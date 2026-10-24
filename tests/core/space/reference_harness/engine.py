@@ -67,7 +67,7 @@ selector reads its case's name); a selector picked by a derived value (the model
 17) is ``Select(by=...)``, a case whose scope holds nothing a ``None`` case, its value read
 by binding the selector itself (a binding to a selector reads its case's name); a child's
 guard is a derived member ``when-<name>``. Facts
-are the root's formals (SZ100 (5)): a required fact is ``Param()``, an optional one
+are the root's formals: a required fact is ``Param()``, an optional one
 ``T | None = Param(default=None)``, left out where the model reads ``None`` (the engine
 reads it ``None`` too). A ``Members`` is the
 engine's ``Members(Base.member)`` over a member of its own, ``members-<path>``, declared on one
@@ -772,7 +772,7 @@ class Engine:
     ) -> Point:
         """The configuration with ``facts`` and nothing committed, as ``implementation``
         answers it (the harness's default by default, ``implementation.default``): an
-        optional fact the model reads ``None`` given ``None``, the fact left out (SZ100 (5)).
+        optional fact the model reads ``None`` given ``None``, the fact left out.
         The design space is built by the public API, the common input every implementation
         opens."""
         configuration = design_space(self.root(**cast(dict[str, Any], dict(facts))))
@@ -935,7 +935,7 @@ class Point:
 
     def state(self, path: str) -> StateForm:
         """A choice's state (``Answers.states``); a choice the implementation does not list
-        (its facts alone rule it out, SZ113) is absent, as the model answers it by name."""
+        (its facts alone rule it out) is absent, as the model answers it by name."""
         found = dict(self.answers.states()).get(path)
         if found is None:
             return StateForm("absent")
@@ -1008,7 +1008,7 @@ class Point:
 
     def change(self, edit: model.Change) -> tuple[ChangeForm, Point | None]:
         """``edit`` applied: its comparable result, and the configuration it publishes. An
-        optional fact unset is given ``None``, the fact left out (SZ100 (5))."""
+        optional fact unset is given ``None``, the fact left out."""
         facts = {**edit.facts, **dict.fromkeys(edit.unset)}
         before = self.stored()
         changed = self.answers.change(dict(edit.commit), tuple(edit.clear), facts)

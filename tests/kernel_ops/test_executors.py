@@ -449,7 +449,7 @@ def test_xsim_runs_a_one_node_partition_as_python_does(tmp_path: Path) -> None:
 
 @requires_xsim
 def test_xsim_puts_a_partitions_link_tensors_into_the_full_context(tmp_path: Path) -> None:
-    """E3's mark: a partition's link tensors, tapped in XSim, equal the oracle's, element
+    """A partition's link tensors, tapped in XSim, equal the oracle's, element
     for element, under the names a Python run gives them; provenance names XSim."""
     source, parent = chain_partition(tmp_path)
     (partition,) = parent.graph.node

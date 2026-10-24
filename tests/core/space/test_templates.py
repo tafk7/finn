@@ -292,7 +292,7 @@ def test_a_selection_read_by_several_classes_is_one_address_in_its_choices_scope
     permuted: bool,
 ) -> None:
     """Read by the choice's own class and by a class above, or by a class above alone: one
-    address, a member of the choice's scope, its owner the choice's key (SZ95 (2); the line
+    address, a member of the choice's scope, its owner the choice's key (the line
     owned them by their first reader, ``first.cop``, ``second.cop``, ``cop``)."""
     scopes = Scopes(compiled(ReadsLater), permuted=permuted)
     for name in ("first", "second"):

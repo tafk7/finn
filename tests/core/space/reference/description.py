@@ -9,8 +9,8 @@ A description is a tree of scopes. Each scope holds:
   declared reads that returns one, possibly empty), optionally narrowed by a
   membership predicate, or *membership-only* (a predicate of the value and declared
   reads, never enumerated). Membership reads facts only: facts, and derived values
-  whose reads are, through derived values, facts only. No domain reads a view (SZ100
-  (3)). A domain carries no ranking and a choice no policy (SZ103): those are a
+  whose reads are, through derived values, facts only.
+  No domain reads a view. A domain carries no ranking and a choice no policy: those are a
   compiler's, never the semantics'.
 - **selectors**: a choice whose cases are named child scopes; only the selected case
   is present. Its value is the case's name. A selector **picked by a derived value**
@@ -23,23 +23,23 @@ A description is a tree of scopes. Each scope holds:
 - **derived** values: a function of declared reads, which returns a value or a
   :class:`Refuse` with its code (the derived value then reads refused, and every reader
   of it receives a refused input).
-- **views**: products, read out (SZ100 (3)); a body over declared reads (anything
+- **views**: products, read out; a body over declared reads (anything
   readable: other views too, its own Space's and its children's) that returns a value
   or a :class:`Refuse` with its code. Nothing else reads a view.
-- **members** (:class:`Members`, SZ100 (6)): a value over named entries, derived values
+- **members** (:class:`Members`): a value over named entries, derived values
   in scopes strictly below the scope declaring it. Its value is the sorted (entry,
   value) pairs of the entries that answer a value; an entry answering inapplicable is
   skipped (the model's docstring, "Reads"). Its entries are never views: a restriction
   of the model, not of the semantics. A ``Members`` over views, read by views alone,
-  would be view-side, views composing by reading views (read-out aggregation, SZ100
-  (3)); the model does not express it.
+  would be view-side, views composing by reading views (read-out aggregation); the model does
+  not express it.
 - **constraints**: a predicate over declared reads, owned by the scope declaring it,
   with the code it refuses with.
 - **children**: scopes always present with their parent, unless their ``when`` guard
   (a boolean of declared reads) says otherwise. A selector's case may carry a
   ``when`` guard too.
 
-Facts are named at the root (:class:`Space`), each required or optional (SZ100 (5)): a
+Facts are named at the root (:class:`Space`), each required or optional: a
 configuration gives every required fact, and an optional fact left out reads ``None``.
 A function over an optional fact handles ``None`` itself.
 
@@ -53,8 +53,8 @@ Every function receives one mapping, from each declared read's path to its value
 reads nothing else.
 
 :meth:`Space.validate` rejects a malformed description (an unknown or unreadable
-read, a duplicate name, a malformed domain or guard), a **view read in** (SZ100 (3),
-``"view-read-in"``: a constraint, a derived value, a ``when`` guard, or a domain's
+read, a duplicate name, a malformed domain or guard), a **view read in**
+(``"view-read-in"``: a constraint, a derived value, a ``when`` guard, or a domain's
 membership or computed list reading a view; and, since the model expresses no
 view-side ``Members``, a ``Members`` naming one; checked before the rest), a domain
 whose membership reads anything but facts, or an input whose existence a choice decides
@@ -79,7 +79,7 @@ dependencies form a graph in which
 
 Any cycle in that graph is an error naming its path: derived values reading each other
 in a ring, a guard reading a value of the scope it guards, views reading each other in a
-ring. A view read in closes none any more: only views read views (SZ100 (3)), so a view,
+ring. A view read in closes none any more: only views read views, so a view,
 which depends on its Space's validity, is never below a piece of it.
 """
 
@@ -198,7 +198,7 @@ class View:
 @dataclass(frozen=True)
 class Members:
     """The entries that answer a value, as sorted (entry, value) pairs: ``entries`` name
-    derived values in scopes strictly below the declaring scope (SZ100 (6))."""
+    derived values in scopes strictly below the declaring scope."""
 
     name: str
     entries: tuple[str, ...]
@@ -255,7 +255,7 @@ def _picker(cases: tuple[str, ...], by: str) -> Callable[[Reads], Any]:
 @dataclass(frozen=True)
 class Space:
     """A description: the facts a configuration gives, the root scope (whose own name is
-    not part of any path), and which facts are optional (SZ100 (5): left out, one reads
+    not part of any path), and which facts are optional (left out, one reads
     ``None``); the others are required."""
 
     facts: tuple[str, ...]
@@ -315,7 +315,7 @@ class Index:
     constraints: dict[str, tuple[Constraint, str]] = field(default_factory=dict)
     members: dict[str, tuple[Members, str]] = field(default_factory=dict)
     facts: frozenset[str] = frozenset()
-    #: the optional facts (SZ100 (5)); the other facts are required
+    #: the optional facts; the other facts are required
     optional: frozenset[str] = frozenset()
     #: each selector picked by a derived value, by path: its holding scope, the path it
     #: reads (``by``) and its cases
@@ -458,7 +458,7 @@ class Index:
                 yield path, scope.when.reads
 
     def _check_views_read_in(self) -> None:
-        """Views are read out (SZ100 (3)): only a view reads a view. A ``Members`` naming a
+        """Views are read out: only a view reads a view. A ``Members`` naming a
         view is refused here too, a restriction of the model: a ``Members`` over views,
         read by views alone, would be view-side, which the model does not express."""
 
@@ -475,7 +475,7 @@ class Index:
 
     def _check_members(self) -> None:
         """A ``Members`` entry is a derived value in a scope strictly below the declaring
-        scope (SZ100 (6); the model expresses no ``Members`` over views, refused before as
+        scope (the model expresses no ``Members`` over views, refused before as
         ``view-read-in``), named once."""
 
         for path, (members, scope) in sorted(self.members.items()):

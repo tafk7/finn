@@ -367,7 +367,7 @@ def stated_auto(report: Mapping[str, Any]) -> None:
 
 
 def test_a_memory_saved_or_pinned_auto_is_kept_and_stated_as_vivado_s(tmp_path: Path) -> None:
-    """``auto`` stays a value of every memory, last (SZ18): a model saved with it replays
+    """``auto`` stays a value of every memory, last: a model saved with it replays
     it, nothing dropped, and a hold of it commits it (the thresholds'
     ``ram_style`` attribute too); either way the report names the memory unstated."""
     model = kernel_model()

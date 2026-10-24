@@ -37,7 +37,7 @@ array, eltwise's real, which is itself the omission checked).
 transpose's stalled samples and its adapter sample (behind a ``vpc``) exercise
 ``inner_shuffle``'s page guard (``finn.kernels.transpose``).
 
-The platform's capabilities, a few cases each (KT10): pumped compute (INT8 dotp
+The platform's capabilities, a few cases each: pumped compute (INT8 dotp
 on DSP58, one interior configuration: pumping needs SIMD >= 2) and a pumped
 memory (memstream), each simulated with ``ap_clk2x`` driven aligned with
 ``ap_clk``; and AXI-Lite, thresholding's runtime-writable rows, one shared row

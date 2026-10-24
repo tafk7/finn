@@ -231,7 +231,7 @@ def test_a_partition_of_kernel_ops_counts_its_movers() -> None:
 
 
 def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:
-    """The shell row owns the doubled clock (SZ11 (e)): the Chain, its first MatMul's
+    """The shell row owns the doubled clock: the Chain, its first MatMul's
     compute pumped, which its kernel offers on any platform, is within the ip row,
     which supplies ap_clk2x, and refused by Ultra96's pynq row, which does not:
     ``clock-unavailable``, by the MatMul's clock rule. In the Zynq shell the pumped value is

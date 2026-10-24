@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """eltwise: element by element, a broadcast operand replayed. No KernelOp reaches it yet, so
-its reference is test-side (decision KT12 A1): ``computed``, which its conformance case and
+its reference is test-side: ``computed``, which its conformance case and
 its numeric sweep (``kernels.sweeps.eltwise_numeric``) both state."""
 
 from __future__ import annotations

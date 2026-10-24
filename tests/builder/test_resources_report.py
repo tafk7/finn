@@ -87,7 +87,7 @@ def test_a_partition_on_the_ip_shell_states_its_model_alone(tmp_path: Path) -> N
 def test_off_the_board_the_shell_was_timed_on_both_reports_name_the_caveat(
     board: str, tmp_path: Path
 ) -> None:
-    """SZ2: the pynq shell was built and timed on Ultra96 only, its movers and static region
+    """The pynq shell was built and timed on Ultra96 only, its movers and static region
     characterised on xczu3eg and xczu7ev. Every pynq row says so; on another board
     an exploration's report's ``exact`` and resources.json's ``caveat`` name it, the
     board and its part; on Ultra96 neither has a caveat."""

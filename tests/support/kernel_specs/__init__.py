@@ -3,9 +3,9 @@
 
 """One spec per kernel (``KernelSpec``): its conformance cases, the numeric sweeps' cases
 that place it, its unit tests, where its computational reference lives, and its lean
-covering points and refused side, drawn from its design space (decision KT10;
-``tests/kernels/test_specs.py`` checks them offline, ``test_conformance.py``
-simulates the cases, ``tests/kernel_ops/test_parity.py`` the KernelOps' parity).
+covering points and refused side, drawn from its design space
+(``tests/kernels/test_specs.py`` checks them offline, ``test_conformance.py`` simulates the
+cases, ``tests/kernel_ops/test_parity.py`` the KernelOps' parity).
 """
 
 from __future__ import annotations

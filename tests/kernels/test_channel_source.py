@@ -75,7 +75,7 @@ FACTS = dict(
 KNOWN = dict(platform=FULL_DSP48E2)
 """MatMul's facts beside its tensors and its weights."""
 INT3, INT8 = ScalarEncoding(DataType["INT3"]), ScalarEncoding(DataType["INT8"])
-# The result of WEIGHTS' columns over INT3 activations (K7): [-30, 40].
+# The result of WEIGHTS' columns over INT3 activations: [-30, 40].
 INT7 = ScalarEncoding(DataType["INT7"])
 FOLDING = {
     "matmul.compute": "packed",
@@ -232,11 +232,11 @@ def test_the_channel_owns_its_source_and_its_choices():
 
 
 def test_a_channel_without_contents_lists_none_of_its_sources_choices():
-    # SZ113: without contents the channel's source is absent under the facts alone (its
+    # Without contents the channel's source is absent under the facts alone (its
     # guard, ``valued``, reads the facts only), so the source's choices are in none of the
     # channel's lists: its decisions, its states, the network's states and open choices.
     # Asked by name they still answer, and set by name one is accepted, dormant, and is then
-    # listed: a stored choice is never pruned (SZ119 (5)).
+    # listed: a stored choice is never pruned.
     # In the partition's design space the channel's keys are below its member's name.
     source = {"source.ram_style", "source.pumped_memory"}
     paths = {f"w.{key}" for key in source}
@@ -290,7 +290,7 @@ def test_the_stored_memory_takes_its_choices_with_its_channel_and_refuses_bad_we
 
 def test_the_result_range_follows_what_the_weight_channel_carries():
     """With a value on the weight channel, each output column's dot products over the
-    activation datatype, unioned over columns; without one, the datatypes' (K7). The
+    activation datatype, unioned over columns; without one, the datatypes'. The
     core states the range on what it produces."""
     stored_, external = base(weights=WEIGHTS).member("matmul"), base().member("matmul")
     assert stored_.result_range == (-30, 40)

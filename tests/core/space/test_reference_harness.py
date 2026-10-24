@@ -107,7 +107,7 @@ def test_every_row_has_exactly_one_witness_and_every_expected_failure_a_row() ->
 
 
 def test_no_milestone_is_pending_the_engine_holds_every_ruling_the_model_does() -> None:
-    # The engine core's, the facts-instance, T4a's, T4c's and T4b's (views read out)
+    # The engine core's, the facts-instance, guard counting, facts known and views read out
     # milestones are accepted, their rows removed: the matrix holds none, and every witness
     # of the case modules is a plain test.
     assert MILESTONES == ("base",)
@@ -385,7 +385,7 @@ def test_a_selector_is_read_as_its_selected_case() -> None:
 
 
 def test_an_optional_fact_unset_is_given_none_in_the_engine() -> None:
-    # SZ100 (5): unset, an optional fact is None in the model; the engine is given None, the
+    # Unset, an optional fact is None in the model; the engine is given None, the
     # fact left out, and agrees.
     unset = NESTED.start({"width": 4}).check_change(Change(unset=("width",)))
     assert unset is not None

@@ -3,7 +3,7 @@
 
 """The acceptance matrix: every disagreement between the engine and the reference model
 expected at this commit, by the milestone that removes it. The model holds the human's
-rulings on the core types (DECISIONS SZ100) before the engine does; none is pending now.
+rulings on the core types before the engine does; none is pending now.
 
 Each row names the change that removes it, in one sentence, and its **witness**: the one
 test that shows it, marked with :func:`expected` (a strict expected failure raising
@@ -13,15 +13,15 @@ fails) and it removes the rows. The engine core (the rewrite to the semantics th
 states: assignment, refusal at the origin, dormant choices) was the first, accepted when
 it landed with the model: its rows' witnesses are plain tests. The facts-instance milestone
 (a change of facts as a new design space, never refused: § 16.24) was the second, accepted
-when the engine dropped and reported as the model does. T4a (the model's reading 8: a
+when the engine dropped and reported as the model does. Guard counting (the model's reading 8: a
 refused guard counts once, at the highest refused guard of its chain, and a refused guard
 below an unknown one leaves its piece unknown) was the third, accepted when the engine
-counted and waited as the model does: its witnesses are plain tests. T4c (an optional fact
-left out read as None, given None the one left out: SZ100 (5); no list holding a choice its
-facts alone rule out, unless it is stored: SZ113, SZ119 (5)) was the fourth, accepted when
-the engine read and pruned as the model does: its witnesses are plain tests. T4b (views
-read out: a constraint, derived value, guard or domain reading a view is a definition error,
-``view-read-in``: SZ100 (3)) was the fifth, accepted when the engine refused as the model
+counted and waited as the model does: its witnesses are plain tests. Facts known (an optional fact
+left out read as None, given None the one left out; no list holding a choice its
+facts alone rule out, unless it is stored) was the fourth, accepted when
+the engine read and pruned as the model does: its witnesses are plain tests. Views
+read out (a constraint, derived value, guard or domain reading a view is a definition error,
+``view-read-in``) was the fifth, accepted when the engine refused as the model
 does: its witnesses are plain tests.
 
 A later milestone joins ``MILESTONES`` with its rows; while it has rows the walks count

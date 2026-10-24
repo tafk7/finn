@@ -99,8 +99,7 @@ class Known:
 @dataclass(frozen=True)
 class Unresolved:
     """The value waits: ``waits`` lists the open choices and the open selectors (or a
-    guard's waiting reads) it waits on. Never a fact: facts are always known (SZ100
-    (5))."""
+    guard's waiting reads) it waits on. Never a fact: facts are always known."""
 
     waits: tuple[str, ...]
 
@@ -245,7 +244,7 @@ class RuleRefusal:
     """An origin the change makes a piece newly false through (§ 16.15). ``origin`` is
     the node where the failure starts; ``kind`` is ``"constraint"``, ``"derived"`` or
     ``"empty-domain"`` (``origin`` then the choice whose listed domain lists no value; a
-    view feeds no piece, SZ100 (3)); ``reasons`` its own reason; ``standing`` the stored
+    view feeds no piece); ``reasons`` its own reason; ``standing`` the stored
     choices standing in the way, which the caller sets in the same change or clears
     first.
 

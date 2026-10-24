@@ -3,7 +3,7 @@
 
 """A kernel's lean covering points and its refused side, drawn from its design space.
 
-Lean coverage (decision KT10): every case of each Decision at least once, and each
+Lean coverage: every case of each Decision at least once, and each
 ordered domain at its extremes, not every combination. ``covering`` walks a bound
 point's open choices in play in the flow order (``finn.kernels.configure.undecided``:
 an enclosing selector before the choices in its cases), each with the values the

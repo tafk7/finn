@@ -443,7 +443,7 @@ WHEN_THROUGH_FORMAL = Case(
 
 def test_a_when_read_past_its_guard_reads_its_scopes_formal_at_its_source() -> None:
     pair = WHEN_THROUGH_FORMAL.start({"f0": 1}, implementation=RUNNING)
-    # absent under the facts alone, so pruned (SZ113): in no list, absent asked by name
+    # absent under the facts alone, so pruned: in no list, absent asked by name
     assert "s.a.g.c1" not in dict(pair.engine.answers.states())
     assert pair.engine.state("s.a.g.c1") == StateForm("absent")
     pair.check_state("s.a.g.c1")

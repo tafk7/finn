@@ -107,7 +107,7 @@ def test_the_ordered_pass_states_the_chains_types_and_qonnx_agrees() -> None:
         "levels": ([chain.ROWS, chain.HIDDEN], chain.T.name),
         "y": ([chain.ROWS, chain.OUTPUTS], chain.Y.name),
     }
-    # Each MatMul's from its weights' columns (K7).
+    # Each MatMul's from its weights' columns.
     assert (chain.H.name, chain.T.name, chain.Y.name) == ("INT6", "UINT2", "INT5")
     after = model.transform(InferShapes()).transform(InferDataTypes())
     assert tensors(after) == tensors(model)

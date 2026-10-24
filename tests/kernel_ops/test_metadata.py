@@ -128,7 +128,7 @@ def test_a_partial_target_is_refused_naming_what_it_misses(missing: str) -> None
 
 
 #: The shape before the registry: capabilities a shell budgets (control_ports,
-#: memory_ports) or supplies (clk2x, the shell row's since SZ11) and an AI Engine flag,
+#: memory_ports) or supplies (clk2x, the shell row's since the registry) and an AI Engine flag,
 #: no shell, board, fabric or resources.
 OLD_SHAPE = {
     "@version": "1",
@@ -264,7 +264,7 @@ def test_what_a_build_made_is_typed_in_finn_outputs() -> None:
             model.set(key, bad)
 
 
-# -- the design digest: what an artifact was made from (decision SR6, item 8) ------------
+# -- the design digest: what an artifact was made from ----------------------------------
 
 
 def chain() -> ModelWrapper:

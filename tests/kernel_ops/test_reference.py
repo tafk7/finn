@@ -214,7 +214,7 @@ def _restated(model: ModelWrapper, annotation: str | None) -> ModelWrapper:
 
 @pytest.mark.parametrize(("spec", "name"), POSITIVE)
 def test_a_pattern_reads_no_datatype(spec: OpSpec, name: str) -> None:
-    """KT18's identity: ``match`` reads structure, roles, semantic attributes and axes,
+    """A pattern's identity: ``match`` reads structure, roles, semantic attributes and axes,
     never a datatype. With every annotation stripped, or stated wrong (a float, a wide
     integer, a bipolar), each KernelOp's match on each positive graph answers as on the
     graph as stated, and stays pure."""
