@@ -24,7 +24,6 @@ from finn.core.space import (
     QueryResult,
     Select,
     Space,
-    View,
     ViewAssessment,
     constraint,
     derived,
@@ -32,6 +31,7 @@ from finn.core.space import (
     inspection,
     view,
 )
+from finn.core.space.declarations import View
 from finn.core.space.inspection import ChoiceInfo
 
 
@@ -47,7 +47,7 @@ class FixedImplementation(Space):
     def result(self) -> int:
         return self.size // self.lanes
 
-    physical = View(result)
+    physical = view(result)
 
 
 class SmallImplementation(Space):
@@ -57,7 +57,7 @@ class SmallImplementation(Space):
     def result(self) -> int:
         return self.size
 
-    physical = View(result)
+    physical = view(result)
 
 
 def _case_name(case: str) -> str:
@@ -95,7 +95,7 @@ class Pipeline(Space):
     assert_type(implementation, FixedImplementation | SmallImplementation)
     # A member every candidate has is read through the choice.
     assert_type(implementation.result, int)
-    chosen = View(implementation.physical)
+    chosen = view(implementation.physical)
     case: str = derived(case=implementation)(_case_name)  # a binding reads the case's name
 
     @derived

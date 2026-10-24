@@ -1,5 +1,18 @@
 from dataclasses import dataclass
-from finn.core.space import Decision, Param, Select, Space, View, constraint, derived, view, QueryResult, Available, design_space
+
+from finn.core.space import (
+    Available,
+    Decision,
+    Param,
+    QueryResult,
+    Select,
+    Space,
+    constraint,
+    derived,
+    design_space,
+    view,
+)
+
 
 class Child(Space):
     width: int = Param()
@@ -10,16 +23,20 @@ class Child(Space):
     def physical(self) -> int:
         return self.width
 
+
 class Boiler(Space):
     kw: int = Param()
+
 
 class HeatPump(Space):
     kw: int = Param()
     cop: int = Decision(values=(3, 4))
 
+
 @dataclass(frozen=True)
 class Spec:
     lanes: int
+
 
 class Producer(Space):
     spec: Spec = Param()
@@ -27,6 +44,7 @@ class Producer(Space):
     @derived
     def wrong_spec(self) -> str:
         return self.spec.lanes  # E
+
 
 class Parent(Space):
     child = Child(width=4)
@@ -60,6 +78,7 @@ class Parent(Space):
 
     own_supplied = Child(width=own)  # E
 
+
 def bad(point: Child, parent: Parent) -> None:
     wrong_value: str = point.width  # E
     wrong_descriptor: str = Child.width  # E
@@ -74,22 +93,26 @@ def bad(point: Child, parent: Parent) -> None:
     point.physical.inspect()  # E
     point.view(Child.physical)  # E
     point.inspect(Child.width)  # not an error: a key typed as its value (refused at runtime)
-    point.try_with_choices('not a change')  # E
+    point.try_with_choices("not a change")  # E
     point.present(3)  # not an error: a value input types as its value (refused at runtime)
     wrong_query: QueryResult[int] = parent.producer.query(Producer.spec)  # E
+
 
 @constraint  # E
 def wrong_constraint() -> str:
     return "yes"
 
+
 @derived
 def wrong_answer() -> QueryResult[str]:
     return Available("bad")
 
+
 wrong_answer_type: int = wrong_answer  # E
 
 bad_guard: int = Decision(values=(1,), when=Child.width)  # E
-bad_view = View(Child.width, when=Child.width)  # E
+bad_view = view(Child.width, when=Child.width)  # E
+
 
 @derived(when=Child.width)  # E
 def wrong_derived_guard() -> int:
@@ -99,13 +122,16 @@ def wrong_derived_guard() -> int:
 class Holder(Space):
     part = Child(width=1)
 
+
 class Kernel(Space):
     spec: Spec = Param()
     spec_typo = Child(width=spec.lanez)  # E
     spec_wrong = Child(width=spec)  # E
 
+
 class Overrides(Space):
     unannotated_ok = Child(width=Param())  # not a mypy error: refused at runtime (inline Param)
+
 
 class Retired(Space):
     """The retired spellings of a Decision: no overload takes them."""

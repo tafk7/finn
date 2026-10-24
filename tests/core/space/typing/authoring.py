@@ -35,7 +35,6 @@ from finn.core.space import (
     Select,
     Space,
     ValueHandle,
-    View,
     ViewAssessment,
     constraint,
     derived,
@@ -43,6 +42,7 @@ from finn.core.space import (
     inspection,
     view,
 )
+from finn.core.space.declarations import View
 
 
 @dataclass(frozen=True)
@@ -148,7 +148,7 @@ class Fifo(Space):
     def physical(self) -> int:
         return self.capacity + len(self.ram_style)
 
-    detached = View(capacity)
+    detached = view(capacity)
 
 
 class Eltwise(Space):
@@ -177,7 +177,7 @@ class GuardedAssembly(Space):
     def supported(*, slots: int) -> bool:
         return slots > 0
 
-    physical = View(value, when=enabled)
+    physical = view(value, when=enabled)
 
 
 def check(point: Fifo, house: House, eltwise: Eltwise) -> None:
@@ -291,7 +291,7 @@ class Wing(Space):
         assert_type(self.hall.cost, int)
         return self.kitchen.cost + self.dining.cost
 
-    checked = View(kitchen.cost)
+    checked = view(kitchen.cost)
     assert_type(checked, View[int])
 
 
