@@ -25,7 +25,6 @@ from finn.core.space import (
     BoundValue,
     Change,
     ConfigurationResult,
-    Const,
     ConstraintAssessment,
     Decision,
     DecisionHandle,
@@ -132,7 +131,10 @@ class Fifo(Space):
     depth: int = Param()
     ram_style: str = Decision(values=("auto", "block"))
     banks: int = Decision(values=(1, 2))
-    minimum_depth = Const(2)
+
+    @derived
+    def minimum_depth(self) -> int:
+        return 2
 
     @constraint
     def supported(self) -> bool:
@@ -182,7 +184,7 @@ def check(point: Fifo, house: House, eltwise: Eltwise) -> None:
     # Class access is the schema key, typed as its value like every reference.
     assert_type(Fifo.word_bits, int)
     assert_type(Fifo.ram_style, str)
-    assert_type(Fifo.minimum_depth, Const[int])
+    assert_type(Fifo.minimum_depth, int)
     assert_type(Fifo.capacity, int)
     assert_type(Fifo.physical, View[int])
     assert_type(House.kitchen, Room)
@@ -222,7 +224,7 @@ def check(point: Fifo, house: House, eltwise: Eltwise) -> None:
     assert_type(GuardedAssembly.physical, View[int])
 
 
-# -- annotated formals and reads of their values' attributes ---------------------------
+# -- annotated formals and derived values over their attributes ----------------------------
 
 
 @dataclass(frozen=True)
@@ -242,9 +244,13 @@ class Buffer(Space):
 
 class Kernel(Space):
     spec: Spec = Param()  # a formal annotated with its value type
-    buffer = Buffer(word_bits=spec.payload_bits)  # typed in the class body
     assert_type(spec, Spec)
-    assert_type(spec.payload_bits, int)
+
+    @derived(spec=spec)
+    def payload_bits(*, spec: Spec) -> int:
+        return spec.payload_bits
+
+    buffer = Buffer(word_bits=payload_bits)
 
 
 class Board(Space):

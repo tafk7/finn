@@ -1,0 +1,57 @@
+from finn.core.space import Param, Space, derived
+
+class Values(Space):
+    # Formals are typed as their values: mypy checks a derived value's arithmetic as on
+    # the values.
+    number: int = Param()
+    text: str = Param()
+    fraction: float = Param()
+
+    @derived
+    def bad_text(*, text: str) -> int:
+        return text + 1  # E
+
+    @derived
+    def bad_reflected(*, text: str) -> int:
+        return 1 + text  # E
+
+    @derived
+    def bad_literal(*, number: int) -> int:
+        return number + "x"  # E
+
+    @derived
+    def bad_unary(*, text: str) -> str:
+        return -text  # E
+
+    @derived
+    def wrong_type(*, number: int) -> str:
+        return number * 2  # E
+
+    # Not reported (int + float is valid on values):
+    @derived
+    def float_sum(*, number: int, fraction: float) -> float:
+        return number + fraction
+
+class Child(Space):
+    width: int = Param()
+    label: str = Param()
+
+class Example(Space):
+    extent: int = Param()
+    child = Child(width=extent, label="x")
+
+    # A reference is typed as its value, so a derived value over it computes on that value.
+    @derived(label=child.label)
+    def bad_reference(*, label: str) -> int:
+        return label + 1  # E
+
+    @derived(width=child.width)
+    def reference_sum(*, width: int) -> int:
+        return width + 1
+
+    @derived
+    def value(self) -> int:
+        return self.extent * 2
+
+def wrong_read(point: Example) -> str:
+    return point.value  # E

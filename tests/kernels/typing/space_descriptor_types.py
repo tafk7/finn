@@ -19,7 +19,6 @@ from typing import assert_type
 from finn.core.space import (
     BoundValue,
     ConfigurationResult,
-    Const,
     Decision,
     Param,
     QueryResult,
@@ -39,7 +38,10 @@ from finn.core.space.inspection import ChoiceInfo
 class FixedImplementation(Space):
     size: int = Param()
     lanes: int = Decision(values=(1, 2, 4))
-    minimum = Const(1)
+
+    @derived
+    def minimum(self) -> int:
+        return 1
 
     @derived
     def result(self) -> int:
@@ -109,7 +111,7 @@ assert_type(Pipeline.fixed.result, int)
 assert_type(Pipeline.implementation, FixedImplementation | SmallImplementation)
 assert_type(Pipeline.size, int)
 assert_type(Pipeline.chosen, View[int])
-assert_type(FixedImplementation.minimum, Const[int])
+assert_type(FixedImplementation.minimum, int)
 assert_type(FixedImplementation.result, int)
 assert_type(FixedImplementation.physical, View[int])
 assert_type(FixedImplementation.lanes, int)
