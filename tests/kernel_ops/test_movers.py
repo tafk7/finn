@@ -25,10 +25,18 @@ from typing import Any
 import pytest
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
+from support.configure import configured
 from support.helpers import FULL_DSP48E2, with_adapter_memories
 from support.helpers import built as module_built
-from support.models import TARGET, configure_partition, kernel_model
+from support.models import (
+    ROW_MAJOR_W2,
+    TARGET,
+    choose_memories,
+    configure_partition,
+    kernel_model,
+)
 from support.tfc import ULTRA96
+from support.xsim import requires_xsim
 
 import finn.custom_op.kernels.shell as shell
 from finn.core.graph.annotations.platform import read_target, write_target
@@ -45,6 +53,7 @@ from finn.custom_op.kernels.shell import (
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, Traversal, tile, vector_major
+from finn.harness.ops import check_parity
 from finn.kernels.artifacts.module import module_name
 from finn.kernels.base import KernelSpace
 from finn.kernels.channels import Channel
@@ -74,6 +83,7 @@ from finn.transformation.kernels import (
     kernel_choices_config,
 )
 from finn.transformation.kernels.cut import CutKernelPartition, MakeCutChoices
+from finn.util.draws import boundary_inputs
 
 # -- a mover's arithmetic -----------------------------------------------------------------
 
@@ -391,6 +401,24 @@ def test_sizing_reads_a_free_side_its_mover_paces() -> None:
     chain = chain_network(TARGET)
     with pytest.raises(NotModelled, match="a boundary: not modelled"):
         sides(chain.member("x"), chain.neighbours("x"))
+
+
+@requires_xsim
+def test_a_pass_its_mover_moves_once_replayed_at_the_edge_computes_what_onnx_computes(
+    tmp_path: Path,
+) -> None:
+    """The Chain, its w2 streamed and read row-major (``ROW_MAJOR_W2``) once per row of x,
+    three times a frame, in the Zynq shell: the mover states w2's side one row-major pass
+    a frame, and the edge channel's ``input_gen`` replays it after the transport. The
+    partition, cut as a build cuts it, streamed at its free sides as they present (w2
+    once, 4 beats), computes what its KernelOps compute (``check_parity``)."""
+    model = kernel_model(second_weights=False)
+    configured(model, {"second": ROW_MAJOR_W2})
+    write_target(model, ULTRA96)
+    model = model.transform(MakeCutChoices())
+    w2 = choose_memories(model).member("w2")
+    assert (w2.input_chain, w2.boundary.form.beats) == ("input_gen", 4)
+    check_parity(model, tmp_path, inputs=boundary_inputs(model, 4), label="replayed")
 
 
 # -- on TFC_W2A2 ---------------------------------------------------------------------------
