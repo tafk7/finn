@@ -3,7 +3,7 @@
 """Neutral extension bundles are ordinary declarations composed into a Space class.
 
 Declarations and nodes are plain Python values, and ``composite(name, members,
-base=B, exports=...)`` names them as a new Space class exactly as a class body
+base=B)`` names them as a new Space class exactly as a class body
 would. The typed surface is the base Space class: formals a caller binds are
 declared on ``B``; the members composite adds are reached by name (or through
 inspection handles).
@@ -26,7 +26,6 @@ from finn.core.space import (
     Space,
     Unresolved,
     View,
-    ViewKey,
     composite,
     constraint,
     derived,
@@ -46,10 +45,6 @@ class StreamValue:
     dtype: Encoding
     lanes: int
     bits: int
-
-
-STREAM = ViewKey("stream", StreamValue)
-BITS = ViewKey("bits", int)
 
 
 class StreamShape(Space):
@@ -107,7 +102,6 @@ def admitted_stream_type() -> type[AdmissionFormals]:
             "bits_view": bits,
         },
         base=AdmissionFormals,
-        exports={STREAM: stream, BITS: bits},
     )
 
 
@@ -183,12 +177,9 @@ def test_composite_is_pure_and_nodes_share_only_the_space_class() -> None:
 
     choice: int = Decision(values=(1, 2))
     output = derived(compute)
-    exported = View(output)
-    key = ViewKey("output", int)
-    members = {"choice": choice, "output": output, "exported": exported}
-    template = composite(
-        "Template", members, base=Scaled, annotations={"choice": int}, exports={key: exported}
-    )
+    reported = View(output)
+    members = {"choice": choice, "output": output, "reported": reported}
+    template = composite("Template", members, base=Scaled, annotations={"choice": int})
     assert calls == []
     # A declaration belongs to one Space class: the same members cannot be named twice.
     with refused("declaration-reused", error=DefinitionError, message="already belongs"):
@@ -204,7 +195,7 @@ def test_composite_is_pure_and_nodes_share_only_the_space_class() -> None:
     handles = {item.key: item.reference for item in inspection.decisions(point)}
     assert set(handles) == {"first.choice", "second.choice"}
     selected = point.with_choices({handles["first.choice"]: 2})
-    assert selected.query(getattr(Parent.first, "exported")) == Available(6)
+    assert selected.query(getattr(Parent.first, "reported")) == Available(6)
     assert isinstance(selected.second.query(choice), Unresolved)
     assert isinstance(point.first.query(choice), Unresolved)
     assert calls == [3]
@@ -222,12 +213,10 @@ def test_a_compiled_composite_rejects_structural_changes() -> None:
     with refused("structure-finalized", error=DefinitionError):
         delattr(space_type, "value")
     with refused("structure-finalized", error=DefinitionError):
-        setattr(space_type, "exports", {})
-    with refused("structure-finalized", error=DefinitionError):
         setattr(space_type, "too_late", Const(1))
 
 
-def test_duplicate_names_owned_declarations_and_foreign_exports_are_definition_errors() -> None:
+def test_duplicate_names_and_owned_declarations_are_definition_errors() -> None:
     with refused("override-changes-semantics", error=DefinitionError):
         composite("Shadow", {"dtype": Param()}, base=StreamShape, annotations={"dtype": int})
     with refused("declaration-reused", error=DefinitionError):
@@ -235,41 +224,24 @@ def test_duplicate_names_owned_declarations_and_foreign_exports_are_definition_e
     local = Const(3)
     with refused("declaration-reused", error=DefinitionError):
         composite("Twice", {"constant": local, "other_name": local})
-    with refused("export-not-member", error=DefinitionError, message="not a member"):
-        composite("Foreign", {}, exports={ViewKey("foreign", int): View(StreamShape.bits)})
-    view = View(Const(3))
-    with refused("export-key-duplicate", error=DefinitionError, message="duplicate export"):
-        composite(
-            "Duplicate",
-            {"complete": view},
-            exports={ViewKey("local", int): view, ViewKey("local", int): view},
-        )
-    constant = Const(4)
-    # Exports are views and derived values only.
-    with refused("export-kind-invalid", error=DefinitionError):
-        composite("Kind", {"constant": constant}, exports={ViewKey("constant", int): constant})
+    shadow: int = Param()
+    with refused("override-changes-semantics", error=DefinitionError):
+        composite("Refused", {"dtype": shadow}, base=StreamShape, annotations={"dtype": int})
+    # The refused Space class still owns its declarations: they cannot be renamed silently.
+    with refused("declaration-reused", error=DefinitionError):
+        composite("Retry", {"dtype": shadow}, base=StreamShape, annotations={"dtype": Encoding})
     with refused("name-invalid", error=DefinitionError):
         composite("Invalid", {"invalid.name": Const(1)})
     with refused("name-invalid", error=DefinitionError):
         composite("invalid.name", {})
 
 
-def test_missing_bindings_and_incompatible_exports_fail_without_descriptor_runtime_errors() -> None:
+def test_missing_bindings_fail_without_descriptor_runtime_errors() -> None:
     # A formal left unsupplied is refused where it would have to be supplied: when
     # the Space class placing the node is prepared.
     holder = composite("Holder", {"shape": StreamShape(dtype=Encoding(3))})
     with refused("formal-unsupplied", error=DefinitionError, message=r"shape\.lanes"):
         design_space(holder())
-    integer = Const(3)
-    view = View(integer)
-    members = {"value": integer, "complete": view}
-    with refused(
-        "export-semantics-incompatible", error=DefinitionError, message="incompatible semantics"
-    ):
-        composite("Wrong", members, exports={ViewKey("value", str): view})
-    # The refused Space class still owns its declarations: they cannot be renamed silently.
-    with refused("declaration-reused", error=DefinitionError):
-        composite("Retry", members, exports={ViewKey("value", int): view})
 
 
 def test_external_references_must_be_explicit_formal_bindings() -> None:

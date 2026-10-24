@@ -35,7 +35,6 @@ from finn.core.space import Available, Decision, Param, Rejected, Space, design_
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
-from finn.kernels.base import RESOURCES
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.dotp import (
     Int8Dsp58DotpKernel,
@@ -74,7 +73,7 @@ INT2, INT4, INT8 = (resolve_qonnx_datatype_name(name) for name in ("INT2", "INT4
 
 
 def stated(point: Any) -> Resources:
-    answer = point.query(type(point).exports[RESOURCES])
+    answer = point.query(type(point).resources)
     assert isinstance(answer, Available), answer
     used: Resources = answer.value
     return used
@@ -344,7 +343,7 @@ def test_a_memory_in_auto_states_no_resources(memory_point: Any) -> None:
     """``auto`` is Vivado's placement: the memory names why it states none, so a total
     over it is a lower bound naming it."""
     point = memory_point()
-    answer = point.query(type(point).exports[RESOURCES])
+    answer = point.query(type(point).resources)
     assert isinstance(answer, Rejected)
     assert [finding.code for finding in answer.findings] == ["memory-auto"]
     assert answer.findings[0].message.endswith("ram_style auto, placed by Vivado, not stated")
@@ -466,7 +465,7 @@ def test_the_compressor_reducer_is_refused_by_name() -> None:
         reducer="compressor",
         platform=FULL_DSP48E2,
     )
-    answer = point.query(type(point).exports[RESOURCES])
+    answer = point.query(type(point).resources)
     assert isinstance(answer, Rejected)
     assert [finding.code for finding in answer.findings] == ["dotp-resources"]
 
@@ -521,7 +520,7 @@ def test_a_thresholding_kernel_reads_its_table_for_shared_rows() -> None:
     # Left to ``auto``, Vivado places the stages: unstated, unless the table folds to
     # nothing (shared rows, never written), which places no memory.
     placed = threshold_base().with_choices(**choices, ram_style="auto")
-    answer = placed.query(type(placed).exports[RESOURCES])
+    answer = placed.query(type(placed).resources)
     assert isinstance(answer, Rejected)
     assert [finding.code for finding in answer.findings] == ["memory-auto"]
     assert "placed by Vivado, not stated" in answer.findings[0].message
@@ -542,6 +541,6 @@ def test_resources_add_and_a_fit_rounds() -> None:
 
 def test_a_leaf_that_states_no_model_is_refused_by_name() -> None:
     point = eltwise()
-    answer = point.query(type(point).exports[RESOURCES])
+    answer = point.query(type(point).resources)
     assert isinstance(answer, Rejected)
     assert [finding.code for finding in answer.findings] == ["kernel-resources"]

@@ -47,8 +47,8 @@ side are placed as for any side's (a ``vpc`` before the transport for a width, a
 ``input_gen`` after it for a reorder or a replay, its buffer the pass), or refused by the
 channel's own codes. Where a shell offers movers on it (``offered``: the boundary side's
 ``offers``, ``finn.kernels.movers``), the channel places its ``mover`` on that free side;
-it binds no RTL in the module and exports its contract (``MOVER``) for the shell's budget
-check and resources.
+it binds no RTL in the module and states its contract (``mover_contracts``) for the shell's
+budget check and resources.
 
 A channel whose tensor has a known value (``contents``) places its ``source`` (a
 memory, ``MemStreamKernel``) as its producer (its producer side the source's,
@@ -66,12 +66,12 @@ stream runs through them. It checks its stages by their streams (``staged``, eac
 own derived values) and wires them by their contracts (``stages``, a view). Its answers
 are the base's views over theirs, but for two it states itself, calling the base's: its
 netlist places its source and its output adapter at their labels and adds the hops between
-its own ends (its source, its stages, its boundary; ``NETLIST``), and a channel of wires
+its own ends (its source, its stages, its boundary; ``netlist``), and a channel of wires
 takes no cycles of its own (0). Its hops to the ports beside it need those ports'
 contracts, which its network holds: the network wires them (``outer_hops``, from the ports
-it read, ``Neighbours``) and places them around the channel's netlist. It exports its
-boundary's AXIS bus (``BOUNDARY``) and its mover's contract (``MOVER``: ``placed_mover``,
-from the mover's own derived ``contract``). It is no module of its own.
+it read, ``Neighbours``) and places them around the channel's netlist. It states its
+boundary's AXIS bus (``boundary_bus``) and its mover's contract (``mover_contracts``, one or none:
+``placed_mover``, from the mover's own derived ``contract``). It is no module of its own.
 """
 
 from __future__ import annotations
@@ -124,12 +124,6 @@ from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import CLOCK, RESET, Bus, Endpoint
 from finn.kernels.artifacts.module import Fragment, Link, LinkEnd, Marker
 from finn.kernels.base import (
-    BOUNDARY,
-    BUFFERING,
-    CYCLES,
-    NETLIST,
-    NETLIST_SEMANTICS,
-    RESOURCES,
     KernelSpace,
     PortContract,
 )
@@ -137,7 +131,7 @@ from finn.kernels.declaration import declared_reads
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.library import library_module
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.movers import MOVER, IodmaMover, MoverContract, MoverOffer
+from finn.kernels.movers import IodmaMover, MoverContract, MoverOffer
 from finn.kernels.policies import Alone, FirstValid, Policy, Required, defaulted, stated
 from finn.kernels.port import served
 from finn.kernels.sides import ROW_MAJOR, Outside, Side, SideKind
@@ -333,8 +327,9 @@ def _below_stages(holder: str, stages: tuple[Stage, ...]) -> tuple[Stage, ...]:
 class ChannelFifo(KernelSpace):
     """An identity stage: what arrives at it, presented on both sides of a native FIFO.
 
-    Its netlist, buffering and resources are its FIFO's, by the base. It exports no
-    cycles: a FIFO presents what arrives, whose beats are counted where they are made
+    Its netlist, buffering and resources are its FIFO's, by the base. Its ``cycles``
+    answers inapplicable (``counts_cycles``, False), which a channel's ``member_cycles``
+    leaves out: a FIFO presents what arrives, whose beats are counted where they are made
     (the channel's producer, its source, its output adapter), so its channel's cycles
     are its other members'. It presents no port: its channel checks it by its FIFO's
     streams (``stage_streams``) and wires it hop by hop (``stages``: its FIFO's module,
@@ -378,6 +373,18 @@ class ChannelFifo(KernelSpace):
         return True
 
     @derived
+    def counts_cycles(self) -> bool:
+        """Whether its cycles count in its channel's: no, the beats it carries are counted
+        where they are made."""
+        return False
+
+    @view(when=counts_cycles)
+    def cycles(self) -> int | Rejected:
+        """The clock cycles a frame takes through it: none it states, so it answers
+        inapplicable, and its channel's ``member_cycles`` leaves it out."""
+        return reject("fifo-cycles", "a FIFO's beats are counted where they are made")
+
+    @derived
     def stage_streams(self) -> tuple[StageStreams, ...]:
         """Its FIFO's streams and output word width, its derived values, labelled as its
         ``Stage`` is."""
@@ -399,12 +406,6 @@ class ChannelFifo(KernelSpace):
                 "fifo.buffer",
             ),
         )
-
-    exports = {
-        NETLIST: KernelSpace.netlist,
-        BUFFERING: KernelSpace.buffering,
-        RESOURCES: KernelSpace.resources,
-    }
 
 
 @dataclass(frozen=True)
@@ -817,7 +818,7 @@ class Channel(KernelSpace):
 
     # -- its answers: the base's, with its own hops, and none of a channel of wires' cycles --
 
-    @view(semantics=NETLIST_SEMANTICS)
+    @view
     @declared_reads(
         "netlists",
         "controls",
@@ -879,16 +880,10 @@ class Channel(KernelSpace):
         found: StreamContract | None = self.boundary
         return () if found is None else (found.transport.axis_bus(),)
 
-    mover_export = View(placed_mover)
-
-    exports = {
-        NETLIST: netlist,
-        BOUNDARY: boundary_bus,
-        CYCLES: cycles,
-        BUFFERING: KernelSpace.buffering,
-        RESOURCES: KernelSpace.resources,
-        MOVER: mover_export,
-    }
+    # The boundary channel's mover, as its contract (``MoverContract``): one, or none
+    # without a mover. The shell's budget check counts their AXI-Lite buses, and it sums
+    # their resources and counts their memory ports.
+    mover_contracts = View(placed_mover)
 
 
 # The channel's policies (``finn.kernels.policies``), as a KernelOp states its kernel's:

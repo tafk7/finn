@@ -3,7 +3,9 @@
 """The space tests' house toy, shared by its own tests and the collapse tests.
 
 The house (``test_house``): rooms, a structural heating choice, a relation of two rooms
-and a budget over every member's cost. Nothing here is about hardware.
+and a budget over every member's cost. Nothing here is about hardware. Each part states its cost
+as a derived value on a common base, ``Costed``, which the house's ``Members`` reads: the budget
+is a rule, and a rule reads no view.
 """
 
 from __future__ import annotations
@@ -15,55 +17,55 @@ from finn.core.space import (
     Rejected,
     Select,
     Space,
-    ViewKey,
     constraint,
+    derived,
     reject,
     view,
 )
 
-COST = ViewKey("cost", int)
+
+class Costed(Space):
+    """What the house's budget counts: a part states its ``cost``. The base's own is the one
+    a part stating none would answer, a refusal, so a part placed without its cost is
+    never taken to cost nothing."""
+
+    @derived
+    def cost(self) -> int | Rejected:
+        return reject("costed-cost", f"{type(self).__qualname__} states no cost")
 
 
-class Room(Space):
+class Room(Costed):
     area: int = Param()
     finish: int = Decision(values=(1, 2, 3))
 
-    @view
+    @derived
     def cost(self) -> int:
         return self.area * self.finish
 
-    exports = {COST: cost}
 
-
-class Boiler(Space):
+class Boiler(Costed):
     kw: int = Param()
 
-    @view
+    @derived
     def cost(self) -> int:
         return 30 + self.kw
 
-    exports = {COST: cost}
 
-
-class HeatPump(Space):
+class HeatPump(Costed):
     kw: int = Param()
     cop: int = Decision(values=(3, 4))
 
-    @view
+    @derived
     def cost(self) -> int:
         return 10 * self.cop + self.kw
 
-    exports = {COST: cost}
 
-
-class Thermostat(Space):
+class Thermostat(Costed):
     kw: int = Param()
 
-    @view
+    @derived
     def cost(self) -> int:
         return 2 if self.kw < 10 else 5
-
-    exports = {COST: cost}
 
 
 class House(Space):
@@ -76,7 +78,7 @@ class House(Space):
     heating: Boiler | HeatPump = Select(boiler=Boiler(kw=24), heat_pump=HeatPump(kw=8))
     thermostat = Thermostat(kw=heating.kw)
     hall.area = kitchen.area  # an edge declared after its nodes
-    costs = Members(COST)
+    costs = Members(Costed.cost)
 
     @constraint
     def matched(self) -> bool | Rejected:

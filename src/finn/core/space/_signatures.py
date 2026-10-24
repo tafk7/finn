@@ -82,8 +82,9 @@ def output_semantics(
     owner: str,
 ) -> ValueSemantics[object]:
     """The type check of a function's value: its return annotation's (``T``, ``T |
-    Rejected``, ``QueryResult[T]``; ``semantics.annotation_type``), or the ``semantics=`` a
-    view states, which the annotation must agree with."""
+    Rejected``, ``QueryResult[T]``; ``semantics.annotation_type``). A constraint states the
+    Boolean check, which the annotation must agree with; a derived value or a view states
+    none."""
     annotation = hints.get("return")
     if annotation is None:
         raise DefinitionError.broken(
@@ -194,8 +195,8 @@ def _annotation_accepts(annotation: object, value_type: type[object]) -> bool:
         return issubclass(value_type, origin)
     if isinstance(annotation, type):
         if getattr(annotation, "_is_protocol", False):
-            # Non-runtime Protocols cannot be checked with issubclass: a view's
-            # stated semantics determine admissible runtime values.
+            # Non-runtime Protocols cannot be checked with issubclass: the supplier's
+            # check determines the admissible runtime values.
             return True
         return issubclass(value_type, annotation)
     return True

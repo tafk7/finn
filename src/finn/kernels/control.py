@@ -5,9 +5,9 @@
 
 A kernel with a control interface (an AXI-Lite configuration bus, say) has a formal
 naming the port its bus is presented at, given where it is placed (``control: str | None =
-Param(default=None)``), and exports, under ``CONTROL``, the bus it presents there
-with that port and the writes that put its configuration into the bus's registers
-(``RegisterMap``): a ``Control``. A kernel's netlist view (its ``Members(CONTROL)``,
+Param(default=None)``), and states, as its member ``bus_control``, the bus it presents
+there with that port and the writes that put its configuration into the bus's registers
+(``RegisterMap``): a ``Control``. A kernel's netlist view (its ``Members(bus_control)``,
 ``finn.kernels.base.KernelSpace``) and a partition (``finn.kernels.partition``) each collect
 their members' controls (``presented``: each a ``BusExport`` from its member's node) and
 present each in their netlist (``finn.kernels.base.merged``), prefixing its port with the
@@ -26,7 +26,7 @@ names::
 the bus (a choice of its own), or the constant False; ``port`` its formal naming the port
 the bus is presented at; ``registers`` its ``RegisterMap``. It lowers to
 ``<name>_presented``, a derived value (bool), and ``<name>_control``, a view of its
-``Control``, which the kernel exports as ``CONTROL``: ``Control(None)`` while it is not
+``Control``, which the kernel reads as its ``bus_control``: ``Control(None)`` while it is not
 presented. Its pins are the bus, and what it holds the bus's inputs while it is not
 presented (``held_bus``: inputs constant, outputs unconnected): a declared bus is held or
 presented by construction (``presents``: its inputs accounted for in its module), and
@@ -49,8 +49,7 @@ from finn.core.space import (
     DefinitionError,
     Rejected,
     Space,
-    ViewKey,
-    default_semantics,
+    View,
     derived,
     reject,
     view,
@@ -71,10 +70,6 @@ class Control:
     bus: Bus | None
     port: str = ""
     registers: RegisterMap = RegisterMap()
-
-
-CONTROL_SEMANTICS = default_semantics(Control)
-CONTROL = ViewKey("control", CONTROL_SEMANTICS)
 
 
 def held_bus(bus: Bus) -> Held:
@@ -128,6 +123,13 @@ class ControlBus(KernelDeclaration):
     def lower(self, owner: type[KernelSpace], name: str) -> Mapping[str, object]:
         label = f"{owner.__qualname__}.{name}"
         self.references()  # each member it names, named
+        if name == "bus":
+            raise DefinitionError.broken(
+                "declaration-member-taken",
+                "ControlBus",
+                f"{label} lowers to bus_control, which every kernel declares",
+                declaration=label,
+            )
         if self.presented is not False and (self.port is None or self.registers is None):
             raise DefinitionError.broken(
                 "control-bus-unaddressed",
@@ -158,9 +160,16 @@ class ControlBus(KernelDeclaration):
                 declaration.value(self, "bus"), port, declaration.value(self, "registers")
             )
 
+        def declares_(self: Space) -> bool:
+            """It declares a control bus."""
+            return True
+
+        control = view(control_)
         return {
             f"{name}_presented": derived(presented_),
-            f"{name}_control": view(semantics=CONTROL_SEMANTICS)(control_),
+            f"{name}_control": control,
+            "declares_bus": derived(declares_),
+            "bus_control": View(control),
         }
 
     def reads(self, name: str, product: Product) -> tuple[str, ...]:
@@ -185,7 +194,6 @@ class ControlBus(KernelDeclaration):
 
 
 __all__ = [
-    "CONTROL",
     "Control",
     "ControlBus",
     "held_bus",

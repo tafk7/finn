@@ -20,7 +20,6 @@ from finn.core.space import (
     ReferenceUseError,
     Select,
     Space,
-    ViewKey,
     design_space,
     view,
 )
@@ -157,4 +156,3 @@ def test_a_declaration_is_not_a_configuration() -> None:
         node.query(Room.area)
     assert repr(node).startswith("<Room node")
     assert "test_reference_misuse.py:" in repr(node)
-    assert ViewKey("cost", int).name == "cost"

@@ -23,7 +23,6 @@ from finn.core.space import (
     Space,
     Unresolved,
     View,
-    ViewKey,
     composite,
     constraint,
     derived,
@@ -32,9 +31,6 @@ from finn.core.space import (
     inspection,
 )
 from finn.core.space.errors import ConfigurationError, DefinitionError
-
-PHYSICAL = ViewKey("physical", int)
-WIDTH = ViewKey("width", int)
 
 
 def test_composite_keeps_narrow_fields_available_and_reuses_accepted_children() -> None:
@@ -51,9 +47,6 @@ def test_composite_keeps_narrow_fields_available_and_reuses_accepted_children() 
             return width > 0
 
         physical = View(complete)
-        # Exports are views only: the width is exported as a view.
-        exported_width = View(width)
-        exports = {WIDTH: exported_width, PHYSICAL: physical}
 
     class Refused(Space):
         width = Const(-1)
@@ -63,8 +56,6 @@ def test_composite_keeps_narrow_fields_available_and_reuses_accepted_children() 
             return False
 
         physical = View(width)
-        exported_width = View(width)
-        exports = {WIDTH: exported_width, PHYSICAL: physical}
 
     class Composite(Space):
         enabled = Const(False)

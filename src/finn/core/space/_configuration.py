@@ -17,7 +17,6 @@ views included: a view reads as its accepted value, and its assessment is
 from __future__ import annotations
 
 from collections.abc import Mapping
-from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -36,7 +35,6 @@ from .declarations import (
     Declaration,
     ValueRef,
     View,
-    ViewKey,
     declared_path,
 )
 from .edits import Change, ChangeRequest, ConfigurationResult
@@ -153,7 +151,7 @@ class SpaceMeta(type):
             "_space_"
         ):
             existing = cls.__dict__.get(name, getattr(cls, name, None))
-            if name == "exports" or _structural(existing) or _structural(value):
+            if _structural(existing) or _structural(value):
                 raise DefinitionError.broken(
                     "structure-finalized",
                     _OWNER,
@@ -165,7 +163,7 @@ class SpaceMeta(type):
     def __delattr__(cls, name: str) -> None:
         if cls.__dict__.get("_space_definition_finalized", False):
             existing = cls.__dict__.get(name)
-            if name == "exports" or _structural(existing):
+            if _structural(existing):
                 raise DefinitionError.broken(
                     "structure-finalized",
                     _OWNER,
@@ -207,8 +205,6 @@ class Space(metaclass=SpaceMeta):
     # scope's record (``_scopes.ScopeRecord``).
     _held: ClassVar[object]
     _scope: ClassVar[Any]
-    # A key maps to one view or derived value (a derived value is typed as its value).
-    exports: ClassVar[Mapping[ViewKey[Any], object]] = MappingProxyType({})
 
     def __set_name__(self, owner: type[object], name: str) -> None:
         path = declared_path(self)

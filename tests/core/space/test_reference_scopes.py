@@ -75,7 +75,7 @@ def test_a_view_of_an_open_choice_waits_on_it() -> None:
 # A view composes: the parent's view reads its children's views (SZ100 (3)). Only a view
 # reads a view, so this is a definition on both sides. (The cycles a rule reading a view of
 # its own Space closed went with views read in: the model refuses those as view-read-in, and
-# the matrix's T4b row is witnessed in the reference cases.)
+# so does the engine: the reference cases witness it.)
 
 
 def stage(name: str) -> Scope:

@@ -90,7 +90,16 @@ from core.space.reference import (
     listed,
 )
 from core.space.reference import Space as Description
-from core.space.reference_harness import MILESTONES, ROWS, Case, Spelling, expected, reached
+from core.space.reference_harness import (
+    MILESTONES,
+    ROWS,
+    Case,
+    Row,
+    Spelling,
+    expected,
+    matrix,
+    reached,
+)
 from core.space.reference_harness import implementation as harness_implementation
 from core.space.reference_harness import walks as reference_walks
 from core.space.reference_harness.engine import definition
@@ -106,7 +115,6 @@ from finn.core.space import (
     Select,
     Space,
     Unresolved,
-    ValueSemantics,
     _compose,
     _value_types,
     bind,
@@ -135,7 +143,7 @@ from finn.core.space._running.value import DesignSpace, FactsLayer
 from finn.core.space._scopes import Address
 from finn.core.space._value_types import is_value_type
 from finn.core.space.occurrence import held
-from finn.core.space.semantics import NotAValue, canonical, default_semantics
+from finn.core.space.semantics import NotAValue, ValueSemantics, canonical, default_semantics
 
 RUNNING: Implementation = load("core.space._running_type:RUNNING")
 RUNNING_DROPPING: Implementation = load("core.space._running_type:RUNNING_DROPPING")
@@ -215,7 +223,7 @@ def test_the_reference_hand_cases_pass_under_the_running_type() -> None:
     ``--space-implementation=core.space._running_type:RUNNING`` (the public API with no
     cache): none fails or passes unexpectedly or is skipped, and the expected failures are
     exactly the witnesses of the matrix's rows the running type has not reached
-    (``matrix.ROWS``, ``matrix.reached``).
+    (``matrix.ROWS``, ``matrix.reached``: none now, so every hand case passes).
 
     The option is written ``--space-implementation=MODULE:ATTRIBUTE``, with ``=``, before
     the test paths: written apart from its value, pytest takes the value for a path.
@@ -231,7 +239,6 @@ def test_the_reference_hand_cases_pass_under_the_running_type() -> None:
         and row.milestone not in reached(RUNNING)
         and row.witness.partition("::")[0] in stems
     )
-    assert unimplemented
     command = [
         sys.executable,
         "-m",
@@ -293,9 +300,20 @@ class _Recording:
 
 @dataclass(frozen=True)
 class _Reaching(_Recording):
-    """An implementation declaring it has reached T4b."""
+    """An implementation declaring it has reached the later milestone ``lane 9`` (see
+    ``a_later_milestone``)."""
 
-    milestones: frozenset[str] = frozenset({"T4b"})
+    milestones: frozenset[str] = frozenset({"lane 9"})
+
+
+@pytest.fixture
+def a_later_milestone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The matrix holding a milestone with a row, as it does while one is pending: no real
+    milestone is, so the machinery is tested on one of its own."""
+    rows = (Row("a-row", "lane 9", "the change", "test_reference_cases::test_it"),)
+    monkeypatch.setattr(matrix, "MILESTONES", ("base", "lane 9"))
+    monkeypatch.setattr(matrix, "ROWS", rows)
+    monkeypatch.setattr(matrix, "BY_ID", {row.id: row for row in rows})
 
 
 @contextmanager
@@ -357,10 +375,11 @@ def test_the_option_makes_its_implementation_the_default_until_stopped() -> None
     assert harness_implementation.default() is PUBLIC
 
 
+@pytest.mark.usefixtures("a_later_milestone")
 def test_a_witness_is_expected_to_fail_for_a_default_short_of_its_milestone() -> None:
     """A row's witness is a strict expected failure for a default that has not reached the
-    row's milestone (the public API, with and without its cache: neither declares any), and a plain
-    test for one that has."""
+    row's milestone (the public API, with and without its cache: neither declares any), and a
+    plain test for one that has. (On a milestone of its own: none is pending.)"""
 
     def witness() -> None: ...
 
@@ -368,16 +387,16 @@ def test_a_witness_is_expected_to_fail_for_a_default_short_of_its_milestone() ->
         return [mark.name for mark in getattr(test, "pytestmark", [])]
 
     assert reached(PUBLIC) == reached(RUNNING) == frozenset()
-    assert reached(_Reaching()) == {"T4b"}
+    assert reached(_Reaching()) == {"lane 9"}
     with pytest.raises(ValueError, match="no later milestones"):
         reached(_Reaching(milestones=frozenset({"T9"})))
 
     def other() -> None: ...
 
-    assert marks(expected("view-read-in")(witness)) == ["xfail"]
+    assert marks(expected("a-row")(witness)) == ["xfail"]
     with _default(_Reaching()):
-        assert marks(expected("view-read-in")(witness)) == ["xfail"]
-        assert marks(expected("view-read-in")(other)) == []
+        assert marks(expected("a-row")(witness)) == ["xfail"]
+        assert marks(expected("a-row")(other)) == []
 
 
 # -- a ``when`` read past its guard, through a formal of its scope ----------------------------

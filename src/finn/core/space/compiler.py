@@ -159,8 +159,8 @@ def compile_model(space_type: type[S]) -> Model[S]:
     """The canonical model of a Space class whose formals are all runtime inputs: its
     compiled form, placed as scopes on demand (``_scopes``). Its class is compiled first
     (checked, with the cycles through the Spaces it places, each compiled before it); then
-    the domain rule, composed per class on the compiled forms up to this root
-    (``_compose``)."""
+    views read out and the domain rule, each composed per class on the compiled forms up
+    to this root (``_compose``)."""
 
     if not isinstance(space_type, type) or not issubclass(space_type, Space):
         raise DefinitionError.broken(
@@ -174,11 +174,12 @@ def compile_model(space_type: type[S]) -> Model[S]:
                     "model-cache-invalid", _OWNER, "invalid prepared-model cache on Space class"
                 )
             return cached
-        from ._compose import check_domains
+        from ._compose import check_domains, check_views
 
         root = compiled(space_type)
-        # Every domain's membership reads facts only (what each method may read is
-        # inferred from its source).
+        # Views are read out: only a view reads a view. Then every domain's membership
+        # reads facts only. (What each method may read is inferred from its source.)
+        check_views(root)
         check_domains(root)
         model = model_of(root)
         type.__setattr__(space_type, "_space_prepared_model", model)

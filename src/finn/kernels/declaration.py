@@ -55,7 +55,7 @@ library module's: ``finn.kernels.library.LibraryModule.build``), its pins of a m
 def is_member(value: object) -> bool:
     """Whether ``value``, an argument of a declaration, is a declaration of the engine (a
     member of the kernel, or one a subclass states: ``required()``), not a constant: a
-    constant of an engine type (a domain, a value semantics) is a constant."""
+    constant of an engine type (a domain) is a constant."""
     return isinstance(value, (Declaration, Required))
 
 

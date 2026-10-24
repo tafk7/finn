@@ -19,15 +19,12 @@ from finn.core.space import (
     Select,
     Space,
     View,
-    ViewKey,
     constraint,
     derived,
     design_space,
     inspection,
     view,
 )
-
-PHYSICAL = ViewKey("physical", int)
 
 
 def test_static_alternatives_and_demanded_evidence_are_separate() -> None:
@@ -41,15 +38,11 @@ def test_static_alternatives_and_demanded_evidence_are_separate() -> None:
             calls.append("good")
             return size
 
-        exports = {PHYSICAL: physical}
-
     class Bad(Space):
         @view
         def physical() -> int:
             calls.append("bad")
             raise AssertionError("inactive evaluator ran")
-
-        exports = {PHYSICAL: physical}
 
     # The structural choice is a Decision over nodes; its output reads the
     # selected candidate's member by name.

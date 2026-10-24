@@ -81,7 +81,7 @@ from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import KernelSpace, extent_of
 from finn.kernels.library import LibraryModule
 from finn.kernels.port import AxiStreamPort, axis
-from finn.kernels.utilization import RESOURCES_SEMANTICS, Fit
+from finn.kernels.utilization import Fit
 from finn.kernels.values.domains import Integer, admit_element, integer_bounds, range_dtype
 from finn.platform.capabilities import DspBlock, Platform, Resources, dsp_widths
 
@@ -628,7 +628,7 @@ class PackedDotpKernel(DotpAxiKernel):
         least, greatest = self.result_range
         return range_dtype(least, greatest)
 
-    @view(semantics=RESOURCES_SEMANTICS)
+    @view
     def resource_use(self) -> Resources | Rejected:
         """``packed_dotp_resources`` at the core's SIMD; the tree reducer's only."""
         if self.reducer != "tree":
@@ -727,7 +727,7 @@ class Int8Dsp58DotpKernel(DotpAxiKernel):
         one reads it."""
         return "compressor"
 
-    @view(semantics=RESOURCES_SEMANTICS)
+    @view
     def resource_use(self) -> Resources:
         return int8_dsp58_dotp_resources(pe=self.pe, simd=self.dsp_simd)
 

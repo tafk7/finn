@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from finn.core.space import Decision, Param, Select, Space, View, constraint, derived, view, ValueSemantics, QueryResult, Available, design_space
+from finn.core.space import Decision, Param, Select, Space, View, constraint, derived, view, QueryResult, Available, design_space
 
 class Child(Space):
     width: int = Param()

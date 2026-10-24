@@ -6,9 +6,9 @@
 A kernel binding a module (``KernelSpace`` with a ``LibraryModule``) states its
 parameters, sources and resources, and its ports; it places no kernel (checked when the
 class is made: ``tests/kernels/test_kernel_space.py``). Its control bus is a declaration
-(``ControlBus``): held idle while it is not presented, presented (exported as ``CONTROL``)
-while it is, so a bus is accounted for by construction; its pins come before every
-port's, its hold after theirs. Every port runs on its kernel's clock domain
+(``ControlBus``): held idle while it is not presented, presented (read as
+``KernelSpace.bus_control``) while it is, so a bus is accounted for by construction; its
+pins come before every port's, its hold after theirs. Every port runs on its kernel's clock domain
 (``clock_domain``). Its module is the ``Leaf`` at the empty label of its netlist
 (``library_module``). A kernel with children presents a child's port as its own
 (``served``: ``<name>_contract``, labelled below it), and its netlist merges its members'.
@@ -49,12 +49,11 @@ from finn.kernels.artifacts.module import Held, Leaf, RegisterMap
 from finn.kernels.base import NATIVE_CLOCKING, KernelSpace
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.configure import commit
-from finn.kernels.control import CONTROL, Control, ControlBus, held_bus
+from finn.kernels.control import Control, ControlBus, held_bus
 from finn.kernels.library import LibraryModule, library_module
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port import AxiStreamPort, served
 from finn.kernels.sides import Side
-from finn.kernels.utilization import RESOURCES_SEMANTICS
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import Resources
 
@@ -91,7 +90,7 @@ class Probe(KernelSpace):
     def parameters(self) -> dict[str, int | str]:
         return {}
 
-    @view(semantics=RESOURCES_SEMANTICS)
+    @view
     def resource_use(self) -> Resources | Rejected:
         return reject("kernel-resources", "a model only")
 
@@ -168,7 +167,7 @@ def test_a_control_bus_held_holds_its_inputs_after_every_port_s_hold() -> None:
     point = controlled()
     assert point.config_presented is False
     assert point.config_control == Control(None)
-    assert point.query(Controlled.exports[CONTROL]) == Available(Control(None))
+    assert point.query(Controlled.bus_control) == Available(Control(None))
     module = library_module(point)
     names = [pin.name for pin in module.abi.pins]
     # Its pins before every port's, after the probe's other pins (declared before it).
@@ -178,17 +177,17 @@ def test_a_control_bus_held_holds_its_inputs_after_every_port_s_hold() -> None:
     assert module.held.unused == expected.unused
 
 
-def test_a_control_bus_presented_is_exported_with_its_port_and_registers() -> None:
+def test_a_control_bus_presented_is_read_with_its_port_and_registers() -> None:
     point = controlled(writable=True, control="first_s_axilite")
     assert point.config_presented is True
     control = Control(BUS, "first_s_axilite", RegisterMap(((0, 7),)))
-    assert point.query(Controlled.exports[CONTROL]) == Available(control)
+    assert point.query(Controlled.bus_control) == Available(control)
     assert library_module(point).held.inputs == (("mode", 1),)
 
 
 def test_a_control_bus_presented_without_its_port_is_refused() -> None:
     # A bus it presents names the port it is presented at: presented with no port (the
-    # optional ``control`` left out, None), its control view refuses rather than export a
+    # optional ``control`` left out, None), its control view refuses rather than present a
     # bus at port None.
     point = controlled(writable=True)
     assert point.config_presented is True
@@ -219,6 +218,31 @@ def test_a_kernel_presents_one_control_bus_at_most() -> None:
         class Twice(Controlled):
             id = "test.probe.twice"
             other = ControlBus(Controlled.config_bus)
+
+
+def test_two_control_buses_in_one_body_are_refused_as_repeated_before_lowering() -> None:
+    """Counted before any declaration is lowered: each bus lowers to ``declares_bus`` and
+    ``bus_control``, so lowering first would answer ``declaration-member-taken`` for the
+    second and hide the refusal. (A second bus from a subclass is the case above.)"""
+    with refused("control-bus-repeated", error=DefinitionError, message="Both declares"):
+
+        class Both(Probe):
+            id = "test.probe.both"
+            writable: bool = Param(default=False)
+            control: str | None = Param(default=None)
+
+            @derived
+            def config_bus(self) -> Bus:
+                return BUS
+
+            @view
+            def register_map(self) -> RegisterMap:
+                return RegisterMap(((0, 7),))
+
+            first = ControlBus(config_bus, presented=writable, port=control, registers=register_map)
+            second = ControlBus(
+                config_bus, presented=writable, port=control, registers=register_map
+            )
 
 
 def test_a_control_bus_it_may_present_names_its_port_and_registers() -> None:

@@ -17,11 +17,11 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Mapping
-from typing import Any, TypeVar, overload
+from typing import TypeVar, overload
 
 from ._configuration import Space
 from .collection import collect_space
-from .declarations import ViewKey, local_name
+from .declarations import local_name
 from .errors import DefinitionError
 
 _OWNER = "space.extensions"
@@ -35,7 +35,6 @@ def composite(
     members: Mapping[str, object],
     *,
     annotations: Mapping[str, object] | None = None,
-    exports: Mapping[ViewKey[Any], object] | None = None,
 ) -> type[Space]: ...
 
 
@@ -46,7 +45,6 @@ def composite(
     *,
     base: type[S],
     annotations: Mapping[str, object] | None = None,
-    exports: Mapping[ViewKey[Any], object] | None = None,
 ) -> type[S]: ...
 
 
@@ -56,7 +54,6 @@ def composite(
     *,
     base: type[Space] = Space,
     annotations: Mapping[str, object] | None = None,
-    exports: Mapping[ViewKey[Any], object] | None = None,
 ) -> type[Space]:
     """A new Space class whose members are ``members``: nodes and declarations.
 
@@ -90,8 +87,6 @@ def composite(
                 declaration=name,
             )
         namespace["__annotations__"] = dict(annotations)
-    if exports is not None:
-        namespace["exports"] = dict(exports)
     try:
         space_type = type(name, (base,), namespace)
     except DefinitionError:

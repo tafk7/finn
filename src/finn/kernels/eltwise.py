@@ -41,7 +41,6 @@ from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import NATIVE_CLOCKING, KernelSpace, extent_of
 from finn.kernels.library import LibraryModule
 from finn.kernels.port import AxiStreamPort
-from finn.kernels.utilization import RESOURCES_SEMANTICS
 from finn.kernels.values.domains import Integer, admit_element
 from finn.platform.capabilities import DspBlock, Platform, Resources
 
@@ -223,7 +222,7 @@ class EltwiseKernel(KernelSpace):
         lhs_element: ClassVar[ScalarEncoding]
         rhs_element: ClassVar[ScalarEncoding]
 
-    @view(semantics=RESOURCES_SEMANTICS)
+    @view
     def resource_use(self) -> Resources | Rejected:
         return reject("kernel-resources", "the eltwise module's resources are not characterised")
 

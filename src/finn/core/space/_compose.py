@@ -19,16 +19,29 @@ reaches out of that Space lifted back through the slot (``lift``).
   by keys relative to it: its own records, the members its edges name, and the members of
   the Spaces it places on the way, as the one table of every placement named them (a
   cycle at two levels sharing members: the inner class's is found first, as that class is
-  compiled first).
+  compiled first). A view's edge to its Space's validity is not in the order: views are
+  read out (below), so it closes no cycle, and a read in is ``view-read-in``, not a cycle
+  through the validity. Edges among views stay: views reading each other in a ring are a
+  cycle.
+- **Views read out** (``check_views``): only a view reads a view. A constraint, a derived
+  value, a guard (a member's or a placed Space's ``when``), a domain (its inputs) and a
+  binding of a placed Space's formal read facts, choices and derived values; one reading a
+  view is ``view-read-in``, named with the view. What passes a value on (an alias, a
+  selection, a ``Members``, a computation written for a member) reads what it passes, so a
+  ``Members`` whose entries are views is read by views alone. A view reads anything, and
+  so do the computations written for it and its own guard. Per class, its own records'
+  reads (references, and a method's inferred reads) and each placed Space's, once; for a
+  root, the first found, named relative to it. It is checked before the domain rule: a
+  domain reading a view refuses as ``view-read-in`` whatever the view reads.
 - **The domain rule** (``check_domains``): a domain's membership reads facts only. Per
   class, each domain's walk follows what its membership inputs may read (arguments,
-  alternatives, a view's validity and a validity's pieces, outputs, selectors, guards and
-  a method's inferred reads), skipping the guards that decide whether the Decision exists;
-  it stops at a choice (``domain-reads-choice``), and at the class's own formals and the
-  guard it is placed under, which it reports as reached. A child's are followed into the
-  placing class's bindings, with the guards above the slot as existence guards of the
-  child's Decision too, and so up to the root. A class records, for its own formals, which
-  are reached by any domain in its subtree (``_Entry``), once.
+  alternatives, outputs, selectors, guards and a method's inferred reads), skipping the
+  guards that decide whether the Decision exists; it stops at a choice
+  (``domain-reads-choice``), and at the class's own formals and the guard it is placed
+  under, which it reports as reached. A child's are followed into the placing class's
+  bindings, with the guards above the slot as existence guards of the child's Decision
+  too, and so up to the root. A class records, for its own formals, which are reached by
+  any domain in its subtree (``_Entry``), once.
 
 Each walk is that of the design space the class is placed in: the composition is exact.
 Where a walk back up re-enters the subtree holding the Decision it started from, its
@@ -42,6 +55,8 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
+from finn.core.reporting.findings import Finding, FindingKind
+
 from ._ordering import cyclic, dependency_order
 from ._reads import _Dynamic, _Missing, _Ref, _TemplateInference
 from ._table import Binding, Table, member_key
@@ -50,7 +65,7 @@ from .ir import Placed, Placing, Selected, forwards
 
 if TYPE_CHECKING:
     from ._template import Compiled
-    from .ir import Edge
+    from .ir import Edge, Member, Node, NodeRef
 
 _OWNER = "space.compose"
 
@@ -150,9 +165,10 @@ class _Fields:
         return list(dict.fromkeys(found))
 
     def following(self) -> list[Ref]:
-        """In the domain rule's order: arguments, alternatives, constraints, output,
-        selector, guard."""
-        found: list[Ref] = [*self.arguments, *self.alternatives, *self.constraints]
+        """In the domain rule's order: arguments, alternatives, output, selector, guard. A
+        view's validity and a validity's pieces are not followed: the walk reaches no view
+        (``check_views``), the one record that lists its Space's validity."""
+        found: list[Ref] = [*self.arguments, *self.alternatives]
         found.extend(
             single for single in (self.output, self.selector, self.guard) if single is not None
         )
@@ -240,11 +256,26 @@ def exits(compiled: Compiled, ref: int | Placed) -> frozenset[Exit]:
 
 
 def _successors(compiled: Compiled, ref: int | Placed) -> list[Ref]:
-    """A record's dependencies; a placed Space's member's, what it reaches there, lifted
-    into this class."""
+    """A record's dependencies in the static order (a view's without its Space's validity:
+    ``_ordered``); a placed Space's member's, what it reaches there, lifted into this
+    class."""
     if isinstance(ref, Placed):
         return list(_through(compiled, ref.path, ref.member))
-    return fields(compiled, ref).dependencies()
+    held = fields(compiled, ref)
+    if compiled.records[ref].kind == "view":
+        return [each for each in held.dependencies() if each not in held.constraints]
+    return held.dependencies()
+
+
+def _ordered(node: Node) -> tuple[NodeRef, ...]:
+    """A node's dependencies in the static order. A view's edge to its Space's validity is
+    left out: a view is read out, so nothing its validity reads may read it (``view-read-in``,
+    checked per root) and the edge closes no cycle the order must find; a read in reaches
+    that check rather than a cycle through the validity. Evaluation keeps the edge (a view
+    is refused with its Space)."""
+    if node.kind != "view":
+        return node.dependencies
+    return tuple(ref for ref in node.dependencies if ref not in node.constraints)
 
 
 def _reaching(compiled: Compiled, ref: Ref) -> frozenset[Exit]:
@@ -291,7 +322,7 @@ def order(table: Table) -> tuple[int, ...]:
         found: list[Any]
         if isinstance(vertex, int):
             node = table.nodes[vertex]
-            found = list(node.dependencies)
+            found = list(_ordered(node))
             names.append(node.key)
         else:
             held, steps, target = _table_descent(table, vertex)
@@ -822,8 +853,249 @@ def domain_refusals(compiled: Compiled) -> dict[str, DefinitionError]:
     return {cast(str, refusal.owner): refusal.error() for refusal in refusals}
 
 
+# -- views read out ----------------------------------------------------------------------------
+
+# What passes a value on without computing from it: what reads one of these reads what it
+# passes on.
+_PASSING = frozenset(("alias", "members", "select"))
+
+
+@dataclass(frozen=True, slots=True)
+class _ReadIn:
+    """A record reading a view: the key it is named by (``reader``), the view, and the
+    members passing the view on to it (``through``), keys relative to the class walked."""
+
+    reader: str
+    view: str
+    through: tuple[str, ...]
+
+    def under(self, name: str) -> _ReadIn:
+        return _ReadIn(
+            member_key(name, self.reader),
+            member_key(name, self.view),
+            tuple(member_key(name, step) for step in self.through),
+        )
+
+    def error(self) -> DefinitionError:
+        through = f" (through {' -> '.join(self.through)})" if self.through else ""
+        detail = (
+            f"{self.reader}: reads the view {self.view}{through}; a view is read out, never "
+            "read in: a constraint, derived value, guard, domain or binding reads facts, "
+            "choices and derived values (read what the view reads)"
+        )
+        details = (("declaration", self.reader), ("view", self.view))
+        return DefinitionError(
+            detail,
+            findings=(
+                Finding(FindingKind.AUTHORING, "view-read-in", self.reader, detail, details),
+            ),
+        )
+
+
+# A record a reference names: the class it is a record of, its number there, and the slots'
+# names from the class read to it.
+_Target: TypeAlias = "tuple[Compiled, int, str]"
+
+
+def _target(compiled: Compiled, ref: Ref) -> _Target | None:
+    """The record ``ref`` names, a member of ``compiled``'s class or of a Space it places;
+    None for a reference out of the class."""
+    if isinstance(ref, int):
+        return compiled, ref, ""
+    if not isinstance(ref, Placed):
+        return None
+    names: list[str] = []
+    below = compiled
+    for step in ref.path:
+        names.append(below.slots[step].name)
+        below = below.slots[step].compiled
+    return below, ref.member, ".".join(names)
+
+
+def _ways(compiled: Compiled) -> dict[int, tuple[str, ...] | None]:
+    """The view each record of ``compiled``'s class reads, by the way to it, as found."""
+    return cast("dict[int, tuple[str, ...] | None]", _cache(compiled, "views read"))
+
+
+@dataclass(slots=True)
+class _Frame:
+    compiled: Compiled
+    record: int
+    passed: Iterator[Ref]
+    waiting: _Target | None = None
+
+
+class _Views:
+    """Views read out (see the module docstring): per class, the first record reading a
+    view, its own records first, then each placed Space's (keys relative to the class)."""
+
+    def __init__(self) -> None:
+        self.inference = _TemplateInference()
+
+    # -- what a reference reads
+
+    def reads(self, compiled: Compiled, record: int) -> Iterator[Ref]:
+        """What ``record`` reads: its references, then a ``self`` method's inferred reads (a
+        dynamic method's are not known, and read as nothing here)."""
+        yield from fields(compiled, record).dependencies()
+        spec = compiled.records[record]
+        if spec.call_style == "self" and spec.function is not None:
+            for item in self.inference.reads(spec.function, compiled):
+                if isinstance(item, _Ref) and not isinstance(item.node, Placing):
+                    yield Placed(item.steps, item.node) if item.steps else item.node
+
+    @staticmethod
+    def _generated(spec: Member) -> bool:
+        """A computation the engine writes for a member (an expression, a projection, a
+        view's output), named by that member."""
+        return spec.kind in ("derived", "const") and spec.source_owner is not None
+
+    def passes(self, compiled: Compiled, record: int) -> Iterator[Ref]:
+        """What ``record`` passes on, if it passes a value on: an alias's, a selection's or a
+        ``Members``'s sources, a generated computation's inputs (a binding is a reader)."""
+        spec = compiled.records[record]
+        if spec.kind in _PASSING and record not in compiled.binds:
+            held = fields(compiled, record)
+            if held.output is not None:
+                yield held.output
+            yield from held.alternatives
+        elif self._generated(spec):
+            guard = fields(compiled, record).guard
+            yield from (ref for ref in self.reads(compiled, record) if ref != guard)
+
+    def view(self, compiled: Compiled, ref: Ref) -> tuple[str, ...] | None:
+        """The view ``ref`` reads, if it reads one: a view, or what passes one on; the way
+        (the passing members, then the view), keys relative to ``compiled``'s class. A
+        reference out of the class reads none (a formal's binding is a reader above)."""
+        target = _target(compiled, ref)
+        if target is None:
+            return None
+        below, record, name = target
+        way = self._way(below, record)
+        return None if way is None else tuple(member_key(name, step) for step in way)
+
+    def _way(self, compiled: Compiled, record: int) -> tuple[str, ...] | None:
+        """``view`` of a record of ``compiled``'s class, found once per record. What passes a
+        value on may be a long chain (an expression's), so it is walked with a stack of its
+        own: each frame a record whose way is being found, what it passes on, and the
+        record it waits on (its class, number, and the slots' names to it)."""
+        memo = _ways(compiled)
+        if record in memo:
+            return memo[record]
+        frames: list[_Frame] = []
+
+        def opened(below: Compiled, at: int) -> bool:
+            """Whether ``at`` waits on a frame of its own (else its way is known)."""
+            spec = below.records[at]
+            if spec.kind == "view":
+                _ways(below)[at] = (spec.key,)
+                return False
+            _ways(below)[at] = None  # until found: the static order is acyclic
+            frames.append(_Frame(below, at, iter(self.passes(below, at))))
+            return True
+
+        opened(compiled, record)
+        while frames:
+            frame = frames[-1]
+            target = frame.waiting
+            frame.waiting = None
+            if target is None:
+                following = next(frame.passed, None)
+                if following is None:
+                    frames.pop()  # passes no view on
+                    continue
+                target = _target(frame.compiled, following)
+                if target is None:
+                    continue
+                if target[1] not in _ways(target[0]) and opened(target[0], target[1]):
+                    frame.waiting = target
+                    continue
+            below, at, name = target
+            found = _ways(below)[at]
+            if found is None:
+                continue
+            way = tuple(member_key(name, step) for step in found)
+            spec = frame.compiled.records[frame.record]
+            _ways(frame.compiled)[frame.record] = way if self._generated(spec) else (spec.key, *way)
+            frames.pop()
+        return memo[record]
+
+    # -- the readers
+
+    def own(self, compiled: Compiled) -> _ReadIn | None:
+        """The first of ``compiled``'s own records reading a view. A view reads anything:
+        a view, the computations written for it and its own guard are not readers here; nor
+        is what passes a value on (its reader is)."""
+        views = {spec.key for spec in compiled.records if spec.kind == "view"}
+        for record, spec in enumerate(compiled.records):
+            if spec.kind in ("view", "validity", "param", "const"):
+                continue
+            if spec.kind in _PASSING and record not in compiled.binds:
+                continue
+            if self._generated(spec) or (spec.kind == "guard" and spec.owner in views):
+                continue
+            for ref in self.reads(compiled, record):
+                found = self.view(compiled, ref)
+                if found is not None:
+                    return _ReadIn(spec.owner, found[-1], found[:-1])
+        return None
+
+    def summary(self, compiled: Compiled) -> _ReadIn | None:
+        """The first record of ``compiled``'s class's subtree reading a view; found once per
+        class, the classes it places first (deepest first)."""
+        cache = _cache(compiled, "views read in")
+        if None not in cache:
+            for below in self._below(compiled):
+                held = _cache(below, "views read in")
+                if None not in held:
+                    held[None] = self._summary(below)
+        return cast("_ReadIn | None", cache[None])
+
+    def _summary(self, compiled: Compiled) -> _ReadIn | None:
+        found = self.own(compiled)
+        if found is not None:
+            return found
+        for index in range(len(compiled.slots)):
+            below = self.summary(slot(compiled, index).compiled)
+            if below is not None:
+                return below.under(compiled.slots[index].name)
+        return None
+
+    @staticmethod
+    def _below(compiled: Compiled) -> list[Compiled]:
+        """``compiled`` and every class it places, each after those it places (none whose
+        readers are known already)."""
+        found: list[Compiled] = []
+        done: set[int] = set()
+        stack: list[tuple[Compiled, Iterator[int]]] = [(compiled, iter(range(len(compiled.slots))))]
+        while stack:
+            current, slots = stack[-1]
+            index = next(slots, None)
+            if index is None:
+                stack.pop()
+                found.append(current)
+                continue
+            held = current.slots[index].compiled
+            if id(held) in done:
+                continue
+            done.add(id(held))
+            if None not in _cache(held, "views read in"):
+                stack.append((held, iter(range(len(held.slots)))))
+        return found
+
+
+def check_views(compiled: Compiled) -> None:
+    """Views read out, ``compiled``'s class as a root (see the module docstring): the first
+    record found reading a view, ``view-read-in``, naming it and the view relative to the
+    root."""
+    found = _Views().summary(compiled)
+    if found is not None:
+        raise found.error()
+
+
 __all__ = [
     "check_domains",
+    "check_views",
     "domain_refusals",
     "order",
 ]

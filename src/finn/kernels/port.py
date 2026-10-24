@@ -98,7 +98,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd
 from finn.kernels.artifacts.abi import Clocking, Direction, Endpoint, Pin
 from finn.kernels.artifacts.module import Held
-from finn.kernels.base import PORT_CONTRACT, KernelSpace, PortContract
+from finn.kernels.base import KernelSpace, PortContract
 from finn.kernels.declaration import (
     KernelDeclaration,
     Product,
@@ -332,7 +332,7 @@ class AxiStreamPort(KernelDeclaration):
             )
             return found if isinstance(found, Rejected) else PortContract(name, found)
 
-        members[f"{name}_contract"] = view(semantics=PORT_CONTRACT, when=guard)(contract_)
+        members[f"{name}_contract"] = view(when=guard)(contract_)
         return members
 
     def element(self, kernel: Space, name: str) -> ScalarEncoding | Rejected:
@@ -717,7 +717,7 @@ class Served(KernelDeclaration):
 
             members[f"{name}_label"] = derived(label=labels)(stated_label)
             members[f"{name}_side"] = derived(side=sides)(stated_side)
-            members[f"{name}_contract"] = view(semantics=PORT_CONTRACT, contract=offered)(stated)
+            members[f"{name}_contract"] = view(contract=offered)(stated)
         elif case is not None:
 
             def chosen_label(case: str, label: str) -> str:
@@ -731,9 +731,7 @@ class Served(KernelDeclaration):
 
             members[f"{name}_label"] = derived(case=case, label=labels)(chosen_label)
             members[f"{name}_side"] = derived(case=case, side=sides)(chosen_side)
-            members[f"{name}_contract"] = view(
-                semantics=PORT_CONTRACT, case=case, contract=offered
-            )(chosen)
+            members[f"{name}_contract"] = view(case=case, contract=offered)(chosen)
         else:
 
             def placed_label(label: str) -> str:
@@ -747,7 +745,7 @@ class Served(KernelDeclaration):
 
             members[f"{name}_label"] = derived(label=labels)(placed_label)
             members[f"{name}_side"] = derived(side=sides)(placed_side)
-            members[f"{name}_contract"] = view(semantics=PORT_CONTRACT, contract=offered)(placed)
+            members[f"{name}_contract"] = view(contract=offered)(placed)
         return members
 
 

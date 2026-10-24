@@ -7,8 +7,9 @@ an edge out of the class (``ir.NodeRef``).
 A member, a path of records (``kitchen.area``), a Decision over nodes' case or
 member (``heating.kw``), a projection (``spec.payload_bits``) and an integer
 expression each resolve to one node; those that need one get it reserved here, once per scope
-and source. ``members_candidates`` lists the exports ``Members`` reads (views and derived
-values), named as the reading scope sees them.
+and source. ``members_candidates`` lists the members ``Members`` reads (views and derived
+values: each child's member of the named base), named as the reading scope sees
+them.
 
 A reference into a placed Space resolves in that class's compiled form, at a place
 (``_table.Place``: a slot, and the slots of the placed classes below it) and is an edge out
@@ -26,6 +27,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import replace
 from typing import cast
 
+from ._configuration import Space
 from ._nodes import NodeChoice, NodeDecision, NodeDecl, unwrap
 from ._table import ExpressionTask, Place, ScopeDraft, Table, member_key
 from .declarations import (
@@ -33,8 +35,8 @@ from .declarations import (
     ChoiceMemberRef,
     Declaration,
     MemberRef,
+    Members,
     Projection,
-    ViewKey,
     at,
 )
 from .errors import DefinitionError, RequestError
@@ -108,21 +110,40 @@ class Names:
         self.placed_choice_members: dict[tuple[Place, int, str], int] = {}
 
     def members_candidates(
-        self, scope: int, key: ViewKey[object]
+        self, scope: int, declaration: Members[object]
     ) -> list[tuple[str, str, NodeRef]]:
-        """Each child node's export of ``key``: (its name, the key's name, its member)."""
+        """Each child node's member a ``Members`` reads: (its name, the member's name, its
+        member). Each child whose class is the member's class or derives from it, at the
+        member's name."""
 
+        base, member_name = self.members_member(declaration)
         result: list[tuple[str, str, NodeRef]] = []
         prefix = self.table.drafts[scope].name
         for child in self.placed(scope):
             name = self.table.drafts[child].name
             name = name[len(prefix) + 1 :] if prefix else name
             compiled = self.table.placing(child).compiled
-            exported = compiled.members.get(key)
-            if exported is not None:
-                self.check_export(child, key, compiled.records[exported].kind)
-                result.append((name, key.name, self.table.lift(Place(child), exported)))
+            if not issubclass(compiled.space_type, base):
+                continue
+            member = compiled.named_members.get(member_name)
+            if member is not None:
+                result.append((name, member_name, self.table.lift(Place(child), member)))
         return result
+
+    def members_member(self, declaration: Members[object]) -> tuple[type[Space], str]:
+        """The class a ``Members`` of a member ranges over, and the member's name there: the
+        class that declares it, read now, when the class holding the ``Members`` is
+        compiled (the member's class does not exist while a body spells it)."""
+        member = declaration.member
+        owner, name = getattr(member, "owner", None), getattr(member, "name", None)
+        if not (isinstance(owner, type) and issubclass(owner, Space) and name is not None):
+            raise DefinitionError.broken(
+                "members-member-invalid",
+                _OWNER,
+                f"Members{at(declaration.origin)}: a member of a Space class is required, "
+                "declared in its body",
+            )
+        return owner, name
 
     def placed(self, scope: int) -> tuple[int, ...]:
         """The scopes placed by a scope's members, in member order (candidates in case order)."""
@@ -139,16 +160,6 @@ class Names:
                 children.extend(child for _, child in cases if child is not None)
         placed = self.placed_scopes[scope] = tuple(children)
         return placed
-
-    def check_export(self, scope: int, key: ViewKey[object], kind: str) -> None:
-        if kind not in ("view", "derived"):
-            raise DefinitionError.broken(
-                "member-not-export",
-                _OWNER,
-                f"{self.table.drafts[scope].name or '<root>'}: member {key.name} must be a view "
-                "or a derived value",
-                declaration=self.table.drafts[scope].name or "<root>",
-            )
 
     def fresh_number(self, owner: str) -> int:
         number = self.expression_counts.get(owner, 0)

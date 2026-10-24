@@ -106,12 +106,12 @@ def test_every_row_has_exactly_one_witness_and_every_expected_failure_a_row() ->
     assert not problems(CASE_MODULES)
 
 
-def test_the_pending_milestones_are_the_rulings_the_engine_has_not_reached() -> None:
-    # The engine core's, the facts-instance, T4a's and T4c's milestones are accepted, their
-    # rows removed; the model holds SZ100's ruling on views before the engine (T4b: views
-    # read out).
-    assert MILESTONES == ("base", "T4b")
-    assert [(row.id, row.milestone) for row in ROWS] == [("view-read-in", "T4b")]
+def test_no_milestone_is_pending_the_engine_holds_every_ruling_the_model_does() -> None:
+    # The engine core's, the facts-instance, T4a's, T4c's and T4b's (views read out)
+    # milestones are accepted, their rows removed: the matrix holds none, and every witness
+    # of the case modules is a plain test.
+    assert MILESTONES == ("base",)
+    assert ROWS == ()
 
 
 # A later milestone with rows, put in the matrix where a test needs one.
@@ -413,9 +413,9 @@ def test_a_selector_carries_its_scopes_guard_only_where_the_scope_holds_it_alone
         Case("unguarded", described(), Spelling(guarded_selectors=frozenset({"hall"})))
 
 
-def test_a_members_entry_is_exported_by_a_child_its_scope_places() -> None:
-    # The engine's Members ranges over the children its Space places, each exporting the
-    # key once: an entry two scopes down, or two entries of one child, cannot be written.
+def test_a_members_entry_is_held_by_a_child_its_scope_places() -> None:
+    # The engine's Members ranges over the children its Space places, each stating its
+    # member once: an entry two scopes down, or two entries of one child, cannot be written.
     def described(*entries: str) -> Space:
         inner = Scope(
             "inner",
@@ -511,8 +511,7 @@ def test_a_planted_value_on_a_stored_choice_is_seen() -> None:
 
 
 #: walks 0-3 (the gate's 30 steps, strict) with each fault planted: the question each seed's
-#: walk reports it by. The strict run fails on every disagreement, as the full run does on
-#: any but a view read in (T4b), drawn before the walk's description. The
+#: walk reports it by. The strict run fails on every disagreement, as the full run does. The
 #: value fault moves the first member by key answering a value: the fact ``f0`` in every
 #: one of these descriptions at the start, and each fact's answer is asked, so each walk
 #: reports it there, at step 0 (``VALUE_LINE``).

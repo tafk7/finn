@@ -44,7 +44,7 @@ from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import Traversal, tile, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.module import module_name
-from finn.kernels.base import RESOURCES
+from finn.kernels.base import KernelSpace
 from finn.kernels.explore import Explorer, SizeFifos, TargetThroughput
 from finn.kernels.fifo_sizing import NotModelled, Pattern, sides
 from finn.kernels.movers import (
@@ -268,7 +268,7 @@ def test_the_shell_s_resources_are_its_partition_s_its_movers_and_its_static_reg
     )
     assert (x.memory_width, x.tdata, y.memory_width) == (16, 8, 32)
     assert split.static_region == ZYNQ_STATIC_REGION.resources(masters=2, slaves=2)
-    members = [bound.query(name, RESOURCES) for name in bound.members]
+    members = [bound.query(name, KernelSpace.resources) for name in bound.members]
     assert split.partition == total(each.value for each in members if isinstance(each, Available))
     assert (
         bound.own_resources()

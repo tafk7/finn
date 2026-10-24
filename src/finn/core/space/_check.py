@@ -6,10 +6,10 @@ order.
 
 An alias, a view, a presence and a selection take their sources' semantics
 when they declare none; then every output, alternative, guard, callback
-argument, export and integer operand must agree with what reads it. A shared
+argument and integer operand must agree with what reads it. A shared
 ``decision.member`` whose candidates disagree on its type is dropped when
 nothing reads it. A placed Space's member has the semantics its class checked
-(``Table.semantics``), and a child's exports are checked in its own class.
+(``Table.semantics``).
 """
 
 from __future__ import annotations
@@ -27,7 +27,6 @@ _OWNER = "space.check"
 def check(table: Table, order: tuple[int, ...]) -> None:
     _check_nodes(table, order)
     _check_arguments(table)
-    _check_exports(table)
     _check_expressions(table)
 
 
@@ -123,25 +122,6 @@ def _check_arguments(table: Table) -> None:
                 declaration=owner,
             )
         validate_argument(dependency, semantics, owner=owner)
-
-
-def _check_exports(table: Table) -> None:
-    for draft in table.drafts:
-        if draft.placed is not None:
-            continue  # a child's exports are checked in its own class
-        exported = [
-            (export, draft.members[declaration])
-            for export, declaration in draft.effective.exports.items()
-        ]
-        for export, target in exported:
-            semantics = table.nodes[target].semantics
-            if semantics is None or not export.semantics.is_compatible_with(semantics):
-                raise DefinitionError.broken(
-                    "export-semantics-incompatible",
-                    _OWNER,
-                    f"{draft.name}: export {export.name} has incompatible semantics",
-                    declaration=draft.name,
-                )
 
 
 def _check_expressions(table: Table) -> None:

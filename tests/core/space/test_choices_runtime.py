@@ -23,7 +23,6 @@ from finn.core.space import (
     Space,
     Unresolved,
     View,
-    ViewKey,
     derived,
     design_space,
     divisors_of,
@@ -37,8 +36,6 @@ from finn.core.space.errors import (
     EvaluationError,
     RequestError,
 )
-
-PHYSICAL = ViewKey("physical", int)
 
 
 class Tile(Space):
@@ -114,15 +111,11 @@ def test_selected_view_preserves_direct_refusal_and_skips_other_alternatives() -
         def physical() -> int | Rejected:
             return reject("unsupported", "this product is not supported")
 
-        exports = {PHYSICAL: physical}
-
     class Explodes(Space):
         @view
         def physical() -> int:
             calls.append("unselected")
             raise AssertionError("unselected alternative was evaluated")
-
-        exports = {PHYSICAL: physical}
 
     class Root(Space):
         # A Decision over nodes; ``implementation.physical`` reads the selected
@@ -155,7 +148,6 @@ def test_singleton_choice_is_open_and_respects_its_outer_guard() -> None:
     class Only(Space):
         output = Const(7)
         physical = View(output)
-        exports = {PHYSICAL: physical}
 
     class Root(Space):
         enabled: bool = Param()
@@ -279,8 +271,6 @@ def test_wide_selected_outputs_keep_frozen_case_order_and_exact_targets() -> Non
         def physical(*, value: int) -> int:
             calls.append(value)
             return value
-
-        exports = {PHYSICAL: physical}
 
     class Root(Space):
         implementation: Leaf = Select(**{f"case{index}": Leaf(value=index) for index in range(128)})

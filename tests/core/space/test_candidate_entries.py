@@ -36,7 +36,6 @@ from finn.core.space import (
     inspection,
     reject,
     required,
-    view,
 )
 from finn.core.space._nodes import NodeChoice
 from finn.core.space.declarations import unmet_required
@@ -60,7 +59,7 @@ class PackedCore(ProtoKernel):
     def schedule(self) -> str:
         return f"pe{self.pe}.simd{self.simd}"
 
-    @view
+    @derived
     def cycles(self) -> int:
         return self.width // self.pe
 
@@ -78,7 +77,7 @@ class StubCore(ProtoKernel):
     def schedule(self) -> str:
         return f"rows{self.rows}"
 
-    @view
+    @derived
     def cycles(self) -> int:
         return self.width * self.rows
 
@@ -96,7 +95,7 @@ class WideCore(ProtoKernel):
     def schedule(self) -> str:
         return "wide"
 
-    @view
+    @derived
     def cycles(self) -> str:
         return "one"
 
@@ -104,7 +103,7 @@ class WideCore(ProtoKernel):
 class Unfinished(ProtoKernel):
     """Leaves ``schedule`` unmet: it cannot be placed."""
 
-    @view
+    @derived
     def cycles(self) -> int:
         return 1
 

@@ -49,7 +49,6 @@ from finn.kernels.library import LibraryModule, library_module
 from finn.kernels.partition import Partition
 from finn.kernels.port import AxiStreamPort, lane_count
 from finn.kernels.sides import Side
-from finn.kernels.utilization import RESOURCES_SEMANTICS
 from finn.kernels.values.domains import Integer
 from finn.platform.capabilities import Resources
 
@@ -98,7 +97,7 @@ class Pool(KernelSpace):
     def parameters(self) -> dict[str, int | str]:
         return {"CHANNELS": self.channels, "PE": self.pe}
 
-    @view(semantics=RESOURCES_SEMANTICS)
+    @view
     def resource_use(self) -> Resources | Rejected:
         return reject("kernel-resources", "a model only")
 
@@ -279,7 +278,7 @@ class Holding(KernelSpace):
     def parameters(self) -> dict[str, int | str]:
         return {}
 
-    @view(semantics=RESOURCES_SEMANTICS)
+    @view
     def resource_use(self) -> Resources | Rejected:
         return reject("kernel-resources", "a model only")
 
