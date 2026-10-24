@@ -153,7 +153,16 @@ def annotation_type(annotation: object, label: str, *, owner: str) -> ValueSeman
         return default_semantics(type(None))
     origin = get_origin(annotation)
     if origin is Annotated:
-        return annotation_type(get_args(annotation)[0], label, owner=owner)
+        annotated, *metadata = get_args(annotation)
+        if any(isinstance(item, ValueSemantics) for item in metadata):
+            raise DefinitionError.broken(
+                "annotation-semantics",
+                owner,
+                f"{label}: semantics= is gone: the annotation's type is the value's check, and "
+                "a value is compared by ==; leave the ValueSemantics out of Annotated[...]",
+                declaration=label,
+            )
+        return annotation_type(annotated, label, owner=owner)
     if origin in (Union, types.UnionType):
         members = get_args(annotation)
         present = tuple(member for member in members if member is not type(None))

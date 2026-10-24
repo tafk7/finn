@@ -16,6 +16,7 @@ from finn.core.space import (
     Decision,
     DefinitionError,
     Derived,
+    Inapplicable,
     Param,
     QueryResult,
     RequestError,
@@ -28,6 +29,7 @@ from finn.core.space import (
     default_semantics,
     derived,
     design_space,
+    inspection,
     view,
 )
 from finn.core.space._nodes import (
@@ -589,6 +591,60 @@ def test_nonboolean_and_foreign_guards_fail_during_collection() -> None:
         message="Unrelated.choice guard.*effective scope",
     ):
         collect_space(Unrelated)
+
+
+def test_a_guard_whose_value_admits_none_is_refused_and_a_derived_test_is_taken() -> None:
+    """A fact left out is ``None``: a guard over ``bool | None`` has no answer for it
+    (the lists would prune, validity fail), so ``when=`` takes a ``bool`` only."""
+
+    class Shelf(Space):
+        style: str = Decision(values=("a", "b"))
+
+    class Cellar(Space):
+        deep: bool | None = Param(default=None)
+        shelf = Shelf(when=deep)
+
+    with refused(
+        "guard-not-boolean",
+        owner="space.collection",
+        message=r"Cellar\.shelf guard: when= requires a bool.*bool \| None.*is not None",
+    ):
+        design_space(Cellar())
+
+    class Left(Space):
+        deep: bool | None = Param(default=None)
+
+    class Right(Space):
+        deep: bool | None = Param(default=None)
+
+    class Chosen(Space):
+        impl: Left | Right = Select(left=Left(), right=Right())
+        shelf = Shelf(when=impl.deep)
+
+    # a guard over a selected member is checked once the choice is linked
+    with refused(
+        "applicability-not-boolean",
+        owner="space.check",
+        message=r"requires a bool.*bool \| None.*is not None",
+    ):
+        design_space(Chosen())
+
+    class Tested(Space):
+        deep: bool | None = Param(default=None)
+
+        @derived
+        def deep_set(self) -> bool:
+            return self.deep is True
+
+        shelf = Shelf(when=deep_set)
+
+    for given, listed in ((None, False), (False, False), (True, True)):
+        point = Tested() if given is None else Tested(deep=given)
+        space = design_space(point)
+        assert bool(inspection.decisions(space)) is listed
+        assert bool(inspection.states(space)) is listed
+        assert inspection.validity(space).status == "valid"
+        assert isinstance(space.query(Tested.shelf), Inapplicable) is not listed
 
 
 def test_when_is_an_authoring_control_argument() -> None:

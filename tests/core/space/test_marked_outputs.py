@@ -13,7 +13,7 @@ is no value type.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Annotated, Protocol
 
 import pytest
 from support.refusals import refused
@@ -93,6 +93,25 @@ def test_a_derived_value_states_no_semantics() -> None:
             @derived(semantics=default_semantics(Point))
             def point(self) -> Point | Rejected:
                 return Point(1)
+
+
+def test_a_value_semantics_in_annotated_metadata_is_refused() -> None:
+    """The annotation's type is the check: a ``ValueSemantics`` in ``Annotated[...]`` is no
+    longer taken or dropped silently."""
+
+    with refused(
+        "annotation-semantics",
+        error=DefinitionError,
+        message="semantics= is gone",
+    ):
+
+        class Stated(Space):
+            point: Annotated[Point, default_semantics(Point)] = Param()
+
+    class Plain(Space):
+        point: Annotated[Point, "units"] = Param()
+
+    assert semantics_of(Plain, "point").type_token is Point
 
 
 def test_a_protocol_is_no_value_type() -> None:

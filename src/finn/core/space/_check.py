@@ -19,7 +19,7 @@ from dataclasses import replace
 from ._signatures import validate_argument
 from ._table import Table
 from .errors import DefinitionError
-from .semantics import BOOL, STRING
+from .semantics import BOOL, STRING, OptionalSemantics
 
 _OWNER = "space.check"
 
@@ -88,6 +88,15 @@ def _check_nodes(table: Table, order: tuple[int, ...]) -> None:
                     "applicability-not-boolean",
                     _OWNER,
                     f"{node.key}: applicability requires Boolean value semantics",
+                    declaration=node.key,
+                )
+            if isinstance(semantics, OptionalSemantics):
+                raise DefinitionError.broken(
+                    "applicability-not-boolean",
+                    _OWNER,
+                    f"{node.key}: applicability requires a bool, and its value is "
+                    f"{semantics.name}, which admits None: guard on a derived value that tests "
+                    "`is not None` (or the bool's value) and returns a bool",
                     declaration=node.key,
                 )
 
