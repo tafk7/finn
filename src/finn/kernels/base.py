@@ -442,6 +442,22 @@ class KernelSpace(Space):
         on it (``replace(type(self).clock_domain, doubled=..., doubling=...)``)."""
         return type(self).clock_domain
 
+    @derived
+    def takes_doubled_clock(self) -> bool:
+        """Whether it takes the doubled clock: its own ``clocking``'s doubling. A kernel
+        with children whose child may take it states its own, reading the child (a
+        MatMul its selected core, a channel its source): a parent's ``clocking`` is its
+        own, never its children's. What a shell's clock rule reads
+        (``finn.kernels.budgets``)."""
+        return self.clocking.doubling
+
+    @derived
+    def memory_initiators(self) -> int:
+        """The memory ports it initiates itself (a memory-mapped bus it is the initiator
+        of): none here, and no kernel declares one today. A kernel that does states its
+        own; a shell's memory rule counts them (``finn.kernels.budgets``)."""
+        return 0
+
     @declared_reads()
     def _accesses(self) -> list[Access]:
         """Each declaration's read of a tensor, in declaration order (each class's own:

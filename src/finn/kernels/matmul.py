@@ -555,6 +555,13 @@ class MatMulKernel(KernelSpace):
     w = served(compute, "w")
     y = served(compute, "y")
 
+    @derived
+    def takes_doubled_clock(self) -> bool:
+        """Whether it takes the doubled clock: its selected core's (a pumped core), a case
+        not selected never read."""
+        core = self.compute
+        return bool(core.takes_doubled_clock)
+
     @constraint
     def realization_supported(self) -> bool | Rejected:
         if self.dense_view and not self.stored:

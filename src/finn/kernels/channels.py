@@ -543,6 +543,14 @@ class Channel(KernelSpace):
     set = served(source, "set", label=SOURCE_LABEL)
 
     @derived
+    def takes_doubled_clock(self) -> bool:
+        """Whether it takes the doubled clock: its source's (a pumped memory), where it
+        places one; without a known value, no source, so not."""
+        if not self.valued:
+            return False
+        return bool(self.source.takes_doubled_clock)
+
+    @derived
     def sides(self) -> ChannelSides | Rejected:
         """The producing and consuming sides, without the stages between them: each its
         ``Side`` and its stream; with a known value, the producer is the channel's source
