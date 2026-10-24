@@ -136,7 +136,8 @@ def bus_counts(fragment: Fragment, boundary: Iterable[Bus]) -> tuple[int, int, b
     that it initiates: a boundary bus, since each presented bus is a target port), and
     whether it takes an aligned doubled clock (an instance's doubled clock, ``doubled``).
     The budgets are rules of the partition in its shell, over its members' derived values
-    (``finn.kernels.budgets``); the static region is sized by this count."""
+    (``finn.kernels.budgets``); emission checks this count against theirs, and the static
+    region is sized by it."""
     buses = top_buses(fragment, boundary)
     control = sum(bus.protocol is StandardProtocol.AXILITE for bus in buses)
     memory = sum(

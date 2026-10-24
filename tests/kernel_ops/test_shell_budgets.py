@@ -14,12 +14,12 @@ one leaves it refused (exploration and emission name it).
 
 No KernelOp names a control port, so a partition of KernelOps presents no AXI-Lite bus:
 the buses are counted here on a partition built from the kernels directly, AXI-Lite
-thresholdings each given its port, the rules' counts (``finn.kernels.budgets.counts``)
-beside the netlist's (``bus_counts``, the pins its module would have, and the movers'
-buses). No kernel initiates a memory port (no bus protocol states one), so on a network
-that count is always zero: ``bus_counts`` is counted here on a netlist and boundary buses
-built directly, a boundary initiator beside the streams standing for a mover's memory
-port.
+thresholdings each given its port. Emission checks the netlist's count (``bus_counts``,
+the pins its module would have, and the movers' buses) against the rules'
+(``finn.kernels.budgets.counts``). No kernel initiates a memory port (no bus protocol
+states one), so on a network that count is always zero: ``bus_counts`` is counted here on
+a netlist and boundary buses built directly, a boundary initiator beside the streams
+standing for a mover's memory port.
 """
 
 from __future__ import annotations
@@ -271,6 +271,25 @@ def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:
         "clock-unavailable",
         "interface-budget-exceeded",
     ]
+
+
+def test_emission_checks_the_netlists_count_against_the_rules() -> None:
+    """Stage 7's chain in the Zynq shell: the netlist's count and its movers' (two AXI-Lite
+    buses, no memory port, no doubled clock) are the rules'; a netlist counted otherwise
+    is refused, naming both counts."""
+    model = chain_model(4)
+    write_target(model, ULTRA96)
+    model = model.transform(MakeCutChoices())
+    point, _ = configured_network(model, "chain")
+    assert counts(point.network.member(SHELL)) == Available((2, 0, False))
+    with pytest.MonkeyPatch.context() as patched:
+        patched.setattr(shell, "bus_counts", lambda *_: (1, 0, True))
+        with refused(
+            "shell-counts-differ",
+            error=KernelOpError,
+            message=r"\(3, 0, True\) is not the shell's rules' \(2, 0, False\)",
+        ):
+            configured_network(model, "chain")
 
 
 def test_one_class_serves_every_shells_row_and_a_bare_network_has_no_shell() -> None:

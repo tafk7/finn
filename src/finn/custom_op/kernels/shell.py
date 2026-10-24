@@ -15,7 +15,9 @@ the row's budgets as rules of its own, and the shell as functions over it, over 
   that takes the doubled clock needs a row that supplies one (``clk2x``), refused as
   ``clock-unavailable``. The ``ip`` row bounds neither count. Each reads the members'
   derived values, so a value that breaks one is refused in the partition, where the seam,
-  the cut and emission read it;
+  the cut and emission read it. Emission checks the netlist's count (``bus_counts``, and
+  the movers' contracts, ``MOVER``) against the rules' (``finn.kernels.budgets.counts``):
+  a difference is an error naming both (``shell-counts-differ``);
 - **resources** (``shell_resources``; ``InShell.own_resources``, which the seam reads):
   the sum of its members' own statements (``Partition.own_resources``), each mover's (its
   contract's) and its row's static region's, at the memory ports and AXI-Lite buses it
@@ -56,7 +58,7 @@ from finn.core.space import Available, Inapplicable, QueryResult, Rejected, insp
 from finn.custom_op.kernels.network import PARTITION, PRODUCER, _network, persist, stale_text
 from finn.kernels.artifacts.module import Composed
 from finn.kernels.base import CYCLES
-from finn.kernels.budgets import SHELL
+from finn.kernels.budgets import SHELL, counts
 from finn.kernels.composer import Key
 from finn.kernels.configure import refusal
 from finn.kernels.explore import FifoCheck, Seam, dotted
@@ -158,6 +160,31 @@ def _mover_contracts(network: InShell) -> QueryResult[tuple[tuple[str, MoverCont
     return Available(tuple(found))
 
 
+def _counts_agree(network: InShell, label: str) -> None:
+    """Refuse ``network``, decided, whose netlist's count (``bus_counts``, its movers'
+    AXI-Lite buses added from their contracts) is not its shell member's
+    (``finn.kernels.budgets.counts``): (AXI-Lite buses, memory ports, doubled clock), the
+    two named (``shell-counts-differ``), or either not known. Emission's check of the
+    rules' count."""
+    buses = _buses(network)
+    contracts = _mover_contracts(network)
+    ruled = counts(network.member(SHELL))
+    netlist: object = buses
+    if isinstance(buses, Available) and isinstance(contracts, Available):
+        control, memory, doubled = buses.value
+        movers = sum(contract.control_buses for _, contract in contracts.value)
+        netlist = (control + movers, memory, doubled)
+    stated = ruled.value if isinstance(ruled, Available) else ruled
+    if netlist != stated:
+        raise KernelOpError.refused(
+            "shell-counts-differ",
+            "configured_network",
+            f"{label}: the netlist's count (AXI-Lite buses, memory ports, doubled clock) "
+            f"{netlist} is not the shell's rules' {stated}",
+            node=label,
+        )
+
+
 def _resources(network: InShell) -> QueryResult[ShellResources]:
     """``shell_resources``, as a query's result, read once of a network."""
 
@@ -247,10 +274,11 @@ def configured_network(
     each broken budget a finding), or whose module or cycles its members refuse, or a
     member's validity refuses (a rule its stored choices break, which the bind binds:
     "refused by its members", each finding naming its member); or graph inputs and outputs
-    out of port order refuse, named. A dormant choice (stored under a case not selected) is
-    not open, and refuses nothing. It only binds: it does not check the FIFOs against their
-    streams (``verify_partition`` does), so a simulation can run a FIFO the model calls too
-    small."""
+    out of port order refuse, named. Its netlist's count (``bus_counts`` and its movers')
+    must be its shell's rules' (``shell-counts-differ``, naming both, otherwise). A dormant
+    choice (stored under a case not selected) is not open, and refuses nothing. It only
+    binds: it does not check the FIFOs against their streams (``verify_partition`` does), so
+    a simulation can run a FIFO the model calls too small."""
     bound = in_shell(model, model.graph.node)
     if bound.stale:
         keys = tuple(bound.stale)
@@ -322,6 +350,7 @@ def configured_network(
         if not isinstance(each, Available):
             found.extend(bound.located(name, finding) for finding in each.findings)
     if not found and isinstance(module, Available):
+        _counts_agree(bound, label)
         # A rule a member's stored choices break that its module and cycles do not read.
         found = [
             bound.located(name, finding)

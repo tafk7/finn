@@ -288,7 +288,7 @@ def test_tfc_w2a2s_partition_holds_the_zynq_shells_budgets_as_its_rules(
     the partition's: each MatMul's pumped core and each weight memory pumped are refused
     (``viable``, a change, the seam), the shell supplying no doubled clock, a core not
     selected never read; stored, a pumped core leaves the partition refused, by the shell
-    member (``Seam.refusals``, emission)."""
+    member (``Seam.refusals``, emission). The netlist's count is the rules'."""
     _, body = partition(ModelWrapper(str(tfc_streamlined)), tmp_path)
     bound = in_shell(body, body.graph.node)
     assert bound.shell == SHELL and SHELL not in {*bound.members, *bound.order}
@@ -298,7 +298,7 @@ def test_tfc_w2a2s_partition_holds_the_zynq_shells_budgets_as_its_rules(
     assert {owner for owner, _ in bound.chosen()} <= set(bound.members)
     assert set(Seam(ULTRA96.platform).cost(bound).cycles) == set(bound.members)
     assert counts(bound.member(SHELL)) == Available((2, 0, False))  # its two movers' buses
-    configured_network(body, "tfc")  # within the shell's budgets
+    configured_network(body, "tfc")  # the netlist's count is the rules'
     states = dict(bound.states())
     chosen = bound.chosen()
     cores = {
