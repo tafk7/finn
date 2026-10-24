@@ -91,8 +91,6 @@ from finn.core.space import (
     Members,
     Rejected,
     Space,
-    ValueSemantics,
-    default_semantics,
     derived,
     reject,
     view,
@@ -106,17 +104,8 @@ from finn.kernels.control import Control, ControlBus, presented
 from finn.kernels.declaration import KernelDeclaration, Product, declarations, declared_reads
 from finn.kernels.library import LibraryModule
 from finn.kernels.transport import StreamContract
-from finn.kernels.utilization import RESOURCES_SEMANTICS, total
+from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
-
-
-def _frozen(name: str, *kinds: type) -> ValueSemantics[object]:
-    """A frozen build value's check: an instance of one of ``kinds`` (compared by ``==``, as
-    every value is)."""
-    return ValueSemantics(kinds[0], name, lambda value: isinstance(value, kinds))
-
-
-NETLIST_SEMANTICS = cast("ValueSemantics[Fragment]", _frozen("netlist", Fragment))
 
 
 class Kernel(Protocol):
@@ -171,10 +160,6 @@ class PortContract:
     def under(self, member: str) -> PortContract:
         """The contract as seen from where ``member`` is held."""
         return PortContract(f"{member}.{self.label}" if self.label else member, self.contract)
-
-
-PORT_CONTRACT = default_semantics(PortContract)
-"""A ``PortContract``'s value semantics: a frozen value, compared by value."""
 
 
 NATIVE_CLOCKING = Clocking(clock="clk", reset="rst", active_low=False)
@@ -506,7 +491,7 @@ class KernelSpace(Timed):
         buffers (a FIFO, an ``input_gen``), which states its own."""
         return 0
 
-    @view(semantics=RESOURCES_SEMANTICS)
+    @view
     def resource_use(self) -> Resources:
         """What it uses of the device itself: nothing; a kernel with a module states its
         own (a refusal where it has no model of it, never nothing)."""
@@ -576,7 +561,7 @@ class KernelSpace(Timed):
         """``resources``: its own ``resource_use`` and its members'."""
         return total((self.resource_use, *(item.value for item in self.member_resources)))
 
-    @view(semantics=NETLIST_SEMANTICS)
+    @view
     @declared_reads("netlists", "controls")
     def netlist(self) -> Fragment | Rejected:
         """Its netlist, labelled relative to itself: its module at the empty label (``under``
@@ -609,7 +594,7 @@ class KernelSpace(Timed):
         """The bits it and its members hold between a channel's sides."""
         return KernelSpace._buffering(self)
 
-    @view(semantics=RESOURCES_SEMANTICS)
+    @view
     @declared_reads("resource_use", "member_resources")
     def resources(self) -> Resources:
         """What it and its members use of the device."""
@@ -631,7 +616,7 @@ _KERNEL_SPANS = (
         KernelSpace._netlist,
         ("netlists", "controls"),
         ("module", "pins", "held"),
-        view(semantics=NETLIST_SEMANTICS),
+        view,
     ),
     _Span("cycles", KernelSpace._cycles, ("member_cycles",), ("beats",), view),
     _Span("buffering", KernelSpace._buffering, ("held_bits", "member_buffering"), (), view),
@@ -640,7 +625,7 @@ _KERNEL_SPANS = (
         KernelSpace._resources,
         ("resource_use", "member_resources"),
         (),
-        view(semantics=RESOURCES_SEMANTICS),
+        view,
     ),
 )
 """A kernel's answers: each spans its declarations."""
@@ -667,7 +652,6 @@ __all__ = [
     "Kernel",
     "KernelSpace",
     "NATIVE_CLOCKING",
-    "PORT_CONTRACT",
     "PortContract",
     "extent_of",
     "merged",

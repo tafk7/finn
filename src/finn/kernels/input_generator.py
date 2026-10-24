@@ -74,7 +74,6 @@ from finn.kernels.base import NATIVE_CLOCKING, KernelSpace
 from finn.kernels.library import LibraryModule
 from finn.kernels.port import LoopEnds, native_stream
 from finn.kernels.utilization import (
-    RESOURCES_SEMANTICS,
     Fit,
     auto_unstated,
     memory,
@@ -279,7 +278,7 @@ class InputGeneratorKernel(KernelSpace):
         words: int = self.buffer_words
         return words * self.input_data_width
 
-    @view(semantics=RESOURCES_SEMANTICS)
+    @view
     def resource_use(self) -> Resources | Rejected:
         if self.ram_style == "auto":
             return auto_unstated("the input_gen buffer")

@@ -47,7 +47,7 @@ from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import NATIVE_CLOCKING, KernelSpace, PortContract
 from finn.kernels.library import LibraryModule
 from finn.kernels.port import native_stream
-from finn.kernels.utilization import RESOURCES_SEMANTICS, lutram, memory, uram_constraint
+from finn.kernels.utilization import lutram, memory, uram_constraint
 from finn.platform.capabilities import Fabric, Platform, Resources
 
 
@@ -284,7 +284,7 @@ class FifoKernel(KernelSpace):
         _ = self.planned_storage
         return True
 
-    @view(semantics=RESOURCES_SEMANTICS)
+    @view
     def resource_use(self) -> Resources:
         return fifo_resources(
             self.depth, self.input_data_width, self.rtl_ram_style, fabric=self.platform.fabric

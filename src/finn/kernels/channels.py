@@ -111,7 +111,6 @@ from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import CLOCK, RESET, Bus, Endpoint
 from finn.kernels.artifacts.module import Fragment, Link, LinkEnd, Marker
 from finn.kernels.base import (
-    NETLIST_SEMANTICS,
     KernelSpace,
     PortContract,
 )
@@ -803,7 +802,7 @@ class Channel(KernelSpace):
 
     # -- its answers: the base's, with its own hops, and none of a channel of wires' cycles --
 
-    @view(semantics=NETLIST_SEMANTICS)
+    @view
     @declared_reads(
         "netlists",
         "controls",

@@ -50,7 +50,6 @@ from finn.core.space import (
     Rejected,
     Space,
     View,
-    default_semantics,
     derived,
     reject,
     view,
@@ -71,9 +70,6 @@ class Control:
     bus: Bus | None
     port: str = ""
     registers: RegisterMap = RegisterMap()
-
-
-CONTROL_SEMANTICS = default_semantics(Control)
 
 
 def held_bus(bus: Bus) -> Held:
@@ -168,7 +164,7 @@ class ControlBus(KernelDeclaration):
             """It declares a control bus."""
             return True
 
-        control = view(semantics=CONTROL_SEMANTICS)(control_)
+        control = view(control_)
         return {
             f"{name}_presented": derived(presented_),
             f"{name}_control": control,
