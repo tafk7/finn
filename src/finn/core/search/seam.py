@@ -845,6 +845,34 @@ class Seam:
                 found[name] = why
         return found
 
+    def unkept(self, network: Composition) -> tuple[Finding, ...]:
+        """Each held key ``network`` does not commit at its held value, one finding a key
+        (``held-not-kept``), owned by the key: a held choice an explorer moved other than
+        through ``set``, which refuses it, or one a change put out of play."""
+        chosen = network.chosen()
+        found: list[Finding] = []
+        for key, value in self.held.items():
+            now = chosen.get(key, _ABSENT)
+            if now is _ABSENT:
+                found.append(
+                    Finding(
+                        FindingKind.REJECTION,
+                        "held-not-kept",
+                        dotted(key),
+                        f"held to {value!r}, but the network states no value for it",
+                    )
+                )
+            elif now != value:
+                found.append(
+                    Finding(
+                        FindingKind.REJECTION,
+                        "held-not-kept",
+                        dotted(key),
+                        f"held to {value!r}, but the network has {now!r}",
+                    )
+                )
+        return tuple(found)
+
     def chosen(self, network: Composition) -> dict[Key, object]:
         """Every Decision ``network`` commits, by key: the choices made on purpose."""
         return dict(network.chosen())

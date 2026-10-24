@@ -370,8 +370,8 @@ def test_a_channel_choice_a_fold_brings_into_play_is_set_by_the_fold_rule_the_st
     assert dict(folded.states(["x"]))[style] == inspection.Set("distributed")
     (run,) = seam.runs
     assert (run.cleared, run.settled, run.by_policy) == ({}, {style: "distributed"}, {})
-    report = explore_kernel_choices(model, TargetCycles(48)).report
-    assert (report["strategy"]["cleared"], report["strategy"]["settled"]) == (
+    report = explore_kernel_choices(model, [TargetCycles(48)]).report
+    assert (report["strategies"][0]["cleared"], report["strategies"][0]["settled"]) == (
         {},
         {"x.adapter_ram_style": "distributed"},
     )

@@ -347,6 +347,22 @@ def test_a_hold_holds_for_later_explorers() -> None:
     assert isinstance(refused, Refused) and codes(refused.why[("link", "depth")]) == ["held"]
 
 
+def test_unkept_names_each_held_key_not_at_its_held_value() -> None:
+    """``Seam.unkept`` finds a held key a network states at another value, or no value for,
+    one finding a key owned by it (``held-not-kept``); a key at its held value is kept."""
+    seam = Seam(ToyHook())
+    network = toy(first_pe=2, link_depth=4)
+    seam.held.update({("first", "pe"): 2, ("link", "depth"): 8, ("link", "lanes"): 2})
+    found = seam.unkept(network)
+    assert [(f.code, f.owner) for f in found] == [
+        ("held-not-kept", "link.depth"),
+        ("held-not-kept", "link.lanes"),
+    ]
+    assert "held to 8, but the network has 4" in found[0].message
+    assert "states no value" in found[1].message
+    assert Seam(ToyHook()).unkept(network) == ()
+
+
 def test_ranked_takes_the_next_value_after_a_refusal() -> None:
     """Ranked in listed order, ``link``'s lanes held: its first value for ``wide``,
     ``False``, is possible but refused by the seam (it would put the held lanes out of play,

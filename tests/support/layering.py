@@ -17,8 +17,8 @@ finn.core.graph <- finn.custom_op.kernels
                 <- finn.harness
                 <- the flow (all other finn)
 finn.core.graph.partition,           <-  finn.core.graph, finn.custom_op.kernels,
-finn.core.graph.annotations.outputs,     finn.transformation.kernels, the executors, the
-finn.core.graph.annotations.choices      partition node, finn.harness, finn.shells, the flow
+finn.core.graph.annotations.outputs      finn.transformation.kernels, the executors, the
+                                         partition node, finn.harness, finn.shells, the flow
 finn.toolchain  <-  finn.util (with finn.xsi, finn.resources)  <-  finn.transformation.kernels,
                                                                 the XSim testbench, the
                                                                 executors, finn.harness,
@@ -179,8 +179,8 @@ LAYERS: tuple[Layer, ...] = (
         (),
         "tests/kernel_ops",
     ),
-    # What is read of a partition, what a build made of it (finn.outputs) and the keys its
-    # body holds (finn.choices, which no design digest covers): below both its writers
+    # What is read of a partition and what a build made of it (finn.outputs, the search's
+    # record among it, which no design digest covers): below both its writers
     # (the cut, PackagePartition) and its readers (the channel's annotation, whose choices
     # a partition's body states; the builder, the integration export, the shell's build,
     # the executors). qonnx (and onnx, which qonnx depends on: its nodes are NodeProto)
@@ -190,14 +190,13 @@ LAYERS: tuple[Layer, ...] = (
         (
             "finn.core.graph.partition",
             "finn.core.graph.annotations.outputs",
-            "finn.core.graph.annotations.choices",
         ),
         ("reporting",),
         ("onnx", "qonnx"),
         "tests/kernel_ops",
     ),
-    # FINN's view of the ONNX model: its graph metadata (the target, a channel's choices,
-    # a body's pins), the facts a graph states of a tensor, the walks over its dataflow.
+    # FINN's view of the ONNX model: its graph metadata (the target, a channel's choices), the
+    # facts a graph states of a tensor, the walks over its dataflow.
     # Above the kernels: a channel's keys are generated from Channel's Decisions, and the
     # facts are read as the kernels' values.
     Layer(

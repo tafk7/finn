@@ -273,8 +273,8 @@ def test_an_explored_network_persists_and_replays_as_itself() -> None:
     """Every choice an exploration commits, a boundary channel's and the others',
     goes back to its owner (a node or a tensor) and replays onto the same network."""
     model = kernel_model()
-    explore_kernel_choices(model, Ranked(Lanes(2)))
-    explored = explore_kernel_choices(model, SizeFifos())
+    explore_kernel_choices(model, [Ranked(Lanes(2))])
+    explored = explore_kernel_choices(model, [SizeFifos()])
     made = {dotted(key): value for key, value in explored.network.chosen().items()}
     assert {"x.transport", "y.transport", "levels.transport"} <= set(made)
     assert "first.pe" in made

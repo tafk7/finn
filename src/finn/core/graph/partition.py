@@ -18,15 +18,14 @@ from __future__ import annotations
 import copy
 import hashlib
 from collections.abc import Callable, MutableSequence
-from typing import Any
+from typing import Any, Literal
 
 from onnx import ModelProto, NodeProto
-from qonnx.core.metadata import clear, delete
+from qonnx.core.metadata import clear
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 
-from finn.core.graph.annotations.choices import HELD
-from finn.core.graph.annotations.outputs import OUTPUTS
+from finn.core.graph.annotations.outputs import OUTPUT_SEARCH, OUTPUTS
 from finn.core.reporting.findings import Finding, FindingKind, Refusal
 
 KERNEL_OPS_DOMAIN = "finn.custom_op.kernels"
@@ -48,15 +47,14 @@ def _sort(field: MutableSequence[Any], key: Callable[[Any], Any]) -> None:
 
 
 def design_digest(model: ModelWrapper) -> str:
-    """``model``'s design, as ``sha256:<hex>``: the model with ``finn.outputs`` and the held
-    mark removed (a hold changes no hardware) and every order that carries no meaning
-    made canonical, serialized deterministically. It covers the choices, the facts, the
+    """``model``'s design, as ``sha256:<hex>``: the model with ``finn.outputs`` removed (the
+    search's record among them: a hold changes no hardware) and every order that carries no
+    meaning made canonical, serialized deterministically. It covers the choices, the facts, the
     weights and the target, and survives a save and a reload. ``model`` is not changed."""
     proto = ModelProto()
     proto.CopyFrom(model.model)
     graph = proto.graph
     clear(graph.metadata_props, OUTPUTS)
-    delete(graph.metadata_props, HELD)
     _sort(graph.metadata_props, lambda prop: prop.key)
     _sort(proto.metadata_props, lambda prop: prop.key)
     for node in graph.node:
@@ -67,6 +65,23 @@ def design_digest(model: ModelWrapper) -> str:
         _sort(annotation.quant_parameter_tensor_names, lambda prop: prop.key)
     _sort(graph.quantization_annotation, lambda annotation: annotation.tensor_name)
     return "sha256:" + hashlib.sha256(proto.SerializeToString(deterministic=True)).hexdigest()
+
+
+def search_record(
+    model: ModelWrapper,
+) -> tuple[Literal["current", "stale", "none"], dict[str, Any] | None]:
+    """The search's record on a partition's body (``OUTPUT_SEARCH``) and whether it is the
+    body's own: ``current`` where its ``design`` is the body's (the record, with the keys
+    the search held and the objective it explored to), ``stale`` where the body's design is
+    another (the body was changed after the search; no record is returned, for a reader
+    holds and reports nothing of it), ``none`` where the body has none (no search persisted
+    it)."""
+    record: dict[str, Any] | None = model.get(OUTPUT_SEARCH)
+    if record is None:
+        return "none", None
+    if record["design"] != design_digest(model):
+        return "stale", None
+    return "current", record
 
 
 def is_partition(node: NodeProto) -> bool:

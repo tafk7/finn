@@ -335,6 +335,31 @@ def test_target_cycles_folds_the_least_parallelism_that_meets_the_budget() -> No
     assert strategy.relaxed_to is None
 
 
+def test_a_fold_that_the_engine_refuses_with_a_choice_standing_takes_another_value() -> None:
+    """FINN's fold meets the engine's ``Refused(why, standing)``: the Chain stored with
+    pumping on at SIMD 2, a budget of 48 cycles a frame wants SIMD 1, which the engine refuses
+    (pumping needs lanes), the stored pumping standing in its way. The fold takes another
+    value for it: pumping, reopened with its SIMD, set by its policy (off); at 24 cycles,
+    SIMD 2 still meets the budget, and pumping stays on."""
+    explorer, base = seam()
+    pumped = explorer.set(
+        base, keyed({"first.simd": 2, "first.compute.packed.compute_pumping": True})
+    )
+    assert isinstance(pumped, Accepted)
+    asked = Seam(FULL_DSP48E2).set(pumped.network, keyed({"first.simd": 1}))
+    assert isinstance(asked, Refused)
+    rule = ("first", "compute.packed.pumping_has_lanes")
+    assert asked.standing == {rule: (("first", "compute.packed.compute_pumping"),)}
+    pumping = "first.compute.packed.compute_pumping"
+    for cycles, simd, taken in ((48, 1, False), (24, 2, True)):
+        fold, _ = seam()
+        strategy = TargetCycles(cycles)
+        folded = strategy.explore(fold, pumped.network)
+        values = chosen(fold, folded)
+        assert (values["first.simd"], values[pumping]) == (simd, taken)
+        assert strategy.report()["met"] is True
+
+
 def test_a_budget_no_member_meets_is_relaxed_to_the_bottleneck_reached() -> None:
     explorer, network = seam()
     strategy = TargetCycles(1)

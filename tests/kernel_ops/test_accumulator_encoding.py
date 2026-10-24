@@ -50,9 +50,9 @@ from finn.kernels.values.domains import range_dtype
 from finn.platform.resolve import resolve_target
 from finn.toolchain.launcher import host_toolchain
 from finn.transformation.kernels import (
-    ExploreKernelChoices,
     InferKernelTensors,
     ToKernelOps,
+    explore_kernel_choices,
 )
 from finn.transformation.kernels.package import boundary_facts
 
@@ -180,12 +180,13 @@ def kernel_ops(case: Case, target: Any = ULTRA96, compute: str | None = None) ->
     model = source(case).transform(ToKernelOps(target)).transform(InferKernelTensors())
     ranked = Ranked(Lanes(2))
     if compute is None:
-        return model.transform(ExploreKernelChoices(ranked))
+        explore_kernel_choices(model, [ranked])
+        return model
     pins = {
         node.name: {"compute": compute} for node in model.graph.node if node.op_type == "MatMul"
     }
-    model = model.transform(ExploreKernelChoices(Hold(pins)))
-    return model.transform(ExploreKernelChoices(ranked))
+    explore_kernel_choices(model, [Hold(pins), ranked])
+    return model
 
 
 def _matmuls(model: ModelWrapper) -> list[Any]:

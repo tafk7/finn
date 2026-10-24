@@ -223,7 +223,7 @@ class KernelExplorer(Protocol):
     def report(self) -> dict[str, object]: ...
 
 
-#: How a strategy step judged its FIFOs, as its report states it (``fifos_judged``): by
+#: How an entry judged its FIFOs, as its report states it (``fifos_judged``): by
 #: sizing's model (``SizeFifos``, or ``Seam.check_fifos``), or not at all. A strategy that
 #: judges them otherwise states its own in its report (``"simulation"``: none yet).
 FIFOS_BY_MODEL = "model"

@@ -64,18 +64,17 @@ def within(lut: float) -> list[KernelExplorer]:
 def explore_each(
     model: ModelWrapper, strategies: list[KernelExplorer]
 ) -> tuple[dict[str, Any], tuple[Finding, ...]]:
-    """``model`` explored by each of ``strategies`` in turn, an exploration each, as a
-    build's strategy steps run them: the last exploration's report, with each one's
-    strategy entry in order (``strategies``), and every finding, in order."""
-    results = [explore_kernel_choices(model, each) for each in strategies]
-    report = {**results[-1].report, "strategies": [each.report["strategy"] for each in results]}
-    return report, tuple(finding for each in results for finding in each.findings)
+    """``model`` explored by ``strategies``, in order, on one seam, as the build's step runs
+    them: the report, with each strategy's entry in order (``strategies``), and every
+    finding."""
+    explored = explore_kernel_choices(model, strategies)
+    return dict(explored.report), explored.findings
 
 
 def explored(
     model: ModelWrapper, target: Target, strategies: list[KernelExplorer]
 ) -> dict[str, Any]:
-    """A copy of ``model`` explored for ``target`` by each of ``strategies`` in turn
+    """A copy of ``model`` explored for ``target`` by ``strategies``
     (``Defaults()`` first: from every choice's default, conversion's and the channel's); the
     report (``explore_each``)."""
     model = ModelWrapper(model.model.__deepcopy__())
@@ -207,7 +206,7 @@ def test_where_nothing_fits_the_search_states_it_and_keeps_the_least_parallelism
     assert [finding.code for finding in findings] == ["resource-budget"]
     unsized = kernel_model()
     write_target(unsized, ULTRA96)
-    explore_kernel_choices(unsized, Defaults())
+    explore_kernel_choices(unsized, [Defaults()])
     _, check = verify_partition(unsized, "the chain")
     assert [(f.kind, f.code) for f in check.findings] == [
         (FindingKind.LIMITATION, "direct-throttles")
