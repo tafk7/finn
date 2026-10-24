@@ -231,8 +231,6 @@ class _Allocation:
         for declaration, member_name in draft.effective.aliases.items():
             if member_name in draft.named_members:
                 draft.members[declaration] = draft.named_members[member_name]
-        for export, declaration in draft.effective.exports.items():
-            draft.members[export] = draft.members[declaration]
         key = member_key(name, "$validity")
         draft.validity = self.table.reserve(
             index, key, "validity", BOOL, guard=guard, source_owner=key

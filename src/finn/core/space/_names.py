@@ -8,7 +8,7 @@ A member, a path of records (``kitchen.area``), a Decision over nodes' case or
 member (``heating.kw``), a projection (``spec.payload_bits``) and an integer
 expression each resolve to one node; those that need one get it reserved here, once per scope
 and source. ``members_candidates`` lists the members ``Members`` reads (views and derived
-values: by key, or each child's member of the named base), named as the reading scope sees
+values: each child's member of the named base), named as the reading scope sees
 them.
 
 A reference into a placed Space resolves in that class's compiled form, at a place
@@ -113,28 +113,22 @@ class Names:
         self, scope: int, declaration: Members[object]
     ) -> list[tuple[str, str, NodeRef]]:
         """Each child node's member a ``Members`` reads: (its name, the member's name, its
-        member). By key: each child exporting it. By member: each child whose class is the
-        member's class or derives from it, at the member's name."""
+        member). Each child whose class is the member's class or derives from it, at the
+        member's name."""
 
-        wanted = declaration.key
-        base, member_name = (None, "") if wanted is not None else self.members_member(declaration)
+        base, member_name = self.members_member(declaration)
         result: list[tuple[str, str, NodeRef]] = []
         prefix = self.table.drafts[scope].name
         for child in self.placed(scope):
             name = self.table.drafts[child].name
             name = name[len(prefix) + 1 :] if prefix else name
             compiled = self.table.placing(child).compiled
-            if wanted is not None:
-                exported = compiled.members.get(wanted)
-                label = wanted.name
-            elif base is not None and issubclass(compiled.space_type, base):
-                exported = compiled.named_members.get(member_name)
-                label = member_name
-            else:
+            if not issubclass(compiled.space_type, base):
                 continue
-            if exported is not None:
-                self.check_export(child, label, compiled.records[exported].kind)
-                result.append((name, label, self.table.lift(Place(child), exported)))
+            member = compiled.named_members.get(member_name)
+            if member is not None:
+                self.check_member(child, member_name, compiled.records[member].kind)
+                result.append((name, member_name, self.table.lift(Place(child), member)))
         return result
 
     def members_member(self, declaration: Members[object]) -> tuple[type[Space], str]:
@@ -168,7 +162,7 @@ class Names:
         placed = self.placed_scopes[scope] = tuple(children)
         return placed
 
-    def check_export(self, scope: int, name: str, kind: str) -> None:
+    def check_member(self, scope: int, name: str, kind: str) -> None:
         if kind not in ("view", "derived"):
             raise DefinitionError.broken(
                 "member-not-export",

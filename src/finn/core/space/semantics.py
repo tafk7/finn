@@ -16,7 +16,7 @@ a union of several classes any of its members' (``union``). A protocol, a type v
 a special form is no value type, and a dataclass leaving a field out of ``==``
 (``compare=False``) is refused as one. ``ValueSemantics`` holds a check: its type token (what
 compatibility compares), its name and its recognizer. Views still state theirs
-(``view(semantics=...)``, ``ViewKey``), until they are read out of the space.
+(``view(semantics=...)``), until they are read out of the space.
 
 **The canonical form** (``canonical``) is what a value becomes where it enters a design
 space: a fact, a choice, a formal's default, a ``Const``, a literal bound at placement, a
@@ -435,10 +435,6 @@ def holds_mutable(value: object) -> bool:
     return False
 
 
-def semantics_for(value_type: type[T] | ValueSemantics[T]) -> ValueSemantics[T]:
-    return value_type if isinstance(value_type, ValueSemantics) else default_semantics(value_type)
-
-
 __all__ = [
     "NoTruthValue",
     "NotAValue",
@@ -450,6 +446,5 @@ __all__ = [
     "holds_mutable",
     "optional",
     "same",
-    "semantics_for",
     "union",
 ]

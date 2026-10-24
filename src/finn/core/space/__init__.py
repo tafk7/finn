@@ -20,7 +20,6 @@ from .declarations import (
     Param,
     Select,
     View,
-    ViewKey,
     constraint,
     declared_annotation,
     derived,
@@ -84,7 +83,6 @@ __all__ = [
     "constraint",
     "view",
     # Typed references and bound accessors
-    "ViewKey",
     "ValueHandle",
     "DecisionHandle",
     "BoundValue",

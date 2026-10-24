@@ -46,8 +46,8 @@ from .semantics import (
     ValueSemantics,
     annotation_type,
     canonical,
+    default_semantics,
     recognize,
-    semantics_for,
     unrecognized,
 )
 
@@ -849,7 +849,7 @@ class Constraint(_MemberOfNode, Declaration):
     constraint of a present Space counts toward the Space's validity
     (``inspection.validity``); a constraint whose ``when=`` does not hold counts as
     true. A constraint reads values (formals, choices, derived values, a child's
-    value export), never a view of its own Space or of an ancestor: that view's
+    derived value), never a view of its own Space or of an ancestor: that view's
     answer reads this constraint, a dependency cycle."""
 
     def __init__(
@@ -1028,20 +1028,6 @@ def view(
     return decorator
 
 
-class ViewKey(Generic[T_co]):
-    """A typed export contract independent of a concrete Space class: see ``Members``.
-
-    A Space class's ``exports`` maps a key to a view (a product, read as its
-    accepted value) or to a derived value (read as the value, whatever the
-    exporting Space's validity)."""
-
-    def __init__(self, name: str, value_type: type[T_co] | ValueSemantics[T_co]) -> None:
-        self.name, self.semantics = local_name(name, "export name"), semantics_for(value_type)
-
-    def __repr__(self) -> str:
-        return f"ViewKey({self.name!r})"
-
-
 # -- Symbolic references ---------------------------------------------------------------
 
 
@@ -1084,7 +1070,7 @@ class _Symbolic:
         from ._configuration import Space
         from ._nodes import NodeChoice
 
-        if isinstance(other, (Declaration, ViewKey, Space, NodeChoice)):
+        if isinstance(other, (Declaration, Space, NodeChoice)):
             return False
         self._misuse("equality comparison with a value")
 
@@ -1334,11 +1320,8 @@ class CaseRef(ValueDecl[str]):
 
 
 class Members(ValueDecl[tuple[Located[T], ...]], Generic[T]):
-    """Every present child node exporting ``key``, or reading ``Base.member``, as
-    ``Located`` values in declaration order.
-
-    ``Members(key)`` ranges over the children whose class exports ``key``; each entry is
-    ``Located(node=<child name>, member=<key name>, value=<export>)``.
+    """Every present child node reading ``Base.member``, as ``Located`` values in
+    declaration order.
 
     ``Members(Base.member)`` ranges over the children whose class is ``Base`` or derives
     from it, each read at its member of that name (so a subclass's override is the one
@@ -1354,31 +1337,23 @@ class Members(ValueDecl[tuple[Located[T], ...]], Generic[T]):
     """
 
     @overload
-    def __init__(self, key: ViewKey[T]) -> None: ...
+    def __init__(self, member: View[T]) -> None: ...
 
     @overload
-    def __init__(self, key: View[T]) -> None: ...
+    def __init__(self, member: T) -> None: ...  # a derived value: a class reads it as its value
 
-    @overload
-    def __init__(self, key: T) -> None: ...  # a derived value: a class reads it as its value
-
-    def __init__(self, key: object) -> None:
+    def __init__(self, member: object) -> None:
         from .expressions import Expr
 
-        self.key: ViewKey[T] | None = None
-        self.member: View[T] | ValueRef[T] | None = None
-        if isinstance(key, ViewKey):
-            self.key = key
-        elif isinstance(key, (View, Derived, Expr)):
-            self.member = cast("View[T] | ValueRef[T]", key)
-        else:
+        if not isinstance(member, (View, Derived, Expr)):
             raise DefinitionError.broken(
                 "members-member-invalid",
                 _OWNER,
-                f"{type(self).__name__} requires a ViewKey, or a view or a derived value "
-                f"of a Space class, not {type(key).__name__}",
+                f"{type(self).__name__} requires a view or a derived value of a Space "
+                f"class, not {type(member).__name__}",
             )
-        self.semantics = cast("ValueSemantics[tuple[Located[T], ...]]", semantics_for(tuple))
+        self.member: View[T] | ValueRef[T] = cast("View[T] | ValueRef[T]", member)
+        self.semantics = cast("ValueSemantics[tuple[Located[T], ...]]", default_semantics(tuple))
 
 
 __all__ = [
@@ -1397,7 +1372,6 @@ __all__ = [
     "ValueDecl",
     "ValueRef",
     "View",
-    "ViewKey",
     "constraint",
     "derived",
     "required",
