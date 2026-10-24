@@ -165,7 +165,7 @@ class Names:
     def check_member(self, scope: int, name: str, kind: str) -> None:
         if kind not in ("view", "derived"):
             raise DefinitionError.broken(
-                "member-not-export",
+                "members-member-invalid",
                 _OWNER,
                 f"{self.table.drafts[scope].name or '<root>'}: member {name} must be a view "
                 "or a derived value",
