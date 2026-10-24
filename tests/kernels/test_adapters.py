@@ -149,9 +149,9 @@ def test_exactly_one_chain_a_side_carries_out_its_steps():
         assert not {"adapter", "output_adapter"} & decisions
         assert (("x", "adapter_ram_style") in point.chosen(["x"])) == (chain != "none")
         # Its memory is in play where a chain is placed (set by the cut); where none is, the
-        # facts alone rule it out: it is in none of x's states, and still a choice by name.
-        states = dict(point.states(["x"]))
-        assert (("x", "adapter_ram_style") in states) == (chain != "none")
+        # facts alone rule it out: its state on the partition is Absent, not in play.
+        state = dict(point.states(["x"]))[("x", "adapter_ram_style")]
+        assert isinstance(state, inspection.Absent) == (chain == "none")
         assert ("x", "adapter_ram_style") in point.decisions()
 
 
