@@ -54,7 +54,6 @@ from finn.kernels.library import LibraryModule, library_module
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port import AxiStreamPort, served
 from finn.kernels.sides import Side
-from finn.kernels.utilization import RESOURCES_SEMANTICS
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import Resources
 
@@ -91,7 +90,7 @@ class Probe(KernelSpace):
     def parameters(self) -> dict[str, int | str]:
         return {}
 
-    @view(semantics=RESOURCES_SEMANTICS)
+    @view
     def resource_use(self) -> Resources | Rejected:
         return reject("kernel-resources", "a model only")
 

@@ -28,7 +28,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.module import Fragment, Leaf
-from finn.kernels.base import PORT_CONTRACT, PortContract
+from finn.kernels.base import PortContract
 from finn.kernels.channels import Channel
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.dotp import PackedDotpKernel
@@ -160,7 +160,7 @@ class Reader(Space):
     def port_side(self) -> Side:
         return Side.kernel(self.port_stream, "port")
 
-    @view(semantics=PORT_CONTRACT)
+    @view
     def port_contract(self) -> PortContract:
         return PortContract("", reading())
 

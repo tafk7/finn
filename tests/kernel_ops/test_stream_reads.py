@@ -59,7 +59,6 @@ from finn.kernels.channels import Channel
 from finn.kernels.declaration import declarations
 from finn.kernels.library import LibraryModule
 from finn.kernels.port import AxiStreamPort, Served
-from finn.kernels.utilization import RESOURCES_SEMANTICS
 from finn.platform.capabilities import Resources
 
 LOWERED = ("element", "stream", "access")
@@ -193,7 +192,7 @@ class Given(KernelSpace):
     def parameters(self) -> dict[str, int | str]:
         return {}
 
-    @view(semantics=RESOURCES_SEMANTICS)
+    @view
     def resource_use(self) -> Resources | Rejected:
         return reject("kernel-resources", "a model only")
 

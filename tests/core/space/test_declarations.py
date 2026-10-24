@@ -22,10 +22,8 @@ from finn.core.space import (
     RequestError,
     Select,
     Space,
-    ValueSemantics,
     View,
     constraint,
-    default_semantics,
     derived,
     design_space,
     inspection,
@@ -42,6 +40,7 @@ from finn.core.space._signatures import BoundArgument, validate_argument
 from finn.core.space.collection import collect_space
 from finn.core.space.compiler import compile_model
 from finn.core.space.declarations import Declaration, MemberRef, ValueRef
+from finn.core.space.semantics import ValueSemantics, default_semantics
 
 
 def decl(value: object) -> Declaration:

@@ -115,7 +115,6 @@ from finn.core.space import (
     Select,
     Space,
     Unresolved,
-    ValueSemantics,
     _compose,
     _value_types,
     bind,
@@ -144,7 +143,7 @@ from finn.core.space._running.value import DesignSpace, FactsLayer
 from finn.core.space._scopes import Address
 from finn.core.space._value_types import is_value_type
 from finn.core.space.occurrence import held
-from finn.core.space.semantics import NotAValue, canonical, default_semantics
+from finn.core.space.semantics import NotAValue, ValueSemantics, canonical, default_semantics
 
 RUNNING: Implementation = load("core.space._running_type:RUNNING")
 RUNNING_DROPPING: Implementation = load("core.space._running_type:RUNNING_DROPPING")

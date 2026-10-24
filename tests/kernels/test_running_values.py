@@ -79,14 +79,14 @@ from support.chain import chain
 from support.helpers import full_platform, in_order, stage_tensor
 
 import finn.kernels
-from finn.core.space import Space, ValueSemantics
+from finn.core.space import Space
 from finn.core.space._running.answers import _same_value
 from finn.core.space._running.cache import PLAIN, enum_key, key, value_class
 from finn.core.space._scopes import Address
 from finn.core.space._value_types import is_value_type, registered
 from finn.core.space.compiler import compile_model
 from finn.core.space.occurrence import held
-from finn.core.space.semantics import OptionalSemantics, default_semantics
+from finn.core.space.semantics import OptionalSemantics, ValueSemantics, default_semantics
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.gemm import Form, Window
 from finn.dataflow.steps import Hop, Step, Steps
