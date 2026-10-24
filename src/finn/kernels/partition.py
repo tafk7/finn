@@ -65,7 +65,7 @@ from finn.core.space import (
     RequestError,
     Space,
     Unresolved,
-    ViewKey,
+    View,
     bind,
     inspection,
     reject,
@@ -75,10 +75,10 @@ from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.artifacts.module import Composed as Module
 from finn.kernels.artifacts.module import Fragment, ProducerIdentity
 from finn.kernels.artifacts.top import compose as top
-from finn.kernels.base import BOUNDARY, NETLIST, RESOURCES, PortContract, merged
+from finn.kernels.base import KernelSpace, PortContract, merged
 from finn.kernels.channels import Channel, Neighbours, OuterHops, outer_hops
 from finn.kernels.composer import Composed, Key, Names, PartitionDeclaration, Port, compose
-from finn.kernels.control import CONTROL, Control
+from finn.kernels.control import Control
 from finn.kernels.control import presented as presented_buses
 from finn.kernels.explore import Trial, dotted
 from finn.kernels.movers import MoverOffer
@@ -341,14 +341,25 @@ class Partition:
             return Unresolved(tuple(self.local(name, each) for each in result.findings))
         return result
 
-    def query(self, name: str, key: ViewKey[T]) -> QueryResult[T]:
-        """Member ``name``'s export ``key`` (``CYCLES``, ``NETLIST``, ...);
-        ``Inapplicable`` where the member exports none."""
+    @overload
+    def query(self, name: str, member: View[T]) -> QueryResult[T]: ...
+
+    @overload
+    def query(self, name: str, member: T) -> QueryResult[T]: ...
+
+    def query(self, name: str, member: object) -> QueryResult[Any]:
+        """Member ``name``'s ``member``, a view or a derived value declared on a Space class
+        ``Base`` (``KernelSpace.netlist``, ``Timed.cycles``): the member of that name of the
+        member's own class. ``Inapplicable`` where the member's class does not derive from
+        ``Base`` (``Channel`` is no class with ``KernelSpace.bus_control``'s bus), or where
+        the member's own answer is inapplicable (a kernel declaring no control bus)."""
         point = self.member(name)
-        exports = type(point).exports
-        if key not in exports:
+        base, declared = getattr(member, "owner", None), getattr(member, "name", None)
+        if not (isinstance(base, type) and issubclass(base, Space) and declared is not None):
+            raise TypeError(f"query reads a member declared in a Space class, not {member!r}")
+        if not isinstance(point, base):
             return Inapplicable()
-        found: QueryResult[T] = point.query(exports[key])
+        found: QueryResult[Any] = point.query(getattr(type(point), declared))
         return self._result(name, found)
 
     def waits(self, name: str, answer: object) -> tuple[Key, ...]:
@@ -617,10 +628,10 @@ class Partition:
         """What its top is made of, read once: each member's netlist under its node, in its
         module's order, a channel's with its hops to the ports beside it around its own
         links (``hops``: the producer's first, the consumer's last), merged with each
-        control bus its kernels present (``CONTROL``, at the port each was given), and each
-        boundary channel's AXIS bus; or why not, every member's refusal (or, where none
-        refuses, what they wait on; a channel's hops' own, ``channel-port`` or
-        ``channel-link``), each finding naming its member (``located``), or the merge's own
+        control bus its kernels present (``KernelSpace.bus_control``, at the port each was
+        given), and each boundary channel's AXIS bus; or why not, every member's refusal
+        (or, where none refuses, what they wait on; a channel's hops' own, ``channel-port``
+        or ``channel-link``), each finding naming its member (``located``), or the merge's own
         (``kernel-netlist``); a channel none of whose netlist applies because a port of a
         kernel it is on does not is refused as ``channel-unused`` (``_unused``). A slice with
         a frozen neighbour at an edge is refused first, each such edge by name
@@ -659,7 +670,7 @@ class Partition:
         controls: list[tuple[str, Control]] = []
         failed: list[tuple[str, QueryResult[object]]] = []
         for name in self._order:
-            netlist = self.query(name, NETLIST)
+            netlist = self.query(name, KernelSpace.netlist)
             if name in self._sides and isinstance(netlist, Available):
                 hops = self.hops(name)
                 netlist = (
@@ -670,13 +681,13 @@ class Partition:
             else:
                 failed.append((name, netlist))
             if name not in self._sides:
-                control = self.query(name, CONTROL)
+                control = self.query(name, KernelSpace.bus_control)
                 if isinstance(control, Available):
                     controls.append((self.node(name), control.value))
                 elif not isinstance(control, Inapplicable):
                     failed.append((name, control))
             else:
-                buses = self.query(name, BOUNDARY)
+                buses = self.query(name, Channel.boundary_bus)
                 if isinstance(buses, Available):
                     boundary.extend(buses.value)
                 else:
@@ -767,7 +778,7 @@ class Partition:
         (``finn.custom_op.kernels.shell``)."""
 
         def read() -> QueryResult[Resources]:
-            used = [self.query(name, RESOURCES) for name in self.members]
+            used = [self.query(name, KernelSpace.resources) for name in self.members]
             missing = [each for each in used if not isinstance(each, Available)]
             if missing:
                 return _together(missing)

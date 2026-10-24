@@ -263,8 +263,8 @@ def shell_resources_report(parent: ModelWrapper, reports: Mapping[str, Path]) ->
         "part": target.part,
         "caveat": shell_row(target.shell, target.board).caveat,
         "columns": {
-            "model": "the network's statements (RESOURCES): the partition's kernels from "
-            f"their RTL's fits; each mover and each static IP {SHELL_CHARACTERISED}, which "
+            "model": "the network's statements (its members' resources): the partition's kernels "
+            f"from their RTL's fits; each mover and each static IP {SHELL_CHARACTERISED}, which "
             "overstate the placed shell",
             "out_of_context": "Vivado's synthesis of each IP alone",
             "placed": "the routed design's hierarchical utilization",

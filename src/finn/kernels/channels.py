@@ -43,8 +43,8 @@ presents what its other side presents, by one rule: an input without the replay 
 its receiver realizes (``unreplayed``), an output as produced, neither with markers. Where
 a shell offers movers on it (``offered``: the boundary side's ``offers``,
 ``finn.kernels.movers``), the channel places its ``mover`` on that free side; it binds no
-RTL in the module and exports its contract (``MOVER``) for the shell's budget check and
-resources.
+RTL in the module and states its contract (``mover_export``) for the shell's budget check
+and resources.
 
 A channel whose tensor has a known value (``contents``) places its ``source`` (a
 memory, ``MemStreamKernel``) as its producer (its producer side the source's,
@@ -62,12 +62,12 @@ stream runs through them. It checks its stages by their streams (``staged``, eac
 own derived values) and wires them by their contracts (``stages``, a view). Its answers
 are the base's views over theirs, but for two it states itself, calling the base's: its
 netlist places its source and its output adapter at their labels and adds the hops between
-its own ends (its source, its stages, its boundary; ``NETLIST``), and a channel of wires
+its own ends (its source, its stages, its boundary; ``netlist``), and a channel of wires
 takes no cycles of its own (0). Its hops to the ports beside it need those ports'
 contracts, which its network holds: the network wires them (``outer_hops``, from the ports
-it read, ``Neighbours``) and places them around the channel's netlist. It exports its
-boundary's AXIS bus (``BOUNDARY``) and its mover's contract (``MOVER``: ``placed_mover``,
-from the mover's own derived ``contract``). It is no module of its own.
+it read, ``Neighbours``) and places them around the channel's netlist. It states its
+boundary's AXIS bus (``boundary_bus``) and its mover's contract (``mover_export``:
+``placed_mover``, from the mover's own derived ``contract``). It is no module of its own.
 """
 
 from __future__ import annotations
@@ -111,12 +111,7 @@ from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import CLOCK, RESET, Bus, Endpoint
 from finn.kernels.artifacts.module import Fragment, Link, LinkEnd, Marker
 from finn.kernels.base import (
-    BOUNDARY,
-    BUFFERING,
-    CYCLES,
-    NETLIST,
     NETLIST_SEMANTICS,
-    RESOURCES,
     KernelSpace,
     PortContract,
 )
@@ -124,7 +119,7 @@ from finn.kernels.declaration import declared_reads
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.library import library_module
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.movers import MOVER, IodmaMover, MoverContract, MoverOffer
+from finn.kernels.movers import IodmaMover, MoverContract, MoverOffer
 from finn.kernels.policies import Alone, FirstValid, Policy, Required, defaulted, stated
 from finn.kernels.port import served
 from finn.kernels.sides import Side, SideKind
@@ -399,12 +394,6 @@ class ChannelFifo(KernelSpace):
                 "fifo.buffer",
             ),
         )
-
-    exports = {
-        NETLIST: KernelSpace.netlist,
-        BUFFERING: KernelSpace.buffering,
-        RESOURCES: KernelSpace.resources,
-    }
 
 
 @dataclass(frozen=True)
@@ -876,16 +865,10 @@ class Channel(KernelSpace):
         found: StreamContract | None = self.boundary
         return () if found is None else (found.transport.axis_bus(),)
 
+    # The boundary channel's mover, as its contract (``MoverContract``): one, or none
+    # without a mover. The shell's budget check counts their AXI-Lite buses, and it sums
+    # their resources and counts their memory ports.
     mover_export = View(placed_mover)
-
-    exports = {
-        NETLIST: netlist,
-        BOUNDARY: boundary_bus,
-        CYCLES: cycles,
-        BUFFERING: KernelSpace.buffering,
-        RESOURCES: KernelSpace.resources,
-        MOVER: mover_export,
-    }
 
 
 # The channel's policies (``finn.kernels.policies``), as a KernelOp states its kernel's:

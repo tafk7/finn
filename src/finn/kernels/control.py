@@ -5,9 +5,9 @@
 
 A kernel with a control interface (an AXI-Lite configuration bus, say) has a formal
 naming the port its bus is presented at, given where it is placed (``control: str | None =
-Param(default=None)``), and exports, under ``CONTROL``, the bus it presents there
-with that port and the writes that put its configuration into the bus's registers
-(``RegisterMap``): a ``Control``. A kernel's netlist view (its ``Members(CONTROL)``,
+Param(default=None)``), and states, as its member ``bus_control``, the bus it presents
+there with that port and the writes that put its configuration into the bus's registers
+(``RegisterMap``): a ``Control``. A kernel's netlist view (its ``Members(bus_control)``,
 ``finn.kernels.base.KernelSpace``) and a partition (``finn.kernels.partition``) each collect
 their members' controls (``presented``: each a ``BusExport`` from its member's node) and
 present each in their netlist (``finn.kernels.base.merged``), prefixing its port with the
@@ -26,7 +26,7 @@ names::
 the bus (a choice of its own), or the constant False; ``port`` its formal naming the port
 the bus is presented at; ``registers`` its ``RegisterMap``. It lowers to
 ``<name>_presented``, a derived value (bool), and ``<name>_control``, a view of its
-``Control``, which the kernel exports as ``CONTROL``: ``Control(None)`` while it is not
+``Control``, which the kernel reads as its ``bus_control``: ``Control(None)`` while it is not
 presented. Its pins are the bus, and what it holds the bus's inputs while it is not
 presented (``held_bus``: inputs constant, outputs unconnected): a declared bus is held or
 presented by construction (``presents``: its inputs accounted for in its module), and
@@ -50,7 +50,6 @@ from finn.core.space import (
     Rejected,
     Space,
     View,
-    ViewKey,
     default_semantics,
     derived,
     reject,
@@ -75,7 +74,6 @@ class Control:
 
 
 CONTROL_SEMANTICS = default_semantics(Control)
-CONTROL = ViewKey("control", CONTROL_SEMANTICS)
 
 
 def held_bus(bus: Bus) -> Held:
@@ -200,7 +198,6 @@ class ControlBus(KernelDeclaration):
 
 
 __all__ = [
-    "CONTROL",
     "Control",
     "ControlBus",
     "held_bus",

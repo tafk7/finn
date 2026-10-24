@@ -73,9 +73,10 @@ children's ports (``served``).
 Every constraint of a kernel and of its present members counts toward its validity
 (``inspection.validity``). A kernel states one contract per stream port: a view
 ``<name>_contract`` of a ``PortContract`` (a module's port's, labelled ``x``; a member's,
-labelled below it: MatMul's ``compute.packed.x``). Every kernel exports its netlist
-(``NETLIST``), its control bus's ``Control`` (``CONTROL``) where it declares one, and what
-an exploration ranks by: ``CYCLES``, ``BUFFERING`` and ``RESOURCES``.
+labelled below it: MatMul's ``compute.packed.x``). Every kernel states
+its netlist (``netlist``), its control bus's ``Control`` (``bus_control``) where it declares
+one, and what an exploration ranks by: ``cycles``, ``buffering`` and ``resources``; a reader
+asks a kernel for each by name (``KernelSpace.netlist``, ``Timed.cycles``).
 """
 
 from __future__ import annotations
@@ -91,7 +92,6 @@ from finn.core.space import (
     Rejected,
     Space,
     ValueSemantics,
-    ViewKey,
     default_semantics,
     derived,
     reject,
@@ -102,7 +102,7 @@ from finn.dataflow.schedule import Access, Affine, Index, Refused, Schedule, bin
 from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import Clocking
 from finn.kernels.artifacts.module import BusExport, Fragment, Link, merge
-from finn.kernels.control import CONTROL, Control, ControlBus, presented
+from finn.kernels.control import Control, ControlBus, presented
 from finn.kernels.declaration import KernelDeclaration, Product, declarations, declared_reads
 from finn.kernels.library import LibraryModule
 from finn.kernels.transport import StreamContract
@@ -117,28 +117,6 @@ def _frozen(name: str, *kinds: type) -> ValueSemantics[object]:
 
 
 NETLIST_SEMANTICS = cast("ValueSemantics[Fragment]", _frozen("netlist", Fragment))
-NETLIST = ViewKey("netlist", NETLIST_SEMANTICS)
-"""A kernel's or a channel's netlist (``finn.kernels.artifacts.module.Fragment``), labelled
-relative to itself; whatever holds it (a network, a kernel with children) merges it
-under its node."""
-
-BOUNDARY = ViewKey("boundary", default_semantics(tuple))
-"""A channel's AXIS bus on its network's boundary: one, or none when both of its sides are
-kernels' ports."""
-
-CYCLES = ViewKey("cycles", default_semantics(int))
-"""The clock cycles a frame takes through a kernel or a channel: a kernel binding a module
-the most beats any of its ports carries; a kernel with children's its slowest member's."""
-
-BUFFERING = ViewKey("buffering", default_semantics(int))
-"""The bits a channel's stages hold between its sides: a stage's its own (an
-``input_gen``'s buffer, a FIFO's depth); a kernel with children's, a channel's among
-them, the sum over its members."""
-
-RESOURCES = ViewKey("resources", RESOURCES_SEMANTICS)
-"""What a kernel or a channel uses of the device (``finn.platform.capabilities.Resources``):
-a kernel binding a module its own statement; a kernel with children's, a channel's among
-them, the sum over its members."""
 
 
 class Kernel(Protocol):
@@ -399,8 +377,6 @@ class KernelSpace(Timed):
                 "a kernel binds one at most",
                 declaration=cls.__qualname__,
             )
-        if buses:
-            cls.exports = {**cls.exports, CONTROL: getattr(cls, f"{buses[0]}_control")}
         cls._module = modules[0] if modules else None
         _spanning(cls, KernelSpace, _KERNEL_SPANS)
         if unmet_required(cls):
@@ -648,14 +624,6 @@ class KernelSpace(Timed):
     member_buffering = Members(buffering)
     member_resources = Members(resources)
 
-    # A kernel adding exports of its own extends these: ``{**KernelSpace.exports, KEY: ...}``.
-    exports = {
-        NETLIST: netlist,
-        CYCLES: cycles,
-        BUFFERING: buffering,
-        RESOURCES: resources,
-    }
-
 
 _KERNEL_SPANS = (
     _Span(
@@ -696,16 +664,11 @@ def extent_of(index: Index) -> int:
 
 
 __all__ = [
-    "BOUNDARY",
-    "BUFFERING",
-    "CYCLES",
     "Kernel",
     "KernelSpace",
     "NATIVE_CLOCKING",
-    "NETLIST",
     "PORT_CONTRACT",
     "PortContract",
-    "RESOURCES",
     "extent_of",
     "merged",
 ]

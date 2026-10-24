@@ -70,7 +70,7 @@ sized before a fold that leaves it too small for its stream is refused when the 
 verifies the partition (``fifo-stale``), unless a strategy dropped it to be sized again.
 
 The resources are the shell's (``shell_resources``), each member its own
-statement (``finn.kernels.base.RESOURCES``): its partition (the partition's kernels
+statement (``finn.kernels.base.KernelSpace.resources``): its partition (the partition's kernels
 and its channels, boundary channels included), each mover and its static region, and
 their sum, ``used``; where members state none (a memory in ``auto``, which
 Vivado places), ``used`` is the sum of those that
@@ -120,7 +120,6 @@ from finn.custom_op.kernels.shell import (
     in_shell,
     shell_resources,
 )
-from finn.kernels.base import RESOURCES
 from finn.kernels.composer import Key
 from finn.kernels.explore import (
     FIFOS_BY_MODEL,
@@ -318,7 +317,7 @@ def _fifo_storage(seam: Seam, network: Partition) -> dict[str, dict[str, object]
         )
         # A FIFO whose depth no strategy sized (required, left open) has neither yet.
         storage = fifo.query(FifoKernel.storage)
-        used = fifo.query(FifoKernel.exports[RESOURCES])
+        used = fifo.query(FifoKernel.resources)
         found.setdefault(owner, {})[key] = {
             "ram_style": value,
             "storage": storage.value.effective_style if isinstance(storage, Available) else None,

@@ -35,7 +35,7 @@ stream side, the free side's contract:
   before the stream runs dry, or once its last word left);
 - it presents one AXI-Lite bus to the shell's processor (its ``s_axi_control``),
   which the shell's budget check counts against its budget beside the
-  partition's (``MOVER``, ``MoverContract.control_buses``);
+  partition's (``Channel.mover_export``, ``MoverContract.control_buses``);
 - the memory latency ``L`` is **excluded**: the shell does not know it, and each call
   adds it (``MEMORY_LATENCY``, what the exploration report states). A frame a call is
   the bound that holds for any batch, since the batch is the driver's runtime argument;
@@ -52,10 +52,10 @@ stream side, the free side's contract:
   otherwise). They are the shell's, not the channel's (``Channel.resource_use``):
   out of context (``SHELL_CHARACTERISED``), which overstates the placed mover.
 
-A boundary channel exports its mover's contract under ``MOVER`` (none without a mover),
-which the shell sums with its static region (``finn.custom_op.kernels.shell``).
-The mover exports its cycles a frame under ``CYCLES``, the channel's member that it is:
-the channel's are at least its mover's.
+A boundary channel states its mover's contract as its member ``mover_export`` (none
+without a mover), which the shell sums with its static region
+(``finn.custom_op.kernels.shell``). The mover states its cycles a frame as its member
+``cycles``, the channel's member that it is: the channel's are at least its mover's.
 A mover is not a channel's stream (``finn.dataflow.streams``: the two beat sequences a
 channel's producer and consumer present, ``Stream``, ``Streams``).
 """
@@ -70,16 +70,14 @@ from finn.core.space import (
     Rejected,
     Space,
     View,
-    ViewKey,
     constraint,
-    default_semantics,
     derived,
     reject,
 )
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import passes, period
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.base import CYCLES, Timed
+from finn.kernels.base import Timed
 from finn.kernels.transport import StreamContract
 from finn.kernels.utilization import Fit
 from finn.platform.capabilities import Resources
@@ -89,11 +87,6 @@ IODMA_HLS = "iodma_hls"
 
 MEMORY_LATENCY = "memory latency: unmeasured; each call adds L"
 """What a mover's cycles leave out, as the exploration report states it."""
-
-MOVER = ViewKey("mover", default_semantics(tuple))
-"""A boundary channel's mover, as its contract (``MoverContract``): one, or none without an
-mover. The shell's budget check counts their AXI-Lite buses, and it sums their
-resources and counts their memory ports."""
 
 NO_CONVERTER, DIVISIBLE, LCM = "none", "divisible", "lcm"
 """The converters between a mover's memory port and its stream (``converter_kind``)."""
@@ -327,8 +320,6 @@ class IodmaMover(Timed):
     # Cost, not validity: read apart from its constraints.
     cycles = View(frame_cycles)
 
-    exports = {CYCLES: cycles}
-
 
 MOVERS: dict[str, type[Space] | Space] = {IODMA_HLS: IodmaMover}
 """The movers a shell can offer a free side, by kind."""
@@ -336,7 +327,6 @@ MOVERS: dict[str, type[Space] | Space] = {IODMA_HLS: IodmaMover}
 
 __all__ = [
     "DIVISIBLE",
-    "MOVER",
     "MOVERS",
     "IODMA_HLS",
     "LCM",
