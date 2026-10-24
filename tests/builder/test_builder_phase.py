@@ -1072,7 +1072,7 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
     assert (made_by.count("target_throughput"), made_by.count("saved")) == (6, 63)
     assert report["open"] == []
     assert report["fifos"] == "not sized here (no size_fifos): each transport as it was"
-    # The Zynq shell's input mover binds: 196 beats and a call's 4 cycles (SZ3 (a): a
+    # The Zynq shell's input mover binds: 196 beats and a call's 4 cycles (a
     # frame a call), within the budget of 200; the slowest of the other members, the
     # first layer's activations, weights, thresholds and MatMul, tie at 196.
     assert report["bottleneck"] == {"members": ["Reshape_0_out0"], "cycles": 200}
@@ -1284,7 +1284,7 @@ def test_the_export_of_tfc_on_pynq_names_both_movers_iodmas_and_every_connection
         Address("odma0/s_axi_control_0", 0xA000_1000, 4096),
     )
     assert (export.period_ns, export.vlnv) == (5.0, "xilinx_finn:finn:partition:1.0")
-    # Z0's module, its memories in their explicit baseline styles (SZ18), its thresholds a data
+    # Z0's module, its memories in their explicit baseline styles, its thresholds a data
     # file (THRESHOLDS_FILE), and choices; its MatMuls after the first INT7, reading each
     # thresholding's range.
     node, body, _ = partition_body(parent)

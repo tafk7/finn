@@ -157,7 +157,7 @@ def test_a_chosen_selector_under_a_refused_when_is_one_piece() -> None:
     assert [piece.owner for piece in inspection.validity(point).pieces] == ["enough", "heating"]
 
 
-# Reading 8's second half (SZ111): a refused ``when`` below a selector that is still open
+# Reading 8's second half: a refused ``when`` below a selector that is still open
 # leaves its piece unknown, waiting on that selector, never counted and never left out:
 # counted once, at the highest such ``when``, keyed as a refused guard's piece. Each wing
 # holds a selector whose own ``when`` refuses at gate 1: chosen, picked by a derived value

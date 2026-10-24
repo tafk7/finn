@@ -292,7 +292,7 @@ def test_a_shell_without_an_integration_has_no_export(tmp_path: Path) -> None:
 
 def test_an_iodma_mover_refuses_w2_repeated_or_tiled_by_name() -> None:
     """The Chain's streamed w2 presents its pass once per row of x, three times a frame,
-    which an IODMA mover does not repeat (SZ11 (f)): the pynq shell refuses it,
+    which an IODMA mover does not repeat: the pynq shell refuses it,
     ``mover-repetition``, at any folding; at the Chain's own each pass is also in 2 x 2
     tiles, which the driver's row-major buffer does not hold, ``mover-order``. The mover
     is placed on w2's free side, no choice, so its rules are the channel's: the cut leaves
@@ -443,7 +443,7 @@ TFC_NODE_DEFAULTS: dict[str, dict[str, object]] = {
 def test_tfc_s_choices_are_created_at_conversion_and_at_the_cut(
     tfc_streamlined: Path, tmp_path: Path
 ) -> None:
-    """SR6's two moments on TFC_W2A2: conversion stores each KernelOp's own choices,
+    """The two moments on TFC_W2A2: conversion stores each KernelOp's own choices,
     each at its default policy, first valid (44 values on 8 nodes), and no channel's; the
     cut creates the channels' by the channel's policies, first valid (25 values on 13
     tensors: transports, the weights' memories, the input buffers' adapters' memories; the

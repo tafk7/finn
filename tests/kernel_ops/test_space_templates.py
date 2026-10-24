@@ -244,7 +244,7 @@ def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
     handles = {item.key: item.reference for item in inspection.decisions(committed)}
     middle = [key for key in handles if key.startswith("mm2.")]
     # the middle MatMul's choices listed: its ``realization`` (``when=depthwise``) is not,
-    # its facts alone rule it out (SZ113)
+    # its facts alone rule it out
     assert len(middle) == 6 and "mm2.realization" not in middle
     inspection.viable(committed, [handles[key] for key in middle])
     counted = scopes.counts()

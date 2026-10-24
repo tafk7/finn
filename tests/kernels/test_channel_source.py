@@ -232,11 +232,11 @@ def test_the_channel_owns_its_source_and_its_choices():
 
 
 def test_a_channel_without_contents_lists_none_of_its_sources_choices():
-    # SZ113: without contents the channel's source is absent under the facts alone (its
+    # Without contents the channel's source is absent under the facts alone (its
     # guard, ``valued``, reads the facts only), so the source's choices are in none of the
     # channel's lists: its decisions, its states, the network's states and open choices.
     # Asked by name they still answer, and set by name one is accepted, dormant, and is then
-    # listed: a stored choice is never pruned (SZ119 (5)).
+    # listed: a stored choice is never pruned.
     # In the partition's design space the channel's keys are below its member's name.
     source = {"source.ram_style", "source.pumped_memory"}
     paths = {f"w.{key}" for key in source}

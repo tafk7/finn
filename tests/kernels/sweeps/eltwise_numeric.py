@@ -6,7 +6,7 @@
 Each case places ``EltwiseKernel`` between three boundary channels (``s_axis_0`` its
 ``lhs``, ``s_axis_1`` its ``rhs``, ``m_axis_0`` its result) and streams one tensor of
 each operand through it, free and stalled. The cases cover what the kernel's design
-space offers, lean (decision KT10), not a matrix:
+space offers, lean, not a matrix:
 
 - each operation (ADD, SUB, SBR, MUL) on integers, signed and unsigned (an unsigned
   difference is signed), from 4 to 16 bits;
@@ -21,7 +21,7 @@ second its greatest (a FLOAT32 operand: a bound the case states, so that no resu
 overflows); ``rhs``'s first two columns are its least and greatest, so every pair of
 extremes meets. The rest is random, seeded by the case. The expected words come from
 the spec's test-side reference (``support.kernel_specs.eltwise.computed``; no KernelOp
-reaches eltwise, decision KT12 A1), packed in each port's order; words that differ are
+reaches eltwise), packed in each port's order; words that differ are
 decoded as an order (``finn.harness.orders``). A float is compared bit for bit. Run
 with Vivado selected (FinnLib is the ``finnlib`` resource); each simulation runs in a
 fresh process.

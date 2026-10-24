@@ -127,7 +127,7 @@ def test_the_description_states_each_streams_passes_a_frame(tmp_path: Path) -> N
     """On ``ip``, whose integrator moves the streams, the Chain's streamed w2 crosses the
     boundary once per row of x, three times a frame, which no mover refuses there: the
     description states each stream's passes (``order``), so that its integrator supplies
-    w2 three times (SZ11 (f))."""
+    w2 three times."""
     configure_partition(model := kernel_model(second_weights=False))
     stub = cast(Toolchain, PackagedByStub())
     model.transform(PackagePartition("sdp_1", directory=tmp_path, toolchain=stub))

@@ -3,7 +3,7 @@
 
 """Pool: max pooling over FinnLib's HLS ``pooling_stream``, each window closed by its
 channel's marker. No KernelOp reaches it yet (a Pool KernelOp from MaxPoolNHWC comes
-later), so its reference is test-side (decision KT12 A1): ``max_pool``."""
+later), so its reference is test-side: ``max_pool``."""
 
 from __future__ import annotations
 

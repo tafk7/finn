@@ -167,7 +167,7 @@ def test_the_reference_scales_and_rounds_in_binary32() -> None:
 
 
 def test_the_numeric_sweep_covers_each_operation_a_broadcast_and_float_arithmetic() -> None:
-    """Lean (decision KT10): every operation the kernel implements, signed and unsigned
+    """Lean: every operation the kernel implements, signed and unsigned
     integers, an rhs of fewer axes, both float paths (an integer converted, and FLOAT32
     alone), a scale, and PE at 1 and the whole innermost extent. Each case places."""
     cases = eltwise_numeric.CASES

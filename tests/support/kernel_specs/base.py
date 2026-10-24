@@ -51,13 +51,13 @@ class SweepCases:
 @dataclass(frozen=True)
 class KernelSpec:
     """One kernel's evidence, in one place: what checks it at each level, and the lean
-    points (decision KT10) its design space is checked at.
+    points its design space is checked at.
 
     - ``reference``: where its computational reference lives. A kernel a KernelOp
       reaches is checked against the op's ``execute_node`` at the op's boundary (the
       oracle, PRINCIPLES 8: ``tests/kernel_ops/test_parity.py``); every kernel's
       conformance cases state a test-side reference, the only one of a kernel no
-      KernelOp reaches (decision KT12 A1);
+      KernelOp reaches;
     - ``cases``: its conformance cases (``tests/kernels/test_conformance.py``), by name;
     - ``space``: the case whose placement, nothing chosen, its covering points
       (``finn.harness.points.covering`` of its ``kernel.*`` Decisions) and its refused

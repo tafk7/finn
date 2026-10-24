@@ -14,7 +14,7 @@ replayed as the exploration saved them (step_verify_partition's), runs in XSim
 random with their extremes, and every output word is checked against the KernelOps'
 ``execute_node`` (the oracle) on the same inputs.
 
-Lean (KT10): two graphs an op, one simulation each. MatMul: unsigned activations over
+Lean: two graphs an op, one simulation each. MatMul: unsigned activations over
 k = 64 with weights stored, and weights streamed as a second graph input. Thresholding:
 a row a channel, and NHWC images. Conv: an overlapping 3 x 3 window over a
 6 x 6 x 4 image, and a strided, dilated one that passes rows and columns: the image

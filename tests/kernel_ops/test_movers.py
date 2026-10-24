@@ -176,7 +176,7 @@ def test_an_iodma_refuses_a_free_side_that_is_not_row_major() -> None:
 def test_an_iodma_refuses_a_free_side_that_repeats_its_pass() -> None:
     """An IODMA moves one pass of the host's buffer a frame: a free side presenting it
     three times (a streamed weight, once per row) is refused by name, row-major or not,
-    until repetition by the host or the mover is designed (SZ11 (f))."""
+    until repetition by the host or the mover is designed."""
     offers = (iodma_hls(128),)
     repeated = free_side(vector_major((4, 6), 3).repeated(3))
     refused = inspection.validity(design_space(IodmaMover(offers=offers, side=repeated))).result
