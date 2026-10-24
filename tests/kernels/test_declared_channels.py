@@ -392,10 +392,29 @@ def test_stated_lanes_that_divide_no_pass_are_refused_by_channel_boundary():
     assert findings(refused.query(Channel.sides)) == [
         (
             "channel-boundary",
-            "s_axis_0: the build statement's 5 lanes a beat do not divide a pass of [4, 6] "
-            "(inner_beats does not align with the loop nest)",
+            "s_axis_0: the build statement's 5 lanes a beat do not divide the pass's 24 "
+            "elements (a pass of [4, 6])",
         )
     ]
+
+
+def test_stated_lanes_a_tiled_order_cannot_regroup_to_are_refused_by_channel_boundary():
+    """Lanes stated alone (the order as presented) that divide the pass's 24 elements, over
+    a reader taking 2 x 3 tiles: the presented order cannot be regrouped to them, its own
+    message under the same code; over the rows, the same lanes regroup."""
+    for lanes in (2, 4, 8):
+        refused = edge(
+            Side.boundary("s_axis_0", outside=stated(lanes=lanes)), reader(tile(4, 6, 2, 3))
+        )
+        assert findings(refused.query(Channel.sides)) == [
+            (
+                "channel-boundary",
+                f"s_axis_0: the presented order of a pass of [4, 6] cannot be regrouped to "
+                f"{lanes} lanes a beat, as the build statement states",
+            )
+        ]
+        rows = edge(Side.boundary("s_axis_0", outside=stated(lanes=lanes)), reader(ROWS))
+        assert rows.boundary.form.lanes == lanes
 
 
 def test_a_statement_of_nothing_the_inside_does_not_present_answers_as_unstated():

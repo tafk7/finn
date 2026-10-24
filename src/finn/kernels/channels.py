@@ -955,24 +955,29 @@ def stated_form(port: str, outside: Outside, presented: Traversal) -> Traversal:
     pass's (with the order as presented: the same elements in the same order, regrouped,
     ``regrouped``); and the stated passes a frame (1), else as many as presented
     (``passes``). Nothing stated beyond what is presented: ``presented`` itself. A
-    ``ValueError`` where the stated lanes do not divide a pass."""
+    ``ValueError`` where the stated lanes do not divide a pass's elements, or where they
+    do but the presented order cannot be regrouped to them (a nest whose loops do not
+    split at that many lanes: a tiled pass)."""
     once = period(presented)
     lanes = once.lanes if outside.lanes is None else outside.lanes
     count = passes(presented) if outside.passes is None else outside.passes
-    one = once
-    try:
-        if outside.order == ROW_MAJOR:
-            size = prod(once.shape)
-            if size % lanes:
-                raise ValueError(f"{size} elements")
-            one = Traversal(once.shape, (Loop(size // lanes, lanes),), (Loop(lanes, 1),))
-        elif outside.lanes is not None:
-            one = regrouped(once, lanes)
-    except ValueError as error:
+    size = prod(once.shape)
+    if size % lanes:
         raise ValueError(
             f"{port}: the {outside.source} statement's {lanes} lanes a beat do not divide "
-            f"a pass of {list(once.shape)} ({error})"
-        ) from None
+            f"the pass's {size} elements (a pass of {list(once.shape)})"
+        )
+    one = once
+    if outside.order == ROW_MAJOR:
+        one = Traversal(once.shape, (Loop(size // lanes, lanes),), (Loop(lanes, 1),))
+    elif outside.lanes is not None:
+        try:
+            one = regrouped(once, lanes)
+        except ValueError:
+            raise ValueError(
+                f"{port}: the presented order of a pass of {list(once.shape)} cannot be "
+                f"regrouped to {lanes} lanes a beat, as the {outside.source} statement states"
+            ) from None
     if one == once and count == passes(presented):
         return presented
     return one if count == 1 else one.repeated(count)
