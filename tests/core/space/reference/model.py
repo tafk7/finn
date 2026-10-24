@@ -21,7 +21,7 @@ reads refused.
 
 **Domains.** Membership reads facts only, so it is a type check fixed once the facts
 are given: a value is a member, outside, refused through a refused input, or refused
-because an input does not apply (reading 6). Facts are always known (SZ100 (5)), so
+because an input does not apply (reading 6). Facts are always known, so
 membership never waits. A listed
 domain's membership list is its listed values that are members, in listed order.
 
@@ -38,7 +38,7 @@ presence unknown; never read as a value),
 dormant (stored, its scope absent or not in play), open (unset, its scope present or
 unknown) or absent (unset, its scope absent or not in play).
 
-**Reads.** A fact is always known (SZ100 (5)). A description declares each fact
+**Reads.** A fact is always known. A description declares each fact
 required or optional (:class:`~.description.Space`, ``optional``): a required fact is
 given with every configuration, and an optional fact left out, or unset, reads
 ``None``, a known value its readers handle. "Unresolved" belongs to open choices alone.
@@ -46,11 +46,11 @@ A derived value or a view
 reads its inputs: all known, its body answers (a :class:`~.description.Refuse` is a
 refusal at its origin); an input refused, it is refused through it; an input waiting,
 it waits; an input inapplicable, it is inapplicable. A view also refuses, through,
-when its Space's validity is false. *Views are read out* (SZ100 (3)): no constraint,
+when its Space's validity is false. *Views are read out*: no constraint,
 derived value, ``when`` guard or domain (its membership, its computed list) reads a
 view, and a description that does is no definition
 (``view-read-in``); a view reads anything readable, other views included, its own
-Space's and its children's. A ``Members`` (SZ100 (6)) reads its entries,
+Space's and its children's. A ``Members`` reads its entries,
 derived values in scopes below it: its value is the (entry, value) pairs of the
 entries that answer a value, sorted by entry. That the model's ``Members`` ranges over
 derived values is a restriction of the model, not of the semantics: views compose by
@@ -84,7 +84,7 @@ space, and is never refused for its facts (§ 16.24).
    refuses the change (:class:`~.answers.AssignmentRefusal`).
 2. *Counted pairs.* An origin is a constraint false on its own values; a derived value
    refusing on its own values; a present choice whose listed domain lists no value (a
-   view refusing on its own values feeds no piece: SZ100 (3)). A configuration's counted
+   view refusing on its own values feeds no piece). A configuration's counted
    pairs are each false piece of the root's validity with each origin it is false
    through: the piece itself, or the origins its refused inputs lead back to.
 3. *Refusal.* A change of choices that sets a choice to a new value is refused when the
@@ -119,14 +119,14 @@ space, and is never refused for its facts (§ 16.24).
 value, in membership's list order: possible (with what moves) or impossible (with
 each refusal).
 
-**Lists** (SZ113). A choice whose existence is false under the facts alone is in no list
+**Lists**. A choice whose existence is false under the facts alone is in no list
 of the design space: not among its states, nor its decisions, its flow or the choices
 whose possible values are listed (:meth:`Solution.listed`, :meth:`Solution.pruned`).
 Existence under the facts alone is its scope's presence read with every choice unknown
 (the configuration's facts with nothing stored): absent is false and pruned; present,
 unknown or refused stays listed (a guard refused through an input, or one reading an
 input that does not apply, is not false). Presence is the model's own, so absent
-dominates refused there too (reading 26). *A stored choice is never pruned* (SZ119 (5)):
+dominates refused there too (reading 26). *A stored choice is never pruned*:
 it stays listed, dormant where its scope is absent, and setting a pruned choice is
 accepted as dormant, so it becomes listed. Facts alone decide what is pruned, so a change
 of facts prunes and unprunes, and a change of choices only unprunes what it sets. Asked
@@ -134,7 +134,7 @@ by name, a pruned choice still answers: its state is absent and its possible val
 what setting each would do. Pruning moves nothing else: no validity, stored choice or
 value.
 
-**Policy is not the model's** (SZ103: default policies belong to FINN's compiler, on a
+**Policy is not the model's** (default policies belong to FINN's compiler, on a
 KernelOp for its kernel's choices and at the cut for a channel's). The model states no
 ranking of a domain and no ``required`` choice, and two of its answers lose a part:
 
@@ -153,17 +153,17 @@ Each reading below is stated in full: the rule the semantics' author chose for t
 where the semantics leave room. A "§ 16.n" is the number its author gave the reading,
 kept as its label; the text here is the rule.
 
-1. *A view refused because its Space is refused is refused through, never an origin*
-   (FN2 for views): its Space's false pieces are counted on their own. A view's body
+1. *A view refused because its Space is refused is refused through, never an origin*:
+   its Space's false pieces are counted on their own. A view's body
    refusing on its own values refuses the view with its own reason (§ 16.1); no piece
-   reads a view (SZ100 (3)), so neither is ever in a pair.
+   reads a view, so neither is ever in a pair.
 2. *Only an origin feeding a false piece counts* (§ 16.2, kept by § 16.15). A piece's
    origins are found from it, following refused inputs back through derived values,
    ``Members`` (to their refused entries; a ``Members`` is never an origin), and
    choices and values refused through a guard (to the guard's refused reads);
    a listed domain's list refused through its membership's input, back over the facts.
    A refusing derived value nothing rules on reads refused where it is asked, is in no
-   pair, and refuses no change; nor is a view, which no piece reads (SZ100 (3)).
+   pair, and refuses no change; nor is a view, which no piece reads.
 3. *A change is refused by a new pair* (§ 16.15, which replaces § 16.2-16.3's reach and
    supersedes § 16.13's first consequence and § 16.14). Pieces are told apart by kind,
    owner and subject; a pair is new when the predecessor lacks it, whatever moved.
@@ -176,18 +176,18 @@ kept as its label; the text here is the rule.
    rule false through the same origin, and refuses one making it false through another.
    Every accepted change of choices that sets leaves the set of pairs no larger (a
    change of facts may enlarge it, § 16.24), so a change from nothing committing the
-   stored set of a design space reached by such changes is accepted (FN3), and no
+   stored set of a design space reached by such changes is accepted, and no
    accepted addition leaves a Space newly refused (§ 16.14's exception cannot arise).
    *Clears are never refused* (§ 16.16; § 5.6 stands): clearing stays the remedy a
    refusal names; an unset is a change of facts, never refused either. "Sets" means a
    new value (§ 16.18): committing the value already stored sets nothing, so a change
    whose commits all repeat stored values is clear-only too (as a same-value update
-   returns the receiver). Consequence (SZ100 (3)): a clear-only change adds no pair. A
+   returns the receiver). Consequence: a clear-only change adds no pair. A
    clear only moves answers towards unresolved, and the one shape that could add a pair,
    masking (a piece false only through a view refused with its Space, revealed when the
    change reopens that Space: § 16.14, § 16.16's note), has no subject, since no piece
    reads a view. So no accepted change of choices adds a pair, clears included.
-4. *What stands in the way* (§ 16.4; SZ100 (6): standing is what the origin's
+4. *What stands in the way* (§ 16.4: standing is what the origin's
    evaluation read): the stored choices the origin's evaluation read for their value,
    in the design space judged, followed through the reads made by the bodies of the
    derived values, views and ``Members`` it read. The model evaluates every declared
@@ -213,7 +213,7 @@ kept as its label; the text here is the rule.
    :class:`~.answers.Absent`, a state the note's table lacks.
 6. *Membership that cannot be decided* (§ 16.6): a refusing input refuses the
    assignment, and a change of facts making it refuse while a value is stored drops the
-   value, its domain piece false through the input. (SZ100 (5): no membership waits on
+   value, its domain piece false through the input. (No membership waits on
    a missing fact any more; an optional fact left out reads ``None``.) Membership is
    evaluated over the facts alone: a derived value it reads is computed from its reads
    whatever its own scope's presence. *An input that does not apply is refused* (§ 16.17,
@@ -242,7 +242,7 @@ kept as its label; the text here is the rule.
    ``broken``, nothing standing. A selector switch bringing such a choice into play is
    still refused, by 3, as a newly present false piece, nothing standing. A domain
    already empty before the change adds no pair.
-10. *Retired* (SZ103): a domain's order (§ 16.10) is no part of the semantics; see
+10. *Retired*: a domain's order (§ 16.10) is no part of the semantics; see
     "Policy is not the model's" above.
 11. *An unknown guard answers unknown* for every piece under it (constraints, empty
     listed domains, guards), not Kleene's implication (the canon's text in § 11: "a scope
@@ -252,7 +252,7 @@ kept as its label; the text here is the rule.
     configuration whose rules could be read.
 13. *A listed domain is a piece only when it lists no value* (§ 4.6, § 16.12): false
     when its list is empty and its choice present (the origin), unknown when it is
-    empty under a guard that waits (SZ100 (5): never while it waits on a fact), and
+    empty under a guard that waits (never while it waits on a fact), and
     false through the input when its membership reads a refused input (the list cannot
     be made; blamed at that input's origin). When an input does not apply (§ 16.17,
     reading 6) the list cannot be made either and the piece is false through it; the
@@ -261,7 +261,7 @@ kept as its label; the text here is the rule.
     holds a listed choice and no rules leaves the configuration valid. A membership-only
     domain has no piece.
 14. *A stored choice waits on what it waits on*: an unknown presence's waits, never on
-    itself (SZ100 (5): never on a fact). An open choice also waits on itself.
+    itself (never on a fact). An open choice also waits on itself.
 15. *Retired, replaced by 27* (a ``when`` reading an input that does not apply left its
     scope unknown, waiting on that input).
 16. *Cycles* are the dependency rule written at :mod:`.description`.
@@ -434,7 +434,7 @@ class FactsOnly:
 
     def _value(self, path: str) -> Answer:
         if path in self.index.facts:
-            # always known (SZ100 (5)): an optional fact left out is None
+            # always known: an optional fact left out is None
             if path in self.facts:
                 return Known(self.facts[path])
             if path in self.index.optional:
@@ -457,7 +457,7 @@ class FactsOnly:
         """Whether the membership read ``path`` exists for a choice of the scope ``within``
         (reading 6, § 16.17): ``Known(True)``; ``Known(False)`` when a guard over facts
         beyond the choice's own existence guards is false; ``Refused`` when it reads a
-        refused input. Never waiting: facts are always known (SZ100 (5)). A fact
+        refused input. Never waiting: facts are always known. A fact
         exists; a derived value exists when its scope does and every value it reads does.
         The choice's own guards (its scope's and those above it) hold whenever it is
         present, so they are not asked."""
@@ -1026,7 +1026,7 @@ class _Evaluation:
 class Configuration:
     """A description, its facts and its commitments (choice path to stored value),
     dormant ones included. Every required fact is given (else
-    :class:`ConfigurationError`); an optional fact left out is ``None`` (SZ100 (5)), and
+    :class:`ConfigurationError`); an optional fact left out is ``None``, and
     ``facts`` holds it so."""
 
     space: Space
@@ -1211,7 +1211,7 @@ def _new_facts_report(
 
 
 def bind(space: Space, facts: Mapping[str, Any], stored: Mapping[str, Any]) -> Accepted:
-    """The design space of ``facts`` with exactly the ``stored`` choices (§ 16.24, SZ90):
+    """The design space of ``facts`` with exactly the ``stored`` choices (§ 16.24):
     each is checked against its domain under ``facts``, and dropped where it falls outside
     (or its domain's input refuses or does not apply), kept where it is inside. Never
     refused for rules. Its baseline is the design space of ``facts``
@@ -1283,7 +1283,7 @@ def change(configuration: Configuration, edit: Change) -> Accepted | Rejected:
     for name in edit.unset:
         if name not in index.optional:
             raise ConfigurationError(f"the required fact {name} cannot be unset")
-        facts[name] = None  # SZ100 (5): an optional fact unset is None
+        facts[name] = None  # an optional fact unset is None
     facts.update(edit.facts)
     choices = Change(commit=edit.commit, clear=edit.clear)
     if _same_mapping(facts, configuration.facts):
@@ -1332,7 +1332,7 @@ class Solution:
         return {name: self.state(name) for name in self.listed()}
 
     def pruned(self) -> tuple[str, ...]:
-        """The choices in no list (SZ113), in order: unset, and their existence false under
+        """The choices in no list, in order: unset, and their existence false under
         the facts alone (their scope absent with nothing stored)."""
 
         if self._pruned is None:

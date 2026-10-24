@@ -385,7 +385,7 @@ def test_a_selector_is_read_as_its_selected_case() -> None:
 
 
 def test_an_optional_fact_unset_is_given_none_in_the_engine() -> None:
-    # SZ100 (5): unset, an optional fact is None in the model; the engine is given None, the
+    # Unset, an optional fact is None in the model; the engine is given None, the
     # fact left out, and agrees.
     unset = NESTED.start({"width": 4}).check_change(Change(unset=("width",)))
     assert unset is not None

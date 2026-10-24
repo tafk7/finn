@@ -552,7 +552,7 @@ def test_a_rule_already_false_before_new_facts_is_never_reported() -> None:
 
 
 def test_the_bind_keeps_saved_choices_that_break_a_rule_and_reports_it() -> None:
-    """SZ90 (2): the bind is never refused for rules. Its baseline is the facts with
+    """The bind is never refused for rules. Its baseline is the facts with
     nothing stored, so it lists every rule the saved choices break, with their standing
     choices; the design space reads refused. A change of facts from the same stored set
     publishes the same design space (§ 16.24)."""
@@ -630,9 +630,9 @@ def staged() -> Space:
 
 
 def test_reading_1_a_view_refused_with_its_space_is_refused_through_and_never_an_origin() -> None:
-    """SZ100 (3): no piece reads a view. ``half`` refusing an odd depth refuses the view
+    """No piece reads a view. ``half`` refusing an odd depth refuses the view
     with its own reason, and no change: nothing rules on it. Refused with its Space, the
-    view is refused through (FN2 for views): the child's rule is the origin."""
+    view is refused through: the child's rule is the origin."""
 
     base = Configuration(staged(), {}, {"stage.depth": 2})
     assert base.solve().validity().verdict is T
@@ -826,7 +826,7 @@ def test_reading_5_clearing_a_selector_leaves_its_cases_choices_waiting() -> Non
 
 
 def capped() -> Space:
-    """``lanes`` divides the optional fact ``n`` (SZ100 (5)), any of 1, 2 and 4 while
+    """``lanes`` divides the optional fact ``n``, any of 1, 2 and 4 while
     ``n`` is left out (``None``); a rule caps it at 2 once ``n`` is given."""
 
     def lanes(r: Reads) -> tuple[int, ...]:
@@ -849,7 +849,7 @@ def capped() -> Space:
 
 
 def test_reading_6_an_optional_fact_left_out_is_none_and_new_facts_check_the_value() -> None:
-    """SZ100 (5): ``n`` left out reads ``None``, a known value, so ``lanes = 2`` is set at
+    """``n`` left out reads ``None``, a known value, so ``lanes = 2`` is set at
     once (no value waits on a fact any more). New facts outside its list drop it
     (§ 16.24); unsetting ``n`` sets it to ``None``, a change of facts like any other."""
 
@@ -875,7 +875,7 @@ def test_reading_6_an_optional_fact_left_out_is_none_and_new_facts_check_the_val
 
 
 def test_a_required_fact_is_given_with_every_configuration() -> None:
-    """SZ100 (5): a configuration missing a required fact is no configuration, and a
+    """A configuration missing a required fact is no configuration, and a
     required fact cannot be unset."""
 
     with pytest.raises(ConfigurationError):
@@ -965,7 +965,7 @@ def test_reading_13_an_unset_choice_whose_input_does_not_apply_is_a_false_piece(
 def test_reading_6_a_choices_own_guards_are_not_asked() -> None:
     """§ 16.17: ``extra.p`` reads ``extra.size`` under its own guard, which holds whenever
     it is present: set while ``extra`` is absent, it is accepted and dormant. (The input's
-    existence waiting on an omitted ``on`` went with SZ100 (5).)"""
+    existence waiting on an omitted ``on`` went away, facts being always known.)"""
 
     off = Configuration(guarded_input(), {"on": False, "n": 4})
     dormant = accepted(change(off, Change(commit={"extra.p": 2})))
@@ -1387,7 +1387,7 @@ def test_a_switch_to_a_case_whose_rule_is_false_through_a_stored_choice_names_it
     assert (
         accepted(change(cleared.configuration, Change(commit={"mode": "on"}))).validity.verdict is U
     )
-    # the walked configuration binds again from nothing (FN3)
+    # the walked configuration binds again from nothing
     bind = change(
         Configuration(case_rule_over_a_stored_choice()), Change(commit={"mode": "off", "c": 3})
     )
@@ -1456,7 +1456,7 @@ def test_a_clear_beside_a_repeated_value_is_clear_only_and_accepted() -> None:
     the clear of ``x`` sets nothing: the change is clear-only, accepted, and the
     configuration reads refused at ``high`` as before. Committing a new value that makes
     ``high`` false is a change that sets, and is refused. (The masking this case showed,
-    § 16.16's note, went with SZ100 (3): ``high`` reads a derived value.)"""
+    § 16.16's note, went away: ``high`` reads a derived value.)"""
 
     broken = Configuration(child_stating(), {}, {"c.x": 3, "c.y": 1})
     repeated = accepted(change(broken, Change(clear=("c.x",), commit={"c.y": 1})))
@@ -1470,7 +1470,7 @@ def test_a_clear_beside_a_repeated_value_is_clear_only_and_accepted() -> None:
     )
 
 
-# --- SZ100 (6): Members, and standing as what the origin's evaluation read ----------------
+# --- Members, and standing as what the origin's evaluation read ---------------------------
 
 
 def house(rule: Constraint) -> Space:
@@ -1636,7 +1636,7 @@ def test_a_members_entry_is_a_derived_value_below_it() -> None:
         entries("d").validate()
     assert (raised.value.kind, raised.value.path) == ("malformed", ("m", "d"))
     with pytest.raises(DefinitionError) as raised:
-        entries("k.v").validate()  # SZ100 (3)
+        entries("k.v").validate()
     assert (raised.value.kind, raised.value.path) == ("view-read-in", ("m", "k.v"))
     with pytest.raises(DefinitionError) as raised:
         entries("k.x").validate()
@@ -1768,7 +1768,7 @@ def test_a_rule_under_an_unknown_guard_reads_unknown_whatever_its_predicate() ->
     assert (always.verdict, always.waits) == (U, ("mode",))
     never = solution.piece("mode.b.never")
     assert (never.verdict, never.waits) == (U, ("mode",))
-    # a guard over an optional fact left out reads None (SZ100 (5)): false here, not unknown
+    # a guard over an optional fact left out reads None: false here, not unknown
     refuses = solve(guarded()).piece("extra.refuses")
     assert (refuses.verdict, refuses.applies) == (T, False)
     assert solve(guarded(), {"wide": True}, mode="a").piece("extra.refuses").verdict is F
@@ -1859,7 +1859,7 @@ def stage(name: str) -> Scope:
 
 
 def test_a_parent_rules_on_its_childrens_derived_values_and_composes_their_views() -> None:
-    """SZ100 (3): the parent's rule reads what its children state (derived values); its
+    """The parent's rule reads what its children state (derived values); its
     view ``total`` composes their views. The child is valid on its own, and its view
     answers while the parent is refused; the parent's view refuses with its Space."""
 
@@ -1972,7 +1972,7 @@ def test_a_domain_whose_membership_reaches_a_choice_is_a_definition_error() -> N
 
 
 def test_reading_a_view_in_is_no_definition() -> None:
-    """SZ100 (3): only a view reads a view. A constraint, a derived value, a ``when``
+    """Only a view reads a view. A constraint, a derived value, a ``when``
     guard, a domain's membership or computed list, and a ``Members``, reading a
     view of their own Space, of a Space above or of a child, are ``view-read-in``,
     checked before cycles (a constraint on a view of its own Space was one)."""
