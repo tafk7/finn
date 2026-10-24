@@ -220,7 +220,7 @@ class StreamAdapter(KernelSpace):
         try:
             return realize(self.steps)
         except Unrealizable as error:
-            return reject("adapter-plan", f"no FinnLib chain carries out the plan: {error}")
+            return reject("adapter-steps", f"no FinnLib chain carries out the steps: {error}")
 
     def _named(self, name: str) -> RealizedStage | Rejected:
         realization: tuple[RealizedStage, ...] = self.realization
@@ -228,7 +228,7 @@ class StreamAdapter(KernelSpace):
         for index, stage in enumerate(realization):
             if _stage_name(kinds, index) == name:
                 return stage
-        return reject("adapter-plan", f"the plan's chain has no {name} stage")
+        return reject("adapter-steps", f"the steps' chain has no {name} stage")
 
     # The sides of every stage a chain can name; each chain reads its own.
     input_gen_arriving = _side("input_gen", "source")

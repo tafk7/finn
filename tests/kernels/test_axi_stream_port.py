@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import Any
 
 from qonnx.core.datatype import DataType
-from support.helpers import FULL_DSP58, choose, dotp_extents, with_direct_transports
+from support.helpers import FULL_DSP58, by_hand, choose, dotp_extents, keyed
 from support.refusals import refused
 
 from finn.core.space import (
@@ -28,7 +28,6 @@ from finn.core.space import (
     DefinitionError,
     Param,
     Rejected,
-    Space,
     derived,
     design_space,
     divisors_of,
@@ -44,11 +43,12 @@ from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import KernelSpace, extent_of
-from finn.kernels.channels import Channel
+from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.library import LibraryModule, library_module
-from finn.kernels.network import Interface, Network, wire
+from finn.kernels.partition import Partition
 from finn.kernels.port import AxiStreamPort, lane_count
+from finn.kernels.sides import Side
 from finn.kernels.utilization import RESOURCES_SEMANTICS
 from finn.kernels.values.domains import Integer
 from finn.platform.capabilities import Resources
@@ -116,30 +116,24 @@ def tensor(shape: tuple[int, ...], dtype: str) -> Tensor:
 X, Y = tensor((1, 4, 8), "INT4"), tensor((1, 8), "INT8")
 
 
-def placing(kernel: Space, x_tensor: Tensor = X, y_tensor: Tensor | None = Y) -> Network:
+def placing(kernel: Facts, x_tensor: Tensor = X, y_tensor: Tensor | None = Y) -> Partition:
     """``kernel`` (``kernel``) between two boundary channels, ``x`` and ``y`` (none without
     ``y_tensor``), of the tensors ``x_tensor`` and ``y_tensor``."""
     members: dict[str, Any] = {
-        "x": wire(
-            tensor=x_tensor,
-            port="in0_V",
-            consumer=Interface("kernel", "x_contract"),
-            platform=FULL_DSP58,
+        "x": channel(
+            Side.boundary("in0_V"), Port("kernel", "x"), tensor=x_tensor, platform=FULL_DSP58
         )
     }
     if y_tensor is not None:
-        members["y"] = wire(
-            tensor=y_tensor,
-            port="out0_V",
-            producer=Interface("kernel", "y_contract"),
-            platform=FULL_DSP58,
+        members["y"] = channel(
+            Port("kernel", "y"), Side.boundary("out0_V"), tensor=y_tensor, platform=FULL_DSP58
         )
-    return Network({**members, "kernel": kernel})
+    return by_hand({**members, "kernel": kernel})
 
 
-def pool(x_shape: tuple[int, ...] = (1, 4, 8), y_shape: tuple[int, ...] = (1, 8)) -> Network:
+def pool(x_shape: tuple[int, ...] = (1, 4, 8), y_shape: tuple[int, ...] = (1, 8)) -> Partition:
     x_tensor, y_tensor = tensor(x_shape, "INT4"), tensor(y_shape, "INT8")
-    return placing(Pool(x_tensor=x_tensor), x_tensor, y_tensor)
+    return placing(Facts(Pool, {"x_tensor": x_tensor}), x_tensor, y_tensor)
 
 
 def coded_messages(result: object) -> set[tuple[str, str]]:
@@ -159,12 +153,18 @@ def test_a_kernel_binds_its_extents_from_its_inputs_and_its_folding_factors_divi
 
 
 def test_a_producers_tensor_is_its_kernels_and_its_channel_refuses_another() -> None:
-    point = with_direct_transports(choose(pool(x_shape=(1, 4, 6)), {"kernel.pe": 2}))
-    kernel = point.member("kernel")
+    """The kernel's output states its tensor, ``(1, 6)``; the channel on it carries
+    another, ``(1, 8)``, so the fold that gives the output its stream is refused by the
+    channel's rule (``channel-tensor``), as on a graph's partition."""
+    network = pool(x_shape=(1, 4, 6))
+    kernel = network.member("kernel")
     assert kernel.y_tensor == tensor((1, 6), "INT8")
     assert kernel.y_element == ScalarEncoding(DataType["INT8"])
-    refused = point.member("y").query(Channel.netlist)
-    assert "channel-tensor" in {code for code, _ in coded_messages(refused)}
+    trial = network.trial(keyed({"kernel.pe": 2}))
+    assert list(trial.refused) == [("y", "well_formed")]
+    assert "channel-tensor" in {
+        code for code, _ in coded_messages(Rejected(trial.refused[("y", "well_formed")]))
+    }
 
 
 def test_an_input_without_its_tensor_is_idle_and_carries_one_lane() -> None:
@@ -182,7 +182,7 @@ def test_extent_of_is_a_named_member() -> None:
         pe: int = Decision(domain=divisors_of(extent_of(c)))
 
     with refused("reference-not-in-scope", error=DefinitionError, declaration="pe"):
-        placing(Inline(x_tensor=X))
+        placing(Facts(Inline, {"x_tensor": X}))
 
 
 def test_a_port_presents_a_schedule_or_a_sequence_not_both() -> None:
@@ -198,8 +198,9 @@ def test_a_port_presents_a_schedule_or_a_sequence_not_both() -> None:
             lanes=(c,),
         )
 
-    point = choose(placing(Both(x_tensor=X)), {"kernel.pe": 8})
-    ((code, message),) = coded_messages(point.member("kernel").query(Both.x_stream))
+    # The fold that places the port is refused by it, its stream's rule.
+    trial = placing(Facts(Both, {"x_tensor": X})).trial(keyed({"kernel.pe": 8}))
+    ((code, message),) = coded_messages(Rejected(trial.refused[("kernel", "x_stream")]))
     assert code == "port-presentation"
     assert message.startswith("s_axis_input: exactly one of a schedule or a sequence")
 
@@ -218,8 +219,8 @@ def test_a_producers_element_is_its_tensors() -> None:
             dtype=DataType["INT9"],
         )
 
-    point = choose(placing(Stated(x_tensor=X)), {"kernel.pe": 4})
-    ((code, message),) = coded_messages(point.member("kernel").query(Stated.y_element))
+    trial = placing(Facts(Stated, {"x_tensor": X})).trial(keyed({"kernel.pe": 4}))
+    ((code, message),) = coded_messages(Rejected(trial.refused[("kernel", "y_element")]))
     assert code == "port-element"
     assert message.startswith("m_axis_output: a producer's element is its tensor's")
 

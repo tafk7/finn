@@ -88,8 +88,10 @@ _ABOVE: Position = (-1, ())
 _UNSET: Any = object()
 
 
-def modes() -> tuple[bool, bool]:
-    """The test modes the environment asks for: (permuted, eager)."""
+def model_modes() -> tuple[bool, bool]:
+    """The test modes the environment asks for, read when a model is made: (permuted,
+    eager). Public as ``finn.core.space.model_modes``: what keeps a model by its class keeps
+    one per mode."""
     return os.environ.get(PERMUTE) == "1", os.environ.get(EAGER) == "1"
 
 
@@ -1234,5 +1236,5 @@ __all__ = [
     "Scopes",
     "existence",
     "implies",
-    "modes",
+    "model_modes",
 ]

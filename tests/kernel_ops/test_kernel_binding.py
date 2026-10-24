@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""A node's kernel, bound from its facts, and the member cache.
+"""A node's kernel, bound from its facts.
 
 A KernelOp binds its kernel class from its facts, by value: its formals, its input
 tensors at the graph's rank and the values of the initializers it holds. One binding per
@@ -14,23 +14,19 @@ channel (``KernelOp.defaulted``).
 from __future__ import annotations
 
 import inspect
-import json
-from contextvars import Context
-from pathlib import Path
 from typing import Any
 
-import numpy as np
 import pytest
 from qonnx.core.datatype import DataType
 from qonnx.core.ranges import TensorRange
 from support.models import TARGET, WEIGHTS, matmul_model, thresholding_model
 from support.refusals import refused
 
-import finn.kernels.members as members
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import integer_tensor
+from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import DefinitionError, Rejected, design_space, inspection
-from finn.custom_op.kernels.base import KernelOp, kernel_op
+from finn.custom_op.kernels.base import KernelOp, kernel_op, reasons
 from finn.custom_op.kernels.conv import Conv
 from finn.custom_op.kernels.matmul import MatMul
 from finn.custom_op.kernels.thresholding import Thresholding
@@ -38,17 +34,6 @@ from finn.dataflow.datatypes import resolve_qonnx_datatype_name as dtype
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.matmul import KnownWeights, MatMulKernel
-from finn.kernels.members import (
-    VERIFY,
-    Facts,
-    MemberCacheMismatch,
-    configured,
-    key,
-    member_cache,
-    typed,
-    verification_counts,
-    write_counts,
-)
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.policies import Defaulted, Fixed, stated
 from finn.kernels.thresholding import ThresholdingAxiKernel
@@ -101,15 +86,13 @@ def test_the_schema_is_the_kernel_classs_decision_keys() -> None:
 
 
 def test_one_binding_per_node_serves_its_outputs_and_its_point() -> None:
-    """Its kernel is bound once from its facts; its outputs are read from that binding,
-    and its point is that binding with its stored choices committed."""
+    """Its kernel is bound from its facts, its own design space; its outputs are read from
+    that binding, and its point is that binding with its stored choices bound."""
     model = matmul_model()
     op = kernel_op(model, model.graph.node[0])
     bound: Any = op.bound()
     (result,) = op.output_tensors().values()
     assert result == bound.y_tensor
-    assert op.bound() is bound
-    assert kernel_op(model, model.graph.node[0]).bound() is bound  # another op instance
     point: Any = op.point()
     # A node made by hand stores no choice, so its core is open; conversion's policies
     # (first valid) take the packed core.
@@ -219,8 +202,10 @@ def test_conversion_sets_each_choice_in_play_by_its_policy_on_the_kernel_alone()
 
 def test_a_choice_no_value_can_be_set_for_keeps_the_node_on_the_host() -> None:
     """INT32 activations: no core takes them, so the core has no first valid value. The
-    answer is one finding owned by the choice's key (``choice-no-valid-value``), naming its
-    policy and each value's rule, those rules' findings its causes; with no core chosen,
+    answer is one finding per such choice (``choice-no-valid-value``: the pass goes on past
+    one, so conversion reports each, where it reported the first), owned by the choice's
+    key, naming its policy and each value's rule, those rules' findings its causes (here
+    one choice, the core: its folding is set and reported by none); with no core chosen,
     no rule of the kernel is false, so the node made by hand is not refused
     (``verify_node``), only open."""
     model = matmul_model(annotate=(), infer=False)
@@ -238,6 +223,32 @@ def test_a_choice_no_value_can_be_set_for_keeps_the_node_on_the_host() -> None:
     assert "'packed' breaks compute.packed." in finding.message
     assert "'int8_dsp58' breaks compute.int8_dsp58." in finding.message
     assert {"dotp-activation-width", "dotp-target"} <= {cause.code for cause in finding.causes}
+
+
+def test_two_choices_no_value_can_be_set_for_are_each_reported() -> None:
+    """INT32 activations leave the core with no first valid value, and a fold fixed past
+    its domain (pe 3 of 4 outputs) leaves the folding with none either: conversion's answer
+    names both, in the flow order, each by its key and its policy, its causes the rules
+    and the domain that refuse each value."""
+
+    class Folding(MatMul):
+        policies = {MatMulKernel.pe: Fixed(3)}
+
+    model = matmul_model(annotate=(), infer=False)
+    for name in ("x", "w"):
+        model.set_tensor_datatype(name, DataType["INT32"])
+    model = model.transform(InferKernelTensors())
+    op = Folding(model.graph.node[0])
+    op.attach_model(model)
+    found = op.defaulted()
+    assert isinstance(found, tuple)
+    assert [(each.code, each.owner, dict(each.details)) for each in found] == [
+        ("choice-no-valid-value", "pe", {"policy": "fixed"}),
+        ("choice-no-valid-value", "compute", {"policy": "first valid"}),
+    ]
+    pe, compute = found
+    assert "domain-membership" in {cause.code for cause in pe.causes}
+    assert {"dotp-activation-width", "dotp-target"} <= {cause.code for cause in compute.causes}
 
 
 @pytest.mark.parametrize("op", [Conv, MatMul, Thresholding], ids=lambda op: op.__name__)
@@ -281,98 +292,13 @@ def test_an_op_s_policies_are_checked_when_its_class_is_made() -> None:
             policies = {ThresholdingAxiKernel.ram_style: "auto"}  # type: ignore[dict-item]
 
 
-def facts(weights: tuple[tuple[int, ...], ...] = STORED, **changed: object) -> Facts:
-    x_tensor = Tensor((3, len(weights)), ScalarEncoding(INT3))
-    arguments: dict[str, object] = {
-        "platform": TARGET.platform,
-        "x_tensor": x_tensor,
-        "weights": KnownWeights(IntegerTensorValue.of(weights), INT3),
-    }
-    return Facts(MatMulKernel, arguments | changed)
-
-
-def test_the_member_cache_keys_a_member_by_its_class_and_arguments_by_value() -> None:
-    with member_cache() as cache:
-        first = configured(facts()).point
-        assert configured(facts()).point is first
-        assert (cache.hits, cache.misses) == (1, 1)
-        # Other weights are another key: nothing is invalidated, the new arguments miss.
-        other = tuple(tuple(-value for value in row) for row in STORED)
-        assert configured(facts(other)).point is not first
-        assert cache.misses == 2
-        # Stored choices are part of the key; the replay starts from the binding's entry.
-        chosen = configured(facts(), {"compute": "packed"})
-        assert chosen.point is not first and configured(facts()).point is first
-        assert configured(facts(), {"compute": "packed"}) is chosen
-    # With no cache open (a context without one), nothing is kept.
-    assert Context().run(lambda: configured(facts()).point is not configured(facts()).point)
-
-
-def test_a_key_tells_values_apart_by_their_exact_type() -> None:
-    """1, 1.0 and True are equal in Python and three values to the engine."""
-    keys = {key(facts(), {"pe": value}, {}, ()) for value in (1, 1.0, True)}
-    assert len(keys) == 3
-    assert typed((1, (True,))) != typed((1, (1,)))
-    assert key(facts(), {}, {}, ()) == key(facts(), {}, {}, ())
-    unhashable = Facts(MatMulKernel, {"x_tensor": X, "bad": bytearray(b"unhashable")})
-    assert key(unhashable, {}, {}, ()) is None
-
-
-def test_a_refused_binding_caches_nothing() -> None:
-    broken = Facts(MatMulKernel, {"x_tensor": X})  # no platform
-    with member_cache() as cache:
-        with refused("formal-unsupplied", error=DefinitionError, message=r"^platform\b"):
-            configured(broken)
-        assert not cache.entries
-
-
-def test_a_hit_loads_no_held_value() -> None:
-    """An initializer is keyed by its digest, so a binding found in the cache never loads
-    the integers of the value it was asked with."""
-    model = matmul_model()
-    first: Any = kernel_op(model, model.graph.node[0]).bound()
-    assert first.weights.contents == integer_tensor(WEIGHTS)
-    again = kernel_op(model, model.graph.node[0])
-    known = again.facts().arguments["weights"]
-    assert again.bound() is first
-    assert isinstance(known, KnownWeights)
-    value = known.contents
-    assert isinstance(value, IntegerTensorValue) and value._integers is None
-    assert value._array is None
-
-
-def test_the_verifying_mode_configures_each_hit_again_and_names_a_mismatch(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    # Counted apart: this test's mismatch is written to its own directory, never the run's.
-    monkeypatch.setattr(members, "_COUNTS", dict.fromkeys(verification_counts(), 0))
-    monkeypatch.setenv(VERIFY, str(tmp_path))
-    before = verification_counts()["member hits verified"]
-    with member_cache(verify=True) as cache:
-        first = configured(facts())
-        assert configured(facts()) is first
-        assert verification_counts()["member hits verified"] == before + 1
-        # An entry kept under another member's key is found out.
-        (found,) = cache.entries
-        cache.entries[found] = configured(facts(), {"compute": "packed"})
-        with pytest.raises(MemberCacheMismatch, match="the member cache's member hit differs"):
-            configured(facts())
-    write_counts()
-    (written,) = tmp_path.glob("*.json")
-    assert json.loads(written.read_text())["mismatches"] == 1
-
-
-def test_a_fact_changed_is_another_binding() -> None:
-    first = kernel_op(matmul_model(), matmul_model().graph.node[0]).bound()
-    changed = WEIGHTS.copy()
-    changed[0, 0] += 1
-    for model in (
-        matmul_model(weights=changed),
-        matmul_model(x_shape=[1, 6, 4]),
-        matmul_model(x_shape=[3, 4]),  # the same rows, another tensor at the graph's rank
-        matmul_model(stored=False),
-    ):
-        assert kernel_op(model, model.graph.node[0]).bound() is not first
-    assert kernel_op(matmul_model(), matmul_model().graph.node[0]).bound() is first
-    stored = matmul_model().get_initializer("w")
-    assert stored is not None and np.array_equal(WEIGHTS, stored)
+def test_reasons_name_each_key_once_with_the_choices_standing_in_its_way() -> None:
+    """A refusal's text: each key once, in order, a finding it owns by code and message,
+    another's whole, and the stored choices standing in its way where any do."""
+    owned = Finding(FindingKind.REJECTION, "dotp-pumping", "rule", "pumping requires SIMD >= 2")
+    other = Finding(FindingKind.REJECTION, "uram-absent", "elsewhere", "no UltraRAM")
+    found = {"rule": (owned, other), "a": (other,)}
+    assert reasons(found, {"rule": ("simd", "pumping")}) == (
+        "a: elsewhere: uram-absent: no UltraRAM; rule: dotp-pumping: pumping requires "
+        "SIMD >= 2; elsewhere: uram-absent: no UltraRAM (standing: simd, pumping)"
+    )

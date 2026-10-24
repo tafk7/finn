@@ -5,7 +5,7 @@
 Stage 7's synthetic chain (four MatMuls, each followed by a Thresholding, and the
 channels between them) joined as one Space, kernels first, its choices committed as
 conversion and the cut set them (each kernel's by its default policies, each channel's
-by the interim channel rule). The engine's walk (``support.space_walk``) applies seeded
+by the channel's policies). The engine's walk (``support.space_walk``) applies seeded
 changes to it: a kernel's core, its folding, a channel's memory or depth, a clear, a
 pair of changes, and ones the kernels refuse; each successor is compared with a
 configuration of the same assignments built from nothing. Here a channel's facts read
@@ -15,20 +15,15 @@ its kernel's ``compute``, as the engine's own examples do in
 
 from __future__ import annotations
 
-from typing import Any, cast
-
 import numpy as np
 from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
-from support.one_space import channel_facts
 from support.space_walk import check, walk
 
-from finn.core.space import Space, composite, design_space
-from finn.custom_op.kernels.base import kernel_op
+from finn.core.space import Space
 from finn.custom_op.kernels.shell import in_shell, make_cut_choices
-from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
 from finn.platform.resolve import resolve_target
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
@@ -81,25 +76,17 @@ def mlp(layers: int) -> ModelWrapper:
 
 
 def whole_space(layers: int) -> Space:
-    """The chain's kernels and channels as one Space, kernels first, with the choices
-    conversion and the cut store committed (``make_cut_choices``: what the cut does to
-    a body)."""
+    """The chain's kernels and channels composed as one Space, kernels first (the class of
+    its partition as the graph layer binds it in its shell, ``in_shell``), with the
+    choices conversion and the cut store committed (``make_cut_choices``: what the cut does
+    to a body)."""
     target = resolve_target(part="xczu3eg-sbva484-1-e", period_ns=5.0)
     model = mlp(layers).transform(ToKernelOps(target)).transform(InferKernelTensors())
-    nodes = list(model.graph.node)
     made = make_cut_choices(model)
     assert not (made.stale or made.late or made.unset), made
-    net = in_shell(model, nodes)
-    declared: dict[str, Any] = {}
-    for node in nodes:
-        facts = kernel_op(model, node).facts()
-        declared[node.name] = facts.space_type(**cast("dict[str, Any]", dict(facts.arguments)))
-    channels: dict[str, object] = {}
-    for name in net.channels:
-        channels[name] = Channel(**channel_facts(net, name, declared))
-    whole = composite(f"chain_{2 * layers}", {**declared, **channels})
-    stored = {f"{owner}.{key}": value for (owner, key), value in net.chosen().items()}
-    return commit(design_space(whole()), stored)
+    bound = in_shell(model, model.graph.node)
+    stored = {bound.path(key): value for key, value in bound.chosen().items()}
+    return commit(bound.composed.design_space(), stored)
 
 
 def test_eight_kernels_answer_as_a_recomputation() -> None:

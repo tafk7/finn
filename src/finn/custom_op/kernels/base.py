@@ -17,19 +17,20 @@ Three terms, used throughout the package:
 - its *kernel*: its kernel class bound to its facts, nothing chosen (``bound``);
 - its *point*: its kernel with the node's stored choices committed (``point``).
 
-Both are kept by the facts, by value, in the build's member cache
-(``finn.kernels.members``): a node's kernel is bound once a build.
+Each is bound from the node's facts as it is asked for (``finn.kernels.composer.Facts``);
+nothing is kept between asks.
 
 Conversion asks two questions of a node. Does the op's pattern cover it? ``match`` reads
 only the graph's structure (op types, connections, attributes), never a datatype or a
 value, and never changes the model. Will a kernel build it? ``defaulted`` applies the
 op's policies (``policies``, ``finn.kernels.policies``) once, on the kernel alone:
 refused where its facts alone refuse it, or where a choice in play can be given no value,
-its fixed one or a first valid one. Conversion builds no channel: the channels are a
-partition's, made at the cut. A missing shape or datatype raises ``FactUnstated``, and
-the node stays on the host; anything else wrong with the facts is an error
-(``KernelOpError``). Conversion stores the kernel's choices only, and writes nothing on a
-tensor.
+its fixed one or a first valid one. Then each of its streams (``streamed``) must meet an
+open AXIS boundary (``finn.transformation.kernels.convert``): a check, by a channel's own
+rules, whose channels are dropped; a partition's channels are made at the cut. A missing
+shape or datatype raises ``FactUnstated``, and the node stays on the host; anything else
+wrong with the facts is an error (``KernelOpError``). Conversion stores the kernel's
+choices only, and writes nothing on a tensor.
 
 ``execute_node`` is the reference for what the op covers, and must equal ONNX on every
 node the op converts (FINN executes ONNX with exact integers, which importing ``finn``
@@ -49,7 +50,7 @@ the node stores or refuses it as absent, and ``set_nodeattr`` of one is refused.
 - *Writes*, all through ``persist`` (``network.persist``, which writes past the guard) and,
   for conversion, ``network.persist_kernel``: conversion writes the node's kernel as its
   policies leave it (``defaulted``), only the node's choices. The cut persists the body's
-  choices, the channels' by the cut's policies (``shell.make_cut_choices``). Every
+  choices, the channels' by the channel's policies (``shell.make_cut_choices``). Every
   strategy persists the network it returns (``explore_kernel_choices``). A user sets a
   choice by ``Hold`` in a step after the cut, which the strategies apply: no one writes an
   attribute.
@@ -85,9 +86,10 @@ the held values are given as, in place of its tensor (``contents``; MatMul's ``w
 the same Param, known weights or a tensor) and the kernel's derived values of what its
 channel carries, downstream of the kernel: the tensor (``carried``,
 ``carried_weights``) and the values its source stores (``stored``,
-``stored_weights``). A network wires the kernel and its channels by it
-(``finn.kernels.network``): each channel's tensor (a parameter channel's from the
-kernel's values, ``Fact``) and its port's contract from the kernel (``Interface``).
+``stored_weights``). The graph layer declares the kernel and its channels by it
+(``finn.custom_op.kernels.network.declaration``): each channel's tensor (a parameter
+channel's from the kernel's values, ``Stated``) and its port as the channel's side
+(``Port``).
 """
 
 from __future__ import annotations
@@ -107,13 +109,23 @@ from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import edge_tensor, initializer, state
 from finn.core.reporting.findings import Finding, FindingKind
-from finn.core.space import Available, Rejected, Space, inspection
+from finn.core.space import (
+    Available,
+    ConfigurationError,
+    Rejected,
+    RequestError,
+    Space,
+    Unresolved,
+    bind,
+    inspection,
+)
 from finn.dataflow.tensor import Tensor
 from finn.kernels.base import KernelSpace
+from finn.kernels.composer import Facts
 from finn.kernels.configure import describe
 from finn.kernels.configure import refusal as refusal_of
-from finn.kernels.members import Facts, configured, reasons
-from finn.kernels.policies import Defaulted, Policy, defaulted, stated
+from finn.kernels.policies import Alone, Defaulted, Policy, defaulted, stated
+from finn.kernels.sides import Side
 from finn.platform.target import Target
 
 if TYPE_CHECKING:
@@ -193,6 +205,66 @@ def why(findings: Iterable[Finding]) -> str:
     if found and all(finding.code == "inapplicable" for finding in found):
         return "inapplicable"
     return "; ".join(map(str, found))
+
+
+def reasons(
+    found: Mapping[str, Iterable[Finding]], standing: Mapping[str, Iterable[str]] | None = None
+) -> str:
+    """Why each key of ``found`` (a choice's or a rule's) is refused, as text, in key order:
+    the key once, then each of its findings (its code and message where the key owns it),
+    and the stored choices ``standing`` in its way where any do."""
+    standing = standing or {}
+
+    def text(key: str, finding: Finding) -> str:
+        return f"{finding.code}: {finding.message}" if finding.owner == key else str(finding)
+
+    def stood(key: str) -> str:
+        keys = tuple(standing.get(key, ()))
+        return f" (standing: {', '.join(keys)})" if keys else ""
+
+    return "; ".join(
+        f"{key}: " + "; ".join(text(key, finding) for finding in found[key]) + stood(key)
+        for key in sorted(found)
+    )
+
+
+def replayed(
+    point: Space, stored: Mapping[str, object]
+) -> tuple[Space, dict[str, tuple[Finding, ...]]]:
+    """``point``, a kernel bound with nothing stored, with its ``stored`` choices bound
+    (the engine's ``bind``), and what refuses them, by key, each with its findings: a key
+    that names no choice (``not-a-decision``), a value outside its domain over the kernel's
+    facts, a request the engine refuses as malformed (``request-refused``, each key), and
+    each rule the values set together break, by the rule's key (nothing stands in a rule's
+    way at a bind, which sets every stored choice)."""
+    if not stored:
+        return point, {}
+    every = inspection.decisions(inspection.model(point))
+    decisions = {item.key: item.reference for item in every}
+    refused: dict[str, tuple[Finding, ...]] = {
+        key: (
+            Finding(FindingKind.REJECTION, "not-a-decision", key, "not a Decision of this member"),
+        )
+        for key in stored
+        if key not in decisions
+    }
+    if refused:
+        return point, refused
+    try:
+        report = bind(point, {decisions[key]: value for key, value in stored.items()})
+    except (RequestError, ConfigurationError) as error:
+        return point, {
+            key: (Finding(FindingKind.REJECTION, "request-refused", key, str(error)),)
+            for key in stored
+        }
+    for outcome in report.outcomes:
+        if outcome.status == "dropped":
+            result = outcome.result
+            refused[outcome.owner] = (
+                result.findings if isinstance(result, (Rejected, Unresolved)) else ()
+            )
+    refused |= {rule.rule: rule.result.findings for rule in report.broken}
+    return report.instance, refused
 
 
 def refusal(
@@ -388,9 +460,8 @@ class KernelOp(CustomOp):
         }
 
     def bound(self) -> KernelSpace:
-        """The node's kernel bound to its facts, nothing chosen (kept by them in the build's
-        member cache)."""
-        point: KernelSpace = configured(self.facts()).point  # type: ignore[assignment]
+        """The node's kernel bound to its facts, nothing chosen: its own design space."""
+        point: KernelSpace = self.facts().bind()  # type: ignore[assignment]
         return point
 
     def _channel_hint(self, names: Iterable[str]) -> str:
@@ -470,21 +541,14 @@ class KernelOp(CustomOp):
         return self._replayed({**self.choices(), **(extra or {})})
 
     def _replayed(self, choices: Mapping[str, object]) -> KernelSpace:
-        """``point``, with ``choices`` (by attribute) in place of the node's: set on its
-        kernel as one change, as a network binds a member's stored choices
-        (``configured``); refused where a value is outside its domain, or a rule they break
-        together, each by name with its findings (``refusal``; nothing stands in a rule's
-        way at a bind, which sets every stored choice)."""
-        found = configured(self.facts(), typed(type(self).kernel, choices))
-        if found.dropped or found.point is None:
-            raise refusal(
-                self.op_type,
-                self.label,
-                {**found.dropped, **found.refused},
-                found.standing,
-                node=self.label,
-            )
-        point: KernelSpace = found.point  # type: ignore[assignment]
+        """``point``, with ``choices`` (by attribute) in place of the node's: bound on its
+        kernel (``replayed``), as a partition binds its stored choices; refused where a
+        value is outside its domain, or a rule they break together, each by name with its
+        findings (``refusal``)."""
+        found, refused = replayed(self.bound(), typed(type(self).kernel, choices))
+        if refused:
+            raise refusal(self.op_type, self.label, refused, node=self.label)
+        point: KernelSpace = found  # type: ignore[assignment]
         return point
 
     def _saved(self, choices: Mapping[str, object]) -> dict[str, int | str]:
@@ -538,6 +602,35 @@ class KernelOp(CustomOp):
     def inputs(self) -> dict[str, str]:
         """The tensor of each of this node's input channels, by port."""
         return {port: tensor for port, tensor in zip(self.ports, self.onnx_node.input) if port}
+
+    def streamed(
+        self, point: KernelSpace
+    ) -> tuple[tuple[str, Side | tuple[Finding, ...], bool], ...]:
+        """Each streamed port of this node at ``point``, its kernel's design space: the
+        tensor it carries, by graph name, the side it gives a channel (its kernel's
+        ``<p>_side``, labelled below the node's name) or, where ``point`` does not know that
+        side (it waits on a choice, or its kernel refuses it), the side's findings, and
+        whether it is an output; its inputs first, in port order. A streamed port is an AXIS
+        one: not a parameter port whose initializer the node holds (its channel's source
+        feeds it), nor an input read as an argument. A port ``point`` does not place is
+        none."""
+        model, node = self.model(), self.onnx_node
+        held = set(self.owned())
+        found = [
+            (port, tensor, False)
+            for port, tensor in self.inputs().items()
+            if port not in held and initializer(model, tensor) is None
+        ]
+        found += [(port, tensor, True) for port, tensor in zip(self.outputs, node.output)]
+        sides: list[tuple[str, Side | tuple[Finding, ...], bool]] = []
+        for port, tensor, output in found:
+            name = self.wiring[port].contract.removesuffix("_contract")
+            answer = point.query(getattr(type(point), f"{name}_side"))
+            if isinstance(answer, Available) and isinstance(answer.value, Side):
+                sides.append((tensor, answer.value.under(self.label), output))
+            elif isinstance(answer, (Rejected, Unresolved)):
+                sides.append((tensor, answer.findings, output))
+        return tuple(sides)
 
     def owned(self) -> dict[str, str]:
         """The tensor of each parameter port whose initializer this node holds, by port."""
@@ -596,10 +689,14 @@ class KernelOp(CustomOp):
         with the op's policies applied once (``finn.kernels.policies.defaulted``), every
         choice in play given its fixed or first valid value, a required one left open, and
         each ranking a policy could not read named (``Defaulted.fallbacks``); else why not:
-        its kernel's refusal on its facts alone, or a choice no value can be set for
-        (``choice-no-valid-value``, owned by its key, each value's refusal among its
-        causes). Conversion writes the point it gets here on the node (``persist_kernel``)."""
-        return defaulted(self.bound(), type(self))
+        its kernel's refusal on its facts alone, or each choice no value can be set for
+        (``choice-no-valid-value``, one per choice, owned by its key, each value's refusal
+        among its causes). Conversion writes the point it gets here on the node
+        (``persist_kernel``)."""
+        done = defaulted(self.bound(), Alone(type(self)))
+        if done.refused:
+            return done.refused[""]
+        return done.unset or done
 
     def verify_node(self) -> list[str]:
         """Why the node's stored choices are refused, or each of ``refusals`` of its
@@ -631,8 +728,10 @@ __all__ = [
     "Wiring",
     "kernel_op",
     "node_attributes",
+    "reasons",
     "refusal",
     "refused",
+    "replayed",
     "typed",
     "unstated",
     "why",

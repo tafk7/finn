@@ -4,17 +4,18 @@
 its tensor, each with the guards that decide whether it exists.
 
 A port lowers into members of its kernel (``finn.kernels.port``): ``<p>_element``,
-``<p>_stream`` and ``<p>_access`` (a kernel with children serves its child's, ``<p>_stream``).
-For every kernel of a partition's network built as one Space (``support.one_space``: stage 7's
-chain of eight kernels, and TFC's partition from its cut body), every such member at any
-depth below it, and each of its existence guards (``_scopes.existence``): the reads the
-engine infers (``_reads.infer``: a method's, the model's reads, not its source) and each
-member's own edges (its arguments, guard, binding, selector and cases), followed through
-every address reached and through each formal to its binding in the placing Space (every
-scope of a model of the partition made, ``_line_reads.line_scopes``), all lie inside the
-kernel's own subtree (its members, its children at any depth and the selectors that choose
-them), the partition's facts (the root's formals) or literals. A neighbour's value of any
-kind, or a channel's, fails, naming the member and the path read.
+``<p>_stream`` and ``<p>_access`` (a kernel with children serves its child's,
+``<p>_stream``). For every kernel of a partition, one Space as the graph layer binds it in
+its shell (``in_shell``: stage 7's chain of eight kernels, and TFC's partition from its cut
+body), every such member at any depth below it, and each of its existence guards
+(``_scopes.existence``): the reads the engine infers (``_reads.infer``: a method's, the
+model's reads, not its source) and each member's own edges (its arguments, guard, binding,
+selector and cases), followed through every address reached and through each formal to its
+binding in the placing Space (every scope of a model of the partition made,
+``_line_reads.line_scopes``), all lie inside the kernel's own subtree (its members, its
+children at any depth and the selectors that choose them), the partition's facts (the root's
+formals) or literals. A neighbour's value of any kind, or a channel's, fails, naming the
+member and the path read.
 
 Two negative controls, small composites, fail the same check: a stream reading a sibling
 directly, and a stream reading a formal bound to a sibling's value. The engine refuses the
@@ -32,7 +33,7 @@ import pytest
 from core.space._line_reads import line_scopes
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
-from support.one_space import chain_space, one_space
+from support.models import chain_model
 
 from finn.core.space import (
     DefinitionError,
@@ -47,6 +48,7 @@ from finn.core.space import (
 )
 from finn.core.space._reads import ModelReads, infer
 from finn.core.space._scopes import Address, Scopes, existence
+from finn.custom_op.kernels.shell import in_shell
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
@@ -153,8 +155,8 @@ def _checked(whole: type[Space]) -> tuple[dict[str, int], list[str]]:
 
 
 def test_stage_7s_chain_s_ports_read_only_their_own_kernels() -> None:
-    whole, _ = chain_space(4)
-    checked, failures = _checked(whole)
+    model = chain_model(4)
+    checked, failures = _checked(in_shell(model, model.graph.node).composed.space_type)
     assert not failures, "\n".join(failures)
     # Each MatMul's three served streams, and its two cores' three ports each (element,
     # stream, access where it binds); each thresholding's three ports.
@@ -163,8 +165,7 @@ def test_stage_7s_chain_s_ports_read_only_their_own_kernels() -> None:
 
 
 def test_tfc_s_partition_s_ports_read_only_their_own_kernels(tfc: ModelWrapper) -> None:
-    whole, _ = one_space(tfc, "tfc_partition")
-    checked, failures = _checked(whole)
+    checked, failures = _checked(in_shell(tfc, tfc.graph.node).composed.space_type)
     assert not failures, "\n".join(failures)
     assert len(checked) == len(tfc.graph.node)
     assert all(count > 0 for count in checked.values()), checked

@@ -42,7 +42,6 @@ from finn.core.space import inspection
 from finn.custom_op.kernels.network import persist
 from finn.custom_op.kernels.shell import configured_network, in_shell
 from finn.kernels.artifacts import build
-from finn.kernels.configure import undecided
 from finn.toolchain.launcher import (
     Selection,
     Toolchain,
@@ -105,13 +104,12 @@ def test_a_choice_waiting_on_an_open_one_is_saved_and_emission_names_the_open_on
     choose_memories(model)
     write_raw(model, "activate", "ram_style", None)
     bound = in_shell(model, model.graph.node)
-    point = bound.member("activate")
     waiting = inspection.Waiting(0, ("ram_style",))
-    assert dict(inspection.states(point))["block_stages"] == waiting
-    assert undecided(point, "*") == ["ram_style"]
+    assert dict(bound.states(["activate"]))[("activate", "block_stages")] == waiting
+    assert [key for key in bound.undecided() if key[0] == "activate"] == [("activate", "ram_style")]
     assert persist(model, bound)["activate"]["block_stages"] == 0
     again = in_shell(model, model.graph.node)
-    assert dict(inspection.states(again.member("activate")))["block_stages"] == waiting
+    assert dict(again.states(["activate"]))[("activate", "block_stages")] == waiting
     with refused(
         "choices-open",
         error=KernelOpError,

@@ -29,7 +29,14 @@ from typing import Any
 
 import numpy as np
 from qonnx.core.datatype import DataType
-from support.helpers import FULL_DSP48E2, built, choose, with_direct_transports
+from support.helpers import (
+    FULL_DSP48E2,
+    built,
+    by_hand,
+    choose,
+    with_channel_defaults,
+    with_direct_transports,
+)
 
 from finn.core.rtlsim_bench import materialize
 from finn.core.rtlsim_pacing import FREE, STALLED
@@ -39,7 +46,9 @@ from finn.harness.orders import Stream, decode
 from finn.harness.toolchain import print_identity
 from finn.kernels.artifacts.module import declared_registers
 from finn.kernels.channels import Channel
-from finn.kernels.network import Interface, Network, wire
+from finn.kernels.composer import Facts, Port, channel
+from finn.kernels.partition import Partition
+from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.toolchain.launcher import host_toolchain
@@ -73,7 +82,7 @@ CASES = (
 )
 
 
-def placed(case: Case) -> Network:
+def placed(case: Case) -> Partition:
     """The kernel between boundary channels ``s_axis_0`` and ``m_axis_0``, presenting its
     control bus at ``s_axilite`` when the case writes its table."""
     count = len(case.initial[0])
@@ -89,24 +98,24 @@ def placed(case: Case) -> Network:
     )
     if case.written is not None:
         facts["control"] = "s_axilite"
-    network = Network(
+    network = by_hand(
         {
-            "x": wire(
+            "x": channel(
+                Side.boundary("s_axis_0"),
+                Port("activate", "input"),
                 tensor=x,
-                port="s_axis_0",
-                consumer=Interface("activate", "input_contract"),
                 platform=FULL_DSP48E2,
             ),
-            "y": wire(
+            "y": channel(
+                Port("activate", "output"),
+                Side.boundary("m_axis_0"),
                 tensor=y,
-                port="m_axis_0",
-                producer=Interface("activate", "output_contract"),
                 platform=FULL_DSP48E2,
             ),
-            "activate": ThresholdingAxiKernel(**facts),
+            "activate": Facts(ThresholdingAxiKernel, facts),
         }
     )
-    return with_direct_transports(
+    chosen = with_direct_transports(
         choose(
             network,
             {
@@ -119,6 +128,7 @@ def placed(case: Case) -> Network:
             },
         )
     )
+    return with_channel_defaults(chosen)
 
 
 def stem(case: Case) -> str:

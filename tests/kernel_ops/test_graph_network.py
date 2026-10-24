@@ -49,8 +49,9 @@ from finn.custom_op.kernels import shell
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import network, persist
 from finn.kernels.channels import Channel
-from finn.kernels.explore import Ranked, SizeFifos
-from finn.kernels.network import dotted
+from finn.kernels.explore import Ranked, Seam, SizeFifos, dotted
+from finn.kernels.policies import ranked
+from finn.kernels.utilization import BLOCK_FIRST_BITS
 from finn.toolchain.launcher import host_toolchain
 from finn.transformation.kernels import (
     InferKernelTensors,
@@ -158,7 +159,7 @@ def test_a_lifted_initializers_source_choices_are_out_of_play_in_the_partition()
     model = model.transform(InferKernelTensors())
     streamed = kernel_op(model, model.graph.node[0])
     # The node replays its own choices only: the weight edge's are the partition's, its
-    # source's memory's (the interim channel rule's beside the one set).
+    # source's memory's (the channel's policies' beside the one set).
     source = {
         "source.ram_style": "block",
         "source.pumped_memory": False,
@@ -206,13 +207,14 @@ def test_a_partition_has_ports_for_its_onnx_inputs_and_outputs_only() -> None:
 
 def test_any_selection_of_nodes_is_a_network() -> None:
     """A slice of a model's KernelOps binds as the whole does: its boundary its ONNX
-    inputs and outputs, an edge it cuts a port (no second-partition refusal)."""
+    inputs and outputs (no second-partition refusal). An edge it cuts at a KernelOp is no
+    port: that node is a frozen neighbour (``test_frozen_neighbour``)."""
     model = kernel_model()
     front = network(model, model.graph.node[:2], name="front")
     assert front.kernels == ("first", "activate")
-    assert front.boundary == (("x", "s_axis_0"), ("levels", "m_axis_0"))
+    assert front.boundary == (("x", "s_axis_0"),)
     alone = network(model, model.graph.node[1:2], name="alone")
-    assert alone.boundary == (("hidden", "s_axis_0"), ("levels", "m_axis_0"))
+    assert alone.boundary == ()
     assert not alone.whole and not front.stale
 
 
@@ -309,6 +311,97 @@ def test_two_nodes_of_one_name_are_refused() -> None:
         message="a node and another node are both named",
     ):
         network(model, model.graph.node)
+
+
+def test_two_graph_names_of_one_member_name_are_refused_by_the_composer() -> None:
+    """``a.b`` and ``a_b`` are one member name (``\\W`` as ``_``): the composer refuses the
+    partition (``name-shared``), which the graph layer reports as it reports a graph it
+    cannot bind, a ``KernelOpError`` carrying the composer's findings."""
+    model = kernel_model()
+    model.graph.node[0].name = "a.b"
+    model.graph.node[2].name = "a_b"
+    with refused(
+        "name-shared",
+        error=KernelOpError,
+        owner="a.b",
+        message="members share a node in the module: a_b: a.b, a_b",
+    ) as caught:
+        network(model, model.graph.node)
+    assert str(caught.error).startswith("partition: a.b: name-shared: ")
+
+
+def test_a_tensor_no_port_names_is_refused_by_name() -> None:
+    """``y`` leaves no node and is no graph output: a channel with no consumer and no
+    boundary port to give it one, refused as the graph is read (``channel-boundary``, by
+    the tensor), before anything is composed."""
+    model = kernel_model()
+    (y,) = model.graph.output
+    model.graph.value_info.append(y)
+    del model.graph.output[:]
+    with refused(
+        "channel-boundary",
+        error=KernelOpError,
+        owner="y",
+        tensor="y",
+        message="y: a boundary of its partition, but no port names it",
+    ):
+        network(model, model.graph.node)
+
+
+def test_a_refused_value_names_each_rule_and_choice_standing_by_its_owner() -> None:
+    """The seam offers a choice's values with each refused one's rules and the stored
+    choices standing in their way, keyed by owner and key: the partition answers each by
+    its path in the design space, mapped back (``Partition.pair``), so a rule of another
+    member a value reaches is named by that member. Pumping the MatMul's core at SIMD 1 is
+    refused by the core's rule, the stored ``simd`` standing."""
+    model = matmul_model()
+    configured(model, {"first": {**MATMUL, "simd": 1, "compute.packed.compute_pumping": False}})
+    bound = network(model, model.graph.node)
+    (pumping,) = Seam().choices(
+        bound.trial({}, [("first", "compute.packed.compute_pumping")]).network,
+        keys=[("first", "compute.packed.compute_pumping")],
+    )
+    rule = ("first", "compute.packed.pumping_has_lanes")
+    assert pumping.cases == (False,)
+    assert set(pumping.refused[True].why) == {rule}
+    assert pumping.refused[True].standing == {rule: (("first", "simd"),)}
+    assert [(f.code, f.owner) for f in pumping.refused[True].why[rule]] == [
+        ("dotp-pumping", "compute.packed.pumping_has_lanes")
+    ]
+    assert bound.pair("first", "w.source.geometry_supported") == (
+        "w",
+        "source.geometry_supported",
+    )
+
+
+def test_a_member_s_ranking_view_orders_its_choice_inside_the_partition() -> None:
+    """A first valid policy that follows a ranking view reads the view on the member's
+    Space where the partition places it, never the listed order in its place: the weight
+    memory of a 64 x 64 MatMul (a table of 12 288 bits, block RAM first from
+    ``BLOCK_FIRST_BITS``) ranks block RAM first, as its ``ram_preference`` states, where
+    its domain lists LUTRAM first. The seam offers it so, and names no fallback; the cut's
+    policy sets it so."""
+    k = n = 64
+    weights = np.array([[(3 * j + 2 * i) % 7 - 3 for j in range(n)] for i in range(k)])
+    model = matmul_model(weights=weights, x_shape=[1, 3, k])
+    bound = network(model, model.graph.node)
+    key = ("w", "source.ram_style")
+    source = bound.member("w").source
+    assert source.table_bits == 12_288 >= BLOCK_FIRST_BITS
+    info = bound.decision(key)
+    assert info is not None
+    ((_, listed),) = bound.viable([key])
+    assert listed.values is not None
+    assert [each.value for each in listed.values] == ["distributed", "block", "ultra", "auto"]
+    order, fallback = ranked(bound.member("w"), Channel, info, listed.values)
+    assert fallback is None
+    assert [each.value for each in order] == ["block", "distributed", "ultra", "auto"]
+    (offered,) = Seam().choices(bound, keys=[key])
+    assert offered.cases == ("block", "distributed", "auto")  # ultra: no UltraRAM here
+    assert offered.fallback is None
+    made = shell.make_cut_choices(model)
+    assert not made.fallbacks and not made.unset
+    assert channel_choices(model, "w")["source.ram_style"] == "block"
 
 
 FAN_OUT = {

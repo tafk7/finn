@@ -50,7 +50,7 @@ from finn.dataflow.datatypes import (
     QONNXDataType,
     ordinary_integer_bounds,
 )
-from finn.kernels.members import Facts
+from finn.kernels.composer import Facts
 from finn.kernels.thresholding import ThresholdingAxiKernel, threshold_table_dtype
 from finn.kernels.values.semantics import IntegerTensorValue
 

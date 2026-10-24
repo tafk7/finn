@@ -59,7 +59,6 @@ from finn.builder.build_dataflow_steps import (
 from finn.core.reporting.findings import Finding, FindingKind, Refusal
 from finn.core.reporting.log import FILE_ONLY, log_run, running_step
 from finn.core.reporting.manifest import note, recorded_run
-from finn.kernels.members import member_cache
 from finn.platform.refusal import TargetRefused
 from finn.platform.target import Target
 from finn.toolchain.launcher import ToolFailed, ToolUnavailable, host_selection
@@ -114,14 +113,8 @@ def _log_failure(step: str, error: BaseException) -> str:
 
 def _run_build_steps(model, cfg: DataflowBuildConfig, plan: Plan, manifest: BuildManifest):
     """Run the plan's steps in order, each with its settings, recording each in the
-    ``manifest``, in one member cache for the build (``finn.kernels.members``). Returns 0,
-    or -1 at the first step that fails, after logging and recording the failure and, with
-    ``enable_build_pdb_debug``, opening the postmortem debugger."""
-    with member_cache():
-        return _run_steps(model, cfg, plan, manifest)
-
-
-def _run_steps(model, cfg: DataflowBuildConfig, plan: Plan, manifest: BuildManifest):
+    ``manifest``. Returns 0, or -1 at the first step that fails, after logging and recording
+    the failure and, with ``enable_build_pdb_debug``, opening the postmortem debugger."""
     run = plan.steps[plan.run]
     for number, step in enumerate(run, start=1):
         started = time.time()

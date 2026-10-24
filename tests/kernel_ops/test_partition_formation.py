@@ -30,7 +30,7 @@ from finn.core.graph.annotations.channel import CHANNEL, channel_choices
 from finn.core.graph.errors import KernelOpError
 from finn.core.onnx_exec import execute_onnx
 from finn.core.space import Available
-from finn.custom_op.kernels.network import network
+from finn.custom_op.kernels.network import PRODUCER, network
 from finn.custom_op.kernels.shell import configured_network
 from finn.transformation.kernels.cut import CutKernelPartition
 
@@ -138,7 +138,7 @@ def test_the_body_is_the_partition_packaging_takes(tmp_path: Path) -> None:
         (tensor, key): value for tensor, held in channels.items() for key, value in held.items()
     }
     bound = network(source, kernel_ops, name=parent.graph.node[1].name)
-    built = bound.with_choices(stated).module_of()
+    built = bound.with_choices(stated).module_of(PRODUCER)
     assert isinstance(built, Available)
     reference = built.value
     assert (module.fragment, module.abi) == (reference.fragment, reference.abi)

@@ -55,8 +55,8 @@ from qonnx.core.modelwrapper import ModelWrapper
 from finn.core.graph.annotations.outputs import OUTPUT_IP, OUTPUT_IP_KEY, OUTPUT_IP_OPTIONS
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.partition import partition_body
-from finn.custom_op.kernels.network import member
 from finn.custom_op.kernels.shell import ShellResources, configured_network, shell_resources
+from finn.kernels.composer import member_name
 from finn.kernels.utilization import SHELL_CHARACTERISED
 from finn.platform.capabilities import Resources
 from finn.platform.shells import shell_row
@@ -113,7 +113,9 @@ def _member_instances(parent: ModelWrapper) -> dict[str, str]:
         return {"partition": node.name}
     export = integration(parent)
     instances = {"partition": export.partition}
-    instances.update({f"movers.{member(mover.tensor)}": mover.instance for mover in export.movers})
+    instances.update(
+        {f"movers.{member_name(mover.tensor)}": mover.instance for mover in export.movers}
+    )
     static = row.static_region
     if static is not None:
         instances.update(

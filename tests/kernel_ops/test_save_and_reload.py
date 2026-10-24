@@ -39,7 +39,9 @@ from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.space import inspection
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.network import Partition, network, persist
+from finn.custom_op.kernels.network import network, persist
+from finn.custom_op.kernels.shell import configured_network
+from finn.kernels.partition import Partition
 from finn.platform.target import Target
 from finn.transformation.kernels import InferKernelTensors, kernel_choices_config
 
@@ -58,7 +60,7 @@ WEIGHT_SOURCE: dict[str, object] = {
     "source.pumped_memory": False,
     "transport": "direct",
 }
-"""The weights' channel's choices, as a set-up and the interim channel rule make them."""
+"""The weights' channel's choices, as a set-up and the channel's policies make them."""
 VERSAL = Target(part="a part with UltraRAM it initializes", platform=FULL_DSP58, shell="ip")
 """A target with UltraRAM, on which a MatMul's ``compute`` has two possible values."""
 
@@ -84,14 +86,16 @@ def stale(network_: Partition) -> dict[str, list[tuple[str, str, dict[str, objec
 
 
 def holding(network_: Partition, tensor: str) -> dict[str, object]:
-    """What channel ``tensor``, unbound, holds, having checked it waits on the MatMul's
-    open ``compute``."""
-    held = network_.unbound(tensor)
-    assert held is not None and held.member == "first"
-    assert {(found.code, found.owner) for found in held.result.findings} == {
-        ("decision-unassigned", "compute")
-    }
-    return dict(held.stored)
+    """What channel ``tensor`` stores, having checked that it is open, waiting on the
+    MatMul's open ``compute`` (its findings the MatMul's, naming it)."""
+    validity = network_.validity(tensor)
+    assert validity.status == "open"
+    assert {
+        (found.code, found.owner, dict(found.details).get("node"))
+        for piece in validity.pieces
+        for found in piece.result.findings
+    } == {("decision-unassigned", "compute", "first")}
+    return {key: value for (_, key), value in network_.chosen([tensor]).items()}
 
 
 def retarget(model: ModelWrapper, target: Target) -> ModelWrapper:
@@ -168,24 +172,36 @@ def test_a_node_choice_a_changed_fact_refuses_is_dropped_with_candidates_and_cle
 # -- a fact changed: a rule false over stored choices ----------------------------------------
 
 
-def test_a_channel_choice_a_rule_a_changed_fact_makes_false_refuses_the_bind() -> None:
+def test_a_channel_choice_a_rule_a_changed_fact_makes_false_binds_and_reads_refused() -> None:
     """The weights' memory stored as ``ultra`` on a part with UltraRAM, the model then built
     for one without. Whether the part has UltraRAM is a rule of the memory's, not its
-    domain: binding the stored choices together breaks it, so the bind is refused, naming
-    each rule by its key once (``network-invalid``), the rules' findings its causes, about
-    the channel; nothing is dropped behind the user's back."""
+    domain: the stored choices break it together. Bind is assignment: the partition binds
+    them, nothing dropped behind the user's back, and reads refused, the channel's validity
+    naming each rule by its key; emission's reader refuses it by them ("refused by its
+    members", each finding about the channel)."""
     model = retarget(matmul_model(), VERSAL)
     configured(model, {"first": FOLDING, "w": {**WEIGHT_SOURCE, "source.ram_style": "ultra"}})
     assert channel_choices(model, "w")["source.ram_style"] == "ultra"
     model = retarget(model, TARGET)
+    partition = bound(model)
+    assert not partition.stale
+    assert partition.chosen(["w"])[("w", "source.ram_style")] == "ultra"
+    validity = partition.validity("w")
+    assert validity.status == "refused"
+    assert {(f.code, f.owner) for piece in validity.pieces for f in piece.result.findings} == {
+        ("uram-absent", "source.uram_present"),
+        ("uram-init", "source.uram_init_taken"),
+    }
     with refused(
-        "network-invalid",
+        "uram-absent",
         error=KernelOpError,
-        message="w: its stored choices are refused: .*uram",
+        owner="source.uram_present",
+        tensor="w",
+        message="the platform has no UltraRAM",
     ) as caught:
-        bound(model)
-    assert caught.finding.message.count("uram_present") == 1
-    assert {(f.code, f.owner, dict(f.details)["tensor"]) for f in caught.finding.causes} == {
+        configured_network(model, "matmul")
+    assert str(caught.error).startswith("matmul: refused by its members: ")
+    assert {(f.code, f.owner, dict(f.details)["tensor"]) for f in caught.error.findings} >= {
         ("uram-absent", "source.uram_present", "w"),
         ("uram-init", "source.uram_init_taken", "w"),
     }
@@ -198,9 +214,10 @@ def test_a_channel_choice_a_rule_a_changed_fact_makes_false_refuses_the_bind() -
 def test_a_channel_whose_contracts_wait_on_a_core_not_stated_holds_its_choices() -> None:
     """The MatMul's ``compute`` not stated (written away, as a graph FINN did not write
     holds it), on DSP58, where it has two possible values: its contracts are unknown, so the
-    weights' channel and the input's wait on it, unbound, each holding the choices stored
-    on its tensor; none is stale. Saving writes them back on their tensors; bound again,
-    the channels wait on ``compute`` holding the same choices."""
+    weights' channel and the input's are open, waiting on it, each holding the choices
+    stored on its tensor, those its ports decide waiting with it; none is stale. Saving
+    writes them back on their tensors; bound again, the channels wait on ``compute``
+    holding the same choices."""
     model = configured(matmul_model(), {"first": FOLDING, "x": EDGE, "w": WEIGHT_SOURCE})
     x, w = channel_choices(model, "x"), channel_choices(model, "w")
     model = retarget(model, VERSAL)
@@ -208,6 +225,9 @@ def test_a_channel_whose_contracts_wait_on_a_core_not_stated_holds_its_choices()
     first = bound(model)
     assert not first.stale
     assert (holding(first, "x"), holding(first, "w")) == (x, w)
+    # The input's adapter memory, which the core's port decides, waits on it.
+    waiting = dict(first.states(["x"]))[("x", "adapter_ram_style")]
+    assert waiting == inspection.Waiting(x["adapter_ram_style"], ("first.compute",))
     assert first.undecided() == (("first", "compute"),)
     written = persist(model, first)
     assert (written["x"], written["w"]) == (x, w)

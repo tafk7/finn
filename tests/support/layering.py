@@ -416,15 +416,11 @@ LAYERS: tuple[Layer, ...] = (
     # The finn-dev oracle's captures (scripts/oracle): the standard library only. The
     # kernel tests compare with the HWCustomOp flow's values through it.
     Layer("tests.oracle", ("oracle",), (), (), "tests/kernels"),
-    # Each test one build: the member cache its fixture opens (finn.kernels.members), which
-    # the kernel and the kernel-op tests' conftests import.
-    Layer(
-        "tests.member_cache", ("support.member_cache",), ("kernels",), ("pytest",), "tests/kernels"
-    ),
     # The shell's bus counts (finn.platform.shells.bus_counts) checked against the top's
     # pins on every netlist a test reads, the fixture the kernel and the kernel-op tests'
     # conftests import: the one place the kernel tests reach the platform registry. The
-    # counts' oracle, until lane 4 (budgets as constraints) retires it.
+    # counts' oracle: emission checks the shell's rules' counts (finn.kernels.budgets)
+    # against these.
     Layer(
         "tests.top_pins",
         ("support.top_pins",),
@@ -504,7 +500,6 @@ LAYERS: tuple[Layer, ...] = (
             "tests.core.space",
             "tests.dataflow",
             "tests.oracle",
-            "tests.member_cache",
             "tests.top_pins",
             "tests.purity",
         ),
@@ -512,10 +507,12 @@ LAYERS: tuple[Layer, ...] = (
         "tests/kernels",
     ),
     # The class-based oracle's targets and its tool (support.space_oracle): the design
-    # spaces of FINN's kernels it compares (the toys, stage 7's chain). The rest of the
-    # package is the engine's (tests.core.space). Its TFC target, which reads FINN's builder,
-    # is a support module of its own in no row (as support.tfc is): a module this table
-    # names is in the import closure the XSim groups are keyed by (scripts/emitted_text.py).
+    # spaces of FINN's kernels it compares (the toys, stage 7's chain: its model,
+    # support.models, and its partition as the graph layer binds it in its shell). The rest
+    # of the package is the engine's (tests.core.space). Its TFC target, which reads FINN's
+    # builder, is a support module of its own in no row (as support.tfc is): a module this
+    # table names is in the import closure the XSim groups are keyed by
+    # (scripts/emitted_text.py).
     Layer(
         "tests.space_oracle_targets",
         (
@@ -524,8 +521,9 @@ LAYERS: tuple[Layer, ...] = (
             "support.space_oracle.__main__",
         ),
         ("space", "kernels", "tests.core.space"),
-        ("support.one_space",),
+        ("support.models",),
         "tests/kernel_ops",
+        ("finn.custom_op.kernels.shell.in_shell",),
     ),
 )
 

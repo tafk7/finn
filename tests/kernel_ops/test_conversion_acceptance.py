@@ -4,13 +4,18 @@
 """Acceptance at conversion: ``ToKernelOps`` asks the kernels about each node a pattern
 matches, on its inputs as the nodes before it state them. A node the kernels refuse
 stays on the host with their codes; a fact the graph does not state is
-``fact-unstated``; a contradiction stops the build."""
+``fact-unstated``; a contradiction stops the build. After its defaults, each stream of
+the node's kernel must meet an open AXIS boundary (its channel's own rules and
+policies): a stream no chain of modules joins keeps the node on the host with the
+channel's findings."""
 
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import replace
+from typing import Any, cast
 
 import numpy as np
+import pytest
 from onnx import NodeProto, TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
@@ -18,8 +23,29 @@ from qonnx.util.basic import qonnx_make_model
 from support.models import DOMAIN, TARGET, convert
 from support.refusals import refused
 
-from finn.core.graph.annotations.platform import write_target
+import finn.custom_op.kernels as domain
+from finn.core.graph.annotations.platform import read_target, write_target
 from finn.core.graph.errors import KernelOpError
+from finn.core.graph.facts import edge_tensor
+from finn.core.reporting.findings import Finding
+from finn.core.space import (
+    Available,
+    Inapplicable,
+    QueryResult,
+    Unresolved,
+    design_space,
+    inspection,
+    reject,
+)
+from finn.custom_op.kernels.base import kernel_op
+from finn.custom_op.kernels.thresholding import Thresholding
+from finn.dataflow.traversal import LevelEnd
+from finn.kernels.base import KernelSpace
+from finn.kernels.channels import Channel, ChannelFifo, open_boundary_refusal
+from finn.kernels.memstream import MemStreamKernel
+from finn.kernels.policies import FirstValid, Fixed, Required, stated
+from finn.kernels.sides import Side
+from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.transformation.kernels import (
     InferKernelTensors,
     Outcome,
@@ -233,3 +259,174 @@ def test_a_refused_node_between_kernel_ops_is_a_host_node_there() -> None:
     assert kernel_ops_summary(conversion.outcomes)[1:] == [
         "ToKernelOps:   threshold-order (rejection) 1: mt"
     ]
+
+
+# -- the stream check ------------------------------------------------------------------------
+
+
+class MarkedThresholding(Thresholding):
+    """Test-only: Thresholding whose input closes a frame every 4 beats and every 6, two
+    marker levels: an input generator can make neither, so no chain of modules joins an
+    open boundary to it (``adapter-steps``). It takes Thresholding's place in the domain."""
+
+    op_type = "MarkedThresholding"
+
+    def streamed(
+        self, point: KernelSpace
+    ) -> tuple[tuple[str, Side | tuple[Finding, ...], bool], ...]:
+        found = []
+        for tensor, side, output in super().streamed(point):
+            if not output and isinstance(side, Side) and side.stream is not None:
+                sequence = replace(side.stream.sequence, markers=(LevelEnd(4), LevelEnd(6)))
+                side = replace(side, stream=replace(side.stream, sequence=sequence))
+            found.append((tensor, side, output))
+        return tuple(found)
+
+
+def in_place_of_thresholding(monkeypatch: pytest.MonkeyPatch, op: type[Thresholding]) -> None:
+    """``op``, a test-only Thresholding, takes Thresholding's place in the domain."""
+    monkeypatch.setattr(domain, op.__name__, op, raising=False)
+    monkeypatch.setattr(
+        domain,
+        "__all__",
+        [op.__name__ if name == "Thresholding" else name for name in domain.__all__],
+    )
+
+
+def test_a_stream_no_chain_joins_keeps_the_node_on_the_host_with_the_channel_s_findings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """x (3, 4) is 12 beats; the input's two marker levels are what no chain of modules
+    makes from what an open boundary presents. The kernel takes its defaults, so its own
+    rules refuse nothing: the channel's do, by their owners in the channel, about x."""
+    assert convert(multithreshold())[1].outcomes == (Outcome(("mt",), "Thresholding"),)
+    in_place_of_thresholding(monkeypatch, MarkedThresholding)
+    found = rejected(multithreshold())
+    assert ("input_chain", "adapter-steps") in found
+    assert {code for _, code in found} == {"adapter-steps", "guard-refused"}
+    _, conversion = convert(multithreshold())
+    (outcome,) = conversion.outcomes
+    assert {dict(each.details)["tensor"] for each in outcome.findings} == {"x"}
+    (steps,) = [each for each in outcome.findings if each.code == "adapter-steps"]
+    assert (
+        steps.message
+        == "no FinnLib chain carries out the steps: no input_gen level closes every 4 beats"
+    )
+
+
+#: The channel's policies with its transport fixed to the FIFO: its depth is required.
+THROUGH_A_FIFO = stated(
+    "Channel",
+    Channel,
+    {
+        Channel.transport: Fixed("fifo"),
+        ChannelFifo.depth: Required(),
+        MemStreamKernel.ram_style: FirstValid(order=MemStreamKernel.ram_preference),
+        Channel.adapter_ram_style: FirstValid(order=Channel.adapter_ram_preference),
+    },
+)
+
+
+def test_a_stream_joined_through_a_fifo_whose_depth_is_open_converts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A validity left open by a required choice only is no refusal: with the transport a
+    FIFO, the check's channel waits on its depth, which sizing sets, and the node converts
+    with no finding. (An open boundary presents what its other side presents, so no channel
+    of a real kernel refuses ``direct`` where a FIFO is accepted: the policy is fixed here.)"""
+    monkeypatch.setattr(Channel, "policies", THROUGH_A_FIFO)
+    model = multithreshold()
+    converted, conversion = convert(model)
+    assert conversion.outcomes == (Outcome(("mt",), "Thresholding"),)
+    op = kernel_op(converted, converted.graph.node[0])
+    point = op.point()
+    platform = read_target(converted).platform
+    for tensor, side, output in op.streamed(point):
+        assert isinstance(side, Side)
+        boundary = Side.boundary("m_axis_0" if output else "s_axis_0")
+        channel = design_space(
+            Channel(
+                tensor=edge_tensor(converted, tensor, op.label),
+                producer=side if output else boundary,
+                consumer=boundary if output else side,
+                platform=platform,
+            )
+        )
+        assert open_boundary_refusal(side, channel.tensor, platform, output=output) == ()
+        done = channel.with_choices(transport="fifo")
+        assert inspection.validity(done).status == "open"
+        assert dict(inspection.states(done))["transport.fifo.depth"] == inspection.Open()
+
+
+class OpenPeThresholding(Thresholding):
+    """Test-only: Thresholding whose policies leave the folding ``pe`` open (required), so
+    the kernel taken at its defaults has both its sides waiting on it."""
+
+    op_type = "OpenPeThresholding"
+    policies = {ThresholdingAxiKernel.pe: Required()}
+
+
+def test_a_stream_whose_side_waits_keeps_the_node_on_the_host_with_the_side_s_findings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The kernel's own rules refuse nothing and no choice lacks a value, but with ``pe``
+    left open neither stream's side (``x_side``, ``y_side``) is known: the stream check
+    cannot meet them with a boundary, and the node stays on the host with the side's
+    findings, each about its tensor, rather than converting with the stream unchecked."""
+    assert convert(multithreshold())[1].outcomes == (Outcome(("mt",), "Thresholding"),)
+    in_place_of_thresholding(monkeypatch, OpenPeThresholding)
+    model = multithreshold()
+    (source,) = model.graph.node
+    converted, conversion = convert(model)
+    assert list(converted.graph.node) == [source]
+    (outcome,) = conversion.outcomes
+    assert outcome.op is None
+    assert {(each.owner, each.code, dict(each.details)["tensor"]) for each in outcome.findings} == {
+        ("pe", "decision-unassigned", "x"),
+        ("pe", "decision-unassigned", "y"),
+    }
+
+
+class Answers:
+    """A stand-in for a kernel's point: each ``<p>_side`` answers as given."""
+
+    input_side = "input_side"
+    output_side = "output_side"
+
+    def __init__(self, answers: dict[str, QueryResult[Side]]) -> None:
+        self.answers = answers
+
+    def query(self, key: str) -> QueryResult[Side]:
+        return self.answers[key]
+
+
+def test_only_a_port_that_is_not_placed_is_skipped_by_the_stream_check() -> None:
+    """``KernelOp.streamed`` skips a port whose side is ``Inapplicable`` (the point does not
+    place it); a side that is ``Unresolved`` or ``Rejected`` is given as its findings, which
+    refuse the check; an ``Available`` one as the side, labelled below the node's name."""
+    converted, _ = convert(multithreshold())
+    op = kernel_op(converted, converted.graph.node[0])
+    point = op.point()
+    known = point.query(cast(Any, type(point)).input_side)
+    assert isinstance(known, Available)
+    waits = Unresolved(reject("decision-unassigned", "pe is open", owner="pe").findings)
+    refused = reject("channel-form", "no form", owner="x")
+
+    def streamed(**answers: QueryResult[Side]) -> Any:
+        return op.streamed(cast(KernelSpace, Answers(answers)))
+
+    assert streamed(input_side=Inapplicable(), output_side=known) == (
+        ("y", known.value.under("mt"), True),
+    )
+    assert streamed(input_side=known, output_side=Inapplicable()) == (
+        ("x", known.value.under("mt"), False),
+    )
+    assert streamed(input_side=Inapplicable(), output_side=Inapplicable()) == ()
+    assert streamed(input_side=waits, output_side=known) == (
+        ("x", waits.findings, False),
+        ("y", known.value.under("mt"), True),
+    )
+    assert streamed(input_side=known, output_side=refused) == (
+        ("x", known.value.under("mt"), False),
+        ("y", refused.findings, True),
+    )

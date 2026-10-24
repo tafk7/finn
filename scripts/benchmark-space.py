@@ -648,8 +648,9 @@ def kernel_fixtures(api):
     it, and the member path of the netlist view measured (the library module the kernel
     builds, at its empty label).
 
-    Each kernel is its own root, bound as a network binds it (``finn.kernels.network``):
-    the FIFO; the packed Dotp core and MatMul on the tensors their channels carry.
+    Each kernel is its own root, bound alone as conversion binds a node's kernel
+    (``KernelOp.bound``): the FIFO; the packed Dotp core and MatMul on the tensors their
+    channels carry.
     Choices are committed as a flow commits them, by their stable decision keys
     (``finn.kernels.configure.commit``).
     """

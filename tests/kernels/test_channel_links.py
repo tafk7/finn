@@ -3,36 +3,37 @@
 
 """A channel's netlist: its stages below it, and each checked hop resolved into wires.
 
-A channel wires the hops between its own ends; its network wires the hops to the ports
-beside it (``Network.hops``) and places them around the channel's links, in the network's
-netlist. A link's end belongs to the kernel whose port it is, beside the channel
-(``^compute``, ``compute`` in the network); a stage sits at its label below the channel
+A channel wires the hops between its own ends; its partition wires the hops to the ports
+beside it (``Partition.hops``) and places them around the channel's links, in the
+partition's netlist. A link's end belongs to the kernel whose port it is, beside the
+channel (``^compute``, ``compute`` in the partition); a stage sits at its label below the channel
 (``adapter.input_gen.input_gen``, ``transport.fifo.buffer``); a link's end on the
 boundary is the root's own pins (``None``).
 """
 
-from typing import Any
-
 from qonnx.core.datatype import DataType
 from support.helpers import (
     FULL_DSP48E2,
+    by_hand,
     choose,
     dotp_extents,
     with_channel_defaults,
     with_direct_transports,
 )
 
-from finn.core.space import Available, Rejected, Space, derived, design_space, view
+from finn.core.space import Available, Rejected, Space, derived, view
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.dataflow.traversal import BeatSequence, vector_major
+from finn.dataflow.traversal import vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.module import Fragment, Leaf
 from finn.kernels.base import PORT_CONTRACT, PortContract
 from finn.kernels.channels import Channel
+from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.dotp import PackedDotpKernel
-from finn.kernels.network import Interface, Network, wire
+from finn.kernels.partition import Partition
+from finn.kernels.sides import Side
 from finn.kernels.transport import AxisBeat, StreamContract
 
 INT3, INT8 = DataType["INT3"], DataType["INT8"]
@@ -41,38 +42,30 @@ W = Tensor((4, 4), ScalarEncoding(INT3))
 Y = Tensor((3, 4), ScalarEncoding(INT8))
 
 
-def placing(*, w_port: str | None = "in1_V") -> Network:
-    """dotp between boundary channels: three rows of four, four outputs, PE = SIMD = 2
-    (the weight channel's port ``w_port``)."""
-    named = {} if w_port is None else {"port": w_port}
-    return Network(
+def placing() -> Partition:
+    """dotp between boundary channels: three rows of four, four outputs, PE = SIMD = 2."""
+    return by_hand(
         {
-            "x": wire(
-                tensor=X,
-                port="in0_V",
-                consumer=Interface("compute", "x_contract"),
-                platform=FULL_DSP48E2,
+            "x": channel(
+                Side.boundary("in0_V"), Port("compute", "x"), tensor=X, platform=FULL_DSP48E2
             ),
-            "w": wire(
-                platform=FULL_DSP48E2,
-                tensor=W,
-                consumer=Interface("compute", "w_contract"),
-                **named,
+            "w": channel(
+                Side.boundary("in1_V"), Port("compute", "w"), tensor=W, platform=FULL_DSP48E2
             ),
-            "y": wire(
-                tensor=Y,
-                port="out0_V",
-                producer=Interface("compute", "y_contract"),
-                platform=FULL_DSP48E2,
+            "y": channel(
+                Port("compute", "y"), Side.boundary("out0_V"), tensor=Y, platform=FULL_DSP48E2
             ),
-            "compute": PackedDotpKernel(
-                result_range=ordinary_integer_bounds(INT8),
-                x_tensor=X,
-                w_tensor=W,
-                **dotp_extents(W),
-                pe=2,
-                simd=2,
-                platform=FULL_DSP48E2,
+            "compute": Facts(
+                PackedDotpKernel,
+                {
+                    "result_range": ordinary_integer_bounds(INT8),
+                    "x_tensor": X,
+                    "w_tensor": W,
+                    **dotp_extents(W),
+                    "pe": 2,
+                    "simd": 2,
+                    "platform": FULL_DSP48E2,
+                },
             ),
         }
     )
@@ -84,12 +77,12 @@ FOLDING = {
 }
 
 
-def placed(**transport: object) -> Network:
+def placed(**transport: object) -> Partition:
     folded = choose(placing(), FOLDING)
     return with_channel_defaults(with_direct_transports(choose(folded, transport)))
 
 
-def links(point: Network) -> list[tuple[str | None, str | None]]:
+def links(point: Partition) -> list[tuple[str | None, str | None]]:
     """The ends of each link of ``point``'s netlist, in order."""
     found = point.netlist()
     assert isinstance(found, Available)
@@ -104,7 +97,7 @@ def test_an_adapted_channel_places_its_stage_and_wires_each_hop() -> None:
     assert label == "adapter.input_gen.input_gen"
     assert isinstance(leaf, Leaf) and leaf.name == "input_gen"
     # Its own hop, from its boundary to its stage; the hop to compute's port is the
-    # network's, placed after it.
+    # partition's, placed after it.
     (into,) = fragment.links
     assert (into.source.instance, into.sink.instance) == (None, label)
     assert (into.source.data, into.sink.data) == ("in0_V_tdata", "idat")
@@ -115,8 +108,8 @@ def test_an_adapted_channel_places_its_stage_and_wires_each_hop() -> None:
     assert out.sink.data == "s_axis_input_tdata" and out.lanes == (0, 1) and out.lane_bits == 3
     # The frame marker: the input_gen's olst bit closing each reduction drives TLAST.
     assert out.markers == (("olst", 1, "s_axis_input_tlast", None),)
-    # A direct channel is one hop, the network's, and only a boundary channel presents
-    # a bus. The network's netlist: each channel's hops in the order the stream runs.
+    # A direct channel is one hop, the partition's, and only a boundary channel presents
+    # a bus. The partition's netlist: each channel's hops in the order the stream runs.
     assert point.member("y").netlist.links == ()
     assert [bus.name for bus in point.member("y").boundary_bus] == ["out0_V"]
     staged = f"x.{label}"
@@ -147,40 +140,6 @@ def test_a_buffered_channel_places_its_fifo_below_its_transport() -> None:
     ]
 
 
-def test_a_boundary_no_port_names_is_refused() -> None:
-    """A weight channel with one side and no port is a boundary nothing may cross: only an
-    ONNX input or output of a partition is one."""
-
-    refused = choose(placing(w_port=None), FOLDING).member("w").query(Channel.sides)
-    assert isinstance(refused, Rejected)
-    assert {(item.code, item.owner) for item in refused.findings} == {("channel-boundary", "sides")}
-    # The same network with the port named is accepted.
-    assert not isinstance(choose(placing(), FOLDING).member("w").sides, Rejected)
-
-
-def test_a_side_given_without_its_label_or_width_is_refused() -> None:
-    """A side's stream comes with its port's label, and a producer's with its word width:
-    a stream given without them would read as the boundary's side."""
-    words = Stream(ScalarEncoding(INT3), BeatSequence(vector_major((3, 4), 2)))
-    sides: dict[str, Any] = dict(
-        producer=words,
-        consumer=words,
-        producer_label="producer.y",
-        consumer_label="consumer.x",
-        producer_width=6,
-    )
-
-    def channel(**facts: Any) -> Channel:
-        return design_space(Channel(tensor=X, platform=FULL_DSP48E2, **facts))
-
-    assert not isinstance(channel(**sides).sides, Rejected)
-    for missing in ("producer_label", "producer_width"):
-        given = {name: value for name, value in sides.items() if name != missing}
-        refused = channel(**given).query(Channel.sides)
-        assert isinstance(refused, Rejected)
-        assert [(item.code, item.owner) for item in refused.findings] == [("channel-side", "sides")]
-
-
 def reading() -> StreamContract:
     """What ``Reader`` states at its port."""
     beat = AxisBeat("s_axis", INT3, 4, endpoint=Endpoint.TARGET)
@@ -197,27 +156,28 @@ class Reader(Space):
         contract = reading()
         return Stream(contract.element, contract.sequence)
 
+    @derived
+    def port_side(self) -> Side:
+        return Side.kernel(self.port_stream, "port")
+
     @view(semantics=PORT_CONTRACT)
     def port_contract(self) -> PortContract:
         return PortContract("", reading())
 
 
 def test_a_contract_that_is_no_kernels_port_has_no_netlist() -> None:
-    bare = Network(
+    bare = by_hand(
         {
-            "edge": wire(
-                platform=FULL_DSP48E2,
-                tensor=X,
-                port="in0_V",
-                consumer=Interface("reader", "port_contract"),
+            "edge": channel(
+                Side.boundary("in0_V"), Port("reader", "port"), platform=FULL_DSP48E2, tensor=X
             ),
-            "reader": Reader(),
+            "reader": Facts(Reader, {}),
         }
     )
     point = with_direct_transports(bare)
     edge = point.member("edge")
-    assert edge.consumer_label == "reader"
-    # The channel's own netlist has no hop to the reader; the network's refuses it.
+    assert edge.consumer.label == "reader.port"
+    # The channel's own netlist has no hop to the reader; the partition's refuses it.
     assert edge.query(Channel.netlist).value == Fragment()
     refused = point.netlist()
     assert isinstance(refused, Rejected)

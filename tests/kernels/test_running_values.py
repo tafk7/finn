@@ -35,12 +35,13 @@ answer.
 
 **What it costs.** An answer that read a value with no key is never kept: it is evaluated
 again in every design space that asks it. Every value FINN's kernels hold is keyed: the
-enums (``Form``, a beat sequence's repetition, a channel's steps, a transport's endpoint and
-marker kinds, and the platform's DSP block and fabric, which mix in ``str``), the QONNX
-datatypes, alone and inside a ``Tensor``, a port's stream and a stream contract, and the
-integer tensors, both also inside MatMul's known weights (``KnownWeights``). Stage 7's
-chain, made one Space by ``support.one_space``, holds no root facts (its kernels' facts are
-constants of its class) and stores only str, int and bool choices.
+enums (``Form``, a beat sequence's repetition, a channel's steps, a channel side's kind, a
+transport's endpoint and marker kinds, and the platform's DSP block and fabric, which mix in
+``str``), the QONNX datatypes, alone and inside a ``Tensor``, a channel's side (a port's
+stream inside it) and a stream contract, and the integer tensors, both also inside MatMul's
+known weights (``KnownWeights``). A partition, composed as one Space
+(``finn.kernels.composer``), holds its members' facts as root Params (each a value above)
+and stores only str, int and bool choices.
 """
 
 from __future__ import annotations
@@ -91,10 +92,12 @@ from finn.dataflow.gemm import Form, Window
 from finn.dataflow.steps import Hop, Step, Steps
 from finn.dataflow.streams import Stream
 from finn.dataflow.traversal import Repetition
+from finn.kernels import composer
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.channels import boundary_contract
 from finn.kernels.matmul import KnownWeights
-from finn.kernels.movers import MoverOffer
+from finn.kernels.movers import MoverOffer, iodma_hls
+from finn.kernels.sides import Side, SideKind
 from finn.kernels.transport import MarkerKind
 from finn.kernels.values.semantics import (
     IntegerTensorValue,
@@ -149,9 +152,12 @@ VERDICTS: dict[str, Verdict] = {
         "a value class holding its element's QONNX datatype, a value type, and enums (the "
         "transport's endpoint and marker kinds and its repetition)",
     ),
-    "Stream": Verdict(
+    "Side": Verdict(
         "always",
-        "a value class holding its element's QONNX datatype, a value type, and a beat sequence",
+        "a value class: its kind an enum member, keyed by type and name; its label a str; "
+        "its stream, where it states one, a value class holding its element's QONNX "
+        "datatype, a value type, and a beat sequence; its width an int or None; its offers "
+        "value classes of a str and ints",
     ),
     "BaseDataType": Verdict("always", "a value type, the one instance of its name"),
     "IntegerTensorValue": Verdict("always", "a value type, equal by its digest"),
@@ -167,7 +173,10 @@ datatype's is ``BaseDataType``'s), with its verdict."""
 
 def kernel_space_classes() -> list[type[Space]]:
     """Every Space class of ``finn.kernels``: each module of the package imported, then
-    every subclass of ``Space`` declared in one of them (a generated scope's too)."""
+    every subclass of ``Space`` declared in one of them (a generated scope's too), but a
+    partition's class the composer makes at run time of them (``finn.kernels.composer``:
+    whichever a test composed earlier in the process; one that does not compile is kept
+    by no cache, but may still be alive)."""
     for module in pkgutil.walk_packages(finn.kernels.__path__, "finn.kernels."):
         importlib.import_module(module.name)
 
@@ -176,7 +185,11 @@ def kernel_space_classes() -> list[type[Space]]:
             yield sub
             yield from below(sub)
 
-    found = {kind for kind in below(Space) if kind.__module__.startswith("finn.kernels.")}
+    found = {
+        kind
+        for kind in below(Space)
+        if kind.__module__.startswith("finn.kernels.") and kind.__module__ != composer.__name__
+    }
     return sorted(found, key=lambda kind: (kind.__module__, kind.__qualname__))
 
 
@@ -241,7 +254,14 @@ def made() -> dict[str, tuple[object, ...]]:
             Steps(()),
             Steps((Hop(Step.WIDTH, in_order(eight), in_order(four)),)),
         ),
-        "Form": (Form.DENSE, Form.DEPTHWISE),
+        # The Chain gives its MatMuls no form (the default): two equal ones made here.
+        "Form": (Form.DENSE, Form.DEPTHWISE, Form.DENSE),
+        "Side": (
+            Side.boundary("s_axis_0", (iodma_hls(64),)),
+            Side.boundary("s_axis_0", (iodma_hls(64),)),
+            Side.source(),
+            Side.neighbour(Stream(eight.element, in_order(eight)), "a.y", 8),
+        ),
         "Platform": (full_platform(DspBlock.DSP58),),
         "BaseDataType": (DataType["INT8"], DataType["UINT2"], DataType["INT8"]),
         "Tensor | KnownWeights": (
@@ -261,21 +281,24 @@ def made() -> dict[str, tuple[object, ...]]:
 @cache
 def samples() -> dict[str, list[object]]:
     """Each name's samples: the configured Chain's facts and stored choices (each by its
-    member's type), a copy of its first stream, the stream contracts its
-    streams make as a channel's free side (a mover's side), and the values ``made``
-    here."""
+    member's type), its channels' sides (a kernel's, which the channel is given from it), a
+    copy of its first side, the stream contracts the streams of its sides make as a
+    channel's free side (a mover's side), and the values ``made`` here."""
     found: dict[str, list[object]] = {}
     network = chain()
-    for name in network.members:
-        current = held(network.member(name)).ds
-        for values in (current.facts, current.stored):
-            for index, value in values.items():
-                assert index.semantics is not None
-                if value is None:
-                    continue  # an optional fact left out: keyed as the plain None
-                found.setdefault(named(index.semantics), []).append(value)
-    streams = cast(list[Stream], found.get("Stream", []))
-    streams.append(dataclasses.replace(streams[0]))  # an equal one, another object
+    current = held(network.point).ds
+    for values in (current.facts, current.stored):
+        for index, value in values.items():
+            assert index.semantics is not None
+            if value is None:
+                continue  # an optional fact left out: keyed as the plain None
+            found.setdefault(named(index.semantics), []).append(value)
+    for name in network.channels:
+        channel = network.member(name)
+        found.setdefault("Side", []).extend((channel.producer, channel.consumer))
+    sides = cast(list[Side], found.get("Side", []))
+    sides.append(dataclasses.replace(sides[0]))  # an equal one, another object
+    streams = [side.stream for side in sides if side.stream is not None]
     found["StreamContract"] = [
         boundary_contract("stream", stream.element, stream.sequence, endpoint)
         for stream in streams
@@ -356,7 +379,16 @@ def test_a_key_hit_is_a_value_the_semantics_hold_equal(name: str) -> None:
         assert hits, name
 
 
-ENUMS: tuple[type[Enum], ...] = (Form, Repetition, Step, Endpoint, MarkerKind, DspBlock, Fabric)
+ENUMS: tuple[type[Enum], ...] = (
+    Form,
+    Repetition,
+    Step,
+    SideKind,
+    Endpoint,
+    MarkerKind,
+    DspBlock,
+    Fabric,
+)
 """Every enum the samples hold, at any depth: the cache keys every one's members, the
 platform's DSP block and fabric (which mix in ``str``) too."""
 

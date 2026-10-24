@@ -11,7 +11,7 @@ instance. The body carries the parent's target. Everything after the cut opens t
 through the node (``finn.core.graph.partition.partition_body``).
 
 The cut is where each channel first has both its sides, so it makes the channel choices,
-each by the cut's policies (``finn.kernels.cut``: first valid, a memory's style in its
+each by the channel's policies (``Channel.policies``: first valid, a memory's style in its
 kernel's ranking). It binds the nodes' choices again in context: a stored value outside its
 domain there is dropped as stale, left open for a strategy and reported (``dropped``); a
 node choice left open by a body that never went through conversion is set by its KernelOp's

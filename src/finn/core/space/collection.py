@@ -39,7 +39,9 @@ from .semantics import OptionalSemantics, ValueSemantics
 
 _OWNER = "space.collection"
 
-_RESERVED = frozenset(
+RESERVED_NAMES = frozenset(
+    # The names a Space class reserves: no member may take one, nor a name starting
+    # ``__`` (``name-reserved``). Public as ``finn.core.space.RESERVED_NAMES``.
     {
         "inspect",
         "view",
@@ -133,7 +135,7 @@ def _collect_members(
             declaration = _member_declaration(value)
             if declaration is not None:
                 local_name(name, "declaration name")
-                if name in _RESERVED or name.startswith("__"):
+                if name in RESERVED_NAMES or name.startswith("__"):
                     raise DefinitionError.broken(
                         "name-reserved",
                         _OWNER,

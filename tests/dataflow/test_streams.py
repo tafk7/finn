@@ -4,7 +4,7 @@
 """A channel's streams traverse its tensor: each stream its shape, the elements in order.
 
 The steps between the streams are ``test_steps``'; a channel's refusals
-(``channel-tensor``, ``channel-plan``) are ``tests/kernels``'.
+(``channel-tensor``, ``channel-steps``) are ``tests/kernels``'.
 """
 
 from __future__ import annotations

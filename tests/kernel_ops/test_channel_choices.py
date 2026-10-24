@@ -20,12 +20,13 @@ from pathlib import Path
 
 import pytest
 from onnx import StringStringEntryProto, TensorProto, helper
+from qonnx.core.datatype import DataType
 from qonnx.core.metadata import MetadataError
 from qonnx.core.modelwrapper import ModelWrapper
 from support.configure import configured, write_raw
 from support.explore_models import kernel_model as open_model
 from support.helpers import Lanes
-from support.models import EDGE, kernel_model
+from support.models import EDGE, kernel_model, matmul_model
 from support.refusals import refused
 from support.tfc import LANES
 
@@ -42,7 +43,11 @@ from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import network, persist
 from finn.kernels.channels import Channel
 from finn.kernels.explore import Defaults, ExploreError, Hold, Ranked
-from finn.transformation.kernels import explore_kernel_choices, kernel_choices_config
+from finn.transformation.kernels import (
+    InferKernelTensors,
+    explore_kernel_choices,
+    kernel_choices_config,
+)
 from finn.transformation.kernels.cut import CutKernelPartition, MakeCutChoices
 
 FIFO: dict[str, object] = {"transport": "fifo", "transport.fifo.depth": 8}
@@ -88,8 +93,8 @@ def test_the_namespace_is_generated_from_the_channels_decisions() -> None:
 
 
 def test_a_channels_choices_are_typed_entries_of_its_tensor() -> None:
-    """Each choice an entry of its tensor, typed: those set, and those the interim channel
-    rule makes beside them (its adapter's memory, and the FIFO's style)."""
+    """Each choice an entry of its tensor, typed: those set, and those the channel's policies
+    make beside them (its adapter's memory, and the FIFO's style)."""
     model = kernel_model()
     configured(model, {"levels": FIFO})
     assert entries(model, "levels") == {
@@ -179,7 +184,7 @@ def test_the_cut_moves_a_channels_choices_into_the_body(tmp_path: Path) -> None:
     """Cases 2 and 4: cutting a model of KernelOps, which is a body already, moves its
     channels' choices into the body the cut makes, its boundary's (x, y) too; the parent's copy of
     a boundary tensor states none, and keeps its datatype. The cut keeps every value the
-    model states; what it leaves open the interim channel rule sets (here nothing: the
+    model states; what it leaves open the channel's policies set (here nothing: the
     helper made them, the adapter's memory and the FIFO's style)."""
     model = kernel_model()
     configured(model, {"levels": FIFO})
@@ -204,7 +209,7 @@ def test_the_cut_moves_a_channels_choices_into_the_body(tmp_path: Path) -> None:
 def test_make_cut_choices_does_to_a_body_made_by_hand_what_the_cut_does(tmp_path: Path) -> None:
     """A body made by hand (the Chain's KernelOps, converted, no cut) states its nodes'
     choices, created at conversion, and no channel's. ``MakeCutChoices`` creates each
-    channel's by the interim channel rule on its tensor, keeps the nodes', and leaves
+    channel's by the channel's policies on its tensor, keeps the nodes', and leaves
     nothing open; a node's choice its facts refuse in context (written raw) is dropped,
     named, and left open for a strategy (emission refuses it until one sets it), as the
     cut does."""
@@ -244,10 +249,45 @@ def test_make_cut_choices_does_to_a_body_made_by_hand_what_the_cut_does(tmp_path
     assert kernel_choices_config(partition_body(parent)[1]) == expected
 
 
+def test_a_stale_choice_stays_open_after_an_earlier_member_set_its_choices() -> None:
+    """A node's stored choice the bind dropped as stale is left open for a strategy,
+    whatever an earlier member of the body had left open for the cut to set: ``first``'s
+    cleared SIMD is set late by conversion's policy (and a channel's choices by the channel's own),
+    ``second``'s PE past its domain stays dropped and open, not set late behind it."""
+    model = open_model()
+    write_raw(model, "first", "simd", None)
+    write_raw(model, "second", "pe", 3)  # past the space, as another tool wrote it
+    making = MakeCutChoices()
+    model = model.transform(making)
+    assert sorted(making.dropped) == ["second.pe"]
+    assert sorted(making.late) == ["first.simd"]
+    assert "pe" not in kernel_op(model, model.graph.node[-1]).choices()
+
+
+def test_a_choice_no_value_can_be_set_for_is_left_open_at_the_cut_and_its_others_are_set() -> None:
+    """INT32 activations: no core takes them, so a MatMul made by hand has no first valid
+    core. The cut leaves ``compute`` open and reports it (``unset``, by key), and still sets
+    the node's folding (late) and every channel's choices: the MatMul's other choices were
+    all lost when the cut stopped at the first such choice."""
+    model = matmul_model(annotate=(), infer=False)
+    for name in ("x", "w"):
+        model.set_tensor_datatype(name, DataType["INT32"])
+    model = model.transform(InferKernelTensors())
+    making = MakeCutChoices()
+    model = model.transform(making)
+    assert list(making.unset) == ["first.compute"]
+    (finding,) = making.unset["first.compute"]
+    assert (finding.code, finding.owner) == ("choice-no-valid-value", "compute")
+    assert sorted(making.late) == ["first.pe", "first.simd"]
+    config = kernel_choices_config(model)
+    assert config["first"] == {"pe": 1, "simd": 1}
+    assert {config[name]["transport"] for name in ("x", "w", "y")} == {"direct"}
+
+
 def test_the_defaults_strategy_resets_the_bodys_channel_choices_too() -> None:
     """To start over, the ``Defaults`` strategy: what the body states, nodes' and
     channels' alike, goes back to its default, the values the cut gives a body stating
-    nothing (``MakeCutChoices``: conversion's policies late, the interim channel rule)."""
+    nothing (``MakeCutChoices``: conversion's policies late, the channel's)."""
     model = kernel_model()
     assert model.tensors_stating(CHANNEL)
     explored = explore_kernel_choices(model, Defaults())
@@ -442,8 +482,8 @@ def test_choices_on_a_tensor_that_is_no_channel_are_dropped_and_cleared() -> Non
 
 
 def test_a_channel_choice_out_of_play_is_saved_and_replayed_out_of_play() -> None:
-    """A FIFO's depth stored while the channel's transport is open; the interim channel
-    rule takes ``direct``, the first: the depth is kept out of play (dormant), and saving
+    """A FIFO's depth stored while the channel's transport is open; the channel's policy
+    takes ``direct``, the first: the depth is kept out of play (dormant), and saving
     writes it on the tensor, as it writes one in play. The model read again holds it
     dormant, back in play with a FIFO."""
     model = kernel_model()
@@ -451,6 +491,5 @@ def test_a_channel_choice_out_of_play_is_saved_and_replayed_out_of_play() -> Non
     configured(model, {"levels": {"transport.fifo.depth": 8}})
     assert entries(model, "levels")["finn.channel/transport.fifo.depth"] == "8"
     assert channel_choices(model, "levels")["transport"] == "direct"
-    point = network(model, model.graph.node).member("levels")
-    states = dict(inspection.states(point))
-    assert states["transport.fifo.depth"] == inspection.Dormant(8)
+    states = dict(network(model, model.graph.node).states(["levels"]))
+    assert states[("levels", "transport.fifo.depth")] == inspection.Dormant(8)
