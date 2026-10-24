@@ -8,7 +8,8 @@ The cut resolves each port the build states to the tensor it carries and writes 
 statements on the partition's body, by tensor (``finn.boundary``,
 ``finn.core.graph.annotations.boundary``); the graph layer reads them where it makes a
 boundary side, on a shell whose row offers no mover (``ip``): the side carries the build's
-statement (``Outside``, its source ``BUILD``). FIFO sizing reads its pace, the edge channel
+statement (``Outside``, its source ``BUILD``). FIFO sizing reads its pace, the partition's
+frame is no shorter than its span (the edge channel's cycles), the edge channel
 presents its lanes (a width step, the port's AXIS width the stated word's), and what it
 leaves out is as the partition presents it: an output as produced. A slice reads the
 statement of an edge that is a partition's port, by its tensor. On the Chain
@@ -21,6 +22,7 @@ import json
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
 from qonnx.core.modelwrapper import ModelWrapper
 from support.models import kernel_model
 from support.packaging import PackagedByStub
@@ -88,6 +90,12 @@ def sized(tmp_path: Path) -> dict[str, tuple[int, int | None, str]]:
         name: (channels[name]["depth"], channels[name]["least"], channels[name]["why"])
         for name in ("x", "y")
     }
+
+
+def period(tmp_path: Path) -> int:
+    """The bottleneck period step_size_fifos sized at."""
+    report = json.loads((tmp_path / "report" / "step_size_fifos.json").read_text())
+    return cast(int, report["strategy"]["period"])
 
 
 def test_the_build_s_statements_are_stored_by_tensor_their_pace_as_given() -> None:
@@ -168,17 +176,23 @@ def test_an_ip_partition_is_sized_from_the_paces_its_build_states(tmp_path: Path
     }
 
 
-def test_a_stated_pace_slower_than_the_bottleneck_is_not_modelled(tmp_path: Path) -> None:
-    """The Chain's bottleneck is 12 cycles a frame; an input stated a beat every third
-    cycle spans 18 over its six beats. The period counts its members' cycles, not the
-    outside's pace, so sizing says it does not model it rather than size against it."""
-    cut(tmp_path, {"s_axis_0": {"pace": {"every": 3}}})
-    assert sized(tmp_path)["x"] == (
-        0,
-        None,
-        "a boundary's stated pace spans 18 cycles a frame, more than the bottleneck's 12: "
-        "not modelled",
-    )
+@pytest.mark.parametrize(("port", "tensor"), [("s_axis_0", "x"), ("m_axis_0", "y")])
+def test_a_stated_pace_slower_than_the_members_bounds_the_partition_s_frame(
+    tmp_path: Path, port: str, tensor: str
+) -> None:
+    """The Chain's members take 12 cycles a frame at most; a port stated a beat every third
+    cycle spans 18 over its six beats, an input's supply or an output's acceptance. The
+    partition runs no faster than its outside: the stated channel's cycles are 18, and
+    step_size_fifos sizes every channel at that period, the stated one from its pace
+    (direct absorbs it); the build's FIFO check passes. Unstated, the period is 12."""
+    stated = {port: {"pace": {"every": 3}}}
+    parent = step_verify_partition(cut(tmp_path, stated), build(tmp_path, stated))
+    channel = body_of(parent).member(tensor)
+    assert channel.boundary.form.beats == 6 and channel.cycles == 18
+    assert period(tmp_path) == 18
+    assert sized(tmp_path)[tensor] == (0, 0, "direct absorbs it")
+    cut(tmp_path / "unstated", {})
+    assert period(tmp_path / "unstated") == 12
 
 
 def test_stated_lanes_place_a_width_step_and_the_port_takes_the_stated_word(

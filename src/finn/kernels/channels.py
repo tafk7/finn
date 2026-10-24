@@ -69,7 +69,8 @@ own derived values) and wires them by their contracts (``stages``, a view). Its 
 are the base's views over theirs, but for two it states itself, calling the base's: its
 netlist places its source and its output adapter at their labels and adds the hops between
 its own ends (its source, its stages, its boundary; ``netlist``), and a channel of wires
-takes no cycles of its own (0). Its hops to the ports beside it need those ports'
+takes no cycles of its own (0); a boundary whose outside states a pace takes no fewer than
+that pace's span a frame (``cycles``). Its hops to the ports beside it need those ports'
 contracts, which its network holds: the network wires them (``outer_hops``, from the ports
 it read, ``Neighbours``) and places them around the channel's netlist. It states its
 boundary's AXIS bus (``boundary_bus``) and its mover's contract (``mover_contracts``, one or none:
@@ -136,7 +137,7 @@ from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.movers import IodmaMover, MoverContract, MoverOffer
 from finn.kernels.policies import Alone, FirstValid, Policy, Required, defaulted, stated
 from finn.kernels.port import served
-from finn.kernels.sides import BUILD, ROW_MAJOR, Outside, Side, SideKind
+from finn.kernels.sides import BUILD, ROW_MAJOR, Outside, Side, SideKind, beat_times
 from finn.kernels.transport import (
     AxisBeat,
     Mismatch,
@@ -877,12 +878,26 @@ class Channel(KernelSpace):
         return KernelSpace._netlist(self, tuple(links), _PLACED)
 
     @view
-    @declared_reads("member_cycles")
+    @declared_reads("member_cycles", "producer", "consumer", "boundary")
     def cycles(self) -> int | Rejected:
         """The clock cycles a frame takes through its own members: the slowest's (its
         source's, its adapters' stages', its mover's), one beat a cycle at best; a FIFO
-        states none, and a channel of wires takes none of its own."""
-        return KernelSpace._cycles(self, default=0)
+        states none, and a channel of wires takes none of its own. On a boundary whose
+        outside states a pace, no fewer than that pace's span at the edge's beats
+        (``finn.kernels.sides.beat_times``): the partition runs no faster than its outside
+        supplies an input or takes an output. A side the outside leaves unstated, or
+        states without a pace (a mover's, its contract's), bounds nothing more."""
+        found = KernelSpace._cycles(self, default=0)
+        paces = [
+            side.outside.pace
+            for side in (self.producer, self.consumer)
+            if side.outside is not None and side.outside.pace is not None
+        ]
+        if isinstance(found, Rejected) or not paces:
+            return found
+        edge: StreamContract | None = self.boundary
+        assert edge is not None  # a side the outside states is a boundary's
+        return max(found, *(beat_times(pace, edge.form.beats).span for pace in paces))
 
     @view
     def boundary_bus(self) -> tuple[Bus, ...]:

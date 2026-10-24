@@ -604,8 +604,10 @@ optionally a `"row_major"` `order`, one pass a frame (`passes`) and the `lanes` 
 the port's word. Beat times state `lanes` and `passes` too, and their count must be the
 beats those make of the port's tensor. What a statement leaves out is as the partition
 presents it (an output as produced), and a port it leaves out is unstated. FIFO sizing
-reads the stated pace, and stated lanes set the port's AXIS width. On `pynq` the shell's
-movers state every port, and a statement there is refused before the first step:
+reads the stated pace, the partition's cycles a frame are no fewer than its span (the
+partition runs no faster than its integrator supplies an input or takes an output), and
+stated lanes set the port's AXIS width. On `pynq` the shell's movers state every port,
+and a statement there is refused before the first step:
 
 ```json
 "boundary": {

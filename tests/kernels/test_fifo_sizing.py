@@ -35,6 +35,7 @@ from finn.kernels.channels import Channel, Neighbours
 from finn.kernels.composer import Port, channel
 from finn.kernels.explore import (
     Accepted,
+    Bottleneck,
     ExploreError,
     FifoCheck,
     Hold,
@@ -268,9 +269,9 @@ def test_a_stated_pace_is_its_pattern_and_a_steady_beat_is_expanded_at_the_edge_
         stated_pattern(BeatTimes((0, 2, 5), 8), 4)
 
 
-def _stated(x: Outside, y: Outside) -> Partition:
-    """The Chain with its input stated ``x`` and its output ``y``, as conversion and the
-    cut leave it, folded to 12 cycles a frame (``_folded``)."""
+def _stated(x: Outside | None, y: Outside | None) -> Partition:
+    """The Chain with its input stated ``x`` and its output ``y`` (None: unstated), as
+    conversion and the cut leave it, folded to 12 cycles a frame (``_folded``)."""
     members = chain.members()
     members["x"] = channel(
         Side.boundary("s_axis_0", outside=x),
@@ -312,6 +313,37 @@ def test_sizing_reads_a_stated_pace_first_on_either_side() -> None:
     for name in ("x", "y"):
         found = size(unstated.member(name), unstated.neighbours(name), 12)
         assert found.why == "a boundary: not modelled"
+
+
+def test_a_stated_pace_slower_than_the_members_bounds_the_channel_s_cycles_on_either_side() -> None:
+    """The partition runs no faster than its outside. An input stated a beat every six
+    cycles, at the three beats its edge presents, spans 18 cycles a frame where the Chain's
+    members take 12 at most: the channel's cycles are 18, and so is the bottleneck, the
+    folding unchanged; sizing at that period reads the supply and needs no FIFO. An output
+    stated a beat every three cycles, at its twelve beats, spans 36: its channel's cycles,
+    and the bottleneck, to which the fold relaxes. Unstated, the same channels take their
+    members' cycles (12 and none)."""
+    explorer, unstated = _folded()
+    assert unstated.member("x").query(Channel.cycles).value == 12
+    assert unstated.member("y").query(Channel.cycles).value == 0
+    assert explorer.cost(unstated).bottleneck.cycles == 12  # type: ignore[union-attr]
+    slow = _stated(Outside(BUILD, pace=Steady(6)), None)
+    x = slow.member("x")
+    assert x.boundary.form.beats == 3 and x.query(Channel.cycles).value == 18
+    assert explorer.cost(slow).bottleneck == Bottleneck(("x",), 18)
+    assert slow.chosen() == unstated.chosen()
+    supply, _ = sides(x, slow.neighbours("x"))
+    assert supply == Pattern((0, 6, 12), 18)
+    assert size(x, slow.neighbours("x"), 18) == Sized(0, "direct absorbs it", 12, 0)
+    slow = _stated(None, Outside(BUILD, pace=Steady(3)))
+    y = slow.member("y")
+    assert y.boundary.form.beats == 12 and y.query(Channel.cycles).value == 36
+    assert explorer.cost(slow).bottleneck == Bottleneck(("y",), 36)
+    # TargetCycles relaxes its budget of 12 to the 36 reached, and folds again to it.
+    assert explorer.cost(slow).cycles["first"] == 24
+    _, accept = sides(y, slow.neighbours("y"))
+    assert accept == Pattern(tuple(range(0, 36, 3)), 36)
+    assert size(y, slow.neighbours("y"), 36) == Sized(0, "direct absorbs it", 5, 0)
 
 
 # -- the strategy ---------------------------------------------------------------------------

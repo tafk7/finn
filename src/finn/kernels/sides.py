@@ -40,7 +40,9 @@ frame (1, or None: as presented), the lanes a beat (the edge's word, or None: th
 the pace (the outside's beat times over a frame, or None where a mover states it, whose
 pace is its contract's) and the host's buffer layout (``ROW_MAJOR_HOST``). The pace is
 kept as given: ``Steady`` is expanded where the edge's beats are known, in one place
-(``beat_times``), which FIFO sizing reads (``finn.kernels.fifo_sizing.stated_pattern``).
+(``beat_times``), which FIFO sizing (``finn.kernels.fifo_sizing.stated_pattern``) and a
+boundary channel's cycles (``finn.kernels.channels.Channel.cycles``: no fewer than its
+span) read.
 """
 
 from __future__ import annotations
@@ -127,7 +129,8 @@ def beat_times(pace: BeatTimes | Steady, beats: int) -> BeatTimes:
     ``beats`` beats a frame: beat times as stated; a steady beat every ``k`` cycles
     expanded to ``(0, k, ..., (beats - 1) k)`` over ``beats * k``. This is the one place a
     ``Steady`` is expanded: ``Side.outside``, ``interface.json`` and any report keep the
-    shorthand as given. FIFO sizing reads it (``finn.kernels.fifo_sizing.stated_pattern``)."""
+    shorthand as given. FIFO sizing reads it (``finn.kernels.fifo_sizing.stated_pattern``),
+    and a boundary channel's cycles its span (``finn.kernels.channels.Channel.cycles``)."""
     if isinstance(pace, Steady):
         every = pace.every
         return BeatTimes(tuple(range(0, beats * every, every)), beats * every)
