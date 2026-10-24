@@ -185,7 +185,7 @@ class WideStream(Space):
 
 class Guarded(Space):
     """What exists only where a choice guarded over an optional fact applies: a case's
-    guard, a case's own choice with a ``when``, and a case's formal bound to an expression;
+    guard, a case's own choice with a ``when``, and a case's formal bound to a derived value;
     and a Decision of the class its cases share, which exists wherever the class does."""
 
     contents: int | None = Param(default=None)

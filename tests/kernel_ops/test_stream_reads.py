@@ -259,6 +259,8 @@ def test_a_stream_reading_a_formal_bound_to_its_sibling_s_value_fails() -> None:
         },
     )
     scopes = line_scopes(whole)
+    # The root of the walk below is the derived value, which reads the sibling's stream.
+    assert scopes.find("b.x_stream") in scopes.find("sibling_sequence").dependencies
     _, failures = check(scopes, infer(scopes))
     assert failures, "a's stream reads its sibling through its formal"
     assert all(failure.startswith("a.x_stream: a.x_stream -> a.sequence") for failure in failures)
