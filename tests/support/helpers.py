@@ -852,7 +852,8 @@ def matmul_assembly(
     kept = {key for key, _ in inspection.states(point)} - left
     done = defaulted(point, Alone(Unstated), kept=kept)
     if done.unset or done.refused:
-        raise ValueError("no value can be set: " + "; ".join(map(str, done.unset)))
+        why = (*done.refused.get("", ()), *done.unset)
+        raise ValueError("no value can be set: " + "; ".join(map(str, why)))
     taken = {
         f"matmul.{key}": value
         for key, value in chosen(done.point).items()

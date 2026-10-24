@@ -21,7 +21,7 @@ from typing import Any, ClassVar
 from support import chain
 from support.helpers import FULL_DSP48E2, keyed
 
-from finn.kernels.composer import PartitionDeclaration, Port, channel
+from finn.kernels.composer import ChannelDeclaration, Facts, PartitionDeclaration, Port, channel
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.partition import Partition, partition
@@ -61,8 +61,8 @@ def chained(
         )
     return partition(
         PartitionDeclaration(
-            {name: each for name, each in members.items() if name in KERNELS},
-            {name: each for name, each in members.items() if name not in KERNELS},
+            {name: each for name, each in members.items() if isinstance(each, Facts)},
+            {name: each for name, each in members.items() if isinstance(each, ChannelDeclaration)},
         ),
         keyed({"activate.pe": chain.PE, **(stored or {})}),
         order=tuple(members),
