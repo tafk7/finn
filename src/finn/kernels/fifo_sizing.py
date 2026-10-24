@@ -72,7 +72,7 @@ from finn.kernels.channels import Channel, Neighbours
 from finn.kernels.fifo import least_depth_holding
 from finn.kernels.input_generator import Generate, NestBuffer, nest_buffer
 from finn.kernels.movers import MoverContract
-from finn.kernels.sides import BeatTimes, Side, SideKind, Steady
+from finn.kernels.sides import BeatTimes, Side, SideKind, Steady, beat_times
 from finn.kernels.transport import StreamContract
 
 
@@ -308,22 +308,18 @@ def _pattern(port: PortContract | None, side: str) -> Pattern:
 
 def stated_pattern(pace: BeatTimes | Steady, beats: int) -> Pattern:
     """The ``Pattern`` of a pace the outside states (``Outside.pace``) at an edge of
-    ``beats`` beats a frame: its beat times and its span; a steady beat every ``k`` cycles
-    expanded to ``(0, k, ..., (beats - 1) k)`` over ``beats * k``. This is the one place a
-    ``Steady`` is expanded: everything else keeps the shorthand as given (``Side.outside``,
-    ``interface.json`` and any report). ``NotModelled`` where the stated beat times are not
-    one a beat of the edge's: a build's beat times state their lanes and passes, and the
+    ``beats`` beats a frame: its beat times and their span (``finn.kernels.sides.beat_times``,
+    the one place a ``Steady`` is expanded). ``NotModelled`` where the stated beat times are
+    not one a beat of the edge's: a build's beat times state their lanes and passes, and the
     cut refuses a count they do not make of the port's tensor, so only a side built by
     hand reaches it."""
-    if isinstance(pace, Steady):
-        every = pace.every
-        return Pattern(tuple(range(0, beats * every, every)), beats * every)
-    if len(pace.times) != beats:
+    found = beat_times(pace, beats)
+    if len(found.times) != beats:
         raise NotModelled(
-            f"a boundary's stated pace times {len(pace.times)} beats a frame, and its edge "
+            f"a boundary's stated pace times {len(found.times)} beats a frame, and its edge "
             f"presents {beats}"
         )
-    return Pattern(pace.times, pace.span)
+    return Pattern(found.times, found.span)
 
 
 def _free(channel: Channel, side: Side) -> Pattern:

@@ -50,6 +50,7 @@ from finn.kernels.sides import (
     Side,
     SideKind,
     Steady,
+    beat_times,
 )
 from finn.kernels.values.semantics import IntegerTensorValue
 
@@ -195,6 +196,17 @@ def test_what_the_outside_states_defaults_to_as_the_inside_presents_it() -> None
     mover = Outside(IODMA_HLS, ROW_MAJOR, 1)
     assert mover.pace is None and mover.lanes is None
     assert Side.boundary("s_axis_0", OFFERS, mover).outside == mover
+
+
+def test_a_steady_beat_is_expanded_at_the_edge_s_beats_and_beat_times_are_as_stated() -> None:
+    """``beat_times``, by value, the one place a ``Steady`` is expanded: a beat every ``k``
+    cycles at ``B`` beats is ``(0, k, ..., (B - 1) k)`` over ``B k``; beat times are
+    returned as stated, at any beats; the statement itself keeps the shorthand."""
+    assert beat_times(Steady(3), 6) == BeatTimes((0, 3, 6, 9, 12, 15), 18)
+    assert beat_times(Steady(1), 1) == BeatTimes((0,), 1)
+    stated = BeatTimes((9, 10, 11), 12)
+    assert beat_times(stated, 3) is stated and beat_times(stated, 4) is stated
+    assert Outside(BUILD, pace=Steady(3)).pace == Steady(3)
 
 
 @pytest.mark.parametrize(

@@ -39,8 +39,8 @@ the order of each pass (``ROW_MAJOR``, or None: as the inside presents it), the 
 frame (1, or None: as presented), the lanes a beat (the edge's word, or None: the inside's),
 the pace (the outside's beat times over a frame, or None where a mover states it, whose
 pace is its contract's) and the host's buffer layout (``ROW_MAJOR_HOST``). The pace is
-kept as given: ``Steady`` is expanded where the edge's beats are known, by FIFO sizing
-alone (``finn.kernels.fifo_sizing.stated_pattern``).
+kept as given: ``Steady`` is expanded where the edge's beats are known, in one place
+(``beat_times``), which FIFO sizing reads (``finn.kernels.fifo_sizing.stated_pattern``).
 """
 
 from __future__ import annotations
@@ -113,13 +113,25 @@ class BeatTimes:
 class Steady:
     """The steady shorthand: a beat every ``every`` cycles (at least 1). Kept as given; it
     is expanded to ``BeatTimes((0, k, ..., (B - 1) k), B k)`` at the edge's beats ``B``,
-    by FIFO sizing alone (``finn.kernels.fifo_sizing.stated_pattern``)."""
+    in one place (``beat_times``)."""
 
     every: int
 
     def __post_init__(self) -> None:
         if not _count(self.every) or self.every < 1:
             raise ValueError(f"a steady beat comes every cycle or more, not every {self.every!r}")
+
+
+def beat_times(pace: BeatTimes | Steady, beats: int) -> BeatTimes:
+    """The beat times of a pace the outside states (``Outside.pace``) at an edge of
+    ``beats`` beats a frame: beat times as stated; a steady beat every ``k`` cycles
+    expanded to ``(0, k, ..., (beats - 1) k)`` over ``beats * k``. This is the one place a
+    ``Steady`` is expanded: ``Side.outside``, ``interface.json`` and any report keep the
+    shorthand as given. FIFO sizing reads it (``finn.kernels.fifo_sizing.stated_pattern``)."""
+    if isinstance(pace, Steady):
+        every = pace.every
+        return BeatTimes(tuple(range(0, beats * every, every)), beats * every)
+    return pace
 
 
 @dataclass(frozen=True)
@@ -260,4 +272,5 @@ __all__ = [
     "Side",
     "SideKind",
     "Steady",
+    "beat_times",
 ]
