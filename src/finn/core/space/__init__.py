@@ -12,13 +12,10 @@ from .collection import RESERVED_NAMES
 from .compiler import Model, design_space
 from .declarations import (
     MISSING,
-    Constraint,
     Decision,
-    Derived,
     Members,
     Param,
     Select,
-    View,
     constraint,
     declared_annotation,
     derived,
@@ -63,9 +60,6 @@ __all__ = [
     "Decision",
     "Select",
     "required",
-    "Derived",
-    "Constraint",
-    "View",
     # A class's formals and names, as a composer declares Params for them
     "space_formals",
     "declared_annotation",
