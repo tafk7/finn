@@ -336,11 +336,14 @@ def test_target_cycles_folds_the_least_parallelism_that_meets_the_budget() -> No
 
 
 def test_a_fold_that_the_engine_refuses_with_a_choice_standing_takes_another_value() -> None:
-    """FINN's fold meets the engine's ``Refused(why, standing)``: the Chain stored with
-    pumping on at SIMD 2, a budget of 48 cycles a frame wants SIMD 1, which the engine refuses
-    (pumping needs lanes), the stored pumping standing in its way. The fold takes another
-    value for it: pumping, reopened with its SIMD, set by its policy (off); at 24 cycles,
-    SIMD 2 still meets the budget, and pumping stays on."""
+    """FINN's fold meets the engine's refusal in ``Seam.restore``, not in the strategy: the Chain
+    stored with pumping on at SIMD 2, a budget of 48 cycles a frame wants SIMD 1. The fold
+    reopens pumping with its SIMD (``TargetCycles`` never sees a ``Refused``, and the fold rule
+    clears nothing), and ``restore`` then proposes the stored pumping (on) at SIMD 1: the engine
+    refuses it (pumping needs lanes), the SIMD standing in its way (``Refused.standing``; the
+    direct ``set`` below, SIMD 1 over a standing pumping, shows a refusal's shape).
+    ``restore`` takes another value for the choice, its policy's (off: ``_set_by_policy``). At
+    24 cycles SIMD 2 still meets the budget, the stored pumping is accepted, and it stays on."""
     explorer, base = seam()
     pumped = explorer.set(
         base, keyed({"first.simd": 2, "first.compute.packed.compute_pumping": True})

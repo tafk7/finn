@@ -55,6 +55,7 @@ from finn.transformation.kernels import (
 )
 from finn.transformation.kernels.cut import CutKernelPartition, MakeCutChoices
 
+COMPUTE_PUMPING = "compute.packed.compute_pumping"
 VCK190 = resolve_target(part="xcvc1902-vsva2197-2MP-e-S", period_ns=5.0)
 
 
@@ -780,6 +781,20 @@ def test_a_held_key_moved_outside_the_seam_is_refused() -> None:
         explore_kernel_choices(model, [Hold({"first": {"pe": 1}}), MovesFirst()])
     assert model.model.SerializeToString() == before
     assert search_record(model) == ("none", None)
+
+
+def test_a_policy_set_value_after_a_refused_restore_is_labelled_its_policy() -> None:
+    """The Chain stored with pumping on at SIMD 2, a target of 2e6 frames a second (a budget
+    that wants SIMD 1): the fold reopens pumping, ``Seam.restore`` has the engine refuse the
+    stored pumping at SIMD 1, and its policy sets it. The report labels SIMD by the entry
+    (``target_throughput``) and pumping by the entry and its policy."""
+    model = cut_model()
+    configured(model, {"first": {**choices(model)["first"], "simd": 2, COMPUTE_PUMPING: True}})
+    report = explore_kernel_choices(model, [TargetThroughput(2_000_000)]).report
+    first = report["choices"]["first"]
+    assert first[COMPUTE_PUMPING]["by"] == "target_throughput, its policy"
+    assert first["simd"]["by"] == "target_throughput"
+    assert (first["simd"]["value"], first[COMPUTE_PUMPING]["value"]) == (1, False)
 
 
 def test_a_refold_after_a_retarget_reopens_every_kept_choice_but_a_held_one() -> None:
