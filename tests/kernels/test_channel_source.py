@@ -353,10 +353,61 @@ def test_the_sources_choices_round_trip_through_another_partition():
 def test_several_weight_sets_without_known_weights_leave_the_set_channel_unplaced():
     # No value, no source: the set channel's consumer, the source's set port, does not
     # apply, and neither does the channel (its sides, its netlist): the partition's module
-    # is not made.
+    # is not made, and the netlist's refusal says why (``channel-unused``: no port of the
+    # channel is present).
     point = configured(base(weight_sets=2))
     assert isinstance(point.member("set").query(Channel.sides), Inapplicable)
-    assert not isinstance(module_of(point, "matmul"), Available)
+    assert isinstance(point.netlist(), Rejected)
+    module = module_of(point, "matmul")
+    assert isinstance(module, Rejected)
+    ((found,),) = [module.findings]
+    assert (found.code, found.owner, found.message, dict(found.details)) == (
+        "channel-unused",
+        "set",
+        "no present port is on this channel: w.set does not apply (its member places no such port)",
+        {"tensor": "set"},
+    )
+
+
+def test_a_channel_with_one_port_present_and_one_not_is_named_unformed_by_its_netlist():
+    # The same absent port (the source's set port) as the consumer of a channel that has a
+    # port present, MatMul's output: the channel does not apply either, and its netlist's
+    # refusal names the port that does not, keeping the code of the channel with none.
+    x_tensor, w_tensor = Tensor((3, 4), INT3), Tensor((4, 4), INT3)
+    indices = Tensor((3,), ScalarEncoding(DataType["UINT1"]))
+    members = {
+        "x": channel(
+            Side.boundary("in0_V"), Port("matmul", "x"), tensor=x_tensor, platform=FULL_DSP48E2
+        ),
+        "w": channel(
+            Side.boundary("in1_V"),
+            Port("matmul", "w"),
+            tensor=Stated("matmul", "carried_weights"),
+            sets=2,
+            index_tensor=indices,
+            platform=FULL_DSP48E2,
+        ),
+        "t": channel(
+            Port("matmul", "y"),
+            Port("w", "set"),
+            tensor=Stated("matmul", "result_tensor"),
+            platform=FULL_DSP48E2,
+        ),
+        "matmul": Facts(
+            MatMulKernel,
+            {"platform": FULL_DSP48E2, "x_tensor": x_tensor, "w_tensor": w_tensor},
+        ),
+    }
+    point = configured(by_hand(members))
+    found = point.netlist()
+    assert isinstance(found, Rejected)
+    ((one,),) = [found.findings]
+    assert (one.code, one.owner, one.message) == (
+        "channel-unused",
+        "t",
+        "a port of this channel does not apply, so it is not formed: w.set "
+        "(its member places no such port)",
+    )
 
 
 def test_a_source_whose_rule_is_false_refuses_the_change_that_places_it():

@@ -547,7 +547,9 @@ class Partition:
         boundary channel's AXIS bus; or why not, every member's refusal (or, where none
         refuses, what they wait on; a channel's hops' own, ``channel-port`` or
         ``channel-link``), each finding naming its member (``located``), or the merge's own
-        (``kernel-netlist``). The shell's counts and its module read the same."""
+        (``kernel-netlist``); a channel none of whose netlist applies because a port of a
+        kernel it is on does not is refused as ``channel-unused`` (``_unused``). The shell's
+        counts and its module read the same."""
         found: QueryResult[tuple[Fragment, tuple[Bus, ...]]] = self._read("netlist", self._netlist)
         return found
 
@@ -590,7 +592,16 @@ class Partition:
             )
             if rejected:
                 return Rejected(findings)
-            return Unresolved(findings) if findings else Inapplicable()
+            if findings:
+                return Unresolved(findings)
+            unused = tuple(
+                dict.fromkeys(
+                    found
+                    for name, each in failed
+                    if isinstance(each, Inapplicable) and (found := self._unused(name)) is not None
+                )
+            )
+            return Rejected(unused) if unused else Inapplicable()
         exported = presented_buses(controls)
         if isinstance(exported, Rejected):
             return exported
@@ -598,6 +609,31 @@ class Partition:
         if isinstance(fragment, Rejected):
             return fragment
         return Available((fragment, tuple(boundary)))
+
+    def _unused(self, name: str) -> Finding | None:
+        """Why channel ``name``'s netlist does not apply, where a port of a kernel it is on
+        does not (a weight-set channel's consumer, the source's set port, where the weights
+        are not known: no source places it): ``channel-unused``, naming the ports that do
+        not apply, owned by the channel; None where no port of its does not apply."""
+        absent: list[str] = []
+        present: list[str] = []
+        for declared in self._sides.get(name, ()):
+            if isinstance(declared, Port):
+                point = self.member(declared.member)
+                answer = point.query(getattr(type(point), f"{declared.port}_side"))
+                label = f"{declared.member}.{declared.port}"
+                (absent if isinstance(answer, Inapplicable) else present).append(label)
+        if not absent:
+            return None
+        ports = ", ".join(absent)
+        text = (
+            f"a port of this channel does not apply, so it is not formed: {ports} "
+            "(its member places no such port)"
+            if present
+            else f"no present port is on this channel: {ports} does not apply "
+            "(its member places no such port)"
+        )
+        return self.located(name, Finding(FindingKind.REJECTION, "channel-unused", name, text))
 
     def module(self, producer: ProducerIdentity, stem: str) -> QueryResult[Module]:
         """Its composed module (``finn.kernels.artifacts.top.compose``) of its ``netlist``;
