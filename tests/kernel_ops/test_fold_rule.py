@@ -301,6 +301,35 @@ def test_a_cleared_choice_the_running_strategy_sets_as_it_finds_it_is_left_to_it
     assert found.chosen()[("board", "uram")] is False
 
 
+def test_a_choice_the_restore_brings_into_play_is_set_by_the_fold_rule_not_left_to_a_loop() -> None:
+    """A strategy that decides every open choice as it finds it (``decides``, as
+    ``Ranked``'s) leaves a choice a change brings into play to its loop only while its
+    search runs. The restore after it has no loop left: the folding the search left open
+    is given back (one lane a side), which brings the input's adapter memory into play,
+    and the fold rule sets it by the cut's policy (``distributed``) as the restore's change
+    is accepted, as for a strategy that decides nothing. (Neither of FINN's strategies
+    reaches this: ``Defaults`` restores nothing, and ``Ranked``'s restore touches only
+    what its search left open, the choices only a membership rule restricts.)"""
+    four = boarded(folding={"first.pe": 4, "first.simd": 4})
+    style = ("x", "adapter_ram_style")
+    assert dict(four.states(["x"]))[style] == inspection.Absent()
+    folded = four.with_choices(keyed({"first.simd": 1}))
+    assert dict(folded.states(["x"]))[style] == inspection.Open(())
+    seam = Seam(FULL_DSP48E2)
+    simd = ("first", "simd")
+
+    def search(opened: Partition, prior: Mapping[tuple[str, str], object]) -> Partition:
+        assert prior == {simd: 1}
+        assert style not in opened.undecided()
+        return opened
+
+    found = seam.run(folded, (simd,), search, "idle", decides=lambda _: True)
+    assert found.chosen()[simd] == 1
+    assert dict(found.states(["x"]))[style] == inspection.Set("distributed")
+    (run,) = seam.runs
+    assert run.settled == {style: "distributed"} and run.cleared == {}
+
+
 def test_a_fifo_newly_in_play_leaves_its_depth_open_and_its_style_set_by_policy() -> None:
     """A change that places the hidden channel's FIFO brings its choices into play: the
     seam sets its style by the cut's policy (``auto``) and leaves its depth, required,
