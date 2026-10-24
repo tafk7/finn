@@ -74,7 +74,7 @@ def explore_each(
 
 def explored(model: ModelWrapper, target: Target, strategies: list[Explorer]) -> dict[str, Any]:
     """A copy of ``model`` explored for ``target`` by each of ``strategies`` in turn
-    (``Defaults()`` first: from every choice's default, conversion's and the cut's); the
+    (``Defaults()`` first: from every choice's default, conversion's and the channel's); the
     report (``explore_each``)."""
     model = ModelWrapper(model.model.__deepcopy__())
     write_target(model, target)
@@ -106,11 +106,11 @@ def test_the_search_keeps_the_least_budget_whose_point_fits_and_reports_it() -> 
     assert searched["monotone"] and searched["departures"] == []
     # It reopened the folding and gave the rest back: it changed the folding alone; what
     # the new folding brings into play on a channel (an output adapter) is placed, so the
-    # interim channel rule sets nothing.
+    # fold rule clears and sets nothing.
     assert searched["reopened"] > searched["kept"] > 0
     changed = set(searched["changed"])
     assert {key.rpartition(".")[2] for key in changed} <= {"pe", "simd", "compute_pumping"}
-    assert searched["interim"] == []
+    assert (searched["cleared"], searched["settled"]) == ({}, {})
     assert sized["strategy"] == "size_fifos" and sized["fifo_bits"] == 0
 
 

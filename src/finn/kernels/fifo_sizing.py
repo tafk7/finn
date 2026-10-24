@@ -33,7 +33,8 @@ pipeline latency is a constant shift of a side's times, and the acceptance follo
 supply's data, so they do not change the depth.
 
 ``size`` reads a channel's sides, its producer's and its consumer's paces from the
-contracts of the ports beside it (its network's ``neighbours``), and gives its ``Sized``: a
+contracts of the ports beside it (its network's ``neighbours``; at a slice's edge, a frozen
+neighbour's port's, at its stored choices, as a kernel's), and gives its ``Sized``: a
 depth (``0``: direct) and why. The least depth counts the words the FIFO must
 hold; the DEPTH proposed is the least whose native storage holds them
 (``least_depth_holding``: FinnLib's FIFO is a shift register of five words up to
@@ -69,6 +70,7 @@ from finn.kernels.channels import Channel, Neighbours
 from finn.kernels.fifo import least_depth_holding
 from finn.kernels.input_generator import Generate, NestBuffer, nest_buffer
 from finn.kernels.movers import MoverContract
+from finn.kernels.sides import SideKind
 
 
 @dataclass(frozen=True)
@@ -318,10 +320,14 @@ def sides(channel: Channel, neighbours: Neighbours) -> tuple[Pattern, Acceptance
         raise NotModelled("a memory source: paced by its consumer")
     found = channel.sides
     producer = (
-        _free(channel) if found.source_owner is None else _pattern(neighbours.producer, "producer")
+        _free(channel)
+        if found.producer.kind is SideKind.BOUNDARY
+        else _pattern(neighbours.producer, "producer")
     )
     consumer = (
-        _free(channel) if found.sink_owner is None else _pattern(neighbours.consumer, "consumer")
+        _free(channel)
+        if found.consumer.kind is SideKind.BOUNDARY
+        else _pattern(neighbours.consumer, "consumer")
     )
     times = producer.times
     if channel.output_adapting:

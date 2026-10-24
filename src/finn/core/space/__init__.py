@@ -5,9 +5,13 @@
 from . import inspection
 from ._configuration import BoundDecision, BoundValue, Space
 from ._failure import NativeEvaluationError
+from ._nodes import space_formals
+from ._scopes import model_modes
 from ._value_types import value_type
+from .collection import RESERVED_NAMES
 from .compiler import Model, design_space
 from .declarations import (
+    MISSING,
     Const,
     Constraint,
     Decision,
@@ -18,6 +22,7 @@ from .declarations import (
     View,
     ViewKey,
     constraint,
+    declared_annotation,
     derived,
     required,
     view,
@@ -65,6 +70,13 @@ __all__ = [
     "Derived",
     "Constraint",
     "View",
+    # A class's formals and names, as a composer declares Params for them
+    "space_formals",
+    "declared_annotation",
+    "MISSING",
+    "RESERVED_NAMES",
+    # The test modes a model is made in
+    "model_modes",
     # Graph primitives
     "Members",
     "Located",

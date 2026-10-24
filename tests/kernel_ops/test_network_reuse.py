@@ -1,23 +1,20 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The graph's network reuses its members by value: the same facts hit, any fact
-changed misses, and choices are never shared.
+"""The graph's partition reuses its class by structure: the same structure is one class,
+other facts a new design space of it, and choices are never shared.
 
-``network`` configures each node's kernel and each channel from its facts through the
-build's member cache (``finn.kernels.members``; each test opens one), so a network of the
-same facts binds nothing again; the stored choices are replayed on each network as it is
-bound, and a replay is kept by them too. The network bound is kept too, by its model's
-design and the nodes selected; a refusal never is.
+``network`` reads the graph into a declaration and composes it
+(``finn.kernels.composer``: the class kept by its structure), then binds the stored choices
+on a design space of that class, each time: nothing of a partition is kept between binds but
+its class.
 """
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
 from dataclasses import replace
 from fnmatch import fnmatchcase
-from pathlib import Path
 
 import pytest
 from onnx import GraphProto
@@ -36,24 +33,14 @@ from support.refusals import refused
 from support.tfc import ULTRA96
 
 import finn.custom_op.kernels.shell as shell
-import finn.kernels.members as members
-from finn.core.graph.annotations.outputs import OUTPUT_IP
 from finn.core.graph.annotations.platform import PLATFORM, write_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import design_digest
-from finn.custom_op.kernels.network import Partition, network, persist
-from finn.custom_op.kernels.shell import InShell, in_shell
-from finn.kernels.members import (
-    VERIFY,
-    MemberCache,
-    MemberCacheMismatch,
-    current,
-    member_cache,
-    uncached,
-    verification_counts,
-    write_counts,
-)
-from finn.kernels.network import dotted
+from finn.custom_op.kernels.network import network, persist
+from finn.custom_op.kernels.shell import in_shell
+from finn.kernels.composer import cached_classes
+from finn.kernels.explore import dotted
+from finn.kernels.partition import Partition
 from finn.platform.resolve import resolve_target
 from finn.platform.shells import shell_row
 from finn.transformation.kernels import InferKernelTensors
@@ -61,7 +48,7 @@ from finn.transformation.kernels.cut import MakeCutChoices
 
 
 def memories(bound: Partition) -> dict[str, object]:
-    """The stored styles of the network's adapter memories, by ``member.key``."""
+    """The stored styles of the partition's adapter memories, by ``member.key``."""
     return {
         dotted(key): value
         for key, value in bound.chosen().items()
@@ -69,27 +56,19 @@ def memories(bound: Partition) -> dict[str, object]:
     }
 
 
-def cache() -> MemberCache:
-    found = current()
-    assert found is not None
-    return found
-
-
-def test_the_same_facts_reuse_the_bindings_never_the_choices() -> None:
+def test_the_same_structure_is_one_class_never_the_same_choices() -> None:
     model = kernel_model()
     first = network(model, model.graph.node, name="chain")
-    misses = cache().misses
     other = kernel_model()
     again = network(other, other.graph.node, name="chain")
-    # Each kernel and each channel is found by its facts and choices: nothing bound.
-    assert cache().misses == misses
-    assert type(again.member("first")) is type(first.member("first"))
-    # Choices are replayed on each network, never shared: saving other memories reaches
-    # the next network and leaves the first one's as they were.
+    assert again.composed.space_type is first.composed.space_type
+    # Choices are bound on each design space, never shared: saving other memories reaches
+    # the next partition and leaves the first one's as they were.
     styles = memories(first)
     assert styles and "auto" not in styles.values()
     persist(model, choose(first, dict.fromkeys(styles, "auto")))
     configured = network(model, model.graph.node, name="chain")
+    assert configured.composed.space_type is first.composed.space_type
     assert memories(configured) == dict.fromkeys(styles, "auto") and not configured.stale
     assert memories(first) == styles
 
@@ -111,52 +90,59 @@ def retargeted(model: ModelWrapper) -> ModelWrapper:
     return model
 
 
-#: A fact of the single MatMul changed: its kernel is bound again.
-CHANGES: dict[str, Callable[[], ModelWrapper]] = {
+#: A fact of the single MatMul changed, its structure kept: a new design space of its class.
+FACTS: dict[str, Callable[[], ModelWrapper]] = {
     "the weights' values": changed_weights,
     "the input's rows": lambda: matmul_model(x_shape=[1, 6, 4]),
     "the input at another rank": lambda: matmul_model(x_shape=[3, 4]),
     "the input's annotation": annotated,
-    "the weights a graph input": lambda: matmul_model(stored=False),
     "the target's clock": lambda: retargeted(matmul_model()),
 }
 
 
-@pytest.mark.parametrize("change", CHANGES, ids=list(CHANGES))
-def test_a_fact_changed_misses(change: str) -> None:
+@pytest.mark.parametrize("change", FACTS, ids=list(FACTS))
+def test_a_fact_changed_is_a_new_design_space_of_the_class(change: str) -> None:
     model = matmul_model()
-    first = network(model, model.graph.node).member("first")
-    changed = CHANGES[change]()
-    assert network(changed, changed.graph.node).member("first") is not first
-    # And the same facts again hit: the change is a key, not an invalidation.
-    misses = cache().misses
-    network(model, model.graph.node)
-    assert cache().misses == misses
+    first = network(model, model.graph.node)
+    changed = FACTS[change]()
+    other = network(changed, changed.graph.node)
+    assert other.composed.space_type is first.composed.space_type
+    assert other.composed.facts != first.composed.facts
 
 
-def test_names_are_no_facts() -> None:
-    """The node's and the tensors' names, and the partition's, name members; the
-    kernel's binding is the same, and its channels' too."""
+def test_a_structure_changed_is_another_class() -> None:
+    """The weights a graph input: their channel's producer is the boundary, not its source,
+    and the MatMul is given no weights."""
     model = matmul_model()
-    first = network(model, model.graph.node).member("first")
+    streamed = matmul_model(stored=False)
+    first = network(model, model.graph.node)
+    assert network(streamed, streamed.graph.node).composed.space_type is not (
+        first.composed.space_type
+    )
+
+
+def test_names_are_the_class_s_structure() -> None:
+    """The node's and the tensors' names are its members' names: a renamed node is
+    another class; the partition's own name is no member's, and names its module only."""
+    model = matmul_model()
+    first = network(model, model.graph.node)
     renamed = matmul_model()
     renamed.graph.node[0].name = "other"
-    renamed.rename_tensor("w", "w_renamed")
-    misses = cache().misses
-    other = network(renamed, renamed.graph.node, name="another")
-    assert cache().misses == misses
-    assert other.member("other") is first
-    assert other.module_of() != network(model, model.graph.node).module_of()
+    other = network(renamed, renamed.graph.node)
+    assert other.composed.space_type is not first.composed.space_type
+    named = network(model, model.graph.node, name="another")
+    assert named.composed.space_type is first.composed.space_type
+    assert (named.name, first.name) == ("another", "partition")
 
 
-def test_a_tensor_read_more_than_once_is_refused_before_any_binding() -> None:
+def test_a_tensor_read_more_than_once_is_refused_before_any_composition() -> None:
     """``hidden`` also leaves the graph while ``activate`` reads it: a channel of two
-    consumers, refused before anything is bound."""
+    consumers, refused before anything is composed."""
     model = kernel_model()
     hidden = model.get_tensor_valueinfo("hidden")
     model.graph.value_info.remove(hidden)
     model.graph.output.append(hidden)
-    misses = cache().misses
+    classes = cached_classes()
     with refused(
         "tensor-fan-out",
         error=KernelOpError,
@@ -165,71 +151,12 @@ def test_a_tensor_read_more_than_once_is_refused_before_any_binding() -> None:
         message="hidden is read by activate",
     ):
         network(model, model.graph.node, name="chain")
-    assert cache().misses == misses
+    assert cached_classes() == classes
 
 
-def networks(cache: MemberCache) -> tuple[int, int]:
-    return cache.counts["network", "hits"], cache.counts["network", "misses"]
-
-
-def test_a_network_is_kept_by_its_design_and_selection() -> None:
-    model, other = kernel_model(), kernel_model()
-    first = network(model, model.graph.node, name="chain")
-    hits, misses = networks(cache())
-    # The same design, read again (its outputs aside): the network kept.
-    other.set(OUTPUT_IP, "elsewhere")
-    assert network(other, other.graph.node, name="chain") is first
-    assert networks(cache()) == (hits + 1, misses)
-    # Another name, selection or channel choice given is another network.
-    assert network(model, model.graph.node, name="other") is not first
-    assert network(model, model.graph.node[:1], name="chain") is not first
-    assert networks(cache()) == (hits + 1, misses + 2)
-    # A choice persisted changes the design: bound again, the members kept.
-    styles = memories(first)
-    persist(model, choose(first, dict.fromkeys(styles, "auto")))
-    members = cache().misses
-    assert network(model, model.graph.node, name="chain") is not first
-    assert networks(cache()) == (hits + 1, misses + 3)
-    assert cache().misses == members + len(styles)
-
-
-def test_a_refused_network_is_not_kept() -> None:
-    model = kernel_model()
-    hidden = model.get_tensor_valueinfo("hidden")
-    model.graph.value_info.remove(hidden)
-    model.graph.output.append(hidden)
-    counted, entries = networks(cache()), len(cache().entries)
-    for _ in range(2):
-        with refused("tensor-fan-out", error=KernelOpError):
-            network(model, model.graph.node, name="chain")
-    assert networks(cache()) == counted and len(cache().entries) == entries
-
-
-def test_the_verifying_mode_binds_a_network_hit_again(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    # Counted apart: this test's mismatch is written to its own directory, never the run's.
-    monkeypatch.setattr(members, "_COUNTS", dict.fromkeys(verification_counts(), 0))
-    monkeypatch.setenv(VERIFY, str(tmp_path))
-    before = verification_counts()["network hits verified"]
-    model = kernel_model()
-    with member_cache(verify=True) as held:
-        first = network(model, model.graph.node, name="chain")
-        assert network(model, model.graph.node, name="chain") is first
-        assert verification_counts()["network hits verified"] == before + 1
-        # A network kept under another's key is found out.
-        (found,) = [key for key in held.entries if key[0] == "network"]  # type: ignore[index]
-        held.entries[found] = network(model, model.graph.node[:1], name="chain")
-        with pytest.raises(MemberCacheMismatch, match="the member cache's network hit differs"):
-            network(model, model.graph.node, name="chain")
-    write_counts()
-    (written,) = tmp_path.glob("*.json")
-    assert json.loads(written.read_text())["mismatches"] == 1
-
-
-def test_a_body_s_inherited_target_is_in_its_network_s_key() -> None:
+def test_a_body_reads_its_parent_s_target() -> None:
     """Two bodies of one design, each opened inside a parent of another target, read
-    their parents' targets: two networks."""
+    their parents' targets: two design spaces of one class, on two platforms."""
     bodies = []
     for parent in (matmul_model(), retargeted(matmul_model())):
         graph = GraphProto()
@@ -238,16 +165,15 @@ def test_a_body_s_inherited_target_is_in_its_network_s_key() -> None:
         bodies.append(parent.make_subgraph_modelwrapper(graph))
     assert design_digest(bodies[0]) == design_digest(bodies[1])
     first, second = (network(body, body.graph.node) for body in bodies)
-    assert first is not second
+    assert first.composed.space_type is second.composed.space_type
     assert first.member("first").platform != second.member("first").platform
 
 
-def test_a_body_bound_plain_and_in_shells_keeps_a_network_each() -> None:
-    """One body bound in one cache, in the verifying mode, three ways: plain (no movers
-    offered), in Ultra96's shell (its row offers a mover) and in a row of the same movers
-    with no static region of its own. Each is its own entry, as it is bound without the
-    cache, and binding each again is its own entry's hit, verified. Retargeted by hand,
-    its new movers are set as the cut sets them (``MakeCutChoices``)."""
+def test_a_body_bound_plain_and_in_shells_states_its_shell_s_resources() -> None:
+    """One body bound three ways: plain (no movers offered), in Ultra96's shell (its row
+    offers a mover) and in a row of the same movers with no static region of its own. Each
+    states its own resources. Retargeted by hand, its new movers are set as the cut sets
+    them (``MakeCutChoices``)."""
     model = kernel_model()
     configure_partition(model)
     write_target(model, ULTRA96)
@@ -256,29 +182,12 @@ def test_a_body_bound_plain_and_in_shells_keeps_a_network_each() -> None:
     row = shell_row("pynq", "Ultra96")
     bare = replace(row, static_region=None)
     assert row.movers and row.static_region is not None
-
-    def bound() -> tuple[Partition, InShell, InShell]:
-        plain = network(model, nodes, name="chain")
-        shelled = in_shell(model, nodes, name="chain")
-        with pytest.MonkeyPatch.context() as patched:
-            patched.setattr(shell, "shell_row", lambda *_: bare)
-            stripped = in_shell(model, nodes, name="chain")
-        return plain, shelled, stripped
-
-    with uncached():
-        fresh = bound()
-    before = verification_counts()
-    with member_cache(verify=True) as held:
-        first = bound()
-        assert networks(held) == (0, 3)
-        assert bound() == first
-        assert networks(held) == (3, 3)
-    after = verification_counts()
-    assert after["network hits verified"] == before["network hits verified"] + 3
-    assert after["mismatches"] == before["mismatches"]
-    plain, shelled, stripped = first
+    plain = network(model, nodes, name="chain")
+    shelled = in_shell(model, nodes, name="chain")
+    with pytest.MonkeyPatch.context() as patched:
+        patched.setattr(shell, "shell_row", lambda *_: bare)
+        stripped = in_shell(model, nodes, name="chain")
     assert type(plain) is Partition and plain.movers == ()
     assert shelled.row == row and stripped.row == bare and shelled.movers == stripped.movers
-    resources = [each.own_resources() for each in first]
+    resources = [each.own_resources() for each in (plain, shelled, stripped)]
     assert len(set(map(repr, resources))) == 3
-    assert resources == [each.own_resources() for each in fresh]

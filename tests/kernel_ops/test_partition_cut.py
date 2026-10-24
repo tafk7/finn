@@ -297,7 +297,7 @@ def test_an_iodma_mover_refuses_w2_repeated_or_tiled_by_name() -> None:
     tiles, which the driver's row-major buffer does not hold, ``mover-order``. The mover
     is placed on w2's free side, no choice, so its rules are the channel's: the cut leaves
     nothing open, and emission refuses w2 by them, each finding keyed by the mover's rule;
-    a folding that breaks one is refused by it."""
+    a folding is refused only by a rule it makes newly false."""
     repeated = (
         r"s_axis_1: an iodma_hls mover moves one pass of a \[4, 4\] buffer a frame, and this "
         r"free side presents it 3 times a frame \(repetition by the host or the mover is not "
@@ -327,12 +327,18 @@ def test_an_iodma_mover_refuses_w2_repeated_or_tiled_by_name() -> None:
     }
     (order,) = [f for f in caught.error.findings if f.code == "mover-order"]
     assert re.search(tiled, order.message)
-    # A row-major folding of w2 still presents its pass three times a frame: refused by
-    # the mover's rule, the fold with it.
+    # A row-major folding of w2 still presents its pass three times a frame. The mover's
+    # rule is false before the fold, which makes no rule newly false: accepted, and
+    # emission refuses w2 by the rule, the order's no longer.
     model = kernel_model(second_weights=False)
     write_target(model, ZYNQ)
-    with refused("mover-repetition", owner="mover.single_pass", message=repeated):
-        configured(model, {"second": ROW_MAJOR_W2})
+    assert in_shell(model, model.graph.node).validity("w2").status == "refused"
+    configured(model, {"second": ROW_MAJOR_W2})
+    with refused(
+        "mover-repetition", owner="mover.single_pass", message=repeated, tensor="w2"
+    ) as caught:
+        configured_network(model, "partition")
+    assert {f.code for f in caught.error.findings} == {"mover-repetition"}
 
 
 def test_a_mover_or_bus_the_block_design_cannot_wire_is_refused_by_name(tmp_path: Path) -> None:
@@ -439,7 +445,7 @@ def test_tfc_s_choices_are_created_at_conversion_and_at_the_cut(
 ) -> None:
     """SR6's two moments on TFC_W2A2: conversion stores each KernelOp's own choices,
     each at its default policy, first valid (44 values on 8 nodes), and no channel's; the
-    cut creates the channels' by the interim channel rule, first valid (25 values on 13
+    cut creates the channels' by the channel's policies, first valid (25 values on 13
     tensors: transports, the weights' memories, the input buffers' adapters' memories; the
     weights' sources and the two boundary movers are placed, and the input buffers'
     adapters picked by their steps, no choices), on the body's network, where it binds the

@@ -8,8 +8,8 @@ PE channels a beat, channels innermost. The channel between them derives the
 steps from the two presentations, split at its transport, and exactly one
 adapter candidate a side carries them out: nothing for the same order, a ``vpc``
 before the transport for other lanes, an ``input_gen`` after it for another
-beat order, and both: each side's set first valid as the network builds the channel (the
-interim channel rule). A FIFO sits between the two sides. A channel that admits no adapter
+beat order, and both: each side's set first valid as the network builds the channel (the cut's
+policies). A FIFO sits between the two sides. A channel that admits no adapter
 refuses any step. FinnLib's ``inner_shuffle`` is not a candidate; a
 kernel with children places it explicitly (``TransposeKernel``, ``test_transpose.py``).
 """
@@ -42,8 +42,8 @@ from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, Traversal, vector_major
 from finn.kernels.adapters import Convert, realize
 from finn.kernels.channels import Channel, ChannelFifo, OuterHops
-from finn.kernels.configure import chosen
 from finn.kernels.library import library_module
+from finn.kernels.sides import Side
 from finn.kernels.utilization import memory_preference
 from finn.kernels.vpc import VpcKernel
 
@@ -135,7 +135,8 @@ def test_exactly_one_chain_a_side_carries_out_its_steps():
         (columns_first(ROWS, CHANNELS, 4), 4, "input_gen", False),
         (columns_first(ROWS, CHANNELS, 4), 2, "input_gen", True),
     ):
-        x = adapted(source, pe).member("x")
+        point = adapted(source, pe)
+        x = point.member("x")
         # The output side's one chain is placed where its steps convert a width; the input
         # side's is picked by its steps (``input_chain``, the kinds ``realize`` takes,
         # joined), ``none`` where nothing happens after the transport.
@@ -144,22 +145,27 @@ def test_exactly_one_chain_a_side_carries_out_its_steps():
         # Where the picker answers, it places a chain exactly where the channel adapts.
         assert x.adapter_placed == x.adapting == (chain != "none")
         # Neither is a choice: no chain is listed, so none is tried.
-        assert not {"adapter", "output_adapter"} & {item.key for item in inspection.decisions(x)}
-        assert ("adapter_ram_style" in chosen(x)) == (chain != "none")
+        decisions = {key for owner, key in point.decisions() if owner == "x"}
+        assert not {"adapter", "output_adapter"} & decisions
+        assert (("x", "adapter_ram_style") in point.chosen(["x"])) == (chain != "none")
+        # Its memory is in play where a chain is placed (set by the cut); where none is, the
+        # facts alone rule it out: its state on the partition is Absent, not in play.
+        state = dict(point.states(["x"]))[("x", "adapter_ram_style")]
+        assert isinstance(state, inspection.Absent) == (chain == "none")
+        assert ("x", "adapter_ram_style") in point.decisions()
 
 
 def _channel(source, sink, shape, platform=FULL_DSP48E2):
-    """A channel between two kernels' streams, ``source`` produced and ``sink`` consumed
-    (``BeatSequence``s of a ``shape`` tensor), as a network binds it (``Interface``),
-    alone."""
+    """A channel between two kernels' ports, ``source`` produced and ``sink`` consumed
+    (``BeatSequence``s of a ``shape`` tensor), each its side, as a network binds it
+    (``Interface``), alone."""
     return design_space(
         Channel(
             tensor=Tensor(shape, ELEMENT),
-            producer=Stream(ELEMENT, source),
-            consumer=Stream(ELEMENT, sink),
-            producer_label="producer.y",
-            consumer_label="consumer.x",
-            producer_width=ELEMENT.bits * source.form.lanes,
+            producer=Side.kernel(
+                Stream(ELEMENT, source), "producer.y", ELEMENT.bits * source.form.lanes
+            ),
+            consumer=Side.kernel(Stream(ELEMENT, sink), "consumer.x"),
             platform=platform,
         )
     )
@@ -168,7 +174,7 @@ def _channel(source, sink, shape, platform=FULL_DSP48E2):
 def test_steps_no_finnlib_chain_carries_out_refuse_the_input_adapter_once():
     """Steps that exist, which no FinnLib chain carries out (a frame closed every 6 beats
     and every 4: no input_gen level closes every 4 beats of a nest of 6): the picker
-    refuses with ``adapter-plan`` and the text its chains gave, one piece keyed
+    refuses with ``adapter-steps`` and the text its chains gave, one piece keyed
     ``adapter``. The style and its UltraRAM rule, guarded by the picker's answer, are not
     in play: each one guard piece beside it."""
     form = vector_major((12,), 1)
@@ -182,9 +188,9 @@ def test_steps_no_finnlib_chain_carries_out_refuse_the_input_adapter_once():
         for piece in validity.pieces
     }
     why = (
-        "adapter-plan",
+        "adapter-steps",
         "input_chain",
-        "no FinnLib chain carries out the plan: no input_gen level closes every 4 beats",
+        "no FinnLib chain carries out the steps: no input_gen level closes every 4 beats",
     )
     (adapter,) = [owner for owner in pieces if owner.split(".")[0] == "adapter"]
     assert adapter == "adapter"
@@ -230,10 +236,10 @@ def test_a_stream_admitting_no_adapter_refuses_its_steps():
     point = adapted(vector_major((ROWS, CHANNELS), 4), 2, adaptable=False)
     refused = point.member("x").query(Channel.netlist)
     assert isinstance(refused, Rejected)
-    refusals = [finding for finding in refused.findings if finding.code == "channel-plan"]
+    refusals = [finding for finding in refused.findings if finding.code == "channel-steps"]
     assert refusals and "width_conversion" in refusals[0].message
-    # Its adapter Decision does not apply, and the network leaves a channel refused on its
-    # own facts as it is: its transport stays open.
+    # Its adapter Decision does not apply, and the channel's policies leave a channel refused on
+    # its own facts as it is: its transport stays open.
     assert not point.member("x").adapting
     assert ("x", "transport") in point.undecided()
 
@@ -277,10 +283,12 @@ def test_a_fifo_refuses_what_carries_markers():
 
 
 def validity_of(point):
-    """The point's validity status, and each piece that is not true with its codes."""
+    """The point's validity status, and each piece that is not true with its codes, each
+    owned by its key in channel ``x``."""
     found = inspection.validity(point)
     return found.status, [
-        (piece.owner, {finding.code for finding in piece.result.findings}) for piece in found.pieces
+        (piece.owner.removeprefix("x."), {finding.code for finding in piece.result.findings})
+        for piece in found.pieces
     ]
 
 
@@ -325,7 +333,7 @@ def test_a_fifo_in_a_memory_the_platform_lacks_is_refused_by_its_rule():
         (
             lambda: adapted(vector_major((ROWS, CHANNELS), 4), 2, adaptable=False),
             "refused",
-            [("realizable", {"channel-plan"})],
+            [("realizable", {"channel-steps"})],
             None,
         ),
         # The FIFO's memory open: its stage's module waits on it, and its rules; the

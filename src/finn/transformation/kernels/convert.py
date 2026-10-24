@@ -10,16 +10,26 @@ inputs as the nodes before it left them.
 The KernelOps anchored at a node's op type each try to match it. The matches are tried
 on a copy of the model, largest first, and for each the op's policies are applied once,
 on the kernel alone (``KernelOp.defaulted``, ``finn.kernels.policies``): the kernel bound
-to the node's facts, each choice in play given its fixed or first valid value. The first
-match whose kernel takes every value replaces the nodes it covers with one KernelOp, which
-keeps the anchor's name and the covered nodes' outside tensors, and its choices are the
-values its policies set, written once (``persist_kernel``): its kernel's, never a
-channel's, so nothing is written on a tensor. Conversion builds no channel: a partition's
-channels are made at the cut. A node that no match converts stays on the host, unchanged,
-with why: its kernel refused on its facts alone, or a choice no value can be set for
-(``choice-no-valid-value``), each value's refusal among the findings. Two
-KernelOps matching the same nodes is an authoring error: one computation is one KernelOp,
-its alternatives a decision of its kernel.
+to the node's facts, each choice in play given its fixed or first valid value. Then each
+of its kernel's streams (``KernelOp.streamed``: each AXIS port, not a parameter a source
+feeds) is checked against the open AXIS boundary it would meet
+(``finn.kernels.channels.open_boundary_refusal``): a channel with the stream on one side
+and the boundary, unstated, on the other, its own policies applied once, refused where its
+validity is (no chain of modules joins them) or a choice of it can take no value. It is no
+rule of the kernel, so the kernel's policies do not steer around it. A port the kernel does
+not place is not checked; one whose side the kernel's point does not know (it waits on a
+choice, or the kernel refuses it) is refused with the side's findings. The first match whose
+kernel takes every value and whose streams each meet the boundary replaces the nodes it
+covers with one KernelOp, which keeps the anchor's name and the covered nodes' outside
+tensors, and its choices are the values its policies set, written once
+(``persist_kernel``): its kernel's, never a channel's, so nothing is written on a tensor.
+The check's channels are dropped: a partition's channels are made at the cut. A node that
+no match converts stays on the host, unchanged, with why: its kernel refused on its facts
+alone, a choice no value can be set for (``choice-no-valid-value``), each value's refusal
+among the findings, or a stream no chain joins or whose side is not known, the check
+channel's or the side's findings, each about its tensor. Two KernelOps matching the same
+nodes is an authoring error: one computation is one KernelOp, its alternatives a decision of
+its kernel.
 
 A match of several nodes must be convex and must not hide a tensor that something
 outside it reads (``match-not-convex``, ``match-interior-exposed``). Nodes it depends on
@@ -43,14 +53,16 @@ from onnx import NodeProto, helper
 from qonnx.transformation.base import Transformation
 
 import finn.custom_op.kernels as domain
-from finn.core.graph.annotations.platform import write_target
+from finn.core.graph.annotations.platform import read_target, write_target
 from finn.core.graph.errors import FactUnstated, KernelOpError
+from finn.core.graph.facts import edge_tensor
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN
 from finn.core.graph.walk import between, upstream
 from finn.core.reporting.findings import Finding, FindingKind, by_code
 from finn.custom_op.kernels.base import KernelOp, Match, kernel_op, unstated
 from finn.custom_op.kernels.network import persist_kernel
 from finn.kernels.base import KernelSpace
+from finn.kernels.channels import open_boundary_refusal
 from finn.kernels.policies import Defaulted
 from finn.platform.target import Target
 from finn.transformation.kernels.infer import infer_node
@@ -295,11 +307,12 @@ def _trial(
 ) -> tuple[ModelWrapper, Defaulted[KernelSpace] | tuple[Finding, ...]]:
     """Try ``match`` on a copy of the model: replace the covered nodes with one
     KernelOp, named as the anchor, on their outside tensors, and apply the op's policies
-    to its kernel (``KernelOp.defaulted``). Returns the copy and, where every value is set,
-    the node's kernel with them (its outputs then inferred) and the rankings it could not
-    read, else the refusals, each finding's causes in its place (each value's refusal, where
-    no value can be set): a missing shape or datatype as ``fact-unstated``. A copy, so a
-    refused trial leaves ``model`` as it was. Any other wrong fact raises."""
+    to its kernel (``KernelOp.defaulted``), then check its streams (``_streams``). Returns
+    the copy and, where every value is set and every stream meets the boundary, the node's
+    kernel with them (its outputs then inferred) and the rankings it could not read, else
+    the refusals, each finding's causes in its place (each value's refusal, where no value
+    can be set): a missing shape or datatype as ``fact-unstated``. A copy, so a refused
+    trial leaves ``model`` as it was. Any other wrong fact raises."""
     trial = copy.deepcopy(model)
     index = subgraph.indices[0]
     new = helper.make_node(
@@ -327,12 +340,37 @@ def _trial(
         defaulted = kernel_op(trial, node).defaulted()
         if isinstance(defaulted, Defaulted):
             infer_node(trial, node)
+            return trial, _streams(trial, node, defaulted.point) or defaulted
     except FactUnstated as error:
         return trial, (unstated(op.op_type, str(error), tensor=error.tensor),)
-    if isinstance(defaulted, Defaulted):
-        return trial, defaulted
-    flat = (cause for finding in defaulted for cause in (finding.causes or (finding,)))
-    return trial, tuple(dict.fromkeys(flat))
+    return trial, _flat(defaulted)
+
+
+def _flat(findings: tuple[Finding, ...]) -> tuple[Finding, ...]:
+    """Each finding's causes in its place (each value's refusal, where no value can be
+    set), each once."""
+    flat = (cause for finding in findings for cause in (finding.causes or (finding,)))
+    return tuple(dict.fromkeys(flat))
+
+
+def _streams(model: ModelWrapper, node: NodeProto, point: KernelSpace) -> tuple[Finding, ...]:
+    """Conversion's stream check: why a stream of ``node``'s kernel at ``point`` (its
+    defaults) meets no open AXIS boundary (``finn.kernels.channels.open_boundary_refusal``),
+    each streamed port's (``KernelOp.streamed``) on its tensor, as ``model`` states it;
+    empty where every one does. A port whose side ``point`` does not know (it waits on a
+    choice, or its kernel refuses it) is refused with the side's findings; one it does not
+    place is not checked."""
+    op = kernel_op(model, node)
+    platform = read_target(model).platform
+    found: list[Finding] = []
+    for tensor, side, output in op.streamed(point):
+        if isinstance(side, tuple):  # the port's side is not known at ``point``
+            refused = side
+        else:
+            carried = edge_tensor(model, tensor, op.label)
+            refused = open_boundary_refusal(side, carried, platform, output=output)
+        found += (finding.about(tensor=tensor) for finding in _flat(refused))
+    return tuple(dict.fromkeys(found))
 
 
 def between_kernel_ops(model: ModelWrapper) -> tuple[str, ...]:

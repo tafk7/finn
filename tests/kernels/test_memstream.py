@@ -31,9 +31,9 @@ from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.artifacts.contributions import ContributionError, GeneratedData
 from finn.kernels.channels import OUTPUT_ADAPTER_LABEL, SOURCE_LABEL
+from finn.kernels.explore import dotted
 from finn.kernels.library import library_module
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.network import dotted
 from finn.kernels.values.semantics import IntegerTensorValue
 
 WEIGHTS = ((-4, -3, -2, -1), (0, 1, 2, 3), (3, 2, 1, 0), (-1, -2, -3, -4))

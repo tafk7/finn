@@ -46,9 +46,11 @@ from finn.builder.build_dataflow_testbench import boundary_words
 from finn.core.graph.annotations.channel import channel_choices
 from finn.core.onnx_exec import execute_onnx
 from finn.core.rtlsim_bench import link_stream, measure
-from finn.custom_op.kernels.network import Partition, member, network
+from finn.custom_op.kernels.network import network
 from finn.custom_op.kernels.shell import configured_network
 from finn.harness.toolchain import print_identity
+from finn.kernels.composer import member_name
+from finn.kernels.partition import Partition
 from finn.toolchain.launcher import host_toolchain
 from support.configure import configured
 
@@ -184,7 +186,7 @@ def measure_partition(
     links = point.module.fragment.links
     hops: list[str] = []
     for node in nodes:
-        name = member(node.name)
+        name = member_name(node.name)
         out = [
             link
             for link in links

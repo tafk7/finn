@@ -1,17 +1,16 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Channels as ordinary Spaces: each takes the contracts of the ports on it as facts.
+"""Channels as ordinary Spaces in a partition: each takes the sides of the ports on it.
 
-Every channel owns its refusals; a channel with a port on one side only is a
-boundary of the network and presents its ``port`` name, by the boundary rule; a
-channel's tensor is a fact, and a channel whose facts read each other is refused when
-its network is declared.
+Every channel owns its refusals; a channel with a port on one side only is a boundary of
+the partition and presents the AXIS port its boundary side names, by the boundary rule; a
+channel's tensor is a fact. A side on the wrong role, and channels whose facts read each
+other, are the composer's to refuse (``tests/kernels/test_composer.py``).
 """
 
-import pytest
 from qonnx.core.datatype import DataType
-from support.helpers import FULL_DSP48E2, built, choose, module_of, with_direct_transports
+from support.helpers import FULL_DSP48E2, built, by_hand, choose, module_of, with_direct_transports
 
 from finn.core.space import (
     Available,
@@ -28,8 +27,10 @@ from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.base import NETLIST, PORT_CONTRACT, KernelSpace, PortContract
 from finn.kernels.channels import Channel, boundary_contract
+from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.network import Fact, Interface, Network, NetworkError, wire
+from finn.kernels.partition import Partition
+from finn.kernels.sides import Side
 from finn.kernels.transport import AxisBeat, StreamContract
 from finn.kernels.values.semantics import IntegerTensorValue
 
@@ -38,30 +39,33 @@ PRODUCED = vector_major((4,), 2)
 VECTOR = Tensor((4,), INT4)
 
 
-def source(contents: tuple[int, ...], tensor: Tensor) -> MemStreamKernel:
-    return MemStreamKernel(
-        dtype=DataType["INT4"],
-        form=PRODUCED,
-        contents=IntegerTensorValue.of(contents),
-        platform=FULL_DSP48E2,
+def source(contents: tuple[int, ...], tensor: Tensor) -> Facts:
+    return Facts(
+        MemStreamKernel,
+        {
+            "dtype": DataType["INT4"],
+            "form": PRODUCED,
+            "contents": IntegerTensorValue.of(contents),
+            "platform": FULL_DSP48E2,
+        },
     )
 
 
-def unconfigured(first: Tensor = VECTOR, second: Tensor = VECTOR) -> Network:
+def unconfigured(first: Tensor = VECTOR, second: Tensor = VECTOR) -> Partition:
     """Two constant vectors streamed to two outputs; each channel's tensor is given. Each
     channel has only its producer: it is a boundary, named by its port."""
-    network = Network(
+    network = by_hand(
         {
-            "first": wire(
+            "first": channel(
+                Port("first_source", "output"),
+                Side.boundary("out0_V"),
                 tensor=first,
-                port="out0_V",
-                producer=Interface("first_source", "output_contract"),
                 platform=FULL_DSP48E2,
             ),
-            "second": wire(
+            "second": channel(
+                Port("second_source", "output"),
+                Side.boundary("out1_V"),
                 tensor=second,
-                port="out1_V",
-                producer=Interface("second_source", "output_contract"),
                 platform=FULL_DSP48E2,
             ),
             "first_source": source((1, 2, 3, 4), first),
@@ -71,7 +75,7 @@ def unconfigured(first: Tensor = VECTOR, second: Tensor = VECTOR) -> Network:
     return with_direct_transports(network)
 
 
-def constants(first: Tensor = VECTOR, second: Tensor = VECTOR) -> Network:
+def constants(first: Tensor = VECTOR, second: Tensor = VECTOR) -> Partition:
     return choose(
         unconfigured(first, second),
         {
@@ -96,7 +100,7 @@ def test_each_channel_owns_its_refusal_and_independent_refusals_are_all_visible(
     assert isinstance(point.query("second", NETLIST), Rejected)
     refusal = module_of(point, "constants")
     assert isinstance(refusal, Rejected)
-    # Each finding keeps its owner, the channel's own declaration; the network names the
+    # Each finding keeps its owner, the channel's own declaration; the partition names the
     # channel beside it.
     assert {(f.owner, dict(f.details)["tensor"]) for f in refusal.findings} == {
         ("well_formed", "first"),
@@ -112,10 +116,10 @@ def test_each_channel_owns_its_refusal_and_independent_refusals_are_all_visible(
 def test_explain_shows_per_channel_and_per_member_evidence():
     point = constants()
     channel = inspection.explain(point.member("first"), Channel.netlist)
-    visited = {node.declaration.key for node in channel.nodes}
+    visited = {node.declaration.key.removeprefix("first.") for node in channel.nodes}
     assert {"netlist", "well_formed", "compatible", "streams"} <= visited
     member = inspection.explain(point.member("first_source"), KernelSpace.netlist)
-    visited = {node.declaration.key for node in member.nodes}
+    visited = {node.declaration.key.removeprefix("first_source.") for node in member.nodes}
     # A kernel's netlist with a module builds it from its ports' streams, its parameters,
     # its data and its bus: it places no member, whose netlists it reads none of.
     assert {"output_stream", "parameters", "init_file", "config_presented", "netlists"} <= visited
@@ -130,15 +134,18 @@ def test_a_channel_waits_for_its_own_sides_only():
     assert isinstance(point.member("first").query(Channel.netlist), Available)
     assert isinstance(point.member("second").query(Channel.netlist), Available)
     assert isinstance(module_of(point, "constants"), Unresolved)
-    # A channel takes its ports' streams as facts, each with its port's label from the
-    # network, and its producing port's word width; the fact a stream is bound to is its side.
+    # A channel takes each side as one value: a port's side, its stream, its label below
+    # its member and, an output's, its word width; its other side the boundary's.
     first = point.member("first")
     produced = point.member("first_source")
-    assert first.producer == produced.output_stream
-    assert first.producer_label == "first_source.output"
-    assert first.producer_width == produced.output_data_width == 8
+    assert first.producer == Side.kernel(
+        produced.output_stream, "first_source.output", produced.output_data_width
+    )
+    assert first.producer.width == 8
+    assert first.consumer == Side.boundary("out0_V")
     sides = first.sides
-    assert (sides.source_owner, sides.sink_owner) == ("first_source.output", None)
+    assert (sides.source_owner, sides.sink_owner) == ("first_source.output", "out0_V")
+    assert sides.owners == ("first_source.output", None)
     assert first.boundary.transport.name == "out0_V"
     assert sides.sink == Stream(first.boundary.element, first.boundary.sequence)
 
@@ -169,62 +176,34 @@ class Replaying(Space):
         contract = replaying()
         return Stream(contract.element, contract.sequence)
 
+    @derived
+    def port_side(self) -> Side:
+        return Side.kernel(self.port_stream, "port")
+
     @view(semantics=PORT_CONTRACT)
     def port_contract(self) -> PortContract:
         return PortContract("port", replaying())
 
 
 def test_a_boundary_presents_its_free_side_without_the_replay_the_receiver_realizes():
-    receiver = Network(
+    receiver = by_hand(
         {
-            "edge": wire(
+            "edge": channel(
+                Side.boundary("in0_V"),
+                Port("reader", "port"),
                 tensor=Tensor((2, 4), INT4),
-                port="in0_V",
-                consumer=Interface("reader", "port_contract"),
                 platform=FULL_DSP48E2,
             ),
-            "reader": Replaying(),
+            "reader": Facts(Replaying, {}),
         }
     )
     edge = receiver.member("edge")
     sides = edge.sides
-    assert sides.source_owner is None and sides.sink_owner == "reader.port"
+    assert sides.producer == Side.boundary("in0_V") and sides.sink_owner == "reader.port"
     # Each row once, no marker: the replay and the frame are the receiver's to realize.
     assert sides.source == Stream(INT4, BeatSequence(vector_major((2, 4), 2)))
     assert edge.boundary.transport.name == "in0_V" and not edge.boundary.rules
     assert sides.sink.sequence.form == vector_major((2, 4), 2).replayed(3, inner_beats=2)
-
-
-def test_a_producer_wired_as_a_consumer_is_refused_by_the_network():
-    # A stream has no direction: the network, which reads each side's contract, refuses a
-    # port wired to the side its endpoint is not as it binds the channel, owned by it.
-    clash = Network(
-        {
-            # b's contract given as the consumer is a producer's all the same.
-            "shared": wire(
-                tensor=VECTOR,
-                port="out0_V",
-                producer=Interface("a", "output_contract"),
-                consumer=Interface("b", "output_contract"),
-                platform=FULL_DSP48E2,
-            ),
-            "a": source((1, 2, 3, 4), VECTOR),
-            "b": source((1, 2, 3, 4), VECTOR),
-        }
-    )
-    assert clash.unbound("shared") is not None
-    validity = clash.validity("shared")
-    assert validity.status == "refused"
-    (piece,) = validity.pieces
-    assert piece.owner == "shared"
-    (users,) = piece.result.findings
-    assert (users.code, users.owner) == ("channel-users", "shared")
-    assert users.message == (
-        "a channel has at most one producer and one consumer; its ports are a.output, b.output"
-    )
-    refused = clash.netlist()
-    assert isinstance(refused, Rejected)
-    assert [f.code for f in refused.findings] == ["channel-users"]
 
 
 def test_an_adapter_under_a_refused_guard_is_one_piece():
@@ -232,19 +211,19 @@ def test_an_adapter_under_a_refused_guard_is_one_piece():
     # chain: one piece keyed by the selector, none for its cases. A correction: the engine
     # gave one piece more per case, against the reference model's reading 8. A channel with
     # a known value given a producer too has two producers (channel-users).
-    clash = Network(
+    clash = by_hand(
         {
-            "shared": wire(
+            "shared": channel(
+                Port("a", "output"),
+                Side.boundary("out0_V"),
                 tensor=VECTOR,
-                port="out0_V",
                 contents=IntegerTensorValue.of((1, 2, 3, 4)),
-                producer=Interface("a", "output_contract"),
                 platform=FULL_DSP48E2,
             ),
             "a": source((1, 2, 3, 4), VECTOR),
         }
     )
-    validity = inspection.validity(clash.member("shared"))
+    validity = clash.validity("shared")
     assert validity.status == "refused"
     for selector in ("adapter", "output_adapter"):
         (piece,) = [
@@ -257,46 +236,3 @@ def test_an_adapter_under_a_refused_guard_is_one_piece():
             ("channel-users", "sides"),
             ("guard-refused", selector),
         }
-
-
-def test_a_boundary_channel_needs_its_port_name():
-    unnamed = Network(
-        {
-            "out": wire(
-                tensor=VECTOR,
-                producer=Interface("source", "output_contract"),
-                platform=FULL_DSP48E2,
-            ),
-            "source": source((1, 2, 3, 4), VECTOR),
-        }
-    )
-    refused = unnamed.member("out").query(Channel.netlist)
-    assert isinstance(refused, Rejected)
-    # The origin, and beside it each guard that reads it (guard-refused, by its scope).
-    assert {f.code for f in refused.findings} == {"channel-boundary", "guard-refused"}
-    origins = {(f.code, f.owner) for f in refused.findings if f.code != "guard-refused"}
-    assert origins == {("channel-boundary", "sides")}
-
-
-# -- the anchoring rule: a channel's facts read the members before it --------------------
-
-
-def test_channels_whose_facts_read_each_other_are_refused_where_the_network_is_declared():
-    """A channel's facts are read from members ranked before it: kernels, which take
-    plain facts, then channels after the ones they read. Two channels that read each
-    other, or one that reads itself, can never be ranked."""
-    with pytest.raises(NetworkError, match="read each other"):
-        Network(
-            {
-                "a": wire(
-                    tensor=VECTOR, consumer=Interface("b", "set_contract"), platform=FULL_DSP48E2
-                ),
-                "b": wire(
-                    tensor=VECTOR, consumer=Interface("a", "set_contract"), platform=FULL_DSP48E2
-                ),
-            }
-        )
-    with pytest.raises(NetworkError, match="read each other"):
-        Network({"a": wire(tensor=Fact("a", "set_contract"), platform=FULL_DSP48E2)})
-    with pytest.raises(NetworkError, match="no members"):
-        Network({"a": wire(tensor=Fact("nowhere", "tensor"), platform=FULL_DSP48E2)})

@@ -301,8 +301,8 @@ def test_the_design_digest_ignores_what_a_build_made_and_changes_nothing() -> No
 
 def test_the_design_digest_ignores_a_hold() -> None:
     """The held mark names the keys strategies leave alone: it changes no hardware, so
-    marking a key held at its own value leaves the digest as it was (the IP cache and the
-    member cache both key on it)."""
+    marking a key held at its own value leaves the digest as it was (the IP cache keys on
+    it)."""
     model = chain()
     digest = design_digest(model)
     model.set(HELD, {"activate": ["pe"]})

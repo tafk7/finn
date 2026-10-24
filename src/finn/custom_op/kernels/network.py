@@ -1,82 +1,98 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The network of KernelOp nodes a graph binds, and its choices written back.
+"""The partition of KernelOp nodes a graph binds, one design space, and its choices
+written back.
 
-``network(model, nodes, movers=...)`` binds a ``finn.kernels.network.Network`` straight
-from the graph, for any selection of KernelOp nodes (a partition's body, a slice of it, one
-node), and changes no graph: it reads the graph once, its tensors from one index
-(``finn.core.graph.facts.reading``). The movers offered on its boundary (``movers``, each an
-``finn.kernels.movers.MoverOffer``; none by default) are a fact its caller gives: a shell's
-row offers them, and ``finn.custom_op.kernels.shell`` binds a partition's network in the
-shell of the model's target (``in_shell``).
+``network(model, nodes, movers=...)`` binds a ``Partition`` straight from the graph, for any
+selection of KernelOp nodes (a partition's body, a slice of it, one node), and changes no
+graph: it reads the graph once, its tensors from one index
+(``finn.core.graph.facts.reading``), into a declaration (``declaration``), which the
+composer (``finn.kernels.composer``) makes one Space class of, and binds its stored choices
+on one design space of that class (``finn.kernels.partition.partition``). The movers offered
+on its boundary (``movers``, each a ``finn.kernels.movers.MoverOffer``; none by default) are
+a fact its caller gives: a shell's row offers them, and ``finn.custom_op.kernels.shell``
+binds a partition in the shell of the model's target (``in_shell``).
+
+**The declaration** (``declaration``):
 
 - **kernels**, one per node, named as the node: its kernel's facts, read once
-  (``KernelOp.facts``), configured through the build's member cache;
+  (``KernelOp.facts``);
 - **channels**, one per ONNX tensor, named as the tensor, in node order: a node's graph
-  inputs, the parameter channels it owns (named after the initializer), its outputs.
-  Each is a ``Wire`` of the facts a ``Channel`` takes: its tensor (the graph's,
-  ``edge_tensor``, at the graph's rank; a parameter channel's, the tensor and contents
-  its kernel states for it, ``Fact(node, wiring.carried)``, ``Fact(node,
-  wiring.stored)``), its ports' contracts (``Interface(node, wiring.contract)``, from the op's
-  ``wiring``), and the target's platform. Only the selection's ONNX inputs and outputs
-  are boundaries, named by the shell's convention ``s_axis_<i>`` and ``m_axis_<j>``, each
-  offered the movers given (``movers``; ``Channel.mover``, placed on its free side where
-  they are offered, no choice). A channel has one consumer, so a
-  tensor read more than once is refused by name before anything is bound
+  inputs, the parameter channels it owns (named after the initializer), its outputs. Each
+  has its two sides, a kernel's port (``Port``: the op's ``wiring``, an input on the
+  consumer's side, an output on the producer's) or, where no port of the selection is on
+  it, the channel's source (a parameter channel, whose kernel states its value) or the
+  boundary (``Side.boundary``: its AXIS port, offered the movers given); its tensor (the
+  graph's, ``edge_tensor``, at the graph's rank; a parameter channel's, the tensor and
+  contents its kernel states for it, ``Stated``); and the target's platform. Only the
+  selection's ONNX inputs and outputs are boundaries, named by the shell's convention
+  ``s_axis_<i>`` and ``m_axis_<j>``. An edge of a slice (a selection short of every
+  KernelOp) whose node beyond it is a KernelOp is no boundary: that node is a **frozen
+  neighbour**, and the edge channel's side there is its port's side at its stored
+  choices, as a fact (``Side.neighbour``: an upstream neighbour's stream, label and word
+  width, a downstream one's stream and label), the edge channel the slice's member. Only
+  an accepted value is a fact: a neighbour whose stored choices or kernel are refused, or
+  whose side is not known at them, is refused by name (``neighbour-unaccepted``); another
+  neighbour is another design space of the slice. An edge at a graph input or output, or
+  at a node that is no KernelOp, stays a boundary. A channel has one consumer, so a
+  tensor read more than once is refused by name before anything is declared
   (``tensor-fan-out``): read by two of the nodes (an edge, or a parameter both own), or
-  read by one and at an output boundary too (a graph output, or read outside the nodes).
-  Fan-out waits for a channel that forks;
-- **its order**: members are declared input boundary channels, the other channels, the
-  kernels, output boundary channels (``Reshape_0_out0``, ..., ``MatMul_0``, ...), the
-  module's instance order; each member's node in the module is its name with ``\\W`` as
-  ``_``. A node and a tensor, or two nodes, of one name are refused: a member is named
-  once, as the choices log ``kernel_choices.json`` names it;
-- **its stored choices**, set as each member is bound, as one change (``Network``'s
-  ``stored``): every node's attributes and every channel's ``finn.channel`` on its tensor
-  (in a partition's body only, ``refuse_outside_body``). A stored value outside its domain
-  over the current facts is dropped as stale, with why (``Partition.stale``); a stored set
-  that breaks a rule refuses the bind, naming it (``network-invalid``, the rule's findings
-  its causes); a channel whose
-  contracts wait holds its choices until it is bound. Nothing is filled in. With every KernelOp
-  of the model selected, choices a tensor states that is no channel of it are stale too.
-  Nothing is written: ``persist``, the one writer of choices, writes a network's choices
-  back, each owner's whole;
-- **its outputs**: each node's output is its kernel's product. Where the graph's
-  annotation of an output (its shape's element count and last axis, its datatype and
-  its range) differs from what its producer states, the graph is stale, refused by name
-  (``tensor-stale``: "run InferKernelTensors"), before any channel's own
-  ``channel-tensor`` is read;
-- **its module** is the partition's IP, the cut's (``PARTITION``): its members'
-  netlists, named as the graph's nodes and tensors, with the boundary's pins, named
-  after the partition (its stem ``finn_<name>``) and identified as the partition's IP
-  (``PRODUCER``), since a mover is integrated beside the IP, not in it.
+  read by one and at an output boundary too (a graph output, or read outside the nodes);
+  and at a frozen neighbour, read by anything else beside the channel's two sides, as the
+  whole partition reads it. Fan-out waits for a channel that forks. A node and a tensor,
+  or two nodes, of one name are refused (``name-shared``):
+  a member is named once, as the choices log ``kernel_choices.json`` names it; and so is
+  what the composer refuses (``PartitionRefused``: its findings, as a ``KernelOpError``);
+- **its order**: the channels are declared input boundary channels, the other channels,
+  output boundary channels, which the composer ranks (each after the members it reads); its
+  module places them input boundary channels, the other channels, the kernels, output
+  boundary channels (``Reshape_0_out0``, ..., ``MatMul_0``, ...), its instance order; each
+  member's node in the module is its member name (``member_name``: ``\\W`` as ``_``).
 
-**Kept per build:** a network bound is kept in the build's member cache
-(``finn.kernels.members``), keyed by the model's ``design_digest`` (all but
-``finn.outputs``, which a bind does not read), the orders the digest makes canonical and a
-bind reads (each node's attributes, the metadata's and the annotations' keys), the target
-the model states (a body opened inside its parent inherits it), the mover offers given, what
-the network is made as (``Partition``, or a shell's ``InShell`` with its row), the nodes
-selected (by position), the name and the channel choices given. A refusal is never kept.
-In the verifying mode a hit is bound again with no cache open and compared.
+**Its stored choices** (bind is assignment): every node's attributes and every channel's
+``finn.channel`` on its tensor (in a partition's body only, ``refuse_outside_body``), bound
+with the engine's ``bind`` on the design space of the graph's facts, never refused there. A
+stored value outside its domain over the current facts (or a key that is no choice) is
+dropped as stale, with why (``Partition.stale``). A stored set that breaks a rule binds, and
+the partition reads refused: the member's validity names the rule, and so do its readers
+(``configured_network``, ``verify_partition``, and the seam's step, ``Seam.refusals``). A
+channel whose choices wait on an open kernel choice holds them, waiting
+(``inspection.Waiting``). Nothing is filled in. With every KernelOp of the model selected,
+choices a tensor states that is no channel of it are stale too. Nothing is written:
+``persist``, the one writer of choices, writes a partition's choices back, each owner's
+whole.
 
-A partition's resources (``Partition.own_resources``) are its members'. The shell's
-budgets and resources over a network (its members', its movers' and its static region's),
-and the cut's choices (``make_cut_choices``: the channels' by the interim channel rule) on
-the network in its shell, are ``finn.custom_op.kernels.shell``'s.
+**Its outputs**: each node's output is its kernel's product. Where the graph's annotation of
+an output (its shape's element count and last axis, its datatype and its range) differs from
+what its producer states, the graph is stale, refused by name (``tensor-stale``: "run
+InferKernelTensors"), before any channel's own ``channel-tensor`` is read.
+
+**Its module** is the partition's IP, the cut's (``PARTITION``; a slice with a frozen
+neighbour has none, ``slice-not-emitted``, ``finn.kernels.partition``): its members'
+netlists, named as the graph's nodes and tensors, with the boundary's pins, named after
+the partition (its stem ``finn_<name>``) and identified as the partition's IP
+(``PRODUCER``, which ``Partition.module_of`` is given), since a mover is integrated beside
+the IP, not in it. Its views are read out of the design space, composed from its members'
+(the netlist with each channel's outer hops from the kernels' contract views, FIFO
+sizing's paces, resources), never bound into it; a frozen neighbour's port contract, which
+sizing reads its pace from, is read at its stored choices and given beside the
+declaration.
+
+A partition's resources (``Partition.own_resources``) are its members'. A partition in its
+shell (``finn.custom_op.kernels.shell.in_shell``) holds the shell's budgets as rules of its
+own (its shell member, ``finn.kernels.budgets``); the shell's resources over a partition
+(its members', its movers' and its static region's), and the cut's choices
+(``make_cut_choices``) on the partition in its shell, are ``finn.custom_op.kernels.shell``'s.
 """
 
 from __future__ import annotations
 
-import re
-from collections.abc import Callable, Hashable, Iterable, Mapping
-from dataclasses import replace
-from functools import partial
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from collections.abc import Callable, Collection, Iterable, Mapping
+from typing import TYPE_CHECKING, TypeVar, cast
 
 from onnx import NodeProto
-from qonnx.core.metadata import SEPARATOR, MetadataError
+from qonnx.core.metadata import MetadataError
 
 from finn.core.graph.annotations.channel import (
     CHANNEL,
@@ -84,74 +100,40 @@ from finn.core.graph.annotations.channel import (
     channel_choices,
     refuse_outside_body,
 )
-from finn.core.graph.annotations.outputs import OUTPUTS
-from finn.core.graph.annotations.platform import PLATFORM, read_target
+from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import edge_tensor, initializer, reading
-from finn.core.graph.partition import KERNEL_OPS_DOMAIN, design_digest
+from finn.core.graph.partition import KERNEL_OPS_DOMAIN
 from finn.core.reporting.findings import Finding, FindingKind
-from finn.core.space import Available, QueryResult, Rejected, Space, Unresolved, inspection
+from finn.core.space import Available, Rejected, Space, Unresolved, inspection
 from finn.custom_op.kernels.base import KernelOp, kernel_op, typed
-from finn.kernels.artifacts.abi import Bus
-from finn.kernels.artifacts.module import Composed, Fragment, ProducerIdentity
-from finn.kernels.base import RESOURCES
-from finn.kernels.channels import Channel
-from finn.kernels.members import Configured, Facts, current, observed, uncached
-from finn.kernels.members import typed as key_part
+from finn.dataflow.streams import Stream
+from finn.kernels.artifacts.module import ProducerIdentity
+from finn.kernels.base import PortContract
+from finn.kernels.channels import Channel, Neighbours
+from finn.kernels.composer import (
+    ChannelDeclaration,
+    Key,
+    PartitionDeclaration,
+    PartitionRefused,
+    Port,
+    Stated,
+)
+from finn.kernels.explore import dotted
 from finn.kernels.movers import MoverOffer
-from finn.kernels.network import Fact, Interface, Key, Network, NetworkError, Wire, dotted, wire
-from finn.kernels.policies import Owner
-from finn.kernels.utilization import total
-from finn.platform.capabilities import Resources
+from finn.kernels.partition import Partition, partition
+from finn.kernels.sides import Side
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
 
 PARTITION = "partition"
 """The partition's name: the cut's node and body file, and the IP made from it, which
-is its network's module (``finn_partition``)."""
+is its module (``finn_partition``)."""
 
 PRODUCER = ProducerIdentity("finn.custom_op.kernels.partition", "1")
 """What derives a partition's module: identified as the partition's, so the IP's name and
 digest are the partition's."""
-
-
-def member(name: str) -> str:
-    """A graph name as its member's node in the module (``\\W`` as ``_``): its instances'
-    prefix, and the name a shell's resources and reports give it."""
-    return re.sub(r"\W", "_", name)
-
-
-def _primitive(value: object) -> bool:
-    """Whether a finding can hold ``value`` as a detail."""
-    return type(value) in (bool, int, float, str)
-
-
-def _described(bound: Network, stored: Mapping[Key, object]) -> dict[str, tuple[Finding, ...]]:
-    """What the bind dropped of ``bound``'s stored choices (each a value outside its
-    domain), by dotted key, each with the kernel's findings kept: the value stored, and the
-    values the choice could take now (its possible ones, ``Network.viable``, read where the
-    dropped choice is open), which its message names."""
-    dropped = bound.dropped
-    if not dropped:
-        return {}
-    cases = {key: item.cases for key, item in bound.viable(dropped)}
-
-    def described(key: Key, finding: Finding) -> Finding:
-        details = dict(finding.details)
-        message = finding.message
-        if key in stored and _primitive(stored[key]):
-            details["value"] = stored[key]
-        viable = cases.get(key, ())
-        if finding.code == "domain-membership" and viable and all(map(_primitive, viable)):
-            details["candidates"] = viable
-            message = "not one of " + ", ".join(map(str, viable))
-        return replace(finding, message=message, details=tuple(details.items()))
-
-    return {
-        dotted(key): tuple(described(key, finding) for finding in found)
-        for key, found in dropped.items()
-    }
 
 
 def stale_text(key: str, found: Iterable[Finding]) -> str:
@@ -171,104 +153,16 @@ def stale_text(key: str, found: Iterable[Finding]) -> str:
     return f"{named}: " + "; ".join(said)
 
 
-class Partition(Network):
-    """A network bound from a graph's nodes (see the module docstring): its ``name`` (its
-    module's), its ``boundary`` (each boundary tensor and its port, inputs then outputs),
-    the boundary channels offered movers (``movers``), the stored choices dropped as stale
-    where it was bound, by key, with the kernel's findings (``stale``: each a value outside
-    its domain, keeping its code, its owner and its details, which add the value stored,
-    ``value``, and the values the choice could take, ``candidates``; ``stale_text`` makes a
-    line of them), and whether it holds every KernelOp of its model (``whole``).
-    Immutable, as a network: a change returns another, which keeps these."""
-
-    __slots__ = ("_memo", "boundary", "movers", "name", "stale", "whole")
-
-    name: str
-    boundary: tuple[tuple[str, str], ...]
-    movers: tuple[str, ...]
-    stale: Mapping[str, tuple[Finding, ...]]
-    whole: bool
-    _memo: dict[str, object]
-
-    def __init__(
-        self,
-        members: Mapping[str, Space | Facts | Wire],
-        *,
-        name: str,
-        movers: tuple[MoverOffer, ...],
-        boundary: tuple[tuple[str, str], ...],
-        stored: Mapping[Key, object],
-        stray: Mapping[str, tuple[Finding, ...]],
-        whole: bool,
-        owners: Mapping[str, Owner] | None = None,
-    ) -> None:
-        super().__init__(
-            members, stored=stored, nodes={each: member(each) for each in members}, owners=owners
-        )
-        self.name, self.boundary, self.whole = name, boundary, whole
-        self.movers = tuple(tensor for tensor, _ in boundary) if movers else ()
-        self.stale = _described(self, stored) | dict(stray)
-        self._memo = {}
-
-    def _changed(self) -> None:
-        self._memo = {}
-
-    def _read(self, question: str, answer: Callable[[], Any]) -> Any:
-        """``answer()``, read once of this network (it is immutable)."""
-        if question not in self._memo:
-            self._memo[question] = answer()
-        return self._memo[question]
-
-    def netlist(self) -> QueryResult[tuple[Fragment, tuple[Bus, ...]]]:
-        """What its module is made of (``Network.netlist``), read once: the shell's counts
-        and its module read the same."""
-        found: QueryResult[tuple[Fragment, tuple[Bus, ...]]] = self._read(
-            "netlist", super().netlist
-        )
-        return found
-
-    def module_of(self) -> QueryResult[Composed]:
-        """Its module, the partition's IP (``finn_<name>``), as far as its members
-        decide it."""
-        found: QueryResult[Composed] = self._read(
-            "module", lambda: self.module(PRODUCER, f"finn_{self.name.lower()}")
-        )
-        return found
-
-    def own_resources(self) -> QueryResult[Resources]:
-        """What its members use, their own statements' sum; or what they wait on, or why
-        one is refused. A shell adds its movers' and its static region's
-        (``finn.custom_op.kernels.shell``)."""
-
-        def read() -> QueryResult[Resources]:
-            used = [self.query(name, RESOURCES) for name in self.members]
-            missing = [each for each in used if not isinstance(each, Available)]
-            if missing:
-                return _together(missing)
-            return Available(total(each.value for each in used if isinstance(each, Available)))
-
-        found: QueryResult[Resources] = self._read("members' resources", read)
-        return found
+# -- reading the graph --------------------------------------------------------------------
 
 
-def _together(results: Iterable[QueryResult[Any]]) -> Rejected | Unresolved:
-    """Results that are not available, as one: refused where one is, else waiting."""
-    held = list(results)
-    findings = tuple(
-        dict.fromkeys(finding for each in held for finding in getattr(each, "findings", ()))
-    )
-    if any(isinstance(each, Rejected) for each in held):
-        return Rejected(findings)
-    return Unresolved(findings)
-
-
-# -- binding the network from the graph ----------------------------------------------------
-
-
-def _boundary(model: ModelWrapper, nodes: list[NodeProto], owned: set[str]) -> dict[str, str]:
+def _boundary(
+    model: ModelWrapper, nodes: list[NodeProto], owned: set[str], frozen: Collection[str]
+) -> dict[str, str]:
     """The port of each boundary tensor, inputs then outputs, in node order: an input
     no node produces (and not a parameter: owned, or an initializer the op reads as a
-    fact) is ``s_axis_<i>``; an output read outside ``nodes`` is ``m_axis_<j>``."""
+    fact) is ``s_axis_<i>``; an output read outside ``nodes`` is ``m_axis_<j>``; a tensor
+    at a frozen neighbour (``frozen``) is neither."""
     produced = {tensor for node in nodes for tensor in node.output}
     inside = {id(node) for node in nodes}
     used_outside = {
@@ -277,9 +171,17 @@ def _boundary(model: ModelWrapper, nodes: list[NodeProto], owned: set[str]) -> d
     inputs = [
         tensor
         for tensor in dict.fromkeys(t for node in nodes for t in node.input)
-        if tensor not in produced and tensor not in owned and initializer(model, tensor) is None
+        if tensor not in produced
+        and tensor not in owned
+        and tensor not in frozen
+        and initializer(model, tensor) is None
     ]
-    outputs = [tensor for node in nodes for tensor in node.output if tensor in used_outside]
+    outputs = [
+        tensor
+        for node in nodes
+        for tensor in node.output
+        if tensor in used_outside and tensor not in frozen
+    ]
     ports = {tensor: f"s_axis_{index}" for index, tensor in enumerate(inputs)}
     return ports | {tensor: f"m_axis_{index}" for index, tensor in enumerate(outputs)}
 
@@ -310,6 +212,122 @@ def _fan_out(
         details = (("tensor", tensor),)
         found.append(Finding(FindingKind.REJECTION, "tensor-fan-out", "fan_out", message, details))
     return found
+
+
+def _beyond(
+    model: ModelWrapper, nodes: list[NodeProto], owned: set[str]
+) -> tuple[dict[str, tuple[str, NodeProto]], dict[str, Finding]]:
+    """Each tensor at the selection's edge whose node beyond it is a KernelOp, in node
+    order: the side that node is on, ``producer`` (an input it produces) or ``consumer``
+    (an output it alone reads), and the node; and each such tensor that something else
+    reads too (a node on either side, or the graph's outputs), refused as the whole
+    partition refuses its fan-out (``tensor-fan-out``). A tensor at a graph input or
+    output, or at a node that is no KernelOp, is none: it stays a boundary."""
+    inside = {id(node) for node in nodes}
+    produced = {tensor for node in nodes for tensor in node.output}
+    graph_outputs = {output.name for output in model.graph.output}
+
+    def readers(tensor: str, within: bool) -> list[NodeProto]:
+        return [
+            node
+            for node in model.graph.node
+            if (id(node) in inside) == within and tensor in node.input
+        ]
+
+    frozen: dict[str, tuple[str, NodeProto]] = {}
+    fanned: dict[str, Finding] = {}
+    edges = [
+        (tensor, "producer")
+        for tensor in dict.fromkeys(t for node in nodes for t in node.input)
+        if tensor not in produced and tensor not in owned and initializer(model, tensor) is None
+    ]
+    edges += [(tensor, "consumer") for node in nodes for tensor in node.output]
+    for tensor, side in edges:
+        outside = readers(tensor, within=False)
+        if side == "producer":
+            found = model.find_producer(tensor)
+            beyond = None if found is None or found.domain != KERNEL_OPS_DOMAIN else found
+            others = outside
+        else:
+            kernels = [node for node in outside if node.domain == KERNEL_OPS_DOMAIN]
+            beyond = kernels[0] if kernels else None
+            others = [node for node in outside if node is not beyond]
+        if beyond is None:
+            continue
+        within = readers(tensor, within=True)
+        alone = len(within) == (1 if side == "producer" else 0)
+        if alone and not others and tensor not in graph_outputs:
+            frozen[tensor] = (side, beyond)
+            continue
+        names = [node.name for node in (*within, *outside)]
+        output = " and is a graph output" if tensor in graph_outputs else ""
+        fanned[tensor] = Finding(
+            FindingKind.REJECTION,
+            "tensor-fan-out",
+            "fan_out",
+            f"{tensor} is read by {', '.join(names)}{output}",
+            (("tensor", tensor),),
+        )
+    return frozen, fanned
+
+
+def _neighbour(
+    model: ModelWrapper, tensor: str, side: str, node: NodeProto
+) -> tuple[Side, PortContract | None]:
+    """The side a frozen neighbour, KernelOp ``node`` beyond the selection on ``side`` of
+    ``tensor``, gives the edge channel, as a fact: its port's ``<p>_side`` at its stored
+    choices (``KernelOp.point``; its facts alone, where it stores none), as a frozen
+    neighbour's (``Side.neighbour``: an upstream one's stream, label and word width, a
+    downstream one's stream and label), its label below the node's name; and that port's
+    contract view there (``<p>_contract``), which sizing reads its pace from. Only an
+    accepted value is a fact: refused (``neighbour-unaccepted``, naming the neighbour, its
+    port and why) where its stored choices are refused, its kernel is refused, or its side
+    is not known there (it waits on an open choice, or is refused)."""
+    op = kernel_op(model, node)
+    port = (
+        op.outputs[list(node.output).index(tensor)]
+        if side == "producer"
+        else op.ports[list(node.input).index(tensor)]
+    )
+    named = "" if port is None else op.wiring[port].contract.removesuffix("_contract")
+
+    def unaccepted(why: str, causes: Iterable[Finding] = ()) -> KernelOpError:
+        message = (
+            f"{tensor}: its frozen neighbour {node.name} ({op.op_type}), at its port "
+            f"{named or '(none)'}, gives no accepted value: {why}"
+        )
+        details = (("tensor", tensor), ("node", node.name), ("port", named))
+        finding = Finding(
+            FindingKind.REJECTION, "neighbour-unaccepted", tensor, message, details, tuple(causes)
+        )
+        return KernelOpError(message, findings=(finding,))
+
+    if port is None:
+        raise unaccepted("it reads the tensor as an argument, at no port")
+    try:
+        point = op.point()
+    except KernelOpError as error:
+        raise unaccepted("its stored choices are refused", error.findings) from error
+    validity = inspection.validity(point)
+    if isinstance(validity.result, Rejected):
+        raise unaccepted("its kernel is refused", validity.result.findings)
+    answer = point.query(getattr(type(point), f"{named}_side"))
+    if not isinstance(answer, Available) or not isinstance(answer.value, Side):
+        why = (
+            "its side waits on an open choice"
+            if isinstance(answer, Unresolved)
+            else (
+                "its side is refused" if isinstance(answer, Rejected) else "its port is not placed"
+            )
+        )
+        raise unaccepted(why, getattr(answer, "findings", ()))
+    found: Side = answer.value
+    stated = Side.neighbour(cast(Stream, found.stream), found.label, found.width)
+    contract = point.query(getattr(type(point), f"{named}_contract"))
+    given = contract.value if isinstance(contract, Available) else None
+    return stated.under(node.name), (
+        given.under(node.name) if isinstance(given, PortContract) else None
+    )
 
 
 def _tensors(model: ModelWrapper, nodes: list[NodeProto], owned: list[dict[str, str]]) -> list[str]:
@@ -350,26 +368,20 @@ def _stored(
     nodes: list[NodeProto],
     ops: list[KernelOp],
     tensors: list[str],
-    stating: Mapping[str, Mapping[str, object]],
     whole: bool,
 ) -> tuple[dict[Key, object], dict[str, tuple[Finding, ...]]]:
-    """The choices the network replays, by key: each node's attributes, each channel's as
-    its tensor states them (or as ``stating`` gives a tensor's); and, where ``whole``, those
-    of a tensor that states some and is no channel of it, by dotted key, each with its
-    finding (``channel-choice-stray``)."""
+    """The choices the partition binds, by key: each node's attributes, each channel's as
+    its tensor states them; and, where ``whole``, those of a tensor that states some and is
+    no channel of it, by dotted key, each with its finding (``channel-choice-stray``)."""
     found: dict[Key, object] = {}
     for node, op in zip(nodes, ops):
         found |= {(node.name, key): value for key, value in op.stored().items()}
     stated = model.tensors_stating(CHANNEL)
     refuse_outside_body(model, stated)
     for tensor in tensors:
-        if tensor in stating:
-            values: Mapping[str, object] = stating[tensor]
-        elif tensor in stated:
+        if tensor in stated:
             values = channel_choices(model, tensor)
-        else:
-            continue
-        found |= {(tensor, key): value for key, value in typed(Channel, values).items()}
+            found |= {(tensor, key): value for key, value in typed(Channel, values).items()}
     channels = set(tensors)
     stray: dict[str, tuple[Finding, ...]] = {
         dotted((tensor, key)): (
@@ -389,14 +401,14 @@ def _stored(
 
 
 def _stale(
-    model: ModelWrapper, network: Network, nodes: list[NodeProto], ops: list[KernelOp]
+    model: ModelWrapper, bound: Partition, nodes: list[NodeProto], ops: list[KernelOp]
 ) -> None:
     """Refuse a graph whose annotation of an output differs from what its producer
     states (its element count, its last axis, or its element: the datatype and its
     range), by name: the graph is stale (``tensor-stale``)."""
     findings: list[Finding] = []
     for node, op in zip(nodes, ops):
-        kernel = network.member(node.name)
+        kernel = bound.member(node.name)
         for port, tensor in zip(op.outputs, node.output):
             stated = kernel.query(getattr(type(kernel), op.wiring[port].tensor))
             if not isinstance(stated, Available):
@@ -424,159 +436,51 @@ def _stale(
         raise KernelOpError("; ".join(map(str, findings)), findings=tuple(findings))
 
 
-def network(
-    model: ModelWrapper,
-    nodes: Iterable[NodeProto],
-    *,
-    name: str = PARTITION,
-    movers: tuple[MoverOffer, ...] = (),
-) -> Partition:
-    """The network of ``nodes``, KernelOp nodes of ``model``, its module the partition
-    ``name``'s IP, on the platform of the model's target: ``movers`` offered on the boundary
-    channels (none by default; a shell's row offers them, ``in_shell``); see the module
-    docstring. A tensor read more than once is refused (``tensor-fan-out``), and so is a
-    stale output (``tensor-stale``)."""
-    return _network(model, list(nodes), name, {}, movers, Partition)
+class _Read:
+    """What the graph states of a selection: its declaration, its module's order, its
+    boundary's ports, its KernelOps, the choices it stores and those stray, whether it
+    holds every KernelOp of the model, and the port contracts of the frozen neighbours
+    beside its edge channels. A record read once, never a value a Space holds."""
+
+    __slots__ = ("declared", "frozen", "ops", "order", "ports", "stored", "stray", "whole")
+
+    def __init__(
+        self,
+        declared: PartitionDeclaration,
+        order: tuple[str, ...],
+        ports: dict[str, str],
+        ops: list[KernelOp],
+        stored: dict[Key, object],
+        stray: dict[str, tuple[Finding, ...]],
+        whole: bool,
+        frozen: dict[str, Neighbours],
+    ) -> None:
+        self.declared, self.order, self.ports, self.ops = declared, order, ports, ops
+        self.stored, self.stray, self.whole, self.frozen = stored, stray, whole, frozen
 
 
-P = TypeVar("P", bound=Partition)
-
-
-def _network(
-    model: ModelWrapper,
-    nodes: list[NodeProto],
-    name: str,
-    stating: Mapping[str, Mapping[str, object]],
-    movers: tuple[MoverOffer, ...],
-    kind: Callable[..., P],
-) -> P:
-    """``network``, made by ``kind`` (``Partition``, or a shell's network over it), each
-    tensor of ``stating`` replayed with the channel choices it gives in place of those the
-    tensor states: kept in the build's member cache (the module docstring)."""
-    cache = current()
-    found = None if cache is None else _key(model, nodes, name, stating, movers, kind)
-    if cache is None or found is None:
-        return _read(model, nodes, name, stating, movers, kind)
-
-    def again() -> P:
-        with uncached():
-            return _read(model, nodes, name, stating, movers, kind)
-
-    return cast(
-        P,
-        cache.get(
-            found,
-            lambda: _read(model, nodes, name, stating, movers, kind),
-            again,
-            _observed,
-            "network",
-        ),
-    )
-
-
-def _made_as(kind: Callable[..., Partition]) -> Hashable:
-    """What a network is made as, for its key: its class, and what a ``partial`` gives it
-    (a shell's row)."""
-    if isinstance(kind, partial):
-        return (kind.func, key_part(kind.args), key_part(kind.keywords))
-    return kind
-
-
-def _key(
+def _graph(
     model: ModelWrapper,
     nodes: list[NodeProto],
     name: str,
-    stating: Mapping[str, Mapping[str, object]],
     movers: tuple[MoverOffer, ...],
-    kind: Callable[..., Partition],
-) -> Hashable | None:
-    """The network's key in the build's cache (the module docstring), or None where a
-    node is not the model's or its target is not stated as one (the bind names why)."""
-    graph = model.graph
-    positions = {id(node): index for index, node in enumerate(graph.node)}
-    selected = tuple(positions.get(id(node)) for node in nodes)
-    if None in selected:
-        return None
-    try:
-        stated = model.namespace(PLATFORM)
-    except MetadataError:
-        return None
-    outputs = OUTPUTS.name + SEPARATOR
-    orders = (
-        tuple(tuple(attribute.name for attribute in node.attribute) for node in graph.node),
-        tuple(prop.key for prop in graph.metadata_props if not prop.key.startswith(outputs)),
-        tuple(prop.key for prop in model.model.metadata_props),
-        tuple(
-            (item.tensor_name, tuple(prop.key for prop in item.quant_parameter_tensor_names))
-            for item in graph.quantization_annotation
-        ),
-    )
-    found = (
-        "network",
-        design_digest(model),
-        orders,
-        key_part(stated),
-        key_part(movers),
-        _made_as(kind),
-        selected,
-        name,
-        key_part({tensor: dict(values) for tensor, values in stating.items()}),
-    )
-    try:
-        hash(found)
-    except TypeError:
-        return None
-    return found
-
-
-def _observed(bound: Partition) -> object:
-    """What is read of a network bound, to compare in the verifying mode: its class, its
-    movers and shell (a shell's row, its resources), its members, their order, wiring and
-    nodes, each member's point as the member cache compares one, what the bind dropped and
-    why each unbound channel waits."""
-    points = {
-        each: observed(Configured(bound.member(each)))
-        for each in bound.members
-        if bound.unbound(each) is None
-    }
-    return (
-        type(bound),
-        (bound.name, bound.boundary, bound.movers, dict(bound.stale), bound.whole),
-        (getattr(bound, "row", None), bound.own_resources()),
-        (bound.order, bound.members, {each: bound.node(each) for each in bound.members}),
-        {each: bound.wiring(each) for each in bound.channels},
-        {each: bound.facts(each) for each in points if each in bound.channels},
-        dict(bound.dropped),
-        {each: bound.unbound(each) for each in bound.members if each not in points},
-        points,
-    )
-
-
-def _read(
-    model: ModelWrapper,
-    nodes: list[NodeProto],
-    name: str,
-    stating: Mapping[str, Mapping[str, object]],
-    movers: tuple[MoverOffer, ...],
-    kind: Callable[..., P],
-) -> P:
-    """The network bound, the graph's tensors read from one index."""
-    with reading(model):
-        return _bound(model, nodes, name, stating, movers, kind)
-
-
-def _bound(
-    model: ModelWrapper,
-    nodes: list[NodeProto],
-    name: str,
-    stating: Mapping[str, Mapping[str, object]],
-    movers: tuple[MoverOffer, ...],
-    kind: Callable[..., P],
-) -> P:
+    shell: Mapping[str, object] | None = None,
+) -> _Read:
+    """The selection ``nodes`` of ``model`` as the graph states it (``_Read``; the module
+    docstring), in a shell where ``shell`` states its row's facts
+    (``PartitionDeclaration.shell``), refused where a tensor is read more than once
+    (``tensor-fan-out``) or two members share a name (``name-shared``)."""
     ops = [kernel_op(model, node) for node in nodes]
     owned = [op.owned() for op in ops]
-    ports = _boundary(model, nodes, {tensor for tensors in owned for tensor in tensors.values()})
-    fanned = _fan_out(model, nodes, owned, ports)
+    parameters = {tensor for tensors in owned for tensor in tensors.values()}
+    beyond, crossed = _beyond(model, nodes, parameters)
+    ports = _boundary(model, nodes, parameters, beyond)
+    fanned = [
+        each
+        for each in _fan_out(model, nodes, owned, ports)
+        if dict(each.details)["tensor"] not in crossed
+    ]
+    fanned += crossed.values()
     if fanned:
         raise KernelOpError(
             f"{name}: a channel has one consumer, and fan-out is not designed yet (a channel "
@@ -587,70 +491,130 @@ def _bound(
     _named(nodes, tensors)
     inside = {id(node) for node in nodes}
     whole = all(id(node) in inside for node in model.graph.node if node.domain == KERNEL_OPS_DOMAIN)
-    stored, stray = _stored(model, nodes, ops, tensors, stating, whole)
+    stored, stray = _stored(model, nodes, ops, tensors, whole)
     platform = read_target(model).platform
-    settings: dict[str, dict[str, object]] = {tensor: {} for tensor in tensors}
+    sides: dict[str, dict[str, Port | Side]] = {tensor: {} for tensor in tensors}
+    facts: dict[str, dict[str, object]] = {tensor: {} for tensor in tensors}
     readers: dict[str, str] = {}
     for node, op, held in zip(nodes, ops, owned):
-        sides = [("consumer", port, tensor) for port, tensor in op.inputs().items()]
-        sides += [("producer", port, tensor) for port, tensor in zip(op.outputs, node.output)]
-        for side, port, tensor in sides:
+        wired = [("consumer", port, tensor) for port, tensor in op.inputs().items()]
+        wired += [("producer", port, tensor) for port, tensor in zip(op.outputs, node.output)]
+        for side, port, tensor in wired:
             wiring = op.wiring[port]
-            settings[tensor][side] = Interface(node.name, wiring.contract)
+            sides[tensor][side] = Port(node.name, wiring.contract.removesuffix("_contract"))
             readers.setdefault(tensor, op.label)
             if port in held:
-                settings[tensor]["tensor"] = Fact(node.name, str(wiring.carried))
-                settings[tensor]["contents"] = Fact(node.name, str(wiring.stored))
-    wires: dict[str, Wire] = {}
+                facts[tensor]["tensor"] = Stated(node.name, str(wiring.carried))
+                facts[tensor]["contents"] = Stated(node.name, str(wiring.stored))
+    frozen: dict[str, Neighbours] = {}
+    for tensor, (side, node) in beyond.items():
+        neighbour, contract = _neighbour(model, tensor, side, node)
+        sides[tensor][side] = neighbour
+        frozen[tensor] = Neighbours(**{side: contract})
+    channels: dict[str, ChannelDeclaration] = {}
     for tensor in tensors:
-        facts_of = settings[tensor]
-        if "tensor" not in facts_of:
-            facts_of["tensor"] = edge_tensor(model, tensor, readers[tensor])
-        boundary_port = ports.get(tensor)
-        if boundary_port is not None:
-            facts_of["port"] = boundary_port
-            if movers:
-                facts_of["mover_offer"] = movers
-        wires[tensor] = wire(platform=platform, **facts_of)
+        given = facts[tensor]
+        if "tensor" not in given:
+            given["tensor"] = edge_tensor(model, tensor, readers[tensor])
+        given["platform"] = platform
+        ends = sides[tensor]
+        if "contents" in given and "producer" not in ends:
+            ends["producer"] = Side.source()
+        for each in ("producer", "consumer"):
+            if each in ends:
+                continue
+            if tensor not in ports:
+                raise KernelOpError.refused(
+                    "channel-boundary",
+                    tensor,
+                    f"{tensor}: a boundary of its partition, but no port names it: only an ONNX "
+                    "input or output of a partition crosses its boundary",
+                    tensor=tensor,
+                )
+            ends[each] = Side.boundary(ports[tensor], movers)
+        channels[tensor] = ChannelDeclaration(ends["producer"], ends["consumer"], given)
 
-    def on(side: str) -> dict[str, Wire]:
-        """The channels at the ports ``<side><i>`` (``""``: no port, none on the boundary)."""
-        return {
-            tensor: each
-            for tensor, each in wires.items()
-            if ports.get(tensor, "").rstrip("0123456789") == side
-        }
+    def on(prefix: str) -> list[str]:
+        """The channels at the ports ``<prefix><i>`` (``""``: no port, none on the
+        boundary)."""
+        return [
+            tensor for tensor in tensors if ports.get(tensor, "").rstrip("0123456789") == prefix
+        ]
 
-    kernels: dict[str, Facts] = {node.name: op.facts() for node, op in zip(nodes, ops)}
-    members: dict[str, Facts | Wire] = {**on("s_axis_"), **on(""), **kernels, **on("m_axis_")}
-    try:
-        bound = kind(
-            members,
-            name=name,
-            movers=movers,
-            boundary=tuple(ports.items()),
-            stored=stored,
-            stray=stray,
-            whole=whole,
-            owners={node.name: type(op) for node, op in zip(nodes, ops)},
-        )
-    except NetworkError as error:
-        message = f"{name}: {error}"
-        raise KernelOpError(
-            message,
-            findings=(
-                Finding(
-                    FindingKind.REJECTION,
-                    "network-invalid",
-                    "Partition",
-                    message,
-                    (("node", name),),
-                    error.findings,
-                ),
-            ),
-        ) from error
-    _stale(model, bound, nodes, ops)
-    return bound
+    kernels = {node.name: op.facts() for node, op in zip(nodes, ops)}
+    declared_order = [*on("s_axis_"), *on(""), *on("m_axis_")]
+    declared = PartitionDeclaration(
+        kernels, {tensor: channels[tensor] for tensor in declared_order}, shell
+    )
+    order = (*on("s_axis_"), *on(""), *kernels, *on("m_axis_"))
+    return _Read(declared, order, ports, ops, stored, stray, whole, frozen)
+
+
+def declaration(
+    model: ModelWrapper,
+    nodes: Iterable[NodeProto],
+    *,
+    movers: tuple[MoverOffer, ...] = (),
+    shell: Mapping[str, object] | None = None,
+) -> PartitionDeclaration:
+    """The partition of ``nodes``, KernelOp nodes of ``model``, as the graph declares it
+    (the module docstring): each node's kernel by its facts, in graph order, and each
+    channel by its tensor with its sides and facts, its boundary offered ``movers``; in a
+    shell where ``shell`` states its row's facts."""
+    with reading(model):
+        return _graph(model, list(nodes), PARTITION, movers, shell).declared
+
+
+def network(
+    model: ModelWrapper,
+    nodes: Iterable[NodeProto],
+    *,
+    name: str = PARTITION,
+    movers: tuple[MoverOffer, ...] = (),
+) -> Partition:
+    """The partition of ``nodes``, KernelOp nodes of ``model``, its module the partition
+    ``name``'s IP, on the platform of the model's target: ``movers`` offered on the boundary
+    channels (none by default; a shell's row offers them, ``in_shell``); see the module
+    docstring. A tensor read more than once is refused (``tensor-fan-out``), and so is a
+    stale output (``tensor-stale``)."""
+    return _network(model, list(nodes), name, movers, Partition)
+
+
+P = TypeVar("P", bound=Partition)
+
+
+def _network(
+    model: ModelWrapper,
+    nodes: list[NodeProto],
+    name: str,
+    movers: tuple[MoverOffer, ...],
+    kind: Callable[..., P],
+    shell: Mapping[str, object] | None = None,
+) -> P:
+    """``network``, made by ``kind`` (``Partition``, or a shell's partition over it), in a
+    shell where ``shell`` states its row's facts, the graph's tensors read from one
+    index."""
+    with reading(model):
+        read = _graph(model, nodes, name, movers, shell)
+        try:
+            made = partition(
+                read.declared,
+                read.stored,
+                name=name,
+                order=read.order,
+                owners={node.name: type(op) for node, op in zip(nodes, read.ops)},
+                ports=tuple(read.ports.items()),
+                movers=movers,
+                stray=read.stray,
+                whole=read.whole,
+                frozen=read.frozen,
+                kind=kind,
+            )
+        except PartitionRefused as error:
+            message = f"{name}: " + "; ".join(map(str, error.findings))
+            raise KernelOpError(message, findings=error.findings) from error
+        _stale(model, made, nodes, read.ops)
+        return made
 
 
 # -- writing choices back -----------------------------------------------------------------
@@ -688,43 +652,43 @@ def _write_channel(model: ModelWrapper, tensor: str, choices: Mapping[str, objec
         model.set(CHANNEL_KEYS[key], value, tensor=tensor)
 
 
-def persist(model: ModelWrapper, network: Network) -> dict[str, dict[str, object]]:
-    """Write ``network``'s choices, a network of ``model``'s nodes (``network``), back
-    where they are stated, each owner's whole: every choice it stores, whatever its state
-    (set, waiting or dormant), and the choices an unbound channel holds, on its owner, a
-    kernel's node or a channel's tensor; a choice an owner holds that the network does
-    not (one the bind dropped as stale) cleared, and, where it is a partition holding every
-    KernelOp of the model, so are the channel choices of a tensor that is no channel of it.
+def persist(model: ModelWrapper, partition: Partition) -> dict[str, dict[str, object]]:
+    """Write ``partition``'s choices, a partition of ``model``'s nodes (``network``), back
+    where they are stated, each owner's whole: every choice its design space stores,
+    whatever its state (set, waiting or dormant), split by member, on its owner, a kernel's
+    node or a channel's tensor; a choice an owner holds that the partition does not (one the
+    bind dropped as stale) cleared, and, where it holds every KernelOp of the model, so are
+    the channel choices of a tensor that is no channel of it.
 
-    The one writer of a network's choices: a route to one is ``Hold`` in a step after the
+    The one writer of a partition's choices: a route to one is ``Hold`` in a step after the
     cut, this function for the compiler (``persist_kernel`` beside it for conversion, one
     node's kernel alone), and ``support.configure.configured`` for a test. Channel
     choices are a partition's body's only: written on a graph that is not (host nodes
     beside the KernelOps) they are refused, by name, before anything is written
     (``channel-choices-outside-body``). Every value is checked and encoded before any is
     written, so a write cannot fail halfway; none is set again on a fresh point, since the
-    network has bound each (its choices are checked as they are set).
+    partition has bound each (its choices are checked as they are set).
     Returns what each owner now holds, by graph name."""
-    names = list(network.members)
+    names = list(partition.members)
+    kernels = set(partition.kernels)
     held_by: dict[str, dict[str, object]] = {name: {} for name in names}
-    for (owner, key), value in network.chosen(names).items():
+    for (owner, key), value in partition.chosen(names).items():
         held_by[owner][key] = value
     refuse_outside_body(
-        model, [name for name, values in held_by.items() if values and name not in network.kernels]
+        model, [name for name, values in held_by.items() if values and name not in kernels]
     )
     nodes = {node.name: node for node in model.graph.node}
     stated = model.tensors_stating(CHANNEL)
     writes: list[Callable[[], None]] = []
     for name, values in held_by.items():
-        if name in network.kernels:
+        if name in kernels:
             op = kernel_op(model, nodes[name])
             if values or op.choices():
                 writes.append(_kernel_write(op, op._saved(values)))
         elif values or name in stated:
             _encoded(name, values)
             writes.append(_channel_write(model, name, values))
-    whole = isinstance(network, Partition) and network.whole
-    stray = [tensor for tensor in stated if whole and tensor not in held_by]
+    stray = [tensor for tensor in stated if partition.whole and tensor not in held_by]
     for write in writes:
         write()
     for tensor in stray:
@@ -736,8 +700,8 @@ def persist_kernel(model: ModelWrapper, node: NodeProto, point: Space) -> dict[s
     """Write ``point``, the KernelOp ``node``'s kernel alone, on the node, its whole: every
     choice it stores, by key, whatever its state (``inspection.states``: set, waiting or
     dormant). Conversion's write (``finn.transformation.kernels.convert``): one node, no
-    network, nothing on a tensor. As ``persist``, every value is checked and encoded before
-    any is written. Returns what the node now holds."""
+    partition, nothing on a tensor. As ``persist``, every value is checked and encoded
+    before any is written. Returns what the node now holds."""
     held = {
         key: state.value
         for key, state in inspection.states(point)
@@ -762,7 +726,7 @@ __all__ = [
     "PARTITION",
     "PRODUCER",
     "Partition",
-    "member",
+    "declaration",
     "network",
     "persist",
     "persist_kernel",

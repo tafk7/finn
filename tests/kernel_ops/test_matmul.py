@@ -34,11 +34,12 @@ from finn.core.space import inspection
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.conv import Conv
 from finn.custom_op.kernels.matmul import MatMul
-from finn.custom_op.kernels.network import Partition, network, persist
+from finn.custom_op.kernels.network import network, persist
 from finn.custom_op.kernels.thresholding import Thresholding
 from finn.harness.reference import converted
 from finn.kernels.matmul import KnownWeights, MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
+from finn.kernels.partition import Partition
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.transformation.kernels import InferKernelTensors
 
@@ -164,6 +165,31 @@ def test_configured_choices_are_written_and_replay_reads_them() -> None:
     with refused("not-a-decision", owner="first.w.transport"):
         configured(model, {"first": {"w.transport": "direct"}})
     assert attributes(model) == sorted(FOLDING)
+
+
+def test_a_stored_choice_its_facts_rule_out_is_found_by_key_and_kept_dormant() -> None:
+    """``realization`` is MatMul's choice of a depthwise form (``when=depthwise``): on a
+    dense MatMul its facts alone rule it out, so no list of its point holds it, and it is
+    still a choice by name. A stored value is found through the kernel's model, not its
+    lists (``replayed``), bound, and kept dormant under the form it does not apply to; a
+    key that names no choice is refused."""
+    model = matmul_model()
+    configured(model, {"first": FOLDING})
+    bare = op(model).point()
+    assert "realization" not in {item.key for item in inspection.decisions(bare)}
+    assert "realization" in {item.key for item in inspection.decisions(inspection.model(bare))}
+    point = op(model).point({"realization": "dense"})
+    states = dict(inspection.states(point))
+    assert states["realization"] == inspection.Dormant("dense")
+    assert point.compute.pe == 2  # the rest of the stored choices are bound as before
+    with refused(
+        "choices-refused",
+        error=KernelOpError,
+        message="not-a-decision",
+        keys=("typo",),
+        node="first",
+    ):
+        op(model).point({"typo": 1})
 
 
 def test_a_graph_with_a_cleared_choice_a_rule_reads_waits_then_is_refused() -> None:

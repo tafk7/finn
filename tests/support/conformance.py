@@ -6,14 +6,16 @@
 ``conformance`` checks one kernel over sampled folding configurations. For
 each sample it
 
-1. places the kernel (``kernel``) in a network between boundary channels, one
-   per stream port: a channel named ``<port>_channel`` carries the tensor of that
-   port, an input's given to the kernel as ``<port>_tensor`` where it declares that
-   Param (else the case gives it among the kernel's facts: MatMul's ``weights``) and an
-   output's the kernel's own (``<port>_tensor``, its statement), and takes the contract it states,
-   ``<port>_contract``. It commits the sample's factors and the pinned ``choices``,
-   then the kernel's other open choices by their policies (``Placed``) and every
-   channel's by the cut's policies, as the cut sets them (its transport and its input
+1. places the kernel (``kernel``) in a partition declared by hand between boundary
+   channels (``support.helpers.by_hand``), one per stream port: a channel named
+   ``<port>_channel`` carries the tensor of that port, an input's given to the kernel as
+   ``<port>_tensor`` where it declares that Param (else the case gives it among the
+   kernel's facts: MatMul's ``weights``) and an output's the kernel's own
+   (``<port>_tensor``, its statement), its one side the kernel's port (``Port("kernel",
+   "<port>")``), its other the boundary's AXIS port of its name. It commits the sample's
+   factors and the pinned ``choices``, then the kernel's other open choices by their
+   policies (``Placed``, on the kernel alone, as conversion sets them) and every
+   channel's by the channel's policies, as the cut sets them (its transport and its input
    adapter's memory; the chain its steps pick).
    The module is named ``finn_<kernel>conformance``;
 2. checks each of the kernel's leaves in the module (the kernel, or
@@ -62,7 +64,7 @@ member of a leaf kernel (``input``) or a child's (``compute.packed.x``).
 
 Factors: ``SAMPLED`` takes the smallest, an interior and the largest
 configuration of the kernel's open choices that ``choices`` leaves open, each from
-its possible values (``Network.viable``: never a value a rule refuses) with the
+its possible values (``Partition.viable``: never a value a rule refuses) with the
 choices before it in the flow order set, and deduplicates them; a selector, or a
 choice with one possible value, takes its default policy and is no factor. Explicit
 configurations name the kernel's own members: a Decision is committed, a Param is
@@ -79,7 +81,7 @@ channel's tensor, which the channel holds the kernel's output to.
 ``reference`` maps named input arrays to named output arrays.
 
 A kernel's control fact (``control``) names the port its control bus is presented
-at: the network presents the bus at the top, and in simulation it is written with what
+at: the partition presents the bus at the top, and in simulation it is written with what
 the kernel's configuration declares (its register map) before any stream starts.
 """
 
@@ -129,19 +131,23 @@ from finn.kernels.artifacts.module import Composed, Leaf
 from finn.kernels.artifacts.rtl import Declined, extract
 from finn.kernels.base import KernelSpace
 from finn.kernels.channels import Channel
+from finn.kernels.composer import Facts, Key, Port, channel
 from finn.kernels.configure import chosen, describe
-from finn.kernels.cut import CHANNEL_POLICIES
+from finn.kernels.explore import dotted
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.network import Interface, Key, Network, dotted, wire
-from finn.kernels.policies import FirstValid, Policy, defaulted
+from finn.kernels.partition import Partition
+from finn.kernels.policies import Alone, FirstValid, Policy, defaulted
+from finn.kernels.sides import Side
 from finn.kernels.transport import StreamContract
 from finn.kernels.transpose import TransposeKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.toolchain.launcher import host_toolchain
 from support.helpers import (
     FULL_DSP48E2,
+    by_hand,
     choose,
     cycles_of,
+    kernel_alone,
     module_of,
     with_channel_defaults,
     with_direct_transports,
@@ -262,7 +268,7 @@ def _label(config: Mapping[str, object]) -> str:
 
 def _possible(point: Any, key: Key) -> tuple[object, ...]:
     """The possible values of the kernel's open choice ``key`` on a design, in its list's
-    order: those setting it alone accepts (``Network.viable``), never a value its domain
+    order: those setting it alone accepts (``Partition.viable``), never a value its domain
     lists that a rule refuses."""
     ((_, found),) = point.viable((key,))
     assert found.cases, f"{dotted(key)} has no possible value: {found}"
@@ -272,32 +278,36 @@ def _possible(point: Any, key: Key) -> tuple[object, ...]:
 class Placed:
     """What places a kernel alone in these tests, as the owner of its policies
     (``finn.kernels.policies``): a memory's style first valid in its kernel's ranking, as
-    the cut states a channel stage's (``CHANNEL_POLICIES``), and a transpose's pages
+    a channel states a stage's (``Channel.policies``), and a transpose's pages
     likewise; every other choice first valid, as no KernelOp states otherwise."""
 
     policies: ClassVar[Mapping[object, Policy]] = {
-        **CHANNEL_POLICIES,
+        **Channel.policies,
         TransposeKernel.ram_style: FirstValid(order=TransposeKernel.ram_preference),
     }
 
 
 def _by_policy(point: Any, key: Key) -> Any:
     """A design with the kernel's open choice ``key`` set by its policy (``Placed``), as
-    conversion sets one (``finn.kernels.policies.defaulted``), the kernel's other open
-    choices left open."""
-    kernel = point.member(KERNEL)
+    conversion sets one, on the kernel alone (``finn.kernels.policies.defaulted``), the
+    kernel's other open choices left open."""
+    kernel = kernel_alone(point, KERNEL)
     others = {below for below, _ in inspection.states(kernel)} - {key[1]}
-    done = defaulted(kernel, Placed, kept=others)
-    assert not isinstance(done, tuple), f"{dotted(key)}: " + "; ".join(map(str, done))
+    done = defaulted(kernel, Alone(Placed), kept=others)
+    assert not (done.unset or done.refused), f"{dotted(key)}: " + "; ".join(
+        map(str, (*done.unset, *(each for found in done.refused.values() for each in found)))
+    )
     return _chosen(point, {dotted(key): chosen(done.point)[key[1]]})
 
 
 def _defaulted(point: Any) -> Any:
     """A design with every open choice of its kernel in play that is not required set by
-    its policy (``Placed``), as conversion sets one."""
-    kernel = point.member(KERNEL)
-    done = defaulted(kernel, Placed)
-    assert not isinstance(done, tuple), "; ".join(map(str, done))
+    its policy (``Placed``), as conversion sets one, on the kernel alone."""
+    kernel = kernel_alone(point, KERNEL)
+    done = defaulted(kernel, Alone(Placed))
+    assert not (done.unset or done.refused), "; ".join(
+        map(str, (*done.unset, *(each for found in done.refused.values() for each in found)))
+    )
     before = chosen(kernel)
     values = {
         f"{KERNEL}.{key}": value for key, value in chosen(done.point).items() if key not in before
@@ -308,7 +318,7 @@ def _defaulted(point: Any) -> Any:
 def _enumerated(base: Any, choices: Mapping[str, object]) -> list[tuple[str, dict[str, object]]]:
     """Configurations of the kernel's open choices, each set in turn.
 
-    The kernel's open choices in play are taken in its flow order (``Network.undecided``),
+    The kernel's open choices in play are taken in its flow order (``Partition.undecided``),
     one at a time, so a choice another brings into play, or whose possible values another
     narrows (pumping by SIMD), is taken after it. A pinned choice takes its value; a
     selector, or a choice with one possible value, its default policy (nothing to sample);
@@ -363,44 +373,52 @@ def _design(
     facts: Mapping[str, object],
     fed: tuple[str, Traversal, object] | None = None,
 ) -> Any:
-    """A network of the kernel on one channel per tensor, each taking the contract of the
-    kernel's port on it; ``fed``'s channel from a memory (``source``)."""
+    """A partition of the kernel on one channel per tensor, each on the kernel's port of its
+    name and the boundary's AXIS port of its own; ``fed``'s channel from a memory
+    (``source``)."""
     members: dict[str, Any] = {}
     tensors = {**inputs, **outputs}
     for name, tensor in tensors.items():
-        side = "consumer" if name in inputs else "producer"
-        settings: dict[str, Any] = {side: Interface(KERNEL, f"{_port_name(name)}_contract")}
-        if fed is not None and fed[0] == name:
-            settings["producer"] = Interface(SOURCE, "output_contract")
+        port = Port(KERNEL, _port_name(name))
+        if name in inputs:
+            fed_here = fed is not None and fed[0] == name
+            producer = Port(SOURCE, "output") if fed_here else Side.boundary(name)
+            members[name] = channel(producer, port, tensor=tensor, platform=FULL_DSP48E2)
         else:
-            settings["port"] = name
-        members[name] = wire(tensor=tensor, platform=FULL_DSP48E2, **settings)
+            members[name] = channel(port, Side.boundary(name), tensor=tensor, platform=FULL_DSP48E2)
     formals = {name: f"{_port_name(name)}_tensor" for name in inputs}
     given = {
         formals[name]: tensor
         for name, tensor in inputs.items()
         if isinstance(getattr(space_type, formals[name], None), Param)
     }
-    members[KERNEL] = space_type(**facts, **given)
+    members[KERNEL] = Facts(space_type, {**facts, **given})
     if fed is not None:
         name, form, contents = fed
         members[SOURCE] = _source(tensors[name], form, contents)
-    return Network(members)
+    return by_hand(members)
 
 
-def _source(tensor: Tensor, form: Traversal, contents: object) -> MemStreamKernel:
+def _source(tensor: Tensor, form: Traversal, contents: object) -> Facts:
     """The memory that feeds the adapter sample's first input: ``contents``, nested int
     tuples, as its value."""
-    return MemStreamKernel(
-        dtype=tensor.element.dtype,
-        form=form,
-        contents=IntegerTensorValue.of(contents),
-        platform=FULL_DSP48E2,
+    return Facts(
+        MemStreamKernel,
+        {
+            "dtype": tensor.element.dtype,
+            "form": form,
+            "contents": IntegerTensorValue.of(contents),
+            "platform": FULL_DSP48E2,
+        },
     )
 
 
-def design_member(design: Any, name: str) -> Any:
-    """Member ``name`` of a design, a network."""
+def design_member(design: Partition, name: str) -> Any:
+    """Member ``name`` of a design, a partition: a kernel alone, its own design space with
+    its choices (``kernel_alone``), as its Decisions and validity are read; a channel's
+    Space in the partition's design space."""
+    if name in design.kernels:
+        return kernel_alone(design, name)
     return design.member(name)
 
 
@@ -415,9 +433,9 @@ def design_cycles(design: Any) -> QueryResult[Any]:
 
 
 def kernel_space(design: Any) -> tuple[Any, str, str]:
-    """Where a design's kernel's own Decisions are read: the network's kernel, every key
-    its own, named ``kernel.<key>`` (the prefix)."""
-    return design.member(KERNEL), "*", f"{KERNEL}."
+    """Where a design's kernel's own Decisions are read: the kernel alone (``kernel_alone``),
+    every key its own, named ``kernel.<key>`` (the prefix)."""
+    return kernel_alone(design, KERNEL), "*", f"{KERNEL}."
 
 
 def configured(design: Any, choices: Mapping[str, object]) -> Any:
@@ -575,7 +593,7 @@ def place(
     values: Mapping[str, np.ndarray] | None = None,
 ) -> Any:
     """The sample's design, every kernel choice it leaves open in play set by its policy
-    (``_defaulted``), then every channel's by the cut's policies, as the cut sets them
+    (``_defaulted``), then every channel's by the channel's policies, as the cut sets them
     (``with_channel_defaults``: its adapter chain, the chain's memories); the adapter
     sample's first input fed by a memory.
 
@@ -680,7 +698,7 @@ def _contracts(
     point: Any, space_type: type[KernelSpace], sample: Sample, names: Sequence[str]
 ) -> dict[str, StreamContract]:
     """The contract the kernel presents on each channel: its port beside the channel, as
-    the network reads it (``Network.neighbours``)."""
+    the partition reads it (``Partition.neighbours``)."""
     found: dict[str, StreamContract] = {}
     for name in names:
         owner = f"{KERNEL}.{_user(point, name)}"

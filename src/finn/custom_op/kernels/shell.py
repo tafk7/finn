@@ -1,20 +1,23 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""A partition's network in its shell (``InShell``, bound by ``in_shell``): the network of
-its KernelOps (``finn.custom_op.kernels.network``) with the movers the row of the model's
-target's shell offers (``finn.platform.shells.shell_row``) on its boundary channels, and
-the shell as functions over it, over its netlist (``Partition.netlist``: the module's
-buses counted without building the module, ``finn.platform.shells.bus_counts``) and its
-channels' mover contracts.
+"""A partition in its shell (``InShell``, bound by ``in_shell``): the partition of its
+KernelOps (``finn.custom_op.kernels.network``) with the movers the row of the model's
+target's shell offers (``finn.platform.shells.shell_row``) on its boundary channels and
+the row's budgets as rules of its own, and the shell as functions over it, over its netlist
+(``Partition.netlist``: the module's buses counted without building the module,
+``finn.platform.shells.bus_counts``) and its channels' mover contracts.
 
-- **budgets** (``budget_refusal``, by the row's ``finn.platform.shells.budgets``):
-  the AXI-Lite buses the module presents and its movers present (each mover's contract,
-  ``MOVER``) within the row's ``control_budget``, and the AXI memory ports the module
-  initiates within its ``memory_ports``, each refused as ``interface-budget-exceeded``;
-  a module that takes an aligned doubled clock needs a row that supplies one
-  (``clk2x``), refused as ``clock-unavailable``. The ``ip`` row bounds neither count.
-  Of the configured netlist, so a network is within them once it is decided;
+- **budgets**, rules of the partition (its shell member, ``finn.kernels.budgets``, given
+  the row's facts, ``row_facts``): the AXI-Lite buses its kernels present and its movers
+  present within the row's ``control_budget``, and the memory ports its kernels initiate
+  within its ``memory_ports``, each refused as ``interface-budget-exceeded``; a member
+  that takes the doubled clock needs a row that supplies one (``clk2x``), refused as
+  ``clock-unavailable``. The ``ip`` row bounds neither count. Each reads the members'
+  derived values, so a value that breaks one is refused in the partition, where the seam,
+  the cut and emission read it. Emission checks the netlist's count (``bus_counts``, and
+  the movers' contracts, ``MOVER``) against the rules' (``finn.kernels.budgets.counts``):
+  a difference is an error naming both (``shell-counts-differ``);
 - **resources** (``shell_resources``; ``InShell.own_resources``, which the seam reads):
   the sum of its members' own statements (``Partition.own_resources``), each mover's (its
   contract's) and its row's static region's, at the memory ports and AXI-Lite buses it
@@ -22,15 +25,18 @@ channels' mover contracts.
   (``SHELL_CHARACTERISED``), which overstates the placed shell. The ``ip`` shell has
   neither, so its resources are its members'.
 
-``configured_network`` is a partition's network as emission builds it (``Configured``: the
-network, its module and its cycles a frame), bound only. ``verify_partition`` is the one
+``configured_network`` is a partition as emission builds it (``Configured``: the
+partition, its module and its cycles a frame), bound only: a stored choice it dropped as
+stale, a rule its stored choices break (a member's, or a budget of its shell's), a choice
+left open, refuse it, named.
+``verify_partition`` is the one
 check of its FIFOs against their streams before emission (a strategy may call the seam's
 check too, ``Seam.check_fifos``), and records the design it verified on the body; emission
 (packaging, the shell's integration, the testbench) compares it (``refuse_unverified``),
 and refuses a design never verified or changed since. Simulation and elaboration only
-bind. The cut makes a body's channel choices (``make_cut_choices``) on its network in its
-shell, which alone holds both sides of a boundary channel, by the cut's policies
-(``finn.kernels.cut``: ``CHANNEL_POLICIES``), and writes them with ``persist``.
+bind. The cut makes a body's channel choices (``make_cut_choices``) on its partition in
+its shell, which alone holds both sides of a boundary channel, by the channel's policies
+(``Channel.policies``), and writes them with ``persist``.
 """
 
 from __future__ import annotations
@@ -48,28 +54,20 @@ from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import design_digest
 from finn.core.reporting.findings import Finding, FindingKind
-from finn.core.space import Available, Inapplicable, QueryResult, Rejected, Space, inspection
-from finn.custom_op.kernels.network import (
-    PARTITION,
-    Partition,
-    _network,
-    _together,
-    member,
-    persist,
-    stale_text,
-)
+from finn.core.space import Available, Inapplicable, QueryResult, Rejected, inspection
+from finn.custom_op.kernels.network import PARTITION, PRODUCER, _network, persist, stale_text
 from finn.kernels.artifacts.module import Composed
 from finn.kernels.base import CYCLES
-from finn.kernels.configure import chosen
-from finn.kernels.cut import channel_defaulted
-from finn.kernels.explore import FifoCheck, Seam
-from finn.kernels.members import Facts
+from finn.kernels.budgets import SHELL, counts
+from finn.kernels.composer import Key
+from finn.kernels.configure import refusal
+from finn.kernels.explore import FifoCheck, Seam, dotted
 from finn.kernels.movers import MOVER, MoverContract
-from finn.kernels.network import Key, Wire, dotted
-from finn.kernels.policies import Defaulted, Required, defaulted, policy
+from finn.kernels.partition import Partition, _together
+from finn.kernels.policies import Required, policy
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
-from finn.platform.shells import ShellRow, budgets, bus_counts, shell_row
+from finn.platform.shells import ShellRow, bus_counts, shell_row
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
@@ -92,20 +90,19 @@ class ShellResources:
 
 
 class InShell(Partition):
-    """A partition's network in its shell (``in_shell``): its shell's ``row``, whose movers
-    its boundary channels were offered. What it uses (``own_resources``, which the seam
-    reads) is the shell's: its members', its movers' and its static region's sum
-    (``shell_resources``). Immutable, as a network: a change returns another, which keeps
+    """A partition in its shell (``in_shell``): its shell's ``row``, whose movers its
+    boundary channels were offered and whose budgets are its shell member's rules (its
+    facts, ``row_facts``). What it uses (``own_resources``, which the seam reads)
+    is the shell's: its members', its movers' and its static region's sum
+    (``shell_resources``). Immutable, as a partition: a change returns another, which keeps
     its row."""
 
     __slots__ = ("row",)
 
     row: ShellRow
 
-    def __init__(
-        self, members: Mapping[str, Space | Facts | Wire], *, row: ShellRow, **given: Any
-    ) -> None:
-        super().__init__(members, **given)
+    def __init__(self, *args: Any, row: ShellRow, **given: Any) -> None:
+        super().__init__(*args, **given)
         self.row = row
 
     def own_resources(self) -> QueryResult[Resources]:
@@ -115,26 +112,27 @@ class InShell(Partition):
         return Available(found.value.total) if isinstance(found, Available) else _together([found])
 
 
+def row_facts(row: ShellRow) -> dict[str, object]:
+    """The facts of ``row`` a partition in its shell holds (``finn.kernels.budgets.ShellBudgets``):
+    the shell's name and its budgets, as the row states them."""
+    return {
+        "shell": row.shell,
+        "control_budget": row.control_budget,
+        "memory_ports": row.memory_ports,
+        "clk2x": row.clk2x,
+    }
+
+
 def in_shell(model: ModelWrapper, nodes: Iterable[NodeProto], *, name: str = PARTITION) -> InShell:
-    """The network of ``nodes``, KernelOp nodes of ``model`` (``network``), in the shell of
-    the model's target: its row (``shell_row``) offers its movers on the boundary channels."""
-    return _bound(model, list(nodes), name, {})
-
-
-def _bound(
-    model: ModelWrapper,
-    nodes: list[NodeProto],
-    name: str,
-    stating: Mapping[str, Mapping[str, object]],
-) -> InShell:
-    """``in_shell``, each tensor of ``stating`` replayed with the channel choices it gives
-    in place of those the tensor states."""
+    """The partition of ``nodes``, KernelOp nodes of ``model`` (``network``), in the shell of
+    the model's target: its row (``shell_row``) offers its movers on the boundary channels,
+    and its budgets are the partition's rules (``row_facts``)."""
     target = read_target(model)
     row = shell_row(target.shell, target.board)
-    return _network(model, nodes, name, stating, row.movers, partial(InShell, row=row))
+    return _network(model, list(nodes), name, row.movers, partial(InShell, row=row), row_facts(row))
 
 
-# -- the shell, as functions over the network ----------------------------------------------
+# -- the shell, as functions over the partition --------------------------------------------
 
 
 def _buses(network: Partition) -> QueryResult[tuple[int, int, bool]]:
@@ -162,16 +160,29 @@ def _mover_contracts(network: InShell) -> QueryResult[tuple[tuple[str, MoverCont
     return Available(tuple(found))
 
 
-def budget_refusal(network: InShell) -> tuple[Finding, ...]:
-    """Why the shell refuses ``network`` (its ``budgets``, of its netlist's ``bus_counts``
-    and its movers' AXI-Lite buses): its findings, none where it is within them or not
-    decided far enough to say."""
+def _counts_agree(network: InShell, label: str) -> None:
+    """Refuse ``network``, decided, whose netlist's count (``bus_counts``, its movers'
+    AXI-Lite buses added from their contracts) is not its shell member's
+    (``finn.kernels.budgets.counts``): (AXI-Lite buses, memory ports, doubled clock), the
+    two named (``shell-counts-differ``), or either not known. Emission's check of the
+    rules' count."""
     buses = _buses(network)
     contracts = _mover_contracts(network)
-    if not isinstance(buses, Available) or not isinstance(contracts, Available):
-        return ()
-    movers = sum(contract.control_buses for _, contract in contracts.value)
-    return budgets(network.row, buses.value, movers)
+    ruled = counts(network.member(SHELL))
+    netlist: object = buses
+    if isinstance(buses, Available) and isinstance(contracts, Available):
+        control, memory, doubled = buses.value
+        movers = sum(contract.control_buses for _, contract in contracts.value)
+        netlist = (control + movers, memory, doubled)
+    stated = ruled.value if isinstance(ruled, Available) else ruled
+    if netlist != stated:
+        raise KernelOpError.refused(
+            "shell-counts-differ",
+            "configured_network",
+            f"{label}: the netlist's count (AXI-Lite buses, memory ports, doubled clock) "
+            f"{netlist} is not the shell's rules' {stated}",
+            node=label,
+        )
 
 
 def _resources(network: InShell) -> QueryResult[ShellResources]:
@@ -185,7 +196,9 @@ def _resources(network: InShell) -> QueryResult[ShellResources]:
         contracts = _mover_contracts(network)
         if not isinstance(contracts, Available):
             return _together([contracts])
-        movers = tuple((member(name), contract.resources) for name, contract in contracts.value)
+        movers = tuple(
+            (network.node(name), contract.resources) for name, contract in contracts.value
+        )
         row = network.row
         region = row.static_region
         if region is None:
@@ -215,8 +228,8 @@ def _resources(network: InShell) -> QueryResult[ShellResources]:
 @dataclass(frozen=True)
 class Configured:
     """A partition's network as emission builds it (``configured_network``): every choice
-    in play stored, none open, within its shell's budgets; its ``module`` and its
-    ``cycles`` a frame, its slowest member's."""
+    in play stored, none open, within its shell's budgets (its shell member's rules); its
+    ``module`` and its ``cycles`` a frame, its slowest member's."""
 
     network: InShell
     module: Composed
@@ -247,7 +260,7 @@ def shell_resources(subject: InShell | Configured) -> ShellResources | tuple[Fin
 def configured_network(
     model: ModelWrapper, label: str
 ) -> tuple[Configured, tuple[tuple[str, str], ...]]:
-    """A partition model's network in the shell of its target (``in_shell``), bound with
+    """A partition model's partition in the shell of its target (``in_shell``), bound with
     its nodes' and its tensors' channel choices, as emission builds it (``Configured``),
     and its boundary (tensor, port). Every choice is stored where it is created (a
     KernelOp's at conversion, a channel's at the cut) and replaced by the strategies, so
@@ -256,13 +269,16 @@ def configured_network(
     cause each, owned by the key, the rules' findings its causes, as the cut reports it), a
     required one no strategy set ("required: run step_size_fifos or
     step_placeholder_choices"), any other one never set ("not set: the cut,
-    MakeCutChoices, or a strategy sets it"; one finding, ``choices-open``); a network over
-    the shell's budgets (``budget_refusal``), or whose
-    module or cycles its members refuse; or graph inputs and outputs out of port order
-    refuse, named. A dormant choice (stored under a case not selected) is not open, and
-    refuses nothing. It only binds: it does not check the FIFOs against their streams
-    (``verify_partition`` does), so a simulation can run a FIFO the model calls too
-    small."""
+    MakeCutChoices, or a strategy sets it"; one finding, ``choices-open``); a partition
+    over the shell's budgets (its shell member's validity: "refused by the <shell> shell",
+    each broken budget a finding), or whose module or cycles its members refuse, or a
+    member's validity refuses (a rule its stored choices break, which the bind binds:
+    "refused by its members", each finding naming its member); or graph inputs and outputs
+    out of port order refuse, named. Its netlist's count (``bus_counts`` and its movers')
+    must be its shell's rules' (``shell-counts-differ``, naming both, otherwise). A dormant
+    choice (stored under a case not selected) is not open, and refuses nothing. It only
+    binds: it does not check the FIFOs against their streams (``verify_partition`` does), so
+    a simulation can run a FIFO the model calls too small."""
     bound = in_shell(model, model.graph.node)
     if bound.stale:
         keys = tuple(bound.stale)
@@ -292,7 +308,7 @@ def configured_network(
         }
         listed = bound.viable(key for key in open_keys if key not in required)
         impossible = {
-            key: _impossible(key, viable.values)
+            key: _impossible(bound, key, viable.values)
             for key, viable in listed
             if viable.values is not None and not viable.cases
         }
@@ -320,19 +336,27 @@ def configured_network(
                 ),
             ),
         )
-    over_budget = budget_refusal(bound)
+    over_budget = refusal(bound.validity(SHELL))
     if over_budget:
         raise KernelOpError(
             f"{label}: refused by the {bound.row.shell!r} shell: "
             + "; ".join(map(str, over_budget)),
             findings=over_budget,
         )
-    module = bound.module_of()
+    module = bound.module_of(PRODUCER)
     cycles = {name: bound.query(name, CYCLES) for name in bound.members}
     found = [] if isinstance(module, Available) else list(module.findings)
     for name, each in cycles.items():
         if not isinstance(each, Available):
             found.extend(bound.located(name, finding) for finding in each.findings)
+    if not found and isinstance(module, Available):
+        _counts_agree(bound, label)
+        # A rule a member's stored choices break that its module and cycles do not read.
+        found = [
+            bound.located(name, finding)
+            for name in bound.members
+            for finding in refusal(bound.validity(name))
+        ]
     if found or not isinstance(module, Available):
         refused = tuple(dict.fromkeys(found))
         raise KernelOpError(
@@ -356,13 +380,22 @@ def configured_network(
     return Configured(bound, module.value, slowest), bound.boundary
 
 
-def _impossible(key: Key, values: tuple[inspection.Possible | inspection.Refused, ...]) -> Finding:
-    """Why open choice ``key`` can take no value (``choice-no-valid-value``, owned by its
-    dotted key): each listed value with the rules it breaks, those rules' findings, each
+def _impossible(
+    bound: Partition, key: Key, values: tuple[inspection.Possible | inspection.Refused, ...]
+) -> Finding:
+    """Why open choice ``key`` of ``bound`` can take no value (``choice-no-valid-value``,
+    owned by its dotted key): each listed value with the rules it breaks (each by its key in
+    the choice's member, another member's by its dotted key), those rules' findings, each
     once, its causes."""
+
+    def named(rule: str) -> str:
+        owner, below = bound.pair(key[0], rule)
+        return below if owner == key[0] else dotted((owner, below))
+
     refused = [item for item in values if isinstance(item, inspection.Refused)]
     why = "; ".join(
-        f"{item.value!r} breaks " + ", ".join(rule.rule for rule in item.broken) for item in refused
+        f"{item.value!r} breaks " + ", ".join(named(rule.rule) for rule in item.broken)
+        for item in refused
     )
     causes = tuple(
         dict.fromkeys(
@@ -446,14 +479,14 @@ def refuse_unverified(model: ModelWrapper, label: str) -> None:
 class CutChoices:
     """What the cut did to a body's choices (``make_cut_choices``), by dotted key: the
     stored choices the bind dropped as stale, each a value outside its domain, with the
-    kernel's findings (``stale``: a kernel's stays open, for a strategy to set, and
-    emission refuses it until one does; a channel's is derived again by the interim
-    channel rule); the kernel choices it set by their KernelOps' policies, left open by a
-    body that never went through conversion (``late``: one ``choice-converted-late``
-    finding each, naming the value); the choices it could set no value for, left open
-    (``unset``: why, ``choice-no-valid-value`` or the change's refusal); and the choices a
-    first valid policy set in listed order, its ranking not read (``fallbacks``: one
-    ``choice-order-unknown`` finding each, naming the view and why)."""
+    kernel's findings (``stale``: left open, for the channel's policies (a channel's) or a
+    strategy (a kernel's) to set, and emission refuses one left open until one does); the
+    kernel choices it set by their KernelOps' policies, left open by a body that never went
+    through conversion (``late``: one ``choice-converted-late`` finding each, naming the
+    value); the choices it could set no value for, left open (``unset``: why,
+    ``choice-no-valid-value``); and the choices a first valid policy set in listed order,
+    its ranking not read (``fallbacks``: one ``choice-order-unknown`` finding each, naming
+    the view and why)."""
 
     stale: Mapping[str, tuple[Finding, ...]]
     late: Mapping[str, tuple[Finding, ...]]
@@ -474,72 +507,46 @@ def _late(key: str, value: object) -> Finding:
 
 def make_cut_choices(model: ModelWrapper) -> CutChoices:
     """The cut's choices of a partition's body, ``model``, persisted, each owner's whole
-    (``persist``), on the network of its KernelOps bound in its shell (``in_shell``), their
-    stored choices set as it binds (a value outside its domain dropped as stale):
+    (``persist``), on the partition of its KernelOps bound in its shell (``in_shell``),
+    their stored choices bound (a value outside its domain dropped as stale), the policies
+    of its members applied once over its design space (``Partition.defaulted``): one pass
+    in the root's flow order, which interleaves the members, each choice's policy read from
+    its member's owner (a kernel's its KernelOp, a channel's the cut), each value first
+    valid where setting it is accepted (no rule of the partition newly false):
 
     1. each kernel choice the body leaves open, in play and not required, that the bind
-       did not drop, set once by its KernelOp's policies on its kernel
-       (``finn.kernels.policies.defaulted``): a body never converted for it (one made by
-       hand), reported (``CutChoices.late``); the channels reading it are rebuilt;
-    2. each channel's open choices in play that are not required set by the cut's
-       policies (``finn.kernels.cut.channel_defaulted``), each channel in rank order (a
-       channel created here has both its sides only in the network). A required choice (a
-       FIFO's depth) stays open for a strategy.
+       did not drop, set by its KernelOp's policies: a body never converted for it (one
+       made by hand), reported (``CutChoices.late``);
+    2. each channel's open choices in play that are not required, those the bind dropped
+       among them, set by the channel's policies (a channel created here has both its sides
+       only in the partition). A required choice (a FIFO's depth) stays open for a
+       strategy.
 
-    Returns what it dropped, set late, could not set, and set in listed order where a
-    ranking could not be read (``CutChoices``)."""
+    A kernel choice the bind dropped as stale stays open, whatever an earlier member set. A
+    member refused on its own is skipped, none of its choices set (emission names it): it
+    is read when the pass reaches the member's first choice. A choice no value can be set
+    for is left open and the pass goes on (``CutChoices.unset``). Returns what it dropped,
+    set late, could not set, and set in listed order where a ranking could not be read
+    (``CutChoices``)."""
     bound = in_shell(model, model.graph.node)
     stale = dict(bound.stale)
-    unset: dict[str, tuple[Finding, ...]] = {}
-    late: dict[Key, object] = {}
-    fallbacks: dict[str, tuple[Finding, ...]] = {}
-    for name in bound.kernels:
-        point = bound.member(name)
-        dropped = {key for owner, key in bound.dropped if owner == name}
-        done = defaulted(point, bound.owner(name), kept=dropped)
-        if isinstance(done, tuple):
-            # A kernel refused on its facts is emission's to name; a choice no value can be
-            # set for is reported.
-            unset |= {
-                dotted((name, finding.owner)): (finding,)
-                for finding in done
-                if finding.code == "choice-no-valid-value"
-            }
-            continue
-        fallbacks |= _fallbacks(name, done)
-        before = chosen(point)
-        late |= {
-            (name, key): value for key, value in chosen(done.point).items() if key not in before
-        }
-    if late:
-        trial = bound.trial(late, check=False)
-        if trial.accepted:
-            bound = trial.network
-        else:
-            unset |= {dotted(key): found for key, found in trial.refused.items()}
-            late = {}
-    for name in bound.channels:
-        if bound.unbound(name) is not None:
-            continue
-        point = bound.member(name)
-        done = channel_defaulted(point)
-        if isinstance(done, tuple):
-            unset |= {dotted((name, finding.owner)): (finding,) for finding in done}
-            continue
-        fallbacks |= _fallbacks(name, done)
-        before = chosen(point)
-        values = {
-            (name, key): value for key, value in chosen(done.point).items() if key not in before
-        }
-        if not values:
-            continue
-        trial = bound.trial(values, check=False)
-        if trial.accepted:
-            bound = trial.network
-            fallbacks |= {dotted(key): found for key, found in trial.fallbacks.items()}
-        else:
-            unset |= {dotted(key): found for key, found in trial.refused.items()}
-    persist(model, bound)
+    done = bound.defaulted(kept=[key for key in bound.dropped if key[0] in bound.kernels])
+    names = bound.composed.names
+
+    def keyed(finding: Finding) -> tuple[str, Finding]:
+        key = names.pair(finding.owner)
+        return dotted(key), bound.local(key[0], finding)
+
+    unset = {each: (finding,) for each, finding in map(keyed, done.unset)}
+    fallbacks = {each: (finding,) for each, finding in map(keyed, done.fallbacks)}
+    after = bound.at(done.point)
+    before = bound.chosen()
+    late = {
+        key: value
+        for key, value in after.chosen().items()
+        if key not in before and key[0] in bound.kernels
+    }
+    persist(model, after)
     return CutChoices(
         stale,
         {dotted(key): (_late(dotted(key), value),) for key, value in late.items()},
@@ -548,21 +555,16 @@ def make_cut_choices(model: ModelWrapper) -> CutChoices:
     )
 
 
-def _fallbacks(name: str, done: Defaulted[Space]) -> dict[str, tuple[Finding, ...]]:
-    """Each ranking member ``name``'s policies could not read, by its choice's dotted key."""
-    return {dotted((name, finding.owner)): (finding,) for finding in done.fallbacks}
-
-
 __all__ = [
     "Configured",
     "CutChoices",
     "InShell",
     "ShellResources",
     "make_cut_choices",
-    "budget_refusal",
     "configured_network",
     "in_shell",
     "refuse_unverified",
+    "row_facts",
     "shell_resources",
     "verify_partition",
 ]

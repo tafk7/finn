@@ -52,7 +52,9 @@ from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import DspBlock, Fabric, Platform
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels.network import Fact, Interface, Network, wire
+from finn.kernels.composer import Facts, PartitionDeclaration, Port, Stated, channel
+from finn.kernels.partition import partition
+from finn.kernels.sides import Side
 from finn.kernels.artifacts.module import ProducerIdentity
 from finn.core.space import (
     Available, Decision, Param, Space, design_space, derived, divisors_of, view,
@@ -95,32 +97,18 @@ PLATFORM = Platform(
 
 X2 = Tensor((1, 2), ScalarEncoding(DataType["INT3"]))
 W2 = Tensor((2, 2), ScalarEncoding(DataType["INT3"]))
-Y2 = Tensor((1, 2), ScalarEncoding(DataType["INT8"]))
 
-placed_dotp = Network({
-    "x": wire(
-        tensor=X2, port="in0_V", consumer=Interface("compute", "x_contract"), platform=PLATFORM
-    ),
-    "w": wire(
-        tensor=W2, port="in1_V", consumer=Interface("compute", "w_contract"), platform=PLATFORM
-    ),
-    "y": wire(
-        tensor=Y2, port="out0_V", producer=Interface("compute", "y_contract"), platform=PLATFORM
-    ),
-    "compute": PackedDotpKernel(
-        result_range=ordinary_integer_bounds(DataType["INT8"]),
-        x_tensor=X2,
-        w_tensor=W2,
-        columns=2,
-        widest_reduction=2,
-        pe=2,
-        simd=2,
-        platform=PLATFORM,
-    ),
-})
-dotp = placed_dotp.with_choices(
-    {("compute", "compute_pumping"): False, ("compute", "reducer"): "tree"},
-).member("compute")
+# The core alone, its own design space: a kernel reads its facts only.
+dotp = design_space(PackedDotpKernel(
+    result_range=ordinary_integer_bounds(DataType["INT8"]),
+    x_tensor=X2,
+    w_tensor=W2,
+    columns=2,
+    widest_reduction=2,
+    pe=2,
+    simd=2,
+    platform=PLATFORM,
+)).with_choices(compute_pumping=False, reducer="tree")
 answer = library_module(dotp)
 assert isinstance(answer, artifact_module.Leaf), answer
 assert dict(answer.parameters)["ACCU_WIDTH"] == 8
@@ -194,30 +182,31 @@ for memory in ("none", "memstream"):
     x_tensor = Tensor((3, 4), INT3)
     y_tensor = Tensor((3, 4), ScalarEncoding(DataType[f"INT{bits}"]))
 
-    # The MatMul in a network of its streams; the weight channel carries what MatMul
-    # states for it.
-    root = Network({
-        "x": wire(
-            tensor=x_tensor,
-            port="in0_V",
-            consumer=Interface("matmul", "x_contract"),
-            platform=PLATFORM,
+    # The MatMul in a partition of its streams, declared by hand; the weight channel
+    # carries what MatMul states for it, its source the known weights' memory.
+    weight = {"tensor": Stated("matmul", "carried_weights"), "platform": PLATFORM}
+    stored = memory == "memstream"
+    if stored:
+        weight["contents"] = Stated("matmul", "stored_weights")
+    root = partition(
+        PartitionDeclaration(
+            {"matmul": Facts(MatMulKernel, {**facts, "x_tensor": x_tensor, **weights})},
+            {
+                "x": channel(
+                    Side.boundary("in0_V"), Port("matmul", "x"), tensor=x_tensor, platform=PLATFORM
+                ),
+                "w": channel(
+                    Side.source() if stored else Side.boundary("in1_V"),
+                    Port("matmul", "w"),
+                    **weight,
+                ),
+                "y": channel(
+                    Port("matmul", "y"), Side.boundary("out0_V"), tensor=y_tensor, platform=PLATFORM
+                ),
+            },
         ),
-        "w": wire(
-            tensor=Fact("matmul", "carried_weights"),
-            contents=Fact("matmul", "stored_weights"),
-            port="in1_V",
-            consumer=Interface("matmul", "w_contract"),
-            platform=PLATFORM,
-        ),
-        "y": wire(
-            tensor=y_tensor,
-            port="out0_V",
-            producer=Interface("matmul", "y_contract"),
-            platform=PLATFORM,
-        ),
-        "matmul": MatMulKernel(**facts, x_tensor=x_tensor, **weights),
-    })
+        order=("x", "w", "y", "matmul"),
+    )
     root = root.with_choices({
         ("matmul", "compute"): "packed",
         ("matmul", "pe"): 2,

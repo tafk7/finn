@@ -3,11 +3,11 @@
 
 """Choices set on a model, or on a network, the way the compiler sets them.
 
-``configured(model, {graph name: {key: value}})``: the KernelOps' network of ``model`` bound
+``configured(model, {graph name: {key: value}})``: the KernelOps' partition of ``model`` bound
 in the shell of its target (as exploration binds a partition's body), the values set through
 the seam as a strategy sets them (``Seam.set``, one batch, as ``Hold`` does), then each
-channel's open choices that are not required set by the cut's policies, as the cut sets
-them (``finn.kernels.cut.channel_defaulted``; a FIFO's depth stays open), and the result
+channel's open choices that are not required set by the channel's policies, as the cut sets
+them (``Partition.defaulted``, once over the channels; a FIFO's depth stays open), and the result
 persisted (``finn.custom_op.kernels.network.persist``, the one writer of choices). What the
 seam refuses is refused, by its findings (the seam's own codes, ``not-a-decision``,
 ``held``, or the engine's: a value outside its domain, ``domain-membership``, or each rule
@@ -16,9 +16,9 @@ the batch would break) at the top of the ``Refusal``, so a test asserts it by co
 refusal (``member-unknown``); a channel's choice on a graph with nodes on the host is
 refused by ``persist``, the one writer, before anything is written
 (``channel-choices-outside-body``); on such a graph, choices of kernels alone are written on
-their nodes (``persist_kernel``), and no channel's are made. A set-up may name any choice,
-a selector and the choices under its case together; a kernel's choice it leaves open stays
-open.
+their nodes (as ``persist`` writes a node's), and no channel's are made. A set-up may name
+any choice, a selector and the choices under its case together; a kernel's choice it leaves
+open stays open.
 
 The seam has no clearing: a value of ``None`` is no value of any Decision, so the engine
 refuses it. A test of a stale or cleared choice writes the raw ONNX attribute instead.
@@ -41,10 +41,10 @@ from qonnx.core.modelwrapper import ModelWrapper
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN
 from finn.core.reporting.findings import Refusal
-from finn.custom_op.kernels.network import persist, persist_kernel
+from finn.custom_op.kernels.base import kernel_op
+from finn.custom_op.kernels.network import persist
 from finn.custom_op.kernels.shell import in_shell
-from finn.kernels.configure import chosen
-from finn.kernels.cut import channel_defaulted
+from finn.kernels.composer import Key
 from finn.kernels.explore import Accepted, Refused, Seam
 
 
@@ -52,7 +52,7 @@ def configured(model: ModelWrapper, choices: Mapping[str, Mapping[str, object]])
     """``model`` with ``choices`` (by graph name: a kernel's under its node, a channel's
     under its tensor) set the way the compiler sets them: the network of the model's
     KernelOps bound, the values set through the seam as a strategy sets them, one batch,
-    each channel's open choices then set by the interim channel rule, as the cut sets them,
+    each channel's open choices then set by the channel's policies, as the cut sets them,
     the result persisted (``persist``); a value the seam refuses is refused, by its code.
     ``model`` is changed in place and returned."""
     nodes = [node for node in model.graph.node if node.domain == KERNEL_OPS_DOMAIN]
@@ -67,24 +67,20 @@ def configured(model: ModelWrapper, choices: Mapping[str, Mapping[str, object]])
         # Not a partition's body (nodes on the host): no channel's choices are made, and
         # only the kernels' are written, each on its node.
         for node in nodes:
-            persist_kernel(model, node, network.member(node.name))
+            op = kernel_op(model, node)
+            held = {key: value for (_, key), value in network.chosen([node.name]).items()}
+            op._write(op._saved(held))
         return model
-    for name in network.channels:
-        if network.unbound(name) is not None:
-            continue
-        point = network.member(name)
-        done = channel_defaulted(point)
-        if isinstance(done, tuple):
-            continue  # a choice no value can be set for: emission names it
-        values = {
-            (name, key): value
-            for key, value in chosen(done.point).items()
-            if key not in chosen(point)
-        }
-        if values:
-            step = seam.set(network, values)
-            if isinstance(step, Accepted):
-                network = step.network
+    done = network.defaulted(members=network.channels)  # one pass: what emission names stays open
+    before = network.chosen()
+    made: dict[str, dict[Key, object]] = {}
+    for key, value in network.at(done.point).chosen(network.channels).items():
+        if key not in before:
+            made.setdefault(key[0], {})[key] = value
+    for values in made.values():
+        step = seam.set(network, values)
+        if isinstance(step, Accepted):
+            network = step.network
     persist(model, network)
     return model
 

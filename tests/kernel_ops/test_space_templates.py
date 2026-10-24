@@ -19,19 +19,24 @@ from core.space._domains_support import domain_differences
 from core.space._templates_support import assert_reads_alike, defined, links, reached
 from core.space._whole_support import differences
 from support.chain import MEMBERS, chain
-from support.one_space import chain_space
+from support.models import chain_model
 
 import finn.custom_op
 import finn.kernels
-from finn.core.space import Space, design_space, inspection
+from finn.core.graph.annotations.platform import read_target
+from finn.core.space import Space, inspection
 from finn.core.space._running.evaluate import evaluation
 from finn.core.space._scopes import EAGER, Address, ScopeRecord
 from finn.core.space._template import link_template
 from finn.core.space.compiler import compile_model
 from finn.core.space.occurrence import ask, held
 from finn.core.space.results import Available, QueryResult, Unresolved
+from finn.custom_op.kernels.network import declaration
+from finn.custom_op.kernels.shell import in_shell
+from finn.kernels.composer import Composed, clear_classes, compose
 from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel
+from finn.platform.shells import shell_row
 
 SUPPORT = Path(__file__).resolve().parents[1] / "support"
 
@@ -60,28 +65,34 @@ def test_the_kernels_read_alike_in_any_order_their_scopes_are_made_in() -> None:
 
 def test_the_kernels_domains_compose_as_the_line_checked_them() -> None:
     modules = [f"support.{path.stem}" for path in sorted(SUPPORT.glob("*.py"))]
-    classes = [*_kernels(), *(cls for cls in defined(modules) if links(cls)), chain_space(4)[0]]
+    classes = [
+        *_kernels(),
+        *(cls for cls in defined(modules) if links(cls)),
+        chain_class(),
+    ]
     differences = [found for found in map(domain_differences, classes) if found is not None]
     assert not differences, "\n".join(differences)
 
 
 def test_the_chains_members_read_alike_in_any_order_their_scopes_are_made_in() -> None:
-    net = chain()  # configured: its channels bound
-    classes = {inspection.model(net.member(name)).space_type for name in MEMBERS}
+    net = chain()  # configured
+    classes = {type(net.member(name)) for name in MEMBERS}
     assert assert_reads_alike(classes) == 3  # the MatMul, the thresholding, the channel
 
 
 def test_stage_7s_chain_of_eight_kernels_reads_alike_in_any_order_its_scopes_are_made_in() -> None:
-    whole, _ = chain_space(4)
+    whole = chain_class()
     assert_reads_alike([whole])
     templates = reached(link_template(whole))
-    # Fifteen classes, and the composite (a port is a declaration of its kernel, no class).
-    assert len(templates) == 16
+    # Fifteen classes, the shell member's (its budgets, in its shell) and the composite (a
+    # port is a declaration of its kernel, no class).
+    assert len(templates) == 17
     # A channel's source and mover are placements: compiled where their guard's formal is
     # not supplied too (their members inapplicable there), so each of the 9 channels
     # without a value has its source's scope, and each of the 13 its mover's, where the
-    # one-case selectors compiled none; a direct transport places none.
-    assert len(compile_model(whole).scopes.ordered()) == 225
+    # one-case selectors compiled none; a direct transport places none. The shell member
+    # is one scope more.
+    assert len(compile_model(whole).scopes.ordered()) == 226
 
 
 def _answers_as_the_line(classes: list[type[Space]]) -> int:
@@ -103,12 +114,12 @@ def test_the_kernels_and_the_test_support_answer_as_the_line() -> None:
     modules = [f"support.{path.stem}" for path in sorted(SUPPORT.glob("*.py"))]
     classes = [*_kernels(), *(cls for cls in defined(modules) if links(cls))]
     net = chain()
-    classes.extend(inspection.model(net.member(name)).space_type for name in MEMBERS)
+    classes.extend(type(net.member(name)) for name in MEMBERS)
     assert _answers_as_the_line(list(dict.fromkeys(classes))) > 50
 
 
 def test_stage_7s_chain_of_eight_kernels_answers_as_the_line() -> None:
-    whole, _ = chain_space(4)
+    whole = chain_class()
     # The choices compared: each MatMul's folding is its own, not each core's; each
     # channel's source's two (absent without a value) and its one adapter memory, and no
     # source, mover or output adapter selector, nor an input adapter's, which its steps
@@ -116,12 +127,34 @@ def test_stage_7s_chain_of_eight_kernels_answers_as_the_line() -> None:
     assert _answers_as_the_line([whole]) == 130
 
 
+def fresh_chain() -> tuple[Composed, dict[str, object]]:
+    """Stage 7's chain at 8 kernels composed as one Space with a model of its own (the
+    graph layer's declaration, in its shell, composed), and its stored values by path:
+    the graph layer binds a partition of the same class as it reads the stored values
+    (``in_shell``), so the composer's classes are dropped before it is composed."""
+    model = chain_model(4)
+    nodes = list(model.graph.node)
+    target = read_target(model)
+    declared = declaration(model, nodes, movers=shell_row(target.shell, target.board).movers)
+    stored = in_shell(model, nodes).chosen()
+    clear_classes()
+    composed = compose(declared)
+    return composed, {composed.names.path(key): value for key, value in stored.items()}
+
+
+def chain_class() -> type[Space]:
+    """Stage 7's chain at 8 kernels: its partition's class, as the graph layer binds it in
+    its shell."""
+    model = chain_model(4)
+    return in_shell(model, model.graph.node).composed.space_type
+
+
 def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv(EAGER, raising=False)  # the eager test mode makes everything at once
-    whole, stored = chain_space(4)
-    point = design_space(whole())
+    composed, _ = fresh_chain()
+    point = composed.design_space()
     scopes = inspection.model(point).scopes
     assert isinstance(point.mm0.query(MatMulKernel.cycles), Unresolved)  # type: ignore[attr-defined]
     read = scopes.counts()
@@ -133,22 +166,22 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
 # The members evaluated (and the constants among them) after the commit, and after
 # ``viable`` and the change (the structure's nodes resolved were 1366 (96) and 1464 (96),
 # 1371 and 1463 since T4c's piece 1 placed the required inputs' ports by construction).
-# Since facts are known (T4c), 1153 (96) and 1224 (96) became these: 40 optional facts
-# left out are constants (None) their readers now read as values (each channel's
-# ``contents`` and ``mover_offer``, a weight channel's ``producer`` and ``index_tensor``,
-# the boundaries' ``producer`` and ``consumer``, MatMul's ``window``, a thresholding's
-# ``set_tensor``), and the 15 producers' word widths (``y_data_width`` of each MatMul and
-# its core, ``output_data_width`` of each thresholding) that a channel's ``sides`` reads
-# as values where it asked their presence (16 after ``viable``: the trial's int8 core's).
-# Then 1208 and 1280: four more, each weight channel's ``source.contents``, a required
-# formal bound to the channel's optional ``contents``, read as itself to check its value.
-# Then 1192 (132) and 1262 (132), MatMul's weights one fact: per MatMul, its two known
-# weights' constants (``w_contents``, ``weights_dtype``) one (``weights``), and ``weighted``,
-# ``carried_weights``' guard and its core's ``w_placed`` and ``w_stream`` guard gone (20;
-# 22 after ``viable``, the trial's int8 core's two as well).
-# Then 1196 (132) and 1266 (132): each thresholding's ``table_dtype`` (4), its table's type,
-# which the rules, the module's parameters and its resources read.
-EVALUATED = ((1196, 132), (1266, 132))
+# 1153 (96) and 1224 (96) before each channel side became one value: each port bound now
+# evaluates its label and its side, and the channels' label constants are gone. 1180 (80)
+# and 1259 (80) before the composer: each fact a member is given is a Param at the root
+# now (59 constants of the members evaluated become 59 root Params evaluated), and each
+# kernel's side a channel takes is a derived value at the root, the side labelled below its
+# member (20 evaluated). Then 1200 (21) and 1279 (21) became these, with facts known and
+# values compared by ``==``: 21 optional facts left out are constants (None) their readers
+# now read as values (the 9 activation channels' ``contents``, the 4 weight channels'
+# ``index_tensor``, MatMul's ``window``, a thresholding's ``set_tensor``); each weight
+# channel's ``source.contents`` (4), a required formal bound to the channel's optional
+# ``contents``, read as itself; each thresholding's ``table_dtype`` (4); and MatMul's
+# weights one fact: per MatMul, its root Params ``w_contents`` and ``weights_dtype`` one
+# (``weights``), and ``weighted``, ``carried_weights``' guard and its packed core's
+# ``w_placed`` and its ``w_side`` and ``w_stream`` guards gone (-24; -27 after ``viable``,
+# the trial's int8 core's three as well).
+EVALUATED = ((1205, 42), (1281, 42))
 
 
 def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
@@ -169,8 +202,8 @@ def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
     output adapters of the channels beside it, ``a1`` and ``h2``, which read its ports'
     streams)."""
     monkeypatch.delenv(EAGER, raising=False)
-    whole, stored = chain_space(4)
-    point = design_space(whole())
+    composed, stored = fresh_chain()
+    point = composed.design_space()
     scopes = inspection.model(point).scopes
     committed = commit(point, stored)
     counted = scopes.counts()

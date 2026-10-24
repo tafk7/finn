@@ -40,7 +40,15 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 from qonnx.core.datatype import DataType
-from support.helpers import FULL_DSP58, built, choose, cycles_of, with_direct_transports
+from support.helpers import (
+    FULL_DSP58,
+    built,
+    by_hand,
+    choose,
+    cycles_of,
+    with_channel_defaults,
+    with_direct_transports,
+)
 from support.kernel_specs.pwpolyf import CLAMP, TOLERANCE, activation, clamped
 
 from finn.core.rtlsim_bench import Receive, stream_out
@@ -50,8 +58,9 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import Traversal, offsets, pack
 from finn.harness.toolchain import print_identity
 from finn.kernels.channels import Channel
-from finn.kernels.network import Interface, Network, wire
+from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.pwpolyf import PwPolyKernel
+from finn.kernels.sides import Side
 from finn.toolchain.launcher import host_toolchain
 
 PORTS = {"input": "s_axis_0", "output": "m_axis_0"}
@@ -106,11 +115,12 @@ def placed(case: Case) -> Any:
     tensors = {"input": tensor, "output": design_space(alone).output_tensor}
     members: dict[str, Any] = {}
     for name, given in tensors.items():
-        contract = Interface("activation", f"{name}_contract")
-        side: dict[str, Any] = {"producer" if name == "output" else "consumer": contract}
-        members[name] = wire(tensor=given, port=PORTS[name], platform=FULL_DSP58, **side)
-    members["activation"] = PwPolyKernel(**facts, input_tensor=tensor)
-    return with_direct_transports(choose(Network(members), {"activation.pe": case.pe}))
+        port, boundary = Port("activation", name), Side.boundary(PORTS[name])
+        sides = (port, boundary) if name == "output" else (boundary, port)
+        members[name] = channel(*sides, tensor=given, platform=FULL_DSP58)
+    members["activation"] = Facts(PwPolyKernel, {**facts, "input_tensor": tensor})
+    chosen = choose(by_hand(members), {"activation.pe": case.pe})
+    return with_channel_defaults(with_direct_transports(chosen))
 
 
 def stem(case: Case) -> str:

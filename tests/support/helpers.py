@@ -6,30 +6,35 @@
 Facts are the root node's typed formals; a missing required one is refused at
 the node call. Choices use the stable decision keys ``inspection`` reports.
 
-A kernel reads tensors and presents its ports' contracts on channels, so a test places
-it in a network (``finn.kernels.network``): its kernels and channels by name, each its
-own space, each channel taking the contracts its kernels present (``Interface``) and, for a
-parameter channel, what its kernel states for it (``Fact``). A test names a choice as
-``member.key`` (``matmul.pe``, ``w.transport``): ``keyed`` makes it the
-network's pair, ``choose`` commits a batch. ``placed_dotp`` places a dot-product core
-between three boundary channels. ``matmul_network`` places a MatMul (``matmul``) on
-``x`` (``in0_V``), ``w`` (``in1_V``, buffered), ``y`` (``out0_V``) and, with several
-weight sets, ``set`` (``in2_V``). Its tensors are MatMul's own statements of them, the
-values its views present (``required_weights``, and its results, ``result_tensor``), read
-from its facts before it is placed: they read only its facts and its ``realization``, and the
-result's range is the same in either realization, so one network serves every
-realization, a depthwise MatMul's left open until committed. Known weights are a fact
-given to MatMul (``weights``, a ``KnownWeights``); the weight channel carries what MatMul
-states for it (``carried_weights``, ``stored_weights``: block-diagonal for a dense
-realization, over their range), with ``set``'s tensor its ``index_tensor`` (one index per
-row) and ``set`` taking its ``set_contract``, so the channel's ``source`` stores them. The
-edge choices are the channels' (``x.adapter_ram_style``, ``w.transport``,
-``w.source.ram_style``), the MatMul's its own (``matmul.pe``). ``matmul_assembly`` configures one
-from concrete facts and choices. A network's module is named ``finn_<stem>``
-(``module_of``).
+A kernel reads tensors and presents its ports on channels, so a test places it in a
+partition declared by hand (``by_hand``: ``finn.kernels.partition``, one design space of
+the composer's class): its kernels by name, each its class and facts
+(``finn.kernels.composer.Facts``), and its channels by the tensor each carries
+(``finn.kernels.composer.channel``), each side a kernel's port (``Port("matmul", "x")``)
+or a ``Side`` given as a value (the boundary's AXIS port, ``Side.boundary("in0_V")``, or a
+valued channel's source, ``Side.source()``), each fact a value or what a kernel states for
+it (``Stated``). Nothing sets a channel's choice a change brings into play: a test sets
+them as the cut does, by the channel's policies (``with_channel_defaults``), or names them. A
+test names a choice as ``member.key`` (``matmul.pe``, ``w.transport``): ``keyed`` makes it
+the partition's pair, ``choose`` commits a batch. ``placed_dotp`` places a dot-product core
+between three boundary channels. ``matmul_network`` places a MatMul (``matmul``) on ``x``
+(``in0_V``), ``w`` (its source with known weights, else ``in1_V``), ``y`` (``out0_V``) and,
+with several weight sets, ``set`` (``in2_V``). Its tensors are MatMul's own statements of
+them, the values its views present (``required_weights``, and its results,
+``result_tensor``), read from its facts before it is placed: they read only its facts and
+its ``realization``, and the result's range is the same in either realization, so one
+partition serves every realization, a depthwise MatMul's left open until committed. Known
+weights are a fact given to MatMul (``weights``, a ``KnownWeights``); the weight channel
+carries what MatMul states for it (``carried_weights``, ``stored_weights``: block-diagonal
+for a dense realization, over their range), with ``set``'s tensor its ``index_tensor`` (one
+index per row) and ``set`` on its source's set port (``Port("w", "set")``), so the channel's
+``source`` stores them. The edge choices are the channels' (``x.adapter_ram_style``,
+``w.transport``, ``w.source.ram_style``), the MatMul's its own (``matmul.pe``).
+``matmul_assembly`` configures one from concrete facts and choices. A partition's module is
+named ``finn_<stem>`` (``module_of``).
 
 A kernel presents its configuration bus itself, at the port it is given (``control``);
-a network presents it on the module.
+a partition presents it on the module.
 
 What a simulation runs on (FinnLib, Vivado, the run's identity) is
 ``finn.harness.toolchain``'s: this module only constructs."""
@@ -61,26 +66,27 @@ from finn.dataflow.traversal import BeatSequence, Loop, Traversal, vector_major
 from finn.kernels.artifacts.abi import Pin
 from finn.kernels.artifacts.module import Composed, Held, Leaf, ProducerIdentity
 from finn.kernels.base import CYCLES, KernelSpace
+from finn.kernels.channels import Channel
+from finn.kernels.composer import (
+    ChannelDeclaration,
+    Facts,
+    Key,
+    PartitionDeclaration,
+    Port,
+    Stated,
+    channel,
+)
 from finn.kernels.configure import chosen, commit, describe
-from finn.kernels.cut import Cut, channel_defaulted
 from finn.kernels.declaration import KernelDeclaration, ModuleOrder, Product
 from finn.kernels.eltwise import EltwiseKernel
-from finn.kernels.explore import Choice, Defaults, Seam
+from finn.kernels.explore import Choice, Defaults, Seam, dotted
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.matmul import KnownWeights, MatMulKernel, datatype_range
-from finn.kernels.members import decision
-from finn.kernels.network import (
-    Fact,
-    Interface,
-    Key,
-    Network,
-    Wire,
-    dotted,
-    wire,
-)
-from finn.kernels.policies import Unstated, defaulted, ranked
+from finn.kernels.partition import Partition, partition
+from finn.kernels.policies import Alone, Unstated, defaulted, ranked
 from finn.kernels.port import AxiStreamPort, axis, transport
+from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.transport import AxisBeat, ReadyValidTransport
 from finn.kernels.values.domains import range_dtype, set_index_dtype
@@ -145,7 +151,8 @@ def value(answer: QueryResult[T]) -> T:
 
 
 PRODUCER = ProducerIdentity("test.root", "1")
-"""Who derives a test network's module: the tests' harness, each module named by its stem."""
+"""Who derives a test partition's module: the tests' harness, each module named by its
+stem."""
 
 
 def keyed(choices: Mapping[str, object]) -> dict[Key, object]:
@@ -158,18 +165,36 @@ def keyed(choices: Mapping[str, object]) -> dict[Key, object]:
     return found
 
 
-N = TypeVar("N", bound=Network)
+def by_hand(
+    members: Mapping[str, Facts | ChannelDeclaration],
+    stored: Mapping[Key, object] | None = None,
+    *,
+    shell: Mapping[str, object] | None = None,
+) -> Partition:
+    """A partition declared by hand (``finn.kernels.partition.partition``): ``members`` in
+    its module's order, each kernel by name (its ``Facts``) and each channel by the tensor
+    it carries (``channel``), its ``stored`` choices bound, by key; in a shell where
+    ``shell`` states its row's facts (``PartitionDeclaration.shell``)."""
+    kernels = {name: each for name, each in members.items() if isinstance(each, Facts)}
+    channels = {
+        name: each for name, each in members.items() if isinstance(each, ChannelDeclaration)
+    }
+    declared = PartitionDeclaration(kernels, channels, shell)
+    return partition(declared, stored, order=tuple(members))
+
+
+N = TypeVar("N", bound=Partition)
 
 
 def choose(network: N, choices: Mapping[str, object]) -> N:
-    """``network`` with ``choices`` (``member.key``) committed, atomically; a refusal, or a
-    stored choice the change would drop, is a ``NetworkError`` (a ``ValueError``)."""
+    """``network`` with ``choices`` (``member.key``) committed, atomically; a refusal is a
+    ``ValueError`` naming each refused value or rule."""
     return network.with_choices(keyed(choices)) if choices else network
 
 
 def refused_codes(network: N, choices: Mapping[str, object]) -> set[str]:
     """The codes a change of ``choices`` (``member.key``) is refused with, checked as the
-    seam checks it (``Network.trial``): its findings' and their causes'. The change must
+    seam checks it (``Partition.trial``): its findings' and their causes'. The change must
     be refused: committed, a choice a member's rule refuses leaves the member refused."""
     trial = network.trial(keyed(choices))
     assert not trial.accepted, choices
@@ -177,19 +202,19 @@ def refused_codes(network: N, choices: Mapping[str, object]) -> set[str]:
     return {finding.code for finding in found} | {c.code for f in found for c in f.causes}
 
 
-def module_of(network: Network, stem: str) -> QueryResult[Composed]:
+def module_of(network: Partition, stem: str) -> QueryResult[Composed]:
     """``network``'s module, named ``finn_<stem>``."""
     return network.module(PRODUCER, f"finn_{stem}")
 
 
-def built(network: Network, stem: str) -> Composed:
+def built(network: Partition, stem: str) -> Composed:
     """``network``'s module, named ``finn_<stem>``, which must be accepted."""
     module = module_of(network, stem)
     assert isinstance(module, Available), describe([module])
     return module.value
 
 
-def cycles_of(network: Network) -> QueryResult[int]:
+def cycles_of(network: Partition) -> QueryResult[int]:
     """The most cycles a frame any member of ``network`` takes, once each states its own."""
     found = [network.query(name, CYCLES) for name in network.members]
     waiting = [answer for answer in found if not isinstance(answer, Available)]
@@ -236,8 +261,9 @@ def placed_dotp(
     reduction: int | None = None,
     **facts: object,
 ) -> S:
-    """A dot-product core between three boundary channels, its folding factors given and
-    its own choices committed.
+    """A dot-product core on its three tensors, its folding factors given and its own
+    choices committed: its own design space, as the boundary channels it is placed between
+    see it (a kernel reads its facts only, so nothing on a channel reaches it).
 
     The core takes its extents from its tensors: ``outputs`` (N) defaults to PE
     and ``reduction`` (K) to SIMD, one fold each. PE and SIMD are facts a core is
@@ -253,56 +279,26 @@ def placed_dotp(
     n = outputs if outputs is not None else (pe if isinstance(pe, int) and pe > 0 else 1)
     k = reduction if reduction is not None else (simd if isinstance(simd, int) and simd > 0 else 1)
     x_shape = (rows, k, n) if form is Form.DEPTHWISE else (rows, k)
-    # The channels are on the core's platform; a test that omits it gets FULL_DSP48E2's.
-    platform = cast(Platform, facts.get("platform", FULL_DSP48E2))
-
     x_tensor = Tensor(x_shape, ScalarEncoding(activation_dtype))
     w_range = None if weights_range is None else TensorRange(*weights_range)
     w_tensor = Tensor((k, n), ScalarEncoding(weights_dtype, w_range))
-    # The results' channel's tensor: the graph's statement of what the core produces.
-    y_range = None if result_range is None else TensorRange(*result_range)
-    y_tensor = Tensor((rows, n), ScalarEncoding(result_dtype, y_range))
-    network = Network(
-        {
-            "x": wire(
-                tensor=x_tensor,
-                port="in0_V",
-                consumer=Interface("compute", "x_contract"),
-                platform=platform,
-            ),
-            "w": wire(
-                tensor=w_tensor,
-                port="in1_V",
-                consumer=Interface("compute", "w_contract"),
-                platform=platform,
-            ),
-            "y": wire(
-                tensor=y_tensor,
-                port="out0_V",
-                producer=Interface("compute", "y_contract"),
-                platform=platform,
-            ),
-            "compute": space_type(
-                x_tensor=x_tensor,
-                w_tensor=w_tensor,
-                result_range=result_range or ordinary_integer_bounds(result_dtype),
-                **dotp_extents(w_tensor),
-                **{
-                    name: value for name, value in (("pe", pe), ("simd", simd)) if value is not None
-                },
-                **facts,
-            ),
-        }
+    core = space_type(
+        x_tensor=x_tensor,
+        w_tensor=w_tensor,
+        result_range=result_range or ordinary_integer_bounds(result_dtype),
+        **dotp_extents(w_tensor),
+        **{name: value for name, value in (("pe", pe), ("simd", simd)) if value is not None},
+        **facts,
     )
     choices = {
         key: value
         for key, value in (
-            ("compute.compute_pumping", compute_pumping),
-            ("compute.reducer", reducer if is_decision(space_type, "reducer") else None),
+            ("compute_pumping", compute_pumping),
+            ("reducer", reducer if is_decision(space_type, "reducer") else None),
         )
         if value is not None
     }
-    placed: S = choose(network, choices).member("compute")
+    placed: S = commit(design_space(core), choices)
     return placed
 
 
@@ -350,9 +346,9 @@ def matmul_network(
     weights: IntegerTensor | None = None,
     weight_sets: int = 1,
     realization: str | None = None,
-) -> Network:
+) -> Partition:
     """A MatMul of ``space_type`` (``matmul``; a ``MatMulKernel`` by default) on the
-    channels of a network: its activations ``(m, k)`` (``(m, k, n)`` depthwise) of
+    channels of a partition: its activations ``(m, k)`` (``(m, k, n)`` depthwise) of
     ``activation_dtype``, its weights known (``weights``, declared ``weights_dtype``) or
     streamed (``(k, n)`` of ``weights_dtype``), its results its own statement; see the
     module docstring. ``realization`` is committed where given."""
@@ -378,48 +374,60 @@ def matmul_network(
         tensors["weights"] = stated.value if isinstance(stated, Available) else given
     several = weight_sets > 1
     set_tensor = Tensor((m,), ScalarEncoding(set_index_dtype(weight_sets)))
-    members: dict[str, Space | Wire] = {
-        "x": wire(
+    members: dict[str, Facts | ChannelDeclaration] = {
+        "x": channel(
+            Side.boundary("in0_V"),
+            Port("matmul", "x"),
             tensor=tensors["x_tensor"],
-            port="in0_V",
-            consumer=Interface("matmul", "x_contract"),
             platform=platform,
         )
     }
     if several:
-        members["set"] = wire(
-            tensor=set_tensor,
-            port="in2_V",
-            consumer=Interface("w", "set_contract"),
-            platform=platform,
+        members["set"] = channel(
+            Side.boundary("in2_V"), Port("w", "set"), tensor=set_tensor, platform=platform
         )
+    # Known weights are the channel's value, its source their memory; else the boundary's.
     weight: dict[str, object] = dict(
-        tensor=Fact("matmul", "carried_weights"),
-        contents=Fact("matmul", "stored_weights"),
-        sets=weight_sets,
-        port="in1_V",
-        consumer=Interface("matmul", "w_contract"),
-        platform=platform,
+        tensor=Stated("matmul", "carried_weights"), sets=weight_sets, platform=platform
     )
+    if weights is not None:
+        weight["contents"] = Stated("matmul", "stored_weights")
     if several:
         weight["index_tensor"] = set_tensor
-    members["w"] = wire(**weight)
-    members["y"] = wire(
+    producer = Side.source() if weights is not None else Side.boundary("in1_V")
+    members["w"] = ChannelDeclaration(producer, Port("matmul", "w"), weight)
+    members["y"] = channel(
+        Port("matmul", "y"),
+        Side.boundary("out0_V"),
         tensor=tensors["y_tensor"],
-        port="out0_V",
-        producer=Interface("matmul", "y_contract"),
         platform=platform,
     )
-    members["matmul"] = space_type(
-        **facts, **{name: tensor for name, tensor in tensors.items() if name != "y_tensor"}
+    members["matmul"] = Facts(
+        space_type,
+        {**facts, **{name: tensor for name, tensor in tensors.items() if name != "y_tensor"}},
     )
-    network = Network(members)
+    network = by_hand(members)
     return choose(network, {"matmul.realization": realization}) if realization else network
 
 
-def matmul_point(*, realization: str | None = None, **facts: Any) -> Network:
+def matmul_point(*, realization: str | None = None, **facts: Any) -> Partition:
     """``matmul_network`` of a ``MatMulKernel``, its ``realization`` committed when given."""
     return matmul_network(realization=realization, **facts)
+
+
+def kernel_alone(network: Partition, name: str) -> Any:
+    """Kernel ``name`` of ``network`` alone: its class bound to the facts the partition
+    gives it, with the choices it stores there committed (its own design space, keyed by
+    its own keys), as conversion's policies read a kernel."""
+    names = network.composed.names
+    facts = {
+        names.roots[root][1]: value
+        for root, value in network.composed.facts.items()
+        if names.roots[root][0] == name
+    }
+    point = Facts(type(network.member(name)), facts).bind()
+    stored = {key: value for (_, key), value in network.chosen([name]).items()}
+    return commit(point, stored) if stored else point
 
 
 def controlled(space_type: Callable[..., S], facts: Mapping[str, object], **choices: object) -> S:
@@ -637,20 +645,20 @@ ADAPTER_RAM_STYLES = "*adapter_ram_style"
 """The keys (``fnmatch``) of every channel's one memory choice for its input adapter's
 ``input_gen`` stages."""
 
-P = TypeVar("P", bound=Space | Network)
+P = TypeVar("P", bound=Space | Partition)
 
 
-def open_choices(network: Network, pattern: str) -> list[str]:
+def open_choices(network: Partition, pattern: str) -> list[str]:
     """The open choices of ``network`` matching ``pattern`` (``fnmatch``), as
     ``member.key``."""
     return _undecided(network, pattern)
 
 
-def _undecided(subject: Space | Network, pattern: str) -> list[str]:
-    """The open choices in play of a point or a network matching ``pattern``, by key (a
-    network's as ``member.key``): unset in a scope that is present (``inspection.Open``,
+def _undecided(subject: Space | Partition, pattern: str) -> list[str]:
+    """The open choices in play of a point or a partition matching ``pattern``, by key (a
+    partition's as ``member.key``): unset in a scope that is present (``inspection.Open``,
     waiting on nothing)."""
-    if isinstance(subject, Network):
+    if not isinstance(subject, Space):
         return [dotted(key) for key in subject.undecided() if fnmatchcase(dotted(key), pattern)]
     return [
         key
@@ -660,18 +668,20 @@ def _undecided(subject: Space | Network, pattern: str) -> list[str]:
 
 
 def _committed(subject: P, choices: Mapping[str, object]) -> P:
-    if isinstance(subject, Network):
+    if not isinstance(subject, Space):
         return cast(P, choose(subject, choices))
     return cast(P, commit(subject, choices))
 
 
-def _first_valid(point: Space, key: str) -> object:
-    """The first value of ``point``'s channel choice ``key`` that setting alone accepts, in
-    its policy's order (the cut's, ``finn.kernels.policies.ranked``), as its first valid
-    policy takes it."""
-    info = cast(Any, decision(point, key))
+def _first_valid(point: Space, key: str | inspection.DecisionInfo[object]) -> object:
+    """The first value of ``point``'s channel choice ``key`` (or the Decision a
+    composition's ``decision`` gives) that setting alone accepts, in its policy's order (the
+    channel's, ``finn.kernels.policies.ranked``), as its first valid policy takes it."""
+    if isinstance(key, str):
+        key = next(item for item in inspection.decisions(point) if item.key == key)
+    info = cast(Any, key)
     (found,) = inspection.viable(point, [info.reference])
-    items, fallback = ranked(point, Cut, info, found.values or ())
+    items, fallback = ranked(point, Channel, info, found.values or ())
     assert fallback is None, f"{key}: {fallback}"
     first = next((item for item in items if isinstance(item, inspection.Possible)), None)
     assert first is not None, f"{key} has no possible value: {found}"
@@ -681,19 +691,19 @@ def _first_valid(point: Space, key: str) -> object:
 def with_adapter_memories(subject: P, ram_style: str | None = None) -> P:
     """Each open adapter memory (a channel's one style for its input adapter's input_gen
     stages) takes ``ram_style``, or where None its first valid value (an explicit style, by
-    the most bits one of those buffers holds: its channel's ranking), as the cut's first
-    valid policy takes it, on a network or a point. A channel's input adapter is picked by
+    the most bits one of those buffers holds: its channel's ranking), as the channel's first
+    valid policy takes it, on a partition or a point. A channel's input adapter is picked by
     its steps."""
     styles = _undecided(subject, ADAPTER_RAM_STYLES)
     if not styles:
         return subject
     if ram_style is None:
-        if isinstance(subject, Network):
-            first = {
-                key: _first_valid(subject.member(owner), below)
-                for key in styles
-                for owner, below in (key.split(".", 1),)
-            }
+        if not isinstance(subject, Space):
+            first = {}
+            for key in styles:
+                owner, _, below = key.partition(".")
+                info = cast(Any, subject.decision((owner, below)))
+                first[key] = _first_valid(subject.member(owner), info)
         else:
             first = {key: _first_valid(subject, key) for key in styles}
         return _committed(subject, first)
@@ -704,32 +714,25 @@ def with_defaults(network: N) -> N:
     """``network`` with every open choice in play that is not required set as conversion
     and the cut set them (``Defaults``, through a seam of its own holding every stored
     choice, so that only the open ones are set): each by its policy, a kernel's (none
-    stated: a network built by hand has no KernelOp) first valid, a channel's the cut's; a
-    FIFO's depth left open. The set-up of a test
-    that explores a network that never went through a graph."""
+    stated: a partition built by hand has no KernelOp) first valid, a channel's its own;
+    a FIFO's depth left open. The set-up of a test that explores a partition that never
+    went through a graph."""
     seam = Seam()
     seam.held.update(network.chosen())
     return Defaults().explore(seam, network)
 
 
 def with_channel_defaults(network: N) -> N:
-    """``network`` with each bound channel's open choices in play that are not required set
-    as the cut sets them, by its policies (``finn.kernels.cut.channel_defaulted``: first
-    valid; a FIFO's depth stays open): for a network built by hand, which no cut made."""
-    for name in network.channels:
-        if network.unbound(name) is not None:
-            continue
-        point = network.member(name)
-        done = channel_defaulted(point)
-        assert not isinstance(done, tuple), f"{name}: " + "; ".join(map(str, done))
-        assert done.fallbacks == (), f"{name}: {done.fallbacks}"
-        before = chosen(point)
-        values = {
-            (name, key): value for key, value in chosen(done.point).items() if key not in before
-        }
-        if values:
-            network = network.with_choices(values)
-    return network
+    """``network`` with each channel's open choices in play that are not required set as
+    the cut sets them, by the channel's policies, on the partition's design space, in the one
+    pass over its root in the root's flow order (``Partition.defaulted``, restricted to the
+    channels: first valid, where setting it is accepted; a FIFO's depth stays open), as
+    ``make_cut_choices`` sets a graph's: for a partition built by hand, which no cut made. A
+    channel refused on its own is left as it is."""
+    done = network.defaulted(members=network.channels)
+    assert not done.unset, "; ".join(map(str, done.unset))
+    assert done.fallbacks == (), f"{done.fallbacks}"
+    return network.at(done.point)
 
 
 TRANSPORTS = "*.transport"
@@ -777,7 +780,7 @@ class MatMulAssembly:
     weight_delivery: WeightDelivery
     module: Composed
     initializer: tuple[int, ...]
-    network: Network
+    network: Partition
 
 
 def _frozen(values: object) -> object:
@@ -822,12 +825,11 @@ def matmul_assembly(
     compute core (``packed`` or ``int8_dsp58``) and ``realization`` a depthwise
     MatMul's; each left out takes its policy, first valid in the flow order
     (``finn.kernels.policies.defaulted``: the realization before the core), as conversion
-    would set it (MatMul states no policy; this layer reaches no KernelOp, so
-    ``Unstated``). PE, SIMD and pumping are the core's, and the
-    packed core's ``reducer``. The kernel's choices are set first, then its channels',
-    whose contracts are its: the network builds each channel as its contracts become
-    known and gives its choices their first valid values (the interim channel rule), the
-    weight channel's memory and FIFO as given.
+    would set it, on the kernel alone (MatMul states no policy; this layer reaches no
+    KernelOp, so ``Unstated``). PE, SIMD and pumping are the core's, and the packed core's
+    ``reducer``. The kernel's choices are set first, then its channels' open ones by their
+    first valid values, as the cut sets them (``with_channel_defaults``), then the weight
+    channel's memory and FIFO as given.
     """
     if not isinstance(weight_delivery, WeightDelivery):
         raise ValueError("weight_delivery must be a WeightDelivery value")
@@ -858,20 +860,22 @@ def matmul_assembly(
         channel["w.transport.fifo.buffer.ram_style"] = "auto"
     network = matmul_point(realization=realization, **facts)
     # What the caller leaves out of the realization and the core takes the kernel's
-    # policy, first valid in the flow order; every other choice is the caller's.
-    point = network.member("matmul")
+    # policy, first valid in the flow order, on the kernel alone (as conversion sets it);
+    # every other choice is the caller's.
+    point = kernel_alone(network, "matmul")
     left = {"realization", "compute"} - ({"compute"} if core is not None else set())
     kept = {key for key, _ in inspection.states(point)} - left
-    done = defaulted(point, Unstated, kept=kept)
-    if isinstance(done, tuple):
-        raise ValueError("no value can be set: " + "; ".join(map(str, done)))
+    done = defaulted(point, Alone(Unstated), kept=kept)
+    if done.unset or done.refused:
+        why = (*done.refused.get("", ()), *done.unset)
+        raise ValueError("no value can be set: " + "; ".join(map(str, why)))
     taken = {
         f"matmul.{key}": value
         for key, value in chosen(done.point).items()
         if key in left and key not in chosen(point)
     }
     network = choose(network, {**taken, **({"matmul.compute": core} if core is not None else {})})
-    core = str(chosen(network.member("matmul"))["compute"])
+    core = str(network.chosen(["matmul"])[("matmul", "compute")])
     network = choose(
         network,
         {
@@ -881,7 +885,7 @@ def matmul_assembly(
             **({"matmul.compute.packed.reducer": reducer} if core == "packed" else {}),
         },
     )
-    network = choose(network, channel)
+    network = choose(with_channel_defaults(network), channel)
     # Each channel's adapter is forced; an input_gen's memory is inferred; the other
     # channels connect directly.
     network = with_direct_transports(with_adapter_memories(network))

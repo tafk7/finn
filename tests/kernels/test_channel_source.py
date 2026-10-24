@@ -3,16 +3,16 @@
 
 """A channel with a known value carries a ``source``: MatMul's weights on its weight channel.
 
-The MatMul sits in a network (``support.helpers.matmul_point``) that gives it its
-weights: the weight channel carries what MatMul states for it, its ``contents`` and
-its tensor over their range. Known weights give the channel a value, so its
-``source`` applies (``memstream``, its one candidate, set first valid as the network
-builds the channel: the interim channel rule) and stores them; unknown weights leave the
-channel without a source, and it is the boundary ``in1_V``. The channel's contracts are
-MatMul's, known once its folding is: its choices are made after the kernel's. These
-tests cover the source, laziness, the memory's own choices, their replay on another
-network, the platform's capabilities, the invariant that a channel with a value has its
-source as its only producer, and the weight channel's FIFO.
+The MatMul sits in a partition declared by hand (``support.helpers.matmul_point``) that
+gives it its weights: the weight channel carries what MatMul states for it, its
+``contents`` and its tensor over their range. Known weights give the channel a value, so
+its ``source`` applies (``memstream``, its one candidate) and stores them; unknown weights
+leave the channel without a source, and it is the boundary ``in1_V``. The channel's sides
+are MatMul's ports, known once its folding is: its choices are set after the kernel's, by
+the channel's policies (``with_channel_defaults``) or by name. These tests cover the source,
+laziness, the memory's own choices, their replay on another partition, the platform's
+capabilities, the invariant that a channel with a value has its source as its only
+producer, and the weight channel's FIFO.
 """
 
 from dataclasses import replace
@@ -24,16 +24,18 @@ from support.helpers import (
     FULL_DSP48E2,
     WeightDelivery,
     built,
+    by_hand,
     choose,
     codes,
+    kernel_alone,
     keyed,
     labels,
     matmul_assembly,
     matmul_point,
     module_of,
     placed,
-    with_adapter_memories,
-    with_direct_transports,
+    refused_codes,
+    with_channel_defaults,
 )
 
 from finn.core.space import (
@@ -43,16 +45,16 @@ from finn.core.space import (
     Unresolved,
     inspection,
 )
-from finn.core.space.errors import ConfigurationError
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.module import Composed
-from finn.kernels.base import NETLIST
 from finn.kernels.channels import Channel
+from finn.kernels.composer import Facts, Port, Stated, channel
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.matmul import KnownWeights, MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.network import Fact, Interface, Network, NetworkError, wire
+from finn.kernels.partition import Partition
+from finn.kernels.sides import Side
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import Platform
 
@@ -91,6 +93,11 @@ def folded(point, *, pe=2, simd=2):
     return choose(point, {**FOLDING, "matmul.pe": pe, "matmul.simd": simd})
 
 
+def relative(key: str, member: str = "w") -> str:
+    """A path in the partition's design space as member ``member``'s own key."""
+    return key.removeprefix(f"{member}.")
+
+
 def handle(point, key):
     """The choice ``key`` of ``point``, by name, listed or not (its model's)."""
     every = inspection.decisions(inspection.model(point))
@@ -104,39 +111,42 @@ def configured(point, *, style=None, pe=2, simd=2):
             "w.source.ram_style": style,
             "w.source.pumped_memory": False,
         }
-    # The activation channel's adapter is forced by the folding; its memory is the flow's.
-    return with_direct_transports(
-        with_adapter_memories(choose(folded(point, pe=pe, simd=simd), choices))
-    )
+    # The activation channel's adapter is forced by the folding; its memory, and every
+    # other channel choice left open, the channel's policies'.
+    return with_channel_defaults(choose(folded(point, pe=pe, simd=simd), choices))
 
 
-def stored(platform: Platform) -> Network:
+def stored(platform: Platform) -> Partition:
     """MatMul with known weights, its channels on ``platform``: the weight channel
     carries what MatMul states for it."""
-    return Network(
+    return by_hand(
         {
-            "x": wire(
+            "x": channel(
+                Side.boundary("in0_V"),
+                Port("matmul", "x"),
                 tensor=Tensor((3, 4), INT3),
-                port="in0_V",
-                consumer=Interface("matmul", "x_contract"),
                 platform=platform,
             ),
-            "w": wire(
-                tensor=Fact("matmul", "carried_weights"),
-                contents=Fact("matmul", "stored_weights"),
-                consumer=Interface("matmul", "w_contract"),
+            "w": channel(
+                Side.source(),
+                Port("matmul", "w"),
+                tensor=Stated("matmul", "carried_weights"),
+                contents=Stated("matmul", "stored_weights"),
                 platform=platform,
             ),
-            "y": wire(
+            "y": channel(
+                Port("matmul", "y"),
+                Side.boundary("out0_V"),
                 tensor=Tensor((3, 4), INT7),
-                port="out0_V",
-                producer=Interface("matmul", "y_contract"),
                 platform=platform,
             ),
-            "matmul": MatMulKernel(
-                **{**KNOWN, "platform": platform},
-                x_tensor=Tensor((3, 4), INT3),
-                weights=KnownWeights(IntegerTensorValue.of(WEIGHTS), DataType["INT3"]),
+            "matmul": Facts(
+                MatMulKernel,
+                {
+                    **{**KNOWN, "platform": platform},
+                    "x_tensor": Tensor((3, 4), INT3),
+                    "weights": KnownWeights(IntegerTensorValue.of(WEIGHTS), DataType["INT3"]),
+                },
             ),
         }
     )
@@ -172,11 +182,11 @@ def test_known_weights_give_the_weight_channel_its_source():
     # the channel states for it.
     assert w.sides.source_owner == "source.memstream"
     assert instance_parameters(stored_, STORED_INSTANCE)["RAM_STYLE"] == '"block"'
-    # Unknown weights: no value, no source; the channel is the boundary in1_V.
+    # Unknown weights: no value, no source; the channel's producer is the boundary in1_V.
     unvalued = external.member("w")
     assert not unvalued.valued
     assert isinstance(unvalued.query(Channel.source), Inapplicable)
-    assert unvalued.sides.source_owner is None
+    assert unvalued.sides.producer == Side.boundary("in1_V")
     # MatMul's netlist is its cores' alone.
     matmul = stored_.member("matmul")
     assert [item.node for item in matmul.netlists] == ["compute.packed"]
@@ -185,15 +195,15 @@ def test_known_weights_give_the_weight_channel_its_source():
 def test_an_unvalued_channel_never_demands_its_source():
     w = configured(base()).member("w")
     evidence = inspection.explain(w, Channel.netlist)
-    visited = {node.declaration.key for node in evidence.nodes}
+    visited = {relative(node.declaration.key) for node in evidence.nodes}
     # Whether the channel has a value is read (the weights' presence), never the value.
     assert {"valued", "streams", "sides"} <= visited
     # Nothing of the source runs: the channel's members are summed (its netlist), so its
     # source's guard is read, and is False; everything below it is inapplicable.
     reached = {
-        node.declaration.key: node.result
+        relative(node.declaration.key): node.result
         for node in evidence.nodes
-        if node.declaration.key.startswith("source.")
+        if relative(node.declaration.key).startswith("source.")
     }
     assert reached.pop("source.$guard", Available(False)) == Available(False)
     assert all(isinstance(result, Inapplicable) for result in reached.values())
@@ -227,28 +237,31 @@ def test_a_channel_without_contents_lists_none_of_its_sources_choices():
     # channel's lists: its decisions, its states, the network's states and open choices.
     # Asked by name they still answer, and set by name one is accepted, dormant, and is then
     # listed: a stored choice is never pruned (SZ119 (5)).
+    # In the partition's design space the channel's keys are below its member's name.
     source = {"source.ram_style", "source.pumped_memory"}
+    paths = {f"w.{key}" for key in source}
     network = configured(base())
     w = network.member("w")
     assert not w.valued
     assert source <= {item.key for item in inspection.decisions(Channel)}
-    assert source <= {item.key for item in inspection.decisions(inspection.model(w))}
-    assert not source & {item.key for item in inspection.decisions(w)}
-    assert not source & {key for key, _ in inspection.states(w)}
+    assert paths <= {item.key for item in inspection.decisions(inspection.model(w))}
+    assert not paths & {item.key for item in inspection.decisions(w)}
+    assert not paths & {key for key, _ in inspection.states(w)}
     assert not source & {key for (_, key), _ in network.states(("w",))}
     assert not source & {key for _, key in network.undecided()}
-    (asked,) = inspection.viable(w, [handle(w, "source.ram_style")])
-    assert asked.key == "source.ram_style" and asked.values is not None
-    stored = w.with_choices({handle(w, "source.ram_style"): "block"})
+    point = network.point
+    (asked,) = inspection.viable(point, [handle(point, "w.source.ram_style")])
+    assert asked.key == "w.source.ram_style" and asked.values is not None
+    stored = point.with_choices({handle(point, "w.source.ram_style"): "block"})
     states = dict(inspection.states(stored))
-    assert states["source.ram_style"] == inspection.Dormant("block")
-    assert "source.pumped_memory" not in states
-    assert "source.ram_style" in {item.key for item in inspection.decisions(stored)}
+    assert states["w.source.ram_style"] == inspection.Dormant("block")
+    assert "w.source.pumped_memory" not in states
+    assert "w.source.ram_style" in {item.key for item in inspection.decisions(stored)}
 
 
 def test_the_stored_memory_takes_its_choices_with_its_channel_and_refuses_bad_weights():
-    # The memory's choices are set, first valid, as the network builds the weight channel
-    # (the interim channel rule): LUTRAM for a table of 64 bits, unpumped.
+    # The memory's choices are set, first valid, by the channel's policies
+    # (``with_channel_defaults``): LUTRAM for a table of 64 bits, unpumped.
     built_with = configured(base(weights=WEIGHTS))
     assert built_with.chosen(("w",)) == {
         ("w", "source.ram_style"): "distributed",
@@ -257,16 +270,18 @@ def test_the_stored_memory_takes_its_choices_with_its_channel_and_refuses_bad_we
     }
     assert isinstance(module_of(built_with, "matmul"), Available)
     # Weights outside their type are refused where MatMul states their range on the
-    # weight channel's tensor; the channel, which carries it, is refused with it.
+    # weight channel's tensor; the partition, whose weight channel carries it, refuses the
+    # folding that places the channel's ports by it.
     outside = base(weights=((4,) * 4,) * 4)
-    refused = outside.member("matmul").query(MatMulKernel.carried_weights)
+    refused = kernel_alone(outside, "matmul").query(MatMulKernel.carried_weights)
     assert isinstance(refused, Rejected)
     assert codes(refused) == {"dtype-storage"}
     assert owners(refused) == {"carried_weights"}
-    assert codes(outside.query("w", NETLIST)) == {"dtype-storage"}
+    fold = {**FOLDING, "matmul.pe": 2, "matmul.simd": 2}
+    assert refused_codes(outside, fold) == {"dtype-storage"}
     # The view presenting it is a product: refused with MatMul, whose cores read the
     # refused value.
-    presented = outside.member("matmul").query(MatMulKernel.w_carried)
+    presented = kernel_alone(outside, "matmul").query(MatMulKernel.w_carried)
     assert codes(presented) == {"dtype-storage"}
     # A shape error is refused by MatMul: its K is its activations', not the weights'.
     wrong = base(weights=((0,),)).member("matmul").query(MatMulKernel.carried)
@@ -318,8 +333,9 @@ def test_the_cores_do_not_wait_on_the_source():
             "matmul.compute.packed.reducer": "tree",
         },
     )
-    # The weight channel, built once the folding is known, takes its memory's choices
-    # (the interim channel rule), so the module is complete.
+    # Its channels' choices set by the channel's policies (the weight channel's memory's among
+    # them), the module is complete.
+    point = with_channel_defaults(point)
     assert isinstance(module_of(point, "matmul"), Available)
     # The packed core does not wait for the memory: its weights' range is the one their
     # owner states on the channel.
@@ -336,11 +352,11 @@ def test_the_cores_do_not_wait_on_the_source():
     }
 
 
-def test_the_sources_choices_round_trip_through_another_network():
+def test_the_sources_choices_round_trip_through_another_partition():
     point = configured(base(weights=WEIGHTS), style="block")
     saved = point.chosen()
-    # Every choice is stored: the source's and the adapter's memory too, set where the
-    # network builds their channels (the interim channel rule).
+    # Every choice is stored: the source's and the adapter's memory too, set by the cut's
+    # policies.
     assert sorted(f"{owner}.{key}" for owner, key in saved) == [
         "matmul.compute",
         "matmul.compute.packed.compute_pumping",
@@ -365,55 +381,121 @@ def test_the_sources_choices_round_trip_through_another_network():
     assert states[("w", "source.ram_style")] == inspection.Dormant("block")
     # Facts that invalidate a saved folding refuse replay atomically: five outputs.
     wider = tuple((*row, 0) for row in WEIGHTS)
-    with pytest.raises(NetworkError, match="matmul.pe"):
+    with pytest.raises(ValueError, match="matmul.pe"):
         base(weights=wider, n=5).with_choices(saved)
 
 
-def test_several_weight_sets_without_known_weights_leave_the_set_channel_unused():
-    # No value, no source: nothing consumes the set index, which refuses itself.
+def test_several_weight_sets_without_known_weights_leave_the_set_channel_unplaced():
+    # No value, no source: the set channel's consumer, the source's set port, does not
+    # apply, and neither does the channel (its sides, its netlist): the partition's module
+    # is not made, and the netlist's refusal says why (``channel-unused``: no port of the
+    # channel is present).
     point = configured(base(weight_sets=2))
-    answer = module_of(point, "matmul")
-    assert isinstance(answer, Rejected)
-    assert "channel-unused" in codes(answer)
+    assert isinstance(point.member("set").query(Channel.sides), Inapplicable)
+    assert isinstance(point.netlist(), Rejected)
+    module = module_of(point, "matmul")
+    assert isinstance(module, Rejected)
+    ((found,),) = [module.findings]
+    assert (found.code, found.owner, found.message, dict(found.details)) == (
+        "channel-unused",
+        "set",
+        "no present port is on this channel: w.set does not apply (its member places no such port)",
+        {"tensor": "set"},
+    )
+
+
+def test_a_channel_with_one_port_present_and_one_not_is_named_unformed_by_its_netlist():
+    # The same absent port (the source's set port) as the consumer of a channel that has a
+    # port present, MatMul's output: the channel does not apply either, and its netlist's
+    # refusal names the port that does not, keeping the code of the channel with none.
+    x_tensor, w_tensor = Tensor((3, 4), INT3), Tensor((4, 4), INT3)
+    indices = Tensor((3,), ScalarEncoding(DataType["UINT1"]))
+    members = {
+        "x": channel(
+            Side.boundary("in0_V"), Port("matmul", "x"), tensor=x_tensor, platform=FULL_DSP48E2
+        ),
+        "w": channel(
+            Side.boundary("in1_V"),
+            Port("matmul", "w"),
+            tensor=Stated("matmul", "carried_weights"),
+            sets=2,
+            index_tensor=indices,
+            platform=FULL_DSP48E2,
+        ),
+        "t": channel(
+            Port("matmul", "y"),
+            Port("w", "set"),
+            tensor=Stated("matmul", "result_tensor"),
+            platform=FULL_DSP48E2,
+        ),
+        "matmul": Facts(
+            MatMulKernel,
+            {"platform": FULL_DSP48E2, "x_tensor": x_tensor, "weights": w_tensor},
+        ),
+    }
+    point = configured(by_hand(members))
+    found = point.netlist()
+    assert isinstance(found, Rejected)
+    ((one,),) = [found.findings]
+    assert (one.code, one.owner, one.message) == (
+        "channel-unused",
+        "t",
+        "a port of this channel does not apply, so it is not formed: w.set "
+        "(its member places no such port)",
+    )
 
 
 def test_a_source_whose_rule_is_false_refuses_the_change_that_places_it():
     # Several sets need the set channel; a memory without one refuses itself.
     members = {
-        **{name: stored(FULL_DSP48E2).wiring(name) for name in ("x", "y")},
-        "w": wire(
-            tensor=Fact("matmul", "carried_weights"),
-            contents=Fact("matmul", "stored_weights"),
-            sets=2,
-            consumer=Interface("matmul", "w_contract"),
+        "x": channel(
+            Side.boundary("in0_V"),
+            Port("matmul", "x"),
+            tensor=Tensor((3, 4), INT3),
             platform=FULL_DSP48E2,
         ),
-        "matmul": MatMulKernel(
-            **KNOWN,
-            x_tensor=Tensor((3, 4), INT3),
-            weights=KnownWeights(IntegerTensorValue.of((WEIGHTS, WEIGHTS)), DataType["INT3"]),
+        "w": channel(
+            Side.source(),
+            Port("matmul", "w"),
+            tensor=Stated("matmul", "carried_weights"),
+            contents=Stated("matmul", "stored_weights"),
+            sets=2,
+            platform=FULL_DSP48E2,
+        ),
+        "y": channel(
+            Port("matmul", "y"),
+            Side.boundary("out0_V"),
+            tensor=Tensor((3, 4), INT7),
+            platform=FULL_DSP48E2,
+        ),
+        "matmul": Facts(
+            MatMulKernel,
+            {
+                **KNOWN,
+                "x_tensor": Tensor((3, 4), INT3),
+                "weights": KnownWeights(
+                    IntegerTensorValue.of((WEIGHTS, WEIGHTS)), DataType["INT3"]
+                ),
+            },
         ),
     }
     folding = {**FOLDING, "matmul.pe": 2, "matmul.simd": 2}
-    # The folding gives the weight channel its value, so its source is placed, and the
-    # memory's own rule is false: the channel would newly read refused, so the fold is
-    # refused by that rule, the channel's own refusal. A strategy can be stopped by a
-    # channel it does not decide, where forcing accepted the fold and left the channel
-    # silently refused.
-    # The memory's output order, which the channel's sides read, refuses the same way: so
-    # do the channel's rules and guards that read its sides.
-    memory = {
-        ("memstream-set-channel", "source.selected"),
-        ("memstream-set-channel", "source.output_sequence"),
+    # The folding gives the memory its output order, which the memory's own rule refuses
+    # with no set channel: on the partition's one design space the rule is newly false,
+    # so the change is refused, by the memory's rule, nothing stored standing in its way
+    # (its facts and the change alone break it).
+    trial = by_hand(members).trial(keyed(folding))
+    assert not trial.accepted
+    rule = ("w", "source.output_sequence")
+    assert {key: [f.code for f in why] for key, why in trial.refused.items()} == {
+        rule: ["memstream-set-channel"]
     }
-    trial = Network(members).trial(keyed(folding))
-    assert set(trial.refused) == {("w", "")}
-    assert {
-        (why.code, why.owner) for why in trial.refused[("w", "")] if why.code != "guard-refused"
-    } == memory
-    # Bound with the folding stored, the channel is refused by the memory's rule.
-    w = Network(members, stored=keyed(folding)).member("w")
-    validity = inspection.validity(w)
+    assert trial.standing.get(rule, ()) == ()
+    # Bound with the folding stored, the partition binds and the channel reads refused by
+    # the memory's rule, which its validity names, and emission with it. The memory's
+    # output order, which the channel's sides read, refuses the same way: so do the
+    # channel's rules and guards that read its sides.
+    validity = by_hand(members, stored=keyed(folding)).validity("w")
     assert validity.status == "refused"
     assert "source.selected" in {piece.owner for piece in validity.pieces}
     assert {
@@ -421,7 +503,10 @@ def test_a_source_whose_rule_is_false_refuses_the_change_that_places_it():
         for piece in validity.pieces
         for finding in piece.result.findings
         if finding.code != "guard-refused"
-    } == memory
+    } == {
+        ("memstream-set-channel", "source.selected"),
+        ("memstream-set-channel", "source.output_sequence"),
+    }
 
 
 @pytest.mark.parametrize(
@@ -454,32 +539,32 @@ def test_a_channel_with_a_value_has_its_source_as_its_only_producer():
         Tensor((4, 4), INT3),
         Tensor((3, 4), INT8),
     )
-    produced = Network(
+    produced = by_hand(
         {
-            "x": wire(
-                tensor=x_tensor,
-                port="in0_V",
-                consumer=Interface("matmul", "x_contract"),
-                platform=FULL_DSP48E2,
+            "x": channel(
+                Side.boundary("in0_V"), Port("matmul", "x"), tensor=x_tensor, platform=FULL_DSP48E2
             ),
-            "w": wire(
-                tensor=w_tensor,
-                port="in1_V",
-                consumer=Interface("matmul", "w_contract"),
-                platform=FULL_DSP48E2,
+            "w": channel(
+                Side.boundary("in1_V"), Port("matmul", "w"), tensor=w_tensor, platform=FULL_DSP48E2
             ),
-            "y": wire(
+            "y": channel(
+                Port("matmul", "y"),
+                Side.boundary("out0_V"),
                 tensor=y_tensor,
                 contents=IntegerTensorValue.of(((0,) * 4,) * 3),
-                producer=Interface("matmul", "y_contract"),
                 platform=FULL_DSP48E2,
             ),
-            "matmul": MatMulKernel(platform=FULL_DSP48E2, x_tensor=x_tensor, weights=w_tensor),
+            "matmul": Facts(
+                MatMulKernel, {"platform": FULL_DSP48E2, "x_tensor": x_tensor, "weights": w_tensor}
+            ),
         }
     )
-    answer = folded(produced).member("y").query(Channel.sides)
-    assert isinstance(answer, Rejected) and codes(answer) == {"channel-users"}
-    assert "only producer" in answer.findings[0].message
+    # The folding states the producer's stream, and the channel's own role check refuses
+    # it: the change is refused by it.
+    trial = produced.trial(keyed({**FOLDING, "matmul.pe": 2, "matmul.simd": 2}))
+    ((key, why),) = trial.refused.items()
+    assert key == ("y", "sides") and {finding.code for finding in why} == {"channel-users"}
+    assert "only producer" in why[0].message
 
 
 @pytest.mark.parametrize("delivery", tuple(WeightDelivery))
@@ -545,38 +630,31 @@ def test_a_buffered_channel_places_a_fifo_between_its_producer_and_consumer():
 
 def test_fifo_depth_is_owned_by_the_channel_and_only_demanded_when_selected():
     point = configured(base())
+    info = point.decision(("w", "transport.fifo.depth"))
+    assert info is not None and info.scope == "w.transport.fifo"
     w = point.member("w")
-    records = {item.key: item for item in inspection.decisions(w)}
-    assert records["transport.fifo.depth"].scope == "transport.fifo"
-    depth = handle(w, "transport.fifo.depth")
-    assert isinstance(w.field(depth).query(), Inapplicable)
+    assert isinstance(w.field(info.reference).query(), Inapplicable)
     undecided = buffered(point)
     assert isinstance(module_of(undecided, "matmul"), Unresolved)
-    with pytest.raises(ConfigurationError):
-        w.with_choices(
-            {
-                handle(w, "transport"): "fifo",
-                handle(w, "transport.fifo.buffer.ram_style"): "auto",
-                depth: 1,
-            }
-        )
+    with pytest.raises(ValueError, match="depth"):
+        buffered(point, depth=1)
     deep = buffered(point, depth=64)
     saved = deep.chosen()
     assert ("w", "transport.fifo.depth") in saved
     assert built(base().with_choices(saved), "matmul") == built(deep, "matmul")
-    # In the channel's space, removing the FIFO keeps its depth and memory style,
-    # dormant: out of play, and back with the FIFO.
-    fifo = deep.member("w")
-    direct = fifo.try_with_choices({handle(fifo, "transport"): "direct"})
+    # Removing the FIFO keeps its depth and memory style, dormant: out of play, and back
+    # with the FIFO; nothing is dropped, and the module is the direct one.
+    transport = deep.decision(("w", "transport"))
+    assert transport is not None
+    direct = deep.point.try_with_choices({transport.reference: "direct"})
     assert direct.accepted and set(direct.dormant) == {
-        "transport.fifo.depth",
-        "transport.fifo.buffer.ram_style",
+        "w.transport.fifo.depth",
+        "w.transport.fifo.buffer.ram_style",
     }
-    assert direct.instance.netlist == w.netlist
-    # In the network the same: nothing is dropped, and the module is the direct one.
     trial = deep.trial(keyed({"w.transport": "direct"}))
-    assert trial.accepted and not trial.rederived
+    assert trial.accepted
     assert ("w", "transport.fifo.depth") in trial.network.chosen()
+    assert trial.network.member("w").netlist == w.netlist
     assert built(trial.network, "matmul") == built(point, "matmul")
 
 

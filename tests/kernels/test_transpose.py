@@ -13,19 +13,18 @@ from typing import Any
 import numpy as np
 import pytest
 from support.conformance import KERNEL, unchosen
-from support.helpers import FULL_DSP48E2, choose
+from support.helpers import FULL_DSP48E2, choose, keyed
 from support.kernel_specs.base import placed
 from support.kernel_specs.thresholding import tensor
 from support.kernel_specs.transpose import MATRICES, transpose
 
-from finn.core.space import Rejected, Space, design_space, inspection
+from finn.core.space import Space, design_space, inspection
 from finn.dataflow.steps import Step, steps
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.harness.points import rejected
 from finn.kernels.artifacts.abi import Signal
-from finn.kernels.channels import Channel
+from finn.kernels.explore import dotted
 from finn.kernels.library import library_module
-from finn.kernels.network import dotted
 from finn.kernels.transpose import TransposeKernel
 
 SIMDS = [factors["simd"] for factors in transpose()["factors"]]
@@ -94,11 +93,12 @@ def test_its_output_is_its_inputs_matrices() -> None:
     tensor it states, is its input's shape, and a channel of another refuses it."""
     transposed = (BATCHES, COLS, ROWS)
     case = {**transpose(), "outputs": {"output_channel": transposed}}
-    point = choose(unchosen(**case), {f"{KERNEL}.simd": 2, f"{KERNEL}.ram_style": "auto"})
+    point = unchosen(**case)
     assert point.member(KERNEL).output_tensor.shape == (BATCHES, ROWS, COLS)
-    refused = point.member("output_channel").query(Channel.well_formed)
-    assert isinstance(refused, Rejected)
-    assert {f.code for f in refused.findings} == {"channel-tensor"}
+    # The folding that places the output on the channel is refused by its rule.
+    trial = point.trial(keyed({f"{KERNEL}.simd": 2, f"{KERNEL}.ram_style": "auto"}))
+    refused = trial.refused[("output_channel", "well_formed")]
+    assert {f.code for f in refused} == {"channel-tensor"}
 
 
 def test_a_tensor_of_one_axis_is_no_matrix() -> None:
