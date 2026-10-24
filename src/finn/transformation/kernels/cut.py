@@ -6,9 +6,9 @@
 ``CutKernelPartition`` puts every KernelOp in one ``StreamingDataflowPartition`` and
 returns the parent graph, which the build keeps as its model. The partition is named
 ``partition`` (``PARTITION``) for its node, its body's file
-(``<directory>/partition.onnx``), its IP (``finn_partition``) and its block-design
-instance. The body carries the parent's target. Everything after the cut opens the body
-through the node (``finn.core.graph.partition.partition_body``).
+(``<directory>/partition.onnx``), its IP and its block-design instance. The body carries
+the parent's target. Everything after the cut opens the body through the node
+(``finn.core.graph.partition.partition_body``).
 
 The cut is where each channel first has both its sides, so it makes the channel choices,
 each by the channel's policies (``Channel.policies``: first valid, a memory's style in its
