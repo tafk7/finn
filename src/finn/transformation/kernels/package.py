@@ -182,7 +182,11 @@ def boundary_facts(
     tensor and its shape; the stream at the channel's free side, the partition's own side
     (the side no kernel of the partition owns): the channel's element and its range,
     lanes, beats and TDATA width; and the mover the shell places there (``mover_facts``), or
-    ``None``."""
+    ``None``. A side the outside states presents the statement there: its lanes are the
+    stated ones where the build states lanes, and its TDATA width their word, padded to
+    bytes. What states the side, and the pace it states, are not facts of the IP's ports
+    and are not reported: a build's pace stays as its configuration gives it, a mover's is
+    its contract (``mover_facts``)."""
     found: tuple[list[dict[str, Any]], list[dict[str, Any]]] = ([], [])
     for tensor, port in boundary:
         channel = point.channel(tensor)
