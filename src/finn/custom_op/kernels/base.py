@@ -25,11 +25,12 @@ only the graph's structure (op types, connections, attributes), never a datatype
 value, and never changes the model. Will a kernel build it? ``defaulted`` applies the
 op's policies (``policies``, ``finn.kernels.policies``) once, on the kernel alone:
 refused where its facts alone refuse it, or where a choice in play can be given no value,
-its fixed one or a first valid one. Conversion builds no channel: the channels are a
-partition's, made at the cut. A missing shape or datatype raises ``FactUnstated``, and
-the node stays on the host; anything else wrong with the facts is an error
-(``KernelOpError``). Conversion stores the kernel's choices only, and writes nothing on a
-tensor.
+its fixed one or a first valid one. Then each of its streams (``streamed``) must meet an
+open AXIS boundary (``finn.transformation.kernels.convert``): a check, by a channel's own
+rules, whose channels are dropped; a partition's channels are made at the cut. A missing
+shape or datatype raises ``FactUnstated``, and the node stays on the host; anything else
+wrong with the facts is an error (``KernelOpError``). Conversion stores the kernel's
+choices only, and writes nothing on a tensor.
 
 ``execute_node`` is the reference for what the op covers, and must equal ONNX on every
 node the op converts (FINN executes ONNX with exact integers, which importing ``finn``
@@ -124,6 +125,7 @@ from finn.kernels.composer import Facts
 from finn.kernels.configure import describe
 from finn.kernels.configure import refusal as refusal_of
 from finn.kernels.policies import Alone, Defaulted, Policy, defaulted, stated
+from finn.kernels.sides import Side
 from finn.platform.target import Target
 
 if TYPE_CHECKING:
@@ -600,6 +602,30 @@ class KernelOp(CustomOp):
     def inputs(self) -> dict[str, str]:
         """The tensor of each of this node's input channels, by port."""
         return {port: tensor for port, tensor in zip(self.ports, self.onnx_node.input) if port}
+
+    def streamed(self, point: KernelSpace) -> tuple[tuple[str, Side, bool], ...]:
+        """Each streamed port of this node at ``point``, its kernel's design space: the
+        tensor it carries, by graph name, the side it gives a channel (its kernel's
+        ``<p>_side``, labelled below the node's name), and whether it is an output; its
+        inputs first, in port order. A streamed port is an AXIS one: not a parameter port
+        whose initializer the node holds (its channel's source feeds it), nor an input read
+        as an argument. A port ``point`` does not place is none, and so is one whose side
+        ``point`` does not know (its kernel's validity says why)."""
+        model, node = self.model(), self.onnx_node
+        held = set(self.owned())
+        found = [
+            (port, tensor, False)
+            for port, tensor in self.inputs().items()
+            if port not in held and initializer(model, tensor) is None
+        ]
+        found += [(port, tensor, True) for port, tensor in zip(self.outputs, node.output)]
+        sides: list[tuple[str, Side, bool]] = []
+        for port, tensor, output in found:
+            name = self.wiring[port].contract.removesuffix("_contract")
+            answer = point.query(getattr(type(point), f"{name}_side"))
+            if isinstance(answer, Available) and isinstance(answer.value, Side):
+                sides.append((tensor, answer.value.under(self.label), output))
+        return tuple(sides)
 
     def owned(self) -> dict[str, str]:
         """The tensor of each parameter port whose initializer this node holds, by port."""

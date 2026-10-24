@@ -77,6 +77,7 @@ from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import ClassVar, cast
 
+from finn.core.reporting.findings import Finding
 from finn.core.space import (
     Decision,
     Param,
@@ -85,7 +86,9 @@ from finn.core.space import (
     View,
     constraint,
     derived,
+    design_space,
     domain,
+    inspection,
     reject,
     view,
 )
@@ -122,7 +125,7 @@ from finn.kernels.fifo import FifoKernel
 from finn.kernels.library import library_module
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.movers import MOVER, IodmaMover, MoverContract, MoverOffer
-from finn.kernels.policies import FirstValid, Policy, Required, stated
+from finn.kernels.policies import Alone, FirstValid, Policy, Required, defaulted, stated
 from finn.kernels.port import served
 from finn.kernels.sides import Side, SideKind
 from finn.kernels.transport import (
@@ -899,6 +902,39 @@ Channel.policies = stated(
 )
 
 
+def open_boundary_refusal(
+    side: Side, tensor: Tensor, platform: Platform, *, output: bool
+) -> tuple[Finding, ...]:
+    """Why a kernel's port, ``side`` (an output port's where ``output``, else an input's),
+    meets no open AXIS boundary; empty where it does. The check is a channel carrying
+    ``tensor`` on ``platform``, ``side`` on one end and the boundary, unstated, on the
+    other, with its own policies applied once (``Channel.policies``, by
+    ``finn.kernels.policies.defaulted``): refused where its validity is refused (no chain
+    of modules joins the two, ``channel-plan``, ``adapter-plan``, a hop that does not
+    connect) or where a choice can take no value (``choice-no-valid-value``). A validity
+    left open only by a required choice (a FIFO's depth, which sizing sets) is no refusal.
+    The boundary presents what its other side presents, so the check finds only what no
+    chain of modules can join. Conversion's stream check
+    (``finn.transformation.kernels.convert``): no rule of the kernel, so no policy of the
+    kernel steers around it."""
+    boundary = Side.boundary("m_axis_0" if output else "s_axis_0")
+    point = design_space(
+        Channel(
+            tensor=tensor,
+            producer=side if output else boundary,
+            consumer=boundary if output else side,
+            platform=platform,
+        )
+    )
+    done = defaulted(point, Alone(Channel))
+    if done.refused:
+        return done.refused[""]
+    if done.unset:
+        return done.unset
+    result = inspection.validity(done.point).result
+    return result.findings if isinstance(result, Rejected) else ()
+
+
 def _misplaced(producer: Side, consumer: Side, valued: bool) -> str | None:
     """Why a side is in a role its kind does not take (``channel-users``), or None: a
     channel with a known value has its source as its producer, and one without has none; a
@@ -937,6 +973,7 @@ __all__ = [
     "Neighbours",
     "OuterHops",
     "boundary_contract",
+    "open_boundary_refusal",
     "outer_hops",
     "wired",
 ]

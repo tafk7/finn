@@ -381,7 +381,8 @@ class Placed(Protocol):
 
 class Alone:
     """One kernel's design space, whole, as ``Placed``: a single member, ``""``, whose
-    owner is the KernelOp ``owner`` and whose own validity is the space's."""
+    owner is ``owner`` (the KernelOp, or the channel class for a channel alone: conversion's
+    stream check) and whose own validity is the space's."""
 
     def __init__(self, owner: Owner) -> None:
         self._owner = owner
