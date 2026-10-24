@@ -18,10 +18,9 @@ from finn.core.space import (
     Rejected,
     Space,
     Unresolved,
-    constraint,
     derived,
     design_space,
-    view,
+    reject,
 )
 from finn.core.space._failure import cancellation_details
 
@@ -93,13 +92,9 @@ def test_nonvalue_cleanup_preserves_primary_and_outer_cleanup(kind: str, warm: b
         unavailable: int = Decision(values=(1, 2))
         inapplicable: int = Decision(values=(1,), when=enabled)
 
-        @constraint
-        def refuses(self) -> bool:
-            return False
-
-        @view
-        def rejected(self) -> int:
-            return 2
+        @derived
+        def rejected(self) -> int | Rejected:
+            return reject("refused", "a derived value that refuses")
 
         @derived
         def broken(self) -> int:
@@ -126,10 +121,7 @@ def test_nonvalue_cleanup_preserves_primary_and_outer_cleanup(kind: str, warm: b
 
     point = design_space(Example(fact=7, enabled=False))
     if warm:
-        if kind == "rejected":
-            point.inspect(Example.rejected)
-        else:
-            point.query(Example.unavailable if kind == "unavailable" else Example.inapplicable)
+        point.query(getattr(Example, kind))
     with pytest.raises(NativeEvaluationError) as caught:
         _ = point.outer
     assert isinstance(caught.value.__cause__, LookupError)

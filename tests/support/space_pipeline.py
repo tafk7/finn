@@ -27,7 +27,6 @@ from finn.core.space import (
     constraint,
     derived,
     reject,
-    view,
 )
 
 
@@ -136,7 +135,7 @@ class Link(Space):
 class Probe(Space):
     enabled: bool = Decision(values=(False, True))
 
-    @view(when=enabled)
+    @derived(when=enabled)
     def level(self) -> int:
         return 3
 

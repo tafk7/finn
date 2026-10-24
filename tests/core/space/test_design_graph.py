@@ -61,7 +61,7 @@ class Tiles(Space):
     extent: int = Param()
     factor: int = Decision(domain=divisors_of(extent))
 
-    @view
+    @derived
     def cost(self) -> int:
         return self.extent // self.factor
 
@@ -168,7 +168,7 @@ class Stage(Space):
     width_in: int = Param()
     growth: int = Decision(values=(0, 1, 2))
 
-    @view
+    @derived
     def width_out(self) -> int:
         return self.width_in + self.growth
 
@@ -212,7 +212,7 @@ def test_a_pipeline_is_built_as_data_and_its_edges_are_declarations() -> None:
 class Source(Space):
     width: int = Param()
 
-    @view
+    @derived
     def out(self) -> int:
         return self.width
 
@@ -238,7 +238,7 @@ class Adder(Space):
     inp: int = Param()
     back: int = Param()
 
-    @view
+    @derived
     def out(self) -> int:
         return max(self.inp, self.back) + 1
 
@@ -246,8 +246,8 @@ class Adder(Space):
 class Register(Space):
     """Holds a declared width: this anchors the value flow around a loop.
 
-    ``q`` is a raw value. Were it a view obliging ``fits``, its acceptance would
-    read ``d`` and so close the cycle: acceptance is part of the value flow.
+    ``q`` is a derived value of ``width`` alone: it reads nothing of ``d``, so the loop
+    through ``adder`` and ``register`` is anchored.
     """
 
     width: int = Param()
@@ -273,7 +273,7 @@ class Accumulator(Space):
 class Echo(Space):
     d: int = Param()
 
-    @view
+    @derived
     def q(self) -> int:
         return self.d
 

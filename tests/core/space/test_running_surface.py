@@ -255,7 +255,7 @@ def test_evidence_reads_through_a_formal_at_its_source_and_copies_a_container() 
     assert evidence == inspection.explain(point, House.thermostat.cost)
     assert evidence.result == Available(5)
     via = {item.declaration.key: [each.key for each in item.via] for item in evidence.nodes}
-    assert via["thermostat.cost.$output"] == ["thermostat.kw"]
+    assert via["thermostat.cost"] == ["thermostat.kw"]
 
     class Listed(Space):
         n: int = Param()
@@ -630,13 +630,9 @@ def test_nonvalue_cleanup_preserves_primary_and_outer_cleanup(
         unavailable: int = Decision(values=(1, 2))
         inapplicable: int = Decision(values=(1,), when=enabled)
 
-        @constraint
-        def refuses(self) -> bool:
-            return False
-
-        @view
-        def rejected(self) -> int:
-            return 2
+        @derived
+        def rejected(self) -> int | Rejected:
+            return reject("refused", "a derived value that refuses")
 
         @derived
         def broken(self) -> int:
@@ -1063,7 +1059,7 @@ def test_interruption_before_failure_delivery_keeps_pending_primary(way: str) ->
     class Example(Space):
         cleanup: int = Param()
 
-        @view
+        @derived
         def failed(self) -> int:
             raise first
 

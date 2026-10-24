@@ -29,7 +29,6 @@ from finn.core.space import (
     derived,
     design_space,
     inspection,
-    view,
 )
 from finn.core.space._template import compiled
 from finn.core.space.compiler import model_of
@@ -112,13 +111,13 @@ class Room(Space):
 
 
 class Pieces(Space):
-    """A guard reading a view, which reads its Space's validity: the walk from the guard
-    reaches a validity piece, a Decision of the class bound into a placed Space's formal."""
+    """A guard reading a derived value of a placed Space's formal, which a Decision of the
+    class is bound into: the walk from the guard reaches that Decision."""
 
     depth: int = Decision(values=(1, 2))
     room = Room(depth=depth)
 
-    @view
+    @derived
     def flag(self) -> bool:
         return self.room.depth > 1
 

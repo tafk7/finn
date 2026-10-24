@@ -3,7 +3,8 @@
 """The space tests' house toy, shared by its own tests and the collapse tests.
 
 The house (``test_house``): rooms, a structural heating choice, a relation of two rooms
-and a budget over every member's cost. Nothing here is about hardware.
+and a budget over every member's cost. Nothing here is about hardware. Each part's cost is a
+derived value, exported under ``COST``: the budget is a rule, and a rule reads no view.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from finn.core.space import (
     Space,
     ViewKey,
     constraint,
+    derived,
     reject,
     view,
 )
@@ -28,7 +30,7 @@ class Room(Space):
     area: int = Param()
     finish: int = Decision(values=(1, 2, 3))
 
-    @view
+    @derived
     def cost(self) -> int:
         return self.area * self.finish
 
@@ -38,7 +40,7 @@ class Room(Space):
 class Boiler(Space):
     kw: int = Param()
 
-    @view
+    @derived
     def cost(self) -> int:
         return 30 + self.kw
 
@@ -49,7 +51,7 @@ class HeatPump(Space):
     kw: int = Param()
     cop: int = Decision(values=(3, 4))
 
-    @view
+    @derived
     def cost(self) -> int:
         return 10 * self.cop + self.kw
 
@@ -59,7 +61,7 @@ class HeatPump(Space):
 class Thermostat(Space):
     kw: int = Param()
 
-    @view
+    @derived
     def cost(self) -> int:
         return 2 if self.kw < 10 else 5
 
