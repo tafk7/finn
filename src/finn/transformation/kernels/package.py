@@ -161,7 +161,10 @@ def stream_order(form: Traversal) -> dict[str, Any]:
     it: whether each pass is row-major (``Traversal.row_major`` of its ``period``), the
     passes a frame repeats (``passes``), and its traversal: the shape it walks and its
     beat and lane loops, outer first, each ``[extent, stride]``, a stride in elements
-    of that shape's row-major index (0: a repetition or a replay)."""
+    of that shape's row-major index (0: a repetition or a replay). Read at a free side,
+    which presents what the outside states of it where it states it
+    (``finn.kernels.sides.Outside``): there the order and the passes are the
+    statement's (a mover's: row-major, one pass a frame); unstated, the inside's."""
     one = period(form)
     return {
         "row_major": one.row_major,
@@ -209,7 +212,7 @@ def interface_description(
     """The interface description of a partition model's IP (``describe_interface``): its
     name, VLNV and top, then the module's pins with the boundary facts of its streams, at
     the model's target (part and period), each stream's order its free side's
-    (``stream_order``)."""
+    (``stream_order``: on a side the outside states, the statement's)."""
     built = read_target(model)
     inputs, outputs = boundary_facts(model, point, boundary, ip_name)
     return {
