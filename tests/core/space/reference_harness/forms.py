@@ -130,8 +130,8 @@ class PossibleForm:
 @dataclass(frozen=True)
 class ListedForm:
     """The choices a design space lists (its states, decisions, flow and the choices whose
-    possible values it lists, one set): every choice but those its facts alone rule out
-    (SZ113). Compared as a set, never in either side's order."""
+    possible values it lists, one set): every choice but those its facts alone rule out.
+    Compared as a set, never in either side's order."""
 
     choices: frozenset[str]
 

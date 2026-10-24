@@ -41,10 +41,10 @@ def tfc_built() -> dict[str, dict[str, object]]:
     persisted, 57 by graph name (on 8 nodes and 13 tensors): the Zynq landing's baseline
     build's (Ultra96, 5 ns, [target_throughput, size_fifos]), whose choices were all
     persisted then, and each MatMul's pumping, at its baseline, off: the doubled clock is the
-    shell's, which the kernels no longer read off the platform (SZ11 (e)), so the choice
+    shell's, which the kernels no longer read off the platform, so the choice
     is open on pynq too. Each layer's kernel on its node; each channel on its tensor: a
     MultiThreshold's input, a MatMul's activations and weights, the graph's output. Every
-    memory takes its baseline, an explicit style (SZ18): the first three layers' weights
+    memory takes its baseline, an explicit style: the first three layers' weights
     in block RAM (8 192 bits and more), the last layer's and every input buffer in LUTRAM,
     and each threshold table's stages in LUTRAM, no block stage."""
     built: dict[str, dict[str, object]] = {}

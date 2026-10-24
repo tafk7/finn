@@ -693,7 +693,7 @@ def test_a_strategy_reopens_its_scope_and_keeps_what_it_does_not_decide() -> Non
 
 
 def test_a_pin_holds_its_keys_and_a_later_strategy_folds_around_it() -> None:
-    """A ``Hold`` first (SR6): the target throughput folds the other MatMul and
+    """A ``Hold`` first: the target throughput folds the other MatMul and
     keeps the held one; its relax step reaches the hold's bottleneck."""
     explorer, base = seam()
     explorer.held.update(keyed({"first.pe": 1, "first.simd": 1}))
@@ -894,7 +894,7 @@ def test_max_throughput_states_where_a_budget_departs_from_its_assumption(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Bisection assumes a larger budget folds to more cycles and fewer resources. A budget
-    whose fold reaches more cycles than itself (a mover's converter, SZ6) departs from
+    whose fold reaches more cycles than itself (a mover's converter) departs from
     that: here every budget from 13 to 23 folds as no budget does, to 48 cycles. The
     search is not corrected, and states each departure; but of every point it tried it
     keeps the one that fits with the fewest cycles: budget 27's, at 24 cycles, not the

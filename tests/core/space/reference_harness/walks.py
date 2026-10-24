@@ -17,7 +17,7 @@ not. At every step (each change tried, accepted or refused):
    as ``Configuration(space, facts, stored)`` built from nothing; and the
    bind of its own choices from nothing, ``bind(space, facts, stored)``, publishes it,
    dropping nothing and reporting no rule broken, for every configuration the walk reaches
-   by accepted changes of choices that set (FN3: what a step publishes binds again with
+   by accepted changes of choices that set (what a step publishes binds again with
    nothing broken). Why (§ 16.15): such a change leaves the set of counted pairs (3) no
    larger, so the configuration's false pieces are those its facts made false, which the
    bind's baseline (its facts, nothing stored) counts too. Its scope: the bind may report
@@ -33,7 +33,7 @@ not. At every step (each change tried, accepted or refused):
    counted in the published configuration is counted in the one before it. A change of
    choices setting no new value (§ 16.18: its commits repeat stored values), only clearing,
    is never refused (§ 16.16), and adds no pair either: masking, the one shape that could
-   (§ 16.14, § 16.16's note), went with views read out (SZ100 (3)), so invariant 3 holds
+   (§ 16.14, § 16.16's note), went with views read out, so invariant 3 holds
    for every change of choices, clears included.
 4. *Every refusal names exactly the origins of the pairs it would add, and their standing
    choices*, checked by brute force: each named origin is false on its own values in the
@@ -74,7 +74,7 @@ by default, whatever the harness's default is) is asked every question through t
 class-based oracle's interface (``support.space_oracle.Answers``; ``engine.Point``). The
 summary and every failure name it. Every permanent check holds for every implementation:
 the binds through ``Answers.bind``, and the check against one built from nothing through
-``Implementation.make`` (history independence, which T1 claims by construction and its
+``Implementation.make`` (history independence, which the running type claims by construction and its
 cache could break), so none is skipped.
 
 **Two runs, and attribution by cause** (DESIGN § 6). Where the model holds a ruling the engine
@@ -97,16 +97,16 @@ engine agrees with the model everywhere the walks reach).
   refuses a change the model accepts, the engine side takes the model's configuration by a
   bind, which is never refused.
 
-Facts are drawn required or optional (SZ100 (5)): every required fact is given from the
+Facts are drawn required or optional: every required fact is given from the
 start, an optional one now and then left out, reading ``None``, and now and then unset (set
 back to ``None``, the fact left out), on both sides: the engine gives the optional fact
-``None`` (``Point.change``). T4c's facts known are reached, so a disagreement reaching an
-optional fact left out fails as any other.
+``None`` (``Point.change``). The engine reads an optional fact left out as None, so a
+disagreement reaching an optional fact left out fails as any other.
 
-**The lists** (SZ113): both sides are asked the choices a design space lists
+**The lists**: both sides are asked the choices a design space lists
 (``("listed", "")``), each leaving out the choices its facts alone rule out
-(``Solution.pruned``; T4c reached). The per-choice questions (a choice's state, its possible
-values) are asked of every choice: a pruned choice answers them by name.
+(``Solution.pruned``; the engine prunes by facts). The per-choice questions (a choice's
+state, its possible values) are asked of every choice: a pruned choice answers them by name.
 
 **Derived selectors** (``by``, the CLI's ``--by``): the descriptions also hold selectors
 picked by a derived value (the model's reading 17, the engine's ``Select(by=...)``): one in
@@ -191,7 +191,7 @@ class Generated:
     #: descriptions drawn before it and skipped, by why: "untranslatable" (the engine cannot
     #: express it), "view-read-in", "cycle", or another definition error's kind
     skipped: Counter[str] = field(default_factory=Counter)
-    #: the descriptions drawn before it that read a view in (SZ100 (3)), which the model
+    #: the descriptions drawn before it that read a view in, which the model
     #: refuses as no definition: each one's text and what the engine's ``definition``
     #: answered (it must be ``view-read-in`` too; the full run's alone)
     read_in: tuple[tuple[str, DefinitionForm], ...] = ()
@@ -215,13 +215,13 @@ class _Draw:
     deeper), a derived value ``d`` over facts and root choices (sometimes refusing), a
     ``when``-guarded scope ``g`` (its guard sometimes reading ``d``; in the root, or in the
     selector's first case, so that selecting it brings the guard into play), views (some
-    refusing) and rules over two or three reads. Now and then (SZ100 (6)) a ``Members``
+    refusing) and rules over two or three reads. Now and then a ``Members``
     ``m`` in the root ranges over a derived value ``e`` of ``g`` (in the root) and of each
     case of ``s``, each reading its scope's own choice, and a root rule reads ``m`` with an
     order-free function: a dormant entry's choice is then never read, so never standing,
     and § 16.22's shape arises when the rule also reads what ``g``'s guard reads.
 
-    ``strict``: no view in a rule's pool, so nothing reads a view in (SZ100 (3)); otherwise
+    ``strict``: no view in a rule's pool, so nothing reads a view in; otherwise
     a root rule now and then reads ``g``'s view or the root's own, which the model refuses
     as ``view-read-in``.
 
@@ -241,7 +241,7 @@ class _Draw:
         self.by_in: str | None = None
         self.names = itertools.count()
         self.facts = tuple(f"f{index}" for index in range(rng.randint(1, 2)))
-        #: the optional facts (SZ100 (5)): left out, one reads None, and every function
+        #: the optional facts: left out, one reads None, and every function
         #: over it handles None itself
         self.optional = tuple(fact for fact in self.facts if rng.random() < 0.5)
         self.ints: list[str] = []  # value choices, by path
@@ -285,8 +285,8 @@ class _Draw:
                 )
             return model.listed(*values, member=_not_one), f"listed{values} where value != 1"
         if draw < 0.58:
-            # Spent draws: these once drew a ranked domain (a domain's order, gone with
-            # SZ103), its order's read included. They are kept so that each seed draws the
+            # Spent draws: these once drew a ranked domain (a domain's order, since removed),
+            # its order's read included. They are kept so that each seed draws the
             # same description as before, less the ranking, and the walks' counts stay
             # comparable across the change; they go when a later lane moves the baseline.
             values = tuple(sorted(rng.sample(VALUES, rng.randint(2, 3))))
@@ -317,7 +317,7 @@ class _Draw:
     def choice(self, scope: str, indent: str) -> model.Choice:
         name = self.name("c")
         domain, text = self.domain()
-        # A spent draw: it once made a choice required (gone with SZ103). Kept so that each
+        # A spent draw: it once made a choice required (since removed). Kept so that each
         # seed draws the same description and the counts stay comparable; it goes when a
         # later lane moves the baseline.
         self.rng.random()
@@ -539,7 +539,7 @@ class _Draw:
         name = "s" if depth == 0 else "t"
         path = _join(scope, name)
         cases = ("a", "b", "c")[: self.rng.choice((2, 2, 3))] if depth == 0 else ("x", "y")
-        # A spent draw: it once made a selector required (gone with SZ103). Kept so that
+        # A spent draw: it once made a selector required (since removed). Kept so that
         # each seed draws the same description and the counts stay comparable; it goes when
         # a later lane moves the baseline.
         self.rng.random()
@@ -620,7 +620,7 @@ class _Draw:
             views = (model.View("v", reads, _capped(reads, k, "too-big")),)
             self.lines.append(f"{indent}view v: {' + '.join(reads)}, refused 'too-big' past {k}")
         pool = [*readable, *(item.name for item in over_facts), *(i for i in self.ints if "." in i)]
-        # a view read in (SZ100 (3)): a descendant's, or the rules' own Space's. Drawn in the
+        # a view read in: a descendant's, or the rules' own Space's. Drawn in the
         # full run only, so the strict run's descriptions stay as they were; the engine must
         # refuse each as the model does (``generate`` asks it)
         if self.guard_view is not None and rng.random() < 0.5 and not self.strict:
@@ -655,7 +655,7 @@ class _Draw:
 
 # The functions a description is built of: each a closure over its own reads, so a drawn
 # description is plain data the engine translates. Each handles an optional fact left out,
-# None, itself, as an author would (SZ100 (5)): a bound that is None bounds nothing, a
+# None, itself, as an author would: a bound that is None bounds nothing, a
 # relation with a None side holds, a guard over None is false, and a sum counts None as 0.
 
 
@@ -796,9 +796,9 @@ def generate(
     """A description and its engine, drawn until one has two to six value choices, is a
     definition (``validate``: cycles and other definition errors are skipped) and the engine
     can express (``build``); the others are counted by why. Every required fact is given;
-    an optional one is left out now and then (``None``, SZ100 (5)), never when ``strict``.
+    an optional one is left out now and then (``None``), never when ``strict``.
 
-    A description the model refuses as ``view-read-in`` (SZ100 (3); drawn only when not
+    A description the model refuses as ``view-read-in`` (drawn only when not
     ``strict``) is checked against the engine's ``definition`` (``implementation`` asked)
     before it is drawn again: each is kept in ``read_in``, with what the engine answered,
     and the walk fails on each the engine answers otherwise: a rule reading a view of
@@ -850,9 +850,9 @@ ENGINE_QUESTIONS = ("state", "answer", "rule", "validity", "possible", "listed")
 
 def questions(index: model.Index) -> list[Question]:
     """What both sides are asked at each configuration: each choice's state; each fact's,
-    choice's, derived value's, view's and ``Members``'s answer (a fact's is always known,
-    SZ100 (5): its value, or ``None`` for an optional one left out); each rule; validity;
-    each listed choice's possible values; the choices the design space lists (SZ113)."""
+    choice's, derived value's, view's and ``Members``'s answer (a fact's is always known:
+    its value, or ``None`` for an optional one left out); each rule; validity;
+    each listed choice's possible values; the choices the design space lists."""
     found: list[Question] = [("state", path) for path in sorted(index.choices)]
     found += [
         ("answer", path)
@@ -1020,7 +1020,7 @@ def order_problems(
     (:func:`below`). ``out``: the nodes refused through their scope's presence before and
     found absent after (:func:`refused_then_absent`), whose answer may move from refused to
     inapplicable (the model's reading 26); no other move is excused. The listed choices
-    (SZ113) may only grow, by what the step sets: an addition prunes nothing, and a pruned
+    may only grow, by what the step sets: an addition prunes nothing, and a pruned
     choice it sets is stored, so listed."""
     found: dict[Question, str] = {}
     for question, old in before.items():
@@ -1367,7 +1367,7 @@ def would_be(
     configuration: model.Configuration, edit: model.Change
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """The facts and stored choices ``edit`` would publish: an optional fact unset is
-    ``None`` (SZ100 (5))."""
+    ``None``."""
     stored = {k: v for k, v in configuration.stored.items() if k not in edit.clear}
     stored.update(edit.commit)
     facts = dict(configuration.facts)
@@ -1454,7 +1454,7 @@ def _check_choices(
         if added:
             checked.problems.append(
                 "3 clears: the clear-only change adds (false piece, origin) pairs: "
-                f"{sorted(added)} (no masking: SZ100 (3))"
+                f"{sorted(added)} (no masking)"
             )
         return
     if isinstance(result, model.Accepted):
@@ -1682,7 +1682,7 @@ def bind_problems(
 ) -> tuple[list[str], frozenset[str]]:
     """Invariant 1's bind: ``bound``, the bind of ``walked``'s stored choices under its facts
     (``model.bind``, from nothing), publishes ``walked`` exactly and drops nothing; and it
-    reports no rule (FN3: what a walk publishes binds again with nothing broken) but those of
+    reports no rule (what a walk publishes binds again with nothing broken) but those of
     ``broken``, which facts steps of the walk made newly false (§ 16.24): a design space a
     facts step left reading refused binds again, reads refused, and reports them. The
     problems, and the origins it reports."""
@@ -1694,8 +1694,8 @@ def bind_problems(
     if stray:
         named = sorted((item.origin, item.kind) for item in bound.broken if item.origin in stray)
         problems.append(
-            f"1 bind: reports {named}; what a walk publishes binds again with nothing broken "
-            f"(FN3), but for rules new facts broke ({sorted(broken)})"
+            f"1 bind: reports {named}; what a walk publishes binds again with nothing broken"
+            f", but for rules new facts broke ({sorted(broken)})"
         )
     return problems, reported
 
@@ -2084,7 +2084,7 @@ class _Walk:
                         facts=new, commit=self.values(rng.sample(unstored, 1), state)
                     )
             return model.Change(facts=new)
-        # an optional fact unset: None (SZ100 (5))
+        # an optional fact unset: None
         return model.Change(unset=(rng.choice(unsettable),))
 
     def values(self, paths: Sequence[str], state: _State, other: bool = False) -> dict[str, object]:
@@ -2140,7 +2140,7 @@ class _Walk:
         started = time.perf_counter()
         try:
             for text, form in self.generated.read_in:
-                # SZ100 (3): the model refuses a view read in; an engine answering otherwise
+                # the model refuses a view read in; an engine answering otherwise
                 # (it builds it, or calls it a cycle) disagrees, with no milestone to count
                 # it under
                 expected = DefinitionForm("view-read-in")

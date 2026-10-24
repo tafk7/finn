@@ -12,10 +12,10 @@ authored or asked is there); :mod:`.compare` puts the model's answers in the sam
 answers (:mod:`.implementation`: the public API unless a session names another) wherever a
 test names none; :mod:`.matrix` records every disagreement a pending
 milestone still expects, by the milestone that removes it (none is pending: the engine
-core's, the facts-instance, T4a's, T4c's and T4b's milestones are accepted, and the engine
-agrees with the model); :mod:`.walks`
-compares the two over seeded random walks (imported on its own, never by this package). The
-engine has one read path, so each test and each walk asks it once.
+core's, the facts-instance, guard counting, facts known and views read out milestones are
+accepted, and the engine agrees with the model); :mod:`.walks` compares the two over seeded
+random walks (imported on its own, never by this package). The engine has one read path, so
+each test and each walk asks it once.
 
     CASE = Case("a toy", Space(("wide",), Scope("", choices=(Choice("x", listed(1, 2)),))))
     pair = CASE.start(facts={"wide": True})

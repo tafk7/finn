@@ -5,7 +5,7 @@
 question.
 
 Case 9 of the reference cases (views and validity, and a parent's view composing its
-children's views: views are read out, SZ100 (3)), and two of how a Space holds cores:
+children's views: views are read out), and two of how a Space holds cores:
 selectors nested three deep, and a value choice whose case puts a selector no case of which
 holds in scope.
 """
@@ -72,7 +72,7 @@ def test_a_view_of_an_open_choice_waits_on_it() -> None:
     VIEWED.start({"limit": 2, "name": "unit"}).check_answer("doubled")
 
 
-# A view composes: the parent's view reads its children's views (SZ100 (3)). Only a view
+# A view composes: the parent's view reads its children's views. Only a view
 # reads a view, so this is a definition on both sides. (The cycles a rule reading a view of
 # its own Space closed went with views read in: the model refuses those as view-read-in, and
 # so does the engine: the reference cases witness it.)

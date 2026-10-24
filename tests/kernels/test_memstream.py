@@ -182,8 +182,8 @@ def test_several_sets_without_their_indices_refuse_the_sequences_that_read_them(
 
 def test_a_single_set_refuses_its_idle_set_port_s_order():
     # One set takes no set channel: its set port is idle, and the port's order, which
-    # would read the indices, is refused with the kernel's set-channel code. Open with the
-    # human (SZ124 (1)): refused, or inapplicable.
+    # would read the indices, is refused with the kernel's set-channel code, not marked
+    # inapplicable.
     space = design_space(
         MemStreamKernel(
             dtype=DataType["INT3"],

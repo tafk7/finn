@@ -3,7 +3,7 @@
 
 """Each kernel's spec (``support.kernel_specs``), checked offline against its design space.
 
-- its lean covering points (``finn.harness.points.covering``, decision KT10) reach
+- its lean covering points (``finn.harness.points.covering``) reach
   every case of each of its Decisions and each ordered domain's extremes, and each
   is a point its kernel finds valid whose module builds (its adapters' memories chosen);
 - the cases its design space refuses where they are drawn from are exactly those the

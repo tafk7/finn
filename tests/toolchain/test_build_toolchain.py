@@ -236,7 +236,7 @@ def test_a_build_directory_builds_in_process_its_toolchain_prepared_once(
 
 
 def test_vivados_jobs_are_a_machine_setting_of_the_selection(monkeypatch):
-    """SZ7, SZ11 (b): how many runs Vivado launches at once is a machine setting
+    """How many runs Vivado launches at once is a machine setting
     (FINN_VIVADO_JOBS), read into the machine's selection, a positive number or None (the
     machine's cores); one check refuses anything else, stated or set."""
     assert Selection(vivado_jobs=3).vivado_jobs == 3 and Selection().vivado_jobs is None

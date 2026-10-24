@@ -6,8 +6,8 @@ choice that picks the case. The domain rule (a domain reads facts only) refuses 
 (``_compose``), and the line's rule over every address (``_domains_support``) alike, through
 a class-body selection and through a method reading one.
 
-A hand case: it runs alike at T3's base (the line's rule then over ``expand``'s table) and at
-its head."""
+A hand case: it runs alike before native addressing (the line's rule then over ``expand``'s
+table) and after it."""
 
 from __future__ import annotations
 

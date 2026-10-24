@@ -165,7 +165,7 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
 
 # The members evaluated (and the constants among them) after the commit, and after
 # ``viable`` and the change (the structure's nodes resolved were 1366 (96) and 1464 (96),
-# 1371 and 1463 since T4c's piece 1 placed the required inputs' ports by construction).
+# 1371 and 1463 since the required inputs' ports are placed by construction).
 # 1153 (96) and 1224 (96) before each channel side became one value: each port bound now
 # evaluates its label and its side, and the channels' label constants are gone. 1180 (80)
 # and 1259 (80) before the composer: each fact a member is given is a Param at the root
@@ -244,7 +244,7 @@ def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
     handles = {item.key: item.reference for item in inspection.decisions(committed)}
     middle = [key for key in handles if key.startswith("mm2.")]
     # the middle MatMul's choices listed: its ``realization`` (``when=depthwise``) is not,
-    # its facts alone rule it out (SZ113)
+    # its facts alone rule it out
     assert len(middle) == 6 and "mm2.realization" not in middle
     inspection.viable(committed, [handles[key] for key in middle])
     counted = scopes.counts()

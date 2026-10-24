@@ -239,7 +239,7 @@ def change_form(
     """``edit``'s ``result`` on ``configuration``. A dropped value's type check and a rule's
     reasons are read over the facts the change publishes, as membership reads them."""
     facts = dict(configuration.facts)
-    facts.update(dict.fromkeys(edit.unset))  # an optional fact unset is None (SZ100 (5))
+    facts.update(dict.fromkeys(edit.unset))  # an optional fact unset is None
     facts.update(edit.facts)
     index = configuration.index
     if isinstance(result, reference.Accepted):
@@ -290,7 +290,7 @@ def possible_form(solution: reference.Solution, path: str) -> PossibleForm:
 
 
 def listed_form(solution: reference.Solution) -> ListedForm:
-    """The choices the design space lists (SZ113): every choice but the pruned."""
+    """The choices the design space lists: every choice but the pruned."""
     return ListedForm(frozenset(solution.listed()))
 
 
@@ -398,7 +398,7 @@ class Pair:
         _check(self.case.name, "validity", expected, self.engine.validity())
 
     def check_listed(self, *, ruled: ListedForm | None = None) -> None:
-        """The choices the design space lists (SZ113): pruned as the model prunes."""
+        """The choices the design space lists: pruned as the model prunes."""
         __tracebackhide__ = True
         expected = ruled or listed_form(self.solution())
         _check(self.case.name, "the listed choices", expected, self.engine.listed())

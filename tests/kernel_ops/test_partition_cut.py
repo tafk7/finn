@@ -487,7 +487,7 @@ TFC_NODE_DEFAULTS: dict[str, dict[str, object]] = {
 def test_tfc_s_choices_are_created_at_conversion_and_at_the_cut(
     tfc_streamlined: Path, tmp_path: Path
 ) -> None:
-    """SR6's two moments on TFC_W2A2: conversion stores each KernelOp's own choices,
+    """The two moments on TFC_W2A2: conversion stores each KernelOp's own choices,
     each at its default policy, first valid (44 values on 8 nodes), and no channel's; the
     cut creates the channels' by the channel's policies, first valid (25 values on 13
     tensors: transports, the weights' memories, the input buffers' adapters' memories; the

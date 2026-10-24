@@ -296,7 +296,7 @@ class Owned(Space):
 
 def test_a_selections_owner_is_its_choices_key() -> None:
     """Whoever reads it, and whether one candidate has the member or several share it: the
-    owner of a selection is its choice's key (SZ95 (2); the line owned one candidate's by
+    owner of a selection is its choice's key (the line owned one candidate's by
     its first reader in declaration order, ``first``)."""
     scopes = line_scopes(Owned)
     assert scopes.find("unit.$member.ok").owner == "unit"

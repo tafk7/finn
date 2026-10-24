@@ -213,7 +213,7 @@ def test_selecting_the_case_of_a_choice_a_root_rule_refuses_names_the_choice_sta
 # present when the choice ``on`` holds, and its rule needs a budget of 20; ``spare`` is
 # present when the choice ``want`` holds, ``costly`` when it does not, and ``costly``'s
 # rule needs a budget of 20 too. (``on`` was a fact, left out for an unknown guard; facts
-# are always known now, SZ100 (5), so a guard waits on an open choice.)
+# are always known now, so a guard waits on an open choice.)
 
 GUARDS = Case(
     "guards",
@@ -364,8 +364,8 @@ def test_a_value_outside_a_membership_only_domain_is_refused_at_commit() -> None
 
 # A membership-only domain is never a piece of validity (§ 4, § 16.12; reading 13): with its
 # input a derived value refusing on the facts (a value committed there would be refused by
-# assignment), the configuration is valid. (Its twin over a missing fact went with SZ100
-# (5): facts are always known.)
+# assignment), the configuration is valid. (Its twin over a missing fact went away:
+# facts are always known.)
 
 MEMBERSHIP_REFUSED = Case(
     "a membership-only domain over a derived value that refuses",
@@ -656,7 +656,7 @@ def test_new_facts_putting_a_stored_choices_membership_input_out_of_play_drop_it
     point.check_change(Change(facts={"on": False}))
 
 
-# -- 6. Members: standing is what the origin's evaluation read (SZ100 (6)) ----------------------
+# -- 6. Members: standing is what the origin's evaluation read ----------------------
 #
 # RUNNING § 2.2's House: the annex ``g`` (present while ``x >= 2``) and each room of ``s``
 # state a derived value ``e`` of their own choice, which the root's ``m`` reads. The
@@ -763,7 +763,7 @@ def test_a_choice_read_beside_members_stands_though_it_decides_an_entrys_existen
     raised.check_possible("x")
 
 
-# -- 7. views are read out (SZ100 (3)) ------------------------------------------------------------
+# -- 7. views are read out ------------------------------------------------------------
 #
 # A stage presents its storage as a view; the parent's rule reads it. Only a view reads a
 # view, so the model refuses the definition (``view-read-in``); so does the public API.
@@ -859,7 +859,7 @@ def test_a_domain_reading_a_view_is_no_definition() -> None:
     check_definition("a domain reading a child's view", READ_IN_DOMAIN, facts={"n": 2})
 
 
-# -- 8. an optional fact left out is None (SZ100 (5)) ---------------------------------------------
+# -- 8. an optional fact left out is None ---------------------------------------------
 #
 # ``width`` is optional: left out, it reads None, a known value, and ``lanes`` lists 1 and 2
 # then; given None, it is the fact left out (one design space).
@@ -898,7 +898,7 @@ def test_an_optional_fact_given_reads_its_value() -> None:
 # ``plant``: the cases under it add nothing. Written as the selector's own guard
 # (``Decision(..., when=)``, ``Spelling.guarded_selectors``), the guard and the cases' guards
 # are nodes of one Space, and the engine counts the piece at the highest refused guard of its
-# chain, one (it counted 1 + 2 before T4a); written as a guarded child, the cases are another
+# chain, one (it once counted 1 + 2); written as a guarded child, the cases are another
 # Space's, and it counts one.
 
 
@@ -961,7 +961,7 @@ def test_a_chosen_selector_under_a_when_that_holds_is_set_as_any_selector() -> N
 # A refused guard below an unknown one: ``s`` is open, its case ``a`` holds ``g``, present when
 # ``d`` is at least 1, and ``d`` refuses an odd ``f``, read by nothing else. The model leaves
 # ``g``'s piece unknown while ``a``'s presence is (reading 8): validity is open, waiting on
-# ``s``. So does the engine (it answered valid before T4a, SZ111).
+# ``s``. So does the engine (it once answered valid).
 
 
 def even(read: Mapping[str, Any]) -> object:
@@ -1007,14 +1007,14 @@ def test_a_refused_when_in_an_unselected_case_does_not_apply() -> None:
     IN_AN_OPEN_CASE.start({"f": 1}, {"s": "b"}).check_validity()
 
 
-# -- 10. a choice its facts alone rule out is in no list (SZ113) -----------------------------------
+# -- 10. a choice its facts alone rule out is in no list -----------------------------------
 #
 # ``wide`` is present when the fact ``mode`` is 1; ``gated`` when ``checked``, a derived value
 # over ``mode`` refusing at 2; ``opted`` when the choice ``pe`` is 2. Under the facts alone
 # (every choice unknown) ``wide`` is false at any other mode, so ``wide.lanes`` is
-# pruned: in no list, unless it is stored (SZ119 (5)). A refused guard and a guard over a choice
+# pruned: in no list, unless it is stored. A refused guard and a guard over a choice
 # are not false, so ``gated.x`` and ``opted.y`` stay listed. The engine prunes as the model does
-# (T4c, its row ``facts-pruning`` removed).
+# (its row ``facts-pruning`` removed).
 
 
 def checked(read: Mapping[str, Any]) -> object:
@@ -1104,11 +1104,11 @@ def test_a_guard_the_facts_refuse_or_a_choice_decides_is_no_pruning() -> None:
     pair.check_state("opted.y")
 
 
-# A selector picked by a derived value over facts alone (lane 3's ``input_chain``) is the rule's
-# widest reach: under the facts alone it names one case, so the choices of every other case are
-# pruned. ``adapter`` is picked by ``chain`` over ``mode`` (0: ``fifo``, 1: ``reg``, 2 refuses);
-# ``other`` by ``side`` over the choice ``pe``, which waits under the facts alone, so its cases stay
-# listed, as ``adapter``'s do where ``chain`` refuses.
+# A selector picked by a derived value over facts alone (the channel kernel's ``input_chain``) is
+# the rule's widest reach: under the facts alone it names one case, so the choices of every other
+# case are pruned. ``adapter`` is picked by ``chain`` over ``mode`` (0: ``fifo``, 1: ``reg``, 2
+# refuses); ``other`` by ``side`` over the choice ``pe``, which waits under the facts alone, so its
+# cases stay listed, as ``adapter``'s do where ``chain`` refuses.
 
 
 def chain_by_mode(read: Mapping[str, Any]) -> object:
@@ -1170,11 +1170,11 @@ def test_an_optional_fact_given_none_is_the_one_left_out() -> None:
     OPTIONAL.check_one_space({"width": None}, {})
 
 
-# A guard over a derived value over facts alone is evaluated, never read as a presence (lane
-# 4's ``offered``, computed from the channel's sides; E2's ``valued``, over ``contents``):
-# ``offered`` reads the optional fact ``offer``, ``mover`` is present where it holds. Left out
-# (None), the guard reads false and ``mover.burst`` is pruned, still answered by name; given,
-# it is listed. Set by name where pruned, it is stored, dormant and listed (SZ119 (5)).
+# A guard over a derived value over facts alone is evaluated, never read as a presence (the
+# channel kernel's ``offered``, computed from the channel's sides, and its ``valued``, over
+# ``contents``): ``offered`` reads the optional fact ``offer``, ``mover`` is present where it
+# holds. Left out (None), the guard reads false and ``mover.burst`` is pruned, still answered
+# by name; given, it is listed. Set by name where pruned, it is stored, dormant and listed.
 
 OFFERED = Case(
     "a derived guard over an optional fact",

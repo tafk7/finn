@@ -548,7 +548,7 @@ def test_a_facts_change_clearing_a_value_outside_its_new_domain_is_accepted() ->
 
 
 # A batch is its facts, then its choices as a change of choices on their design space
-# (§ 16.25); a bind is the same instantiation from nothing (SZ90). ``k`` asks ``c`` to be at
+# (§ 16.25); a bind is the same instantiation from nothing. ``k`` asks ``c`` to be at
 # most the fact ``f``, ``l`` the same of ``x``.
 
 BOUNDED = Case(

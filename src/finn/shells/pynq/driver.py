@@ -258,7 +258,7 @@ def write_driver(export: Integration, directory: str, fclk_mhz: float, bitfile: 
 def driver_description(
     export: Integration, fclk_mhz: float, bitfile: str, before: list[str], after: list[str]
 ) -> dict[str, Any]:
-    """What the driver of ``export`` takes and returns (SS9): the bitfile it runs, by
+    """What the driver of ``export`` takes and returns: the bitfile it runs, by
     its path in the build's output directory and in the deployment package, both of
     which hold bitfile/ beside driver/; the partition's inputs and outputs, each by its
     tensor's name, element and shape, and the mover that moves it; the clock it sets; and

@@ -102,7 +102,7 @@ def test_the_cache_keys_an_optional_value_as_its_type_keys_it() -> None:
     assert cache_key(None) != cache_key(0)
 
 
-# devi's probe (E2's review): an optional fact left out, bound to a child's required formal
+# What the review probed: an optional fact left out, bound to a child's required formal
 # of the same type, with no guard. The binding is a definition (the two types are
 # compatible); the formal recognizes the value it is bound to by its own type, so ``None``
 # never flows in: the formal is refused at itself (``formal-value``), and a derived value

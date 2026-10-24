@@ -118,7 +118,7 @@ def test_a_held_initializer_is_given_as_contents_never_as_a_tensor() -> None:
 
 def test_the_views_answer_from_facts() -> None:
     """Without known weights the result is the datatypes' range; with them, their
-    columns' (K7), each stated on the result element at the activations' rank."""
+    columns', each stated on the result element at the activations' rank."""
     streamed = design_space(
         MatMulKernel(
             platform=TARGET.platform, x_tensor=X, weights=Tensor((4, 4), ScalarEncoding(INT3))
@@ -182,7 +182,7 @@ def test_conversion_sets_each_choice_in_play_by_its_policy_on_the_kernel_alone()
         "compute.int8_dsp58.compute_pumping": inspection.Absent(),
     }
     # a dense MatMul has no ``realization`` (``when=depthwise``): its facts alone rule it out,
-    # so it is in no list (SZ113)
+    # so it is in no list
     assert "realization" not in {item.key for item in inspection.decisions(point)}
     assert inspection.validity(point).status == "valid"
     thresholding = thresholding_model()

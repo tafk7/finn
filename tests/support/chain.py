@@ -40,7 +40,7 @@ THRESHOLD_DTYPE = DataType["INT5"]
 W1 = tuple(tuple((3 * n + 2 * k) % 7 - 3 for n in range(HIDDEN)) for k in range(INPUTS))
 W2 = tuple(tuple((2 * n + 5 * k) % 7 - 3 for n in range(OUTPUTS)) for k in range(HIDDEN))
 X = tuple(tuple((5 * r + 3 * k) % 8 - 4 for k in range(INPUTS)) for r in range(ROWS))
-# Each MatMul's result: its weights' columns over its activations' datatype (K7), in
+# Each MatMul's result: its weights' columns over its activations' datatype, in
 # the range's smallest encoding: INT6 over [-28, 28] and INT5 over [-15, 12].
 H = range_dtype(*column_range(ScalarEncoding(A), W1))
 Y = range_dtype(*column_range(ScalarEncoding(T), W2))

@@ -54,7 +54,7 @@ FRAMES = 2
 # The partition's boundary, its free sides' and movers' facts in the Zynq shell:
 # 784 UINT8 pixels in 49 beats of 16 lanes, which an IODMA_hls reads from a 128-bit port
 # with no width converter; ten INT7 logits over [-61, 61] (the last MatMul's columns over its
-# activations' range, [-1, 1], K7) in one beat of 72 bits, which an IODMA_hls writes through
+# activations' range, [-1, 1]) in one beat of 72 bits, which an IODMA_hls writes through
 # a converter to an 8-bit port, nine words.
 MOVER = {"kind": "iodma_hls", "frames_per_call": 1, "control_buses": 1}
 FACTS = (
