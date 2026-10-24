@@ -174,7 +174,7 @@ def _channel(source, sink, shape, platform=FULL_DSP48E2):
 def test_steps_no_finnlib_chain_carries_out_refuse_the_input_adapter_once():
     """Steps that exist, which no FinnLib chain carries out (a frame closed every 6 beats
     and every 4: no input_gen level closes every 4 beats of a nest of 6): the picker
-    refuses with ``adapter-plan`` and the text its chains gave, one piece keyed
+    refuses with ``adapter-steps`` and the text its chains gave, one piece keyed
     ``adapter``. The style and its UltraRAM rule, guarded by the picker's answer, are not
     in play: each one guard piece beside it."""
     form = vector_major((12,), 1)
@@ -188,9 +188,9 @@ def test_steps_no_finnlib_chain_carries_out_refuse_the_input_adapter_once():
         for piece in validity.pieces
     }
     why = (
-        "adapter-plan",
+        "adapter-steps",
         "input_chain",
-        "no FinnLib chain carries out the plan: no input_gen level closes every 4 beats",
+        "no FinnLib chain carries out the steps: no input_gen level closes every 4 beats",
     )
     (adapter,) = [owner for owner in pieces if owner.split(".")[0] == "adapter"]
     assert adapter == "adapter"
@@ -236,7 +236,7 @@ def test_a_stream_admitting_no_adapter_refuses_its_steps():
     point = adapted(vector_major((ROWS, CHANNELS), 4), 2, adaptable=False)
     refused = point.member("x").query(Channel.netlist)
     assert isinstance(refused, Rejected)
-    refusals = [finding for finding in refused.findings if finding.code == "channel-plan"]
+    refusals = [finding for finding in refused.findings if finding.code == "channel-steps"]
     assert refusals and "width_conversion" in refusals[0].message
     # Its adapter Decision does not apply, and the channel's policies leave a channel refused on
     # its own facts as it is: its transport stays open.
@@ -333,7 +333,7 @@ def test_a_fifo_in_a_memory_the_platform_lacks_is_refused_by_its_rule():
         (
             lambda: adapted(vector_major((ROWS, CHANNELS), 4), 2, adaptable=False),
             "refused",
-            [("realizable", {"channel-plan"})],
+            [("realizable", {"channel-steps"})],
             None,
         ),
         # The FIFO's memory open: its stage's module waits on it, and its rules; the

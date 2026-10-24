@@ -189,7 +189,7 @@ def _geometry_supported(bits: int, depth: int) -> bool:
 
 
 #: The finding of a geometry the native FIFO does not take (``_geometry_supported``).
-_GEOMETRY = ("fifo-geometry", "word_bits must be positive and depth at least two")
+_GEOMETRY = ("fifo-geometry", "input_data_width must be positive and depth at least two")
 
 
 def _given(depth: int, bits: int, style: str, uram: bool) -> str:

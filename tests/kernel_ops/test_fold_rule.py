@@ -201,7 +201,7 @@ def test_a_kernel_s_stored_choice_standing_in_the_way_refuses_the_change_naming_
     assert isinstance(done, Refused)
     rules = {("hidden", "realizable"), ("hidden", "compatible")}
     assert set(done.why) == rules
-    assert [f.code for f in done.why[("hidden", "realizable")]] == ["channel-plan"]
+    assert [f.code for f in done.why[("hidden", "realizable")]] == ["channel-steps"]
     assert all(("activate", "pe") in done.standing[rule] for rule in rules)
     assert not any(key[0] in network.channels for keys in done.standing.values() for key in keys)
     both = boarded(ULTRA, folding=folding, adaptable=False)

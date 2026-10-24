@@ -18,7 +18,7 @@ the boundary. The channel's tensor is never derived from a port.
 
 Each side's stream must traverse the tensor (``channel-tensor``), and the steps between
 their beat sequences (``finn.dataflow.steps``) must be ones a chain of FinnLib modules
-carries out (``channel-plan``); each hop between them connects directly
+carries out (``channel-steps``); each hop between them connects directly
 (``compatible``: their sequences, and a boundary output's word against the AXIS word that
 carries it, ``channel-padding``). A channel runs, in order:
 
@@ -29,7 +29,7 @@ The steps split at the transport: their output side (width conversions) is the
 (a reorder, replay included, and markers) the ``adapter``, the fixed chain
 (``finn.kernels.adapters``) its steps take, picked by them (``input_chain``): ``none``
 where nothing happens after the transport, refused where no FinnLib chain carries them
-out (``adapter-plan``). Its input generators share one memory style, the channel's choice
+out (``adapter-steps``). Its input generators share one memory style, the channel's choice
 (``adapter_ram_style``), ranked by the most bits one of them holds a frame
 (``adapter_ram_preference``), in UltraRAM only where the platform has it
 (``adapter_uram_present``). The ``transport`` selector is ``direct``, which places
@@ -638,7 +638,7 @@ class Channel(KernelSpace):
         try:
             return between(streams.source.sequence, streams.sink.sequence)
         except Unrealizable as error:
-            return reject("channel-plan", f"no adapter can join the streams: {error}")
+            return reject("channel-steps", f"no adapter can join the streams: {error}")
 
     @derived
     def output_steps(self) -> Steps:
@@ -663,7 +663,7 @@ class Channel(KernelSpace):
         found = self.steps
         if found and not self.adaptable:
             return reject(
-                "channel-plan",
+                "channel-steps",
                 f"the streams need {found.describe()}, and this channel admits no adapter",
             )
         return True
@@ -693,14 +693,14 @@ class Channel(KernelSpace):
     def input_chain(self) -> str | Rejected:
         """The chain its input adapter places (an ``ADAPTERS`` key): the kinds of the
         stages that carry out the steps after the transport (``realize``), joined, or
-        ``none`` where it does not adapt. Refused where the steps are (``channel-plan``),
-        or where no FinnLib chain carries them out (``adapter-plan``)."""
+        ``none`` where it does not adapt. Refused where the steps are (``channel-steps``),
+        or where no FinnLib chain carries them out (``adapter-steps``)."""
         if not self.adapting:
             return "none"
         try:
             realization = realize(self.input_steps)
         except Unrealizable as error:
-            return reject("adapter-plan", f"no FinnLib chain carries out the plan: {error}")
+            return reject("adapter-steps", f"no FinnLib chain carries out the steps: {error}")
         return "_".join(stage.kind for stage in realization)
 
     @derived
@@ -911,7 +911,7 @@ def open_boundary_refusal(
     ``tensor`` on ``platform``, ``side`` on one end and the boundary, unstated, on the
     other, with its own policies applied once (``Channel.policies``, by
     ``finn.kernels.policies.defaulted``): refused where its validity is refused (no chain
-    of modules joins the two, ``channel-plan``, ``adapter-plan``, a hop that does not
+    of modules joins the two, ``channel-steps``, ``adapter-steps``, a hop that does not
     connect) or where a choice can take no value (``choice-no-valid-value``). A validity
     left open only by a required choice (a FIFO's depth, which sizing sets) is no refusal.
     The boundary presents what its other side presents, so the check finds only what no

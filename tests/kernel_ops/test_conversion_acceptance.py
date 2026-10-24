@@ -267,7 +267,7 @@ def test_a_refused_node_between_kernel_ops_is_a_host_node_there() -> None:
 class MarkedThresholding(Thresholding):
     """Test-only: Thresholding whose input closes a frame every 4 beats and every 6, two
     marker levels: an input generator can make neither, so no chain of modules joins an
-    open boundary to it (``adapter-plan``). It takes Thresholding's place in the domain."""
+    open boundary to it (``adapter-steps``). It takes Thresholding's place in the domain."""
 
     op_type = "MarkedThresholding"
 
@@ -302,15 +302,15 @@ def test_a_stream_no_chain_joins_keeps_the_node_on_the_host_with_the_channel_s_f
     assert convert(multithreshold())[1].outcomes == (Outcome(("mt",), "Thresholding"),)
     in_place_of_thresholding(monkeypatch, MarkedThresholding)
     found = rejected(multithreshold())
-    assert ("input_chain", "adapter-plan") in found
-    assert {code for _, code in found} == {"adapter-plan", "guard-refused"}
+    assert ("input_chain", "adapter-steps") in found
+    assert {code for _, code in found} == {"adapter-steps", "guard-refused"}
     _, conversion = convert(multithreshold())
     (outcome,) = conversion.outcomes
     assert {dict(each.details)["tensor"] for each in outcome.findings} == {"x"}
-    (plan,) = [each for each in outcome.findings if each.code == "adapter-plan"]
+    (steps,) = [each for each in outcome.findings if each.code == "adapter-steps"]
     assert (
-        plan.message
-        == "no FinnLib chain carries out the plan: no input_gen level closes every 4 beats"
+        steps.message
+        == "no FinnLib chain carries out the steps: no input_gen level closes every 4 beats"
     )
 
 

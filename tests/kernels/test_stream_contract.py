@@ -336,7 +336,7 @@ def test_the_delivery_kernel_serves_a_second_consumer_through_the_same_contract(
     strided = constant_network(Traversal.over((CHANNELS,), ((0, 2, 1),), ((0, 2, 2),)))
     refused = strided.member("c").query(Channel.netlist)
     assert isinstance(refused, Rejected)
-    (refusal,) = [finding for finding in refused.findings if finding.code == "channel-plan"]
+    (refusal,) = [finding for finding in refused.findings if finding.code == "channel-steps"]
     assert "another lane axis" in refusal.message
     trial = strided.trial(keyed({"c.transport": "direct"}))
     assert not trial.accepted
@@ -347,7 +347,7 @@ def test_the_delivery_kernel_serves_a_second_consumer_through_the_same_contract(
 
 def test_steps_that_refuse_refuse_the_input_adapter_once():
     # The same lane regroup on a channel that admits adapters: its steps refuse
-    # (channel-plan), so the picker of its input adapter refuses with them, one piece keyed
+    # (channel-steps), so the picker of its input adapter refuses with them, one piece keyed
     # by the selector, as the guard of the chosen selector it replaces did; and its
     # adapter's memory and that memory's UltraRAM rule, which the picker guards, one
     # guard piece each.
@@ -359,7 +359,7 @@ def test_steps_that_refuse_refuse_the_input_adapter_once():
     pieces = {
         piece.owner: {(f.code, f.owner) for f in piece.result.findings} for piece in validity.pieces
     }
-    steps = ("channel-plan", "steps")
+    steps = ("channel-steps", "steps")
     assert pieces == {
         "realizable": {steps},
         "compatible": {steps},
