@@ -17,17 +17,21 @@ stream side, the free side's contract:
 - it moves a frame between a flat buffer and the stream in order, a memory word after
   another, so the host's buffer holds the stream's beats as they come; the PYNQ driver
   fills and reads that buffer as the tensor's row-major array, one pass of it a
-  frame. A free side that presents its pass more than once a frame (``passes``: a
-  streamed weight read once per row of its activations) is refused
-  (``mover-repetition``) until the host's or the mover's repetition is designed: the
-  driver would move one pass where the stream takes several. A free side whose pass
-  is not row-major (``Traversal.row_major``) is refused (``mover-order``): the driver
-  would feed it the wrong elements with no error;
+  frame. So the mover states its free side (``MoverOffer.states``, the boundary side's
+  ``outside``): each pass row-major (``Traversal.row_major``), one pass a frame, the
+  word (lanes a beat) left the inside's. The edge channel presents that side and
+  places what joins it to the inside (``finn.kernels.channels``): an ``input_gen``
+  after the transport where the inside writes or reads the pass in another order, or
+  reads it more than once a frame (a streamed weight read once per row of its
+  activations), its buffer the pass; what no chain of modules joins it refuses by its
+  own code (``channel-steps``), naming the mover. The free side the mover moves is
+  always one row-major pass a frame;
 
 - its memory port is ``gcd(frame bits, cap)``, a frame's bits the stream's padded
-  ``tdata`` times its beats, as ``InsertIODMA`` sizes ``intfWidth``; a frame is
-  ``words`` memory words, and a width converter sits between memory and stream when
-  the two widths differ;
+  ``tdata`` times its beats, as ``InsertIODMA`` sizes ``intfWidth``: the offer's cap
+  (``width_cap``) bounds the memory port, not the stream, whose ``tdata`` is the edge's
+  word; a frame is ``words`` memory words, and a width converter sits between memory
+  and stream when the two widths differ;
 - its cycles a frame are ``max(beats, words) + ceil(c / frames a call)``: a beat or a
   word a cycle, and each call's constant ``c``, which the offer states with and
   without a converter (``iodma_hls``: measured in XSim against a memory model, 4
@@ -76,7 +80,6 @@ from finn.core.space import (
     reject,
 )
 from finn.dataflow.tensor import ScalarEncoding
-from finn.dataflow.traversal import passes, period
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.base import Timed
 from finn.kernels.transport import StreamContract
@@ -258,7 +261,9 @@ class MoverContract:
 
 class IodmaMover(Timed):
     """The ``IODMA_hls`` mover on a free side (``side``), where ``offers`` offer it. It is
-    ``Timed``: its ``cycles`` count in its channel's."""
+    ``Timed``: its ``cycles`` count in its channel's. The side is the one it states
+    (``MoverOffer.states``: row-major, one pass a frame), so it states no rule of its own
+    on it."""
 
     offers: tuple[MoverOffer, ...] = Param()
     side: StreamContract = Param()
@@ -268,35 +273,6 @@ class IodmaMover(Timed):
         """The shell offers this kind."""
         if not any(offer.kind == IODMA_HLS for offer in self.offers):
             return reject("mover-not-offered", f"the shell offers no {IODMA_HLS} mover here")
-        return True
-
-    @constraint
-    def single_pass(self) -> bool | Rejected:
-        """Its free side presents the tensor once a frame, as the host's buffer holds it."""
-        form = self.side.form
-        repeated = passes(form)
-        if repeated > 1:
-            return reject(
-                "mover-repetition",
-                f"{self.side.transport.name}: an {IODMA_HLS} mover moves one pass of a "
-                f"{list(form.shape)} buffer a frame, and this free side presents it "
-                f"{repeated} times a frame (repetition by the host or the mover is not "
-                "designed yet)",
-            )
-        return True
-
-    @constraint
-    def row_major(self) -> bool | Rejected:
-        """Its free side presents each pass of the tensor row-major, the order of the
-        host's buffer."""
-        one = period(self.side.form)
-        if not one.row_major:
-            return reject(
-                "mover-order",
-                f"{self.side.transport.name}: an {IODMA_HLS} mover moves a row-major buffer, "
-                f"and this free side presents {one.beats} beats of {one.lanes} lanes of "
-                f"{list(one.shape)} in another order",
-            )
         return True
 
     @derived
