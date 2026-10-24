@@ -806,7 +806,7 @@ def test_a_record_that_fails_its_check_after_the_search_writes_nothing() -> None
     model = cut_model()
     before = model.model.SerializeToString()
     strategy = TargetThroughput(1_000_000_000 // (5 * 6))
-    strategy.fps = True  # type: ignore[assignment]
+    strategy.fps = True
     with pytest.raises(MetadataError, match="cannot store"):
         explore_kernel_choices(model, [strategy])
     assert model.model.SerializeToString() == before
