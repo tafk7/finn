@@ -33,7 +33,12 @@ from finn.builder.build_dataflow_steps import (
     step_size_fifos,
     step_verify_partition,
 )
-from finn.core.graph.annotations.boundary import BOUNDARY, read_boundary, write_boundary
+from finn.core.graph.annotations.boundary import (
+    BOUNDARY,
+    STATEMENTS,
+    read_boundary,
+    write_boundary,
+)
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import partition_body
@@ -98,7 +103,7 @@ def test_the_build_s_statements_are_stored_by_tensor_their_pace_as_given() -> No
     }
     write_boundary(model, statements)
     assert read_boundary(model) == statements
-    assert json.loads(model.get_metadata_prop("finn.boundary/statements"))["x"] == {
+    assert (model.get(STATEMENTS) or {})["x"] == {
         "order": None,
         "passes": None,
         "lanes": None,
