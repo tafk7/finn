@@ -43,7 +43,7 @@ presents what its other side presents, by one rule: an input without the replay 
 its receiver realizes (``unreplayed``), an output as produced, neither with markers. Where
 a shell offers movers on it (``offered``: the boundary side's ``offers``,
 ``finn.kernels.movers``), the channel places its ``mover`` on that free side; it binds no
-RTL in the module and states its contract (``mover_export``) for the shell's budget check
+RTL in the module and states its contract (``mover_contracts``) for the shell's budget check
 and resources.
 
 A channel whose tensor has a known value (``contents``) places its ``source`` (a
@@ -66,7 +66,7 @@ its own ends (its source, its stages, its boundary; ``netlist``), and a channel 
 takes no cycles of its own (0). Its hops to the ports beside it need those ports'
 contracts, which its network holds: the network wires them (``outer_hops``, from the ports
 it read, ``Neighbours``) and places them around the channel's netlist. It states its
-boundary's AXIS bus (``boundary_bus``) and its mover's contract (``mover_export``:
+boundary's AXIS bus (``boundary_bus``) and its mover's contract (``mover_contracts``, one or none:
 ``placed_mover``, from the mover's own derived ``contract``). It is no module of its own.
 """
 
@@ -867,7 +867,7 @@ class Channel(KernelSpace):
     # The boundary channel's mover, as its contract (``MoverContract``): one, or none
     # without a mover. The shell's budget check counts their AXI-Lite buses, and it sums
     # their resources and counts their memory ports.
-    mover_export = View(placed_mover)
+    mover_contracts = View(placed_mover)
 
 
 # The channel's policies (``finn.kernels.policies``), as a KernelOp states its kernel's:

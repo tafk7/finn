@@ -16,7 +16,7 @@ the row's budgets as rules of its own, and the shell as functions over it, over 
   ``clock-unavailable``. The ``ip`` row bounds neither count. Each reads the members'
   derived values, so a value that breaks one is refused in the partition, where the seam,
   the cut and emission read it. Emission checks the netlist's count (``bus_counts``, and
-  the movers' contracts, ``Channel.mover_export``) against the rules'
+  the movers' contracts, ``Channel.mover_contracts``) against the rules'
   (``finn.kernels.budgets.counts``): a difference is an error naming both
   (``shell-counts-differ``);
 - **resources** (``shell_resources``; ``InShell.own_resources``, which the seam reads):
@@ -152,7 +152,7 @@ def _mover_contracts(network: InShell) -> QueryResult[tuple[tuple[str, MoverCont
     found: list[tuple[str, MoverContract]] = []
     waiting: list[QueryResult[object]] = []
     for name in network.movers:
-        placed = network.query(name, Channel.mover_export)
+        placed = network.query(name, Channel.mover_contracts)
         if isinstance(placed, Available):
             found.extend((name, contract) for contract in placed.value)
         elif not isinstance(placed, Inapplicable):
