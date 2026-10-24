@@ -56,6 +56,7 @@ def test_kernel_identity_is_validated_at_class_creation() -> None:
     empty = design_space(Empty())
     assert views(empty) == [
         "buffering",
+        "bus_control",
         "cycles",
         "held_bits",
         "netlist",

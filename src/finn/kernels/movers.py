@@ -79,7 +79,7 @@ from finn.core.space import (
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import passes, period
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.base import CYCLES
+from finn.kernels.base import CYCLES, Timed
 from finn.kernels.transport import StreamContract
 from finn.kernels.utilization import Fit
 from finn.platform.capabilities import Resources
@@ -245,8 +245,9 @@ class MoverContract:
         return tuple(max(beat, ceil((beat + 1) * words / beats) - 1) for beat in range(beats))
 
 
-class IodmaMover(Space):
-    """The ``IODMA_hls`` mover on a free side (``side``), where ``offers`` offer it."""
+class IodmaMover(Timed):
+    """The ``IODMA_hls`` mover on a free side (``side``), where ``offers`` offer it. It is
+    ``Timed``: its ``cycles`` count in its channel's."""
 
     offers: tuple[MoverOffer, ...] = Param()
     side: StreamContract = Param()

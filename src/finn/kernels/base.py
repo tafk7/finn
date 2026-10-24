@@ -34,10 +34,11 @@ from its netlist (``finn.kernels.library.library_module``). **``Kernel``** is wh
 reader of any kernel's design point asks: a ``typing.Protocol`` of the four answers, read
 out, and nothing else (its docstring).
 
-**What it reaches of its members**: their answers, through ``Members`` over their exports
-(``netlists``, ``controls``, ``member_cycles``, ``member_buffering``,
-``member_resources``), read by its views alone. A parent reaches only its present members,
-one refused member refusing the answer.
+**What it reaches of its members**: their answers, through ``Members`` over the member each
+states (``netlists``, ``controls`` over ``bus_control``, ``member_cycles`` over
+``Timed.cycles``, ``member_buffering``, ``member_resources``), read by its views alone. A
+parent reaches only its present members, one refused member refusing the answer; a member
+answering inapplicable (a kernel declaring no control bus, a FIFO's cycles) is left out.
 
 **Its declarations** (``finn.kernels.declaration``): its stream ports
 (``finn.kernels.port``), the ports it presents for its members
@@ -100,7 +101,7 @@ from finn.dataflow.schedule import Access, Affine, Index, Refused, Schedule, bin
 from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import Clocking
 from finn.kernels.artifacts.module import BusExport, Fragment, Link, merge
-from finn.kernels.control import CONTROL, ControlBus, presented
+from finn.kernels.control import CONTROL, Control, ControlBus, presented
 from finn.kernels.declaration import KernelDeclaration, Product, declarations, declared_reads
 from finn.kernels.library import LibraryModule
 from finn.kernels.transport import StreamContract
@@ -322,7 +323,26 @@ def _made(member: object) -> bool:
     return bool(getattr(getattr(member, "function", None), "_spanning", False))
 
 
-class KernelSpace(Space):
+class Timed(Space):
+    """A Space stating the clock cycles a frame takes through it: its view ``cycles``.
+
+    The base of what a channel's ``cycles`` counts: ``KernelSpace`` and the movers derive
+    from it, and ``member_cycles`` collects ``Timed.cycles`` of the members of a kernel.
+    A member that takes none a channel counts (``ChannelFifo``) states ``cycles`` guarded
+    to answer inapplicable, which ``Members`` leaves out.
+
+    Its own ``cycles`` is the one a class stating none would answer: a refusal, so that a
+    ``Timed`` class that is placed without stating its cycles is never taken to take none.
+    Every class placed states its own.
+    """
+
+    @view
+    def cycles(self) -> int | Rejected:
+        """The clock cycles a frame takes through it: what a class stating none refuses."""
+        return reject("timed-cycles", f"{type(self).__qualname__} states no cycles")
+
+
+class KernelSpace(Timed):
     """A kernel: the design space of its hardware, binding a library module or placing
     kernels, never both (the module docstring). ``id`` names it, a nonempty string.
 
@@ -330,17 +350,9 @@ class KernelSpace(Space):
     ``_buffering``, ``_resources``) and made for each class when it is made, reading the
     class's declarations by the names their lowering fixes (``_spanning``). A class may
     state one itself, calling these. Its members' answers it reaches through ``Members``
-    over their exports, which only these views read."""
+    over the member each states, which only these views read."""
 
     id: ClassVar[str] = ""
-
-    # -- what it reaches of its members: their answers, read by its views only ------------
-
-    netlists = Members(NETLIST)
-    controls = Members(CONTROL)
-    member_cycles = Members(CYCLES)
-    member_buffering = Members(BUFFERING)
-    member_resources = Members(RESOURCES)
 
     # Its declarations (``declarations``), by name, in the order they are declared, and its
     # library module among them, by name (None: it binds none).
@@ -572,6 +584,19 @@ class KernelSpace(Space):
         names it by its node where it is held), its members' under theirs."""
         return KernelSpace._netlist(self)
 
+    @derived
+    def declares_bus(self) -> bool:
+        """Whether it declares a control bus (presented or not): False here, True in a
+        class declaring one (``ControlBus.lower``)."""
+        return False
+
+    @view(when=declares_bus)
+    def bus_control(self) -> Control | Rejected:
+        """The control bus it declares: a ``Control``, presenting nothing while the bus is
+        not presented. A kernel declaring none answers inapplicable; one declaring a bus
+        reads that bus's own view here (``ControlBus.lower``)."""
+        return reject("kernel-control", f"{type(self).__qualname__} declares no control bus")
+
     @view
     @declared_reads("member_cycles")
     def cycles(self) -> int | Rejected:
@@ -590,6 +615,15 @@ class KernelSpace(Space):
     def resources(self) -> Resources:
         """What it and its members use of the device."""
         return KernelSpace._resources(self)
+
+    # -- what it reaches of its members: their answers, read by its views only ------------
+    # Each ``Members`` names the member it reads, so it follows the views it names.
+
+    netlists = Members(netlist)
+    controls = Members(bus_control)
+    member_cycles = Members(Timed.cycles)
+    member_buffering = Members(buffering)
+    member_resources = Members(resources)
 
     # A kernel adding exports of its own extends these: ``{**KernelSpace.exports, KEY: ...}``.
     exports = {

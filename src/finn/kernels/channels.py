@@ -311,8 +311,9 @@ def _below_stages(holder: str, stages: tuple[Stage, ...]) -> tuple[Stage, ...]:
 class ChannelFifo(KernelSpace):
     """An identity stage: what arrives at it, presented on both sides of a native FIFO.
 
-    Its netlist, buffering and resources are its FIFO's, by the base. It exports no
-    cycles: a FIFO presents what arrives, whose beats are counted where they are made
+    Its netlist, buffering and resources are its FIFO's, by the base. Its ``cycles``
+    answers inapplicable (``counts_cycles``, False), which a channel's ``member_cycles``
+    leaves out: a FIFO presents what arrives, whose beats are counted where they are made
     (the channel's producer, its source, its output adapter), so its channel's cycles
     are its other members'. It presents no port: its channel checks it by its FIFO's
     streams (``stage_streams``) and wires it hop by hop (``stages``: its FIFO's module,
@@ -354,6 +355,18 @@ class ChannelFifo(KernelSpace):
                 "what arrives carries markers, and a FIFO carries data words only",
             )
         return True
+
+    @derived
+    def counts_cycles(self) -> bool:
+        """Whether its cycles count in its channel's: no, the beats it carries are counted
+        where they are made."""
+        return False
+
+    @view(when=counts_cycles)
+    def cycles(self) -> int | Rejected:
+        """The clock cycles a frame takes through it: none it states, so it answers
+        inapplicable, and its channel's ``member_cycles`` leaves it out."""
+        return reject("fifo-cycles", "a FIFO's beats are counted where they are made")
 
     @derived
     def stage_streams(self) -> tuple[StageStreams, ...]:

@@ -49,6 +49,7 @@ from finn.core.space import (
     DefinitionError,
     Rejected,
     Space,
+    View,
     ViewKey,
     default_semantics,
     derived,
@@ -128,6 +129,13 @@ class ControlBus(KernelDeclaration):
     def lower(self, owner: type[KernelSpace], name: str) -> Mapping[str, object]:
         label = f"{owner.__qualname__}.{name}"
         self.references()  # each member it names, named
+        if name == "bus":
+            raise DefinitionError.broken(
+                "declaration-member-taken",
+                "ControlBus",
+                f"{label} lowers to bus_control, which every kernel declares",
+                declaration=label,
+            )
         if self.presented is not False and (self.port is None or self.registers is None):
             raise DefinitionError.broken(
                 "control-bus-unaddressed",
@@ -158,9 +166,16 @@ class ControlBus(KernelDeclaration):
                 declaration.value(self, "bus"), port, declaration.value(self, "registers")
             )
 
+        def declares_(self: Space) -> bool:
+            """It declares a control bus."""
+            return True
+
+        control = view(semantics=CONTROL_SEMANTICS)(control_)
         return {
             f"{name}_presented": derived(presented_),
-            f"{name}_control": view(semantics=CONTROL_SEMANTICS)(control_),
+            f"{name}_control": control,
+            "declares_bus": derived(declares_),
+            "bus_control": View(control),
         }
 
     def reads(self, name: str, product: Product) -> tuple[str, ...]:

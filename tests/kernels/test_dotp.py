@@ -79,6 +79,7 @@ def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_th
         item.key for item in inspection.members(point) if item.kind == "view" and item.scope == ""
     ] == [
         "buffering",
+        "bus_control",
         "cycles",
         # What its module and its resources read, and nothing in its space.
         "dsp_simd",
