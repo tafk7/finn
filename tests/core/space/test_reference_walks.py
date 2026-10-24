@@ -10,9 +10,11 @@ nothing broken, additions moving answers only up the information order, no accep
 adding a (false piece, origin) pair, every refusal naming exactly its origins and their
 standing choices), and the engine's own checks hold (its walked configuration against one
 built from nothing). Each seed walks twice (DESIGN § 6): the strict run draws no view read in,
-gives every fact and unsets none, and each disagreement fails it; the full run draws them,
-counts a disagreement attributed to T4b (a view read in) under that pending milestone, and
-fails on any other, or on one whose milestone is taken as removed. Every invariant's checker
+gives every fact and unsets none, and each disagreement fails it; the full run draws them (a
+rule reading a view, which the engine must refuse as the model does), counts a disagreement
+attributed to a pending milestone under it, and fails on any other, or on one whose
+milestone is taken as removed (no milestone is pending now, so it fails on every one).
+Every invariant's checker
 is also shown catching a deliberately wrong answer on a small description. Reading 8's
 shapes, which no drawn description holds, are walked by hand.
 
@@ -51,7 +53,7 @@ from core.space.reference import (
     computed,
     listed,
 )
-from core.space.reference_harness import Case, walks
+from core.space.reference_harness import Case, Row, walks
 from core.space.reference_harness.compare import answer_form
 from core.space.reference_harness.engine import Engine, Point, Spelling, build
 from core.space.reference_harness.forms import (
@@ -118,13 +120,13 @@ def test_a_seeded_walk_keeps_the_four_invariants_and_the_engines_own_checks(
     assert tally.engine_checks["cold change"] == tally.steps
 
 
-def test_the_full_run_meets_its_causes_and_counts_each_under_its_milestone() -> None:
-    # T4c is reached (an optional fact left out or unset is None in the engine too, and the
-    # lists are pruned): only T4b's view read in is counted, anything else fails
+def test_the_full_run_draws_read_ins_the_engine_refuses_and_counts_no_disagreement() -> None:
+    # T4b and T4c are reached (a view read in is refused, an optional fact left out or unset
+    # is None in the engine too, and the lists are pruned): the full run draws both, no
+    # milestone is pending, and nothing is counted: every one would fail its walk
     tallies = [gate_walk(seed, False) for seed in SEEDS]
-    counted = sum((tally.by_milestone for tally in tallies), start=type(tallies[0].checks)())
-    assert counted["T4b"], counted
-    assert set(counted) == {"T4b"}
+    assert not any(tally.by_milestone or tally.by_question for tally in tallies)
+    assert sum(tally.skipped["view-read-in"] for tally in tallies)
 
 
 def test_the_gates_walks_exercise_every_invariant() -> None:
@@ -178,9 +180,10 @@ def test_descriptions_hold_two_to_six_choices_and_skip_views_read_in() -> None:
 
 # -- the engine comparison: attributed by cause in the full run, failing in the strict one -------
 #
-# The public API differs from the model where the ruling reaches (T4b). Elsewhere it
-# agrees, so a disagreement with no cause is made here: the engine answers every choice's
-# state as absent (the model's start holds an open choice).
+# The public API agrees with the model, so a disagreement is made here: the engine answers
+# every choice's state as absent (the model's start holds an open choice). No milestone is
+# pending, so none has a cause: the machinery that counts one under a milestone is tested on
+# a milestone of its own.
 
 
 @pytest.fixture
@@ -204,34 +207,63 @@ def first_line(tally: walks.Tally) -> str:
 
 @pytest.mark.usefixtures("engine_disagrees")
 def test_a_disagreement_with_no_cause_fails_the_full_run_and_any_fails_the_strict_run() -> None:
-    # only a view read in has a cause (T4b)
+    # no milestone is pending: nothing has a cause
     assert first_line(walk(1, 6)) == "seed 1, step 0: the engine disagrees (state; no cause)"
     strict = walk(1, 6, strict=True)
     assert first_line(strict) == "seed 1, step 0: the engine disagrees (state; strict run)"
 
 
-def test_a_view_read_in_is_counted_under_t4b_until_it_is_taken_as_removed() -> None:
-    # seed 0 draws a rule reading a view before its description: the model refuses it as
-    # view-read-in, the engine builds it
-    tally = walk(0, 3)
-    assert tally.failure is None, tally.failure
-    assert (tally.by_milestone["T4b"], tally.by_question["definition"]) == (1, 1)
-    assert first_line(walk(0, 3, without=("T4b",))) == (
-        "seed 0, step 0: the engine disagrees (definition; T4b not pending)"
-    )
+@pytest.fixture
+def a_later_milestone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The matrix holding a milestone with a row, as it does while one is pending: none is,
+    so the walks' counting is tested on a milestone of its own."""
+    rows = (Row("a-row", "lane 9", "the change", "test_reference_cases::test_it"),)
+    monkeypatch.setattr(walks, "MILESTONES", ("base", "lane 9"))
+    monkeypatch.setattr(walks, "ROWS", rows)
 
 
-def test_an_engine_refusing_a_view_read_in_as_the_model_does_is_not_counted(
+@pytest.mark.usefixtures("a_later_milestone")
+def test_a_disagreement_is_counted_under_a_pending_milestone_and_otherwise_fails_its_walk() -> None:
+    expected, engine = DefinitionForm("view-read-in"), DefinitionForm(None)
+    assert pending() == ("lane 9",) and pending(("lane 9",)) == ()
+    run = walks._Walk(0, 3, False, pending())
+    run.disagree("definition", "a description", expected, engine, "lane 9")
+    assert (run.tally.by_milestone["lane 9"], run.tally.by_question["definition"]) == (1, 1)
+    assert run.tally.failure is None
+    # no cause, a cause not pending, and the strict run, which counts none
+    for cause, strict, reason in (
+        (None, False, "no cause"),
+        ("lane 10", False, "lane 10 not pending"),
+        ("lane 9", True, "strict run"),
+    ):
+        refused = walks._Walk(0, 3, strict, pending())
+        with pytest.raises(walks.WalkFailure):
+            refused.disagree("definition", "a description", expected, engine, cause)
+        assert first_line(refused.tally) == (
+            f"seed 0, step 0: the engine disagrees (definition; {reason})"
+        )
+    taken_as_removed = walks._Walk(0, 3, False, pending(("lane 9",)))
+    with pytest.raises(walks.WalkFailure):
+        taken_as_removed.disagree("definition", "a description", expected, engine, "lane 9")
+    assert first_line(taken_as_removed.tally).endswith("(definition; lane 9 not pending)")
+
+
+def test_an_engine_refusing_a_view_read_in_as_the_model_does_agrees_and_otherwise_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # once T4b's engine answers view-read-in, seed 0's drawn description agrees: nothing counted
-    def refusing(*_: object, **__: object) -> DefinitionForm:
-        return DefinitionForm("view-read-in")
-
-    monkeypatch.setattr(walks, "definition", refusing)
+    # seed 0 draws a rule reading a view before its description: the model refuses it as
+    # view-read-in, and so does the engine: the walk agrees, counting nothing
     tally = walk(0, 3)
     assert tally.failure is None, tally.failure
-    assert (tally.by_milestone["T4b"], tally.by_question["definition"]) == (0, 0)
+    assert tally.skipped["view-read-in"]
+    assert not tally.by_milestone and not tally.by_question
+
+    # an engine building it instead disagrees, and no milestone is pending to count it under
+    def building(*_: object, **__: object) -> DefinitionForm:
+        return DefinitionForm(None)
+
+    monkeypatch.setattr(walks, "definition", building)
+    assert first_line(walk(0, 3)) == "seed 0, step 0: the engine disagrees (definition; no cause)"
 
 
 def test_a_question_reaching_an_optional_fact_left_out_agrees() -> None:
@@ -406,16 +438,12 @@ def test_each_facts_answer_is_asked_at_each_configuration() -> None:
         assert point.answer(fact) == AnswerForm("value", expected)  # left out: None
 
 
-def test_with_no_milestone_pending_every_disagreement_fails_its_walk(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(walks, "ROWS", ())
+def test_with_no_milestone_pending_every_disagreement_fails_its_walk() -> None:
+    # none is pending: the engine answering a view read in otherwise fails seed 0's walk (the
+    # test above), as does any other disagreement; a milestone that was retired is unknown
     assert pending() == ()
-    assert first_line(walk(0, 3)) == (
-        "seed 0, step 0: the engine disagrees (definition; T4b not pending)"
-    )
     with pytest.raises(ValueError, match="no such milestone"):
-        pending(("lane 10",))
+        pending(("T4b",))
 
 
 def test_the_summary_names_the_runs_the_milestones_and_the_checks() -> None:
@@ -433,12 +461,21 @@ def test_the_summary_names_the_runs_the_milestones_and_the_checks() -> None:
     assert "walks 2 (full 1, strict 1)" in text
     assert "implementation: public" in text.splitlines()
     assert (
-        "engine disagreements (full: attributed by cause, counted while pending (T4b), "
-        "else failing; strict: every one failing): by milestone T4b 0; by question -"
+        "engine disagreements (full: every one failing (no milestone with rows pending); "
+        "strict: every one failing): by milestone -; by question -"
     ) in text
     assert text.splitlines()[2].startswith("| 7 | full | 3 |")
     assert text.splitlines()[3].startswith("| 7 | strict | 3 |")
-    removed = ("T4b",)
+
+
+@pytest.mark.usefixtures("a_later_milestone")
+def test_the_summary_names_a_pending_milestone_and_what_is_counted_under_it() -> None:
+    tallies = [walk(7, 3), walk(7, 3, strict=True)]
+    assert (
+        "engine disagreements (full: attributed by cause, counted while pending (lane 9), "
+        "else failing; strict: every one failing): by milestone lane 9 0; by question -"
+    ) in table(tallies)
+    removed = ("lane 9",)
     assert "every one failing (no milestone with rows pending)" in table(tallies, removed)
 
 
