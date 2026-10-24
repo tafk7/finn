@@ -2,16 +2,18 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """One spelling for each shape of a Space: what an author writes, and what must not move.
 
-The Space has a few shapes that can still be written two ways: a constant (``Const``) beside
-a derived value of nothing, integer arithmetic and attribute reads on a reference in a class
-body beside a named derived value, ``View(source)`` beside ``view``, ``when=`` on a derived
-value, a constraint or a view beside the body's own early return, ``getattr(self, name)`` and
-``__reads__`` beside a closed set of reads, and a declaration that stays open until the first
-compile beside one closed with its class. This file holds the hand cases of the change that
-leaves one spelling each.
+The Space has a few shapes that can still be written two ways: ``View(source)`` beside
+``view``, ``when=`` on a derived value, a constraint or a view beside the body's own early
+return, ``getattr(self, name)`` and ``__reads__`` beside a closed set of reads, and a
+declaration that stays open until the first compile beside one closed with its class. A
+constant beside a derived value of nothing, and integer arithmetic or an attribute read on a
+reference in a class body beside a named derived value, are refused by name: those hand
+cases are the first group. This file holds the hand cases of the change that leaves one
+spelling each.
 
-Four groups:
+Five groups:
 
+- **Refused**: a spelling that has gone, refused by name, with the spelling that remains.
 - **Expected failures**, strict: what the change makes true, each written with today's
   spelling where it must be. Each fails today for the intended reason (the refusal that is
   not yet raised, or the answer that is not yet given), and flips when the change lands:
@@ -42,11 +44,11 @@ from finn.core.space import (
     DefinitionError,
     Inapplicable,
     Param,
-    ReferenceUseError,
     Rejected,
     Space,
     Unresolved,
     constraint,
+    declarations,
     derived,
     design_space,
     inspection,
@@ -60,13 +62,20 @@ NOT_RAISED = pytest.fail.Exception
 """What a ``pytest.raises`` block raises where nothing is: an expected failure of a refusal
 that is not made yet."""
 
-REFUSED_BY_NAME = (DefinitionError, ReferenceUseError)
-"""The errors a class body may raise to refuse a spelling by name."""
-
 
 def holds(answer: object) -> bool:
     """Whether ``answer`` is the value true: a constraint that holds."""
     return isinstance(answer, Available) and answer.value is True
+
+
+@dataclass(frozen=True)
+class Rate:
+    per_head: int
+    heads: int
+
+    @property
+    def total(self) -> int:
+        return self.per_head * self.heads
 
 
 class Kitchen(Space):
@@ -79,63 +88,61 @@ class Kitchen(Space):
         return self.area * 2
 
 
-# -- expected failures: spellings the change refuses ------------------------------------------
+# -- refused: spellings that have gone --------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=NOT_RAISED,
-    reason="flips when Const leaves the surface: a class body holding one is refused by name",
-)
-def test_a_const_in_a_class_body_is_refused_by_name() -> None:
-    with pytest.raises(DefinitionError, match="Const"):
+def test_const_is_gone_and_a_class_body_cannot_declare_one() -> None:
+    assert not hasattr(space, "Const")
+    assert not hasattr(declarations, "Const")
+    with pytest.raises(AttributeError):
 
         class Holds(Space):
-            limit = space.Const(1)
+            limit = space.Const(1)  # type: ignore[attr-defined]
 
-        design_space(Holds())
+    class Constant(Space):
+        @derived
+        def limit(self) -> int:
+            return 1
+
+    assert design_space(Constant()).limit == 1
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=NOT_RAISED,
-    reason="flips when arithmetic on a reference is refused: a derived value is declared instead",
-)
 def test_arithmetic_on_a_reference_is_refused_by_name() -> None:
-    with pytest.raises(REFUSED_BY_NAME, match="derived value"):
+    with refused("reference-expression", error=DefinitionError, message="derived value") as caught:
 
         class Wing(Space):
             kitchen = Kitchen()
             doubled = kitchen.cost * 2
 
-        design_space(Wing())
+    assert "Kitchen node" in caught.finding.message and ".cost" in caught.finding.message
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=NOT_RAISED,
-    reason="flips when an attribute read on a reference is refused: a derived value is declared",
-)
 def test_an_attribute_read_on_a_reference_is_refused_by_name() -> None:
-    @dataclass(frozen=True)
-    class Rate:
-        per_head: int
-        heads: int
-
-        @property
-        def total(self) -> int:
-            return self.per_head * self.heads
-
     class Ledger(Space):
         amount: int = Param()
 
-    with pytest.raises(REFUSED_BY_NAME, match="derived value"):
+    with refused("reference-projection", error=DefinitionError, message="derived value") as caught:
 
         class Office(Space):
             rate: Rate = Param()
             ledger = Ledger(amount=rate.total)
 
-        design_space(Office(rate=Rate(10, 3)))
+    assert "rate" in caught.finding.message and ".total" in caught.finding.message
+
+    # The derived value it asks for does the same, bound to the formal.
+    class Booked(Space):
+        rate: Rate = Param()
+
+        @derived(rate=rate)
+        def amount(*, rate: Rate) -> int:
+            return rate.total
+
+        ledger = Ledger(amount=amount)
+
+    assert design_space(Booked(rate=Rate(10, 3))).ledger.amount == 30
+
+
+# -- expected failures: spellings the change refuses ------------------------------------------
 
 
 @pytest.mark.xfail(

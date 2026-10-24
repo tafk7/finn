@@ -484,13 +484,49 @@ def test_a_none_case_places_nothing() -> None:
 
 
 def test_a_class_object_as_a_shared_binding_is_refused() -> None:
-    with refused("select-binding-class"):
+    with refused("select-binding-class", message="declare a derived value of nothing returning it"):
         Select(fifo=Fifo, reg=Reg, width=int)
 
 
 def test_a_space_class_named_as_the_cases_formal_is_refused() -> None:
-    with refused("select-binding-class"):
+    with refused(
+        "select-binding-class", message="declare a derived value of nothing returning the value"
+    ):
         Select(fifo=Fifo, reg=Reg, width=Boiler)
+
+
+class Wordy(Space):
+    kind: type = Param()
+
+    @derived
+    def named(self) -> str:
+        return self.kind.__name__
+
+
+class Plain(Space):
+    kind: type = Param()
+
+
+def test_a_derived_value_of_nothing_carries_a_class_to_a_shared_binding() -> None:
+    """What the two refusals advise: the class is the value of a derived value of nothing,
+    and that member is what the cases' formal binds."""
+
+    class Holder(Space):
+        pick: int = Decision(values=(0, 1))
+
+        @derived
+        def chain(self) -> str:
+            return ("wordy", "plain")[self.pick]
+
+        @derived
+        def word(self) -> type:
+            return int
+
+        adapter: Wordy | Plain = Select(by=chain, wordy=Wordy, plain=Plain, kind=word)
+
+    point = bind(design_space(Holder()), {Holder.pick: 0}).instance
+    adapter = point.adapter
+    assert isinstance(adapter, Wordy) and adapter.kind is int and adapter.named == "int"
 
 
 def test_a_select_placing_nothing_is_refused() -> None:
