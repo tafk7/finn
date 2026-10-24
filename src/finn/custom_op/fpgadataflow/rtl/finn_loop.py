@@ -31,7 +31,6 @@ import math
 import numpy as np
 import os
 import shutil
-import subprocess
 from pathlib import Path
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
@@ -44,6 +43,7 @@ from finn.analysis.fpgadataflow.dataflow_performance import dataflow_performance
 from finn.custom_op.fpgadataflow import templates
 from finn.custom_op.fpgadataflow.hwcustomop import HWCustomOp
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
+from finn.toolchain.launcher import run_tool
 from finn.transformation.fpgadataflow.annotate_cycles import AnnotateCycles
 from finn.util.basic import make_build_dir, resolve_xilinx_tool
 from finn.util.create import adjacency_list
@@ -1307,18 +1307,12 @@ class FINNLoop(HWCustomOp, RTLBackend):
         f.write(template)
         f.close()
 
-        # create a shell script and call Vivado
-        make_project_sh = vivado_stitch_proj_dir + "/make_loop_ip.sh"
-        working_dir = os.environ["PWD"]
-        vivado_cmd = resolve_xilinx_tool("vivado")
-        with open(make_project_sh, "w") as f:
-            f.write("#!/bin/bash \n")
-            f.write("cd {}\n".format(vivado_stitch_proj_dir))
-            f.write("{} -mode batch -source make_loop_ip.tcl\n".format(vivado_cmd))
-            f.write("cd {}\n".format(working_dir))
-        bash_command = ["bash", make_project_sh]
-        process_compile = subprocess.Popen(bash_command, stdout=subprocess.PIPE)
-        process_compile.communicate()
+        # call Vivado; make_loop_ip.sh repeats the run by hand
+        run_tool(
+            [resolve_xilinx_tool("vivado"), "-mode", "batch", "-source", "make_loop_ip.tcl"],
+            cwd=vivado_stitch_proj_dir,
+            replay=vivado_stitch_proj_dir + "/make_loop_ip.sh",
+        )
         assert os.path.isfile(wrapper_filename), "IPGen failed: %s not found" % (wrapper_filename)
         self.set_nodeattr("ipgen_path", wrapper_filename)
         self.set_nodeattr("ip_path", vivado_stitch_proj_dir + "/ip")
