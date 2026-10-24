@@ -64,6 +64,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import ceil, gcd, lcm
+from typing import TYPE_CHECKING
 
 from finn.core.space import (
     Param,
@@ -81,6 +82,9 @@ from finn.kernels.base import Timed
 from finn.kernels.transport import StreamContract
 from finn.kernels.utilization import Fit
 from finn.platform.capabilities import Resources
+
+if TYPE_CHECKING:
+    from finn.kernels.sides import Outside
 
 IODMA_HLS = "iodma_hls"
 """The kind of the ``IODMA_hls`` mover."""
@@ -153,10 +157,11 @@ def iodma_hls_resources(*, direction: str, intf_width: int, stream_width: int) -
 @dataclass(frozen=True, kw_only=True)
 class MoverOffer:
     """What a shell offers a boundary channel's free side: a mover's ``kind`` (a key of
-    ``MOVERS``), its memory port's widest (``width_cap``, bits), the frames each call
-    moves (``frames_per_call``), and the cycles each call adds beside the memory
-    latency, with a width converter (``call_converted``) and without
-    (``call_direct``)."""
+    ``MOVERS``), its memory port's widest (``width_cap``, bits: it bounds the mover's
+    memory port, never the stream, whose word is the edge's), the frames each call moves
+    (``frames_per_call``), and the cycles each call adds beside the memory latency, with
+    a width converter (``call_converted``) and without (``call_direct``). What the mover
+    states of the side it is offered on is ``states``."""
 
     kind: str
     width_cap: int
@@ -171,6 +176,19 @@ class MoverOffer:
             raise ValueError(f"{self.frames_per_call} frames a call is none")
         if self.call_converted < 0 or self.call_direct < 0:
             raise ValueError("a call adds no fewer than zero cycles")
+
+    def states(self) -> Outside:
+        """What the mover states of the boundary side it is offered on, the one place it
+        is stated (``finn.kernels.sides.Outside``, its source the mover's kind): each pass
+        row-major, one pass a frame, as the host's buffer holds the tensor. It states no
+        word: the edge's lanes stay the inside's, and the mover, generated for that word,
+        converts to its memory port itself. It states no pace either: its pace is its
+        contract at the edge's word (``IodmaMover.contract``)."""
+        # The sides import this module (a side's offers, the movers' kinds): the statement
+        # is made from them when it is asked for.
+        from finn.kernels.sides import ROW_MAJOR, Outside  # noqa: PLC0415
+
+        return Outside(self.kind, order=ROW_MAJOR, passes=1)
 
 
 def iodma_hls(width_cap: int, *, frames_per_call: int = 1) -> MoverOffer:

@@ -60,6 +60,7 @@ from finn.kernels.movers import (
     iodma_hls,
     iodma_hls_resources,
 )
+from finn.kernels.sides import ROW_MAJOR, ROW_MAJOR_HOST, Outside
 from finn.kernels.transport import AxisBeat, StreamContract
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
@@ -117,6 +118,19 @@ def test_the_iodma_offer_states_its_measured_call_constants() -> None:
         iodma_hls(12)
     with pytest.raises(ValueError, match="frames a call is none"):
         iodma_hls(64, frames_per_call=0)
+
+
+def test_the_iodma_offer_states_each_pass_row_major_once_a_frame_and_no_word() -> None:
+    """What the mover states of the side it is offered on (``MoverOffer.states``), by
+    value: each pass row-major and one pass a frame, as the host's buffer holds the
+    tensor; no lanes (the edge keeps the inside's word, which the mover converts to its
+    memory port itself) and no pace (its contract's at that word). Its cap bounds its
+    memory port, not the stream: two caps state the same."""
+    stated = iodma_hls(128).states()
+    assert stated == Outside(IODMA_HLS, order=ROW_MAJOR, passes=1)
+    assert (stated.source, stated.order, stated.passes) == (IODMA_HLS, ROW_MAJOR, 1)
+    assert (stated.lanes, stated.pace, stated.layout) == (None, None, ROW_MAJOR_HOST)
+    assert iodma_hls(64, frames_per_call=16).states() == stated
 
 
 def test_an_iodma_places_its_converters_as_its_hls_source_does() -> None:
@@ -250,6 +264,19 @@ def test_an_offer_places_a_mover_on_each_free_side() -> None:
     # The mover's cycles are the channel's, beside its stages': y has none of its own.
     assert bound.member("y").cycles == y.cycles == 6 + 4
     assert bound.member("x").cycles == max(12, x.cycles)
+
+
+def test_each_boundary_side_is_stated_by_the_mover_its_shell_offers() -> None:
+    """In the Zynq shell each boundary side of the Chain carries its mover's statement, as
+    the graph declares it; on ip, offered none, each is unstated. The Chain presents each
+    pass row-major once a frame at its free sides, so stated it presents what it presents
+    on ip."""
+    bound = cut_network()
+    x, y = bound.member("x"), bound.member("y")
+    assert x.producer.outside == y.consumer.outside == iodma_hls(128).states()
+    ip = chain_network(TARGET)
+    assert ip.member("x").producer.outside is None and ip.member("y").consumer.outside is None
+    assert x.boundary == ip.member("x").boundary and y.boundary == ip.member("y").boundary
 
 
 def test_the_shell_s_resources_are_its_partition_s_its_movers_and_its_static_region_s() -> None:

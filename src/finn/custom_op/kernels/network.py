@@ -12,7 +12,9 @@ composer (``finn.kernels.composer``) makes one Space class of, and binds its sto
 on one design space of that class (``finn.kernels.partition.partition``). The movers offered
 on its boundary (``movers``, each a ``finn.kernels.movers.MoverOffer``; none by default) are
 a fact its caller gives: a shell's row offers them, and ``finn.custom_op.kernels.shell``
-binds a partition in the shell of the model's target (``in_shell``).
+binds a partition in the shell of the model's target (``in_shell``). A mover offered states
+each boundary side it is offered on (``MoverOffer.states``: row-major, one pass a frame);
+where none is, the side is unstated.
 
 **The declaration** (``declaration``):
 
@@ -23,9 +25,10 @@ binds a partition in the shell of the model's target (``in_shell``).
   has its two sides, a kernel's port (``Port``: the op's ``wiring``, an input on the
   consumer's side, an output on the producer's) or, where no port of the selection is on
   it, the channel's source (a parameter channel, whose kernel states its value) or the
-  boundary (``Side.boundary``: its AXIS port, offered the movers given); its tensor (the
-  graph's, ``edge_tensor``, at the graph's rank; a parameter channel's, the tensor and
-  contents its kernel states for it, ``Stated``); and the target's platform. Only the
+  boundary (``Side.boundary``: its AXIS port, offered the movers given and stated by the
+  mover offered, unstated where none is); its tensor (the graph's, ``edge_tensor``, at
+  the graph's rank; a parameter channel's, the tensor and contents its kernel states for
+  it, ``Stated``); and the target's platform. Only the
   selection's ONNX inputs and outputs are boundaries, named by the shell's convention
   ``s_axis_<i>`` and ``m_axis_<j>``. An edge of a slice (a selection short of every
   KernelOp) whose node beyond it is a KernelOp is no boundary: that node is a **frozen
@@ -493,6 +496,9 @@ def _graph(
     whole = all(id(node) in inside for node in model.graph.node if node.domain == KERNEL_OPS_DOMAIN)
     stored, stray = _stored(model, nodes, ops, tensors, whole)
     platform = read_target(model).platform
+    # A row offers each kind of mover once, and the channel places the one kind there is:
+    # its statement is each boundary side's; none offered, the side is unstated.
+    outside = movers[0].states() if movers else None
     sides: dict[str, dict[str, Port | Side]] = {tensor: {} for tensor in tensors}
     facts: dict[str, dict[str, object]] = {tensor: {} for tensor in tensors}
     readers: dict[str, str] = {}
@@ -531,7 +537,7 @@ def _graph(
                     "input or output of a partition crosses its boundary",
                     tensor=tensor,
                 )
-            ends[each] = Side.boundary(ports[tensor], movers)
+            ends[each] = Side.boundary(ports[tensor], movers, outside)
         channels[tensor] = ChannelDeclaration(ends["producer"], ends["consumer"], given)
 
     def on(prefix: str) -> list[str]:

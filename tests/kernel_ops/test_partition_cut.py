@@ -11,12 +11,12 @@ weights streamed, so two inputs cross the boundary. No Vivado.
 
 from __future__ import annotations
 
-import re
 import subprocess
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+import pytest
 from qonnx.core.modelwrapper import ModelWrapper
 from support.configure import configured
 from support.ipxact_ports import AXILITE
@@ -290,55 +290,96 @@ def test_a_shell_without_an_integration_has_no_export(tmp_path: Path) -> None:
         integration(parent)
 
 
-def test_an_iodma_mover_refuses_w2_repeated_or_tiled_by_name() -> None:
-    """The Chain's streamed w2 presents its pass once per row of x, three times a frame,
-    which an IODMA mover does not repeat (SZ11 (f)): the pynq shell refuses it,
-    ``mover-repetition``, at any folding; at the Chain's own each pass is also in 2 x 2
-    tiles, which the driver's row-major buffer does not hold, ``mover-order``. The mover
-    is placed on w2's free side, no choice, so its rules are the channel's: the cut leaves
-    nothing open, and emission refuses w2 by them, each finding keyed by the mover's rule;
-    a folding is refused only by a rule it makes newly false."""
-    repeated = (
-        r"s_axis_1: an iodma_hls mover moves one pass of a \[4, 4\] buffer a frame, and this "
-        r"free side presents it 3 times a frame \(repetition by the host or the mover is not "
-        r"designed yet\)"
-    )
-    tiled = (
-        r"s_axis_1: an iodma_hls mover moves a row-major buffer, and this free side presents "
-        r"4 beats of 4 lanes of \[4, 4\]"
-    )
-    model = kernel_model(second_weights=False)
+#: The Chain with its weights w2 streamed, by its rows and a folding, as the boundary's
+#: hand cases fold it: w2 in 2 x 2 tiles at the Chain's own folding, row-major at
+#: ``ROW_MAJOR_W2``; x read once at PE 4 and twice a frame at the Chain's PE 2 on one row.
+TILED_W2 = {
+    "three rows, the Chain's folding": (3, {}),
+    "one row, the Chain's folding": (1, {}),
+    "one row, first at PE 4": (1, {"first": {"pe": 4}}),
+}
+
+
+def streamed_on_pynq(rows: int, choices: dict[str, Any]) -> ModelWrapper:
+    """The Chain, w2 streamed, on ``rows`` rows, folded by ``choices``, for Ultra96 in the
+    Zynq shell, its channels' choices made as the cut makes them (``MakeCutChoices``)."""
+    model = kernel_model(second_weights=False, rows=rows)
+    configured(model, choices)
     write_target(model, ZYNQ)
     cut = MakeCutChoices()
     model = model.transform(cut)
     assert cut.unset == {}
+    return model
+
+
+@pytest.mark.parametrize("case", sorted(TILED_W2))
+def test_a_tiled_w2_is_refused_by_channel_steps_under_its_mover_s_statement(case: str) -> None:
+    """The mover states w2's side row-major, one pass a frame; the second MatMul reads it
+    in 2 x 2 tiles, on three rows each pass three times. No chain of modules regroups four
+    lanes of a row into four of a tile (the steps regroup lanes only through the gcd of
+    the two lane counts), so the edge channel refuses w2 by its own code, ``channel-steps``,
+    at every one of these foldings; emission refuses it by that code alone. Where only the
+    order differs the steps name the lane axis; where the passes differ too, the
+    positions."""
+    rows, choices = TILED_W2[case]
+    model = streamed_on_pynq(rows, choices)
     choose_memories(model)
+    reason = (
+        "the sequences present different positions"
+        if rows == 3
+        else "the same positions under another lane axis"
+    )
     with refused(
-        "mover-repetition",
+        "channel-steps",
         error=KernelOpError,
-        owner="mover.single_pass",
-        message=repeated,
+        owner="steps",
+        message=f"^no adapter can join the streams: {reason}$",
         tensor="w2",
     ) as caught:
         configured_network(model, "partition")
-    assert {(f.code, f.owner) for f in caught.error.findings} == {
-        ("mover-order", "mover.row_major"),
-        ("mover-repetition", "mover.single_pass"),
-    }
-    (order,) = [f for f in caught.error.findings if f.code == "mover-order"]
-    assert re.search(tiled, order.message)
-    # A row-major folding of w2 still presents its pass three times a frame. The mover's
-    # rule is false before the fold, which makes no rule newly false: accepted, and
-    # emission refuses w2 by the rule, the order's no longer.
-    model = kernel_model(second_weights=False)
-    write_target(model, ZYNQ)
-    assert in_shell(model, model.graph.node).validity("w2").status == "refused"
-    configured(model, {"second": ROW_MAJOR_W2})
-    with refused(
-        "mover-repetition", owner="mover.single_pass", message=repeated, tensor="w2"
-    ) as caught:
-        configured_network(model, "partition")
-    assert {f.code for f in caught.error.findings} == {"mover-repetition"}
+    assert {f.code for f in caught.error.findings} == {"channel-steps", "guard-refused"}
+    assert in_shell(model, model.graph.node).validity("x").status == "valid"
+
+
+def test_a_row_major_w2_on_three_rows_is_replayed_by_an_input_gen_after_its_mover() -> None:
+    """At ``ROW_MAJOR_W2`` the second MatMul reads each pass of w2 row-major, three times a
+    frame (once a row of x). The mover states one pass: its free side presents w2 once, 4
+    beats of 4 lanes, its mover moves those 4 beats, not 12, and an ``input_gen`` after the
+    transport replays the pass three times, its buffer the pass (16 INT3); its memory is
+    the channel's choice (``adapter_ram_style``), which the cut makes. The network is
+    configured; unstated (on ip) the edge presents the three passes and places nothing."""
+    model = streamed_on_pynq(3, {"second": ROW_MAJOR_W2})
+    bound = in_shell(model, model.graph.node)
+    w2 = bound.member("w2")
+    assert bound.validity("w2").status == "valid"
+    assert (w2.boundary.form.lanes, w2.boundary.form.beats) == (4, 4)
+    assert w2.input_chain == "input_gen" and w2.adapter.frame_bits == 16 * 3
+    assert ("w2", "adapter_ram_style") in bound.chosen()
+    mover = w2.mover_contract
+    assert (mover.beats, mover.tdata, mover.memory_width, mover.words) == (4, 16, 64, 1)
+    choose_memories(model)
+    configured_network(model, "partition")
+    ip = kernel_model(second_weights=False)
+    configured(ip, {"second": ROW_MAJOR_W2})
+    unstated = in_shell(ip, ip.graph.node).member("w2")
+    assert unstated.boundary.form.beats == 12 and unstated.input_chain == "none"
+
+
+def test_x_read_twice_on_one_row_is_replayed_by_an_input_gen_after_its_mover() -> None:
+    """On one row at the Chain's folding (the first MatMul at PE 2) x is read twice a
+    frame. The mover states one pass: x's free side presents it once, 2 beats, and an
+    ``input_gen`` replays it (and marks it), its buffer the pass (4 INT3), its memory the
+    cut's choice. Unstated, the edge presents the two passes."""
+    model = streamed_on_pynq(1, {})
+    bound = in_shell(model, model.graph.node)
+    x = bound.member("x")
+    assert bound.validity("x").status == "valid"
+    assert (x.boundary.form.beats, x.mover_contract.beats) == (2, 2)
+    assert x.input_chain == "input_gen" and x.adapter.frame_bits == 4 * 3
+    assert x.input_steps.describe() == "reorder -> markers"
+    assert ("x", "adapter_ram_style") in bound.chosen()
+    ip = kernel_model(second_weights=False, rows=1)
+    assert in_shell(ip, ip.graph.node).member("x").boundary.form.beats == 4
 
 
 def test_a_mover_or_bus_the_block_design_cannot_wire_is_refused_by_name(tmp_path: Path) -> None:
