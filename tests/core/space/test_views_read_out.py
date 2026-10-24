@@ -172,7 +172,12 @@ def double(*, x: int) -> int:
 
 
 def _wire(declaration: View[int], **aliases: object) -> None:
-    """Close a cycle: bind ``declaration``'s arguments to declarations made after it."""
+    """Close a cycle: bind ``declaration``'s arguments to declarations made after it.
+
+    No public spelling writes such a cycle: a class body cannot name a declaration made
+    later in it, so these cases reach through ``aliases``. They pin a defence no author's
+    class reaches; if the alias machinery changes, they go with that defence rather than
+    being respelled."""
     declaration.aliases = MappingProxyType(aliases)
 
 
