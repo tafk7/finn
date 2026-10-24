@@ -26,8 +26,9 @@ the boundary channels are made as stated; a tensor no port of the partition carr
 refused (``boundary-port-unknown``), naming the partition's ports.
 
 Channel choices may be stored only in a partition's body. A model with host nodes that
-stores some is refused (a build fixes them in a step after the cut, with ``Hold``); a
-model of KernelOps only keeps them, moved into the body, and the parent's copy is cleared.
+stores some is refused (a build fixes them by adding a hold to ``step_explore``'s
+strategies); a model of KernelOps only keeps them, moved into the body, and the parent's copy
+is cleared.
 """
 
 from __future__ import annotations
