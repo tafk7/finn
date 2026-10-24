@@ -35,13 +35,13 @@ reaches out of that Space lifted back through the slot (``lift``).
   domain reading a view refuses as ``view-read-in`` whatever the view reads.
 - **The domain rule** (``check_domains``): a domain's membership reads facts only. Per
   class, each domain's walk follows what its membership inputs may read (arguments,
-  alternatives, a view's validity and a validity's pieces, outputs, selectors, guards and
-  a method's inferred reads), skipping the guards that decide whether the Decision exists;
-  it stops at a choice (``domain-reads-choice``), and at the class's own formals and the
-  guard it is placed under, which it reports as reached. A child's are followed into the
-  placing class's bindings, with the guards above the slot as existence guards of the
-  child's Decision too, and so up to the root. A class records, for its own formals, which
-  are reached by any domain in its subtree (``_Entry``), once.
+  alternatives, outputs, selectors, guards and a method's inferred reads), skipping the
+  guards that decide whether the Decision exists; it stops at a choice
+  (``domain-reads-choice``), and at the class's own formals and the guard it is placed
+  under, which it reports as reached. A child's are followed into the placing class's
+  bindings, with the guards above the slot as existence guards of the child's Decision
+  too, and so up to the root. A class records, for its own formals, which are reached by
+  any domain in its subtree (``_Entry``), once.
 
 Each walk is that of the design space the class is placed in: the composition is exact.
 Where a walk back up re-enters the subtree holding the Decision it started from, its
@@ -165,9 +165,10 @@ class _Fields:
         return list(dict.fromkeys(found))
 
     def following(self) -> list[Ref]:
-        """In the domain rule's order: arguments, alternatives, constraints, output,
-        selector, guard."""
-        found: list[Ref] = [*self.arguments, *self.alternatives, *self.constraints]
+        """In the domain rule's order: arguments, alternatives, output, selector, guard. A
+        view's validity and a validity's pieces are not followed: the walk reaches no view
+        (``check_views``), the one record that lists its Space's validity."""
+        found: list[Ref] = [*self.arguments, *self.alternatives]
         found.extend(
             single for single in (self.output, self.selector, self.guard) if single is not None
         )
