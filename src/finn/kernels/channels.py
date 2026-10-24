@@ -10,11 +10,12 @@ as a fact. Its two sides are facts too, ``producer`` and ``consumer``, each one 
 (``finn.kernels.sides.Side``) of its kind: a kernel's port (the ``Stream`` it presents,
 its label, ``matmul.compute.packed.x``, and on an output port its word width: a kernel's
 ``x_side``), a frozen neighbour's (the same, given as a fact), the boundary's (its AXIS
-port's name, ``s_axis_0``, and the movers a shell offers on it, its stream unstated), or,
-for a known value, its own source. Each side's role takes its kinds only (``channel-users``):
-a producer is an output port, the boundary or the channel's source, and the source is the
-producer of a channel with a known value, and of no other; a consumer is an input port or
-the boundary. The channel's tensor is never derived from a port.
+port's name, ``s_axis_0``, the movers a shell offers on it, and what the outside states
+of it, ``outside``, its stream never given), or, for a known value, its own source. Each
+side's role takes its kinds only (``channel-users``): a producer is an output port, the
+boundary or the channel's source, and the source is the producer of a channel with a
+known value, and of no other; a consumer is an input port or the boundary. The channel's
+tensor is never derived from a port.
 
 Each side's stream must traverse the tensor (``channel-tensor``), and the steps between
 their beat sequences (``finn.dataflow.steps``) must be ones a chain of FinnLib modules
