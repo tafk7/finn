@@ -145,20 +145,66 @@ def test_an_attribute_read_on_a_reference_is_refused_by_name() -> None:
 # -- expected failures: spellings the change refuses ------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=DefinitionError,
-    reason="flips when view takes a reference: today it is read as a function of no annotation",
-)
+# -- one view: a reference or a function ------------------------------------------------------
+
+
 def test_a_view_given_a_reference_answers_as_the_view_of_it_does() -> None:
+    """``view(reference)`` builds what the engine's own source view builds: the same answer, the
+    same source, the check taken from the source."""
+
     class Alike(Space):
         width: int = Param(default=3)
-        by_class = space.View(width)
-        by_decorator = view(width)  # type: ignore[call-overload]
+        by_class = declarations.View(width)
+        by_decorator = view(width)
 
     point = design_space(Alike())
     assert point.by_class == 3
     assert point.by_decorator == 3
+    assert isinstance(Alike.by_decorator, declarations.View)
+    assert Alike.by_decorator.source is Alike.width
+    assert Alike.by_decorator.function is None
+    assert Alike.by_decorator.semantics is Alike.by_class.semantics
+
+
+def test_a_view_of_a_reference_lowers_without_an_output_node_of_its_own() -> None:
+    """A view of a reference reads its source's output: its node holds no ``.$output`` key,
+    where a function view's does."""
+
+    class Both(Space):
+        width: int = Param(default=3)
+        by_reference = view(width)
+
+        @view
+        def by_function(self) -> int:
+            return self.width
+
+    point = design_space(Both())
+    keys = {
+        member: {node.declaration.key for node in inspection.explain(point, reference).nodes}
+        for member, reference in (("function", Both.by_function), ("reference", Both.by_reference))
+    }
+    assert "by_function.$output" in keys["function"]
+    assert not any(key.endswith(".$output") for key in keys["reference"])
+    assert point.by_reference == point.by_function == 3
+
+
+def test_a_view_of_a_reference_takes_a_guard_and_reads_a_view() -> None:
+    class Guarded(Space):
+        width: int = Param(default=3)
+        on: bool = Param(default=True)
+        shown = view(width, when=on)
+        again = view(shown)
+
+    assert design_space(Guarded()).again == 3
+    assert isinstance(design_space(Guarded(on=False)).query(Guarded.again), Inapplicable)
+
+
+def test_a_view_of_a_reference_with_aliases_is_refused_by_name() -> None:
+    with refused("view-source-aliases", error=DefinitionError, message="takes no aliases"):
+
+        class Aliased(Space):
+            width: int = Param(default=3)
+            shown = view(width, base=width)  # type: ignore[call-overload]
 
 
 @pytest.mark.xfail(

@@ -966,6 +966,10 @@ class _ViewDecorator:
 
 
 @overload
+def view(source: ValueRef[T] | View[T], /, *, when: Guard = None) -> View[T]: ...
+
+
+@overload
 def view(function: Callable[..., QueryResult[T]], /) -> View[T]: ...
 
 
@@ -974,29 +978,45 @@ def view(function: Callable[..., T | NonValue], /) -> View[T]: ...
 
 
 @overload
+def view(source: T, /, *, when: Guard = None) -> View[T]: ...
+
+
+@overload
 def view(*, when: ValueRef[bool] | bool | None = None, **aliases: object) -> _ViewDecorator: ...
 
 
 def view(
-    function: Callable[..., object] | None = None,
+    function: object | None = None,
     /,
     *,
     when: Guard = None,
     **aliases: object,
 ) -> object:
-    """A view: ``@view`` on a method, or ``@view(when=..., **aliases)``. Its return
-    annotation is its value's type and check (``T``, or ``T | Rejected``)."""
+    """A view: ``view(reference)``, the product of a value (``view(width)``,
+    ``view(adapter.stages)``), or ``@view`` on a method, or ``@view(when=..., **aliases)``.
+    A function's return annotation is its value's type and check (``T``, or ``T |
+    Rejected``); a reference's is its source's."""
     if "semantics" in aliases:
         raise DefinitionError.broken(
             "view-semantics",
             _OWNER,
             f"view{at(source_origin())}: {SEMANTICS_GONE} (the return annotation, or the "
-            "source of a View)",
+            "source of a view)",
         )
-    decorator = _ViewDecorator(aliases, when)
-    if function is not None:
-        return decorator(function)
-    return decorator
+    if function is None:
+        return _ViewDecorator(aliases, when)
+    if isinstance(function, (ValueRef, View)) or not callable(function):
+        # A reference: a symbolic reference answers every call by refusing it, so it is
+        # told apart from a function before it is called.
+        if aliases:
+            raise DefinitionError.broken(
+                "view-source-aliases",
+                _OWNER,
+                f"view{at(source_origin())}: a view of a reference takes no aliases "
+                f"({', '.join(sorted(aliases))}): they name the reads of a function",
+            )
+        return View(function, when=when)
+    return _ViewDecorator(aliases, when)(function)
 
 
 # -- Symbolic references ---------------------------------------------------------------
