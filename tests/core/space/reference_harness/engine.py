@@ -829,9 +829,9 @@ def definition(
     """Whether the engine takes ``description`` as a definition: a dependency cycle reported
     when building the Space, or when ``implementation`` is asked (the harness's default by
     default; its validity, every rule and every view of the configuration with ``facts``),
-    is ``"cycle"``; a domain whose membership reads a choice, refused at compile, is
-    ``"domain-reads-choice"``; otherwise ``None``. (The engine has no ``"view-read-in"``:
-    it builds a Space reading a view in, T4b's row.)"""
+    is ``"cycle"``; a constraint, derived value, guard, domain or binding reading a view,
+    refused at compile, is ``"view-read-in"``; a domain whose membership reads a choice,
+    refused at compile, is ``"domain-reads-choice"``; otherwise ``None``."""
     try:
         engine = build(description, spelling, unchecked=True)
         point = engine.open(dict(facts or {}), implementation)
@@ -844,6 +844,8 @@ def definition(
         codes = {finding.code for finding in error.findings}
         if "cyclic-dependency" in codes:
             return DefinitionForm("cycle")
+        if "view-read-in" in codes:
+            return DefinitionForm("view-read-in")
         if "domain-reads-choice" in codes:
             return DefinitionForm("domain-reads-choice")
         raise
