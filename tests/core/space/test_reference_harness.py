@@ -107,7 +107,7 @@ def test_every_row_has_exactly_one_witness_and_every_expected_failure_a_row() ->
 
 
 def test_no_milestone_is_pending_the_engine_holds_every_ruling_the_model_does() -> None:
-    # The engine core's, the facts-instance, T4a's, T4c's and T4b's (views read out)
+    # The engine core's, the facts-instance, guard counting, facts known and views read out
     # milestones are accepted, their rows removed: the matrix holds none, and every witness
     # of the case modules is a plain test.
     assert MILESTONES == ("base",)

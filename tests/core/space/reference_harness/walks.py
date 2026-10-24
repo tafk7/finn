@@ -74,7 +74,7 @@ by default, whatever the harness's default is) is asked every question through t
 class-based oracle's interface (``support.space_oracle.Answers``; ``engine.Point``). The
 summary and every failure name it. Every permanent check holds for every implementation:
 the binds through ``Answers.bind``, and the check against one built from nothing through
-``Implementation.make`` (history independence, which T1 claims by construction and its
+``Implementation.make`` (history independence, which the running type claims by construction and its
 cache could break), so none is skipped.
 
 **Two runs, and attribution by cause** (DESIGN § 6). Where the model holds a ruling the engine
@@ -100,13 +100,13 @@ engine agrees with the model everywhere the walks reach).
 Facts are drawn required or optional: every required fact is given from the
 start, an optional one now and then left out, reading ``None``, and now and then unset (set
 back to ``None``, the fact left out), on both sides: the engine gives the optional fact
-``None`` (``Point.change``). T4c's facts known are reached, so a disagreement reaching an
-optional fact left out fails as any other.
+``None`` (``Point.change``). The engine reads an optional fact left out as None, so a
+disagreement reaching an optional fact left out fails as any other.
 
 **The lists**: both sides are asked the choices a design space lists
 (``("listed", "")``), each leaving out the choices its facts alone rule out
-(``Solution.pruned``; T4c reached). The per-choice questions (a choice's state, its possible
-values) are asked of every choice: a pruned choice answers them by name.
+(``Solution.pruned``; the engine prunes by facts). The per-choice questions (a choice's
+state, its possible values) are asked of every choice: a pruned choice answers them by name.
 
 **Derived selectors** (``by``, the CLI's ``--by``): the descriptions also hold selectors
 picked by a derived value (the model's reading 17, the engine's ``Select(by=...)``): one in

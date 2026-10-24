@@ -898,7 +898,7 @@ def test_an_optional_fact_given_reads_its_value() -> None:
 # ``plant``: the cases under it add nothing. Written as the selector's own guard
 # (``Decision(..., when=)``, ``Spelling.guarded_selectors``), the guard and the cases' guards
 # are nodes of one Space, and the engine counts the piece at the highest refused guard of its
-# chain, one (it counted 1 + 2 before T4a); written as a guarded child, the cases are another
+# chain, one (it once counted 1 + 2); written as a guarded child, the cases are another
 # Space's, and it counts one.
 
 
@@ -961,7 +961,7 @@ def test_a_chosen_selector_under_a_when_that_holds_is_set_as_any_selector() -> N
 # A refused guard below an unknown one: ``s`` is open, its case ``a`` holds ``g``, present when
 # ``d`` is at least 1, and ``d`` refuses an odd ``f``, read by nothing else. The model leaves
 # ``g``'s piece unknown while ``a``'s presence is (reading 8): validity is open, waiting on
-# ``s``. So does the engine (it answered valid before T4a).
+# ``s``. So does the engine (it once answered valid).
 
 
 def even(read: Mapping[str, Any]) -> object:
@@ -1014,7 +1014,7 @@ def test_a_refused_when_in_an_unselected_case_does_not_apply() -> None:
 # (every choice unknown) ``wide`` is false at any other mode, so ``wide.lanes`` is
 # pruned: in no list, unless it is stored. A refused guard and a guard over a choice
 # are not false, so ``gated.x`` and ``opted.y`` stay listed. The engine prunes as the model does
-# (T4c, its row ``facts-pruning`` removed).
+# (its row ``facts-pruning`` removed).
 
 
 def checked(read: Mapping[str, Any]) -> object:
