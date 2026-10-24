@@ -200,9 +200,10 @@ def wired(
 @dataclass(frozen=True)
 class Neighbours:
     """The ports beside a channel, as its partition reads them (each kernel's port's
-    contract view, labelled below its member's node: ``matmul.compute.packed.x``): the
-    producing kernel's and the consuming kernel's, each None where that side is the
-    channel's own, its source (a known value) or its boundary."""
+    contract view, labelled below its member's node: ``matmul.compute.packed.x``; a frozen
+    neighbour's, outside a slice, read at its stored choices): the producing kernel's and
+    the consuming kernel's, each None where that side is the channel's own, its source (a
+    known value) or its boundary."""
 
     producer: PortContract | None = None
     consumer: PortContract | None = None

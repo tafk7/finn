@@ -68,13 +68,16 @@ an output (its shape's element count and last axis, its datatype and its range) 
 what its producer states, the graph is stale, refused by name (``tensor-stale``: "run
 InferKernelTensors"), before any channel's own ``channel-tensor`` is read.
 
-**Its module** is the partition's IP, the cut's (``PARTITION``): its members' netlists,
-named as the graph's nodes and tensors, with the boundary's pins, named after the partition
-(its stem ``finn_<name>``) and identified as the partition's IP (``PRODUCER``, which
-``Partition.module_of`` is given), since a mover is integrated beside the IP, not in it. Its
-views are read out of the design space, composed from its members' (the netlist with each
-channel's outer hops from the kernels' contract views, FIFO sizing's paces, resources),
-never bound into it.
+**Its module** is the partition's IP, the cut's (``PARTITION``; a slice with a frozen
+neighbour has none, ``slice-not-emitted``, ``finn.kernels.partition``): its members'
+netlists, named as the graph's nodes and tensors, with the boundary's pins, named after
+the partition (its stem ``finn_<name>``) and identified as the partition's IP
+(``PRODUCER``, which ``Partition.module_of`` is given), since a mover is integrated beside
+the IP, not in it. Its views are read out of the design space, composed from its members'
+(the netlist with each channel's outer hops from the kernels' contract views, FIFO
+sizing's paces, resources), never bound into it; a frozen neighbour's port contract, which
+sizing reads its pace from, is read at its stored choices and given beside the
+declaration.
 
 A partition's resources (``Partition.own_resources``) are its members'. A partition in its
 shell (``finn.custom_op.kernels.shell.in_shell``) holds the shell's budgets as rules of its
@@ -106,7 +109,8 @@ from finn.core.space import Available, Rejected, Space, Unresolved, inspection
 from finn.custom_op.kernels.base import KernelOp, kernel_op, typed
 from finn.dataflow.streams import Stream
 from finn.kernels.artifacts.module import ProducerIdentity
-from finn.kernels.channels import Channel
+from finn.kernels.base import PortContract
+from finn.kernels.channels import Channel, Neighbours
 from finn.kernels.composer import (
     ChannelDeclaration,
     Key,
@@ -267,12 +271,15 @@ def _beyond(
     return frozen, fanned
 
 
-def _neighbour(model: ModelWrapper, tensor: str, side: str, node: NodeProto) -> Side:
+def _neighbour(
+    model: ModelWrapper, tensor: str, side: str, node: NodeProto
+) -> tuple[Side, PortContract | None]:
     """The side a frozen neighbour, KernelOp ``node`` beyond the selection on ``side`` of
     ``tensor``, gives the edge channel, as a fact: its port's ``<p>_side`` at its stored
     choices (``KernelOp.point``; its facts alone, where it stores none), as a frozen
     neighbour's (``Side.neighbour``: an upstream one's stream, label and word width, a
-    downstream one's stream and label), its label below the node's name. Only an
+    downstream one's stream and label), its label below the node's name; and that port's
+    contract view there (``<p>_contract``), which sizing reads its pace from. Only an
     accepted value is a fact: refused (``neighbour-unaccepted``, naming the neighbour, its
     port and why) where its stored choices are refused, its kernel is refused, or its side
     is not known there (it waits on an open choice, or is refused)."""
@@ -316,7 +323,11 @@ def _neighbour(model: ModelWrapper, tensor: str, side: str, node: NodeProto) -> 
         raise unaccepted(why, getattr(answer, "findings", ()))
     found: Side = answer.value
     stated = Side.neighbour(cast(Stream, found.stream), found.label, found.width)
-    return stated.under(node.name)
+    contract = point.query(getattr(type(point), f"{named}_contract"))
+    given = contract.value if isinstance(contract, Available) else None
+    return stated.under(node.name), (
+        given.under(node.name) if isinstance(given, PortContract) else None
+    )
 
 
 def _tensors(model: ModelWrapper, nodes: list[NodeProto], owned: list[dict[str, str]]) -> list[str]:
@@ -427,10 +438,11 @@ def _stale(
 
 class _Read:
     """What the graph states of a selection: its declaration, its module's order, its
-    boundary's ports, its KernelOps, the choices it stores and those stray, and whether it
-    holds every KernelOp of the model. A record read once, never a value a Space holds."""
+    boundary's ports, its KernelOps, the choices it stores and those stray, whether it
+    holds every KernelOp of the model, and the port contracts of the frozen neighbours
+    beside its edge channels. A record read once, never a value a Space holds."""
 
-    __slots__ = ("declared", "ops", "order", "ports", "stored", "stray", "whole")
+    __slots__ = ("declared", "frozen", "ops", "order", "ports", "stored", "stray", "whole")
 
     def __init__(
         self,
@@ -441,9 +453,10 @@ class _Read:
         stored: dict[Key, object],
         stray: dict[str, tuple[Finding, ...]],
         whole: bool,
+        frozen: dict[str, Neighbours],
     ) -> None:
         self.declared, self.order, self.ports, self.ops = declared, order, ports, ops
-        self.stored, self.stray, self.whole = stored, stray, whole
+        self.stored, self.stray, self.whole, self.frozen = stored, stray, whole, frozen
 
 
 def _graph(
@@ -493,8 +506,11 @@ def _graph(
             if port in held:
                 facts[tensor]["tensor"] = Stated(node.name, str(wiring.carried))
                 facts[tensor]["contents"] = Stated(node.name, str(wiring.stored))
+    frozen: dict[str, Neighbours] = {}
     for tensor, (side, node) in beyond.items():
-        sides[tensor][side] = _neighbour(model, tensor, side, node)
+        neighbour, contract = _neighbour(model, tensor, side, node)
+        sides[tensor][side] = neighbour
+        frozen[tensor] = Neighbours(**{side: contract})
     channels: dict[str, ChannelDeclaration] = {}
     for tensor in tensors:
         given = facts[tensor]
@@ -531,7 +547,7 @@ def _graph(
         kernels, {tensor: channels[tensor] for tensor in declared_order}, shell
     )
     order = (*on("s_axis_"), *on(""), *kernels, *on("m_axis_"))
-    return _Read(declared, order, ports, ops, stored, stray, whole)
+    return _Read(declared, order, ports, ops, stored, stray, whole, frozen)
 
 
 def declaration(
@@ -591,6 +607,7 @@ def _network(
                 movers=movers,
                 stray=read.stray,
                 whole=read.whole,
+                frozen=read.frozen,
                 kind=kind,
             )
         except PartitionRefused as error:

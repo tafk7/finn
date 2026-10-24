@@ -7,8 +7,10 @@ The edge channel's side there is the neighbour's port's side at its stored choic
 as a fact (``Side.neighbour``): an upstream neighbour's stream, label and word width, a
 downstream one's stream and label. Only an accepted value is a fact, so a neighbour whose
 stored choices or kernel are refused, or whose side is not known at them, is refused by
-name (``neighbour-unaccepted``). The edge channel is the slice's: its adapters are its
-choices."""
+name (``neighbour-unaccepted``). The edge channel is the slice's: its adapters, its hops to
+the neighbour, its sizing (the neighbour's pace) and its resources derive as the whole
+partition's do; its netlist and module are refused (``slice-not-emitted``): a slice is not
+emitted."""
 
 from __future__ import annotations
 
@@ -22,10 +24,12 @@ from support.models import TARGET, chain_model, fan_out_source, kernel_model
 from support.refusals import refused
 
 from finn.core.graph.errors import KernelOpError
-from finn.core.space import Available, inspection
+from finn.core.space import Available, Rejected, inspection
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.network import declaration, network
-from finn.kernels.channels import Channel
+from finn.custom_op.kernels.network import PRODUCER, declaration, network
+from finn.kernels import fifo_sizing
+from finn.kernels.base import RESOURCES
+from finn.kernels.channels import Channel, OuterHops
 from finn.kernels.composer import ChannelDeclaration, PartitionDeclaration
 from finn.kernels.partition import Partition, partition
 from finn.kernels.sides import Side, SideKind
@@ -196,8 +200,10 @@ def _open(model: ModelWrapper, names: tuple[str, ...], tensor: str) -> Partition
 def test_a_downstream_neighbour_brings_the_input_chain_it_needs_into_the_slice() -> None:
     """Stage 7's chain, the slice {mm1, mt1}, ``mm2`` frozen: a1 needs the input generator
     ``mm2`` requires, as in the whole partition, where an open boundary takes whatever
-    ``mt1`` sends (no chain)."""
+    ``mt1`` sends (no chain). The edge channel's hops reach ``mm2`` from that chain's
+    stage; they, its sizing and its resources are the whole partition's."""
     model = chain_model(4)
+    whole = network(model, model.graph.node)
     part = _slice(model, "mm1", "mt1")
     assert part.boundary == ()
     assert _open(model, ("mm1", "mt1"), "a1").member("a1").query(Channel.input_chain) == (
@@ -205,6 +211,39 @@ def test_a_downstream_neighbour_brings_the_input_chain_it_needs_into_the_slice()
     )
     for name in ("a0", "a1"):
         assert part.member(name).query(Channel.input_chain) == Available("input_gen")
+        assert part.neighbours(name) == whole.neighbours(name)
+        assert part.hops(name) == whole.hops(name)
+        assert part.query(name, RESOURCES) == whole.query(name, RESOURCES)
+        assert fifo_sizing.size(part.member(name), part.neighbours(name), 1024) == (
+            fifo_sizing.size(whole.member(name), whole.neighbours(name), 1024)
+        )
+    hops = part.hops("a1")
+    assert isinstance(hops, OuterHops) and hops.consumer is not None
+    stage = hops.consumer.source.instance
+    assert stage is not None and stage.startswith("adapter.input_gen")
+    assert hops.consumer.sink.instance == "^mm2.compute.packed"
+    consumer = part.neighbours("a1").consumer
+    assert consumer is not None and consumer.label == "mm2.compute.packed.x"
+
+
+def test_a_slice_s_netlist_and_module_are_refused_by_their_code() -> None:
+    """A frozen edge is a kernel's port outside the module, no AXIS port of it: the slice's
+    netlist and module are refused, each edge by name (``slice-not-emitted``), not by a
+    bare error."""
+    model = chain_model(4)
+    part = _slice(model, "mm1", "mt1")
+    netlist, module = part.netlist(), part.module_of(PRODUCER)
+    assert isinstance(netlist, Rejected) and isinstance(module, Rejected)
+    for found in (netlist, module):
+        assert [(f.code, f.owner, dict(f.details)["tensor"]) for f in found.findings] == [
+            ("slice-not-emitted", "a0", "a0"),
+            ("slice-not-emitted", "a1", "a1"),
+        ]
+    (first, _) = netlist.findings
+    assert first.message == (
+        "a slice is not emitted: its edge meets mt0.output, a frozen neighbour's port "
+        "outside its module, and no AXIS port of it"
+    )
 
 
 def test_another_neighbour_is_another_design_space_of_the_same_class() -> None:

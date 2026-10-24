@@ -33,7 +33,8 @@ pipeline latency is a constant shift of a side's times, and the acceptance follo
 supply's data, so they do not change the depth.
 
 ``size`` reads a channel's sides, its producer's and its consumer's paces from the
-contracts of the ports beside it (its network's ``neighbours``), and gives its ``Sized``: a
+contracts of the ports beside it (its network's ``neighbours``; at a slice's edge, a frozen
+neighbour's port's, at its stored choices, as a kernel's), and gives its ``Sized``: a
 depth (``0``: direct) and why. The least depth counts the words the FIFO must
 hold; the DEPTH proposed is the least whose native storage holds them
 (``least_depth_holding``: FinnLib's FIFO is a shift register of five words up to

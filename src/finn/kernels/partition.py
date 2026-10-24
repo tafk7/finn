@@ -27,6 +27,15 @@ breaks a rule binds, and the partition reads refused: the member's validity name
 rule. Nothing is filled in: a choice a change brings into play is open until a policy or
 a strategy sets it (the channel's policies at the cut, the seam's fold rule after it).
 
+**A slice** (a declaration of some of a graph's kernels) may meet a frozen neighbour at an
+edge: a channel one of whose sides is a kernel's outside it, given as a fact
+(``Side.neighbour``, its stream at the neighbour's stored choices). The edge channel is the
+slice's (its adapters and their memory style are its choices), and its hops to the
+neighbour, its sizing (the neighbour's pace, from its port's contract view at its stored
+choices, given beside the declaration: ``frozen``) and its resources derive. Its netlist and
+module do not: a frozen edge is a kernel's port outside the module, no AXIS port of it, and
+a slice is not emitted (``slice-not-emitted``).
+
 **Its module** (``module``): its members' netlists, each under its node (its member name),
 in its module's instance order (``order``, the declaration's by default), a channel's with
 its hops to the ports beside it, read from the kernels' contract views (``hops``,
@@ -126,7 +135,9 @@ class Partition:
     maps a key to its path in the class).
 
     Its ``name`` (its module's), its ``boundary`` (each boundary tensor and its port, inputs
-    then outputs), the boundary channels offered movers (``movers``), the stored choices
+    then outputs), the boundary channels offered movers (``movers``), the port contracts of
+    the frozen neighbours beside a slice's edge channels (``frozen``, by channel, each side's
+    read at the neighbour's stored choices: ``neighbours`` gives them), the stored choices
     dropped as stale where it was bound, by key, with the kernel's findings (``stale``: each
     a value outside its domain, keeping its code, its owner and its details, which add the
     value stored, ``value``, and the values the choice could take, ``candidates``), and,
@@ -144,6 +155,7 @@ class Partition:
     __slots__ = (
         "_composed",
         "_decisions",
+        "_frozen",
         "_locator",
         "_memo",
         "_order",
@@ -168,6 +180,7 @@ class Partition:
     _point: Space
     _order: tuple[str, ...]
     _sides: Mapping[str, tuple[Port | Side, Port | Side]]
+    _frozen: Mapping[str, Neighbours]
     _owners: Mapping[str, Owner]
     _decisions: Mapping[Key, inspection.DecisionInfo[object]]
     _locator: _Locator
@@ -188,10 +201,12 @@ class Partition:
         stray: Mapping[str, tuple[Finding, ...]] | None = None,
         stored: Mapping[Key, object] | None = None,
         whole: bool = True,
+        frozen: Mapping[str, Neighbours] | None = None,
     ) -> None:
         self._composed, self._point = composed, point
         self._order = order
         self._sides = MappingProxyType(dict(sides))
+        self._frozen = MappingProxyType(dict(frozen or {}))
         self._owners = MappingProxyType(dict(owners or {}))
         self._locator = _Locator(composed.names, frozenset(sides))
         self._decisions = MappingProxyType(_decisions(composed, point))
@@ -573,10 +588,17 @@ class Partition:
     def neighbours(self, name: str) -> Neighbours:
         """The ports beside channel ``name`` (each kernel's ``<p>_contract`` view, labelled
         below its member's node): the producing kernel's and the consuming kernel's, by the
-        side each is declared on. FIFO sizing reads their paces
+        side each is declared on; a frozen neighbour's, outside a slice, as given at its
+        stored choices (``frozen``). FIFO sizing reads their paces
         (``finn.kernels.fifo_sizing``), and the netlist its hops to them (``hops``)."""
         found: dict[str, PortContract] = {}
+        frozen = self._frozen.get(name, Neighbours())
         for side, declared in zip(("producer", "consumer"), self._sides[name], strict=True):
+            if isinstance(declared, Side) and declared.kind is SideKind.NEIGHBOUR:
+                given: PortContract | None = getattr(frozen, side)
+                if given is not None:
+                    found[side] = given
+                continue
             if not isinstance(declared, Port):
                 continue
             point = self.member(declared.member)
@@ -600,12 +622,38 @@ class Partition:
         refuses, what they wait on; a channel's hops' own, ``channel-port`` or
         ``channel-link``), each finding naming its member (``located``), or the merge's own
         (``kernel-netlist``); a channel none of whose netlist applies because a port of a
-        kernel it is on does not is refused as ``channel-unused`` (``_unused``). The shell's
-        counts and its module read the same."""
+        kernel it is on does not is refused as ``channel-unused`` (``_unused``). A slice with
+        a frozen neighbour at an edge is refused first, each such edge by name
+        (``slice-not-emitted``): a slice is not emitted. The shell's counts and its module
+        read the same."""
         found: QueryResult[tuple[Fragment, tuple[Bus, ...]]] = self._read("netlist", self._netlist)
         return found
 
+    def _frozen_edges(self) -> tuple[Finding, ...]:
+        """Each channel with a frozen neighbour's side (a slice's edge), as a
+        ``slice-not-emitted`` finding owned by the channel: the neighbour's port is outside
+        the module and no AXIS port of it."""
+        return tuple(
+            self.located(
+                name,
+                Finding(
+                    FindingKind.REJECTION,
+                    "slice-not-emitted",
+                    name,
+                    f"a slice is not emitted: its edge meets {side.label}, a frozen "
+                    "neighbour's port outside its module, and no AXIS port of it",
+                ),
+            )
+            for name in self._order
+            if name in self._sides
+            for side in self._sides[name]
+            if isinstance(side, Side) and side.kind is SideKind.NEIGHBOUR
+        )
+
     def _netlist(self) -> QueryResult[tuple[Fragment, tuple[Bus, ...]]]:
+        frozen = self._frozen_edges()
+        if frozen:
+            return Rejected(frozen)
         netlists: list[tuple[str, Fragment]] = []
         boundary: list[Bus] = []
         controls: list[tuple[str, Control]] = []
@@ -910,6 +958,7 @@ def partition(
     movers: tuple[MoverOffer, ...] = ...,
     stray: Mapping[str, tuple[Finding, ...]] | None = ...,
     whole: bool = ...,
+    frozen: Mapping[str, Neighbours] | None = ...,
 ) -> Partition: ...
 
 
@@ -925,6 +974,7 @@ def partition(
     movers: tuple[MoverOffer, ...] = ...,
     stray: Mapping[str, tuple[Finding, ...]] | None = ...,
     whole: bool = ...,
+    frozen: Mapping[str, Neighbours] | None = ...,
     kind: Callable[..., P],
 ) -> P: ...
 
@@ -940,6 +990,7 @@ def partition(
     movers: tuple[MoverOffer, ...] = (),
     stray: Mapping[str, tuple[Finding, ...]] | None = None,
     whole: bool = True,
+    frozen: Mapping[str, Neighbours] | None = None,
     kind: Callable[..., Partition] = Partition,
 ) -> Partition:
     """``declared`` composed (``finn.kernels.composer.compose``; a ``PartitionRefused``
@@ -950,7 +1001,8 @@ def partition(
     instance order (the kernels, then the channels, as declared, by default); ``owners``:
     each kernel's policies' owner (``Unstated`` where none is given); ``ports``: each
     boundary channel and its AXIS port, inputs then outputs (``boundary``'s by default),
-    ``movers`` the offers on them; ``stray`` and ``whole``, a graph's."""
+    ``movers`` the offers on them; ``stray`` and ``whole``, a graph's; ``frozen``, the port
+    contracts of the frozen neighbours beside a slice's edge channels, by channel."""
     composed = compose(declared)
     point = composed.design_space()
     every = inspection.decisions(inspection.model(point))
@@ -994,6 +1046,7 @@ def partition(
         stray=stray,
         stored=stored,
         whole=whole,
+        frozen=frozen,
     )
 
 
