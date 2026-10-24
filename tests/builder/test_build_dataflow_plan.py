@@ -11,6 +11,7 @@ import ast
 import enum
 import functools
 import json
+from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,17 @@ from finn.builder.build_dataflow_config import (
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
 from finn.builder.build_dataflow_plan import Plan, Step, resolve_plan
 from finn.builder.build_dataflow_steps import default_steps, step_cleanup
+from finn.builder.build_dataflow_strategies import (
+    HoldEntry,
+    MaxThroughputEntry,
+    MaxThroughputOptions,
+    Named,
+    SizeFifosEntry,
+    SizeFifosOptions,
+    StrategyEntry,
+    TargetThroughputEntry,
+    TargetThroughputOptions,
+)
 from finn.core.reporting.findings import FindingKind
 from finn.platform.request import TargetRequest
 
@@ -578,3 +590,179 @@ def test_every_rejection_of_the_settings_and_the_run_is_raised_together() -> Non
         ("setting-invalid", "configuration.count"),
         ("start-without-model", "configuration.start_step"),
     ]
+
+
+# -- strategy entries ------------------------------------------------------------------------
+
+
+def step_listing(
+    model: ModelWrapper,
+    cfg: DataflowBuildConfig,
+    *,
+    strategies: Sequence[StrategyEntry] = (Named.SIZE_FIFOS,),
+) -> ModelWrapper:
+    """Declares a list of strategies, as step_explore does."""
+    RAN["step_listing"] = {"strategies": list(strategies)}
+    return model
+
+
+ENTRIES: list[Any] = [
+    {"hold": {"MatMul_0": {"simd": 8, "compute": "packed"}, "t": {"pumped": True}}},
+    {"target_throughput": {"fps": 1000000, "relax": False}},
+    {"target_throughput": {"fps": 2.5}},
+    {"max_throughput": {"within": {"lut": 0.5, "dsp": 1}}},
+    "size_fifos",
+    {"size_fifos": {"margin": 2, "ram_style": "block"}},
+    {"size_fifos": {}},
+    "defaults",
+    "debug_placeholder",
+]
+
+
+def test_entries_decode_a_name_or_a_one_key_object() -> None:
+    """A bare name decodes as a ``Named``, a one-key object as the one dataclass that
+    declares its key; each makes a new strategy that reports itself under the entry's name."""
+    plan = build_plan(config(steps=[step_listing], settings={"strategies": ENTRIES}))
+    setting = plan.settings["strategies"]
+    decoded = setting.value
+    assert decoded == [
+        HoldEntry({"MatMul_0": {"simd": 8, "compute": "packed"}, "t": {"pumped": True}}),
+        TargetThroughputEntry(TargetThroughputOptions(1000000.0, relax=False)),
+        TargetThroughputEntry(TargetThroughputOptions(2.5)),
+        MaxThroughputEntry(MaxThroughputOptions({"lut": 0.5, "dsp": 1.0})),
+        Named.SIZE_FIFOS,
+        SizeFifosEntry(SizeFifosOptions(margin=2, ram_style="block")),
+        SizeFifosEntry(SizeFifosOptions()),
+        Named.DEFAULTS,
+        Named.DEBUG_PLACEHOLDER,
+    ]
+    assert setting.given
+    made = [entry.strategy() for entry in decoded]
+    assert [each.strategy for each in made] == [
+        "hold",
+        "target_throughput",
+        "target_throughput",
+        "max_throughput",
+        "size_fifos",
+        "size_fifos",
+        "size_fifos",
+        "defaults",
+        "debug_placeholder",
+    ]
+    assert decoded[0].strategy() is not made[0], "a strategy keeps its run: a new one each call"
+
+
+def test_the_default_strategies_are_size_fifos_by_name() -> None:
+    setting = build_plan(config(steps=[step_listing])).settings["strategies"]
+    assert setting.value == (Named.SIZE_FIFOS,) and not setting.given
+
+
+SCALAR = "hold.MatMul_0.simd: a bool, an int or a str"
+ALL_ENTRIES = "Named | HoldEntry | TargetThroughputEntry | MaxThroughputEntry | SizeFifosEntry"
+
+
+@pytest.mark.parametrize(
+    "entry, place, message",
+    [
+        ("nonsense", "", f"{ALL_ENTRIES}, not 'nonsense'"),
+        ("hold", "", f"{ALL_ENTRIES}, not 'hold'"),
+        ({"nonsense": {}}, "", f"{ALL_ENTRIES}, not {{'nonsense': {{}}}}"),
+        ({"hold": {}, "size_fifos": {}}, "", f"{ALL_ENTRIES}, not "),
+        ({}, "", f"{ALL_ENTRIES}, not {{}}"),
+        (3, "", f"{ALL_ENTRIES}, not 3"),
+        (None, "", "null, and it is not optional"),
+        ({"hold": ["MatMul_0"]}, ".hold", "an object, not ['MatMul_0']"),
+        (
+            {"target_throughput": {"fps": 1, "speed": 2}},
+            ".target_throughput",
+            "keys TargetThroughputOptions does not declare: ['speed']",
+        ),
+        (
+            {"target_throughput": {}},
+            ".target_throughput",
+            "no fps, which TargetThroughputOptions requires",
+        ),
+        ({"size_fifos": {"margin": "2"}}, ".size_fifos.margin", "an int, not '2'"),
+    ],
+)
+def test_an_unknown_or_two_key_entry_is_refused_at_the_plan(
+    entry: Any, place: str, message: str
+) -> None:
+    """An entry no type declares, a name that takes an option bare, an object of two keys
+    or an option of the wrong type is refused when the plan resolves, naming its place:
+    before any step runs."""
+    line = refused(config(steps=[step_listing], settings={"strategies": [entry]}))
+    assert line.startswith(f"configuration.strategies[0]{place}: setting-invalid: ")
+    assert message in line
+
+
+@pytest.mark.parametrize(
+    "entry, code, why",
+    [
+        ({"target_throughput": {"fps": 0}}, "throughput-invalid", "a throughput of 0.0"),
+        ({"target_throughput": {"fps": -5}}, "throughput-invalid", "a throughput of -5.0"),
+        ({"max_throughput": {"within": {}}}, "budget-invalid", "needs a budget"),
+        ({"max_throughput": {"within": {"gates": 0.5}}}, "budget-invalid", "no resource is named"),
+        ({"max_throughput": {"within": {"lut": 0}}}, "budget-invalid", "a fraction of 0"),
+        ({"size_fifos": {"margin": -1}}, "sizing-invalid", "a margin of -1 words is none"),
+        (
+            {"hold": {"MatMul_0": {"simd": [8]}}},
+            None,
+            SCALAR,
+        ),
+        (
+            {"hold": {"MatMul_0": {"simd": 8.0}}},
+            None,
+            SCALAR,
+        ),
+        (
+            {"hold": {"MatMul_0": {"simd": None}}},
+            None,
+            SCALAR,
+        ),
+    ],
+)
+def test_a_bad_option_is_refused_at_the_plan(entry: Any, code: str | None, why: str) -> None:
+    """An option a strategy refuses (its own code) or a hold value no Decision takes is
+    refused when the plan resolves, as the setting invalid."""
+    line = refused(config(steps=[step_listing], settings={"strategies": [entry]}))
+    assert "configuration.strategies[0]" in line and "setting-invalid" in line
+    assert why in line
+    if code is not None:
+        assert code in line
+
+
+def test_the_manifest_records_the_entries_json(tmp_path: Path) -> None:
+    """The plan states a strategy list as JSON, each entry as its one form: a name stays
+    a name, an object keeps its one key and its options."""
+    model = tmp_path / "model.onnx"
+    onnx.save(identity_model().model, model)
+    cfg = config(
+        output_dir=str(tmp_path / "output"),
+        steps=[step_listing],
+        settings={"strategies": ENTRIES},
+        enable_build_pdb_debug=False,
+    )
+    assert build_dataflow_cfg(str(model), cfg) == 0
+    manifest = json.loads((tmp_path / "output" / MANIFEST_FILE).read_text())
+    setting = manifest["plan"]["settings"]["strategies"]
+    assert setting["given"] is True and setting["readers"] == ["step_listing"]
+    assert setting["value"] == [
+        {"hold": {"MatMul_0": {"simd": 8, "compute": "packed"}, "t": {"pumped": True}}},
+        {"target_throughput": {"fps": 1000000.0, "relax": False}},
+        {"target_throughput": {"fps": 2.5, "relax": True}},
+        {"max_throughput": {"within": {"lut": 0.5, "dsp": 1.0}}},
+        "size_fifos",
+        {"size_fifos": {"margin": 2, "ram_style": "block"}},
+        {"size_fifos": {"margin": 0, "ram_style": None}},
+        "defaults",
+        "debug_placeholder",
+    ]
+    # The default, never given, is recorded too, as a list of names.
+    again = config(
+        output_dir=str(tmp_path / "again"), steps=[step_listing], enable_build_pdb_debug=False
+    )
+    assert build_dataflow_cfg(str(model), again) == 0
+    manifest = json.loads((tmp_path / "again" / MANIFEST_FILE).read_text())
+    assert manifest["plan"]["settings"]["strategies"]["value"] == ["size_fifos"]
+    assert manifest["plan"]["settings"]["strategies"]["given"] is False

@@ -341,7 +341,7 @@ def test_a_hold_holds_for_later_explorers() -> None:
         ("link", "wide"): True,
         ("link", "lanes"): 2,
     }
-    assert [run.strategy for run in seam.runs] == ["held", "ranked"]
+    assert [run.strategy for run in seam.runs] == ["hold", "ranked"]
     assert ("link", "depth") not in seam.runs[-1].reopened
     refused = seam.set(done, {("link", "depth"): 4})
     assert isinstance(refused, Refused) and codes(refused.why[("link", "depth")]) == ["held"]

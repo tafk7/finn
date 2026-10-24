@@ -32,6 +32,7 @@ from support.refusals import refused
 from support.tfc_built import TFC_BUILT, TFC_STORED
 
 import finn.kernels.explore as explore_module
+from finn.builder.build_dataflow_strategies import HoldEntry
 from finn.core.graph.annotations.choices import HELD, OBJECTIVE_FPS
 from finn.core.graph.annotations.outputs import OUTPUT_VERIFIED
 from finn.core.graph.annotations.platform import read_target, write_target
@@ -325,11 +326,11 @@ def test_a_hold_is_committed_held_in_the_body_and_the_rest_explored() -> None:
     with refused(
         "pin-refused",
         error=ExploreError,
-        owner="held",
+        owner="hold",
         message=r"first\.pe: .*domain-membership",
     ):
         kernel_model().transform(ExploreKernelChoices(Hold({"first": {"pe": 3}})))
-    with refused("member-unknown", error=ExploreError, owner="held", message=r"nobody\.pe"):
+    with refused("member-unknown", error=ExploreError, owner="hold", message=r"nobody\.pe"):
         kernel_model().transform(ExploreKernelChoices(Hold({"nobody": {"pe": 1}})))
 
 
@@ -425,7 +426,7 @@ def test_a_hold_holds_for_every_later_exploration_of_the_body() -> None:
     with refused(
         "pin-refused",
         error=ExploreError,
-        owner="held",
+        owner="hold",
         message=r"first\.simd: already held to 1\b",
     ):
         explore_kernel_choices(model, Hold({"first": {"simd": 2}}))
@@ -442,7 +443,7 @@ def test_a_second_hold_at_another_value_is_refused() -> None:
     with refused(
         "pin-refused",
         error=ExploreError,
-        owner="held",
+        owner="hold",
         message=r"first\.simd: already held to 1\b",
     ):
         explore_kernel_choices(model, Hold({"first": {"simd": 2}}))
@@ -711,3 +712,46 @@ def test_exploration_reads_a_partitions_body_and_refuses_any_other_node() -> Non
         message="second: not KernelOps; exploration reads",
     ):
         explore_kernel_choices(model)
+
+
+def test_a_json_hold_of_each_value_kind_is_decoded() -> None:
+    """A hold stated as JSON is read as each Decision's type, the way a stored choice is
+    read back: an int Decision takes an int, a bool Decision a bool (or the 0 or 1 a stored
+    form gives it), a str Decision a str; a value of another type is refused by name before
+    anything is set. What is held is read back as that type."""
+    stated = json.loads(
+        '{"first": {"simd": 2, "compute": "packed", "compute.packed.compute_pumping": false},'
+        ' "activate": {"deep_pipeline": true, "ram_style": "auto", "use_axilite": 0},'
+        ' "levels": {"transport": "fifo", "transport.fifo.depth": 8}}'
+    )
+    model = cut_model()
+    explore_kernel_choices(model, HoldEntry(stated).strategy())
+    explorer, held = seam_of(model)
+    typed = explorer.chosen(held)
+    assert typed[("first", "simd")] == 2 and type(typed[("first", "simd")]) is int
+    assert typed[("first", "compute")] == "packed"
+    assert typed[("activate", "ram_style")] == "auto"
+    assert typed[("activate", "deep_pipeline")] is True
+    assert typed[("activate", "use_axilite")] is False
+    assert typed[("first", "compute.packed.compute_pumping")] is False
+    assert typed[("levels", "transport")] == "fifo"
+    assert typed[("levels", "transport.fifo.depth")] == 8
+    # Held at the decoded values: the same hold again is taken, a bool as 1 as well.
+    explore_kernel_choices(model, HoldEntry({"activate": {"deep_pipeline": 1}}).strategy())
+    for owner, key, value, kind in (
+        ("first", "simd", "2", "int"),
+        ("first", "simd", True, "int"),
+        ("activate", "deep_pipeline", 2, "bool"),
+        ("activate", "deep_pipeline", "true", "bool"),
+        ("first", "compute", 1, "str"),
+    ):
+        fresh = cut_model()
+        before = choices(fresh)
+        with refused(
+            "hold-value-invalid",
+            error=ExploreError,
+            owner="hold",
+            message=rf"{owner}\.{key}: {value!r} is no {kind}",
+        ):
+            explore_kernel_choices(fresh, HoldEntry({owner: {key: value}}).strategy())
+        assert choices(fresh) == before

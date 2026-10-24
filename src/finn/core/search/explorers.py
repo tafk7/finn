@@ -186,9 +186,9 @@ class Hold:
     the seam refuses (an owner or key that is no choice here, a value it does not take, a
     rule the batch would break, with the stored choices standing in its way, a key
     another hold keeps at another value: ``already held``) is refused, named, its owner
-    ``held``. ``held`` keeps the keys it held, with their values."""
+    ``hold``. ``held`` keeps the keys it held, with their values."""
 
-    strategy = "held"
+    strategy = "hold"
 
     def __init__(self, values: Mapping[str, Mapping[str, object]]) -> None:
         self.values = {owner: dict(keys) for owner, keys in values.items()}

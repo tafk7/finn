@@ -319,7 +319,7 @@ def test_the_export_names_nodes_and_tensors_and_hold_takes_it() -> None:
     # Every value is held, by its owner as the export names it; what it changed is logged
     # as the hold's.
     assert report["held"] == config
-    assert report["choices"]["first"]["pe"] == {"value": 2, "by": "held"}
+    assert report["choices"]["first"]["pe"] == {"value": 2, "by": "hold"}
     assert report["choices"]["levels"]["transport"]["value"] == config["levels"]["transport"]
     # A channel's key under its consumer is no Decision of the root: D8's form is
     # refused, named.

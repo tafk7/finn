@@ -714,7 +714,7 @@ def test_a_hold_a_rule_refuses_names_the_rule_and_what_stands_in_its_way() -> No
     with refused(
         "pin-refused",
         error=ExploreError,
-        owner="held",
+        owner="hold",
         message=r"pumping_has_lanes: .*dotp-pumping.*\(standing: first\.simd\)",
     ):
         Hold({"first": {"compute.packed.compute_pumping": True}}).explore(explorer, base)
@@ -739,7 +739,7 @@ def test_the_debug_placeholder_takes_a_required_choice_s_first_case_or_refuses_i
     explorer, base = seam()
     placeholder = DebugPlaceholder()
     assert explorer.chosen(placeholder.explore(explorer, base)) == explorer.chosen(base)
-    assert placeholder.report() == {"strategy": "placeholder", "set": {}}
+    assert placeholder.report() == {"strategy": "debug_placeholder", "set": {}}
     assert placeholder.label == "DEBUG: set by placeholder"
     fifo = explorer.set(base, keyed({"levels.transport": "fifo"}))
     assert isinstance(fifo, Accepted)

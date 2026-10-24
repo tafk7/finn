@@ -534,7 +534,7 @@ def test_a_style_held_as_none_is_sized_as_auto_and_left_to_its_hold(
     with refused(
         "pin-refused",
         error=ExploreError,
-        owner="held",
+        owner="hold",
         message="hidden.transport.fifo.buffer.ram_style: .*request-refused",
     ):
         Hold({"hidden": {"transport.fifo.buffer.ram_style": None}}).explore(

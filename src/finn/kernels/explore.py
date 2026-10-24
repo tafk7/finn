@@ -47,7 +47,7 @@ and ``Ranked`` are the seam's own, ``finn.core.search``):
   one batch, at the stored folding: it runs after the strategies that fold;
 - ``Defaults()`` (``defaults``): every choice not held back to the value its policy
   gives, a kernel's its KernelOp's and a channel's its own (``Channel.policies``);
-- ``DebugPlaceholder()`` (``placeholder``, for debugging): every open required choice
+- ``DebugPlaceholder()`` (``debug_placeholder``, for debugging): every open required choice
   at its first possible value, ``DEBUG: set by placeholder``; one known by membership
   only (a FIFO's depth) is refused, by name.
 
@@ -590,13 +590,13 @@ class Defaults:
 
 
 class DebugPlaceholder:
-    """The debug placeholder (``placeholder``): every open required choice at its first
+    """The debug placeholder (``debug_placeholder``): every open required choice at its first
     possible value, ranked, so that a design can be generated while the strategy that
     should make that choice does not exist yet; each is logged ``DEBUG: set by
     placeholder`` (``label``). A required choice known by membership only (a FIFO's
     depth that no strategy sized) has no first value: it is refused, by name."""
 
-    strategy = "placeholder"
+    strategy = "debug_placeholder"
     label = "DEBUG: set by placeholder"
 
     def __init__(self) -> None:
