@@ -24,7 +24,6 @@ from .declarations import (
     MISSING,
     CaseRef,
     ChoiceMemberRef,
-    Const,
     Decision,
     Declaration,
     Param,
@@ -364,7 +363,7 @@ def _pending_supplier(member: Param[object], value: object, label: str) -> objec
             declaration=label,
         )
     if isinstance(value, (ValueRef, View)):
-        return value  # a forward (a Param), a member reference or an expression
+        return value  # a forward (a Param) or a member reference
     raise DefinitionError.broken(
         "literal-annotation-unresolved",
         _OWNER,
@@ -494,7 +493,7 @@ def structural_settings(record: NodeDecl) -> list[str]:
         formal = formals.get(key)
         if formal is None:
             found.append(key)
-        elif isinstance(value, (ValueRef, View, NodeDecl)) and not isinstance(value, Const):
+        elif isinstance(value, (ValueRef, View, NodeDecl)):
             found.append(key)
     return found
 
@@ -675,8 +674,8 @@ def select_choice(
                 _OWNER,
                 f"Select{where}: shared binding {key}={value.__qualname__} is a class object; "
                 "a Space class given as a keyword is a case, and no other class is a value. "
-                "To bind a class as a value, wrap it: declare it as a member of the holding "
-                f"class (a Const) and bind that member, {key}=<member>",
+                "To bind a class as a value, declare a derived value of nothing returning it "
+                f"in the holding class, and bind that member, {key}=<member>",
             )
         else:
             shared[key] = value
@@ -748,8 +747,9 @@ def _check_case_named_like_a_formal(
                 _OWNER,
                 f"Select{where}: {key}={entry.__qualname__} is a case (a Space class given as a "
                 f"keyword), and every other case declares a formal {key!r}. A formal takes a "
-                "value, never a Space class: rename the case, or wrap the value as a member "
-                f"of the holding class (a Const) and bind that member, {key}=<member>",
+                "value, never a Space class: rename the case, or declare a derived value of "
+                "nothing returning the value in the holding class, and bind that member, "
+                f"{key}=<member>",
             )
 
 

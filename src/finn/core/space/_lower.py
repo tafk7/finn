@@ -5,11 +5,10 @@
 
 A supplied formal becomes its binding (a literal, or an alias of what it
 references); a Space class's own member becomes its kind's payload: a formal's
-requirement, a constant, a Decision's domain and its arguments, a callback with
-its arguments, a view's output and its Space's validity, and ``Members`` entries. Guards
-and integer expressions are linked after every member, references resolving
-through ``_names``. A reference into a placed Space is an edge out of the class, named
-as it is first read (``Table.lift``).
+requirement, a Decision's domain and its arguments, a callback with its arguments, a
+view's output and its Space's validity, and ``Members`` entries. Guards are linked after
+every member, references resolving through ``_names``. A reference into a placed Space is
+an edge out of the class, named as it is first read (``Table.lift``).
 """
 
 from __future__ import annotations
@@ -26,7 +25,6 @@ from ._table import MemberTask, ScopeDraft, Table
 from .declarations import (
     CaseRef,
     ChoiceMemberRef,
-    Const,
     Constraint,
     Decision,
     Declaration,
@@ -39,7 +37,6 @@ from .declarations import (
 )
 from .domains import Domain
 from .errors import DefinitionError
-from .expressions import INTEGER_SEMANTICS, Expr, evaluator
 from .ir import Argument, Node, NodeRef
 from .semantics import ValueSemantics
 
@@ -47,7 +44,7 @@ _OWNER = "space.lower"
 
 
 def lower(table: Table) -> None:
-    """Lower every member, then link every guard's condition and every expression."""
+    """Lower every member, then link every guard's condition."""
     _Lowering(table).run()
 
 
@@ -71,71 +68,6 @@ class _Lowering:
             node = self.table.nodes[selector]
             target = self.names.reference(source_scope, by, owner=node.owner)
             self.table.nodes[selector] = replace(node, arguments=(Argument("value", target),))
-        self.link_expressions()
-
-    # -- expressions ----------------------------------------------------------------------
-
-    def link_expressions(self) -> None:
-        cursor = 0
-        while cursor < len(self.table.expression_tasks):
-            task = self.table.expression_tasks[cursor]
-            cursor += 1
-            if task.operator not in {"add", "sub", "mul", "floordiv", "mod", "neg"}:
-                raise DefinitionError.broken(
-                    "expression-operator-unsupported",
-                    _OWNER,
-                    f"{task.owner}: unsupported integer expression operator",
-                    declaration=task.owner,
-                )
-            names = ("operand",) if task.operator == "neg" else ("left", "right")
-            if len(task.operands) != len(names):
-                raise DefinitionError.broken(
-                    "expression-arity-invalid",
-                    _OWNER,
-                    f"{task.owner}: invalid integer expression arity",
-                    declaration=task.owner,
-                )
-            arguments: list[Argument] = []
-            for name, operand in zip(names, task.operands):
-                target: NodeRef
-                if type(operand) is int:
-                    literal = self.table.reserve(
-                        task.scope,
-                        f"{self.table.nodes[task.index].key}.$literal.{name}",
-                        "const",
-                        cast(ValueSemantics[object], INTEGER_SEMANTICS),
-                        source_owner=task.owner,
-                    )
-                    self.table.nodes[literal] = replace(self.table.nodes[literal], value=operand)
-                    target = literal
-                elif isinstance(operand, Const) and operand.owner is None:
-                    semantics = cast(ValueSemantics[object], operand.semantics)
-                    target = self.table.reserve(
-                        task.scope,
-                        f"{self.table.nodes[task.index].key}.$literal.{name}",
-                        "const",
-                        semantics,
-                        source_owner=task.owner,
-                    )
-                    self.table.nodes[target] = replace(
-                        self.table.nodes[target],
-                        value=operand.value,
-                    )
-                elif isinstance(operand, ValueRef):
-                    target = self.names.reference(task.scope, operand, owner=task.owner)
-                else:
-                    raise DefinitionError.broken(
-                        "expression-literal-not-int",
-                        _OWNER,
-                        f"{task.owner}: integer expressions reject non-int literals",
-                        declaration=task.owner,
-                    )
-                arguments.append(Argument(name, target))
-            self.table.nodes[task.index] = replace(
-                self.table.nodes[task.index],
-                arguments=tuple(arguments),
-                function=evaluator(task.operator),
-            )
 
     # -- members ------------------------------------------------------------------------
 
@@ -285,9 +217,6 @@ class _Lowering:
             # Its default, where it has one: the value it takes where nobody supplies it.
             default = None if declaration.required else declaration.default
             return {"required": declaration.required, "value": default}
-        if isinstance(declaration, Const):
-            # A Const is immutable, in its canonical form: the model holds it as it is.
-            return {"value": declaration.value}
         if isinstance(declaration, Decision):
             assert node.semantics is not None
             changes: dict[str, Any] = {}
@@ -295,9 +224,6 @@ class _Lowering:
                 source_scope, declaration, node.semantics, owner=node.key
             )
             return changes
-        if isinstance(declaration, Expr):
-            self.names.expression(scope.index, declaration, owner=node.key, index=node.index)
-            return {}
         if isinstance(declaration, (Derived, Constraint)):
             return self.callback(node, scope.effective.functions[task.name])
         if isinstance(declaration, View):

@@ -20,7 +20,7 @@ member's check, not a spelling an author writes: a view's check is its annotatio
 ``View(source)``, its source's).
 
 **The canonical form** (``canonical``) is what a value becomes where it enters a design
-space: a fact, a choice, a formal's default, a ``Const``, a literal bound at placement, a
+space: a fact, a choice, a formal's default, a literal bound at placement, a
 domain's listed value. It walks the value item by item whatever the annotation (a tuple's
 items, a frozen set's, a frozen dataclass's fields): ``-0.0`` becomes ``0.0``; NaN is
 refused (``==`` does not hold it equal to itself); a mutable value is refused (a list, a

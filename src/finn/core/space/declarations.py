@@ -53,7 +53,6 @@ from .semantics import (
 
 if TYPE_CHECKING:
     from ._configuration import Space
-    from .expressions import Expr
 
 _OWNER = "space.declarations"
 
@@ -143,7 +142,7 @@ class Declaration:
 
 
 class ValueRef(Declaration, Generic[T_co]):
-    """A typed value handle: a member, a symbolic reference, or an expression."""
+    """A typed value handle: a member or a symbolic reference."""
 
     semantics: ValueSemantics[T_co] | None
 
@@ -151,60 +150,57 @@ class ValueRef(Declaration, Generic[T_co]):
     def value_semantics(self) -> ValueSemantics[T_co] | None:
         return self.semantics
 
-    def __add__(self: ValueRef[int], other: int | ValueRef[int]) -> Expr:
-        from .expressions import Expr
+    if not TYPE_CHECKING:
+        # A reference is not an integer to compute with: arithmetic on one is refused,
+        # for a derived value to state.
 
-        return Expr("add", self, other)
+        def __add__(self, other: object) -> NoReturn:
+            _expression_refused(self, "+")
 
-    def __radd__(self: ValueRef[int], other: int | ValueRef[int]) -> Expr:
-        from .expressions import Expr
+        def __sub__(self, other: object) -> NoReturn:
+            _expression_refused(self, "-")
 
-        return Expr("add", other, self)
+        def __mul__(self, other: object) -> NoReturn:
+            _expression_refused(self, "*")
 
-    def __sub__(self: ValueRef[int], other: int | ValueRef[int]) -> Expr:
-        from .expressions import Expr
+        def __floordiv__(self, other: object) -> NoReturn:
+            _expression_refused(self, "//")
 
-        return Expr("sub", self, other)
+        def __mod__(self, other: object) -> NoReturn:
+            _expression_refused(self, "%")
 
-    def __rsub__(self: ValueRef[int], other: int | ValueRef[int]) -> Expr:
-        from .expressions import Expr
+        __radd__, __rsub__, __rmul__ = __add__, __sub__, __mul__
+        __rfloordiv__, __rmod__ = __floordiv__, __mod__
 
-        return Expr("sub", other, self)
+        def __neg__(self) -> NoReturn:
+            _expression_refused(self, "unary -")
 
-    def __mul__(self: ValueRef[int], other: int | ValueRef[int]) -> Expr:
-        from .expressions import Expr
 
-        return Expr("mul", self, other)
+def reference_label(reference: ValueRef[Any]) -> str:
+    """How a refusal names a reference: ``Class.name`` once its class exists, the name it
+    has in the class body being written (found in the nearest frame outside the engine),
+    else its kind, each with where it was declared."""
+    if isinstance(reference, _Symbolic):
+        return reference._describe()
+    if reference.name is not None and reference.owner is not None:
+        return describe_formal(reference, type(reference).__name__)
+    frame = _outside_frame(0)
+    if frame is not None:
+        for name, value in frame.f_locals.items():
+            if value is reference:
+                return f"{name}{at(reference.origin)}"
+    return describe_formal(reference, type(reference).__name__)
 
-    def __rmul__(self: ValueRef[int], other: int | ValueRef[int]) -> Expr:
-        from .expressions import Expr
 
-        return Expr("mul", other, self)
-
-    def __floordiv__(self: ValueRef[int], other: int | ValueRef[int]) -> Expr:
-        from .expressions import Expr
-
-        return Expr("floordiv", self, other)
-
-    def __rfloordiv__(self: ValueRef[int], other: int | ValueRef[int]) -> Expr:
-        from .expressions import Expr
-
-        return Expr("floordiv", other, self)
-
-    def __mod__(self: ValueRef[int], other: int | ValueRef[int]) -> Expr:
-        from .expressions import Expr
-
-        return Expr("mod", self, other)
-
-    def __rmod__(self: ValueRef[int], other: int | ValueRef[int]) -> Expr:
-        from .expressions import Expr
-
-        return Expr("mod", other, self)
-
-    def __neg__(self: ValueRef[int]) -> Expr:
-        from .expressions import Expr
-
-        return Expr("neg", self)
+def _expression_refused(reference: ValueRef[Any], operator: str) -> NoReturn:
+    label = reference_label(reference)
+    raise DefinitionError.broken(
+        "reference-expression",
+        _OWNER,
+        f"{label}: arithmetic ({operator}) on a reference is not available in a class body; "
+        "declare a derived value that computes it, and bind that member",
+        declaration=label,
+    )
 
 
 def declared_path(instance: object) -> tuple[Declaration, ...] | None:
@@ -454,25 +450,16 @@ class Param(ValueDecl[T], Generic[T]):
 
     if not TYPE_CHECKING:
 
-        def __getattr__(self, name: str) -> Any:
-            # A formal projects an attribute of its value (``platform.uram``), as a
-            # derived value does.
+        def __getattr__(self, name: str) -> NoReturn:
+            # An attribute of a formal's value (``platform.uram``) is refused, for a
+            # derived value to read.
             if name.startswith("_"):
                 raise AttributeError(name)
             try:
                 self.resolve()
             except DefinitionError:
                 raise AttributeError(name) from None
-            return project(self, name)
-
-
-class Const(ValueDecl[T], Generic[T]):
-    """A definition-owned value, of its own type, in its canonical form."""
-
-    def __init__(self, value: T) -> None:
-        label = f"Const{at(self.origin)}"
-        self.semantics = _annotation_semantics(type(value), label)
-        self.value = cast(T, literal(self.semantics, value, label, role="constant", owner=label))
+            _projection_refused(self, name)
 
 
 Guard: TypeAlias = "ValueRef[bool] | bool | None"
@@ -778,9 +765,9 @@ class Derived(ValueDecl[T], Generic[T]):
 
     if not TYPE_CHECKING:
 
-        def __getattr__(self, name: str) -> Projection[Any]:
+        def __getattr__(self, name: str) -> NoReturn:
             # ``facts.word_bits`` in a class body: an attribute of this derived value.
-            return project(self, name)
+            _projection_refused(self, name)
 
 
 class _DerivedDecorator:
@@ -1127,13 +1114,13 @@ class _Symbolic:
     def __abs__(self) -> NoReturn:
         self._misuse("abs()")
 
-    # Integer +, -, *, //, % and unary - build expressions (see ValueRef);
-    # every other operator is value-like use.
+    # Integer +, -, *, //, % and unary - are refused by name (see ValueRef); every other
+    # operator is value-like use.
     def __truediv__(self, other: object) -> NoReturn:
-        self._misuse("true division (integer references support //)")
+        self._misuse("true division")
 
     def __rtruediv__(self, other: object) -> NoReturn:
-        self._misuse("true division (integer references support //)")
+        self._misuse("true division")
 
     def __pow__(self, other: object) -> NoReturn:
         self._misuse("exponentiation")
@@ -1183,8 +1170,8 @@ class MemberRef(_Symbolic, ValueRef[T], Generic[T]):
 
     if not TYPE_CHECKING:
 
-        def __getattr__(self, name: str) -> Projection[Any]:
-            return project(self, name)
+        def __getattr__(self, name: str) -> NoReturn:
+            _projection_refused(self, name)
 
 
 def _attribute_type(owner: object, name: str) -> object:
@@ -1222,11 +1209,11 @@ def _hints(annotated: object, name: str, *, include_extras: bool) -> dict[str, o
         ) from cause
 
 
-def project(source: ValueRef[Any], name: str) -> Projection[Any]:
-    """``output.spec.payload_bits``: an attribute of a referenced value, typed by its class.
+def _projection_refused(source: ValueRef[Any], name: str) -> NoReturn:
+    """``output.spec.payload_bits`` in a class body: an attribute of a referenced value.
 
-    Only an attribute the value's type annotates projects; anything else is
-    the ordinary ``AttributeError``, so introspection stays unaffected.
+    Only an attribute the value's type annotates is refused, ``reference-projection``;
+    anything else is the ordinary ``AttributeError``, so introspection stays unaffected.
     """
     if name.startswith("_"):
         raise AttributeError(name)
@@ -1240,40 +1227,16 @@ def project(source: ValueRef[Any], name: str) -> Projection[Any]:
     token = get_origin(token) or token
     if not isinstance(token, type):
         raise AttributeError(name)
-    annotation = _attribute_type(token, name)
-    if annotation is MISSING:
+    if _attribute_type(token, name) is MISSING:
         raise AttributeError(name)
-    return Projection(source, name, annotation)
-
-
-class Projection(_Symbolic, ValueRef[T], Generic[T]):
-    """An attribute of a referenced value, read in the class body (``spec.payload_bits``).
-
-    Its type check is the one its attribute's annotation states
-    (``semantics.annotation_type``); none where that states no value type.
-    """
-
-    def __init__(self, source: ValueRef[Any], attribute: str, annotation: object) -> None:
-        self.source, self.attribute = source, attribute
-        try:
-            self.semantics = cast(
-                "ValueSemantics[T]", annotation_type(annotation, attribute, owner=_OWNER)
-            )
-        except DefinitionError:
-            self.semantics = None
-
-    def _describe(self) -> str:
-        inner = self.source._describe() if isinstance(self.source, _Symbolic) else "value"
-        return f"{inner}.{self.attribute}"
-
-    def _key(self) -> tuple[object, ...]:
-        inner = self.source._key() if isinstance(self.source, _Symbolic) else (id(self.source),)
-        return (*inner, self.attribute)
-
-    if not TYPE_CHECKING:
-
-        def __getattr__(self, name: str) -> Projection[Any]:
-            return project(self, name)
+    label = reference_label(source)
+    raise DefinitionError.broken(
+        "reference-projection",
+        _OWNER,
+        f"{label}: reading .{name} of a referenced value is not available in a class body; "
+        "declare a derived value that returns it, and bind that member",
+        declaration=label,
+    )
 
 
 class ChoiceMemberRef(_Symbolic, ValueRef[Any]):
@@ -1327,9 +1290,7 @@ class Members(ValueDecl[tuple[Located[T], ...]], Generic[T]):
     def __init__(self, member: T) -> None: ...  # a derived value: a class reads it as its value
 
     def __init__(self, member: object) -> None:
-        from .expressions import Expr
-
-        if not isinstance(member, (View, Derived, Expr)):
+        if not isinstance(member, (View, Derived)):
             raise DefinitionError.broken(
                 "members-member-invalid",
                 _OWNER,
@@ -1343,7 +1304,6 @@ class Members(ValueDecl[tuple[Located[T], ...]], Generic[T]):
 __all__ = [
     "CaseRef",
     "ChoiceMemberRef",
-    "Const",
     "Constraint",
     "Decision",
     "Declaration",
@@ -1351,7 +1311,6 @@ __all__ = [
     "Members",
     "MemberRef",
     "Param",
-    "Projection",
     "Required",
     "ValueDecl",
     "ValueRef",

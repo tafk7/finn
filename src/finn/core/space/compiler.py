@@ -245,15 +245,8 @@ def root_parameters(model: Model[Space], record: NodeDecl) -> dict[Address, obje
         index = root.named_members.get(name)
         if index is None or index.kind != "param" or name not in own:
             continue
-        value = own[name]
-        values[index] = getattr(value, "value", value) if _is_const(value) else value
+        values[index] = own[name]
     return values
-
-
-def _is_const(value: object) -> bool:
-    from .declarations import Const
-
-    return isinstance(value, Const)
 
 
 def design_space(node: S) -> S:

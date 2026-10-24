@@ -12,7 +12,6 @@ from .collection import RESERVED_NAMES
 from .compiler import Model, design_space
 from .declarations import (
     MISSING,
-    Const,
     Constraint,
     Decision,
     Derived,
@@ -61,7 +60,6 @@ __all__ = [
     "Model",
     "composite",
     "Param",
-    "Const",
     "Decision",
     "Select",
     "required",

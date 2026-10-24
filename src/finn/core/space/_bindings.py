@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from ._nodes import NodeDecision, NodeDecl, inline_decision
-from .declarations import Const, Decision, Param, ValueRef, View
+from .declarations import Decision, Param, ValueRef, View
 from .errors import DefinitionError
 
 _OWNER = "space.bindings"
@@ -41,7 +41,7 @@ class Slot:
 def classify(slot: Slot) -> tuple[BindingKind, object]:
     """How a value formal is supplied: its binding kind and supplier.
 
-    A literal (or an inline ``Const``) is a constant, and anything else forwards a
+    A literal is a constant, and anything else forwards a
     reference. A Decision that is no class attribute (given at the call) is refused.
     """
     value = slot.supplier
@@ -62,8 +62,6 @@ def classify(slot: Slot) -> tuple[BindingKind, object]:
         )
     if isinstance(value, Decision) and value.owner is None and not isinstance(value, NodeDecision):
         raise inline_decision(slot.key)
-    if isinstance(value, Const) and value.owner is None:
-        return "literal", value.value
     if isinstance(value, (ValueRef, View)):
         return "reference", value
     return "literal", value

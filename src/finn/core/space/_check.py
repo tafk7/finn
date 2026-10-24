@@ -27,7 +27,6 @@ _OWNER = "space.check"
 def check(table: Table, order: tuple[int, ...]) -> None:
     _check_nodes(table, order)
     _check_arguments(table)
-    _check_expressions(table)
 
 
 def _check_nodes(table: Table, order: tuple[int, ...]) -> None:
@@ -122,17 +121,3 @@ def _check_arguments(table: Table) -> None:
                 declaration=owner,
             )
         validate_argument(dependency, semantics, owner=owner)
-
-
-def _check_expressions(table: Table) -> None:
-    """Integer operands, once linked aliases have their semantics."""
-    for task in table.expression_tasks:
-        node = table.nodes[task.index]
-        operands = (table.semantics(arg.node) for arg in node.arguments)
-        if any(semantics is None or semantics.type_token is not int for semantics in operands):
-            raise DefinitionError.broken(
-                "expression-operand-not-int",
-                _OWNER,
-                f"{node.owner}: integer expression operands require int value semantics",
-                declaration=node.owner,
-            )

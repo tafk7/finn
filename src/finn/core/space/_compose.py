@@ -946,9 +946,9 @@ class _Views:
 
     @staticmethod
     def _generated(spec: Member) -> bool:
-        """A computation the engine writes for a member (an expression, a projection, a
-        view's output), named by that member."""
-        return spec.kind in ("derived", "const") and spec.source_owner is not None
+        """A computation the engine writes for a member (a view's output, a case's guard),
+        named by that member."""
+        return spec.kind == "derived" and spec.source_owner is not None
 
     def passes(self, compiled: Compiled, record: int) -> Iterator[Ref]:
         """What ``record`` passes on, if it passes a value on: an alias's, a selection's or a
@@ -976,7 +976,7 @@ class _Views:
 
     def _way(self, compiled: Compiled, record: int) -> tuple[str, ...] | None:
         """``view`` of a record of ``compiled``'s class, found once per record. What passes a
-        value on may be a long chain (an expression's), so it is walked with a stack of its
+        value on may be a long chain (derived values'), so it is walked with a stack of its
         own: each frame a record whose way is being found, what it passes on, and the
         record it waits on (its class, number, and the slots' names to it)."""
         memo = _ways(compiled)

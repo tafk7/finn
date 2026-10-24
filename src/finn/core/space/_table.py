@@ -35,7 +35,6 @@ from ._nodes import NodeDecl, SlotKind, slot_kind
 from ._signatures import BoundArgument
 from .collection import EffectiveSpace, collect_space
 from .declarations import Declaration, ValueRef
-from .expressions import IntOperator
 from .ir import Node, NodeKind, NodeRef, Placed, Placing, Selected
 from .semantics import BOOL, ValueSemantics
 
@@ -136,15 +135,6 @@ class GuardTask:
     condition: ValueRef[bool]
 
 
-@dataclass(frozen=True)
-class ExpressionTask:
-    index: int
-    scope: int
-    owner: str
-    operator: IntOperator
-    operands: tuple[int | ValueRef[int], ...]
-
-
 # An edge out of the class a reference may name: a placed Space's member or selection.
 Edge = Placed | Selected
 
@@ -172,8 +162,7 @@ class Table:
     slot_drafts: list[int] = field(default_factory=list)
     # Allocation -> checks: selections linked for a member name several candidates share.
     shared: dict[int, tuple[int, str]] = field(default_factory=dict)
-    # Lowering -> checks: integer expressions, and each callback argument's target.
-    expression_tasks: list[ExpressionTask] = field(default_factory=list)
+    # Lowering -> checks: each callback argument's target.
     argument_checks: list[tuple[BoundArgument, NodeRef, str]] = field(default_factory=list)
     # Each edge out of the class, and the records and edges in the order they were made
     # (``vertices``: the dependency order's).

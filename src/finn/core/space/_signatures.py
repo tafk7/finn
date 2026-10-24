@@ -18,12 +18,10 @@ from .declarations import (
     Constraint,
     Derived,
     MemberRef,
-    Projection,
     ValueRef,
     View,
 )
 from .errors import DefinitionError
-from .expressions import Expr
 from .results import Available, Inapplicable, Rejected, Unresolved
 from .semantics import ValueSemantics, annotation_type
 
@@ -155,7 +153,7 @@ def resolve_source(source: object, effective: EffectiveSpace, owner: str) -> Val
         return cast(ValueRef[object], replacement)
     if isinstance(source, (MemberRef, ChoiceMemberRef)):
         return source
-    if isinstance(source, (Expr, CaseRef, Projection)) and source.owner is None:
+    if isinstance(source, CaseRef) and source.owner is None:
         return cast(ValueRef[object], source)
     raise DefinitionError.broken(
         "dependency-undeclared",

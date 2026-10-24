@@ -5,11 +5,10 @@
 an edge out of the class (``ir.NodeRef``).
 
 A member, a path of records (``kitchen.area``), a Decision over nodes' case or
-member (``heating.kw``), a projection (``spec.payload_bits``) and an integer
-expression each resolve to one node; those that need one get it reserved here, once per scope
-and source. ``members_candidates`` lists the members ``Members`` reads (views and derived
-values: each child's member of the named base), named as the reading scope sees
-them.
+member (``heating.kw``) each resolve to one node; those that need one get it reserved
+here, once per scope and source. ``members_candidates`` lists the members ``Members``
+reads (views and derived values: each child's member of the named base), named as the
+reading scope sees them.
 
 A reference into a placed Space resolves in that class's compiled form, at a place
 (``_table.Place``: a slot, and the slots of the placed classes below it) and is an edge out
@@ -23,35 +22,24 @@ classes make for one scope is one address where they are placed, in the choice's
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import replace
-from typing import cast
 
 from ._configuration import Space
 from ._nodes import NodeChoice, NodeDecision, NodeDecl, unwrap
-from ._table import ExpressionTask, Place, ScopeDraft, Table, member_key
+from ._table import Place, ScopeDraft, Table, member_key
 from .declarations import (
     CaseRef,
     ChoiceMemberRef,
     Declaration,
     MemberRef,
     Members,
-    Projection,
     at,
 )
 from .errors import DefinitionError, RequestError
-from .expressions import INTEGER_SEMANTICS, Expr
-from .ir import Argument, NodeRef
-from .semantics import ValueSemantics
+from .ir import NodeRef
 
 _OWNER = "space.names"
-
-
-def _attribute(name: str) -> Callable[..., object]:
-    def attribute(*, value: object) -> object:
-        return getattr(value, name)
-
-    return attribute
 
 
 def _in_table(drafts: Sequence[ScopeDraft], scope: int, reference: object) -> int:
@@ -100,10 +88,6 @@ class Names:
 
     def __init__(self, table: Table) -> None:
         self.table = table
-        # Each expression and projection once per scope.
-        self.expression_nodes: dict[tuple[int, Expr], int] = {}
-        self.expression_counts: dict[str, int] = {}
-        self.projections: dict[tuple[int, Projection[object]], int] = {}
         self.choice_member_nodes: dict[tuple[int, str], int] = {}
         self.placed_scopes: dict[int, tuple[int, ...]] = {}
         # Selections made in a placed Space's choice, by (where, choice, member).
@@ -160,11 +144,6 @@ class Names:
                 children.extend(child for _, child in cases if child is not None)
         placed = self.placed_scopes[scope] = tuple(children)
         return placed
-
-    def fresh_number(self, owner: str) -> int:
-        number = self.expression_counts.get(owner, 0)
-        self.expression_counts[owner] = number + 1
-        return number
 
     def _in_slot(self, place: Place) -> bool:
         """Whether ``place`` is a placed Space's scope (else the class's own)."""
@@ -317,10 +296,6 @@ class Names:
 
     def reference(self, scope: int, source: object, *, owner: str) -> NodeRef:
         source = unwrap(source)
-        if isinstance(source, Expr) and source.owner is None:
-            return self.expression(scope, source, owner=owner)
-        if isinstance(source, Projection):
-            return self.projection(scope, source, owner=owner)
         if isinstance(source, ChoiceMemberRef) and source.owner is None:
             return self.choice_member(scope, source, owner=owner)
         if isinstance(source, CaseRef) and source.owner is None:
@@ -384,69 +359,3 @@ class Names:
                 f"{owner}: reference is not a member of this scope",
                 declaration=owner,
             ) from cause
-
-    def projection(self, scope: int, source: Projection[object], *, owner: str) -> int:
-        """``spec.payload_bits``: a derived node reading one attribute of a value."""
-        identity = (scope, source)
-        cached = self.projections.get(identity)
-        if cached is not None:
-            return cached
-        if source.semantics is None:
-            raise DefinitionError.broken(
-                "projection-unannotated",
-                _OWNER,
-                f"{owner}: {source._describe()} is not annotated with a class; read it in a "
-                "@derived method instead",
-                declaration=owner,
-            )
-        index = self.table.reserve(
-            scope,
-            f"{owner}.$project.{self.fresh_number(owner)}",
-            "derived",
-            source.semantics,
-            guard=self.table.drafts[scope].guard,
-            source_owner=owner,
-        )
-        self.projections[identity] = index
-        target = self.reference(scope, source.source, owner=owner)
-        self.table.nodes[index] = replace(
-            self.table.nodes[index],
-            function=_attribute(source.attribute),
-            arguments=(Argument("value", target),),
-        )
-        return index
-
-    def expression(
-        self,
-        scope: int,
-        source: Expr,
-        *,
-        owner: str,
-        index: int | None = None,
-    ) -> int:
-        """Register each source expression once per scope.
-
-        A named expression owns its authored node. Anonymous shared expressions
-        use their first consumer's source owner; every later consumer retains
-        its own dependency edge and therefore its demanded evidence path.
-        Their applicability comes from the scope, never the first consumer.
-        """
-
-        identity = (scope, source)
-        previous = self.expression_nodes.get(identity)
-        if previous is not None:
-            return previous
-        if index is None:
-            index = self.table.reserve(
-                scope,
-                f"{owner}.$expr.{self.fresh_number(owner)}",
-                "derived",
-                cast(ValueSemantics[object], INTEGER_SEMANTICS),
-                guard=self.table.drafts[scope].guard,
-                source_owner=owner,
-            )
-        self.expression_nodes[identity] = index
-        self.table.expression_tasks.append(
-            ExpressionTask(index, scope, owner, source.operator, tuple(source.operands))
-        )
-        return index

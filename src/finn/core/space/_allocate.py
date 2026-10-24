@@ -46,7 +46,6 @@ from .declarations import (
     MISSING,
     CaseRef,
     ChoiceMemberRef,
-    Const,
     Constraint,
     Decision,
     Declaration,
@@ -58,7 +57,6 @@ from .declarations import (
 )
 from .domains import Domain, finite
 from .errors import DefinitionError
-from .expressions import Expr
 from .ir import PLACING, Argument, NodeKind, NodeRef
 from .results import reject
 from .semantics import BOOL, STRING, ValueSemantics
@@ -116,9 +114,7 @@ def allocate(space_type: type[Space], compiled_of: Callable[[type[Space]], Compi
 
 def _declared_kind(declaration: Declaration) -> NodeKind | None:
     """The node kind of a Space class's own member that is neither a formal nor a Decision."""
-    if isinstance(declaration, Const):
-        return "const"
-    if isinstance(declaration, (Derived, Expr)):
+    if isinstance(declaration, Derived):
         return "derived"
     if isinstance(declaration, Constraint):
         return "constraint"
