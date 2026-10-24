@@ -127,7 +127,6 @@ class Names:
                 continue
             member = compiled.named_members.get(member_name)
             if member is not None:
-                self.check_member(child, member_name, compiled.records[member].kind)
                 result.append((name, member_name, self.table.lift(Place(child), member)))
         return result
 
@@ -161,16 +160,6 @@ class Names:
                 children.extend(child for _, child in cases if child is not None)
         placed = self.placed_scopes[scope] = tuple(children)
         return placed
-
-    def check_member(self, scope: int, name: str, kind: str) -> None:
-        if kind not in ("view", "derived"):
-            raise DefinitionError.broken(
-                "members-member-invalid",
-                _OWNER,
-                f"{self.table.drafts[scope].name or '<root>'}: member {name} must be a view "
-                "or a derived value",
-                declaration=self.table.drafts[scope].name or "<root>",
-            )
 
     def fresh_number(self, owner: str) -> int:
         number = self.expression_counts.get(owner, 0)
