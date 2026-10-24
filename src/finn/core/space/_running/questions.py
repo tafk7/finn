@@ -163,12 +163,12 @@ def state_of(ev: Evaluation, index: Address) -> ChoiceState:
 
 
 def pruned(ev: Evaluation, index: Address) -> bool:
-    """Whether the choice ``index`` is in none of the design space's lists (SZ113): unset,
+    """Whether the choice ``index`` is in none of the design space's lists: unset,
     and its existence false under the facts alone. That is its presence read in its facts
     layer's design space with nothing stored (every choice unknown): absent there, by a
     guard or a case not picked, is false, an absent guard dominating a refused one. Present,
-    unknown, refused or failing is not false, and a stored choice is never pruned (SZ119
-    (5)): it is listed, dormant where its scope is absent."""
+    unknown, refused or failing is not false, and a stored choice is never pruned: it is
+    listed, dormant where its scope is absent."""
     if index in ev.ds.stored or not ev.inferred.guards(index):
         return False
     try:

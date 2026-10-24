@@ -12,9 +12,9 @@ one query and follows the reads its answers recorded. ``states`` and ``viable`` 
 the choices' values themselves: a choice's value is immutable, in its canonical form
 (``semantics.canonical``), and every answer type is a frozen dataclass of tuples.
 
-**The lists** (SZ113). A design space's ``decisions`` and ``states`` (and so its flow
+**The lists**. A design space's ``decisions`` and ``states`` (and so its flow
 order) leave out each choice whose existence the facts alone rule out, unless it is stored
-(SZ119 (5); ``_running.questions.pruned``). A choice asked by name is answered all the same:
+(``_running.questions.pruned``). A choice asked by name is answered all the same:
 its state, its possible values (``viable``), a change setting it (accepted, dormant). A
 compiled model's or a Space class's ``decisions`` list every decision.
 """
@@ -228,7 +228,7 @@ def decisions(subject: Space | Model[S] | type[Space]) -> tuple[DecisionInfo[obj
     (``_running.per_class.flow_below``). Of a compiled model or a Space class, every one,
     inactive cases included: read once per compiled model and scope, from its compiled
     forms and scope records (``_whole``), no member evaluated. Of a design space, those in
-    its lists (SZ113): every one but each choice whose existence the facts alone rule out,
+    its lists: every one but each choice whose existence the facts alone rule out,
     unless it is stored (``_running.questions.pruned``). A decision asked by name is
     answered whether it is listed or not."""
 
@@ -512,8 +512,8 @@ def states(point: Space) -> tuple[tuple[str, ChoiceState], ...]:
     """Every choice below this scope in the design space's lists, by key, with its state,
     in the flow order (each after every choice its presence, its list or its Space's facts
     read: a selector before the choices its cases hold). A choice whose existence the facts
-    alone rule out is in no list, unless it is stored (SZ113, SZ119 (5);
-    ``_running.questions.pruned``)."""
+    alone rule out is in no list, unless it is stored
+    (``_running.questions.pruned``)."""
     from ._running.evaluate import evaluation
     from ._running.questions import listed, state_of
 

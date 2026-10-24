@@ -14,7 +14,7 @@ boundary (PRINCIPLES 8), as two runs of the model: in XSim and in Python;
 its reference against the ONNX it covers, every value equal, and which platform
 rows' kernels admit it, a gap record where none does (the ONNX
 entry); ``finn.harness.points`` draws a kernel's lean covering points and its
-refused side from its design space (KT10); ``finn.harness.orders`` decodes output
+refused side from its design space; ``finn.harness.orders`` decodes output
 words that differ as the order a stream was walked in, by beat and index tuple;
 ``finn.harness.hls`` C-simulates an HLS leaf, its top called by a driver FINN writes.
 The inputs it runs a model on are drawn from the model's annotations
