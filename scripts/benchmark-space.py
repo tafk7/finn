@@ -79,6 +79,18 @@ def increment(*, value: int) -> int:
     return value + 1
 
 
+def one() -> int:
+    return 1
+
+
+def always() -> bool:
+    return True
+
+
+def multiply(*, extent: int, lanes: int) -> int:
+    return extent * lanes
+
+
 @dataclass(frozen=True)
 class CachedPayload:
     value: int
@@ -124,7 +136,7 @@ def repeated_space(api, count: int):
     class Child(api.Space):
         extent: int = api.Param()
         lanes: int = api.Decision(values=(1, 2, 4))
-        width = extent * lanes
+        width = api.Derived(multiply, aliases={"extent": extent, "lanes": lanes})
         physical = api.View(width)
 
     # Each child is a node declaration: calling the Space class places it once.
@@ -135,11 +147,11 @@ def repeated_space(api, count: int):
 
 def deep_space(api, count: int):
     class Leaf(api.Space):
-        value = api.Const(1)
+        value = api.derived(one)
 
     space_type = Leaf
     for index in range(count):
-        enabled = api.Const(True)
+        enabled = api.derived(always)
         space_type = api.composite(
             f"Level{index}", {"enabled": enabled, "child": space_type(when=enabled)}
         )
@@ -190,19 +202,32 @@ def compilation(api, label: str, count: int, factory) -> dict[str, object]:
 
 
 def constant_expressions(api, terms: int, trials: int) -> dict[str, object]:
-    """Measure the deliberate tradeoff of runtime evaluation of constant expressions."""
-    base = api.Const(7)
+    """Measure the runtime evaluation of many derived values over one constant derived value."""
     names = tuple(f"term{index}" for index in range(terms))
+
+    def seven() -> int:
+        return 7
+
+    def term(offset: int):
+        def add(*, base: int) -> int:
+            return base + offset
+
+        return add
 
     def total(self) -> int:
         return sum(getattr(self, name) for name in names)
+
+    base = api.derived(seven)
 
     space_type = api.composite(
         "ConstantExpressions",
         {
             "base": base,
             "total": api.derived(total),
-            **{name: base + index for index, name in enumerate(names)},
+            **{
+                name: api.Derived(term(index), aliases={"base": base})
+                for index, name in enumerate(names)
+            },
         },
     )
     started = time.perf_counter()
@@ -222,8 +247,8 @@ def constant_expressions(api, terms: int, trials: int) -> dict[str, object]:
     evidence = api.inspection.explain(points[0], space_type.total)
     assert evidence.result == api.Available(expected)
     # The design spaces share the model's node cache: each term and the total is called
-    # once, by the first one read; every later one finds them.
-    assert PURITY_CHECKED or work["calls"]["derived"] == terms + 1, work
+    # once, by the first one read, with the one value they read; every later one finds them.
+    assert PURITY_CHECKED or work["calls"]["derived"] == terms + 2, work
     return {
         "terms": terms,
         "trials": trials,
@@ -240,6 +265,10 @@ def constant_expressions(api, terms: int, trials: int) -> dict[str, object]:
 def batch_updates(api, count: int, *, dependent: bool) -> dict[str, object]:
     work = Counter()
 
+    def root() -> int:
+        work["root"] += 1
+        return 0
+
     def prerequisite(*, previous: int) -> int:
         work["prerequisite"] += 1
         return previous
@@ -254,7 +283,7 @@ def batch_updates(api, count: int, *, dependent: bool) -> dict[str, object]:
 
     # A domain's membership reads facts only: how a choice follows the one before it
     # is a rule of the Space holding both.
-    source = api.Const(0)
+    source = api.derived(root)
     members = {"source": source}
     previous = source
     requests = []
@@ -286,15 +315,19 @@ def batch_updates(api, count: int, *, dependent: bool) -> dict[str, object]:
     assert len(report.outcomes) == count
     counted = cache_work(model, since, "domain membership", "derived", "constraint")
     # Each choice's membership, each limit and each rule is called once, on the one value
-    # it reads once the batch is in. What else reads them finds them kept.
+    # it reads once the batch is in, and the root they start from once. What else reads
+    # them finds them kept.
     assert PURITY_CHECKED or counted["calls"] == {
         "domain membership": count,
-        "derived": count,
+        "derived": count + 1,
         "constraint": count,
     }, counted
-    assert work == ran(
+    expected_work = ran(
         counted, membership="domain membership", prerequisite="derived", rule="constraint"
     )
+    expected_work["prerequisite"] -= work["root"]
+    expected_work["root"] = work["root"]
+    assert work == expected_work
     return {
         "fixture": "dependent" if dependent else "independent",
         "changes": count,
@@ -533,7 +566,7 @@ def self_workload(api, shape: str, depth: int, width: int) -> dict[str, object]:
     A callback counts its completions: past the engine's depth guard a method is
     abandoned and run again on an explicit stack, so it may start more than once."""
     work = Counter()
-    members = {"source": api.Const(1)}
+    members = {"source": api.derived(one)}
 
     def computation(name: str, dependency: str):
         def evaluate(self) -> int:
