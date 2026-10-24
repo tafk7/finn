@@ -66,10 +66,11 @@ views are read out of the design space, composed from its members' (the netlist 
 channel's outer hops from the kernels' contract views, FIFO sizing's paces, resources),
 never bound into it.
 
-A partition's resources (``Partition.own_resources``) are its members'. The shell's budgets
-and resources over a partition (its members', its movers' and its static region's), and the
-cut's choices (``make_cut_choices``) on the partition in its shell, are
-``finn.custom_op.kernels.shell``'s.
+A partition's resources (``Partition.own_resources``) are its members'. A partition in its
+shell (``finn.custom_op.kernels.shell.in_shell``) holds the shell's budgets as rules of its
+own (its shell member, ``finn.kernels.budgets``); the shell's resources over a partition
+(its members', its movers' and its static region's), and the cut's choices
+(``make_cut_choices``) on the partition in its shell, are ``finn.custom_op.kernels.shell``'s.
 """
 
 from __future__ import annotations
@@ -315,11 +316,16 @@ class _Read:
 
 
 def _graph(
-    model: ModelWrapper, nodes: list[NodeProto], name: str, movers: tuple[MoverOffer, ...]
+    model: ModelWrapper,
+    nodes: list[NodeProto],
+    name: str,
+    movers: tuple[MoverOffer, ...],
+    shell: Mapping[str, object] | None = None,
 ) -> _Read:
     """The selection ``nodes`` of ``model`` as the graph states it (``_Read``; the module
-    docstring), refused where a tensor is read more than once (``tensor-fan-out``) or two
-    members share a name (``name-shared``)."""
+    docstring), in a shell where ``shell`` states its row's facts
+    (``PartitionDeclaration.shell``), refused where a tensor is read more than once
+    (``tensor-fan-out``) or two members share a name (``name-shared``)."""
     ops = [kernel_op(model, node) for node in nodes]
     owned = [op.owned() for op in ops]
     ports = _boundary(model, nodes, {tensor for tensors in owned for tensor in tensors.values()})
@@ -382,20 +388,25 @@ def _graph(
     kernels = {node.name: op.facts() for node, op in zip(nodes, ops)}
     declared_order = [*on("s_axis_"), *on(""), *on("m_axis_")]
     declared = PartitionDeclaration(
-        kernels, {tensor: channels[tensor] for tensor in declared_order}
+        kernels, {tensor: channels[tensor] for tensor in declared_order}, shell
     )
     order = (*on("s_axis_"), *on(""), *kernels, *on("m_axis_"))
     return _Read(declared, order, ports, ops, stored, stray, whole)
 
 
 def declaration(
-    model: ModelWrapper, nodes: Iterable[NodeProto], *, movers: tuple[MoverOffer, ...] = ()
+    model: ModelWrapper,
+    nodes: Iterable[NodeProto],
+    *,
+    movers: tuple[MoverOffer, ...] = (),
+    shell: Mapping[str, object] | None = None,
 ) -> PartitionDeclaration:
     """The partition of ``nodes``, KernelOp nodes of ``model``, as the graph declares it
     (the module docstring): each node's kernel by its facts, in graph order, and each
-    channel by its tensor with its sides and facts, its boundary offered ``movers``."""
+    channel by its tensor with its sides and facts, its boundary offered ``movers``; in a
+    shell where ``shell`` states its row's facts."""
     with reading(model):
-        return _graph(model, list(nodes), PARTITION, movers).declared
+        return _graph(model, list(nodes), PARTITION, movers, shell).declared
 
 
 def network(
@@ -422,11 +433,13 @@ def _network(
     name: str,
     movers: tuple[MoverOffer, ...],
     kind: Callable[..., P],
+    shell: Mapping[str, object] | None = None,
 ) -> P:
-    """``network``, made by ``kind`` (``Partition``, or a shell's partition over it), the
-    graph's tensors read from one index."""
+    """``network``, made by ``kind`` (``Partition``, or a shell's partition over it), in a
+    shell where ``shell`` states its row's facts, the graph's tensors read from one
+    index."""
     with reading(model):
-        read = _graph(model, nodes, name, movers)
+        read = _graph(model, nodes, name, movers, shell)
         try:
             made = partition(
                 read.declared,

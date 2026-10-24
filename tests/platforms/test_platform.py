@@ -80,14 +80,19 @@ def test_a_memory_case_the_device_cannot_build_is_refused_by_name() -> None:
 
 def test_a_doubled_clock_is_the_shells_not_the_platforms() -> None:
     """The platform carries no doubled clock (the shell row owns it, and the shell
-    supplies it): a KernelOp offers a pumped memory on any target, the Zynq shell's
-    included, whose budgets then refuse it (``test_shell_budgets``)."""
+    supplies it): a KernelOp offers a pumped memory on any target, and its partition in
+    the Zynq shell, which supplies none, refuses it by the shell's budget
+    (``clock-unavailable``, the weight channel's clock rule; ``test_shell_budgets``)."""
     assert "clk2x" not in {item.name for item in fields(Platform)}
-    for target in (TARGET, ZYNQ):
-        model = targeted(matmul_model(), target)
-        configured(model, {"first": MATMUL})
-        configured(model, {"w": {"source.pumped_memory": True}})
-        assert folded(model).member("w").source.pumped_memory is True
+    model = targeted(matmul_model(), TARGET)
+    configured(model, {"first": MATMUL})
+    configured(model, {"w": {"source.pumped_memory": True}})
+    assert folded(model).member("w").source.pumped_memory is True
+    zynq = targeted(matmul_model(), ZYNQ)
+    configured(zynq, {"first": MATMUL})
+    with refused("clock-unavailable", owner="w-clock"):
+        configured(zynq, {"w": {"source.pumped_memory": True}})
+    assert folded(zynq).member("w").source.pumped_memory is False
 
 
 def test_runtime_writable_thresholds_need_a_control_bus() -> None:

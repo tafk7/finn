@@ -14,7 +14,6 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from finn.core.reporting.findings import Finding, FindingKind
 from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
 from finn.kernels.artifacts.module import Fragment
 from finn.kernels.artifacts.top import doubled, top_buses
@@ -135,7 +134,9 @@ def bus_counts(fragment: Fragment, boundary: Iterable[Bus]) -> tuple[int, int, b
     from the pins it would have (``finn.kernels.artifacts.top``) without building it: the
     AXI-Lite buses it presents, the AXI memory ports it initiates (a bus beside its streams
     that it initiates: a boundary bus, since each presented bus is a target port), and
-    whether it takes an aligned doubled clock (an instance's doubled clock, ``doubled``)."""
+    whether it takes an aligned doubled clock (an instance's doubled clock, ``doubled``).
+    The budgets are rules of the partition in its shell, over its members' derived values
+    (``finn.kernels.budgets``); the static region is sized by this count."""
     buses = top_buses(fragment, boundary)
     control = sum(bus.protocol is StandardProtocol.AXILITE for bus in buses)
     memory = sum(
@@ -143,35 +144,6 @@ def bus_counts(fragment: Fragment, boundary: Iterable[Bus]) -> tuple[int, int, b
         for bus in buses
     )
     return control, memory, doubled(fragment)
-
-
-def budgets(row: ShellRow, counts: tuple[int, int, bool], movers: int) -> tuple[Finding, ...]:
-    """Why ``row`` refuses a module of these ``counts`` (``bus_counts``) whose movers
-    present ``movers`` AXI-Lite buses: its budgets (``ShellRow``), each by code;
-    none where it admits it."""
-    control, memory, doubled = counts
-    refused: tuple[str, str] | None = None
-    if row.control_budget is not None and control + movers > row.control_budget:
-        refused = (
-            "interface-budget-exceeded",
-            f"the {row.shell!r} shell takes {row.control_budget} AXI-Lite buses; the "
-            f"partition presents {control} and its movers {movers}",
-        )
-    elif row.memory_ports is not None and memory > row.memory_ports:
-        refused = (
-            "interface-budget-exceeded",
-            f"the {row.shell!r} shell gives a partition {row.memory_ports} memory "
-            f"ports; it initiates {memory}",
-        )
-    elif doubled and not row.clk2x:
-        refused = (
-            "clock-unavailable",
-            f"the partition takes an aligned doubled clock (ap_clk2x), which the "
-            f"{row.shell!r} shell does not supply",
-        )
-    if refused is None:
-        return ()
-    return (Finding(FindingKind.REJECTION, refused[0], "budgets", refused[1]),)
 
 
 IP_ROW = ShellRow(
@@ -324,7 +296,6 @@ __all__ = [
     "VIVADO_BLOCK_DESIGN",
     "XRT",
     "ZYNQ_STATIC_REGION",
-    "budgets",
     "built_shell",
     "bus_counts",
     "shell_row",

@@ -13,6 +13,12 @@ selection of a graph into a declaration and binds it so
 (``finn.custom_op.kernels.network``), and a test declares one by hand. Nothing binds one
 design space to another at run time: a change is one change of the design space.
 
+**In a shell** (a declaration that states its shell's row), it holds the shell member
+(``shell``, ``finn.kernels.budgets``): the shell's budgets as rules over its members'
+derived values. It is no kernel or channel (none of ``members``, ``kernels``, ``channels``,
+``order``, so in no netlist, module, persisted choice or cost); it is reached by its name
+(``Partition.shell``), and its validity is read as a member's (``validity``).
+
 **Bind is assignment**: the stored choices, by key, are bound with the engine's ``bind``
 on the design space of the declaration's facts, never refused there. A stored value
 outside its domain over the facts (or a key that is no choice) is dropped as stale, with
@@ -241,6 +247,13 @@ class Partition:
         return tuple(self._composed.names.members)
 
     @property
+    def shell(self) -> str | None:
+        """Its shell member's name (``finn.kernels.budgets.SHELL``), in a shell; None
+        outside one. Not among its ``members``: its validity is read by its name
+        (``validity``)."""
+        return self._composed.names.shell
+
+    @property
     def order(self) -> tuple[str, ...]:
         """Every member in its module's instance order."""
         return self._order
@@ -270,8 +283,10 @@ class Partition:
         return self._composed.names.pair(key)
 
     def member(self, name: str) -> Any:
-        """Member ``name``'s Space inside the design space."""
-        member = self._composed.names.members.get(name)
+        """Member ``name``'s Space inside the design space; the shell member's by its name
+        (``shell``)."""
+        names = self._composed.names
+        member = name if name == names.shell else names.members.get(name)
         if member is None:
             raise ValueError(f"{name} is no member of the partition")
         return getattr(self._point, member)
@@ -289,7 +304,10 @@ class Partition:
     def located(self, name: str, finding: Finding) -> Finding:
         """A finding of member ``name``'s, its owner kept, with the member named in its
         details (a finding of another member's names that one already): a channel as its
-        ``tensor``, a kernel as its ``node``."""
+        ``tensor``, a kernel as its ``node``. The shell member's is no node or tensor of the
+        graph: its finding is kept as it is (its message names the shell)."""
+        if name == self._composed.names.shell:
+            return finding
         return finding.about(**{"tensor" if name in self._sides else "node": name})
 
     # -- a member's answers, relative to it --------------------------------------------------
@@ -337,7 +355,8 @@ class Partition:
 
     def validity(self, name: str) -> inspection.Validity:
         """Member ``name``'s own validity inside the design space (``inspection.validity``):
-        its pieces and findings relative to it."""
+        its pieces and findings relative to it. The shell member's by its name (``shell``):
+        its budgets, each a rule of its own."""
         found = inspection.validity(self.member(name))
         pieces = tuple(
             inspection.Piece(

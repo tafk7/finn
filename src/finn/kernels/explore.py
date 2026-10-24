@@ -165,7 +165,9 @@ class Composition(Protocol):
     possible values of those asked, what is open and stored, its validity, and a change
     (``trial``); per channel the ports beside it (``neighbours``, whose paces FIFO sizing
     reads); its own statement of what it uses, where it makes one (``own_resources``); the
-    owner of each member's policies (``owner``); and the key, by owner, of a rule or a
+    owner of each member's policies (``owner``); in a shell, its shell member's name
+    (``shell``: no member, but its validity is read by its name, the shell's budgets'
+    rules); and the key, by owner, of a rule or a
     stored choice an answer about a member names (``pair``: a refused value's rules and
     the choices standing in their way, which may be another member's).
 
@@ -179,6 +181,9 @@ class Composition(Protocol):
 
     @property
     def channels(self) -> tuple[str, ...]: ...
+
+    @property
+    def shell(self) -> str | None: ...
 
     def member(self, name: str) -> Any: ...
 
@@ -1099,9 +1104,13 @@ class Seam:
         self, network: Composition, members: Iterable[str] | None = None
     ) -> dict[str, tuple[Finding, ...]]:
         """Every member whose validity is refused, with why, its findings, by name (only
-        ``members``' where named)."""
+        ``members``' where named): in a shell, the shell member's too (``Composition.shell``,
+        the shell's budgets), where none is named."""
         found: dict[str, tuple[Finding, ...]] = {}
-        for name in network.members if members is None else members:
+        names = tuple(network.members if members is None else members)
+        if members is None and network.shell is not None:
+            names = (*names, network.shell)
+        for name in names:
             why = refusal(network.validity(name))
             if why:
                 found[name] = why

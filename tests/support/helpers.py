@@ -166,16 +166,21 @@ def keyed(choices: Mapping[str, object]) -> dict[Key, object]:
 
 
 def by_hand(
-    members: Mapping[str, Facts | ChannelDeclaration], stored: Mapping[Key, object] | None = None
+    members: Mapping[str, Facts | ChannelDeclaration],
+    stored: Mapping[Key, object] | None = None,
+    *,
+    shell: Mapping[str, object] | None = None,
 ) -> Partition:
     """A partition declared by hand (``finn.kernels.partition.partition``): ``members`` in
     its module's order, each kernel by name (its ``Facts``) and each channel by the tensor
-    it carries (``channel``), its ``stored`` choices bound, by key."""
+    it carries (``channel``), its ``stored`` choices bound, by key; in a shell where
+    ``shell`` states its row's facts (``PartitionDeclaration.shell``)."""
     kernels = {name: each for name, each in members.items() if isinstance(each, Facts)}
     channels = {
         name: each for name, each in members.items() if isinstance(each, ChannelDeclaration)
     }
-    return partition(PartitionDeclaration(kernels, channels), stored, order=tuple(members))
+    declared = PartitionDeclaration(kernels, channels, shell)
+    return partition(declared, stored, order=tuple(members))
 
 
 N = TypeVar("N", bound=Partition)

@@ -21,22 +21,28 @@ from pathlib import Path
 import numpy as np
 import pytest
 from qonnx.core.modelwrapper import ModelWrapper
+from support.configure import write_raw
 from support.helpers import refused_codes
 from support.models import DOMAIN
 from support.packaging import reaches_vivado, read_back
+from support.refusals import refused
 from support.tfc import LANES, SHAPE, ULTRA96, cut, partition
 from support.xsim import requires_vivado, requires_xsim
 
 import finn.core.onnx_exec as onnx_exec
 from finn.core.graph.annotations.channel import CHANNEL, channel_choices
 from finn.core.graph.annotations.outputs import OUTPUT_INTERFACES, OUTPUT_VLNV
+from finn.core.graph.errors import KernelOpError
 from finn.core.onnx_exec import RanBy, execute_onnx
 from finn.core.rtlsim_bench import pack_lanes, stream_through
 from finn.core.rtlsim_exec import XSim
 from finn.core.rtlsim_pacing import FREE, STALLED
+from finn.core.space import Available, inspection
 from finn.custom_op.kernels.base import kernel_op
+from finn.custom_op.kernels.network import PRODUCER
 from finn.custom_op.kernels.shell import configured_network, in_shell
-from finn.kernels.explore import Ranked
+from finn.kernels.budgets import SHELL, counts
+from finn.kernels.explore import Ranked, Refused, Seam
 from finn.toolchain.launcher import host_toolchain
 from finn.transformation.kernels import ExploreKernelChoices, PackagePartition
 from finn.transformation.kernels.package import ElaboratePartition, boundary_facts
@@ -270,3 +276,63 @@ def test_tfc_w2a2_binds_the_ultra96_platform(tfc_streamlined: Path, tmp_path: Pa
     for key in adapters:
         assert "uram-absent" in refused_codes(bound, {key: "ultra"})
     assert "uram-absent" in refused_codes(bound, {f"{weights[0]}.source.ram_style": "ultra"})
+
+
+# Partitions the whole network, a few seconds.
+@pytest.mark.slow
+def test_tfc_w2a2s_partition_holds_the_zynq_shells_budgets_as_its_rules(
+    tfc_streamlined: Path, tmp_path: Path
+) -> None:
+    """TFC's partition in the Zynq shell holds the shell member (``finn.kernels.budgets``),
+    which is no kernel or channel: in no module, persisted choice or cost. Its rules are
+    the partition's: each MatMul's pumped core and each weight memory pumped are refused
+    (``viable``, a change, the seam), the shell supplying no doubled clock, a core not
+    selected never read; stored, a pumped core leaves the partition refused, by the shell
+    member (``Seam.refusals``, emission)."""
+    _, body = partition(ModelWrapper(str(tfc_streamlined)), tmp_path)
+    bound = in_shell(body, body.graph.node)
+    assert bound.shell == SHELL and SHELL not in {*bound.members, *bound.order}
+    module = bound.module_of(PRODUCER)
+    assert isinstance(module, Available)
+    assert not any(label.startswith(SHELL) for label, _ in module.value.fragment.instances)
+    assert {owner for owner, _ in bound.chosen()} <= set(bound.members)
+    assert set(Seam(ULTRA96.platform).cost(bound).cycles) == set(bound.members)
+    assert counts(bound.member(SHELL)) == Available((2, 0, False))  # its two movers' buses
+    configured_network(body, "tfc")  # within the shell's budgets
+    states = dict(bound.states())
+    chosen = bound.chosen()
+    cores = {
+        (node.name, f"compute.{case}.compute_pumping"): case == chosen[(node.name, "compute")]
+        for node in body.graph.node
+        if node.op_type == "MatMul"
+        for case in ("packed", "int8_dsp58")
+    }
+    memories = [
+        key
+        for key, state in states.items()
+        if key[1] == "source.pumped_memory" and isinstance(state, inspection.Set)
+    ]
+    assert len(cores) == 8 and len(memories) == 4  # its four weight channels' sources
+    for key, broken in bound.viable([*cores, *memories]):
+        refusing = {
+            item.value: [bound.pair(key[0], rule.rule) for rule in item.broken]
+            for item in broken.values or ()
+            if isinstance(item, inspection.Refused)
+        }
+        selected = cores.get(key, True)
+        assert refusing == ({True: [(SHELL, f"{key[0]}-clock")]} if selected else {}), key
+    first = ("MatMul_0", f"compute.{chosen[('MatMul_0', 'compute')]}.compute_pumping")
+    trial = bound.trial({first: True})
+    assert [(key, [f.code for f in found]) for key, found in trial.refused.items()] == [
+        ((SHELL, "MatMul_0-clock"), ["clock-unavailable"])
+    ]
+    changed = Seam(ULTRA96.platform).set(bound, {first: True})
+    assert isinstance(changed, Refused) and list(changed.why) == [(SHELL, "MatMul_0-clock")]
+    write_raw(body, "MatMul_0", first[1], 1)
+    pumped = in_shell(body, body.graph.node)
+    found = Seam(ULTRA96.platform).refusals(pumped)
+    assert {name: [f.code for f in why] for name, why in found.items()} == {
+        SHELL: ["clock-unavailable"]
+    }
+    with refused("clock-unavailable", error=KernelOpError, owner="MatMul_0-clock"):
+        configured_network(body, "tfc")

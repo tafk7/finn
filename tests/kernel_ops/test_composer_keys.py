@@ -9,7 +9,7 @@ Each choice FINN names by its pair (owner, key), the owner a graph name (every D
 every member of the shell's network, applicable or not, and every choice it stores), is a
 path of the composed class (``Names.path``), and the path's pair is the pair again
 (``Names.pair``); the class's choices are exactly those paths. Each root member maps back
-to its member's fact (``Names.roots``)."""
+to its member's fact (``Names.roots``), the shell's row's facts to the shell member's."""
 
 from __future__ import annotations
 
@@ -19,7 +19,8 @@ from support.models import mlp
 from finn.core.graph.annotations.platform import read_target
 from finn.core.space import inspection
 from finn.custom_op.kernels.network import declaration
-from finn.custom_op.kernels.shell import in_shell, make_cut_choices
+from finn.custom_op.kernels.shell import in_shell, make_cut_choices, row_facts
+from finn.kernels.budgets import SHELL
 from finn.kernels.composer import Composed, compose
 from finn.platform.resolve import resolve_target
 from finn.platform.shells import shell_row
@@ -31,9 +32,8 @@ def _round_trip(model: ModelWrapper) -> tuple[Composed, int]:
     composed partition and the number of pairs."""
     nodes = list(model.graph.node)
     target = read_target(model)
-    composed = compose(
-        declaration(model, nodes, movers=shell_row(target.shell, target.board).movers)
-    )
+    row = shell_row(target.shell, target.board)
+    composed = compose(declaration(model, nodes, movers=row.movers, shell=row_facts(row)))
     names = composed.names
     network = in_shell(model, nodes)
     stored = network.chosen()
@@ -47,6 +47,8 @@ def _round_trip(model: ModelWrapper) -> tuple[Composed, int]:
         assert names.path(names.pair(path)) == path
     for root, (owner, fact) in names.roots.items():
         assert names.root(owner, fact) == root
+    assert names == network.composed.names and names.shell == SHELL
+    assert {fact for owner, fact in names.roots.values() if owner == SHELL} == set(row_facts(row))
     return composed, len(set(pairs))
 
 

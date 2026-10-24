@@ -342,12 +342,25 @@ def test_two_graph_names_of_one_member_name_are_refused(cache: None) -> None:
         ("", "name-invalid"),
         ("root", "name-reserved"),
         ("query", "name-reserved"),
+        ("shell", "name-reserved"),
         ("__init__", "name-reserved"),
     ],
 )
 def test_a_name_no_member_can_take_is_refused(cache: None, name: str, code: str) -> None:
     found = _refused(declared({"activate": name}))
     assert [(each[0], each[1]) for each in found] == [(code, name)]
+
+
+def test_a_channel_named_as_the_shell_member_is_refused_in_a_shell_or_not(cache: None) -> None:
+    """``shell`` is the name of a partition's shell member (``finn.kernels.budgets``): no
+    kernel (above) or channel takes it, whether the partition is in a shell or not."""
+    named = {("shell" if name == "hidden" else name): each for name, each in channels().items()}
+    row = {"shell": "ip", "control_budget": None, "memory_ports": None, "clk2x": True}
+    for shell in (None, row):
+        found = _refused(PartitionDeclaration(kernels(), named, shell))
+        assert found == [
+            ("name-reserved", "shell", "shell: shell is the name of a partition's shell member")
+        ]
 
 
 def test_a_graph_name_s_member_name_is_its_node_and_its_keys_map_both_ways(cache: None) -> None:

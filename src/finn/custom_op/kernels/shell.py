@@ -3,18 +3,19 @@
 
 """A partition in its shell (``InShell``, bound by ``in_shell``): the partition of its
 KernelOps (``finn.custom_op.kernels.network``) with the movers the row of the model's
-target's shell offers (``finn.platform.shells.shell_row``) on its boundary channels, and
-the shell as functions over it, over its netlist (``Partition.netlist``: the module's
-buses counted without building the module, ``finn.platform.shells.bus_counts``) and its
-channels' mover contracts.
+target's shell offers (``finn.platform.shells.shell_row``) on its boundary channels and
+the row's budgets as rules of its own, and the shell as functions over it, over its netlist
+(``Partition.netlist``: the module's buses counted without building the module,
+``finn.platform.shells.bus_counts``) and its channels' mover contracts.
 
-- **budgets** (``budget_refusal``, by the row's ``finn.platform.shells.budgets``):
-  the AXI-Lite buses the module presents and its movers present (each mover's contract,
-  ``MOVER``) within the row's ``control_budget``, and the AXI memory ports the module
-  initiates within its ``memory_ports``, each refused as ``interface-budget-exceeded``;
-  a module that takes an aligned doubled clock needs a row that supplies one
-  (``clk2x``), refused as ``clock-unavailable``. The ``ip`` row bounds neither count.
-  Of the configured netlist, so a network is within them once it is decided;
+- **budgets**, rules of the partition (its shell member, ``finn.kernels.budgets``, given
+  the row's facts, ``row_facts``): the AXI-Lite buses its kernels present and its movers
+  present within the row's ``control_budget``, and the memory ports its kernels initiate
+  within its ``memory_ports``, each refused as ``interface-budget-exceeded``; a member
+  that takes the doubled clock needs a row that supplies one (``clk2x``), refused as
+  ``clock-unavailable``. The ``ip`` row bounds neither count. Each reads the members'
+  derived values, so a value that breaks one is refused in the partition, where the seam,
+  the cut and emission read it;
 - **resources** (``shell_resources``; ``InShell.own_resources``, which the seam reads):
   the sum of its members' own statements (``Partition.own_resources``), each mover's (its
   contract's) and its row's static region's, at the memory ports and AXI-Lite buses it
@@ -24,7 +25,8 @@ channels' mover contracts.
 
 ``configured_network`` is a partition as emission builds it (``Configured``: the
 partition, its module and its cycles a frame), bound only: a stored choice it dropped as
-stale, a rule its stored choices break, a choice left open, refuse it, named.
+stale, a rule its stored choices break (a member's, or a budget of its shell's), a choice
+left open, refuse it, named.
 ``verify_partition`` is the one
 check of its FIFOs against their streams before emission (a strategy may call the seam's
 check too, ``Seam.check_fifos``), and records the design it verified on the body; emission
@@ -54,6 +56,7 @@ from finn.core.space import Available, Inapplicable, QueryResult, Rejected, insp
 from finn.custom_op.kernels.network import PARTITION, PRODUCER, _network, persist, stale_text
 from finn.kernels.artifacts.module import Composed
 from finn.kernels.base import CYCLES
+from finn.kernels.budgets import SHELL
 from finn.kernels.composer import Key
 from finn.kernels.configure import refusal
 from finn.kernels.explore import FifoCheck, Seam, dotted
@@ -62,7 +65,7 @@ from finn.kernels.partition import Partition, _together
 from finn.kernels.policies import Required, policy
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
-from finn.platform.shells import ShellRow, budgets, bus_counts, shell_row
+from finn.platform.shells import ShellRow, bus_counts, shell_row
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
@@ -86,7 +89,8 @@ class ShellResources:
 
 class InShell(Partition):
     """A partition in its shell (``in_shell``): its shell's ``row``, whose movers its
-    boundary channels were offered. What it uses (``own_resources``, which the seam reads)
+    boundary channels were offered and whose budgets are its shell member's rules (its
+    facts, ``row_facts``). What it uses (``own_resources``, which the seam reads)
     is the shell's: its members', its movers' and its static region's sum
     (``shell_resources``). Immutable, as a partition: a change returns another, which keeps
     its row."""
@@ -106,12 +110,24 @@ class InShell(Partition):
         return Available(found.value.total) if isinstance(found, Available) else _together([found])
 
 
+def row_facts(row: ShellRow) -> dict[str, object]:
+    """The facts of ``row`` a partition in its shell holds (``finn.kernels.budgets.ShellBudgets``):
+    the shell's name and its budgets, as the row states them."""
+    return {
+        "shell": row.shell,
+        "control_budget": row.control_budget,
+        "memory_ports": row.memory_ports,
+        "clk2x": row.clk2x,
+    }
+
+
 def in_shell(model: ModelWrapper, nodes: Iterable[NodeProto], *, name: str = PARTITION) -> InShell:
     """The partition of ``nodes``, KernelOp nodes of ``model`` (``network``), in the shell of
-    the model's target: its row (``shell_row``) offers its movers on the boundary channels."""
+    the model's target: its row (``shell_row``) offers its movers on the boundary channels,
+    and its budgets are the partition's rules (``row_facts``)."""
     target = read_target(model)
     row = shell_row(target.shell, target.board)
-    return _network(model, list(nodes), name, row.movers, partial(InShell, row=row))
+    return _network(model, list(nodes), name, row.movers, partial(InShell, row=row), row_facts(row))
 
 
 # -- the shell, as functions over the partition --------------------------------------------
@@ -140,18 +156,6 @@ def _mover_contracts(network: InShell) -> QueryResult[tuple[tuple[str, MoverCont
     if waiting:
         return _together(waiting)
     return Available(tuple(found))
-
-
-def budget_refusal(network: InShell) -> tuple[Finding, ...]:
-    """Why the shell refuses ``network`` (its ``budgets``, of its netlist's ``bus_counts``
-    and its movers' AXI-Lite buses): its findings, none where it is within them or not
-    decided far enough to say."""
-    buses = _buses(network)
-    contracts = _mover_contracts(network)
-    if not isinstance(buses, Available) or not isinstance(contracts, Available):
-        return ()
-    movers = sum(contract.control_buses for _, contract in contracts.value)
-    return budgets(network.row, buses.value, movers)
 
 
 def _resources(network: InShell) -> QueryResult[ShellResources]:
@@ -197,8 +201,8 @@ def _resources(network: InShell) -> QueryResult[ShellResources]:
 @dataclass(frozen=True)
 class Configured:
     """A partition's network as emission builds it (``configured_network``): every choice
-    in play stored, none open, within its shell's budgets; its ``module`` and its
-    ``cycles`` a frame, its slowest member's."""
+    in play stored, none open, within its shell's budgets (its shell member's rules); its
+    ``module`` and its ``cycles`` a frame, its slowest member's."""
 
     network: InShell
     module: Composed
@@ -239,13 +243,14 @@ def configured_network(
     required one no strategy set ("required: run step_size_fifos or
     step_placeholder_choices"), any other one never set ("not set: the cut,
     MakeCutChoices, or a strategy sets it"; one finding, ``choices-open``); a partition
-    over the shell's budgets (``budget_refusal``), or whose module or cycles its members
-    refuse, or a member's validity refuses (a rule its stored choices break, which the bind
-    binds: "refused by its members", each finding naming its member); or graph inputs and
-    outputs out of port order refuse, named. A dormant choice (stored under a case not
-    selected) is not open, and refuses nothing. It only binds: it does not check the FIFOs
-    against their streams (``verify_partition`` does), so a simulation can run a FIFO the
-    model calls too small."""
+    over the shell's budgets (its shell member's validity: "refused by the <shell> shell",
+    each broken budget a finding), or whose module or cycles its members refuse, or a
+    member's validity refuses (a rule its stored choices break, which the bind binds:
+    "refused by its members", each finding naming its member); or graph inputs and outputs
+    out of port order refuse, named. A dormant choice (stored under a case not selected) is
+    not open, and refuses nothing. It only binds: it does not check the FIFOs against their
+    streams (``verify_partition`` does), so a simulation can run a FIFO the model calls too
+    small."""
     bound = in_shell(model, model.graph.node)
     if bound.stale:
         keys = tuple(bound.stale)
@@ -303,7 +308,7 @@ def configured_network(
                 ),
             ),
         )
-    over_budget = budget_refusal(bound)
+    over_budget = refusal(bound.validity(SHELL))
     if over_budget:
         raise KernelOpError(
             f"{label}: refused by the {bound.row.shell!r} shell: "
@@ -527,10 +532,10 @@ __all__ = [
     "InShell",
     "ShellResources",
     "make_cut_choices",
-    "budget_refusal",
     "configured_network",
     "in_shell",
     "refuse_unverified",
+    "row_facts",
     "shell_resources",
     "verify_partition",
 ]

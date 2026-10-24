@@ -84,13 +84,15 @@ def test_stage_7s_chain_of_eight_kernels_reads_alike_in_any_order_its_scopes_are
     whole = chain_class()
     assert_reads_alike([whole])
     templates = reached(link_template(whole))
-    # Fifteen classes, and the composite (a port is a declaration of its kernel, no class).
-    assert len(templates) == 16
+    # Fifteen classes, the shell member's (its budgets, in its shell) and the composite (a
+    # port is a declaration of its kernel, no class).
+    assert len(templates) == 17
     # A channel's source and mover are placements: compiled where their guard's formal is
     # not supplied too (their members inapplicable there), so each of the 9 channels
     # without a value has its source's scope, and each of the 13 its mover's, where the
-    # one-case selectors compiled none; a direct transport places none.
-    assert len(compile_model(whole).scopes.ordered()) == 225
+    # one-case selectors compiled none; a direct transport places none. The shell member
+    # is one scope more.
+    assert len(compile_model(whole).scopes.ordered()) == 226
 
 
 def _answers_as_the_line(classes: list[type[Space]]) -> int:

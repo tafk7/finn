@@ -126,6 +126,9 @@ VERDICTS: dict[str, Verdict] = {
     "int": Verdict("always", "a plain type"),
     "str": Verdict("always", "a plain type"),
     "float": Verdict("always", "a plain type"),
+    "budget": Verdict(
+        "always", "semantics comparing by ==: an int or None (a shell's budget), plain types"
+    ),
     "tuple": Verdict(
         "always",
         "item by item: a pair of ints (a dot product's result range), mover offers (value "
@@ -225,6 +228,7 @@ def made() -> dict[str, tuple[object, ...]]:
     eight, four = stage_tensor(8), stage_tensor(8, words=4)
     return {
         "float": (0.0, -0.0, 0.5, 1.0),
+        "budget": (None, 0, 9, 9),
         "tuple": (
             (-3, 4),
             (0, 7),
@@ -683,8 +687,11 @@ def test_finns_value_semantics_compare_by_eq_and_are_trusted() -> None:
 BEFORE: dict[str, Callable[[Any, Any], bool]] = {
     "QONNXDataType": lambda left, right: left is right,
     "integer tensor": lambda left, right: left is right or tensor_of(left) == tensor_of(right),
+    # A shell's budget (finn.kernels.budgets): an int or None, by == since it was made.
+    "budget": operator.eq,
 }
-"""The ``equal`` of each semantics that now compares by ``operator.eq``, as it was before."""
+"""The ``equal`` of each semantics that now compares by ``operator.eq``, as it was before
+(a semantics made comparing by ``==``, that)."""
 
 
 def tensor_of(value: object) -> IntegerTensorValue:

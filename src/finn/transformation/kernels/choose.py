@@ -25,9 +25,9 @@ and nothing fills a value in but a strategy):
   within its idle time, named with why and left open, a required choice FIFO sizing sizes
   again), and the build checks once, before emission (``verify_partition``,
   ``finn.custom_op.kernels.shell``);
-- refuses a network a member's validity refuses (``Seam.refusals``) or over its shell's
-  budgets (``budget_refusal``: its AXI-Lite buses, memory ports and doubled clock against
-  the shell's row), by name (a ``KernelOpError`` carrying their findings);
+- refuses a network a member's validity refuses (``Seam.refusals``), its shell's budgets
+  among them (its shell member's rules: its AXI-Lite buses, memory ports and doubled clock
+  against the shell's row), by name (a ``KernelOpError`` carrying their findings);
 - persists every value of the network where it is stated, each owner's whole
   (``persist``): a kernel's on its node, a channel's on its tensor (``finn.channel``);
   a required choice no strategy set stays open, and emission refuses it by name
@@ -117,7 +117,6 @@ from finn.custom_op.kernels.network import persist, stale_text
 from finn.custom_op.kernels.shell import (
     InShell,
     ShellResources,
-    budget_refusal,
     in_shell,
     shell_resources,
 )
@@ -540,13 +539,6 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
             findings=tuple(
                 network.located(name, finding) for name, why in refused.items() for finding in why
             ),
-        )
-    over_budget = budget_refusal(network)
-    if over_budget:
-        raise KernelOpError(
-            f"the explored point is refused by the {network.row.shell!r} shell: "
-            + "; ".join(map(str, over_budget)),
-            findings=over_budget,
         )
     persist(model, network)
     if seam.held:
