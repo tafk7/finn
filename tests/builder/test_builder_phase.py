@@ -1290,7 +1290,7 @@ def test_sizing_fifos_on_tfc_places_none_and_changes_no_choice(
 ) -> None:
     """On TFC, sizing the FIFOs changes no choice: a size_fifos entry after a target_throughput
     one proposes ``direct`` for every channel, says why, and leaves every value as the target
-    alone builds them (TFC's configuration: the target throughput and FIFO sizing)."""
+    alone builds them (TFC's build: the target throughput and FIFO sizing)."""
     explored: dict[str, Any] = {}
     for name, strategies in (
         ("sized", [TFC_FPS, "size_fifos"]),
