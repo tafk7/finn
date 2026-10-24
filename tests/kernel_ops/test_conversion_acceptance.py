@@ -407,7 +407,7 @@ def test_only_a_port_that_is_not_placed_is_skipped_by_the_stream_check() -> None
     converted, _ = convert(multithreshold())
     op = kernel_op(converted, converted.graph.node[0])
     point = op.point()
-    known = point.query(type(point).input_side)
+    known = point.query(cast(Any, type(point)).input_side)
     assert isinstance(known, Available)
     waits = Unresolved(reject("decision-unassigned", "pe is open", owner="pe").findings)
     refused = reject("channel-form", "no form", owner="x")
