@@ -312,7 +312,9 @@ def stated_pattern(pace: BeatTimes | Steady, beats: int) -> Pattern:
     expanded to ``(0, k, ..., (beats - 1) k)`` over ``beats * k``. This is the one place a
     ``Steady`` is expanded: everything else keeps the shorthand as given (``Side.outside``,
     ``interface.json`` and any report). ``NotModelled`` where the stated beat times are not
-    one a beat of the edge's."""
+    one a beat of the edge's: a build's beat times state their lanes and passes, and the
+    cut refuses a count they do not make of the port's tensor, so only a side built by
+    hand reaches it."""
     if isinstance(pace, Steady):
         every = pace.every
         return Pattern(tuple(range(0, beats * every, every)), beats * every)
@@ -381,6 +383,17 @@ def sides(channel: Channel, neighbours: Neighbours) -> tuple[Pattern, Acceptance
     return supply, Buffered(nest_buffer(module.frame, module.dims, module.coefs), consumer)
 
 
+def _within_period(channel: Channel, supply: Pattern, period: int) -> None:
+    """``NotModelled`` where the outside's stated pace supplies the channel slower than the
+    bottleneck ``period``: the period is its members' cycles a frame, which a stated pace
+    is not one of, so no depth keeps a producer that slow on time."""
+    if supply.beats > period and channel.sides.producer.kind is SideKind.BOUNDARY:
+        raise NotModelled(
+            f"a boundary's stated pace spans {supply.beats} cycles a frame, more than the "
+            f"bottleneck's {period}: not modelled"
+        )
+
+
 @dataclass(frozen=True)
 class Sized:
     """One channel's proposal and why: ``depth`` 0 is ``direct``. ``least`` is the
@@ -410,10 +423,12 @@ def size(
     """``channel``'s FIFO at the bottleneck ``period``, between the ports beside it
     (``neighbours``): the least DEPTH whose storage holds the least words plus ``margin``
     (``least_depth_holding``: a FIFO of two words or more), or direct where none is
-    needed, none helps, or the sides are not modelled."""
+    needed, none helps, or the sides are not modelled (a boundary's stated pace slower
+    than the period among them)."""
     word_bits = channel.arriving.form.lanes * channel.tensor.element.bits
     try:
         supply, accept = sides(channel, neighbours)
+        _within_period(channel, supply, period)
     except NotModelled as error:
         return Sized(0, str(error), word_bits)
     least = least_depth(supply, accept, period)
@@ -432,6 +447,7 @@ def holds(channel: Channel, neighbours: Neighbours, period: int, words: int) -> 
     the test ``size`` sizes it by, at the words it holds. ``NotModelled`` where the model
     does not read its sides (``sides``)."""
     supply, accept = sides(channel, neighbours)
+    _within_period(channel, supply, period)
     return keeps(supply, accept, period, words)
 
 

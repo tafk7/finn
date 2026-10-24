@@ -163,6 +163,19 @@ def test_an_ip_partition_is_sized_from_the_paces_its_build_states(tmp_path: Path
     }
 
 
+def test_a_stated_pace_slower_than_the_bottleneck_is_not_modelled(tmp_path: Path) -> None:
+    """The Chain's bottleneck is 12 cycles a frame; an input stated a beat every third
+    cycle spans 18 over its six beats. The period counts its members' cycles, not the
+    outside's pace, so sizing says it does not model it rather than size against it."""
+    cut(tmp_path, {"s_axis_0": {"pace": {"every": 3}}})
+    assert sized(tmp_path)["x"] == (
+        0,
+        None,
+        "a boundary's stated pace spans 18 cycles a frame, more than the bottleneck's 12: "
+        "not modelled",
+    )
+
+
 def test_stated_lanes_place_a_width_step_and_the_port_takes_the_stated_word(
     tmp_path: Path,
 ) -> None:
