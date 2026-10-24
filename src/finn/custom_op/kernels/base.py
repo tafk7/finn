@@ -603,14 +603,17 @@ class KernelOp(CustomOp):
         """The tensor of each of this node's input channels, by port."""
         return {port: tensor for port, tensor in zip(self.ports, self.onnx_node.input) if port}
 
-    def streamed(self, point: KernelSpace) -> tuple[tuple[str, Side, bool], ...]:
+    def streamed(
+        self, point: KernelSpace
+    ) -> tuple[tuple[str, Side | tuple[Finding, ...], bool], ...]:
         """Each streamed port of this node at ``point``, its kernel's design space: the
         tensor it carries, by graph name, the side it gives a channel (its kernel's
-        ``<p>_side``, labelled below the node's name), and whether it is an output; its
-        inputs first, in port order. A streamed port is an AXIS one: not a parameter port
-        whose initializer the node holds (its channel's source feeds it), nor an input read
-        as an argument. A port ``point`` does not place is none, and so is one whose side
-        ``point`` does not know (its kernel's validity says why)."""
+        ``<p>_side``, labelled below the node's name) or, where ``point`` does not know that
+        side (it waits on a choice, or its kernel refuses it), the side's findings, and
+        whether it is an output; its inputs first, in port order. A streamed port is an AXIS
+        one: not a parameter port whose initializer the node holds (its channel's source
+        feeds it), nor an input read as an argument. A port ``point`` does not place is
+        none."""
         model, node = self.model(), self.onnx_node
         held = set(self.owned())
         found = [
@@ -619,12 +622,14 @@ class KernelOp(CustomOp):
             if port not in held and initializer(model, tensor) is None
         ]
         found += [(port, tensor, True) for port, tensor in zip(self.outputs, node.output)]
-        sides: list[tuple[str, Side, bool]] = []
+        sides: list[tuple[str, Side | tuple[Finding, ...], bool]] = []
         for port, tensor, output in found:
             name = self.wiring[port].contract.removesuffix("_contract")
             answer = point.query(getattr(type(point), f"{name}_side"))
             if isinstance(answer, Available) and isinstance(answer.value, Side):
                 sides.append((tensor, answer.value.under(self.label), output))
+            elif isinstance(answer, (Rejected, Unresolved)):
+                sides.append((tensor, answer.findings, output))
         return tuple(sides)
 
     def owned(self) -> dict[str, str]:

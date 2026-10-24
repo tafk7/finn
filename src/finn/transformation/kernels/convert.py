@@ -16,7 +16,9 @@ feeds) is checked against the open AXIS boundary it would meet
 (``finn.kernels.channels.open_boundary_refusal``): a channel with the stream on one side
 and the boundary, unstated, on the other, its own policies applied once, refused where its
 validity is (no chain of modules joins them) or a choice of it can take no value. It is no
-rule of the kernel, so the kernel's policies do not steer around it. The first match whose
+rule of the kernel, so the kernel's policies do not steer around it. A port the kernel does
+not place is not checked; one whose side the kernel's point does not know (it waits on a
+choice, or the kernel refuses it) is refused with the side's findings. The first match whose
 kernel takes every value and whose streams each meet the boundary replaces the nodes it
 covers with one KernelOp, which keeps the anchor's name and the covered nodes' outside
 tensors, and its choices are the values its policies set, written once
@@ -24,9 +26,10 @@ tensors, and its choices are the values its policies set, written once
 The check's channels are dropped: a partition's channels are made at the cut. A node that
 no match converts stays on the host, unchanged, with why: its kernel refused on its facts
 alone, a choice no value can be set for (``choice-no-valid-value``), each value's refusal
-among the findings, or a stream no chain joins, the check channel's findings, each about
-its tensor. Two KernelOps matching the same nodes is an authoring error: one computation
-is one KernelOp, its alternatives a decision of its kernel.
+among the findings, or a stream no chain joins or whose side is not known, the check
+channel's or the side's findings, each about its tensor. Two KernelOps matching the same
+nodes is an authoring error: one computation is one KernelOp, its alternatives a decision of
+its kernel.
 
 A match of several nodes must be convex and must not hide a tensor that something
 outside it reads (``match-not-convex``, ``match-interior-exposed``). Nodes it depends on
@@ -354,13 +357,18 @@ def _streams(model: ModelWrapper, node: NodeProto, point: KernelSpace) -> tuple[
     """Conversion's stream check: why a stream of ``node``'s kernel at ``point`` (its
     defaults) meets no open AXIS boundary (``finn.kernels.channels.open_boundary_refusal``),
     each streamed port's (``KernelOp.streamed``) on its tensor, as ``model`` states it;
-    empty where every one does."""
+    empty where every one does. A port whose side ``point`` does not know (it waits on a
+    choice, or its kernel refuses it) is refused with the side's findings; one it does not
+    place is not checked."""
     op = kernel_op(model, node)
     platform = read_target(model).platform
     found: list[Finding] = []
     for tensor, side, output in op.streamed(point):
-        carried = edge_tensor(model, tensor, op.label)
-        refused = open_boundary_refusal(side, carried, platform, output=output)
+        if isinstance(side, tuple):  # the port's side is not known at ``point``
+            refused = side
+        else:
+            carried = edge_tensor(model, tensor, op.label)
+            refused = open_boundary_refusal(side, carried, platform, output=output)
         found += (finding.about(tensor=tensor) for finding in _flat(refused))
     return tuple(dict.fromkeys(found))
 
