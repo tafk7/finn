@@ -4,8 +4,9 @@
 
 A change that sets a new value is refused when the configuration it would publish holds a
 false piece of validity through an origin it was not false through before: a constraint
-false on its own values, a derived value or a view's body refusing on its own values, a
-choice whose listed domain lists no value. The refusal names the origin (never a guard,
+false on its own values, a derived value refusing on its own values (where a rule reads it),
+a choice whose listed domain lists no value. A view's refusal is no origin: no rule reads
+a view. The refusal names the origin (never a guard,
 never a rule false only through a refused input) and the stored choices standing in its
 way: those the origin reads that the change does not name, never what decides whether
 the origin, or what it reads, exists. A change of clears alone is never refused.
@@ -396,60 +397,22 @@ class Stage(Space):
 
 
 class Line(Space):
+    """A stage whose view nothing reads: a view is read out."""
+
     stage = Stage()
 
-    @constraint
-    def paced(self) -> bool:
-        return self.stage.beats >= 4
 
-
-def test_a_views_body_refusing_on_its_own_values_is_an_origin() -> None:
+def test_a_views_body_refusing_on_its_own_values_refuses_no_change() -> None:
+    """The view answers refused, and no rule reads it, so no change is refused for it (it
+    was an origin while a constraint could read a view)."""
     point = design_space(Line())
-    assert broken(point.try_with_choices({Line.stage.lanes: 3})) == [("stage.beats", ())]
+    assert point.try_with_choices({Line.stage.lanes: 3}).accepted
+    refused = point.with_choices({Line.stage.lanes: 3})
+    assert isinstance(refused.query(Line.stage.beats), Rejected)
     assert point.with_choices({Line.stage.lanes: 2}).stage.beats == 4
 
 
 # -- clears, and what a published configuration keeps ------------------------------------
-
-
-class Child(Space):
-    k: int = Decision(values=(1, 2))
-
-    @constraint
-    def own(self) -> bool:
-        return self.k == 1
-
-    @view
-    def out(self) -> int:
-        return 10
-
-
-class Parent(Space):
-    limit: int = Param()
-    other: int = Decision(values=(1, 2))
-    child = Child()
-
-    @constraint
-    def under(self) -> bool:
-        return self.child.out <= self.limit
-
-
-def test_a_change_of_clears_alone_is_never_refused() -> None:
-    # Built directly with the child refused, its view refuses with it, and the parent's
-    # rule is false only through that view: no origin of its own.
-    masked = built(design_space(Parent(limit=5)), {"child.k": 2, "other": 1})
-    assert held_pairs(masked) == {("child.own", "child.own")}
-    # Clearing ``k`` reopens the child: the view answers, and ``under`` is false at its own
-    # origin. A clear only removes information: accepted, and the configuration reads
-    # refused, naming the rule it revealed.
-    cleared = masked.with_choices(masked.child.field(Child.k).clear())
-    assert held_pairs(cleared) == {("under", "under")}
-    # A commit repeating the value stored sets nothing: still clears alone.
-    again = masked.try_with_choices(masked.child.field(Child.k).clear(), other=1)
-    assert again.accepted
-    # A new value beside the clear is judged: the revealed rule refuses it.
-    moved = masked.try_with_choices(masked.child.field(Child.k).clear(), other=2)
-    assert broken(moved) == [("under", ())]
 
 
 class Budget(Space):

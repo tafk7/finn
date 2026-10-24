@@ -13,10 +13,10 @@ with the pieces that are not true and their owners.
 
 A view is a product: it refuses when its output or its Space is refused, answers while
 its Space is open, and an inactive view answers ``Inapplicable`` without reading its
-Space's validity. A constraint reads values; one that reads a view of its own Space, or
-of an ancestor, closes a dependency cycle. An export may name a derived value, which a
-holder reads as the value whatever the exporting Space's validity. A value is possible
-unless a rule it reaches refuses it (``inspection.viable``), and a value set is checked
+Space's validity. A constraint reads values; one that reads a view is refused at compile
+(``view-read-in``). An export may name a derived value, which a holder reads as the value
+whatever the exporting Space's validity; a holder reading a view export is a view. A value is
+possible unless a rule it reaches refuses it (``inspection.viable``), and a value set is checked
 against the choice's own domain, over the facts. A state describes the commitment, a
 read the answer: every stored choice is committed with its stored value, whether it
 reads as its value, waits, or is dormant.
@@ -26,7 +26,6 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-import pytest
 from support.refusals import refused
 from support.space_cores import built, commit
 
@@ -35,7 +34,7 @@ from finn.core.space import (
     Available,
     Decision,
     DecisionState,
-    EvaluationError,
+    DefinitionError,
     Inapplicable,
     Members,
     Param,
@@ -332,24 +331,16 @@ class Port(Space):
 
 
 class Leaf(Space):
-    """A leaf whose output port's tensor follows the extents its ports' accesses give: a
-    loop through the output port's validity, cut by its guard (an initiator does not bind)."""
+    """A leaf with two ports: the initiator's ``access`` is inactive (an initiator does not
+    bind)."""
 
     x = Port(binds=True, tensor=1)
-    y = Port(binds=False)
-    accesses = Members(ACCESS)
-
-    @derived
-    def extents(self) -> int:
-        return sum(member.value for member in self.accesses)
-
-    y.tensor = extents
+    y = Port(binds=False, tensor=1)
 
 
 def test_an_inactive_view_answers_inapplicable_and_never_reads_its_spaces_validity() -> None:
     point = design_space(Leaf())
     assert inspection.validity(point).status == "valid"
-    assert point.extents == 4
     ds = occurrence.held(point).ds
     model = ds.model
     access = model.resolve(point.y._scope, Port.access)
@@ -361,31 +352,39 @@ def test_an_inactive_view_answers_inapplicable_and_never_reads_its_spaces_validi
     assert validity not in read
     assessment = point.y.inspect(Port.access)
     assert assessment.validity == Inapplicable()
+    # The bound port's view answers, and reads its Space's validity.
+    assert point.x.access == 4
 
 
-def test_the_same_loop_with_the_guard_holding_is_a_dependency_cycle() -> None:
-    class Bound(Space):
-        x = Port(binds=True, tensor=1)
-        y = Port(binds=True)
-        accesses = Members(ACCESS)
+def test_a_derived_value_reading_the_accesses_is_view_read_in_whether_or_not_they_bind() -> None:
+    """The output port's tensor follows the extents its ports' accesses give: a loop through
+    the output port's validity, once cut by an initiator's inactive guard. A derived value
+    reading the accesses (views) is refused ``view-read-in`` at compile, the guard
+    holding or not."""
+    for binds in (False, True):
 
-        @derived
-        def extents(self) -> int:
-            return sum(member.value for member in self.accesses)
+        class Looped(Space):
+            x = Port(binds=True, tensor=1)
+            y = Port(binds=binds)
+            accesses = Members(ACCESS)
 
-        y.tensor = extents
+            @derived
+            def extents(self) -> int:
+                return sum(member.value for member in self.accesses)
 
-    with pytest.raises(EvaluationError, match="dependency cycle") as caught:
-        inspection.validity(design_space(Bound()))
-    path = str(caught.value)
-    for step in ("y.$validity", "y.admitted", "extents", "y.access"):
-        assert step in path, path
+            y.tensor = extents
 
-
-# -- a rule that reads a view: a dependency cycle --------------------------------------
+        with refused("view-read-in", error=DefinitionError, owner="extents"):
+            design_space(Looped())
 
 
-def test_a_constraint_reading_a_view_of_its_own_space_is_a_cycle_naming_its_path() -> None:
+# -- a rule that reads a view: refused at compile ---------------------------------------
+
+
+def test_a_constraint_reading_a_view_of_its_own_space_is_view_read_in() -> None:
+    """Once a dependency cycle through the Space's validity, found when the first change met
+    it; now refused at compile, naming the rule and the view."""
+
     class Storage(Space):
         depth: int = Decision(values=(2, 4))
 
@@ -397,16 +396,11 @@ def test_a_constraint_reading_a_view_of_its_own_space_is_a_cycle_naming_its_path
         def capacity_supported(self) -> bool:
             return self.storage <= 32
 
-    # The change that sets ``depth`` reads the root's validity, and meets the cycle there.
-    with pytest.raises(EvaluationError, match="dependency cycle") as caught:
-        design_space(Storage()).with_choices(depth=2)
-    assert caught.value.role == "dependency cycle"
-    assert caught.value.detail == (
-        "$validity (validity) -> capacity_supported (constraint) -> storage (view) -> $validity"
-    )
+    with refused("view-read-in", error=DefinitionError, owner="capacity_supported", view="storage"):
+        design_space(Storage())
 
 
-def test_a_childs_constraint_reading_its_parents_view_through_a_formal_is_a_cycle() -> None:
+def test_a_childs_constraint_reading_its_parents_view_through_a_formal_is_view_read_in() -> None:
     class Child(Space):
         width: int = Param()
 
@@ -423,11 +417,11 @@ def test_a_childs_constraint_reading_its_parents_view_through_a_formal_is_a_cycl
 
         child = Child(width=cast(int, carried))
 
-    with pytest.raises(EvaluationError, match="dependency cycle") as caught:
-        design_space(Parent()).with_choices(lanes=1)
-    assert "carried" in str(caught.value) and "child.narrow" in str(caught.value)
+    # The binding reads the view: refused at the root, naming the formal and the view.
+    with refused("view-read-in", error=DefinitionError, owner="child.width", view="carried"):
+        design_space(Parent())
 
-    # Reading a derived value instead, which the view presents, is no cycle.
+    # Reading the derived value the view presents instead is accepted.
     class Rewritten(Space):
         lanes: int = Decision(values=(1, 2))
 
@@ -478,7 +472,7 @@ class Holder(Space):
     def total_width(self) -> int:
         return sum(member.value for member in self.widths)
 
-    @derived
+    @view
     def total_cost(self) -> int:
         return sum(member.value for member in self.costs)
 
