@@ -160,7 +160,11 @@ def test_the_chain_composed_answers_by_key_as_its_partition(cache: None) -> None
     assert inspection.validity(point).status == "valid"
     states = {names.pair(path): state for path, state in inspection.states(point)}
     assert states == dict(network.states())
-    # The partition's decisions are its class's, listed or not (the model's).
+    # The partition's decisions are its class's, listed or not (the model's). Nearly a
+    # tautology: ``Partition.decisions`` is built from the same call, so this pins the
+    # keys' mapping (``Names.pair``) and the member set, not the choice of the call. That
+    # the model's decisions are more than the design space lists is shown by
+    # ``test_channel_source.test_a_channel_without_contents_lists_none_of_its_sources_choices``.
     every = inspection.decisions(inspection.model(point))
     assert {names.pair(item.key) for item in every} == set(network.decisions())
 
