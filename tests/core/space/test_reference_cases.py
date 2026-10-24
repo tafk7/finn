@@ -1104,11 +1104,11 @@ def test_a_guard_the_facts_refuse_or_a_choice_decides_is_no_pruning() -> None:
     pair.check_state("opted.y")
 
 
-# A selector picked by a derived value over facts alone (lane 3's ``input_chain``) is the rule's
-# widest reach: under the facts alone it names one case, so the choices of every other case are
-# pruned. ``adapter`` is picked by ``chain`` over ``mode`` (0: ``fifo``, 1: ``reg``, 2 refuses);
-# ``other`` by ``side`` over the choice ``pe``, which waits under the facts alone, so its cases stay
-# listed, as ``adapter``'s do where ``chain`` refuses.
+# A selector picked by a derived value over facts alone (the channel kernel's ``input_chain``) is
+# the rule's widest reach: under the facts alone it names one case, so the choices of every other
+# case are pruned. ``adapter`` is picked by ``chain`` over ``mode`` (0: ``fifo``, 1: ``reg``, 2
+# refuses); ``other`` by ``side`` over the choice ``pe``, which waits under the facts alone, so its
+# cases stay listed, as ``adapter``'s do where ``chain`` refuses.
 
 
 def chain_by_mode(read: Mapping[str, Any]) -> object:
@@ -1170,11 +1170,11 @@ def test_an_optional_fact_given_none_is_the_one_left_out() -> None:
     OPTIONAL.check_one_space({"width": None}, {})
 
 
-# A guard over a derived value over facts alone is evaluated, never read as a presence (lane
-# 4's ``offered``, computed from the channel's sides; E2's ``valued``, over ``contents``):
-# ``offered`` reads the optional fact ``offer``, ``mover`` is present where it holds. Left out
-# (None), the guard reads false and ``mover.burst`` is pruned, still answered by name; given,
-# it is listed. Set by name where pruned, it is stored, dormant and listed.
+# A guard over a derived value over facts alone is evaluated, never read as a presence (the
+# channel kernel's ``offered``, computed from the channel's sides, and its ``valued``, over
+# ``contents``): ``offered`` reads the optional fact ``offer``, ``mover`` is present where it
+# holds. Left out (None), the guard reads false and ``mover.burst`` is pruned, still answered
+# by name; given, it is listed. Set by name where pruned, it is stored, dormant and listed.
 
 OFFERED = Case(
     "a derived guard over an optional fact",
