@@ -496,12 +496,13 @@ def make_cut_choices(model: ModelWrapper) -> CutChoices:
     unset: dict[str, tuple[Finding, ...]] = {}
     late: dict[Key, object] = {}
     fallbacks: dict[str, tuple[Finding, ...]] = {}
+    dropped = tuple(bound.dropped)  # what the first bind dropped; a rebind (``at``) has none
     for name in bound.members:
         point = bound.member(name)
         if name in bound.channels:
             done = channel_defaulted(point)
         else:
-            kept = {bound.path(key) for key in bound.dropped if key[0] == name}
+            kept = {bound.path(key) for key in dropped if key[0] == name}
             done = defaulted(point, bound.owner(name), kept=kept)
         if isinstance(done, tuple):
             # A kernel refused on its facts is emission's to name; a choice no value can be

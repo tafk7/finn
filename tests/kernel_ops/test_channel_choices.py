@@ -244,6 +244,21 @@ def test_make_cut_choices_does_to_a_body_made_by_hand_what_the_cut_does(tmp_path
     assert kernel_choices_config(partition_body(parent)[1]) == expected
 
 
+def test_a_stale_choice_stays_open_after_an_earlier_member_set_its_choices() -> None:
+    """A node's stored choice the bind dropped as stale is left open for a strategy,
+    whatever an earlier member of the body had left open for the cut to set: ``first``'s
+    cleared SIMD is set late by conversion's policy (and a channel's choices by the cut's),
+    ``second``'s PE past its domain stays dropped and open, not set late behind it."""
+    model = open_model()
+    write_raw(model, "first", "simd", None)
+    write_raw(model, "second", "pe", 3)  # past the space, as another tool wrote it
+    making = MakeCutChoices()
+    model = model.transform(making)
+    assert sorted(making.dropped) == ["second.pe"]
+    assert sorted(making.late) == ["first.simd"]
+    assert "pe" not in kernel_op(model, model.graph.node[-1]).choices()
+
+
 def test_the_defaults_strategy_resets_the_bodys_channel_choices_too() -> None:
     """To start over, the ``Defaults`` strategy: what the body states, nodes' and
     channels' alike, goes back to its default, the values the cut gives a body stating
