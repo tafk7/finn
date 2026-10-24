@@ -44,7 +44,7 @@ established*.  The module is not declined for it: the ports and their widths
 are what slang resolved under the binding, and nothing the checker compares
 reads a parameter value.
 
-**One read, beside the checker** (decision FS6): ``evaluate`` returns the
+**One read, beside the checker**: ``evaluate`` returns the
 integer and integer-array constants a module derives at elaboration under a
 binding, for an analysis that must agree with the RTL's own derivation (an
 ``input_gen``'s buffer size and pointer increments) rather than copy it. It
@@ -393,7 +393,7 @@ def evaluate(
 
     The one place a value is read from the RTL rather than checked against it: an
     analysis that must agree with what the RTL derives at elaboration (an
-    ``input_gen``'s buffer, decision FS6) reads it here instead of copying the
+    ``input_gen``'s buffer) reads it here instead of copying the
     derivation. It declines when the module does not elaborate, the binding names
     an undeclared parameter, or a named value is missing or of another kind.
     """

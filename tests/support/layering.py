@@ -151,7 +151,7 @@ LAYERS: tuple[Layer, ...] = (
     Layer("platform.capabilities", ("finn.platform.capabilities",), (), (), "tests/kernels"),
     # Kernels bound to RTL/HLS sources. They never read an ONNX graph. One module of
     # util: the resource store (standard library only), where an input_gen's buffer
-    # is read from FinnLib's RTL as FINN resolves FinnLib (decision FS6).
+    # is read from FinnLib's RTL as FINN resolves FinnLib.
     Layer(
         "kernels",
         ("finn.kernels",),

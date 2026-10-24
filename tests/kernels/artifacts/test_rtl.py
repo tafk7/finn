@@ -791,7 +791,7 @@ def test_the_parse_rate_over_everything_we_compile_is_recorded(
     assert len(failed) / len(real) < 0.05
 
 
-# -- evaluated constants (decision FS6) -----------------------------------------
+# -- evaluated constants: the one read of a value from the RTL, beside the checker ---------
 
 
 INPUT_GEN_REPLAY = (
