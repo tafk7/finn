@@ -225,6 +225,32 @@ def test_a_choice_no_value_can_be_set_for_keeps_the_node_on_the_host() -> None:
     assert {"dotp-activation-width", "dotp-target"} <= {cause.code for cause in finding.causes}
 
 
+def test_two_choices_no_value_can_be_set_for_are_each_reported() -> None:
+    """INT32 activations leave the core with no first valid value, and a fold fixed past
+    its domain (pe 3 of 4 outputs) leaves the folding with none either: conversion's answer
+    names both, in the flow order, each by its key and its policy, its causes the rules
+    and the domain that refuse each value."""
+
+    class Folding(MatMul):
+        policies = {MatMulKernel.pe: Fixed(3)}
+
+    model = matmul_model(annotate=(), infer=False)
+    for name in ("x", "w"):
+        model.set_tensor_datatype(name, DataType["INT32"])
+    model = model.transform(InferKernelTensors())
+    op = Folding(model.graph.node[0])
+    op.attach_model(model)
+    found = op.defaulted()
+    assert isinstance(found, tuple)
+    assert [(each.code, each.owner, dict(each.details)) for each in found] == [
+        ("choice-no-valid-value", "pe", {"policy": "fixed"}),
+        ("choice-no-valid-value", "compute", {"policy": "first valid"}),
+    ]
+    pe, compute = found
+    assert "domain-membership" in {cause.code for cause in pe.causes}
+    assert {"dotp-activation-width", "dotp-target"} <= {cause.code for cause in compute.causes}
+
+
 @pytest.mark.parametrize("op", [Conv, MatMul, Thresholding], ids=lambda op: op.__name__)
 def test_every_op_states_its_policies_and_none_states_one_yet(op: type[KernelOp]) -> None:
     """Every op's policies are well formed, checked when its class was made. None states
