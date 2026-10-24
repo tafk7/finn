@@ -800,6 +800,69 @@ def test_a_rule_reading_a_view_is_no_definition() -> None:
     check_definition("a rule reading its children's views", READ_IN)
 
 
+# The same ruling for each other reader, each its own row. A derived value, a ``when`` guard
+# and a domain read a child's view, a rule's form above.
+
+
+def read_in_root(**root: Any) -> Space:
+    return Space(
+        (),
+        Scope(
+            "",
+            children=(storage_stage("first"), *root.pop("children", ())),
+            **root,
+        ),
+    )
+
+
+READ_IN_DERIVED = read_in_root(
+    derived=(Derived("stored", ("first.storage",), lambda read: read["first.storage"]),),
+)
+
+
+@expected("view-read-in-derived")
+def test_a_derived_value_reading_a_view_is_no_definition() -> None:
+    check_definition("a derived value reading a child's view", READ_IN_DERIVED)
+
+
+READ_IN_GUARD = read_in_root(
+    children=(
+        Scope(
+            "second",
+            choices=(Choice("depth", listed(1, 2, 4)),),
+            when=When(("first.storage",), lambda read: read["first.storage"] > 8),
+        ),
+    ),
+)
+
+
+@expected("view-read-in-guard")
+def test_a_guard_reading_a_view_is_no_definition() -> None:
+    check_definition("a guard reading a sibling's view", READ_IN_GUARD)
+
+
+# A view over a fact alone: a domain reading it reads no choice, so the engine builds the
+# Space (where the view reads a choice, it refuses ``domain-reads-choice`` instead).
+READ_IN_DOMAIN = Space(
+    ("n",),
+    Scope(
+        "",
+        choices=(
+            Choice(
+                "depth",
+                membership(lambda value, read: value <= read["first.size"], ("first.size",)),
+            ),
+        ),
+        children=(Scope("first", views=(View("size", ("n",), lambda read: 2 * read["n"]),)),),
+    ),
+)
+
+
+@expected("view-read-in-domain")
+def test_a_domain_reading_a_view_is_no_definition() -> None:
+    check_definition("a domain reading a child's view", READ_IN_DOMAIN, facts={"n": 2})
+
+
 # -- 8. an optional fact left out is None (SZ100 (5)) ---------------------------------------------
 #
 # ``width`` is optional: left out, it reads None, a known value, and ``lanes`` lists 1 and 2

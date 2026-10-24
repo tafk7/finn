@@ -111,7 +111,12 @@ def test_the_pending_milestones_are_the_rulings_the_engine_has_not_reached() -> 
     # rows removed; the model holds SZ100's ruling on views before the engine (T4b: views
     # read out).
     assert MILESTONES == ("base", "T4b")
-    assert [(row.id, row.milestone) for row in ROWS] == [("view-read-in", "T4b")]
+    assert [(row.id, row.milestone) for row in ROWS] == [
+        ("view-read-in", "T4b"),
+        ("view-read-in-derived", "T4b"),
+        ("view-read-in-guard", "T4b"),
+        ("view-read-in-domain", "T4b"),
+    ]
 
 
 # A later milestone with rows, put in the matrix where a test needs one.

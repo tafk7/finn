@@ -77,6 +77,30 @@ ROWS: tuple[Row, ...] = (
         "test_reference_cases::test_a_rule_reading_a_view_is_no_definition",
         "the engine builds the Space and answers",
     ),
+    Row(
+        "view-read-in-derived",
+        "T4b",
+        "The engine refuses a definition whose derived value reads a view, as a definition "
+        "error (view-read-in)",
+        "test_reference_cases::test_a_derived_value_reading_a_view_is_no_definition",
+        "the engine builds the Space and answers",
+    ),
+    Row(
+        "view-read-in-guard",
+        "T4b",
+        "The engine refuses a definition whose guard reads a view, as a definition error "
+        "(view-read-in)",
+        "test_reference_cases::test_a_guard_reading_a_view_is_no_definition",
+        "the engine builds the Space and lists the guarded choice",
+    ),
+    Row(
+        "view-read-in-domain",
+        "T4b",
+        "The engine refuses a definition whose domain reads a view, as a definition error "
+        "(view-read-in)",
+        "test_reference_cases::test_a_domain_reading_a_view_is_no_definition",
+        "the engine builds the Space where the view reads no choice",
+    ),
 )
 
 BY_ID = {row.id: row for row in ROWS}
