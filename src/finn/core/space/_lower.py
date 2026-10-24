@@ -36,7 +36,6 @@ from .declarations import (
     Param,
     ValueRef,
     View,
-    ViewKey,
 )
 from .domains import Domain
 from .errors import DefinitionError
@@ -307,9 +306,7 @@ class _Lowering:
                 "constraints": (cast(int, self.table.drafts[node.scope].validity),),
             }
         if isinstance(declaration, Members):
-            entries = self.names.members_candidates(
-                scope.index, cast(ViewKey[object], declaration.key)
-            )
+            entries = self.names.members_candidates(scope.index, declaration)
             return {
                 "alternatives": tuple((name, target) for name, _, target in entries),
                 "value": tuple(member for _, member, _ in entries),

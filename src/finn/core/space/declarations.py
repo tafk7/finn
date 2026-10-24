@@ -1334,21 +1334,50 @@ class CaseRef(ValueDecl[str]):
 
 
 class Members(ValueDecl[tuple[Located[T], ...]], Generic[T]):
-    """Every present child node exporting ``key``, as ``Located`` values in
-    declaration order.
+    """Every present child node exporting ``key``, or reading ``Base.member``, as
+    ``Located`` values in declaration order.
 
-    Each entry is ``Located(node=<child name>, member=<key name>, value=<export>)``.
-    A view export answers its accepted value (refused with its Space); a value
-    export (a derived value) answers its value. One refused entry refuses the
+    ``Members(key)`` ranges over the children whose class exports ``key``; each entry is
+    ``Located(node=<child name>, member=<key name>, value=<export>)``.
+
+    ``Members(Base.member)`` ranges over the children whose class is ``Base`` or derives
+    from it, each read at its member of that name (so a subclass's override is the one
+    read): ``Located(node=<child name>, member=<member name>, value=<member>)``. The
+    member is a view or a derived value of ``Base``, spelled ``Base.member`` from
+    outside it, or ``Members(member)`` in ``Base``'s own body after the member is
+    declared. ``Base`` and the name are those of the class that declares the member,
+    resolved when the class holding the ``Members`` is compiled.
+
+    A view answers its accepted value (refused with its Space); a derived value answers
+    its value. An entry that is inapplicable is left out. One refused entry refuses the
     whole, else one unresolved leaves it unresolved.
     """
 
-    def __init__(self, key: ViewKey[T]) -> None:
-        if not isinstance(key, ViewKey):
+    @overload
+    def __init__(self, key: ViewKey[T]) -> None: ...
+
+    @overload
+    def __init__(self, key: View[T]) -> None: ...
+
+    @overload
+    def __init__(self, key: T) -> None: ...  # a derived value: a class reads it as its value
+
+    def __init__(self, key: object) -> None:
+        from .expressions import Expr
+
+        self.key: ViewKey[T] | None = None
+        self.member: View[T] | ValueRef[T] | None = None
+        if isinstance(key, ViewKey):
+            self.key = key
+        elif isinstance(key, (View, Derived, Expr)):
+            self.member = cast("View[T] | ValueRef[T]", key)
+        else:
             raise DefinitionError.broken(
-                "view-key-required", _OWNER, f"{type(self).__name__} requires a ViewKey"
+                "members-member-invalid",
+                _OWNER,
+                f"{type(self).__name__} requires a ViewKey, or a view or a derived value "
+                f"of a Space class, not {type(key).__name__}",
             )
-        self.key = key
         self.semantics = cast("ValueSemantics[tuple[Located[T], ...]]", semantics_for(tuple))
 
 
