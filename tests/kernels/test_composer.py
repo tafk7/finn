@@ -37,7 +37,7 @@ from support.refusals import refused
 from finn.core.space import Available, Decision, DefinitionError, divisors_of, inspection
 from finn.core.space._scopes import EAGER, PERMUTE
 from finn.core.space.compiler import compile_model
-from finn.dataflow.gemm import Form
+from finn.dataflow.gemm import Form, Window
 from finn.dataflow.schedule import Index
 from finn.kernels import composer
 from finn.kernels.artifacts.abi import Endpoint
@@ -252,6 +252,27 @@ def test_the_same_structure_is_one_class_and_new_facts_a_new_design_space(cache:
     renamed = compose(declared({"first": "first_"}))
     assert renamed.space_type is not composed.space_type
     assert cached_classes() == 3
+
+
+def test_a_fact_left_out_and_a_fact_given_none_are_one_class(cache: None) -> None:
+    """An optional fact (MatMul's ``window``, whose default is None) left out and given None
+    is one design space: its formal takes None either way, so the class's key
+    (``presence``: given and not None) and the facts the class is given are the same."""
+    left_out = compose(declared())
+    given_none = kernels()
+    given_none["first"] = Facts(MatMulKernel, {**given_none["first"].arguments, "window": None})
+    assert "window" not in kernels()["first"].arguments
+    none = compose(PartitionDeclaration(given_none, channels()))
+    assert none.space_type is left_out.space_type and none.names == left_out.names
+    assert none.facts == left_out.facts and "first-window" not in none.names.roots
+    assert cached_classes() == 1
+    # Given a value, it is another class: only None is the fact left out.
+    window = Window(image=(8, 8), size=(3, 3))
+    given_value = kernels()
+    given_value["first"] = Facts(MatMulKernel, {**given_value["first"].arguments, "window": window})
+    valued = compose(PartitionDeclaration(given_value, channels()))
+    assert valued.space_type is not left_out.space_type
+    assert valued.facts["first-window"] == window and cached_classes() == 2
 
 
 @pytest.mark.parametrize("mode", [PERMUTE, EAGER])
