@@ -39,7 +39,9 @@ facts read, an enclosing selector before the choices of its cases, ties in decla
 order. Only those in play are defaulted: a choice under a case not selected, or whose
 presence waits on a choice still open, is left as it is. A value is valid when setting it
 alone is accepted (``inspection.viable``): a rule that waits on a choice still open does
-not refuse it.
+not refuse it. A partition's policies are applied in one pass over its design space's
+root, in the root's flow order (which interleaves its members), each choice's policy read
+from its member's owner.
 
 **A ranking that cannot be read.** A ranking is a view, which refuses while its kernel is
 refused and waits while it waits. First valid then takes the listed order and says so
@@ -51,7 +53,7 @@ and why), so a fallback is never silent: ``defaulted`` returns it beside the poi
 from __future__ import annotations
 
 from collections.abc import Collection, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cache
 from types import MappingProxyType
 from typing import ClassVar, Generic, Protocol, TypeAlias, TypeVar
@@ -359,15 +361,58 @@ def ranked(
 # -- applying them once ------------------------------------------------------------------------
 
 
+class Placed(Protocol):
+    """Where the choices of a design space's root belong, for ``defaulted``: the members it
+    is made of, each choice's member (by the choice's key in the root), each member's owner
+    of policies (``Owner``) and why a member is refused on its own facts, read of the root as
+    it stands. A kernel alone is one member (``Alone``); a partition's are its kernels and
+    channels (``finn.kernels.partition.Partition.defaulted``)."""
+
+    @property
+    def members(self) -> tuple[str, ...]: ...
+
+    def member(self, key: str) -> str: ...
+
+    def owner(self, member: str) -> Owner: ...
+
+    def refusal(self, point: Space, member: str) -> tuple[Finding, ...]: ...
+
+
+class Alone:
+    """One kernel's design space, whole, as ``Placed``: a single member, ``""``, whose
+    owner is the KernelOp ``owner`` and whose own validity is the space's."""
+
+    def __init__(self, owner: Owner) -> None:
+        self._owner = owner
+
+    @property
+    def members(self) -> tuple[str, ...]:
+        return ("",)
+
+    def member(self, key: str) -> str:
+        return ""
+
+    def owner(self, member: str) -> Owner:
+        return self._owner
+
+    def refusal(self, point: Space, member: str) -> tuple[Finding, ...]:
+        result = inspection.validity(point).result
+        return result.findings if isinstance(result, Rejected) else ()
+
+
 @dataclass
 class Defaulted(Generic[S]):
-    """A design space with its policies applied once (``defaulted``): its ``point``, and
-    each ranking that could not be read, its choice taken in listed order
-    (``fallbacks``: ``choice-order-unknown``). A result, not a value a Space holds: a plain
-    dataclass."""
+    """A design space with its policies applied once (``defaulted``): its ``point``; each
+    ranking that could not be read, its choice taken in listed order (``fallbacks``:
+    ``choice-order-unknown``); each choice no value could be set for, left open (``unset``:
+    ``choice-no-valid-value``); and each member refused on its own, none of its choices set
+    (``refused``: its member's name and the findings of its validity). A result, not a value
+    a Space holds: a plain dataclass."""
 
     point: S
     fallbacks: tuple[Finding, ...] = ()
+    unset: tuple[Finding, ...] = ()
+    refused: Mapping[str, tuple[Finding, ...]] = field(default_factory=dict)
 
 
 def _flow_order(point: Space) -> tuple[str, ...]:
@@ -444,25 +489,51 @@ def unset(key: str, policy: str, message: str, causes: tuple[Finding, ...]) -> F
     )
 
 
-def defaulted(
-    point: S, owner: Owner, *, kept: Collection[str] = ()
-) -> Defaulted[S] | tuple[Finding, ...]:
-    """``point``, a design space's root (a kernel or a channel bound to its facts), with
-    each of ``owner``'s policies applied once (the module docstring): every choice in play
-    and unset that is not required set to its fixed value or its first valid one, in the
-    flow order, with each ranking it could not read named (``Defaulted.fallbacks``); or why
-    it cannot be: its validity's refusal on what it already holds, or a choice no value can
-    be set for (``unset``). Choices it holds are kept, and so are the open choices ``kept``
-    names, by key: left open."""
-    validity = inspection.validity(point)
-    if isinstance(validity.result, Rejected):
-        return validity.result.findings
+def defaulted(point: S, placed: Placed, *, kept: Collection[str] = ()) -> Defaulted[S]:
+    """``point``, a design space's root (a kernel bound to its facts, or a partition's design
+    space), with the policies of each choice's owner applied once (the module docstring), in
+    one pass in the root's flow order: every choice in play and unset that is not required set
+    to its fixed value or its first valid one, each policy read from its choice's member's
+    owner (``placed``), with each ranking it could not read named (``Defaulted.fallbacks``).
+    Choices it holds are kept, and so are the open choices ``kept`` names, by key: left open.
+
+    **First valid** is the first value, in its policy's order, whose change is accepted:
+    setting it alone leaves no rule of the root newly false (``inspection.viable``,
+    whichever member the rule belongs to, and one that waits on a choice still open is not
+    false). It is not that the root is valid after it: a rule false already does not refuse a
+    value that leaves it so.
+
+    **A choice no value can be set for** is left open and the pass goes on, reported
+    (``Defaulted.unset``: ``choice-no-valid-value``, owned by its key). **A member refused on
+    its own** (``Placed.refusal``) is skipped whole, none of its choices set, and reported
+    (``Defaulted.refused``). Its refusal is read when the pass reaches the member's first
+    choice, not before: what it reads of another member's choices has been set by then, so a
+    rule waiting on a choice still open is not read as false."""
+    members = set(placed.members)
     decisions = {item.key: item for item in inspection.decisions(point)}
+    states = dict(inspection.states(point))
     fallbacks: list[Finding] = []
+    unset: list[Finding] = []
+    refused: dict[str, tuple[Finding, ...]] = {}
+    read: set[str] = set()
+
+    def refusal(member: str) -> None:
+        read.add(member)
+        found = placed.refusal(point, member)
+        if found:
+            refused[member] = found
+
     for key in _flow_order(point):
+        member = placed.member(key)
+        if member not in members:
+            continue
+        if member not in read:
+            refusal(member)
+        if member in refused:
+            continue
         item = decisions[key]
-        found = policy(owner, item)
-        state = dict(inspection.states(point))[key]
+        found = policy(placed.owner(member), item)
+        state = states[key]
         if (
             isinstance(found, Required)
             or key in kept
@@ -473,21 +544,28 @@ def defaulted(
         if isinstance(found, Fixed):
             done = _fixed(point, item.reference, key, found.value)
         else:
-            done, fallback = _first_valid(point, owner, item)
+            done, fallback = _first_valid(point, placed.owner(member), item)
             if fallback is not None:
                 fallbacks.append(fallback)
         if isinstance(done, Finding):
-            return (done,)
+            unset.append(done)
+            continue
         point = done
-    return Defaulted(point, tuple(fallbacks))
+        states = dict(inspection.states(point))
+    for member in placed.members:
+        if member not in read:
+            refusal(member)
+    return Defaulted(point, tuple(fallbacks), tuple(unset), refused)
 
 
 __all__ = [
     "FIRST_VALID",
+    "Alone",
     "Defaulted",
     "Fixed",
     "FirstValid",
     "Owner",
+    "Placed",
     "Policy",
     "Ranking",
     "Required",

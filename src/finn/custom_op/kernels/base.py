@@ -122,7 +122,7 @@ from finn.kernels.base import KernelSpace
 from finn.kernels.composer import Facts
 from finn.kernels.configure import describe
 from finn.kernels.configure import refusal as refusal_of
-from finn.kernels.policies import Defaulted, Policy, defaulted, stated
+from finn.kernels.policies import Alone, Defaulted, Policy, defaulted, stated
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.target import Target
 
@@ -657,10 +657,14 @@ class KernelOp(CustomOp):
         with the op's policies applied once (``finn.kernels.policies.defaulted``), every
         choice in play given its fixed or first valid value, a required one left open, and
         each ranking a policy could not read named (``Defaulted.fallbacks``); else why not:
-        its kernel's refusal on its facts alone, or a choice no value can be set for
-        (``choice-no-valid-value``, owned by its key, each value's refusal among its
-        causes). Conversion writes the point it gets here on the node (``persist_kernel``)."""
-        return defaulted(self.bound(), type(self))
+        its kernel's refusal on its facts alone, or each choice no value can be set for
+        (``choice-no-valid-value``, one per choice, owned by its key, each value's refusal
+        among its causes). Conversion writes the point it gets here on the node
+        (``persist_kernel``)."""
+        done = defaulted(self.bound(), Alone(type(self)))
+        if done.refused:
+            return done.refused[""]
+        return done.unset or done
 
     def verify_node(self) -> list[str]:
         """Why the node's stored choices are refused, or each of ``refusals`` of its

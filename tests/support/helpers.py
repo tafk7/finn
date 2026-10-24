@@ -76,7 +76,7 @@ from finn.kernels.composer import (
     channel,
 )
 from finn.kernels.configure import chosen, commit, describe
-from finn.kernels.cut import Cut, channel_defaulted
+from finn.kernels.cut import Cut
 from finn.kernels.declaration import KernelDeclaration, ModuleOrder, Product
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.explore import Choice, Defaults, Seam, dotted
@@ -84,7 +84,7 @@ from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.matmul import MatMulKernel, datatype_range
 from finn.kernels.partition import Partition, partition
-from finn.kernels.policies import Unstated, defaulted, ranked
+from finn.kernels.policies import Alone, Unstated, defaulted, ranked
 from finn.kernels.port import AxiStreamPort, axis, transport
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
@@ -709,17 +709,15 @@ def with_defaults(network: N) -> N:
 
 def with_channel_defaults(network: N) -> N:
     """``network`` with each channel's open choices in play that are not required set as
-    the cut sets them, by its policies, on the partition's design space, each channel in
-    rank order (``finn.kernels.cut.channel_defaulted``: first valid, where setting it is
-    accepted; a FIFO's depth stays open), as ``make_cut_choices`` sets a graph's: for a
-    partition built by hand, which no cut made. A channel refused on its own is left as it
-    is."""
-    for name in network.channels:
-        done = channel_defaulted(network.member(name))
-        assert not isinstance(done, tuple), f"{name}: " + "; ".join(map(str, done))
-        assert done.fallbacks == (), f"{name}: {done.fallbacks}"
-        network = network.at(done.point.root)
-    return network
+    the cut sets them, by the cut's policies, on the partition's design space, in the one
+    pass over its root in the root's flow order (``Partition.defaulted``, restricted to the
+    channels: first valid, where setting it is accepted; a FIFO's depth stays open), as
+    ``make_cut_choices`` sets a graph's: for a partition built by hand, which no cut made. A
+    channel refused on its own is left as it is."""
+    done = network.defaulted(members=network.channels)
+    assert not done.unset, "; ".join(map(str, done.unset))
+    assert done.fallbacks == (), f"{done.fallbacks}"
+    return network.at(done.point)
 
 
 TRANSPORTS = "*.transport"
@@ -852,9 +850,9 @@ def matmul_assembly(
     point = kernel_alone(network, "matmul")
     left = {"realization", "compute"} - ({"compute"} if core is not None else set())
     kept = {key for key, _ in inspection.states(point)} - left
-    done = defaulted(point, Unstated, kept=kept)
-    if isinstance(done, tuple):
-        raise ValueError("no value can be set: " + "; ".join(map(str, done)))
+    done = defaulted(point, Alone(Unstated), kept=kept)
+    if done.unset or done.refused:
+        raise ValueError("no value can be set: " + "; ".join(map(str, done.unset)))
     taken = {
         f"matmul.{key}": value
         for key, value in chosen(done.point).items()

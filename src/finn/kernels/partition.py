@@ -68,7 +68,7 @@ from finn.kernels.control import presented as presented_buses
 from finn.kernels.cut import Cut
 from finn.kernels.explore import Trial, dotted
 from finn.kernels.movers import MoverOffer
-from finn.kernels.policies import Owner, Unstated
+from finn.kernels.policies import Defaulted, Owner, Unstated, defaulted
 from finn.kernels.sides import Side, SideKind
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
@@ -93,6 +93,25 @@ def _together(results: Iterable[QueryResult[Any]]) -> Rejected | Unresolved:
 
 
 # -- the partition --------------------------------------------------------------------------
+
+
+class _Placed:
+    """A partition's members as ``finn.kernels.policies.Placed``: each choice's member is
+    the one its path is below, its owner the partition's (``Partition.owner``), and a
+    member's own refusal is its validity's, read at the design space the pass has reached."""
+
+    def __init__(self, bound: Partition, members: tuple[str, ...]) -> None:
+        self._bound, self.members = bound, members
+
+    def member(self, key: str) -> str:
+        return self._bound.composed.names.pair(key)[0]
+
+    def owner(self, member: str) -> Owner:
+        return self._bound.owner(member)
+
+    def refusal(self, point: Space, member: str) -> tuple[Finding, ...]:
+        result = self._bound.at(point).validity(member).result
+        return result.findings if isinstance(result, Rejected) else ()
 
 
 class Partition:
@@ -409,6 +428,21 @@ class Partition:
             for key, state in self.states(names)
             if isinstance(state, (inspection.Set, inspection.Waiting, inspection.Dormant))
         }
+
+    def defaulted(
+        self, *, kept: Iterable[Key] = (), members: Iterable[str] | None = None
+    ) -> Defaulted[Space]:
+        """Its design space with the policies of its members applied once
+        (``finn.kernels.policies.defaulted``): one pass over its root in the root's flow
+        order, each choice in play and open that is not required set by the policy its
+        member's owner states (``owner``), each first valid where the change is accepted; a
+        member refused on its own skipped, a choice no value can be set for left open, both
+        reported. Choices it holds are kept, and so are the open choices ``kept`` names, by
+        key. Only the choices of ``members`` (every member where None)."""
+        wanted = self._wanted(members)
+        return defaulted(
+            self._point, _Placed(self, tuple(wanted)), kept={self.path(key) for key in kept}
+        )
 
     def viable(self, keys: Iterable[Key]) -> tuple[tuple[Key, inspection.Viable], ...]:
         """Each choice ``keys`` names, by key, in the order given, with its listed values,

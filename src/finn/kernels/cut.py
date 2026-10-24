@@ -22,8 +22,8 @@ keyed by the class-level Decisions of the channel and its stages, checked agains
   source's pumped memory. Its source, its output adapter and its mover are placements,
   and its input adapter is picked by its steps (``Channel.input_chain``), no choices.
 
-``Cut`` is their owner, as ``finn.kernels.policies.policy`` reads it; ``channel_defaulted``
-applies them once to a channel's point.
+``Cut`` is their owner, as ``finn.kernels.policies.policy`` reads it. The cut applies them
+once, with its kernels' policies, over the whole partition (``Partition.defaulted``).
 """
 
 from __future__ import annotations
@@ -31,11 +31,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import ClassVar
 
-from finn.core.reporting.findings import Finding
-from finn.core.space import Rejected, Space, inspection
 from finn.kernels.channels import Channel, ChannelFifo
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.policies import Defaulted, FirstValid, Policy, Required, defaulted, stated
+from finn.kernels.policies import FirstValid, Policy, Required, stated
 
 CHANNEL_POLICIES: Mapping[object, Policy] = stated(
     "Cut",
@@ -56,16 +54,4 @@ class Cut:
     policies: ClassVar[Mapping[object, Policy]] = CHANNEL_POLICIES
 
 
-def channel_defaulted(point: Space) -> Defaulted[Space] | tuple[Finding, ...]:
-    """The channel ``point`` (a partition's member, in its design space) with the cut's
-    policies applied once (``finn.kernels.policies.defaulted``): each open choice in play
-    that is not required set to its first valid value, in the flow order (each after what
-    its presence, its list and its facts read); or why a choice can take no value
-    (``choice-no-valid-value``, owned by its key). A channel refused on its own facts is
-    returned as it is: its validity says why."""
-    if isinstance(inspection.validity(point).result, Rejected):
-        return Defaulted(point)
-    return defaulted(point, Cut)
-
-
-__all__ = ["CHANNEL_POLICIES", "Cut", "channel_defaulted"]
+__all__ = ["CHANNEL_POLICIES", "Cut"]

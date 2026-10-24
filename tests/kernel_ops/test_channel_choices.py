@@ -20,12 +20,13 @@ from pathlib import Path
 
 import pytest
 from onnx import StringStringEntryProto, TensorProto, helper
+from qonnx.core.datatype import DataType
 from qonnx.core.metadata import MetadataError
 from qonnx.core.modelwrapper import ModelWrapper
 from support.configure import configured, write_raw
 from support.explore_models import kernel_model as open_model
 from support.helpers import Lanes
-from support.models import EDGE, kernel_model
+from support.models import EDGE, kernel_model, matmul_model
 from support.refusals import refused
 from support.tfc import LANES
 
@@ -42,7 +43,11 @@ from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import network, persist
 from finn.kernels.channels import Channel
 from finn.kernels.explore import Defaults, ExploreError, Hold, Ranked
-from finn.transformation.kernels import explore_kernel_choices, kernel_choices_config
+from finn.transformation.kernels import (
+    InferKernelTensors,
+    explore_kernel_choices,
+    kernel_choices_config,
+)
 from finn.transformation.kernels.cut import CutKernelPartition, MakeCutChoices
 
 FIFO: dict[str, object] = {"transport": "fifo", "transport.fifo.depth": 8}
@@ -257,6 +262,26 @@ def test_a_stale_choice_stays_open_after_an_earlier_member_set_its_choices() -> 
     assert sorted(making.dropped) == ["second.pe"]
     assert sorted(making.late) == ["first.simd"]
     assert "pe" not in kernel_op(model, model.graph.node[-1]).choices()
+
+
+def test_a_choice_no_value_can_be_set_for_is_left_open_at_the_cut_and_its_others_are_set() -> None:
+    """INT32 activations: no core takes them, so a MatMul made by hand has no first valid
+    core. The cut leaves ``compute`` open and reports it (``unset``, by key), and still sets
+    the node's folding (late) and every channel's choices: the MatMul's other choices were
+    all lost when the cut stopped at the first such choice."""
+    model = matmul_model(annotate=(), infer=False)
+    for name in ("x", "w"):
+        model.set_tensor_datatype(name, DataType["INT32"])
+    model = model.transform(InferKernelTensors())
+    making = MakeCutChoices()
+    model = model.transform(making)
+    assert list(making.unset) == ["first.compute"]
+    (finding,) = making.unset["first.compute"]
+    assert (finding.code, finding.owner) == ("choice-no-valid-value", "compute")
+    assert sorted(making.late) == ["first.pe", "first.simd"]
+    config = kernel_choices_config(model)
+    assert config["first"] == {"pe": 1, "simd": 1}
+    assert {config[name]["transport"] for name in ("x", "w", "y")} == {"direct"}
 
 
 def test_the_defaults_strategy_resets_the_bodys_channel_choices_too() -> None:

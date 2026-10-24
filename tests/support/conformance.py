@@ -136,7 +136,7 @@ from finn.kernels.cut import CHANNEL_POLICIES
 from finn.kernels.explore import dotted
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.partition import Partition
-from finn.kernels.policies import FirstValid, Policy, defaulted
+from finn.kernels.policies import Alone, FirstValid, Policy, defaulted
 from finn.kernels.sides import Side
 from finn.kernels.transport import StreamContract
 from finn.kernels.transpose import TransposeKernel
@@ -292,8 +292,10 @@ def _by_policy(point: Any, key: Key) -> Any:
     kernel's other open choices left open."""
     kernel = kernel_alone(point, KERNEL)
     others = {below for below, _ in inspection.states(kernel)} - {key[1]}
-    done = defaulted(kernel, Placed, kept=others)
-    assert not isinstance(done, tuple), f"{dotted(key)}: " + "; ".join(map(str, done))
+    done = defaulted(kernel, Alone(Placed), kept=others)
+    assert not (done.unset or done.refused), f"{dotted(key)}: " + "; ".join(
+        map(str, (*done.unset, *(each for found in done.refused.values() for each in found)))
+    )
     return _chosen(point, {dotted(key): chosen(done.point)[key[1]]})
 
 
@@ -301,8 +303,10 @@ def _defaulted(point: Any) -> Any:
     """A design with every open choice of its kernel in play that is not required set by
     its policy (``Placed``), as conversion sets one, on the kernel alone."""
     kernel = kernel_alone(point, KERNEL)
-    done = defaulted(kernel, Placed)
-    assert not isinstance(done, tuple), "; ".join(map(str, done))
+    done = defaulted(kernel, Alone(Placed))
+    assert not (done.unset or done.refused), "; ".join(
+        map(str, (*done.unset, *(each for found in done.refused.values() for each in found)))
+    )
     before = chosen(kernel)
     values = {
         f"{KERNEL}.{key}": value for key, value in chosen(done.point).items() if key not in before

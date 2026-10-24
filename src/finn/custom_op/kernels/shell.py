@@ -55,12 +55,11 @@ from finn.custom_op.kernels.network import PARTITION, PRODUCER, _network, persis
 from finn.kernels.artifacts.module import Composed
 from finn.kernels.base import CYCLES
 from finn.kernels.composer import Key
-from finn.kernels.configure import chosen, refusal
-from finn.kernels.cut import channel_defaulted
+from finn.kernels.configure import refusal
 from finn.kernels.explore import FifoCheck, Seam, dotted
 from finn.kernels.movers import MOVER, MoverContract
 from finn.kernels.partition import Partition, _together
-from finn.kernels.policies import Required, defaulted, policy
+from finn.kernels.policies import Required, policy
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
 from finn.platform.shells import ShellRow, budgets, bus_counts, shell_row
@@ -475,56 +474,45 @@ def _late(key: str, value: object) -> Finding:
 def make_cut_choices(model: ModelWrapper) -> CutChoices:
     """The cut's choices of a partition's body, ``model``, persisted, each owner's whole
     (``persist``), on the partition of its KernelOps bound in its shell (``in_shell``),
-    their stored choices bound (a value outside its domain dropped as stale), each member's
-    policies applied once on its Space in the design space (each value first valid where
-    setting it is accepted: no rule of the partition newly false), the kernels in graph
-    order, then the channels in rank order, each after the kernels it joins:
+    their stored choices bound (a value outside its domain dropped as stale), the policies
+    of its members applied once over its design space (``Partition.defaulted``): one pass
+    in the root's flow order, which interleaves the members, each choice's policy read from
+    its member's owner (a kernel's its KernelOp, a channel's the cut), each value first
+    valid where setting it is accepted (no rule of the partition newly false):
 
     1. each kernel choice the body leaves open, in play and not required, that the bind
-       did not drop, set by its KernelOp's policies (``finn.kernels.policies.defaulted``):
-       a body never converted for it (one made by hand), reported (``CutChoices.late``);
+       did not drop, set by its KernelOp's policies: a body never converted for it (one
+       made by hand), reported (``CutChoices.late``);
     2. each channel's open choices in play that are not required, those the bind dropped
-       among them, set by the cut's policies (``finn.kernels.cut.channel_defaulted``; a
-       channel created here has both its sides only in the partition). A required choice
-       (a FIFO's depth) stays open for a strategy.
+       among them, set by the cut's policies (a channel created here has both its sides
+       only in the partition). A required choice (a FIFO's depth) stays open for a
+       strategy.
 
-    A member refused on its own is skipped (emission names it). Returns what it dropped,
+    A kernel choice the bind dropped as stale stays open, whatever an earlier member set. A
+    member refused on its own is skipped, none of its choices set (emission names it): it
+    is read when the pass reaches the member's first choice. A choice no value can be set
+    for is left open and the pass goes on (``CutChoices.unset``). Returns what it dropped,
     set late, could not set, and set in listed order where a ranking could not be read
     (``CutChoices``)."""
     bound = in_shell(model, model.graph.node)
     stale = dict(bound.stale)
-    unset: dict[str, tuple[Finding, ...]] = {}
-    late: dict[Key, object] = {}
-    fallbacks: dict[str, tuple[Finding, ...]] = {}
-    dropped = tuple(bound.dropped)  # what the first bind dropped; a rebind (``at``) has none
-    for name in bound.members:
-        point = bound.member(name)
-        if name in bound.channels:
-            done = channel_defaulted(point)
-        else:
-            kept = {bound.path(key) for key in dropped if key[0] == name}
-            done = defaulted(point, bound.owner(name), kept=kept)
-        if isinstance(done, tuple):
-            # A kernel refused on its facts is emission's to name; a choice no value can be
-            # set for is reported.
-            unset |= {
-                dotted(bound.pair(name, finding.owner)): (bound.local(name, finding),)
-                for finding in done
-                if finding.code == "choice-no-valid-value"
-            }
-            continue
-        fallbacks |= {
-            dotted(bound.pair(name, finding.owner)): (bound.local(name, finding),)
-            for finding in done.fallbacks
-        }
-        before = chosen(point)
-        made = {key: value for key, value in chosen(done.point).items() if key not in before}
-        if not made:
-            continue
-        if name in bound.kernels:
-            late |= {bound.pair(name, key): value for key, value in made.items()}
-        bound = bound.at(done.point.root)
-    persist(model, bound)
+    done = bound.defaulted(kept=[key for key in bound.dropped if key[0] in bound.kernels])
+    names = bound.composed.names
+
+    def keyed(finding: Finding) -> tuple[str, Finding]:
+        key = names.pair(finding.owner)
+        return dotted(key), bound.local(key[0], finding)
+
+    unset = {each: (finding,) for each, finding in map(keyed, done.unset)}
+    fallbacks = {each: (finding,) for each, finding in map(keyed, done.fallbacks)}
+    after = bound.at(done.point)
+    before = bound.chosen()
+    late = {
+        key: value
+        for key, value in after.chosen().items()
+        if key not in before and key[0] in bound.kernels
+    }
+    persist(model, after)
     return CutChoices(
         stale,
         {dotted(key): (_late(dotted(key), value),) for key, value in late.items()},

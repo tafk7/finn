@@ -196,8 +196,10 @@ def test_conversion_sets_each_choice_in_play_by_its_policy_on_the_kernel_alone()
 
 def test_a_choice_no_value_can_be_set_for_keeps_the_node_on_the_host() -> None:
     """INT32 activations: no core takes them, so the core has no first valid value. The
-    answer is one finding owned by the choice's key (``choice-no-valid-value``), naming its
-    policy and each value's rule, those rules' findings its causes; with no core chosen,
+    answer is one finding per such choice (``choice-no-valid-value``: the pass goes on past
+    one, so conversion reports each, where it reported the first), owned by the choice's
+    key, naming its policy and each value's rule, those rules' findings its causes (here
+    one choice, the core: its folding is set and reported by none); with no core chosen,
     no rule of the kernel is false, so the node made by hand is not refused
     (``verify_node``), only open."""
     model = matmul_model(annotate=(), infer=False)

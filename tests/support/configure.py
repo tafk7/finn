@@ -7,7 +7,7 @@
 in the shell of its target (as exploration binds a partition's body), the values set through
 the seam as a strategy sets them (``Seam.set``, one batch, as ``Hold`` does), then each
 channel's open choices that are not required set by the cut's policies, as the cut sets
-them (``finn.kernels.cut.channel_defaulted``; a FIFO's depth stays open), and the result
+them (``Partition.defaulted``, once over the channels; a FIFO's depth stays open), and the result
 persisted (``finn.custom_op.kernels.network.persist``, the one writer of choices). What the
 seam refuses is refused, by its findings (the seam's own codes, ``not-a-decision``,
 ``held``, or the engine's: a value outside its domain, ``domain-membership``, or each rule
@@ -44,8 +44,7 @@ from finn.core.reporting.findings import Refusal
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import persist
 from finn.custom_op.kernels.shell import in_shell
-from finn.kernels.configure import chosen
-from finn.kernels.cut import channel_defaulted
+from finn.kernels.composer import Key
 from finn.kernels.explore import Accepted, Refused, Seam
 
 
@@ -72,20 +71,16 @@ def configured(model: ModelWrapper, choices: Mapping[str, Mapping[str, object]])
             held = {key: value for (_, key), value in network.chosen([node.name]).items()}
             op._write(op._saved(held))
         return model
-    for name in network.channels:
-        point = network.member(name)
-        done = channel_defaulted(point)
-        if isinstance(done, tuple):
-            continue  # a choice no value can be set for: emission names it
-        values = {
-            network.pair(name, key): value
-            for key, value in chosen(done.point).items()
-            if key not in chosen(point)
-        }
-        if values:
-            step = seam.set(network, values)
-            if isinstance(step, Accepted):
-                network = step.network
+    done = network.defaulted(members=network.channels)  # one pass: what emission names stays open
+    before = network.chosen()
+    made: dict[str, dict[Key, object]] = {}
+    for key, value in network.at(done.point).chosen(network.channels).items():
+        if key not in before:
+            made.setdefault(key[0], {})[key] = value
+    for values in made.values():
+        step = seam.set(network, values)
+        if isinstance(step, Accepted):
+            network = step.network
     persist(model, network)
     return model
 
