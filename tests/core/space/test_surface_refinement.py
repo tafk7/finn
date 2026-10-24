@@ -19,12 +19,12 @@ from finn.core.space import (
     Select,
     Space,
     Unresolved,
-    View,
     constraint,
     derived,
     design_space,
     domain,
     inspection,
+    view,
 )
 from finn.core.space._running.evaluate import evaluation
 from finn.core.space.compiler import compile_model
@@ -242,7 +242,7 @@ def test_replacement_revalidates_retained_choices_and_supports_atomic_clear() ->
 def test_value_reads_preserve_result_and_view_context() -> None:
     class Example(Space):
         choice: int = Decision(values=(0, 1))
-        result = View(choice)
+        result = view(choice)
 
     base = design_space(Example())
     unresolved = base.query(Example.choice)
@@ -306,7 +306,7 @@ def test_replacement_reuses_frozen_facts_keeps_views_lazy_and_drops_what_it_reac
             calls.append(choice)
             return len(source) + choice
 
-        result = View(output)
+        result = view(output)
 
     first = design_space(Example(source=(1,))).with_choices(choice=1)
     assert calls == []

@@ -21,13 +21,13 @@ from finn.core.space import (
     Select,
     Space,
     Unresolved,
-    View,
     composite,
     constraint,
     derived,
     design_space,
     divisors_of,
     inspection,
+    view,
 )
 from finn.core.space.errors import ConfigurationError, DefinitionError
 
@@ -49,7 +49,7 @@ def test_composite_keeps_narrow_fields_available_and_reuses_accepted_children() 
         def supported(*, width: int) -> bool:
             return width > 0
 
-        physical = View(complete)
+        physical = view(complete)
 
     class Refused(Space):
         @derived
@@ -60,7 +60,7 @@ def test_composite_keeps_narrow_fields_available_and_reuses_accepted_children() 
         def supported() -> bool:
             return False
 
-        physical = View(width)
+        physical = view(width)
 
     class Composite(Space):
         @derived
@@ -77,7 +77,7 @@ def test_composite_keeps_narrow_fields_available_and_reuses_accepted_children() 
         def narrow(*, activation: int, weights: int) -> int:
             return activation + weights
 
-        physical = View(implementation.physical)
+        physical = view(implementation.physical)
 
         # Reading the member by name links one selection of it.
         @derived(width=implementation.width)
@@ -112,7 +112,7 @@ def test_composite_keeps_narrow_fields_available_and_reuses_accepted_children() 
 def test_a_decision_of_the_class_reads_its_suppliers_and_exposure_is_explicit() -> None:
     class Child(Space):
         value: int = Param()
-        physical = View(value)
+        physical = view(value)
 
     class Root(Space):
         extent: int = Param()
@@ -148,14 +148,14 @@ def test_nested_handles_and_named_aliases_keep_frozen_interpretations() -> None:
         def other(self) -> int:
             return 7
 
-        physical = View(value)
+        physical = view(value)
 
     class Middle(Space):
         inner = Leaf()
 
     class Root(Space):
         outer = Middle()
-        accepted = View(outer.inner.physical)
+        accepted = view(outer.inner.physical)
 
     original_placement = Middle.inner
     original_accepted = Root.accepted
@@ -222,7 +222,7 @@ def test_choice_members_are_validated_over_all_cases_before_selection() -> None:
         def value(self) -> int:
             return 1
 
-        physical = View(value)
+        physical = view(value)
 
     class Missing(Space):
         @derived
@@ -233,17 +233,17 @@ def test_choice_members_are_validated_over_all_cases_before_selection() -> None:
 
         class Nowhere(Space):
             implementation: Complete | Missing = Select(complete=Complete(), missing=Missing())
-            absent = View(implementation.absent)  # type: ignore[union-attr]
+            absent = view(implementation.absent)  # type: ignore[union-attr]
 
     with refused("direct-read-undeclared", error=DefinitionError, message=r"cases \['missing'\]"):
 
         class Unqualified(Space):
             implementation: Complete | Missing = Select(complete=Complete(), missing=Missing())
-            physical = View(cast(Complete, implementation).physical)
+            physical = view(cast(Complete, implementation).physical)
 
     class Partial(Space):
         implementation: Complete | Missing = Select(complete=Complete(), missing=Missing())
-        physical = View(implementation["complete"].physical)  # type: ignore[index]
+        physical = view(implementation["complete"].physical)  # type: ignore[index]
 
     base = design_space(Partial())
     assert isinstance(base.query(Partial.physical), Unresolved)
@@ -259,7 +259,7 @@ def test_inferred_nested_output_must_match_consumer_annotation() -> None:
         def value() -> int:
             return 1
 
-        physical = View(value)
+        physical = view(value)
 
     class Middle(Space):
         inner = Leaf()

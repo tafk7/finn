@@ -26,7 +26,6 @@ from finn.core.space import (
     Select,
     Space,
     Unresolved,
-    View,
     bind,
     constraint,
     derived,
@@ -84,7 +83,7 @@ class BySelect(Space):
         return self.gate == 0
 
     heating = Select(none=None, boiler=Boiler, heat_pump=HeatPump, kw=load, when=heated)
-    heat = View(heating.output)
+    heat = view(heating.output)
     kind = view(case=heating)(_name)
 
     @constraint
@@ -308,7 +307,7 @@ class Channel(Space):
         return CASES[(self.x + self.y) % 4]
 
     adapter: Fifo | Reg | None = Select(by=chain, fifo=Fifo, reg=Reg, direct=None, width=w)
-    adapter_stages = View(adapter.stages)  # type: ignore[union-attr]
+    adapter_stages = view(adapter.stages)  # type: ignore[union-attr]
 
     @derived
     def stages_read(self) -> int:
@@ -469,7 +468,7 @@ def test_a_none_case_places_nothing() -> None:
             return ("direct", "fifo")[self.x]
 
         adapter: Fifo | None = Select(by=chain, direct=None, fifo=Fifo, width=2)
-        stages = View(adapter.stages)  # type: ignore[union-attr]
+        stages = view(adapter.stages)  # type: ignore[union-attr]
         kind = view(case=adapter)(_name)
 
     point = bind(design_space(Holder()), {Holder.x: 0}).instance

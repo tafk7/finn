@@ -11,13 +11,13 @@ import pytest
 
 from finn.core.space import (
     Decision,
-    Derived,
     Param,
     Select,
     Space,
     bind,
     composite,
     constraint,
+    derived,
     design_space,
     domain,
     inspection,
@@ -174,7 +174,7 @@ def test_independent_batch_reuses_trial_dependencies_and_publishes_only_once() -
 
     class Seeded(Space):
         seed: int = Param()
-        limit = Derived(limit_value)
+        limit = derived(limit_value)
 
     limit = Seeded.limit
     members: list[int] = [

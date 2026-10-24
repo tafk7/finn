@@ -16,9 +16,7 @@ from finn.core.space._template import compiled
 from finn.core.space.compiler import compile_model
 from finn.core.space.declarations import (
     Decision,
-    Derived,
     Param,
-    View,
     constraint,
     derived,
     view,
@@ -58,7 +56,7 @@ def test_compile_links_forward_dependencies_without_executing_callbacks() -> Non
             calls.append("supported")
             return extent > 0
 
-        result = View(cycles)
+        result = view(cycles)
 
     model = compile_model(Example)
     assert calls == []
@@ -162,7 +160,7 @@ def test_function_and_value_views_have_an_explicit_raw_output() -> None:
         def doubled(*, size: int) -> int:
             return size * 2
 
-        value_view = View(doubled)
+        value_view = view(doubled)
 
         @view
         def function_view(*, size: int) -> int:
@@ -226,9 +224,7 @@ def test_twenty_thousand_dependencies_compile_and_evaluate_iteratively() -> None
 
     members: dict[str, object] = {"value0": derived(_zero)}
     for number in range(1, 20_001):
-        members[f"value{number}"] = Derived(
-            step, aliases={"previous": members[f"value{number - 1}"]}
-        )
+        members[f"value{number}"] = derived(previous=members[f"value{number - 1}"])(step)
     space_type = cast(type[Space], type("Deep", (Space,), members))
     model = compile_model(space_type)
     last = model.resolve(model.root, members["value20000"])
@@ -238,9 +234,7 @@ def test_twenty_thousand_dependencies_compile_and_evaluate_iteratively() -> None
     form = compiled(space_type)
     assert len(form.order) == len(form.records) == 20_002
     assert form.order[-2:] == (form.keys["value20000"], form.validity)
-    assert design_space(space_type()).query(cast(Derived[int], members["value20000"])) == Available(
-        20_000
-    )
+    assert design_space(space_type()).query(cast(int, members["value20000"])) == Available(20_000)
 
 
 def test_compiled_handles_do_not_follow_later_class_rebinding() -> None:
@@ -312,10 +306,10 @@ def test_compile_holds_values_domains_and_callback_references() -> None:
             return (1,)
 
         choice: tuple[int, ...] = Decision(values=((1,), (2,)))
-        calculated = Derived(first)
+        calculated = derived(first)
 
     old = compile_model(Example)
-    Example.calculated.function = second
+    cast(Any, Example.calculated).function = second
     new = compile_model(Example)
     old_constant = old.resolve(old.root, Example.constant)
     constant_function = old_constant.function
@@ -336,7 +330,7 @@ def test_a_foreign_value_reference_is_a_definition_error() -> None:
             return 1
 
     class ForeignView(Space):
-        result = View(Other.value)
+        result = view(Other.value)
 
     with pytest.raises(DefinitionError):
         compile_model(ForeignView)
@@ -392,7 +386,7 @@ def test_incompatible_inferred_derived_override_is_rejected() -> None:
     def output() -> str:
         return "different"
 
-    changed = cast(type[Space], type("Changed", (Base,), {"output": Derived(output)}))
+    changed = cast(type[Space], type("Changed", (Base,), {"output": derived(output)}))
 
     with refused("override-changes-semantics", error=DefinitionError):
         compile_model(changed)
@@ -403,7 +397,7 @@ def test_missing_binding_names_fail_before_any_callback() -> None:
         raise AssertionError("a compiler must never discover dependencies by execution")
 
     class Example(Space):
-        result = Derived(invalid)
+        result = derived(invalid)
 
     with refused("declaration-unknown", error=DefinitionError):
         compile_model(Example)

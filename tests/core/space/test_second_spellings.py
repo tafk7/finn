@@ -2,14 +2,14 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """One spelling for each shape of a Space: what an author writes, and what must not move.
 
-The Space has a few shapes that can still be written two ways: ``View(source)`` beside
-``view``, ``when=`` on a derived value, a constraint or a view beside the body's own early
-return, ``getattr(self, name)`` and ``__reads__`` beside a closed set of reads, and a
-declaration that stays open until the first compile beside one closed with its class. A
-constant beside a derived value of nothing, and integer arithmetic or an attribute read on a
-reference in a class body beside a named derived value, are refused by name: those hand
-cases are the first group. This file holds the hand cases of the change that leaves one
-spelling each.
+The Space has a few shapes that can still be written two ways: ``when=`` on a derived
+value, a constraint or a view beside the body's own early return, ``getattr(self, name)``
+and ``__reads__`` beside a closed set of reads, and a declaration that stays open until the
+first compile beside one closed with its class. A constant beside a derived value of
+nothing, and integer arithmetic or an attribute read on a reference in a class body beside a
+named derived value, are refused by name: those hand cases are the first group. A view of a
+reference and a view of a function are one ``view``. This file holds the hand cases of the
+change that leaves one spelling each.
 
 Five groups:
 

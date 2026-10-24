@@ -20,7 +20,6 @@ import pytest
 from core.space._evaluation_support import entry, node, open_evaluation
 from finn.core.space import (
     Available,
-    Derived,
     EvaluationError,
     Param,
     Space,
@@ -115,9 +114,7 @@ def test_a_chain_of_twenty_thousand_explicit_functions() -> None:
 
     members: dict[str, object] = {"value0": derived(_zero)}
     for number in range(1, 20_001):
-        members[f"value{number}"] = Derived(
-            step, aliases={"previous": members[f"value{number - 1}"]}
-        )
+        members[f"value{number}"] = derived(previous=members[f"value{number - 1}"])(step)
     world = open_evaluation(cast(type[Space], type("Deep", (Space,), members))())
     assert world.result(node(world, "value20000")) == Available(20_000)
     assert world.counters.calls["derived"] == 20_001  # explicit: never abandoned

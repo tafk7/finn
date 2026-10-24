@@ -14,12 +14,12 @@ from finn.core.space import (
     Decision,
     Param,
     Rejected,
-    View,
     composite,
     constraint,
     derived,
     design_space,
     inspection,
+    view,
 )
 from finn.core.space.errors import DefinitionError, RequestError
 from finn.core.space.semantics import annotation_type, canonical
@@ -121,7 +121,7 @@ def test_a_datatype_fact_and_derived_value_are_the_datatype_itself() -> None:
         def result(self) -> QONNXDataType:
             return self.dtype
 
-        physical = View(result)
+        physical = view(result)
 
     original = resolve_qonnx_datatype_name("INT8")
     point = design_space(Typed(dtype=original))
@@ -150,7 +150,7 @@ def test_composite_extends_kernel_with_typed_optional_views_and_independent_node
 
     pins = derived(plain_pins)
     admitted = constraint(narrow)
-    ports = View(pins)
+    ports = view(pins)
     word = composite(
         "IntegerWord",
         {

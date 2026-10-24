@@ -21,13 +21,13 @@ from typing import Any
 
 from finn.core.space import (
     Decision,
-    Derived,
     Param,
     Select,
     Space,
-    View,
     composite,
+    derived,
     divisors_of,
+    view,
 )
 from finn.core.space.errors import DefinitionError
 
@@ -95,7 +95,7 @@ class _Draw:
         members: dict[str, Any] = {"a": Param(), "b": Param(default=None)}
         annotations: dict[str, object] = {"a": int, "b": int | None}
         if self.maybe(0.5):
-            members["valued"] = Derived(given, aliases={"v": members["b"]})
+            members["valued"] = derived(v=members["b"])(given)
         if self.maybe(0.6):
             members["flag"] = Decision(values=(False, True))
             annotations["flag"] = bool
@@ -132,15 +132,13 @@ class _Draw:
         kind = rng.random()
         when: Any = members["flag"] if "flag" in members and self.maybe(0.3) else None
         if kind < 0.5:
-            members["x"] = Derived(
-                ident, aliases={"v": self.ref(members, rng.choice(sources))}, when=when
-            )
+            members["x"] = derived(when=when, v=self.ref(members, rng.choice(sources)))(ident)
         elif kind < 0.7:
             v, w = rng.sample(sources, 2)
             aliases = {"v": self.ref(members, v), "w": self.ref(members, w)}
-            members["x"] = Derived(add, aliases=aliases, when=when)
+            members["x"] = derived(when=when, **aliases)(add)
         else:
-            members["x"] = Derived(rng.choice((m_a, m_c0x, m_chx, m_c1p)), when=when)
+            members["x"] = derived(when=when)(rng.choice((m_a, m_c0x, m_chx, m_c1p)))
         targets = ["a", "x", "b", *(f"{child}.x" for child in children)]
         if "ch" in members:
             targets.append("ch.x")
@@ -150,10 +148,10 @@ class _Draw:
         )
         annotations["p"] = int
         if self.maybe(0.4):
-            members["y"] = Derived(rng.choice((m_present, m_given, m_flag)))
+            members["y"] = derived(rng.choice((m_present, m_given, m_flag)))
         if self.maybe(0.3):
             path = rng.choice(["x", "a", *(f"{child}.x" for child in children)])
-            members["v"] = View(self.ref(members, path))
+            members["v"] = view(self.ref(members, path))
         self.count += 1
         return composite(f"Drawn{level}_{self.count}", members, annotations=annotations)
 

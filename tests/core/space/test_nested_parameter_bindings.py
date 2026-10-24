@@ -23,12 +23,12 @@ from finn.core.space import (
     Param,
     Space,
     Unresolved,
-    View,
     composite,
     derived,
     design_space,
     divisors_of,
     inspection,
+    view,
 )
 from finn.core.space.errors import ConfigurationError, DefinitionError, RequestError
 
@@ -41,7 +41,7 @@ class Port(Space):
     def description(*, dtype: str, lanes: int) -> tuple[str, int]:
         return dtype, lanes
 
-    physical = View(description)
+    physical = view(description)
 
 
 class Reusable(Space):

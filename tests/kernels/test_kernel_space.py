@@ -32,7 +32,6 @@ from finn.core.space import (
     Param,
     Rejected,
     Unresolved,
-    View,
     design_space,
     divisors_of,
     required,
@@ -40,6 +39,7 @@ from finn.core.space import (
 )
 from finn.core.space._reads import summary
 from finn.core.space.compiler import compile_model
+from finn.core.space.declarations import View
 from finn.core.space.semantics import default_semantics
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major

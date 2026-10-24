@@ -27,11 +27,9 @@ from core.space._templates_support import defined
 from finn.core.space import (
     Available,
     Decision,
-    Derived,
     Param,
     Select,
     Space,
-    View,
     derived,
     design_space,
     divisors_of,
@@ -174,8 +172,8 @@ def plus(*, v: int) -> int:
 
 class Inner(Space):
     depth: int = Param()
-    doubled = Derived(plus, aliases={"v": depth})
-    tripled = Derived(plus, aliases={"v": doubled})
+    doubled = derived(v=depth)(plus)
+    tripled = derived(v=doubled)(plus)
 
 
 class Loop(Space):
@@ -183,16 +181,16 @@ class Loop(Space):
     its formal, bound to ``budget``."""
 
     kitchen = Inner()
-    budget = Derived(plus, aliases={"v": kitchen.doubled})
-    kitchen.depth = cast(int, budget)
+    budget = derived(v=kitchen.doubled)(plus)
+    kitchen.depth = budget
 
 
 class Deep(Space):
     """Through the child's ``doubled`` on the way to ``tripled``."""
 
     inner = Inner()
-    seen = Derived(plus, aliases={"v": inner.tripled})
-    inner.depth = cast(int, seen)
+    seen = derived(v=inner.tripled)(plus)
+    inner.depth = seen
 
 
 class Middle(Space):
@@ -204,8 +202,8 @@ class Top(Space):
     """Two levels down: through the middle's binding of its child's formal."""
 
     middle = Middle()
-    seen = Derived(plus, aliases={"v": middle.inner.tripled})
-    middle.depth = cast(int, seen)
+    seen = derived(v=middle.inner.tripled)(plus)
+    middle.depth = seen
 
 
 class PlacesLoop(Space):
@@ -288,10 +286,10 @@ class Owned(Space):
     def first(self) -> int:
         return 1
 
-    second = View(cast(Any, unit).ok)
+    second = view(cast(Any, unit).ok)
     # Read through a choice its candidates share.
     heat: Pump | Boiler = Select(pump=Pump(ok=True), boiler=Boiler(ok=False))
-    seen = View(heat.cop)
+    seen = view(heat.cop)
 
 
 def test_a_selections_owner_is_its_choices_key() -> None:

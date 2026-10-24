@@ -34,13 +34,13 @@ from finn.core.space import (
     Members,
     Param,
     Space,
-    View,
     constraint,
     derived,
     design_space,
     domain,
     view,
 )
+from finn.core.space.declarations import View
 
 
 class Room(Space):
@@ -285,10 +285,10 @@ def test_a_view_reading_itself_by_argument_is_cyclic_dependency_at_compile() -> 
 
 
 def test_a_view_of_a_view_closing_a_cycle_is_cyclic_dependency_at_compile() -> None:
-    """``c = View(a)`` with ``a`` reading ``c`` as its argument: ``cyclic-dependency`` at
+    """``c = view(a)`` with ``a`` reading ``c`` as its argument: ``cyclic-dependency`` at
     compile."""
     first = View.from_function(double, aliases={"x": Param(default=1)})
-    second = View(first)
+    second = view(first)
     _wire(first, x=second)
 
     class Loop(Space):

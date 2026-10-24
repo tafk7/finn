@@ -43,7 +43,6 @@ from finn.core.space import (
     Space,
     Unresolved,
     ValueUnavailableError,
-    View,
     _failure,
     bind,
     constraint,
@@ -114,7 +113,7 @@ class Bad(Space):
 class Alternatives(Space):
     size: int = Param()
     implementation = Select(good=Good(size=size), bad=Bad())
-    physical = View(implementation.physical)
+    physical = view(implementation.physical)
 
 
 class OptionalChild(Space):
@@ -168,7 +167,7 @@ class Refusing(Space):
     def selected(self) -> int:
         return self.value + self.chosen
 
-    physical = View(selected)
+    physical = view(selected)
 
 
 # A selector whose cases' choices list values read from the facts (``Kernel``): with the
@@ -266,7 +265,7 @@ def test_evidence_reads_through_a_formal_at_its_source_and_copies_a_container() 
         def source(self) -> list[int]:
             return [1, self.n]
 
-        physical = View(source)
+        physical = view(source)
 
     listed = design_space(Listed(n=2))
     opened = Running()

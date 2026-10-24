@@ -42,7 +42,6 @@ from finn.core.space import (
     Select,
     Space,
     Unresolved,
-    View,
     constraint,
     derived,
     design_space,
@@ -423,7 +422,7 @@ def test_a_childs_constraint_reading_its_parents_view_through_a_formal_is_view_r
         def carried_value(self) -> int:
             return 4 * self.lanes
 
-        carried = View(carried_value)
+        carried = view(carried_value)
         child = Child(width=carried_value)
 
     fixed = design_space(Rewritten()).with_choices(lanes=1)

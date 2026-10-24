@@ -27,7 +27,6 @@ from finn.core.space import (
     Select,
     Space,
     Unresolved,
-    View,
     composite,
     constraint,
     derived,
@@ -36,6 +35,7 @@ from finn.core.space import (
     inspection,
     reject,
     required,
+    view,
 )
 from finn.core.space._nodes import NodeChoice
 from finn.core.space.declarations import unmet_required
@@ -119,8 +119,8 @@ class Unit(Space):
     compute: PackedCore | StubCore = Select(
         packed=PackedCore(narrow_weights=True), stub=StubCore, width=width
     )
-    cycles = View(compute.cycles)  # every candidate declares cycles: int
-    narrow = View(compute["packed"].narrow_weights)  # type: ignore[index]
+    cycles = view(compute.cycles)  # every candidate declares cycles: int
+    narrow = view(compute["packed"].narrow_weights)  # type: ignore[index]
 
     @derived
     def doubled(self) -> int:
@@ -134,7 +134,7 @@ class Earlier(Space):
     compute: PackedCore | StubCore = Select(
         packed=PackedCore(width=width, narrow_weights=True), stub=StubCore(width=width)
     )
-    cycles = View(compute.cycles)
+    cycles = view(compute.cycles)
 
 
 def keys(point: Any) -> list[str]:
@@ -266,7 +266,7 @@ def test_direct_reads_need_a_member_every_candidate_declares_with_one_type() -> 
         class Mixed(Space):
             width: int = Param()
             compute: PackedCore | WideCore = Select(packed=PackedCore, wide=WideCore, width=width)
-            cycles = View(compute.cycles)
+            cycles = view(compute.cycles)
 
     with pytest.raises(AttributeError):
         Unit.compute.nothing  # type: ignore[union-attr]  # noqa: B018

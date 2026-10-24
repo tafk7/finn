@@ -24,7 +24,6 @@ from finn.core.space import (
     Rejected,
     Space,
     Unresolved,
-    View,
     constraint,
     derived,
     design_space,
@@ -96,7 +95,7 @@ def test_a_derived_value_states_no_semantics() -> None:
 
 
 def test_a_view_states_no_semantics() -> None:
-    """A view's check is its return annotation's, or its source's for ``View(source)``."""
+    """A view's check is its return annotation's, or its source's for ``view(source)``."""
     with refused("view-semantics", error=DefinitionError, message="semantics= is gone"):
 
         class Explicit(Space):
@@ -120,8 +119,8 @@ def test_a_view_states_no_semantics() -> None:
         def point(self) -> Point | Rejected:
             return Point(self.n)
 
-        again = View(point)
-        plain = View(n)
+        again = view(point)
+        plain = view(n)
 
     assert semantics_of(Stated, "point").type_token is Point
     assert semantics_of(Stated, "again").type_token is Point
@@ -189,7 +188,7 @@ class Projected(Space):
     def x_of_point(*, point: Point) -> int:
         return point.x
 
-    x = View(x_of_point)
+    x = view(x_of_point)
 
 
 def test_a_marked_output_is_read_by_a_derived_value_through_its_value_type() -> None:

@@ -5,10 +5,10 @@
 On a configuration ``point.kitchen.cost`` is the accepted value (a read of a
 view that is not accepted raises ``ValueUnavailableError`` carrying its
 result): refused with its Space, and answering while its Space is open. On a
-declaration ``kitchen.cost`` is a reference to that value: a view is read out, so a
-formal is supplied by a derived value (``kitchen.price``), never by a view. Assessment and
-query are explicit calls on the configuration: ``point.inspect(Hall.total)`` and
-``point.query(Hall.total)``.
+declaration ``kitchen.cost`` is a reference to that value, read by another view and
+by nothing else: a view is read out, so a formal is supplied by a derived value
+(``kitchen.price``), never by a view. Assessment and query are explicit calls on the
+configuration: ``point.inspect(Hall.total)`` and ``point.query(Hall.total)``.
 """
 
 from __future__ import annotations
@@ -32,7 +32,6 @@ from finn.core.space import (
     Space,
     Unresolved,
     ValueUnavailableError,
-    View,
     constraint,
     derived,
     design_space,
@@ -40,6 +39,7 @@ from finn.core.space import (
     reject,
     view,
 )
+from finn.core.space.declarations import View
 
 
 class Room(Space):
@@ -54,7 +54,7 @@ class Room(Space):
     def price(self) -> int:
         return self.area * self.finish
 
-    cost = View(price)
+    cost = view(price)
 
 
 class Hall(Space):
@@ -65,13 +65,11 @@ class Hall(Space):
     hall = Room()
     hall.area = kitchen.price  # a derived value supplies a formal
     annex = Room(area=dining.price)  # at the call, too
+    checked = view(dining.area)
 
-    @derived(price=kitchen.price)  # a derived value reads what the view reads
-    def twice_price(*, price: int) -> int:
-        return price * 2
-
-    doubled = View(twice_price)
-    checked = View(dining.area)
+    @view
+    def doubled(self) -> int:
+        return self.kitchen.cost * 2  # a view reads a view
 
     @view
     def total(self) -> int:
@@ -100,7 +98,7 @@ def test_a_view_reads_as_its_accepted_value_on_a_configuration() -> None:
     point = chosen()
     assert point.kitchen.cost == 24 and point.dining.cost == 16
     assert point.total == 40
-    assert point.doubled == 48
+    assert point.doubled == 48  # the kitchen's cost, 12 * 2 = 24, doubled
     assert point.checked == 16
     # The read, the query and the assessment agree.
     assert point.query(Hall.total) == Available(40)
@@ -198,7 +196,7 @@ def test_a_view_refuses_with_its_space_and_answers_while_it_is_open_in_both_form
     class Strict(Space):
         kitchen = Room(area=50)
         dining = Room(area=10)
-        checked = View(dining.area)
+        checked = view(dining.area)
 
     strict = design_space(Strict()).with_choices(
         {Strict.kitchen.finish: 1, Strict.dining.finish: 1}
@@ -239,7 +237,7 @@ def test_a_views_own_name_in_its_class_body_is_its_declaration() -> None:
         def doubled(self) -> int:
             return 2 * self.kitchen.cost
 
-        checked = View(doubled)
+        checked = view(doubled)
 
     point = design_space(Wing()).with_choices({Wing.kitchen.finish: 1})
     assert point.checked == 24

@@ -104,12 +104,12 @@ from finn.core.rtlsim_bench import WordsDiffer, materialize, stream_through
 from finn.core.rtlsim_pacing import FREE, STALLED
 from finn.core.space import (
     Available,
-    Derived,
     Param,
     QueryResult,
     RequestError,
     inspection,
 )
+from finn.core.space.declarations import Derived
 from finn.dataflow.datatypes import DatatypeError, ordinary_integer_bounds
 from finn.dataflow.steps import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor

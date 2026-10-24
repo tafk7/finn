@@ -24,12 +24,12 @@ from finn.core.space import (
     Rejected,
     Space,
     Unresolved,
-    View,
     composite,
     constraint,
     derived,
     design_space,
     inspection,
+    view,
 )
 
 
@@ -100,8 +100,8 @@ def admitted_stream_type() -> type[AdmissionFormals]:
     value = derived(
         dtype=AdmissionFormals.dtype, lanes=AdmissionFormals.lanes, bits=AdmissionFormals.bits
     )(_stream)
-    stream = View(value)
-    bits = View(AdmissionFormals.bits)
+    stream = view(value)
+    bits = view(AdmissionFormals.bits)
     return composite(
         "AdmittedStream",
         {
@@ -188,7 +188,7 @@ def test_composite_is_pure_and_nodes_share_only_the_space_class() -> None:
 
     choice: int = Decision(values=(1, 2))
     output = derived(compute)
-    reported = View(output)
+    reported = view(output)
     members = {"choice": choice, "output": output, "reported": reported}
     template = composite("Template", members, base=Scaled, annotations={"choice": int})
     assert calls == []
@@ -214,7 +214,7 @@ def test_composite_is_pure_and_nodes_share_only_the_space_class() -> None:
 
 def test_a_compiled_composite_rejects_structural_changes() -> None:
     value = derived(_one)
-    space_type = composite("Sealed", {"value": value, "physical": View(value)})
+    space_type = composite("Sealed", {"value": value, "physical": view(value)})
     assert design_space(space_type()).query(value) == Available(1)
     # There is no builder to seal: the compiled Space class itself refuses changes.
     with refused("structure-finalized", error=DefinitionError):

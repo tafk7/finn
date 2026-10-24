@@ -27,7 +27,6 @@ from finn.core.space import (
     Param,
     Select,
     Space,
-    View,
     _template,
     bind,
     composite,
@@ -92,13 +91,13 @@ class ReadsThroughAChild(Space):
 
     heater = Heater()
     thermostat = Thermostat(kw=heater.heating.kw)
-    cop = View(heater.pump.cop)  # type: ignore[union-attr]
-    direct = View(heater.heating["heat_pump"].cop)  # type: ignore[index]
+    cop = view(heater.pump.cop)  # type: ignore[union-attr]
+    direct = view(heater.heating["heat_pump"].cop)  # type: ignore[index]
 
 
 class ReadsItself(Space):
     pump: HeatPump | None = Select(none=None, heat_pump=HeatPump(kw=4))
-    cop = View(pump.cop)  # type: ignore[union-attr]
+    cop = view(pump.cop)  # type: ignore[union-attr]
 
 
 class ReadsLater(Space):
@@ -114,8 +113,8 @@ class ReadsLater(Space):
     def next_cop(*, cop: int) -> int:
         return cop + 1
 
-    later = View(next_cop)
-    earlier = View(second.pump.cop)  # type: ignore[union-attr]
+    later = view(next_cop)
+    earlier = view(second.pump.cop)  # type: ignore[union-attr]
 
 
 class Memory(Space):
@@ -147,9 +146,9 @@ class Edge(Space):
         return self.contents is not None
 
     source: Memory | Fetcher = Select(memory=Memory, fetch=Fetcher, when=valued, contents=contents)
-    words = View(source.words)
+    words = view(source.words)
     cache: Fetcher | None = Select(none=None, fetch=Fetcher, when=valued, contents=contents)
-    cache_lanes = View(cache.lanes)  # type: ignore[union-attr]
+    cache_lanes = view(cache.lanes)  # type: ignore[union-attr]
 
 
 class GivenOnceAndNot(Space):
@@ -158,9 +157,9 @@ class GivenOnceAndNot(Space):
 
     stored = Edge(contents=4)
     streamed = Edge()
-    stored_words = View(stored.source.words)
-    streamed_words = View(streamed.source.words)
-    streamed_contents = View(streamed.source.contents)
+    stored_words = view(stored.source.words)
+    streamed_words = view(streamed.source.words)
+    streamed_contents = view(streamed.source.contents)
 
 
 class Stream(Space):
@@ -208,7 +207,7 @@ class Guarded(Space):
         when=valued,
         contents=contents,
     )
-    words = View(source.words)  # type: ignore[union-attr]
+    words = view(source.words)  # type: ignore[union-attr]
     pair: Stream | None = Select(
         none=None,
         left=Stream(lanes=split),
@@ -249,8 +248,8 @@ class Outer(Space):
     """A three-level reference: ``middle.inner.doubled``."""
 
     middle = Middle(depth=3)
-    seen = View(middle.inner.doubled)
-    formal = View(middle.inner.depth)
+    seen = view(middle.inner.doubled)
+    formal = view(middle.inner.depth)
 
 
 class Packed(Space):
@@ -266,7 +265,7 @@ class Dotted(Space):
     """Cases named so that a scope's name holds a choice's: ``compute.packed.packed.compute``."""
 
     compute: Packed | Plain = Select(packed=Packed, plain=Plain, lanes=2)
-    kw = View(compute["packed"].packed.kw)  # type: ignore[index]
+    kw = view(compute["packed"].packed.kw)  # type: ignore[index]
 
 
 EDGE_CASES = (
@@ -438,7 +437,7 @@ def test_a_change_names_an_address_of_a_scope_of_its_model(
     class Reads(Space):  # a class of its own: its model is made under this mode
         heater = Heater()
         thermostat = Thermostat(kw=heater.heating.kw)
-        cop = View(heater.pump.cop)  # type: ignore[union-attr]
+        cop = view(heater.pump.cop)  # type: ignore[union-attr]
 
     point = design_space(Reads())
     scopes = inspection.model(point).scopes
@@ -491,7 +490,7 @@ def test_a_decision_named_by_another_models_address_is_refused_beside_its_own(
 
     class Standing(Space):  # a class of its own: its model is made under this mode
         fetcher = Fetcher(contents=4)
-        lanes = View(fetcher.lanes)
+        lanes = view(fetcher.lanes)
 
     point = design_space(Standing())
     model = inspection.model(point)

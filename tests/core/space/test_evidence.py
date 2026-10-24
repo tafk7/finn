@@ -17,7 +17,6 @@ from finn.core.space import (
     Rejected,
     Select,
     Space,
-    View,
     constraint,
     derived,
     design_space,
@@ -48,7 +47,7 @@ def test_static_alternatives_and_demanded_evidence_are_separate() -> None:
     class Root(Space):
         size: int = Param()
         implementation: Good | Bad = Select(good=Good(size=size), bad=Bad())
-        physical = View(implementation.physical)
+        physical = view(implementation.physical)
 
     output = Root.physical
     # Static dependencies (transitively, through the generated selection) name
@@ -141,7 +140,7 @@ def test_refusal_causes_stay_visible_while_the_output_is_unresolved() -> None:
         def selected(self) -> int:
             return self.value + self.chosen
 
-        physical = View(selected)  # refused with its Space, which ``supported`` refuses
+        physical = view(selected)  # refused with its Space, which ``supported`` refuses
 
     point = design_space(Example())
     evidence = inspection.explain(point, Example.physical)
@@ -167,7 +166,7 @@ def test_evidence_hands_out_a_container_a_derived_value_answers_as_a_copy() -> N
         def source(self) -> list[int]:
             return [1, self.n]
 
-        physical = View(source)
+        physical = view(source)
 
     point = design_space(Example(n=2))
     first = inspection.explain(point, Example.physical)

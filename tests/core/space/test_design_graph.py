@@ -35,7 +35,6 @@ from finn.core.space import (
     Select,
     Space,
     Unresolved,
-    View,
     composite,
     constraint,
     derived,
@@ -340,7 +339,7 @@ def test_a_composite_node_has_the_surface_of_a_leaf_node() -> None:
 
 class Fixed(Space):
     width: int = Param()
-    physical = View(width)
+    physical = view(width)
 
 
 class Tuned(Space):
@@ -357,7 +356,7 @@ class WithChoice(Space):
 
     base: int = Param()
     choice: Fixed | Tuned = Select(fixed=Fixed(width=8), tuned=Tuned(base=base))
-    physical = View(choice.physical)
+    physical = view(choice.physical)
 
 
 class WithPrimitives(Space):

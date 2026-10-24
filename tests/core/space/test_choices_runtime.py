@@ -21,7 +21,6 @@ from finn.core.space import (
     Select,
     Space,
     Unresolved,
-    View,
     derived,
     design_space,
     divisors_of,
@@ -45,7 +44,7 @@ class Tile(Space):
     def cycles(*, extent: int, lanes: int) -> int:
         return extent // lanes
 
-    physical = View(cycles)
+    physical = view(cycles)
 
 
 def test_two_child_placements_have_independent_choices_and_immutable_roots() -> None:
@@ -82,7 +81,7 @@ def test_false_outer_scope_suppresses_inner_commitments_and_callbacks() -> None:
             calls.append("inactive body")
             raise AssertionError("inactive body was evaluated")
 
-        physical = View(raw, when=inner)
+        physical = view(raw, when=inner)
 
     class Outer(Space):
         @derived
@@ -123,8 +122,8 @@ def test_selected_view_preserves_direct_refusal_and_skips_other_alternatives() -
         # A Decision over nodes; ``implementation.physical`` reads the selected
         # candidate's member by name.
         implementation: Refused | Explodes = Select(refused=Refused(), explodes=Explodes())
-        accepted = View(implementation.physical)
-        physical = View(accepted)
+        accepted = view(implementation.physical)
+        physical = view(accepted)
 
     base = design_space(Root())
     assert isinstance(base.query(Root.accepted), Unresolved)
@@ -152,12 +151,12 @@ def test_singleton_choice_is_open_and_respects_its_outer_guard() -> None:
         def output(self) -> int:
             return 7
 
-        physical = View(output)
+        physical = view(output)
 
     class Root(Space):
         enabled: bool = Param()
         implementation: Only = Select(only=Only(), when=enabled)
-        accepted = View(implementation.physical)
+        accepted = view(implementation.physical)
 
     active = design_space(Root(enabled=True))
     assert isinstance(active.query(Root.accepted), Unresolved)
@@ -254,7 +253,7 @@ def test_function_view_failure_names_its_authored_owner() -> None:
 def test_exposed_inputs_and_supplier_aliases_keep_distinct_rights() -> None:
     class Child(Space):
         width: int = Param()
-        physical = View(width)
+        physical = view(width)
 
     class Root(Space):
         supplier: int = Decision(values=(2, 4))
@@ -287,7 +286,7 @@ def test_wide_selected_outputs_keep_frozen_case_order_and_exact_targets() -> Non
 
     class Root(Space):
         implementation: Leaf = Select(**{f"case{index}": Leaf(value=index) for index in range(128)})
-        physical = View(implementation.physical)
+        physical = view(implementation.physical)
 
     model = inspection.model(Root)
     output = Root.physical

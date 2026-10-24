@@ -25,7 +25,6 @@ from support.refusals import refused
 from finn.core.space import (
     Decision,
     DefinitionError,
-    Derived,
     Param,
     ReferenceUseError,
     Select,
@@ -178,7 +177,7 @@ REFERENCES: dict[str, tuple[Callable[[], object], str]] = {
     "a view of a node": (kitchen_cost, "Room node"),
     "a formal": (lambda: Param(), "declared at "),
     "a derived value": (one(value_two), "declared at "),
-    "a Derived": (lambda: Derived(value_two), "declared at "),
+    "a Derived": (lambda: derived(value_two), "declared at "),
     "a decision": (lambda: Decision(values=(1, 2)), "declared at "),
 }
 

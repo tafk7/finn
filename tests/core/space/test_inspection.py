@@ -22,7 +22,6 @@ from finn.core.space import (
     Select,
     Space,
     Unresolved,
-    View,
     composite,
     derived,
     design_space,
@@ -54,7 +53,7 @@ def test_inspection_does_not_run_domains_or_evaluators() -> None:
             calls.append("cost")
             return 12 // lanes
 
-        physical = View(cost)
+        physical = view(cost)
 
     point = design_space(Example())
     model = inspection.model(point)
@@ -233,7 +232,7 @@ def test_singleton_choice_metadata_exposes_an_ordinary_editable_selector() -> No
 def test_statistics_counts_instantiated_members_and_direct_structure() -> None:
     class Leaf(Space):
         value: int = Decision(values=(1, 2))
-        physical = View(value)
+        physical = view(value)
 
     def repeated(count: int) -> inspection.ModelStatistics:
         space_type = composite("Repeated", {f"child{index}": Leaf() for index in range(count)})

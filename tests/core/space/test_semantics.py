@@ -15,7 +15,6 @@ from finn.core.space import (
     Param,
     Select,
     Space,
-    View,
     constraint,
     derived,
     design_space,
@@ -275,7 +274,7 @@ class Unchosen(Space):
 
 class Holder(Space):
     implementation: Chosen | Unchosen = Select(chosen=Chosen, other=Unchosen)
-    selection = View(implementation.value)
+    selection = view(implementation.value)
 
 
 def test_a_selection_keeps_the_selected_refusal_and_skips_the_other_candidate() -> None:
@@ -302,7 +301,7 @@ class Physical(Space):
 
 class Placed(Space):
     inner = Physical(raw=4)
-    parent = View(inner.physical)
+    parent = view(inner.physical)
 
 
 def test_a_view_and_a_view_reading_it_answer_its_accepted_result() -> None:
@@ -345,7 +344,7 @@ def test_a_view_of_a_refused_space_refuses_and_keeps_what_waits_visible() -> Non
         def pending(*, lanes: int) -> bool:
             return lanes > 0
 
-        physical = View(output)
+        physical = view(output)
 
     point = design_space(Grouped())
     for _ in range(2):
@@ -374,7 +373,7 @@ def test_a_view_of_a_space_with_no_pieces_reads_its_output() -> None:
         def output(self) -> int:
             return 4
 
-        physical = View(output)
+        physical = view(output)
 
     point = design_space(Empty())
     assert point.physical == 4

@@ -14,14 +14,12 @@ from finn.core.reporting.findings import by_code
 from finn.core.space import (
     Decision,
     DefinitionError,
-    Derived,
     Inapplicable,
     Param,
     QueryResult,
     RequestError,
     Select,
     Space,
-    View,
     constraint,
     derived,
     design_space,
@@ -38,7 +36,7 @@ from finn.core.space._nodes import (
 from finn.core.space._signatures import BoundArgument, validate_argument
 from finn.core.space.collection import collect_space
 from finn.core.space.compiler import compile_model
-from finn.core.space.declarations import Declaration, MemberRef, ValueRef
+from finn.core.space.declarations import Declaration, Derived, MemberRef, ValueRef
 from finn.core.space.semantics import ValueSemantics, default_semantics
 
 
@@ -127,7 +125,7 @@ def test_value_and_function_views_are_distinct_declarations_with_same_type() -> 
         def function(*, value: int) -> int:
             raise AssertionError("must not run")
 
-        detached = View(value)
+        detached = view(value)
 
     collected = collect_space(Example)
     assert collected.functions["function"].semantics.type_token is int
@@ -144,7 +142,7 @@ def test_node_member_alias_and_typed_views() -> None:
         def result(*, extent: int) -> int:
             return extent
 
-        width_view = View(extent)
+        width_view = view(extent)
 
     # The parent declares the formal and binds it to the child.
     class Parent(Space):
@@ -514,7 +512,7 @@ def test_guards_are_collected_separately_and_respect_inherited_overrides() -> No
         def authored(*, selected: int) -> int:
             raise AssertionError("must not execute")
 
-        physical = View(result, when=enabled)
+        physical = view(result, when=enabled)
         child = Child(value=1, when=enabled)
         # A singleton structural choice is an ordinary Decision over nodes.
         implementation: Child = Select(only=Child(value=1), when=enabled)
@@ -652,7 +650,7 @@ def test_linked_child_types_are_inferred_without_mutating_declarations() -> None
         def enabled(*, size: int) -> bool:
             raise AssertionError("must not execute")
 
-        admitted = View(enabled)
+        admitted = view(enabled)
 
     class Parent(Space):
         child = Child(size=1)
@@ -661,7 +659,7 @@ def test_linked_child_types_are_inferred_without_mutating_declarations() -> None
         def value() -> int:
             raise AssertionError("must not execute")
 
-        copied = View(child.admitted)
+        copied = view(child.admitted)
 
     model = compile_model(Parent)
     semantics = model.resolve(model.root, Parent.copied).semantics
