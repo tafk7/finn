@@ -176,6 +176,24 @@ def test_stored_choices_are_bound_as_assignment() -> None:
     ]
 
 
+def test_a_stored_key_no_member_declares_binds_and_is_named_stale_as_not_a_decision() -> None:
+    """Bind is assignment: a stored key of no member (``nobody.pe``) does not refuse the
+    partition. It is dropped as stale, named by its dotted key with ``not-a-decision``,
+    owned by the key; every other stored choice binds as it was."""
+    stored = chain.chain().chosen()
+    bound = by_hand(chain.members(), {**stored, ("nobody", "pe"): 1})
+    assert bound.chosen() == stored
+    assert list(bound.dropped) == [("nobody", "pe")]
+    assert list(bound.stale) == ["nobody.pe"]
+    ((found,),) = bound.stale.values()
+    assert (found.code, found.owner, found.message) == (
+        "not-a-decision",
+        "nobody.pe",
+        "no choice of the partition",
+    )
+    assert not by_hand(chain.members(), stored).stale
+
+
 class Board(Space):
     """A member that states the platform of the Chain's hidden channel: with UltraRAM or
     without, by its own choice."""
