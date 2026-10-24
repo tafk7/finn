@@ -52,7 +52,6 @@ from .results import (
     ViewAssessment,
     reject,
 )
-from .semantics import ValueSemantics, default_semantics
 
 __all__ = [
     # Space classes, node declarations and the compile step
@@ -91,8 +90,6 @@ __all__ = [
     "Domain",
     "domain",
     "divisors_of",
-    "ValueSemantics",
-    "default_semantics",
     "value_type",
     # Results and assessments
     "QueryResult",

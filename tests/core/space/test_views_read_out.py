@@ -260,8 +260,8 @@ def test_a_cycle_among_explicit_argument_views_is_cyclic_dependency_at_compile()
     """Two views, each naming the other as its argument (``a(b)``, ``b(a)``): found when the
     class is compiled, ``cyclic-dependency``; it is no ``view-read-in``, which a view's
     reading a view is not."""
-    first = View.from_function(double, semantics=None, aliases={"x": Param(default=1)})
-    second = View.from_function(double, semantics=None, aliases={"x": first})
+    first = View.from_function(double, aliases={"x": Param(default=1)})
+    second = View.from_function(double, aliases={"x": first})
     _wire(first, x=second)
 
     class Loop(Space):
@@ -274,7 +274,7 @@ def test_a_cycle_among_explicit_argument_views_is_cyclic_dependency_at_compile()
 
 def test_a_view_reading_itself_by_argument_is_cyclic_dependency_at_compile() -> None:
     """A view naming itself as its argument: ``cyclic-dependency`` at compile."""
-    only = View.from_function(double, semantics=None, aliases={"x": Param(default=1)})
+    only = View.from_function(double, aliases={"x": Param(default=1)})
     _wire(only, x=only)
 
     class Loop(Space):
@@ -287,7 +287,7 @@ def test_a_view_reading_itself_by_argument_is_cyclic_dependency_at_compile() -> 
 def test_a_view_of_a_view_closing_a_cycle_is_cyclic_dependency_at_compile() -> None:
     """``c = View(a)`` with ``a`` reading ``c`` as its argument: ``cyclic-dependency`` at
     compile."""
-    first = View.from_function(double, semantics=None, aliases={"x": Param(default=1)})
+    first = View.from_function(double, aliases={"x": Param(default=1)})
     second = View(first)
     _wire(first, x=second)
 

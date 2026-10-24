@@ -936,7 +936,6 @@ class View(Declaration, Generic[T]):
         cls,
         function: Callable[..., T | QueryResult[T]],
         *,
-        semantics: ValueSemantics[T] | None,
         aliases: Mapping[str, object],
         when: Guard = None,
     ) -> View[T]:
@@ -944,7 +943,7 @@ class View(Declaration, Generic[T]):
         result.source = None
         result.function = function
         result.aliases = MappingProxyType(dict(aliases))
-        result.semantics = semantics
+        result.semantics = None
         result.when = guard(when)
         return result
 
@@ -969,21 +968,18 @@ class _ViewDecorator:
     def __init__(self, aliases: Mapping[str, object], when: Guard) -> None:
         self.aliases, self.when = aliases, when
 
-    def __call__(self, function: Callable[..., T | NonValue]) -> View[T]:
-        return View.from_function(function, semantics=None, aliases=self.aliases, when=self.when)
+    @overload
+    def __call__(self, function: Callable[..., QueryResult[T]]) -> View[T]: ...
+
+    @overload
+    def __call__(self, function: Callable[..., T | NonValue]) -> View[T]: ...
+
+    def __call__(self, function: Callable[..., object]) -> View[Any]:
+        return View.from_function(function, aliases=self.aliases, when=self.when)
 
 
-class _SemanticViewDecorator(Generic[T]):
-    def __init__(self, semantics: ValueSemantics[T], decorator: _ViewDecorator) -> None:
-        self.semantics, self.decorator = semantics, decorator
-
-    def __call__(self, function: Callable[..., T | QueryResult[T]]) -> View[T]:
-        return View.from_function(
-            function,
-            semantics=self.semantics,
-            aliases=self.decorator.aliases,
-            when=self.decorator.when,
-        )
+@overload
+def view(function: Callable[..., QueryResult[T]], /) -> View[T]: ...
 
 
 @overload
@@ -991,40 +987,28 @@ def view(function: Callable[..., T | NonValue], /) -> View[T]: ...
 
 
 @overload
-def view(
-    *,
-    semantics: ValueSemantics[T],
-    when: ValueRef[bool] | bool | None = None,
-    **aliases: object,
-) -> _SemanticViewDecorator[T]: ...
-
-
-@overload
-def view(
-    *,
-    semantics: None = None,
-    when: ValueRef[bool] | bool | None = None,
-    **aliases: object,
-) -> _ViewDecorator: ...
+def view(*, when: ValueRef[bool] | bool | None = None, **aliases: object) -> _ViewDecorator: ...
 
 
 def view(
     function: Callable[..., object] | None = None,
     /,
     *,
-    semantics: object = None,
     when: Guard = None,
     **aliases: object,
 ) -> object:
+    """A view: ``@view`` on a method, or ``@view(when=..., **aliases)``. Its return
+    annotation is its value's type and check (``T``, or ``T | Rejected``)."""
+    if "semantics" in aliases:
+        raise DefinitionError.broken(
+            "view-semantics",
+            _OWNER,
+            f"view{at(source_origin())}: {SEMANTICS_GONE} (the return annotation, or the "
+            "source of a View)",
+        )
     decorator = _ViewDecorator(aliases, when)
     if function is not None:
         return decorator(function)
-    if semantics is not None:
-        if not isinstance(semantics, ValueSemantics):
-            raise DefinitionError.broken(
-                "semantics-invalid", _OWNER, "semantics= must be a ValueSemantics"
-            )
-        return _SemanticViewDecorator(semantics, decorator)
     return decorator
 
 

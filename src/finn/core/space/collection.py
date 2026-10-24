@@ -203,6 +203,7 @@ def _collect_semantics(
                 function_decl, hints_for(function, owner), owner
             )
         elif isinstance(declaration, (ValueRef, View)) and declaration.semantics is not None:
+            # a fact's annotation, a value-authored view's source's (a function states its own)
             semantics[declaration] = declaration.semantics
         for prior in inherited[name][:-1]:
             if isinstance(prior, (NodeDecl, NodeDecision)) and isinstance(

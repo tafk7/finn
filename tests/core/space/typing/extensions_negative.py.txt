@@ -1,5 +1,5 @@
 from finn.core.space import (
-    Available, Param, QueryResult, Space, ValueSemantics,
+    Available, Param, QueryResult, Space,
     composite, design_space, derived,
 )
 

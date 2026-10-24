@@ -39,7 +39,6 @@ from finn.core.space import (
     View,
     ViewAssessment,
     constraint,
-    default_semantics,
     derived,
     design_space,
     inspection,
@@ -50,9 +49,6 @@ from finn.core.space import (
 @dataclass(frozen=True)
 class DType:
     bits: int
-
-
-INT = default_semantics(int)
 
 
 class Room(Space):
@@ -161,7 +157,7 @@ class Eltwise(Space):
     def result_dtype(*, a: DType, b: DType) -> QueryResult[DType]:
         return Available(DType(max(a.bits, b.bits) + 1))
 
-    @view(semantics=INT)
+    @view
     def physical(*, result_dtype: DType) -> QueryResult[int]:
         return Available(result_dtype.bits)
 
