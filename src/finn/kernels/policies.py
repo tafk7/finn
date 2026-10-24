@@ -408,8 +408,10 @@ class Defaulted(Generic[S]):
     ranking that could not be read, its choice taken in listed order (``fallbacks``:
     ``choice-order-unknown``); each choice no value could be set for, left open (``unset``:
     ``choice-no-valid-value``); and each member refused on its own, none of its choices set
-    (``refused``: its member's name and the findings of its validity). A result, not a value
-    a Space holds: a plain dataclass."""
+    (``refused``: its member's name and the findings of its validity). ``refused[""]`` is
+    the point itself refused (``Alone``'s one member, ``""``: a kernel or a channel alone,
+    whole), as against a member of a partition, keyed by its name. A result, not a value a
+    Space holds: a plain dataclass."""
 
     point: S
     fallbacks: tuple[Finding, ...] = ()
