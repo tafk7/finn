@@ -59,7 +59,7 @@ from finn.kernels.composer import (
 from finn.kernels.configure import commit
 from finn.kernels.matmul import KnownWeights, MatMulKernel
 from finn.kernels.port import port_endpoint
-from finn.kernels.sides import Side, SideKind
+from finn.kernels.sides import BUILD, Outside, Side, SideKind, Steady
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 
@@ -259,6 +259,24 @@ def test_the_same_structure_is_one_class_and_new_facts_a_new_design_space(cache:
     renamed = compose(declared({"first": "first_"}))
     assert renamed.space_type is not composed.space_type
     assert cached_classes() == 3
+
+
+def test_a_boundary_stated_or_not_is_one_class_its_side_a_root_fact(cache: None) -> None:
+    """The class's key reads a boundary side by its kind and its label (``("side", kind,
+    label)``), never its value: the Chain with its input stated by the outside is the
+    class of the Chain unstated, a new design space, and the side, a root fact, is all
+    that differs."""
+    plain = compose(declared())
+    side = Side.boundary("s_axis_0", outside=Outside(BUILD, pace=Steady(2)))
+    others = channels()
+    others["x"] = channel(side, Port("first", "x"), tensor=X_TENSOR, platform=FULL_DSP48E2)
+    stated = compose(declared(channels_=others))
+    assert stated.space_type is plain.space_type and stated.names == plain.names
+    assert cached_classes() == 1
+    assert stated.facts["x-producer"] == side != plain.facts["x-producer"]
+    assert {name: fact for name, fact in stated.facts.items() if name != "x-producer"} == {
+        name: fact for name, fact in plain.facts.items() if name != "x-producer"
+    }
 
 
 def test_a_fact_left_out_and_a_fact_given_none_are_one_class(cache: None) -> None:

@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 from support import chain
-from support.helpers import FULL_DSP48E2, keyed, with_defaults
+from support.helpers import FULL_DSP48E2, by_hand, choose, keyed, with_defaults
 from support.refusals import refused
 from support.xsim import requires_xsim
 
@@ -32,8 +32,10 @@ from finn.harness.toolchain import finnlib_root
 from finn.kernels import input_generator
 from finn.kernels.artifacts.rtl import evaluate
 from finn.kernels.channels import Channel, Neighbours
+from finn.kernels.composer import Port, channel
 from finn.kernels.explore import (
     Accepted,
+    Bottleneck,
     ExploreError,
     FifoCheck,
     Hold,
@@ -57,10 +59,13 @@ from finn.kernels.fifo_sizing import (
     least_depth,
     sides,
     simulate,
+    size,
+    stated_pattern,
 )
 from finn.kernels.input_generator import NestBuffer, nest_buffer, nest_geometry
 from finn.kernels.partition import Partition
 from finn.kernels.policies import Required
+from finn.kernels.sides import BUILD, BeatTimes, Outside, Side, Steady
 from finn.toolchain.launcher import host_toolchain
 
 MEMBERS = chain.MEMBERS
@@ -247,6 +252,98 @@ def test_a_boundary_and_a_memory_are_not_modelled() -> None:
         sides(point.member("x"), point.neighbours("x"))
     with pytest.raises(NotModelled, match="a memory source: paced by its consumer"):
         sides(point.member("w1"), point.neighbours("w1"))
+
+
+def test_a_stated_pace_is_its_pattern_and_a_steady_beat_is_expanded_at_the_edge_s_beats() -> None:
+    """``stated_pattern``, by value: beat times as stated, their span the pattern's; a beat
+    every ``k`` cycles at ``B`` beats, ``(0, k, ..., (B - 1) k)`` over ``B k``; beat times
+    stated for another count of beats than the edge's, not modelled."""
+    assert stated_pattern(BeatTimes((0, 2, 5), 8), 3) == Pattern((0, 2, 5), 8)
+    assert stated_pattern(BeatTimes((1, 2), 3), 2) == Pattern((1, 2), 3)
+    assert stated_pattern(Steady(3), 4) == Pattern((0, 3, 6, 9), 12)
+    assert stated_pattern(Steady(1), 1) == Pattern((0,), 1)
+    with pytest.raises(
+        NotModelled,
+        match="a boundary's stated pace times 3 beats a frame, and its edge presents 4",
+    ):
+        stated_pattern(BeatTimes((0, 2, 5), 8), 4)
+
+
+def _stated(x: Outside | None, y: Outside | None) -> Partition:
+    """The Chain with its input stated ``x`` and its output ``y`` (None: unstated), as
+    conversion and the cut leave it, folded to 12 cycles a frame (``_folded``)."""
+    members = chain.members()
+    members["x"] = channel(
+        Side.boundary("s_axis_0", outside=x),
+        Port("first", "x"),
+        tensor=chain.X_TENSOR,
+        platform=FULL_DSP48E2,
+    )
+    members["y"] = channel(
+        Port("second", "y"),
+        Side.boundary("m_axis_0", outside=y),
+        tensor=chain.Y_TENSOR,
+        platform=FULL_DSP48E2,
+    )
+    explorer = Seam(FULL_DSP48E2)
+    explorer.held.update(chain.HELD)
+    network = choose(by_hand(members), {"activate.pe": chain.PE})
+    return TargetCycles(12).explore(explorer, with_defaults(network))
+
+
+def test_sizing_reads_a_stated_pace_first_on_either_side() -> None:
+    """A stated input's pace is the supply (a beat every three cycles, expanded at the
+    three beats its edge presents), a stated output's the acceptance (its beat times, as a
+    consumer's port's); each channel sized from them. Unstated, the same channels are
+    not modelled, verbatim."""
+    point = _stated(
+        Outside(BUILD, pace=Steady(3)), Outside(BUILD, pace=BeatTimes(tuple(range(12)), 12))
+    )
+    x, y = point.member("x"), point.member("y")
+    assert x.boundary.form.beats == 3 and x.input_chain == "input_gen"
+    supply, accept = sides(x, point.neighbours("x"))
+    assert supply == Pattern((0, 3, 6), 9)
+    assert isinstance(accept, Buffered) and accept.reads == Pattern(tuple(range(12)), 12)
+    supply, accept = sides(y, point.neighbours("y"))
+    assert accept == Pattern(tuple(range(12)), 12)
+    assert size(x, point.neighbours("x"), 12) == Sized(0, "direct absorbs it", 12, 0)
+    assert size(y, point.neighbours("y"), 12) == Sized(0, "direct absorbs it", 5, 0)
+    _, unstated = _folded()
+    assert unstated.chosen() == point.chosen()
+    for name in ("x", "y"):
+        found = size(unstated.member(name), unstated.neighbours(name), 12)
+        assert found.why == "a boundary: not modelled"
+
+
+def test_a_stated_pace_slower_than_the_members_bounds_the_channel_s_cycles_on_either_side() -> None:
+    """The partition runs no faster than its outside. An input stated a beat every six
+    cycles, at the three beats its edge presents, spans 18 cycles a frame where the Chain's
+    members take 12 at most: the channel's cycles are 18, and so is the bottleneck, the
+    folding unchanged; sizing at that period reads the supply and needs no FIFO. An output
+    stated a beat every three cycles, at its twelve beats, spans 36: its channel's cycles,
+    and the bottleneck, to which the fold relaxes. Unstated, the same channels take their
+    members' cycles (12 and none)."""
+    explorer, unstated = _folded()
+    assert unstated.member("x").query(Channel.cycles).value == 12
+    assert unstated.member("y").query(Channel.cycles).value == 0
+    assert explorer.cost(unstated).bottleneck.cycles == 12  # type: ignore[union-attr]
+    slow = _stated(Outside(BUILD, pace=Steady(6)), None)
+    x = slow.member("x")
+    assert x.boundary.form.beats == 3 and x.query(Channel.cycles).value == 18
+    assert explorer.cost(slow).bottleneck == Bottleneck(("x",), 18)
+    assert slow.chosen() == unstated.chosen()
+    supply, _ = sides(x, slow.neighbours("x"))
+    assert supply == Pattern((0, 6, 12), 18)
+    assert size(x, slow.neighbours("x"), 18) == Sized(0, "direct absorbs it", 12, 0)
+    slow = _stated(None, Outside(BUILD, pace=Steady(3)))
+    y = slow.member("y")
+    assert y.boundary.form.beats == 12 and y.query(Channel.cycles).value == 36
+    assert explorer.cost(slow).bottleneck == Bottleneck(("y",), 36)
+    # TargetCycles relaxes its budget of 12 to the 36 reached, and folds again to it.
+    assert explorer.cost(slow).cycles["first"] == 24
+    _, accept = sides(y, slow.neighbours("y"))
+    assert accept == Pattern(tuple(range(0, 36, 3)), 36)
+    assert size(y, slow.neighbours("y"), 36) == Sized(0, "direct absorbs it", 5, 0)
 
 
 # -- the strategy ---------------------------------------------------------------------------

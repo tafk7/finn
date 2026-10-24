@@ -325,19 +325,21 @@ def kernel_model(**options: Any) -> ModelWrapper:
 
 
 #: The second MatMul's folding under which the Chain's streamed w2 presents each pass
-#: row-major at its free side, the order an IODMA mover moves (``IodmaMover.row_major``): a
-#: row of PE lanes a beat. At the Chain's own (2 x 2) it is tiled, and the pynq shell
-#: refuses it (``mover-order``).
+#: row-major at its free side, the order an IODMA mover states (``MoverOffer.states``): a
+#: row of PE lanes a beat. At the Chain's own (2 x 2) it is tiled, which no chain of
+#: modules regroups to the stated rows: the pynq shell's edge channel refuses it
+#: (``channel-steps``).
 ROW_MAJOR_W2 = {"pe": 4, "simd": 1}
 
 
 def streamed_w2_model() -> ModelWrapper:
-    """The Chain with x and w2 streamed as IODMA movers move them, each one pass a frame
-    (``IodmaMover.single_pass``): one row of x, so w2 presents its pass once (at the
-    Chain's three rows it presents it three times, which the pynq shell refuses,
-    ``mover-repetition``), and the first MatMul folded at PE 4, all of its outputs, so
-    that x is read once (at PE 2 it is read twice: over one row, the replay of each
-    row is a repetition of the whole pass); the second folded ``ROW_MAJOR_W2``."""
+    """The Chain with x and w2 streamed as IODMA movers state them, each pass row-major
+    and one pass a frame, so that no adapter is placed for the statement: one row of x,
+    so w2 presents its pass once (at the Chain's three rows it presents it three times,
+    and on pynq an ``input_gen`` replays the one pass its mover moves), and the first
+    MatMul folded at PE 4, all of its outputs, so that x is read once (at PE 2 it is read
+    twice: over one row, the replay of each row is a repetition of the whole pass); the
+    second folded ``ROW_MAJOR_W2``."""
     model = kernel_model(second_weights=False, rows=1)
     return configured(model, {"first": {"pe": 4}, "second": ROW_MAJOR_W2})
 

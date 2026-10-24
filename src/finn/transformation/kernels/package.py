@@ -161,7 +161,10 @@ def stream_order(form: Traversal) -> dict[str, Any]:
     it: whether each pass is row-major (``Traversal.row_major`` of its ``period``), the
     passes a frame repeats (``passes``), and its traversal: the shape it walks and its
     beat and lane loops, outer first, each ``[extent, stride]``, a stride in elements
-    of that shape's row-major index (0: a repetition or a replay)."""
+    of that shape's row-major index (0: a repetition or a replay). Read at a free side,
+    which presents what the outside states of it where it states it
+    (``finn.kernels.sides.Outside``): there the order and the passes are the
+    statement's (a mover's: row-major, one pass a frame); unstated, the inside's."""
     one = period(form)
     return {
         "row_major": one.row_major,
@@ -179,7 +182,11 @@ def boundary_facts(
     tensor and its shape; the stream at the channel's free side, the partition's own side
     (the side no kernel of the partition owns): the channel's element and its range,
     lanes, beats and TDATA width; and the mover the shell places there (``mover_facts``), or
-    ``None``."""
+    ``None``. A side the outside states presents the statement there: its lanes are the
+    stated ones where the build states lanes, and its TDATA width their word, padded to
+    bytes. What states the side, and the pace it states, are not facts of the IP's ports
+    and are not reported: a build's pace stays as its configuration gives it, a mover's is
+    its contract (``mover_facts``)."""
     found: tuple[list[dict[str, Any]], list[dict[str, Any]]] = ([], [])
     for tensor, port in boundary:
         channel = point.channel(tensor)
@@ -209,7 +216,7 @@ def interface_description(
     """The interface description of a partition model's IP (``describe_interface``): its
     name, VLNV and top, then the module's pins with the boundary facts of its streams, at
     the model's target (part and period), each stream's order its free side's
-    (``stream_order``)."""
+    (``stream_order``: on a side the outside states, the statement's)."""
     built = read_target(model)
     inputs, outputs = boundary_facts(model, point, boundary, ip_name)
     return {

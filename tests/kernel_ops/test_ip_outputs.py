@@ -31,6 +31,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.ranges import TensorRange
 from support.configure import configured
 from support.models import (
+    ROW_MAJOR_W2,
     choose_memories,
     configure_partition,
     kernel_model,
@@ -124,8 +125,8 @@ def test_the_description_beside_the_ip_reads_back_against_the_modules_pins(
 
 
 def test_the_description_states_each_streams_passes_a_frame(tmp_path: Path) -> None:
-    """On ``ip``, whose integrator moves the streams, the Chain's streamed w2 crosses the
-    boundary once per row of x, three times a frame, which no mover refuses there: the
+    """On ``ip``, whose integrator moves the streams and states nothing of them, the
+    Chain's streamed w2 crosses the boundary once per row of x, three times a frame: the
     description states each stream's passes (``order``), so that its integrator supplies
     w2 three times."""
     configure_partition(model := kernel_model(second_weights=False))
@@ -136,6 +137,29 @@ def test_the_description_states_each_streams_passes_a_frame(tmp_path: Path) -> N
         (stream["name"], stream["tensor"], stream["beats"], stream["order"]["passes"])
         for stream in described["streams"]
     ] == [("s_axis_0", "x", 6, 1), ("s_axis_1", "w2", 12, 3), ("m_axis_0", "y", 6, 1)]
+
+
+def test_on_pynq_the_description_states_what_the_movers_state(tmp_path: Path) -> None:
+    """In the Zynq shell each mover states its side row-major, one pass a frame, so the
+    description states each stream's order as stated: the same Chain, its w2 read
+    row-major (``ROW_MAJOR_W2``), crosses the boundary once a frame, 4 beats, and an
+    ``input_gen`` in the partition replays it; every stream row-major, one pass."""
+    model = kernel_model(second_weights=False)
+    configured(model, {"second": ROW_MAJOR_W2})
+    write_target(model, ZYNQ)
+    configure_partition(model)
+    stub = cast(Toolchain, PackagedByStub())
+    model.transform(PackagePartition("sdp_1", directory=tmp_path, toolchain=stub))
+    described = json.loads((tmp_path / "interface.json").read_text())
+    assert [
+        (
+            stream["name"],
+            stream["beats"],
+            stream["order"]["row_major"],
+            stream["order"]["passes"],
+        )
+        for stream in described["streams"]
+    ] == [("s_axis_0", 6, True, 1), ("s_axis_1", 4, True, 1), ("m_axis_0", 3, True, 1)]
 
 
 def test_the_frame_draws_each_input_from_its_range() -> None:

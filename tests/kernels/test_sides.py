@@ -17,6 +17,9 @@ takes each kind in.
   input port (one without).
 - **The boundary**, unstated: its label names the AXIS port, which presents what the other
   side presents; a shell's offers on it place the mover (``offered``).
+- **What the outside states** (``Outside``, its pace ``BeatTimes`` or ``Steady``): value
+  classes, each invariant refused by name as it is made; only the boundary's side carries
+  one, and a mover's only where the side offers that mover.
 - **A served port** below the label its kernel states for its child (a channel's set port,
   ``source.memstream.set``) states that label and its side below it.
 """
@@ -37,8 +40,18 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.channels import Channel
-from finn.kernels.movers import iodma_hls
-from finn.kernels.sides import Side, SideKind
+from finn.kernels.movers import IODMA_HLS, iodma_hls
+from finn.kernels.sides import (
+    BUILD,
+    ROW_MAJOR,
+    ROW_MAJOR_HOST,
+    BeatTimes,
+    Outside,
+    Side,
+    SideKind,
+    Steady,
+    beat_times,
+)
 from finn.kernels.values.semantics import IntegerTensorValue
 
 INT3 = ScalarEncoding(DataType["INT3"])
@@ -49,10 +62,13 @@ OUTPUT = Side.kernel(WORDS, "producer.y", 8)
 INPUT = Side.kernel(WORDS, "consumer.x")
 OFFERS = (iodma_hls(64),)
 
+STATED = Outside(BUILD, ROW_MAJOR, 1, 2, BeatTimes((0, 2, 4), 6))
+"""A build's statement: row-major, one pass, two lanes, a beat every other cycle."""
+
 SIDES = {
     "kernel": OUTPUT,
     "neighbour": Side.neighbour(WORDS, "upstream.y", 8),
-    "boundary": Side.boundary("s_axis_0", OFFERS),
+    "boundary": Side.boundary("s_axis_0", OFFERS, OFFERS[0].states()),
     "source": Side.source(),
 }
 """A side of each kind."""
@@ -97,6 +113,8 @@ def test_each_kind_is_made_whole_by_its_constructor() -> None:
         lambda: Side(SideKind.BOUNDARY, "s_axis_0", width=8),
         lambda: Side(SideKind.SOURCE, "source.memstream"),
         lambda: Side(SideKind.KERNEL, "producer.y", WORDS, offers=OFFERS),
+        lambda: Side(SideKind.KERNEL, "producer.y", WORDS, 8, outside=STATED),
+        lambda: Side(SideKind.SOURCE, outside=STATED),
     ],
     ids=[
         "a stream without its label",
@@ -107,6 +125,8 @@ def test_each_kind_is_made_whole_by_its_constructor() -> None:
         "a boundary with a width",
         "a source with a label",
         "offers beside no boundary",
+        "a statement on a kernel's side",
+        "a statement on a source's side",
     ],
 )
 def test_a_side_not_whole_is_not_made(made: Any) -> None:
@@ -137,6 +157,138 @@ def test_a_side_is_a_value_class_the_node_cache_keys() -> None:
     assert all(found is not None for found in keys.values()), keys
     assert len(set(keys.values())) == len(SIDES)
     assert key(Side.kernel(WORDS, "producer.y", 8)) == keys["kernel"]
+
+
+def test_what_the_outside_states_is_a_value_class_the_node_cache_keys() -> None:
+    """``Outside``, ``BeatTimes`` and ``Steady`` are keyed field by field, and a boundary
+    side's ``outside`` is part of its key: a side stated and one unstated differ, two
+    stated alike share one."""
+    assert value_class(Outside) and value_class(BeatTimes) and value_class(Steady)
+    unstated = Side.boundary("s_axis_0")
+    stated = Side.boundary("s_axis_0", outside=STATED)
+    keys = [
+        key(value)
+        for value in (
+            unstated,
+            stated,
+            STATED,
+            STATED.pace,
+            Steady(3),
+            Outside(BUILD, pace=Steady(3)),
+        )
+    ]
+    assert all(found is not None for found in keys), keys
+    assert len(set(keys)) == len(keys)
+    again = Outside(BUILD, ROW_MAJOR, 1, 2, BeatTimes((0, 2, 4), 6))
+    assert key(Side.boundary("s_axis_0", outside=again)) == key(stated)
+    assert stated.outside == again and stated != unstated
+    # Unstated is the default, by name: a boundary made without one states None.
+    assert unstated.outside is None and unstated == Side.boundary("s_axis_0", outside=None)
+
+
+def test_what_the_outside_states_defaults_to_as_the_inside_presents_it() -> None:
+    """Each field the outside leaves out is None, as the inside presents it; the host's
+    layout is the one named default; a mover's statement may leave its pace to its
+    contract."""
+    stated = Outside(BUILD, pace=Steady(2))
+    assert (stated.order, stated.passes, stated.lanes) == (None, None, None)
+    assert stated.layout == ROW_MAJOR_HOST and stated.pace == Steady(2)
+    mover = Outside(IODMA_HLS, ROW_MAJOR, 1)
+    assert mover.pace is None and mover.lanes is None
+    assert Side.boundary("s_axis_0", OFFERS, mover).outside == mover
+
+
+def test_a_steady_beat_is_expanded_at_the_edge_s_beats_and_beat_times_are_as_stated() -> None:
+    """``beat_times``, by value, the one place a ``Steady`` is expanded: a beat every ``k``
+    cycles at ``B`` beats is ``(0, k, ..., (B - 1) k)`` over ``B k``; beat times are
+    returned as stated, at any beats; the statement itself keeps the shorthand."""
+    assert beat_times(Steady(3), 6) == BeatTimes((0, 3, 6, 9, 12, 15), 18)
+    assert beat_times(Steady(1), 1) == BeatTimes((0,), 1)
+    stated = BeatTimes((9, 10, 11), 12)
+    assert beat_times(stated, 3) is stated and beat_times(stated, 4) is stated
+    assert Outside(BUILD, pace=Steady(3)).pace == Steady(3)
+
+
+@pytest.mark.parametrize(
+    ("made", "message"),
+    [
+        (lambda: Outside("dma", pace=Steady(1)), "a mover \\(iodma_hls\\) or the build"),
+        (lambda: Outside(BUILD, "column_major", pace=Steady(1)), "a row_major order"),
+        (lambda: Outside(BUILD, passes=2, pace=Steady(1)), "one pass a frame, not 2"),
+        (lambda: Outside(BUILD, passes=0, pace=Steady(1)), "one pass a frame, not 0"),
+        (lambda: Outside(BUILD, lanes=0, pace=Steady(1)), "one lane a beat or more, not 0"),
+        (lambda: Outside(BUILD, lanes=True, pace=Steady(1)), "one lane a beat or more"),
+        (lambda: Outside(BUILD), "the build's statement states its pace"),
+        (
+            lambda: Outside(BUILD, pace=(0, 1)),  # type: ignore[arg-type]
+            "its beat times or a steady beat",
+        ),
+        (lambda: Outside(BUILD, pace=Steady(1), layout="tiled"), "row_major_host, not 'tiled'"),
+        (lambda: Steady(0), "every cycle or more, not every 0"),
+        (lambda: BeatTimes((), 4), "a tuple of at least one cycle"),
+        (lambda: BeatTimes([0, 1], 4), "a tuple of at least one cycle"),  # type: ignore[arg-type]
+        (lambda: BeatTimes((0, 1), 0), "at least one cycle, not 0"),
+        (lambda: BeatTimes((-1, 1), 4), "start at cycle 0 or later, one beat a cycle"),
+        (lambda: BeatTimes((0, 2, 2), 4), "start at cycle 0 or later, one beat a cycle"),
+        (lambda: BeatTimes((0, 3, 1), 4), "start at cycle 0 or later, one beat a cycle"),
+        (lambda: BeatTimes((0, 4), 4), "lie within its span: a beat at 4 of 4"),
+    ],
+    ids=[
+        "a source neither a mover nor the build",
+        "an order other than row-major",
+        "two passes",
+        "no pass",
+        "no lane",
+        "a bool for lanes",
+        "the build's without a pace",
+        "a pace of another type",
+        "a layout other than the host's",
+        "a steady beat every 0 cycles",
+        "no beat",
+        "beat times not a tuple",
+        "a span of no cycle",
+        "a beat before the frame",
+        "two beats in one cycle",
+        "beats out of order",
+        "a beat beyond the span",
+    ],
+)
+def test_a_statement_not_well_formed_is_not_made(made: Any, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        made()
+
+
+def test_only_the_boundary_carries_a_statement_and_a_mover_s_where_it_is_offered() -> None:
+    """A kernel's, a neighbour's or a source's side carries no ``outside`` (the cases above);
+    a mover's statement is made on a side that offers that mover, the build's on a boundary
+    offered none."""
+    mover = Outside(IODMA_HLS, ROW_MAJOR, 1)
+    with pytest.raises(ValueError, match="stated by an iodma_hls mover, and none is offered"):
+        Side.boundary("s_axis_0", outside=mover)
+    with pytest.raises(ValueError, match="only the boundary's side is stated by the outside"):
+        Side(SideKind.NEIGHBOUR, "upstream.y", WORDS, 8, outside=STATED)
+    assert Side.boundary("s_axis_0", outside=STATED).outside == STATED
+
+
+@pytest.mark.parametrize(
+    ("outside", "said"),
+    [
+        (None, "left unstated"),
+        (STATED, "stated by the build"),
+        (Outside(IODMA_HLS, ROW_MAJOR, 1, 2), "stated otherwise than its iodma_hls mover states"),
+    ],
+    ids=["unstated", "the build's statement", "another statement of the mover's kind"],
+)
+def test_a_side_offered_a_mover_carries_that_mover_s_statement(
+    outside: Outside | None, said: str
+) -> None:
+    """A boundary offered a mover is stated by it (``MoverOffer.states``), exactly: so the
+    mover is never placed on a side it does not state, and a build's statement never meets
+    an offered mover (the build refuses it first, ``boundary-stated-twice``)."""
+    stated = OFFERS[0].states()
+    assert Side.boundary("s_axis_0", OFFERS, stated).outside == stated
+    with pytest.raises(ValueError, match=f"s_axis_0 is offered an iodma_hls mover and {said}"):
+        Side.boundary("s_axis_0", OFFERS, outside)
 
 
 # -- the roles -----------------------------------------------------------------------------
@@ -223,7 +375,7 @@ def test_an_unstated_boundary_presents_its_other_side_at_the_port_its_label_name
 def test_offers_on_the_boundary_place_the_mover() -> None:
     plain = channel(Side.boundary("s_axis_0"), INPUT)
     assert not plain.offered and plain.placed_mover == ()
-    offered = channel(Side.boundary("s_axis_0", OFFERS), INPUT)
+    offered = channel(Side.boundary("s_axis_0", OFFERS, OFFERS[0].states()), INPUT)
     assert offered.offered and offered.offers == OFFERS
     (mover,) = offered.placed_mover
     assert (mover.port, mover.direction) == ("s_axis_0", "in")

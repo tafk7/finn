@@ -7,7 +7,8 @@ A channel runs ``source -> output adapter -> transport -> input adapter ->
 consumer`` (``finn.kernels.channels``); its ``transport`` is ``direct`` or a
 FIFO of ``depth`` words of what arrives at it, the pre-replay stream. The depth
 a channel needs is read from two patterns over a frame, repeated at the
-partition's bottleneck period ``P`` (its ``cycles``):
+partition's bottleneck period ``P`` (its ``cycles``, which count a boundary's stated pace:
+``Channel.cycles``):
 
 - the **supply**: when each word arrives at the transport, unthrottled. The
   producer's beat times, which its port states with its contract (``Pace``: one
@@ -38,9 +39,11 @@ neighbour's port's, at its stored choices, as a kernel's), and gives its ``Sized
 depth (``0``: direct) and why. The least depth counts the words the FIFO must
 hold; the DEPTH proposed is the least whose native storage holds them
 (``least_depth_holding``: FinnLib's FIFO is a shift register of five words up to
-33, so a DEPTH of two holds up to five). A boundary's free side is paced by the
+33, so a DEPTH of two holds up to five). A boundary's free side is paced, in order, by
+the pace the outside states of it (``Side.outside``, ``finn.kernels.sides``: its beat
+times, or a steady beat expanded at the edge's beats, ``stated_pattern``), else by the
 mover the shell places there (``Channel.mover``, ``finn.kernels.movers``): its beat
-times over a frame, and its cycles a frame as its span. A boundary without a
+times over a frame, and its cycles a frame as its span. An unstated boundary without a
 mover (the ``ip`` shell: its integrator's pacing), a memory source (paced by its
 consumer) and a side no schedule paces are not modelled: direct, with that
 reason. So is an adapter
@@ -70,7 +73,8 @@ from finn.kernels.channels import Channel, Neighbours
 from finn.kernels.fifo import least_depth_holding
 from finn.kernels.input_generator import Generate, NestBuffer, nest_buffer
 from finn.kernels.movers import MoverContract
-from finn.kernels.sides import SideKind
+from finn.kernels.sides import BeatTimes, Side, SideKind, Steady, beat_times
+from finn.kernels.transport import StreamContract
 
 
 @dataclass(frozen=True)
@@ -303,8 +307,32 @@ def _pattern(port: PortContract | None, side: str) -> Pattern:
     return Pattern(pace.times, pace.span)
 
 
-def _free(channel: Channel) -> Pattern:
-    """A boundary's free side, paced by its mover: its beat times and its cycles a frame."""
+def stated_pattern(pace: BeatTimes | Steady, beats: int) -> Pattern:
+    """The ``Pattern`` of a pace the outside states (``Outside.pace``) at an edge of
+    ``beats`` beats a frame: its beat times and their span (``finn.kernels.sides.beat_times``,
+    the one place a ``Steady`` is expanded). ``NotModelled`` where the stated beat times are
+    not one a beat of the edge's: a build's beat times state their lanes and passes, and the
+    cut refuses a count they do not make of the port's tensor, so only a side built by
+    hand reaches it."""
+    found = beat_times(pace, beats)
+    if len(found.times) != beats:
+        raise NotModelled(
+            f"a boundary's stated pace times {len(found.times)} beats a frame, and its edge "
+            f"presents {beats}"
+        )
+    return Pattern(found.times, found.span)
+
+
+def _free(channel: Channel, side: Side) -> Pattern:
+    """A boundary's free side (``side``), paced, in order: by the pace the outside states
+    (``stated_pattern``, at the beats the edge presents a frame); else by its mover, its
+    beat times and its cycles a frame; else, an unstated side without a mover, not
+    modelled ("a boundary: not modelled")."""
+    outside = side.outside
+    if outside is not None and outside.pace is not None:
+        edge: StreamContract | None = channel.boundary
+        assert edge is not None  # a channel with a boundary side presents its port
+        return stated_pattern(outside.pace, edge.form.beats)
     if not channel.offered:
         raise NotModelled("a boundary: not modelled")
     contract: MoverContract = channel.mover_contract
@@ -314,18 +342,19 @@ def _free(channel: Channel) -> Pattern:
 def sides(channel: Channel, neighbours: Neighbours) -> tuple[Pattern, Acceptance]:
     """A channel's supply at its transport and its input side's acceptance, from the
     paces the ports beside it state (``neighbours``, as its network reads them); a
-    boundary side's from its mover; ``NotModelled`` naming why the model does not read
-    them."""
+    boundary side's from the pace the outside states, else from its mover (``_free``; a
+    stated output's pace is the acceptance, as a consumer's port's); ``NotModelled``
+    naming why the model does not read them."""
     if channel.valued:
         raise NotModelled("a memory source: paced by its consumer")
     found = channel.sides
     producer = (
-        _free(channel)
+        _free(channel, found.producer)
         if found.producer.kind is SideKind.BOUNDARY
         else _pattern(neighbours.producer, "producer")
     )
     consumer = (
-        _free(channel)
+        _free(channel, found.consumer)
         if found.consumer.kind is SideKind.BOUNDARY
         else _pattern(neighbours.consumer, "consumer")
     )
@@ -420,4 +449,5 @@ __all__ = [
     "sides",
     "simulate",
     "size",
+    "stated_pattern",
 ]

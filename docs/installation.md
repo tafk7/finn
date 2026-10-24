@@ -596,6 +596,28 @@ part beside it is an assertion) and the `shell`: `ip` unless one is stated, the
 packaged IP its user integrates, whose target states the part alone; `pynq`, the
 Zynq block design for a board.
 
+`boundary` states, for the `ip` shell, what its integrator presents or takes at each
+port of the partition, by the partition's port names (`s_axis_<i>` for its i-th input,
+`m_axis_<j>` for its j-th output): the pace, a beat every `k` cycles (`{"every": k}`) or
+each beat's cycle over a frame and the frame's span (`{"times": [...], "span": n}`), and
+optionally a `"row_major"` `order`, one pass a frame (`passes`) and the `lanes` a beat,
+the port's word, which divides the port's elements. Beat times state `lanes` and `passes`
+too, and their count must be the beats those make of the port's tensor. What a statement
+leaves out is as the partition presents it (an output as produced), and a port it leaves
+out is unstated. FIFO sizing
+reads the stated pace, the partition's cycles a frame are no fewer than its span (the
+partition runs no faster than its integrator supplies an input or takes an output), and
+stated lanes set the port's AXIS width. On `pynq` the shell's movers state every port,
+and a statement there is refused before the first step:
+
+```json
+"boundary": {
+  "s_axis_0": {"pace": {"every": 2}},
+  "m_axis_0": {"order": "row_major", "passes": 1, "lanes": 4,
+               "pace": {"times": [0, 3, 6], "span": 12}}
+}
+```
+
 A build makes what its list's steps make: each output is a step, and listing it makes
 the output. `step_package_partition` packages the partition, on any shell, into
 `stitched_ip/`: the IP, its interface description `interface.json` (the part and
@@ -644,8 +666,8 @@ alone (`"steps": ["list_ip"]`); in Python,
 change and give as `steps`. `start_step` and `stop_step` name a step once in the list,
 or a phase or premade list: its first step to start from, its last to stop after.
 
-The configuration's fields say how the build runs (`output_dir`, `target`, `toolchain`,
-`steps`, `start_step`, `stop_step`, `save_intermediate_models`, `enable_build_pdb_debug`,
+The configuration's fields say how the build runs (`output_dir`, `target`, `boundary`,
+`toolchain`, `steps`, `start_step`, `stop_step`, `save_intermediate_models`, `enable_build_pdb_debug`,
 `verbose`). Every other top-level key is a setting (in Python, `settings={...}`): the
 value of the keyword-only parameter of that name of the steps that declare it
 (`def step_build_bitfile(model, cfg, *, hw_debug: bool = False)`), decoded by its

@@ -93,15 +93,20 @@ def thresholdings(count: int, row: ShellRow, presenting: int | None = None) -> P
     every transport direct."""
     platform = ULTRA96.platform
     # Each channel is on the ports of the thresholdings on either side of it; the first's
-    # and the last's other side the boundary, offered the row's movers.
+    # and the last's other side the boundary, offered the row's movers and stated by them.
     names = ["x", *(f"c{index}" for index in range(count - 1)), "y"]
+    stated = row.movers[0].states() if row.movers else None
     channels: dict[str, Any] = {}
     for index, name in enumerate(names):
         producer = (
-            Port(f"t{index - 1}", "output") if index > 0 else Side.boundary("s_axis_0", row.movers)
+            Port(f"t{index - 1}", "output")
+            if index > 0
+            else Side.boundary("s_axis_0", row.movers, stated)
         )
         consumer = (
-            Port(f"t{index}", "input") if index < count else Side.boundary("m_axis_0", row.movers)
+            Port(f"t{index}", "input")
+            if index < count
+            else Side.boundary("m_axis_0", row.movers, stated)
         )
         channels[name] = channel(producer, consumer, tensor=TENSOR, platform=platform)
     members: dict[str, Any] = {name: channels[name] for name in names[:-1]}

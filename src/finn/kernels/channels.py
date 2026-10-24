@@ -10,11 +10,12 @@ as a fact. Its two sides are facts too, ``producer`` and ``consumer``, each one 
 (``finn.kernels.sides.Side``) of its kind: a kernel's port (the ``Stream`` it presents,
 its label, ``matmul.compute.packed.x``, and on an output port its word width: a kernel's
 ``x_side``), a frozen neighbour's (the same, given as a fact), the boundary's (its AXIS
-port's name, ``s_axis_0``, and the movers a shell offers on it, its stream unstated), or,
-for a known value, its own source. Each side's role takes its kinds only (``channel-users``):
-a producer is an output port, the boundary or the channel's source, and the source is the
-producer of a channel with a known value, and of no other; a consumer is an input port or
-the boundary. The channel's tensor is never derived from a port.
+port's name, ``s_axis_0``, the movers a shell offers on it, and what the outside states
+of it, ``outside``, its stream never given), or, for a known value, its own source. Each
+side's role takes its kinds only (``channel-users``): a producer is an output port, the
+boundary or the channel's source, and the source is the producer of a channel with a
+known value, and of no other; a consumer is an input port or the boundary. The channel's
+tensor is never derived from a port.
 
 Each side's stream must traverse the tensor (``channel-tensor``), and the steps between
 their beat sequences (``finn.dataflow.steps``) must be ones a chain of FinnLib modules
@@ -38,13 +39,19 @@ exploration sizes it, ``Channel.policies``) and its ``ram_style``, and carries d
 only (``fifo-markers``). Its keys are the channel's, by its name (``("x", "transport")``).
 
 A channel with a boundary side presents the module's AXIS port its label names, whose
-contract the channel builds from its facts (``boundary``). The boundary is unstated: it
-presents what its other side presents, by one rule: an input without the replay or window
-its receiver realizes (``unreplayed``), an output as produced, neither with markers. Where
-a shell offers movers on it (``offered``: the boundary side's ``offers``,
-``finn.kernels.movers``), the channel places its ``mover`` on that free side; it binds no
-RTL in the module and states its contract (``mover_contracts``) for the shell's budget check
-and resources.
+contract the channel builds from its facts (``boundary``). Unstated (the side's ``outside``
+None), the boundary presents what its other side presents, by one rule: an input without
+the replay or window its receiver realizes (``unreplayed``), an output as produced, neither
+with markers. Stated (``finn.kernels.sides.Outside``), it presents the stated order, passes
+and lanes, each left None as that rule presents it, and the steps between it and the other
+side are placed as for any side's (a ``vpc`` before the transport for a width, an
+``input_gen`` after it for a reorder or a replay, its buffer the pass), or refused by the
+channel's own codes, ``channel-steps`` naming what states the side (``stated_by``). Where a
+shell offers movers on it (``offered``: the boundary side's ``offers``,
+``finn.kernels.movers``), the mover states the side (``MoverOffer.states``: each pass
+row-major, one pass a frame), and the channel places its ``mover`` on that free side; it
+binds no RTL in the module and states its contract (``mover_contracts``) for the shell's
+budget check and resources.
 
 A channel whose tensor has a known value (``contents``) places its ``source`` (a
 memory, ``MemStreamKernel``) as its producer (its producer side the source's,
@@ -63,7 +70,8 @@ own derived values) and wires them by their contracts (``stages``, a view). Its 
 are the base's views over theirs, but for two it states itself, calling the base's: its
 netlist places its source and its output adapter at their labels and adds the hops between
 its own ends (its source, its stages, its boundary; ``netlist``), and a channel of wires
-takes no cycles of its own (0). Its hops to the ports beside it need those ports'
+takes no cycles of its own (0); a boundary whose outside states a pace takes no fewer than
+that pace's span a frame (``cycles``). Its hops to the ports beside it need those ports'
 contracts, which its network holds: the network wires them (``outer_hops``, from the ports
 it read, ``Neighbours``) and places them around the channel's netlist. It states its
 boundary's AXIS bus (``boundary_bus``) and its mover's contract (``mover_contracts``, one or none:
@@ -74,6 +82,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
+from math import prod
 from types import MappingProxyType
 from typing import ClassVar, cast
 
@@ -97,7 +106,15 @@ from finn.dataflow.steps import Steps, Unrealizable
 from finn.dataflow.steps import steps as between
 from finn.dataflow.streams import Stream, Streams, misfit
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.dataflow.traversal import BeatSequence, Traversal, period, unreplayed
+from finn.dataflow.traversal import (
+    BeatSequence,
+    Loop,
+    Traversal,
+    passes,
+    period,
+    regrouped,
+    unreplayed,
+)
 from finn.kernels.adapters import (
     ADAPTERS,
     OUTPUT_ADAPTER,
@@ -121,7 +138,7 @@ from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.movers import IodmaMover, MoverContract, MoverOffer
 from finn.kernels.policies import Alone, FirstValid, Policy, Required, defaulted, stated
 from finn.kernels.port import served
-from finn.kernels.sides import Side, SideKind
+from finn.kernels.sides import BUILD, ROW_MAJOR, Outside, Side, SideKind, beat_times
 from finn.kernels.transport import (
     AxisBeat,
     Mismatch,
@@ -564,23 +581,26 @@ class Channel(KernelSpace):
         # module's input is the AXIS target and its output the initiator.
         try:
             if source is None and sink is not None:
-                source = _stream(self._boundary(producer.label, sink, Endpoint.TARGET))
+                source = _stream(self._boundary(producer, sink, Endpoint.TARGET))
             elif sink is None and source is not None:
-                sink = _stream(self._boundary(consumer.label, source, Endpoint.INITIATOR))
+                sink = _stream(self._boundary(consumer, source, Endpoint.INITIATOR))
         except ValueError as error:
             return reject("channel-boundary", str(error))
         if source is None or sink is None:
             return reject("channel-unused", "no present port is on this channel")
         return ChannelSides(producer, source, consumer, sink)
 
-    def _boundary(self, port: str, inside: Stream, endpoint: Endpoint) -> StreamContract:
-        """The AXIS port ``port`` the module presents for a boundary side, unstated, from
-        what the other side presents (``inside``): an input without the replay or window its
-        receiver realizes (``unreplayed``), an output as produced, neither with markers."""
+    def _boundary(self, side: Side, inside: Stream, endpoint: Endpoint) -> StreamContract:
+        """The AXIS port the module presents for a boundary ``side`` (its label names it),
+        from what the other side presents (``inside``): an input without the replay or
+        window its receiver realizes (``unreplayed``), an output as produced, neither with
+        markers; where the outside states the side, as it states it (``stated_form``)."""
         form = inside.sequence.form
         if endpoint is Endpoint.TARGET:
             form = unreplayed(form)
-        return boundary_contract(port, self.tensor.element, BeatSequence(form), endpoint)
+        if side.outside is not None:
+            form = stated_form(side.label, side.outside, form)
+        return boundary_contract(side.label, self.tensor.element, BeatSequence(form), endpoint)
 
     @derived
     def boundary(self) -> StreamContract | None:
@@ -589,9 +609,9 @@ class Channel(KernelSpace):
         where neither side is the boundary."""
         found = self.sides
         if found.producer.kind is SideKind.BOUNDARY:
-            return self._boundary(found.producer.label, found.sink, Endpoint.TARGET)
+            return self._boundary(found.producer, found.sink, Endpoint.TARGET)
         if found.consumer.kind is SideKind.BOUNDARY:
-            return self._boundary(found.consumer.label, found.source, Endpoint.INITIATOR)
+            return self._boundary(found.consumer, found.source, Endpoint.INITIATOR)
         return None
 
     @derived
@@ -634,12 +654,19 @@ class Channel(KernelSpace):
 
     @derived
     def steps(self) -> Steps | Rejected:
-        """What must happen between the source's beat sequence and the sink's."""
+        """What must happen between the source's beat sequence and the sink's. Refused where
+        no chain of modules carries them out (``channel-steps``), naming, on a stated
+        boundary, what states it (``stated_by``)."""
         streams = self.streams
         try:
             return between(streams.source.sequence, streams.sink.sequence)
         except Unrealizable as error:
-            return reject("channel-steps", f"no adapter can join the streams: {error}")
+            found = self.sides
+            return reject(
+                "channel-steps",
+                f"{stated_by(found.producer, found.consumer)}no adapter can join the streams: "
+                f"{error}",
+            )
 
     @derived
     def output_steps(self) -> Steps:
@@ -663,9 +690,11 @@ class Channel(KernelSpace):
     def realizable(self) -> bool | Rejected:
         found = self.steps
         if found and not self.adaptable:
+            ends = self.sides
             return reject(
                 "channel-steps",
-                f"the streams need {found.describe()}, and this channel admits no adapter",
+                f"{stated_by(ends.producer, ends.consumer)}the streams need {found.describe()}, "
+                "and this channel admits no adapter",
             )
         return True
 
@@ -850,12 +879,26 @@ class Channel(KernelSpace):
         return KernelSpace._netlist(self, tuple(links), _PLACED)
 
     @view
-    @declared_reads("member_cycles")
+    @declared_reads("member_cycles", "producer", "consumer", "boundary")
     def cycles(self) -> int | Rejected:
         """The clock cycles a frame takes through its own members: the slowest's (its
         source's, its adapters' stages', its mover's), one beat a cycle at best; a FIFO
-        states none, and a channel of wires takes none of its own."""
-        return KernelSpace._cycles(self, default=0)
+        states none, and a channel of wires takes none of its own. On a boundary whose
+        outside states a pace, no fewer than that pace's span at the edge's beats
+        (``finn.kernels.sides.beat_times``): the partition runs no faster than its outside
+        supplies an input or takes an output. A side the outside leaves unstated, or
+        states without a pace (a mover's, its contract's), bounds nothing more."""
+        found = KernelSpace._cycles(self, default=0)
+        paces = [
+            side.outside.pace
+            for side in (self.producer, self.consumer)
+            if side.outside is not None and side.outside.pace is not None
+        ]
+        if isinstance(found, Rejected) or not paces:
+            return found
+        edge: StreamContract | None = self.boundary
+        assert edge is not None  # a side the outside states is a boundary's
+        return max(found, *(beat_times(pace, edge.form.beats).span for pace in paces))
 
     @view
     def boundary_bus(self) -> tuple[Bus, ...]:
@@ -931,6 +974,64 @@ def open_boundary_refusal(
     return result.findings if isinstance(result, Rejected) else ()
 
 
+def stated_form(port: str, outside: Outside, presented: Traversal) -> Traversal:
+    """What a boundary ``port`` stated by ``outside`` presents, where unstated it presents
+    ``presented`` (the boundary rule's form: ``Channel._boundary``). Each pass (``period``)
+    in the stated order, row-major (``Traversal.row_major``) where ``outside.order`` is
+    ``ROW_MAJOR``, else as presented; at the stated lanes a beat, else at the presented
+    pass's (with the order as presented: the same elements in the same order, regrouped,
+    ``regrouped``); and the stated passes a frame (1), else as many as presented
+    (``passes``). Nothing stated beyond what is presented: ``presented`` itself. A
+    ``ValueError`` where the stated lanes do not divide a pass's elements, or where they
+    do but the presented order cannot be regrouped to them (a nest whose loops do not
+    split at that many lanes: a tiled pass)."""
+    once = period(presented)
+    lanes = once.lanes if outside.lanes is None else outside.lanes
+    count = passes(presented) if outside.passes is None else outside.passes
+    size = prod(once.shape)
+    if size % lanes:
+        raise ValueError(
+            f"{port}: the {outside.source} statement's {lanes} lanes a beat do not divide "
+            f"the pass's {size} elements (a pass of {list(once.shape)})"
+        )
+    one = once
+    if outside.order == ROW_MAJOR:
+        one = Traversal(once.shape, (Loop(size // lanes, lanes),), (Loop(lanes, 1),))
+    elif outside.lanes is not None:
+        try:
+            one = regrouped(once, lanes)
+        except ValueError:
+            raise ValueError(
+                f"{port}: the presented order of a pass of {list(once.shape)} cannot be "
+                f"regrouped to {lanes} lanes a beat, as the {outside.source} statement states"
+            ) from None
+    if one == once and count == passes(presented):
+        return presented
+    return one if count == 1 else one.repeated(count)
+
+
+def stated_by(producer: Side, consumer: Side) -> str:
+    """What states a channel's boundary side, as a refusal of its steps names it before
+    its own reason: ``the boundary s_axis_1, stated by the iodma_hls mover (row-major, one
+    pass a frame): `` (the build's: ``stated by the build``; what it states of the order,
+    the passes and the lanes in brackets). Empty where neither side is a stated boundary:
+    an interior channel's refusal, and an unstated boundary's, read as the steps give
+    them."""
+    for side in (producer, consumer):
+        outside = side.outside
+        if outside is None:
+            continue
+        source = "the build" if outside.source == BUILD else f"the {outside.source} mover"
+        stated = [
+            *(["row-major"] if outside.order == ROW_MAJOR else []),
+            *(["one pass a frame"] if outside.passes == 1 else []),
+            *([f"{outside.lanes} lanes a beat"] if outside.lanes is not None else []),
+        ]
+        what = f" ({', '.join(stated)})" if stated else ""
+        return f"the boundary {side.label}, stated by {source}{what}: "
+    return ""
+
+
 def _misplaced(producer: Side, consumer: Side, valued: bool) -> str | None:
     """Why a side is in a role its kind does not take (``channel-users``), or None: a
     channel with a known value has its source as its producer, and one without has none; a
@@ -971,5 +1072,7 @@ __all__ = [
     "boundary_contract",
     "open_boundary_refusal",
     "outer_hops",
+    "stated_by",
+    "stated_form",
     "wired",
 ]

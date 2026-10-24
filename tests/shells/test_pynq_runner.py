@@ -755,7 +755,7 @@ def test_the_driver_reads_its_io_from_the_movers_and_sets_the_clock_it_is_given(
     assert shapes["idt"] == [DataType["INT3"], DataType["INT3"]]
     assert shapes["odt"] == [DataType["INT7"]]
     assert (shapes["ishape_normal"], shapes["oshape_normal"]) == ([(1, 4), (4, 4)], [(1, 4)])
-    # Each frame one pass of its tensor (a mover refuses a repeated one): as many
+    # Each frame one pass of its tensor (each mover states one pass a frame): as many
     # elements folded as the tensor holds.
     assert (shapes["ishape_folded"], shapes["oshape_folded"]) == (
         [(1, 2, 2), (1, 4, 4)],

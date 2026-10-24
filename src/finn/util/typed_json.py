@@ -39,6 +39,10 @@ def _text(kind: Any) -> str:
     """``kind`` as a refusal names it."""
     if isinstance(kind, type) and not typing.get_args(kind):
         return kind.__name__
+    if typing.get_origin(kind) in (Union, types.UnionType):
+        return " | ".join(
+            "None" if each is type(None) else _text(each) for each in typing.get_args(kind)
+        )
     return str(kind).replace("typing.", "").replace("collections.abc.", "")
 
 
@@ -46,8 +50,9 @@ def decoded(kind: Any, stated: Any, place: str) -> Any:
     """``stated`` (as JSON states it, or as Python gives it) as a value of the type
     ``kind``: a bool, an int, a float (an int accepted), a str, a path (from a str), an
     enum (from its value), a list, tuple or sequence, a dict or mapping with str keys, a
-    dataclass (from an object of its fields), a union (``X | None``), a callable,
-    ``Any``, or an instance of any other class. Refuses, naming ``place``, a null
+    dataclass (from an object of its fields), a union (``X | None``; an object whose keys
+    one dataclass of the union alone declares, as that one), a callable, ``Any``, or an
+    instance of any other class. Refuses, naming ``place``, a null
     where ``kind`` is not optional, a value of another type, an unknown enum value and a
     key a dataclass does not declare."""
     origin, args = typing.get_origin(kind), typing.get_args(kind)
@@ -59,6 +64,24 @@ def decoded(kind: Any, stated: Any, place: str) -> Any:
         if stated is None:
             raise ValueError(f"{place}: null, and it is not optional")
         members = [each for each in args if each is not type(None)]
+        if isinstance(stated, Mapping):
+            # An object whose keys one member alone declares (of dataclasses, and no
+            # mapping beside them) is that member's, so its own refusal is the one named.
+            declaring = [
+                each
+                for each in members
+                if isinstance(each, type)
+                and is_dataclass(each)
+                and set(stated) <= {item.name for item in fields(each)}
+            ]
+            mappings = [
+                each
+                for each in members
+                if typing.get_origin(each) in (dict, collections.abc.Mapping)
+                or each in (dict, collections.abc.Mapping, Any)
+            ]
+            if len(declaring) == 1 and not mappings:
+                members = declaring
         if len(members) == 1:
             return decoded(members[0], stated, place)
         for each in members:
