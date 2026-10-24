@@ -313,14 +313,14 @@ def streamed_on_pynq(rows: int, choices: dict[str, Any]) -> ModelWrapper:
 
 
 @pytest.mark.parametrize("case", sorted(TILED_W2))
-def test_a_tiled_w2_is_refused_by_channel_steps_under_its_mover_s_statement(case: str) -> None:
+def test_a_tiled_w2_is_refused_by_channel_steps_naming_its_mover(case: str) -> None:
     """The mover states w2's side row-major, one pass a frame; the second MatMul reads it
     in 2 x 2 tiles, on three rows each pass three times. No chain of modules regroups four
     lanes of a row into four of a tile (the steps regroup lanes only through the gcd of
     the two lane counts), so the edge channel refuses w2 by its own code, ``channel-steps``,
-    at every one of these foldings; emission refuses it by that code alone. Where only the
-    order differs the steps name the lane axis; where the passes differ too, the
-    positions."""
+    naming the mover that states the side, at every one of these foldings; emission
+    refuses it by that code alone. Where only the order differs the steps name the lane
+    axis; where the passes differ too, the positions."""
     rows, choices = TILED_W2[case]
     model = streamed_on_pynq(rows, choices)
     choose_memories(model)
@@ -333,7 +333,10 @@ def test_a_tiled_w2_is_refused_by_channel_steps_under_its_mover_s_statement(case
         "channel-steps",
         error=KernelOpError,
         owner="steps",
-        message=f"^no adapter can join the streams: {reason}$",
+        message=(
+            r"^the boundary s_axis_1, stated by the iodma_hls mover \(row-major, one pass a "
+            rf"frame\): no adapter can join the streams: {reason}$"
+        ),
         tensor="w2",
     ) as caught:
         configured_network(model, "partition")

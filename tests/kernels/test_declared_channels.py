@@ -46,10 +46,11 @@ from finn.dataflow.traversal import (
 )
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.base import KernelSpace, PortContract
-from finn.kernels.channels import Channel, boundary_contract, stated_form
+from finn.kernels.channels import Channel, boundary_contract, stated_by, stated_form
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.configure import commit
 from finn.kernels.memstream import MemStreamKernel
+from finn.kernels.movers import IODMA_HLS, iodma_hls
 from finn.kernels.partition import Partition
 from finn.kernels.sides import BUILD, ROW_MAJOR, Outside, Side, Steady
 from finn.kernels.transport import AxisBeat, StreamContract
@@ -374,17 +375,46 @@ def test_a_stated_row_major_side_is_reordered_by_an_input_gen():
 def test_a_stated_side_nothing_bridges_is_refused_by_channel_steps():
     """A reader taking 2 x 3 tiles, stated row-major: the edge's six lanes span a row,
     the reader's two rows, and no chain regroups them (``channel-steps``, its message
-    unchanged). Unstated, the edge presents the tiles."""
+    naming what states the side before the steps' own reason). Unstated, the edge
+    presents the tiles."""
     tiles = tile(4, 6, 2, 3)
     assert edge(Side.boundary("s_axis_0"), reader(tiles)).input_chain == "none"
     refused = edge(Side.boundary("s_axis_0", outside=stated(order=ROW_MAJOR)), reader(tiles))
     assert findings(refused.query(Channel.steps)) == [
         (
             "channel-steps",
-            "no adapter can join the streams: the same positions under another lane axis",
+            "the boundary s_axis_0, stated by the build (row-major): no adapter can join the "
+            "streams: the same positions under another lane axis",
         )
     ]
     assert inspection.validity(refused).status == "refused"
+
+
+def test_an_interior_channel_s_channel_steps_names_no_statement():
+    """Between two kernels' ports, the same rows written and tiles read: refused by
+    ``channel-steps`` in the steps' words alone, as before a boundary could be stated;
+    only a stated boundary side names what states it (``stated_by``)."""
+    rows, tiles = writer(vector_major((4, 6), 6)), reader(tile(4, 6, 2, 3))
+    refused = edge(rows, tiles)
+    assert findings(refused.query(Channel.steps)) == [
+        (
+            "channel-steps",
+            "no adapter can join the streams: the same positions under another lane axis",
+        )
+    ]
+    assert stated_by(rows, tiles) == stated_by(Side.boundary("s_axis_0"), tiles) == ""
+    mover = Outside(IODMA_HLS, ROW_MAJOR, 1)
+    offered = Side.boundary("s_axis_1", (iodma_hls(128),), mover)
+    assert stated_by(offered, tiles) == (
+        "the boundary s_axis_1, stated by the iodma_hls mover (row-major, one pass a frame): "
+    )
+    leaving = Side.boundary("m_axis_0", outside=stated(lanes=4))
+    assert (
+        stated_by(rows, leaving) == "the boundary m_axis_0, stated by the build (4 lanes a beat): "
+    )
+    assert stated_by(rows, Side.boundary("m_axis_0", outside=stated())) == (
+        "the boundary m_axis_0, stated by the build: "
+    )
 
 
 def test_stated_lanes_that_divide_no_pass_are_refused_by_channel_boundary():

@@ -45,9 +45,11 @@ with markers. Stated (``finn.kernels.sides.Outside``), it presents the stated or
 and lanes, each left None as that rule presents it, and the steps between it and the other
 side are placed as for any side's (a ``vpc`` before the transport for a width, an
 ``input_gen`` after it for a reorder or a replay, its buffer the pass), or refused by the
-channel's own codes. Where a shell offers movers on it (``offered``: the boundary side's
-``offers``, ``finn.kernels.movers``), the channel places its ``mover`` on that free side;
-it binds no RTL in the module and states its contract (``mover_contracts``) for the shell's
+channel's own codes, ``channel-steps`` naming what states the side (``stated_by``). Where a
+shell offers movers on it (``offered``: the boundary side's ``offers``,
+``finn.kernels.movers``), the mover states the side (``MoverOffer.states``: each pass
+row-major, one pass a frame), and the channel places its ``mover`` on that free side; it
+binds no RTL in the module and states its contract (``mover_contracts``) for the shell's
 budget check and resources.
 
 A channel whose tensor has a known value (``contents``) places its ``source`` (a
@@ -134,7 +136,7 @@ from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.movers import IodmaMover, MoverContract, MoverOffer
 from finn.kernels.policies import Alone, FirstValid, Policy, Required, defaulted, stated
 from finn.kernels.port import served
-from finn.kernels.sides import ROW_MAJOR, Outside, Side, SideKind
+from finn.kernels.sides import BUILD, ROW_MAJOR, Outside, Side, SideKind
 from finn.kernels.transport import (
     AxisBeat,
     Mismatch,
@@ -650,12 +652,19 @@ class Channel(KernelSpace):
 
     @derived
     def steps(self) -> Steps | Rejected:
-        """What must happen between the source's beat sequence and the sink's."""
+        """What must happen between the source's beat sequence and the sink's. Refused where
+        no chain of modules carries them out (``channel-steps``), naming, on a stated
+        boundary, what states it (``stated_by``)."""
         streams = self.streams
         try:
             return between(streams.source.sequence, streams.sink.sequence)
         except Unrealizable as error:
-            return reject("channel-steps", f"no adapter can join the streams: {error}")
+            found = self.sides
+            return reject(
+                "channel-steps",
+                f"{stated_by(found.producer, found.consumer)}no adapter can join the streams: "
+                f"{error}",
+            )
 
     @derived
     def output_steps(self) -> Steps:
@@ -679,9 +688,11 @@ class Channel(KernelSpace):
     def realizable(self) -> bool | Rejected:
         found = self.steps
         if found and not self.adaptable:
+            ends = self.sides
             return reject(
                 "channel-steps",
-                f"the streams need {found.describe()}, and this channel admits no adapter",
+                f"{stated_by(ends.producer, ends.consumer)}the streams need {found.describe()}, "
+                "and this channel admits no adapter",
             )
         return True
 
@@ -983,6 +994,28 @@ def stated_form(port: str, outside: Outside, presented: Traversal) -> Traversal:
     return one if count == 1 else one.repeated(count)
 
 
+def stated_by(producer: Side, consumer: Side) -> str:
+    """What states a channel's boundary side, as a refusal of its steps names it before
+    its own reason: ``the boundary s_axis_1, stated by the iodma_hls mover (row-major, one
+    pass a frame): `` (the build's: ``stated by the build``; what it states of the order,
+    the passes and the lanes in brackets). Empty where neither side is a stated boundary:
+    an interior channel's refusal, and an unstated boundary's, read as the steps give
+    them."""
+    for side in (producer, consumer):
+        outside = side.outside
+        if outside is None:
+            continue
+        source = "the build" if outside.source == BUILD else f"the {outside.source} mover"
+        stated = [
+            *(["row-major"] if outside.order == ROW_MAJOR else []),
+            *(["one pass a frame"] if outside.passes == 1 else []),
+            *([f"{outside.lanes} lanes a beat"] if outside.lanes is not None else []),
+        ]
+        what = f" ({', '.join(stated)})" if stated else ""
+        return f"the boundary {side.label}, stated by {source}{what}: "
+    return ""
+
+
 def _misplaced(producer: Side, consumer: Side, valued: bool) -> str | None:
     """Why a side is in a role its kind does not take (``channel-users``), or None: a
     channel with a known value has its source as its producer, and one without has none; a
@@ -1023,6 +1056,7 @@ __all__ = [
     "boundary_contract",
     "open_boundary_refusal",
     "outer_hops",
+    "stated_by",
     "stated_form",
     "wired",
 ]
