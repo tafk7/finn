@@ -20,7 +20,6 @@ import pytest
 from core.space._evaluation_support import entry, node, open_evaluation
 from finn.core.space import (
     Available,
-    Const,
     Derived,
     EvaluationError,
     Param,
@@ -100,6 +99,10 @@ def test_a_chain_of_twenty_thousand_methods_completes_each_once() -> None:
     assert sys.getrecursionlimit() == limit
 
 
+def _zero() -> int:
+    return 0
+
+
 @pytest.mark.usefixtures("purity_unchecked")
 def test_a_chain_of_twenty_thousand_explicit_functions() -> None:
     """``test_compiler``'s twenty-thousand explicit chain, on the running type: each
@@ -110,14 +113,14 @@ def test_a_chain_of_twenty_thousand_explicit_functions() -> None:
     def step(*, previous: int) -> int:
         return previous + 1
 
-    members: dict[str, object] = {"value0": Const(0)}
+    members: dict[str, object] = {"value0": derived(_zero)}
     for number in range(1, 20_001):
         members[f"value{number}"] = Derived(
             step, aliases={"previous": members[f"value{number - 1}"]}
         )
     world = open_evaluation(cast(type[Space], type("Deep", (Space,), members))())
     assert world.result(node(world, "value20000")) == Available(20_000)
-    assert world.counters.calls["derived"] == 20_000  # explicit: never abandoned
+    assert world.counters.calls["derived"] == 20_001  # explicit: never abandoned
 
 
 def test_a_failure_at_the_bottom_of_a_deep_chain_is_the_primary() -> None:

@@ -177,7 +177,7 @@ def test_a_union_of_values_is_checked_by_each() -> None:
 
 
 class Projected(Space):
-    """A derived value typed only by its annotation projects in the class body."""
+    """A derived value typed only by its annotation: another derived value reads its attribute."""
 
     n: int = Param()
 
@@ -185,10 +185,14 @@ class Projected(Space):
     def point(self) -> Point | Rejected:
         return Point(self.n)
 
-    x = View(point.x)
+    @derived(point=point)
+    def x_of_point(*, point: Point) -> int:
+        return point.x
+
+    x = View(x_of_point)
 
 
-def test_a_marked_output_projects_by_its_value_type() -> None:
+def test_a_marked_output_is_read_by_a_derived_value_through_its_value_type() -> None:
     assert design_space(Projected(n=3)).x == 3
     with pytest.raises(AttributeError):
         Projected.point.missing  # type: ignore[attr-defined]  # Point annotates none

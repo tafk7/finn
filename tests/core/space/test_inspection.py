@@ -16,7 +16,6 @@ from finn.core.reporting.manifest import FINDING
 from finn.core.space import (
     Available,
     BoundDecision,
-    Const,
     Decision,
     Inapplicable,
     Param,
@@ -203,7 +202,9 @@ def test_singleton_choice_metadata_exposes_an_ordinary_editable_selector() -> No
     # A Decision over nodes is an ordinary Decision, so even one candidate is an
     # owned, editable selector. A None candidate places nothing and has no scope or Space class.
     class Child(Space):
-        value = Const(1)
+        @derived
+        def value(self) -> int:
+            return 1
 
     class Root(Space):
         implementation: Child = Select(only=Child())

@@ -14,7 +14,6 @@ from core.space._results_support import dependency_nodes
 from finn.core.space import (
     Available,
     BoundDecision,
-    Const,
     Decision,
     Inapplicable,
     Param,
@@ -86,7 +85,10 @@ def test_false_outer_scope_suppresses_inner_commitments_and_callbacks() -> None:
         physical = View(raw, when=inner)
 
     class Outer(Space):
-        enabled = Const(False)
+        @derived
+        def enabled(self) -> bool:
+            return False
+
         child = Guarded(when=enabled)
 
     point = design_space(Outer())
@@ -146,7 +148,10 @@ def test_singleton_choice_is_open_and_respects_its_outer_guard() -> None:
     # A singleton choice is an ordinary Decision: open until a change sets it, though it
     # has one case. Setting it is a choice like any other.
     class Only(Space):
-        output = Const(7)
+        @derived
+        def output(self) -> int:
+            return 7
+
         physical = View(output)
 
     class Root(Space):
@@ -172,10 +177,14 @@ def test_singleton_choice_is_open_and_respects_its_outer_guard() -> None:
 
 def test_nested_choice_selection_retains_its_owning_scope() -> None:
     class A(Space):
-        value = Const(1)
+        @derived
+        def value(self) -> int:
+            return 1
 
     class B(Space):
-        value = Const(2)
+        @derived
+        def value(self) -> int:
+            return 2
 
     class Example(Space):
         implementation: A | B = Select(a=A(), b=B())
@@ -201,10 +210,14 @@ def test_nested_choice_selection_retains_its_owning_scope() -> None:
 
 def test_choice_metadata_and_handles_retain_the_compiled_definition() -> None:
     class A(Space):
-        value = Const(1)
+        @derived
+        def value(self) -> int:
+            return 1
 
     class B(Space):
-        value = Const(2)
+        @derived
+        def value(self) -> int:
+            return 2
 
     class Root(Space):
         implementation: A | B = Select(a=A(), b=B())

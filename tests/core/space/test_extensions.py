@@ -18,7 +18,6 @@ from support.refusals import refused
 
 from finn.core.space import (
     Available,
-    Const,
     Decision,
     DefinitionError,
     Param,
@@ -74,6 +73,18 @@ def _positive_lanes(*, lanes: int, minimum: int) -> bool:
     return lanes >= minimum
 
 
+def _one() -> int:
+    return 1
+
+
+def _two() -> int:
+    return 2
+
+
+def _three() -> int:
+    return 3
+
+
 def _stream(*, dtype: Encoding, lanes: int, bits: int) -> StreamValue:
     return StreamValue(dtype, lanes, bits)
 
@@ -81,7 +92,7 @@ def _stream(*, dtype: Encoding, lanes: int, bits: int) -> StreamValue:
 def admitted_stream_type() -> type[AdmissionFormals]:
     """The stream's constraints and its stream, built as data and named by composite; the
     stream is refused with the Space when a constraint refuses."""
-    minimum = Const(1)
+    minimum = derived(_one)
     admission = constraint(
         dtype=AdmissionFormals.dtype, maximum_bits=AdmissionFormals.maximum_bits
     )(_admitted)
@@ -202,18 +213,18 @@ def test_composite_is_pure_and_nodes_share_only_the_space_class() -> None:
 
 
 def test_a_compiled_composite_rejects_structural_changes() -> None:
-    value = Const(1)
+    value = derived(_one)
     space_type = composite("Sealed", {"value": value, "physical": View(value)})
     assert design_space(space_type()).query(value) == Available(1)
     # There is no builder to seal: the compiled Space class itself refuses changes.
     with refused("structure-finalized", error=DefinitionError):
-        setattr(space_type, "too_late", Const(2))
+        setattr(space_type, "too_late", derived(_two))
     with refused("structure-finalized", error=DefinitionError):
         setattr(space_type, "too_late", Decision(values=(1,)))
     with refused("structure-finalized", error=DefinitionError):
         delattr(space_type, "value")
     with refused("structure-finalized", error=DefinitionError):
-        setattr(space_type, "too_late", Const(1))
+        setattr(space_type, "too_late", derived(_one))
 
 
 def test_duplicate_names_and_owned_declarations_are_definition_errors() -> None:
@@ -221,7 +232,7 @@ def test_duplicate_names_and_owned_declarations_are_definition_errors() -> None:
         composite("Shadow", {"dtype": Param()}, base=StreamShape, annotations={"dtype": int})
     with refused("declaration-reused", error=DefinitionError):
         composite("Renamed", {"renamed": StreamShape.dtype}, base=StreamShape)
-    local = Const(3)
+    local = derived(_three)
     with refused("declaration-reused", error=DefinitionError):
         composite("Twice", {"constant": local, "other_name": local})
     shadow: int = Param()
@@ -231,7 +242,7 @@ def test_duplicate_names_and_owned_declarations_are_definition_errors() -> None:
     with refused("declaration-reused", error=DefinitionError):
         composite("Retry", {"dtype": shadow}, base=StreamShape, annotations={"dtype": Encoding})
     with refused("name-invalid", error=DefinitionError):
-        composite("Invalid", {"invalid.name": Const(1)})
+        composite("Invalid", {"invalid.name": derived(_one)})
     with refused("name-invalid", error=DefinitionError):
         composite("invalid.name", {})
 

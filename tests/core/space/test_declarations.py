@@ -12,7 +12,6 @@ from support.refusals import refused
 
 from finn.core.reporting.findings import by_code
 from finn.core.space import (
-    Const,
     Decision,
     DefinitionError,
     Derived,
@@ -68,6 +67,10 @@ def decision_record(choice: object) -> NodeDecision:
     return record
 
 
+def _two() -> int:
+    return 2
+
+
 class Base(Space):
     extent: int = Param()
 
@@ -112,7 +115,9 @@ def test_forward_members_and_postponed_class_annotations() -> None:
 
 def test_value_and_function_views_are_distinct_declarations_with_same_type() -> None:
     class Example(Space):
-        value = Const(5)
+        @derived
+        def value(self) -> int:
+            return 5
 
         @constraint
         def supported(*, value: int) -> bool:
@@ -308,7 +313,7 @@ def test_incompatible_override_collision_and_reserved_names() -> None:
         "override-changes-semantics", error=DefinitionError, message="Different.extent.*semantics"
     ):
         collect_space(different)
-    changed_kind = type("ChangedKind", (Base,), {"extent": Const(2)})
+    changed_kind = type("ChangedKind", (Base,), {"extent": derived(_two)})
     with refused("override-changes-kind", error=DefinitionError, message="declaration kind"):
         collect_space(changed_kind)
     hidden = type("Hidden", (Base,), {"extent": 3})
@@ -333,7 +338,7 @@ def test_each_broken_rule_is_its_own_code_owned_by_the_module_that_checks_it() -
     """Three overrides a Space class collects and refuses: each its own code, owned by
     collection, the declaration in its details, so ``by_code`` tells them apart."""
     found = []
-    for name, value in (("Different", Param()), ("ChangedKind", Const(2)), ("Hidden", 3)):
+    for name, value in (("Different", Param()), ("ChangedKind", derived(_two)), ("Hidden", 3)):
         annotations = {"extent": str} if name == "Different" else {}
         space_type = type(name, (Base,), {"__annotations__": annotations, "extent": value})
         with pytest.raises(DefinitionError) as refused:
@@ -387,10 +392,17 @@ def test_unbound_late_declarations_are_rejected() -> None:
         collect_space(Example)
 
 
-def test_definition_constants_are_values_and_decision_domain_contract() -> None:
-    assert Const((1, -0.0)).value == (1, 0.0)
+def test_param_defaults_are_values_and_decision_domain_contract() -> None:
+    class Held(Space):
+        pair: tuple[int, float] = Param(default=(1, -0.0))
+
+    held = cast(Param[tuple[int, float]], Held.pair).default
+    assert held == (1, 0.0) and str(held[1]) == "0.0"
     with refused("literal-not-value", error=DefinitionError, message="list is mutable"):
-        Const([1, 2])
+
+        class Mutable(Space):
+            pair: list[int] = Param(default=[1, 2])
+
     with refused("decision-domain-ambiguous", error=DefinitionError, message="exactly one"):
         Decision()  # type: ignore[call-overload]
     with pytest.raises(TypeError, match="truth value"):

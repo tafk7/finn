@@ -10,7 +10,6 @@ import pytest
 from support.refusals import refused
 
 from finn.core.space import (
-    Const,
     Decision,
     Param,
     Space,
@@ -36,7 +35,10 @@ class Fifo(Space):
     word_bits: int = Param()
     depth: int = Param()
     ram_style: str = Decision(values=("auto", "block", "shift"))
-    space_type = Const("fifo")
+
+    @derived
+    def space_type(self) -> str:
+        return "fifo"
 
     @constraint
     def supported(self) -> bool:

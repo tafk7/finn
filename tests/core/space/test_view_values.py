@@ -5,10 +5,10 @@
 On a configuration ``point.kitchen.cost`` is the accepted value (a read of a
 view that is not accepted raises ``ValueUnavailableError`` carrying its
 result): refused with its Space, and answering while its Space is open. On a
-declaration ``kitchen.cost`` is a reference to that value, read by another view and
-by nothing else: a view is read out, so a formal is supplied by a derived value
-(``kitchen.price``), never by a view. Assessment and query are explicit calls on the
-configuration: ``point.inspect(Hall.total)`` and ``point.query(Hall.total)``.
+declaration ``kitchen.cost`` is a reference to that value: a view is read out, so a
+formal is supplied by a derived value (``kitchen.price``), never by a view. Assessment and
+query are explicit calls on the configuration: ``point.inspect(Hall.total)`` and
+``point.query(Hall.total)``.
 """
 
 from __future__ import annotations
@@ -65,7 +65,12 @@ class Hall(Space):
     hall = Room()
     hall.area = kitchen.price  # a derived value supplies a formal
     annex = Room(area=dining.price)  # at the call, too
-    doubled = View(kitchen.cost * 2)  # an expression over a view reference
+
+    @derived(price=kitchen.price)  # a derived value reads what the view reads
+    def twice_price(*, price: int) -> int:
+        return price * 2
+
+    doubled = View(twice_price)
     checked = View(dining.area)
 
     @view

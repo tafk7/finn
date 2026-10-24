@@ -109,7 +109,12 @@ class ReadsLater(Space):
 
     first = ReadsItself()
     second = ReadsItself()
-    later = View(first.pump.cop + 1)  # type: ignore[union-attr]
+
+    @derived(cop=first.pump.cop)  # type: ignore[union-attr]
+    def next_cop(*, cop: int) -> int:
+        return cop + 1
+
+    later = View(next_cop)
     earlier = View(second.pump.cop)  # type: ignore[union-attr]
 
 
@@ -192,10 +197,14 @@ class Guarded(Space):
     def valued(self) -> bool:
         return self.contents is not None
 
+    @derived(when=valued)
+    def widened(self) -> int:
+        return cast(int, self.contents) + 1  # read only where valued
+
     source: WideStream | Stream | None = Select(
         none=None,
         fetch=WideStream(wide=wide, when=wide),
-        plus=Stream(lanes=cast(int, contents) + 1),  # read only where valued
+        plus=Stream(lanes=widened),
         when=valued,
         contents=contents,
     )

@@ -11,7 +11,6 @@ import pytest
 
 from finn.core.reporting.findings import Finding, FindingKind, ordered_findings
 from finn.core.space import (
-    Const,
     Decision,
     Param,
     Select,
@@ -332,7 +331,10 @@ def test_a_functions_output_of_the_wrong_type_is_its_owners_error() -> None:
 
 def test_a_view_of_a_refused_space_refuses_and_keeps_what_waits_visible() -> None:
     class Grouped(Space):
-        output = Const(4)
+        @derived
+        def output(self) -> int:
+            return 4
+
         lanes: int = Decision(values=(1, 2))
 
         @constraint
@@ -368,7 +370,10 @@ def test_a_view_of_a_refused_space_refuses_and_keeps_what_waits_visible() -> Non
 
 def test_a_view_of_a_space_with_no_pieces_reads_its_output() -> None:
     class Empty(Space):
-        output = Const(4)
+        @derived
+        def output(self) -> int:
+            return 4
+
         physical = View(output)
 
     point = design_space(Empty())

@@ -9,17 +9,21 @@ import pytest
 from support.refusals import refused
 
 from finn.core.space import (
-    Const,
     Decision,
     Param,
     Select,
     Space,
     composite,
+    derived,
     design_space,
     inspection,
 )
 from finn.core.space.compiler import compile_model
 from finn.core.space.errors import DefinitionError
+
+
+def _three() -> int:
+    return 3
 
 
 @pytest.mark.parametrize("name", ["", "a.b", "$selector", "has space", "ümlaut"])
@@ -28,8 +32,8 @@ def test_authored_names_are_unambiguous_segments(name: str) -> None:
     with refused("name-invalid", error=DefinitionError):
         Select(**{name: Space()})
     with refused("name-invalid", error=DefinitionError):
-        composite("Named", {name: Const(3)})
-    space_type = type("BadIdentity", (Space,), {name: Const(3)})
+        composite("Named", {name: derived(_three)})
+    space_type = type("BadIdentity", (Space,), {name: derived(_three)})
     with refused("name-invalid", error=DefinitionError):
         compile_model(space_type)
 

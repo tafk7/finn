@@ -34,7 +34,6 @@ from core.space._running_type import Running
 from core.space._toys_support import Boiler, House
 from finn.core.space import (
     Available,
-    Const,
     Decision,
     EvaluationError,
     Inapplicable,
@@ -138,18 +137,28 @@ class Inner(Space):
 
 class Forwarded(Space):
     value: int = Param()
-    enabled = Const(False)
+
+    @derived
+    def enabled(self) -> bool:
+        return False
+
     child = Inner(value=value, when=enabled)
 
 
 class Literal(Space):
-    enabled = Const(False)
+    @derived
+    def enabled(self) -> bool:
+        return False
+
     child = Inner(value=12345, when=enabled)
 
 
 class Refusing(Space):
     chosen: int = Decision(values=(1, 2))
-    value = Const(3)
+
+    @derived
+    def value(self) -> int:
+        return 3
 
     @constraint
     def supported() -> bool:

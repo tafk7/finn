@@ -11,7 +11,6 @@ from typing import cast
 
 from finn.core.space import (
     Available,
-    Const,
     Decision,
     Inapplicable,
     Param,
@@ -102,11 +101,18 @@ def test_inactive_parameter_evidence_does_not_expose_unused_bound_value() -> Non
     # alongside it.
     class Forwarded(Space):
         value: int = Param()
-        enabled = Const(False)
+
+        @derived
+        def enabled(self) -> bool:
+            return False
+
         child = Child(value=value, when=enabled)
 
     class Literal(Space):
-        enabled = Const(False)
+        @derived
+        def enabled(self) -> bool:
+            return False
+
         child = Child(value=12345, when=enabled)
 
     for point in (design_space(Forwarded(value=12345)), design_space(Literal())):
@@ -122,7 +128,10 @@ def test_inactive_parameter_evidence_does_not_expose_unused_bound_value() -> Non
 def test_refusal_causes_stay_visible_while_the_output_is_unresolved() -> None:
     class Example(Space):
         chosen: int = Decision(values=(1, 2))
-        value = Const(3)
+
+        @derived
+        def value(self) -> int:
+            return 3
 
         @constraint
         def supported() -> bool:
@@ -174,7 +183,9 @@ def test_evidence_hands_out_a_container_a_derived_value_answers_as_a_copy() -> N
 
 def test_evidence_retains_no_occurrence_or_snapshot_lifetime() -> None:
     class Example(Space):
-        value = Const(2)
+        @derived
+        def value(self) -> int:
+            return 2
 
     point = design_space(Example())
     reference = weakref.ref(point)

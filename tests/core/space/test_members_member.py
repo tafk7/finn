@@ -17,7 +17,6 @@ from typing import Any
 from support.refusals import refused
 
 from finn.core.space import (
-    Const,
     Constraint,
     DefinitionError,
     Located,
@@ -148,8 +147,6 @@ def test_an_inapplicable_entry_is_skipped() -> None:
 def test_a_member_of_the_wrong_kind_is_refused() -> None:
     with refused("members-member-invalid", error=DefinitionError):
         Members(Param())
-    with refused("members-member-invalid", error=DefinitionError):
-        Members(Const(3))
     with refused("members-member-invalid", error=DefinitionError):
         Members(Priced.size)
 

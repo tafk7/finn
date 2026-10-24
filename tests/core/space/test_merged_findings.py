@@ -18,6 +18,7 @@ from finn.core.space import (
     Space,
     View,
     constraint,
+    derived,
     design_space,
     reject,
     view,
@@ -152,7 +153,11 @@ def test_a_computation_reading_two_aliases_of_one_blocked_value_lists_it_once() 
         left = Room(area=width)
         right = Room(area=width)
 
-        both = View(left.area + right.area)  # a derived output with two arguments
+        @derived(first=left.area, second=right.area)
+        def combined(*, first: int, second: int) -> int:
+            return first + second
+
+        both = View(combined)  # a derived output with two arguments
 
     # Both arguments collapse onto the one open Decision; the output merges them.
     waiting = design_space(Twice()).inspect(Twice.both).output_result
