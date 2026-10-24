@@ -67,7 +67,7 @@ STATED = Outside(BUILD, ROW_MAJOR, 1, 2, BeatTimes((0, 2, 4), 6))
 SIDES = {
     "kernel": OUTPUT,
     "neighbour": Side.neighbour(WORDS, "upstream.y", 8),
-    "boundary": Side.boundary("s_axis_0", OFFERS),
+    "boundary": Side.boundary("s_axis_0", OFFERS, OFFERS[0].states()),
     "source": Side.source(),
 }
 """A side of each kind."""
@@ -248,14 +248,35 @@ def test_a_statement_not_well_formed_is_not_made(made: Any, message: str) -> Non
 
 def test_only_the_boundary_carries_a_statement_and_a_mover_s_where_it_is_offered() -> None:
     """A kernel's, a neighbour's or a source's side carries no ``outside`` (the cases above);
-    a mover's statement is made on a side that offers that mover, the build's on any
-    boundary."""
+    a mover's statement is made on a side that offers that mover, the build's on a boundary
+    offered none."""
     mover = Outside(IODMA_HLS, ROW_MAJOR, 1)
     with pytest.raises(ValueError, match="stated by an iodma_hls mover, and none is offered"):
         Side.boundary("s_axis_0", outside=mover)
     with pytest.raises(ValueError, match="only the boundary's side is stated by the outside"):
         Side(SideKind.NEIGHBOUR, "upstream.y", WORDS, 8, outside=STATED)
-    assert Side.boundary("s_axis_0", OFFERS, STATED).outside == STATED
+    assert Side.boundary("s_axis_0", outside=STATED).outside == STATED
+
+
+@pytest.mark.parametrize(
+    ("outside", "said"),
+    [
+        (None, "left unstated"),
+        (STATED, "stated by the build"),
+        (Outside(IODMA_HLS, ROW_MAJOR, 1, 2), "stated otherwise than its iodma_hls mover states"),
+    ],
+    ids=["unstated", "the build's statement", "another statement of the mover's kind"],
+)
+def test_a_side_offered_a_mover_carries_that_mover_s_statement(
+    outside: Outside | None, said: str
+) -> None:
+    """A boundary offered a mover is stated by it (``MoverOffer.states``), exactly: so the
+    mover is never placed on a side it does not state, and a build's statement never meets
+    an offered mover (the build refuses it first, ``boundary-stated-twice``)."""
+    stated = OFFERS[0].states()
+    assert Side.boundary("s_axis_0", OFFERS, stated).outside == stated
+    with pytest.raises(ValueError, match=f"s_axis_0 is offered an iodma_hls mover and {said}"):
+        Side.boundary("s_axis_0", OFFERS, outside)
 
 
 # -- the roles -----------------------------------------------------------------------------
@@ -342,7 +363,7 @@ def test_an_unstated_boundary_presents_its_other_side_at_the_port_its_label_name
 def test_offers_on_the_boundary_place_the_mover() -> None:
     plain = channel(Side.boundary("s_axis_0"), INPUT)
     assert not plain.offered and plain.placed_mover == ()
-    offered = channel(Side.boundary("s_axis_0", OFFERS), INPUT)
+    offered = channel(Side.boundary("s_axis_0", OFFERS, OFFERS[0].states()), INPUT)
     assert offered.offered and offered.offers == OFFERS
     (mover,) = offered.placed_mover
     assert (mover.port, mover.direction) == ("s_axis_0", "in")

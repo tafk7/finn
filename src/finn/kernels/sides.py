@@ -17,7 +17,10 @@ A ``Channel`` (``finn.kernels.channels``) takes two sides, its ``producer`` and 
   outside states of it (``outside``). Its ``stream`` is None: the channel derives what the
   port presents (``Channel.boundary``). **Unstated** (``outside`` None, the default), that
   is what its other side presents; **stated** (an ``Outside``), the stated order, passes
-  and lanes, each one left None as the other side presents it;
+  and lanes, each one left None as the other side presents it. A side offered a mover
+  carries that mover's statement (``MoverOffer.states``), and a mover's statement is made
+  only on a side offered that mover: a mover is never placed on a side it does not state,
+  and the build states only a side offered none;
 - a valued channel's **source** (``Side.source``): the channel's own memory, which produces
   its known value.
 
@@ -163,7 +166,8 @@ class Side:
     word width (``width``: an output port's), the movers a shell offers on the boundary
     (``offers``), and what the outside states of the boundary (``outside``: None, unstated,
     the boundary presents what its other side presents). Made by ``kernel``,
-    ``neighbour``, ``boundary`` or ``source``."""
+    ``neighbour``, ``boundary`` or ``source``. A boundary offered movers carries the
+    statement of one of them (``MoverOffer.states``)."""
 
     kind: SideKind
     label: str = ""
@@ -190,6 +194,19 @@ class Side:
                 raise ValueError(
                     f"{self.label} is stated by an {outside.source} mover, and none is offered"
                 )
+        if self.offers and outside not in [offer.states() for offer in self.offers]:
+            kinds = " or ".join(offer.kind for offer in self.offers)
+            said = (
+                "left unstated"
+                if outside is None
+                else "stated by the build"
+                if outside.source == BUILD
+                else f"stated otherwise than its {outside.source} mover states it"
+            )
+            raise ValueError(
+                f"{self.label} is offered an {kinds} mover and {said}: a side offered a "
+                "mover carries that mover's statement"
+            )
         if self.kind is SideKind.SOURCE and (self.stream is not None or self.label):
             raise ValueError("a source's side states nothing: the channel's source is its own")
 
@@ -211,7 +228,8 @@ class Side:
     ) -> Self:
         """The boundary: its AXIS port's name (``port``), the movers a shell offers on it
         (``offers``), and what the outside states of it (``outside``; None, unstated by
-        default: the boundary presents what its other side presents)."""
+        default: the boundary presents what its other side presents). Offered a mover, it
+        is stated by that mover (``offer.states()``)."""
         return cls(SideKind.BOUNDARY, port, offers=tuple(offers), outside=outside)
 
     @classmethod
