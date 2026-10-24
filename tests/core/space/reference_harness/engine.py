@@ -327,6 +327,8 @@ class _Builder:
         #: per scope: the entry each ``Members`` of it reads there
         self.entered: dict[str, dict[str, str]] = {scope: {} for scope in index.scopes}
         for path, (members, scope) in sorted(index.members.items()):
+            # The names must sort after the toy's own members: the planted-value-fault test
+            # moves the first member by key that answers a value, and expects it to be ``f0``.
             self.keys[path] = "members-" + path.replace(".", "-")
             self.located[path] = {}
             for entry in members.entries:
