@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 from support import chain
-from support.helpers import FULL_DSP48E2, keyed, with_defaults
+from support.helpers import FULL_DSP48E2, by_hand, choose, keyed, with_defaults
 from support.refusals import refused
 from support.xsim import requires_xsim
 
@@ -32,6 +32,7 @@ from finn.harness.toolchain import finnlib_root
 from finn.kernels import input_generator
 from finn.kernels.artifacts.rtl import evaluate
 from finn.kernels.channels import Channel, Neighbours
+from finn.kernels.composer import Port, channel
 from finn.kernels.explore import (
     Accepted,
     ExploreError,
@@ -57,10 +58,13 @@ from finn.kernels.fifo_sizing import (
     least_depth,
     sides,
     simulate,
+    size,
+    stated_pattern,
 )
 from finn.kernels.input_generator import NestBuffer, nest_buffer, nest_geometry
 from finn.kernels.partition import Partition
 from finn.kernels.policies import Required
+from finn.kernels.sides import BUILD, BeatTimes, Outside, Side, Steady
 from finn.toolchain.launcher import host_toolchain
 
 MEMBERS = chain.MEMBERS
@@ -247,6 +251,67 @@ def test_a_boundary_and_a_memory_are_not_modelled() -> None:
         sides(point.member("x"), point.neighbours("x"))
     with pytest.raises(NotModelled, match="a memory source: paced by its consumer"):
         sides(point.member("w1"), point.neighbours("w1"))
+
+
+def test_a_stated_pace_is_its_pattern_and_a_steady_beat_is_expanded_at_the_edge_s_beats() -> None:
+    """``stated_pattern``, by value: beat times as stated, their span the pattern's; a beat
+    every ``k`` cycles at ``B`` beats, ``(0, k, ..., (B - 1) k)`` over ``B k``; beat times
+    stated for another count of beats than the edge's, not modelled."""
+    assert stated_pattern(BeatTimes((0, 2, 5), 8), 3) == Pattern((0, 2, 5), 8)
+    assert stated_pattern(BeatTimes((1, 2), 3), 2) == Pattern((1, 2), 3)
+    assert stated_pattern(Steady(3), 4) == Pattern((0, 3, 6, 9), 12)
+    assert stated_pattern(Steady(1), 1) == Pattern((0,), 1)
+    with pytest.raises(
+        NotModelled,
+        match="a boundary's stated pace times 3 beats a frame, and its edge presents 4",
+    ):
+        stated_pattern(BeatTimes((0, 2, 5), 8), 4)
+
+
+def _stated(x: Outside, y: Outside) -> Partition:
+    """The Chain with its input stated ``x`` and its output ``y``, as conversion and the
+    cut leave it, folded to 12 cycles a frame (``_folded``)."""
+    members = chain.members()
+    members["x"] = channel(
+        Side.boundary("s_axis_0", outside=x),
+        Port("first", "x"),
+        tensor=chain.X_TENSOR,
+        platform=FULL_DSP48E2,
+    )
+    members["y"] = channel(
+        Port("second", "y"),
+        Side.boundary("m_axis_0", outside=y),
+        tensor=chain.Y_TENSOR,
+        platform=FULL_DSP48E2,
+    )
+    explorer = Seam(FULL_DSP48E2)
+    explorer.held.update(chain.HELD)
+    network = choose(by_hand(members), {"activate.pe": chain.PE})
+    return TargetCycles(12).explore(explorer, with_defaults(network))
+
+
+def test_sizing_reads_a_stated_pace_first_on_either_side() -> None:
+    """A stated input's pace is the supply (a beat every three cycles, expanded at the
+    three beats its edge presents), a stated output's the acceptance (its beat times, as a
+    consumer's port's); each channel sized from them. Unstated, the same channels are
+    not modelled, verbatim."""
+    point = _stated(
+        Outside(BUILD, pace=Steady(3)), Outside(BUILD, pace=BeatTimes(tuple(range(12)), 12))
+    )
+    x, y = point.member("x"), point.member("y")
+    assert x.boundary.form.beats == 3 and x.input_chain == "input_gen"
+    supply, accept = sides(x, point.neighbours("x"))
+    assert supply == Pattern((0, 3, 6), 9)
+    assert isinstance(accept, Buffered) and accept.reads == Pattern(tuple(range(12)), 12)
+    supply, accept = sides(y, point.neighbours("y"))
+    assert accept == Pattern(tuple(range(12)), 12)
+    assert size(x, point.neighbours("x"), 12) == Sized(0, "direct absorbs it", 12, 0)
+    assert size(y, point.neighbours("y"), 12) == Sized(0, "direct absorbs it", 5, 0)
+    _, unstated = _folded()
+    assert unstated.chosen() == point.chosen()
+    for name in ("x", "y"):
+        found = size(unstated.member(name), unstated.neighbours(name), 12)
+        assert found.why == "a boundary: not modelled"
 
 
 # -- the strategy ---------------------------------------------------------------------------
