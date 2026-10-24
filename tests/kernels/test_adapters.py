@@ -148,6 +148,11 @@ def test_exactly_one_chain_a_side_carries_out_its_steps():
         decisions = {key for owner, key in point.decisions() if owner == "x"}
         assert not {"adapter", "output_adapter"} & decisions
         assert (("x", "adapter_ram_style") in point.chosen(["x"])) == (chain != "none")
+        # Its memory is in play where a chain is placed (set by the cut); where none is, the
+        # facts alone rule it out: it is in none of x's states, and still a choice by name.
+        states = dict(point.states(["x"]))
+        assert (("x", "adapter_ram_style") in states) == (chain != "none")
+        assert ("x", "adapter_ram_style") in point.decisions()
 
 
 def _channel(source, sink, shape, platform=FULL_DSP48E2):
