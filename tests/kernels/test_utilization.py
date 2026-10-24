@@ -142,7 +142,7 @@ def test_ultraram_is_counted_in_the_fabric_s_aspects() -> None:
         (US, 4, 512, 296),
         (US, 4, 96, 56),
         (US, 32, 196, 112),
-        (US, 1024, 32, 640),  # xczu7ev, E1(c): 40 LUTs a bank at 32 bits, not 37
+        (US, 1024, 32, 640),  # xczu7ev: 40 LUTs a bank at 32 bits, not 37
         (V, 1024, 32, 640),  # xcvc1902: the same LUTRAMs
         (V, 4096, 64, 4736),
     ],
@@ -156,7 +156,7 @@ def test_lutram_storage_is_the_fabric_s_primitives(
 @pytest.mark.parametrize(
     ("fabric", "words", "bits", "measured"),
     [
-        # E1(c), the whole memory's LUTs: storage, a LUT a bank for the write decode, and
+        # The whole memory's LUTs: storage, a LUT a bank for the write decode, and
         # the read multiplexer. xczu7ev: MUXF7 and MUXF8 combine four LUT6s; the first
         # four banks are not free.
         (US, 128, 8, 26),
@@ -201,7 +201,7 @@ def test_the_read_multiplexer_differs_by_fabric_from_eight_banks() -> None:
     assert read_mux(1, 64, fabric=V) == 0
     # A one-port bank is a slice's primitive with its multiplexer inside: 512 rows on
     # UltraScale (RAM512X1S, MUXF9), 256 on the 7 series, 64 on Versal.
-    assert lutram(1024, 32, fabric=V, single_port=True) == 688  # E1(c), written
+    assert lutram(1024, 32, fabric=V, single_port=True) == 688  # written
     assert lutram(4096, 64, fabric=US, single_port=True, written=False) == 4096 + 128
 
 

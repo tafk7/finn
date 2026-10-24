@@ -143,7 +143,7 @@ def test_a_value_keeps_its_column_sums() -> None:
 
 def test_a_new_configuration_reads_only_the_stated_facts() -> None:
     """Configuring a point reads the weights' shape and range, and their integers once:
-    for the column sums MatMul's result range derives from (K7), which the value keeps,
+    for the column sums MatMul's result range derives from, which the value keeps,
     and the memory image reads the same load. At 512 x 512, recognizing the same weights
     again cost about 700 ms a configuration."""
     int3 = DataType["INT3"]

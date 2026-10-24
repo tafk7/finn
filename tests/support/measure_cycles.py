@@ -16,7 +16,7 @@ Chain's KernelOp nodes, ``support.models``; TFC_W2A2 at 16 lanes,
   adapter and memories, its output ``direct`` unless the node holds its transport),
   so that its interval is its own and not its slowest neighbour's.
 
-Each layer's prediction is its schedule's ``beat_count`` (decision K10), beside
+Each layer's prediction is its schedule's ``beat_count``, beside
 FINN's ``get_exp_cycles`` for the same folding (``MVAU``, ``Thresholding``), as the
 finn-dev oracle captured it (``tests/oracle``). The
 tables are printed, and written to ``OUT/cycles.json`` and ``OUT/cycles.md``.

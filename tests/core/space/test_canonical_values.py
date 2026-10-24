@@ -133,7 +133,7 @@ def test_the_canonical_form_at_the_boundary() -> None:
     assert held(signed).ds == held(signed.with_facts({Meter.rate: -0.0})).ds
 
 
-# -- E4's fixes (devi's review): the output copy, a tuple subclass, an init=False field ------
+# -- What the review found: the output copy, a tuple subclass, an init=False field -----------
 
 
 class Listed(NamedTuple):

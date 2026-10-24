@@ -118,7 +118,7 @@ def test_a_held_initializer_is_given_as_contents_never_as_a_tensor() -> None:
 
 def test_the_views_answer_from_facts() -> None:
     """Without known weights the result is the datatypes' range; with them, their
-    columns' (K7), each stated on the result element at the activations' rank."""
+    columns', each stated on the result element at the activations' rank."""
     streamed = design_space(
         MatMulKernel(
             platform=TARGET.platform, x_tensor=X, weights=Tensor((4, 4), ScalarEncoding(INT3))
