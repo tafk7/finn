@@ -56,7 +56,7 @@ from finn.core.space import (
     reject,
 )
 from finn.kernels.artifacts import ArtifactError
-from finn.kernels.artifacts.abi import Bus
+from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.artifacts.module import Composed as Module
 from finn.kernels.artifacts.module import Fragment, ProducerIdentity
 from finn.kernels.artifacts.top import compose as top
@@ -601,11 +601,16 @@ class Partition:
 
     def module(self, producer: ProducerIdentity, stem: str) -> QueryResult[Module]:
         """Its composed module (``finn.kernels.artifacts.top.compose``) of its ``netlist``;
-        or why not, the netlist's refusal or wait, or the top's own (``kernel-netlist``)."""
+        or why not, the netlist's refusal or wait, the marker pins its boundary leaves
+        unconsumed or unruled (``channel-top-marker``, ``top_markers``), or the top's own
+        (``kernel-netlist``)."""
         found = self.netlist()
         if not isinstance(found, Available):
             return found
         fragment, boundary = found.value
+        unruled = top_markers(fragment, boundary)
+        if unruled:
+            return Rejected(unruled)
         try:
             return Available(top(producer, stem, fragment, boundary))
         except ArtifactError as error:
@@ -739,6 +744,52 @@ def _not_a_decision(key: Key) -> tuple[Finding, ...]:
 # -- binding a declaration -------------------------------------------------------------------
 
 
+def top_markers(fragment: Fragment, boundary: Iterable[Bus]) -> tuple[Finding, ...]:
+    """What the module's boundary leaves of its marker pins (an AXIS bus's ``tlast``)
+    unruled, as ``channel-top-marker`` findings: an input marker no link takes as its
+    source (it would be left unconsumed), and an output marker no link drives (it lacks a
+    rule). A boundary of a bus without marker pins leaves none."""
+    taken = {
+        pin for link in fragment.links if link.source.instance is None for pin, *_ in link.markers
+    }
+    driven = {
+        pin
+        for link in fragment.links
+        if link.sink.instance is None
+        for _, _, pin, _ in link.markers
+    }
+    unconsumed: list[str] = []
+    unruled: list[str] = []
+    for bus in boundary:
+        for member in bus.signals:
+            if member.logical != "tlast":
+                continue
+            if bus.endpoint is Endpoint.TARGET and member.physical not in taken:
+                unconsumed.append(member.physical)
+            elif bus.endpoint is not Endpoint.TARGET and member.physical not in driven:
+                unruled.append(member.physical)
+    found: list[Finding] = []
+    if unconsumed:
+        found.append(
+            Finding(
+                FindingKind.REJECTION,
+                "channel-top-marker",
+                "",
+                f"top input markers {unconsumed} would be left unconsumed",
+            )
+        )
+    if unruled:
+        found.append(
+            Finding(
+                FindingKind.REJECTION,
+                "channel-top-marker",
+                "",
+                f"top output markers {unruled} lack rules",
+            )
+        )
+    return tuple(found)
+
+
 def boundary(declared: PartitionDeclaration) -> tuple[tuple[str, str], ...]:
     """Each boundary channel of ``declared`` and its AXIS port (``Side.boundary``'s label),
     inputs then outputs, in the order declared."""
@@ -856,4 +907,4 @@ def partition(
     )
 
 
-__all__ = ["Partition", "boundary", "partition"]
+__all__ = ["Partition", "boundary", "partition", "top_markers"]

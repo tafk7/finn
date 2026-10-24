@@ -34,6 +34,8 @@ from support.helpers import (
 )
 
 from finn.core.space import Available, Decision, Rejected, Space, derived, inspection
+from finn.kernels.artifacts.abi import Bus, Endpoint, Member, StandardProtocol
+from finn.kernels.artifacts.module import Fragment, Link, LinkEnd
 from finn.kernels.base import CYCLES
 from finn.kernels.composer import (
     ChannelDeclaration,
@@ -43,7 +45,7 @@ from finn.kernels.composer import (
     Stated,
     channel,
 )
-from finn.kernels.partition import Partition, partition
+from finn.kernels.partition import Partition, partition, top_markers
 from finn.kernels.sides import Side
 from finn.platform.capabilities import Platform
 
@@ -297,6 +299,91 @@ def test_a_top_whose_pins_cannot_be_formed_is_refused_as_its_netlist() -> None:
     assert isinstance(module, Rejected)
     assert [(f.code, f.message) for f in module.findings] == [
         ("kernel-netlist", "an ABI names one pin twice")
+    ]
+
+
+def marked(bus: Bus) -> Bus:
+    """``bus`` with a marker pin (AXIS ``tlast``), named after it."""
+    last = Member("tlast", f"{bus.name}_last")
+    return Bus(
+        bus.name,
+        bus.protocol,
+        (*bus.signals, last),
+        bus.endpoint,
+        bus.role,
+        bus.associated_clock,
+        bus.associated_reset,
+    )
+
+
+def test_marker_pins_the_boundary_leaves_unruled_refuse_the_module(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No target's boundary carries a marker pin (a channel presents its AXIS port with
+    none), so a hand-built partition's is given them: an input's marker no link consumes
+    and an output's no link rules are the module's own refusals, ``channel-top-marker``,
+    each naming its pins. The netlist is answered as it was (the check is the module's)."""
+    read = Partition.netlist
+
+    def netlist(network: Partition) -> object:
+        answer = read(network)
+        assert isinstance(answer, Available)
+        fragment, buses = answer.value
+        return Available((fragment, tuple(marked(bus) for bus in buses)))
+
+    network = by_hand(chain.members(), chain.chain().chosen())
+    assert isinstance(network.netlist(), Available)
+    monkeypatch.setattr(Partition, "netlist", netlist)
+    found = module_of(network, chain.STEM)
+    assert isinstance(found, Rejected)
+    assert [(f.code, f.message) for f in found.findings] == [
+        (
+            "channel-top-marker",
+            "top input markers ['s_axis_0_last'] would be left unconsumed",
+        ),
+        (
+            "channel-top-marker",
+            "top output markers ['m_axis_0_last'] lack rules",
+        ),
+    ]
+
+
+def test_a_marker_pin_a_link_takes_or_drives_is_not_left_unruled() -> None:
+    """An input marker is consumed where a link takes it as its source pin, an output
+    marker ruled where a link drives it; a bus with no marker pin leaves none."""
+    inside = LinkEnd("k", "d", 8, "v", "r")
+    wired = Fragment(
+        (),
+        (
+            Link(
+                LinkEnd(None, "in_data", 8, "in_valid", "in_ready"),
+                inside,
+                8,
+                (0,),
+                (("in_last", None, "k_last", None),),
+            ),
+            Link(
+                inside,
+                LinkEnd(None, "out_data", 8, "out_valid", "out_ready"),
+                8,
+                (0,),
+                ((None, None, "out_last", None),),
+            ),
+        ),
+        (),
+    )
+    inbound = marked(Bus("in", StandardProtocol.AXIS, (Member("tdata", "in_data", 8),)))
+    outbound = marked(
+        Bus("out", StandardProtocol.AXIS, (Member("tdata", "out_data", 8),), Endpoint.INITIATOR)
+    )
+    assert (inbound.signals[-1].physical, outbound.signals[-1].physical) == ("in_last", "out_last")
+    assert top_markers(wired, (inbound, outbound)) == ()
+    bare = Bus("in", StandardProtocol.AXIS, (Member("tdata", "in_data", 8),))
+    assert top_markers(Fragment(), (bare,)) == ()
+    missing = top_markers(Fragment(), (inbound, outbound))
+    assert [f.message for f in missing] == [
+        "top input markers ['in_last'] would be left unconsumed",
+        "top output markers ['out_last'] lack rules",
     ]
 
 
