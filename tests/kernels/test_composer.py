@@ -246,6 +246,9 @@ def test_the_same_structure_is_one_class_and_new_facts_a_new_design_space(cache:
     assert changed.space_type is composed.space_type and cached_classes() == 1
     assert changed.facts["activate-thresholds"] != composed.facts["activate-thresholds"]
     # Another fact given, or another member name, or a side of another kind: another class.
+    # A fact given counts, whatever its value: ``form=Form.DENSE`` is MatMul's default, and
+    # given explicitly is another class (a cache miss, harmless). Only None is no fact (the
+    # next test: given None is left out).
     more = kernels()
     more["first"] = Facts(MatMulKernel, {**more["first"].arguments, "form": Form.DENSE})
     assert compose(PartitionDeclaration(more, channels())).space_type is not composed.space_type
@@ -255,9 +258,11 @@ def test_the_same_structure_is_one_class_and_new_facts_a_new_design_space(cache:
 
 
 def test_a_fact_left_out_and_a_fact_given_none_are_one_class(cache: None) -> None:
-    """An optional fact (MatMul's ``window``, whose default is None) left out and given None
-    is one design space: its formal takes None either way, so the class's key
-    (``presence``: given and not None) and the facts the class is given are the same."""
+    """The class's key has two halves (``presence``: facts given and not None). Given None is
+    the same class as left out: an optional fact (MatMul's ``window``, whose default is None)
+    left out and given None is one design space, its formal taking None either way, and the
+    facts the class is given the same. The other half, a default given explicitly is another
+    class, is pinned by the case ``more`` in the test above."""
     left_out = compose(declared())
     given_none = kernels()
     given_none["first"] = Facts(MatMulKernel, {**given_none["first"].arguments, "window": None})
