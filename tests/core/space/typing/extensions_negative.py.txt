@@ -1,5 +1,5 @@
 from finn.core.space import (
-    Available, Param, QueryResult, Space, ValueSemantics, View, ViewKey,
+    Available, Param, QueryResult, Space, ValueSemantics,
     composite, design_space, derived,
 )
 
@@ -17,7 +17,6 @@ Plain = composite("Plain", {})
 Plain(lanes=1)  # E
 composite("NotASpace", {}, base=int)  # E
 composite("NotAMapping", [("lanes", Param(int))])  # E
-composite("BadExports", {}, exports={"complete": View(Shape.lanes)})  # E
 wrong_class: Other = design_space(Doubled(lanes=1))  # E
 wrong_node: Other = Doubled(lanes=1)  # E
 

@@ -413,9 +413,9 @@ def test_a_selector_carries_its_scopes_guard_only_where_the_scope_holds_it_alone
         Case("unguarded", described(), Spelling(guarded_selectors=frozenset({"hall"})))
 
 
-def test_a_members_entry_is_exported_by_a_child_its_scope_places() -> None:
-    # The engine's Members ranges over the children its Space places, each exporting the
-    # key once: an entry two scopes down, or two entries of one child, cannot be written.
+def test_a_members_entry_is_held_by_a_child_its_scope_places() -> None:
+    # The engine's Members ranges over the children its Space places, each stating its
+    # member once: an entry two scopes down, or two entries of one child, cannot be written.
     def described(*entries: str) -> Space:
         inner = Scope(
             "inner",

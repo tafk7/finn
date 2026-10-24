@@ -70,9 +70,11 @@ guard is a derived member ``when-<name>``. Facts
 are the root's formals (SZ100 (5)): a required fact is ``Param()``, an optional one
 ``T | None = Param(default=None)``, left out where the model reads ``None`` (the engine
 reads it ``None`` too). A ``Members`` is the
-engine's ``Members(KEY)``, a key of its own, each entry its child's value export of that key
-(``exports = {KEY: derived}``); each entry is in a child or a case placed by the
-``Members``'s scope, one per child. Its value, the engine's ``Located`` entries, is read as
+engine's ``Members(Base.member)`` over a member of its own, ``members-<path>``, declared on one
+base every scope's class derives from (``MembersBase``): there it answers inapplicable (guarded
+by ``members-none``), and a child holding an entry overrides it with a derived value reading
+the entry; each entry is in a child or a case placed by the ``Members``'s scope, one per
+child. Its value, the engine's ``Located`` entries, is read as
 the model's sorted (entry, value) pairs, ``Located.node`` mapped to the entry's path, in
 its answer and wherever a function reads it.
 """
@@ -101,7 +103,6 @@ from finn.core.space import (
     Select,
     Space,
     Unresolved,
-    ViewKey,
     composite,
     constraint,
     derived,
@@ -232,6 +233,16 @@ def _value_type(values: Iterable[object], path: str) -> type:
     raise NotTranslatable(f"{path}: state the value type of {sorted(map(str, kinds))}")
 
 
+def _copied(path: str) -> Any:
+    """A function of the one read ``path``, answering it: what a child states as its member
+    of a ``Members``'s base, from the derived value of its own that the ``Members`` names."""
+
+    def body(read: dict[str, Any]) -> Any:
+        return read[path]
+
+    return _explicit((path,), body, int | Rejected)
+
+
 def _name(path: str) -> str:
     return path.rsplit(".", 1)[-1]
 
@@ -309,21 +320,22 @@ class _Builder:
                 raise NotTranslatable(f"{path}: a selector's guard holds one selector alone")
             self.guards[f"{path}.{held.selectors[0].name}"] = path
         self.externals = {scope: self._externals(scope) for scope in index.scopes}
-        #: per ``Members``: its export key, and its entries by the child's local name
-        self.keys: dict[str, ViewKey[Any]] = {}
+        #: per ``Members``: the member of ``MembersBase`` it reads, and its entries by the
+        #: child's local name
+        self.keys: dict[str, str] = {}
         self.located: dict[str, dict[str, str]] = {}
-        #: per scope: the export key of each entry it holds
-        self.exported: dict[str, dict[str, str]] = {scope: {} for scope in index.scopes}
+        #: per scope: the entry each ``Members`` of it reads there
+        self.entered: dict[str, dict[str, str]] = {scope: {} for scope in index.scopes}
         for path, (members, scope) in sorted(index.members.items()):
-            self.keys[path] = ViewKey(_name(path), int)
+            self.keys[path] = "members-" + path.replace(".", "-")
             self.located[path] = {}
             for entry in members.entries:
                 below = index.derived[entry][1]
                 if index.scopes[below].parent != scope:
                     raise NotTranslatable(f"{path}: {entry} is not in a child placed by its scope")
-                if path in self.exported[below]:
+                if path in self.entered[below]:
                     raise NotTranslatable(f"{path}: two entries in {below}")
-                self.exported[below][path] = entry
+                self.entered[below][path] = entry
                 local = below[len(scope) + 1 :] if scope else below
                 self.located[path][local] = entry
         #: per scope: the declaration of each member it owns, by model path or generated name
@@ -332,6 +344,7 @@ class _Builder:
         self.nodes: dict[str, dict[str, Any]] = {scope: {} for scope in index.scopes}
         self.selectors: dict[str, Any] = {}
         self.classes: dict[str, type[Space]] = {}
+        self.members_base: type[Space] = Space
         self.pending: set[tuple[str, str]] = set()
         #: an engine alias key (a scope's formal) -> the model path it takes
         self.aliases: dict[str, str] = {}
@@ -458,7 +471,7 @@ class _Builder:
         if name in index.views:
             return self._view(scope, name)
         if name in index.members:
-            return Members(self.keys[name])
+            return Members(getattr(self.members_base, self.keys[name]))
         if name in index.constraints:
             return self._constraint(scope, name)
         raise NotTranslatable(f"{name}: nothing to declare in {scope or 'the root'}")
@@ -648,9 +661,28 @@ class _Builder:
             _explicit(when.reads, lambda read: bool(when.test(self.model_reads(read))), bool)
         )
 
+    def _members_base(self) -> type[Space]:
+        """The base of every scope's class: each ``Members``'s member, answering inapplicable
+        (guarded by ``members-none``, False) where a class holds no entry of it."""
+
+        def never() -> bool:
+            return False
+
+        guard = derived(never)
+        members: dict[str, object] = {"members-none": guard}
+        for member in self.keys.values():
+
+            def nothing() -> int | Rejected:
+                raise AssertionError("a member guarded off was read")
+
+            members[member] = derived(when=guard)(nothing)
+        return composite("MembersBase", members)
+
     def space_class(self, scope: str) -> type[Space]:
         if scope in self.classes:
             return self.classes[scope]
+        if self.keys and self.members_base is Space:
+            self.members_base = self._members_base()
         index = self.index
         members: dict[str, object] = {}
         annotations: dict[str, object] = {}
@@ -707,12 +739,10 @@ class _Builder:
         if clashes:
             raise NotTranslatable(f"{scope}: names the harness generates: {clashes}")
         name = "Ref_" + (scope.replace(".", "_") or "root")
-        exports = {
-            self.keys[path]: self.member(scope, entry)
-            for path, entry in sorted(self.exported[scope].items())
-        }
+        for path, entry in sorted(self.entered[scope].items()):
+            members[self.keys[path]] = derived(**self._aliases(scope, (entry,)))(_copied(entry))
         self.classes[scope] = composite(
-            name, members, annotations=annotations, exports=exports or None
+            name, members, base=self.members_base, annotations=annotations
         )
         return self.classes[scope]
 

@@ -22,7 +22,6 @@ from finn.core.space import (
     Rejected,
     Select,
     Space,
-    ViewKey,
     composite,
     constraint,
     derived,
@@ -31,8 +30,6 @@ from finn.core.space import (
     reject,
     view,
 )
-
-COST = ViewKey("cost", int)
 
 
 class Room(Space):
@@ -49,13 +46,11 @@ class Room(Space):
     def cost(self) -> int:
         return self.area * self.finish
 
-    exports = {COST: cost}
-
 
 class Wing(Space):
     kitchen = Room(area=14)
     study = Room()
-    costs = Members(COST)
+    costs = Members(Room.cost)
 
 
 def test_a_formal_is_supplied_at_the_call_or_by_assignment() -> None:
@@ -138,7 +133,7 @@ def test_behaviour_is_not_assignable(member: str) -> None:
         setattr(target, member, 1)
 
     class Budget(Space):
-        claims = Members(COST)
+        claims = Members(Room.cost)
 
         @derived
         def claimed(self) -> int:

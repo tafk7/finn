@@ -659,7 +659,7 @@ def test_new_facts_putting_a_stored_choices_membership_input_out_of_play_drop_it
 # -- 6. Members: standing is what the origin's evaluation read (SZ100 (6)) ----------------------
 #
 # RUNNING § 2.2's House: the annex ``g`` (present while ``x >= 2``) and each room of ``s``
-# state a derived value ``e`` of their own choice, exported to the root's ``m``. The
+# state a derived value ``e`` of their own choice, which the root's ``m`` reads. The
 # scullery refuses ``q = 3``; the annex's ``e`` reads its shed's ``z``, inapplicable while
 # the shed (present while ``g.c >= 2``) is absent. ``small`` asks the rooms' sum to be at
 # most 4; ``fitted`` reads ``x``, the annex's guard's read, beside ``m`` (§ 16.22).

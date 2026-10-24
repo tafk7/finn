@@ -6,7 +6,8 @@ Calling a Space class declares a node; ``node.member`` is a reference to one of 
 members. Edges are bindings at the call, or assignments to a formal after the
 node is declared (``adder.back = register.q``: forward, around a cycle, or
 built as data). A relation between siblings is their parent's constraint, and
-``Members(key)`` ranges over the present children that export ``key``. A
+``Members(Base.member)`` ranges over the present children deriving from ``Base``, each
+read at its member. A
 Decision over nodes is the structural choice. None of these cases is about
 hardware.
 """
@@ -35,7 +36,6 @@ from finn.core.space import (
     Space,
     Unresolved,
     View,
-    ViewKey,
     composite,
     constraint,
     derived,
@@ -47,25 +47,27 @@ from finn.core.space import (
 )
 from finn.core.space._nodes import NodeDecl, node_record, unsupplied_formals
 
-COST = ViewKey("cost", int)
-AGREED = ViewKey("agreed", int)
-WIDTH = ViewKey("width", int)
-
 
 def owners(result: object) -> set[str]:
     assert isinstance(result, (Rejected, Unresolved))
     return {finding.owner for finding in result.findings}
 
 
-class Tiles(Space):
+class Costly(Space):
+    """What a budget counts: a part states its ``cost``, whose own refuses."""
+
+    @derived
+    def cost(self) -> int | Rejected:
+        return reject("no-cost", f"{type(self).__qualname__} states no cost")
+
+
+class Tiles(Costly):
     extent: int = Param()
     factor: int = Decision(domain=divisors_of(extent))
 
     @derived
     def cost(self) -> int:
         return self.extent // self.factor
-
-    exports = {COST: cost}
 
 
 # -- 1. a relation between siblings is their parent's -----------------------------------
@@ -120,7 +122,7 @@ class Budgeted(Space):
     a = Tiles(extent=12)
     b = Tiles(extent=8)
     c = Tiles(extent=6, when=use_third)
-    costs = Members(COST)
+    costs = Members(Costly.cost)
 
     @constraint
     def within(self) -> bool | Rejected:
@@ -164,15 +166,22 @@ def test_members_range_over_present_nodes_and_the_budget_counts_them() -> None:
 # -- 3. a graph built as data, with edges assigned after their nodes -------------------
 
 
-class Stage(Space):
+class Wide(Space):
+    """What a pipeline counts the width of: a part states its ``width_out``, whose own
+    refuses."""
+
+    @derived
+    def width_out(self) -> int | Rejected:
+        return reject("no-width", f"{type(self).__qualname__} states no width")
+
+
+class Stage(Wide):
     width_in: int = Param()
     growth: int = Decision(values=(0, 1, 2))
 
     @derived
     def width_out(self) -> int:
         return self.width_in + self.growth
-
-    exports = {WIDTH: width_out}
 
 
 def pipeline(count: int) -> type[Space]:
@@ -181,7 +190,7 @@ def pipeline(count: int) -> type[Space]:
     for previous, current in zip(stages, stages[1:]):
         current.width_in = previous.width_out
     nodes = {f"s{index}": stage for index, stage in enumerate(stages)}
-    return composite(f"Pipeline{count}", {**nodes, "widths": Members(WIDTH)})
+    return composite(f"Pipeline{count}", {**nodes, "widths": Members(Wide.width_out)})
 
 
 def test_a_pipeline_is_built_as_data_and_its_edges_are_declarations() -> None:
@@ -300,21 +309,23 @@ def test_an_unanchored_value_cycle_fails_with_its_path() -> None:
 # -- 6. closure: a composite is a node like any other ----------------------------------
 
 
-class Pair(Space):
-    """Two stages in series; its input is its own formal, its output an export."""
+class Pair(Wide):
+    """Two stages in series; its input is its own formal, its output its ``width_out``."""
 
     width_in: int = Param()
     first = Stage(width_in=width_in)
     second = Stage(width_in=first.width_out)
-    width_out = View(second.width_out)
-    exports = {WIDTH: width_out}
+
+    @derived
+    def width_out(self) -> int:
+        return self.second.width_out
 
 
 class Chain(Space):
     head = Stage(width_in=2)
     body = Pair()
     body.width_in = head.width_out  # an edge, assigned
-    widths = Members(WIDTH)
+    widths = Members(Wide.width_out)
 
 
 def test_a_composite_node_has_the_surface_of_a_leaf_node() -> None:

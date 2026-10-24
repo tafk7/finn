@@ -14,8 +14,6 @@ from finn.core.space import (
     Param,
     Select,
     Space,
-    View,
-    ViewKey,
     composite,
     design_space,
     inspection,
@@ -26,10 +24,7 @@ from finn.core.space.errors import DefinitionError
 
 @pytest.mark.parametrize("name", ["", "a.b", "$selector", "has space", "ümlaut"])
 def test_authored_names_are_unambiguous_segments(name: str) -> None:
-    # Export keys (ViewKey) and the case names of a selector are authored names, so each
-    # must be one segment.
-    with refused("name-invalid", error=DefinitionError, message="name segment"):
-        ViewKey(name, int)
+    # The case names of a selector are authored names, so each must be one segment.
     with refused("name-invalid", error=DefinitionError):
         Select(**{name: Space()})
     with refused("name-invalid", error=DefinitionError):
@@ -67,17 +62,6 @@ def test_malformed_candidates_fail_as_definitions() -> None:
         Select()
     with refused("select-no-node", error=DefinitionError):
         Select(none=None)  # the None case alone places nothing
-    # A duplicate export name is refused on the Space class.
-    first = ViewKey("result", int)
-    second = ViewKey("result", int)
-
-    class Duplicate(Space):
-        value = Const(1)
-        result = View(value)
-        exports = {first: result, second: result}
-
-    with refused("export-key-duplicate", error=DefinitionError, message=r"\bresult$"):
-        compile_model(Duplicate)
 
 
 def test_case_ids_can_use_hyphens_without_becoming_paths() -> None:

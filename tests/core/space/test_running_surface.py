@@ -45,7 +45,6 @@ from finn.core.space import (
     Unresolved,
     ValueUnavailableError,
     View,
-    ViewKey,
     _failure,
     bind,
     constraint,
@@ -98,8 +97,6 @@ def _outcome(ask: Callable[[], object]) -> object:
 # The evidence tests' shapes (``test_evidence``), and the selectors of ``_running_shapes``:
 # chosen and picked, given as a binding's argument, and picked by a choice.
 
-PHYSICAL = ViewKey("physical", int)
-
 
 class Good(Space):
     size: int = Param()
@@ -108,15 +105,11 @@ class Good(Space):
     def physical(*, size: int) -> int:
         return size
 
-    exports = {PHYSICAL: physical}
-
 
 class Bad(Space):
     @view
     def physical() -> int:
         raise AssertionError("inactive evaluator ran")
-
-    exports = {PHYSICAL: physical}
 
 
 class Alternatives(Space):

@@ -38,7 +38,6 @@ from finn.core.space import (
     ValueHandle,
     View,
     ViewAssessment,
-    ViewKey,
     constraint,
     default_semantics,
     derived,
@@ -54,7 +53,6 @@ class DType:
 
 
 INT = default_semantics(int)
-COST = ViewKey("cost", int)
 
 
 class Room(Space):
@@ -69,8 +67,6 @@ class Room(Space):
     @view
     def cost(self) -> int:
         return self.price
-
-    exports = {COST: cost}
 
 
 class Boiler(Space):
@@ -101,7 +97,7 @@ class House(Space):
     maybe: Boiler | None = Select(none=None, boiler=Boiler(kw=3))
     thermostat = Thermostat(kw=heating.kw)
     hall.area = kitchen.area  # typed by the annotation: an int reference
-    costs = Members(COST)
+    costs = Members(Room.cost)
     which: str = derived(case=heating)(_case_name)  # a binding reads the case's name
 
     # References in a class body are typed as the values they stand for.

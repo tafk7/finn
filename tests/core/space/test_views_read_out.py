@@ -22,7 +22,6 @@ control buses is ``control-bus-repeated``: that case is with the kernels', in
 from __future__ import annotations
 
 from types import MappingProxyType
-from typing import cast
 
 import pytest
 from support.refusals import refused
@@ -36,7 +35,6 @@ from finn.core.space import (
     Param,
     Space,
     View,
-    ViewKey,
     constraint,
     derived,
     design_space,
@@ -44,11 +42,9 @@ from finn.core.space import (
     view,
 )
 
-COST = ViewKey("cost", int)
-
 
 class Room(Space):
-    """A child presenting its cost as a view, exported under ``COST``."""
+    """A child presenting its cost as a view."""
 
     area: int = Param(default=12)
 
@@ -59,8 +55,6 @@ class Room(Space):
     @view
     def big(self) -> bool:
         return self.area > 10
-
-    exports = {COST: cost}
 
 
 class Sized(Space):
@@ -88,20 +82,20 @@ def test_a_childs_formal_bound_to_a_siblings_view_is_view_read_in() -> None:
 
     class Root(Space):
         source = Sized()
-        sink = Sink(width=cast(int, source.carried))
+        sink = Sink(width=source.carried)
 
     with refused("view-read-in", error=DefinitionError):
         design_space(Root())
 
 
 def test_a_view_side_members_read_by_a_derived_value_is_view_read_in() -> None:
-    """A ``Members`` whose entries are views (each child's ``cost``, a view exported under
-    one key), read by a derived value: refused ``view-read-in`` at the root."""
+    """A ``Members`` whose entries are views (each child's ``cost``), read by a derived value:
+    refused ``view-read-in`` at the root."""
 
     class Wing(Space):
         kitchen = Room(area=14)
         study = Room()
-        costs = Members(COST)
+        costs = Members(Room.cost)
 
         @derived
         def claimed(self) -> int:
@@ -118,7 +112,7 @@ def test_a_view_side_members_read_by_a_constraint_is_view_read_in() -> None:
     class Wing(Space):
         kitchen = Room(area=14)
         study = Room()
-        costs = Members(COST)
+        costs = Members(Room.cost)
 
         @constraint
         def two_rooms(self) -> bool:
@@ -216,7 +210,7 @@ def test_a_view_side_members_read_only_by_views_is_accepted_and_answers() -> Non
     class Wing(Space):
         kitchen = Room(area=14)
         study = Room()
-        costs = Members(COST)
+        costs = Members(Room.cost)
 
         @view
         def total(self) -> int:

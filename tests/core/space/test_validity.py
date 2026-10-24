@@ -14,8 +14,8 @@ with the pieces that are not true and their owners.
 A view is a product: it refuses when its output or its Space is refused, answers while
 its Space is open, and an inactive view answers ``Inapplicable`` without reading its
 Space's validity. A constraint reads values; one that reads a view is refused at compile
-(``view-read-in``). An export may name a derived value, which a holder reads as the value
-whatever the exporting Space's validity; a holder reading a view export is a view. A value is
+(``view-read-in``). A ``Members`` may read a derived value, which a holder reads as the
+value whatever the Space's validity; a holder reading a view of a ``Members`` is a view. A value is
 possible unless a rule it reaches refuses it (``inspection.viable``), and a value set is checked
 against the choice's own domain, over the facts. A state describes the commitment, a
 read the answer: every stored choice is committed with its stored value, whether it
@@ -43,7 +43,6 @@ from finn.core.space import (
     Space,
     Unresolved,
     View,
-    ViewKey,
     constraint,
     derived,
     design_space,
@@ -309,9 +308,6 @@ def test_a_view_answers_while_its_space_is_open_and_refuses_with_it() -> None:
     assert refused.inspect(Product.cycles).output_result == Available(4)
 
 
-ACCESS = ViewKey("access", int)
-
-
 class Port(Space):
     """A port: its ``access`` is a product only while it binds, and its constraint reads
     the tensor its kernel gives it."""
@@ -326,8 +322,6 @@ class Port(Space):
     @view(when=binds)
     def access(self) -> int:
         return 4
-
-    exports = {ACCESS: access}
 
 
 class Leaf(Space):
@@ -366,7 +360,7 @@ def test_a_derived_value_reading_the_accesses_is_view_read_in_whether_or_not_the
         class Looped(Space):
             x = Port(binds=True, tensor=1)
             y = Port(binds=binds)
-            accesses = Members(ACCESS)
+            accesses = Members(Port.access)
 
             @derived
             def extents(self) -> int:
@@ -436,15 +430,11 @@ def test_a_childs_constraint_reading_its_parents_view_through_a_formal_is_view_r
     assert inspection.validity(fixed).status == "valid" and fixed.carried == 4
 
 
-# -- an export may name a derived value --------------------------------------------------
-
-
-WIDTH = ViewKey("width", int)
-COST = ViewKey("cost", int)
+# -- a Members may read a derived value --------------------------------------------------
 
 
 class Stage(Space):
-    """Refused past 4 lanes; exports its width as a value and its cost as a product."""
+    """Refused past 4 lanes; states its width as a derived value and its cost as a view."""
 
     lanes: int = Decision(values=(2, 8))
 
@@ -460,13 +450,11 @@ class Stage(Space):
     def cost(self) -> int:
         return 10 * self.lanes
 
-    exports = {WIDTH: width, COST: cost}
-
 
 class Holder(Space):
     stage = Stage()
-    widths = Members(WIDTH)
-    costs = Members(COST)
+    widths = Members(Stage.width)
+    costs = Members(Stage.cost)
 
     @derived
     def total_width(self) -> int:
@@ -477,7 +465,7 @@ class Holder(Space):
         return sum(member.value for member in self.costs)
 
 
-def test_a_value_export_answers_while_its_space_is_refused_and_a_view_export_refuses() -> None:
+def test_a_derived_member_answers_while_its_space_is_refused_and_a_view_member_refuses() -> None:
     report = design_space(Holder()).try_with_choices({Holder.stage.lanes: 8})
     assert not report.accepted and broken(report) == {"stage.fits": set()}
     point = built(design_space(Holder()), {"stage.lanes": 8})

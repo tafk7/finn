@@ -26,7 +26,6 @@ from finn.core.space import (
     Select,
     Space,
     View,
-    ViewKey,
     constraint,
     derived,
     design_space,
@@ -172,24 +171,3 @@ def test_a_member_no_class_declares_is_refused_when_the_class_is_compiled() -> N
 
     with refused("members-member-invalid", error=DefinitionError):
         design_space(Shelf())
-
-
-def test_a_view_key_still_collects_by_key_beside_it() -> None:
-    cost = ViewKey("cost", int)
-
-    class Keyed(Space):
-        @view
-        def charge(self) -> int:
-            return 7
-
-        exports = {cost: charge}
-
-    class Shelf(Space):
-        first = Keyed()
-        second = Priced(size=1)
-        keyed = Members(cost)
-        named = Members(Priced.price)
-
-    point = design_space(Shelf())
-    assert point.keyed == (Located("first", "cost", 7),)
-    assert point.named == (Located("second", "price", 10),)
