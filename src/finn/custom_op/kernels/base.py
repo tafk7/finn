@@ -81,11 +81,12 @@ given as, an output's the kernel's derived value of the tensor it writes (``tens
 given to it), and the view of the contract its channel takes of the kernel's port
 (``contract``, ``x_contract``, a view of a ``finn.kernels.base.PortContract``). A parameter port,
 whose initializer the node may hold (MatMul's weights), also names the kernel's Param
-the initializer's values are given as (``contents``, ``w_contents``, in place of its
-tensor) and the kernel's derived values of what its channel carries, downstream of the
-kernel: the tensor (``carried``, ``carried_weights``) and the values its source stores
-(``stored``, ``stored_weights``). The graph layer declares the kernel and its channels by
-it (``finn.custom_op.kernels.network.declaration``): each channel's tensor (a parameter
+the held values are given as, in place of its tensor (``contents``; MatMul's ``weights``,
+the same Param, known weights or a tensor) and the kernel's derived values of what its
+channel carries, downstream of the kernel: the tensor (``carried``,
+``carried_weights``) and the values its source stores (``stored``,
+``stored_weights``). The graph layer declares the kernel and its channels by it
+(``finn.custom_op.kernels.network.declaration``): each channel's tensor (a parameter
 channel's from the kernel's values, ``Stated``) and its port as the channel's side
 (``Port``).
 """
@@ -123,7 +124,6 @@ from finn.kernels.composer import Facts
 from finn.kernels.configure import describe
 from finn.kernels.configure import refusal as refusal_of
 from finn.kernels.policies import Alone, Defaulted, Policy, defaulted, stated
-from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.target import Target
 
 if TYPE_CHECKING:
@@ -237,7 +237,8 @@ def replayed(
     way at a bind, which sets every stored choice)."""
     if not stored:
         return point, {}
-    decisions = {item.key: item.reference for item in inspection.decisions(point)}
+    every = inspection.decisions(inspection.model(point))
+    decisions = {item.key: item.reference for item in every}
     refused: dict[str, tuple[Finding, ...]] = {
         key: (
             Finding(FindingKind.REJECTION, "not-a-decision", key, "not a Decision of this member"),
@@ -434,12 +435,12 @@ class KernelOp(CustomOp):
     def binding(
         self,
         formals: Mapping[str, object],
-        values: Mapping[str, IntegerTensorValue] | None = None,
+        values: Mapping[str, object] | None = None,
     ) -> Facts:
         """The node's facts: its kernel class and its arguments, the ``formals`` it reads
         from the graph beside its tensors, each input port's tensor (``edge_tensor``), and
-        the ``values`` of the initializers it holds, by port (``owned``), given as the
-        kernel's contents in place of a tensor."""
+        the values it makes of the initializers it holds, by port (``owned``; MatMul's
+        ``KnownWeights``), given as the kernel's contents in place of a tensor."""
         held = values or {}
         tensors = {
             self.wiring[port].tensor: tensor for port, tensor in self.input_edges(skip=held).items()

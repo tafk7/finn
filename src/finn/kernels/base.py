@@ -109,14 +109,9 @@ from finn.platform.capabilities import Resources
 
 
 def _frozen(name: str, *kinds: type) -> ValueSemantics[object]:
-    """A frozen build value: compared by value, shared without a copy."""
-    return ValueSemantics(
-        kinds[0],
-        name,
-        lambda value: isinstance(value, kinds),
-        lambda left, right: left == right,
-        lambda value: value,
-    )
+    """A frozen build value's check: an instance of one of ``kinds`` (compared by ``==``, as
+    every value is)."""
+    return ValueSemantics(kinds[0], name, lambda value: isinstance(value, kinds))
 
 
 NETLIST_SEMANTICS = cast("ValueSemantics[Fragment]", _frozen("netlist", Fragment))

@@ -3,7 +3,7 @@ from finn.core.space import Decision, Param, Select, Space, View, constraint, de
 
 class Child(Space):
     width: int = Param()
-    label: str = Param(required=False)
+    label: str | None = Param(default=None)
     lanes: int = Decision(values=(1, 2))
 
     @view
@@ -82,9 +82,11 @@ def bad(point: Child, parent: Parent) -> None:
 def wrong_constraint() -> str:
     return "yes"
 
-@derived(semantics=ValueSemantics.immutable_nominal(int))  # E
+@derived
 def wrong_answer() -> QueryResult[str]:
     return Available("bad")
+
+wrong_answer_type: int = wrong_answer  # E
 
 bad_guard: int = Decision(values=(1,), when=Child.width)  # E
 bad_view = View(Child.width, when=Child.width)  # E

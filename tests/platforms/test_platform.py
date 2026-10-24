@@ -130,9 +130,8 @@ def test_a_partitions_weight_stream_reads_the_platform() -> None:
 
 
 def test_a_bare_kernel_states_its_platform() -> None:
-    tensors = {
-        f"{port}_tensor": tensor for port, tensor in op(matmul_model()).input_edges().items()
-    }
+    node = op(matmul_model())
+    tensors = {node.wiring[port].tensor: tensor for port, tensor in node.input_edges().items()}
     with refused("formal-unsupplied", error=DefinitionError, message="^platform is not supplied"):
         design_space(MatMulKernel(**tensors))
 

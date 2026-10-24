@@ -808,11 +808,12 @@ class _Locator:
 
 def _decisions(composed: Composed, point: Space) -> dict[Key, inspection.DecisionInfo[object]]:
     """Every Decision of ``point``, by key, by member in rank order, each member's in the
-    flow order."""
+    flow order: its class's, listed or not (a choice its facts alone rule out is in no list
+    of a design space, and is still a choice by name)."""
     found: dict[str, dict[Key, inspection.DecisionInfo[object]]] = {
         name: {} for name in composed.names.members
     }
-    for item in inspection.decisions(point):
+    for item in inspection.decisions(inspection.model(point)):
         owner, key = composed.names.pair(item.key)
         found[owner][(owner, key)] = item
     return {key: item for each in found.values() for key, item in each.items()}
@@ -952,7 +953,8 @@ def partition(
     ``movers`` the offers on them; ``stray`` and ``whole``, a graph's."""
     composed = compose(declared)
     point = composed.design_space()
-    decisions = {item.key: item.reference for item in inspection.decisions(point)}
+    every = inspection.decisions(inspection.model(point))
+    decisions = {item.key: item.reference for item in every}
     unknown: dict[Key, tuple[Finding, ...]] = {}
     values: dict[object, object] = {}
     for key, value in (stored or {}).items():

@@ -75,20 +75,18 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from types import MappingProxyType
-from typing import ClassVar
+from typing import ClassVar, cast
 
 from finn.core.space import (
     Decision,
     Param,
     Rejected,
     Select,
-    ValueSemantics,
     View,
     constraint,
     derived,
     domain,
     reject,
-    supplied,
     view,
 )
 from finn.dataflow.datatypes import QONNXDataType
@@ -137,11 +135,7 @@ from finn.kernels.transport import (
     marker_pairs,
 )
 from finn.kernels.utilization import memory_preference, memory_styles, uram_constraint
-from finn.kernels.values.semantics import (
-    INTEGER_TENSOR,
-    QONNX_DATATYPE_VALUE_SEMANTICS,
-    IntegerTensor,
-)
+from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import Platform
 
 # -- the labels a channel's placements keep --------------------------------------------------
@@ -160,16 +154,6 @@ OUTPUT_ADAPTER_LABEL = "output_adapter.vpc"
 
 _PLACED = {"source": SOURCE_LABEL, "output_adapter": OUTPUT_ADAPTER_LABEL}
 """Each placement's node, and the label the channel's netlist places it at."""
-
-BOUNDARY_CONTRACT: ValueSemantics[StreamContract | None] = ValueSemantics(
-    StreamContract,
-    "boundary contract",
-    lambda value: value is None or isinstance(value, StreamContract),
-    lambda left, right: left == right,
-    lambda value: value,
-)
-"""The AXIS port a channel's module presents for its boundary side; None where neither
-side is the boundary."""
 
 
 def boundary_contract(
@@ -468,13 +452,16 @@ class Channel(KernelSpace):
     adaptable: bool = Param(default=True)
     producer: Side = Param()
     consumer: Side = Param()
-    contents: IntegerTensor = Param(semantics=INTEGER_TENSOR, required=False)
+    contents: IntegerTensorValue | None = Param(default=None)
     sets: int = Param(default=1)
-    index_tensor: Tensor = Param(required=False)
+    index_tensor: Tensor | None = Param(default=None)
     platform: Platform = Param()
-    # Whether the channel carries a known value, which its source drives: where nothing
-    # supplies ``contents``, the source is never placed.
-    valued = supplied(contents)
+
+    @derived
+    def valued(self) -> bool:
+        """Whether the channel carries a known value, which its source drives: without
+        ``contents`` its source is not in play."""
+        return self.contents is not None
 
     @derived
     def offered(self) -> bool:
@@ -517,15 +504,16 @@ class Channel(KernelSpace):
         """One period of the value in the order its consumer reads it."""
         return period(self.consumed.sequence.form)
 
-    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    @derived
     def source_dtype(self) -> QONNXDataType:
         return self.tensor.element.dtype
 
+    # Placed only where ``valued`` holds: its contents are given there.
     source = MemStreamKernel(
         when=valued,
         dtype=source_dtype,
         form=source_form,
-        contents=contents,
+        contents=cast("IntegerTensorValue", contents),
         sets=sets,
         set_tensor=index_tensor,
         platform=platform,
@@ -589,7 +577,7 @@ class Channel(KernelSpace):
             form = unreplayed(form)
         return boundary_contract(port, self.tensor.element, BeatSequence(form), endpoint)
 
-    @derived(semantics=BOUNDARY_CONTRACT)
+    @derived
     def boundary(self) -> StreamContract | None:
         """The AXIS port the module presents for its boundary side (``boundary_contract``:
         the side's label, the tensor's element, and what the other side presents); None

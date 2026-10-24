@@ -213,7 +213,7 @@ class _Visitor(ast.NodeVisitor):
             self.uses.present.add(tuple(reversed(names)))
             return
         if isinstance(argument, ast.Name):
-            # A declaration a closure holds (the engine's ``supplied``): its member name.
+            # A declaration a closure holds: its member name.
             name = getattr(self.constants.get(argument.id), "name", None)
             if isinstance(name, str):
                 self.uses.present.add((name,))
@@ -336,8 +336,7 @@ def _uses(function: Callable[..., object]) -> _Uses:
 # runs in (its own members, its slots, through each case's class, helpers followed in the
 # class they are reached through) to references relative to the scope it runs in, once per
 # class and function (``_TemplateInference``); an address's reads are those references mapped
-# to addresses in its scope when first asked (``_Mapping``). What a placement decides (a
-# candidate of a choice that never applies there) is decided when mapped.
+# to addresses in its scope when first asked (``_Mapping``).
 
 
 @dataclass(frozen=True, slots=True)
@@ -358,28 +357,22 @@ class _Place:
 class _Ref:
     """What a method may read: a record of the class ``steps`` reach, or the guard it is
     placed under (``PLACING``: where ``present()`` of a child reads the guard the child is
-    placed under, and that is the reading class's own). ``sources``: what decides whether it
-    is supplied (``present`` of a value input), followed when mapped."""
+    placed under, and that is the reading class's own)."""
 
     steps: tuple[int, ...]
     node: int | Placing
-    sources: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class _Missing:
-    """A path naming nothing compiled, where ``when`` is placed and none of ``unless`` is."""
+    """A path naming nothing compiled."""
 
     text: str
-    when: tuple[int, ...] = ()
-    unless: tuple[tuple[int, ...], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
 class _Dynamic:
-    """Reads its source does not fix, where ``when`` is placed (a dynamic helper there)."""
-
-    when: tuple[int, ...] = ()
+    """Reads its source does not fix (a dynamic method or helper)."""
 
 
 _Item: TypeAlias = "_Ref | _Missing | _Dynamic"
@@ -391,13 +384,7 @@ _DYNAMIC: tuple[_Dynamic] = (_Dynamic(),)
 
 def _prefixed(steps: tuple[int, ...], item: _Item) -> _Item:
     if isinstance(item, _Ref):
-        return _Ref((*steps, *item.steps), item.node, item.sources)
-    if isinstance(item, _Missing):
-        return _Missing(
-            item.text, (*steps, *item.when), tuple((*steps, *unless) for unless in item.unless)
-        )
-    if isinstance(item, _Dynamic):
-        return _Dynamic((*steps, *item.when))
+        return _Ref((*steps, *item.steps), item.node)
     return item
 
 
@@ -539,41 +526,38 @@ class _TemplateInference:
             if not (prefix and self._resolve(place, prefix, items, helpers, text)):
                 items.append(_Missing(text))
             return
-        known: list[tuple[int, ...]] = []
+        known = False
         for at in reached:
             held = inspect.getattr_static(at.compiled.space_type, name, None)
             if isinstance(held, (staticmethod, classmethod)):
-                known.append(at.steps)
+                known = True
             elif inspect.isfunction(held):
                 helpers.append((held, at))
-                known.append(at.steps)
-        items.append(_Missing(text, (), tuple(known)))
+                known = True
+        if not known:
+            items.append(_Missing(text))
 
     def _presence(self, place: _Place, path: Path, items: list[_Item]) -> None:
-        """What ``present()`` reads of the last name of ``path``: as
-        ``_Inference._presence``."""
+        """What ``present()`` reads of the last name of ``path``, a child: the guard it is
+        placed under. Of anything else (a value input is no node) it reads nothing: a
+        missing path, which ``present()`` refuses when it runs."""
         text = f"present({'.'.join(path)})"
         reached = self._scopes(place, path[:-1], items)
         if reached is None:
             items.append(_Missing(text))
             return
-        name = path[-1]
-        known: list[tuple[int, ...]] = []
+        known = False
         for at in reached:
             compiled = at.compiled
-            slot = compiled.named_children.get(name)
+            slot = compiled.named_children.get(path[-1])
             if slot is not None:
                 # The guard the child is placed under: a record of this class, or the guard
                 # this class is placed under.
                 guard = compiled.ref(compiled.slots[slot].guard)
                 items.append(_Ref(at.steps, cast("int | Placing", guard)))
-                known.append(at.steps)
-                continue
-            index = compiled.named_members.get(name)
-            if index is not None:
-                items.append(_Ref(at.steps, index, sources=True))
-                known.append(at.steps)
-        items.append(_Missing(text, (), tuple(known)))
+                known = True
+        if not known:
+            items.append(_Missing(text))
 
 
 class _Mapping:
@@ -609,25 +593,14 @@ class _Mapping:
         missing: list[str] = []
         for item in found:
             if isinstance(item, _Dynamic):
-                if record.reach(item.when) is not None:
-                    return None, ()
-            elif isinstance(item, _Missing):
-                if record.reach(item.when) is not None and not any(
-                    record.reach(unless) is not None for unless in item.unless
-                ):
-                    missing.append(item.text)
+                return None, ()
+            if isinstance(item, _Missing):
+                missing.append(item.text)
             else:
-                at = record.reach(item.steps)
-                index = None if at is None else at.member_address(item.node)
+                index = record.reach(item.steps).member_address(item.node)
                 if index is not None:
-                    self._add(index, item.sources, nodes)
+                    nodes.add(index)
         return frozenset(nodes), tuple(dict.fromkeys(missing))
-
-    def _add(self, index: Address, sources: bool, found: set[Address]) -> None:
-        if sources:
-            _address_sources(self.scopes, index, found)
-        else:
-            found.add(index)
 
     def guards(self, index: Address) -> tuple[Address, ...]:
         held = self.existence.get(index)
@@ -653,37 +626,6 @@ class _Mapping:
                         found = scopes.case_of(choice, index)
             self.cases[index] = found
             return found
-
-
-def _address_sources(scopes: Scopes, index: Address, found: set[Address]) -> None:
-    """What decides whether a value input is supplied at ``index`` (``present``): the
-    guards and selectors on the way to its source, every alias on the way walked as read,
-    so each one's guard is named."""
-    pending, seen = [index], set()
-    while pending:
-        current = pending.pop()
-        if current in seen:
-            continue
-        seen.add(current)
-        guard = current.guard
-        if guard is not None:
-            found.add(guard)
-        kind = current.kind
-        if kind == "param":
-            found.add(current)
-        elif kind in ("alias", "guard", "view"):
-            output = current.output
-            if output is not None:
-                pending.append(output)
-        elif kind == "select":
-            selector = current.selector
-            if selector is not None:
-                found.add(selector)
-                pending.extend(target for _, target in current.alternatives)
-        elif kind == "present":
-            pending.extend(target for _, target in current.alternatives)
-    if scopes.selector_choice(index) is not None:
-        found.add(index)
 
 
 class _Lazy(Mapping[Address, Any]):

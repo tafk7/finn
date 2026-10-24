@@ -25,7 +25,6 @@ from .declarations import (
     declared_annotation,
     derived,
     required,
-    supplied,
     view,
 )
 from .domains import Domain, divisors_of, domain
@@ -68,7 +67,6 @@ __all__ = [
     "Decision",
     "Select",
     "required",
-    "supplied",
     "Derived",
     "Constraint",
     "View",

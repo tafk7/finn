@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 """The running type's evaluation of one design space: how each kind of node reads,
-validity's pieces, and answers compared by value semantics.
+validity's pieces, and answers compared by type and ``==``.
 
 Each test opens an evaluation of a root declaration's facts and stored choices, in a
 session of its own (``core.space._evaluation_support``).
@@ -24,7 +24,6 @@ from finn.core.space import (
     Rejected,
     Space,
     Unresolved,
-    ValueSemantics,
     constraint,
     derived,
     divisors_of,
@@ -65,7 +64,7 @@ def test_a_choice_reads_its_stored_value_unassigned_waiting_or_dormant() -> None
 
 
 class Facts(Space):
-    extent: int = Param(required=False)
+    extent: int = Param()
 
     @derived
     def checked(*, extent: int) -> int | Rejected:
@@ -80,9 +79,6 @@ class Facts(Space):
 def test_a_stored_value_reads_through_its_type_check_over_facts() -> None:
     outside = open_evaluation(Facts(extent=4), {"lanes": 3})
     assert _codes(answer(outside, "lanes")) == [("domain-membership", "lanes")]
-
-    missing = open_evaluation(Facts(), {"lanes": 2})
-    assert _codes(answer(missing, "lanes")) == [("input-missing", "extent")]
 
     refused = open_evaluation(Facts(extent=1), {"banks": 1})
     assert _codes(answer(refused, "banks")) == [("extent-small", "checked")]
@@ -179,69 +175,12 @@ class Parity(Space):
         return 2 * other
 
 
-def test_same_compares_by_value_semantics_never_bare_equality() -> None:
+def test_same_compares_by_type_and_eq_never_bare_equality() -> None:
     world = open_evaluation(Parity(), {"count": 1, "other": 1})
     odd = node(world, "odd")
-    # ``True == 1`` in Python; the bool semantics does not recognize 1.
+    # ``True == 1`` in Python; the two are of different types.
     assert not _same_answer(odd, Available(True), Available(1))
     assert _same_answer(odd, Available(True), Available(True))
     refused = reject("x", "y", owner="z")
     assert _same_answer(odd, refused, reject("x", "y", owner="z"))
     assert not _same_answer(odd, refused, Unresolved(refused.findings))
-
-
-class Grid:
-    """A value like an array: ``==`` answers cell by cell, with no truth value."""
-
-    def __init__(self, cells: tuple[int, ...]) -> None:
-        self.cells = cells
-
-    def __eq__(self, other: object) -> Cells:  # type: ignore[override]
-        assert isinstance(other, Grid)
-        return Cells(tuple(a == b for a, b in zip(self.cells, other.cells)))
-
-    __hash__ = None  # type: ignore[assignment]
-
-
-class Cells:
-    def __init__(self, cells: tuple[bool, ...]) -> None:
-        self.cells = cells
-
-    def __bool__(self) -> bool:
-        raise ValueError("the truth value of a grid comparison is ambiguous")
-
-
-GRID = ValueSemantics(
-    Grid,
-    "grid",
-    lambda value: type(value) is Grid,
-    lambda left, right: left.cells == right.cells,
-    lambda value: Grid(value.cells),
-)
-
-
-class Table(Space):
-    table: Grid = Param(semantics=GRID)
-
-    @derived
-    def total(*, table: Grid) -> int:
-        return sum(table.cells)
-
-    @derived
-    def large(*, total: int) -> bool:
-        return total > 10
-
-
-def test_values_without_a_truth_value_compare_by_their_semantics() -> None:
-    """Facts compared by their semantics: equal grids make equal design spaces, others
-    other ones; an answer holding a grid is the same by its semantics."""
-    world = open_evaluation(Table(table=Grid((1, 2, 3))))
-    assert answer(world, "large") == Available(False)
-    again = open_evaluation(Table(table=Grid((1, 2, 3))))
-    assert again.ds == world.ds
-    assert open_evaluation(Table(table=Grid((3, 2, 1)))).ds != world.ds
-    table = node(world, "table")
-    assert _same_answer(table, Available(Grid((1, 2))), Available(Grid((1, 2))))
-    assert not _same_answer(table, Available(Grid((1, 2))), Available(Grid((2, 1))))
-    with pytest.raises(ValueError, match="ambiguous"):
-        bool(Grid((1,)) == Grid((1,)))

@@ -85,12 +85,9 @@ from finn.core.space import (
     Param,
     Rejected,
     Space,
-    ValueSemantics,
     constraint,
-    default_semantics,
     derived,
     reject,
-    supplied,
     view,
 )
 from finn.core.space._nodes import NodeDecision, NodeDecl, selected, unwrap
@@ -109,7 +106,7 @@ from finn.kernels.declaration import (
     declared_reads,
     is_member,
 )
-from finn.kernels.sides import SIDE, Side
+from finn.kernels.sides import Side
 from finn.kernels.transport import (
     AxisBeat,
     AxisSpelling,
@@ -119,18 +116,6 @@ from finn.kernels.transport import (
     StreamMarker,
 )
 from finn.kernels.values.domains import Integer, admit_element
-
-INTEGER_POLICY: ValueSemantics[Integer | None] = ValueSemantics(
-    Integer,
-    "integer policy",
-    lambda value: value is None or isinstance(value, Integer),
-    lambda left, right: left == right,
-    lambda value: value,
-)
-"""An integer policy a port's hardware takes; None when its kernel admits the element."""
-
-STREAM = default_semantics(Stream)
-"""A ``Stream``'s value semantics: a frozen value, compared by value."""
 
 
 @dataclass(frozen=True)
@@ -199,11 +184,13 @@ class AxiStreamPort(KernelDeclaration):
 
     def placement(self) -> bool | None:
         """Whether it is placed: True or False when the class is made, None where it reads
-        whether its tensor is supplied (``<name>_placed``)."""
+        whether its tensor is given (``<name>_placed``): a formal whose default is ``None``,
+        an optional tensor (``x: Tensor | None = Param(default=None)``). A formal with any
+        other default is always given."""
         tensor = self.tensor
         if tensor is None:
             return False
-        if isinstance(tensor, Param) and not tensor.required:
+        if isinstance(tensor, Param) and tensor.default is None:
             return None
         if is_member(tensor) and getattr(tensor, "when", None) is not None:
             raise DefinitionError.broken(
@@ -244,7 +231,13 @@ class AxiStreamPort(KernelDeclaration):
         placed = (f"{name}_placed",) if placement is None else ()
         guard: bool | None = None
         if placement is None:
-            guard = supplied(self.tensor)
+
+            @declared_reads(*self.paths("tensor"))
+            def placed_(self: Space) -> bool:
+                """Whether its tensor is given: the port is idle without it."""
+                return port.value(self, "tensor") is not None
+
+            guard = derived(placed_)
             members[f"{name}_placed"] = guard
         tensor = self.paths("tensor") if placement is not False else ()
 
@@ -272,7 +265,7 @@ class AxiStreamPort(KernelDeclaration):
         def stream(self: Space) -> Stream | Rejected:
             return port.presented(self, name)
 
-        members[f"{name}_stream"] = derived(semantics=STREAM, when=guard)(stream)
+        members[f"{name}_stream"] = derived(when=guard)(stream)
 
         @declared_reads(f"{name}_stream", *self.paths(*AxiStreamPort.VIEWED))
         def data_width_(self: Space) -> int | Rejected:
@@ -301,7 +294,7 @@ class AxiStreamPort(KernelDeclaration):
                 return Side.kernel(stream, label, getattr(self, f"{name}_data_width"))
             return Side.kernel(stream, label)
 
-        members[f"{name}_side"] = derived(semantics=SIDE, when=guard)(side_)
+        members[f"{name}_side"] = derived(when=guard)(side_)
         binding = self.binding()
         binds = guard
         if binding is None:
@@ -702,7 +695,7 @@ class Served(KernelDeclaration):
         def width(width: int) -> int:
             return width
 
-        members[f"{name}_stream"] = derived(semantics=STREAM, stream=given)(stream)
+        members[f"{name}_stream"] = derived(stream=given)(stream)
         members[f"{name}_data_width"] = derived(width=widths)(width)
         try:
             case = selected(self.child)  # a selector over children: the case it selects
@@ -723,7 +716,7 @@ class Served(KernelDeclaration):
                 return contract.under(above)
 
             members[f"{name}_label"] = derived(label=labels)(stated_label)
-            members[f"{name}_side"] = derived(semantics=SIDE, side=sides)(stated_side)
+            members[f"{name}_side"] = derived(side=sides)(stated_side)
             members[f"{name}_contract"] = view(semantics=PORT_CONTRACT, contract=offered)(stated)
         elif case is not None:
 
@@ -737,7 +730,7 @@ class Served(KernelDeclaration):
                 return contract.under(f"{child}.{case}")
 
             members[f"{name}_label"] = derived(case=case, label=labels)(chosen_label)
-            members[f"{name}_side"] = derived(semantics=SIDE, case=case, side=sides)(chosen_side)
+            members[f"{name}_side"] = derived(case=case, side=sides)(chosen_side)
             members[f"{name}_contract"] = view(
                 semantics=PORT_CONTRACT, case=case, contract=offered
             )(chosen)
@@ -753,7 +746,7 @@ class Served(KernelDeclaration):
                 return contract.under(child)
 
             members[f"{name}_label"] = derived(label=labels)(placed_label)
-            members[f"{name}_side"] = derived(semantics=SIDE, side=sides)(placed_side)
+            members[f"{name}_side"] = derived(side=sides)(placed_side)
             members[f"{name}_contract"] = view(semantics=PORT_CONTRACT, contract=offered)(placed)
         return members
 
@@ -794,8 +787,6 @@ def port_endpoint(space_type: type[Space], port: str) -> Endpoint | None:
 
 
 __all__ = [
-    "INTEGER_POLICY",
-    "STREAM",
     "AxiStreamPort",
     "LoopEnds",
     "Served",

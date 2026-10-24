@@ -58,7 +58,7 @@ from finn.kernels.base import KernelSpace
 from finn.kernels.channels import Channel
 from finn.kernels.declaration import declarations
 from finn.kernels.library import LibraryModule
-from finn.kernels.port import STREAM, AxiStreamPort, Served
+from finn.kernels.port import AxiStreamPort, Served
 from finn.kernels.utilization import RESOURCES_SEMANTICS
 from finn.platform.capabilities import Resources
 
@@ -219,7 +219,7 @@ def _reader(read: Any) -> type[Space]:
     def stream(stream: Stream) -> Stream:
         return stream
 
-    return composite("reader", {"y_stream": derived(semantics=STREAM, stream=read)(stream)})
+    return composite("reader", {"y_stream": derived(stream=read)(stream)})
 
 
 def test_a_stream_reading_its_sibling_directly_fails() -> None:

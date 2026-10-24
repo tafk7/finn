@@ -77,31 +77,33 @@ the binds through ``Answers.bind``, and the check against one built from nothing
 ``Implementation.make`` (history independence, which T1 claims by construction and its
 cache could break), so none is skipped.
 
-**Two runs, and attribution by cause** (DESIGN § 6). The model holds rulings the engine has
-not reached (SZ100 (3), (5)), each a pending milestone of the matrix with one row.
+**Two runs, and attribution by cause** (DESIGN § 6). The model holds a ruling the engine has
+not reached (SZ100 (3)), a pending milestone of the matrix with one row.
 
 - The **strict** run (``strict=True``, ``--strict``) draws neither cause: no view in a
   rule's pool, every fact given at the start, no unset. Every disagreement fails the walk.
-- The **full** run (the default) draws both. Each disagreement is attributed by its cause,
-  computed from the description and the model's configuration, never the engine's answers:
-  T4b, a description the model refuses as ``view-read-in`` that the engine takes otherwise
-  (``engine.definition``; counted once, and the generator draws again: built, or refused
-  as a cycle, see :func:`generate`); T4c, a question
-  whose subject reaches an optional fact left out (:meth:`Structure.reach`; a fact's own
-  answer, ``None`` in the model and unresolved in the engine, reaches the fact itself;
-  validity, possible values, a change, a bind and refinement reach the whole description).
-  One attributed to a pending milestone (:func:`pending`) is **counted, not failed**, tallied
-  by question and by milestone; one with no cause fails the walk, and so does one whose
-  milestone is not pending (``--without``: its rows taken as removed). Refinement on the engine
-side (its answers over an addition, in the same order) is a disagreement like any other
-where the model holds. Where the engine refuses a change the model accepts, the engine side
-takes the model's configuration by a bind, which is never refused.
+- The **full** run (the default) draws both. A disagreement is attributed by its cause,
+  computed from the description, never the engine's answers: T4b, a description the model
+  refuses as ``view-read-in`` that the engine takes otherwise (``engine.definition``;
+  counted once, and the generator draws again: built, or refused as a cycle, see
+  :func:`generate`). One attributed to a pending milestone (:func:`pending`) is **counted,
+  not failed**, tallied by question and by milestone; every other one fails the walk, and so
+  does one whose milestone is not pending (``--without``: its rows taken as removed).
+  Refinement on the engine side (its answers over an addition, in the same order) is a
+  disagreement like any other where the model holds. Where the engine refuses a change the
+  model accepts, the engine side takes the model's configuration by a bind, which is never
+  refused.
 
 Facts are drawn required or optional (SZ100 (5)): every required fact is given from the
-start, an optional one now and then left out, reading ``None``. An optional fact unset (set
-to ``None``) is the model's alone: the engine cannot set an optional formal back to
-unsupplied, so such a step is checked against the model's invariants and never sent to the
-engine (``Point.change`` would raise ``NotTranslatable``).
+start, an optional one now and then left out, reading ``None``, and now and then unset (set
+back to ``None``, the fact left out), on both sides: the engine gives the optional fact
+``None`` (``Point.change``). T4c's facts known are reached, so a disagreement reaching an
+optional fact left out fails as any other.
+
+**The lists** (SZ113): both sides are asked the choices a design space lists
+(``("listed", "")``), each leaving out the choices its facts alone rule out
+(``Solution.pruned``; T4c reached). The per-choice questions (a choice's state, its possible
+values) are asked of every choice: a pruned choice answers them by name.
 
 **Derived selectors** (``by``, the CLI's ``--by``): the descriptions also hold selectors
 picked by a derived value (the model's reading 17, the engine's ``Select(by=...)``): one in
@@ -143,6 +145,7 @@ from .compare import (
     answer_form,
     bind_form,
     change_form,
+    listed_form,
     possible_form,
     rule_form,
     state_form,
@@ -154,6 +157,7 @@ from .forms import (
     ChangeForm,
     DefinitionForm,
     Form,
+    ListedForm,
     PossibleForm,
     RuleForm,
     StateForm,
@@ -833,20 +837,20 @@ def generate(
 
 # --- the questions --------------------------------------------------------------------------------
 
-#: a question: what is asked ("state", "answer", "rule", "validity", "possible") and of
-#: which path
+#: a question: what is asked ("state", "answer", "rule", "validity", "possible", "listed")
+#: and of which path
 Question = tuple[str, str]
 
 #: the kinds of question both sides answer, and the walk's own: a change, and the engine's
 #: refinement over an addition
-ENGINE_QUESTIONS = ("state", "answer", "rule", "validity", "possible")
+ENGINE_QUESTIONS = ("state", "answer", "rule", "validity", "possible", "listed")
 
 
 def questions(index: model.Index) -> list[Question]:
     """What both sides are asked at each configuration: each choice's state; each fact's,
     choice's, derived value's, view's and ``Members``'s answer (a fact's is always known,
     SZ100 (5): its value, or ``None`` for an optional one left out); each rule; validity;
-    each listed choice's possible values."""
+    each listed choice's possible values; the choices the design space lists (SZ113)."""
     found: list[Question] = [("state", path) for path in sorted(index.choices)]
     found += [
         ("answer", path)
@@ -858,6 +862,7 @@ def questions(index: model.Index) -> list[Question]:
     found.append(("validity", ""))
     listed = sorted(path for path, info in index.choices.items() if info.domain.listed)
     found += [("possible", path) for path in listed]
+    found.append(("listed", ""))
     return found
 
 
@@ -878,6 +883,8 @@ def model_forms(
             forms[question] = validity_form(solution)
         elif what == "possible" and possible:
             forms[question] = possible_form(solution, path)
+        elif what == "listed":
+            forms[question] = listed_form(solution)
     return forms
 
 
@@ -895,6 +902,8 @@ def engine_forms(point: Point, asked: Iterable[Question]) -> dict[Question, Form
             forms[question] = point.validity()
         elif what == "possible":
             forms[question] = point.possible(path)
+        elif what == "listed":
+            forms[question] = point.listed()
     return forms
 
 
@@ -902,6 +911,8 @@ def ask(question: Question) -> str:
     what, path = question
     if what == "validity":
         return "validity"
+    if what == "listed":
+        return "the listed choices"
     return f"the possible values of {path}" if what == "possible" else f"the {what} of {path}"
 
 
@@ -1006,13 +1017,21 @@ def order_problems(
     """Over an addition committing ``committed``: the answers that moved down the order
     (:func:`below`). ``out``: the nodes refused through their scope's presence before and
     found absent after (:func:`refused_then_absent`), whose answer may move from refused to
-    inapplicable (the model's reading 26); no other move is excused."""
+    inapplicable (the model's reading 26); no other move is excused. The listed choices
+    (SZ113) may only grow, by what the step sets: an addition prunes nothing, and a pruned
+    choice it sets is stored, so listed."""
     found: dict[Question, str] = {}
     for question, old in before.items():
         if question not in after or question[0] == "possible":
             continue
         what, path = question
         new = after[question]
+        if isinstance(old, ListedForm) and isinstance(new, ListedForm):
+            lost = old.choices - new.choices
+            gained = new.choices - old.choices - set(committed)
+            if lost or gained:
+                found[question] = f"listed, losing {sorted(lost)}, gaining unset {sorted(gained)}"
+            continue
         if (
             what == "answer"
             and path in out
@@ -1127,43 +1146,6 @@ class Structure:
 
     def deciders(self, scope: str) -> frozenset[str]:
         return frozenset(p for p in self.closure(self.presence(scope)) if p in self.index.choices)
-
-    def reach(self, seeds: Iterable[str]) -> frozenset[str]:
-        """What an answer about ``seeds`` can depend on, for the attribution by cause
-        (DESIGN § 6): the closure, with each choice's membership reads (its type check and
-        its list) and, for a view, every piece of its Space's validity (its constraints,
-        its listed domains, its guards). Never used by the invariants."""
-        index = self.index
-        found: set[str] = set()
-        stack = list(seeds)
-        while stack:
-            path = stack.pop()
-            if path in found:
-                continue
-            found.add(path)
-            if path in index.facts:
-                continue
-            stack.extend(self.reads(path))
-            stack.extend(self.presence(self.scope(path)))
-            if path in index.choices:
-                stack.extend(index.choices[path].domain.reads)
-            if path in index.views:
-                scope = index.views[path][1]
-                stack.extend(p for p, (_, o) in index.constraints.items() if index.within(o, scope))
-                stack.extend(
-                    p
-                    for p, info in index.choices.items()
-                    if info.domain.listed and index.within(info.scope, scope)
-                )
-                for name, info_ in index.scopes.items():
-                    if info_.when is not None and index.within(name, scope):
-                        stack.extend(info_.when.reads)
-                stack.extend(
-                    name
-                    for name, (owner, _, _) in index.pickers.items()
-                    if index.within(owner, scope)
-                )
-        return frozenset(found)
 
     def over_facts(self, path: str) -> bool:
         """Whether a derived value reads, through derived values, facts alone."""
@@ -1743,9 +1725,6 @@ class Tally:
     seed: int
     steps: int = 0
     accepted: int = 0
-    #: steps the model alone tried (unsetting a fact, which the engine cannot): checked,
-    #: never applied
-    model_only: int = 0
     #: descriptions drawn and skipped, by why
     skipped: Counter[str] = field(default_factory=Counter)
     #: the model's invariant checks run, by name
@@ -1876,24 +1855,6 @@ class _Walk:
         assert cause is not None
         self.tally.by_milestone[cause] += 1
 
-    def cause(self, subject: str | None, *configurations: model.Configuration) -> str | None:
-        """The cause a disagreement is attributed to, from the description and the model's
-        configurations alone, never the engine's answers (DESIGN § 6): T4c when its
-        question's subject reaches an optional fact left out (``None``) in one of
-        ``configurations`` (:meth:`Structure.reach`; a ``None`` subject, validity, possible
-        values, a change or a bind, reaches the whole description); else none."""
-        left_out = {
-            name
-            for configuration in configurations
-            for name in self.index.optional
-            if configuration.facts[name] is None
-        }
-        if not left_out:
-            return None
-        if subject is None or left_out & self.structure.reach({subject}):
-            return "T4c"
-        return None
-
     def on_engine(self, call: Callable[[], T]) -> T:
         try:
             return call()
@@ -1928,7 +1889,8 @@ class _Walk:
         forms: Mapping[Question, Form],
         edit: model.Change,
     ) -> None:
-        """Invariant 2, with reading 26's one move (:func:`refused_then_absent`)."""
+        """Invariant 2, with reading 26's one move (:func:`refused_then_absent`). A question
+        not asked after an addition is not a move."""
         out = refused_then_absent(before.solution, solution)
         found = order_problems(before.forms, forms, edit.commit, out)
         self.invariant(
@@ -1977,10 +1939,8 @@ class _Walk:
         self.tally.compared += 1
         for question in self.engine_asked:
             if not agrees(forms[question], engine[question]):
-                what, path = question
-                subject = path if what in ("state", "answer", "rule") else None
-                cause = self.cause(subject, configuration)
-                self.disagree(what, ask(question), forms[question], engine[question], cause)
+                what = question[0]
+                self.disagree(what, ask(question), forms[question], engine[question], None)
 
     def engine_change(
         self, configuration: model.Configuration, point: Point, edit: model.Change
@@ -2029,7 +1989,7 @@ class _Walk:
         ):
             self.tally.engine_checks[question] += 1
             if not agrees(expected, form):
-                self.disagree(question, label, expected, form, self.cause(None, configuration))
+                self.disagree(question, label, expected, form, None)
             if not _same_facts(self.on_engine(bound.stored), walked):
                 self.fail(
                     "engine",
@@ -2051,13 +2011,12 @@ class _Walk:
         self.tally.engine_checks["refinement"] += 1
         out = refused_then_absent(before.solution, after)
         found = order_problems(before.engine, engine, edit.commit, out)
-        cause = self.cause(None, before.configuration, after.configuration)
         for question, move in sorted(found.items()):
             # shown by the answers that disagree: after the step, or else before it
             pair = (forms[question], engine[question])
             if agrees(*pair):
                 pair = (before.forms[question], before.engine[question])
-            self.disagree("refinement", f"{ask(question)} moves down: {move}", *pair, cause)
+            self.disagree("refinement", f"{ask(question)} moves down: {move}", *pair, None)
 
     # -- drawing
 
@@ -2224,14 +2183,6 @@ class _Walk:
         for name, count in checked.runs.items():
             tally.checks[name] += count
         verdict = "accepted" if isinstance(result, model.Accepted) else "refused"
-        if edit.unset:
-            tally.model_only += 1
-            self.history.append(f"{_edit(edit)}: model {verdict} (the model's alone, not applied)")
-            if checked.problems:
-                self.fail(
-                    checked.problems[0].split(":")[0], "invariant " + "\n".join(checked.problems)
-                )
-            return state
         engine, successor = self.engine_change(configuration, state.point, edit)
         self.history.append(
             f"{_edit(edit)}: model {verdict}, engine {'accepted' if engine.accepted else 'refused'}"
@@ -2243,10 +2194,7 @@ class _Walk:
         if not agrees(expected, engine):
             # tallied apart: a facts step's change (§ 16.24) and a change of choices
             what = "facts change" if facts_step else "change"
-            facts, _ = would_be(configuration, edit)
-            published = model.Configuration(configuration.space, facts)
-            cause = self.cause(None, configuration, published)
-            self.disagree(what, f"the change {_edit(edit)}", expected, engine, cause)
+            self.disagree(what, f"the change {_edit(edit)}", expected, engine, None)
         if not isinstance(result, model.Accepted):
             return state
         tally.accepted += 1
@@ -2295,9 +2243,8 @@ def walk(
 ) -> Tally:
     """One seeded walk of ``steps`` changes (DESIGN § 6). ``strict``: the generator draws
     neither cause (no view read in, every fact given, no unset) and every disagreement fails
-    the walk. Otherwise, the full run: each disagreement is attributed by its cause, T4b (a
-    description the model refuses as ``view-read-in``) or T4c (its question reaching an
-    optional fact left out), and counted under that pending milestone; an unattributed one,
+    the walk. Otherwise, the full run: a disagreement attributed to T4b (a description the
+    model refuses as ``view-read-in``) is counted under that pending milestone; any other,
     or one whose milestone is not pending (``without``: its rows taken as removed), fails
     the walk. ``implementation`` is the one compared with the model (the public API by
     default), asked through ``support.space_oracle``'s interface. ``by``: the descriptions
@@ -2366,8 +2313,8 @@ def table(tallies: Sequence[Tally], without: Iterable[str] = ()) -> str:
         f"implementation: {', '.join(sorted(implementations)) or '-'}",
         "derived selectors: " + ("drawn" if any(tally.by for tally in tallies) else "not drawn"),
         f"walks {len(tallies)} ({_counts(runs)}), failed {sum(failed.values())} "
-        f"({_counts(failed)}); steps {summed('steps')}, accepted {summed('accepted')}, the "
-        f"model's alone {summed('model_only')}; {seconds:.1f} s, "
+        f"({_counts(failed)}); steps {summed('steps')}, accepted {summed('accepted')}; "
+        f"{seconds:.1f} s, "
         f"{seconds / max(len(tallies), 1):.2f} s per walk",
         f"descriptions skipped: {_counts(totals['skipped'])}",
         f"invariant checks: {_counts(totals['checks'])}; binds reading refused, reporting rules "

@@ -14,7 +14,6 @@ from finn.core.space import (
     Decision,
     Param,
     Space,
-    View,
     constraint,
     derived,
     design_space,
@@ -134,37 +133,6 @@ def test_atomic_refinement_follows_dependencies_and_never_publishes_partial_stat
         )
 
 
-def test_binding_and_callback_values_are_snapshots_without_requiring_a_codec() -> None:
-    calls: list[int] = []
-
-    class Mutable(Space):
-        payload: list[object] = Param()
-
-        @derived
-        def length(*, payload: list[object]) -> int:
-            calls.append(len(payload))
-            payload.append("local mutation")
-            return len(payload)
-
-        physical = View(length)
-
-    original: list[object] = [1, 2]
-    # The node call is the binding boundary: it snapshots the value.
-    node = Mutable(payload=original)
-    original.append(3)
-    base = design_space(node)
-    assert base.length == 3
-    assert base.payload == [1, 2]
-    base.payload.append(4)
-    assert base.payload == [1, 2]
-    assert base.physical == 3
-    assert calls == [2]
-    other = design_space(Mutable(payload=[8]))
-    assert inspection.model(other) is inspection.model(base)
-    assert other.length == 2
-    assert calls == [2, 1]
-
-
 def test_missing_required_parameters_and_malformed_commitments_fail_at_boundary() -> None:
     # A missing formal is refused when the root is configured; type errors at the call.
     with refused("formal-unsupplied", error=DefinitionError, message="depth is not supplied"):
@@ -208,7 +176,7 @@ def test_concurrent_reads_and_successors_are_deterministic() -> None:
     assert isinstance(base.query(Fifo.ram_style), Unresolved)
 
 
-def test_generic_container_outputs_infer_nominal_snapshot_semantics() -> None:
+def test_a_container_a_view_answers_is_handed_out_as_a_copy() -> None:
     class Collections(Space):
         count: int = Param()
 

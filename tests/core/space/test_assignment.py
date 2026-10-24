@@ -652,9 +652,10 @@ class OverChoice(Space):
 
 def test_a_false_when_beneath_an_open_selector_makes_its_scope_absent() -> None:
     """Presence is the AND over the path: the ``when`` reads false whatever the selector
-    above it will hold, so its choice is absent, not open waiting on the selector."""
+    above it will hold, so its choice is absent, not open waiting on the selector. Absent
+    under the facts alone, it is in no list (SZ113)."""
     states = dict(inspection.states(design_space(Over(k=0))))
-    assert states == {"s": Open(), "s.a.g.x": Absent()}
+    assert states == {"s": Open()}
     assert dict(inspection.states(design_space(Over(k=5))))["s.a.g.x"] == Open(("s",))
 
 
@@ -705,27 +706,6 @@ def test_a_when_reading_a_choice_of_its_own_open_case_waits_on_the_selector(
     states = dict(inspection.states(point))
     assert states[f"s.{case}.c"] == Waiting(stored, ("s",))
     assert states[f"s.{case}.g.x"] == Open(("s",))
-
-
-class Waits(Space):
-    extent: int = Param(required=False)
-    lanes: int = Decision(domain=divisors_of(extent))
-
-    @derived
-    def doubled(self) -> int:
-        return 2 * self.lanes
-
-
-def test_a_stored_value_waiting_on_a_missing_fact_names_the_fact() -> None:
-    point = design_space(Waits()).with_choices(lanes=5)
-    for reference in (Waits.lanes, Waits.doubled):
-        answer = point.query(reference)
-        assert isinstance(answer, Unresolved)
-        assert {(f.code, f.owner) for f in answer.findings} == {("input-missing", "extent")}
-    # The facts change that supplies it brings no choice into play: its presence did not
-    # move (section 16.19), only its type check was made.
-    supplied = point.try_with_facts({Waits.extent: 10})
-    assert supplied.accepted and supplied.in_play == () and supplied.instance.doubled == 10
 
 
 # -- facts changes: a new design space, never refused --------------------------------------
@@ -875,9 +855,7 @@ def test_a_possible_value_names_what_it_would_move_and_publishes_nothing() -> No
     assert point.source.depth == 2  # nothing published
 
 
-def test_values_that_cannot_be_listed_and_values_under_an_open_selector() -> None:
-    (lanes,) = inspection.viable(design_space(Waits()), [Waits.lanes])
-    assert lanes.values is None and lanes.waits == ("extent",)  # the list waits on a fact
+def test_values_under_an_open_selector() -> None:
     # Under the open selector, the style is listed as if its case were selected; each
     # value waits with it, nothing refuses.
     base = design_space(Sourced(ultra=False))
@@ -891,7 +869,7 @@ def domain_of_positive() -> Domain[int]:
 
 
 class States(Space):
-    extent: int = Param(required=False)
+    extent: int = Param()
     source: Store | Wire = Select(memory=Store(ultra=True), wire=Wire)
     enabled: bool = Decision(values=(False, True))
     lanes: int = Decision(domain=divisors_of(extent))
@@ -899,7 +877,7 @@ class States(Space):
 
 
 def test_every_choice_has_one_of_five_states_in_rank_order() -> None:
-    base = design_space(States())
+    base = design_space(States(extent=12))
     point = keyed(
         base, {"source.memory.style": "block", "enabled": False, "depth": 8, "lanes": 4}
     ).instance
@@ -910,7 +888,7 @@ def test_every_choice_has_one_of_five_states_in_rank_order() -> None:
         "source.memory.depth": Open(("source",)),
         "source.wire.taps": Open(("source",)),
         "enabled": Set(False),
-        "lanes": Waiting(4, ("extent",)),
+        "lanes": Set(4),
         "depth": Dormant(8),
     }
     keys = [key for key, _ in inspection.states(point)]

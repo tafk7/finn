@@ -1,19 +1,19 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""A ``T | Rejected`` output takes ``T``'s semantics.
+"""A ``T | Rejected`` output is of type ``T``.
 
-A union of one value type and the engine's own result markers (``Rejected``,
-``Inapplicable``, ``Unresolved``) infers the value type's default semantics, as
-``QueryResult[T]`` names ``T``. An explicit ``semantics=`` still overrides and
-is checked against ``T``. A Protocol and a union of two value types (or with
-``None``) still need ``semantics=``.
+A union of value types and the engine's own result markers (``Rejected``,
+``Inapplicable``, ``Unresolved``) is checked by the value types less the markers, as
+``QueryResult[T]`` names ``T``: one class, ``T | None``, or a union of several classes.
+A derived value states no ``semantics=``: its return annotation is its type. A Protocol
+is no value type.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Annotated, Protocol
 
 import pytest
 from support.refusals import refused
@@ -86,46 +86,45 @@ def test_a_marked_union_infers_the_value_type() -> None:
     assert isinstance(refused, Rejected) and refused.findings[0].code == "odd"
 
 
-POINT: ValueSemantics[Point] = ValueSemantics(
-    Point, "point", lambda value: type(value) is Point, lambda a, b: a == b, lambda value: value
-)
+def test_a_derived_value_states_no_semantics() -> None:
+    with refused("derived-semantics", error=DefinitionError, message="semantics= is gone"):
+
+        class Explicit(Space):
+            @derived(semantics=default_semantics(Point))
+            def point(self) -> Point | Rejected:
+                return Point(1)
 
 
-def test_explicit_semantics_still_override() -> None:
-    class Explicit(Space):
-        @derived(semantics=POINT)
-        def point(self) -> Point | Rejected:
-            return Point(1)
-
-    assert semantics_of(Explicit, "point") is POINT
-
-
-def test_explicit_semantics_on_a_marked_union_are_checked_against_the_value_type() -> None:
-    class Mismatched(Space):
-        # The typed decorator refuses it statically as well.
-        @derived(semantics=default_semantics(Other))  # type: ignore[arg-type]
-        def point(self) -> Point | Rejected:
-            return Point(1)
+def test_a_value_semantics_in_annotated_metadata_is_refused() -> None:
+    """The annotation's type is the check: a ``ValueSemantics`` in ``Annotated[...]`` is no
+    longer taken or dropped silently."""
 
     with refused(
-        "annotation-semantics-incompatible",
+        "annotation-semantics",
         error=DefinitionError,
-        message="Point is incompatible with Other",
+        message="semantics= is gone",
     ):
-        collect_space(Mismatched)
+
+        class Stated(Space):
+            point: Annotated[Point, default_semantics(Point)] = Param()
+
+    class Plain(Space):
+        point: Annotated[Point, "units"] = Param()
+
+    assert semantics_of(Plain, "point").type_token is Point
 
 
-def test_a_protocol_still_needs_semantics() -> None:
+def test_a_protocol_is_no_value_type() -> None:
     class Implicit(Space):
         @derived
         def named(self) -> Named | Rejected:
             raise AssertionError("never run")
 
-    with refused("semantics-unstated", error=DefinitionError, message=r"Protocol outputs"):
+    with refused("annotation-not-value-type", error=DefinitionError, message=r"no value type"):
         collect_space(Implicit)
 
 
-def test_a_union_of_values_still_needs_semantics() -> None:
+def test_a_union_of_values_is_checked_by_each() -> None:
     class Optional(Space):
         @derived
         def point(self) -> Point | None:
@@ -136,9 +135,12 @@ def test_a_union_of_values_still_needs_semantics() -> None:
         def value(self) -> int | str | Rejected:
             return 1
 
-    for space_type in (Optional, Either):
-        with refused("semantics-unstated", error=DefinitionError, message=r"output annotation"):
-            collect_space(space_type)
+    optional = semantics_of(Optional, "point")
+    assert optional.type_token is Point and optional.accepts(None)
+    either = semantics_of(Either, "value")
+    assert either.type_token == frozenset({int, str})
+    assert either.accepts(1) and either.accepts("1") and not either.accepts(1.0)
+    assert design_space(Optional()).point is None and design_space(Either()).value == 1
 
 
 class Projected(Space):

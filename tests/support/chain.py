@@ -8,7 +8,7 @@ It computes ``thresholds(x @ W1) @ W2``. Each MatMul reads its tensors and prese
 ports on the partition's channels; each channel's sides are its kernels' ports
 (``Port``), and the tensor of a MatMul's results is the MatMul's statement of them
 (``result_tensor``), read before it is placed. The weights are given to each MatMul
-(``w_contents``): each weight channel carries what its MatMul states for it (``Stated``),
+(``weights``, known): each weight channel carries what its MatMul states for it (``Stated``),
 its contents (``stored_weights``) and its tensor over their range (``carried_weights``), its
 source their memory. ``chain()`` is the Chain configured as the kernel tests, the KernelOp
 partition tests and the XSim harness use it; its module is named ``finn_chain``
@@ -23,11 +23,12 @@ from qonnx.core.datatype import DataType
 
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.composer import ChannelDeclaration, Facts, Port, Stated, channel
-from finn.kernels.matmul import MatMulKernel, column_range
+from finn.kernels.matmul import KnownWeights, MatMulKernel, column_range
 from finn.kernels.partition import Partition
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.domains import range_dtype
+from finn.kernels.values.semantics import IntegerTensorValue
 from support.helpers import FULL_DSP48E2, by_hand, choose, with_channel_defaults
 
 ROWS, INPUTS, HIDDEN, OUTPUTS, PE, SIMD = 3, 4, 4, 4, 2, 2
@@ -57,7 +58,11 @@ def matmul(weights: Any, x_tensor: Any) -> Facts:
     and the activations' datatype are its tensors'."""
     return Facts(
         MatMulKernel,
-        {"weights_dtype": W, "platform": FULL_DSP48E2, "x_tensor": x_tensor, "w_contents": weights},
+        {
+            "platform": FULL_DSP48E2,
+            "x_tensor": x_tensor,
+            "weights": KnownWeights(IntegerTensorValue.of(weights), W),
+        },
     )
 
 
@@ -116,7 +121,7 @@ def members(hidden: Tensor = HIDDEN_TENSOR) -> dict[str, Facts | ChannelDeclarat
             ThresholdingAxiKernel,
             {
                 "threshold_dtype": THRESHOLD_DTYPE,
-                "thresholds": THRESHOLDS,
+                "thresholds": IntegerTensorValue.of(THRESHOLDS),
                 "bias": 0,
                 "input_tensor": hidden,
                 "platform": platform,

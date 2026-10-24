@@ -47,6 +47,7 @@ from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.partition import Partition
 from finn.kernels.sides import Side
+from finn.kernels.values.semantics import IntegerTensorValue
 from finn.toolchain.launcher import host_toolchain
 
 ROWS, INPUTS, HIDDEN, OUTPUTS = 3, 4, 4, 4
@@ -124,11 +125,21 @@ def layered(*, adaptable: bool = True) -> Partition:
             "second": _layer(*layers["second"]),
             "rom1": Facts(
                 MemStreamKernel,
-                {"platform": FULL_DSP48E2, "dtype": W, "form": periods["first"], "contents": W1},
+                {
+                    "platform": FULL_DSP48E2,
+                    "dtype": W,
+                    "form": periods["first"],
+                    "contents": IntegerTensorValue.of(W1),
+                },
             ),
             "rom2": Facts(
                 MemStreamKernel,
-                {"platform": FULL_DSP48E2, "dtype": W, "form": periods["second"], "contents": W2},
+                {
+                    "platform": FULL_DSP48E2,
+                    "dtype": W,
+                    "form": periods["second"],
+                    "contents": IntegerTensorValue.of(W2),
+                },
             ),
         }
     )

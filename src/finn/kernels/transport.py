@@ -37,7 +37,6 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 
-from finn.core.space import ValueSemantics, default_semantics
 from finn.dataflow.datatypes import (
     QONNXDataType,
     canonical_qonnx_datatype,
@@ -317,9 +316,6 @@ class StreamContract:
         return BeatSequence(self.form, self.repetition, tuple(self.rules.values()))
 
 
-STREAM_CONTRACT: ValueSemantics[StreamContract] = default_semantics(StreamContract)
-
-
 def marker_bit(key: str) -> tuple[str, int | None]:
     """The signal a marker rule key names, and the bit of it (None for a one-bit marker)."""
     match = re.fullmatch(r"(\w+)\[(\d+)\]", key)
@@ -408,7 +404,6 @@ __all__ = [
     "MarkerKind",
     "Mismatch",
     "ReadyValidTransport",
-    "STREAM_CONTRACT",
     "StreamContract",
     "StreamMarker",
     "compatibility",

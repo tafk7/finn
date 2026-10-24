@@ -8,21 +8,17 @@ references); a Space class's own member becomes its kind's payload: a formal's
 requirement, a constant, a Decision's domain and its arguments, a callback with
 its arguments, a view's output and its Space's validity, and ``Members`` entries. Guards
 and integer expressions are linked after every member, references resolving
-through ``_names``. What a task makes exists only where its own node does
-(``Table.requires``): a candidate's binding, or a case's guard, of a Decision over nodes
-that may never apply. A reference into a placed Space is an edge out of the class, named
+through ``_names``. A reference into a placed Space is an edge out of the class, named
 as it is first read (``Table.lift``).
 """
 
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable
 from dataclasses import replace
 from typing import Any, cast
 
 from ._bindings import PlacementBinding
-from ._configuration import Space
 from ._names import Names
 from ._nodes import selector_value
 from ._signatures import BoundFunction
@@ -38,7 +34,6 @@ from .declarations import (
     MemberRef,
     Members,
     Param,
-    Supplied,
     ValueRef,
     View,
     ViewKey,
@@ -57,42 +52,15 @@ def lower(table: Table) -> None:
     _Lowering(table).run()
 
 
-def _supply(formal: Param[object]) -> Callable[..., object]:
-    def supplied(point: Space) -> bool:
-        return point.present(formal)
-
-    return supplied
-
-
-def _constant(semantics: ValueSemantics[object], constant: Const[object], *, owner: str) -> object:
-    """The model's own snapshot of a constant, detached from its declaration.
-
-    ``Const`` snapshots its value when declared; a compiled model takes another,
-    so a later change to the declaration's value never reaches it.
-    """
-    try:
-        return semantics.freeze(constant.value)
-    except Exception as cause:
-        raise DefinitionError.broken(
-            "constant-snapshot-failed",
-            _OWNER,
-            f"{owner}: constant snapshot failed",
-            declaration=owner,
-        ) from cause
-
-
 class _Lowering:
     def __init__(self, table: Table) -> None:
         self.table = table
         self.names = Names(table)
 
     def run(self) -> None:
-        requires = self.table.requires
         for task in self.table.members:
-            self.table.applying = requires.get(task.index)
             self.link_member(task)
         for guard_task in self.table.guards:
-            self.table.applying = requires.get(guard_task.index)
             node = self.table.nodes[guard_task.index]
             self.table.nodes[guard_task.index] = replace(
                 node,
@@ -101,12 +69,10 @@ class _Lowering:
                 ),
             )
         for selector, source_scope, by in self.table.picks:
-            self.table.applying = requires.get(selector)
             node = self.table.nodes[selector]
             target = self.names.reference(source_scope, by, owner=node.owner)
             self.table.nodes[selector] = replace(node, arguments=(Argument("value", target),))
         self.link_expressions()
-        self.table.applying = None
 
     # -- expressions ----------------------------------------------------------------------
 
@@ -115,7 +81,6 @@ class _Lowering:
         while cursor < len(self.table.expression_tasks):
             task = self.table.expression_tasks[cursor]
             cursor += 1
-            self.table.applying = self.table.requires.get(task.index)
             if task.operator not in {"add", "sub", "mul", "floordiv", "mod", "neg"}:
                 raise DefinitionError.broken(
                     "expression-operator-unsupported",
@@ -155,7 +120,7 @@ class _Lowering:
                     )
                     self.table.nodes[target] = replace(
                         self.table.nodes[target],
-                        value=_constant(semantics, operand, owner=task.owner),
+                        value=operand.value,
                     )
                 elif isinstance(operand, ValueRef):
                     target = self.names.reference(task.scope, operand, owner=task.owner)
@@ -318,10 +283,12 @@ class _Lowering:
         """What a declared member's node holds, by the kind of its declaration."""
         scope = self.table.drafts[task.scope]
         if isinstance(declaration, Param):
-            return {"required": declaration.required}
+            # Its default, where it has one: the value it takes where nobody supplies it.
+            default = None if declaration.required else declaration.default
+            return {"required": declaration.required, "value": default}
         if isinstance(declaration, Const):
-            assert node.semantics is not None
-            return {"value": _constant(node.semantics, declaration, owner=node.key)}
+            # A Const is immutable, in its canonical form: the model holds it as it is.
+            return {"value": declaration.value}
         if isinstance(declaration, Decision):
             assert node.semantics is not None
             changes: dict[str, Any] = {}
@@ -334,8 +301,6 @@ class _Lowering:
             return {}
         if isinstance(declaration, (Derived, Constraint)):
             return self.callback(node, scope.effective.functions[task.name])
-        if isinstance(declaration, Supplied):
-            return {"function": _supply(declaration.formal), "call_style": "self"}
         if isinstance(declaration, View):
             return {
                 "output": self.view_output(node, guard, declaration, task.name),

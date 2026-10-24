@@ -46,7 +46,6 @@ values are facts, so every row shares one class.
 
 from __future__ import annotations
 
-import operator
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -57,7 +56,6 @@ from finn.core.space import (
     Rejected,
     Space,
     Unresolved,
-    ValueSemantics,
     constraint,
     derived,
     reject,
@@ -77,16 +75,6 @@ PRESENTED, MOVER, INITIATORS, DOUBLED, CLOCK = (
 )
 """What a contributor's Param (or rule) holds, after its member's name (``contributor``)."""
 
-BOUND: ValueSemantics[int | None] = ValueSemantics(
-    int,
-    "budget",
-    lambda value: value is None or type(value) is int,
-    operator.eq,
-    lambda value: value,
-)
-"""A budget: a count, or None, which bounds nothing; equal by ``==``, so the node cache
-keys it."""
-
 
 def contributor(member: str, kind: str) -> str:
     """The name of member ``member``'s Param of ``kind`` (``mm0-doubled``), or of its rule
@@ -100,8 +88,9 @@ class ShellBudgets(Space):
     made for a structure (``shell_members``)."""
 
     shell: str = Param()
-    control_budget: int | None = Param(semantics=BOUND)
-    memory_ports: int | None = Param(semantics=BOUND)
+    # A budget: a count, or None, which bounds nothing.
+    control_budget: int | None = Param()
+    memory_ports: int | None = Param()
     clk2x: bool = Param()
 
     @derived
@@ -257,7 +246,6 @@ def counts(point: Space) -> QueryResult[tuple[int, int, bool]]:
 
 
 __all__ = [
-    "BOUND",
     "SHELL",
     "ShellBudgets",
     "contributor",

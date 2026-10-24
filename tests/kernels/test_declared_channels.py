@@ -30,9 +30,9 @@ from finn.kernels.channels import Channel, boundary_contract
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.partition import Partition
-from finn.kernels.port import STREAM
-from finn.kernels.sides import SIDE, Side
+from finn.kernels.sides import Side
 from finn.kernels.transport import AxisBeat, StreamContract
+from finn.kernels.values.semantics import IntegerTensorValue
 
 INT4 = ScalarEncoding(DataType["INT4"])
 PRODUCED = vector_major((4,), 2)
@@ -45,7 +45,7 @@ def source(contents: tuple[int, ...], tensor: Tensor) -> Facts:
         {
             "dtype": DataType["INT4"],
             "form": PRODUCED,
-            "contents": contents,
+            "contents": IntegerTensorValue.of(contents),
             "platform": FULL_DSP48E2,
         },
     )
@@ -171,12 +171,12 @@ class Replaying(Space):
     """A consumer reading each two-beat group of its input three times, framed: its port's
     stream and its contract."""
 
-    @derived(semantics=STREAM)
+    @derived
     def port_stream(self) -> Stream:
         contract = replaying()
         return Stream(contract.element, contract.sequence)
 
-    @derived(semantics=SIDE)
+    @derived
     def port_side(self) -> Side:
         return Side.kernel(self.port_stream, "port")
 
@@ -217,7 +217,7 @@ def test_an_adapter_under_a_refused_guard_is_one_piece():
                 Port("a", "output"),
                 Side.boundary("out0_V"),
                 tensor=VECTOR,
-                contents=(1, 2, 3, 4),
+                contents=IntegerTensorValue.of((1, 2, 3, 4)),
                 platform=FULL_DSP48E2,
             ),
             "a": source((1, 2, 3, 4), VECTOR),

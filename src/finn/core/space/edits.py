@@ -43,9 +43,8 @@ class ChangeOutcome:
     ``result``: for a choice set, its type check, the domain over the facts, read as if
     the choice existed (wherever it sits: present, dormant or waiting on its presence):
     true where it holds the value; refused outside it, or through an input of the
-    domain refusing or not applying; unresolved while a fact the domain reads is
-    missing (the choice is stored and waits on it). For a choice dropped, the check it
-    failed. For a fact, or a clear, ``Available(True)``.
+    domain refusing or not applying. For a choice dropped, the check it failed. For a
+    fact, or a clear, ``Available(True)``.
 
     ``status``: ``"changed"``, ``"unchanged"`` or ``"removed"`` in a published change,
     and ``"dropped"`` for a stored value that new facts leave outside its domain (or

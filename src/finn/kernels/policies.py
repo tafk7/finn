@@ -34,14 +34,15 @@ the cut and the seam read it, and nothing else: no reader asks the engine for a 
 
 The engine knows nothing of it: a policy is applied once, by ``defaulted``, and the values
 it sets are ordinary choices, unmarked. Choices are taken in the flow order
-(``inspection.states``): each after every choice its presence, its list or its Space's
-facts read, an enclosing selector before the choices of its cases, ties in declaration
-order. Only those in play are defaulted: a choice under a case not selected, or whose
-presence waits on a choice still open, is left as it is. A value is valid when setting it
-alone is accepted (``inspection.viable``): a rule that waits on a choice still open does
-not refuse it. A partition's policies are applied in one pass over its design space's
-root, in the root's flow order (which interleaves its members), each choice's policy read
-from its member's owner.
+(``inspection.states``, the design space's lists: a choice its facts alone rule out is in
+none): each after every choice its presence, its list or its Space's facts read, an
+enclosing selector before the choices of its cases, ties in declaration order. Only those
+in play are defaulted: a choice under a case not selected, or whose presence waits on a
+choice still open, is left as it is. A value is valid when setting it alone is accepted
+(``inspection.viable``): a rule that waits on a choice still open does not refuse it. A
+partition's policies are applied in one pass over its design space's root, in the root's
+flow order (which interleaves its members), each choice's policy read from its member's
+owner.
 
 **A ranking that cannot be read.** A ranking is a view, which refuses while its kernel is
 refused and waits while it waits. First valid then takes the listed order and says so

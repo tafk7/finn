@@ -24,9 +24,9 @@ from support.helpers import (
     placed,
 )
 
-from finn.core.space import Rejected, design_space
+from finn.core.space import Available, Rejected, design_space
 from finn.dataflow.tensor import ScalarEncoding
-from finn.dataflow.traversal import tile, vector_major
+from finn.dataflow.traversal import BeatSequence, Repetition, tile, vector_major
 from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.artifacts.contributions import ContributionError, GeneratedData
@@ -34,6 +34,7 @@ from finn.kernels.channels import OUTPUT_ADAPTER_LABEL, SOURCE_LABEL
 from finn.kernels.explore import dotted
 from finn.kernels.library import library_module
 from finn.kernels.memstream import MemStreamKernel
+from finn.kernels.values.semantics import IntegerTensorValue
 
 WEIGHTS = ((-4, -3, -2, -1), (0, 1, 2, 3), (3, 2, 1, 0), (-1, -2, -3, -4))
 # MatMul stores its weights (k, n): WEIGHTS read by output.
@@ -59,6 +60,7 @@ def memory(**changes):
         "platform": FULL_DSP48E2,
         **changes,
     }
+    facts["contents"] = IntegerTensorValue.of(facts["contents"])
     return design_space(MemStreamKernel(**facts)).with_choices(
         ram_style="block", pumped_memory=False
     )
@@ -84,7 +86,10 @@ def test_the_image_is_the_consumers_order_in_a_content_named_init_file():
 def test_a_pumped_memory_stores_half_words_low_first():
     point = design_space(
         MemStreamKernel(
-            platform=FULL_DSP48E2, dtype=DataType["INT3"], form=tile(4, 4, 2, 2), contents=WEIGHTS
+            platform=FULL_DSP48E2,
+            dtype=DataType["INT3"],
+            form=tile(4, 4, 2, 2),
+            contents=IntegerTensorValue.of(WEIGHTS),
         )
     ).with_choices(ram_style="auto", pumped_memory=True)
     # 12-bit words as 6-bit halves: 0x22C -> 0x2C, 0x08.
@@ -159,7 +164,7 @@ def test_several_sets_without_their_indices_refuse_the_sequences_that_read_them(
         MemStreamKernel(
             dtype=DataType["INT3"],
             form=tile(4, 4, 2, 2),
-            contents=(WEIGHTS, WEIGHTS),
+            contents=IntegerTensorValue.of((WEIGHTS, WEIGHTS)),
             sets=2,
             platform=FULL_DSP48E2,
         )
@@ -173,6 +178,28 @@ def test_several_sets_without_their_indices_refuse_the_sequences_that_read_them(
         assert [(finding.code, finding.owner) for finding in answer.findings] == [
             ("memstream-set-channel", owner)
         ]
+
+
+def test_a_single_set_refuses_its_idle_set_port_s_order():
+    # One set takes no set channel: its set port is idle, and the port's order, which
+    # would read the indices, is refused with the kernel's set-channel code. Open with the
+    # human (SZ124 (1)): refused, or inapplicable.
+    space = design_space(
+        MemStreamKernel(
+            dtype=DataType["INT3"],
+            form=tile(4, 4, 2, 2),
+            contents=IntegerTensorValue.of(WEIGHTS),
+            platform=FULL_DSP48E2,
+        )
+    )
+    answer = space.query(MemStreamKernel.set_sequence)
+    assert isinstance(answer, Rejected)
+    assert [(finding.code, finding.owner, finding.message) for finding in answer.findings] == [
+        ("memstream-set-channel", "set_sequence", "a single set takes no set channel")
+    ]
+    assert space.query(MemStreamKernel.output_sequence) == Available(
+        BeatSequence(tile(4, 4, 2, 2), Repetition.CYCLIC)
+    )
 
 
 def test_a_channel_s_placements_keep_the_labels_it_states_in_the_emitted_netlist():

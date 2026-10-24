@@ -52,6 +52,7 @@ from finn.kernels.transport import (
     compatibility,
     marker_pairs,
 )
+from finn.kernels.values.semantics import IntegerTensorValue
 from finn.toolchain.launcher import host_toolchain
 
 INT3 = ScalarEncoding(DataType["INT3"])
@@ -93,7 +94,10 @@ def test_tiled_mvu_weight_chunks_are_a_width_conversion_a_delivery_can_avoid():
     values = tuple(tuple((row * MW + col) % 7 - 3 for col in range(MW)) for row in range(MH))
     source = design_space(
         MemStreamKernel(
-            platform=FULL_DSP48E2, dtype=DataType["INT3"], form=chunked, contents=values
+            platform=FULL_DSP48E2,
+            dtype=DataType["INT3"],
+            form=chunked,
+            contents=IntegerTensorValue.of(values),
         )
     )
     sink = contract(chunked.repeated(R // T), Endpoint.TARGET)
@@ -210,7 +214,12 @@ def test_contracts_reject_lanes_wider_than_the_word_and_unknown_marker_rules():
 def delivery(form=None, values=(1, -2, 7, -8), **choices):
     form = vector_major((4,), 2) if form is None else form
     base = design_space(
-        MemStreamKernel(dtype=DataType["INT4"], form=form, contents=values, platform=FULL_DSP48E2)
+        MemStreamKernel(
+            dtype=DataType["INT4"],
+            form=form,
+            contents=IntegerTensorValue.of(values),
+            platform=FULL_DSP48E2,
+        )
     )
     return base.with_choices(**choices) if choices else base
 
@@ -239,7 +248,7 @@ def test_delivery_refuses_values_outside_the_operand_contract(values, dtype, mes
         MemStreamKernel(
             dtype=DataType[dtype],
             form=vector_major((4,), 2),
-            contents=values,
+            contents=IntegerTensorValue.of(values),
             platform=FULL_DSP48E2,
         )
     )
@@ -293,7 +302,12 @@ def constant_network(form=None, *, adaptable=False):
             ),
             "rhs": Facts(
                 MemStreamKernel,
-                {"platform": FULL_DSP48E2, "dtype": int4, "form": form, "contents": PARAMETERS},
+                {
+                    "platform": FULL_DSP48E2,
+                    "dtype": int4,
+                    "form": form,
+                    "contents": IntegerTensorValue.of(PARAMETERS),
+                },
             ),
             "add": Facts(
                 EltwiseKernel,
@@ -372,7 +386,10 @@ def test_a_pure_lane_permutation_is_realized_as_free_wiring():
     values = (((1, 2), (3, 4)), ((5, 6), (7, -8)))
     source = design_space(
         MemStreamKernel(
-            platform=FULL_DSP48E2, dtype=DataType["INT4"], form=produced, contents=values
+            platform=FULL_DSP48E2,
+            dtype=DataType["INT4"],
+            form=produced,
+            contents=IntegerTensorValue.of(values),
         )
     )
     fifo = design_space(fifo_node(word_bits=16, depth=2)).with_choices(ram_style="auto")

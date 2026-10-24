@@ -9,13 +9,14 @@ each sample it
 1. places the kernel (``kernel``) in a partition declared by hand between boundary
    channels (``support.helpers.by_hand``), one per stream port: a channel named
    ``<port>_channel`` carries the tensor of that port, an input's given to the kernel as
-   ``<port>_tensor`` and an output's the kernel's own (``<port>_tensor``, its
-   statement), its one side the kernel's port (``Port("kernel", "<port>")``), its other
-   the boundary's AXIS port of its name. It commits the sample's factors and the pinned
-   ``choices``, then the kernel's other open choices by their policies (``Placed``, on
-   the kernel alone, as conversion sets them) and every channel's by the channel's policies,
-   as the cut sets them (its transport and its input adapter's memory; the chain its
-   steps pick).
+   ``<port>_tensor`` where it declares that Param (else the case gives it among the
+   kernel's facts: MatMul's ``weights``) and an output's the kernel's own
+   (``<port>_tensor``, its statement), its one side the kernel's port (``Port("kernel",
+   "<port>")``), its other the boundary's AXIS port of its name. It commits the sample's
+   factors and the pinned ``choices``, then the kernel's other open choices by their
+   policies (``Placed``, on the kernel alone, as conversion sets them) and every
+   channel's by the channel's policies, as the cut sets them (its transport and its input
+   adapter's memory; the chain its steps pick).
    The module is named ``finn_<kernel>conformance``;
 2. checks each of the kernel's leaves in the module (the kernel, or
    the children of a kernel with children) against its materialized sources
@@ -139,6 +140,7 @@ from finn.kernels.policies import Alone, FirstValid, Policy, defaulted
 from finn.kernels.sides import Side
 from finn.kernels.transport import StreamContract
 from finn.kernels.transpose import TransposeKernel
+from finn.kernels.values.semantics import IntegerTensorValue
 from finn.toolchain.launcher import host_toolchain
 from support.helpers import (
     FULL_DSP48E2,
@@ -384,7 +386,12 @@ def _design(
             members[name] = channel(producer, port, tensor=tensor, platform=FULL_DSP48E2)
         else:
             members[name] = channel(port, Side.boundary(name), tensor=tensor, platform=FULL_DSP48E2)
-    given = {f"{_port_name(name)}_tensor": tensor for name, tensor in inputs.items()}
+    formals = {name: f"{_port_name(name)}_tensor" for name in inputs}
+    given = {
+        formals[name]: tensor
+        for name, tensor in inputs.items()
+        if isinstance(getattr(space_type, formals[name], None), Param)
+    }
     members[KERNEL] = Facts(space_type, {**facts, **given})
     if fed is not None:
         name, form, contents = fed
@@ -393,13 +400,14 @@ def _design(
 
 
 def _source(tensor: Tensor, form: Traversal, contents: object) -> Facts:
-    """The memory that feeds the adapter sample's first input."""
+    """The memory that feeds the adapter sample's first input: ``contents``, nested int
+    tuples, as its value."""
     return Facts(
         MemStreamKernel,
         {
             "dtype": tensor.element.dtype,
             "form": form,
-            "contents": contents,
+            "contents": IntegerTensorValue.of(contents),
             "platform": FULL_DSP48E2,
         },
     )

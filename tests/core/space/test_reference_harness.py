@@ -107,14 +107,11 @@ def test_every_row_has_exactly_one_witness_and_every_expected_failure_a_row() ->
 
 
 def test_the_pending_milestones_are_the_rulings_the_engine_has_not_reached() -> None:
-    # The engine core's, the facts-instance and T4a's milestones are accepted, their rows
-    # removed; the model holds SZ100's rulings before the engine (T4b: views read out; T4c:
-    # an optional fact left out is None).
-    assert MILESTONES == ("base", "T4b", "T4c")
-    assert [(row.id, row.milestone) for row in ROWS] == [
-        ("view-read-in", "T4b"),
-        ("optional-fact-none", "T4c"),
-    ]
+    # The engine core's, the facts-instance, T4a's and T4c's milestones are accepted, their
+    # rows removed; the model holds SZ100's ruling on views before the engine (T4b: views
+    # read out).
+    assert MILESTONES == ("base", "T4b")
+    assert [(row.id, row.milestone) for row in ROWS] == [("view-read-in", "T4b")]
 
 
 # A later milestone with rows, put in the matrix where a test needs one.
@@ -387,11 +384,12 @@ def test_a_selector_is_read_as_its_selected_case() -> None:
     NESTED.start({"width": 4}, {"unit.compute": "stub"}).check_answer("unit.compute")
 
 
-def test_an_optional_fact_cannot_be_left_out_again_in_the_engine() -> None:
-    # SZ100 (5): unset, an optional fact is None in the model; the engine cannot unsupply a
-    # param it was given.
-    with pytest.raises(NotTranslatable):
-        NESTED.start({"width": 4}).check_change(Change(unset=("width",)))
+def test_an_optional_fact_unset_is_given_none_in_the_engine() -> None:
+    # SZ100 (5): unset, an optional fact is None in the model; the engine is given None, the
+    # fact left out, and agrees.
+    unset = NESTED.start({"width": 4}).check_change(Change(unset=("width",)))
+    assert unset is not None
+    unset.check_answer("width")
 
 
 def test_a_selector_carries_its_scopes_guard_only_where_the_scope_holds_it_alone() -> None:
@@ -513,8 +511,8 @@ def test_a_planted_value_on_a_stored_choice_is_seen() -> None:
 
 
 #: walks 0-3 (the gate's 30 steps, strict) with each fault planted: the question each seed's
-#: walk reports it by. The strict run fails on every disagreement; in the full run one
-#: reaching an optional fact left out is counted under T4c, which could hide a fault. The
+#: walk reports it by. The strict run fails on every disagreement, as the full run does on
+#: any but a view read in (T4b), drawn before the walk's description. The
 #: value fault moves the first member by key answering a value: the fact ``f0`` in every
 #: one of these descriptions at the start, and each fact's answer is asked, so each walk
 #: reports it there, at step 0 (``VALUE_LINE``).
@@ -580,7 +578,7 @@ def test_the_check_against_a_cold_build_runs_for_every_implementation() -> None:
     assert renamed.failure is None, renamed.failure
     assert renamed.implementation == "public, renamed"
     assert renamed.engine_checks["cold"] == renamed.compared
-    assert renamed.engine_checks["cold change"] == renamed.steps - renamed.model_only
+    assert renamed.engine_checks["cold change"] == renamed.steps
     assert renamed.engine_checks["bind"] == renamed.engine_checks["bind held"] == renamed.compared
 
 

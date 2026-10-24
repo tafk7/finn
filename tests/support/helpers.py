@@ -24,10 +24,10 @@ them, the values its views present (``required_weights``, and its results,
 ``result_tensor``), read from its facts before it is placed: they read only its facts and
 its ``realization``, and the result's range is the same in either realization, so one
 partition serves every realization, a depthwise MatMul's left open until committed. Known
-weights are a fact given to MatMul (``w_contents``); the weight channel carries what MatMul
-states for it (``carried_weights``, ``stored_weights``: block-diagonal for a dense
-realization, over their range), with ``set``'s tensor its ``index_tensor`` (one index per
-row) and ``set`` on its source's set port (``Port("w", "set")``), so the channel's
+weights are a fact given to MatMul (``weights``, a ``KnownWeights``); the weight channel
+carries what MatMul states for it (``carried_weights``, ``stored_weights``: block-diagonal
+for a dense realization, over their range), with ``set``'s tensor its ``index_tensor`` (one
+index per row) and ``set`` on its source's set port (``Port("w", "set")``), so the channel's
 ``source`` stores them. The edge choices are the channels' (``x.adapter_ram_style``,
 ``w.transport``, ``w.source.ram_style``), the MatMul's its own (``matmul.pe``).
 ``matmul_assembly`` configures one from concrete facts and choices. A partition's module is
@@ -82,7 +82,7 @@ from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.explore import Choice, Defaults, Seam, dotted
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import InputGeneratorKernel
-from finn.kernels.matmul import MatMulKernel, datatype_range
+from finn.kernels.matmul import KnownWeights, MatMulKernel, datatype_range
 from finn.kernels.partition import Partition, partition
 from finn.kernels.policies import Alone, Unstated, defaulted, ranked
 from finn.kernels.port import AxiStreamPort, axis, transport
@@ -312,7 +312,8 @@ def _views(
     probe = design_space(space_type(**facts))
     if facts.get("form") is not Form.DEPTHWISE:
         return probe
-    preferred = realization or ("dense" if "w_contents" in facts else "native")
+    known = isinstance(facts.get("weights"), KnownWeights)
+    preferred = realization or ("dense" if known else "native")
     for case in (preferred, *(other for other in ("native", "dense") if other != preferred)):
         try:
             return commit(probe, {"realization": case})
@@ -357,9 +358,9 @@ def matmul_network(
         form=form, platform=platform, x_tensor=Tensor(shape, ScalarEncoding(activation_dtype))
     )
     if weights is not None:
-        facts |= {"w_contents": weights, "weights_dtype": weights_dtype}
+        facts["weights"] = KnownWeights(integer_tensor(weights), weights_dtype)
     else:
-        facts["w_tensor"] = Tensor((k, n), ScalarEncoding(weights_dtype))
+        facts["weights"] = Tensor((k, n), ScalarEncoding(weights_dtype))
     views = _views(space_type, facts, realization)
     tensors: dict[str, Any] = {
         "x_tensor": facts.pop("x_tensor"),
@@ -369,8 +370,8 @@ def matmul_network(
         # Unknown weights are MatMul's statement of them at the realization committed;
         # with none, as stored, (K, N) in their datatype.
         stated = views.query(type(views).required_weights)
-        given = facts.pop("w_tensor")
-        tensors["w_tensor"] = stated.value if isinstance(stated, Available) else given
+        given = facts.pop("weights")
+        tensors["weights"] = stated.value if isinstance(stated, Available) else given
     several = weight_sets > 1
     set_tensor = Tensor((m,), ScalarEncoding(set_index_dtype(weight_sets)))
     members: dict[str, Facts | ChannelDeclaration] = {
@@ -439,6 +440,15 @@ THRESHOLDS = IntegerTensorValue.of((((-2, 0, 3), (-1, 1, 4)),))
 """One threshold table, one set of two channels of three thresholds."""
 
 
+def integer_tensor(values: IntegerTensor) -> IntegerTensorValue:
+    """An integer tensor as a fact takes it: nested int tuples made its value
+    (``IntegerTensorValue.of``), anything else as it is (the kernel's annotation refuses
+    what is no ``IntegerTensorValue``)."""
+    if type(values) is tuple and integer_shape(values) is not None:
+        return IntegerTensorValue.of(values)
+    return cast(IntegerTensorValue, values)
+
+
 def set_indices(sets: int, beats: int) -> Tensor:
     """The set indices of a kernel of ``sets`` sets: one an input beat, of ``beats``
     beats, in FinnLib's selector type (``set_index_dtype``)."""
@@ -462,7 +472,7 @@ def threshold_base(
     facts: dict[str, Any] = dict(
         input_tensor=Tensor((1, count), ScalarEncoding(resolve_qonnx_datatype_name(input_dtype))),
         threshold_dtype=resolve_qonnx_datatype_name(threshold_dtype),
-        thresholds=table,
+        thresholds=integer_tensor(table),
         bias=bias,
         platform=FULL_DSP48E2,
     )

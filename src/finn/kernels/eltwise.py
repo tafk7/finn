@@ -27,7 +27,6 @@ from finn.core.space import (
     Param,
     Rejected,
     constraint,
-    default_semantics,
     derived,
     divisors_of,
     domain,
@@ -44,7 +43,6 @@ from finn.kernels.library import LibraryModule
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.utilization import RESOURCES_SEMANTICS
 from finn.kernels.values.domains import Integer, admit_element
-from finn.kernels.values.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.platform.capabilities import DspBlock, Platform, Resources
 
 c = Index("c")
@@ -67,7 +65,6 @@ def _pe_values(extent: object) -> Domain[int]:
     return domain(
         accepts=accepts,
         candidates=candidates,
-        semantics=default_semantics(int),
         ordered=True,
         extent=extent,
     )
@@ -96,17 +93,17 @@ class EltwiseKernel(KernelSpace):
     # parameter, a 32-bit integer, holds.
     pe: int = Decision(domain=_pe_values(channels))
 
-    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    @derived
     def lhs_dtype(self) -> QONNXDataType:
         """``lhs``'s element type: its tensor's."""
         return self.lhs_element.dtype
 
-    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    @derived
     def rhs_dtype(self) -> QONNXDataType:
         """``rhs``'s element type: its tensor's."""
         return self.rhs_element.dtype
 
-    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    @derived
     def result_dtype(self) -> QONNXDataType:
         operation = self.operation
         a = self.lhs_dtype

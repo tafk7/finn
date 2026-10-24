@@ -47,6 +47,6 @@ def test_equal_integers_stored_differently_are_one_value_and_equal_facts() -> No
     integers.set_initializer("w", np.asarray(WEIGHTS, dtype=np.int8))
     ops = [kernel_op(model, model.graph.node[0]) for model in (floats, integers)]
     facts = [op.facts() for op in ops]
-    assert facts[0].arguments["w_contents"] == facts[1].arguments["w_contents"]
+    assert facts[0].arguments["weights"] == facts[1].arguments["weights"]
     assert dict(facts[0].arguments) == dict(facts[1].arguments)
-    assert hash(facts[0].arguments["w_contents"]) == hash(facts[1].arguments["w_contents"])
+    assert hash(facts[0].arguments["weights"]) == hash(facts[1].arguments["weights"])

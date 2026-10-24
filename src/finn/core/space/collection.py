@@ -35,7 +35,7 @@ from .declarations import (
     local_name,
 )
 from .errors import DefinitionError
-from .semantics import ValueSemantics
+from .semantics import OptionalSemantics, ValueSemantics
 
 _OWNER = "space.collection"
 
@@ -262,6 +262,15 @@ def _collect_guards(effective: EffectiveSpace) -> Mapping[Declaration, ValueRef[
                 "guard-not-boolean",
                 _OWNER,
                 f"{owner}: when= requires Boolean value semantics",
+                declaration=owner,
+            )
+        if isinstance(guard_semantics, OptionalSemantics):
+            raise DefinitionError.broken(
+                "guard-not-boolean",
+                _OWNER,
+                f"{owner}: when= requires a bool, and its value is {guard_semantics.name}, which "
+                "admits None: guard on a derived value that tests `is not None` (or the bool's "
+                "value) and returns a bool",
                 declaration=owner,
             )
         guards[declaration] = cast(ValueRef[bool], guard)

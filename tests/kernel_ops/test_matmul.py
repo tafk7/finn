@@ -21,7 +21,7 @@ from onnx import helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import get_domain_opset_version, getCustomOp, op_identity
 from support.configure import configured, write_raw
-from support.models import TARGET, WEIGHTS, X, matmul_model, schema_digest
+from support.models import INT3, TARGET, WEIGHTS, X, matmul_model, schema_digest
 from support.op_specs import matmul as spec
 from support.refusals import refused
 
@@ -37,7 +37,7 @@ from finn.custom_op.kernels.matmul import MatMul
 from finn.custom_op.kernels.network import network, persist
 from finn.custom_op.kernels.thresholding import Thresholding
 from finn.harness.reference import converted
-from finn.kernels.matmul import MatMulKernel
+from finn.kernels.matmul import KnownWeights, MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.partition import Partition
 from finn.kernels.values.semantics import IntegerTensorValue
@@ -75,11 +75,11 @@ def test_facts_come_from_the_model() -> None:
     assert facts.space_type is MatMulKernel and op(model).owned() == {"w": "w"}
     arguments = facts.arguments
     # Its extents and datatypes are its tensors': beside them, the platform and the known
-    # weights' declared datatype. Known weights are its contents, never a tensor: the
-    # weight channel carries what MatMul states over their values' range.
-    assert set(arguments) == {"weights_dtype", "platform", "x_tensor", "w_contents"}
+    # weights, with their declared datatype. Known weights are its contents, never a
+    # tensor: the weight channel carries what MatMul states over their values' range.
+    assert set(arguments) == {"platform", "x_tensor", "weights"}
     value = IntegerTensorValue.of(tuple(tuple(int(v) for v in row) for row in WEIGHTS))
-    assert arguments["w_contents"] == value
+    assert arguments["weights"] == KnownWeights(value, INT3)
     assert op(model).bound().w_carried.element.value_range.span == value.range
     # The output keeps the input's leading axes: the kernel states it at their rank.
     (result,) = op(model).output_tensors().values()

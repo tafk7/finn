@@ -50,16 +50,16 @@ RUNNING: Implementation = load("core.space._running_type:RUNNING")
 
 
 class Part(Space):
-    v: int = Param(required=False)
+    v: int | None = Param(default=None)
     pe: int = Decision(values=(1, 2, 4))
 
     @derived
     def given(self) -> bool:
-        return self.present(Part.v)
+        return self.v is not None
 
 
 class Spare(Space):
-    v: int = Param(required=False)
+    v: int | None = Param(default=None)
 
 
 class Reads(Space):
@@ -79,7 +79,9 @@ class Reads(Space):
 
     @derived
     def chosen(self) -> int:
-        return self.unit.v
+        found = self.unit.v
+        assert found is not None  # bound to ``w``, a required fact
+        return found
 
     @derived
     def wider(self) -> int:

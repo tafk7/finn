@@ -55,6 +55,7 @@ from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port import AxiStreamPort, served
 from finn.kernels.sides import Side
 from finn.kernels.utilization import RESOURCES_SEMANTICS
+from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import Resources
 
 INT4 = DataType["INT4"]
@@ -69,7 +70,7 @@ class Probe(KernelSpace):
 
     id = "test.probe"
 
-    tensor: Tensor = Param(required=False)
+    tensor: Tensor | None = Param(default=None)
 
     x = AxiStreamPort(
         name="s_axis",
@@ -146,7 +147,7 @@ class Controlled(Probe):
     id = "test.probe.controlled"
 
     writable: bool = Param(default=False)
-    control: str = Param(required=False)
+    control: str | None = Param(default=None)
 
     @derived
     def config_bus(self) -> Bus:
@@ -185,10 +186,24 @@ def test_a_control_bus_presented_is_exported_with_its_port_and_registers() -> No
     assert library_module(point).held.inputs == (("mode", 1),)
 
 
+def test_a_control_bus_presented_without_its_port_is_refused() -> None:
+    # A bus it presents names the port it is presented at: presented with no port (the
+    # optional ``control`` left out, None), its control view refuses rather than export a
+    # bus at port None.
+    point = controlled(writable=True)
+    assert point.config_presented is True
+    answer = point.query(Controlled.config_control)
+    assert isinstance(answer, Rejected)
+    assert codes(answer) == {"control-bus-unaddressed"}
+
+
 def test_a_memstream_s_bus_is_held_by_construction() -> None:
     point = design_space(
         MemStreamKernel(
-            platform=FULL_DSP48E2, dtype=INT4, form=vector_major((4,), 2), contents=(1, 2, 3, 4)
+            platform=FULL_DSP48E2,
+            dtype=INT4,
+            form=vector_major((4,), 2),
+            contents=IntegerTensorValue.of((1, 2, 3, 4)),
         )
     )
     memory = commit(point, {"ram_style": "auto", "pumped_memory": False})

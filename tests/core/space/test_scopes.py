@@ -119,22 +119,20 @@ def test_a_decision_of_the_class_reads_its_suppliers_and_exposure_is_explicit() 
         extent: int = Param()
         # The formal is declared on the enclosing Space class and bound to the
         # child by name; so is the Decision bound to the other child.
-        exposed_value: int = Param(required=False)
+        exposed_value: int = Param()
         value: int = Decision(domain=divisors_of(extent))
         owned = Child(value=value)
         exposed = Child(value=exposed_value)
 
-    base = design_space(Root(extent=12))
+    base = design_space(Root(extent=12, exposed_value=7))
     owned = base.field(Root.value)
     assert isinstance(owned, BoundDecision)
     assert owned.candidates() == Available((1, 2, 3, 4, 6, 12))
     chosen = base.with_choices({Root.value: 3})
     assert chosen.owned.physical == 3
-    assert isinstance(chosen.exposed.query(Child.value), Unresolved)
+    assert chosen.exposed.value == 7
     with pytest.raises(ConfigurationError):
         base.with_choices({Root.value: 5})
-    supplied = design_space(Root(extent=12, exposed_value=7))
-    assert supplied.exposed.value == 7
 
     missing = composite("Missing", {"child": Child()})
     with refused("formal-unsupplied", error=DefinitionError, message=r"child\.value"):

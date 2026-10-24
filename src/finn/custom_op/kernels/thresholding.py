@@ -15,7 +15,9 @@ an integer input, the kernel's table is derived from them without changing any c
 given the narrowest type that holds them. For a signed input, that type also holds one
 value below the smallest threshold, unless the smallest is the input type's minimum: the
 RTL clamps an input wider than the thresholds to their type, and a clamped input must
-not reach the smallest threshold (``threshold-saturation``).
+not reach the smallest threshold (``threshold-saturation``). That type is the initial
+values', the fact ``threshold_dtype``; with runtime-writable thresholds the kernel sizes
+its table from the input's type instead (``table_dtype``).
 
 The pattern refuses ``out_scale`` other than 1 (``threshold-scale``) and a non-integer
 ``out_bias`` (``threshold-bias``), both with ``ExtractMultiThresholdScaleBias`` as a
@@ -47,10 +49,9 @@ from finn.dataflow.datatypes import (
     DatatypeError,
     QONNXDataType,
     ordinary_integer_bounds,
-    resolve_qonnx_datatype_name,
 )
 from finn.kernels.composer import Facts
-from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.thresholding import ThresholdingAxiKernel, threshold_table_dtype
 from finn.kernels.values.semantics import IntegerTensorValue
 
 if TYPE_CHECKING:
@@ -66,9 +67,10 @@ def stored_thresholds(
     stored: npt.NDArray[Any], input_dtype: QONNXDataType
 ) -> tuple[IntegerTensorValue, QONNXDataType]:
     """The kernel's table for the thresholds ``stored`` on an input of ``input_dtype``,
-    one set of them, and its type (see the module docstring). For an input that is not
-    an integer type, the thresholds as they are (truncated to integers), in the input's
-    type, which the kernel refuses."""
+    one set of them, and its type (see the module docstring), sized as the kernel sizes a
+    writable table (``threshold_table_dtype``). For an input that is not an integer type,
+    the thresholds as they are (truncated to integers), in the input's type, which the
+    kernel refuses."""
     try:
         low, high = ordinary_integer_bounds(input_dtype)
     except DatatypeError:
@@ -78,12 +80,8 @@ def stored_thresholds(
     table = np.clip(np.ceil(np.asarray(stored, dtype=np.float64)), low, high + 1)
     least, most = int(table.min()), int(table.max())
     if low < 0:
-        floor = max(low, least - 1)  # one value below the smallest (module docstring)
-        bits = max(max((-floor - 1).bit_length() if floor < 0 else 0, most.bit_length()) + 1, 2)
-        dtype = resolve_qonnx_datatype_name(f"INT{bits}")
-    else:
-        dtype = resolve_qonnx_datatype_name(f"UINT{max(most.bit_length(), 1)}")
-    return integer_tensor(table[None]), dtype
+        least = max(low, least - 1)  # one value below the smallest (module docstring)
+    return integer_tensor(table[None]), threshold_table_dtype(least, most, signed=low < 0)
 
 
 class Thresholding(KernelOp):

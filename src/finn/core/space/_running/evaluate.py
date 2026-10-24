@@ -19,6 +19,15 @@ its scope, its guard first. A ``self`` method is a plain call on a receiver read
 through the evaluation (``Reader``), the method's node its reader; what it read, in order,
 is its answer's trace.
 
+**A guard's condition** (``Evaluation.condition``). A ``when`` guard answers its
+condition, but where the condition is a derived value and no value, an input of it that
+does not apply ranks first, ahead of refused and unresolved: no value of what waits or
+refuses can make a condition over a value that does not exist hold, so its scope is
+absent, under a guard that waits too (``_holds_here``). A derived value's required inputs
+keep their own ranking (refused, then unresolved, then inapplicable, ``answers._blocked``),
+so the condition answers by it to every other reader. A ``self`` method halts at its first
+read of a non-value, so its inputs are what it read up to there.
+
 **Validity's pieces.** A piece whose guard is refused through an input counts once, at
 the highest refused guard of its chain (each guard's own guard read in turn). Counted at
 a guard above its own, the piece is that guard's owner's, keyed by the owner where the
@@ -68,9 +77,9 @@ guards taken as holding. A node abandoned by the depth guard, or failing, keeps 
 the depth guard's restart all rest on purity. The check tests it (``Session.verifying``:
 the session's ``verify``, or the process's switch, ``purity.check_purity``, read each
 time): a cache hit is evaluated anyway, a kept domain outcome computed again, and a node the
-depth guard abandoned evaluated again once it completes; where the two answers differ by the
-member's value semantics (the result, and the assessment where there is one), the
-function is impure, its ``EvaluationError``, today's.
+depth guard abandoned evaluated again once it completes; where the two answers differ (the
+result, and the assessment where there is one; a value by type and ``==``), the function is
+impure, its ``EvaluationError``, today's.
 
 An evaluation, its session and the model's record take no lock: the public layer asks each
 question under the model's lock (``occurrence.ask``), one run of a model at a time.
@@ -113,30 +122,30 @@ from ..results import (
     assess_view,
     merged_findings,
 )
+from ..semantics import recognize
 from . import depth, purity
 from .answers import (
     Called,
     _blocked,
-    _clone,
     _empty_domain,
     _finished,
     _first_member,
+    _formal_value,
     _guard_assessment,
     _guard_piece,
     _guard_result,
-    _input_missing,
     _inputs_absent,
     _listed_members,
-    _present,
     _same_value,
     _unassigned,
+    handed_out,
     membership_arguments,
     public_value,
 )
 from .cache import key as value_key
 from .receiver import MethodReader
 from .receiver import receiver as _receiver
-from .structure import Record, record
+from .structure import Record, narrows, record
 from .value import DesignSpace
 
 if TYPE_CHECKING:
@@ -390,11 +399,11 @@ def invoke(
 
 
 def answer_key(node: Address, answer: QueryResult[object]) -> object:
-    """``node``'s answer as a key: a value as the node cache keys it under ``node``'s value
-    semantics (``cache.key``), a non-value by its variant and findings; ``None`` where it
-    has no key (semantics of its own, a type not keyed, unhashable findings)."""
+    """``node``'s answer as a key: a value as the node cache keys it (``cache.key``: by type
+    and ``==``), a non-value by its variant and findings; ``None`` where it has no key (a
+    type not keyed, an unhashable value or findings)."""
     if isinstance(answer, Available):
-        found = value_key(answer.value, node.semantics)
+        found = value_key(answer.value)
         return None if found is None else ("value", found)
     try:
         hash(answer.findings)
@@ -418,9 +427,9 @@ def _same_findings(left: QueryResult[object], right: QueryResult[object]) -> boo
 
 
 def _same_answer(node: Address, left: QueryResult[object], right: QueryResult[object]) -> bool:
-    """Whether two answers of ``node`` are the same: the same object, or values equal by
-    its value semantics (``answers._same_value``), or non-values of one variant with equal
-    findings."""
+    """Whether two answers of ``node`` are the same: the same object, or the same value (of
+    one type and equal by ``==``, ``answers._same_value``), or non-values of one variant
+    with equal findings."""
     if left is right:
         return True
     if type(left) is not type(right):
@@ -444,7 +453,7 @@ def _same_bool(left: QueryResult[Any], right: QueryResult[Any]) -> bool:
 
 def _same_assessment(node: Address, left: Assessment | None, right: Assessment | None) -> bool:
     """Two assessments of ``node``: a constraint's pieces and result, each exactly; a
-    view's output and accepted result by its semantics, and its validity."""
+    view's output and accepted result as values (``_same_answer``), and its validity."""
     if left is right:
         return True
     if isinstance(left, ConstraintAssessment) and isinstance(right, ConstraintAssessment):
@@ -463,8 +472,9 @@ def _same_assessment(node: Address, left: Assessment | None, right: Assessment |
 
 
 def _same_outcome(node: Address, left: QueryResult[object], right: QueryResult[object]) -> bool:
-    """Two outcomes of a choice's domain: listed values each by the choice's semantics, a
-    bool or nothing listed exactly, a non-value's findings (today's)."""
+    """Two outcomes of a choice's domain: listed values each the same value
+    (``answers._same_value``), a bool or nothing listed exactly, a non-value's findings
+    (today's)."""
     if left is right:
         return True
     if type(left) is not type(right):
@@ -608,7 +618,8 @@ class Evaluation:
 
     def _again(self, index: Address, held: Ans, found: Ans) -> None:
         """The purity check: ``found``, ``index`` evaluated again on the same reads,
-        answers as ``held`` by the member's value semantics; else its function is impure."""
+        answers as ``held`` (``_same_answer``, ``_same_assessment``); else its function is
+        impure."""
         node = index
         if not (
             _same_answer(node, held.result, found.result)
@@ -711,9 +722,9 @@ class Evaluation:
 
     def _holds_here(self, node: Address, trace: _Tr) -> bool | None:
         """A guard's own condition, read while a guard above it waits or is refused: false
-        where its case's selector stores another case or its ``when`` reads false. The
-        guard is the reader of its condition, read past the condition's own guard where
-        the guard implies it."""
+        where its case's selector stores another case or its ``when`` reads false, or reads
+        a value that does not apply (``condition``). The guard is the reader of its
+        condition, read past the condition's own guard where the guard implies it."""
         held = self.case(node)
         if held is not None:
             selector, case = held
@@ -725,7 +736,8 @@ class Evaluation:
         if node.output is None:
             return None
         answer = self._condition(node, trace)
-        return False if isinstance(answer, Available) and answer.value is False else None
+        false = isinstance(answer, Available) and answer.value is False
+        return False if false or isinstance(answer, Inapplicable) else None
 
     def _condition(self, node: Address, trace: _Tr) -> QueryResult[object]:
         """A ``when`` guard's condition (``node``: the guard, its reader, under a guard of
@@ -738,11 +750,28 @@ class Evaluation:
             or condition.kind in _OWN_BIT
             or not implies(condition.guard, node.guard)
         ):
-            return self.read(trace, output, node).result
+            return self.condition(output, self.read(trace, output, node))
         # Past its own guard: its frame alone, the guard its reader.
         found = _FRAMES[condition.kind](self, condition, [], node)
         trace.extend(found.trace)
-        return found.result
+        return self.condition(condition, found)
+
+    def condition(self, condition: Address, found: Ans) -> QueryResult[object]:
+        """A ``when`` guard's answer from its condition's (``condition``, read at its source,
+        and ``found``, its own answer): where a derived value is the condition and waits or
+        is refused, inapplicable if one of its inputs does not apply (the module docstring,
+        "A guard's condition"). An input is read in the condition's trace, but what a method
+        read only to know whether it exists; its own guard, read first there, does not apply
+        only where the condition does not either."""
+        result = found.result
+        if condition.kind != "derived" or not isinstance(result, (Unresolved, Rejected)):
+            return result
+        absent = tuple(
+            answer
+            for index, answer in found.trace
+            if isinstance(answer, Inapplicable) and index not in found.existence
+        )
+        return Inapplicable(merged_findings(absent)) if absent else result
 
     def refused_waiting(self, guard: Address, trace: _Tr, reader: Address) -> Address | None:
         """The highest ``when`` guard in the chain of ``guard`` (which waits) refused
@@ -779,8 +808,8 @@ class Evaluation:
     ) -> QueryResult[object]:
         """A domain's outcome, kept on the facts layer by its inputs' answers (a domain
         reads facts only, so every design space of the layer shares it): each answer keyed
-        as the node cache keys it, under its member's value semantics (the membership
-        candidate's, its choice's); nothing kept where one has no key (``_outcome_key``)."""
+        as the node cache keys it, by type and ``==`` (the membership candidate's too);
+        nothing kept where one has no key (``_outcome_key``)."""
         outcomes = self.ds.layer.outcomes
         local = self._outcome_key(inputs)
         memo_key = None if local is None else (key, local)
@@ -799,19 +828,14 @@ class Evaluation:
         return called.result
 
     def _outcome_key(self, inputs: Trace) -> tuple[object, ...] | None:
-        """A domain outcome's inputs as the facts layer keeps it by (``answer_key``, each
-        under its node's semantics); ``None`` where one has no key."""
+        """A domain outcome's inputs as the facts layer keeps it by (``answer_key``);
+        ``None`` where one has no key."""
         local = tuple(answer_key(index, answer) for index, answer in inputs)
         return None if any(part is None for part in local) else local
 
     def call_explicit(self, node: Address, answers: list[QueryResult[object]]) -> Called:
         arguments = {
-            argument.name: _clone(
-                argument.node,
-                cast(Available[object], answer).value,
-                owner=node.owner,
-                role="dependency snapshot",
-            )
+            argument.name: handed_out(cast(Available[object], answer).value)
             for argument, answer in zip(node.arguments, answers)
         }
         outcome = invoke(
@@ -863,12 +887,7 @@ class Evaluation:
         self, node: Address, answers: tuple[QueryResult[object], ...]
     ) -> dict[str, object]:
         return {
-            argument.name: _clone(
-                argument.node,
-                cast(Available[object], answer).value,
-                owner=node.owner,
-                role="dependency snapshot",
-            )
+            argument.name: handed_out(cast(Available[object], answer).value)
             for argument, answer in zip(membership_arguments(node), answers)
         }
 
@@ -888,7 +907,7 @@ class Evaluation:
             return blocked
 
         def membership() -> Called:
-            candidate = _clone(node, value.value, owner=node.owner, role="domain candidate")
+            candidate = value.value
             outcome = invoke(
                 self.session,
                 Call(node.owner, "domain membership"),
@@ -1057,31 +1076,6 @@ class Reader(MethodReader):
             self.call.failure.add(CleanupFailure(node.owner, "cleanup read", result=answer))
         raise ValueUnavailableError(answer, context=node.owner)
 
-    def _source_applies(self, index: Address) -> bool | Address:
-        index = self._source(index)
-        node = index
-        if node.guard is not None:
-            holds = self._holds(node.guard)
-            if holds is not True:
-                return holds
-        if node.kind == "param":
-            return isinstance(self._answer(index), Available)
-        if node.kind in ("alias", "guard", "view"):
-            return self._source_applies(cast("Address", node.output))
-        if node.kind == "select":
-            selector = cast("Address", node.selector)
-            case = self._answer(selector)
-            if not isinstance(case, Available):
-                return False if isinstance(case, Inapplicable) else selector
-            target = cast("Mapping[str, Address]", node.selection_index).get(cast(str, case.value))
-            return False if target is None else self._source_applies(target)
-        if node.kind == "present":
-            answers = [self._source_applies(target) for _, target in node.alternatives]
-            if any(answer is True for answer in answers):
-                return True
-            return next((answer for answer in answers if answer is not False), False)
-        return True
-
 
 # -- frames: each kind of node (``reader``: whose scope its reads are made from) ----------
 
@@ -1089,9 +1083,8 @@ class Reader(MethodReader):
 def _param(ev: Evaluation, node: Address, trace: _Tr, reader: Address) -> Ans:
     if ev.session.cache is not None:
         ev.note({node})
-    if node in ev.ds.facts:
-        return Ans(Available(ev.ds.facts[node]), tuple(trace))
-    return Ans(_input_missing(node), tuple(trace))
+    # Every fact is known: given, or its default (``facts.open``).
+    return Ans(Available(ev.ds.facts[node]), tuple(trace))
 
 
 def _const(ev: Evaluation, node: Address, trace: _Tr, reader: Address) -> Ans:
@@ -1117,7 +1110,23 @@ def _decision(ev: Evaluation, node: Address, trace: _Tr, reader: Address) -> Ans
 def _forward(ev: Evaluation, node: Address, trace: _Tr, reader: Address) -> Ans:
     if node.output is None:
         raise EvaluationError(node.owner, node.kind, "missing output reference")
-    return Ans(ev.read(trace, node.output, reader).result, tuple(trace))
+    result = ev.read(trace, node.output, reader).result
+    if isinstance(result, Available) and narrows(node):
+        # a formal taking fewer values than it is bound to: its own type checks the value
+        semantics = node.semantics
+        assert semantics is not None
+        if not recognize(semantics, result.value, owner=node.owner, role="formal recognition"):
+            refused = _formal_value(node, result.value)
+            return Ans(refused, tuple(trace), own_refusal=True)
+    return Ans(result, tuple(trace))
+
+
+def _guard(ev: Evaluation, node: Address, trace: _Tr, reader: Address) -> Ans:
+    """A ``when`` guard: its condition's answer as a guard takes it (``Evaluation.condition``)."""
+    if node.output is None:
+        raise EvaluationError(node.owner, node.kind, "missing output reference")
+    found = ev.read(trace, node.output, reader)
+    return Ans(ev.condition(ev.source(node.output, reader), found), tuple(trace))
 
 
 def _select(ev: Evaluation, node: Address, trace: _Tr, reader: Address) -> Ans:
@@ -1297,11 +1306,7 @@ def _choice_piece(
     return piece.key, cast(QueryResult[bool], listed)
 
 
-def _graph(ev: Evaluation, node: Address, trace: _Tr, reader: Address) -> Ans:
-    if node.kind == "present":
-        answers = [ev.read(trace, target, reader).result for _, target in node.alternatives]
-        several = sum(1 for answer in answers if isinstance(answer, Available)) > 1
-        return Ans(_present(node, answers), tuple(trace), own_refusal=several)
+def _members(ev: Evaluation, node: Address, trace: _Tr, reader: Address) -> Ans:
     located: list[Located[object]] = []
     failures: list[QueryResult[object]] = []
     for (name, target), member in zip(node.alternatives, cast(tuple[str, ...], node.value)):
@@ -1338,12 +1343,11 @@ _FRAMES: Mapping[str, Callable[[Evaluation, Address, _Tr, Address], Ans]] = {
     "const": _const,
     "decision": _decision,
     "alias": _forward,
-    "guard": _forward,
+    "guard": _guard,
     "select": _select,
     "view": _view,
     "validity": _validity,
-    "present": _graph,
-    "members": _graph,
+    "members": _members,
     "derived": _callback,
     "constraint": _callback,
 }

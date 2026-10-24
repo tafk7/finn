@@ -47,7 +47,7 @@ from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.library import LibraryModule, library_module
 from finn.kernels.partition import Partition
-from finn.kernels.port import INTEGER_POLICY, AxiStreamPort, lane_count
+from finn.kernels.port import AxiStreamPort, lane_count
 from finn.kernels.sides import Side
 from finn.kernels.utilization import RESOURCES_SEMANTICS
 from finn.kernels.values.domains import Integer
@@ -60,7 +60,7 @@ class Pool(KernelSpace):
     """Global sum pooling, model only: Y[b, c] = sum_s X[b, s, c], PE channels a beat."""
 
     id = "test.accpool"
-    x_tensor: Tensor = Param(required=False)
+    x_tensor: Tensor | None = Param(default=None)
 
     channels = extent_of(c)
     pe: int = Decision(domain=divisors_of(channels))
@@ -264,7 +264,7 @@ class Holding(KernelSpace):
     """A kernel of one input port, given the integer policy its hardware takes."""
 
     id = "test.holding"
-    admits: Integer | None = Param(default=None, semantics=INTEGER_POLICY)
+    admits: Integer | None = Param(default=None)
     x = AxiStreamPort(
         name="s_axis_input",
         endpoint=Endpoint.TARGET,

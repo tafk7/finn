@@ -67,6 +67,7 @@ from finn.kernels.dotp import Int8Dsp58DotpKernel
 from finn.kernels.library import library_module
 from finn.kernels.matmul import datatype_range
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import DspBlock
 from finn.toolchain import xsim
 from finn.toolchain.launcher import (
@@ -139,7 +140,7 @@ def _thresholds_alone() -> Any:
     facts = dict(
         input_tensor=Tensor((1, 1), ScalarEncoding(DataType["INT4"])),
         threshold_dtype=DataType["INT4"],
-        thresholds=(((-2, 0, 3),),),
+        thresholds=IntegerTensorValue.of((((-2, 0, 3),),)),
         bias=0,
         platform=FULL_DSP48E2,
     )
@@ -364,15 +365,16 @@ def test_a_control_bus_is_written_what_its_kernel_declares(tmp_path: Path) -> No
     point = _written(((-3, 0, 2),), ((-6, -1, 5),))
     declared = declared_registers(_module(point))
     assert declared == {"s_axilite": point.member("activate").register_map}
-    # One 32-bit word a threshold of the shared row (C = 1, N = 3): the word select alone.
-    assert declared["s_axilite"] == RegisterMap(((0, 0xD), (4, 0x0), (8, 0x2)))
+    # One 32-bit word a threshold of the shared row (C = 1, N = 3): the word select alone;
+    # each the threshold in the writable table's type, INT5 over the INT4 input.
+    assert declared["s_axilite"] == RegisterMap(((0, 0x1D), (4, 0x0), (8, 0x2)))
     stimulus = {"s_axis_0": ([0] * (PIXELS * CHANNELS // 4), 16)}
     expected = {"m_axis_0": ([0] * (PIXELS * CHANNELS // 4), 8)}
     bench = stream_bench(
         _module(point), tmp_path, inputs=stimulus, outputs=expected, toolchain=host_toolchain()
     )
     assert (tmp_path / "s_axilite.writes.mem").read_text().split() == [
-        "00000000d",
+        "00000001d",
         "400000000",
         "800000002",
     ]

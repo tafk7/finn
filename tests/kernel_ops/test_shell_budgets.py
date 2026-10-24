@@ -71,6 +71,7 @@ from finn.kernels.explore import Refused, Seam
 from finn.kernels.partition import Partition
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.resolve import resolve_target
 from finn.platform.shells import IP_ROW, ShellRow, bus_counts, shell_row
 from finn.transformation.kernels import explore_kernel_choices
@@ -81,7 +82,7 @@ PYNQ_ROW = shell_row("pynq", "Ultra96")
 UINT2 = DataType["UINT2"]
 TENSOR = Tensor((3, 2), ScalarEncoding(UINT2))
 """Each channel's tensor: three rows of two UINT2 channels."""
-TABLE = (((0, 1, 2), (0, 1, 2)),)
+TABLE = IntegerTensorValue.of((((0, 1, 2), (0, 1, 2)),))
 """Each thresholding's table: two channels of three thresholds over UINT2, to UINT2."""
 
 

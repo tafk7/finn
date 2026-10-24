@@ -71,7 +71,7 @@ def test_outer_params_and_decisions_supply_interface_slots_without_new_choices()
         chosen.with_choices({Parent.kernel.port.lanes: 1})
     evidence = inspection.explain(chosen.kernel.port, Port.description)
     assert any(
-        node.declaration.key == "dtype" and node.input_presence == "supplied"
+        node.declaration.key == "dtype" and node.result == Available("INT8")
         for node in evidence.nodes
     )
     assert any(
@@ -135,12 +135,9 @@ def test_a_decision_bound_into_two_nodes_is_one_decision_of_its_class() -> None:
 def test_unbound_exposure_is_a_formal_declared_on_the_enclosing_space_class() -> None:
     # The formal is declared here and bound to the child by name.
     class Parent(Space):
-        lanes: int = Param(required=False)
+        lanes: int = Param()
         kernel = Reusable(count=1, dtype="INT8", lanes=lanes)
 
-    omitted = design_space(Parent())
-    assert omitted.kernel.port.dtype == "INT8"
-    assert isinstance(omitted.kernel.port.query(Port.lanes), Unresolved)
     supplied = design_space(Parent(lanes=3))
     assert supplied.kernel.port.physical == ("INT8", 3)
 

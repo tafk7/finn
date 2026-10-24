@@ -1,12 +1,17 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Value semantics for scalar datatypes and immutable arrays."""
+"""FINN's value types: QONNX datatypes and integer tensors, registered (``value_type``).
+
+A fact or choice annotated with one is type-checked by it and compared by ``==``, as every
+value is: a ``QONNXDataType`` (``BaseDataType``: qonnx interns one instance per canonical
+name) and an ``IntegerTensorValue`` (equal by its digest). An integer tensor is given as its
+value: nested int tuples make one by ``IntegerTensorValue.of``.
+"""
 
 from __future__ import annotations
 
 import hashlib
-import operator
 import sys
 from array import array
 from collections.abc import Callable, Sequence
@@ -17,32 +22,10 @@ from typing import cast
 import numpy as np
 import numpy.typing as npt
 
-from finn.core.space import ValueSemantics, value_type
-from finn.dataflow.datatypes import (
-    QONNX_DATATYPE_TOKEN,
-    QONNXDataType,
-    canonical_qonnx_datatype,
-    is_qonnx_datatype,
-)
-
-QONNX_DATATYPE_VALUE_SEMANTICS: ValueSemantics[QONNXDataType] = ValueSemantics(
-    type_token=QONNX_DATATYPE_TOKEN,
-    name="QONNXDataType",
-    recognizes=is_qonnx_datatype,
-    # One instance per canonical name: two datatypes are equal when they are the same, so
-    # exactly when ``==`` (by canonical name) holds them equal.
-    equal=operator.eq,
-    snapshot=canonical_qonnx_datatype,
-)
+from finn.core.space import value_type
+from finn.dataflow.datatypes import QONNXDataType
 
 IntegerVector = tuple[int, ...]
-INTEGER_VECTOR: ValueSemantics[IntegerVector] = ValueSemantics(
-    IntegerVector,
-    "integer vector",
-    lambda value: type(value) is tuple and all(type(item) is int for item in value),
-    lambda left, right: left == right,
-    lambda value: value,
-)
 
 
 def _shape(value: object) -> tuple[int, ...] | None:
@@ -271,8 +254,8 @@ class IntegerTensorValue:
 
 
 IntegerTensor = IntegerTensorValue | tuple[object, ...]
-"""What an integer tensor input takes: the value, or nested int tuples that
-``INTEGER_TENSOR`` snapshots into one."""
+"""What the helpers below take for an integer tensor: the value, or nested int tuples they
+read as one (``IntegerTensorValue.of``). A fact or choice takes the value alone."""
 
 
 def integers(values: object) -> tuple[int, ...]:
@@ -308,23 +291,6 @@ def _value(values: object) -> IntegerTensorValue:
     return values if type(values) is IntegerTensorValue else IntegerTensorValue.of(values)
 
 
-def _recognized(value: object) -> bool:
-    return type(value) is IntegerTensorValue or (type(value) is tuple and _shape(value) is not None)
-
-
-def _snapshot(value: IntegerTensor) -> IntegerTensor:
-    return _value(value)
-
-
-INTEGER_TENSOR: ValueSemantics[IntegerTensor] = ValueSemantics(
-    IntegerTensor,
-    "integer tensor",
-    _recognized,
-    # A stored integer tensor is its value (the snapshot): equal by ``==``, its digest.
-    operator.eq,
-    _snapshot,
-)
-
 # The value types FINN's values hold, registered here and nowhere else: each class's ``==``
 # and hash are its semantics, equal instances cannot be told apart, and none changes. A
 # QONNX datatype is the one instance of its canonical name, equal to another by that name
@@ -335,12 +301,9 @@ value_type(IntegerTensorValue)
 
 
 __all__ = [
-    "INTEGER_TENSOR",
-    "INTEGER_VECTOR",
     "IntegerTensor",
     "IntegerTensorValue",
     "IntegerVector",
-    "QONNX_DATATYPE_VALUE_SEMANTICS",
     "integer_bytes",
     "integer_columns",
     "integer_digest",

@@ -295,16 +295,12 @@ class Space(metaclass=SpaceMeta):
         return query(self, value)
 
     def present(self, node: object) -> bool:
-        """Whether a node (a child or a candidate) is present, or a value input is supplied.
+        """Whether a node (a child or a candidate) is present.
 
         Read like a value: undecided presence raises ``ValueUnavailableError``
         (inside a method it halts the method as unresolved). A value input (a ``Param``) is
-        present when it is supplied: given a literal, or bound to a source that
-        applies (its guards hold and the choices it is read through select it);
-        an optional input omitted at start, or one that no present source
-        supplies, is not. The value is not evaluated: a source that refuses is
-        present, and its refusal surfaces where the value is read, with its
-        findings. A source whose presence is still undecided raises.
+        no node and is refused (``RequestError``): it is known, an optional one ``None``
+        where it is left out, so read it and test it with ``is not None``.
         """
         from .occurrence import present
 

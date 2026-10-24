@@ -5,7 +5,8 @@ by the model's scope records (``Model.scopes.record``), so that it lives exactly
 the model.
 
 - each formal bound by reference, and the address it is bound to (a formal bound to a
-  formal is followed hop by hop, each hop checked against the reader: ``source``);
+  formal is followed hop by hop, each hop checked against the reader: ``source``); a
+  formal taking fewer values than what it is bound to is read as itself (``narrows``);
 - the flow order's ranks;
 - the facts layers made for the model (``value.FactsLayer``), interned by their facts'
   hash keys and held weakly by value, so that a layer lives as long as a design space
@@ -24,6 +25,8 @@ from __future__ import annotations
 import weakref
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, cast
+
+from ..semantics import OptionalSemantics
 
 if TYPE_CHECKING:
     from .._configuration import Space
@@ -48,13 +51,13 @@ class Record:
     def bound(self, index: Address) -> Address | None:
         """Where ``index`` is a formal bound by reference (a formal of a placed scope whose
         placement binds it to something: an alias there), the address it is bound to; else
-        ``None``."""
+        ``None``. A formal that ``narrows`` is read as itself."""
         if index in self._bound:
             return self._bound[index]
         found: Address | None = None
         scope, member = index
         if scope.parent is not None and member in scope.compiled.formal_names:
-            if index.kind == "alias":
+            if index.kind == "alias" and not narrows(index):
                 found = index.output
         self._bound[index] = found
         return found
@@ -77,6 +80,19 @@ class Record:
         return self._ranks
 
 
+def narrows(index: Address) -> bool:
+    """Whether ``index``, an alias, takes fewer values than what it reads: a ``T`` formal
+    bound to a ``T | None`` value (the two types are compatible, so the binding is a
+    definition). Such a formal is no reference: it is read as itself, and recognizes the
+    value it reads by its own type check (``evaluate._forward``)."""
+    output = index.output
+    if index.kind != "alias" or output is None:
+        return False
+    return isinstance(output.semantics, OptionalSemantics) and not isinstance(
+        index.semantics, OptionalSemantics
+    )
+
+
 _RECORDS: weakref.WeakSet[Record] = weakref.WeakSet()
 """Each live model's record (for the tests of their lifetime)."""
 
@@ -96,4 +112,4 @@ def records() -> int:
     return len(_RECORDS)
 
 
-__all__ = ["Record", "record", "records"]
+__all__ = ["Record", "narrows", "record", "records"]

@@ -87,10 +87,7 @@ from finn.kernels.utilization import (
 )
 from finn.kernels.values.domains import Integer, admit_element, set_index_dtype
 from finn.kernels.values.semantics import (
-    INTEGER_TENSOR,
-    INTEGER_VECTOR,
-    QONNX_DATATYPE_VALUE_SEMANTICS,
-    IntegerTensor,
+    IntegerTensorValue,
     IntegerVector,
     integer_range,
     integer_shape,
@@ -128,12 +125,12 @@ class MemStreamKernel(KernelSpace):
     id = "finnlib.memstream_axi"
     clock_domain = NATIVE_CLOCKING
 
-    dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    dtype: QONNXDataType = Param()
     form: Traversal = Param()
-    contents: IntegerTensor = Param(semantics=INTEGER_TENSOR)
+    contents: IntegerTensorValue = Param()
     sets: int = Param(default=1)
     # The set indices its set port reads (several sets only): a fact it is given.
-    set_tensor: Tensor = Param(required=False)
+    set_tensor: Tensor | None = Param(default=None)
     platform: Platform = Param()
 
     @derived
@@ -190,7 +187,7 @@ class MemStreamKernel(KernelSpace):
     def word_bits(self) -> int:
         return self.form.lanes * self.element.bits
 
-    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    @derived
     def set_dtype(self) -> QONNXDataType:
         return set_index_dtype(self.sets)
 
@@ -211,18 +208,17 @@ class MemStreamKernel(KernelSpace):
     @constraint
     def selected(self) -> bool | Rejected:
         """Several sets take a tensor of set indices, one a beat; a single set none."""
-        placed = self.present(MemStreamKernel.set_tensor)
         if self.sets < 2:
-            if placed:
+            if self.set_tensor is not None:
                 return reject("memstream-set-channel", "a single set takes no set channel")
             return True
-        if not placed:
+        if self.set_tensor is None:
             return reject("memstream-set-channel", "several sets take a set channel")
         if len(self.set_tensor.shape) != 1:
             return reject("memstream-set-channel", "the set channel carries a vector of indices")
         return True
 
-    @view(semantics=INTEGER_VECTOR)
+    @view
     def image(self) -> IntegerVector | Rejected:
         """Packed words, set after set, each set in the consumer's ``form``."""
         encoding, sets, form = self.element, self.sets, self.form
@@ -293,9 +289,12 @@ class MemStreamKernel(KernelSpace):
 
     @derived
     def set_sequence(self) -> BeatSequence | Rejected:
-        """One index a beat, one beat per pass of the weights; several sets without their
-        indices are refused, as ``selected`` refuses them."""
-        if self.sets >= 2 and not self.present(MemStreamKernel.set_tensor):
+        """One index a beat, one beat per pass of the weights. Without a set tensor its port
+        is idle, and its order is refused: several sets as ``selected`` refuses them, a
+        single set because it takes no set channel."""
+        if self.set_tensor is None:
+            if self.sets < 2:
+                return reject("memstream-set-channel", "a single set takes no set channel")
             return reject("memstream-set-channel", "several sets take a set channel")
         return BeatSequence(vector_major(self.set_tensor.shape, 1))
 
@@ -304,7 +303,7 @@ class MemStreamKernel(KernelSpace):
         """One set streams cyclically; several stream one pass per accepted index, and
         without their indices are refused, as ``selected`` refuses them."""
         if self.sets > 1:
-            if not self.present(MemStreamKernel.set_tensor):
+            if self.set_tensor is None:
                 return reject("memstream-set-channel", "several sets take a set channel")
             return BeatSequence(self.form.repeated(self.set_tensor.size))
         return BeatSequence(self.form, Repetition.CYCLIC)

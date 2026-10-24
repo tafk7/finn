@@ -45,19 +45,26 @@ from .results import (
     owned_result,
     reject,
 )
-from .semantics import ValueSemantics, default_semantics, unrecognized
+from .semantics import NotAValue, ValueSemantics, canonical, default_semantics, same, unrecognized
 
 _OWNER = "space.domains"
 
 T = TypeVar("T")
 
 
-def _contains(values: tuple[T, ...], candidate: T, semantics: ValueSemantics[T]) -> bool:
-    """Finite membership compares detached operands, including unhashable values."""
+def _contains(values: tuple[T, ...], candidate: T) -> bool:
+    """Finite membership: one of ``values`` is the same value (``semantics.same``)."""
     return any(
-        semantics.values_equal(semantics.freeze(candidate), semantics.freeze(allowed))
-        for allowed in values
+        same(candidate, allowed, owner=_OWNER, role="domain membership") for allowed in values
     )
+
+
+def _value(semantics: ValueSemantics[T], value: object) -> T:
+    """A domain's value, type-checked by its Decision's ``semantics`` and in its canonical
+    form (``semantics.canonical``); a ``TypeError`` or ``NotAValue`` where it is neither."""
+    if not semantics.accepts(value):
+        raise TypeError(unrecognized(semantics))
+    return cast(T, canonical(value))
 
 
 def _named(
@@ -148,11 +155,11 @@ class Domain(Generic[T]):
         return tuple(found)
 
     def with_semantics(self, semantics: ValueSemantics[T]) -> Domain[T]:
-        """Bind finite values to their Decision's declared snapshot and equality."""
+        """Bind the domain to its Decision's type check: listed values are checked by it, and
+        taken in their canonical form."""
 
-        if (
-            self.value_semantics is not None
-            and self.value_semantics.type_token is not semantics.type_token
+        if self.value_semantics is not None and not self.value_semantics.is_compatible_with(
+            cast(ValueSemantics[object], semantics)
         ):
             raise DefinitionError.broken(
                 "domain-semantics-incompatible",
@@ -171,15 +178,13 @@ class Domain(Generic[T]):
         semantics: ValueSemantics[T],
         owner: str,
     ) -> QueryResult[bool]:
-        """Evaluate membership and preserve explicit semantic refusal/nonvalues."""
+        """Evaluate membership and preserve explicit refusal/nonvalues."""
 
         try:
             if not semantics.accepts(candidate):
                 raise TypeError(unrecognized(semantics))
             if self._finite_values is not None:
-                result: bool | QueryResult[bool] = _contains(
-                    self._finite_values, candidate, semantics
-                )
+                result: bool | QueryResult[bool] = _contains(self._finite_values, candidate)
             else:
                 inputs = {name: dependency_values[name] for name in self._accepts_inputs}
                 result = self.accepts(candidate=candidate, **inputs)
@@ -207,7 +212,8 @@ class Domain(Generic[T]):
         semantics: ValueSemantics[T],
         owner: str,
     ) -> QueryResult[tuple[T, ...]]:
-        """Read the optional candidate provider without adopting any value."""
+        """Read the optional candidate provider without adopting any value: each candidate
+        type-checked, in its canonical form."""
 
         if self.candidates is None:
             return Inapplicable()
@@ -217,7 +223,7 @@ class Domain(Generic[T]):
             if isinstance(result, (Inapplicable, Rejected, Unresolved)):
                 return owned_result(result, owner)
             values = result.value if isinstance(result, Available) else result
-            return Available(tuple(semantics.freeze(value) for value in values))
+            return Available(tuple(_value(semantics, value) for value in values))
         except (EvaluationError, ValueUnavailableError):
             raise
         except Exception as cause:
@@ -227,29 +233,34 @@ class Domain(Generic[T]):
 def finite(
     values: Iterable[T], semantics: ValueSemantics[T] | None = None, *, ordered: bool = False
 ) -> Domain[T]:
-    """Finite membership uses declared equality and supports unhashable values.
+    """Listed values: a candidate is a member where one of them is the same value
+    (``semantics.same``).
 
-    A Decision binds this domain to its semantics before use. Passing semantics
-    here also makes direct domain use safe for mutable definition values. The
-    values are unordered unless ``ordered``: listed in their order.
+    A Decision binds this domain to its type check before use (``Domain.with_semantics``),
+    which checks each value and takes it in its canonical form. The values are unordered
+    unless ``ordered``: listed in their order.
     """
 
     listed = tuple(values)
     if semantics is not None:
-        listed = tuple(semantics.freeze(value) for value in listed)
+        try:
+            listed = tuple(_value(semantics, value) for value in listed)
+        except NotAValue as refusal:
+            raise DefinitionError.broken(
+                "domain-value-not-value", _OWNER, f"a listed value: {refusal}"
+            ) from None
 
     def accepts(*, candidate: T) -> bool:
         if semantics is None:
             raise DefinitionError.broken(
                 "domain-semantics-unbound",
                 _OWNER,
-                "a finite domain must be bound to value semantics before evaluation",
+                "a finite domain must be bound to its Decision's type before evaluation",
             )
-        return _contains(listed, candidate, semantics)
+        return _contains(listed, candidate)
 
     def candidates() -> tuple[T, ...]:
-        # The public enumeration method snapshots each result. The callback is
-        # declaration data consumed only through that evaluation boundary.
+        # The values as the Decision's type check took them (``with_semantics``).
         return listed
 
     return Domain((), accepts, candidates, semantics, listed, ordered=ordered)
@@ -259,14 +270,21 @@ def domain(
     *,
     accepts: Callable[..., bool | QueryResult[bool]],
     candidates: Callable[..., Iterable[T] | QueryResult[Iterable[T]]] | None = None,
-    semantics: ValueSemantics[T] | None = None,
     ordered: bool = False,
     **dependencies: object,
 ) -> Domain[T]:
     """A domain over ``dependencies``, each callable taking those its signature names;
     ``ordered`` when its cases have an order by construction (an integer range), which
-    ``candidates`` follows. ``order=`` is refused (``domain-order``): a domain ranks
-    nothing."""
+    ``candidates`` follows. Its values' type is its Decision's annotation. ``order=`` is
+    refused (``domain-order``): a domain ranks nothing; so is ``semantics=``
+    (``domain-semantics``)."""
+    if "semantics" in dependencies:
+        raise DefinitionError.broken(
+            "domain-semantics",
+            _OWNER,
+            "semantics= is gone: a domain's values are of its Decision's annotated type, "
+            "compared by ==",
+        )
     if "order" in dependencies:
         raise DefinitionError.broken(
             "domain-order",
@@ -276,7 +294,7 @@ def domain(
             "FirstValid(order=Kernel.ram_preference)); ordered=True states an order by "
             "construction",
         )
-    return Domain(tuple(dependencies.items()), accepts, candidates, semantics, ordered=ordered)
+    return Domain(tuple(dependencies.items()), accepts, candidates, ordered=ordered)
 
 
 def divisors_of(extent: object) -> Domain[int]:
@@ -300,13 +318,13 @@ def divisors_of(extent: object) -> Domain[int]:
                     high.append(quotient)
         return tuple(low + list(reversed(high)))
 
-    return domain(
+    made = domain(
         accepts=accepts,
         candidates=cast(Callable[..., Iterable[int] | QueryResult[Iterable[int]]], candidates),
-        semantics=default_semantics(int),
         ordered=True,
         extent=extent,
     )
+    return replace(made, value_semantics=default_semantics(int))
 
 
 __all__ = [

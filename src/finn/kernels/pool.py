@@ -60,7 +60,6 @@ from finn.kernels.port import AxiStreamPort, axis
 from finn.kernels.transport import AxisSpelling
 from finn.kernels.utilization import RESOURCES_SEMANTICS
 from finn.kernels.values.domains import Integer
-from finn.kernels.values.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.platform.capabilities import Platform, Resources
 
 oh, ow, c, kh, kw = (Index(name) for name in ("oh", "ow", "c", "kh", "kw"))
@@ -235,7 +234,7 @@ class PoolKernel(KernelSpace):
         spelling=AxisSpelling.UPPER,
     )
 
-    @view(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    @view
     def element_dtype(self) -> QONNXDataType:
         """The input's element: a window's maximum is one of its values."""
         return self.input_element.dtype

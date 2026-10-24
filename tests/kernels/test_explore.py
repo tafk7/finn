@@ -59,12 +59,13 @@ from finn.kernels.explore import (
     dotted,
     explore,
 )
-from finn.kernels.matmul import MatMulKernel
+from finn.kernels.matmul import KnownWeights, MatMulKernel
 from finn.kernels.partition import Partition
 from finn.kernels.policies import Required
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.utilization import total
+from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import RESOURCE_NAMES, Resources
 
 
@@ -400,10 +401,9 @@ def dsp58_matmul() -> tuple[Seam, Partition]:
     first = composer.Facts(
         MatMulKernel,
         {
-            "weights_dtype": chain.W,
             "platform": FULL_DSP58,
             "x_tensor": x_tensor,
-            "w_contents": chain.W1,
+            "weights": KnownWeights(IntegerTensorValue.of(chain.W1), chain.W),
         },
     )
     y_tensor = cast(Any, first.bind()).y_tensor

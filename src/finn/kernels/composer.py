@@ -20,11 +20,10 @@ facts (``Composed``; ``Composed.design_space()`` opens it):
   facts, and each side given as a value, named ``<member>-<fact>`` (``mm0-x_tensor``,
   ``x-producer``; ``root_name``). A member's name has no ``-`` and a formal's is an
   identifier, so the scheme never meets a member's name, another Param's or a name the
-  engine reserves. Each Param is declared as its formal is: its annotation, and its
-  ``semantics=`` only where the formal states one (a side's Param states none), required
-  (each is given). A fact a member is not given has no Param: its formal is left
-  unsupplied (``required=False``), and which facts each member is given is part of the
-  class's key (``presence``);
+  engine reserves. Each Param is declared as its formal is, by its annotation, required
+  (each is given). A fact a member is not given, or is given as None, has no Param: its
+  formal takes its default (an optional fact's, None), and which facts each member is
+  given is part of the class's key (``presence``);
 - **the kernels**, in the order declared (the graph's), each its class with every formal
   it is given bound to its Param: no kernel formal is bound from a channel or from another
   kernel;
@@ -124,7 +123,7 @@ from finn.kernels.channels import Channel
 from finn.kernels.control import ControlBus
 from finn.kernels.declaration import declarations
 from finn.kernels.port import port_endpoint
-from finn.kernels.sides import SIDE, Side, SideKind
+from finn.kernels.sides import Side, SideKind
 
 Key = tuple[str, str]
 """A choice at FINN's surface: its owner's graph name and its key in the owner's space."""
@@ -507,10 +506,9 @@ def _ranked(declared: PartitionDeclaration) -> list[str]:
 
 
 def presence(arguments: Mapping[str, object]) -> tuple[str, ...]:
-    """Which facts a member is given, by name: part of its class's key (an absent fact is
-    left unsupplied). Where every fact is always given (an absent one as None), this is
-    constant per class and the key's one use of it goes."""
-    return tuple(sorted(arguments))
+    """Which facts a member is given, by name: given and not None, part of its class's key.
+    A fact left out and a fact given None are one: its formal takes its default, None."""
+    return tuple(sorted(name for name, value in arguments.items() if value is not None))
 
 
 def _side_key(side: Port | Side) -> Hashable:
@@ -571,9 +569,8 @@ def clear_classes() -> None:
 def _param(
     space_type: type[Space], fact: str, owner: str, annotations: dict[str, object], root: str
 ) -> Any:
-    """A root Param ``root`` for ``fact`` of ``space_type``, declared as its formal is: its
-    annotation (added to ``annotations``), and its ``semantics=`` where the formal states
-    one."""
+    """A root Param ``root`` for ``fact`` of ``space_type``, declared as its formal is: by its
+    annotation (added to ``annotations``)."""
     formal = space_formals(space_type).get(fact)
     if formal is None:
         raise PartitionRefused(
@@ -588,7 +585,7 @@ def _param(
     annotation = declared_annotation(formal, "Param")
     if annotation is not MISSING:
         annotations[root] = annotation
-    return Param() if formal.explicit is None else Param(semantics=formal.explicit)
+    return Param()
 
 
 def _under(member: str) -> Callable[[Side], Side]:
@@ -626,9 +623,7 @@ def _made(
             roots[root] = (owner, role)
             if isinstance(side, Port):
                 read = getattr(nodes[names[side.member]], f"{side.port}_side")
-                channels[root] = given[role] = derived(semantics=SIDE, side=read)(
-                    _under(names[side.member])
-                )
+                channels[root] = given[role] = derived(side=read)(_under(names[side.member]))
             else:
                 params[root] = given[role] = _param(Channel, role, owner, annotations, root)
         for fact, value in sorted(each.facts.items()):
@@ -676,7 +671,8 @@ def _shell(
     its row's facts, each a root Param (added to ``params``, ``annotations`` and
     ``roots``), and each contributor's Param bound to its member's derived value."""
     given: dict[str, object] = {}
-    for fact in presence(declared.shell or {}):
+    # Every fact of the row, None too: the row's values are facts, never the class's key.
+    for fact in sorted(declared.shell or {}):
         root = root_name(SHELL, fact)
         params[root] = given[fact] = _param(ShellBudgets, fact, SHELL, annotations, root)
         roots[root] = (SHELL, fact)
@@ -741,8 +737,8 @@ def compose(declared: PartitionDeclaration) -> Composed:
     space_type, table = found
     facts: dict[str, object] = {}
     for owner, kernel in declared.kernels.items():
-        for fact, value in kernel.arguments.items():
-            facts[table.root(owner, fact)] = value
+        for fact in presence(kernel.arguments):
+            facts[table.root(owner, fact)] = kernel.arguments[fact]
     for owner, each in declared.channels.items():
         for role, side in (("producer", each.producer), ("consumer", each.consumer)):
             if isinstance(side, Side):

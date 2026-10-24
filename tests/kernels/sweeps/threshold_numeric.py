@@ -50,6 +50,7 @@ from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.partition import Partition
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.values.semantics import IntegerTensorValue
 from finn.toolchain.launcher import host_toolchain
 from kernels.sweeps.rtl_transport import drive_observed
 
@@ -90,7 +91,7 @@ def placed(case: Case) -> Partition:
     y = Tensor((PIXELS, CHANNELS), result)
     facts: dict[str, Any] = dict(
         threshold_dtype=ELEMENT,
-        thresholds=(case.initial,),
+        thresholds=IntegerTensorValue.of((case.initial,)),
         bias=0,
         input_tensor=x,
         platform=FULL_DSP48E2,

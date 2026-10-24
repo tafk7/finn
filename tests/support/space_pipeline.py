@@ -8,7 +8,7 @@ the selected core's choice; a packed core's ``pe`` divides the width it is given
 constraint (its width reads the choices upstream, and a domain reads facts only). A
 ``Link`` between units reads whether the upstream core is packed, through constraints on its
 ``burst`` and its ``beat``; a ``Probe`` and a ``Meter`` close the chain with a Decision read
-through ``present`` and ``supplied``. Its rules read choices that move when a neighbour's
+through an optional formal and a guard over it. Its rules read choices that move when a neighbour's
 choice moves: the Space the bounded change's walks (``core.space.test_bounded_change``), the
 change of facts' tests (``core.space.test_with_facts``) and the oracle's toys share, imported
 as ``support.space_pipeline``.
@@ -27,7 +27,6 @@ from finn.core.space import (
     constraint,
     derived,
     reject,
-    supplied,
     view,
 )
 
@@ -143,15 +142,20 @@ class Probe(Space):
 
 
 class Meter(Space):
-    """Reads through ``present`` and ``supplied``, guarded by the probe's Decision."""
+    """Reads an optional formal, bound to the probe's level, guarded by its Decision; and a
+    guard over the formal."""
 
-    reading: int = Param(required=False)
-    valued = supplied(reading)
+    reading: int | None = Param(default=None)
+
+    @derived
+    def valued(self) -> bool:
+        return self.reading is not None
+
     scale: int = Decision(values=(1, 2), when=valued)
 
     @derived
     def seen(self) -> int:
-        return self.reading if self.present(Meter.reading) else 0
+        return 0 if self.reading is None else self.reading
 
 
 class Pipeline(Space):

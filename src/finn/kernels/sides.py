@@ -33,7 +33,6 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Self
 
-from finn.core.space import default_semantics
 from finn.dataflow.streams import Stream
 from finn.kernels.movers import MoverOffer
 
@@ -115,8 +114,4 @@ class Side:
         return replace(self, label=f"{member}.{self.label}")
 
 
-SIDE = default_semantics(Side)
-"""A ``Side``'s value semantics: a frozen value, compared by value."""
-
-
-__all__ = ["SIDE", "STATED", "Side", "SideKind"]
+__all__ = ["STATED", "Side", "SideKind"]

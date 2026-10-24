@@ -39,6 +39,7 @@ from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.channels import Channel
 from finn.kernels.movers import iodma_hls
 from finn.kernels.sides import Side, SideKind
+from finn.kernels.values.semantics import IntegerTensorValue
 
 INT3 = ScalarEncoding(DataType["INT3"])
 X = Tensor((3, 4), INT3)
@@ -123,9 +124,8 @@ def test_a_side_seen_from_its_member_s_holder_is_labelled_below_it() -> None:
 
 
 def test_a_side_is_a_value_class_the_node_cache_keys() -> None:
-    """Keyed field by field under the semantics a channel's sides take (its ``producer``'s
-    and ``consumer``'s, the default ones): equal sides share a key, sides that differ do
-    not."""
+    """Keyed field by field, as a channel's sides (its ``producer`` and ``consumer``, typed
+    ``Side``) are: equal sides share a key, sides that differ do not."""
     assert value_class(Side)
     nodes = {
         node.key: node
@@ -133,11 +133,10 @@ def test_a_side_is_a_value_class_the_node_cache_keys() -> None:
         if node.key in ("producer", "consumer")
     }
     assert set(nodes) == {"producer", "consumer"}
-    for node in nodes.values():
-        keys = {name: key(side, node.semantics) for name, side in SIDES.items()}
-        assert all(found is not None for found in keys.values()), keys
-        assert len(set(keys.values())) == len(SIDES)
-        assert key(Side.kernel(WORDS, "producer.y", 8), node.semantics) == keys["kernel"]
+    keys = {name: key(side) for name, side in SIDES.items()}
+    assert all(found is not None for found in keys.values()), keys
+    assert len(set(keys.values())) == len(SIDES)
+    assert key(Side.kernel(WORDS, "producer.y", 8)) == keys["kernel"]
 
 
 # -- the roles -----------------------------------------------------------------------------
@@ -152,7 +151,7 @@ def test_a_channel_between_two_ports_takes_each_side() -> None:
 
 
 def test_a_valued_channel_with_a_producer_other_than_its_source_is_refused() -> None:
-    assert refused(channel(OUTPUT, INPUT, contents=((1, 2, 3, 4),) * 3)) == [
+    assert refused(channel(OUTPUT, INPUT, contents=IntegerTensorValue.of(((1, 2, 3, 4),) * 3))) == [
         (
             "channel-users",
             "sides",

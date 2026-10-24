@@ -37,6 +37,7 @@ from support.refusals import refused
 from finn.core.space import Available, Decision, DefinitionError, divisors_of, inspection
 from finn.core.space._scopes import EAGER, PERMUTE
 from finn.core.space.compiler import compile_model
+from finn.dataflow.gemm import Form
 from finn.dataflow.schedule import Index
 from finn.kernels import composer
 from finn.kernels.artifacts.abi import Endpoint
@@ -56,16 +57,21 @@ from finn.kernels.composer import (
     compose,
 )
 from finn.kernels.configure import commit
-from finn.kernels.matmul import MatMulKernel
+from finn.kernels.matmul import KnownWeights, MatMulKernel
 from finn.kernels.port import port_endpoint
 from finn.kernels.sides import Side, SideKind
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.values.semantics import IntegerTensorValue
 
 
 def _matmul(weights: object, x_tensor: object) -> Facts:
     return Facts(
         MatMulKernel,
-        {"weights_dtype": W, "platform": FULL_DSP48E2, "x_tensor": x_tensor, "w_contents": weights},
+        {
+            "platform": FULL_DSP48E2,
+            "x_tensor": x_tensor,
+            "weights": KnownWeights(IntegerTensorValue.of(weights), W),
+        },
     )
 
 
@@ -78,7 +84,7 @@ def kernels(names: Mapping[str, str] | None = None) -> dict[str, Facts]:
             ThresholdingAxiKernel,
             {
                 "threshold_dtype": THRESHOLD_DTYPE,
-                "thresholds": THRESHOLDS,
+                "thresholds": IntegerTensorValue.of(THRESHOLDS),
                 "bias": 0,
                 "input_tensor": chain.HIDDEN_TENSOR,
                 "platform": FULL_DSP48E2,
@@ -154,9 +160,9 @@ def test_the_chain_composed_answers_by_key_as_its_partition(cache: None) -> None
     assert inspection.validity(point).status == "valid"
     states = {names.pair(path): state for path, state in inspection.states(point)}
     assert states == dict(network.states())
-    assert {names.pair(item.key) for item in inspection.decisions(point)} == set(
-        network.decisions()
-    )
+    # The partition's decisions are its class's, listed or not (the model's).
+    every = inspection.decisions(inspection.model(point))
+    assert {names.pair(item.key) for item in every} == set(network.decisions())
 
 
 def test_a_param_per_fact_at_the_root_named_member_and_fact(cache: None) -> None:
@@ -171,7 +177,7 @@ def test_a_param_per_fact_at_the_root_named_member_and_fact(cache: None) -> None
     params = {name for name in composed.facts}
     assert params <= set(roots)
     assert composed.facts["x-producer"] == Side.boundary("s_axis_0")
-    assert composed.facts["first-w_contents"] == W1
+    assert composed.facts["first-weights"] == KnownWeights(IntegerTensorValue.of(W1), W)
     for name in roots:
         member, separator, fact = name.partition(SEPARATOR)
         assert separator and member in composed.names.owners and fact.isidentifier()
@@ -231,18 +237,18 @@ def test_the_same_structure_is_one_class_and_new_facts_a_new_design_space(cache:
     other = kernels()
     other["activate"] = Facts(
         ThresholdingAxiKernel,
-        {**other["activate"].arguments, "thresholds": (tuple((-8, 0, 9) for _ in range(4)),)},
+        {
+            **other["activate"].arguments,
+            "thresholds": IntegerTensorValue.of((tuple((-8, 0, 9) for _ in range(4)),)),
+        },
     )
     changed = compose(PartitionDeclaration(other, channels()))
     assert changed.space_type is composed.space_type and cached_classes() == 1
     assert changed.facts["activate-thresholds"] != composed.facts["activate-thresholds"]
     # Another fact given, or another member name, or a side of another kind: another class.
-    fewer = kernels()
-    fewer["first"] = Facts(
-        MatMulKernel,
-        {key: value for key, value in fewer["first"].arguments.items() if key != "weights_dtype"},
-    )
-    assert compose(PartitionDeclaration(fewer, channels())).space_type is not composed.space_type
+    more = kernels()
+    more["first"] = Facts(MatMulKernel, {**more["first"].arguments, "form": Form.DENSE})
+    assert compose(PartitionDeclaration(more, channels())).space_type is not composed.space_type
     renamed = compose(declared({"first": "first_"}))
     assert renamed.space_type is not composed.space_type
     assert cached_classes() == 3

@@ -49,7 +49,7 @@ class Presenting(KernelSpace):
 
     id = "test.presenting"
 
-    control: str = Param(required=False)
+    control: str | None = Param(default=None)
     on: bool = Decision(values=(True, False))
     config = ControlBus(LITE, presented=on, port=control, registers=RegisterMap())
 

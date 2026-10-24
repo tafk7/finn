@@ -16,11 +16,13 @@ from collections.abc import Mapping
 from typing import Any
 
 from core.space.reference import (
+    Absent,
     Change,
     Choice,
     Constraint,
     Derived,
     Members,
+    Open,
     Refuse,
     Scope,
     Selector,
@@ -30,6 +32,7 @@ from core.space.reference import (
     computed,
     listed,
     membership,
+    nothing,
 )
 from core.space.reference_harness import Case, Pair, Spelling, check_definition, expected
 
@@ -800,7 +803,7 @@ def test_a_rule_reading_a_view_is_no_definition() -> None:
 # -- 8. an optional fact left out is None (SZ100 (5)) ---------------------------------------------
 #
 # ``width`` is optional: left out, it reads None, a known value, and ``lanes`` lists 1 and 2
-# then. The public API reads an unsupplied optional param as unresolved, until T4c.
+# then; given None, it is the fact left out (one design space).
 
 OPTIONAL = Case(
     "an optional fact left out",
@@ -821,7 +824,6 @@ OPTIONAL = Case(
 )
 
 
-@expected("optional-fact-none")
 def test_an_optional_fact_left_out_reads_none() -> None:
     OPTIONAL.start().check_answer("lanes")
 
@@ -944,3 +946,432 @@ def test_a_refused_when_in_a_case_of_an_open_selector_leaves_validity_open() -> 
 
 def test_a_refused_when_in_an_unselected_case_does_not_apply() -> None:
     IN_AN_OPEN_CASE.start({"f": 1}, {"s": "b"}).check_validity()
+
+
+# -- 10. a choice its facts alone rule out is in no list (SZ113) -----------------------------------
+#
+# ``wide`` is present when the fact ``mode`` is 1; ``gated`` when ``checked``, a derived value
+# over ``mode`` refusing at 2; ``opted`` when the choice ``pe`` is 2. Under the facts alone
+# (every choice unknown) ``wide`` is false at any other mode, so ``wide.lanes`` is
+# pruned: in no list, unless it is stored (SZ119 (5)). A refused guard and a guard over a choice
+# are not false, so ``gated.x`` and ``opted.y`` stay listed. The engine prunes as the model does
+# (T4c, its row ``facts-pruning`` removed).
+
+
+def checked(read: Mapping[str, Any]) -> object:
+    return Refuse("mode-bad") if read["mode"] == 2 else 1
+
+
+PRUNED = Case(
+    "a choice its facts rule out",
+    Space(
+        ("mode",),
+        Scope(
+            "",
+            choices=(Choice("pe", listed(1, 2)),),
+            derived=(Derived("checked", ("mode",), checked),),
+            children=(
+                Scope(
+                    "wide",
+                    when=When(("mode",), lambda read: read["mode"] == 1),
+                    choices=(Choice("lanes", listed(2, 4)),),
+                ),
+                Scope(
+                    "gated",
+                    when=When(("checked",), lambda read: read["checked"] == 1),
+                    choices=(Choice("x", listed(1, 2)),),
+                ),
+                Scope(
+                    "opted",
+                    when=When(("pe",), lambda read: read["pe"] == 2),
+                    choices=(Choice("y", listed(1, 2)),),
+                ),
+            ),
+        ),
+    ),
+)
+
+
+def test_a_choice_the_facts_rule_out_is_in_no_list() -> None:
+    pair = PRUNED.start({"mode": 0})
+    assert pair.solution().pruned() == ("wide.lanes",)
+    pair.check_listed()
+
+
+def test_a_change_of_facts_prunes_a_choice() -> None:
+    pair = PRUNED.start({"mode": 1})
+    assert pair.solution().pruned() == ()
+    pruned = pair.reach(Change(facts={"mode": 0}))
+    assert pruned.solution().pruned() == ("wide.lanes",)
+    assert "wide.lanes" not in pruned.solution().states()
+    pruned.check_listed()
+    pruned.check_state("wide.lanes")
+
+
+def test_a_change_of_facts_unprunes_a_choice_which_comes_back_open() -> None:
+    pair = PRUNED.start({"mode": 0})
+    assert pair.solution().pruned() == ("wide.lanes",)
+    unpruned = pair.reach(Change(facts={"mode": 1}))
+    assert unpruned.solution().pruned() == ()
+    unpruned.check_listed()
+    unpruned.check_state("wide.lanes")
+
+
+def test_a_stored_choice_is_never_pruned_by_a_change_of_facts() -> None:
+    pair = PRUNED.start({"mode": 1}, {"wide.lanes": 4})
+    narrow = pair.reach(Change(facts={"mode": 0}))
+    assert narrow.solution().pruned() == ()
+    assert "wide.lanes" in narrow.solution().dormant()
+    narrow.check_listed()
+    narrow.check_state("wide.lanes")
+
+
+def test_a_stored_choice_is_never_pruned_by_a_change_of_choices() -> None:
+    pair = PRUNED.start({"mode": 0})
+    assert pair.solution().pruned() == ("wide.lanes",)
+    stored = pair.reach(Change(commit={"wide.lanes": 2}))
+    assert stored.solution().pruned() == ()
+    assert "wide.lanes" in stored.solution().dormant()
+    stored.check_listed()
+    stored.check_state("wide.lanes")
+
+
+def test_a_guard_the_facts_refuse_or_a_choice_decides_is_no_pruning() -> None:
+    pair = PRUNED.start({"mode": 2})
+    assert pair.solution().pruned() == ("wide.lanes",)
+    assert {"gated.x", "opted.y"} <= set(pair.solution().listed())
+    pair.check_listed()
+    pair.check_state("gated.x")
+    pair.check_state("opted.y")
+
+
+# A selector picked by a derived value over facts alone (lane 3's ``input_chain``) is the rule's
+# widest reach: under the facts alone it names one case, so the choices of every other case are
+# pruned. ``adapter`` is picked by ``chain`` over ``mode`` (0: ``fifo``, 1: ``reg``, 2 refuses);
+# ``other`` by ``side`` over the choice ``pe``, which waits under the facts alone, so its cases stay
+# listed, as ``adapter``'s do where ``chain`` refuses.
+
+
+def chain_by_mode(read: Mapping[str, Any]) -> object:
+    return Refuse("chain-refused") if read["mode"] == 2 else ("fifo", "reg")[read["mode"]]
+
+
+PICKED = Case(
+    "a selector picked by facts",
+    Space(
+        ("mode",),
+        Scope(
+            "",
+            choices=(Choice("pe", listed(1, 2)),),
+            derived=(
+                Derived("chain", ("mode",), chain_by_mode),
+                Derived("side", ("pe",), lambda read: ("u", "v")[read["pe"] - 1]),
+            ),
+            selectors=(
+                Selector(
+                    "adapter",
+                    (
+                        Scope("fifo", choices=(Choice("depth", listed(2, 4)),)),
+                        Scope("reg", choices=(Choice("stages", listed(1, 2)),)),
+                        nothing("direct"),
+                    ),
+                    by="chain",
+                ),
+                Selector(
+                    "other",
+                    (
+                        Scope("u", choices=(Choice("a", listed(1, 2)),)),
+                        Scope("v", choices=(Choice("b", listed(1, 2)),)),
+                    ),
+                    by="side",
+                ),
+            ),
+        ),
+    ),
+)
+
+
+def test_a_selector_picked_by_facts_prunes_the_cases_it_does_not_pick() -> None:
+    pair = PICKED.start({"mode": 0})
+    assert pair.solution().pruned() == ("adapter.reg.stages",)
+    assert {"adapter.fifo.depth", "other.u.a", "other.v.b"} <= set(pair.solution().listed())
+    pair.check_listed()
+    pair.check_state("adapter.reg.stages")
+    pair.check_state("adapter.fifo.depth")
+
+
+def test_a_selector_picked_by_facts_that_refuse_prunes_no_case() -> None:
+    pair = PICKED.start({"mode": 2})
+    assert pair.solution().pruned() == ()
+    pair.check_listed()
+    pair.check_state("adapter.reg.stages")
+
+
+def test_an_optional_fact_given_none_is_the_one_left_out() -> None:
+    OPTIONAL.check_one_space({"width": None}, {})
+
+
+# A guard over a derived value over facts alone is evaluated, never read as a presence (lane
+# 4's ``offered``, computed from the channel's sides; E2's ``valued``, over ``contents``):
+# ``offered`` reads the optional fact ``offer``, ``mover`` is present where it holds. Left out
+# (None), the guard reads false and ``mover.burst`` is pruned, still answered by name; given,
+# it is listed. Set by name where pruned, it is stored, dormant and listed (SZ119 (5)).
+
+OFFERED = Case(
+    "a derived guard over an optional fact",
+    Space(
+        ("offer",),
+        Scope(
+            "",
+            derived=(Derived("offered", ("offer",), lambda read: read["offer"] is not None),),
+            children=(
+                Scope(
+                    "mover",
+                    when=When(("offered",), lambda read: read["offered"]),
+                    choices=(Choice("burst", listed(1, 2)),),
+                ),
+            ),
+        ),
+        optional=("offer",),
+    ),
+    Spelling(types={"offered": bool}),
+)
+
+
+def test_a_derived_guard_over_facts_alone_prunes_where_it_reads_false() -> None:
+    pair = OFFERED.start()
+    assert pair.solution().pruned() == ("mover.burst",)
+    pair.check_listed()
+    pair.check_state("mover.burst")
+    pair.check_possible("mover.burst")
+    stored = pair.reach(Change(commit={"mover.burst": 2}))
+    assert stored.solution().pruned() == ()
+    assert "mover.burst" in stored.solution().dormant()
+    stored.check_listed()
+    stored.check_state("mover.burst")
+    offered = OFFERED.start({"offer": 3})
+    assert offered.solution().pruned() == ()
+    offered.check_listed()
+    offered.check_state("mover.burst")
+
+
+def test_unsetting_an_optional_fact_prunes_what_its_derived_guard_held() -> None:
+    pair = OFFERED.start({"offer": 3})
+    unset = pair.reach(Change(unset=("offer",)))
+    assert unset.solution().pruned() == ("mover.burst",)
+    unset.check_listed()
+    unset.check_state("mover.burst")
+
+
+# -- 11. a when over a value that does not apply is false (reading 27) -----------------------------
+#
+# ``g`` is present when ``s.a.v``, a choice of case ``a`` of the selector ``s``, is 1; ``h`` when it
+# is not. With ``s`` at its other case ``o``, ``s.a.v`` does not exist, and both guards are false:
+# ``g`` and ``h`` are absent, not unknown. ``e``, present when the fact ``f`` is 1, holds ``d``, a
+# derived value over ``f``; ``m`` is present when ``e.d`` is positive. At ``f = 0`` the facts alone
+# make ``e.d`` not apply, so ``m`` is absent under the facts alone and ``m.z`` leaves the lists.
+
+NOT_APPLYING = Case(
+    "a when over a value that does not apply",
+    Space(
+        ("f",),
+        Scope(
+            "",
+            selectors=(
+                Selector("s", (Scope("a", choices=(Choice("v", listed(1, 2)),)), Scope("o"))),
+            ),
+            children=(
+                Scope(
+                    "g",
+                    when=When(("s.a.v",), lambda read: read["s.a.v"] == 1),
+                    choices=(Choice("y", listed(1, 2)),),
+                ),
+                Scope(
+                    "h",
+                    when=When(("s.a.v",), lambda read: read["s.a.v"] != 1),
+                    choices=(Choice("w", listed(1, 2)),),
+                ),
+                Scope(
+                    "e",
+                    when=When(("f",), lambda read: read["f"] == 1),
+                    derived=(Derived("d", ("f",), lambda read: read["f"] + 1),),
+                ),
+                Scope(
+                    "m",
+                    when=When(("e.d",), lambda read: read["e.d"] > 0),
+                    choices=(Choice("z", listed(1, 2)),),
+                ),
+            ),
+        ),
+    ),
+)
+
+
+def test_a_when_over_a_value_that_does_not_apply_leaves_its_scope_absent() -> None:
+    pair = NOT_APPLYING.start({"f": 1}, {"s": "o"})
+    solution = pair.solution()
+    assert isinstance(solution.state("g.y"), Absent)
+    assert isinstance(solution.state("h.w"), Absent)
+    pair.check_state("g.y")
+    pair.check_state("h.w")
+    pair.check_answer("g.y")
+
+
+def test_a_when_over_a_value_still_to_be_chosen_waits() -> None:
+    pair = NOT_APPLYING.start({"f": 1})
+    assert pair.solution().state("g.y") == Open(("s", "s.a.v"))
+    pair.check_state("g.y")
+
+
+def test_a_when_over_a_value_the_facts_make_not_apply_is_pruned() -> None:
+    pair = NOT_APPLYING.start({"f": 0})
+    assert pair.solution().pruned() == ("m.z",)
+    pair.check_listed()
+    pair.check_state("m.z")
+    present = NOT_APPLYING.start({"f": 1})
+    assert "m.z" in present.solution().listed()
+    present.check_listed()
+    present.check_state("m.z")
+
+
+# A selector picked by a derived value that does not apply picks no case: ``p`` is picked by
+# ``s.a.v``, and with ``s`` at its other case ``o`` that value does not exist, so both of ``p``'s
+# cases are absent, not waiting on the picker. With ``s`` open, they wait on it.
+
+PICKED_BY_MISSING = Case(
+    "a selector picked by a value that does not apply",
+    Space(
+        ("f",),
+        Scope(
+            "",
+            selectors=(
+                Selector("s", (Scope("a", choices=(Choice("v", listed("x", "z")),)), Scope("o"))),
+                Selector(
+                    "p",
+                    (
+                        Scope("x", choices=(Choice("c", listed(1, 2)),)),
+                        Scope("z", choices=(Choice("d", listed(1, 2)),)),
+                    ),
+                    by="s.a.v",
+                ),
+            ),
+        ),
+    ),
+)
+
+
+def test_a_selector_picked_by_a_value_that_does_not_apply_has_every_case_absent() -> None:
+    pair = PICKED_BY_MISSING.start({"f": 1}, {"s": "o"})
+    solution = pair.solution()
+    assert isinstance(solution.state("p.x.c"), Absent)
+    assert isinstance(solution.state("p.z.d"), Absent)
+    pair.check_state("p.x.c")
+    pair.check_state("p.z.d")
+    pair.check_answer("p")
+    waiting = PICKED_BY_MISSING.start({"f": 1})
+    assert isinstance(waiting.solution().state("p.x.c"), Open)
+    waiting.check_state("p.x.c")
+
+
+# A when over a value that does not apply beside another input is false whatever the other
+# answers: ``g`` reads ``s.a.v`` and the open choice ``k``, ``h`` reads ``s.a.v`` and ``r``, a
+# derived value over ``f`` refused for ``f > 2``. With ``s`` at ``o``, no value of ``k`` makes
+# ``g``'s condition hold, so ``g`` is absent, not waiting on ``k``; and ``h`` is absent, not
+# refused (absent dominates refused). A derived value's own inputs keep refused, then
+# unresolved, then inapplicable: only a guard ranks the input that does not apply first.
+
+MIXED = Case(
+    "a when over an input that does not apply beside another",
+    Space(
+        ("f",),
+        Scope(
+            "",
+            choices=(Choice("k", listed(1, 2)),),
+            derived=(
+                Derived("r", ("f",), lambda read: Refuse("big") if read["f"] > 2 else read["f"]),
+            ),
+            selectors=(
+                Selector("s", (Scope("a", choices=(Choice("v", listed(1, 2)),)), Scope("o"))),
+            ),
+            children=(
+                Scope(
+                    "g",
+                    when=When(("s.a.v", "k"), lambda read: read["s.a.v"] == 1 or read["k"] == 2),
+                    choices=(Choice("y", listed(1, 2)),),
+                ),
+                Scope(
+                    "h",
+                    when=When(("s.a.v", "r"), lambda read: read["s.a.v"] == 1 or read["r"] == 1),
+                    choices=(Choice("w", listed(1, 2)),),
+                ),
+            ),
+        ),
+    ),
+)
+
+
+def test_a_when_over_a_value_that_does_not_apply_beside_an_open_choice_is_false() -> None:
+    pair = MIXED.start({"f": 1}, {"s": "o"})
+    assert isinstance(pair.solution().state("g.y"), Absent)
+    pair.check_state("g.y")
+
+
+def test_a_when_over_a_value_that_does_not_apply_beside_a_refused_input_is_false() -> None:
+    pair = MIXED.start({"f": 5}, {"s": "o"})
+    assert isinstance(pair.solution().state("h.w"), Absent)
+    pair.check_state("h.w")
+
+
+# A when over a value that does not apply is false under a guard that waits too: presence is the
+# AND over the path. ``t`` waits on the open choice ``q``; its child ``u`` reads ``s.a.v`` (``s``
+# at ``o``), and ``t2``'s child ``u2`` reads ``s.a.v`` and ``q``. Both children's conditions are
+# false whatever ``q`` is, so their choices are absent, not waiting on ``q``.
+
+NESTED = Case(
+    "a when over a value that does not apply under a when that waits",
+    Space(
+        ("f",),
+        Scope(
+            "",
+            choices=(Choice("q", listed(1, 2)),),
+            selectors=(
+                Selector("s", (Scope("a", choices=(Choice("v", listed(1, 2)),)), Scope("o"))),
+            ),
+            children=(
+                Scope(
+                    "t",
+                    when=When(("q",), lambda read: read["q"] == 1),
+                    children=(
+                        Scope(
+                            "u",
+                            when=When(("s.a.v",), lambda read: read["s.a.v"] == 1),
+                            choices=(Choice("z", listed(1, 2)),),
+                        ),
+                    ),
+                ),
+                Scope(
+                    "t2",
+                    when=When(("q",), lambda read: read["q"] == 1),
+                    children=(
+                        Scope(
+                            "u2",
+                            when=When(
+                                ("s.a.v", "q"),
+                                lambda read: read["s.a.v"] == 1 or read["q"] == 2,
+                            ),
+                            choices=(Choice("z", listed(1, 2)),),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+)
+
+
+def test_a_when_over_a_value_that_does_not_apply_under_a_when_that_waits_is_false() -> None:
+    pair = NESTED.start({"f": 1}, {"s": "o"})
+    assert isinstance(pair.solution().state("t.u.z"), Absent)
+    assert isinstance(pair.solution().state("t2.u2.z"), Absent)
+    pair.check_state("t.u.z")
+    pair.check_state("t2.u2.z")

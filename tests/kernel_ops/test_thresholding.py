@@ -23,7 +23,7 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.onnx_exec import execute_onnx
 from finn.custom_op.kernels.thresholding import Thresholding
 from finn.kernels.library import library_module
-from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.thresholding import ThresholdingAxiKernel, threshold_table_dtype
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.transformation.kernels import InferKernelTensors
 
@@ -112,6 +112,16 @@ def test_the_thresholds_type_holds_a_value_below_the_least_an_input_can_miss() -
     floor[0, 0] = -128
     formals = op(thresholding_model(thresholds=floor)).facts().arguments
     assert formals["threshold_dtype"] == DataType["INT8"]
+
+
+def test_thresholds_all_at_a_signed_input_s_minimum_take_the_input_s_type() -> None:
+    """Every threshold at (or clipped to) INT8's minimum: the narrowest type holding the
+    table is INT8 itself, never a bit wider; INT4's minimum alone is INT4."""
+    table = np.full_like(THRESHOLDS, -128.0, dtype=np.float64)
+    table[0, 0] = -300.0
+    formals = op(thresholding_model(thresholds=table)).facts().arguments
+    assert formals["threshold_dtype"] == DataType["INT8"]
+    assert threshold_table_dtype(-8, -8, signed=True) == DataType["INT4"]
 
 
 def test_the_table_is_derived_from_the_stored_thresholds_and_the_input_type() -> None:

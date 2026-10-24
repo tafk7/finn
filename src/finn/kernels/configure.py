@@ -54,8 +54,9 @@ def refusal(validity: inspection.Validity) -> tuple[Finding, ...]:
 def commit(point: S, choices: Mapping[str, object]) -> S:
     """Commit choices named by their stable decision keys, atomically; a refusal names
     each value outside its domain, or each rule the choices would break with the stored
-    choices standing in its way."""
-    owned = {item.key: item.reference for item in inspection.decisions(point)}
+    choices standing in its way. A key names a Decision whether the design space lists it
+    or not (a choice its facts alone rule out is set dormant): the keys are its model's."""
+    owned = {item.key: item.reference for item in inspection.decisions(inspection.model(point))}
     unknown = sorted(choices.keys() - owned.keys())
     if unknown:
         raise ValueError(f"{type(point).__name__}: unknown choices {unknown}")

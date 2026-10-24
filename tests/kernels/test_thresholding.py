@@ -5,8 +5,6 @@
 
 from __future__ import annotations
 
-from typing import cast
-
 import pytest
 from qonnx.core.datatype import DataType
 from support.helpers import (
@@ -14,6 +12,7 @@ from support.helpers import (
     THRESHOLDS,
     by_hand,
     controlled,
+    integer_tensor,
     set_indices,
     threshold_base,
 )
@@ -78,7 +77,7 @@ def threshold(
         facts = dict(
             input_tensor=Tensor((1, channels), element),
             threshold_dtype=resolve_qonnx_datatype_name(threshold_dtype),
-            thresholds=table,
+            thresholds=integer_tensor(table),
             bias=bias,
             platform=FULL_DSP48E2,
         )
@@ -176,6 +175,17 @@ def test_several_sets_without_their_indices_refuse_the_set_port_s_order() -> Non
     ]
 
 
+def test_a_single_set_refuses_its_idle_set_port_s_order() -> None:
+    # One set takes no set channel: its set port is idle, and the port's order is refused
+    # with the kernel's set-channel code. Open with the human (SZ124 (1)): refused, or
+    # inapplicable.
+    answer = threshold_base().query(ThresholdingAxiKernel.set_sequence)
+    assert isinstance(answer, Rejected)
+    assert [(finding.code, finding.owner, finding.message) for finding in answer.findings] == [
+        ("threshold-set-channel", "set_sequence", "a single threshold set takes no set channel")
+    ]
+
+
 def test_threshold_partial_dtype_query_does_not_adopt_implementation_decisions() -> None:
     base = threshold_base()
     assert base.result_dtype.name == "INT3"
@@ -187,7 +197,6 @@ def test_threshold_rejects_unsupported_profiles_and_malformed_tables() -> None:
     profiles = (
         threshold(table=(((2, 1),),)),
         threshold(table=(((0, 20),),)),
-        threshold(threshold_dtype="UINT5"),
         threshold(bias=1 << 31),
         threshold(bias=-10),
     )
@@ -204,10 +213,23 @@ def test_threshold_rejects_unsupported_profiles_and_malformed_tables() -> None:
         pe=1, ram_style="distributed", block_stages=2, ultra_stages=1
     )
     assert not report.accepted and [rule.rule for rule in report.broken] == ["depth_triggers"]
-    # The table is an integer tensor: nothing else is one.
+    # Thresholds of another signedness than the input: never written, the table is in
+    # their type, which the RTL compares in the input's signedness; refused by that rule.
+    unsigned = threshold_base(threshold_dtype="UINT5").try_with_choices(use_axilite=False)
+    assert not unsigned.accepted and [rule.rule for rule in unsigned.broken] == ["types_supported"]
+    # The table is an integer tensor value: a nest is none, however well formed (it makes
+    # one, ``IntegerTensorValue.of``), and a malformed nest makes none.
+    facts = dict(
+        input_tensor=Tensor((1, 2), ScalarEncoding(DataType["INT8"])),
+        threshold_dtype=DataType["INT5"],
+        bias=-1,
+        platform=FULL_DSP48E2,
+    )
+    with refused("literal-unrecognized", error=DefinitionError, message="IntegerTensorValue"):
+        ThresholdingAxiKernel(**facts, thresholds=(((-2, 0, 3), (-1, 1, 4)),))
     for malformed in ((), (((0,), (0, 1)),), (([-2, 0, 3],),)):
-        with refused("literal-unrecognized", error=DefinitionError, message="integer tensor"):
-            threshold(table=cast(IntegerTensor, malformed), pe=None)
+        with pytest.raises(TypeError, match="integer tensor"):
+            IntegerTensorValue.of(malformed)
     # PE divides the input's channels, the table's two rows; another is refused where it
     # is committed.
     for pe in (0, 3, 4, 5):
@@ -287,7 +309,7 @@ def placed_on(channels: int, table: IntegerTensor) -> ThresholdingAxiKernel:
                 ThresholdingAxiKernel,
                 {
                     "threshold_dtype": DataType["INT5"],
-                    "thresholds": table,
+                    "thresholds": integer_tensor(table),
                     "bias": -1,
                     "input_tensor": x_tensor,
                     "platform": FULL_DSP48E2,
@@ -317,19 +339,68 @@ def test_a_placed_table_has_one_row_or_a_row_a_channel() -> None:
 
 def test_runtime_writable_thresholds_declare_the_writes_of_their_table() -> None:
     """Each threshold at (channel fold, lane, threshold) as thresholding_axi decodes it, its
-    word masked to the threshold's bits; presented on the control bus with it."""
+    word masked to the table's bits; presented on the control bus with it."""
     table = (((-2, 0, 3), (-1, 1, 4), (0, 2, 5)),)  # three rows, N = 3
     point = threshold(table=table, pe=1, axilite=True)
+    # Writable over an INT8 input, the table is INT9 ([-128, 128]), whatever its INT5
+    # initial values: nine bits a word.
+    assert point.table_dtype.name == "INT9"
     # PE 1: three folds of one lane; two bits of threshold, no lane bit, two of fold.
     expected = []
     for row_index, row in enumerate(table[0]):
         for index, value in enumerate(row):
-            expected.append((((row_index << 2) | index) << 2, value & 0x1F))
+            expected.append((((row_index << 2) | index) << 2, value & 0x1FF))
     assert point.register_map.writes == tuple(expected)
     assert point.config_control.registers == point.register_map
     shared = threshold(table=(((-2, 0, 3),),), pe=2, axilite=True)  # C = 1: one row, lane 0
-    assert shared.register_map.writes == ((0, 0x1E), (4, 0), (8, 3))
+    assert shared.register_map.writes == ((0, 0x1FE), (4, 0), (8, 3))
     assert threshold(pe=1).config_control.bus is None  # held, not presented: nothing to write
+
+
+def test_a_writable_table_is_sized_from_the_input_never_its_initial_values() -> None:
+    """Never written, the table's type is its thresholds' (``threshold_dtype``); runtime-
+    writable, it holds any threshold a host may set over the input's clipped range, ``[min,
+    max + 1]``: WT, the file's words and the register map's mask follow it."""
+    table = (((-2, 0, 3),),)  # over an INT4 input: INT3, as the KernelOp narrows it
+    fixed = threshold(table=table, input_dtype="INT4", threshold_dtype="INT3")
+    written = threshold(table=table, input_dtype="INT4", threshold_dtype="INT3", axilite=True)
+    assert (fixed.table_dtype.name, written.table_dtype.name) == ("INT3", "INT5")  # [-8, 8]
+    assert [dict(library_module(point).parameters)["WT"] for point in (fixed, written)] == [3, 5]
+    # N = 3, padded to four words: one hex digit of three bits, two of five.
+    assert fixed.thresholds_file.data == b"6\n0\n3\n0\n"
+    assert written.thresholds_file.data == b"1e\n00\n03\n00\n"
+    assert fixed.register_map.writes == ((0, 0x6), (4, 0), (8, 3))
+    assert written.register_map.writes == ((0, 0x1E), (4, 0), (8, 3))
+
+
+def test_a_writable_table_holds_thresholds_of_another_signedness_than_the_input() -> None:
+    """``UINT5`` thresholds over an ``INT4`` input. Never written, the table is ``UINT5``,
+    which the RTL would compare signed (the input's): refused. Writable, the table holds
+    both ranges, ``[0, 31]`` and the input's ``[-8, 8]``, signed: ``INT6``, which compares
+    every initial threshold as it is."""
+    table = (((1, 9, 17),),)  # none at 0, UINT5's minimum, which a negative input saturates to
+    facts = dict(
+        input_tensor=Tensor((1, 1), ScalarEncoding(DataType["INT4"])),
+        threshold_dtype=DataType["UINT5"],
+        thresholds=IntegerTensorValue.of(table),
+        bias=0,
+        platform=FULL_DSP48E2,
+    )
+    space = controlled(ThresholdingAxiKernel, facts)
+    (viable,) = inspection.viable(space, [ThresholdingAxiKernel.use_axilite])
+    assert viable.cases == (True,)
+    (refused_value,) = [
+        item for item in viable.values or () if isinstance(item, inspection.Refused)
+    ]
+    assert refused_value.value is False
+    assert [rule.rule for rule in refused_value.broken] == ["types_supported"]
+    written = threshold(
+        table=table, bias=0, input_dtype="INT4", threshold_dtype="UINT5", axilite=True
+    )
+    assert written.table_dtype.name == "INT6"
+    assert dict(library_module(written).parameters)["WT"] == 6
+    assert written.register_map.writes == ((0, 1), (4, 9), (8, 17))
+    assert inspection.validity(written).status != "refused"
 
 
 def test_a_threshold_wider_than_a_word_is_written_in_words_low_first() -> None:

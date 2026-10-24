@@ -36,10 +36,11 @@ from finn.custom_op.kernels.network import persist
 from finn.custom_op.kernels.shell import in_shell
 from finn.kernels.composer import Facts, PartitionDeclaration, Port, Stated, channel
 from finn.kernels.explore import Accepted, ExploreError, Hold, Refused, Seam, TargetCycles
-from finn.kernels.matmul import MatMulKernel
+from finn.kernels.matmul import KnownWeights, MatMulKernel
 from finn.kernels.partition import Partition, partition
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import Platform
 from finn.transformation.kernels import explore_kernel_choices
 
@@ -64,13 +65,17 @@ def declared(*, adaptable: bool) -> PartitionDeclaration:
             "board": Facts(Board, {}),
             "first": Facts(
                 MatMulKernel,
-                {"weights_dtype": W, "platform": platform, "x_tensor": X_TENSOR, "w_contents": W1},
+                {
+                    "platform": platform,
+                    "x_tensor": X_TENSOR,
+                    "weights": KnownWeights(IntegerTensorValue.of(W1), W),
+                },
             ),
             "activate": Facts(
                 ThresholdingAxiKernel,
                 {
                     "threshold_dtype": THRESHOLD_DTYPE,
-                    "thresholds": THRESHOLDS,
+                    "thresholds": IntegerTensorValue.of(THRESHOLDS),
                     "bias": 0,
                     "input_tensor": chain.HIDDEN_TENSOR,
                     "platform": platform,
