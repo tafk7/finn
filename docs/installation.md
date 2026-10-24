@@ -207,8 +207,8 @@ FINN_PLATFORM_CATALOG=~/acme/parts.json build_dataflow ...
   device is built otherwise, the device states `fabric` (`series7`, `ultrascale`,
   `versal`), `dsp` (`DSP48E1`, `DSP48E2`, `DSP58`) and, optionally, `uram_init`.
 - Every entry carries a `source`, its own or the file's. The part's `source`
-  states it with the overlay's path, and so does each strategy step's report
-  (`report/step_size_fifos.json`, `resources.part.source`).
+  states it with the overlay's path, and so does the exploration's report
+  (`report/step_explore.json`, `resources.part.source`).
 - An entry whose name is a shipped part or device is refused, unless it says
   `"overrides": true`; `overrides` on a name the catalog does not ship is refused.
 
@@ -583,11 +583,10 @@ the configuration states no `toolchain`):
     "phase_prepare_model",
     "phase_convert_to_hardware",
     "phase_create_accelerator",
-    "step_target_throughput",
     "phase_optimize_hardware",
     "phase_generate_outputs"
   ],
-  "target_fps": 1000000
+  "strategies": [{"target_throughput": {"fps": 1000000}}, "size_fifos"]
 }
 ```
 
@@ -642,8 +641,8 @@ packaged partition with `ooc_synth`), and as placed (`pynq` with the bitfile); w
 A phase is a name for its steps: `phase_prepare_model` (the export cleaned, its pre- and
 post-processing added, its Quant nodes lowered, then tidied, streamlined and made
 channels-last), `phase_convert_to_hardware` (the KernelOps), `phase_create_accelerator`
-(the partition), `phase_optimize_hardware` (their choices, one strategy step at a time,
-and the partition's verification), `phase_emit_hardware` (the packaged IP) and
+(the partition), `phase_optimize_hardware` (their choices, explored by one search, and
+the partition's verification), `phase_emit_hardware` (the packaged IP) and
 `phase_generate_outputs` (the bitfile, the driver, the resources report and the
 deployment package), in `finn.builder.build_dataflow_steps.build_dataflow_phases`. The
 premade lists, in `build_dataflow_lists` beside them, are names for a list from the
@@ -677,12 +676,14 @@ the same name share its value, and a step that names a parameter like a field is
 refused. The preparation steps declare `override_inpsize`
 (`step_cleanup`), `max_multithreshold_bit_width` (`step_qonnx_to_finn`, default 8),
 and `preprocessing`, `input_datatype` and `topk` (`step_add_pre_post_processing`);
-the strategy steps theirs (below); `step_package_partition` `ooc_synth`;
+`step_explore` `strategies` (below); `step_package_partition` `ooc_synth`;
 `step_build_bitfile` `hw_debug` (integrated logic analyzers on the movers' streams); its
 clock report's objective
-is the `target_fps` the partition's body records where `step_target_throughput` folded
-it (`finn.choices/objective_fps`), and none where a later step that may change the folding
-(a hold, a maximum throughput, going back to the defaults) explored it since. The build's manifest records the steps it runs, and
+is the `fps` of a `target_throughput` entry, recorded in the partition's search record
+(`finn.outputs/search`) while the body is the design that search saved, and none where a
+later entry that changes a kernel's choice (a hold, a maximum throughput, going back to
+the defaults) explored it since, or where the body was edited after the search (the record
+is then stale: the report says no current objective). The build's manifest records the steps it runs, and
 each setting with its value or default and its readers (`plan`). JSON is read strictly: a key a nested object does not declare, a null
 where a field is not optional, a wrong type and an unknown value are refused, naming
 their place (`configuration.target: ...`), as a `ConfigurationRefused`. A build
@@ -696,85 +697,91 @@ value the kernel's author fixes, or the first valid value its kernel lists (the 
 parallelism; each memory in the explicit style the size of what it holds orders first,
 `auto` last), or none for a required choice (a FIFO's depth). The cut makes each
 channel's choices the same way, first valid (every transport `direct`): an interim rule,
-until the ends are designed. The strategy steps then choose the KernelOps' choices
-through the DSE seam, one strategy each; a build lists them like any step, in `steps`.
-Each opens the partition's body, runs its strategy, which reopens the choices it
-decides, explores, and gives the rest back their earlier values (setting one by its
-policy where its earlier value is no longer valid, and saying so), and saves every
-value in the body. A change that breaks a kernel's rule is refused, naming the rule.
+until the ends are designed. `step_explore` then chooses the KernelOps' choices through
+the DSE seam, in one search: its one setting, `strategies`, is a list of entries, each a
+name or a one-key object, run in order on one seam. It opens the partition's body; each
+entry reopens the choices it decides, explores, and gives the rest back their earlier
+values (setting one by its policy where its earlier value is no longer valid, and saying
+so); and the result is checked once and every value saved in the body, or nothing is
+written. A change that breaks a kernel's rule is refused, naming the rule.
 
-| Step | Settings | What it does |
+| Entry | Form | What it does |
 |---|---|---|
-| `step_target_throughput` | `target_fps` (required), `relax_target_fps` (default true) | folds the least parallelism that meets `target_fps` at the target's clock |
-| `step_max_throughput` | `max_throughput_within` (required: `{"lut": 0.5}`) | the fewest cycles a frame whose resources stay within the fractions of the part's |
-| `step_size_fifos` | `fifo_margin` (default 0), `fifo_ram_style` (default none: FinnLib's `auto`) | sizes each channel's FIFO at the folding before it |
-| `step_default_choices` | none | sets every value not held back to its default: conversion's policies for the kernels', the interim rule for the channels' |
-| `step_placeholder_choices` | none | for debugging, sets each open required choice to its first possible value |
+| `target_throughput` | `{"target_throughput": {"fps": 1e6, "relax": true}}` | folds the least parallelism that meets `fps` at the target's clock |
+| `max_throughput` | `{"max_throughput": {"within": {"lut": 0.5}}}` | the fewest cycles a frame whose resources stay within the fractions of the part's |
+| `size_fifos` | `"size_fifos"` or `{"size_fifos": {"margin": 2, "ram_style": "block"}}` (default: margin 0, FinnLib's `auto`) | sizes each channel's FIFO at the folding before it |
+| `hold` | `{"hold": {"MatMul_0": {"simd": 8}}}` | fixes the values, by graph name and key; no later entry changes them |
+| `defaults` | `"defaults"` | sets every value not held back to its default: conversion's policies for the kernels', the interim rule for the channels' |
+| `debug_placeholder` | `"debug_placeholder"` | for debugging, sets each open required choice to its first possible value |
 
-`step_target_throughput` tries each case of an unordered choice, such as a MatMul's
-core on a DSP58 part, and states the bottleneck reached and whether `target_fps` is
-met; with `relax_target_fps`, a throughput the folding cannot reach is relaxed to the
-fastest it reaches. `step_max_throughput` keeps, of every point it tried, the fastest
-whose resources (the shell's: its partition, movers and static region) stay within
-`max_throughput_within`; where a member states no resources (a memory pinned `auto`:
-placed by Vivado, not stated), it budgets what is stated, a lower bound, and warns,
-naming it. A hold is recorded in the partition's body (`finn.choices/held`, the held
-keys; the values are the ones the body states), so every later strategy step of the build
-keeps it, going back to the defaults included. The build has no step that fixes values: a user fixes them with
-`Hold` in a step of their own, listed before the strategies that should fold around them:
+The default list is `["size_fifos"]`. A `target_throughput` entry tries each case of an
+unordered choice, such as a MatMul's core on a DSP58 part, and states the bottleneck
+reached and whether `fps` is met; with `relax`, a throughput the folding cannot reach is
+relaxed to the fastest it reaches. `max_throughput` keeps, of every point it tried, the
+fastest whose resources (the shell's: its partition, movers and static region) stay
+within `within`; where a member states no resources (a memory pinned `auto`: placed by
+Vivado, not stated), it budgets what is stated, a lower bound, and warns, naming it.
 
-```python
-from finn.core.search import Hold
-from finn.transformation.kernels import explore_partition
+A `hold` holds for the entries after it in its list, going back to the defaults
+included, and for the build's verification: the partition's body records the keys held
+in its search record (`finn.outputs/search`; the values are the ones the nodes and tensors
+state), which `step_verify_partition` reads while the body is still the design that
+search saved. The values are as JSON states them, each read as the type of its choice
+(a bool, an int or a str); a value the partition does not take, or a key an earlier hold
+keeps at another value, is refused, named. A hold ends with its list: a second
+`step_explore` holds only what its own list holds. Fix values in a build described by its
+JSON alone:
 
-def step_my_choices(model, cfg):
-    explore_partition(model, Hold({"MatMul_0": {"simd": 8},
-                                   "MatMul_0_param0": {"source.ram_style": "block"}}))
-    return model
+```json
+{"strategies": [
+  {"hold": {"MatMul_0": {"simd": 8}, "MatMul_0_param0": {"source.ram_style": "block"}}},
+  {"target_throughput": {"fps": 1000000}},
+  "size_fifos"
+]}
 ```
 
-(`steps=[..., step_my_choices, "step_target_throughput", "step_size_fifos", ...]`; the
-values are `{graph name: {key: value}}`, a kernel's under its node, a channel's under its
-tensor.) A value the partition does not take, or a key an earlier hold keeps at another
-value, is refused, named. The trade-off: a build described by its JSON alone cannot fix a
-choice without Python, since the step is named there by its import path
-(`package.module.step_my_choices`).
+(the values are `{graph name: {key: value}}`, a kernel's under its node, a channel's
+under its tensor). In Python, a step of the user's own runs a search of its own:
+`explore_kernel_choices(body, [Hold({...}), ...])` on the body that `partition_body`
+opens, then saves it, with the entries' own classes (`finn.core.search.Hold`,
+`finn.kernels.explore`).
 
-`step_size_fifos` sizes each
-channel from both ends' beat patterns at the bottleneck (`direct` where none is
-needed), `fifo_margin` words added to a FIFO it places. The default phase is
-`[step_size_fifos, step_verify_partition]`: conversion's folding, its FIFOs sized; a
-target throughput is `step_target_throughput` listed before it, with `target_fps` (the
-example above). FIFO depths are sized at the folding before them: run `step_size_fifos`
-after the last step that may change the folding. The FIFOs are checked against their
-streams once, by `step_verify_partition`, at the bottleneck the partition reached (the
-model `step_size_fifos` sizes by), and in a strategy step only where its strategy calls
-the check. A FIFO that no longer keeps its producer within its idle time (a fold anywhere
-may shorten the bottleneck, and a depth edited by hand may be too small) is refused
-there, named, unless you held it: a held one is kept with a warning, and so is a
-`direct` that throttles its producer. Packaging, the shell's integration and the
-testbench take only the design `step_verify_partition` verified: a partition it never
-verified is refused (run `step_verify_partition`), and so is one changed since (verify
-again), so a list that makes an output lists `step_verify_partition` after its last
-strategy step. Simulating or elaborating the partition only builds it, without the
-check, so a simulation can run a FIFO the model calls too small. A required choice left
-open (a FIFO's depth) is refused by name when the partition is built.
+`size_fifos` sizes each channel from both ends' beat patterns at the bottleneck (`direct`
+where none is needed), `margin` words added to a FIFO it places. The default phase is
+`[step_explore, step_verify_partition]`: conversion's folding, its FIFOs sized; a target
+throughput is a `target_throughput` entry listed before `size_fifos` in `strategies`.
+FIFO depths are sized at the folding before them: list `size_fifos` after the last entry
+that may change the folding. The FIFOs are checked against their streams once, by
+`step_verify_partition`, at the bottleneck the partition reached (the model `size_fifos`
+sizes by), and in `step_explore` only where an entry calls the check. A FIFO that no
+longer keeps its producer within its idle time (a fold anywhere may shorten the
+bottleneck, and a depth edited by hand may be too small) is refused there, named, unless
+you held it: a held one is kept with a warning, and so is a `direct` that throttles its
+producer. Packaging, the shell's integration and the testbench take only the design
+`step_verify_partition` verified: a partition it never verified is refused (run
+`step_verify_partition`), and so is one changed since (verify again), so a list that
+makes an output lists `step_verify_partition` after `step_explore`. Simulating or
+elaborating the partition only builds it, without the check, so a simulation can run a
+FIFO the model calls too small. A required choice left open (a FIFO's depth) is refused by
+name when the partition is built.
 
-Each strategy step writes its report, `report/<step>.json`, listed under it in the
-build's manifest: its strategy with the values it changed, reopened, kept and set by
-their policy, attempts and time; every value with who set it (saved in the body, the
-strategy, the strategy by the choice's policy, or the interim channel rule); the holds; whether it sized FIFOs and how its FIFOs were judged
-(`fifos_judged`: `model` where it sized or checked them, else `not checked`; where it
-checked, what the check found, `fifo_check`); per-member cycles and buffering, the
-bottleneck, and the shell's resources against the part's. A point that uses more of a
-resource than the part has is a warning naming that resource, never a refusal.
-`step_verify_partition` writes its check's record, `report/step_verify_partition.json`
-(`fifos_judged`, and `fifo_check`: the bottleneck period, the channels checked, those
-the model does not read, and the warnings), and every value to `report/kernel_choices.json`,
-by graph name (`{"MatMul_0_param0": {"transport": "direct"}, "MatMul_0": {"pe": 16}}`:
-a kernel's choices under its node, a channel's under the tensor it carries, in graph
-order: each node's input channels, the node, its output channels), a log FINN never
-reads, which makes two builds easy to compare.
+`step_explore` writes its report, `report/step_explore.json`, listed under it in the
+build's manifest: an entry for each strategy of its list, in order, with the values it
+changed, reopened, kept and set by their policy, attempts and time, and whether it sized
+FIFOs and how its FIFOs were judged (`fifos_judged`: `model` where it sized or checked
+them, else `not checked`; where it checked, what the check found, `fifo_check`); then what
+the whole point has: every value with who set it (saved in the body, or the entry that
+last changed it, or that entry by the choice's policy), the holds, per-member cycles and
+buffering, the bottleneck, and the shell's resources against the part's. A point that
+uses more of a resource than the part has is a warning naming that resource, never a
+refusal. `step_verify_partition` writes its check's record,
+`report/step_verify_partition.json` (`search`: whether the search's record is current,
+stale or none; `held`; `fifos_judged`, and `fifo_check`: the bottleneck period, the
+channels checked, those the model does not read, and the warnings), and every value to
+`report/kernel_choices.json`, by graph name (`{"MatMul_0_param0": {"transport":
+"direct"}, "MatMul_0": {"pe": 16}}`: a kernel's choices under its node, a channel's under
+the tensor it carries, in graph order: each node's input channels, the node, its output
+channels), a log FINN never reads, which makes two builds easy to compare.
 
 A build makes the partition and its outputs; checking them is for tests and for
 utilities a user runs over a finished build's output directory, none of them a step.

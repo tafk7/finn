@@ -373,7 +373,7 @@ def test_public_build_entry_point_builds_in_process_and_exits_with_its_result(tm
     assert (project / "output/report/build.json").is_file()
     assert os.getcwd() == cwd and dict(os.environ) == env
     # A step that fails on an empty model: no partition to explore.
-    assert build_dataflow_directory(str(state("step_size_fifos"))) == -1
+    assert build_dataflow_directory(str(state("step_explore"))) == -1
     with refused(
         "step-unknown",
         error=ConfigurationRefused,
@@ -383,7 +383,7 @@ def test_public_build_entry_point_builds_in_process_and_exits_with_its_result(tm
         build_dataflow_directory(str(state("not_a_step")))
     assert os.getcwd() == cwd
     assert command().returncode == 0
-    assert command("step_size_fifos").returncode == 255
+    assert command("step_explore").returncode == 255
     unknown = command("not_a_step")
     assert unknown.returncode == 1
     # The console's finding line is the finding's owner, code and message.

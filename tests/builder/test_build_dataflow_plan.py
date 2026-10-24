@@ -171,14 +171,14 @@ def test_an_entry_is_a_named_list_a_step_an_import_path_or_in_python_a_function(
     """Each entry's name is its step function's; a phase stands for its steps."""
     entries: list[StepEntry] = [
         "phase_create_accelerator",
-        "step_size_fifos",
+        "step_explore",
         f"{__name__}.step_scaled",
         step_unique_names,
     ]
     plan = build_plan(config(steps=entries))
     assert names(plan) == [
         "step_create_dataflow_partition",
-        "step_size_fifos",
+        "step_explore",
         "step_scaled",
         "step_unique_names",
     ]
@@ -247,7 +247,7 @@ DEFAULT = [
     "step_convert_to_channels_last",
     "step_convert_to_hw",
     "step_create_dataflow_partition",
-    "step_size_fifos",
+    "step_explore",
     "step_verify_partition",
     "step_resources_report",
 ]
@@ -265,7 +265,7 @@ def test_a_list_made_from_the_default_one_is_the_list() -> None:
     replaced or removed where the caller puts it."""
     steps: list[StepEntry] = list(default_steps())
     steps.insert(steps.index("step_streamline") + 1, f"{__name__}.step_unique_names")
-    steps[steps.index("step_size_fifos")] = step_scaled
+    steps[steps.index("step_explore")] = step_scaled
     steps.remove("step_verify_partition")
     assert names(build_plan(config(steps=steps))) == [
         *DEFAULT[:5],
@@ -287,12 +287,12 @@ def test_a_phase_names_its_steps_in_the_list_and_at_start_and_stop() -> None:
     plan = build_plan(cfg)
     assert [step.name for step in plan.steps] == [
         "step_scaled",
-        "step_size_fifos",
+        "step_explore",
         "step_verify_partition",
         "step_unique_names",
     ]
-    assert names(plan) == ["step_size_fifos", "step_verify_partition"]
-    inside = config(steps=["step_size_fifos", step_scaled, "step_verify_partition", "step_tidy_up"])
+    assert names(plan) == ["step_explore", "step_verify_partition"]
+    inside = config(steps=["step_explore", step_scaled, "step_verify_partition", "step_tidy_up"])
     stopped = replace(inside, start_step="step_scaled", stop_step="phase_optimize_hardware")
     assert names(build_plan(stopped)) == ["step_scaled", "step_verify_partition"]
 
@@ -561,16 +561,16 @@ def test_the_plan_resolves_a_list_over_the_named_lists_and_steps_it_is_given() -
     assert "finn.builder.build_dataflow_steps" not in imported
 
 
-def test_a_target_throughput_without_its_target_is_refused_when_the_plan_resolves() -> None:
-    """step_target_throughput requires target_fps, its one reader."""
-    cut = ["phase_create_accelerator", "step_target_throughput"]
-    assert refused(config(steps=cut)) == (
-        "configuration.target_fps: setting-required: step_target_throughput require it, and "
-        "it is not given"
-    )
-    plan = build_plan(config(steps=cut, settings={"target_fps": 1000}))
-    assert plan.settings["target_fps"].value == 1000.0
-    assert plan.settings["target_fps"].readers == ("step_target_throughput",)
+def test_step_explore_declares_its_strategies_and_sizes_fifos_by_default() -> None:
+    """step_explore's one setting, ``strategies``, is optional (a list of one name: size_fifos);
+    given, it is decoded as the entries and read by it alone."""
+    cut = ["phase_create_accelerator", "step_explore"]
+    plan = build_plan(config(steps=cut))
+    assert plan.settings["strategies"].value == (Named.SIZE_FIFOS,)
+    assert plan.settings["strategies"].readers == ("step_explore",)
+    plan = build_plan(config(steps=cut, settings={"strategies": ["defaults", "size_fifos"]}))
+    assert plan.settings["strategies"].value == [Named.DEFAULTS, Named.SIZE_FIFOS]
+    assert plan.settings["strategies"].given
 
 
 def test_every_rejection_of_the_settings_and_the_run_is_raised_together() -> None:

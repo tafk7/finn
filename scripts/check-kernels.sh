@@ -82,7 +82,7 @@ gate_mypy -p finn.kernels -p finn.platform -p finn.core.graph -p finn.custom_op.
     -m finn.builder.build_dataflow_steps -m finn.builder.build_dataflow_testbench \
     -m finn.builder.build_dataflow_resources -m finn.builder.build_dataflow_checks \
     -m finn.builder.build_dataflow_verification \
-    -m finn.builder.build_dataflow_manifest
+    -m finn.builder.build_dataflow_manifest -m finn.builder.build_dataflow_strategies
 # Whole directories; the files not yet strictly typed are listed in .mypy.ini.
 gate_mypy tests/support tests/kernels tests/kernel_ops tests/builder tests/platforms \
     tests/analysis tests/shells tests/networks tests/layers tests/xsim_sweep tests/oracle

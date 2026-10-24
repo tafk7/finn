@@ -200,10 +200,10 @@ def test_a_refused_configuration_is_the_outcome_with_its_findings(tmp_path):
     with refused("board-vivado", error=ConfigurationRefused) as caught:
         build_of(
             tmp_path,
-            [step_reports, "step_size_fifos"],
+            [step_reports, "step_explore"],
             target=TargetRequest(period_ns=10.0, board="AUP-ZU3_8GB", shell="pynq"),
             stop_step="step_reports",
-            settings={"fifo_margin": 2},
+            settings={"strategies": [{"size_fifos": {"margin": 2}}]},
         )
     manifest = manifest_of(str(tmp_path / "output"))
     assert manifest["outcome"] == {
