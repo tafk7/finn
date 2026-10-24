@@ -724,7 +724,7 @@ keeps it, going back to the defaults included. The build has no step that fixes 
 `Hold` in a step of their own, listed before the strategies that should fold around them:
 
 ```python
-from finn.kernels.explore import Hold
+from finn.core.search import Hold
 from finn.transformation.kernels import explore_partition
 
 def step_my_choices(model, cfg):
