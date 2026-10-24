@@ -124,7 +124,8 @@ class DataflowBuildConfig:
     #: In effect the ``ip`` shell's: a shell whose row offers a mover (``pynq``) states each
     #: port by its mover, and a statement there is refused before the first step
     #: (``boundary-stated-twice``); an empty one states nothing. A port the partition does
-    #: not have is refused at the cut (``boundary-port-unknown``). In JSON:
+    #: not have is refused at the cut (``boundary-port-unknown``), and so are lanes that do
+    #: not divide the port's elements (``boundary-lanes``). In JSON:
     #: {"s_axis_0": {"pace": {"every": 2}}, "m_axis_0": {"order": "row_major", "lanes": 4,
     #: "passes": 1, "pace": {"times": [0, 3, 6], "span": 12}}}.
     boundary: dict[str, PortStatement] = field(default_factory=dict)

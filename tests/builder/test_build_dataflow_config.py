@@ -583,8 +583,8 @@ def test_the_cut_refuses_a_port_the_partition_does_not_have_and_beat_times_its_p
     """The cut is the first step that knows the partition's ports: a statement of a port it
     does not have is refused there, listing its ports; so are beat times of another count
     than the beats the statement's lanes and passes make of the port's tensor (the Chain's
-    y: twelve elements, three beats at four lanes), and lanes that divide none. Each at its
-    port, together, before anything is cut."""
+    y: twelve elements, three beats at four lanes). Each at its port, together, before
+    anything is cut."""
     beats = {"lanes": 4, "passes": 1, "pace": {"times": [0, 1], "span": 4}}
     cfg = stating(tmp_path, "ip", {"s_axis_1": {"pace": {"every": 1}}, "m_axis_0": beats})
     with pytest.raises(ConfigurationRefused) as refused:
@@ -604,18 +604,35 @@ def test_the_cut_refuses_a_port_the_partition_does_not_have_and_beat_times_its_p
         ),
     ]
     assert not (tmp_path / "output" / "partition").exists()
-    undivided = {"lanes": 5, "passes": 1, "pace": {"times": [0, 1], "span": 4}}
+
+
+def test_the_cut_refuses_stated_lanes_that_divide_none_of_the_port_s_elements_whatever_its_pace(
+    tmp_path: Path,
+) -> None:
+    """Lanes that do not divide the port's tensor (the Chain's x and y: twelve elements,
+    five lanes) present it at no folding, so the cut refuses them at their port, whatever
+    the pace: a steady beat, which states no beats, as beat times. Before anything is cut,
+    rather than at every folding's edge channel."""
+    steady = {"lanes": 5, "pace": {"every": 2}}
+    timed = {"lanes": 5, "passes": 1, "pace": {"times": [0, 1], "span": 4}}
+    cfg = stating(tmp_path, "ip", {"s_axis_0": steady, "m_axis_0": timed})
     with pytest.raises(ConfigurationRefused) as refused:
-        step_create_dataflow_partition(
-            kernel_model(), stating(tmp_path, "ip", {"s_axis_0": undivided})
-        )
-    (finding,) = refused.value.findings
-    assert (finding.code, finding.message) == (
-        "boundary-pace-beats",
-        "s_axis_0: the build's statement (5 lanes a beat, 1 pass a frame, 2 beat times over "
-        "4 cycles) states lanes that do not divide x's 12 elements, so its beat times time "
-        "no beats",
-    )
+        step_create_dataflow_partition(kernel_model(), cfg)
+    assert [(each.code, each.owner, each.message) for each in refused.value.findings] == [
+        (
+            "boundary-lanes",
+            "configuration.boundary.s_axis_0",
+            "s_axis_0: the build's statement states 5 lanes a beat, which do not divide x's "
+            "12 elements",
+        ),
+        (
+            "boundary-lanes",
+            "configuration.boundary.m_axis_0",
+            "m_axis_0: the build's statement states 5 lanes a beat, which do not divide y's "
+            "12 elements",
+        ),
+    ]
+    assert not (tmp_path / "output" / "partition").exists()
 
 
 def test_an_output_is_a_step_so_generate_outputs_is_an_unknown_setting() -> None:

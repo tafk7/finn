@@ -601,9 +601,10 @@ port of the partition, by the partition's port names (`s_axis_<i>` for its i-th 
 `m_axis_<j>` for its j-th output): the pace, a beat every `k` cycles (`{"every": k}`) or
 each beat's cycle over a frame and the frame's span (`{"times": [...], "span": n}`), and
 optionally a `"row_major"` `order`, one pass a frame (`passes`) and the `lanes` a beat,
-the port's word. Beat times state `lanes` and `passes` too, and their count must be the
-beats those make of the port's tensor. What a statement leaves out is as the partition
-presents it (an output as produced), and a port it leaves out is unstated. FIFO sizing
+the port's word, which divides the port's elements. Beat times state `lanes` and `passes`
+too, and their count must be the beats those make of the port's tensor. What a statement
+leaves out is as the partition presents it (an output as produced), and a port it leaves
+out is unstated. FIFO sizing
 reads the stated pace, the partition's cycles a frame are no fewer than its span (the
 partition runs no faster than its integrator supplies an input or takes an output), and
 stated lanes set the port's AXIS width. On `pynq` the shell's movers state every port,
