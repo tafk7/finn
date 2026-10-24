@@ -128,7 +128,7 @@ def flat_space(api, count: int):
     source = api.Param()
     members = {"source": source}
     for index in range(count):
-        members[f"item{index}"] = api.Derived(increment, aliases={"value": source})
+        members[f"item{index}"] = api.derived(value=source)(increment)
     return api.composite("FlatSpace", members, annotations={"source": int})
 
 
@@ -136,8 +136,8 @@ def repeated_space(api, count: int):
     class Child(api.Space):
         extent: int = api.Param()
         lanes: int = api.Decision(values=(1, 2, 4))
-        width = api.Derived(multiply, aliases={"extent": extent, "lanes": lanes})
-        physical = api.View(width)
+        width = api.derived(extent=extent, lanes=lanes)(multiply)
+        physical = api.view(width)
 
     # Each child is a node declaration: calling the Space class places it once.
     return api.composite(
@@ -224,10 +224,7 @@ def constant_expressions(api, terms: int, trials: int) -> dict[str, object]:
         {
             "base": base,
             "total": api.derived(total),
-            **{
-                name: api.Derived(term(index), aliases={"base": base})
-                for index, name in enumerate(names)
-            },
+            **{name: api.derived(base=base)(term(index)) for index, name in enumerate(names)},
         },
     )
     started = time.perf_counter()
@@ -288,13 +285,11 @@ def batch_updates(api, count: int, *, dependent: bool) -> dict[str, object]:
     previous = source
     requests = []
     for index in range(count):
-        limit = api.Derived(prerequisite, aliases={"previous": previous})
+        limit = api.derived(previous=previous)(prerequisite)
         decision = api.Decision(domain=api.domain(accepts=membership))
         members[f"limit{index}"] = limit
         members[f"choice{index}"] = decision
-        members[f"follows{index}"] = api.Constraint(
-            follows, aliases={"choice": decision, "limit": limit}
-        )
+        members[f"follows{index}"] = api.constraint(choice=decision, limit=limit)(follows)
         requests.append((decision, index + 1 if dependent else 1))
         if dependent:
             previous = decision
@@ -405,7 +400,7 @@ def narrow_query(api, branches: int) -> dict[str, object]:
         # case's member by name (replaces the accepted export).
         choice = api.Select(selected=Selected(value=source), inactive=Inactive())
         members[f"branch{index}"] = choice
-        members[f"output{index}"] = api.View(choice.physical)
+        members[f"output{index}"] = api.view(choice.physical)
     space_type = api.composite("NarrowQuery", members, annotations={"source": int})
     model = compile_model(api, space_type)
     assert work == Counter()
@@ -446,7 +441,7 @@ def wide_choice(api, alternatives: int, trials: int = 30) -> dict[str, object]:
 
     choice = api.Select(**{f"case{index}": Leaf() for index in range(alternatives)})
     space_type = api.composite(
-        "WideChoice", {"implementation": choice, "physical": api.View(choice.physical)}
+        "WideChoice", {"implementation": choice, "physical": api.view(choice.physical)}
     )
     model = compile_model(api, space_type)
     # A selector always has its node, even with one case.
