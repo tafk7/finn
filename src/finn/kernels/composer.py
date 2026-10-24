@@ -64,7 +64,10 @@ The cache is **bounded**: it holds at most ``CLASS_CACHE_BOUND`` classes (16), t
 recently composed dropped past it (a dropped class lives on while a design space of it
 does, and a later composition of its structure makes it again). Each class holds its
 compiled model and, with it, the engine's node cache, so the bound is what limits the
-classes a long build keeps. ``cached_classes()`` reads its size, in entries. Composing may
+classes a long build keeps. A class is compiled when it is made, before it is kept: a
+structure whose class does not compile raises the engine's error, is no entry, and is
+compiled (and refused) again where it is composed again. ``cached_classes()`` reads its
+size, in entries. Composing may
 be called from several threads: one lock guards the cache, and a class is made under it,
 so a structure composed at once from two threads is one class.
 """
@@ -94,6 +97,7 @@ from finn.core.space import (
     model_modes,
     space_formals,
 )
+from finn.core.space.compiler import compile_model
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.channels import Channel
 from finn.kernels.port import port_endpoint
@@ -605,6 +609,10 @@ def compose(declared: PartitionDeclaration) -> Composed:
         found = _CLASSES.get(key)
         if found is None:
             found = _made(declared, ranked, names, key)
+            # Compiled before it is kept: a class that does not compile (a kernel's
+            # declaration the engine refuses) raises here, its error the engine's, and is
+            # no entry: composed again, it is compiled, and refused, again.
+            compile_model(found[0])
             _CLASSES[key] = found
             while len(_CLASSES) > CLASS_CACHE_BOUND:
                 _CLASSES.popitem(last=False)

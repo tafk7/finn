@@ -177,8 +177,8 @@ def kernel_space_classes() -> list[type[Space]]:
     """Every Space class of ``finn.kernels``: each module of the package imported, then
     every subclass of ``Space`` declared in one of them (a generated scope's too), but a
     partition's class the composer makes at run time of them (``finn.kernels.composer``:
-    whichever a test composed earlier in the process, a declaration it means to refuse
-    among them)."""
+    whichever a test composed earlier in the process; one that does not compile is kept
+    by no cache, but may still be alive)."""
     for module in pkgutil.walk_packages(finn.kernels.__path__, "finn.kernels."):
         importlib.import_module(module.name)
 

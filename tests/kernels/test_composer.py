@@ -32,12 +32,15 @@ from support.chain import (
     W,
 )
 from support.helpers import FULL_DSP48E2
+from support.refusals import refused
 
-from finn.core.space import Available, inspection
+from finn.core.space import Available, Decision, DefinitionError, divisors_of, inspection
 from finn.core.space._scopes import EAGER, PERMUTE
 from finn.core.space.compiler import compile_model
+from finn.dataflow.schedule import Index
 from finn.kernels import composer
 from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.base import extent_of
 from finn.kernels.channels import Channel
 from finn.kernels.composer import (
     CLASS_CACHE_BOUND,
@@ -235,9 +238,9 @@ def test_the_same_structure_is_one_class_and_new_facts_a_new_design_space(cache:
     assert changed.facts["activate-thresholds"] != composed.facts["activate-thresholds"]
     # Another fact given, or another member name, or a side of another kind: another class.
     fewer = kernels()
-    fewer["activate"] = Facts(
-        ThresholdingAxiKernel,
-        {key: value for key, value in fewer["activate"].arguments.items() if key != "bias"},
+    fewer["first"] = Facts(
+        MatMulKernel,
+        {key: value for key, value in fewer["first"].arguments.items() if key != "weights_dtype"},
     )
     assert compose(PartitionDeclaration(fewer, channels())).space_type is not composed.space_type
     renamed = compose(declared({"first": "first_"}))
@@ -286,6 +289,34 @@ def test_the_class_cache_holds_at_most_its_bound(cache: None) -> None:
     # The least recently composed was dropped: composed again, it is made again.
     assert compose(declared({"first": "m0"})).space_type is not first
     assert cached_classes() == CLASS_CACHE_BOUND
+
+
+class Misplaced(MatMulKernel):
+    """A MatMul with a folding factor whose domain reads an extent no port binds: the
+    engine refuses the class when it is compiled."""
+
+    id = "test.composer.misplaced"
+    lanes: int = Decision(domain=divisors_of(extent_of(Index("never"))))
+
+
+def test_a_structure_whose_class_does_not_compile_is_not_cached_and_is_compiled_again(
+    cache: None,
+) -> None:
+    """The class is compiled before it is kept: the engine's error is raised by composing
+    it (not by the first design space of a class already cached), no entry is made, and
+    composing the structure again compiles it, and is refused, again. Another structure
+    cached meanwhile is kept."""
+    members = kernels()
+    members["first"] = Facts(Misplaced, members["first"].arguments)
+    broken = declared(channels_=channels())
+    broken = PartitionDeclaration(members, broken.channels)
+    good = compose(declared())
+    assert cached_classes() == 1
+    for _ in range(2):
+        with refused("reference-not-in-scope", error=DefinitionError):
+            compose(broken)
+        assert cached_classes() == 1
+    assert compose(declared()).space_type is good.space_type and cached_classes() == 1
 
 
 def _refused(declaration: PartitionDeclaration) -> list[tuple[str, str, str]]:
