@@ -524,6 +524,57 @@ def test_a_build_for_a_board_that_requires_no_release_never_asks_vivado(
     ]
 
 
+def stating(tmp_path: Path, shell: str, boundary: dict[str, Any]) -> DataflowBuildConfig:
+    """A build for Ultra96 on ``shell`` that states ``boundary`` (in JSON), its output in
+    ``tmp_path``, its toolchain one without tools."""
+    target = {"period_ns": 5.0, "board": "Ultra96", "shell": shell}
+    stated = {**STATED, "target": target, "boundary": boundary}
+    cfg = DataflowBuildConfig.from_json(json.dumps(stated))
+    cfg.output_dir = str(tmp_path / "output")
+    cfg.prepared_toolchain = Toolchain(Selection(), {"PATH": str(tmp_path)})
+    return cfg
+
+
+def test_a_build_statement_on_a_shell_offering_a_mover_is_refused_before_the_first_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Zynq shell's row offers an IODMA mover on every boundary port, which states each
+    port it moves: a build's statement there would be a second source, refused from the
+    row and the statement alone, at each port, before the model is read."""
+    monkeypatch.setattr(Toolchain, "probe", never)
+    cfg = stating(tmp_path, "pynq", BOUNDARY)
+    with pytest.raises(ConfigurationRefused) as refused:
+        build_dataflow_cfg(str(tmp_path / "absent.onnx"), cfg)
+    findings = refused.value.findings
+    assert [(finding.code, finding.owner) for finding in findings] == [
+        ("boundary-stated-twice", "configuration.boundary.s_axis_0"),
+        ("boundary-stated-twice", "configuration.boundary.m_axis_0"),
+    ]
+    assert findings[1].message == (
+        "the 'pynq' shell's row offers an iodma_hls mover on every boundary port, which "
+        "states m_axis_0 (row-major, one pass a frame, its pace the mover's): a build "
+        "statement would be a second source; state no boundary on this shell"
+    )
+    manifest = json.loads((tmp_path / "output" / MANIFEST_FILE).read_text())
+    assert manifest["outcome"]["status"] == "refused" and manifest["steps"] == []
+    assert manifest["identity"]["model"] is None
+
+
+def test_a_build_statement_is_the_ip_shell_s_and_an_empty_one_states_nothing_on_pynq(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On ``ip``, whose row offers no mover, the build's statements stand. On ``pynq`` an
+    empty ``boundary`` states nothing, and the build runs."""
+    monkeypatch.setattr(Toolchain, "probe", never)
+    assert [finding.code for finding in checked(stating(tmp_path, "ip", BOUNDARY))] == []
+    cfg = stating(tmp_path, "pynq", {})
+    assert cfg.boundary == {} and checked(cfg) == []
+    source = tmp_path / "model.onnx"
+    onnx.save(helper.make_model(helper.make_graph([], "empty", [], [])), source)
+    cfg.steps, cfg.enable_build_pdb_debug = [step_nothing], False
+    assert build_dataflow_cfg(str(source), cfg) == 0
+
+
 def test_an_output_is_a_step_so_generate_outputs_is_an_unknown_setting() -> None:
     """A list makes the outputs whose steps it names; a configuration that states
     outputs apart from its steps is refused as a key no step declares."""
