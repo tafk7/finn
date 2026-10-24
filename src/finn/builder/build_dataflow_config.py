@@ -3,9 +3,11 @@
 
 """The configuration of a dataflow build (``DataflowBuildConfig``), and its JSON form.
 
-Its fields say how the build runs: the target, the toolchain and the steps, which
-are what the build makes. Everything else is a setting: the value of a keyword-only parameter a step
-declares, decoded by the step's annotation when the build's plan resolves. In JSON a
+Its fields say how the build runs: the target, what the outside states of the
+partition's boundary (``boundary``, by port: ``PortStatement``), the toolchain and the
+steps, which are what the build makes. Everything else is a setting: the value of a
+keyword-only parameter a step declares, decoded by the step's annotation when the
+build's plan resolves. In JSON a
 setting is a top-level key beside the fields; in Python an entry of ``settings``.
 Reading JSON refuses what does not decode, and what the configuration does not
 declare, as a ``ConfigurationRefused`` whose finding is owned by its place
@@ -30,6 +32,7 @@ from typing import Any, Union
 from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.core.reporting.findings import Finding, FindingKind, Refusal
+from finn.kernels.sides import BUILD, BeatTimes, Outside, Steady
 from finn.platform.request import TargetRequest
 from finn.platform.target import Target
 from finn.toolchain.launcher import Selection, Toolchain, host_selection
@@ -68,6 +71,37 @@ StepFunction = Callable[..., ModelWrapper]
 StepEntry = Union[str, StepFunction]
 
 
+@dataclass(frozen=True, kw_only=True)
+class PortStatement:
+    """What the build states of one port of the partition's boundary, as the outside
+    presents it there (``DataflowBuildConfig.boundary``): the ``order`` of each pass
+    (``"row_major"``), the ``passes`` a frame (1) and the ``lanes`` a beat (at least 1: the
+    port's word, whose AXIS width follows), each left out (None) as the partition presents
+    it, and the ``pace``, which a statement always states: a steady beat every ``k``
+    cycles (``{"every": k}``, ``Steady``) or each beat's cycle over a frame and the frame's
+    span (``{"times": [...], "span": n}``, ``BeatTimes``). Beat times are one a beat, so
+    they state ``lanes`` and ``passes`` too; their count is checked against the port's
+    tensor where the partition is cut. A statement not well formed is not made
+    (``ValueError``; from JSON, ``configuration-invalid``)."""
+
+    order: str | None = None
+    passes: int | None = None
+    lanes: int | None = None
+    pace: Steady | BeatTimes
+
+    def __post_init__(self) -> None:
+        self.outside()
+        if isinstance(self.pace, BeatTimes) and (self.lanes is None or self.passes is None):
+            raise ValueError(
+                "a pace of beat times states the lanes a beat and the passes a frame it times"
+            )
+
+    def outside(self) -> Outside:
+        """The statement as a boundary side carries it (``finn.kernels.sides.Outside``, its
+        source the build), its pace kept as given."""
+        return Outside(BUILD, self.order, self.passes, self.lanes, self.pace)
+
+
 @dataclass
 class DataflowBuildConfig:
     """The configuration of a build: give it to build_dataflow_cfg, or write it as
@@ -81,6 +115,19 @@ class DataflowBuildConfig:
     #: shell, ``ip`` unless given. In JSON:
     #: {"period_ns": 5.0, "board": "Ultra96", "part": null, "shell": "pynq"}.
     target: TargetRequest
+
+    #: What the build states of the partition's boundary, by the partition's port names
+    #: (``s_axis_<i>`` for its i-th input, ``m_axis_<j>`` for its j-th output), each a
+    #: ``PortStatement``: the pace the outside presents or takes the port's stream at, and
+    #: optionally its order, passes and lanes. A port left out, or an order, passes or lanes
+    #: left out, is as the partition presents it: an output is "as produced" by default.
+    #: In effect the ``ip`` shell's: a shell whose row offers a mover (``pynq``) states each
+    #: port by its mover, and a statement there is refused before the first step
+    #: (``boundary-stated-twice``); an empty one states nothing. A port the partition does
+    #: not have is refused at the cut (``boundary-port-unknown``). In JSON:
+    #: {"s_axis_0": {"pace": {"every": 2}}, "m_axis_0": {"order": "row_major", "lanes": 4,
+    #: "passes": 1, "pace": {"times": [0, 3, 6], "span": 12}}}.
+    boundary: dict[str, PortStatement] = field(default_factory=dict)
 
     #: The AMD tool installation the build's tools run in: the machine's, with any field
     #: given here taking precedence.
@@ -217,6 +264,7 @@ _FIELDS = frozenset(item.name for item in fields(DataflowBuildConfig)) - {"setti
 __all__ = [
     "ConfigurationRefused",
     "DataflowBuildConfig",
+    "PortStatement",
     "StepEntry",
     "StepFunction",
     "config_finding",

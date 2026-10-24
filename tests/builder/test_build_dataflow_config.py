@@ -30,7 +30,11 @@ from finn.builder.build_dataflow import (
     read_build_config,
 )
 from finn.builder.build_dataflow_checks import configuration_findings
-from finn.builder.build_dataflow_config import ConfigurationRefused, DataflowBuildConfig
+from finn.builder.build_dataflow_config import (
+    ConfigurationRefused,
+    DataflowBuildConfig,
+    PortStatement,
+)
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
 from finn.builder.build_dataflow_steps import (
     DEFAULT_LIST,
@@ -47,6 +51,7 @@ from finn.builder.build_dataflow_steps import (
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.partition import partition_body
 from finn.core.reporting.findings import Finding, FindingKind
+from finn.kernels.sides import BUILD, ROW_MAJOR, BeatTimes, Outside, Steady
 from finn.platform.request import TargetRequest
 from finn.platform.resolve import resolve_target
 from finn.toolchain.launcher import Selection, Toolchain
@@ -212,6 +217,111 @@ def test_json_without_a_required_field_or_not_an_object_is_refused(
     (finding,) = refusal.value.findings
     assert (finding.code, finding.owner) == ("configuration-invalid", where)
     assert finding.message.startswith(refused)
+
+
+#: A statement of each port of a partition of one input and one output: the input's pace a
+#: beat every other cycle, all else as presented; the output row-major at four lanes, one
+#: pass, three beats timed over twelve cycles.
+BOUNDARY = {
+    "s_axis_0": {"pace": {"every": 2}},
+    "m_axis_0": {
+        "order": "row_major",
+        "passes": 1,
+        "lanes": 4,
+        "pace": {"times": [0, 3, 6], "span": 12},
+    },
+}
+
+
+def test_the_boundary_is_stated_by_port_and_holds_through_json_its_pace_as_given() -> None:
+    """Each port's statement decodes to a ``PortStatement``, its pace the shorthand or the
+    beat times as given; a port, an order, passes or lanes left out are as the partition
+    presents them; a build states none by default."""
+    assert DataflowBuildConfig.from_json(json.dumps(STATED)).boundary == {}
+    cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, "boundary": BOUNDARY}))
+    assert cfg.boundary == {
+        "s_axis_0": PortStatement(pace=Steady(2)),
+        "m_axis_0": PortStatement(
+            order="row_major", passes=1, lanes=4, pace=BeatTimes((0, 3, 6), 12)
+        ),
+    }
+    assert cfg.boundary["s_axis_0"].outside() == Outside(BUILD, pace=Steady(2))
+    assert cfg.boundary["m_axis_0"].outside() == Outside(
+        BUILD, ROW_MAJOR, 1, 4, BeatTimes((0, 3, 6), 12)
+    )
+    written = cfg.to_json()
+    assert DataflowBuildConfig.from_json(written) == cfg
+    assert json.loads(written)["boundary"] == {
+        "s_axis_0": {"order": None, "passes": None, "lanes": None, "pace": {"every": 2}},
+        "m_axis_0": BOUNDARY["m_axis_0"],
+    }
+
+
+@pytest.mark.parametrize(
+    "statement, place, refused",
+    [
+        (
+            {"order": "column_major", "pace": {"every": 2}},
+            "",
+            "the outside states a row_major order, not 'column_major'",
+        ),
+        ({"passes": 2, "pace": {"every": 2}}, "", "the outside states one pass a frame, not 2"),
+        (
+            {"lanes": 0, "pace": {"every": 2}},
+            "",
+            "the outside states one lane a beat or more, not 0",
+        ),
+        ({"lanes": 4}, "", "no pace, which PortStatement requires"),
+        ({"pace": {"every": 0}}, ".pace", "a steady beat comes every cycle or more, not every 0"),
+        (
+            {"lanes": 1, "passes": 1, "pace": {"times": [0, 2, 1], "span": 4}},
+            ".pace",
+            "a pace's beat times start at cycle 0 or later, one beat a cycle",
+        ),
+        (
+            {"lanes": 1, "passes": 1, "pace": {"times": [0, 4], "span": 4}},
+            ".pace",
+            "a pace's beat times lie within its span: a beat at 4 of 4",
+        ),
+        (
+            {"pace": {"times": [0, 1], "span": 2}},
+            "",
+            "a pace of beat times states the lanes a beat and the passes a frame it times",
+        ),
+        (
+            {"lanes": 2, "pace": {"times": [0, 1], "span": 2}},
+            "",
+            "a pace of beat times states the lanes a beat and the passes a frame it times",
+        ),
+        ({"pace": {"often": 2}}, ".pace", "Steady | BeatTimes, not {'often': 2}"),
+        ({"width": 8, "pace": {"every": 2}}, "", "keys PortStatement does not declare: ['width']"),
+    ],
+    ids=[
+        "an order other than row-major",
+        "two passes",
+        "no lane",
+        "no pace",
+        "a steady beat every 0 cycles",
+        "beat times out of order",
+        "a beat beyond the span",
+        "beat times without lanes or passes",
+        "beat times without passes",
+        "a pace of neither form",
+        "a key a statement does not declare",
+    ],
+)
+def test_a_port_statement_not_well_formed_is_refused_at_decoding_naming_its_port(
+    statement: dict[str, Any], place: str, refused: str
+) -> None:
+    stated = {**STATED, "boundary": {"m_axis_0": BOUNDARY["m_axis_0"], "s_axis_0": statement}}
+    with pytest.raises(ConfigurationRefused) as refusal:
+        DataflowBuildConfig.from_json(json.dumps(stated))
+    (finding,) = refusal.value.findings
+    assert (finding.code, finding.owner) == (
+        "configuration-invalid",
+        f"configuration.boundary.s_axis_0{place}",
+    )
+    assert finding.message == refused
 
 
 def test_a_setting_named_as_a_field_is_refused() -> None:
