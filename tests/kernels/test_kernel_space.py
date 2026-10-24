@@ -46,14 +46,7 @@ from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Direction, Endpoint, Signal
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource
 from finn.kernels.artifacts.module import Fragment, Held
-from finn.kernels.base import (
-    BUFFERING,
-    CYCLES,
-    NATIVE_CLOCKING,
-    NETLIST,
-    RESOURCES,
-    KernelSpace,
-)
+from finn.kernels.base import NATIVE_CLOCKING, KernelSpace
 from finn.kernels.channels import ChannelFifo
 from finn.kernels.declaration import KernelDeclaration, is_member
 from finn.kernels.fifo import FifoKernel, fifo_resources
@@ -79,13 +72,13 @@ def test_a_fifo_answers_its_netlist_cycles_buffering_and_resources() -> None:
     assert point.cycles == 6
     assert point.buffering == 8 * 13
     assert point.resources == fifo_resources(8, 13, "auto", fabric=FULL_DSP48E2.fabric)
-    for key, value in (
-        (NETLIST, point.netlist),
-        (CYCLES, 6),
-        (BUFFERING, 8 * 13),
-        (RESOURCES, point.resources),
+    for member, value in (
+        (FifoKernel.netlist, point.netlist),
+        (FifoKernel.cycles, 6),
+        (FifoKernel.buffering, 8 * 13),
+        (FifoKernel.resources, point.resources),
     ):
-        assert point.query(FifoKernel.exports[key]) == Available(value)
+        assert point.query(member) == Available(value)
 
 
 def test_a_fifo_s_answers_wait_on_its_choices_and_refuse_with_it() -> None:

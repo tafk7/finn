@@ -27,7 +27,6 @@ from finn.core.space import (
     Space,
     View,
     ViewAssessment,
-    ViewKey,
     constraint,
     derived,
     design_space,
@@ -35,8 +34,6 @@ from finn.core.space import (
     view,
 )
 from finn.core.space.inspection import ChoiceInfo
-
-RESULT = ViewKey("result", int)
 
 
 class FixedImplementation(Space):
@@ -49,7 +46,6 @@ class FixedImplementation(Space):
         return self.size // self.lanes
 
     physical = View(result)
-    exports = {RESULT: physical}
 
 
 class SmallImplementation(Space):
@@ -60,7 +56,6 @@ class SmallImplementation(Space):
         return self.size
 
     physical = View(result)
-    exports = {RESULT: physical}
 
 
 def _case_name(case: str) -> str:

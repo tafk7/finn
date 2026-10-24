@@ -6,9 +6,9 @@
 A kernel binding a module (``KernelSpace`` with a ``LibraryModule``) states its
 parameters, sources and resources, and its ports; it places no kernel (checked when the
 class is made: ``tests/kernels/test_kernel_space.py``). Its control bus is a declaration
-(``ControlBus``): held idle while it is not presented, presented (exported as ``CONTROL``)
-while it is, so a bus is accounted for by construction; its pins come before every
-port's, its hold after theirs. Every port runs on its kernel's clock domain
+(``ControlBus``): held idle while it is not presented, presented (read as
+``KernelSpace.bus_control``) while it is, so a bus is accounted for by construction; its
+pins come before every port's, its hold after theirs. Every port runs on its kernel's clock domain
 (``clock_domain``). Its module is the ``Leaf`` at the empty label of its netlist
 (``library_module``). A kernel with children presents a child's port as its own
 (``served``: ``<name>_contract``, labelled below it), and its netlist merges its members'.
@@ -49,7 +49,7 @@ from finn.kernels.artifacts.module import Held, Leaf, RegisterMap
 from finn.kernels.base import NATIVE_CLOCKING, KernelSpace
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.configure import commit
-from finn.kernels.control import CONTROL, Control, ControlBus, held_bus
+from finn.kernels.control import Control, ControlBus, held_bus
 from finn.kernels.library import LibraryModule, library_module
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port import AxiStreamPort, served
@@ -168,7 +168,7 @@ def test_a_control_bus_held_holds_its_inputs_after_every_port_s_hold() -> None:
     point = controlled()
     assert point.config_presented is False
     assert point.config_control == Control(None)
-    assert point.query(Controlled.exports[CONTROL]) == Available(Control(None))
+    assert point.query(Controlled.bus_control) == Available(Control(None))
     module = library_module(point)
     names = [pin.name for pin in module.abi.pins]
     # Its pins before every port's, after the probe's other pins (declared before it).
@@ -178,17 +178,17 @@ def test_a_control_bus_held_holds_its_inputs_after_every_port_s_hold() -> None:
     assert module.held.unused == expected.unused
 
 
-def test_a_control_bus_presented_is_exported_with_its_port_and_registers() -> None:
+def test_a_control_bus_presented_is_read_with_its_port_and_registers() -> None:
     point = controlled(writable=True, control="first_s_axilite")
     assert point.config_presented is True
     control = Control(BUS, "first_s_axilite", RegisterMap(((0, 7),)))
-    assert point.query(Controlled.exports[CONTROL]) == Available(control)
+    assert point.query(Controlled.bus_control) == Available(control)
     assert library_module(point).held.inputs == (("mode", 1),)
 
 
 def test_a_control_bus_presented_without_its_port_is_refused() -> None:
     # A bus it presents names the port it is presented at: presented with no port (the
-    # optional ``control`` left out, None), its control view refuses rather than export a
+    # optional ``control`` left out, None), its control view refuses rather than present a
     # bus at port None.
     point = controlled(writable=True)
     assert point.config_presented is True
