@@ -36,11 +36,11 @@ from finn.core.space import (
     Select,
     Space,
     ValueHandle,
-    ValueSemantics,
     View,
     ViewAssessment,
     ViewKey,
     constraint,
+    default_semantics,
     derived,
     design_space,
     inspection,
@@ -53,14 +53,13 @@ class DType:
     bits: int
 
 
-DTYPE = ValueSemantics.immutable_nominal(DType)
-INT = ValueSemantics.immutable_nominal(int)
+INT = default_semantics(int)
 COST = ViewKey("cost", int)
 
 
 class Room(Space):
     area: int = Param()
-    label: str = Param(required=False)
+    label: str | None = Param(default=None)
     finish: int = Decision(values=(1, 2, 3))
 
     @view
@@ -155,10 +154,10 @@ class Fifo(Space):
 
 
 class Eltwise(Space):
-    activation: DType = Param(semantics=DTYPE)
-    weight: DType = Param(semantics=DTYPE)
+    activation: DType = Param()
+    weight: DType = Param()
 
-    @derived(a=activation, b=weight, semantics=DTYPE)
+    @derived(a=activation, b=weight)
     def result_dtype(*, a: DType, b: DType) -> QueryResult[DType]:
         return Available(DType(max(a.bits, b.bits) + 1))
 
@@ -264,7 +263,7 @@ def keys(board: Board, house: House) -> None:
     assert_type(Kernel.spec, Spec)
     assert_type(Board.kernel.buffer.depth, int)
     assert_type(board.kernel.query(Kernel.spec), QueryResult[Spec])
-    assert_type(board.kernel.present(Kernel.spec), bool)
+    assert_type(board.present(Board.kernel), bool)
     assert_type(board.kernel.spec.payload_bits, int)
     assert_type(inspection.decision_handle(house, House.kitchen.finish), DecisionHandle[int])
     assert_type(inspection.decision_handle(house, House.heating), DecisionHandle[str])

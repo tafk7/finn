@@ -826,11 +826,13 @@ class Network:
     # -- its choices ----------------------------------------------------------------------
 
     def decisions(self) -> dict[Key, inspection.DecisionInfo[object]]:
-        """Every Decision of every member, by key, applicable or not, ranked."""
+        """Every Decision of every member, by key, applicable or not, listed or not (its
+        class's, found by structure), ranked."""
         found: dict[Key, inspection.DecisionInfo[object]] = {}
         for name in self._ranked:
             subject = Channel if name in self._unbound else self._points[name]
-            found |= {(name, item.key): item for item in inspection.decisions(subject)}
+            every = inspection.decisions(inspection.model(subject))
+            found |= {(name, item.key): item for item in every}
         return found
 
     def _wanted(self, names: Iterable[str] | None) -> Sequence[str]:

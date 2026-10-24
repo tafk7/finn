@@ -7,7 +7,7 @@ It computes ``thresholds(x @ W1) @ W2``. Each MatMul reads its tensors and prese
 its ports' contracts on the network's channels; each channel takes them from its
 kernels (``Interface``), and the tensor of a MatMul's results is the MatMul's statement
 of them (``result_tensor``), read before it is placed. The weights are given to each MatMul
-(``w_contents``): each weight channel carries what its MatMul states for it, its
+(``weights``, known): each weight channel carries what its MatMul states for it, its
 contents (``stored_weights``) and its tensor over their range (``carried_weights``). ``chain()``
 is the Chain configured as the kernel tests, the KernelOp partition tests and the
 XSim harness use it; its module is named ``finn_chain`` (``STEM``).
@@ -21,10 +21,11 @@ from qonnx.core.datatype import DataType
 
 from finn.core.space import Space, design_space
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels.matmul import MatMulKernel, column_range
+from finn.kernels.matmul import KnownWeights, MatMulKernel, column_range
 from finn.kernels.network import Fact, Interface, Network, Wire, wire
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.domains import range_dtype
+from finn.kernels.values.semantics import IntegerTensorValue
 from support.helpers import (
     FULL_DSP48E2,
     choose,
@@ -58,10 +59,9 @@ def matmul(weights: Any, x_tensor: Any) -> MatMulKernel:
     """A MatMul of known ``weights`` (``W``) on the activations ``x_tensor``: its extents
     and the activations' datatype are its tensors'."""
     return MatMulKernel(
-        weights_dtype=W,
         platform=FULL_DSP48E2,
         x_tensor=x_tensor,
-        w_contents=weights,
+        weights=KnownWeights(IntegerTensorValue.of(weights), W),
     )
 
 
@@ -129,7 +129,7 @@ def members(hidden: Tensor = HIDDEN_TENSOR) -> dict[str, Space | Wire]:
             "first": matmul(W1, X_TENSOR),
             "activate": ThresholdingAxiKernel(
                 threshold_dtype=THRESHOLD_DTYPE,
-                thresholds=THRESHOLDS,
+                thresholds=IntegerTensorValue.of(THRESHOLDS),
                 bias=0,
                 input_tensor=hidden,
                 platform=platform,

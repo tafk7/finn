@@ -25,14 +25,15 @@ def _results(x: Tensor, w: Tensor, **facts: Any) -> Tensor:
     """MatMul's statement of its results on the activations ``x`` and streamed weights
     ``w``: a value, whatever MatMul's validity."""
     found: Tensor = design_space(
-        MatMulKernel(**FACTS, **facts, x_tensor=x, w_tensor=w)
+        MatMulKernel(**FACTS, **facts, x_tensor=x, weights=w)
     ).result_tensor
     return found
 
 
 def matmul() -> dict[str, Any]:
     """Y = X @ W on the packed core, its weights streamed: its activations replayed and framed
-    by the channel's adapter, as its core's port states; its result element its own view."""
+    by the channel's adapter, as its core's port states; its result element its own view.
+    The weights' channel carries the tensor MatMul is given as its ``weights``."""
     x, w = tensor((ROWS, REDUCTION), "INT4"), tensor((REDUCTION, OUTPUTS), "INT4")
     return dict(
         space_type=MatMulKernel,
@@ -44,7 +45,7 @@ def matmul() -> dict[str, Any]:
             "compute.packed.compute_pumping": False,
             "compute.packed.reducer": "tree",
         },
-        facts=FACTS,
+        facts={**FACTS, "weights": w},
     )
 
 
@@ -54,7 +55,7 @@ def depthwise() -> dict[str, Any]:
     x, w = tensor((ROWS, REDUCTION, OUTPUTS), "INT4"), tensor((REDUCTION, OUTPUTS), "INT4")
     case["inputs"] = {"x_channel": x, "w_channel": w}
     case["outputs"] = {"y_channel": _results(x, w, form=Form.DEPTHWISE)}
-    case["facts"] = {**FACTS, "form": Form.DEPTHWISE}
+    case["facts"] = {**FACTS, "form": Form.DEPTHWISE, "weights": w}
     return case
 
 

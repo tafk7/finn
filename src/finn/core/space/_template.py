@@ -13,11 +13,6 @@ literal or a default is a value on the slot. C's own formals are its ``param`` r
 where C is placed, the placing class's slot binds each, so a formal has one identity, its
 scope and its formal record, whatever binds it.
 
-A Decision over nodes guarded by ``supplied(formal)`` never applies where that formal is
-unsupplied. A class is compiled once, with the choice's candidates; it records the formal,
-and what exists only where the choice applies (``Compiled.requires``); where the class is
-placed, the rule is applied per placement.
-
 C's members are numbered within the class, each reference an edge (``ir.Edge``: a member of
 C; a member of a class C places, through its slots; C's own formal; the guard C is placed
 under; a selection of a choice's member, in the choice's own scope). No record stands for a
@@ -49,7 +44,7 @@ from ._check import check
 from ._configuration import Space
 from ._lower import lower
 from ._nodes import NodeDecision, NodeDecl, slot_declaration
-from ._table import Binding, Read, Table, member_key
+from ._table import Binding, Table, member_key
 from .errors import DefinitionError
 from .ir import PLACING, Edge, Formal, Local, Member, NodeRef, Placed, Placing, Selected
 
@@ -73,10 +68,9 @@ class CompiledSlot:
     """A Space a class places (a child node, or a candidate of a Decision over nodes), slot
     ``index`` of its compiled form: its local name, its class's compiled form, the node
     declaration placed, the guard it is placed under (an edge of the placing class), its
-    candidacy (choice, case), the Decision over nodes it exists only where it applies
-    (``requires``), its formals' bindings (``Binding``: a literal or a default as a value; a
-    reference by the record the placing class writes for it, ``node``; or unsupplied), and
-    its declaration position (``position``: its structure item, 0 for a child node or 1 + its
+    candidacy (choice, case), its formals' bindings (``Binding``: a literal or a default as a
+    value; a reference by the record the placing class writes for it, ``node``), and its
+    declaration position (``position``: its structure item, 0 for a child node or 1 + its
     case for a candidate)."""
 
     index: int
@@ -85,7 +79,6 @@ class CompiledSlot:
     record: NodeDecl | None
     guard: Edge
     candidate: tuple[int, str] | None
-    requires: int | None
     bindings: Mapping[str, Binding]
     position: tuple[int, int]
 
@@ -98,12 +91,8 @@ class CompiledSlot:
 class CompiledChoice:
     """An own Decision over nodes: its key, its selector (a record), its guard, its cases
     (each a slot, or None for a case that places nothing), its selections of a member
-    (records), and what a placement where it never applies needs (``never_formal``
-    unsupplied there): the candidates' classes, the selector's value there, every selection
-    made for it (record -> member) and those its candidates share, each read of a member
-    through it (in the order lowered), and the shared members dropped for their
-    candidates' disagreeing types. A selection where it never applies has no alternatives
-    and keeps the type the class checked its readers against (``_scopes``)."""
+    (records), every selection made for it (record -> member) and those its candidates
+    share, and the shared members dropped for their candidates' disagreeing types."""
 
     index: int
     key: str
@@ -111,12 +100,8 @@ class CompiledChoice:
     guard: Edge
     cases: tuple[tuple[str, int | None], ...]
     members: Mapping[str, int]
-    space_types: tuple[type[Space], ...]
-    never_formal: str | None
-    never_value: str
     selects: Mapping[int, str]
     shared: frozenset[int]
-    readers: Mapping[str, tuple[Read, ...]]
     dropped: frozenset[str]
 
 
@@ -132,15 +117,11 @@ class Compiled:
     member of another class, for a scope it places, or for the guard it is placed under. A
     walk reads each edge as ``ref`` says. ``order``: its records in dependency order.
 
-    ``binds``, ``chooses`` and ``chosen_reads`` read each written record back: what it is
-    written for, and a selection's reads (where one exists at a placement, the selection does).
+    ``binds`` and ``chooses`` read each written record back: what it is written for.
 
     ``slots``: the Spaces it places, in placement order (structure order, candidates in case
     order). Its own maps, by record and slot: ``formals``, ``members``,
-    ``children``, ``choices``, ``selections`` (each own selection's (choice, member)),
-    ``requires`` (what exists only where an own Decision over nodes applies, a record or a
-    member of a placed Space it reads: carried for ``supplied()``'s rule; a member of a placed
-    Space takes the applicability of the first reader that named it, ``Table.edges``)."""
+    ``children``, ``choices``, ``selections`` (each own selection's (choice, member))."""
 
     space_type: type[Space]
     records: tuple[Member, ...]
@@ -153,16 +134,13 @@ class Compiled:
     selections: Mapping[int, tuple[int, str]]
     own_selection: Mapping[tuple[int, str], int]
     selectors: Mapping[int, int]
-    requires: Mapping[object, int]
     bound: Mapping[tuple[int, str], int]
     chosen: Mapping[tuple[tuple[int, ...], int, str], int]
     written: Mapping[int, int]
     # Each written record back to what it is written for: a binding's (slot, formal), a
-    # selection's (slots, choice, member) and each read of that selection (``Read``, in the
-    # class's declaration order).
+    # selection's (slots, choice, member).
     binds: Mapping[int, tuple[int, str]]
     chooses: Mapping[int, tuple[tuple[int, ...], int, str]]
-    chosen_reads: Mapping[int, tuple[Read, ...]]
     members: Mapping[object, int]
     named_members: Mapping[str, int]
     children: Mapping[object, int]
@@ -325,9 +303,7 @@ def _link(space_type: type[Space]) -> Compiled:
 def _compile(space_type: type[Space]) -> Compiled:
     table = allocate(space_type, link_template)
     lower(table)
-    # What crosses a slot: a placed Space's records that read what its placement does not
-    # place, and cycles through the Spaces it places (``_compose``).
-    _compose.check_placements(table)
+    # What crosses a slot: cycles through the Spaces it places (``_compose``).
     order = _compose.order(table)
     check(table, order)
     names = [node.key for node in table.nodes]
@@ -417,7 +393,6 @@ class _Freezing:
         bound: dict[tuple[int, str], int] = {}
         chosen: dict[tuple[tuple[int, ...], int, str], int] = {}
         written: dict[int, int] = {}
-        chosen_reads: dict[int, tuple[Read, ...]] = {}
         for record, node in enumerate(nodes):
             if node.scope == 0:
                 continue
@@ -429,7 +404,6 @@ class _Freezing:
             path, choice, member = table.chooses[record]
             chosen[(path, choice, member)] = record
             written[record] = path[0]
-            chosen_reads[record] = tuple(table.chosen_reads.get(record, ()))
         structure: list[tuple[str, int]] = []
         for name, declaration in own.effective.members.items():
             kind = table.kinds[space_type][name]
@@ -461,21 +435,6 @@ class _Freezing:
         for edge in edges:
             if type(edge) is not Local and edge not in refs:
                 refs[edge] = _ref(edge, slots, formals, own_selection, chosen)
-        # What exists only where an own Decision over nodes applies: a record made under it,
-        # and a member of a placed Space first named under it (each in the order made).
-        requires: dict[object, int] = {}
-        for vertex in table.vertices:
-            if isinstance(vertex, int):
-                found = table.requires.get(vertex)
-                if found is not None:
-                    requires[vertex] = found
-                continue
-            applying = table.edges[vertex]
-            if applying is not None:
-                read = refs.get(vertex)
-                if read is None:  # an edge nothing reads (named once, for its first reader)
-                    read = _ref(vertex, slots, formals, own_selection, chosen)
-                requires.setdefault(read, applying)
         value_members = tuple(
             own.named_members[name]
             for name, kind in table.kinds[space_type].items()
@@ -493,13 +452,11 @@ class _Freezing:
             _frozen(self.selections),
             _frozen(own_selection),
             _frozen({choice.selector: choice.index for choice in table.choice_drafts}),
-            _frozen(requires),
             _frozen(bound),
             _frozen(chosen),
             _frozen(written),
             _frozen({record: written_for for written_for, record in bound.items()}),
             _frozen({record: written_for for written_for, record in chosen.items()}),
-            _frozen(chosen_reads),
             _frozen(own.members),
             _frozen(own.named_members),
             _frozen({key: self.slot_of[draft] for key, draft in own.children.items()}),
@@ -524,16 +481,12 @@ class _Freezing:
             scope.record,
             self.edge(cast(NodeRef, scope.guard)),
             scope.candidate,
-            placed.requires,
             _frozen(placed.bindings),
             position,
         )
 
     def choice(self, index: int) -> CompiledChoice:
-        table = self.table
-        draft = table.choice_drafts[index]
-        owner = table.drafts[draft.scope].effective
-        decision = cast(NodeDecision, owner.members[draft.key])
+        draft = self.table.choice_drafts[index]
         return CompiledChoice(
             draft.index,
             draft.key,
@@ -544,14 +497,8 @@ class _Freezing:
                 for case, child in draft.cases
             ),
             _frozen(draft.members),
-            tuple(
-                record.space_type for record in decision.candidates.values() if record is not None
-            ),
-            draft.never_formal,
-            next(iter(decision.candidates)),
             _frozen(draft.selects),
             frozenset(draft.shared),
-            _frozen({member: tuple(reads) for member, reads in draft.readers.items()}),
             frozenset(draft.dropped),
         )
 

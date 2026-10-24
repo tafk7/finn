@@ -41,6 +41,7 @@ from finn.kernels.artifacts.module import declared_registers
 from finn.kernels.channels import Channel
 from finn.kernels.network import Interface, Network, wire
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.values.semantics import IntegerTensorValue
 from finn.toolchain.launcher import host_toolchain
 from kernels.sweeps.rtl_transport import drive_observed
 
@@ -81,7 +82,7 @@ def placed(case: Case) -> Network:
     y = Tensor((PIXELS, CHANNELS), result)
     facts: dict[str, Any] = dict(
         threshold_dtype=ELEMENT,
-        thresholds=(case.initial,),
+        thresholds=IntegerTensorValue.of((case.initial,)),
         bias=0,
         input_tensor=x,
         platform=FULL_DSP48E2,

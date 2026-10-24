@@ -23,15 +23,11 @@ from finn.core.space import (
     inspection,
 )
 from finn.core.space.errors import DefinitionError, RequestError
-from finn.dataflow.datatypes import (
-    QONNX_DATATYPE_TOKEN,
-    QONNXDataType,
-    resolve_qonnx_datatype_name,
-)
+from finn.core.space.semantics import annotation_type, canonical
+from finn.dataflow.datatypes import QONNXDataType, resolve_qonnx_datatype_name
 from finn.kernels.base import KernelSpace
 from finn.kernels.configure import chosen, commit
 from finn.kernels.values.domains import Integer
-from finn.kernels.values.semantics import INTEGER_VECTOR, QONNX_DATATYPE_VALUE_SEMANTICS
 
 
 def views(point: object) -> list[str]:
@@ -88,51 +84,40 @@ def test_kernel_identity_is_validated_at_class_creation() -> None:
         "FLOAT<5,10,7>",
     ),
 )
-def test_candidate_dtype_adapter_preserves_canonical_names_and_snapshots(name: str) -> None:
+def test_the_datatype_annotation_takes_each_qonnx_datatype_as_it_is(name: str) -> None:
+    """``QONNXDataType`` is the check: every datatype qonnx resolves is an instance of
+    ``BaseDataType``, its token; a datatype's canonical name is not one. A datatype is a
+    registered value type, so its canonical form is the value itself."""
     value = resolve_qonnx_datatype_name(name)
-    semantics = QONNX_DATATYPE_VALUE_SEMANTICS
-    assert semantics.type_token is QONNX_DATATYPE_TOKEN
-    assert semantics.accepts(value)
-    # A datatype is a value (one immutable instance per canonical name), so the
-    # snapshot is the value itself.
-    assert semantics.freeze(value) is value
-    assert not semantics.accepts(name)
+    check = annotation_type(QONNXDataType, "dtype", owner="test")
+    assert check.type_token is QONNXDataType
+    assert check.accepts(value)
+    assert canonical(value) is value
+    assert not check.accepts(name)
 
 
 def test_a_dtype_choice_replays_the_exact_datatype() -> None:
     class DtypeKernel(KernelSpace):
         id = "test.dtype"
         dtype: QONNXDataType = Decision(
-            values=(resolve_qonnx_datatype_name("TERNARY"), resolve_qonnx_datatype_name("INT2")),
-            semantics=QONNX_DATATYPE_VALUE_SEMANTICS,
+            values=(resolve_qonnx_datatype_name("TERNARY"), resolve_qonnx_datatype_name("INT2"))
         )
 
     base = design_space(DtypeKernel())
     point = base.with_choices(dtype=resolve_qonnx_datatype_name("TERNARY"))
     replayed = commit(base, chosen(point))
     assert replayed.dtype.name == "TERNARY"
-    assert not QONNX_DATATYPE_VALUE_SEMANTICS.values_equal(
-        replayed.dtype, resolve_qonnx_datatype_name("INT2")
-    )
+    assert replayed.dtype != resolve_qonnx_datatype_name("INT2")
     with pytest.raises(RequestError):
         base.with_choices(dtype=cast(QONNXDataType, "TERNARY"))
 
 
-def test_the_integer_vector_adapter_preserves_exact_integers() -> None:
-    assert INTEGER_VECTOR.accepts((1, 0, -2))
-    assert INTEGER_VECTOR.accepts(())
-    assert not INTEGER_VECTOR.accepts((True, 2))
-    assert not INTEGER_VECTOR.accepts([1, 2])
-    vector = (1, 2)
-    assert INTEGER_VECTOR.freeze(vector) is vector
-
-
-def test_explicit_dtype_semantics_support_typed_protocol_results_of_immutable_values() -> None:
+def test_a_datatype_fact_and_derived_value_are_the_datatype_itself() -> None:
     class Typed(KernelSpace):
         id = "test.typed"
-        dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+        dtype: QONNXDataType = Param()
 
-        @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+        @derived
         def result(self) -> QONNXDataType:
             return self.dtype
 
@@ -170,7 +155,7 @@ def test_composite_extends_kernel_with_typed_optional_views_and_independent_node
     word = composite(
         "IntegerWord",
         {
-            "dtype": Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS),
+            "dtype": Param(),
             "lanes": Param(),
             "payload_bits": derived(bits),
             "pin_values": pins,
@@ -185,8 +170,8 @@ def test_composite_extends_kernel_with_typed_optional_views_and_independent_node
 
     class Pair(KernelSpace):
         id = "test.interface_pair"
-        activation_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
-        weights_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+        activation_dtype: QONNXDataType = Param()
+        weights_dtype: QONNXDataType = Param()
         activation = word(dtype=activation_dtype, lanes=2)  # type: ignore[call-arg]
         weights = word(dtype=weights_dtype, lanes=2)  # type: ignore[call-arg]
 

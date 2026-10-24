@@ -56,11 +56,12 @@ from finn.kernels.explore import (
     TargetThroughput,
     explore,
 )
-from finn.kernels.matmul import MatMulKernel
+from finn.kernels.matmul import KnownWeights, MatMulKernel
 from finn.kernels.network import Fact, Interface, Network, NetworkError, Wire, dotted, wire
 from finn.kernels.policies import Required
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.utilization import total
+from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import RESOURCE_NAMES, Platform, Resources
 
 
@@ -388,10 +389,9 @@ def dsp58_matmul() -> tuple[Seam, Network]:
 
     def first() -> MatMulKernel:
         return MatMulKernel(
-            weights_dtype=chain.W,
             platform=FULL_DSP58,
             x_tensor=x_tensor,
-            w_contents=chain.W1,
+            weights=KnownWeights(IntegerTensorValue.of(chain.W1), chain.W),
         )
 
     y_tensor = design_space(first()).y_tensor
@@ -747,7 +747,8 @@ def test_a_choice_a_rebuild_brings_into_play_is_the_interim_rule_s_not_the_strat
     folding_ = {"first.pe": 4, "first.simd": 4}
     wide = with_defaults(choose(chain.network(), {"first.compute": "packed", **folding_}))
     assert wide.member("x").input_chain == "none"
-    assert isinstance(state(wide, "x.adapter_ram_style"), inspection.Absent)
+    # its adapter places nothing for x's facts, so its memory is in none of x's lists (SZ113)
+    assert ("x", "adapter_ram_style") not in dict(wide.states(("x",)))
     folded = TargetCycles(48).explore(explorer, wide)
     assert folding(explorer, folded)["first.simd"] == 1
     assert folded.member("x").input_chain == "input_gen"

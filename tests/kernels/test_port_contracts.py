@@ -52,6 +52,7 @@ from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.library import library_module
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.network import Interface, Network, wire
+from finn.kernels.values.semantics import IntegerTensorValue
 
 A, W, R = DataType["INT3"], DataType["INT3"], DataType["INT8"]
 ROWS, REDUCTION, OUTPUTS, PE, SIMD = 2, 4, 4, 2, 2
@@ -116,7 +117,7 @@ def placed(
                 platform=FULL_DSP48E2,
                 dtype=W,
                 form=tiled,
-                contents=weight_values(w),
+                contents=IntegerTensorValue.of(weight_values(w)),
             ),
             "compute": core(
                 form=form,

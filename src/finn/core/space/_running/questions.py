@@ -19,6 +19,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from .._failure import NativeEvaluationError
 from ..edits import BrokenRule, ChangeOutcome
 from ..inspection import (
     Absent,
@@ -41,7 +42,7 @@ from ..results import (
     Rejected,
     Unresolved,
 )
-from ..semantics import equal, snapshot
+from ..semantics import same
 from .answers import _ordered, _waits, membership_arguments
 from .evaluate import INAPPLICABLE, TRUE, Evaluation, Session, evaluation
 from .facts import prepare
@@ -161,10 +162,32 @@ def state_of(ev: Evaluation, index: Address) -> ChoiceState:
     return Waiting(value, _waits(read)) if isinstance(read, Unresolved) else Set(value)
 
 
-def states(ev: Evaluation, scope: ScopeRecord | None = None) -> tuple[tuple[str, ChoiceState], ...]:
-    """Every choice's state, in the flow order (today's, from the compiled forms)."""
+def pruned(ev: Evaluation, index: Address) -> bool:
+    """Whether the choice ``index`` is in none of the design space's lists (SZ113): unset,
+    and its existence false under the facts alone. That is its presence read in its facts
+    layer's design space with nothing stored (every choice unknown): absent there, by a
+    guard or a case not picked, is false, an absent guard dominating a refused one. Present,
+    unknown, refused or failing is not false, and a stored choice is never pruned (SZ119
+    (5)): it is listed, dormant where its scope is absent."""
+    if index in ev.ds.stored or not ev.inferred.guards(index):
+        return False
+    try:
+        found, answer = presence(evaluation(ev.ds.layer.bare, ev.session), index)
+    except NativeEvaluationError:
+        return False
+    return found == "absent" and not isinstance(answer, Rejected)
+
+
+def listed(ev: Evaluation, scope: ScopeRecord | None = None) -> tuple[Address, ...]:
+    """The choices below ``scope`` (the root's by default) in the design space's lists, in
+    the flow order: every choice but the pruned (``pruned``)."""
     at = ev.scopes.root if scope is None else scope
-    return tuple((i.key, state_of(ev, i)) for i in _flow(ev.model, at))
+    return tuple(i for i in _flow(ev.model, at) if not pruned(ev, i))
+
+
+def states(ev: Evaluation, scope: ScopeRecord | None = None) -> tuple[tuple[str, ChoiceState], ...]:
+    """Every listed choice's state, in the flow order (``listed``)."""
+    return tuple((i.key, state_of(ev, i)) for i in listed(ev, scope))
 
 
 # -- pairs, origins, standing -----------------------------------------------------------
@@ -246,23 +269,18 @@ def standing(ev: Evaluation, origin: Address, named: frozenset[Address]) -> tupl
         return ()
     deciders = _deciders(ev, origin)
     read: set[Address] = set()
-    if node.kind == "present":
-        for target, answer in ev.get(origin).trace:
-            if not isinstance(answer, Inapplicable) and target != node.guard:
-                read |= {i for i in _deciders(ev, target) if i.kind == "decision"}
-    else:
-        pending, seen = [origin], {origin}
-        while pending:
-            index = pending.pop()
-            for dependency in _value_reads(ev, index):
-                if dependency in seen:
-                    continue
-                seen.add(dependency)
-                kind = dependency.kind
-                if kind == "decision":
-                    read.add(dependency)
-                elif kind not in ("param", "const", "validity"):
-                    pending.append(dependency)
+    pending, seen = [origin], {origin}
+    while pending:
+        index = pending.pop()
+        for dependency in _value_reads(ev, index):
+            if dependency in seen:
+                continue
+            seen.add(dependency)
+            kind = dependency.kind
+            if kind == "decision":
+                read.add(dependency)
+            elif kind not in ("param", "const", "validity"):
+                pending.append(dependency)
     stored = ev.ds.stored
     return tuple(
         sorted(i.key for i in read if i in stored and i not in named and i not in deciders)
@@ -413,24 +431,16 @@ def _same(left: Mapping[Address, object], right: Mapping[Address, object]) -> bo
     return left.keys() == right.keys() and all(left[i] is right[i] for i in left)
 
 
-def _equal(node: Address, left: object, right: object, role: str, *, detach: bool) -> bool:
-    """Whether two values of ``node`` are equal by its semantics, in ``role``: a fact's
-    ("parameter equality") as given, a choice's ("configuration equality") each detached
-    first, so equality cannot change a stored value (today's assignment's)."""
-    if left is right:
-        return True
-    semantics = node.semantics
-    assert semantics is not None
-    if detach:
-        left = snapshot(semantics, left, owner=node.owner, role=role)
-        right = snapshot(semantics, right, owner=node.owner, role=role)
-    return equal(semantics, left, right, owner=node.owner, role=role)
+def _equal(node: Address, left: object, right: object, role: str) -> bool:
+    """Whether two values of ``node`` are the same value, in ``role`` (a fact's "parameter
+    equality", a choice's "configuration equality"): of one type and equal by ``==``."""
+    return same(left, right, owner=node.owner, role=role)
 
 
 def _stored(node: Address, value: object, old: object) -> object:
-    """A choice's ``value`` as stored: the held object ``old`` where the two are equal by
-    the choice's semantics (so nothing reads it anew), else ``value``."""
-    if old is not _MISSING and _equal(node, value, old, "configuration equality", detach=True):
+    """A choice's ``value`` as stored: the held object ``old`` where the two are the same
+    value (so nothing reads it anew), else ``value``."""
+    if old is not _MISSING and _equal(node, value, old, "configuration equality"):
         return old
     return value
 
@@ -454,7 +464,7 @@ def change(
     changed: set[Address] = set()
     for i in facts:
         old = held_facts.get(i, _MISSING)
-        if old is not _MISSING and _equal(i, old, values[i], "parameter equality", detach=False):
+        if old is not _MISSING and _equal(i, old, values[i], "parameter equality"):
             given[i] = old
         else:
             given[i] = values[i]
@@ -561,10 +571,12 @@ __all__ = [
     "bind",
     "change",
     "check",
+    "listed",
     "moved",
     "pairs",
     "placed",
     "presence",
+    "pruned",
     "standing",
     "state_of",
     "states",

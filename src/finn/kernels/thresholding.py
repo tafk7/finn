@@ -78,7 +78,6 @@ from finn.core.space import (
     Param,
     Rejected,
     constraint,
-    default_semantics,
     derived,
     divisors_of,
     domain,
@@ -112,9 +111,7 @@ from finn.kernels.utilization import (
 )
 from finn.kernels.values.domains import Integer, admit_element, set_index_dtype
 from finn.kernels.values.semantics import (
-    INTEGER_TENSOR,
-    QONNX_DATATYPE_VALUE_SEMANTICS,
-    IntegerTensor,
+    IntegerTensorValue,
     integer_range,
     integer_shape,
     integers,
@@ -141,7 +138,6 @@ def stage_counts(stages: object) -> Domain[int]:
     return domain(
         accepts=accepts,
         candidates=candidates,
-        semantics=default_semantics(int),
         ordered=True,
         stages=stages,
     )
@@ -211,8 +207,8 @@ class ThresholdingAxiKernel(KernelSpace):
 
     id = "finnlib.thresholding_axi.integer"
 
-    threshold_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
-    thresholds: IntegerTensor = Param(semantics=INTEGER_TENSOR)
+    threshold_dtype: QONNXDataType = Param()
+    thresholds: IntegerTensorValue = Param()
     bias: int = Param()
 
     @derived
@@ -224,7 +220,7 @@ class ThresholdingAxiKernel(KernelSpace):
         sets, rows, count = found
         return sets, rows, count
 
-    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    @derived
     def result_dtype(self) -> QONNXDataType | Rejected:
         bias = self.bias
         _, _, count = self.shape
@@ -248,15 +244,15 @@ class ThresholdingAxiKernel(KernelSpace):
     # set indices its set port reads (absent, the port is idle); and the port its
     # AXI-Lite interface is presented at when thresholds are runtime-writable.
     input_tensor: Tensor = Param()
-    set_tensor: Tensor = Param(required=False)
-    control: str = Param(required=False)
+    set_tensor: Tensor | None = Param(default=None)
+    control: str | None = Param(default=None)
     platform: Platform = Param()
 
     @derived
     def controllable(self) -> bool:
         """Whether whoever binds it named a port for its control bus, which runtime writes
         reach it by."""
-        return self.present(ThresholdingAxiKernel.control)
+        return self.control is not None
 
     use_axilite: bool = Decision(values=(False, True))
 
@@ -274,7 +270,7 @@ class ThresholdingAxiKernel(KernelSpace):
         FinnLib's ``rtl/nonlin/thresholding_axi.sv`` joins the two streams with several sets
         (SETS >= 2), accepting an input beat only beside a set beat, so without a set
         tensor it takes no beat; with one set it leaves the set port's ready undriven."""
-        placed = self.present(ThresholdingAxiKernel.set_tensor)
+        placed = self.set_tensor is not None
         if self.shape[0] < 2:
             if placed:
                 return reject(
@@ -338,12 +334,12 @@ class ThresholdingAxiKernel(KernelSpace):
             return 0, uram
         return self.stage_depth(stages - ultra - block), uram
 
-    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    @derived
     def input_dtype(self) -> QONNXDataType:
         """The input's element type: its tensor's."""
         return self.input_element.dtype
 
-    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    @derived
     def table_dtype(self) -> QONNXDataType:
         """The table's type, WT, which its memories hold and the input is compared in.
         Never written (``use_axilite`` False), the table is its initial values, and its
@@ -478,7 +474,7 @@ class ThresholdingAxiKernel(KernelSpace):
             associated_reset=RESET,
         )
 
-    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    @derived
     def selector_dtype(self) -> QONNXDataType:
         return set_index_dtype(self.shape[0])
 
@@ -525,13 +521,14 @@ class ThresholdingAxiKernel(KernelSpace):
 
     @derived
     def set_sequence(self) -> BeatSequence | Rejected:
-        """One set index for each input beat; several sets without their indices are
-        refused, as ``selected`` refuses them."""
-        if self.shape[0] >= 2 and not self.present(ThresholdingAxiKernel.set_tensor):
-            return reject("threshold-set-channel", "several threshold sets take a set channel")
-        shape = self.set_tensor.shape
+        """One set index for each input beat. A single set takes no set channel, and its
+        idle port's order is refused, with a set tensor or without; several sets without
+        their indices are refused, as ``selected`` refuses them."""
         if self.shape[0] < 2:
             return reject("threshold-set-channel", "a single threshold set takes no set channel")
+        if self.set_tensor is None:
+            return reject("threshold-set-channel", "several threshold sets take a set channel")
+        shape = self.set_tensor.shape
         if shape != (self.input_stream.sequence.form.beats,):
             return reject("threshold-set-channel", "each input beat needs one set index")
         return BeatSequence(vector_major(shape, 1))

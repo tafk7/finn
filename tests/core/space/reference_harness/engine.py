@@ -68,8 +68,8 @@ selector reads its case's name); a selector picked by a derived value (the model
 by binding the selector itself (a binding to a selector reads its case's name); a child's
 guard is a derived member ``when-<name>``. Facts
 are the root's formals (SZ100 (5)): a required fact is ``Param()``, an optional one
-``Param(required=False)``, left unsupplied where the model reads ``None`` (the engine
-reads it unresolved: T4c's row). A ``Members`` is the
+``T | None = Param(default=None)``, left out where the model reads ``None`` (the engine
+reads it ``None`` too). A ``Members`` is the
 engine's ``Members(KEY)``, a key of its own, each entry its child's value export of that key
 (``exports = {KEY: derived}``); each entry is in a child or a case placed by the
 ``Members``'s scope, one per child. Its value, the engine's ``Located`` entries, is read as
@@ -112,6 +112,7 @@ from finn.core.space import (
     view,
 )
 from finn.core.space.edits import BrokenRule, ChangeOutcome
+from finn.core.space.occurrence import held
 
 from .forms import (
     AnswerForm,
@@ -119,6 +120,7 @@ from .forms import (
     Code,
     DefinitionForm,
     DroppedForm,
+    ListedForm,
     OutcomeForm,
     PossibleForm,
     RefusalForm,
@@ -445,7 +447,7 @@ class _Builder:
         if name in index.pickers:
             return self.picked(scope, name)
         if name in index.facts:
-            return Param(required=False) if name in index.optional else Param()
+            return Param(default=None) if name in index.optional else Param()
         if name in index.choices and index.choices[name].cases is not None:
             # a selector's value, read as its selected key
             return self._selector_key(scope, name)
@@ -661,10 +663,17 @@ class _Builder:
         if scope == "":
             for fact in sorted(index.facts):
                 members[fact] = self.member(scope, fact)
-                annotations[fact] = self.value_type(fact)
+                fact_type = self.value_type(fact)
+                annotations[fact] = (
+                    cast(Any, fact_type) | None if fact in index.optional else fact_type
+                )
         for path in self.externals[scope]:
             members[_input(path)] = self.member(scope, _input(path))
-            annotations[_input(path)] = self.value_type(path)
+            # an optional fact's input is optional too: its formal takes the None it reads
+            input_type = self.value_type(path)
+            annotations[_input(path)] = (
+                cast(Any, input_type) | None if path in index.optional else input_type
+            )
         if scope in self.spelling.guarded_selectors:
             members[OWN_GUARD] = self.member(scope, OWN_GUARD)
         for path in mine:
@@ -731,12 +740,26 @@ class Engine:
     ) -> Point:
         """The configuration with ``facts`` and nothing committed, as ``implementation``
         answers it (the harness's default by default, ``implementation.default``): an
-        optional fact the model reads ``None`` left unsupplied. The design space is built by
-        the public API, the common input every implementation opens."""
-        supplied = {name: value for name, value in facts.items() if not self._left_out(name, value)}
-        configuration = design_space(self.root(**cast(dict[str, Any], supplied)))
+        optional fact the model reads ``None`` given ``None``, the fact left out (SZ100 (5)).
+        The design space is built by the public API, the common input every implementation
+        opens."""
+        configuration = design_space(self.root(**cast(dict[str, Any], dict(facts))))
         implementation = chosen(implementation)
-        return Point(self, implementation.open(configuration), implementation.name)
+        return Point(
+            self, implementation.open(configuration), implementation.name, _reached(implementation)
+        )
+
+    def one_space(self, left: Mapping[str, object], right: Mapping[str, object]) -> AnswerForm:
+        """Whether the facts ``left`` and ``right``, each given to the root as written (an
+        optional fact given ``None`` passed as ``None``, never left out), make one design
+        space: the same interned facts layer and equal design space values. Refused with
+        the definition error's code where the engine refuses either."""
+        try:
+            first = held(design_space(self.root(**cast(dict[str, Any], left)))).ds
+            second = held(design_space(self.root(**cast(dict[str, Any], right)))).ds
+        except DefinitionError:
+            return AnswerForm("refused", codes=frozenset({("definition-error", "")}))
+        return AnswerForm("value", first.layer is second.layer and first == second)
 
     def make(
         self,
@@ -749,13 +772,9 @@ class Engine:
         ``implementation`` (``Implementation.make``; the harness's default by default): no
         rule checked, nothing dropped. A walked configuration answers as the one made from its
         facts and stored choices."""
-        supplied = {name: value for name, value in facts.items() if not self._left_out(name, value)}
         implementation = chosen(implementation)
-        made = implementation.make(self.root, supplied, dict(stored))
-        return Point(self, made, implementation.name)
-
-    def _left_out(self, name: str, value: object) -> bool:
-        return value is None and name in self.index.optional
+        made = implementation.make(self.root, dict(facts), dict(stored))
+        return Point(self, made, implementation.name, _reached(implementation))
 
     def path(self, owner: str) -> str:
         """The model path an engine finding's owner names."""
@@ -835,6 +854,12 @@ def definition(
     return DefinitionForm(None)
 
 
+def _reached(implementation: Implementation) -> frozenset[str]:
+    """The later milestones ``implementation`` declares it has reached (``matrix.reached``,
+    unchecked here: the matrix imports this module)."""
+    return frozenset(getattr(implementation, "milestones", frozenset()))
+
+
 @dataclass(frozen=True)
 class Point:
     """One configuration, as an implementation answers it (``answers``), asked the model's
@@ -845,6 +870,8 @@ class Point:
     answers: Answers
     #: the implementation answering (``Implementation.name``)
     implementation: str
+    #: the later milestones it declares it has reached (its ``milestones``; ``matrix.reached``)
+    reached: frozenset[str] = frozenset()
 
     def stored(self) -> dict[str, object]:
         """The committed choices, dormant ones included, by path."""
@@ -864,13 +891,20 @@ class Point:
     def _successor(self, changed: Changed) -> Point | None:
         if changed.after is None:
             return None
-        return Point(self.engine, changed.after, self.implementation)
+        return Point(self.engine, changed.after, self.implementation, self.reached)
 
     # -- the questions
 
+    def listed(self) -> ListedForm:
+        """The choices the implementation lists (``Answers.states``' keys)."""
+        return ListedForm(frozenset(path for path, _ in self.answers.states()))
+
     def state(self, path: str) -> StateForm:
-        """A choice's state (``Answers.states``)."""
-        found = dict(self.answers.states())[path]
+        """A choice's state (``Answers.states``); a choice the implementation does not list
+        (its facts alone rule it out, SZ113) is absent, as the model answers it by name."""
+        found = dict(self.answers.states()).get(path)
+        if found is None:
+            return StateForm("absent")
         if isinstance(found, inspection.Set):
             return StateForm("set", found.value)
         if isinstance(found, inspection.Waiting):
@@ -939,13 +973,11 @@ class Point:
         return PossibleForm(tuple(outcomes))
 
     def change(self, edit: model.Change) -> tuple[ChangeForm, Point | None]:
-        """``edit`` applied: its comparable result, and the configuration it publishes."""
-        if edit.unset or any(
-            self.engine._left_out(name, value) for name, value in edit.facts.items()
-        ):
-            raise NotTranslatable("the engine cannot set an optional fact back to unsupplied")
+        """``edit`` applied: its comparable result, and the configuration it publishes. An
+        optional fact unset is given ``None``, the fact left out (SZ100 (5))."""
+        facts = {**edit.facts, **dict.fromkeys(edit.unset)}
         before = self.stored()
-        changed = self.answers.change(dict(edit.commit), tuple(edit.clear), dict(edit.facts))
+        changed = self.answers.change(dict(edit.commit), tuple(edit.clear), facts)
         return self._form(changed, before)
 
     def bind(self, stored: Mapping[str, object]) -> tuple[ChangeForm, Point]:

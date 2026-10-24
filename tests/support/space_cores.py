@@ -53,7 +53,7 @@ CORES: dict[str, type[Space] | Space] = {"packed": Packed, "stub": Stub}
 
 
 def commit(point: Any, choices: dict[str, object]) -> Any:
-    owned = {item.key: item.reference for item in inspection.decisions(point)}
+    owned = {item.key: item.reference for item in inspection.decisions(inspection.model(point))}
     return point.with_choices({owned[key]: value for key, value in choices.items()})
 
 

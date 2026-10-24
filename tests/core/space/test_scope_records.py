@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 
 from core.space._templates_support import defined, links
-from finn.core.space import Decision, Param, Select, Space, derived, supplied
+from finn.core.space import Decision, Param, Select, Space, derived
 from finn.core.space._running.evaluate import evaluation
 from finn.core.space._scopes import Address, Scopes, existence
 from finn.core.space._template import compiled
@@ -59,8 +59,12 @@ class Outer(Space):
 
 
 class Gated(Space):
-    stream: int = Param(required=False)
-    given = supplied(stream)
+    stream: int | None = Param(default=None)
+
+    @derived
+    def given(self) -> bool:
+        return self.stream is not None
+
     source: Wide | Narrow = Select(wide=Wide, narrow=Narrow, when=given, width=stream)
 
 
@@ -152,19 +156,18 @@ def test_a_formal_bound_by_reference_has_its_own_address_and_reads_its_binding()
     width = scopes.find("left.width")
     assert width.scope.name == "left" and width.kind == "alias"
     assert width.output is scopes.find("leaf.bits")
-    # Bound by a literal: a constant under its scope's guard; left unsupplied: present.
+    # Bound by a literal: a constant under its scope's guard; left out: its default, None,
+    # a constant too.
     held = Scopes(compiled(Holds))
-    assert held.find("missing.stream").kind == "present"
-    # A choice that never applies where its formal is unsupplied: no candidates there.
-    assert held.find("missing.source").kind == "const"
-    (source,) = (choice for choice in held.choices() if choice.key == "missing.source")
-    assert source.scope is held.root.named_children["missing"]
-    assert dict(source.cases) == {"wide": None, "narrow": None}
-    (placed,) = (choice for choice in held.choices() if choice.key == "given.source")
-    assert [case.name for _, case in placed.cases if case is not None] == [
-        "given.source.wide",
-        "given.source.narrow",
-    ]
+    missing = held.find("missing.stream")
+    assert missing.kind == "const" and missing.value is None
+    # A choice guarded over the formal is placed wherever its class is: its guard decides.
+    for key in ("given.source", "missing.source"):
+        (placed,) = (choice for choice in held.choices() if choice.key == key)
+        assert [case.name for _, case in placed.cases if case is not None] == [
+            f"{key}.wide",
+            f"{key}.narrow",
+        ]
 
 
 @pytest.mark.parametrize("permuted", [False, True])

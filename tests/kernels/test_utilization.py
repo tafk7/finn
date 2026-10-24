@@ -65,6 +65,7 @@ from finn.kernels.utilization import (
     uram_constraint,
     uram_init_constraint,
 )
+from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import DspBlock, Fabric, Platform, Resources
 
 INT2, INT4, INT8 = (resolve_qonnx_datatype_name(name) for name in ("INT2", "INT4", "INT8"))
@@ -244,7 +245,7 @@ def table(elements: int) -> Any:
         MemStreamKernel(
             dtype=INT4,
             form=vector_major((elements,), 1),
-            contents=values,
+            contents=IntegerTensorValue.of(values),
             platform=FULL_DSP48E2,
         )
     )

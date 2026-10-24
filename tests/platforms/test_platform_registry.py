@@ -20,6 +20,7 @@ from finn.dataflow.traversal import tile
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.movers import iodma_hls
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.architectures import rule
 from finn.platform.boards import BOARDS
 from finn.platform.capabilities import DspBlock, Fabric, Platform, Resources
@@ -226,7 +227,9 @@ def test_versal_s_ultraram_takes_initial_contents_so_initialised_ultra_memories_
             MemStreamKernel(
                 dtype=DataType["INT3"],
                 form=tile(4, 4, 2, 2),
-                contents=((-4, -3, -2, -1), (0, 1, 2, 3), (3, 2, 1, 0), (-1, -2, -3, -4)),
+                contents=IntegerTensorValue.of(
+                    ((-4, -3, -2, -1), (0, 1, 2, 3), (3, 2, 1, 0), (-1, -2, -3, -4))
+                ),
                 platform=platform,
             )
         )
@@ -236,7 +239,7 @@ def test_versal_s_ultraram_takes_initial_contents_so_initialised_ultra_memories_
             ThresholdingAxiKernel(
                 input_tensor=Tensor((1, 1), ScalarEncoding(DataType["INT8"])),
                 threshold_dtype=DataType["INT8"],
-                thresholds=(((-2, 0, 3),),),
+                thresholds=IntegerTensorValue.of((((-2, 0, 3),),)),
                 bias=0,
                 platform=platform,
             )

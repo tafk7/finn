@@ -23,7 +23,6 @@ from finn.core.space import (
     Select,
     Space,
     derived,
-    supplied,
 )
 from finn.core.space._table import Binding
 from finn.core.space._template import Compiled, compiled, link_template
@@ -176,8 +175,12 @@ class Source(Space):
 
 
 class Edge(Space):
-    contents: int = Param(required=False)
-    valued = supplied(contents)
+    contents: int | None = Param(default=None)
+
+    @derived
+    def valued(self) -> bool:
+        return self.contents is not None
+
     source: Source = Select(memory=Source, when=valued, contents=contents)
 
 
@@ -186,15 +189,11 @@ class Graph(Space):
     streamed = Edge()
 
 
-def test_an_unsupplied_formal_and_the_choice_it_decides_are_carried() -> None:
-    """``supplied()``'s rule as the template carries it: a choice guarded by the supply of a
-    formal names it, and a slot leaving it unsupplied binds it so."""
-    edge = compiled(Edge)
-    (source,) = edge.choices
-    assert source.never_formal == "contents"
+def test_an_optional_formal_nothing_supplies_binds_its_default() -> None:
+    """A slot leaving an optional formal out binds its default, None, as a literal: no
+    binding form of its own, and the choice it guards is compiled as any other."""
     graph = compiled(Graph)
-    assert graph.slots[_slot(graph, "streamed")].bindings["contents"] == Binding("unsupplied")
+    assert graph.slots[_slot(graph, "streamed")].bindings["contents"] == Binding("literal", None)
     assert graph.slots[_slot(graph, "stored")].bindings["contents"] == Binding("literal", 4)
-    # What exists only where the choice applies, by record.
-    candidate = edge.slots[source.cases[0][1] or 0]
-    assert candidate.requires == source.index
+    (source,) = compiled(Edge).choices
+    assert [case for case, slot in source.cases if slot is not None] == ["memory"]

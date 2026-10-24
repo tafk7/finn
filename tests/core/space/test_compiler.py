@@ -10,7 +10,7 @@ from typing import Any, cast
 import pytest
 from support.refusals import refused
 
-from finn.core.space import Space, default_semantics, design_space, inspection
+from finn.core.space import Space, design_space, inspection
 from finn.core.space._nodes import node_record
 from finn.core.space._template import compiled
 from finn.core.space.compiler import compile_model
@@ -28,7 +28,6 @@ from finn.core.space.domains import divisors_of, domain
 from finn.core.space.errors import DefinitionError, RequestError
 from finn.core.space.ir import Local
 from finn.core.space.results import Available
-from finn.core.space.semantics import ValueSemantics
 
 
 def test_compile_links_forward_dependencies_without_executing_callbacks() -> None:
@@ -70,52 +69,34 @@ def test_compile_links_forward_dependencies_without_executing_callbacks() -> Non
     assert model.resolve(model.root, Example.result).semantics is not None
 
 
-def test_placement_literals_are_frozen_once_per_declaration_and_reads_stay_detached() -> None:
-    snapshots: list[list[int]] = []
-
-    def snapshot(value: list[int]) -> list[int]:
-        snapshots.append(list(value))
-        return list(value)
-
-    semantics: ValueSemantics[list[int]] = ValueSemantics(
-        list,
-        "integer list",
-        lambda value: type(value) is list,
-        lambda left, right: left == right,
-        snapshot,
-    )
-    literal = [1]
+def test_placement_literals_are_taken_once_per_declaration_in_their_canonical_form() -> None:
+    """A literal binding is type-checked and taken in its canonical form once, where its node
+    is declared (``-0.0`` is ``0.0``); every placement and every design space holds that one
+    value."""
 
     class Leaf(Space):
-        value: list[int] = Param(semantics=semantics)
+        value: tuple[float, ...] = Param()
 
     class Branch(Space):
-        leaf = Leaf(value=literal)
-
-    # A literal binding is frozen once, where its node is declared.
-    assert snapshots == [[1]]
+        leaf = Leaf(value=(-0.0, 1.0))
 
     class Root(Space):
         left = Branch()
         right = Branch()
 
     model = compile_model(Root)
-    assert snapshots == [[1]]  # compiling reuses the declaration's frozen literal
-    literal.append(2)
     point = design_space(Root())
-    point.left.leaf.value.append(99)
-    assert point.left.leaf.value == point.right.leaf.value == [1]
+    assert point.left.leaf.value == (0.0, 1.0) and str(point.left.leaf.value[0]) == "0.0"
+    assert point.left.leaf.value is point.right.leaf.value
     assert compile_model(Root) is model
     assert inspection.model(point) is model
 
-    # A fresh declaration freezes the literal's current value; no cache lets
-    # it reuse, or disturb, the earlier declaration's frozen literal.
+    # A fresh declaration takes its own literal; no cache lets it reuse the earlier one's.
     class Fresh(Space):
-        leaf = Leaf(value=literal)
+        leaf = Leaf(value=(2.0,))
 
-    assert design_space(Fresh()).leaf.value == [1, 2]
-    assert design_space(Branch()).leaf.value == [1]
-    assert point.left.leaf.value == [1]
+    assert design_space(Fresh()).leaf.value == (2.0,)
+    assert design_space(Branch()).leaf.value == (0.0, 1.0)
 
 
 def test_self_invocation_is_preserved_for_nested_functions_and_view_outputs() -> None:
@@ -254,7 +235,7 @@ def test_compiled_handles_do_not_follow_later_class_rebinding() -> None:
 
     original = Example.value
     old = compile_model(Example)
-    replacement = cast(Param[int], Param(semantics=default_semantics(int)))
+    replacement = cast(Param[int], Param())
     replacement.__set_name__(Example, "value")
     with refused("structure-finalized", error=DefinitionError):
         Example.value = replacement  # type: ignore[assignment]
@@ -290,8 +271,9 @@ def test_inherited_dependencies_bind_to_overrides_without_mutating_base() -> Non
     assert child.resolve(child.root, Base.doubled).arguments[0].node == child_node
 
 
-def test_compile_snapshots_values_domains_and_callback_references() -> None:
-    values = [[1], [2]]
+def test_compile_holds_values_domains_and_callback_references() -> None:
+    """A model holds the values its declarations took (immutable: a constant, a domain's
+    listed values) and the callbacks it bound, whatever is rebound on the class later."""
 
     def first(*, value: int) -> int:
         return value + 1
@@ -301,24 +283,19 @@ def test_compile_snapshots_values_domains_and_callback_references() -> None:
 
     class Example(Space):
         value: int = Param()
-        constant = Const([1])
-        choice: list[int] = Decision(values=values)
+        constant = Const((1,))
+        choice: tuple[int, ...] = Decision(values=((1,), (2,)))
         calculated = Derived(first)
 
     old = compile_model(Example)
-    Example.constant.value.append(2)
-    values[0].append(3)  # the Decision's domain enumerates this very list
-    declared = cast(Decision[list[int]], Example.choice).domain
-    assert declared is not None and declared.candidates is not None
-    assert declared.candidates() == ([1, 3], [2])
     Example.calculated.function = second
     new = compile_model(Example)
     old_constant = old.resolve(old.root, Example.constant)
     old_choice = old.resolve(old.root, Example.choice)
     old_function = old.resolve(old.root, Example.calculated)
-    assert old_constant.value == [1]
+    assert old_constant.value == (1,)
     assert old_choice.domain is not None and old_choice.domain.candidates is not None
-    assert old_choice.domain.candidates() == ([1], [2])
+    assert old_choice.domain.candidates() == ((1,), (2,))
     assert old_function.function is first
     assert new is old
     assert new.resolve(new.root, Example.calculated).function is first
@@ -400,28 +377,3 @@ def test_missing_binding_names_fail_before_any_callback() -> None:
 
     with refused("declaration-unknown", error=DefinitionError):
         compile_model(Example)
-
-
-def test_generic_alias_adapter_tokens_keep_identity_for_input_and_output_annotations() -> None:
-    token = tuple[int, ...]
-    vector: ValueSemantics[tuple[int, ...]] = ValueSemantics(
-        token,
-        "integer vector",
-        lambda value: type(value) is tuple and all(type(item) is int for item in value),
-        lambda left, right: left == right,
-        lambda value: value,
-    )
-
-    class Example(Space):
-        source: tuple[int, ...] = Param(semantics=vector)
-
-        @derived(semantics=vector)
-        def result(*, source: tuple[int, ...]) -> tuple[int, ...]:
-            return source + (3,)
-
-    model = compile_model(Example)
-    point = design_space(Example(source=(1, 2)))
-    assert inspection.model(point) is model  # plain root values stay runtime inputs
-    assert point.result == (1, 2, 3)
-    semantics = model.resolve(model.root, Example.result).semantics
-    assert semantics is not None and semantics.type_token is token

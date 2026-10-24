@@ -16,6 +16,7 @@ from finn.core.space import (
     Decision,
     DefinitionError,
     Derived,
+    Inapplicable,
     Param,
     QueryResult,
     RequestError,
@@ -25,8 +26,10 @@ from finn.core.space import (
     View,
     ViewKey,
     constraint,
+    default_semantics,
     derived,
     design_space,
+    inspection,
     view,
 )
 from finn.core.space._nodes import (
@@ -184,11 +187,11 @@ def test_node_member_alias_and_typed_view_exports() -> None:
         design_space(Exposing())
 
 
-def test_explicit_answer_semantics_preserve_the_value_type() -> None:
+def test_an_answer_annotation_states_its_value_type() -> None:
     class Example(Space):
         value: int = Param()
 
-        @derived(input=value, semantics=ValueSemantics.immutable_nominal(int))
+        @derived(input=value)
         def forwarded(*, input: int) -> QueryResult[int]:
             raise AssertionError("collection must not evaluate")
 
@@ -300,7 +303,7 @@ def test_self_receiver_and_explicit_argument_aliases_are_ambiguous() -> None:
         collect_space(Ambiguous)
 
 
-def test_extra_alias_and_answer_without_semantics_are_rejected() -> None:
+def test_an_extra_alias_is_rejected_and_an_answer_is_typed_by_its_value() -> None:
     class Extra(Space):
         value: int = Param()
 
@@ -311,15 +314,12 @@ def test_extra_alias_and_answer_without_semantics_are_rejected() -> None:
     with refused("alias-unknown", error=DefinitionError, message="unknown arguments.*typo"):
         collect_space(Extra)
 
-    class NoSemantics(Space):
+    class Answer(Space):
         @derived
         def result() -> QueryResult[int]:
             raise AssertionError("must not run")
 
-    with refused(
-        "semantics-unstated", error=DefinitionError, message="QueryResult.*explicit semantics"
-    ):
-        collect_space(NoSemantics)
+    assert collect_space(Answer).functions["result"].semantics.type_token is int
 
 
 def test_incompatible_override_collision_and_reserved_names() -> None:
@@ -416,11 +416,10 @@ def test_unbound_late_declarations_and_bad_exports_are_rejected() -> None:
         collect_space(wrong)
 
 
-def test_definition_constants_snapshot_and_decision_domain_contract() -> None:
-    source = [1, 2]
-    constant = Const(source)
-    source.append(3)
-    assert constant.value == [1, 2]
+def test_definition_constants_are_values_and_decision_domain_contract() -> None:
+    assert Const((1, -0.0)).value == (1, 0.0)
+    with refused("literal-not-value", error=DefinitionError, message="list is mutable"):
+        Const([1, 2])
     with refused("decision-domain-ambiguous", error=DefinitionError, message="exactly one"):
         Decision()  # type: ignore[call-overload]
     with pytest.raises(TypeError, match="truth value"):
@@ -479,16 +478,18 @@ def test_binding_forms_and_local_edit_ownership() -> None:
 def test_child_omissions_and_incompatible_bindings_are_not_implicit_exposure() -> None:
     class Child(Space):
         width: int = Param()
-        optional_width: int = Param(required=False)
+        optional_width: int | None = Param(default=None)
 
-    # An optional formal may stay unsupplied: it is not implicitly exposed.
+    # An optional formal may be left out: it is not implicitly exposed, and takes its
+    # default, None, a constant.
     assert unsupplied_formals(record_of(Child(width=8))) == []
     assert unsupplied_formals(record_of(Child())) == ["width"]
 
     class Holder(Space):
         child = Child(width=8)
 
-    assert compile_model(Holder).scopes.find("child.optional_width").kind == "present"
+    left_out = compile_model(Holder).scopes.find("child.optional_width")
+    assert left_out.kind == "const" and left_out.value is None
 
     # A required formal nobody supplies is legal at the call (an assignment may
     # still supply it), and fails when a Space class containing the node is prepared.
@@ -592,6 +593,60 @@ def test_nonboolean_and_foreign_guards_fail_during_collection() -> None:
         collect_space(Unrelated)
 
 
+def test_a_guard_whose_value_admits_none_is_refused_and_a_derived_test_is_taken() -> None:
+    """A fact left out is ``None``: a guard over ``bool | None`` has no answer for it
+    (the lists would prune, validity fail), so ``when=`` takes a ``bool`` only."""
+
+    class Shelf(Space):
+        style: str = Decision(values=("a", "b"))
+
+    class Cellar(Space):
+        deep: bool | None = Param(default=None)
+        shelf = Shelf(when=deep)
+
+    with refused(
+        "guard-not-boolean",
+        owner="space.collection",
+        message=r"Cellar\.shelf guard: when= requires a bool.*bool \| None.*is not None",
+    ):
+        design_space(Cellar())
+
+    class Left(Space):
+        deep: bool | None = Param(default=None)
+
+    class Right(Space):
+        deep: bool | None = Param(default=None)
+
+    class Chosen(Space):
+        impl: Left | Right = Select(left=Left(), right=Right())
+        shelf = Shelf(when=impl.deep)
+
+    # a guard over a selected member is checked once the choice is linked
+    with refused(
+        "applicability-not-boolean",
+        owner="space.check",
+        message=r"requires a bool.*bool \| None.*is not None",
+    ):
+        design_space(Chosen())
+
+    class Tested(Space):
+        deep: bool | None = Param(default=None)
+
+        @derived
+        def deep_set(self) -> bool:
+            return self.deep is True
+
+        shelf = Shelf(when=deep_set)
+
+    for given, listed in ((None, False), (False, False), (True, True)):
+        point = Tested() if given is None else Tested(deep=given)
+        space = design_space(point)
+        assert bool(inspection.decisions(space)) is listed
+        assert bool(inspection.states(space)) is listed
+        assert inspection.validity(space).status == "valid"
+        assert isinstance(space.query(Tested.shelf), Inapplicable) is not listed
+
+
 def test_when_is_an_authoring_control_argument() -> None:
     class Wrong(Space):
         active: bool = Param()
@@ -658,7 +713,7 @@ def test_collection_does_not_descend_into_deep_child_hierarchies() -> None:
 
 def test_linker_argument_validation_checks_required_input_types() -> None:
     source = cast(ValueRef[object], Param(default=0))
-    integer = cast(ValueSemantics[object], ValueSemantics.immutable_nominal(int))
+    integer = cast(ValueSemantics[object], default_semantics(int))
     validate_argument(BoundArgument("item", source, int), integer, owner="reader.item")
     with refused("argument-annotation-incompatible", error=DefinitionError, message=r"\bint$"):
         validate_argument(BoundArgument("item", source, str), integer, owner="reader.item")

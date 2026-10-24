@@ -132,24 +132,38 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
 
 # The members evaluated (and the constants among them) after the commit, and after
 # ``viable`` and the change (the structure's nodes resolved were 1366 (96) and 1464 (96),
-# 1371 and 1463 since T4c's piece 1 placed the required inputs' ports by construction;
-# four more each since a thresholding's table type is a derived value, one for each of
-# its four thresholdings).
-EVALUATED = ((1157, 96), (1228, 96))
+# 1371 and 1463 since T4c's piece 1 placed the required inputs' ports by construction).
+# Since facts are known (T4c), 1153 (96) and 1224 (96) became these: 40 optional facts
+# left out are constants (None) their readers now read as values (each channel's
+# ``contents`` and ``mover_offer``, a weight channel's ``producer`` and ``index_tensor``,
+# the boundaries' ``producer`` and ``consumer``, MatMul's ``window``, a thresholding's
+# ``set_tensor``), and the 15 producers' word widths (``y_data_width`` of each MatMul and
+# its core, ``output_data_width`` of each thresholding) that a channel's ``sides`` reads
+# as values where it asked their presence (16 after ``viable``: the trial's int8 core's).
+# Then 1208 and 1280: four more, each weight channel's ``source.contents``, a required
+# formal bound to the channel's optional ``contents``, read as itself to check its value.
+# Then 1192 (132) and 1262 (132), MatMul's weights one fact: per MatMul, its two known
+# weights' constants (``w_contents``, ``weights_dtype``) one (``weights``), and ``weighted``,
+# ``carried_weights``' guard and its core's ``w_placed`` and ``w_stream`` guard gone (20;
+# 22 after ``viable``, the trial's int8 core's two as well).
+# Then 1196 (132) and 1266 (132): each thresholding's ``table_dtype`` (4), its table's type,
+# which the rules, the module's parameters and its resources read.
+EVALUATED = ((1196, 132), (1266, 132))
 
 
 def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``commit`` of the chain's stored values on a design space made from scratch, before
-    any trial or ``viable``. Listing its choices (``inspection.decisions``, in the flow
-    order) makes every scope's record and evaluates no member; the change evaluates what it
-    and its checks read, each member as its scope reads it. An absent scope's validity is
-    read from its guard and its choices' presence from their guards, so no scope absent at
-    the baseline has a member evaluated for either, and none of unknown presence in the
-    design space before the change either: the scopes with a member evaluated (in play)
-    are exactly the 38 present at the baseline (the line's present scopes). Each MatMul's
-    ``compute.int8_dsp58`` case, of unknown presence before the change, has none evaluated.
+    any trial or ``viable``. Listing its model's choices (``inspection.decisions`` of the
+    model, in the flow order, by which ``commit`` names them) makes every scope's record and
+    evaluates no member; the change evaluates what it and its checks read, each member as
+    its scope reads it. An absent scope's validity is read from its guard and its choices'
+    presence from their guards, so no scope absent at the baseline has a member evaluated
+    for either, and none of unknown presence in the design space before the change
+    either: the scopes with a member evaluated (in play) are exactly the 38 present at the
+    baseline (the line's present scopes). Each MatMul's ``compute.int8_dsp58`` case, of
+    unknown presence before the change, has none evaluated.
     Then ``viable`` of the middle MatMul's choices and one change of its ``pe``: what trials
     evaluate more (the middle MatMul's ``int8_dsp58`` case, which a trial selects, and the
     output adapters of the channels beside it, ``a1`` and ``h2``, which read its ports'
@@ -196,7 +210,9 @@ def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
         assert guard is not None and isinstance(answer(point, guard), Unresolved)
     handles = {item.key: item.reference for item in inspection.decisions(committed)}
     middle = [key for key in handles if key.startswith("mm2.")]
-    assert len(middle) == 7
+    # the middle MatMul's choices listed: its ``realization`` (``when=depthwise``) is not,
+    # its facts alone rule it out (SZ113)
+    assert len(middle) == 6 and "mm2.realization" not in middle
     inspection.viable(committed, [handles[key] for key in middle])
     counted = scopes.counts()
     assert (counted["scopes made"], counted["scopes in play"]) == (225, 43)

@@ -24,10 +24,9 @@ from finn.core.space import (
     divisors_of,
     domain,
     reject,
-    supplied,
 )
 from finn.core.space._running import surface
-from finn.core.space._running.evaluate import Session, evaluation
+from finn.core.space._running.evaluate import Session
 from finn.core.space._running.surface import At
 from finn.core.space._running.value import DesignSpace
 from finn.core.space._scopes import Address
@@ -46,10 +45,6 @@ def answer(ds: DesignSpace, index: Address) -> QueryResult[object]:
 
 def value(ds: DesignSpace, index: Address) -> object:
     return surface.value(At(ds), _handle(ds, index), Session())
-
-
-def source_applies(ds: DesignSpace, index: Address) -> bool | Address:
-    return surface._source_applies(evaluation(ds, Session()), index)
 
 
 class Leaf(Space):
@@ -114,7 +109,7 @@ def at_most(bound: object) -> Domain[int]:
 
 
 class Bounded(Space):
-    f: int = Param(required=False)
+    f: int = Param()
     c: int = Decision(domain=at_most(f))
 
 
@@ -123,7 +118,7 @@ class Bare(Space):
 
 
 class UnderOpen(Space):
-    f: int = Param(required=False)
+    f: int = Param()
     s: Bounded | Bare = Select(a=Bounded(f=f), b=Bare())
 
 
@@ -150,13 +145,13 @@ class AbsentInput(Space):
 
 @pytest.mark.parametrize(
     "declaration",
-    [Bounded(), UnderOpen(), RefusingInput(f=5), AbsentInput(wide=False, f=1)],
-    ids=["input-missing", "under-an-open-selector", "input-refusing", "input-absent"],
+    [Bounded(f=1), UnderOpen(f=1), RefusingInput(f=5), AbsentInput(wide=False, f=1)],
+    ids=["input-known", "under-an-open-selector", "input-refusing", "input-absent"],
 )
 def test_a_domain_that_lists_no_values_is_never_a_piece(declaration: Space) -> None:
-    """Membership alone lists nothing: whatever its inputs answer (a missing fact, a
-    refusal on the facts, an input that does not apply), the choice adds no piece, and an
-    open choice with no rule reading it leaves the configuration valid."""
+    """Membership alone lists nothing: whatever its inputs answer (a value, a refusal on
+    the facts, an input that does not apply), the choice adds no piece, and an open choice
+    with no rule reading it leaves the configuration valid."""
     found = validity(start(declaration))
     assert (found.status, found.pieces) == ("valid", ())
 
@@ -180,25 +175,28 @@ def test_a_guard_refused_through_its_input_is_one_guard_piece() -> None:
 
 
 class Fed(Space):
-    size: int = Param(required=False)
+    size: int | None = Param(default=None)
     depth: int = Param()
 
     @derived
     def doubled(self) -> int:
         return 2 * self.depth
 
-    has_size = supplied(size)
+    @derived
+    def has_size(self) -> bool:
+        return self.size is not None
+
     gated: int = Decision(values=(1, 2), when=has_size)
 
 
-def test_answers_values_and_whether_an_input_is_supplied() -> None:
+def test_answers_and_values() -> None:
     point = start(Fed(depth=3))
     keys = point.model.scopes.keys
     assert answer(point, keys["doubled"]) == Available(6)
     assert value(point, keys["doubled"]) == 6
+    assert answer(point, keys["size"]) == Available(None)
     with pytest.raises(ValueUnavailableError):
         value(point, keys["gated"])
-    assert source_applies(point, keys["depth"]) is True
     assert isinstance(answer(point, keys["gated"]), Inapplicable)
     open_ = start(Fed(depth=3, size=4))
     assert isinstance(answer(open_, keys["gated"]), Unresolved)
@@ -213,4 +211,3 @@ def test_the_evidence_of_a_query_is_what_its_answers_read() -> None:
     assert set(by_key) == {"doubled", "depth"}
     scopes = point.model.scopes
     assert [handle._resolve(scopes) for handle in by_key["doubled"].dependencies] == [keys["depth"]]
-    assert by_key["depth"].input_presence == "supplied"

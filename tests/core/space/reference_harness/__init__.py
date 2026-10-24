@@ -11,8 +11,9 @@ authored or asked is there); :mod:`.compare` puts the model's answers in the sam
 (:mod:`.forms`) and compares them, the engine's side as the harness's default implementation
 answers (:mod:`.implementation`: the public API unless a session names another) wherever a
 test names none; :mod:`.matrix` records every disagreement a pending
-milestone still expects, by the milestone that removes it (none: the engine core's and the
-facts-instance milestones are accepted, and the engine agrees with the model); :mod:`.walks`
+milestone still expects, by the milestone that removes it (T4b's; the engine core's, the
+facts-instance, T4a's and T4c's milestones are accepted, and the engine agrees with the
+model there); :mod:`.walks`
 compares the two over seeded random walks (imported on its own, never by this package). The
 engine has one read path, so each test and each walk asks it once.
 
@@ -36,6 +37,7 @@ from .forms import (
     ChangeForm,
     DefinitionForm,
     DroppedForm,
+    ListedForm,
     OutcomeForm,
     PossibleForm,
     RefusalForm,
@@ -46,6 +48,7 @@ from .forms import (
 from .matrix import MILESTONES, ROWS, Reaching, Row, expected, markdown, reached
 
 __all__ = [
+    "ListedForm",
     "MILESTONES",
     "ROWS",
     "Admission",

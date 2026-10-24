@@ -12,25 +12,22 @@ import numpy as np
 import pytest
 from support.helpers import eltwise, module_of
 from support.kernel_specs.eltwise import computed
+from support.refusals import refused
 
 from finn.core.space import (
-    Available,
     Decision,
-    Param,
+    DefinitionError,
     Rejected,
-    Space,
-    Unresolved,
-    design_space,
+    RequestError,
     inspection,
 )
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
-from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import Signal
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.configure import refusal
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.library import library_module
-from finn.platform.capabilities import DspBlock, Platform
+from finn.platform.capabilities import DspBlock
 from kernels.sweeps import eltwise_numeric
 
 
@@ -75,7 +72,7 @@ def test_eltwise_rounds_its_scale_to_binary32_and_lists_its_sources_in_order() -
     assert dict(library_module(floating).parameters)["B_SCALE"] == "0.25"
 
 
-@pytest.mark.parametrize("scale", (1e100, float("inf"), float("nan")))
+@pytest.mark.parametrize("scale", (1e100, float("inf")))
 def test_eltwise_refuses_a_nonfinite_or_unrepresentable_native_scale(
     scale: float,
 ) -> None:
@@ -89,6 +86,17 @@ def test_eltwise_refuses_a_nonfinite_or_unrepresentable_native_scale(
     report = point.try_with_choices(pe=2)
     assert report.accepted
     assert refused_by(report.instance) == {("native_scale", "eltwise-scale")}
+
+
+def test_a_nan_scale_is_refused_where_it_enters_not_by_the_kernel() -> None:
+    """NaN is no value (``==`` does not hold it equal to itself): refused where it enters
+    the design space, naming the fact, given at the call or as a change of facts. The
+    kernel's own ``eltwise-scale`` never reads it."""
+    with refused("literal-not-value", error=DefinitionError, message="NaN is no value"):
+        eltwise(scale=float("nan"))
+    point = eltwise(scale=1.0, pe=None)
+    with pytest.raises(RequestError, match="b_scale: NaN is no value"):
+        point.with_facts({EltwiseKernel.b_scale: float("nan")})
 
 
 def refused_by(point: EltwiseKernel) -> set[tuple[str, str]]:
@@ -136,28 +144,6 @@ def test_eltwise_pe_is_a_divisor_of_the_channels_its_parameter_holds() -> None:
     assert isinstance(declared, Decision)
     assert declared.domain.accepts(candidate=2**31, extent=2**32) is True
     assert declared.domain.accepts(candidate=2**32, extent=2**33) is False
-
-
-def test_eltwise_result_is_known_while_an_optional_parent_platform_is_unset() -> None:
-    # The optional formal is the parent's own, bound to the child by name.
-    class OptionalPlatform(Space):
-        platform: Platform = Param(required=False)
-        arithmetic = EltwiseKernel(
-            operation="ADD",
-            lhs_tensor=Tensor((1, 2), ScalarEncoding(resolve_qonnx_datatype_name("INT3"))),
-            rhs_tensor=Tensor((1, 2), ScalarEncoding(resolve_qonnx_datatype_name("INT3"))),
-            b_scale=1.0,
-            platform=platform,
-        )
-
-    point = design_space(OptionalPlatform()).with_choices({OptionalPlatform.arithmetic.pe: 2})
-    assert point.arithmetic.result_dtype.name == "INT4"
-    # Its validity waits on the platform; its module, a product, answers meanwhile.
-    assert inspection.validity(point.arithmetic).status == "open"
-    assessment = point.arithmetic.inspect(EltwiseKernel.netlist)
-    assert isinstance(assessment.output_result, Available)
-    assert isinstance(assessment.validity, Unresolved)
-    assert assessment.accepted_result == assessment.output_result
 
 
 def test_the_reference_computes_each_operation_with_its_operand_in_turn() -> None:

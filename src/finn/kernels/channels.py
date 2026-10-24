@@ -72,19 +72,18 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
+from typing import cast
 
 from finn.core.space import (
     Decision,
     Param,
     Rejected,
     Select,
-    ValueSemantics,
     View,
     constraint,
     derived,
     domain,
     reject,
-    supplied,
     view,
 )
 from finn.dataflow.datatypes import QONNXDataType
@@ -120,7 +119,7 @@ from finn.kernels.fifo import FifoKernel
 from finn.kernels.library import library_module
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.movers import MOVER, IodmaMover, MoverContract, MoverOffer
-from finn.kernels.port import STREAM, served
+from finn.kernels.port import served
 from finn.kernels.transport import (
     AxisBeat,
     Mismatch,
@@ -131,11 +130,7 @@ from finn.kernels.transport import (
     marker_pairs,
 )
 from finn.kernels.utilization import memory_preference, memory_styles, uram_constraint
-from finn.kernels.values.semantics import (
-    INTEGER_TENSOR,
-    QONNX_DATATYPE_VALUE_SEMANTICS,
-    IntegerTensor,
-)
+from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import Platform
 
 # -- the labels a channel's placements keep --------------------------------------------------
@@ -154,16 +149,6 @@ OUTPUT_ADAPTER_LABEL = "output_adapter.vpc"
 
 _PLACED = {"source": SOURCE_LABEL, "output_adapter": OUTPUT_ADAPTER_LABEL}
 """Each placement's node, and the label the channel's netlist places it at."""
-
-BOUNDARY_CONTRACT: ValueSemantics[StreamContract | None] = ValueSemantics(
-    StreamContract,
-    "boundary contract",
-    lambda value: value is None or isinstance(value, StreamContract),
-    lambda left, right: left == right,
-    lambda value: value,
-)
-"""The AXIS port a channel's module presents for its side without a port; None where both
-sides have one."""
 
 
 def boundary_contract(
@@ -435,56 +420,62 @@ class Channel(KernelSpace):
     tensor: Tensor = Param()
     # False admits no adapter: the two sides must connect directly.
     adaptable: bool = Param(default=True)
-    port: str = Param(required=False)
-    producer: Stream = Param(required=False, semantics=STREAM)
-    consumer: Stream = Param(required=False, semantics=STREAM)
-    producer_label: str = Param(required=False)
-    consumer_label: str = Param(required=False)
-    producer_width: int = Param(required=False)
-    contents: IntegerTensor = Param(semantics=INTEGER_TENSOR, required=False)
+    port: str | None = Param(default=None)
+    producer: Stream | None = Param(default=None)
+    consumer: Stream | None = Param(default=None)
+    producer_label: str | None = Param(default=None)
+    consumer_label: str | None = Param(default=None)
+    producer_width: int | None = Param(default=None)
+    contents: IntegerTensorValue | None = Param(default=None)
     sets: int = Param(default=1)
-    index_tensor: Tensor = Param(required=False)
+    index_tensor: Tensor | None = Param(default=None)
     platform: Platform = Param()
-    mover_offer: tuple[MoverOffer, ...] = Param(required=False)
-    # Whether the channel carries a known value, which its source drives: where nothing
-    # supplies ``contents``, the source is never placed.
-    valued = supplied(contents)
-    # Whether a shell offers movers on its free side: where nothing supplies the offers,
-    # the mover is never placed.
-    offered = supplied(mover_offer)
+    mover_offer: tuple[MoverOffer, ...] | None = Param(default=None)
+
+    @derived
+    def valued(self) -> bool:
+        """Whether the channel carries a known value, which its source drives: without
+        ``contents`` its source is not in play."""
+        return self.contents is not None
+
+    @derived
+    def offered(self) -> bool:
+        """Whether a shell offers movers on its free side: without the offers its mover is
+        not in play."""
+        return self.mover_offer is not None
 
     @derived
     def attached(self) -> tuple[Stream, ...]:
         """The streams given, the producer's first."""
         found: list[Stream] = []
-        if self.present(Channel.producer):
+        if self.producer is not None:
             found.append(self.producer)
-        if self.present(Channel.consumer):
+        if self.consumer is not None:
             found.append(self.consumer)
         return tuple(found)
 
     @derived
     def consumed(self) -> Stream | Rejected:
         """The consuming port's stream: the order a source stores the value in."""
-        if not self.present(Channel.consumer):
+        if self.consumer is None:
             return reject("channel-source", "a known value streams to exactly one consumer")
-        consumer: Stream = self.consumer
-        return consumer
+        return self.consumer
 
     @derived
     def source_form(self) -> Traversal:
         """One period of the value in the order its consumer reads it."""
         return period(self.consumed.sequence.form)
 
-    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    @derived
     def source_dtype(self) -> QONNXDataType:
         return self.tensor.element.dtype
 
+    # Placed only where ``valued`` holds: its contents are given there.
     source = MemStreamKernel(
         when=valued,
         dtype=source_dtype,
         form=source_form,
-        contents=contents,
+        contents=cast("IntegerTensorValue", contents),
         sets=sets,
         set_tensor=index_tensor,
         platform=platform,
@@ -513,14 +504,14 @@ class Channel(KernelSpace):
         consumer: tuple[str | None, Stream] | None = None
         # A side is given whole: a stream without its port's label (or a producer's
         # without its word width) would read as the boundary's.
-        if self.present(Channel.producer):
-            if not self.present(Channel.producer_label):
+        if self.producer is not None:
+            if self.producer_label is None:
                 return reject("channel-side", "a producer's stream comes with its port's label")
-            if not self.present(Channel.producer_width):
+            if self.producer_width is None:
                 return reject("channel-side", "a producer's stream comes with its word width")
             producer = (self.producer_label, self.producer)
-        if self.present(Channel.consumer):
-            if not self.present(Channel.consumer_label):
+        if self.consumer is not None:
+            if self.consumer_label is None:
                 return reject("channel-side", "a consumer's stream comes with its port's label")
             consumer = (self.consumer_label, self.consumer)
         if self.valued:
@@ -534,7 +525,7 @@ class Channel(KernelSpace):
             producer = (self.source_label, produced)
         if producer is not None and consumer is not None:
             return ChannelSides(*producer, *consumer)
-        if not self.present(Channel.port):
+        if self.port is None:
             return reject(
                 "channel-boundary",
                 "a boundary of its network, but no port names it: only an ONNX input or output "
@@ -560,9 +551,11 @@ class Channel(KernelSpace):
         form = inside.sequence.form
         if endpoint is Endpoint.TARGET:
             form = unreplayed(form)
-        return boundary_contract(self.port, self.tensor.element, BeatSequence(form), endpoint)
+        # Read past ``sides``' test of the port: given here.
+        port = cast(str, self.port)
+        return boundary_contract(port, self.tensor.element, BeatSequence(form), endpoint)
 
-    @derived(semantics=BOUNDARY_CONTRACT)
+    @derived
     def boundary(self) -> StreamContract | None:
         """The AXIS port the module presents for the side without a port
         (``boundary_contract``: ``port``, the tensor's element, and what the other side
@@ -586,7 +579,10 @@ class Channel(KernelSpace):
             )
         return found
 
-    mover = IodmaMover(when=offered, offers=mover_offer, side=free_side)
+    # Placed only where ``offered`` holds: its offers are given there.
+    mover = IodmaMover(
+        when=offered, offers=cast("tuple[MoverOffer, ...]", mover_offer), side=free_side
+    )
     mover_contract = View(mover.contract)
 
     @derived

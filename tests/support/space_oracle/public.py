@@ -61,8 +61,10 @@ class PublicAnswers:
         return self._members
 
     def _decision_infos(self) -> dict[str, inspection.DecisionInfo[object]]:
+        """Every decision by key, listed or not: a key asked by name is answered (SZ113)."""
         if self._decisions is None:
-            self._decisions = {info.key: info for info in inspection.decisions(self.point)}
+            every = inspection.decisions(inspection.model(self.point))
+            self._decisions = {info.key: info for info in every}
         return self._decisions
 
     def members(self) -> Sequence[tuple[str, NodeKind]]:

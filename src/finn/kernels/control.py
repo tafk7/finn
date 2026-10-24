@@ -4,8 +4,8 @@
 """Control buses: a kernel presents its own, and its composition presents it at the top.
 
 A kernel with a control interface (an AXI-Lite configuration bus, say) has a formal
-naming the port its bus is presented at, given where it is placed (``control: str =
-Param(required=False)``), and exports, under ``CONTROL``, the bus it presents there
+naming the port its bus is presented at, given where it is placed (``control: str | None =
+Param(default=None)``), and exports, under ``CONTROL``, the bus it presents there
 with that port and the writes that put its configuration into the bus's registers
 (``RegisterMap``): a ``Control``. A kernel's netlist view (its ``Members(CONTROL)``,
 ``finn.kernels.base.KernelSpace``) and a network (``finn.kernels.network``) each collect
@@ -144,14 +144,18 @@ class ControlBus(KernelDeclaration):
             return bool(declaration.value(self, "presented"))
 
         @declared_reads(f"{name}_presented", *self.paths("bus", "port", "registers"))
-        def control_(self: Space) -> Control:
-            """The control bus it presents, None while it presents none."""
+        def control_(self: Space) -> Control | Rejected:
+            """The control bus it presents, None while it presents none; a bus presented
+            without the port it is presented at is refused."""
             if not getattr(self, f"{name}_presented"):
                 return Control(None)
+            port = declaration.value(self, "port")
+            if port is None:
+                return reject(
+                    "control-bus-unaddressed", "a bus it presents names the port it is presented at"
+                )
             return Control(
-                declaration.value(self, "bus"),
-                declaration.value(self, "port"),
-                declaration.value(self, "registers"),
+                declaration.value(self, "bus"), port, declaration.value(self, "registers")
             )
 
         return {

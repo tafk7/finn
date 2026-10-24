@@ -15,7 +15,6 @@ from finn.core.space import (
     Param,
     Select,
     Space,
-    ValueSemantics,
     bind,
     composite,
     constraint,
@@ -28,7 +27,6 @@ from finn.core.space._template import compiled
 from finn.core.space.compiler import model_of
 from finn.core.space.edits import ChangeRequest
 from finn.core.space.errors import (
-    DefinitionError,
     EvaluationError,
     RequestError,
 )
@@ -36,23 +34,15 @@ from finn.core.space.inspection import candidate, choices, decision_handle
 from finn.core.space.results import Available, Inapplicable, Unresolved
 
 
-def test_malformed_batch_structure_and_types_precede_every_snapshot_callback() -> None:
+def test_malformed_batch_structure_and_types_precede_every_membership_callback() -> None:
     events: list[str] = []
-
-    def snapshot(value: int) -> int:
-        events.append("snapshot")
-        return value
 
     def membership(*, candidate: int) -> bool:
         events.append("membership")
         return True
 
-    semantics = ValueSemantics(
-        int, "integer", lambda value: type(value) is int, lambda a, b: a == b, snapshot
-    )
-
     class Trial(Space):
-        first: int = Decision(domain=domain(accepts=membership), semantics=semantics)
+        first: int = Decision(domain=domain(accepts=membership))
         second: int = Decision(values=(1, 2))
 
     # A change applies to any design space equal to its own: a foreign one is a design
@@ -121,94 +111,46 @@ def test_foreign_model_handles_are_rejected_before_evaluators() -> None:
     assert calls == []
 
 
-def test_snapshot_and_recognition_programmer_failures_are_contextual() -> None:
-    memberships: list[int] = []
+class Flaky:
+    """A value whose ``==`` raises while ``failing`` is set."""
 
-    def membership(*, candidate: int) -> bool:
-        memberships.append(candidate)
-        return True
+    failing = False
 
-    def broken(value: int) -> int:
-        raise RuntimeError("adapter failed")
+    def __init__(self, n: int) -> None:
+        self.n = n
 
-    semantics = ValueSemantics(
-        int, "integer", lambda value: type(value) is int, lambda a, b: a == b, broken
-    )
-
-    class Inputs(Space):
-        value: int = Param(semantics=semantics)
-
-    class Decisions(Space):
-        earlier: int = Decision(domain=domain(accepts=membership))
-        value: int = Decision(domain=domain(accepts=lambda *, candidate: True), semantics=semantics)
-
-    # An unrecognized literal is a bad binding at the node call.
-    with pytest.raises(DefinitionError):
-        Inputs(value=cast(int, "wrong"))
-    with pytest.raises(EvaluationError) as input_error:
-        design_space(Inputs(value=1))
-    assert input_error.value.owner == "value"
-    assert input_error.value.role == "parameter snapshot"
-    assert isinstance(input_error.value.__cause__, RuntimeError)
-    base = design_space(Decisions())
-    with pytest.raises(EvaluationError) as candidate_error:
-        base.try_with_choices(
-            base.field(Decisions.earlier).change(1), base.field(Decisions.value).change(1)
-        )
-    assert candidate_error.value.role == "choice snapshot"
-    assert isinstance(candidate_error.value.__cause__, RuntimeError)
-    assert memberships == []
-
-    def unrecognizable(value: object) -> bool:
-        raise LookupError("recognition failed")
-
-    recognition: ValueSemantics[int] = ValueSemantics(
-        int, "integer", unrecognizable, lambda a, b: a == b, lambda a: a
-    )
-
-    class Unrecognizable(Space):
-        value: int = Param(semantics=recognition)
-
-    with pytest.raises(EvaluationError) as recognition_error:
-        design_space(Unrecognizable(value=1))
-    assert recognition_error.value.role == "parameter recognition"
-    assert isinstance(recognition_error.value.__cause__, LookupError)
-
-
-def test_replacement_equality_is_contextual_and_cannot_mutate_stored_values() -> None:
-    fail = False
-
-    def equal(left: list[int], right: list[int]) -> bool:
-        if fail:
+    def __eq__(self, other: object) -> bool:
+        if Flaky.failing:
             raise RuntimeError("equality failed")
-        result = left == right
-        left.append(99)
-        right.append(98)
-        return result
+        return isinstance(other, Flaky) and other.n == self.n
 
-    semantics: ValueSemantics[list[int]] = ValueSemantics(
-        list, "integers", lambda value: type(value) is list, equal, list
-    )
+    def __hash__(self) -> int:
+        return hash(self.n)
+
+
+def test_replacement_equality_is_contextual() -> None:
+    """Setting a choice to a value the same as the one stored (of its type, equal by ``==``)
+    keeps the design space; an ``==`` that raises is the choice's error, in its role."""
 
     class Trial(Space):
-        value: list[int] = Decision(
-            domain=domain(accepts=lambda *, candidate: True), semantics=semantics
-        )
+        value: Flaky = Decision(domain=domain(accepts=lambda *, candidate: True))
 
     base = design_space(Trial())
-    chosen = base.try_with_choices(base.field(Trial.value).change([1])).instance
-    assert chosen.try_with_choices(chosen.field(Trial.value).change([1])).instance is chosen
-    assert chosen.value == [1]
-    conflict = chosen.try_with_choices(chosen.field(Trial.value).change([2]))
-    assert conflict.accepted and conflict.instance.value == [2]
-    assert chosen.value == [1]
-    fail = True
-    with pytest.raises(EvaluationError) as raised:
-        chosen.try_with_choices(chosen.field(Trial.value).change([1]))
+    held = Flaky(1)
+    chosen = base.try_with_choices(base.field(Trial.value).change(held)).instance
+    assert chosen.try_with_choices(chosen.field(Trial.value).change(Flaky(1))).instance is chosen
+    assert chosen.value is held
+    conflict = chosen.try_with_choices(chosen.field(Trial.value).change(Flaky(2)))
+    assert conflict.accepted and conflict.instance.value == Flaky(2)
+    Flaky.failing = True
+    try:
+        with pytest.raises(EvaluationError) as raised:
+            chosen.try_with_choices(chosen.field(Trial.value).change(Flaky(1)))
+    finally:
+        Flaky.failing = False
     assert raised.value.owner == "value"
     assert raised.value.role == "configuration equality"
     assert isinstance(raised.value.__cause__, RuntimeError)
-    assert chosen.value == [1]
 
 
 @pytest.mark.usefixtures("purity_unchecked")
@@ -266,7 +208,7 @@ def test_independent_batch_reuses_trial_dependencies_and_publishes_only_once() -
     assert not failed.accepted
     assert failed.instance is base
     # The model's memo answers the limit, a function of the same fact, as before, and the
-    # membership of every value the first batch checked: equal values, by their semantics.
+    # membership of every value the first batch checked: the same values (of one type, equal by ==).
     assert limits == []
     assert admitted == [-1]
     assert [outcome.status for outcome in failed.outcomes].count("checked") == len(members) - 1

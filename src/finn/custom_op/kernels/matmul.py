@@ -4,9 +4,12 @@
 """The MatMul KernelOp: ONNX ``MatMul``, Y = A @ B, on ``MatMulKernel``.
 
 A is read at the graph's rank, its leading axes the kernel's rows, and B is the (k, n)
-matrix ONNX stores. When B is an initializer, the node holds the weights and the kernel
-stores them, given with the datatype the graph declares them in; otherwise they arrive on
-a stream like any other input, their tensor a fact like A's.
+matrix ONNX stores. The kernel's ``weights`` are one fact, known or not: when B is an
+initializer, the node holds the weights and the kernel stores them, given as
+``KnownWeights`` (their values, with the datatype the graph declares them in); otherwise
+they arrive on a stream like any other input, their tensor the fact, as A's is. (An
+initializer a run may write would be read as a tensor too; nothing in FINN makes one
+today.)
 
 ``execute_node`` is the reference: for integer operands, the exact integer product, as
 the hardware computes it (``product``); for float operands, as ONNX computes it. The
@@ -33,7 +36,7 @@ from finn.core.graph.facts import (
 )
 from finn.core.space import Rejected
 from finn.custom_op.kernels.base import KernelOp, Match, Wiring, refused, unstated
-from finn.kernels.matmul import MatMulKernel
+from finn.kernels.matmul import KnownWeights, MatMulKernel
 from finn.kernels.members import Facts
 
 if TYPE_CHECKING:
@@ -79,7 +82,7 @@ class MatMul(KernelOp):
     ports = ("x", "w")
     wiring = {
         "x": Wiring("x_tensor", "x_contract"),
-        "w": Wiring("w_tensor", "w_contract", "w_contents", "carried_weights", "stored_weights"),
+        "w": Wiring("weights", "w_contract", "weights", "carried_weights", "stored_weights"),
         "y": Wiring("result_tensor", "y_contract"),
     }
     parameters = ("w",)
@@ -140,8 +143,8 @@ class MatMul(KernelOp):
         # Known weights: their values, and the datatype the graph declares them in.
         weights_dtype = datatype(model, b, label)
         admitted(model, b, weights_dtype, label)
-        formals: dict[str, object] = dict(weights_dtype=weights_dtype, platform=platform, **shaped)
-        return self.binding(formals, {"w": integer_tensor(stored)})
+        known = KnownWeights(integer_tensor(stored), weights_dtype)
+        return self.binding(dict(platform=platform, **shaped), {"w": known})
 
     def execute_node(self, context: dict[str, Any], graph: Any) -> None:
         """Y = A @ B, by ``product``."""

@@ -50,9 +50,10 @@ from finn.kernels.artifacts.module import Composed
 from finn.kernels.base import NETLIST
 from finn.kernels.channels import Channel
 from finn.kernels.dotp import DotpAxiKernel
-from finn.kernels.matmul import MatMulKernel
+from finn.kernels.matmul import KnownWeights, MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.network import Fact, Interface, Network, NetworkError, wire
+from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import Platform
 
 STORED_INSTANCE = "w.source.memstream"
@@ -69,8 +70,8 @@ FACTS = dict(
     platform=FULL_DSP48E2,
 )
 """The harness's MatMul (``matmul_point``, ``matmul_assembly``)."""
-KNOWN = dict(weights_dtype=DataType["INT3"], platform=FULL_DSP48E2)
-"""MatMul's facts beside its tensors, its weights known: their declared datatype."""
+KNOWN = dict(platform=FULL_DSP48E2)
+"""MatMul's facts beside its tensors and its weights."""
 INT3, INT8 = ScalarEncoding(DataType["INT3"]), ScalarEncoding(DataType["INT8"])
 # The result of WEIGHTS' columns over INT3 activations (K7): [-30, 40].
 INT7 = ScalarEncoding(DataType["INT7"])
@@ -91,7 +92,9 @@ def folded(point, *, pe=2, simd=2):
 
 
 def handle(point, key):
-    return next(item.reference for item in inspection.decisions(point) if item.key == key)
+    """The choice ``key`` of ``point``, by name, listed or not (its model's)."""
+    every = inspection.decisions(inspection.model(point))
+    return next(item.reference for item in every if item.key == key)
 
 
 def configured(point, *, style=None, pe=2, simd=2):
@@ -133,7 +136,7 @@ def stored(platform: Platform) -> Network:
             "matmul": MatMulKernel(
                 **{**KNOWN, "platform": platform},
                 x_tensor=Tensor((3, 4), INT3),
-                w_contents=WEIGHTS,
+                weights=KnownWeights(IntegerTensorValue.of(WEIGHTS), DataType["INT3"]),
             ),
         }
     )
@@ -216,6 +219,31 @@ def test_the_channel_owns_its_source_and_its_choices():
     assert unvalued.accepted
     states = dict(unvalued.network.states(("w",)))
     assert states[("w", "source.ram_style")] == inspection.Dormant("block")
+
+
+def test_a_channel_without_contents_lists_none_of_its_sources_choices():
+    # SZ113: without contents the channel's source is absent under the facts alone (its
+    # guard, ``valued``, reads the facts only), so the source's choices are in none of the
+    # channel's lists: its decisions, its states, the network's states and open choices.
+    # Asked by name they still answer, and set by name one is accepted, dormant, and is then
+    # listed: a stored choice is never pruned (SZ119 (5)).
+    source = {"source.ram_style", "source.pumped_memory"}
+    network = configured(base())
+    w = network.member("w")
+    assert not w.valued
+    assert source <= {item.key for item in inspection.decisions(Channel)}
+    assert source <= {item.key for item in inspection.decisions(inspection.model(w))}
+    assert not source & {item.key for item in inspection.decisions(w)}
+    assert not source & {key for key, _ in inspection.states(w)}
+    assert not source & {key for (_, key), _ in network.states(("w",))}
+    assert not source & {key for _, key in network.undecided()}
+    (asked,) = inspection.viable(w, [handle(w, "source.ram_style")])
+    assert asked.key == "source.ram_style" and asked.values is not None
+    stored = w.with_choices({handle(w, "source.ram_style"): "block"})
+    states = dict(inspection.states(stored))
+    assert states["source.ram_style"] == inspection.Dormant("block")
+    assert "source.pumped_memory" not in states
+    assert "source.ram_style" in {item.key for item in inspection.decisions(stored)}
 
 
 def test_the_stored_memory_takes_its_choices_with_its_channel_and_refuses_bad_weights():
@@ -363,7 +391,7 @@ def test_a_source_whose_rule_is_false_refuses_the_change_that_places_it():
         "matmul": MatMulKernel(
             **KNOWN,
             x_tensor=Tensor((3, 4), INT3),
-            w_contents=(WEIGHTS, WEIGHTS),
+            weights=KnownWeights(IntegerTensorValue.of((WEIGHTS, WEIGHTS)), DataType["INT3"]),
         ),
     }
     folding = {**FOLDING, "matmul.pe": 2, "matmul.simd": 2}
@@ -442,11 +470,11 @@ def test_a_channel_with_a_value_has_its_source_as_its_only_producer():
             ),
             "y": wire(
                 tensor=y_tensor,
-                contents=((0,) * 4,) * 3,
+                contents=IntegerTensorValue.of(((0,) * 4,) * 3),
                 producer=Interface("matmul", "y_contract"),
                 platform=FULL_DSP48E2,
             ),
-            "matmul": MatMulKernel(platform=FULL_DSP48E2, x_tensor=x_tensor, w_tensor=w_tensor),
+            "matmul": MatMulKernel(platform=FULL_DSP48E2, x_tensor=x_tensor, weights=w_tensor),
         }
     )
     answer = folded(produced).member("y").query(Channel.sides)

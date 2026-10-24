@@ -5,12 +5,12 @@
 markdown table; ``python -m core.space.reference_harness walks --seeds 0-99 --steps 40`` runs
 the seeded walks and prints their summary, then each failed walk whole.
 
-The full run (the default) draws both of the rulings' causes the engine has not reached
-(DESIGN § 6): each disagreement is attributed by its cause to T4b (a view read in) or T4c (an
-optional fact left out) and counted under that milestone while it is pending; an
-unattributed one fails its walk. ``--without MILESTONE`` takes its rows as removed, so its
-disagreements fail their walks (its engine walked as if it had removed them). ``--strict``
-draws neither cause, and every disagreement fails. ``--implementation module:attribute``
+The full run (the default) draws both causes the strict run leaves out (DESIGN § 6): a
+disagreement attributed to T4b (a view read in) is counted under that milestone while it is
+pending; any other fails its walk (an optional fact left out among them: T4c reached).
+``--without MILESTONE`` takes its rows as removed, so its disagreements fail their walks
+(its engine walked as if it had removed them). ``--strict`` draws neither cause, and every
+disagreement fails. ``--implementation module:attribute``
 (or a registered name; ``public`` by default) names the implementation compared with the
 model, asked through ``support.space_oracle``'s interface; the summary names it. ``--by``
 draws selectors picked by a derived value too (the model's reading 17). It exits 1

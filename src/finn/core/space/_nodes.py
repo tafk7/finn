@@ -29,12 +29,12 @@ from .declarations import (
     Declaration,
     Param,
     PendingAnnotation,
-    Supplied,
     ValueRef,
     View,
     at,
     declared_path,
     guard,
+    literal,
     local_name,
     path_text,
     source_origin,
@@ -42,7 +42,7 @@ from .declarations import (
 )
 from .domains import finite
 from .errors import DefinitionError
-from .semantics import STRING, ValueSemantics, recognize, snapshot, unrecognized
+from .semantics import STRING, ValueSemantics
 
 if TYPE_CHECKING:
     from ._configuration import Space
@@ -249,10 +249,12 @@ def _check_reference(semantics: ValueSemantics[object] | None, value: object, la
 def _freeze_literal(
     semantics: ValueSemantics[object] | None, name: str, label: str, value: object
 ) -> object:
-    """Recognize, then snapshot, a literal once, where it is written.
+    """A literal, type-checked and in its canonical form, once, where it is written
+    (``declarations.literal``).
 
-    An unrecognized value is a definition error; an adapter that raises is a
-    programmer failure, reported with its owner and role like any other.
+    An unrecognized value, or one that is no value (NaN, a mutable one), is a definition
+    error; a recognizer that raises is a programmer failure, reported with its owner and
+    role like any other.
     """
     if semantics is None:
         raise DefinitionError.broken(
@@ -261,11 +263,7 @@ def _freeze_literal(
             f"{label}: the member's value type is not known yet",
             declaration=label,
         )
-    if not recognize(semantics, value, owner=name, role="parameter recognition"):
-        raise DefinitionError.broken(
-            "literal-unrecognized", _OWNER, f"{label}: {unrecognized(semantics)}", declaration=label
-        )
-    return snapshot(semantics, value, owner=name, role="parameter snapshot")
+    return literal(semantics, value, label, role="parameter", owner=name)
 
 
 def _value_supplier(
@@ -518,7 +516,7 @@ def missing_formal(key: str, formal: Declaration, record: NodeDecl | None, space
 
 
 def fallback(formal: Param[object]) -> object:
-    """The default of an unsupplied formal: a value, UNSUPPLIED, or MISSING if required."""
+    """The default of a formal nothing supplies: its value, or MISSING if required."""
     return formal.default
 
 
@@ -622,7 +620,7 @@ def node_choice(values: Mapping[object, object], *, when: ValueRef[bool] | None)
         candidates[cast(str, key)] = record
     decision.candidates = MappingProxyType(candidates)
     string = cast("ValueSemantics[str]", STRING)
-    decision.semantics = decision.explicit = string
+    decision.semantics = string
     decision.resolved = True
     decision.when = when
     decision.domain = finite(tuple(candidates), string)
@@ -687,14 +685,6 @@ def select_choice(
             "select-by-not-value",
             _OWNER,
             f"Select{where}: by= takes a value reference (a derived value, a formal)",
-        )
-    if by is not None and isinstance(when, Supplied):
-        raise DefinitionError.broken(
-            "select-by-supplied",
-            _OWNER,
-            f"Select{where}: a selector picked by a derived value takes no supplied() guard "
-            "until facts are known values: whether a formal is supplied is settled where its "
-            "holder is placed, and only a chosen selector reads it there",
         )
     space_types: dict[str, type[Space]] = {}
     records: dict[str, NodeDecl] = {}

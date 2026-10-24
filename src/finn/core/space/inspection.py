@@ -8,8 +8,15 @@ design space are the running type's (``_running.questions``, ``_running.surface`
 asked in the model's one session under its lock (``occurrence.ask``): validity reads the
 pieces of a Space's validity; ``viable`` tries each listed value of a choice as a change
 would set it, publishing nothing; ``states`` reads each choice's state; explain evaluates
-one query and follows the reads its answers recorded. ``states`` and ``viable`` detach the
-values they hand out, by each choice's semantics.
+one query and follows the reads its answers recorded. ``states`` and ``viable`` hand out
+the choices' values themselves: a choice's value is immutable, in its canonical form
+(``semantics.canonical``), and every answer type is a frozen dataclass of tuples.
+
+**The lists** (SZ113). A design space's ``decisions`` and ``states`` (and so its flow
+order) leave out each choice whose existence the facts alone rule out, unless it is stored
+(SZ119 (5); ``_running.questions.pruned``). A choice asked by name is answered all the same:
+its state, its possible values (``viable``), a change setting it (accepted, dormant). A
+compiled model's or a Space class's ``decisions`` list every decision.
 """
 
 # The running type imports this module's types: it is imported inside the bodies here.
@@ -17,7 +24,7 @@ values they hand out, by each choice's semantics.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeAlias, TypeVar, cast, overload
 
 from ._configuration import Space
@@ -37,7 +44,6 @@ from .occurrence import ask, held, model_of
 from .occurrence import candidate as _candidate
 from .references import DecisionHandle, ValueHandle, decision_key
 from .results import (
-    Available,
     ConstraintAssessment,
     DecisionState,
     QueryResult,
@@ -111,16 +117,11 @@ class ChoiceInfo:
 
 @dataclass(frozen=True, slots=True)
 class EvidenceNode:
-    """Detached result and actual outgoing demands for one visited computation.
-
-    Input presence is recorded only when parameter evaluation reached its body.
-    An inactive parameter therefore exposes no unused external value.
-    """
+    """Detached result and actual outgoing demands for one visited computation."""
 
     declaration: NodeInfo
     result: QueryResult[object]
     dependencies: tuple[ValueHandle[object], ...]
-    input_presence: Literal["supplied", "omitted"] | None = None
     decision_state: QueryResult[DecisionState[object]] | None = None
     selector: bool = False
     is_guard: bool = False
@@ -223,9 +224,13 @@ def _decision_info(model: Model[Space], index: Address) -> DecisionInfo[object]:
 
 
 def decisions(subject: Space | Model[S] | type[Space]) -> tuple[DecisionInfo[object], ...]:
-    """Discover all owning decisions below this scope, including inactive cases, in the
-    flow order (``_running.per_class.flow_below``). Read once per compiled model and scope,
-    from its compiled forms and scope records (``_whole``): no member is evaluated."""
+    """The owning decisions below this scope, in the flow order
+    (``_running.per_class.flow_below``). Of a compiled model or a Space class, every one,
+    inactive cases included: read once per compiled model and scope, from its compiled
+    forms and scope records (``_whole``), no member evaluated. Of a design space, those in
+    its lists (SZ113): every one but each choice whose existence the facts alone rule out,
+    unless it is stored (``_running.questions.pruned``). A decision asked by name is
+    answered whether it is listed or not."""
 
     compiled, scope = _context(subject)
     found = compiled._read.get(("decisions", scope))
@@ -233,7 +238,22 @@ def decisions(subject: Space | Model[S] | type[Space]) -> tuple[DecisionInfo[obj
         found = compiled._read[("decisions", scope)] = tuple(
             _decision_info(compiled, index) for index in flow_below(compiled, scope)
         )
-    return cast(tuple[DecisionInfo[object], ...], found)
+    every = cast(tuple[DecisionInfo[object], ...], found)
+    if not isinstance(subject, Space):
+        return every
+    from ._running.evaluate import evaluation
+    from ._running.questions import listed
+
+    driver_only("decisions")
+    at = held(subject)
+
+    def answer(session: Session) -> tuple[DecisionInfo[object], ...]:
+        kept = {index.key for index in listed(evaluation(at.ds, session), at.scope)}
+        if len(kept) == len(every):
+            return every
+        return tuple(item for item in every if item.key in kept)
+
+    return ask(compiled, answer)
 
 
 @overload
@@ -409,8 +429,8 @@ class Refused:
 class Viable:
     """One choice's listed values, each possible or refused, in its domain's list order.
     ``values`` is ``None`` where nothing can be listed: a domain known by membership only,
-    or a list that waits on missing facts (``waits``, by key) or is refused through an
-    input of the domain."""
+    or a list that waits (``waits``, by key) or is refused through an input of the
+    domain."""
 
     key: str
     values: tuple[Possible | Refused, ...] | None
@@ -426,7 +446,8 @@ class Viable:
 
 def viable(point: Space, keys: Iterable[object]) -> tuple[Viable, ...]:
     """Each named choice's listed values (its domain over the facts, listed as if the
-    choice existed), each tried alone as a change would set it, publishing nothing:
+    choice existed; a choice the design space's lists leave out is answered all the same),
+    each tried alone as a change would set it, publishing nothing:
     possible, with what it would move, or refused, with each rule it would break and
     the stored choices standing in its way. A rule waiting on an open choice does not
     refuse; the value stored is possible (setting it changes nothing). In the order of
@@ -439,27 +460,9 @@ def viable(point: Space, keys: Iterable[object]) -> tuple[Viable, ...]:
     indices = [model.decision(at.scope, key) for key in keys]
 
     def answer(session: Session) -> tuple[Viable, ...]:
-        return tuple(
-            _detached_viable(index, questions.viable(at.ds, index, session)) for index in indices
-        )
+        return tuple(questions.viable(at.ds, index, session) for index in indices)
 
     return ask(model, answer)
-
-
-def _detached(index: Address, value: object) -> object:
-    """A choice's value detached for a reader, by the choice's semantics."""
-    from ._running.answers import copy_result as detached
-
-    return cast(Available[object], detached(index, Available(value))).value
-
-
-def _detached_viable(index: Address, found: Viable) -> Viable:
-    """``found`` with each listed value detached (a domain's list is the facts layer's,
-    shared by every design space of those facts)."""
-    if found.values is None:
-        return found
-    values = tuple(replace(item, value=_detached(index, item.value)) for item in found.values)
-    return Viable(found.key, values, found.waits)
 
 
 # -- every choice's state --------------------------------------------------------------
@@ -474,8 +477,8 @@ class Set:
 
 @dataclass(frozen=True, slots=True)
 class Waiting:
-    """Stored, never read as a value: its presence is unknown, or its domain waits on a
-    missing fact. ``waits``: what it waits on (open choices, missing facts), by key."""
+    """Stored, never read as a value: its presence is unknown. ``waits``: what it waits on
+    (open choices), by key."""
 
     value: object
     waits: tuple[str, ...]
@@ -506,11 +509,13 @@ ChoiceState: TypeAlias = Set | Waiting | Dormant | Open | Absent
 
 
 def states(point: Space) -> tuple[tuple[str, ChoiceState], ...]:
-    """Every choice below this scope, by key, with its state, in the flow order (each
-    after every choice its presence, its list or its Space's facts read: a selector before
-    the choices its cases hold)."""
+    """Every choice below this scope in the design space's lists, by key, with its state,
+    in the flow order (each after every choice its presence, its list or its Space's facts
+    read: a selector before the choices its cases hold). A choice whose existence the facts
+    alone rule out is in no list, unless it is stored (SZ113, SZ119 (5);
+    ``_running.questions.pruned``)."""
     from ._running.evaluate import evaluation
-    from ._running.questions import state_of
+    from ._running.questions import listed, state_of
 
     driver_only("choice states")
     at = held(point)
@@ -518,20 +523,9 @@ def states(point: Space) -> tuple[tuple[str, ChoiceState], ...]:
 
     def answer(session: Session) -> tuple[tuple[str, ChoiceState], ...]:
         ev = evaluation(at.ds, session)
-        return tuple(
-            (index.key, _detached_state(index, state_of(ev, index)))
-            for index in flow_below(model, at.scope)
-        )
+        return tuple((index.key, state_of(ev, index)) for index in listed(ev, at.scope))
 
     return ask(model, answer)
-
-
-def _detached_state(index: Address, found: ChoiceState) -> ChoiceState:
-    """A choice's state with its stored value detached (a stored value is the design
-    space's own)."""
-    if isinstance(found, (Set, Waiting, Dormant)):
-        return replace(found, value=_detached(index, found.value))
-    return found
 
 
 @overload

@@ -33,9 +33,7 @@ from ._nodes import (
 from ._ordering import dependency_order
 from ._signatures import resolve_source
 from ._table import (
-    UNSUPPLIED_BINDING,
     Binding,
-    BindingForm,
     ChoiceDraft,
     MemberTask,
     Place,
@@ -46,7 +44,6 @@ from ._table import (
 )
 from .declarations import (
     MISSING,
-    UNSUPPLIED,
     CaseRef,
     ChoiceMemberRef,
     Const,
@@ -57,7 +54,6 @@ from .declarations import (
     MemberRef,
     Members,
     Param,
-    Supplied,
     View,
 )
 from .domains import Domain, finite
@@ -122,7 +118,7 @@ def _declared_kind(declaration: Declaration) -> NodeKind | None:
     """The node kind of a Space class's own member that is neither a formal nor a Decision."""
     if isinstance(declaration, Const):
         return "const"
-    if isinstance(declaration, (Derived, Expr, Supplied)):
+    if isinstance(declaration, (Derived, Expr)):
         return "derived"
     if isinstance(declaration, Constraint):
         return "constraint"
@@ -220,9 +216,7 @@ class _Allocation:
         if parent is not None:
             # The child's compiled form, compiled first; a slot of this class.
             draft.placed = SlotDraft(
-                self.table.compiled_of(space_type),
-                len(self.table.slot_drafts),
-                requires=self.table.applying,
+                self.table.compiled_of(space_type), len(self.table.slot_drafts)
             )
             self.table.slot_drafts.append(index)
         draft.slots = self.own_slots(draft)
@@ -271,7 +265,7 @@ class _Allocation:
             elif draft.parent is None:
                 node_kind = "param"
             else:
-                binding, node_kind = self.unsupplied(draft, member_name, declaration)
+                binding, node_kind = self.unsupplied(draft, member_name, declaration), "const"
         elif isinstance(declaration, Decision):
             node_kind = "decision"
         else:
@@ -283,11 +277,12 @@ class _Allocation:
                     f"{key}: unsupported declaration",
                     declaration=key,
                 )
-        if placed is not None and node_kind in ("const", "present"):
-            # A literal or a default is a value on the slot, and an unsupplied formal stays
-            # unsupplied: no node (the child's compiled form has the formal's).
-            placed.bindings[member_name] = (
-                UNSUPPLIED_BINDING if binding is None else Binding("literal", binding.supplier)
+        if placed is not None and node_kind == "const":
+            # A literal or a default is a value on the slot: no node (the child's compiled
+            # form has the formal's). A required formal nothing supplies has none: the
+            # class is refused once allocated (``formal-unsupplied``).
+            placed.bindings[member_name] = Binding(
+                "literal", None if binding is None else binding.supplier
             )
             return
         node = self.table.reserve(
@@ -300,15 +295,16 @@ class _Allocation:
         )
         if placed is not None:
             binding = cast(PlacementBinding, binding)
-            placed.bindings[member_name] = Binding(cast(BindingForm, binding.kind), node=node)
+            placed.bindings[member_name] = Binding(binding.kind, node=node)
         else:
             draft.named_members[member_name] = node
         self.table.members.append(MemberTask(node, draft.index, member_name, declaration, binding))
 
     def unsupplied(
         self, draft: ScopeDraft, name: str, formal: Param[object]
-    ) -> tuple[PlacementBinding | None, NodeKind]:
-        """A child's formal nothing supplies: its default, unsupplied, or missing."""
+    ) -> PlacementBinding | None:
+        """A child's formal nothing supplies: its default (``None`` for an optional fact),
+        or missing (none: a required formal)."""
         default = fallback(formal)
         if default is MISSING:
             self.missing.append(
@@ -319,9 +315,8 @@ class _Allocation:
                     self.table.space_type.__qualname__,
                 )
             )
-        if default is MISSING or default is UNSUPPLIED:
-            return None, "present"  # no alternatives: unsupplied
-        return PlacementBinding(default, "literal"), "const"
+            return None
+        return PlacementBinding(default, "literal")
 
     def place(
         self,
@@ -413,15 +408,6 @@ class _Allocation:
         for alias in self.table.aliases[scope.effective.space_type][name]:
             scope.choices[alias] = choice.index
             scope.members[alias] = selector
-        condition = scope.effective.guards.get(decision)
-        if isinstance(condition, Supplied) and decision.by is None:
-            # Guarded by the supply of a formal: whether it applies is decided where the
-            # class is placed (it never does where the formal is unsupplied); its
-            # candidates are compiled, and what exists only where it applies is marked.
-            choice.never_formal = scope.effective.aliases.get(condition.formal)
-        outer = self.table.applying
-        if choice.never_formal is not None:
-            self.table.applying = choice.index
         for case, record in decision.candidates.items():
             case_key = member_key(key, case)
             if record is None:
@@ -461,7 +447,6 @@ class _Allocation:
             self.table.drafts[child].candidate = (choice.index, case)
             choice.cases.append((case, child))
         self.shared_members(scope, choice)
-        self.table.applying = outer
 
     def shared_members(self, scope: ScopeDraft, choice: ChoiceDraft) -> None:
         """Link ``decision.member`` for every member name several candidates share.

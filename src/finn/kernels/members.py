@@ -187,8 +187,9 @@ def rejection(code: str, owner: str, message: str) -> tuple[Finding, ...]:
 
 def decision(subject: Space | type[Space], key: str) -> inspection.DecisionInfo[object] | None:
     """The Decision ``key`` of a point or a Space class, or None: found by its key in the
-    engine's table of its compiled model."""
-    return next((item for item in inspection.decisions(subject) if item.key == key), None)
+    engine's table of its compiled model, whether a point lists it or not."""
+    found = inspection.decisions(inspection.model(subject))
+    return next((item for item in found if item.key == key), None)
 
 
 def refusal(report: ConfigurationResult[Any]) -> Refusal:

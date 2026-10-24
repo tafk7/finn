@@ -36,4 +36,4 @@ class Parent(Space):
 def wrong(*, number: int) -> QueryResult[str]:
     return Available(str(number))
 
-derived(semantics=ValueSemantics.immutable_nominal(int))(wrong)  # E
+wrong_answer: int = derived(wrong)  # E

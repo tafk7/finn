@@ -1,15 +1,14 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The default snapshot's contract, checked: a frozen value class holds immutable values.
+"""Values are immutable, checked: a frozen value class holds immutable values.
 
-Under the Space engine's default value semantics an instance of a frozen
-dataclass is its own snapshot (``finn.core.space.semantics.default_semantics``):
-a frozen value class holds immutable values; one that holds a mutable field
-states its own semantics. ``mutable_fields`` reads each class's field
-annotations and names every field whose type is not immutable, so a field that
-would make sharing unsound fails a gate where the class is declared, not a
-replay far from it.
+The Space engine holds and hands out a fact's, a choice's and a constant's value as it
+is, never a copy, and refuses a mutable one where it enters a design space
+(``finn.core.space.semantics.canonical``): a frozen value class holds immutable values.
+``mutable_fields`` reads each class's field annotations and names every field whose
+type is not immutable, so a field that would make sharing unsound fails a gate where
+the class is declared, not a replay far from it.
 
 Immutable: ``None``, ``bool``, ``int``, ``float``, ``complex``, ``str``,
 ``bytes``, ``pathlib`` paths, enums, frozen dataclasses (each checked where it

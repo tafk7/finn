@@ -52,12 +52,11 @@ from finn.core.space import (
     inspection,
     occurrence,
     reject,
-    supplied,
 )
 from finn.core.space._running.evaluate import Ans, Session, evaluation
 from finn.core.space._scopes import Address
 from finn.core.space.edits import ConfigurationResult
-from finn.core.space.inspection import Absent, Dormant, Open, Set, Waiting
+from finn.core.space.inspection import Absent, Dormant, Open
 
 WIDTHS = (4, 6, 8, 9, 10, 12, 14, 70)
 
@@ -91,66 +90,70 @@ def test_the_house_walked_through_other_budgets() -> None:
         check(report, facts=True)
 
 
-# -- an optional formal: its presence is a fact an evaluation reads ---------------------------
+# -- an optional formal: None where it is left out, a fact an evaluation reads ---------------
 
 
 class Gauge(Space):
-    """Reads an optional formal through ``present`` and through a ``supplied`` guard."""
+    """Reads an optional formal, and a guard over it."""
 
-    reading: int = Param(required=False)
-    valued = supplied(reading)
+    reading: int | None = Param(default=None)
+
+    @derived
+    def valued(self) -> bool:
+        return self.reading is not None
+
     scale: int = Decision(values=(1, 2), when=valued)
 
     @derived
     def seen(self) -> int:
-        return self.reading if self.present(Gauge.reading) else 0
+        return 0 if self.reading is None else self.reading
 
 
 class Office(Space):
-    """A root with an optional formal, bound to a child and read by ``present`` here too."""
+    """A root with an optional formal, bound to a child and read here too."""
 
     width: int = Param()
-    rate: int = Param(required=False)
+    rate: int | None = Param(default=None)
     gauge = Gauge(reading=rate)
     mode: int = Decision(values=(1, 2, 4))
 
     @derived
     def charged(self) -> int:
-        return self.rate * self.mode if self.present(Office.rate) else self.width
+        return self.width if self.rate is None else self.rate * self.mode
 
 
-def test_an_optional_formal_walked_through_being_supplied_and_changed() -> None:
-    # Every walk starts with `rate` omitted. A fact can supply it and change it; none can
-    # omit it again (``with_facts`` keeps the formals it is not given).
+def test_an_optional_formal_walked_through_being_given_changed_and_left_out() -> None:
+    # Every walk starts with `rate` left out (None). A fact can give it, change it and set
+    # it back to None, the fact left out.
     for seed in (1, 2, 3):
         report = walk(
             design_space(Office(width=4)),
             seed=seed,
             steps=100,
-            facts={"width": (4, 6, 8), "rate": (1, 2, 3)},
+            facts={"width": (4, 6, 8), "rate": (None, 1, 2, 3)},
         )
         assert not report.differences, "\n".join(report.differences[:5])
         assert report.tallies.facts_changed > 10
 
 
-def test_supplying_an_omitted_formal_replaces_what_read_it_omitted() -> None:
+def test_giving_an_optional_formal_replaces_what_read_it_none() -> None:
     point = design_space(Office(width=4))
-    assert (point.present(Office.rate), point.charged, point.gauge.seen) == (False, 4, 0)
-    assert point.gauge.present(Gauge.reading) is False
+    assert (point.rate, point.charged, point.gauge.seen) == (None, 4, 0)
     assert isinstance(point.gauge.query(Gauge.scale), Inapplicable)
     moved = point.with_facts({Office.rate: 3}, {Office.mode: 2})
-    assert (moved.present(Office.rate), moved.charged, moved.gauge.seen) == (True, 6, 3)
-    assert moved.gauge.present(Gauge.reading) is True
+    assert (moved.rate, moved.charged, moved.gauge.seen) == (3, 6, 3)
     assert isinstance(moved.gauge.query(Gauge.scale), Unresolved)
     assert read(moved.with_facts({Office.rate: 5}), Office.charged) == 10
-    assert (point.present(Office.rate), point.charged) == (False, 4)  # the base is as it was
+    assert (point.rate, point.charged) == (None, 4)  # the base is as it was
 
 
-def test_a_formal_cannot_be_set_back_to_omitted() -> None:
+def test_an_optional_formal_set_back_to_none_is_the_one_left_out() -> None:
     point = design_space(Office(width=4, rate=2))
-    with pytest.raises(RequestError, match="expected value of nominal type int"):
-        point.with_facts({Office.rate: None})
-    assert point.present(Office.rate) is True
+    back = point.with_facts({Office.rate: None})
+    assert (back.rate, back.charged) == (None, 4)
+    left_out = design_space(Office(width=4))
+    assert occurrence.held(back).ds == occurrence.held(left_out).ds
+    assert occurrence.held(back).ds.layer is occurrence.held(left_out).ds.layer
 
 
 # -- the facts an evaluation reads ---------------------------------------------------------
@@ -608,11 +611,6 @@ class Gated(Space):
     lanes: int = Decision(domain=divisors_of(extent), when=enabled)
 
 
-class Waits(Space):
-    extent: int = Param(required=False)
-    lanes: int = Decision(domain=divisors_of(extent))
-
-
 def answer(point: Space, index: Address) -> Ans:
     """``index``'s answer in the design space ``point`` holds, in its model's session."""
     ds = occurrence.held(point).ds
@@ -663,17 +661,6 @@ def test_a_dormant_value_outside_its_new_domain_is_dropped_and_reported() -> Non
     assert states(report.instance)["lanes"] == Absent()
     # Back in play, it is open: nothing is stored for it.
     assert states(report.instance.with_choices(enabled=True))["lanes"] == Open()
-
-
-def test_a_value_waiting_on_a_missing_fact_is_dropped_when_the_fact_arrives_outside() -> None:
-    point = design_space(Waits()).with_choices(lanes=5)
-    assert states(point)["lanes"] == Waiting(5, ("extent",))
-    report = point.try_with_facts({Waits.extent: 12})
-    assert report.accepted
-    assert dropped(report) == {"lanes": {("domain-membership", "lanes")}}
-    assert states(report.instance)["lanes"] == Open()
-    # Inside, it is kept, now a value.
-    assert states(point.with_facts({Waits.extent: 10}))["lanes"] == Set(5)
 
 
 def test_a_batch_whose_choice_breaks_a_rule_with_the_new_facts_is_refused() -> None:

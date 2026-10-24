@@ -43,7 +43,6 @@ from finn.core.space import (
     Select,
     Space,
     Unresolved,
-    ValueSemantics,
     ValueUnavailableError,
     View,
     ViewKey,
@@ -127,16 +126,16 @@ class Alternatives(Space):
 
 
 class OptionalChild(Space):
-    size: int = Param(required=False)
+    size: int | None = Param(default=None)
 
     @derived
     def doubled(self) -> int:
-        return self.size * 2
+        return 0 if self.size is None else self.size * 2
 
 
 class Optional(Space):
-    size: int = Param(required=False)
-    nil: None = Param(required=False)
+    size: int | None = Param(default=None)
+    nil: None = Param(default=None)
     child = OptionalChild(size=size)
 
 
@@ -186,10 +185,12 @@ class Packed(Space):
 
 
 class Plain(Space):
-    depth: int = Param()
+    depth: int | None = Param(default=None)
 
     @derived
-    def lanes(self) -> int:
+    def lanes(self) -> int | Rejected:
+        if self.depth is None:
+            return reject("depth-unknown", "no depth is given")
         return self.depth * 4
 
     simd: int = Decision(domain=divisors_of(lanes))
@@ -197,7 +198,7 @@ class Plain(Space):
 
 class Kernel(Space):
     width: int = Param()
-    depth: int = Param(required=False)
+    depth: int | None = Param(default=None)
     style = Select(packed=Packed(width=width), plain=Plain(depth=depth))
 
     @view
@@ -242,10 +243,11 @@ SHAPES: dict[str, Callable[[], Space]] = {
 }
 
 
-def test_evidence_reads_through_a_formal_at_its_source_and_detaches_its_values() -> None:
+def test_evidence_reads_through_a_formal_at_its_source_and_copies_a_container() -> None:
     """The house's thermostat's cost reads its ``kw`` at its source (a formal bound by
     reference, read within its scope): named in ``via``, with no cache as through the public
-    API. The evidence's values are copies."""
+    API. A mutable container a derived value answers (a list) is handed out as a copy, in
+    the evidence and read as a value: a reader changing it changes nothing held."""
     point = design_space(House(budget=100)).with_choices({House.heating: "boiler"})
     running = Running()
     at = S.At(cast(Any, running.open(point)).ds)
@@ -256,16 +258,24 @@ def test_evidence_reads_through_a_formal_at_its_source_and_detaches_its_values()
     assert via["thermostat.cost.$output"] == ["thermostat.kw"]
 
     class Listed(Space):
-        source: list[int] = Param()
+        n: int = Param()
+
+        @derived
+        def source(self) -> list[int]:
+            return [1, self.n]
+
         physical = View(source)
 
-    listed = design_space(Listed(source=[1, 2]))
+    listed = design_space(Listed(n=2))
     opened = Running()
     here = S.At(cast(Any, opened.open(listed)).ds)
     first = S.explain(here, Listed.physical, opened.session)
     assert isinstance(first.result, Available)
     cast(list[int], first.result.value).append(3)
     assert S.explain(here, Listed.physical, opened.session).result == Available([1, 2])
+    read = listed.source
+    read.append(4)
+    assert listed.source == [1, 2] and listed.physical == [1, 2]
 
 
 def test_a_configuration_is_its_design_space_at_a_scope() -> None:
@@ -347,17 +357,19 @@ def _kernel() -> type[Space]:
 
     class Plain(Space):
         width: int = Param()
-        depth: int = Param()
+        depth: int | None = Param()
 
         @derived
-        def lanes(self) -> int:
+        def lanes(self) -> int | Rejected:
+            if self.depth is None:
+                return reject("depth-unknown", "no depth is given")
             return self.depth * self.width
 
         simd: int = Decision(domain=divisors_of(lanes))
 
     class Kernel(Space):
         width: int = Param()
-        depth: int = Param(required=False)
+        depth: int | None = Param(default=None)
         style = Select(packed=Packed(width=width), plain=Plain(width=width, depth=depth))
 
     return Kernel
@@ -365,8 +377,8 @@ def _kernel() -> type[Space]:
 
 def _by_key(point: Space, evidence: object) -> object:
     """``evidence`` (a ``QueryEvidence``) with every node named by its key, so two models
-    compare: each node's key, answer, the keys it read in order, its presence, state,
-    selector and guard flags, and the keys it read through."""
+    compare: each node's key, answer, the keys it read in order, its state, selector and
+    guard flags, and the keys it read through."""
     found = cast(Any, evidence)
     return (
         found.query.key,
@@ -376,7 +388,6 @@ def _by_key(point: Space, evidence: object) -> object:
                 node.declaration.key,
                 node.result,
                 tuple(each._node.key for each in node.dependencies),
-                node.input_presence,
                 node.decision_state,
                 node.selector,
                 node.is_guard,
@@ -404,7 +415,7 @@ def _handle(point: Space, key: str | ScopeRecord) -> ValueHandle[object]:
 
 
 FACTS = {"given": {"width": 12, "depth": 3}, "missing": {"width": 12}}
-"""``Kernel``'s facts: ``plain``'s list reads both, or halts on a missing ``depth``."""
+"""``Kernel``'s facts: ``plain``'s list reads both, or refuses on a ``depth`` left out (None)."""
 
 
 def _explained(facts: dict[str, int]) -> tuple[Space, dict[str, object], dict[str, object]]:
@@ -452,7 +463,7 @@ def test_evidence_of_a_choice_of_unknown_presence_holds_what_its_list_read(
         assert evidence == public[what], what
     read = _reads(point, mine["the root's validity"])
     # each case's piece: its guard, then the facts its list read in key order (``plain``'s
-    # halts on a missing ``depth``), then the rest of its validity
+    # refuses on a ``depth`` left out), then the rest of its validity
     assert read["style.packed.$validity"][:2] == ["style.packed.$selected", "width"], read
     assert read["style.plain.$validity"] == ["style.plain.$selected", *plain], read
 
@@ -1202,45 +1213,13 @@ def test_contextual_domain_error_is_one_primary_failure(way: str) -> None:
 
 
 @pytest.mark.parametrize("way", WAYS)
-def test_public_snapshot_failure_cannot_be_caught_into_success(way: str) -> None:
-    armed = False
-
-    def snapshot(value: list[int]) -> list[int]:
-        if armed:
-            raise LookupError("snapshot failure")
-        return list(value)
-
-    semantics = ValueSemantics(
-        list, "list", lambda value: type(value) is list, lambda left, right: left == right, snapshot
-    )
-
-    class Example(Space):
-        fact: list[int] = Param(semantics=semantics)
-
-        @derived
-        def output(self) -> int:
-            try:
-                return len(self.fact)
-            except EvaluationError:
-                return 99
-
-    space = opened(way, Example(fact=[1]))
-    armed = True
-    with pytest.raises(NativeEvaluationError) as caught:
-        space.read("output")
-    assert isinstance(caught.value.__cause__, LookupError)
-    assert caught.value.primary.owner == "fact"
-    assert caught.value.cleanup_failures == ()
-
-
-@pytest.mark.parametrize("way", WAYS)
 def test_value_transformations_cannot_read_a_design_space_even_when_caught(way: str) -> None:
     class Facts(Space):
         value: int = Param()
 
     facts = opened(way, Facts(value=7))
     with pytest.raises(EvaluationError, match="pure value transformation"):
-        with _failure.transformation("value snapshot"):
+        with _failure.transformation("value recognition"):
             try:
                 facts.read("value")
             except EvaluationError:

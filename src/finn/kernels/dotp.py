@@ -51,7 +51,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from math import ceil, floor, prod
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, cast
 
 from qonnx.core.ranges import TensorRange
 
@@ -80,10 +80,9 @@ from finn.kernels.artifacts.abi import CLOCK2X, Clocking, Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import KernelSpace, extent_of
 from finn.kernels.library import LibraryModule
-from finn.kernels.port import INTEGER_POLICY, AxiStreamPort, axis
+from finn.kernels.port import AxiStreamPort, axis
 from finn.kernels.utilization import RESOURCES_SEMANTICS, Fit
 from finn.kernels.values.domains import Integer, admit_element, integer_bounds, range_dtype
-from finn.kernels.values.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.platform.capabilities import DspBlock, Platform, Resources, dsp_widths
 
 _DSP_VERSION = {DspBlock.DSP48E1: 1, DspBlock.DSP48E2: 2, DspBlock.DSP58: 3}
@@ -178,15 +177,15 @@ class DotpAxiKernel(KernelSpace):
     form: Form = Param(default=Form.DENSE)
     reshape_activations: bool = Param(default=False)
     # A dense form read through a window (the module docstring): a lowered convolution.
-    window: Window = Param(required=False)
+    window: Window | None = Param(default=None)
     # The range of its results: its parent's statement (MatMul binds its result range),
     # so that it is known before the results channel exists.
     result_range: tuple[int, int] = Param()
     platform: Platform = Param()
-    # The tensors its input ports read: facts its parent gives, the weights' where they
-    # stream (absent, the port is idle).
+    # The tensors its input ports read: facts its parent gives (MatMul's activations, and
+    # the weights' tensor it carries, ``carried_weights``).
     x_tensor: Tensor = Param()
-    w_tensor: Tensor = Param(required=False)
+    w_tensor: Tensor = Param()
     # The extents PE and SIMD may divide, which its parent states from the operation's
     # own facts (``extents_stated``). N is the same in every datapath; the widest
     # reduction is the widest datapath's K: K * N for a depthwise operation, which a
@@ -201,7 +200,7 @@ class DotpAxiKernel(KernelSpace):
     @derived
     def windowed(self) -> bool:
         """Whether it reads its activations through a window."""
-        return self.present(DotpAxiKernel.window)
+        return self.window is not None
 
     @derived
     def x_rank(self) -> int:
@@ -234,15 +233,9 @@ class DotpAxiKernel(KernelSpace):
         leading axis together."""
         given: dict[Index, int] = {}
         if self.windowed:
-            # A window's outputs are the weights' last axis: without the weights' tensor,
-            # nothing states them. This rests on MatMul's weights, an open question: should
-            # they become one required fact, a core's w_tensor is required and this
-            # refusal is removed, not respelled.
-            if not self.present(DotpAxiKernel.w_tensor):
-                return reject(
-                    "dotp-extents", "a window's outputs are bound by weights, and none are given"
-                )
-            given |= {**self.window.extents, n: self.w_tensor.shape[-1]}
+            # A window's outputs are the weights' last axis.
+            window = cast(Window, self.window)
+            given |= {**window.extents, n: self.w_tensor.shape[-1]}
         if self.reshape_activations:
             given[m] = self.x_tensor.shape[0]
         if self.rows_viewed:
@@ -322,7 +315,7 @@ class DotpAxiKernel(KernelSpace):
     @derived
     def signature(self) -> tuple[tuple[Index | Affine, ...], ...]:
         """The indices x, w and y read: the form's, or its window's over the image's rank."""
-        found = self.window.over(self.x_rank) if self.windowed else self.form.value
+        found = cast(Window, self.window).over(self.x_rank) if self.windowed else self.form.value
         return found.x, found.w, found.y
 
     @derived
@@ -362,7 +355,7 @@ class DotpAxiKernel(KernelSpace):
         """Each weight beat's PE * SIMD lanes, SIMD fastest."""
         return (n, self.lanes_of)
 
-    @derived(semantics=INTEGER_POLICY)
+    @derived
     def activation_policy(self) -> Integer:
         """The activation encodings the core takes (``activations``)."""
         return self.activations
@@ -630,7 +623,7 @@ class PackedDotpKernel(DotpAxiKernel):
     def activations(self) -> Integer:
         return Integer(min_bits=2)
 
-    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    @derived
     def accumulator(self) -> QONNXDataType:
         least, greatest = self.result_range
         return range_dtype(least, greatest)
@@ -718,7 +711,7 @@ class Int8Dsp58DotpKernel(DotpAxiKernel):
         # No floor on ACTIVATION_WIDTH: it pads each activation to its 9-bit lane.
         return Integer()
 
-    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    @derived
     def accumulator(self) -> QONNXDataType:
         least, greatest = self.result_range
         return range_dtype(least, greatest)

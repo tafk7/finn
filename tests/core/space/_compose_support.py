@@ -4,14 +4,14 @@
 line's over one table (``test_compose``).
 
 ``composite_space(seed)`` draws a Space of three levels: each places up to two children and
-a selector of up to two cases (sometimes guarded by ``supplied`` of a formal, or by a
-choice), binds each child's formals to a literal, a formal, a choice, a Decision of its own
-declared for that binding (sometimes with a ``when``), one Decision it shares among its
-children (``shared``) or a sibling's member, or leaves one unsupplied, and sometimes binds a
-child's formal back to one of its own members (a walk up re-enters it). Each Space has a
-derived value ``x`` (explicit or a ``self`` method, sometimes guarded by a choice), a
-Decision ``p`` whose domain reads a formal, ``x``, a child's ``x`` or a selection, and
-sometimes a presence test and a view.
+a selector of up to two cases (sometimes guarded by whether its optional formal ``b`` is
+given, or by a choice), binds each child's formals to a literal, a formal, a choice, a
+Decision of its own declared for that binding (sometimes with a ``when``), one Decision it
+shares among its children (``shared``) or a sibling's member, or leaves ``b`` out (None), and
+sometimes binds a child's formal back to one of its own members (a walk up re-enters it).
+Each Space has a derived value ``x`` (explicit or a ``self`` method, sometimes guarded by a
+choice), a Decision ``p`` whose domain reads a formal, ``x``, a child's ``x`` or a
+selection, and sometimes a presence test, a test of ``b`` and a view.
 Most domains read facts; many read a choice, some through a slot, some through a guard."""
 
 from __future__ import annotations
@@ -28,7 +28,6 @@ from finn.core.space import (
     View,
     composite,
     divisors_of,
-    supplied,
 )
 from finn.core.space.errors import DefinitionError
 
@@ -39,6 +38,10 @@ def ident(*, v: int) -> int:
 
 def add(*, v: int, w: int) -> int:
     return v + w
+
+
+def given(*, v: object) -> bool:
+    return v is not None
 
 
 def m_a(self) -> int:  # type: ignore[no-untyped-def]
@@ -61,8 +64,8 @@ def m_present(self) -> bool:  # type: ignore[no-untyped-def]
     return bool(self.present(self.c0))
 
 
-def m_supplied(self) -> bool:  # type: ignore[no-untyped-def]
-    return bool(self.present(self.b))
+def m_given(self) -> bool:  # type: ignore[no-untyped-def]
+    return self.b is not None
 
 
 def m_flag(self) -> bool:  # type: ignore[no-untyped-def]
@@ -73,7 +76,7 @@ class _Draw:
     def __init__(self, seed: int) -> None:
         self.rng = random.Random(seed)
         self.count = 0
-        # Whether the last child placed left its formal ``b`` unsupplied.
+        # Whether the last child placed left its formal ``b`` out.
         self.unbound = False
 
     def maybe(self, chance: float) -> bool:
@@ -89,10 +92,10 @@ class _Draw:
 
     def space(self, level: int) -> type[Space]:
         rng = self.rng
-        members: dict[str, Any] = {"a": Param(), "b": Param(required=False)}
-        annotations: dict[str, object] = {"a": int, "b": int}
+        members: dict[str, Any] = {"a": Param(), "b": Param(default=None)}
+        annotations: dict[str, object] = {"a": int, "b": int | None}
         if self.maybe(0.5):
-            members["valued"] = supplied(members["b"])
+            members["valued"] = Derived(given, aliases={"v": members["b"]})
         if self.maybe(0.6):
             members["flag"] = Decision(values=(False, True))
             annotations["flag"] = bool
@@ -147,7 +150,7 @@ class _Draw:
         )
         annotations["p"] = int
         if self.maybe(0.4):
-            members["y"] = Derived(rng.choice((m_present, m_supplied, m_flag)))
+            members["y"] = Derived(rng.choice((m_present, m_given, m_flag)))
         if self.maybe(0.3):
             path = rng.choice(["x", "a", *(f"{child}.x" for child in children)])
             members["v"] = View(self.ref(members, path))

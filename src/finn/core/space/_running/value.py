@@ -5,11 +5,13 @@ and its facts) and its stored choices, dormant ones included. Two design spaces 
 same layer and stored choices are equal, whatever led to them, and answer alike.
 
 - ``FactsLayer(model, facts)``: one per model and facts, interned in the model's record
-  (``structure.Record.layers``). It holds what reads facts alone, for every design space
+  (``structure.Record.layers``). Every fact is known: a root formal not given takes its
+  default (``None`` for an optional fact), so a fact left out and one given its default
+  are one layer. It holds what reads facts alone, for every design space
   with those facts: the membership readings (a choice's membership read as if the choice
   existed, an evaluation of the layer with nothing stored) and the domains' outcomes. Both
   are the layer's memo, part of the value, never a cache.
-- ``DesignSpace(layer, stored)``: equal by value (each value by its member's semantics),
+- ``DesignSpace(layer, stored)``: equal by value (each value of one type and equal by ``==``),
   hashed by value, its hash computed once. What an evaluation of it answered hangs off it,
   by session, and is never part of the value.
 """
@@ -54,7 +56,8 @@ _EXACT = (int, str, bool, bytes, type(None))
 def _exact(value: object) -> object:
     """``value``'s part of a design space's hash: the value itself where its type's
     equality is exact (a plain int, string, bool, bytes or ``None``, or a tuple or frozen
-    set of them), else nothing. Equal by a member's semantics then always hashes alike."""
+    set of them), else nothing. The same value (``answers._same_value``) then always hashes
+    alike."""
     kind = type(value)
     if kind in _EXACT:
         return (kind, value)
@@ -70,7 +73,8 @@ def _part(values: Mapping[Address, object]) -> frozenset[tuple[Address, object]]
 
 
 def _same(mine: Mapping[Address, object], theirs: Mapping[Address, object]) -> bool:
-    """The same keys, each value equal by its member's semantics."""
+    """The same keys, each value the same (``answers._same_value``: of one type and equal by
+    ``==``)."""
     if mine.keys() != theirs.keys():
         return False
     return all(_same_value(key, mine[key], theirs[key]) for key in mine)
@@ -81,8 +85,7 @@ class FactsLayer:
     them alone: the membership readings (``evaluate.Evaluation.membership``, kept on the
     layer's design space with nothing stored, ``bare``) and the domains' outcomes
     (``outcomes``, by address, purpose and the answers of their inputs). Equal by value: the
-    same model, each fact equal by its member's semantics. Made by ``of``, interned per
-    model."""
+    same model, each fact the same value. Made by ``of``, interned per model."""
 
     __slots__ = ("model", "facts", "outcomes", "_bare", "_hash", "__weakref__")
 
@@ -95,9 +98,18 @@ class FactsLayer:
 
     @staticmethod
     def of(model: Model[Space], facts: Mapping[Address, object]) -> FactsLayer:
-        """The layer of ``model`` with ``facts``: the one the model's record holds for
-        facts with the same hash keys and equal by value, else a new one, interned there
+        """The layer of ``model`` with ``facts``, each root formal not given at its default
+        (a formal's member record holds it): the one the model's record holds for facts
+        with the same hash keys and equal by value, else a new one, interned there
         (unhashable facts give a new layer each time, equal by value all the same)."""
+        facts = {
+            **{
+                index: index.value
+                for index in model.scopes.parameters
+                if not index.required and index not in facts
+            },
+            **facts,
+        }
         layers = record(model).layers
         key = frozenset((index, hashkey(value)) for index, value in facts.items())
         hashable = all(part[1] is not None for part in key)
@@ -144,7 +156,7 @@ class FactsLayer:
 class DesignSpace:
     """A design space: its facts layer and its stored choices (by Decision, dormant
     ones included). Equality is by value: an equal layer and the same stored keys, each
-    value equal by its member's semantics."""
+    value the same."""
 
     layer: FactsLayer
     stored: Mapping[Address, object]

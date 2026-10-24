@@ -3,7 +3,8 @@
 """The rest of the public questions, each a function of a design space value: what today's
 configuration, its bound accessors and ``inspection`` answer beyond presence, validity, the
 states, the possible values, a change and a bind (``questions``). Each returns today's
-public result type, its values detached as today's are (by each member's semantics).
+public result type, its values as they are held (values are immutable), a mutable
+container a derived value or a view answers copied (``answers.handed_out``).
 
 A configuration of today's API is a design space read at one of its scopes: ``At``, the
 design space and the scope (the root, a child's, a candidate's, selected or not). What is
@@ -13,7 +14,7 @@ compiled class's; here it is only read, to address the answer.
 
 - ``query``: a member's answer, or a node's configuration (``At``) where it is present;
   ``value``: a member read as a value (a non-value raises ``ValueUnavailableError``);
-- ``present``: whether a node is present, or a value input supplied;
+- ``present``: whether a node is present;
 - ``inspect``: a view's or a constraint's assessment;
 - ``decision_state``: a Decision's commitment; ``candidates``: a choice's listed values,
   in their listed order, under its guard;
@@ -27,13 +28,12 @@ today's driver raises it.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from .._configuration import Space
 from .._nodes import NodeDecl
-from ..declarations import Param, declared_path
+from ..declarations import declared_path
 from ..errors import EvaluationError, RequestError
 from ..inspection import EvidenceNode, QueryEvidence, _node_info
 from ..references import ValueHandle, descend
@@ -43,14 +43,13 @@ from ..results import (
     DecisionState,
     Inapplicable,
     QueryResult,
-    Unresolved,
     ViewAssessment,
     require_value,
 )
-from ..semantics import snapshot
 from .answers import _guard_result, copy_assessment, copy_result
 from .evaluate import INAPPLICABLE, Ans, Evaluation, Session, evaluation
 from .questions import presence
+from .receiver import not_a_node
 from .receiver import scope_choice as _scope_choice
 from .value import DesignSpace
 
@@ -98,7 +97,7 @@ def _node_scope(at: At, reference: object) -> ScopeRecord | None:
 
 
 def _public(ev: Evaluation, index: Address) -> QueryResult[object]:
-    """``index``'s answer, detached by its semantics."""
+    """``index``'s answer, as a reader receives it (``answers.copy_result``)."""
     return copy_result(index, ev.result(index))
 
 
@@ -132,64 +131,22 @@ def value(at: At, reference: object, session: Session) -> object:
 
 
 def present(at: At, node: object, session: Session) -> bool:
-    """Whether a node (a child or a candidate) is present, or a value input supplied (a
-    source applies), read like a value: undecided presence raises
-    ``ValueUnavailableError`` (``Space.present``)."""
+    """Whether a node (a child or a candidate) is present, read like a value: undecided
+    presence raises ``ValueUnavailableError`` (``Space.present``). A value input is known,
+    never absent: it is no node (``not_a_node``)."""
     ev = _evaluation(at, session)
     target = _node_scope(at, node)
     if target is None:
-        if isinstance(node, Param):
-            index = at.ds.model.resolve(at.scope, node)
-            applies = ev.run(lambda: _source_applies(ev, index))
-            if isinstance(applies, bool):
-                return applies
-            require_value(_public(ev, applies), context=applies.owner)
-            raise AssertionError("an undecided presence read halts")
-        raise RequestError("present() takes a node (a child or a selector's case) or a value input")
+        raise not_a_node(node)
     guard = target.guard
     if guard is None:
         return True
     answer = ev.result(guard)
     if isinstance(answer, Available):
         return answer.value is True
-    if isinstance(answer, Inapplicable) or (isinstance(answer, Unresolved) and _unsupplied(answer)):
+    if isinstance(answer, Inapplicable):
         return False
     return bool(require_value(answer, context=guard.owner))
-
-
-def _unsupplied(answer: Unresolved) -> bool:
-    findings = answer.findings
-    return bool(findings) and all(finding.code == "input-unsupplied" for finding in findings)
-
-
-def _source_applies(ev: Evaluation, index: Address) -> bool | Address:
-    """Whether a source applies at ``index`` (a value input is supplied), or the address
-    whose answer still decides it: the edges a read of the value follows, reading only what
-    decides presence, never a computation."""
-    node = index
-    if node.guard is not None:
-        held = ev.result(node.guard)
-        if not isinstance(held, Available):
-            return False if isinstance(held, Inapplicable) else node.guard
-        if held.value is not True:
-            return False
-    if node.kind == "param":
-        return isinstance(ev.result(index), Available)
-    if node.kind in ("alias", "guard", "view"):
-        return _source_applies(ev, cast("Address", node.output))
-    if node.kind == "select":
-        selector = cast("Address", node.selector)
-        case = ev.result(selector)
-        if not isinstance(case, Available):
-            return False if isinstance(case, Inapplicable) else selector
-        target = cast("Mapping[str, Address]", node.selection_index).get(cast(str, case.value))
-        return False if target is None else _source_applies(ev, target)
-    if node.kind == "present":
-        answers = [_source_applies(ev, target) for _, target in node.alternatives]
-        if any(answer is True for answer in answers):
-            return True
-        return next((answer for answer in answers if answer is not False), False)
-    return True
 
 
 # -- assessments, a Decision's state and its candidates ---------------------------------
@@ -217,9 +174,7 @@ def _decision_state(ev: Evaluation, index: Address) -> QueryResult[DecisionState
         raise EvaluationError(node.owner, "decision state", "reference is not an owning decision")
     stored = ev.ds.stored
     if index in stored:
-        assert node.semantics is not None
-        held = snapshot(node.semantics, stored[index], owner=node.owner, role="decision state")
-        return Available(DecisionState(node.owner, "committed", held))
+        return Available(DecisionState(node.owner, "committed", stored[index]))
     found, answer = presence(ev, index)
     if found == "present":
         return Available(DecisionState(node.owner))
@@ -248,16 +203,7 @@ def candidates(
     found = ev.run(lambda: _candidates(ev, node))
     if isinstance(found, Available) and found.value is None:
         return None
-    if not isinstance(found, Available):
-        return cast(QueryResult[tuple[object, ...]], found)
-    semantics = node.semantics
-    assert semantics is not None
-    return Available(
-        tuple(
-            snapshot(semantics, item, owner=node.owner, role="public value snapshot")
-            for item in cast(tuple[object, ...], found.value)
-        )
-    )
+    return cast(QueryResult[tuple[object, ...]], found)
 
 
 def _candidates(ev: Evaluation, node: Address) -> QueryResult[object]:
@@ -385,19 +331,11 @@ def _evidence(ev: Evaluation, index: Address) -> QueryEvidence[object]:
     for item in sorted(visited, key=lambda each: each.key):
         node, entry = item, visited[item]
         demanded = tuple(dict.fromkeys(dependency for dependency, _ in entry.trace))
-        active = True
-        if node.guard is not None:
-            guard = visited[node.guard].result
-            active = isinstance(guard, Available) and guard.value is True
-        supplied: Literal["supplied", "omitted"] | None = None
-        if node.kind == "param" and active:
-            supplied = "supplied" if item in ev.ds.facts else "omitted"
         nodes.append(
             EvidenceNode(
                 _node_info(model, item),
                 copy_result(item, entry.result),
                 tuple(ValueHandle[object](model, target) for target in demanded),
-                supplied,
                 _decision_state(ev, item) if node.kind == "decision" else None,
                 model.scopes.selector_choice(item) is not None,
                 item in guards,

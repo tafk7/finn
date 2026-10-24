@@ -158,8 +158,8 @@ def query(point: Space, reference: object) -> QueryResult[object]:
 
 
 def present(point: Space, node: object) -> bool:
-    """Whether a node, or a value input, is present, read like a value (undecided presence
-    raises)."""
+    """Whether a node is present, read like a value (undecided presence raises); a value
+    input is no node (it is known: test it with ``is not None``)."""
     from ._running import surface
 
     reader = _reader(point)
@@ -368,12 +368,11 @@ def try_with_facts(
     batch. A change of facts is never refused: every stored choice the batch does not
     name, dormant ones included, is checked again against its domain under the new facts,
     and one outside it, or whose domain's input refuses or does not apply, is dropped
-    (``"dropped"``, not requested); one waiting on a missing fact keeps waiting. A
-    constraint the new facts make false reads refused. The report's ``broken`` names each
-    rule newly false in the published design space, by the new facts or revealed by a
-    clear beside them, with the stored choices standing in its way. ``changes`` are a
-    change of choices on the new design space, refused by the rules of
-    ``try_with_choices`` judged against it; a refused batch publishes nothing."""
+    (``"dropped"``, not requested). A constraint the new facts make false reads refused.
+    The report's ``broken`` names each rule newly false in the published design space, by
+    the new facts or revealed by a clear beside them, with the stored choices standing in
+    its way. ``changes`` are a change of choices on the new design space, refused by the
+    rules of ``try_with_choices`` judged against it; a refused batch publishes nothing."""
     from ._running import questions, requests
 
     driver_only("configuration replacement")
@@ -409,8 +408,8 @@ def bind(point: S, /, *choices: ChangeRequest | Mapping[Any, object]) -> Configu
     those facts is the same instantiation, keeping the choices that fall within their
     domains: each value is checked under ``point``'s facts as if its choice existed, and
     one outside its domain, or whose domain's input refuses or does not apply, is dropped
-    (``"dropped"``); one waiting on a missing fact is kept, waiting. Each saved choice kept
-    is ``"changed"``, as set on the facts with nothing stored, whatever ``point`` holds.
+    (``"dropped"``). Each saved choice kept is ``"changed"``, as set on the facts with
+    nothing stored, whatever ``point`` holds.
     Never refused for constraints: the report's ``broken`` names every rule the saved
     choices break under these facts (false through an origin the facts with nothing stored
     are not), each with the stored choices standing in its way, and the design space reads

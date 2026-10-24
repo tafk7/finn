@@ -35,15 +35,12 @@ from ._nodes import NodeDecl, SlotKind, slot_kind
 from ._signatures import BoundArgument
 from .collection import EffectiveSpace, collect_space
 from .declarations import Declaration, ValueRef
-from .errors import DefinitionError
 from .expressions import IntOperator
 from .ir import Node, NodeKind, NodeRef, Placed, Placing, Selected
 from .semantics import BOOL, ValueSemantics
 
 if TYPE_CHECKING:
-    from ._template import Compiled, CompiledChoice
-
-_OWNER = "space.table"
+    from ._template import Compiled
 
 
 def member_key(scope: str, member: str) -> str:
@@ -51,44 +48,27 @@ def member_key(scope: str, member: str) -> str:
     return f"{scope}.{member}" if scope else member
 
 
-BindingForm = Literal["literal", "reference", "unsupplied"]
+BindingForm = Literal["literal", "reference"]
 
 
 @dataclass(frozen=True, slots=True)
 class Binding:
     """How a placing body binds one formal of a child: a literal or a default (``value``,
-    no record), a reference (``node``: the record the placing class writes for it), or
-    nothing."""
+    no record), or a reference (``node``: the record the placing class writes for it)."""
 
     kind: BindingForm
     value: object = None
     node: int | None = None
 
 
-UNSUPPLIED_BINDING = Binding("unsupplied")
-
-
-@dataclass(frozen=True, slots=True)
-class Read:
-    """One read of ``decision.member``: its reader's key, and the Decision over nodes it
-    exists only where it applies (None: everywhere)."""
-
-    owner: str
-    requires: int | None
-
-
 @dataclass
 class SlotDraft:
     """A Space the class places, slot ``slot`` of its compiled form: the placed class's
-    compiled form, and what the placing body writes for it (its formals' bindings).
-    ``requires`` is the class's Decision over nodes whose candidate it is, where that
-    choice may never apply (a guard ``supplied(formal)``): what the class writes for it
-    exists only where it applies."""
+    compiled form, and what the placing body writes for it (its formals' bindings)."""
 
     compiled: Compiled
     slot: int
     bindings: dict[str, Binding] = field(default_factory=dict)
-    requires: int | None = None
 
 
 @dataclass
@@ -133,14 +113,10 @@ class ChoiceDraft:
     selector: int
     cases: list[tuple[str, int | None]] = field(default_factory=list)
     members: dict[str, int] = field(default_factory=dict)
-    # The formal whose absence makes the choice never apply (its guard is
-    # ``supplied(formal)``); every selection made for it (node -> member), those its
-    # candidates share, each read of a member through it; shared selections dropped for
-    # disagreeing types.
-    never_formal: str | None = None
+    # Every selection made for it (node -> member), those its candidates share; shared
+    # selections dropped for disagreeing types.
     selects: dict[int, str] = field(default_factory=dict)
     shared: set[int] = field(default_factory=set)
-    readers: dict[str, list[Read]] = field(default_factory=dict)
     dropped: set[str] = field(default_factory=set)
 
 
@@ -199,21 +175,15 @@ class Table:
     # Lowering -> checks: integer expressions, and each callback argument's target.
     expression_tasks: list[ExpressionTask] = field(default_factory=list)
     argument_checks: list[tuple[BoundArgument, NodeRef, str]] = field(default_factory=list)
-    # The Decision over nodes each node exists only where it applies, and the one whose
-    # nodes are being made. Each edge out of the class, in the order first named, with the
-    # Decision being applied then (an edge takes its first reader's applicability), and
-    # the records and edges in the order they were made (``vertices``: the dependency
-    # order's).
-    requires: dict[int, int] = field(default_factory=dict)
-    applying: int | None = None
-    edges: dict[Edge, int | None] = field(default_factory=dict)
+    # Each edge out of the class, and the records and edges in the order they were made
+    # (``vertices``: the dependency order's).
+    edges: set[Edge] = field(default_factory=set)
     vertices: list[int | Edge] = field(default_factory=list)
     # ``Select(by=...)``: each derived selector's node, its scope and what picks it.
     picks: list[tuple[int, int, object]] = field(default_factory=list)
     # Each selection made in a placed Space's choice: node -> (its slots, the choice in the
-    # class those slots reach, member), and its reads.
+    # class those slots reach, member).
     chooses: dict[int, tuple[tuple[int, ...], int, str]] = field(default_factory=dict)
-    chosen_reads: dict[int, list[Read]] = field(default_factory=dict)
 
     def collected(self, space_type: type[Space]) -> EffectiveSpace:
         effective = self.effective.get(space_type)
@@ -254,8 +224,6 @@ class Table:
             )
         )
         self.vertices.append(index)
-        if self.applying is not None:
-            self.requires[index] = self.applying
         return index
 
     def guarded(
@@ -339,9 +307,9 @@ class Table:
         return self.named(edge)
 
     def named(self, edge: Edge) -> Edge:
-        """An edge out of the class, named: the first reader's applicability is its own."""
+        """An edge out of the class, named (a vertex of the order when first named)."""
         if edge not in self.edges:
-            self.edges[edge] = self.applying
+            self.edges.add(edge)
             self.vertices.append(edge)
         return edge
 
@@ -356,27 +324,8 @@ class Table:
             above, cast("int | Placing", compiled.ref(compiled.slots[place.steps[-1]].guard))
         )
 
-    def never_at(self, place: Place, choice: CompiledChoice) -> bool:
-        """Whether a Decision over nodes of the class placed at ``place`` never applies there:
-        its guard is the supply of a formal the placing body leaves unsupplied."""
-        if choice.never_formal is None:
-            return False
-        return self.bindings(place)[choice.never_formal].kind == "unsupplied"
-
-    def below(self, place: Place, slot: int, *, owner: str) -> Place:
-        """The scope of slot ``slot`` of the class placed at ``place``; a candidate of a
-        Decision over nodes that never applies there is not placed (``reference-not-placed``)."""
-        compiled = self.compiled_at(place)
-        placing = compiled.slots[slot]
-        if placing.candidate is not None and self.never_at(
-            place, compiled.choices[placing.candidate[0]]
-        ):
-            raise DefinitionError.broken(
-                "reference-not-placed",
-                _OWNER,
-                f"{owner}: {placing.record!r} is not placed in {self.name(place) or '<root>'}",
-                declaration=owner,
-            )
+    def below(self, place: Place, slot: int) -> Place:
+        """The scope of slot ``slot`` of the class placed at ``place``."""
         return Place(place.draft, (*place.steps, slot))
 
     def member_at(self, place: Place, member: object) -> NodeRef:

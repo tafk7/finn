@@ -113,11 +113,11 @@ def compile_model(api, space_type):
 
 
 def flat_space(api, count: int):
-    source = api.Param(semantics=api.default_semantics(int))
+    source = api.Param()
     members = {"source": source}
     for index in range(count):
         members[f"item{index}"] = api.Derived(increment, aliases={"value": source})
-    return api.composite("FlatSpace", members)
+    return api.composite("FlatSpace", members, annotations={"source": int})
 
 
 def repeated_space(api, count: int):
@@ -260,10 +260,7 @@ def batch_updates(api, count: int, *, dependent: bool) -> dict[str, object]:
     requests = []
     for index in range(count):
         limit = api.Derived(prerequisite, aliases={"previous": previous})
-        decision = api.Decision(
-            domain=api.domain(accepts=membership),
-            semantics=api.default_semantics(int),
-        )
+        decision = api.Decision(domain=api.domain(accepts=membership))
         members[f"limit{index}"] = limit
         members[f"choice{index}"] = decision
         members[f"follows{index}"] = api.Constraint(
@@ -272,7 +269,11 @@ def batch_updates(api, count: int, *, dependent: bool) -> dict[str, object]:
         requests.append((decision, index + 1 if dependent else 1))
         if dependent:
             previous = decision
-    space_type = api.composite("DependentBatch" if dependent else "IndependentBatch", members)
+    space_type = api.composite(
+        "DependentBatch" if dependent else "IndependentBatch",
+        members,
+        annotations={f"choice{index}": int for index in range(count)},
+    )
     model = compile_model(api, space_type)
     base = api.design_space(space_type())
     changes = [base.field(reference).change(value) for reference, value in reversed(requests)]
@@ -315,12 +316,12 @@ def replacement_validation(api, count: int) -> dict[str, object]:
         return candidate in {0, 1}
 
     members = {
-        f"choice{index}": api.Decision(
-            domain=api.domain(accepts=membership), semantics=api.default_semantics(int)
-        )
+        f"choice{index}": api.Decision(domain=api.domain(accepts=membership))
         for index in range(count)
     }
-    space_type = api.composite("ReplacementValidation", members)
+    space_type = api.composite(
+        "ReplacementValidation", members, annotations={name: int for name in members}
+    )
     base = api.design_space(space_type())
     configured = base.with_choices(
         *(base.field(reference).change(0) for reference in members.values())
@@ -364,7 +365,7 @@ def narrow_query(api, branches: int) -> dict[str, object]:
             work["inactive"] += 1
             raise AssertionError("an inactive alternative was demanded")
 
-    source = api.Param(semantics=api.default_semantics(int))
+    source = api.Param()
     members = {"source": source}
     for index in range(branches):
         # The structural choice is a selector; ``choice.physical`` is the selected
@@ -372,7 +373,7 @@ def narrow_query(api, branches: int) -> dict[str, object]:
         choice = api.Select(selected=Selected(value=source), inactive=Inactive())
         members[f"branch{index}"] = choice
         members[f"output{index}"] = api.View(choice.physical)
-    space_type = api.composite("NarrowQuery", members)
+    space_type = api.composite("NarrowQuery", members, annotations={"source": int})
     model = compile_model(api, space_type)
     assert work == Counter()
     base = api.design_space(space_type(source=7))
@@ -459,7 +460,6 @@ def wide_choice(api, alternatives: int, trials: int = 30) -> dict[str, object]:
 
 def cache_reclamation(api, population: int) -> dict[str, object]:
     created = []
-    payload_semantics = api.ValueSemantics.immutable_nominal(CachedPayload)
 
     def member(*, candidate: int) -> bool:
         return candidate >= 0
@@ -467,7 +467,7 @@ def cache_reclamation(api, population: int) -> dict[str, object]:
     class Example(api.Space):
         choice: int = api.Decision(domain=api.domain(accepts=member))
 
-        @api.derived(semantics=payload_semantics)
+        @api.derived
         def output(self) -> CachedPayload:
             payload = CachedPayload(self.choice, bytes((self.choice % 256,)) * 1024)
             # Track the callback-created object, not a detached public copy.
@@ -511,9 +511,7 @@ def cache_reclamation(api, population: int) -> dict[str, object]:
         "alive_after_cache_released": after_cache,
         "creation_seconds": creation_seconds,
         "collection_seconds_after_release": reclamation_seconds,
-        "snapshot_policy": (
-            "explicit immutable nominal semantics preserves each callback-created object"
-        ),
+        "snapshot_policy": "a value is held as its callback returned it: values are immutable",
     }
 
 
@@ -737,7 +735,7 @@ def kernel_fixtures(api):
             MatMulKernel(
                 platform=platform,
                 x_tensor=matmul_tensors[0],
-                w_tensor=matmul_tensors[1],
+                weights=matmul_tensors[1],
             ),
             lambda point, index: commit(
                 point,

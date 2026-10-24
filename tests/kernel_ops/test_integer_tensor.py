@@ -48,6 +48,6 @@ def test_equal_integers_stored_differently_are_one_value_and_one_binding() -> No
     integers.set_initializer("w", np.asarray(WEIGHTS, dtype=np.int8))
     ops = [kernel_op(model, model.graph.node[0]) for model in (floats, integers)]
     facts = [op.facts() for op in ops]
-    assert facts[0].arguments["w_contents"] == facts[1].arguments["w_contents"]
+    assert facts[0].arguments["weights"] == facts[1].arguments["weights"]
     assert key(facts[0], {}, {}, ()) == key(facts[1], {}, {}, ())
     assert ops[0].bound() is ops[1].bound()

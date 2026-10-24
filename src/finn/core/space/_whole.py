@@ -16,12 +16,10 @@ enclosing one: a way ends at a choice, a fact and a Space's validity (a view's S
 not followed), and follows a node's dependencies and a method's inferred reads (a
 dynamic method's: every node of its scope and of the scopes below it). A guard's
 **reach** is every choice and fact on every way back from it, through choices too (a
-dynamic method's: every choice and fact). A read through ``present()`` follows what
-decides whether the value is supplied (its guards; an alias, a guard or a view to its
-output; a selection to its selector and alternatives; a formal to its binding).
+dynamic method's: every choice and fact).
 
-**Per class, summaries.** Each walk is done once per class (and placement:
-``_compose.Placement``), from one start, over the records of its compiled form, and cached
+**Per class, summaries.** Each walk is done once per class, from one start, over the
+records of its compiled form, and cached
 with it: what it finds there (choices; for a reach, facts too), what it finds in the Spaces
 it places (an edge into a placed Space continued in the child's compiled form by the
 child's summary, and what that reaches out of the child followed into this class's
@@ -31,11 +29,9 @@ method's subtree is one summary per class too.
 
 **Per scope, composition.** A summary's finds are addressed in the scope it is read at
 (``ScopeRecord.reach`` and ``member_address``: a scope's record, no member read); each exit
-is followed
-into the placing scope's binding (``_compose.lift``: a literal, a default or an
-unsupplied formal ends at the guard the scope is placed under; a reference continues
-there), by that class's summaries, up to the root, where a formal is a fact. Composed per
-scope and exit once.
+is followed into the placing scope's binding (``_compose.lift``: a literal or a default
+ends at the guard the scope is placed under; a reference continues there), by that class's
+summaries, up to the root, where a formal is a fact. Composed per scope and exit once.
 
 That this is the line's answer, the line's algorithms over one table of every node,
 is the tests' oracle (``core.space._whole_support``), on every Space class of the tests
@@ -49,20 +45,7 @@ from dataclasses import dataclass
 from heapq import heapify, heappop, heappush
 from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
 
-from ._compose import (
-    ROOT,
-    Exit,
-    Mode,
-    Placement,
-    Ref,
-    _classify,
-    _Slot,
-    excluded,
-    fields,
-    is_decision,
-    lift,
-    slot,
-)
+from ._compose import Exit, Ref, _classify, _Slot, fields, lift, slot
 from ._reads import _Dynamic, _Found, _Ref, _TemplateInference
 from .ir import Placed, Placing
 
@@ -78,8 +61,8 @@ Walk = Literal["upstream", "reach"]
 # A member a walk found: the slots from the class walked, and a record of the class they
 # reach.
 Step = tuple[tuple[int, ...], int]
-# A walk's step to a reference, read as a mode.
-_Push = Callable[[Ref, Mode], None]
+# A walk's step to a reference.
+_Push = Callable[[Ref], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,7 +107,7 @@ class _Union:
 
 
 class _Walks:
-    """The summaries of one walk, per class and placement (cached on the compiled form:
+    """The summaries of one walk, per class (cached on the compiled form:
     ``Compiled.composed``). ``inference`` answers each method's reads per class."""
 
     def __init__(self, walk: Walk, inference: _TemplateInference) -> None:
@@ -132,207 +115,143 @@ class _Walks:
         self.inference = inference
         self.name = f"whole.{walk}"
 
-    def _memo(self, compiled: Compiled, at: Placement) -> dict[tuple[int, Mode], Summary]:
-        held = cast(
-            dict[Placement, dict[tuple[int, Mode], Summary]],
-            compiled.composed.setdefault(self.name, {}),
-        )
-        return held.setdefault(at, {})
+    def _memo(self, compiled: Compiled) -> dict[int, Summary]:
+        return cast(dict[int, Summary], compiled.composed.setdefault(self.name, {}))
 
-    def summary(self, compiled: Compiled, at: Placement, ref: Ref, mode: Mode) -> Summary:
-        """The walk from ``ref`` (read as ``mode``) in ``compiled``'s class at ``at``; found
-        once."""
-        out = _classify(compiled, ref, mode)
+    def summary(self, compiled: Compiled, ref: Ref) -> Summary:
+        """The walk from ``ref`` in ``compiled``'s class; found once."""
+        out = _classify(compiled, ref)
         if out is not None:
             return Summary(exits=frozenset((out,)))
         node = cast(int, ref)
-        memo = self._memo(compiled, at)
-        found = memo.get((node, mode))
+        memo = self._memo(compiled)
+        found = memo.get(node)
         if found is None:
-            found = memo[(node, mode)] = self._dfs(compiled, at, ((node, mode),), memo)
+            found = memo[node] = self._dfs(compiled, (node,), memo)
         return found
 
-    def gathered(
-        self, compiled: Compiled, at: Placement, starts: Iterable[tuple[Ref, Mode]]
-    ) -> Summary:
+    def gathered(self, compiled: Compiled, starts: Iterable[Ref]) -> Summary:
         """The walk from each of ``starts``, as one (a walk's finds are a union)."""
         union = _Union()
-        for ref, mode in starts:
-            union.add(self.summary(compiled, at, ref, mode))
+        for ref in starts:
+            union.add(self.summary(compiled, ref))
         return union.summary()
 
-    def subtree(self, compiled: Compiled, at: Placement) -> Summary:
-        """The upstream walk from every record of the scope ``compiled``'s class is placed
-        as at ``at`` and of the scopes below it (what a dynamic method of that scope may
-        read): its own members and the records it writes for the Spaces it places (their
-        formals' bindings), and each placed Space's subtree. Found once."""
-        held = cast(dict[Placement, Summary], compiled.composed.setdefault("whole.subtree", {}))
-        found = held.get(at)
+    def subtree(self, compiled: Compiled) -> Summary:
+        """The upstream walk from every record of ``compiled``'s class and of the classes
+        it places (what a dynamic method of its scope may read): its own members and the
+        records it writes for the Spaces it places (their formals' bindings), and each
+        placed Space's subtree. Found once."""
+        found = cast("Summary | None", compiled.composed.get("whole.subtree"))
         if found is None:
             union = _Union()
-            starts: list[tuple[Ref, Mode]] = [
-                (record, "r") for record in range(len(compiled.records))
-            ]
+            starts: list[Ref] = list(range(len(compiled.records)))
             for index in range(len(compiled.slots)):
                 child = slot(compiled, index)
-                if child.requires in at.never:
-                    continue
-                below = self.subtree(child.compiled, child.placement)
+                below = self.subtree(child.compiled)
                 union.add(Summary(below.found), (index,))
-                starts.extend(item for exit in below.exits for item in lift(child, (exit,)))
-            union.add(self._dfs(compiled, at, starts, None, subtree=True))
-            found = held[at] = union.summary()
+                starts.extend(lift(child, below.exits))
+            union.add(self._dfs(compiled, starts, None, subtree=True))
+            found = union.summary()
+            compiled.composed["whole.subtree"] = found
         return found
 
     def _dfs(
         self,
         compiled: Compiled,
-        at: Placement,
-        starts: Sequence[tuple[Ref, Mode]],
-        memo: Mapping[tuple[int, Mode], Summary] | None,
+        starts: Sequence[Ref],
+        memo: Mapping[int, Summary] | None,
         *,
         subtree: bool = False,
     ) -> Summary:
-        """The walk from ``starts`` over ``compiled``'s records at ``at``. A record whose
-        walk is known (``memo``) contributes it whole. ``subtree``: the walk of the scope's
-        subtree itself, to which a dynamic method of its own adds nothing."""
+        """The walk from ``starts`` over ``compiled``'s records. A record whose walk is
+        known (``memo``) contributes it whole. ``subtree``: the walk of the scope's subtree
+        itself, to which a dynamic method of its own adds nothing."""
         upstream = self.walk == "upstream"
         union = _Union()
-        seen: set[tuple[int, Mode]] = set()
-        pending: list[tuple[int, Mode]] = []
+        seen: set[int] = set()
+        pending: list[int] = []
 
-        def push(ref: Ref, mode: Mode) -> None:
-            out = _classify(compiled, ref, mode)
+        def push(ref: Ref) -> None:
+            out = _classify(compiled, ref)
             if out is not None:
                 union.exits.add(out)
                 return
             node = cast("int | Placed", ref)
-            if excluded(compiled, at, node):
-                return
             if isinstance(node, Placed):
-                found, lifted = self._down(compiled, at, node.path, node.member, mode)
+                found, lifted = self._down(compiled, node.path, node.member)
                 union.add(found)
                 for item in lifted:
-                    push(*item)
+                    push(item)
                 return
-            if (node, mode) in seen:
+            if node in seen:
                 return
-            seen.add((node, mode))
-            known = None if memo is None else memo.get((node, mode))
+            seen.add(node)
+            known = None if memo is None else memo.get(node)
             if known is not None:
                 union.add(known)
                 return
-            pending.append((node, mode))
+            pending.append(node)
 
-        for ref, mode in starts:
-            push(ref, mode)
+        for ref in starts:
+            push(ref)
         while pending:
             if union.every:
                 return Summary(every=True)
-            node, mode = pending.pop()
+            node = pending.pop()
             spec = compiled.records[node]
-            if mode != "r":
-                # What ``present()`` reads of a value: its guard; an alias, a guard or a
-                # view's output; a selection's selector and alternatives; a selector
-                # itself where it is the value asked of.
-                if mode == "S" and node in compiled.selectors:
-                    push(node, "r")
-                read = fields(compiled, at, node)
-                if read.guard is not None:
-                    push(read.guard, "r")
-                if spec.kind in ("alias", "guard", "view") and read.output is not None:
-                    push(read.output, "s")
-                elif spec.kind == "select" and read.selector is not None:
-                    push(read.selector, "r")
-                    for target in read.alternatives:
-                        push(target, "s")
-                continue
-            if is_decision(compiled, at, node):
+            if spec.kind == "decision":
                 union.found.add(((), node))
                 if upstream:
                     continue
             elif upstream and spec.kind == "validity":
                 continue
-            for ref in fields(compiled, at, node).dependencies():
-                push(ref, "r")
+            for ref in fields(compiled, node).dependencies():
+                push(ref)
             if spec.call_style == "self" and spec.function is not None:
                 items = self.inference.reads(spec.function, compiled)
-                if self._dynamic(compiled, at, items):
+                if any(isinstance(item, _Dynamic) for item in items):
                     if not upstream:
                         return Summary(every=True)
                     if not subtree:
-                        union.add(self.subtree(compiled, at))
+                        union.add(self.subtree(compiled))
                     continue
-                self._reads(compiled, at, items, union, push)
+                self._reads(compiled, items, union, push)
         return union.summary()
 
     def _down(
-        self,
-        compiled: Compiled,
-        at: Placement,
-        steps: Sequence[int],
-        target: int | Placing,
-        mode: Mode,
-    ) -> tuple[Summary, list[tuple[int | Placing, Mode]]]:
+        self, compiled: Compiled, steps: Sequence[int], target: int | Placing
+    ) -> tuple[Summary, list[int | Placing]]:
         """The walk from ``target``, a record of the class ``steps`` reach from
         ``compiled``'s (its slots), there: what it finds below (from ``compiled``'s class),
         and what it reaches out of the Space at ``steps[0]``, lifted into ``compiled``'s
         records to walk on there."""
         held = slot(compiled, steps[0])
-        if held.requires in at.never:
-            return _NOTHING, []
-        child, child_at = held.compiled, held.placement
+        child = held.compiled
         union = _Union()
         if len(steps) > 1:
-            found, lifted = self._down(child, child_at, steps[1:], target, mode)
+            found, lifted = self._down(child, steps[1:], target)
             union.add(found)
-            union.add(self.gathered(child, child_at, lifted))
+            union.add(self.gathered(child, lifted))
         else:
-            union.add(self.summary(child, child_at, target, mode))
+            union.add(self.summary(child, target))
         below = union.summary()
         if below.every:
             return Summary(every=True), []
         found = Summary(frozenset(((steps[0], *inner), node) for inner, node in below.found))
-        return found, [item for exit in below.exits for item in lift(held, (exit,))]
+        return found, list(lift(held, below.exits))
 
-    def _dynamic(self, compiled: Compiled, at: Placement, items: _Found) -> bool:
-        """Whether a method's reads are not fixed at ``at`` (as ``_compose``'s domain rule
-        reads them): a dynamic read placed there."""
-        return any(
-            isinstance(item, _Dynamic) and _placed(compiled, at, item.when) for item in items
-        )
-
-    def _reads(
-        self,
-        compiled: Compiled,
-        at: Placement,
-        items: _Found,
-        union: _Union,
-        push: _Push,
-    ) -> None:
-        """A method's inferred reads at ``at``, walked on (``_reads._Mapping``'s mapping, by
-        class): a record, read as ``present()`` reads it where its source asks presence."""
+    def _reads(self, compiled: Compiled, items: _Found, union: _Union, push: _Push) -> None:
+        """A method's inferred reads, walked on (``_reads._Mapping``'s mapping, by class)."""
         for item in items:
             if isinstance(item, _Ref):
-                mode: Mode = "S" if item.sources else "r"
                 if not item.steps:
-                    push(item.node, mode)
-                elif _placed(compiled, at, item.steps):
-                    found, lifted = self._down(compiled, at, item.steps, item.node, mode)
+                    push(item.node)
+                else:
+                    found, lifted = self._down(compiled, item.steps, item.node)
                     union.add(found)
                     for lifted_item in lifted:
-                        push(*lifted_item)
-
-
-def _placed(compiled: Compiled, at: Placement, steps: Sequence[int]) -> bool:
-    """Whether the slots ``steps`` are placed at ``at`` (none a candidate of a Decision over
-    nodes that never applies)."""
-    for index in steps:
-        held = slot(compiled, index)
-        if held.requires in at.never:
-            return False
-        compiled, at = held.compiled, held.placement
-    return True
+                        push(lifted_item)
 
 
 # -- the flow order --------------------------------------------------------------------------------
@@ -451,20 +370,11 @@ class Whole:
             "upstream": _Walks("upstream", inference),
             "reach": _Walks("reach", inference),
         }
-        self._placements: dict[ScopeRecord, Placement] = {}
         self._up: dict[tuple[ScopeRecord, Exit, Walk], tuple[frozenset[Address], bool]] = {}
         self._formals: dict[ScopeRecord, frozenset[Address]] = {}
         self._flow: Flow | None = None
         self._positions: dict[Address, int] | None = None
         self._readers: tuple[dict[Address, tuple[Address, ...]], tuple[Address, ...]] | None = None
-
-    def placement(self, record: ScopeRecord) -> Placement:
-        """How ``record``'s class is placed there (``_compose.Placement``)."""
-        found = self._placements.get(record)
-        if found is None:
-            found = ROOT if record.parent is None else self._slot(record).placement
-            self._placements[record] = found
-        return found
 
     @staticmethod
     def _slot(record: ScopeRecord) -> _Slot:
@@ -475,11 +385,11 @@ class Whole:
     # -- composition
 
     def reached(
-        self, record: ScopeRecord, starts: Iterable[tuple[Ref, Mode]], walk: Walk
+        self, record: ScopeRecord, starts: Iterable[Ref], walk: Walk
     ) -> tuple[frozenset[Address], bool]:
         """What the walk ``walk`` from ``starts`` (refs of ``record``'s compiled form) finds
         in the design space, by address; and whether it reads every choice and fact."""
-        summary = self.walks[walk].gathered(record.compiled, self.placement(record), starts)
+        summary = self.walks[walk].gathered(record.compiled, starts)
         return self._composed(record, summary, walk)
 
     def _composed(
@@ -489,8 +399,7 @@ class Whole:
             return frozenset(), True
         found: set[Address] = set()
         for steps, node in summary.found:
-            at = record.reach(steps)
-            index = None if at is None else at.member_address(node)
+            index = record.reach(steps).member_address(node)
             if index is not None:
                 found.add(index)
         for exit in summary.exits:
@@ -525,7 +434,7 @@ class Whole:
         record, member = index.held
         name = record.compiled.formal_names.get(member)
         if name is not None and record.parent is not None:
-            return record, ("formal", name, "r")
+            return record, ("formal", name)
         return record, member
 
     # -- the flow order
@@ -536,7 +445,7 @@ class Whole:
         if found is None:
             own: set[Address] = set()
             for name in scope.compiled.formals:
-                own |= self._exit(scope, ("formal", name, "r"), "upstream")[0]
+                own |= self._exit(scope, ("formal", name), "upstream")[0]
             outer = frozenset() if scope.parent is None else self.formals(scope.parent)
             found = self._formals[scope] = frozenset(own) | outer
         return found
@@ -548,11 +457,9 @@ class Whole:
         record, member = decision
         compiled = record.compiled
         spec = compiled.records[member]
-        starts: list[tuple[Ref, Mode]] = [
-            (compiled.ref(edge), "r") for _, edge in spec.domain_arguments
-        ]
+        starts: list[Ref] = [compiled.ref(edge) for _, edge in spec.domain_arguments]
         if spec.guard is not None:
-            starts.append((compiled.ref(spec.guard), "r"))
+            starts.append(compiled.ref(spec.guard))
         found = self.reached(record, starts, "upstream")[0] | self.formals(record)
         return found - {decision}
 
@@ -596,7 +503,7 @@ class Whole:
             found = reaches.get(guard)
             if found is None:
                 record, ref = self._start(guard)
-                found = reaches[guard] = self.reached(record, ((ref, "r"),), "reach")
+                found = reaches[guard] = self.reached(record, (ref,), "reach")
             sources, every = found
             if every:
                 everywhere.append(decision)
