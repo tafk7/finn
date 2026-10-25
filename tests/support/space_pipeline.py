@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from finn.core.space import (
     Decision,
+    Inapplicable,
     Param,
     Rejected,
     Select,
@@ -135,8 +136,10 @@ class Link(Space):
 class Probe(Space):
     enabled: bool = Decision(values=(False, True))
 
-    @derived(when=enabled)
-    def level(self) -> int:
+    @derived
+    def level(self) -> int | Inapplicable:
+        if not self.enabled:
+            return Inapplicable()
         return 3
 
 

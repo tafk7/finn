@@ -362,8 +362,10 @@ class Guarded(Space):
             return reject("size-negative", "a size is never negative")
         return self.size * self.scale > 4
 
-    @constraint(when=big)
-    def limit(self) -> bool:
+    @constraint
+    def limit(self) -> bool | Inapplicable:
+        if not self.big:
+            return Inapplicable()
         return self.size < 100
 
 
@@ -373,13 +375,14 @@ def test_a_guard_refused_through_its_input_names_the_inputs_origin() -> None:
     # ``big`` refuses before it reads ``scale``: what it read decides what stands (a
     # method records its reads as it makes them).
     assert broken(report) == [("big", ())]
-    # Built directly: the rule under the refused guard does not apply, and the guard's
-    # piece stands for it, once.
+    # Built directly: the rule reads the refused guard first, so it is refused through that
+    # read, in the guard's code alone.
     refused = built(design_space(Guarded()), {"size": -1, "scale": 1})
-    assert isinstance(refused.query(Guarded.limit), Inapplicable)
+    limit = refused.query(Guarded.limit)
+    assert isinstance(limit, Rejected) and codes(limit) == {"size-negative"}
     validity = inspection.validity(refused)
     assert [(piece.owner, codes(piece.result)) for piece in validity.pieces] == [
-        ("limit", {"guard-refused", "size-negative"})
+        ("limit", {"size-negative"})
     ]
 
 
@@ -757,8 +760,10 @@ class Spanned(Space):
     wide: bool = Param()
     width: int = Param(default=8)
 
-    @derived(when=wide)
-    def span(self) -> int:
+    @derived
+    def span(self) -> int | Inapplicable:
+        if not self.wide:
+            return Inapplicable()
         return self.width
 
     lanes: int = Decision(domain=divisors_of(span))

@@ -28,6 +28,7 @@ from finn.core.space import (
     ConstraintAssessment,
     Decision,
     DecisionHandle,
+    Inapplicable,
     Located,
     Members,
     Param,
@@ -169,15 +170,19 @@ class GuardedAssembly(Space):
     slots: int = Decision(values=(1, 2), when=enabled)
     fifo = Fifo(word_bits=8, depth=4, when=enabled)
 
-    @derived(when=enabled)
-    def value(*, slots: int) -> int:
-        return slots
+    @derived
+    def value(self) -> int | Inapplicable:
+        if not self.enabled:
+            return Inapplicable()
+        return self.slots
 
-    @constraint(when=enabled)
-    def supported(*, slots: int) -> bool:
-        return slots > 0
+    @constraint
+    def supported(self) -> bool | Inapplicable:
+        if not self.enabled:
+            return Inapplicable()
+        return self.slots > 0
 
-    physical = view(value, when=enabled)
+    physical = view(value)
 
 
 def check(point: Fifo, house: House, eltwise: Eltwise) -> None:

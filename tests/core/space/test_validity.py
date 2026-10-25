@@ -83,8 +83,10 @@ class Core(Space):
     def off(self) -> bool:
         return False
 
-    @constraint(when=off)
-    def never_applies(self) -> bool | Rejected:
+    @constraint
+    def never_applies(self) -> bool | Rejected | Inapplicable:
+        if not self.off:
+            return Inapplicable()
         return reject("inactive", "an inactive constraint counts as true")
 
 
@@ -239,12 +241,14 @@ def test_the_pieces_of_a_placed_space_whose_presence_waits_are_unknown_each_unde
     None
 ):
     # A placed Space is not one piece: each constraint inside is unknown, waiting on the
-    # selector, whatever its body would answer. ``never_applies`` is no piece: its own
-    # guard reads false, and presence is the AND over the path, so it does not apply
-    # whatever the selector holds. ``plain`` holds no piece: it adds nothing.
+    # selector, whatever its body would answer. A scope whose guard waits counts each of its
+    # constraints as unknown, its body not evaluated: ``never_applies`` too, though its body
+    # returns early (it does not apply) wherever the case is selected, as no constraint of
+    # a scope whose presence waits is read past that wait. ``plain`` holds no piece: it adds
+    # nothing.
     validity = inspection.validity(design_space(Either(width=8)))
     assert validity.status == "open"
-    assert owners(validity) == ["compute.core.divides"]
+    assert owners(validity) == ["compute.core.divides", "compute.core.never_applies"]
     for piece in validity.pieces:
         assert {(f.code, f.owner) for f in piece.result.findings} == {
             ("decision-unassigned", "compute")
@@ -308,8 +312,8 @@ def test_a_view_answers_while_its_space_is_open_and_refuses_with_it() -> None:
 
 
 class Port(Space):
-    """A port: its ``access`` is a product only while it binds, and its constraint reads
-    the tensor its kernel gives it."""
+    """A port: its ``access`` is a product only while it binds (else it returns inapplicable),
+    and its constraint reads the tensor its kernel gives it."""
 
     binds: bool = Param()
     tensor: int = Param()
@@ -318,42 +322,36 @@ class Port(Space):
     def admitted(self) -> bool | Rejected:
         return True if self.tensor > 0 else reject("no-tensor", "the port carries nothing")
 
-    @view(when=binds)
-    def access(self) -> int:
+    @view
+    def access(self) -> int | Inapplicable:
+        if not self.binds:
+            return Inapplicable()
         return 4
 
 
 class Leaf(Space):
-    """A leaf with two ports: the initiator's ``access`` is inactive (an initiator does not
+    """A leaf with two ports: the initiator's ``access`` does not apply (an initiator does not
     bind)."""
 
     x = Port(binds=True, tensor=1)
     y = Port(binds=False, tensor=1)
 
 
-def test_an_inactive_view_answers_inapplicable_and_never_reads_its_spaces_validity() -> None:
+def test_a_view_that_does_not_apply_answers_inapplicable_and_reads_its_spaces_validity() -> None:
     point = design_space(Leaf())
     assert inspection.validity(point).status == "valid"
-    ds = occurrence.held(point).ds
-    model = ds.model
-    access = model.resolve(point.y._scope, Port.access)
-    entry = occurrence.ask(model, lambda session: evaluation(ds, session).get(access))
-    assert isinstance(entry.result, Inapplicable)
-    validity = point.y._scope.validity
-    read = [node for node, _ in entry.trace]
-    assert read == [access.guard]
-    assert validity not in read
+    assert isinstance(point.y.query(Port.access), Inapplicable)
     assessment = point.y.inspect(Port.access)
-    assert assessment.validity == Inapplicable()
-    # The bound port's view answers, and reads its Space's validity.
+    assert assessment.output_result == Inapplicable()
+    assert assessment.validity == Available(True)
+    # The bound port's view answers.
     assert point.x.access == 4
 
 
 def test_a_derived_value_reading_the_accesses_is_view_read_in_whether_or_not_they_bind() -> None:
     """The output port's tensor follows the extents its ports' accesses give: a loop through
-    the output port's validity, once cut by an initiator's inactive guard. A derived value
-    reading the accesses (views) is refused ``view-read-in`` at compile, the guard
-    holding or not."""
+    the output port's validity. A derived value reading the accesses (views) is refused
+    ``view-read-in`` at compile, an access applying or not."""
     for binds in (False, True):
 
         class Looped(Space):
@@ -940,8 +938,10 @@ class Banks(Space):
 
     wide: bool = Decision(values=(False, True))
 
-    @derived(when=wide)
-    def width(self) -> int:
+    @derived
+    def width(self) -> int | Inapplicable:
+        if not self.wide:
+            return Inapplicable()
         return 8
 
     lanes: int = Decision(

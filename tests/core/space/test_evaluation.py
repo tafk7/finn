@@ -131,9 +131,11 @@ class Guarded(Space):
             return reject("size-negative", "a size is never negative")
         return size > 4
 
-    @constraint(when=big)
-    def limit(*, size: int) -> bool:
-        return size < 100
+    @constraint
+    def limit(self) -> bool | Inapplicable:
+        if not self.big:
+            return Inapplicable()
+        return self.size < 100
 
     banks: int = Decision(values=(1, 2), when=big)
     leaf = Leaf(width=size, when=big)
@@ -146,11 +148,12 @@ def test_a_guard_refused_through_its_input_is_one_piece_per_guard() -> None:
     assert {key: sorted(_codes(result)) for key, result in assessment.results.items()} == {
         "banks": [("guard-refused", "banks"), ("size-negative", "big")],
         "leaf.$validity": [("guard-refused", "leaf"), ("size-negative", "big")],
-        "limit": [("guard-refused", "limit"), ("size-negative", "big")],
+        "limit": [("size-negative", "big")],
     }
-    # The scope is not in play (§ 16.8): its constraint does not apply, the guard's piece
-    # standing for it; a value under it reads refused through the guard, no origin.
-    assert isinstance(answer(world, "limit"), Inapplicable)
+    # The scope is not in play (§ 16.8): a value under it reads refused through the guard,
+    # no origin. A constraint reading the guard is refused through that read: its piece is
+    # the guard's refusal, with no guard piece of its own.
+    assert _codes(answer(world, "limit")) == [("size-negative", "big")]
     assert _codes(answer(world, "banks")) == [("size-negative", "big")]
     assert not entry(world, "banks").own_refusal
     assert entry(world, "big").own_refusal

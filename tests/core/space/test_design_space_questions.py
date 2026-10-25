@@ -136,8 +136,10 @@ class AbsentInput(Space):
     wide: bool = Param()
     f: int = Param()
 
-    @derived(when=wide)
-    def d(self) -> int:
+    @derived
+    def d(self) -> int | Inapplicable:
+        if not self.wide:
+            return Inapplicable()
         return self.f
 
     c: int = Decision(domain=at_most(d))

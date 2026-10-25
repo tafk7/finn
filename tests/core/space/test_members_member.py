@@ -18,6 +18,7 @@ from support.refusals import refused
 
 from finn.core.space import (
     DefinitionError,
+    Inapplicable,
     Located,
     Members,
     Param,
@@ -129,8 +130,10 @@ def test_an_inapplicable_entry_is_skipped() -> None:
 
         loud: bool = Param(default=False)
 
-        @view(when=loud)
-        def price(self) -> int:
+        @view
+        def price(self) -> int | Inapplicable:
+            if not self.loud:
+                return Inapplicable()
             return 1
 
     class Shelf(Space):

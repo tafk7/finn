@@ -76,12 +76,12 @@ def test_false_outer_scope_suppresses_inner_commitments_and_callbacks() -> None:
         inner: bool = Decision(values=(True, False))
         lanes: int = Decision(values=(1, 2), when=inner)
 
-        @derived(when=inner)
+        @derived
         def raw() -> int:
             calls.append("inactive body")
             raise AssertionError("inactive body was evaluated")
 
-        physical = view(raw, when=inner)
+        physical = view(raw)
 
     class Outer(Space):
         @derived

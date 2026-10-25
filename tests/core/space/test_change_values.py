@@ -269,8 +269,10 @@ class Banks(Space):
     wide: bool = Param()
     width: int = Param(default=8)
 
-    @derived(when=wide)
-    def span(self) -> int:
+    @derived
+    def span(self) -> int | Inapplicable:
+        if not self.wide:
+            return Inapplicable()
         return self.width
 
     lanes: int = Decision(

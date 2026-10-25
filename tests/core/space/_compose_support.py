@@ -9,9 +9,9 @@ given, or by a choice), binds each child's formals to a literal, a formal, a cho
 Decision of its own declared for that binding (sometimes with a ``when``), one Decision it
 shares among its children (``shared``) or a sibling's member, or leaves ``b`` out (None), and
 sometimes binds a child's formal back to one of its own members (a walk up re-enters it).
-Each Space has a derived value ``x`` (explicit or a ``self`` method, sometimes guarded by a
-choice), a Decision ``p`` whose domain reads a formal, ``x``, a child's ``x`` or a
-selection, and sometimes a presence test, a test of ``b`` and a view.
+Each Space has a derived value ``x`` (explicit or a ``self`` method), a Decision ``p`` whose
+domain reads a formal, ``x``, a child's ``x`` or a selection, and sometimes a presence test, a
+test of ``b`` and a view.
 Most domains read facts; many read a choice, some through a slot, some through a guard."""
 
 from __future__ import annotations
@@ -130,15 +130,17 @@ class _Draw:
         if "ch" in members and self.maybe(0.5):
             sources.append("ch.x")
         kind = rng.random()
-        when: Any = members["flag"] if "flag" in members and self.maybe(0.3) else None
+        if "flag" in members:
+            # The draw that guarded ``x``: kept, so each seed draws the Space it did.
+            self.maybe(0.3)
         if kind < 0.5:
-            members["x"] = derived(when=when, v=self.ref(members, rng.choice(sources)))(ident)
+            members["x"] = derived(v=self.ref(members, rng.choice(sources)))(ident)
         elif kind < 0.7:
             v, w = rng.sample(sources, 2)
             aliases = {"v": self.ref(members, v), "w": self.ref(members, w)}
-            members["x"] = derived(when=when, **aliases)(add)
+            members["x"] = derived(**aliases)(add)
         else:
-            members["x"] = derived(when=when)(rng.choice((m_a, m_c0x, m_chx, m_c1p)))
+            members["x"] = derived(rng.choice((m_a, m_c0x, m_chx, m_c1p)))
         targets = ["a", "x", "b", *(f"{child}.x" for child in children)]
         if "ch" in members:
             targets.append("ch.x")

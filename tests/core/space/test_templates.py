@@ -24,6 +24,7 @@ from core.space._templates_support import assert_reads_alike, defined, links
 from core.space._toys_support import Boiler, HeatPump, House, Room, Thermostat
 from finn.core.space import (
     Decision,
+    Inapplicable,
     Param,
     Select,
     Space,
@@ -196,8 +197,10 @@ class Guarded(Space):
     def valued(self) -> bool:
         return self.contents is not None
 
-    @derived(when=valued)
-    def widened(self) -> int:
+    @derived
+    def widened(self) -> int | Inapplicable:
+        if not self.valued:
+            return Inapplicable()
         return cast(int, self.contents) + 1  # read only where valued
 
     source: WideStream | Stream | None = Select(

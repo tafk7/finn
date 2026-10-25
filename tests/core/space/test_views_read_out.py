@@ -12,7 +12,7 @@ bound to a view (the model names facts at the root only) and a ``Members`` whose
 views (the model refuses every ``Members`` naming a view); and what the check leaves alone.
 
 Two groups. The refused forms answer ``view-read-in``, and what the check does not refuse:
-a view's own guard reading a view, a ``Members`` over views read by views only, a view's read
+a view returning early on a child's view, a ``Members`` over views read by views only, a view's read
 checked against its source, and a cycle among views found where it is found, among them the
 one cycle through a derived value that stays ``cyclic-dependency``. (A kernel declaring two
 control buses is ``control-bus-repeated``: that case is with the kernels', in
@@ -151,19 +151,20 @@ def test_a_domain_reading_a_view_of_a_choice_is_view_read_in() -> None:
 # -- accepted: what a view may read, and the one cycle that is still a cycle ------------------
 
 
-def test_a_views_own_guard_reading_a_childs_view_is_accepted() -> None:
-    """A view's ``when=`` reading a child's view: accepted, and the view answers while the
-    guard holds, inapplicable while it does not. The guard governs that view alone (a design
-    space's rules are the only other readers, and the model has no view guards), so it is no
-    rule reading a view in. (A view of the Space's own is no reference a guard takes.)"""
+def test_a_view_returning_early_on_a_childs_view_is_accepted() -> None:
+    """A view reading a child's view first, and returning early where it does not hold:
+    accepted, as a view reads anything, and the view answers where the child's view holds,
+    inapplicable where it does not."""
 
     class Gated(Space):
         area: int = Param(default=14)
         room = Room(area=area)
         size: int = Param(default=3)
 
-        @view(when=room.big)
-        def by_child(self) -> int:
+        @view
+        def by_child(self) -> int | Inapplicable:
+            if not self.room.big:
+                return Inapplicable()
             return 2 * self.size
 
     point = design_space(Gated())

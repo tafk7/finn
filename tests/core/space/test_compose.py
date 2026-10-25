@@ -27,6 +27,7 @@ from core.space._templates_support import defined
 from finn.core.space import (
     Available,
     Decision,
+    Inapplicable,
     Param,
     Select,
     Space,
@@ -282,8 +283,10 @@ class Owned(Space):
 
     unit: Pump | None = Select(none=None, pump=Pump(ok=True))
 
-    @derived(when=cast(Any, unit).ok)
-    def first(self) -> int:
+    @derived
+    def first(self) -> int | Inapplicable:
+        if not self.unit.ok:  # type: ignore[union-attr]
+            return Inapplicable()
         return 1
 
     second = view(cast(Any, unit).ok)

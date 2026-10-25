@@ -241,9 +241,11 @@ class Guarded(Space):
     enabled: bool = Param()
     lanes: int = Decision(values=(1, 2), when=enabled)
 
-    @derived(when=enabled)
-    def body(self) -> int:
-        raise AssertionError("inactive function ran")
+    @derived
+    def body(self) -> int | Inapplicable:
+        if not self.enabled:
+            return Inapplicable()
+        raise AssertionError("an enabled body ran")
 
     active: int = Decision(values=(1, 2))
 
@@ -253,7 +255,7 @@ def test_a_guard_suppresses_functions_and_both_decision_questions_agree() -> Non
     assert isinstance(point.query(Guarded.lanes), Inapplicable)
     assert isinstance(point.field(Guarded.lanes).state, Inapplicable)
     assert isinstance(point.query(Guarded.body), Inapplicable)
-    assert _reads(inspection.explain(point, Guarded.body), "body") == ["body.$guard"]
+    assert _reads(inspection.explain(point, Guarded.body), "body") == ["enabled"]
     state = point.field(Guarded.active).state
     assert isinstance(state, Available)
     assert state.value.status == "unassigned"
