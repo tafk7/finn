@@ -695,9 +695,9 @@ def persist(model: ModelWrapper, partition: Partition) -> dict[str, dict[str, ob
     bind dropped as stale) cleared, and, where it holds every KernelOp of the model, so are
     the channel choices of a tensor that is no channel of it.
 
-    The one writer of a partition's choices: a route to one is ``Hold`` in a step after the
-    cut, this function for the compiler (``persist_kernel`` beside it for conversion, one
-    node's kernel alone), and ``support.configure.configured`` for a test. Channel
+    The one writer of a partition's choices: a route to one is a hold in step_explore's
+    strategies, this function for the compiler (``persist_kernel`` beside it for conversion,
+    one node's kernel alone), and ``support.configure.configured`` for a test. Channel
     choices are a partition's body's only: written on a graph that is not (host nodes
     beside the KernelOps) they are refused, by name, before anything is written
     (``channel-choices-outside-body``). Every value is checked and encoded before any is
