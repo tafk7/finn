@@ -993,7 +993,8 @@ def view(
     **aliases: object,
 ) -> object:
     """A view: ``view(reference)``, the product of a value (``view(width)``,
-    ``view(adapter.stages)``), or ``@view`` on a method, or ``@view(when=..., **aliases)``.
+    ``view(adapter.stages)``); anything else that is not a function is refused
+    (``view-source-invalid``). Or ``@view`` on a method, or ``@view(when=..., **aliases)``.
     A function's return annotation is its value's type and check (``T``, or ``T |
     Rejected``); a reference's is its source's."""
     if "semantics" in aliases:
@@ -1005,7 +1006,7 @@ def view(
         )
     if function is None:
         return _ViewDecorator(aliases, when)
-    if isinstance(function, (ValueRef, View)) or not callable(function):
+    if isinstance(function, (ValueRef, View)):
         # A reference: a symbolic reference answers every call by refusing it, so it is
         # told apart from a function before it is called.
         if aliases:
@@ -1016,6 +1017,18 @@ def view(
                 f"({', '.join(sorted(aliases))}): they name the reads of a function",
             )
         return View(function, when=when)
+    if not callable(function) or isinstance(function, type):
+        what = (
+            f"the class {function.__qualname__}"
+            if isinstance(function, type)
+            else f"{function!r} ({type(function).__name__})"
+        )
+        raise DefinitionError.broken(
+            "view-source-invalid",
+            _OWNER,
+            f"view{at(source_origin())}: a view's source is a reference (view(width)) or a "
+            f"function (@view), not {what}",
+        )
     return _ViewDecorator(aliases, when)(function)
 
 

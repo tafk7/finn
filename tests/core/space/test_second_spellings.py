@@ -209,6 +209,28 @@ def test_a_view_of_a_reference_takes_a_guard_and_reads_a_view() -> None:
     assert isinstance(design_space(Guarded(on=False)).query(Guarded.again), Inapplicable)
 
 
+def test_a_view_of_anything_but_a_reference_or_a_function_is_refused_by_name() -> None:
+    with refused("view-source-invalid", error=DefinitionError, message=r"not 3 \(int\)"):
+
+        class Constant(Space):
+            shown = view(3)
+
+    with refused("view-source-invalid", error=DefinitionError, message="not the class int"):
+
+        class Class(Space):
+            shown = view(int)
+
+    class Function(Space):
+        width: int = Param(default=3)
+
+        def twice(self) -> int:
+            return 2 * self.width
+
+        shown = view(twice)
+
+    assert design_space(Function()).shown == 6
+
+
 def test_a_view_of_a_reference_with_aliases_is_refused_by_name() -> None:
     with refused("view-source-aliases", error=DefinitionError, message="takes no aliases"):
 
