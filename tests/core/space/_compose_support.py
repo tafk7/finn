@@ -9,9 +9,10 @@ given, or by a choice), binds each child's formals to a literal, a formal, a cho
 Decision of its own declared for that binding (sometimes with a ``when``), one Decision it
 shares among its children (``shared``) or a sibling's member, or leaves ``b`` out (None), and
 sometimes binds a child's formal back to one of its own members (a walk up re-enters it).
-Each Space has a derived value ``x`` (explicit or a ``self`` method), a Decision ``p`` whose
-domain reads a formal, ``x``, a child's ``x`` or a selection, and sometimes a presence test, a
-test of ``b`` and a view.
+Each Space has a derived value ``x`` (explicit or a ``self`` method, sometimes reading a
+choice first and returning early where it is false), a Decision ``p`` whose domain reads a
+formal, ``x``, a child's ``x`` or a selection, and sometimes a presence test, a test of ``b``
+and a view.
 Most domains read facts; many read a choice, some through a slot, some through a guard."""
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from typing import Any
 
 from finn.core.space import (
     Decision,
+    Inapplicable,
     Param,
     Select,
     Space,
@@ -38,6 +40,16 @@ def ident(*, v: int) -> int:
 
 def add(*, v: int, w: int) -> int:
     return v + w
+
+
+def ident_if(*, flag: bool, v: int) -> int | Inapplicable:
+    """``ident`` where ``flag`` holds, which it reads as an input."""
+    return v if flag else Inapplicable()
+
+
+def add_if(*, flag: bool, v: int, w: int) -> int | Inapplicable:
+    """``add`` where ``flag`` holds, which it reads as an input."""
+    return v + w if flag else Inapplicable()
 
 
 def given(*, v: object) -> bool:
@@ -58,6 +70,34 @@ def m_c1p(self) -> int:  # type: ignore[no-untyped-def]
 
 def m_chx(self) -> int:  # type: ignore[no-untyped-def]
     return int(self.ch.x)
+
+
+def m_a_if(self) -> int | Inapplicable:  # type: ignore[no-untyped-def]
+    if not self.flag:
+        return Inapplicable()
+    return int(self.a)
+
+
+def m_c0x_if(self) -> int | Inapplicable:  # type: ignore[no-untyped-def]
+    if not self.flag:
+        return Inapplicable()
+    return int(self.c0.x)
+
+
+def m_c1p_if(self) -> int | Inapplicable:  # type: ignore[no-untyped-def]
+    if not self.flag:
+        return Inapplicable()
+    return int(self.c1.p)
+
+
+def m_chx_if(self) -> int | Inapplicable:  # type: ignore[no-untyped-def]
+    if not self.flag:
+        return Inapplicable()
+    return int(self.ch.x)
+
+
+# Each method of ``x``, and the same reading the choice ``flag`` first.
+IF_FLAG = {m_a: m_a_if, m_c0x: m_c0x_if, m_chx: m_chx_if, m_c1p: m_c1p_if}
 
 
 def m_present(self) -> bool:  # type: ignore[no-untyped-def]
@@ -130,17 +170,19 @@ class _Draw:
         if "ch" in members and self.maybe(0.5):
             sources.append("ch.x")
         kind = rng.random()
-        if "flag" in members:
-            # The draw that guarded ``x``: kept, so each seed draws the Space it did.
-            self.maybe(0.3)
+        # Sometimes ``x`` reads the choice ``flag`` first and returns early where it is false.
+        flagged = "flag" in members and self.maybe(0.3)
+        flag: dict[str, Any] = {"flag": members["flag"]} if flagged else {}
         if kind < 0.5:
-            members["x"] = derived(v=self.ref(members, rng.choice(sources)))(ident)
+            source = self.ref(members, rng.choice(sources))
+            members["x"] = derived(**flag, v=source)(ident_if if flagged else ident)
         elif kind < 0.7:
             v, w = rng.sample(sources, 2)
-            aliases = {"v": self.ref(members, v), "w": self.ref(members, w)}
-            members["x"] = derived(**aliases)(add)
+            aliases = {**flag, "v": self.ref(members, v), "w": self.ref(members, w)}
+            members["x"] = derived(**aliases)(add_if if flagged else add)
         else:
-            members["x"] = derived(rng.choice((m_a, m_c0x, m_chx, m_c1p)))
+            method = rng.choice((m_a, m_c0x, m_chx, m_c1p))
+            members["x"] = derived(IF_FLAG[method] if flagged else method)
         targets = ["a", "x", "b", *(f"{child}.x" for child in children)]
         if "ch" in members:
             targets.append("ch.x")
