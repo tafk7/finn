@@ -290,7 +290,7 @@ def test_inherited_dependencies_bind_to_overrides_without_mutating_base() -> Non
 
 def test_compile_holds_values_domains_and_callback_references() -> None:
     """A model holds the values its declarations took (immutable: a domain's listed values)
-    and the callbacks it bound, whatever is rebound on the class later."""
+    and the callbacks it bound; a declaration's callback cannot be rebound later."""
 
     def first(*, value: int) -> int:
         return value + 1
@@ -309,7 +309,9 @@ def test_compile_holds_values_domains_and_callback_references() -> None:
         calculated = derived(first)
 
     old = compile_model(Example)
-    cast(Any, Example.calculated).function = second
+    # A declaration is frozen with its class: its callback cannot be rebound.
+    with refused("declaration-frozen", error=DefinitionError, message="Example was created"):
+        cast(Any, Example.calculated).function = second
     new = compile_model(Example)
     old_constant = old.resolve(old.root, Example.constant)
     constant_function = old_constant.function

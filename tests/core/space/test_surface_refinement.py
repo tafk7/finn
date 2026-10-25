@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import gc
 from concurrent.futures import ThreadPoolExecutor
-from typing import cast
 from weakref import ReferenceType, ref
 
 import pytest
@@ -59,20 +58,24 @@ def test_failed_preparation_does_not_poison_cache_and_subclasses_do_not_borrow_i
 
     with refused("declaration-unknown", error=DefinitionError):
         compile_model(Broken)
-    value = cast(Param[int], Param())
-    setattr(Broken, "__annotations__", {"value": int})
-    value.__set_name__(Broken, "value")
-    setattr(Broken, "value", value)
-    # The formal is added after class creation, so it is not part of the static signature.
-    assert design_space(Broken(value=3)).doubled == 6  # type: ignore[call-arg]
+    # The refusal is not cached: compiling again refuses again.
+    with refused("declaration-unknown", error=DefinitionError):
+        compile_model(Broken)
+    assert "_space_prepared_model" not in Broken.__dict__
 
-    class Child(Broken):
+    # A subclass declares the formal the class lacks (a class is closed when it is made).
+    class Fixed(Broken):
+        value: int = Param()
+
+    assert design_space(Fixed(value=3)).doubled == 6
+
+    class Child(Fixed):
         extra: int = Param()
 
-    parent_model = compile_model(Broken)
+    parent_model = compile_model(Fixed)
     child_model = compile_model(Child)
     assert child_model is not parent_model
-    assert design_space(Child(value=3, extra=4)).extra == 4  # type: ignore[call-arg]
+    assert design_space(Child(value=3, extra=4)).extra == 4
 
 
 def test_prepared_structure_and_configuration_fields_are_immutable() -> None:

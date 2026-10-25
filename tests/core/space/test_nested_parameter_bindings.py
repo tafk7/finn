@@ -204,9 +204,9 @@ def test_assignment_after_freezing_is_refused() -> None:
 
     reference = Parent.kernel.port.dtype
     old = design_space(Parent(first="INT3", second="INT7"))
-    # Preparing Parent froze its node declarations: the model cannot drift.
+    # Making Parent froze its node declarations: the model cannot drift.
     with refused(
-        "declaration-frozen", error=DefinitionError, message="is frozen .Parent was prepared"
+        "declaration-frozen", error=DefinitionError, message="is frozen .Parent was created"
     ) as caught:
         Parent.kernel.lanes = 2
     assert "assigned at test_nested_parameter_bindings.py:" in str(caught.error)

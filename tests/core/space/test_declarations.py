@@ -380,10 +380,16 @@ def test_duplicate_declaration_reuse_is_attributable() -> None:
 
 
 def test_unbound_late_declarations_are_rejected() -> None:
-    class Example(Space):
+    # Added while the class is made (by its __init_subclass__, as a lowering adds members),
+    # but never named: after the class is made it can no longer be added at all.
+    class Adding(Space):
+        def __init_subclass__(cls, **kwargs: object) -> None:
+            super().__init_subclass__(**kwargs)
+            setattr(cls, "late", Param())
+
+    class Example(Adding):
         pass
 
-    setattr(Example, "late", Param())
     with refused(
         "declaration-unbound", error=DefinitionError, message="not bound at class creation"
     ):

@@ -170,9 +170,10 @@ def test_nested_handles_and_named_aliases_keep_frozen_interpretations() -> None:
     assert Middle.inner is original_placement
     assert base.query(Root.outer.inner.value) == Available(5)
 
-    # A declared alias is interpreted by its frozen compiled entry. Mutating
-    # the source declaration later cannot retarget that old compiled reference.
-    original_accepted.source = Root.outer.inner.other
+    # A declared alias is interpreted by its compiled entry, and the source declaration
+    # cannot be retargeted later: it was frozen when Root was made.
+    with refused("declaration-frozen", error=DefinitionError, message="Root was created"):
+        original_accepted.source = Root.outer.inner.other
     assert base.query(original_accepted) == Available(5)
     assert design_space(Root()).accepted == 5
 
@@ -198,14 +199,20 @@ def test_two_thousand_guarded_scopes_compile_and_query_iteratively() -> None:
 
 
 def test_recursive_structure_is_rejected_before_occurrence_allocation() -> None:
-    class Recursive(Space):
+    # A class placing itself: only its __init_subclass__ can, while the class is made (a
+    # class is closed when it is made, and its body cannot name it).
+    class Placing(Space):
+        def __init_subclass__(cls, **kwargs: object) -> None:
+            super().__init_subclass__(**kwargs)
+            repeated = cls()
+            setattr(cls, "again", repeated)
+            repeated.__set_name__(cls, "again")
+
+    class Recursive(Placing):
         @derived
         def value(self) -> int:
             return 1
 
-    repeated = Recursive()
-    repeated.__set_name__(Recursive, "again")
-    setattr(Recursive, "again", repeated)
     with refused("cyclic-dependency", error=DefinitionError) as caught:
         design_space(Recursive())
     # The error's own detail, over the finding it rewraps.

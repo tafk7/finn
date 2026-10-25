@@ -27,7 +27,7 @@ Four groups:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from support.refusals import refused
@@ -43,6 +43,7 @@ from finn.core.space import (
     Rejected,
     Space,
     Unresolved,
+    composite,
     constraint,
     declarations,
     derived,
@@ -339,11 +340,6 @@ def test_a_view_reading_by_a_computed_name_has_no_inferred_reads() -> None:
     assert summary(model.scopes, model.per_class.reads)["dynamic"] == 0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=NOT_RAISED,
-    reason="flips when a class is closed as it is created: a later declaration is refused at once",
-)
 def test_a_declaration_added_to_a_class_after_it_is_made_is_refused_at_once() -> None:
     class Example(Space):
         pass
@@ -356,18 +352,54 @@ class Reusable(Space):
     lanes: int = Param(default=1)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=NOT_RAISED,
-    reason="flips when a declaration a class places is closed with it: assigning its formal "
-    "from outside is refused at once",
-)
 def test_a_formal_assigned_from_outside_after_the_class_is_made_is_refused_at_once() -> None:
     class Parent(Space):
         kernel = Reusable()
 
-    with refused("declaration-frozen", error=DefinitionError):
+    with refused("declaration-frozen", error=DefinitionError, message="Parent was created"):
         Parent.kernel.lanes = 2
+
+
+def test_a_field_of_a_declaration_is_refused_once_its_class_is_made() -> None:
+    def other(self: object) -> int:
+        return 2
+
+    class Example(Space):
+        @derived
+        def value(self) -> int:
+            return 1
+
+    with refused("declaration-frozen", error=DefinitionError, message=r"Example\.value\.function"):
+        cast(Any, Example.value).function = other
+    assert design_space(Example()).value == 1
+
+
+def test_a_formal_assigned_in_the_class_body_after_the_node_is_still_bound() -> None:
+    """Held: the class body binds forward, by assignment after the node, before the class
+    is made."""
+
+    class Parent(Space):
+        kernel = Reusable()
+        kernel.lanes = 3
+
+    assert design_space(Parent()).kernel.lanes == 3
+
+
+def test_a_composite_is_closed_when_it_is_made() -> None:
+    """A class built from data is made whole: its structure and the declarations it holds
+    are closed when ``composite`` returns, before anything compiles it."""
+    child = Reusable()
+    child.lanes = 2
+    built = composite("Built", {"child": child, "doubled": derived(lanes=child.lanes)(_doubled)})
+    with refused("structure-finalized", error=DefinitionError):
+        setattr(built, "late", Param())
+    with refused("declaration-frozen", error=DefinitionError, message="Built was created"):
+        child.lanes = 4
+    assert design_space(built()).query(cast(int, getattr(built, "doubled"))) == Available(4)
+
+
+def _doubled(*, lanes: int) -> int:
+    return 2 * lanes
 
 
 # -- held: what must not move -----------------------------------------------------------------
