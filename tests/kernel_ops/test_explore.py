@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from onnx import StringStringEntryProto
 from qonnx.core.datatype import DataType
 from qonnx.core.metadata import MetadataError
 from qonnx.core.modelwrapper import ModelWrapper
@@ -811,6 +812,20 @@ def test_a_record_that_fails_its_check_after_the_search_writes_nothing() -> None
         explore_kernel_choices(model, [strategy])
     assert model.model.SerializeToString() == before
     assert search_record(model) == ("none", None)
+
+
+def test_a_malformed_stored_outputs_namespace_is_refused_before_anything_is_written() -> None:
+    """A body that stores an output (``finn.outputs/ip``) without the namespace's version
+    cannot take the search's record, which is set into the same namespace. The search finds
+    that before it persists a value: the body is refused, byte-identical, with no record."""
+    model = cut_model()
+    model.graph.metadata_props.append(StringStringEntryProto(key="finn.outputs/ip", value="x"))
+    before = model.model.SerializeToString()
+    with pytest.raises(MetadataError, match="stored without finn.outputs/@version"):
+        explore_kernel_choices(model, [TargetThroughput(1_000_000_000 // (5 * 6))])
+    assert model.model.SerializeToString() == before
+    with pytest.raises(MetadataError, match="stored without finn.outputs/@version"):
+        search_record(model)
 
 
 def test_a_policy_set_value_after_a_refused_restore_is_labelled_its_policy() -> None:

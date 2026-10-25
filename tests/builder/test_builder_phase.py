@@ -25,8 +25,10 @@ from typing import Any, cast
 
 import numpy as np
 import pytest
+from onnx import StringStringEntryProto
 from oracle import capture
 from qonnx.core.datatype import DataType
+from qonnx.core.metadata import MetadataError
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
@@ -720,6 +722,26 @@ def test_a_throughput_that_is_a_truth_value_writes_nothing(tmp_path: Path) -> No
     assert not (Path(cfg.output_dir) / "report" / "step_explore.json").exists()
     _, body, _ = partition_body(parent)
     assert search_record(body) == ("none", None)
+
+
+def test_a_body_with_a_malformed_stored_outputs_namespace_writes_nothing(tmp_path: Path) -> None:
+    """A body that stores an output (``finn.outputs/ip``) without the namespace's version
+    cannot take the search's record: ``step_explore`` is refused before it persists a value,
+    the body's file byte for byte as it was, no report written and no record kept."""
+    cfg = chain_build(tmp_path, [])
+    parent = run_steps(kernel_model(), replace(cfg, steps=["step_create_dataflow_partition"]))
+    _, body, body_file = partition_body(parent)
+    body.graph.metadata_props.append(StringStringEntryProto(key="finn.outputs/ip", value="x"))
+    body.save(body_file)
+    before = Path(body_file).read_bytes()
+    with pytest.raises(MetadataError, match="stored without finn.outputs/@version"):
+        step_explore(
+            parent, cfg, strategies=[TargetThroughputEntry(TargetThroughputOptions(CHAIN_FPS))]
+        )
+    assert Path(body_file).read_bytes() == before
+    assert not (Path(cfg.output_dir) / "report" / "step_explore.json").exists()
+    _, body, _ = partition_body(parent)
+    assert "finn.outputs/search" not in [entry.key for entry in body.graph.metadata_props]
 
 
 def test_step_explore_reports_each_entry_in_one_file(tmp_path: Path) -> None:

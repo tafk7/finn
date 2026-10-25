@@ -105,7 +105,7 @@ from dataclasses import asdict, dataclass
 from functools import reduce
 from typing import TYPE_CHECKING, Any
 
-from finn.core.graph.annotations.outputs import OUTPUT_SEARCH
+from finn.core.graph.annotations.outputs import OUTPUT_SEARCH, OUTPUTS
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN, design_digest
@@ -609,6 +609,9 @@ def explore_kernel_choices(
         "objective_fps": objective,
     }
     OUTPUT_SEARCH.encode(record)
+    # Setting the record reads the body's stored outputs back: a namespace stored malformed
+    # is refused here, before anything is written.
+    model.namespace(OUTPUTS)
     # The last two writes: the values, then the record that says whose they are.
     persist(model, network)
     model.set(OUTPUT_SEARCH, {**record, "design": design_digest(model)})
