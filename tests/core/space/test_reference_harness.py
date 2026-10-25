@@ -439,6 +439,33 @@ def test_a_members_entry_is_held_by_a_child_its_scope_places() -> None:
             Case("not written", described(*entries))
 
 
+def test_a_class_holding_no_entry_does_not_derive_the_members_base() -> None:
+    # The engine's Members(Base.member) ranges over the children deriving Base: each Members
+    # has a base of its own, derived only by the classes holding an entry of it (one holding
+    # entries of several derives each). A class holding none is no candidate, so the base's
+    # own member, which refuses to be read, never is.
+    unit = Scope(
+        "unit",
+        choices=(Choice("c", listed(1, 2)),),
+        derived=(
+            Derived("e", ("unit.c",), lambda r: r["unit.c"]),
+            Derived("f", ("unit.c",), lambda r: 2 * r["unit.c"]),
+        ),
+    )
+    hall = Scope("hall", choices=(Choice("d", listed(1, 2)),))
+    members = (Members("m", ("unit.e",)), Members("n", ("unit.f",)))
+    described = Space((), Scope("", children=(unit, hall), members=members))
+    case = Case("one child holds both", described)
+    root = vars(case.engine.root)
+    bases = [root[name].member.owner for name in ("m", "n")]
+    assert bases[0] is not bases[1]
+    assert all(issubclass(type(root["unit"]), base) for base in bases)
+    assert not any(issubclass(type(root["hall"]), base) for base in bases)
+    pair = case.start({}, {"unit.c": 2})
+    pair.check_answer("m")
+    pair.check_answer("n")
+
+
 # -- planted faults (DESIGN § 7) ---------------------------------------------------------------
 #
 # The public API with one answer altered (``public.FAULTS``): one standing choice dropped, one
