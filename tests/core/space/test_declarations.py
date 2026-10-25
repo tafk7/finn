@@ -36,7 +36,7 @@ from finn.core.space._nodes import (
 from finn.core.space._signatures import BoundArgument, validate_argument
 from finn.core.space.collection import collect_space
 from finn.core.space.compiler import compile_model
-from finn.core.space.declarations import Declaration, Derived, MemberRef, ValueRef
+from finn.core.space.declarations import Declaration, MemberRef, ValueRef
 from finn.core.space.semantics import ValueSemantics, default_semantics
 
 
@@ -500,19 +500,10 @@ def test_guards_are_collected_separately_and_respect_inherited_overrides() -> No
         enabled: bool = Param()
         selected: int = Decision(values=(1, 2), when=enabled)
 
-        @derived(when=enabled)
+        @derived
         def result(*, selected: int) -> int:
             raise AssertionError("must not execute")
 
-        @constraint(when=enabled)
-        def support(*, selected: int) -> bool:
-            raise AssertionError("must not execute")
-
-        @view(when=enabled)
-        def authored(*, selected: int) -> int:
-            raise AssertionError("must not execute")
-
-        physical = view(result, when=enabled)
         child = Child(value=1, when=enabled)
         # A singleton structural choice is an ordinary Decision over nodes.
         implementation: Child = Select(only=Child(value=1), when=enabled)
@@ -523,10 +514,6 @@ def test_guards_are_collected_separately_and_respect_inherited_overrides() -> No
     effective = collect_space(OverrideGuard)
     guarded: tuple[Declaration, ...] = (
         decl(Guarded.selected),
-        decl(Guarded.result),
-        decl(Guarded.support),
-        decl(Guarded.authored),
-        decl(Guarded.physical),
         record_of(Guarded.child),
         decision_record(Guarded.implementation),
     )
@@ -534,7 +521,6 @@ def test_guards_are_collected_separately_and_respect_inherited_overrides() -> No
         effective.guards[declaration] is decl(OverrideGuard.enabled) for declaration in guarded
     )
     assert [arg.name for arg in effective.functions["result"].dependencies] == ["selected"]
-    assert "when" not in cast("Derived[object]", Guarded.result).aliases
     assert "when" not in record_of(Guarded.child).bindings
 
 
@@ -630,9 +616,7 @@ def test_a_guard_whose_value_admits_none_is_refused_and_a_derived_test_is_taken(
 
 def test_when_is_an_authoring_control_argument() -> None:
     class Wrong(Space):
-        active: bool = Param()
-
-        @derived(when=active)
+        @derived
         def value(*, when: bool) -> int:
             return 1
 
@@ -655,16 +639,11 @@ def test_linked_child_types_are_inferred_without_mutating_declarations() -> None
     class Parent(Space):
         child = Child(size=1)
 
-        @derived(when=child.enabled)
-        def value() -> int:
-            raise AssertionError("must not execute")
-
         copied = view(child.admitted)
 
     model = compile_model(Parent)
     semantics = model.resolve(model.root, Parent.copied).semantics
     assert semantics is not None and semantics.type_token is bool
-    assert model.resolve(model.root, Parent.value).guard is not None
     assert ref(Child.enabled).semantics is None
     assert Child.admitted.semantics is None
     assert Parent.copied.semantics is None

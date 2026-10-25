@@ -103,15 +103,6 @@ def test_a_view_states_no_semantics() -> None:
             def point(self) -> Point | Rejected:
                 return Point(1)
 
-    with refused("view-semantics", error=DefinitionError, message="semantics= is gone"):
-
-        class Guarded(Space):
-            enabled: bool = Param()
-
-            @view(semantics=default_semantics(Point), when=enabled)
-            def point(self) -> Point | Rejected:
-                return Point(1)
-
     class Stated(Space):
         n: int = Param()
 

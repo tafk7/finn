@@ -2,30 +2,26 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """One spelling for each shape of a Space: what an author writes, and what must not move.
 
-The Space has a few shapes that can still be written two ways: ``when=`` on a derived
-value, a constraint or a view beside the body's own early return, ``getattr(self, name)``
-and ``__reads__`` beside a closed set of reads, and a declaration that stays open until the
-first compile beside one closed with its class. A constant beside a derived value of
-nothing, and integer arithmetic or an attribute read on a reference in a class body beside a
-named derived value, are refused by name: those hand cases are the first group. A view of a
+A Space's shapes have one spelling each. A derived value, a constraint or a view that does
+not apply returns ``Inapplicable()`` from its body, reading its guard first; ``when=`` is for
+a placement and a Decision, and is refused by name on a computation. ``getattr(self, name)``
+and ``__reads__`` give way to a closed set of reads, and a declaration closes with its class.
+A constant beside a derived value of nothing, and integer arithmetic or an attribute read on
+a reference in a class body beside a named derived value, are refused by name. A view of a
 reference and a view of a function are one ``view``. This file holds the hand cases of the
-change that leaves one spelling each.
+shapes that have one spelling.
 
-Five groups:
+Four groups:
 
 - **Refused**: a spelling that has gone, refused by name, with the spelling that remains.
-- **Expected failures**, strict: what the change makes true, each written with today's
-  spelling where it must be. Each fails today for the intended reason (the refusal that is
-  not yet raised, or the answer that is not yet given), and flips when the change lands:
-  the mark comes off then.
+- **Expected failures**, strict: what a change not yet made will make true. Each fails for
+  the intended reason (the refusal not yet raised, or the answer not yet given), and flips
+  when the change lands: the mark comes off then.
 - **Held**: what must not move. An early return answers as its guard did; a constraint over
-  explicit inputs answers the same whether its guard is a ``when=`` or an early return; the
-  root declaration stays closed by ``design_space``.
-- **Today's guard spelling**: the same shapes written with ``when=`` on the computation,
-  which goes with the spelling. Each states the answer the early return in the held group
-  gives, so the two groups together show that the answer holds.
-- **Known moves**: the answers a guard stops giving once it is an early return, each stated
-  with the spelling that remains, as an expected failure beside today's answer.
+  explicit inputs answers the same with its guard read as an input; the root declaration
+  stays closed by ``design_space``.
+- **Answers that follow from an early return**: a member that reads its guard answers as any
+  member reading that input does, where the input is refused or waits.
 """
 
 from __future__ import annotations
@@ -152,6 +148,62 @@ def test_an_attribute_read_on_a_reference_is_refused_by_name() -> None:
     assert design_space(Booked(rate=Rate(10, 3))).ledger.amount == 30
 
 
+def test_when_on_a_derived_value_is_refused_by_name() -> None:
+    with refused("computation-when", error=DefinitionError, message="Inapplicable"):
+
+        class Gated(Space):
+            on: bool = Param(default=True)
+
+            @derived(when=on)
+            def doubled(self) -> int:
+                return 2
+
+
+def test_when_on_a_constraint_is_refused_by_name() -> None:
+    with refused("computation-when", error=DefinitionError, message="Inapplicable"):
+
+        class Gated(Space):
+            on: bool = Param(default=True)
+
+            @constraint(when=on)
+            def holds(self) -> bool:
+                return True
+
+
+def test_when_on_a_view_is_refused_by_name() -> None:
+    with refused("computation-when", error=DefinitionError, message="Inapplicable"):
+
+        class Gated(Space):
+            on: bool = Param(default=True)
+
+            @view(when=on)
+            def shown(self) -> int:
+                return 2
+
+
+def test_when_on_a_view_of_a_reference_is_refused_by_name() -> None:
+    with refused("computation-when", error=DefinitionError, message="Inapplicable"):
+
+        class Gated(Space):
+            on: bool = Param(default=True)
+            width: int = Param(default=3)
+            shown = view(width, when=on)  # type: ignore[call-overload]
+
+
+def test_when_stays_on_a_placement_and_a_decision() -> None:
+    class Child(Space):
+        value: int = Param(default=1)
+
+    class Gated(Space):
+        on: bool = Param(default=True)
+        lanes: int = Decision(values=(1, 2), when=on)
+        child = Child(when=on)
+
+    off = design_space(Gated(on=False))
+    assert isinstance(off.query(Gated.lanes), Inapplicable)
+    assert isinstance(design_space(Gated(on=True)).query(Gated.lanes), Unresolved)
+
+
 # -- expected failures: spellings the change refuses ------------------------------------------
 
 
@@ -198,15 +250,13 @@ def test_a_view_of_a_reference_lowers_without_an_output_node_of_its_own() -> Non
     assert point.by_reference == point.by_function == 3
 
 
-def test_a_view_of_a_reference_takes_a_guard_and_reads_a_view() -> None:
-    class Guarded(Space):
+def test_a_view_of_a_reference_reads_a_view() -> None:
+    class Chained(Space):
         width: int = Param(default=3)
-        on: bool = Param(default=True)
-        shown = view(width, when=on)
+        shown = view(width)
         again = view(shown)
 
-    assert design_space(Guarded()).again == 3
-    assert isinstance(design_space(Guarded(on=False)).query(Guarded.again), Inapplicable)
+    assert design_space(Chained()).again == 3
 
 
 def test_a_view_of_anything_but_a_reference_or_a_function_is_refused_by_name() -> None:
@@ -237,60 +287,6 @@ def test_a_view_of_a_reference_with_aliases_is_refused_by_name() -> None:
         class Aliased(Space):
             width: int = Param(default=3)
             shown = view(width, base=width)  # type: ignore[call-overload]
-
-
-@pytest.mark.xfail(
-    strict=True,
-    raises=NOT_RAISED,
-    reason="flips when when= leaves a derived value: a guard is the body's early return",
-)
-def test_when_on_a_derived_value_is_refused_by_name() -> None:
-    with pytest.raises(DefinitionError, match="when"):
-
-        class Gated(Space):
-            on: bool = Param(default=True)
-
-            @derived(when=on)
-            def doubled(self) -> int:
-                return 2
-
-        design_space(Gated())
-
-
-@pytest.mark.xfail(
-    strict=True,
-    raises=NOT_RAISED,
-    reason="flips when when= leaves a constraint: a guard is the body's early return",
-)
-def test_when_on_a_constraint_is_refused_by_name() -> None:
-    with pytest.raises(DefinitionError, match="when"):
-
-        class Gated(Space):
-            on: bool = Param(default=True)
-
-            @constraint(when=on)
-            def holds(self) -> bool:
-                return True
-
-        design_space(Gated())
-
-
-@pytest.mark.xfail(
-    strict=True,
-    raises=NOT_RAISED,
-    reason="flips when when= leaves a view: a guard is the body's early return",
-)
-def test_when_on_a_view_is_refused_by_name() -> None:
-    with pytest.raises(DefinitionError, match="when"):
-
-        class Gated(Space):
-            on: bool = Param(default=True)
-
-            @view(when=on)
-            def shown(self) -> int:
-                return 2
-
-        design_space(Gated())
 
 
 @pytest.mark.xfail(
@@ -496,74 +492,16 @@ def test_a_root_declaration_stays_closed_by_design_space() -> None:
         node.area = 4
 
 
-# -- today's guard spelling: goes with when= on a computation ---------------------------------
-
-
-class Guarded(Space):
-    """The members of ``EarlyReturns``, guarded by ``when=``."""
-
-    on: bool = Param(default=True)
-    size: int = Param(default=4)
-
-    @derived(when=on)
-    def doubled(self) -> int:
-        return self.size * 2
-
-    @constraint(when=on)
-    def small(self) -> bool:
-        return self.size < 10
-
-    @view(when=on)
-    def shown(self) -> int:
-        return self.size * 3
-
-
-def test_a_guard_answers_inapplicable_while_false_and_the_value_while_true() -> None:
-    """Today's answers for a guarded member: the ones ``EarlyReturns`` gives."""
-    off = design_space(Guarded(on=False))
-    for member in (Guarded.doubled, Guarded.small, Guarded.shown):
-        assert isinstance(off.query(member), Inapplicable)
-    on = design_space(Guarded(on=True))
-    assert on.query(Guarded.doubled) == Available(8)
-    assert holds(on.query(Guarded.small))
-    assert on.query(Guarded.shown) == Available(12)
-
-
-class PlacedGuarded(Placed):
-    """The constraint with the guard as its ``when=``: the real one's spelling."""
-
-    uram_present = constraint(choice=Placed.style, platform=Placed.ultra, when=Placed.placed)(
-        _absent_ultra
-    )
-
-
-def test_an_explicit_input_constraint_with_a_guard_is_inapplicable_where_unplaced() -> None:
-    point = design_space(PlacedGuarded(mode="direct"))
-    assert isinstance(point.query(PlacedGuarded.style), Inapplicable)
-    assert isinstance(point.query(PlacedGuarded.uram_present), Inapplicable)
-    assert inspection.validity(point).status == "valid"
-
-
-def test_an_explicit_input_constraint_with_a_guard_refuses_the_ultra_style_when_placed() -> None:
-    point = design_space(PlacedGuarded())
-    assert isinstance(point.query(PlacedGuarded.uram_present), Unresolved)
-    assert possible(point, PlacedGuarded.style) == ("lut",)
-    with_platform = design_space(PlacedGuarded(ultra=True))
-    assert possible(with_platform, PlacedGuarded.style) == ("lut", "ultra")
-    chosen = with_platform.with_choices({PlacedGuarded.style: "ultra"})
-    assert holds(chosen.query(PlacedGuarded.uram_present))
-
-
-# -- known moves: what a guard that stood apart no longer does --------------------------------
+# -- answers that follow from an early return -------------------------------------------------
 #
-# The early return is the body's own answer, so a guard that is refused through an input, or a
-# view that does not apply in a Space that is refused, answers as any member reading a refused
-# input does. Each case states today's answer for the guarded spelling, then the answer the
-# early return gives (and gives today, in the spelling that stays).
+# The early return is the body's own answer, so a member that reads its guard and a guard that
+# is refused through an input, or a view that does not apply in a Space that is refused,
+# answers as any member reading a refused input does.
 
 
 class RefusedSpace(Space):
-    """A Space with a constraint that always refuses, and a view guarded to not apply."""
+    """A Space with a constraint that always refuses, a view that does not apply and a
+    derived value that does not."""
 
     @constraint
     def never(self) -> bool | Rejected:
@@ -572,10 +510,6 @@ class RefusedSpace(Space):
     @derived
     def off(self) -> bool:
         return False
-
-    @view(when=off)
-    def guarded(self) -> int:
-        return 1
 
     @view
     def early(self) -> int | Inapplicable:
@@ -590,9 +524,9 @@ class RefusedSpace(Space):
         return 1
 
 
-def test_a_view_returning_early_in_a_refused_space_is_refused_through_its_space() -> None:
-    """Held: the early return in a Space that is refused answers refused; a derived value
-    answers inapplicable, as no Space's validity is read for it."""
+def test_a_view_that_does_not_apply_in_a_refused_space_is_refused_through_its_space() -> None:
+    """A view answers refused whenever its Space is, as its answer is the Space's too; a
+    derived value answers inapplicable, as no Space's validity is read for it."""
     point = design_space(RefusedSpace())
     answer = point.query(RefusedSpace.early)
     assert isinstance(answer, Rejected)
@@ -600,42 +534,8 @@ def test_a_view_returning_early_in_a_refused_space_is_refused_through_its_space(
     assert isinstance(point.query(RefusedSpace.derived_early), Inapplicable)
 
 
-def test_a_guarded_view_is_inapplicable_in_a_refused_space_today() -> None:
-    point = design_space(RefusedSpace())
-    assert isinstance(point.query(RefusedSpace.guarded), Inapplicable)
-
-
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="flips when a view's guard is its early return: refused through its Space "
-    "where the guard answered inapplicable",
-)
-def test_a_guarded_view_is_refused_through_its_space_in_a_refused_space() -> None:
-    point = design_space(RefusedSpace())
-    answer = point.query(RefusedSpace.guarded)
-    assert isinstance(answer, Rejected)
-    assert {finding.code for finding in answer.findings} == {"never-holds"}
-
-
-class UnderOneGuard(Space):
-    """Two constraints under one guard that is refused through an input."""
-
-    @derived
-    def source(self) -> bool | Rejected:
-        return reject("source-refused", "the source is refused")
-
-    @constraint(when=source)
-    def first(self) -> bool:
-        return False
-
-    @constraint(when=source)
-    def second(self) -> bool:
-        return False
-
-
 class UnderOneRead(Space):
-    """The same two constraints, each reading the source first."""
+    """Two constraints, each reading a source that is refused first."""
 
     @derived
     def source(self) -> bool | Rejected:
@@ -662,33 +562,9 @@ def _piece_codes(point: Space) -> dict[str, set[str]]:
     }
 
 
-def test_two_guarded_constraints_under_a_refused_guard_are_inapplicable_today() -> None:
-    point = design_space(UnderOneGuard())
-    assert isinstance(point.query(UnderOneGuard.first), Inapplicable)
-    assert isinstance(point.query(UnderOneGuard.second), Inapplicable)
-    assert _piece_codes(point) == {
-        "first": {"guard-refused", "source-refused"},
-        "second": {"guard-refused", "source-refused"},
-    }
-
-
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="flips when a guard is the body's early return: each constraint is refused through "
-    "its read of the source, its piece in the source's code alone",
-)
-def test_two_guarded_constraints_under_a_refused_guard_are_each_refused_through_the_read() -> None:
-    point = design_space(UnderOneGuard())
-    for member in (UnderOneGuard.first, UnderOneGuard.second):
-        answer = point.query(member)
-        assert isinstance(answer, Rejected)
-        assert {finding.code for finding in answer.findings} == {"source-refused"}
-    assert _piece_codes(point) == {"first": {"source-refused"}, "second": {"source-refused"}}
-
-
 def test_two_constraints_reading_a_refused_guard_are_each_refused_through_the_read() -> None:
-    """Held: the early return's answer, which the guarded spelling's takes over."""
+    """Each answers refused in the source's code, and the Space's pieces are each constraint's,
+    in the source's code alone: the refusal is counted where the source makes it."""
     point = design_space(UnderOneRead())
     for member in (UnderOneRead.first, UnderOneRead.second):
         answer = point.query(member)
@@ -697,22 +573,86 @@ def test_two_constraints_reading_a_refused_guard_are_each_refused_through_the_re
     assert _piece_codes(point) == {"first": {"source-refused"}, "second": {"source-refused"}}
 
 
-def test_an_explicit_input_constraint_with_a_guard_is_inapplicable_where_it_is_refused() -> None:
-    """Today's answer for a guard refused through an input: inapplicable, though the choice
-    it constrains is refused."""
-    point = design_space(PlacedGuarded(mode="broken"))
-    assert isinstance(point.query(PlacedGuarded.style), Rejected)
-    assert isinstance(point.query(PlacedGuarded.uram_present), Inapplicable)
+class PlacedFirst(Placed):
+    """``uram_present``'s shape: a constraint that reads the choice it judges first, placed
+    under ``placed`` (so the rule's presence is the choice's), then a platform fact that is
+    still open, as a method."""
+
+    open_ultra: bool = Decision(values=(False, True))
+
+    @constraint
+    def uram_present(self) -> bool | Rejected:
+        style = self.style
+        return _absent_ultra(choice=style, platform=self.open_ultra)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="flips when a guard is the body's early return: the constraint is refused through "
-    "its read of the guard, as the choice it constrains is",
-)
-def test_an_explicit_input_constraint_with_a_guard_is_refused_where_its_guard_is_refused() -> None:
-    point = design_space(PlacedGuarded(mode="broken"))
-    answer = point.query(PlacedGuarded.uram_present)
+def test_a_constraint_reading_its_choice_first_is_inapplicable_where_the_platform_waits() -> None:
+    """Its choice absent, it answers inapplicable whatever else waits (a method stops at its
+    first read with no value); a function over explicit inputs reads them all first and
+    would answer what its platform does."""
+    point = design_space(PlacedFirst(mode="direct"))
+    assert isinstance(point.query(PlacedFirst.open_ultra), Unresolved)
+    assert isinstance(point.query(PlacedFirst.uram_present), Inapplicable)
+    assert inspection.validity(point).status == "valid"
+    assert _piece_codes(point) == {}
+
+
+def test_a_constraint_reading_its_choice_first_is_refused_where_its_guard_is_refused() -> None:
+    """The choice is refused through the chain that places it: so is the constraint, in the
+    chain's code alone, and its piece is the chain's, with no guard piece of its own."""
+    point = design_space(PlacedFirst(mode="broken"))
+    answer = point.query(PlacedFirst.uram_present)
     assert isinstance(answer, Rejected)
     assert {finding.code for finding in answer.findings} == {"chain-broken"}
+    assert _piece_codes(point)["uram_present"] == {"chain-broken"}
+
+
+def test_a_constraint_reading_its_choice_first_refuses_ultra_where_the_platform_has_none() -> None:
+    point = design_space(PlacedFirst()).with_choices({PlacedFirst.style: "ultra"})
+    assert isinstance(point.query(PlacedFirst.uram_present), Unresolved)
+    without = point.try_with_choices({PlacedFirst.open_ultra: False})
+    assert not without.accepted
+    with_it = point.with_choices({PlacedFirst.open_ultra: True})
+    assert holds(with_it.query(PlacedFirst.uram_present))
+
+
+class Chosen(Space):
+    """A choice ``a`` deciding whether a memory is placed, its style placed under that, and a
+    platform fact still open."""
+
+    a: int = Decision(values=(1, 2))
+    open_ultra: bool = Decision(values=(False, True))
+
+    @derived
+    def placed(self) -> bool:
+        return self.a == 2
+
+    style: str = Decision(values=("lut", "ultra"), when=placed)
+
+
+class ChoiceFirst(Chosen):
+    @constraint
+    def uram_present(self) -> bool | Rejected:
+        style = self.style
+        return _absent_ultra(choice=style, platform=self.open_ultra)
+
+
+class GuardFirst(Chosen):
+    @constraint
+    def uram_present(self) -> bool | Rejected | Inapplicable:
+        if not self.placed:
+            return Inapplicable()
+        return _absent_ultra(choice=self.style, platform=self.open_ultra)
+
+
+def test_a_constraint_reading_its_choice_first_names_only_what_it_judges_standing() -> None:
+    """Refusing ``ultra`` on a platform without UltraRAM: read first through the choice it
+    judges, the rule names the platform alone standing, as ``a`` only decides whether the
+    rule exists (a choice is read as a value, and what decides its existence is not
+    followed). Read first through its guard, ``a`` is read as a value, and stands too."""
+    for form, standing in ((ChoiceFirst, ("open_ultra",)), (GuardFirst, ("a", "open_ultra"))):
+        point = design_space(form()).with_choices({form.a: 2, form.open_ultra: False})
+        report = point.try_with_choices({form.style: "ultra"})
+        assert [(rule.rule, rule.standing) for rule in report.broken] == [
+            ("uram_present", standing)
+        ]

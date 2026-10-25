@@ -111,12 +111,6 @@ def wrong_answer() -> QueryResult[str]:
 wrong_answer_type: int = wrong_answer  # E
 
 bad_guard: int = Decision(values=(1,), when=Child.width)  # E
-bad_view = view(Child.width, when=Child.width)  # E
-
-
-@derived(when=Child.width)  # E
-def wrong_derived_guard() -> int:
-    return 1
 
 
 class Holder(Space):

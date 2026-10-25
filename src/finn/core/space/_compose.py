@@ -24,15 +24,15 @@ reaches out of that Space lifted back through the slot (``lift``).
   through the validity. Edges among views stay: views reading each other in a ring are a
   cycle.
 - **Views read out** (``check_views``): only a view reads a view. A constraint, a derived
-  value, a guard (a member's or a placed Space's ``when``), a domain (its inputs) and a
+  value, a guard (a Decision's or a placed Space's ``when``), a domain (its inputs) and a
   binding of a placed Space's formal read facts, choices and derived values; one reading a
   view is ``view-read-in``, named with the view. What passes a value on (an alias, a
   selection, a ``Members``, a computation written for a member) reads what it passes, so a
   ``Members`` whose entries are views is read by views alone. A view reads anything, and
-  so do the computations written for it and its own guard. Per class, its own records'
-  reads (references, and a method's inferred reads) and each placed Space's, once; for a
-  root, the first found, named relative to it. It is checked before the domain rule: a
-  domain reading a view refuses as ``view-read-in`` whatever the view reads.
+  so do the computations written for it. Per class, its own records' reads (references,
+  and a method's inferred reads) and each placed Space's, once; for a root, the first
+  found, named relative to it. It is checked before the domain rule: a domain reading a
+  view refuses as ``view-read-in`` whatever the view reads.
 - **The domain rule** (``check_domains``): a domain's membership reads facts only. Per
   class, each domain's walk follows what its membership inputs may read (arguments,
   alternatives, outputs, selectors, guards and a method's inferred reads), skipping the
@@ -1024,15 +1024,14 @@ class _Views:
 
     def own(self, compiled: Compiled) -> _ReadIn | None:
         """The first of ``compiled``'s own records reading a view. A view reads anything:
-        a view, the computations written for it and its own guard are not readers here; nor
-        is what passes a value on (its reader is)."""
-        views = {spec.key for spec in compiled.records if spec.kind == "view"}
+        a view and the computations written for it are not readers here; nor is what passes
+        a value on (its reader is)."""
         for record, spec in enumerate(compiled.records):
             if spec.kind in ("view", "validity", "param", "const"):
                 continue
             if spec.kind in _PASSING and record not in compiled.binds:
                 continue
-            if self._generated(spec) or (spec.kind == "guard" and spec.owner in views):
+            if self._generated(spec):
                 continue
             for ref in self.reads(compiled, record):
                 found = self.view(compiled, ref)

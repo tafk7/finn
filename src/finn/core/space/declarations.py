@@ -742,6 +742,19 @@ def guard(when: object) -> ValueRef[bool] | None:
     return cast(ValueRef[bool], when)
 
 
+def _refuse_computation_when(kind: str, aliases: Mapping[str, object]) -> None:
+    """``when=`` on a derived value, constraint or view: a computation says it does not
+    apply by returning ``Inapplicable()``, its guard read first (``when=`` is a placement's
+    and a Decision's presence)."""
+    if "when" in aliases:
+        raise DefinitionError.broken(
+            "computation-when",
+            _OWNER,
+            f"{kind}{at(source_origin())}: {kind} takes no when=: return Inapplicable() from "
+            "its body, reading the guard first (when= is for a placement or a Decision)",
+        )
+
+
 class Derived(ValueDecl[T], Generic[T]):
     """A function whose dependencies are bound after effective collection."""
 
@@ -750,7 +763,6 @@ class Derived(ValueDecl[T], Generic[T]):
         function: Callable[..., T | QueryResult[T]],
         *,
         aliases: Mapping[str, object] | None = None,
-        when: Guard = None,
     ) -> None:
         if aliases is not None and "semantics" in aliases:
             raise DefinitionError.broken(
@@ -761,7 +773,6 @@ class Derived(ValueDecl[T], Generic[T]):
         self.function = function
         self.semantics: ValueSemantics[T] | None = None
         self.aliases = MappingProxyType(dict(aliases or {}))
-        self.when = guard(when)
 
     if not TYPE_CHECKING:
 
@@ -771,8 +782,8 @@ class Derived(ValueDecl[T], Generic[T]):
 
 
 class _DerivedDecorator:
-    def __init__(self, aliases: Mapping[str, object], when: Guard) -> None:
-        self.aliases, self.when = aliases, when
+    def __init__(self, aliases: Mapping[str, object]) -> None:
+        self.aliases = aliases
 
     @overload
     def __call__(self, function: Callable[..., QueryResult[T]]) -> T: ...
@@ -783,7 +794,7 @@ class _DerivedDecorator:
     def __call__(self, function: Callable[..., object]) -> object:
         # Typed as its value, like a formal: it may supply a formal in the class body.
         # ``T | Rejected`` and ``QueryResult[T]`` are typed ``T``: its value's type.
-        return Derived(function, aliases=self.aliases, when=self.when)
+        return Derived(function, aliases=self.aliases)
 
 
 @overload
@@ -795,29 +806,23 @@ def derived(function: Callable[..., T | NonValue], /) -> T: ...
 
 
 @overload
-def derived(
-    *, when: ValueRef[bool] | bool | None = None, **aliases: object
-) -> _DerivedDecorator: ...
+def derived(**aliases: object) -> _DerivedDecorator: ...
 
 
-def derived(
-    function: Callable[..., object] | None = None,
-    /,
-    *,
-    when: Guard = None,
-    **aliases: object,
-) -> object:
-    """A derived value: ``@derived`` on a method, or ``@derived(when=..., **aliases)``. Its
-    return annotation is its value's type and check (``T``, or ``T | Rejected``)."""
+def derived(function: Callable[..., object] | None = None, /, **aliases: object) -> object:
+    """A derived value: ``@derived`` on a method, or ``@derived(**aliases)``. Its return
+    annotation is its value's type and check (``T``, or ``T | Rejected``). It does not
+    apply by returning ``Inapplicable()``, its guard read first."""
+    _refuse_computation_when("derived", aliases)
     if function is not None:
-        return Derived(function, aliases=aliases, when=when)
+        return Derived(function, aliases=aliases)
     if "semantics" in aliases:
         raise DefinitionError.broken(
             "derived-semantics",
             _OWNER,
             f"derived{at(source_origin())}: {SEMANTICS_GONE} (the return annotation)",
         )
-    return _DerivedDecorator(aliases, when)
+    return _DerivedDecorator(aliases)
 
 
 class _MemberOfNode:
@@ -834,7 +839,7 @@ class _MemberOfNode:
 class Constraint(_MemberOfNode, Declaration):
     """A rule of its Space: true, false (refused, with its findings) or unknown. Every
     constraint of a present Space counts toward the Space's validity
-    (``inspection.validity``); a constraint whose ``when=`` does not hold counts as
+    (``inspection.validity``); a constraint that returns ``Inapplicable()`` counts as
     true. A constraint reads values (formals, choices, derived values, a child's
     derived value), never a view of its own Space or of an ancestor: that view's
     answer reads this constraint, a dependency cycle."""
@@ -844,20 +849,18 @@ class Constraint(_MemberOfNode, Declaration):
         function: Callable[..., bool | QueryResult[bool]],
         *,
         aliases: Mapping[str, object] | None = None,
-        when: Guard = None,
     ) -> None:
         self.function = function
         self.aliases = MappingProxyType(dict(aliases or {}))
         self.semantics = cast("ValueSemantics[bool]", BOOL)
-        self.when = guard(when)
 
 
 class _ConstraintDecorator:
-    def __init__(self, aliases: Mapping[str, object], when: Guard) -> None:
-        self.aliases, self.when = aliases, when
+    def __init__(self, aliases: Mapping[str, object]) -> None:
+        self.aliases = aliases
 
     def __call__(self, function: Callable[..., bool | QueryResult[bool]]) -> Constraint:
-        return Constraint(function, aliases=self.aliases, when=self.when)
+        return Constraint(function, aliases=self.aliases)
 
 
 @overload
@@ -865,21 +868,18 @@ def constraint(function: Callable[..., bool | QueryResult[bool]], /) -> Constrai
 
 
 @overload
-def constraint(
-    *, when: ValueRef[bool] | bool | None = None, **aliases: object
-) -> _ConstraintDecorator: ...
+def constraint(**aliases: object) -> _ConstraintDecorator: ...
 
 
 def constraint(
     function: Callable[..., bool | QueryResult[bool]] | None = None,
     /,
-    *,
-    when: Guard = None,
     **aliases: object,
 ) -> Constraint | _ConstraintDecorator:
+    _refuse_computation_when("constraint", aliases)
     if function is not None:
-        return Constraint(function, aliases=aliases, when=when)
-    return _ConstraintDecorator(aliases, when)
+        return Constraint(function, aliases=aliases)
+    return _ConstraintDecorator(aliases)
 
 
 class View(Declaration, Generic[T]):
@@ -894,29 +894,27 @@ class View(Declaration, Generic[T]):
     pass it to ``point.inspect`` for the assessment and to ``point.query`` for
     the accepted result.
 
-    A view's accepted result is, in order: inapplicable while its guard
-    (``when=``) does not hold, and then its Space's validity is never read; refused
-    when its output is refused or its Space is refused (``inspection.validity``),
-    whatever else waits; unresolved when its output is; else its output. A view
-    answers while its Space is undecided. A rule that matters for one product
-    only refuses in the view's body. A constraint of the view's Space (or of an
+    A view's accepted result is, in order: refused when its output is refused or its
+    Space is refused (``inspection.validity``), whatever else waits; unresolved when
+    its output is; else its output (inapplicable when its body returns
+    ``Inapplicable()``). A view answers while its Space is undecided. A rule that matters
+    for one product only refuses in the view's body. A constraint of the view's Space (or of an
     ancestor) reading the view closes a dependency cycle: rules read values.
     """
 
     @overload
-    def __init__(self, source: ValueRef[T] | View[T], *, when: Guard = None) -> None: ...
+    def __init__(self, source: ValueRef[T] | View[T]) -> None: ...
 
     @overload
-    def __init__(self, source: T, *, when: Guard = None) -> None: ...
+    def __init__(self, source: T) -> None: ...
 
-    def __init__(self, source: object, *, when: Guard = None) -> None:
+    def __init__(self, source: object) -> None:
         self.source: object | None = source
         self.function: Callable[..., T | QueryResult[T]] | None = None
         self.aliases: Mapping[str, object] = MappingProxyType({})
         self.semantics: ValueSemantics[T] | None = cast(
             "ValueSemantics[T] | None", getattr(source, "semantics", None)
         )
-        self.when = guard(when)
 
     @classmethod
     def from_function(
@@ -924,14 +922,12 @@ class View(Declaration, Generic[T]):
         function: Callable[..., T | QueryResult[T]],
         *,
         aliases: Mapping[str, object],
-        when: Guard = None,
     ) -> View[T]:
         result = cls.__new__(cls)
         result.source = None
         result.function = function
         result.aliases = MappingProxyType(dict(aliases))
         result.semantics = None
-        result.when = guard(when)
         return result
 
     @overload
@@ -952,8 +948,8 @@ class View(Declaration, Generic[T]):
 
 
 class _ViewDecorator:
-    def __init__(self, aliases: Mapping[str, object], when: Guard) -> None:
-        self.aliases, self.when = aliases, when
+    def __init__(self, aliases: Mapping[str, object]) -> None:
+        self.aliases = aliases
 
     @overload
     def __call__(self, function: Callable[..., QueryResult[T]]) -> View[T]: ...
@@ -962,11 +958,11 @@ class _ViewDecorator:
     def __call__(self, function: Callable[..., T | NonValue]) -> View[T]: ...
 
     def __call__(self, function: Callable[..., object]) -> View[Any]:
-        return View.from_function(function, aliases=self.aliases, when=self.when)
+        return View.from_function(function, aliases=self.aliases)
 
 
 @overload
-def view(source: ValueRef[T] | View[T], /, *, when: Guard = None) -> View[T]: ...
+def view(source: ValueRef[T] | View[T], /) -> View[T]: ...
 
 
 @overload
@@ -978,25 +974,21 @@ def view(function: Callable[..., T | NonValue], /) -> View[T]: ...
 
 
 @overload
-def view(source: T, /, *, when: Guard = None) -> View[T]: ...
+def view(source: T, /) -> View[T]: ...
 
 
 @overload
-def view(*, when: ValueRef[bool] | bool | None = None, **aliases: object) -> _ViewDecorator: ...
+def view(**aliases: object) -> _ViewDecorator: ...
 
 
-def view(
-    function: object | None = None,
-    /,
-    *,
-    when: Guard = None,
-    **aliases: object,
-) -> object:
+def view(function: object | None = None, /, **aliases: object) -> object:
     """A view: ``view(reference)``, the product of a value (``view(width)``,
     ``view(adapter.stages)``); anything else that is not a function is refused
-    (``view-source-invalid``). Or ``@view`` on a method, or ``@view(when=..., **aliases)``.
+    (``view-source-invalid``). Or ``@view`` on a method, or ``@view(**aliases)``.
     A function's return annotation is its value's type and check (``T``, or ``T |
-    Rejected``); a reference's is its source's."""
+    Rejected``); a reference's is its source's. A function view does not apply by
+    returning ``Inapplicable()``, its guard read first."""
+    _refuse_computation_when("view", aliases)
     if "semantics" in aliases:
         raise DefinitionError.broken(
             "view-semantics",
@@ -1005,7 +997,7 @@ def view(
             "source of a view)",
         )
     if function is None:
-        return _ViewDecorator(aliases, when)
+        return _ViewDecorator(aliases)
     if isinstance(function, (ValueRef, View)):
         # A reference: a symbolic reference answers every call by refusing it, so it is
         # told apart from a function before it is called.
@@ -1016,7 +1008,7 @@ def view(
                 f"view{at(source_origin())}: a view of a reference takes no aliases "
                 f"({', '.join(sorted(aliases))}): they name the reads of a function",
             )
-        return View(function, when=when)
+        return View(function)
     if not callable(function) or isinstance(function, type):
         what = (
             f"the class {function.__qualname__}"
@@ -1029,7 +1021,7 @@ def view(
             f"view{at(source_origin())}: a view's source is a reference (view(width)) or a "
             f"function (@view), not {what}",
         )
-    return _ViewDecorator(aliases, when)(function)
+    return _ViewDecorator(aliases)(function)
 
 
 # -- Symbolic references ---------------------------------------------------------------
