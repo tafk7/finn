@@ -285,17 +285,12 @@ def _places(space_type: type[Space]) -> list[type[Space]]:
 
 
 def _link(space_type: type[Space]) -> Compiled:
-    from .compiler import _definition_classes, _validate_constructors  # noqa: PLC0415 - a cycle
+    from .compiler import _validate_constructors  # noqa: PLC0415 - a cycle
 
+    # What the class is compiled from no longer changes: it was closed when it was created
+    # (``SpaceMeta``), its declarations frozen with it.
     form = _compile(space_type)
     _validate_constructors((space_type,))
-    # What the class was compiled from no longer changes: the class is prepared.
-    reason = f"{space_type.__name__} was prepared"
-    for slot in form.slots:
-        if slot.record is not None:
-            slot.record.freeze(reason)
-    for definition in _definition_classes((space_type,)):
-        type.__setattr__(definition, "_space_definition_finalized", True)
     type.__setattr__(space_type, "_space_compiled", form)
     return form
 

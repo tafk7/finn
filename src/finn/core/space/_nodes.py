@@ -69,9 +69,9 @@ class NodeDecl(Declaration):
     """One declared node of ``space_type``: its formals' suppliers, guard and placement.
 
     ``settings`` maps each formal the declaring body supplied (at the call, or by
-    assignment) to its supplier and the line that wrote it. A declaration is
-    mutable until it is frozen: when a model containing it is prepared, or when
-    ``design_space`` takes it as a root.
+    assignment) to its supplier and the line that wrote it. It is assigned until it is
+    frozen: when the Space class placing it is created (an assignment in that class body
+    runs before), or when ``design_space`` takes it as a root.
     """
 
     _record_origin = False
@@ -85,7 +85,6 @@ class NodeDecl(Declaration):
         self.instance: object = None
         self.placement: str | None = None
         self.candidate_of: NodeDecision | None = None
-        self.frozen: str | None = None
 
     @property
     def bindings(self) -> dict[str, object]:
@@ -95,10 +94,6 @@ class NodeDecl(Declaration):
     def describe(self) -> str:
         where = f" placed at {self.placement}" if self.placement else ""
         return f"{self.space_type.__qualname__} node{where}{at(self.origin)}"
-
-    def freeze(self, reason: str) -> None:
-        if self.frozen is None:
-            self.frozen = reason
 
     def __repr__(self) -> str:
         return f"<{self.describe()}>"
@@ -146,14 +141,14 @@ def place_in_class(record: NodeDecl, owner: type[object], name: str) -> None:
         )
     if record.placement is not None:
         _refuse_placement(record, where)
-    record.owner, record.name, record.placement = owner, name, where
+    record._settle(owner=owner, name=name, placement=where)
 
 
 def place_as_candidate(record: NodeDecl, decision: NodeDecision, key: str) -> None:
     where = f"case {key!r} of a selector{at(decision.origin)}"
     if record.placement is not None or record.candidate_of is not None:
         _refuse_placement(record, where)
-    record.name, record.placement, record.candidate_of = key, where, decision
+    record._settle(name=key, placement=where, candidate_of=decision)
 
 
 def node_record(value: object) -> NodeDecl | None:
@@ -400,7 +395,7 @@ def declare_node(space_type: type[Space], keywords: Mapping[str, object]) -> Spa
     """``space_type(**keywords)``: validate the bindings eagerly and return the node.
 
     A keyword is exactly an assignment by the calling body. Members left out
-    may be supplied later by assignment; a required formal that nothing
+    may be supplied by assignment in the same body; a required formal that nothing
     supplies is reported when a Space class containing the node is prepared.
     """
 
@@ -467,8 +462,9 @@ def assign(instance: object, name: str, value: object) -> None:
         raise DefinitionError.broken(
             "declaration-frozen",
             _OWNER,
-            f"{label}: {record.describe()} is frozen ({record.frozen}); a declaration can be "
-            "assigned only until its Space class is prepared or design_space() takes it",
+            f"{label}: {record.describe()} is frozen ({record.frozen}); a node's formals are "
+            "assigned in the body that declares it, before the class placing it is created or "
+            "design_space() takes it as a root",
             declaration=label,
         )
     supplier = check_supplier(record.space_type, name, members[name], value, label)
@@ -547,7 +543,7 @@ class NodeChoice:
         decision.__set_name__(owner, name)
         for key, record in decision.candidates.items():
             if record is not None:
-                record.placement = f"{owner.__qualname__}.{name}.{key}"
+                record._settle(placement=f"{owner.__qualname__}.{name}.{key}")
 
     def __get__(self, instance: object, owner: type[object] | None = None) -> Any:
         if instance is None:

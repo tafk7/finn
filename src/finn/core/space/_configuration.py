@@ -22,6 +22,7 @@ from typing import (
     Any,
     ClassVar,
     Generic,
+    NoReturn,
     Self,
     TypeVar,
     cast,
@@ -121,7 +122,12 @@ def _when_field(*, default: None = None, kw_only: bool = True) -> Any:
     field_specifiers=(_when_field,),
 )
 class SpaceMeta(type):
-    """Declare nodes, and protect prepared declaration structure.
+    """Declare nodes, and close each Space class when it is created.
+
+    A class is closed when its class statement finishes (``__init__``, after
+    ``__set_name__`` and ``__init_subclass__``, which may still add members): each
+    declaration it holds is frozen, and a structural member (``_structural``) can no
+    longer be set or removed on it (``structure-finalized``). Compiling stays lazy.
 
     ``dataclass_transform`` types each Space class's call from its annotated
     formals and Decisions (``area: int = Param()``) plus the ``when`` guard.
@@ -146,31 +152,56 @@ class SpaceMeta(type):
 
             return declare_node(cls, keywords)
 
+    def __init__(
+        cls, name: str, bases: tuple[type, ...], namespace: dict[str, Any], /, **kwargs: Any
+    ) -> None:
+        super().__init__(name, bases, namespace, **kwargs)
+        _close(cls)
+
     def __setattr__(cls, name: str, value: object) -> None:
-        if cls.__dict__.get("_space_definition_finalized", False) and not name.startswith(
-            "_space_"
-        ):
+        if cls.__dict__.get("_space_closed", False) and not name.startswith("_space_"):
             existing = cls.__dict__.get(name, getattr(cls, name, None))
             if _structural(existing) or _structural(value):
-                raise DefinitionError.broken(
-                    "structure-finalized",
-                    _OWNER,
-                    f"{cls.__qualname__}.{name}: prepared declaration structure is finalized",
-                    declaration=f"{cls.__qualname__}.{name}",
-                )
+                _refuse_structure(cls, name)
         super().__setattr__(name, value)
 
     def __delattr__(cls, name: str) -> None:
-        if cls.__dict__.get("_space_definition_finalized", False):
+        if cls.__dict__.get("_space_closed", False):
             existing = cls.__dict__.get(name)
             if _structural(existing):
-                raise DefinitionError.broken(
-                    "structure-finalized",
-                    _OWNER,
-                    f"{cls.__qualname__}.{name}: prepared declaration structure is finalized",
-                    declaration=f"{cls.__qualname__}.{name}",
-                )
+                _refuse_structure(cls, name)
         super().__delattr__(name)
+
+
+def _close(cls: SpaceMeta) -> None:
+    """Close a Space class as it is created: freeze each declaration it holds (a node's
+    record, a selector's and each of its cases' included), and mark it closed."""
+    from ._nodes import NodeDecision, slot_declaration
+
+    reason = f"{cls.__name__} was created"
+    # The Space base itself (no Space among its bases) holds none, and is made before its
+    # name is bound, which ``slot_declaration`` reads.
+    placed = any(isinstance(base, SpaceMeta) for base in cls.__bases__)
+    for value in vars(cls).values() if placed else ():
+        declaration = slot_declaration(value)
+        if declaration is None:
+            continue
+        if isinstance(declaration, NodeDecision):
+            for case in declaration.candidates.values():
+                if case is not None:
+                    case.freeze(reason)
+        declaration.freeze(reason)
+    type.__setattr__(cls, "_space_closed", True)
+
+
+def _refuse_structure(cls: SpaceMeta, name: str) -> NoReturn:
+    raise DefinitionError.broken(
+        "structure-finalized",
+        _OWNER,
+        f"{cls.__qualname__}.{name}: a Space class's structure is finalized when the class is "
+        "created; declare the member in its class body, or in a subclass",
+        declaration=f"{cls.__qualname__}.{name}",
+    )
 
 
 def _structural(value: object) -> bool:

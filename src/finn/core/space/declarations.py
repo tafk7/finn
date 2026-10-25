@@ -112,12 +112,21 @@ MISSING = _Missing()
 
 
 class Declaration:
-    """Identity-bearing source declaration; names are diagnostic hints only."""
+    """Identity-bearing source declaration; names are diagnostic hints only.
+
+    A declaration is written while it is open: in the class body that declares it, or,
+    for a node, at its call and by assignment there. It is frozen when the Space class
+    holding it is created, or when ``design_space`` takes it as a root (``frozen``, the
+    reason); from then on writing a field of it is refused (``declaration-frozen``). What
+    the engine works out or records about it (its annotation resolved, its placement) it
+    writes with ``_settle``.
+    """
 
     name: str | None = None
     owner: type[object] | None = None
     when: ValueRef[bool] | None = None
     origin: str | None = None
+    frozen: str | None = None
     _record_origin = True
 
     def __new__(cls, *args: object, **kwargs: object) -> Self:
@@ -135,10 +144,47 @@ class Declaration:
                 f"{self.owner.__qualname__}.{self.name}; create a fresh declaration",
                 declaration=f"{owner.__qualname__}.{name}",
             )
-        self.owner, self.name = owner, name
+        self._settle(owner=owner, name=name)
+
+    def freeze(self, reason: str) -> None:
+        """Close the declaration (the first reason is kept)."""
+        if self.frozen is None:
+            self._settle(frozen=reason)
+
+    def _settle(self, **fields: object) -> None:
+        """The engine's own writes, which a frozen declaration takes: what it works out or
+        records about the declaration, never what its author wrote."""
+        for field, value in fields.items():
+            object.__setattr__(self, field, value)
+
+    if not TYPE_CHECKING:
+        # Hidden from type checkers: a declared __setattr__ would make mypy accept
+        # assignment to any attribute.
+
+        def __setattr__(self, field: str, value: object) -> None:
+            if self.frozen is not None:
+                _refuse_frozen(self, field)
+            object.__setattr__(self, field, value)
 
     def __bool__(self) -> bool:
         raise TypeError("a declaration has no truth value")
+
+
+def _refuse_frozen(declaration: Declaration, field: str) -> NoReturn:
+    owner, name = declaration.owner, declaration.name
+    what = (
+        f"{owner.__qualname__}.{name}"
+        if owner is not None and name is not None
+        else type(declaration).__name__
+    )
+    label = f"{what}.{field}{at(declaration.origin)}"
+    raise DefinitionError.broken(
+        "declaration-frozen",
+        _OWNER,
+        f"{label}: the declaration is frozen ({declaration.frozen}); a declaration is written "
+        "in the class body that declares it, and a subclass redeclares it",
+        declaration=label,
+    )
 
 
 class ValueRef(Declaration, Generic[T_co]):
@@ -425,16 +471,18 @@ class Param(ValueDecl[T], Generic[T]):
             )
         semantics = _annotation_semantics(annotation, label)
         if self.default is not MISSING:
-            self.default = literal(
-                semantics,
-                self.default,
-                label,
-                role="default",
-                owner=label,
-                what="invalid formal default: ",
+            # Its canonical form, the engine's: a frozen formal takes it too.
+            self._settle(
+                default=literal(
+                    semantics,
+                    self.default,
+                    label,
+                    role="default",
+                    owner=label,
+                    what="invalid formal default: ",
+                )
             )
-        self.semantics = semantics
-        self.resolved = True
+        self._settle(semantics=semantics, resolved=True)
         return self
 
     @overload
@@ -626,8 +674,10 @@ class Decision(ValueDecl[T], Generic[T]):
             return self  # still in its class body: resolved when the class is made
         if annotation is MISSING:
             raise _unannotated(self, "Decision")
-        self.semantics = _annotation_semantics(annotation, describe_formal(self, "Decision"))
-        self.resolved = True
+        self._settle(
+            semantics=_annotation_semantics(annotation, describe_formal(self, "Decision")),
+            resolved=True,
+        )
         return self
 
 

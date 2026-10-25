@@ -12,9 +12,9 @@ choices, and a *design point* one complete for the question asked.
 Space class is compiled once, into the model every design space of it shares; a
 root supplies plain values for its value formals, bound as runtime inputs. A
 root that supplies structure (a reference, a fresh Decision) is refused:
-structure belongs to a Space class. Preparing a model freezes every node
-declaration it instantiates, and ``design_space`` freezes its root: from then
-on, assignment is refused.
+structure belongs to a Space class. A Space class is closed when it is created,
+every declaration it holds frozen with it, and ``design_space`` freezes its root:
+from then on, assignment is refused.
 """
 
 # Lazy imports break the declaration/configuration/evaluation cycle.
@@ -138,21 +138,6 @@ def _validate_constructors(space_types: tuple[type[Space], ...]) -> None:
                     f"{base.__qualname__}: custom instance __new__ is unsupported",
                     declaration=base.__qualname__,
                 )
-
-
-def _definition_classes(space_types: tuple[type[Space], ...]) -> tuple[type[Space], ...]:
-    """Include concrete Space classes and Space bases contributing effective declarations."""
-
-    result: list[type[Space]] = []
-    seen: set[type[Space]] = set()
-    for space_type in space_types:
-        for base in space_type.__mro__:
-            if base is Space:
-                break
-            if issubclass(base, Space) and base not in seen:
-                seen.add(base)
-                result.append(base)
-    return tuple(result)
 
 
 def compile_model(space_type: type[S]) -> Model[S]:
