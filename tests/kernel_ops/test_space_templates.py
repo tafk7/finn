@@ -180,8 +180,16 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
 # weights one fact: per MatMul, its root Params ``w_contents`` and ``weights_dtype`` one
 # (``weights``), and ``weighted``, ``carried_weights``' guard and its packed core's
 # ``w_placed`` and its ``w_side`` and ``w_stream`` guards gone (-24; -27 after ``viable``,
-# the trial's int8 core's three as well).
-EVALUATED = ((1205, 42), (1281, 42))
+# the trial's int8 core's three as well). Then 1205 (42) and 1281 (42) became these, with a
+# computation's guard its body's early return: the guard nodes of guarded computations are
+# gone (-33): each channel's ``adapter_uram_present`` guard (13), and per MatMul (4 each) its
+# ``native_readable`` and ``stored_weights`` guards, its packed core's ``w_access`` and
+# ``x_access`` guards and its thresholding's ``input_access`` guard; and
+# ``adapter_uram_present``, reading the style it judges first, now evaluates
+# ``adapter_ram_style`` where no adapter is placed (+9: the 4 ``h`` and 4 ``w`` channels and
+# ``y``; the style answers inapplicable, and the rule with it). After ``viable``, -35 + 9:
+# the trial's int8 core's ``w_access`` and ``x_access`` guards as well.
+EVALUATED = ((1181, 42), (1255, 42))
 
 
 def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
