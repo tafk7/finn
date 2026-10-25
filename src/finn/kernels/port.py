@@ -82,6 +82,7 @@ from typing import Any, ClassVar, cast
 
 from finn.core.space import (
     DefinitionError,
+    Inapplicable,
     Param,
     Rejected,
     Space,
@@ -116,6 +117,12 @@ from finn.kernels.transport import (
     StreamMarker,
 )
 from finn.kernels.values.domains import Integer, admit_element
+
+
+def _applies(space: Space, guard: str | None) -> bool:
+    """Whether a member guarded by the member ``guard`` of ``space`` applies: always where it
+    has none; else where that member holds."""
+    return guard is None or bool(getattr(space, guard))
 
 
 @dataclass(frozen=True)
@@ -229,7 +236,7 @@ class AxiStreamPort(KernelDeclaration):
         members: dict[str, object] = {}
         placement = self.placement()
         placed = (f"{name}_placed",) if placement is None else ()
-        guard: bool | None = None
+        guard: str | None = None
         if placement is None:
 
             @declared_reads(*self.paths("tensor"))
@@ -237,8 +244,8 @@ class AxiStreamPort(KernelDeclaration):
                 """Whether its tensor is given: the port is idle without it."""
                 return port.value(self, "tensor") is not None
 
-            guard = derived(placed_)
-            members[f"{name}_placed"] = guard
+            guard = f"{name}_placed"
+            members[guard] = derived(placed_)
         tensor = self.paths("tensor") if placement is not False else ()
 
         @declared_reads(*self.paths("name", "dtype", "endpoint"), *placed, *tensor)
@@ -261,19 +268,26 @@ class AxiStreamPort(KernelDeclaration):
         if placement is False:
             return members
 
-        @declared_reads(*self.paths(*AxiStreamPort.PRESENTED), f"{name}_element")
-        def stream(self: Space) -> Stream | Rejected:
+        # What a member applies under, a member of the kernel read first, before any other.
+        under = () if guard is None else (guard,)
+
+        @declared_reads(*under, *self.paths(*AxiStreamPort.PRESENTED), f"{name}_element")
+        def stream(self: Space) -> Stream | Rejected | Inapplicable:
+            if not _applies(self, guard):
+                return Inapplicable()
             return port.presented(self, name)
 
-        members[f"{name}_stream"] = derived(when=guard)(stream)
+        members[f"{name}_stream"] = derived(stream)
 
-        @declared_reads(f"{name}_stream", *self.paths(*AxiStreamPort.VIEWED))
-        def data_width_(self: Space) -> int | Rejected:
+        @declared_reads(*under, f"{name}_stream", *self.paths(*AxiStreamPort.VIEWED))
+        def data_width_(self: Space) -> int | Rejected | Inapplicable:
+            if not _applies(self, guard):
+                return Inapplicable()
             return data_width(
                 port.read(self, *AxiStreamPort.VIEWED), getattr(self, f"{name}_stream")
             )
 
-        members[f"{name}_data_width"] = derived(when=guard)(data_width_)
+        members[f"{name}_data_width"] = derived(data_width_)
 
         @declared_reads()
         def label_(self: Space) -> str:
@@ -286,15 +300,17 @@ class AxiStreamPort(KernelDeclaration):
             (f"{name}_data_width",) if is_member(endpoint) or endpoint is Endpoint.INITIATOR else ()
         )
 
-        @declared_reads(f"{name}_stream", f"{name}_label", *widths, *self.paths("endpoint"))
-        def side_(self: Space) -> Side:
+        @declared_reads(*under, f"{name}_stream", f"{name}_label", *widths, *self.paths("endpoint"))
+        def side_(self: Space) -> Side | Inapplicable:
+            if not _applies(self, guard):
+                return Inapplicable()
             stream: Stream = getattr(self, f"{name}_stream")
             label: str = getattr(self, f"{name}_label")
             if port.value(self, "endpoint") is Endpoint.INITIATOR:
                 return Side.kernel(stream, label, getattr(self, f"{name}_data_width"))
             return Side.kernel(stream, label)
 
-        members[f"{name}_side"] = derived(when=guard)(side_)
+        members[f"{name}_side"] = derived(side_)
         binding = self.binding()
         binds = guard
         if binding is None:
@@ -307,12 +323,16 @@ class AxiStreamPort(KernelDeclaration):
                     and bool(port.value(self, "index"))
                 )
 
-            binds = derived(binds_)
-            members[f"{name}_binds"] = binds
+            binds = f"{name}_binds"
+            members[binds] = derived(binds_)
         if binding is not False:
 
-            @declared_reads(*self.paths("tensor", "index", "reshaped"))
-            def access(self: Space) -> Access:
+            @declared_reads(
+                *(() if binds is None else (binds,)), *self.paths("tensor", "index", "reshaped")
+            )
+            def access(self: Space) -> Access | Inapplicable:
+                if not _applies(self, binds):
+                    return Inapplicable()
                 return Access(
                     name,
                     port.value(self, "tensor").shape,
@@ -320,10 +340,12 @@ class AxiStreamPort(KernelDeclaration):
                     port.value(self, "reshaped"),
                 )
 
-            members[f"{name}_access"] = derived(when=binds)(access)
+            members[f"{name}_access"] = derived(access)
 
-        @declared_reads(f"{name}_stream", *self.paths(*AxiStreamPort.PACED))
-        def contract_(self: Space) -> PortContract | Rejected:
+        @declared_reads(*under, f"{name}_stream", *self.paths(*AxiStreamPort.PACED))
+        def contract_(self: Space) -> PortContract | Rejected | Inapplicable:
+            if not _applies(self, guard):
+                return Inapplicable()
             kernel = cast("type[UntimedKernel]", type(self))
             found = contract(
                 port.read(self, *AxiStreamPort.PACED),
@@ -332,7 +354,7 @@ class AxiStreamPort(KernelDeclaration):
             )
             return found if isinstance(found, Rejected) else PortContract(name, found)
 
-        members[f"{name}_contract"] = view(when=guard)(contract_)
+        members[f"{name}_contract"] = view(contract_)
         return members
 
     def element(self, kernel: Space, name: str) -> ScalarEncoding | Rejected:

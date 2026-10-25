@@ -36,7 +36,6 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from math import ceil, inf
-from typing import Any
 
 from finn.core.space import (
     Domain,
@@ -346,22 +345,27 @@ def _stores(cases: _UltraCases) -> Callable[[object], bool]:
     return lambda value: value in cases
 
 
-def uram_constraint(
-    platform: Platform, choice: object, cases: _UltraCases, *, when: Any = None
-) -> Constraint:
+def uram_available(choice: object, platform: Platform, cases: _UltraCases) -> bool | Rejected:
+    """Whether ``platform`` has the UltraRAM that ``choice`` needs where it takes one of the
+    ``cases`` that store in it: true, or ``uram-absent``. What ``uram_constraint`` states."""
+    if _stores(cases)(choice) and not platform.uram:
+        return reject("uram-absent", "the platform has no UltraRAM")
+    return True
+
+
+def uram_constraint(platform: Platform, choice: object, cases: _UltraCases) -> Constraint:
     """A constraint of the Space owning ``choice``: where ``choice`` takes one of the
     ``cases`` that store in UltraRAM, ``platform`` (its ``Platform`` parameter) has
-    UltraRAM (``uram-absent``); guarded by ``when``, the choice's own guard, where it has
-    one. Name it in the class body
-    (``uram_present = uram_constraint(platform, ram_style, ("ultra",))``)."""
-    stores = _stores(cases)
+    UltraRAM (``uram-absent``). Name it in the class body
+    (``uram_present = uram_constraint(platform, ram_style, ("ultra",))``). Where the choice
+    is placed under a guard, write the constraint as a method reading the choice first, so
+    that its presence is the rule's, and stating ``uram_available``
+    (``Channel.adapter_uram_present``)."""
 
     def uram_present(*, choice: object, platform: Platform) -> bool | Rejected:
-        if stores(choice) and not platform.uram:
-            return reject("uram-absent", "the platform has no UltraRAM")
-        return True
+        return uram_available(choice, platform, cases)
 
-    return constraint(choice=choice, platform=platform, when=when)(uram_present)
+    return constraint(choice=choice, platform=platform)(uram_present)
 
 
 def uram_init_constraint(platform: Platform, choice: object, cases: _UltraCases) -> Constraint:
@@ -400,6 +404,7 @@ __all__ = [
     "read_mux",
     "total",
     "uram",
+    "uram_available",
     "uram_constraint",
     "uram_init_constraint",
 ]

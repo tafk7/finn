@@ -93,6 +93,7 @@ from typing import Any, ClassVar, Protocol, cast
 
 from finn.core.space import (
     DefinitionError,
+    Inapplicable,
     Members,
     Rejected,
     Space,
@@ -575,11 +576,13 @@ class UntimedKernel(Space):
         class declaring one (``ControlBus.lower``)."""
         return False
 
-    @view(when=declares_bus)
-    def bus_control(self) -> Control | Rejected:
+    @view
+    def bus_control(self) -> Control | Rejected | Inapplicable:
         """The control bus it declares: a ``Control``, presenting nothing while the bus is
         not presented. A kernel declaring none answers inapplicable; one declaring a bus
         reads that bus's own view here (``ControlBus.lower``)."""
+        if not self.declares_bus:
+            return Inapplicable()
         return reject("kernel-control", f"{type(self).__qualname__} declares no control bus")
 
     @view

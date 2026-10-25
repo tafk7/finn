@@ -105,6 +105,7 @@ from qonnx.core.ranges import TensorRange
 
 from finn.core.space import (
     Decision,
+    Inapplicable,
     Param,
     Rejected,
     Select,
@@ -321,8 +322,10 @@ class MatMulKernel(KernelSpace):
     # it) or on the dense datapath with block-diagonal weights, on any core.
     realization: str = Decision(values=("native", "dense"), when=depthwise)
 
-    @constraint(when=depthwise)
-    def native_readable(self) -> bool | Rejected:
+    @constraint
+    def native_readable(self) -> bool | Rejected | Inapplicable:
+        if not self.depthwise:
+            return Inapplicable()
         if self.realization == "native" and not self.reads_depthwise:
             return reject(
                 "matmul-native",
@@ -473,10 +476,12 @@ class MatMulKernel(KernelSpace):
     # The product its holder reads; inference reads the value it presents.
     y_tensor = view(result_tensor)
 
-    @derived(when=stored)
-    def stored_weights(self) -> IntegerTensorValue:
+    @derived
+    def stored_weights(self) -> IntegerTensorValue | Inapplicable:
         """The known weights as the datapath reads them, which the weight channel's source
         stores: block-diagonal when a depthwise operation is realized densely."""
+        if not self.stored:
+            return Inapplicable()
         weights = cast(KnownWeights, self.weights).contents  # stored: known
         return block_diagonal(weights) if self.dense_view else weights
 
@@ -504,7 +509,7 @@ class MatMulKernel(KernelSpace):
     # What the weight channel's source stores and what it carries, the products its
     # holder reads; its network (``Fact(member, "carried_weights")``) and the cores read
     # the values.
-    w_stored = view(stored_weights, when=stored)
+    w_stored = view(stored_weights)
     w_carried = view(carried_weights)
 
     @constraint

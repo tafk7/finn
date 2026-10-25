@@ -89,6 +89,7 @@ from typing import ClassVar, cast
 from finn.core.reporting.findings import Finding
 from finn.core.space import (
     Decision,
+    Inapplicable,
     Param,
     Rejected,
     Select,
@@ -148,7 +149,7 @@ from finn.kernels.transport import (
     marker_bit,
     marker_pairs,
 )
-from finn.kernels.utilization import memory_preference, memory_styles, uram_constraint
+from finn.kernels.utilization import memory_preference, memory_styles, uram_available
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import Platform
 
@@ -482,9 +483,11 @@ class Channel(KernelSpace):
             for side in (self.producer, self.consumer)
         )
 
-    @derived(when=offered)
-    def offers(self) -> tuple[MoverOffer, ...]:
+    @derived
+    def offers(self) -> tuple[MoverOffer, ...] | Inapplicable:
         """The movers a shell offers on its boundary side."""
+        if not self.offered:
+            return Inapplicable()
         return next(
             side.offers
             for side in (self.producer, self.consumer)
@@ -529,9 +532,11 @@ class Channel(KernelSpace):
         platform=platform,
     )
 
-    @derived(when=valued)
-    def source_label(self) -> str:
+    @derived
+    def source_label(self) -> str | Inapplicable:
         """Its source's label (``SOURCE_LABEL``): its producer's owner."""
+        if not self.valued:
+            return Inapplicable()
         return SOURCE_LABEL
 
     # With several sets, its source's set port, a port of the channel labelled below the
@@ -729,9 +734,14 @@ class Channel(KernelSpace):
     # The one memory style of its input adapter's generators, present where it places a
     # chain; given to every chain, which gives it to each of its input generators.
     adapter_ram_style: str = Decision(domain=memory_styles(), when=adapter_placed)
-    adapter_uram_present = uram_constraint(
-        platform, adapter_ram_style, ("ultra",), when=adapter_placed
-    )
+
+    @constraint
+    def adapter_uram_present(self) -> bool | Rejected:
+        """Where the adapter's memory style is UltraRAM, the platform has it
+        (``uram_available``). The style is read first: absent where no adapter is placed, so
+        the rule does not apply there, whatever the platform answers; refused with it."""
+        style = self.adapter_ram_style
+        return uram_available(style, self.platform, ("ultra",))
 
     adapter: InputAdapter | None = Select(
         by=input_chain,
@@ -744,11 +754,13 @@ class Channel(KernelSpace):
     )
     adapter_stages = view(adapter.stages)  # type: ignore[union-attr]
 
-    @view(when=adapter_placed)
-    def adapter_ram_preference(self) -> tuple[str, ...]:
+    @view
+    def adapter_ram_preference(self) -> tuple[str, ...] | Inapplicable:
         """Its adapter's memory styles in its preference for the most bits one of its
         input generators holds a frame (the picked chain's ``frame_bits``,
         ``memory_preference``): the ranking a first valid policy may follow."""
+        if not self.adapter_placed:
+            return Inapplicable()
         adapter = self.adapter
         bits: int = 0 if adapter is None else adapter.frame_bits
         return memory_preference(bits)

@@ -348,9 +348,9 @@ def test_the_delivery_kernel_serves_a_second_consumer_through_the_same_contract(
 def test_steps_that_refuse_refuse_the_input_adapter_once():
     # The same lane regroup on a channel that admits adapters: its steps refuse
     # (channel-steps), so the picker of its input adapter refuses with them, one piece keyed
-    # by the selector, as the guard of the chosen selector it replaces did; and its
-    # adapter's memory and that memory's UltraRAM rule, which the picker guards, one
-    # guard piece each.
+    # by the selector, as the guard of the chosen selector it replaces did; its adapter's
+    # memory, which the picker guards, one guard piece; and that memory's UltraRAM rule,
+    # reading the memory first, refused through that read with no guard piece of its own.
     strided = constant_network(
         Traversal.over((CHANNELS,), ((0, 2, 1),), ((0, 2, 2),)), adaptable=True
     )
@@ -365,13 +365,9 @@ def test_steps_that_refuse_refuse_the_input_adapter_once():
         "compatible": {steps},
         **{
             guarded: {steps, ("guard-refused", guarded)}
-            for guarded in (
-                "adapter",
-                "output_adapter",
-                "adapter_ram_style",
-                "adapter_uram_present",
-            )
+            for guarded in ("adapter", "output_adapter", "adapter_ram_style")
         },
+        "adapter_uram_present": {steps},
     }
 
 
