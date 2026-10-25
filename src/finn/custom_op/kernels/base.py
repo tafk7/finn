@@ -50,8 +50,8 @@ the node stores or refuses it as absent, and ``set_nodeattr`` of one is refused.
 - *Writes*, all through ``persist`` (``network.persist``, which writes past the guard) and,
   for conversion, ``network.persist_kernel``: conversion writes the node's kernel as its
   policies leave it (``defaulted``), only the node's choices. The cut persists the body's
-  choices, the channels' by the channel's policies (``shell.make_cut_choices``). Every
-  strategy persists the network it returns (``explore_kernel_choices``). A user fixes a
+  choices, the channels' by the channel's policies (``shell.make_cut_choices``). A list of
+  strategies persists the network it returns, once (``explore_kernel_choices``). A user fixes a
   choice by adding a hold to ``step_explore``'s strategies: no one writes an attribute.
 - *Reads*: ``choices`` (the attributes the node holds), ``stored`` (as the kernel's
   Decisions take them), ``point`` (the kernel with them committed), ``verify_node`` and

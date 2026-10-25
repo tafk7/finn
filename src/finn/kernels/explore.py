@@ -26,8 +26,9 @@ choice it cleared or brought into play by the channel's policy (``finn.core.sear
 A kernel's stored choice standing in the way (the neighbour's, or the changed kernel's own)
 refuses the change, naming it. The verdict reads every member's validity and, in a shell,
 the shell member's (its budgets). ``held`` holds the keys no strategy changes, with their
-values: those a ``Hold`` strategy fixes, and those the build seeds from its partition's body
-(``HELD``, ``finn.transformation.kernels.choose``).
+values: those a ``Hold`` strategy fixes, for the rest of its list. Nothing is seeded from the
+body: the holds come from the strategies, and a verification takes the keys the search held
+from its record (``OUTPUT_SEARCH``, ``finn.core.graph.partition.search_record``).
 
 The strategies, each an objective and its constraints searched through the seam (``Hold``
 and ``Ranked`` are the seam's own, ``finn.core.search``):
