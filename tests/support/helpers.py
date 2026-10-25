@@ -65,7 +65,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, Loop, Traversal, vector_major
 from finn.kernels.artifacts.abi import Pin
 from finn.kernels.artifacts.module import Composed, Held, Leaf, ProducerIdentity
-from finn.kernels.base import KernelSpace, Timed
+from finn.kernels.base import KernelSpace, Timed, UntimedKernel
 from finn.kernels.channels import Channel
 from finn.kernels.composer import (
     ChannelDeclaration,
@@ -605,18 +605,18 @@ class OtherPins(KernelDeclaration):
 
     module_order = ModuleOrder.ENCLOSING
 
-    def lower(self, owner: type[KernelSpace], name: str) -> Mapping[str, object]:
+    def lower(self, owner: type[UntimedKernel], name: str) -> Mapping[str, object]:
         self.references()
         return {}
 
     def reads(self, name: str, product: Product) -> tuple[str, ...]:
         return {"pins": self.paths("signals"), "held": self.paths("holding")}.get(product, ())
 
-    def pins(self, kernel: KernelSpace, name: str) -> tuple[Pin, ...]:
+    def pins(self, kernel: UntimedKernel, name: str) -> tuple[Pin, ...]:
         found: tuple[Pin, ...] = self.value(kernel, "signals")
         return found
 
-    def held(self, kernel: KernelSpace, name: str) -> Held:
+    def held(self, kernel: UntimedKernel, name: str) -> Held:
         found: Held = self.value(kernel, "holding")
         return found
 

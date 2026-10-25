@@ -98,7 +98,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd
 from finn.kernels.artifacts.abi import Clocking, Direction, Endpoint, Pin
 from finn.kernels.artifacts.module import Held
-from finn.kernels.base import KernelSpace, PortContract
+from finn.kernels.base import PortContract, UntimedKernel
 from finn.kernels.declaration import (
     KernelDeclaration,
     Product,
@@ -224,7 +224,7 @@ class AxiStreamPort(KernelDeclaration):
             return found
         return placement
 
-    def lower(self, owner: type[KernelSpace], name: str) -> Mapping[str, object]:
+    def lower(self, owner: type[UntimedKernel], name: str) -> Mapping[str, object]:
         port = self
         members: dict[str, object] = {}
         placement = self.placement()
@@ -324,7 +324,7 @@ class AxiStreamPort(KernelDeclaration):
 
         @declared_reads(f"{name}_stream", *self.paths(*AxiStreamPort.PACED))
         def contract_(self: Space) -> PortContract | Rejected:
-            kernel = cast("type[KernelSpace]", type(self))
+            kernel = cast("type[UntimedKernel]", type(self))
             found = contract(
                 port.read(self, *AxiStreamPort.PACED),
                 getattr(self, f"{name}_stream"),
@@ -409,7 +409,7 @@ class AxiStreamPort(KernelDeclaration):
         guards = (f"{name}_binds",) if binding is None else placed
         return (*guards, f"{name}_access")
 
-    def viewed(self, kernel: KernelSpace, name: str) -> tuple[AxiStreamPort, Presenting]:
+    def viewed(self, kernel: UntimedKernel, name: str) -> tuple[AxiStreamPort, Presenting]:
         """What its views read on ``kernel``, declared as ``name``: its arguments, and its
         stream while placed, else its element alone (``<name>_element``)."""
         if self.placed(kernel, name):
@@ -418,20 +418,20 @@ class AxiStreamPort(KernelDeclaration):
         element: ScalarEncoding = getattr(kernel, f"{name}_element")
         return self.read(kernel, *AxiStreamPort.VIEWED, *AxiStreamPort.IDLE), element
 
-    def pins(self, kernel: KernelSpace, name: str) -> tuple[Pin, ...] | Rejected:
+    def pins(self, kernel: UntimedKernel, name: str) -> tuple[Pin, ...] | Rejected:
         port, presenting = self.viewed(kernel, name)
         return pins(port, presenting, type(kernel).clock_domain)
 
-    def held(self, kernel: KernelSpace, name: str) -> Held | Rejected:
+    def held(self, kernel: UntimedKernel, name: str) -> Held | Rejected:
         if self.placed(kernel, name):
             return Held()
         port, presenting = self.viewed(kernel, name)
         return held(port, presenting, type(kernel).clock_domain)
 
-    def presents(self, kernel: KernelSpace, name: str) -> bool:
+    def presents(self, kernel: UntimedKernel, name: str) -> bool:
         return True  # a port's pins: placed, or held while idle
 
-    def access(self, kernel: KernelSpace, name: str) -> Access | None:
+    def access(self, kernel: UntimedKernel, name: str) -> Access | None:
         binding = self.binding()
         if binding is None:
             binding = getattr(kernel, f"{name}_binds")
@@ -442,7 +442,7 @@ class AxiStreamPort(KernelDeclaration):
         found: Access = getattr(kernel, f"{name}_access")
         return found
 
-    def beats(self, kernel: KernelSpace, name: str) -> int | None:
+    def beats(self, kernel: UntimedKernel, name: str) -> int | None:
         if not self.placed(kernel, name):
             return None
         return beats(getattr(kernel, f"{name}_stream"))
@@ -664,7 +664,7 @@ class Served(KernelDeclaration):
     port: str
     labelled: str | None = None
 
-    def lower(self, owner: type[KernelSpace], name: str) -> Mapping[str, object]:
+    def lower(self, owner: type[UntimedKernel], name: str) -> Mapping[str, object]:
         child = next(
             (
                 attribute
@@ -773,9 +773,9 @@ def port_endpoint(space_type: type[Space], port: str) -> Endpoint | None:
     port's, its child's (every case's, where they agree). None where the class states no
     stream port of that name, or where its endpoint is not known when the class is made (an
     endpoint read from a member, or cases that disagree)."""
-    if not (isinstance(space_type, type) and issubclass(space_type, KernelSpace)):
+    if not (isinstance(space_type, type) and issubclass(space_type, UntimedKernel)):
         return None
-    declared = declarations(space_type, KernelSpace).get(port)
+    declared = declarations(space_type, UntimedKernel).get(port)
     if isinstance(declared, AxiStreamPort):
         return None if is_member(declared.endpoint) else declared.endpoint
     if isinstance(declared, Served):

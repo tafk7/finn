@@ -8,7 +8,7 @@ body, not a Space: a stream port (``finn.kernels.port``), a port a kernel presen
 of its members (``finn.kernels.port.served``), the library module it binds
 (``finn.kernels.library.LibraryModule``), or its control bus
 (``finn.kernels.control.ControlBus``). When the class is made, the kernel base
-(``finn.kernels.base.KernelSpace``) lowers each into ordinary members of the kernel, named
+(``finn.kernels.base.UntimedKernel``) lowers each into ordinary members of the kernel, named
 ``<name>_<what>``: derived values, constraints and views (``KernelDeclaration.lower``),
 each reading the kernel's members by the names its declaration gives, never dynamically.
 
@@ -42,7 +42,7 @@ from finn.kernels.artifacts.abi import Pin
 from finn.kernels.artifacts.module import Held
 
 if TYPE_CHECKING:
-    from finn.kernels.base import KernelSpace
+    from finn.kernels.base import UntimedKernel
 
 
 Product = Literal["module", "pins", "held", "access", "beats"]
@@ -155,7 +155,7 @@ class KernelDeclaration:
 
     # -- what it lowers to, and what a kernel's products read of it -------------------------
 
-    def lower(self, owner: type[KernelSpace], name: str) -> Mapping[str, object]:
+    def lower(self, owner: type[UntimedKernel], name: str) -> Mapping[str, object]:
         """The members it adds to ``owner``, where it is declared as ``name``, by name."""
         raise NotImplementedError
 
@@ -163,31 +163,33 @@ class KernelDeclaration:
         """The member paths ``product`` reads of it, declared as ``name``."""
         return ()
 
-    def pins(self, kernel: KernelSpace, name: str) -> tuple[Pin, ...] | Rejected:
+    def pins(self, kernel: UntimedKernel, name: str) -> tuple[Pin, ...] | Rejected:
         """Its pins of the module, in order."""
         return ()
 
-    def held(self, kernel: KernelSpace, name: str) -> Held | Rejected:
+    def held(self, kernel: UntimedKernel, name: str) -> Held | Rejected:
         """The pins of the module it holds."""
         return Held()
 
-    def presents(self, kernel: KernelSpace, name: str) -> bool:
+    def presents(self, kernel: UntimedKernel, name: str) -> bool:
         """Whether its pins are presented (a port's, a presented control bus's), read with
         what it holds (``held``): an input of the module that is neither presented nor held
         refuses the module (``kernel-pins``)."""
         return False
 
-    def access(self, kernel: KernelSpace, name: str) -> Access | None:
+    def access(self, kernel: UntimedKernel, name: str) -> Access | None:
         """Its read of a tensor, from which the kernel binds its indices' extents; None for
         none."""
         return None
 
-    def beats(self, kernel: KernelSpace, name: str) -> int | None:
+    def beats(self, kernel: UntimedKernel, name: str) -> int | None:
         """The beats it carries a frame; None for none."""
         return None
 
 
-def declarations(cls: type[KernelSpace], below: type[KernelSpace]) -> dict[str, KernelDeclaration]:
+def declarations(
+    cls: type[UntimedKernel], below: type[UntimedKernel]
+) -> dict[str, KernelDeclaration]:
     """The declarations of ``cls`` and its bases down to, not including, ``below``, by name,
     in the order they are declared (a base's first)."""
     found: dict[str, KernelDeclaration] = {}

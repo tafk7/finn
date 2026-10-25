@@ -56,7 +56,7 @@ from finn.kernels.artifacts.module import Abi, BuildError, Held, Leaf
 from finn.kernels.declaration import KernelDeclaration, ModuleOrder, Product, is_member
 
 if TYPE_CHECKING:
-    from finn.kernels.base import Kernel, KernelSpace
+    from finn.kernels.base import Kernel, UntimedKernel
 
 _T = TypeVar("_T")
 
@@ -131,7 +131,7 @@ class LibraryModule(KernelDeclaration):
             f"{self.rtl_module} ({wanted})"
         )
 
-    def lower(self, owner: type[KernelSpace], name: str) -> Mapping[str, object]:
+    def lower(self, owner: type[UntimedKernel], name: str) -> Mapping[str, object]:
         label = f"{owner.__qualname__}.{name}"
         self.references()  # each member it names, named
         if not is_member(self.sources):
@@ -147,7 +147,7 @@ class LibraryModule(KernelDeclaration):
             return ()
         return (*self.paths("parameters", "sources", "data"), "clocking")
 
-    def build(self, kernel: KernelSpace, name: str) -> Leaf | Rejected:
+    def build(self, kernel: UntimedKernel, name: str) -> Leaf | Rejected:
         """The module on ``kernel``, where it is declared as ``name``: its parameters, its
         clocking and each declaration's pins, its sources and data, and what it holds."""
         space_type = type(kernel)

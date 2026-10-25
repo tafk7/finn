@@ -18,6 +18,8 @@ or a constant, of whatever type.
 
 from __future__ import annotations
 
+import importlib
+import pkgutil
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -26,6 +28,7 @@ from qonnx.core.datatype import DataType
 from support.helpers import FULL_DSP48E2, OtherPins, codes, fifo_node
 from support.refusals import refused
 
+import finn.kernels
 from finn.core.space import (
     Available,
     DefinitionError,
@@ -46,7 +49,7 @@ from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Direction, Endpoint, Signal
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource
 from finn.kernels.artifacts.module import Fragment, Held
-from finn.kernels.base import NATIVE_CLOCKING, KernelSpace
+from finn.kernels.base import NATIVE_CLOCKING, KernelSpace, Timed, UntimedKernel
 from finn.kernels.channels import ChannelFifo
 from finn.kernels.declaration import KernelDeclaration, is_member
 from finn.kernels.fifo import FifoKernel, fifo_resources
@@ -161,6 +164,53 @@ def test_a_kernel_with_neither_a_module_nor_a_member_is_refused_its_answers() ->
     assert isinstance(found, Rejected)
     assert found.findings[0].message == "no member of Empty states cycles"
     assert point.buffering == 0 and point.resources == Resources()
+
+
+class Untimed(UntimedKernel):
+    """A kernel that counts no cycles of its own, placing one stage."""
+
+    id = "test.kernel_space.untimed"
+    stage = Stage(input_tensor=TENSOR, arriving=ARRIVING)
+
+
+class Beside(KernelSpace):
+    """A stage, and beside it a kernel that counts no cycles."""
+
+    id = "test.kernel_space.beside"
+    first = Stage(input_tensor=TENSOR, arriving=ARRIVING)
+    held = Untimed()
+
+
+def test_a_kernel_counting_no_cycles_is_a_kernel_but_for_its_cycles() -> None:
+    """It derives the untimed base alone: no ``Timed``, no ``cycles``, so its parent's
+    cycles are its other members'; its netlist, buffering and resources count as any
+    kernel's."""
+    assert not issubclass(Untimed, Timed)
+    for member in ("cycles", "member_cycles"):
+        assert not hasattr(Untimed, member)
+    assert design_space(Untimed()).buffering == 5
+    point = design_space(Beside())
+    assert point.cycles == 4
+    assert point.buffering == 10
+    assert point.resources == Resources(lut=6)
+
+
+def test_a_channel_s_fifo_is_the_one_kernel_of_the_library_counting_no_cycles() -> None:
+    """A channel's FIFO presents what arrives, whose beats are counted where they are made:
+    it derives ``UntimedKernel`` alone; every other kernel class derives ``KernelSpace``."""
+    for module in pkgutil.iter_modules(finn.kernels.__path__):
+        importlib.import_module(f"finn.kernels.{module.name}")
+    found: list[type[UntimedKernel]] = []
+    pending: list[type[UntimedKernel]] = [UntimedKernel]
+    while pending:
+        for each in pending.pop().__subclasses__():
+            pending.append(each)
+            if each.__module__.startswith("finn.kernels.") and not issubclass(each, KernelSpace):
+                found.append(each)
+    assert found == [ChannelFifo]
+    assert not issubclass(ChannelFifo, Timed)
+    for member in ("cycles", "counts_cycles", "member_cycles"):
+        assert not hasattr(ChannelFifo, member)
 
 
 # -- the library module's sources -------------------------------------------------------------

@@ -1,14 +1,15 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""The ``Kernel`` Protocol: a design point of every kernel satisfies it, its four answers
-read out as their values, and a class missing one answer does not."""
+"""The ``Kernel`` Protocol: a design point of every ``KernelSpace`` satisfies it, its four
+answers read out as their values, and a class missing one answer does not: a channel's FIFO,
+which states no cycles, among them."""
 
 from typing import assert_type
 
 from finn.core.space import Space, view
 from finn.kernels.artifacts.module import Fragment
 from finn.kernels.base import Kernel
-from finn.kernels.channels import Channel
+from finn.kernels.channels import Channel, ChannelFifo
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.matmul import MatMulKernel
 from finn.platform.capabilities import Resources
@@ -49,3 +50,8 @@ class Unbuffered(Space):
 
 def refuse(point: Unbuffered) -> None:
     answers(point)  # type: ignore[arg-type]
+
+
+def untimed(fifo: ChannelFifo) -> None:
+    # A kernel that counts no cycles of its own (an ``UntimedKernel`` alone) is no Kernel.
+    answers(fifo)  # type: ignore[arg-type]

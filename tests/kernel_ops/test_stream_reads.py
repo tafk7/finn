@@ -54,7 +54,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.base import KernelSpace
+from finn.kernels.base import KernelSpace, UntimedKernel
 from finn.kernels.channels import Channel
 from finn.kernels.declaration import declarations
 from finn.kernels.library import LibraryModule
@@ -67,9 +67,9 @@ LOWERED = ("element", "stream", "access")
 
 def lowered(space_type: type[Space]) -> Iterator[str]:
     """The members ``space_type``'s ports lower to that the condition reads, by name."""
-    if not issubclass(space_type, KernelSpace):
+    if not issubclass(space_type, UntimedKernel):
         return
-    for name, declaration in declarations(space_type, KernelSpace).items():
+    for name, declaration in declarations(space_type, UntimedKernel).items():
         if isinstance(declaration, AxiStreamPort):
             yield from (f"{name}_{what}" for what in LOWERED)
         elif isinstance(declaration, Served):
@@ -81,7 +81,7 @@ def kernels(scopes: Scopes) -> list[str]:
     return sorted(
         name
         for name, scope in scopes.root.named_children.items()
-        if issubclass(scope.space_type, KernelSpace) and not issubclass(scope.space_type, Channel)
+        if issubclass(scope.space_type, UntimedKernel) and not issubclass(scope.space_type, Channel)
     )
 
 

@@ -8,7 +8,7 @@ naming the port its bus is presented at, given where it is placed (``control: st
 Param(default=None)``), and states, as its member ``bus_control``, the bus it presents
 there with that port and the writes that put its configuration into the bus's registers
 (``RegisterMap``): a ``Control``. A kernel's netlist view (its ``Members(bus_control)``,
-``finn.kernels.base.KernelSpace``) and a partition (``finn.kernels.partition``) each collect
+``finn.kernels.base.UntimedKernel``) and a partition (``finn.kernels.partition``) each collect
 their members' controls (``presented``: each a ``BusExport`` from its member's node) and
 present each in their netlist (``finn.kernels.base.merged``), prefixing its port with the
 member's node
@@ -58,7 +58,7 @@ from finn.kernels.artifacts.module import BusExport, Held, RegisterMap
 from finn.kernels.declaration import KernelDeclaration, ModuleOrder, Product, declared_reads
 
 if TYPE_CHECKING:
-    from finn.kernels.base import KernelSpace
+    from finn.kernels.base import UntimedKernel
 
 
 @dataclass(frozen=True)
@@ -119,7 +119,7 @@ class ControlBus(KernelDeclaration):
     KIND: ClassVar[str] = "control-bus"
     module_order: ClassVar[ModuleOrder] = ModuleOrder.ENCLOSING
 
-    def lower(self, owner: type[KernelSpace], name: str) -> Mapping[str, object]:
+    def lower(self, owner: type[UntimedKernel], name: str) -> Mapping[str, object]:
         label = f"{owner.__qualname__}.{name}"
         self.references()  # each member it names, named
         if name == "bus":
@@ -178,17 +178,17 @@ class ControlBus(KernelDeclaration):
             return (f"{name}_presented", *self.paths("bus"))
         return ()
 
-    def pins(self, kernel: KernelSpace, name: str) -> tuple[Pin, ...] | Rejected:
+    def pins(self, kernel: UntimedKernel, name: str) -> tuple[Pin, ...] | Rejected:
         bus: Bus = self.value(kernel, "bus")
         return (bus,)
 
-    def held(self, kernel: KernelSpace, name: str) -> Held | Rejected:
+    def held(self, kernel: UntimedKernel, name: str) -> Held | Rejected:
         if getattr(kernel, f"{name}_presented"):
             return Held()
         bus: Bus = self.value(kernel, "bus")
         return held_bus(bus)
 
-    def presents(self, kernel: KernelSpace, name: str) -> bool:
+    def presents(self, kernel: UntimedKernel, name: str) -> bool:
         return bool(getattr(kernel, f"{name}_presented"))
 
 

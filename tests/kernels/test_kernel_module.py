@@ -12,7 +12,7 @@ pins come before every port's, its hold after theirs. Every port runs on its ker
 (``clock_domain``). Its module is the ``Leaf`` at the empty label of its netlist
 (``library_module``). A kernel with children presents a child's port as its own
 (``served``: ``<name>_contract``, labelled below it), and its netlist merges its members'.
-Every kernel is a ``KernelSpace``.
+Every kernel is an ``UntimedKernel``, and every one but a channel's FIFO a ``KernelSpace``.
 """
 
 from __future__ import annotations
