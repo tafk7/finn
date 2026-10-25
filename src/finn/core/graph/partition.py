@@ -150,4 +150,5 @@ __all__ = [
     "kernel_partition_body",
     "kernel_partition_nodes",
     "partition_body",
+    "search_record",
 ]
