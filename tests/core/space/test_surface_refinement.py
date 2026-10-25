@@ -51,6 +51,12 @@ def test_concurrent_configures_share_one_preparation() -> None:
 
 
 def test_failed_preparation_does_not_poison_cache_and_subclasses_do_not_borrow_it() -> None:
+    """A failed preparation is not cached. The assertion on the class's ``__dict__`` is
+    what proves it: a class is closed when it is created and can no longer be repaired, so
+    a second compile of the same class cannot show that nothing was kept. A subclass
+    declaring what the class lacks compiles, and its own subclass compiles a model of its
+    own."""
+
     class Broken(Space):
         @derived
         def doubled(*, value: int) -> int:
