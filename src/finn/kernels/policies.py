@@ -60,6 +60,7 @@ from types import MappingProxyType
 from typing import ClassVar, Generic, Protocol, TypeAlias, TypeVar
 
 from finn.core.reporting.findings import Finding, FindingKind
+from finn.core.search import Values, unset
 from finn.core.space import (
     Available,
     BrokenRule,
@@ -322,9 +323,6 @@ def _fallback(key: str, view: object, answer: QueryResult[object]) -> Finding:
     )
 
 
-Values = tuple[inspection.Possible | inspection.Refused, ...]
-
-
 def ranked(
     point: Space,
     owner: Owner,
@@ -479,20 +477,6 @@ def _first_valid(
     return unset(key, name, why or "its domain lists no value", causes), fallback
 
 
-def unset(key: str, policy: str, message: str, causes: tuple[Finding, ...]) -> Finding:
-    """The finding for a choice no value can be set for (``choice-no-valid-value``), owned
-    by its key: the policy (``policy_name``), why each value it tried is refused, and those
-    refusals' findings as its causes."""
-    return Finding(
-        FindingKind.REJECTION,
-        "choice-no-valid-value",
-        key,
-        f"no value can be set ({policy}): {message}",
-        (("policy", policy),),
-        causes,
-    )
-
-
 def defaulted(point: S, placed: Placed, *, kept: Collection[str] = ()) -> Defaulted[S]:
     """``point``, a design space's root (a kernel bound to its facts, or a partition's design
     space), with the policies of each choice's owner applied once (the module docstring), in
@@ -580,5 +564,4 @@ __all__ = [
     "policy_name",
     "ranked",
     "stated",
-    "unset",
 ]

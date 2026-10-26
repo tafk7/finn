@@ -46,6 +46,8 @@ from support.top_pins import bus_counts_of_abi
 import finn.custom_op.kernels.shell as shell
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
+from finn.core.graph.partition import search_record
+from finn.core.search import Refused
 from finn.core.space import Available, inspection
 from finn.custom_op.kernels.network import network
 from finn.custom_op.kernels.shell import configured_network, in_shell, row_facts
@@ -67,7 +69,7 @@ from finn.kernels.artifacts.module import Abi, BusExport, Fragment, Leaf
 from finn.kernels.artifacts.top import module_abi
 from finn.kernels.budgets import SHELL, counts
 from finn.kernels.composer import Facts, Port, channel, member_name
-from finn.kernels.explore import Refused, Seam
+from finn.kernels.explore import Seam, SizeFifos
 from finn.kernels.partition import Partition
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
@@ -228,6 +230,26 @@ def test_a_partition_of_kernel_ops_counts_its_movers() -> None:
     # Each refusal carries the shell's findings alone, by code.
     for caught in (explored, packaged):
         assert [f.code for f in caught.error.findings] == ["interface-budget-exceeded"]
+
+
+def test_a_refused_list_writes_nothing() -> None:
+    """A list of strategies whose result the shell's budgets refuse (the Chain on a row taking
+    one AXI-Lite bus, its movers alone exceeding it) leaves the model as it was: the choices
+    its entries made are not saved and no search's record is written."""
+    model = kernel_model()
+    write_target(model, ULTRA96)
+    model = model.transform(MakeCutChoices())
+    explore_kernel_choices(model)
+    before = model.model.SerializeToString()
+    narrow = replace(PYNQ_ROW, control_budget=1)
+    with pytest.MonkeyPatch.context() as patched:
+        patched.setattr(shell, "shell_row", lambda *_: narrow)
+        with refused(
+            "interface-budget-exceeded", error=KernelOpError, owner="within_control_budget"
+        ):
+            explore_kernel_choices(model, [SizeFifos(margin=1)])
+    assert model.model.SerializeToString() == before
+    assert search_record(model)[0] == "current"  # the empty list's, written before
 
 
 def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:

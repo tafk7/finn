@@ -50,10 +50,9 @@ the node stores or refuses it as absent, and ``set_nodeattr`` of one is refused.
 - *Writes*, all through ``persist`` (``network.persist``, which writes past the guard) and,
   for conversion, ``network.persist_kernel``: conversion writes the node's kernel as its
   policies leave it (``defaulted``), only the node's choices. The cut persists the body's
-  choices, the channels' by the channel's policies (``shell.make_cut_choices``). Every
-  strategy persists the network it returns (``explore_kernel_choices``). A user sets a
-  choice by ``Hold`` in a step after the cut, which the strategies apply: no one writes an
-  attribute.
+  choices, the channels' by the channel's policies (``shell.make_cut_choices``). A list of
+  strategies persists the network it returns, once (``explore_kernel_choices``). A user fixes a
+  choice by adding a hold to ``step_explore``'s strategies: no one writes an attribute.
 - *Reads*: ``choices`` (the attributes the node holds), ``stored`` (as the kernel's
   Decisions take them), ``point`` (the kernel with them committed), ``verify_node`` and
   every bind of a network. They never write: a stored choice the facts refuse is
@@ -62,8 +61,8 @@ the node stores or refuses it as absent, and ``set_nodeattr`` of one is refused.
 - *The guard*: ``get_nodeattr`` and ``set_nodeattr`` of a KernelOp, the way qonnx's
   transformations reach an attribute. They guard the choice keys only: reading an absent
   choice is refused (``choice-absent``), setting one is refused (``choice-set-refused``),
-  each naming the node and the key, and the second the route, ``Hold``. Any other
-  attribute is qonnx's.
+  each naming the node and the key, and the second the route, a hold in ``step_explore``'s
+  strategies. Any other attribute is qonnx's.
 
 Its outputs are its kernel's statement, one rule for every op: the kernel bound on its
 inputs states each output's tensor (``output_tensors``), its shape and its element, a
@@ -470,8 +469,8 @@ class KernelOp(CustomOp):
         ports = {port for port in (*self.ports, *self.outputs) if port}
         if any(name.partition(".")[0] in ports for name in names):
             return (
-                f"; a channel's choices are its tensor's ({CHANNEL.name}): set them in a step "
-                "after the cut, with Hold"
+                f"; a channel's choices are its tensor's ({CHANNEL.name}): set them by "
+                "adding a hold to step_explore's strategies"
             )
         return ""
 
@@ -524,8 +523,8 @@ class KernelOp(CustomOp):
             raise KernelOpError.refused(
                 "choice-set-refused",
                 self.op_type,
-                f"{self.label}: {name} is a choice, set by the compiler; to fix one, set it "
-                "in a step after the cut, with Hold",
+                f"{self.label}: {name} is a choice, set by the compiler; to fix one, add a "
+                "hold to step_explore's strategies",
                 (name,),
                 node=self.label,
             )
@@ -554,10 +553,10 @@ class KernelOp(CustomOp):
     def _saved(self, choices: Mapping[str, object]) -> dict[str, int | str]:
         """What ``persist`` stores on this node, its whole: ``choices`` (by attribute),
         the committed Decisions of the node's kernel in the network it persists. ``persist``
-        alone calls it (a route to a choice is ``Hold`` in a step after the cut, ``persist``
-        for the compiler, ``support.configure.configured`` for a test). Each key is checked
-        to be one of the schema's and each value for its attribute's type and encoding, so a
-        write cannot fail halfway; no replay, the network has bound them. Writes nothing."""
+        alone calls it (a route to a choice is a hold in ``step_explore``'s strategies,
+        ``persist`` for the compiler, ``support.configure.configured`` for a test). Each key is
+        checked to be one of the schema's and each value for its attribute's type and encoding,
+        so a write cannot fail halfway; no replay, the network has bound them. Writes nothing."""
         schema = self.schema()
         unknown = sorted(set(choices) - set(schema))
         if unknown:

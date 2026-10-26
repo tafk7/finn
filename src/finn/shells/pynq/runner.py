@@ -531,11 +531,11 @@ class BuildPynqBitfile(Transformation):
     the template's impl_1 hierarchical utilization (report/placed_utilization.xml), each
     IP's out-of-context synthesis utilization (report/out_of_context/), and the
     delivered clock beside the one asked, with the partition network's bottleneck, movers
-    included, and the throughput asked (``objective_fps``, step_target_throughput's)
-    (report/delivered_clock.json), with its limitations (``delivered_clock_findings``,
-    the report's ``findings``). The shell, board, part and clock are the target the
-    partition's body states (``pynq_row``); the movers' scratch models are kept in
-    ``movers/`` beside the body's file.
+    included, and the throughput asked (``objective_fps``, a target_throughput entry of
+    step_explore's) (report/delivered_clock.json), with its limitations
+    (``delivered_clock_findings``, the report's ``findings``). The shell, board, part and
+    clock are the target the partition's body states (``pynq_row``); the movers' scratch
+    models are kept in ``movers/`` beside the body's file.
 
     The parent graph states the bitfile and its hardware handoff (``finn.outputs``; the
     reports beside them: ``bitfile_directory``), the digest of the partition's design

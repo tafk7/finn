@@ -53,8 +53,12 @@ from finn.builder.build_dataflow_testbench import (
     run_testbench,
     write_testbench,
 )
-from finn.core.graph.annotations.choices import HELD
-from finn.core.graph.annotations.outputs import OUTPUT_IP, OUTPUT_IP_KEY, OUTPUT_VERIFIED
+from finn.core.graph.annotations.outputs import (
+    OUTPUT_IP,
+    OUTPUT_IP_KEY,
+    OUTPUT_SEARCH,
+    OUTPUT_VERIFIED,
+)
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import design_digest, partition_body
@@ -362,12 +366,19 @@ def test_a_fifo_too_small_for_its_stream_is_refused_at_verification(
         "levels.transport.fifo.depth",
     )
     assert str(refused.value).startswith(
-        f"{node.name}: FIFOs too small for their streams, refused at verification (run "
-        "step_size_fifos): levels: levels.transport.fifo.depth: fifo-stale: depth 8 "
+        f"{node.name}: FIFOs too small for their streams, refused at verification (add "
+        "size_fifos to step_explore's strategies): levels: levels.transport.fifo.depth: fifo-stale: depth 8 "
         "(8 words) no longer keeps its producer"
     )
     assert body.get(OUTPUT_VERIFIED) is None
-    body.set(HELD, {"levels": ["transport.fifo.depth"]})
+    body.set(
+        OUTPUT_SEARCH,
+        {
+            "design": design_digest(body),
+            "held": {"levels": ["transport.fifo.depth"]},
+            "objective_fps": None,
+        },
+    )
     _, check = verify_partition(body, node.name)
     assert [(f.kind, f.code) for f in check.findings] == [
         (FindingKind.LIMITATION, "fifo-held-stale")
@@ -591,12 +602,11 @@ def test_tfc_on_the_ip_shell_packages_and_its_testbench_passes_on_its_own(
     cfg = DataflowBuildConfig(
         output_dir=str(output),
         target=TargetRequest(board="Ultra96", period_ns=5.0),
-        settings={"target_fps": 1e6},
+        settings={"strategies": [{"target_throughput": {"fps": 1e6}}, "size_fifos"]},
         steps=[
             "phase_prepare_model",
             "phase_convert_to_hardware",
             "phase_create_accelerator",
-            "step_target_throughput",
             "phase_optimize_hardware",
             "phase_emit_hardware",
             "step_resources_report",

@@ -11,6 +11,7 @@ import ast
 import enum
 import functools
 import json
+from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,17 @@ from finn.builder.build_dataflow_config import (
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
 from finn.builder.build_dataflow_plan import Plan, Step, resolve_plan
 from finn.builder.build_dataflow_steps import default_steps, step_cleanup
+from finn.builder.build_dataflow_strategies import (
+    HoldEntry,
+    MaxThroughputEntry,
+    MaxThroughputOptions,
+    Named,
+    SizeFifosEntry,
+    SizeFifosOptions,
+    StrategyEntry,
+    TargetThroughputEntry,
+    TargetThroughputOptions,
+)
 from finn.core.reporting.findings import FindingKind
 from finn.platform.request import TargetRequest
 
@@ -159,14 +171,14 @@ def test_an_entry_is_a_named_list_a_step_an_import_path_or_in_python_a_function(
     """Each entry's name is its step function's; a phase stands for its steps."""
     entries: list[StepEntry] = [
         "phase_create_accelerator",
-        "step_size_fifos",
+        "step_explore",
         f"{__name__}.step_scaled",
         step_unique_names,
     ]
     plan = build_plan(config(steps=entries))
     assert names(plan) == [
         "step_create_dataflow_partition",
-        "step_size_fifos",
+        "step_explore",
         "step_scaled",
         "step_unique_names",
     ]
@@ -235,7 +247,7 @@ DEFAULT = [
     "step_convert_to_channels_last",
     "step_convert_to_hw",
     "step_create_dataflow_partition",
-    "step_size_fifos",
+    "step_explore",
     "step_verify_partition",
     "step_resources_report",
 ]
@@ -253,7 +265,7 @@ def test_a_list_made_from_the_default_one_is_the_list() -> None:
     replaced or removed where the caller puts it."""
     steps: list[StepEntry] = list(default_steps())
     steps.insert(steps.index("step_streamline") + 1, f"{__name__}.step_unique_names")
-    steps[steps.index("step_size_fifos")] = step_scaled
+    steps[steps.index("step_explore")] = step_scaled
     steps.remove("step_verify_partition")
     assert names(build_plan(config(steps=steps))) == [
         *DEFAULT[:5],
@@ -275,12 +287,12 @@ def test_a_phase_names_its_steps_in_the_list_and_at_start_and_stop() -> None:
     plan = build_plan(cfg)
     assert [step.name for step in plan.steps] == [
         "step_scaled",
-        "step_size_fifos",
+        "step_explore",
         "step_verify_partition",
         "step_unique_names",
     ]
-    assert names(plan) == ["step_size_fifos", "step_verify_partition"]
-    inside = config(steps=["step_size_fifos", step_scaled, "step_verify_partition", "step_tidy_up"])
+    assert names(plan) == ["step_explore", "step_verify_partition"]
+    inside = config(steps=["step_explore", step_scaled, "step_verify_partition", "step_tidy_up"])
     stopped = replace(inside, start_step="step_scaled", stop_step="phase_optimize_hardware")
     assert names(build_plan(stopped)) == ["step_scaled", "step_verify_partition"]
 
@@ -549,16 +561,16 @@ def test_the_plan_resolves_a_list_over_the_named_lists_and_steps_it_is_given() -
     assert "finn.builder.build_dataflow_steps" not in imported
 
 
-def test_a_target_throughput_without_its_target_is_refused_when_the_plan_resolves() -> None:
-    """step_target_throughput requires target_fps, its one reader."""
-    cut = ["phase_create_accelerator", "step_target_throughput"]
-    assert refused(config(steps=cut)) == (
-        "configuration.target_fps: setting-required: step_target_throughput require it, and "
-        "it is not given"
-    )
-    plan = build_plan(config(steps=cut, settings={"target_fps": 1000}))
-    assert plan.settings["target_fps"].value == 1000.0
-    assert plan.settings["target_fps"].readers == ("step_target_throughput",)
+def test_step_explore_declares_its_strategies_and_sizes_fifos_by_default() -> None:
+    """step_explore's one setting, ``strategies``, is optional (a list of one name: size_fifos);
+    given, it is decoded as the entries and read by it alone."""
+    cut = ["phase_create_accelerator", "step_explore"]
+    plan = build_plan(config(steps=cut))
+    assert plan.settings["strategies"].value == (Named.SIZE_FIFOS,)
+    assert plan.settings["strategies"].readers == ("step_explore",)
+    plan = build_plan(config(steps=cut, settings={"strategies": ["defaults", "size_fifos"]}))
+    assert plan.settings["strategies"].value == [Named.DEFAULTS, Named.SIZE_FIFOS]
+    assert plan.settings["strategies"].given
 
 
 def test_every_rejection_of_the_settings_and_the_run_is_raised_together() -> None:
@@ -578,3 +590,180 @@ def test_every_rejection_of_the_settings_and_the_run_is_raised_together() -> Non
         ("setting-invalid", "configuration.count"),
         ("start-without-model", "configuration.start_step"),
     ]
+
+
+# -- strategy entries ------------------------------------------------------------------------
+
+
+def step_listing(
+    model: ModelWrapper,
+    cfg: DataflowBuildConfig,
+    *,
+    strategies: Sequence[StrategyEntry] = (Named.SIZE_FIFOS,),
+) -> ModelWrapper:
+    """Declares a list of strategies, as step_explore does."""
+    RAN["step_listing"] = {"strategies": list(strategies)}
+    return model
+
+
+ENTRIES: list[Any] = [
+    {"hold": {"MatMul_0": {"simd": 8, "compute": "packed"}, "t": {"pumped": True}}},
+    {"target_throughput": {"fps": 1000000, "relax": False}},
+    {"target_throughput": {"fps": 2.5}},
+    {"max_throughput": {"within": {"lut": 0.5, "dsp": 1}}},
+    "size_fifos",
+    {"size_fifos": {"margin": 2, "ram_style": "block"}},
+    {"size_fifos": {}},
+    "defaults",
+    "debug_placeholder",
+]
+
+
+def test_entries_decode_a_name_or_a_one_key_object() -> None:
+    """A bare name decodes as a ``Named``, a one-key object as the one dataclass that
+    declares its key; each makes a new strategy that reports itself under the entry's name."""
+    plan = build_plan(config(steps=[step_listing], settings={"strategies": ENTRIES}))
+    setting = plan.settings["strategies"]
+    decoded = setting.value
+    assert decoded == [
+        HoldEntry({"MatMul_0": {"simd": 8, "compute": "packed"}, "t": {"pumped": True}}),
+        TargetThroughputEntry(TargetThroughputOptions(1000000.0, relax=False)),
+        TargetThroughputEntry(TargetThroughputOptions(2.5)),
+        MaxThroughputEntry(MaxThroughputOptions({"lut": 0.5, "dsp": 1.0})),
+        Named.SIZE_FIFOS,
+        SizeFifosEntry(SizeFifosOptions(margin=2, ram_style="block")),
+        SizeFifosEntry(SizeFifosOptions()),
+        Named.DEFAULTS,
+        Named.DEBUG_PLACEHOLDER,
+    ]
+    assert setting.given
+    made = [entry.strategy() for entry in decoded]
+    assert [each.strategy for each in made] == [
+        "hold",
+        "target_throughput",
+        "target_throughput",
+        "max_throughput",
+        "size_fifos",
+        "size_fifos",
+        "size_fifos",
+        "defaults",
+        "debug_placeholder",
+    ]
+    assert decoded[0].strategy() is not made[0], "a strategy keeps its run: a new one each call"
+
+
+def test_the_default_strategies_are_size_fifos_by_name() -> None:
+    setting = build_plan(config(steps=[step_listing])).settings["strategies"]
+    assert setting.value == (Named.SIZE_FIFOS,) and not setting.given
+
+
+SCALAR = "hold.MatMul_0.simd: a bool, an int or a str"
+ALL_ENTRIES = "Named | HoldEntry | TargetThroughputEntry | MaxThroughputEntry | SizeFifosEntry"
+
+
+@pytest.mark.parametrize(
+    "entry, place, message",
+    [
+        ("nonsense", "", f"{ALL_ENTRIES}, not 'nonsense'"),
+        ("hold", "", f"{ALL_ENTRIES}, not 'hold'"),
+        ({"nonsense": {}}, "", f"{ALL_ENTRIES}, not {{'nonsense': {{}}}}"),
+        ({"hold": {}, "size_fifos": {}}, "", f"{ALL_ENTRIES}, not "),
+        ({}, "", f"{ALL_ENTRIES}, not {{}}"),
+        (3, "", f"{ALL_ENTRIES}, not 3"),
+        (None, "", "null, and it is not optional"),
+        ({"hold": ["MatMul_0"]}, ".hold", "an object, not ['MatMul_0']"),
+        (
+            {"target_throughput": {"fps": 1, "speed": 2}},
+            ".target_throughput",
+            "keys TargetThroughputOptions does not declare: ['speed']",
+        ),
+        (
+            {"target_throughput": {}},
+            ".target_throughput",
+            "no fps, which TargetThroughputOptions requires",
+        ),
+        ({"size_fifos": {"margin": "2"}}, ".size_fifos.margin", "an int, not '2'"),
+        ({"target_throughput": {"fps": True}}, ".target_throughput.fps", "a float, not True"),
+    ],
+)
+def test_an_unknown_or_two_key_entry_is_refused_at_the_plan(
+    entry: Any, place: str, message: str
+) -> None:
+    """An entry no type declares, a name that takes an option bare, an object of two keys
+    or an option of the wrong type is refused when the plan resolves, naming its place:
+    before any step runs."""
+    line = refused(config(steps=[step_listing], settings={"strategies": [entry]}))
+    assert line.startswith(f"configuration.strategies[0]{place}: setting-invalid: ")
+    assert message in line
+
+
+@pytest.mark.parametrize(
+    "entry, code, why",
+    [
+        ({"target_throughput": {"fps": 0}}, "throughput-invalid", "a throughput of 0.0"),
+        ({"target_throughput": {"fps": -5}}, "throughput-invalid", "a throughput of -5.0"),
+        ({"max_throughput": {"within": {}}}, "budget-invalid", "needs a budget"),
+        ({"max_throughput": {"within": {"gates": 0.5}}}, "budget-invalid", "no resource is named"),
+        ({"max_throughput": {"within": {"lut": 0}}}, "budget-invalid", "a fraction of 0"),
+        ({"size_fifos": {"margin": -1}}, "sizing-invalid", "a margin of -1 words is none"),
+        (
+            {"hold": {"MatMul_0": {"simd": [8]}}},
+            None,
+            SCALAR,
+        ),
+        (
+            {"hold": {"MatMul_0": {"simd": 8.0}}},
+            None,
+            SCALAR,
+        ),
+        (
+            {"hold": {"MatMul_0": {"simd": None}}},
+            None,
+            SCALAR,
+        ),
+    ],
+)
+def test_a_bad_option_is_refused_at_the_plan(entry: Any, code: str | None, why: str) -> None:
+    """An option a strategy refuses (its own code) or a hold value no Decision takes is
+    refused when the plan resolves, as the setting invalid."""
+    line = refused(config(steps=[step_listing], settings={"strategies": [entry]}))
+    assert "configuration.strategies[0]" in line and "setting-invalid" in line
+    assert why in line
+    if code is not None:
+        assert code in line
+
+
+def test_the_manifest_records_the_entries_json(tmp_path: Path) -> None:
+    """The plan states a strategy list as JSON, each entry as its one form: a name stays
+    a name, an object keeps its one key and its options."""
+    model = tmp_path / "model.onnx"
+    onnx.save(identity_model().model, model)
+    cfg = config(
+        output_dir=str(tmp_path / "output"),
+        steps=[step_listing],
+        settings={"strategies": ENTRIES},
+        enable_build_pdb_debug=False,
+    )
+    assert build_dataflow_cfg(str(model), cfg) == 0
+    manifest = json.loads((tmp_path / "output" / MANIFEST_FILE).read_text())
+    setting = manifest["plan"]["settings"]["strategies"]
+    assert setting["given"] is True and setting["readers"] == ["step_listing"]
+    assert setting["value"] == [
+        {"hold": {"MatMul_0": {"simd": 8, "compute": "packed"}, "t": {"pumped": True}}},
+        {"target_throughput": {"fps": 1000000.0, "relax": False}},
+        {"target_throughput": {"fps": 2.5, "relax": True}},
+        {"max_throughput": {"within": {"lut": 0.5, "dsp": 1.0}}},
+        "size_fifos",
+        {"size_fifos": {"margin": 2, "ram_style": "block"}},
+        {"size_fifos": {"margin": 0, "ram_style": None}},
+        "defaults",
+        "debug_placeholder",
+    ]
+    # The default, never given, is recorded too, as a list of names.
+    again = config(
+        output_dir=str(tmp_path / "again"), steps=[step_listing], enable_build_pdb_debug=False
+    )
+    assert build_dataflow_cfg(str(model), again) == 0
+    manifest = json.loads((tmp_path / "again" / MANIFEST_FILE).read_text())
+    assert manifest["plan"]["settings"]["strategies"]["value"] == ["size_fifos"]
+    assert manifest["plan"]["settings"]["strategies"]["given"] is False

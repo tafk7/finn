@@ -32,7 +32,7 @@ from support.tfc import ULTRA96
 from finn.builder.build_dataflow_config import DataflowBuildConfig
 from finn.builder.build_dataflow_steps import (
     step_create_dataflow_partition,
-    step_size_fifos,
+    step_explore,
     step_verify_partition,
 )
 from finn.core.graph.annotations.boundary import (
@@ -69,10 +69,10 @@ def build(tmp_path: Path, boundary: dict[str, Any]) -> DataflowBuildConfig:
 
 def cut(tmp_path: Path, boundary: dict[str, Any], **options: Any) -> ModelWrapper:
     """The Chain's KernelOps cut as the build cuts them, ``boundary`` stated, its FIFOs
-    sized (``step_size_fifos``): the parent graph."""
+    sized (``step_explore``): the parent graph."""
     cfg = build(tmp_path, boundary)
     parent = step_create_dataflow_partition(kernel_model(**options), cfg)
-    return step_size_fifos(parent, cfg)
+    return step_explore(parent, cfg)
 
 
 def body_of(parent: ModelWrapper) -> InShell:
@@ -82,10 +82,10 @@ def body_of(parent: ModelWrapper) -> InShell:
 
 
 def sized(tmp_path: Path) -> dict[str, tuple[int, int | None, str]]:
-    """Each boundary channel's FIFO as step_size_fifos proposed it: its depth, its least
+    """Each boundary channel's FIFO as size_fifos proposed it: its depth, its least
     words and why."""
-    report = json.loads((tmp_path / "report" / "step_size_fifos.json").read_text())
-    channels = report["strategy"]["channels"]
+    report = json.loads((tmp_path / "report" / "step_explore.json").read_text())
+    channels = report["strategies"][0]["channels"]
     return {
         name: (channels[name]["depth"], channels[name]["least"], channels[name]["why"])
         for name in ("x", "y")
@@ -93,9 +93,9 @@ def sized(tmp_path: Path) -> dict[str, tuple[int, int | None, str]]:
 
 
 def period(tmp_path: Path) -> int:
-    """The bottleneck period step_size_fifos sized at."""
-    report = json.loads((tmp_path / "report" / "step_size_fifos.json").read_text())
-    return cast(int, report["strategy"]["period"])
+    """The bottleneck period size_fifos sized at."""
+    report = json.loads((tmp_path / "report" / "step_explore.json").read_text())
+    return cast(int, report["strategies"][0]["period"])
 
 
 def test_the_build_s_statements_are_stored_by_tensor_their_pace_as_given() -> None:
@@ -155,7 +155,7 @@ def test_the_cut_writes_the_statements_on_the_body_and_refuses_a_tensor_no_port_
 def test_an_ip_partition_is_sized_from_the_paces_its_build_states(tmp_path: Path) -> None:
     """The input stated a beat every other cycle: its supply is that beat at the six beats
     its edge presents, which direct absorbs. The output stated three beats at the end of
-    the frame: its acceptance is those beat times, and step_size_fifos places a FIFO of
+    the frame: its acceptance is those beat times, and size_fifos places a FIFO of
     the three words they keep waiting. Unstated, both are not modelled."""
     bound = body_of(cut(tmp_path, {"s_axis_0": X_STATED, "m_axis_0": Y_STATED}))
     x, y = bound.member("x"), bound.member("y")
@@ -183,7 +183,7 @@ def test_a_stated_pace_slower_than_the_members_bounds_the_partition_s_frame(
     """The Chain's members take 12 cycles a frame at most; a port stated a beat every third
     cycle spans 18 over its six beats, an input's supply or an output's acceptance. The
     partition runs no faster than its outside: the stated channel's cycles are 18, and
-    step_size_fifos sizes every channel at that period, the stated one from its pace
+    size_fifos sizes every channel at that period, the stated one from its pace
     (direct absorbs it); the build's FIFO check passes. Unstated, the period is 12."""
     stated = {port: {"pace": {"every": 3}}}
     parent = step_verify_partition(cut(tmp_path, stated), build(tmp_path, stated))

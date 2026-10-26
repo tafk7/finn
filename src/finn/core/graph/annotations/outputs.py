@@ -3,10 +3,10 @@
 
 """What a build made of a partition of KernelOps: the ``finn.outputs`` namespace.
 
-On the partition's body: the digest of the design its check verified, the packaged IP,
-its key and the options it was packaged with. On the parent graph: the bitfile, its
-hardware handoff, the digest of the design and the key of the IP it was built from, and
-its shell options. Two ties, two facts: a design digest
+On the partition's body: the digest of the design its check verified, the search's
+record, the packaged IP, its key and the options it was packaged with. On the parent
+graph: the bitfile, its hardware handoff, the digest of the design and the key of the IP it
+was built from, and its shell options. Two ties, two facts: a design digest
 (``finn.core.graph.partition.design_digest``) says which design an artifact or a check
 describes, an IP key (``finn.toolchain.ip.packaging_key``) which packaged IP it holds. A
 reader compares a recorded value with the current one, so an artifact is never cleared
@@ -43,6 +43,28 @@ def _options(value: object) -> bool:
     return isinstance(value, dict)
 
 
+def _keys_by_owner(value: object) -> bool:
+    return isinstance(value, dict) and all(
+        isinstance(keys, list) and all(isinstance(key, str) for key in keys)
+        for keys in value.values()
+    )
+
+
+def _search(value: object) -> bool:
+    if not isinstance(value, dict) or set(value) != {"design", "held", "objective_fps"}:
+        return False
+    objective = value["objective_fps"]
+    return (
+        _digest(value["design"])
+        and _keys_by_owner(value["held"])
+        and (
+            objective is None
+            or (isinstance(objective, int | float) and not isinstance(objective, bool))
+            and objective > 0
+        )
+    )
+
+
 OUTPUT_VERIFIED = OUTPUTS.key(
     "verified", str, check=_digest, expect="a design digest (sha256:<64 hex digits>)"
 )
@@ -50,6 +72,25 @@ OUTPUT_VERIFIED = OUTPUTS.key(
 when ``finn.custom_op.kernels.shell.verify_partition`` passed it). Emission refuses a body
 whose design is not that one (``refuse_unverified``). Not the IP key: what Vivado was
 given is one fact, that this design passed its check another."""
+OUTPUT_SEARCH = OUTPUTS.key(
+    "search",
+    JSON,
+    check=_search,
+    expect=(
+        "the search's record: {design: a design digest, held: {graph name: [key, ...]}, "
+        "objective_fps: frames a second or null}"
+    ),
+)
+"""What the search that made the body's choices left to later readers, written with them
+(``finn.transformation.kernels.explore_kernel_choices``): ``design``, the digest of the
+design the search persisted (``design_digest``), so a reader takes the record as its own
+only while the body is that design; ``held``, the keys the search held, by owner (``{graph
+name: [key, ...]}``, each owner's keys sorted; the values are the ones the nodes and tensors
+state), which a verification holds again; ``objective_fps``, the frames a second a target
+throughput explored the body to, or null where none did or an entry changed a kernel's
+choice after it, which a shell's build reports its delivered clock against. A record whose
+``design`` is not the body's is stale: it holds nothing and states no objective
+(``finn.core.graph.partition.search_record``)."""
 OUTPUT_IP = OUTPUTS.key("ip", str, check=_named, expect="a directory")
 """The packaged IP's directory (its ``component.xml``)."""
 OUTPUT_VLNV = OUTPUTS.key("vlnv", str, check=_named, expect="a VLNV")
@@ -102,6 +143,7 @@ __all__ = [
     "OUTPUT_IP",
     "OUTPUT_IP_KEY",
     "OUTPUT_IP_OPTIONS",
+    "OUTPUT_SEARCH",
     "OUTPUT_VERIFIED",
     "OUTPUT_VLNV",
 ]

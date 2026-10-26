@@ -58,7 +58,7 @@ from finn.kernels.artifacts.module import module_name
 from finn.kernels.base import KernelSpace
 from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
-from finn.kernels.explore import Explorer, SizeFifos, TargetThroughput
+from finn.kernels.explore import KernelExplorer, SizeFifos, TargetThroughput
 from finn.kernels.fifo_sizing import NotModelled, Pattern, sides
 from finn.kernels.movers import (
     DIVISIBLE,
@@ -431,14 +431,12 @@ def explored(
     tfc: ModelWrapper, fps: float, target: Target = ULTRA96, *, sizing: bool = False
 ) -> tuple[ModelWrapper, dict[str, Any]]:
     """TFC explored at ``fps`` for ``target`` (its shell's movers), by the target
-    throughput and, if ``sizing``, FIFO sizing after it, each an exploration of its own:
-    the last one's report, with each exploration's strategy entry in order
-    (``strategies``)."""
+    throughput and, if ``sizing``, FIFO sizing after it, on one seam: the report, with each
+    strategy's entry in order (``strategies``)."""
     model = ModelWrapper(tfc.model.__deepcopy__())
     write_target(model, target)
-    strategies: list[Explorer] = [TargetThroughput(fps), *([SizeFifos()] if sizing else [])]
-    reports = [explore_kernel_choices(model, strategy).report for strategy in strategies]
-    return model, {**reports[-1], "strategies": [each["strategy"] for each in reports]}
+    strategies: list[KernelExplorer] = [TargetThroughput(fps), *([SizeFifos()] if sizing else [])]
+    return model, dict(explore_kernel_choices(model, strategies).report)
 
 
 def pumping(name: str) -> dict[str, object]:
@@ -592,7 +590,7 @@ def test_tfc_on_the_default_ip_shell_is_tfc_in_the_zynq_shell_without_its_movers
     assert {name: in_shell[name] for name in moved} == moved
     assert cycles == {**in_shell, **{name: cycles[name] for name in moved}}
     assert ip["bottleneck"]["cycles"] == 196 and zynq["bottleneck"]["cycles"] == 200
-    assert ip["fifos"] == zynq["fifos"]
+    assert ip["strategies"][-1]["fifos"] == zynq["strategies"][-1]["fifos"]
     # The shell's resources: on ip its partition's alone; the Zynq shell adds its two
     # movers and its static region to the same partition.
     on_ip, on_zynq = ip["resources"], zynq["resources"]

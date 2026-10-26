@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""ExploreKernelChoices with a rank-style policy (``Ranked``): every open choice of a
+"""``explore_kernel_choices`` with a rank-style policy (``Ranked``): every open choice of a
 model's KernelOps, one possible value or several, committed by a policy that only ranks
 what the engine says is possible, persisted on their owners: a kernel's on its node, a
 channel's on its tensor.
@@ -16,38 +16,30 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from qonnx.core.modelwrapper import ModelWrapper
-from support.explore_models import choices, kernel_model
+from support.explore_models import choices, explored, kernel_model
 from support.helpers import FULL_DSP48E2, Lanes
 from support.refusals import refused
 
 from finn.core.graph.errors import KernelOpError
+from finn.core.search import Choice, ExploreError, Ranked, RankPolicy, dotted
 from finn.custom_op.kernels.network import network
 from finn.custom_op.kernels.shell import configured_network
-from finn.kernels.explore import (
-    Choice,
-    DebugPlaceholder,
-    ExploreError,
-    Ranked,
-    RankPolicy,
-    dotted,
-)
+from finn.kernels.explore import DebugPlaceholder
 from finn.platform.target import Target
-from finn.transformation.kernels import (
-    ExploreKernelChoices,
-)
+from finn.transformation.kernels import explore_kernel_choices
 
 URAM = Target(part="a part with UltraRAM it initializes", platform=FULL_DSP48E2, shell="ip")
 
 
-def ranked(policy: RankPolicy) -> ExploreKernelChoices:
-    return ExploreKernelChoices(Ranked(policy))
+def ranked(policy: RankPolicy) -> Ranked:
+    return Ranked(policy)
 
 
 def offer(key: str, cases: tuple[object, ...]) -> Choice:
     """An open choice with ``cases``, as the seam offers it (``key``: its owner and the
     key there, joined)."""
     owner, _, below = key.partition(".")
-    return Choice((owner, below), None, cases, False)
+    return Choice((owner, below), None, cases, False, {}, None)
 
 
 class Recording:
@@ -80,9 +72,9 @@ class Last:
 
 def test_the_test_policy_folds_to_its_lanes_or_the_largest_factor() -> None:
     policy = Lanes(4)
-    fold = Choice(("first", "pe"), None, (1, 2, 4, 8), True)
+    fold = Choice(("first", "pe"), None, (1, 2, 4, 8), True, {}, None)
     assert list(policy.rank(fold)) == [4, 8, 2, 1]
-    odd = Choice(("x", "simd"), None, (1, 3), True)
+    odd = Choice(("x", "simd"), None, (1, 3), True, {}, None)
     assert list(policy.rank(odd)) == [3, 1] and list(Lanes().rank(odd)) == [1, 3]
     memory = offer("w.source.ram_style", ("block", "auto"))
     assert list(policy.rank(memory)) == ["block", "auto"]
@@ -90,7 +82,7 @@ def test_the_test_policy_folds_to_its_lanes_or_the_largest_factor() -> None:
 
 def test_the_packed_reducer_is_offered_open_its_adder_tree_first() -> None:
     policy = Recording(Lanes())
-    model = kernel_model().transform(ranked(policy))
+    model = explored(kernel_model(), ranked(policy))
     offered = {dotted(choice.key): choice.cases or () for choice in policy.offered}
     reducers = {
         key: cases for key, cases in offered.items() if key.endswith("compute.packed.reducer")
@@ -101,7 +93,7 @@ def test_the_packed_reducer_is_offered_open_its_adder_tree_first() -> None:
 
 
 def test_every_open_choice_is_committed_and_the_model_replays_it(tmp_path: Path) -> None:
-    model = kernel_model().transform(ranked(Lanes(2)))
+    model = explored(kernel_model(), ranked(Lanes(2)))
     saved = choices(model)
     assert saved["first"]["pe"] == 2
     assert saved["activate"]["pe"] == 2
@@ -111,15 +103,15 @@ def test_every_open_choice_is_committed_and_the_model_replays_it(tmp_path: Path)
     assert bound.undecided() == () and not bound.stale
     # A second pass reopens every choice and ranks it again: the same policy makes the
     # same choices, another replaces them.
-    assert choices(again.transform(ranked(Lanes(2)))) == saved
-    assert choices(again.transform(ranked(Lanes())))["first"]["pe"] == 1
+    assert choices(explored(again, ranked(Lanes(2)))) == saved
+    assert choices(explored(again, ranked(Lanes())))["first"]["pe"] == 1
 
 
 def test_the_policy_is_offered_every_open_choice_its_possible_values_only() -> None:
     """Every open choice is offered, one possible value or several: nothing is set because
     one value is possible. Each is stored."""
     policy = Recording(Lanes())
-    model = kernel_model().transform(ranked(policy))
+    model = explored(kernel_model(), ranked(policy))
     offered = {dotted(choice.key): choice.cases or () for choice in policy.offered}
     assert offered and all(cases for cases in offered.values())
     # Ultra96 has no UltraRAM: ultra is never offered; on DSP48E2 the packed core is the
@@ -138,9 +130,9 @@ def test_the_policy_is_offered_every_open_choice_its_possible_values_only() -> N
 
 
 def test_a_refused_case_is_never_picked_even_when_preferred() -> None:
-    model = kernel_model().transform(ranked(Last(memories=True)))
+    model = explored(kernel_model(), ranked(Last(memories=True)))
     assert choices(model)["w1"]["source.ram_style"] not in ("ultra", "auto")
-    uram = kernel_model(URAM).transform(ranked(Last(memories=True)))
+    uram = explored(kernel_model(URAM), ranked(Last(memories=True)))
     assert choices(uram)["w1"]["source.ram_style"] == "ultra"
 
 
@@ -148,21 +140,19 @@ def test_a_required_choice_left_open_is_refused_by_name_where_it_is_built() -> N
     # Preferring the FIFO transport opens its depth, a domain known by membership only
     # and required: no baseline takes a case of it. The exploration leaves it open
     # and reports it; emission completes nothing and refuses it, named, with what sets it.
-    explore = ExploreKernelChoices(Ranked(Last()))
-    model = kernel_model().transform(explore)
-    assert explore.explored is not None
-    left = explore.explored.report["open"]
+    model = kernel_model()
+    left = explore_kernel_choices(model, [Ranked(Last())]).report["open"]
     assert left and all(name.endswith("transport.fifo.depth (required)") for name in left)
     with refused("choices-open", error=KernelOpError, node="the chain") as open_choices:
         configured_network(model, "the chain")
     assert isinstance(open_choices.error, KernelOpError)
     assert all(key.endswith("transport.fifo.depth") for key in open_choices.error.keys)
-    required = "(required: run step_size_fifos or step_placeholder_choices)"
+    required = "(required: add size_fifos or debug_placeholder to step_explore's strategies)"
     assert str(open_choices.error).count(required) == len(left)
     # The debug placeholder strategy takes the first case of a required choice, and
     # refuses one known by membership only, named.
     with refused("placeholder-no-case", error=ExploreError, message=r"transport\.fifo\.depth"):
-        model.transform(ExploreKernelChoices(DebugPlaceholder()))
+        explore_kernel_choices(model, [DebugPlaceholder()])
 
 
 def test_a_policy_ranking_a_case_that_is_not_viable_is_refused() -> None:
@@ -177,7 +167,7 @@ def test_a_policy_ranking_a_case_that_is_not_viable_is_refused() -> None:
         error=ExploreError,
         message=r"ram_style: the policy ranked \['ultra'\]",
     ):
-        kernel_model().transform(ranked(Ultra()))
+        explored(kernel_model(), ranked(Ultra()))
 
 
 class PreferUltra:
@@ -202,12 +192,12 @@ def test_an_adapter_memory_is_never_ultra_without_ultraram() -> None:
     # Ultra96 has no UltraRAM: an adapter's memory (its channel's one style for its
     # input_gen stages) is never offered ultra, so a policy that prefers it does not get it.
     policy = Recording(PreferUltra())
-    ultra96 = kernel_model().transform(ranked(policy))
+    ultra96 = explored(kernel_model(), ranked(policy))
     offered = {dotted(choice.key): choice.cases or () for choice in policy.offered}
     adapters = [cases for key, cases in offered.items() if key.endswith(".adapter_ram_style")]
     assert adapters and all("ultra" not in cases for cases in adapters)
     memories = adapter_memories(ultra96)
     assert memories and "ultra" not in memories.values()
     # With UltraRAM it is viable, and the policy gets what it prefers.
-    uram = kernel_model(URAM).transform(ranked(PreferUltra()))
+    uram = explored(kernel_model(URAM), ranked(PreferUltra()))
     assert set(adapter_memories(uram).values()) == {"ultra"}

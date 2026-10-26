@@ -64,7 +64,7 @@ CHANNEL_KEYS: dict[str, Key[Any]] = {
 
 def refuse_outside_body(model: ModelWrapper, tensors: Iterable[str]) -> None:
     """Refuse channel choices on ``tensors``, by name, unless ``model`` is a partition's
-    body. A build sets them in a step after the cut, with ``Hold``."""
+    body. A build fixes them by adding a hold to ``step_explore``'s strategies."""
     named = list(tensors)
     if not named or is_kernel_partition(model):
         return
@@ -76,7 +76,7 @@ def refuse_outside_body(model: ModelWrapper, tensors: Iterable[str]) -> None:
         "refuse_outside_body",
         f"{', '.join(named)}: channel choices ({CHANNEL.name}) are stated in a partition's "
         f"body only, not on a graph with nodes on the host ({', '.join(hosts) or 'none'}): "
-        "fix them in a step after the cut, with Hold, which sets them in the body",
+        "fix them by adding a hold to step_explore's strategies, which sets them in the body",
         tuple(named),
     )
 

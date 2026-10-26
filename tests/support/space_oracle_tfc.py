@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 """The class-based oracle's TFC target (``tfc``): TFC's partition (``support.tfc``) after
-the cut, and after each of seven strategy sequences explored on the cut's body
+the cut, and after each of seven strategy lists explored on the cut's body
 (``SEQUENCES``), each its partition's class as the graph layer binds it in its shell
 (``in_shell``), configured with its stored choices; and the oracle's tool with every target,
 TFC's too:
@@ -28,17 +28,16 @@ from pathlib import Path
 
 from qonnx.core.modelwrapper import ModelWrapper
 
+from finn.core.search import Hold, Ranked
 from finn.custom_op.kernels.shell import in_shell
 from finn.kernels.explore import (
     Defaults,
-    Explorer,
-    Hold,
+    KernelExplorer,
     MaxThroughput,
-    Ranked,
     SizeFifos,
     TargetThroughput,
 )
-from finn.transformation.kernels import ExploreKernelChoices
+from finn.transformation.kernels import explore_kernel_choices
 from support.space_oracle.targets import Station, _middle, _partition
 from support.tfc import LANES, cut, streamlined
 
@@ -48,7 +47,7 @@ PINS: Mapping[str, Mapping[str, object]] = {
 }
 """The holds of ``pinned_then_target``, by node and key."""
 
-SEQUENCES: Mapping[str, Callable[[], list[Explorer]]] = {
+SEQUENCES: Mapping[str, Callable[[], list[KernelExplorer]]] = {
     "ranked": lambda: [Ranked(LANES)],
     "target_throughput": lambda: [TargetThroughput(1_000_000)],
     "target_throughput_then_size_fifos": lambda: [TargetThroughput(1_000_000), SizeFifos()],
@@ -59,7 +58,7 @@ SEQUENCES: Mapping[str, Callable[[], list[Explorer]]] = {
 }
 """TFC's seven strategy sequences, with the lanes, throughput targets, budget and pins an
 earlier probe explored TFC with to compare what two checkouts choose, each explored on the
-cut's body, one strategy after another; ``defaults`` is that probe's ``rebaseline``,
+cut's body, one list on one seam; ``defaults`` is that probe's ``rebaseline``,
 whose strategy is now ``Defaults``."""
 
 
@@ -84,8 +83,7 @@ def tfc(work: Path | None = None) -> list[Station]:
     stations = [_tfc_partition("cut", ModelWrapper(saved))]
     for name, sequence in SEQUENCES.items():
         model = ModelWrapper(saved)
-        for strategy in sequence():
-            model = model.transform(ExploreKernelChoices(strategy))
+        explore_kernel_choices(model, sequence())
         stations.append(_tfc_partition(name, model))
     return stations
 

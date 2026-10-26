@@ -1,67 +1,68 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Exploring a partition body's kernel choices through the DSE seam, one strategy at a
-time, and saving them.
+"""Exploring a partition body's kernel choices through the DSE seam, a list of strategies
+on one seam, and saving them.
 
-``explore_kernel_choices(model, strategy)`` explores a partition's body, the model of
-KernelOps the build's cut made (``CutKernelPartition``; ``explore_partition``, which
-the build's strategy steps run, opens it through the parent graph's node,
-``partition_body``, and saves it in its file), so which KernelOps go together is the
-cut's alone: a model holding any other node is refused. It binds the body's network in
-its shell (``finn.custom_op.kernels.shell.in_shell``: their kernels, the channels between
-them and the channels on its boundary, members named as the graph, ``MatMul_0``; the nodes'
-and the channels' saved choices set as it binds, a stale one dropped with why), which its
-``Seam`` (``finn.kernels.explore``) explores, each choice keyed by its owner, a node or a
-tensor, and the key there; holds the keys the body records (``HELD``; a held key the
-bound network does not state is refused, ``held-not-taken``, ``held-owner-unknown``); runs
-the strategy, which reopens the choices it decides, searches, and gives back the prior
-values of those it left open (or, where one is refused, sets it by its policy, reported);
-and then (a choice the body leaves open stays open: conversion and the cut set the rest,
-and nothing fills a value in but a strategy):
+``explore_kernel_choices(model, strategies)`` explores a partition's body, the model of
+KernelOps the build's cut made (``CutKernelPartition``; the build's ``step_explore`` opens
+it through the parent graph's node, ``partition_body``, and saves it in its file), so which
+KernelOps go together is the cut's alone: a model holding any other node is refused. It
+binds the body's network in its shell (``finn.custom_op.kernels.shell.in_shell``: their
+kernels, the channels between them and the channels on its boundary, members named as the
+graph, ``MatMul_0``; the nodes' and the channels' saved choices set as it binds, a stale one
+dropped with why), which its ``Seam`` (``finn.kernels.explore``) explores, each choice keyed
+by its owner, a node or a tensor, and the key there; runs each strategy of the list in
+order on that one seam (the keys a ``Hold`` fixes stay held for the strategies after it),
+each reopening the choices it decides, searching, and giving back the prior values of those
+it left open (or, where one is refused, setting it by its policy, reported); and then (a
+choice the body leaves open stays open: conversion and the cut set the rest, and nothing
+fills a value in but a strategy):
 
 - checks nothing of the FIFOs of itself: a strategy may (``Seam.check_fifos``, or
   ``Seam.checked``, which drops each FIFO, not held, that no longer keeps its producer
   within its idle time, named with why and left open, a required choice FIFO sizing sizes
   again), and the build checks once, before emission (``verify_partition``,
   ``finn.custom_op.kernels.shell``);
-- refuses a network a member's validity refuses (``Seam.refusals``), its shell's budgets
-  among them (its shell member's rules: its AXI-Lite buses, memory ports and doubled clock
-  against the shell's row), by name (a ``KernelOpError`` carrying their findings);
+- refuses, once, for the whole list, and writes nothing: a ``Hold`` whose key the bind
+  dropped as stale, where the seam refuses it (``pin-refused``, the bind's findings first
+  among its causes); a held key not at its held value at the end (``held-not-kept``,
+  ``Seam.unkept``); a network a member's validity refuses (``Seam.refusals``), its shell's
+  budgets among them (its shell member's rules: its AXI-Lite buses, memory ports and doubled
+  clock against the shell's row), by name (a ``KernelOpError`` carrying their findings);
 - persists every value of the network where it is stated, each owner's whole
   (``persist``): a kernel's on its node, a channel's on its tensor (``finn.channel``);
   a required choice no strategy set stays open, and emission refuses it by name
   (``configured_network``);
-- records the keys held, those the body recorded and those a ``Hold`` fixed, in the
-  body as keys (``HELD``, ``{graph name: [key, ...]}``; the values are the ones the nodes
-  and tensors state), so that every later exploration of the body holds them: a hold lasts
-  for the build, and going back to the defaults keeps it; and a
-  target throughput's frames a second (``OBJECTIVE_FPS``), which a later exploration
-  whose strategy changes any kernel's choice removes;
-- keeps what it found (``explored``): the network, its cost and the report: the strategy
-  with every value it changed (``changed``: before and after, by owner), how many it
-  reopened and gave back their prior values (``kept``), those it set by their policy
-  where the prior value is refused (``by_policy``), those it left open (``unset``), what
-  the fold rule did for the strategy's changes (``finn.kernels.explore.Seam.set``): the
-  stored channel choices the seam cleared, each standing in the way of a change, with why
-  (``cleared``), and the channel choices it set by the channel's policy, cleared or brought
-  into play by a change, with their values (``settled``), a ``Hold``'s held keys, attempts
-  and time; every value by its owner (a node or a tensor, by graph name, and the key
-  there, as the log ``report/kernel_choices.json`` names it), with who set it (``saved``:
-  the body, the strategy (the fold rule's values among its own), or the strategy by the
-  choice's policy, ``<strategy>, its policy``); the keys
-  held; the choices left open (a required one named so); each FIFO's memory style beside
-  the storage FinnLib's selection gives it and what it uses
-  (``fifo_storage``: its ``auto`` is FinnLib's, not Vivado's); whether FIFOs were
-  sized; how they were judged (``fifos_judged``: ``model``, where the strategy sized them
-  or checked them; ``not checked``; or what the strategy's report states); the dropped
-  choices with why (``dropped``: replay's, and those the strategy dropped through
-  ``Seam.checked``), what the strategy's last check of the transports found
-  (``fifo_check``, only where it checked), per member cycles, buffering and resources, the
-  bottleneck, and the shell's resources against the platform's, ``resources``), so an
-  outer search can compare; and every limitation it found (``findings``: the strategy's,
-  its last check's and the resources'), in the report where each was found. Who set a
-  value is logged in the report, never stored in the model.
+- records, right after, what the search left to later readers (``OUTPUT_SEARCH``): the
+  design it persisted, the keys held (those the list's holds fixed, ``{graph name: [key,
+  ...]}``), so that the build's verification holds them, and a target throughput's frames a
+  second, which a later entry that changes any kernel's choice removes;
+- keeps what it found (``explored``): the network, its cost and the report. ``strategies``
+  has an entry for each strategy, in order, taken from what the seam did beyond what it had
+  done before the entry: the strategy's own report, every value it changed (``changed``:
+  before and after, by owner), how many it reopened and gave back their prior values
+  (``kept``), those it set by their policy where the prior value is refused (``by_policy``),
+  those it left open (``unset``), what the fold rule did for its changes
+  (``finn.kernels.explore.Seam.set``): the stored channel choices the seam cleared, each
+  standing in the way of a change, with why (``cleared``), and the channel choices it set by
+  the channel's policy, cleared or brought into play by a change, with their values
+  (``settled``), a ``Hold``'s held keys, attempts and time; whether FIFOs were sized
+  (``fifos``); how they were judged (``fifos_judged``: ``model``, where the strategy sized
+  them or checked them; ``not checked``; or what the strategy's report states); and what the
+  entry's last check of the transports found (``fifo_check``, only where it checked). The
+  rows of the whole point are written once: every value by its owner (a node or a tensor,
+  by graph name, and the key there, as the log ``report/kernel_choices.json`` names it),
+  with who set it (``choices``: the body (``saved``), the entry that changed it (the fold
+  rule's values among its own), or that entry by the choice's policy, ``<strategy>, its
+  policy``); the keys held; the choices left open (a required one named so); each FIFO's
+  memory style beside the storage FinnLib's selection gives it and what it uses
+  (``fifo_storage``: its ``auto`` is FinnLib's, not Vivado's); the dropped choices with why
+  (``dropped``: replay's, and those a strategy dropped through ``Seam.checked``), per member
+  cycles, buffering and resources, the bottleneck, and the shell's resources against the
+  platform's, ``resources``), so an outer search can compare; and every limitation it found
+  (``findings``: each strategy's, its last check's and the resources'), in the report where
+  each was found. Who set a value is logged in the report, never stored in the model.
 
 ``exploration_summary`` gives an exploration's lines for a build's log.
 
@@ -104,13 +105,12 @@ from dataclasses import asdict, dataclass
 from functools import reduce
 from typing import TYPE_CHECKING, Any
 
-from qonnx.transformation.base import Transformation
-
-from finn.core.graph.annotations.choices import HELD, OBJECTIVE_FPS, held_keys
+from finn.core.graph.annotations.outputs import OUTPUT_SEARCH, OUTPUTS
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.errors import KernelOpError
-from finn.core.graph.partition import KERNEL_OPS_DOMAIN, partition_body
+from finn.core.graph.partition import KERNEL_OPS_DOMAIN, design_digest
 from finn.core.reporting.findings import Finding, FindingKind
+from finn.core.search import ExploreError, Hold, Key, dotted
 from finn.core.space import Available
 from finn.custom_op.kernels.base import why
 from finn.custom_op.kernels.network import persist, stale_text
@@ -120,19 +120,16 @@ from finn.custom_op.kernels.shell import (
     in_shell,
     shell_resources,
 )
-from finn.kernels.composer import Key
 from finn.kernels.explore import (
     FIFOS_BY_MODEL,
     FIFOS_NOT_CHECKED,
     Bottleneck,
     Cost,
-    Explorer,
     FifoCheck,
-    Hold,
+    KernelExplorer,
     Seam,
     SizeFifos,
     TargetThroughput,
-    dotted,
 )
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.movers import MEMORY_LATENCY, MoverContract
@@ -272,7 +269,7 @@ def _over_part(most: str | None, exceeded: Mapping[str, Mapping[str, int]]) -> t
         Finding(
             FindingKind.LIMITATION,
             "resources-over-part",
-            ExploreKernelChoices.__name__,
+            "explore_kernel_choices",
             f"the point uses more than the platform's part has, most of {most}: {counts}",
             (("binding", most), ("over", tuple(exceeded))),
         ),
@@ -335,7 +332,7 @@ def _by_owner(values: Mapping[Key, object]) -> dict[str, dict[str, object]]:
 
 
 def _fifos(
-    strategy: Explorer | None, entry: Mapping[str, Any] | None, placed: Sequence[str]
+    strategy: KernelExplorer | None, entry: Mapping[str, Any] | None, placed: Sequence[str]
 ) -> str:
     """Whether this exploration sized the FIFOs, said so that a design without sizing does
     not read as sized: by ``size_fifos`` (the channels it sized, the FIFOs placed), or not,
@@ -407,58 +404,90 @@ def _mover_rows(network: Partition, movers: Sequence[str]) -> dict[str, dict[str
     return rows
 
 
-def _held_values(
-    network: Partition, saved: Mapping[Key, object], held: Mapping[str, Sequence[str]]
-) -> dict[Key, object]:
-    """The values of the keys the body's mark holds (``held``, by owner), the ones
-    ``network`` states (``saved``). A held key is the user's exact value, so one the network
-    does not take is refused, by name, never dropped and set another way: an owner that is
-    no member of the network (``held-owner-unknown``), or a key the bound network states no
-    value for, because the bind dropped the stored one or it is gone (``held-not-taken``;
-    the bind's findings are its causes). A key stored out of play (dormant) or waiting is
-    stated, by its stored value."""
-    members = set(network.members)
-    kernels = set(network.kernels)
-    values: dict[Key, object] = {}
-    lost: list[Finding] = []
-    refused_keys: list[str] = []
-    for owner, keys in held.items():
-        for key in keys:
-            if owner not in members:
-                code, reason = "held-owner-unknown", "no member of the network owns it"
-                subject: tuple[tuple[str, str], ...] = ()
-            elif (owner, key) not in saved:
-                code, reason = "held-not-taken", "the bound network states no value for it"
-                subject = (("node" if owner in kernels else "tensor", owner),)
-            else:
-                values[(owner, key)] = saved[(owner, key)]
-                continue
-            refused_keys.append(dotted((owner, key)))
-            lost.append(
-                Finding(
-                    FindingKind.REJECTION,
-                    code,
-                    "explore_kernel_choices",
-                    f"{dotted((owner, key))}: held by the body, but {reason}; the held value "
-                    "was not taken, and nothing takes its place",
-                    (("keys", (key,)), *subject),
-                    causes=network.dropped.get((owner, key), ()),
-                )
-            )
-    if lost:
-        raise KernelOpError(
-            "a held choice is refused: " + "; ".join(each.message for each in lost),
-            tuple(refused_keys),
-            findings=lost,
-        )
-    return values
+def _hold_refused(
+    error: ExploreError, strategy: KernelExplorer, bound: Partition
+) -> ExploreError | None:
+    """``error``, a hold's ``pin-refused``, as the entry that states a held key the bind
+    dropped as stale refuses it: the bind's findings for those keys (``domain-membership``,
+    the stored value outside its domain) first among its causes, then the seam's own; None
+    where the error is not that (a key held to another value, or one the bind kept)."""
+    if not isinstance(strategy, Hold):
+        return None
+    kept = [dotted(key) for key in strategy.held if key in bound.dropped]
+    if error.findings[0].code != "pin-refused" or not kept:
+        return None
+    finding = error.findings[0]
+    dropped = tuple(each for key in kept for each in bound.stale.get(key, ()))
+    return ExploreError(
+        finding.code,
+        finding.owner,
+        f"{finding.message}; the body stored another value for {', '.join(kept)}, which the "
+        "bind dropped as stale",
+        causes=(*dropped, *finding.causes),
+    )
 
 
-def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None) -> Explored:
-    """The KernelOps of a partition's body, ``model``, explored by ``strategy`` (None:
-    nothing changed, only checked and reported) and every value persisted, on its network
-    in the shell of the model's target, the body's holds kept and recorded; see the module
-    docstring."""
+@dataclass(frozen=True)
+class _Mark:
+    """What the seam held before an entry: its runs, attempts, fallbacks and checks."""
+
+    runs: int
+    attempts: int
+    fallbacks: frozenset[Key]
+    checks: int
+
+
+def _entry_report(
+    seam: Seam,
+    strategy: KernelExplorer,
+    before: Mapping[Key, object],
+    after: Mapping[Key, object],
+    changed: Sequence[Key],
+    since: _Mark,
+    began: float,
+) -> dict[str, Any]:
+    """One entry's report: its strategy's own, then what it changed (``changed``: before
+    and after, by owner; ``committed``), and what its runs and the changes it made through
+    the seam did, taken from what lies beyond ``since`` (the seam's runs, attempts,
+    fallbacks and checks before the entry): the choices it ``reopened`` and gave back their
+    prior values (``kept``), set by their policy (``by_policy``), left open (``unset``),
+    cleared (``cleared``) or settled (``settled``), its ``attempts``, ``seconds``, and the
+    keys a ``Hold`` held; the choices it fell back on a listed order for where a ranking
+    was not read; and how it left the FIFOs: ``fifos`` (the FIFOs placed on its result),
+    ``fifos_judged`` and, where it checked them, ``fifo_check``."""
+    runs = seam.runs[since.runs :]
+    report = strategy.report()
+    entry: dict[str, Any] = {
+        **report,
+        "committed": sum(key in after for key in changed),
+        "changed": {dotted(key): [before.get(key), after.get(key)] for key in changed},
+        "reopened": len({key for run in runs for key in run.reopened}),
+        "kept": len({key for run in runs for key in run.kept}),
+        "by_policy": [dotted(key) for run in runs for key in run.by_policy],
+        "unset": {dotted(key): why(found) for run in runs for key, found in run.unset.items()},
+        "cleared": {dotted(key): why(found) for run in runs for key, found in run.cleared.items()},
+        "settled": {dotted(key): value for run in runs for key, value in run.settled.items()},
+        "attempts": seam.attempts - since.attempts,
+        "seconds": round(time.perf_counter() - began, 3),
+    }
+    if isinstance(strategy, Hold):
+        entry["held"] = [dotted(key) for key in strategy.held]
+    fell = {key: found for key, found in seam.fallbacks.items() if key not in since.fallbacks}
+    if fell:
+        # A ranking a policy could not read: its choice offered in listed order.
+        entry["fallbacks"] = {dotted(key): why((finding,)) for key, finding in fell.items()}
+    return entry
+
+
+def explore_kernel_choices(
+    model: ModelWrapper, strategies: Sequence[KernelExplorer] = ()
+) -> Explored:
+    """The KernelOps of a partition's body, ``model``, explored by ``strategies``, in
+    order, on one seam (the holds of one lasting through the rest), and every value
+    persisted, on its network in the shell of the model's target, the search's record kept;
+    no strategy: only checked and reported. See the module docstring. The body is changed
+    only at the end, by the persisted values and the record; a refusal or an exception
+    before leaves it as it was."""
     if not model.graph.node:
         raise KernelOpError.refused(
             "kernel-ops-absent", "explore_kernel_choices", "no KernelOp to explore"
@@ -476,27 +505,31 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
     bound = in_shell(model, nodes)
     seam = Seam(read_target(model).platform)
     network = bound
-    # What the body states: every stored choice, in play or not.
-    saved = network.chosen()
-    # The body's mark names the keys held; their values are the ones the network states.
-    seam.held.update(_held_values(network, saved, held_keys(model)))
-    # Who set each value: the body (``saved``), or the strategy.
-    set_by = dict.fromkeys(saved, "saved")
-    entry: dict[str, object] | None = None
-    changed: list[Key] = []
-    if strategy is not None:
-        attempts, began = seam.attempts, time.perf_counter()
+    # Who set each value: the body (what it stated), or the entry that changed it.
+    set_by = dict.fromkeys(network.chosen(), "saved")
+    entries: list[dict[str, Any]] = []
+    found: list[Finding] = []
+    objective: float | None = None
+    for strategy in strategies:
+        since = _Mark(len(seam.runs), seam.attempts, frozenset(seam.fallbacks), len(seam.checks))
+        began = time.perf_counter()
         before = seam.chosen(network)
-        network = strategy.explore(seam, network)
-        report = strategy.report()
+        try:
+            network = strategy.explore(seam, network)
+        except ExploreError as error:
+            enriched = _hold_refused(error, strategy, bound)
+            if enriched is None:
+                raise
+            raise enriched from error
         after = seam.chosen(network)
+        report = strategy.report()
         label = str(getattr(strategy, "label", report["strategy"]))
         changed = [
             key
             for key in dict.fromkeys([*before, *after])
             if before.get(key, _ABSENT) != after.get(key, _ABSENT)
         ]
-        by_policy = {key for run in seam.runs for key in run.by_policy}
+        by_policy = {key for run in seam.runs[since.runs :] for key in run.by_policy}
         for key in changed:
             if key not in after:
                 set_by.pop(key, None)
@@ -504,32 +537,29 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
                 set_by[key] = f"{label}, its policy"
             else:
                 set_by[key] = label
-        entry = {
-            **report,
-            "committed": sum(key in after for key in changed),
-            "changed": {dotted(key): [before.get(key), after.get(key)] for key in changed},
-            "reopened": len({key for run in seam.runs for key in run.reopened}),
-            "kept": len({key for run in seam.runs for key in run.kept}),
-            "by_policy": [dotted(key) for run in seam.runs for key in run.by_policy],
-            "unset": {
-                dotted(key): why(found) for run in seam.runs for key, found in run.unset.items()
-            },
-            "cleared": {
-                dotted(key): why(found) for run in seam.runs for key, found in run.cleared.items()
-            },
-            "settled": {
-                dotted(key): value for run in seam.runs for key, value in run.settled.items()
-            },
-            "attempts": seam.attempts - attempts,
-            "seconds": round(time.perf_counter() - began, 3),
-        }
-        if isinstance(strategy, Hold):
-            entry["held"] = [dotted(key) for key in strategy.held]
-        if seam.fallbacks:
-            # A ranking a policy could not read: its choice offered in listed order.
-            entry["fallbacks"] = {
-                dotted(key): why((finding,)) for key, finding in seam.fallbacks.items()
-            }
+        entry = _entry_report(seam, strategy, before, after, changed, since, began)
+        # The entry's last check of the FIFOs, where it made one (Seam.check_fifos).
+        checks = seam.checks[since.checks :]
+        check = checks[-1] if checks else None
+        entry["fifos"] = _fifos(strategy, entry, [dotted(key) for key in _placed(seam, network)])
+        entry["fifos_judged"] = _judged(entry, check)
+        if check is not None:
+            entry["fifo_check"] = check.report()
+        entries.append(entry)
+        found += [*getattr(strategy, "findings", ()), *(() if check is None else check.findings)]
+        if isinstance(strategy, TargetThroughput):
+            objective = strategy.fps
+        elif any(owner in network.kernels for owner, _ in changed):
+            # The folding is no longer the one the target throughput explored.
+            objective = None
+    unkept = seam.unkept(network)
+    if unkept:
+        raise KernelOpError(
+            "a held choice was not kept: "
+            + "; ".join(f"{each.owner}: {each.message}" for each in unkept),
+            tuple(each.owner for each in unkept),
+            findings=unkept,
+        )
     refused = seam.refusals(network)
     if refused:
         raise KernelOpError(
@@ -539,15 +569,6 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
                 network.located(name, finding) for name, why in refused.items() for finding in why
             ),
         )
-    persist(model, network)
-    if seam.held:
-        held = _by_owner(seam.held)
-        model.set(HELD, {owner: sorted(held[owner]) for owner in sorted(held)})
-    if isinstance(strategy, TargetThroughput):
-        model.set(OBJECTIVE_FPS, strategy.fps)
-    elif any(owner in network.kernels for owner, _ in changed):
-        # The folding is no longer the one the target throughput explored.
-        model.delete(OBJECTIVE_FPS)
     left = [
         dotted(key) + (" (required)" if isinstance(seam.policy(network, key), Required) else "")
         for key in network.undecided()
@@ -564,49 +585,57 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
     if network.movers and not cost.waiting and not cost.refused:
         movers = {"movers": _mover_rows(network, network.movers), "memory_latency": MEMORY_LATENCY}
     final = seam.chosen(network)
-    placed = [dotted(key) for key in _placed(seam, network)]
-    # The strategy's last check of the FIFOs, where it made one (Seam.check_fifos).
-    check = seam.checks[-1] if seam.checks else None
     explored = {
-        "strategy": entry,
+        "strategies": entries,
         "choices": _by_owner({key: {"value": final[key], "by": set_by[key]} for key in final}),
         "held": _by_owner(seam.held),
         "open": left,
         "fifo_storage": _fifo_storage(seam, network),
-        "fifos": _fifos(strategy, entry, placed),
-        "fifos_judged": _judged(entry, check),
         "dropped": {
-            **{key: stale_text(key, found) for key, found in bound.stale.items()},
-            **{dotted(key): why(found) for key, found in seam.dropped.items()},
+            **{key: stale_text(key, each) for key, each in bound.stale.items()},
+            **{dotted(key): why(each) for key, each in seam.dropped.items()},
         },
-        **({} if check is None else {"fifo_check": check.report()}),
         **_cost_report(network, cost, resources),
         **movers,
         "seconds": round(time.perf_counter() - started, 3),
     }
-    found = tuple(getattr(strategy, "findings", ()))
-    checked = () if check is None else check.findings
-    return Explored(network, cost, explored, (*found, *checked, *over_part))
+    held = _by_owner(seam.held)
+    record = {
+        # The design the record describes is the persisted body's, known only once it is
+        # persisted; the body as it stands stands in for it here, as a digest of the same
+        # form, so that the record is checked whole before anything is written.
+        "design": design_digest(model),
+        "held": {owner: sorted(held[owner]) for owner in sorted(held)},
+        "objective_fps": objective,
+    }
+    OUTPUT_SEARCH.encode(record)
+    # Setting the record reads the body's stored outputs back: a namespace stored malformed
+    # is refused here, before anything is written.
+    model.namespace(OUTPUTS)
+    # The last two writes: the values, then the record that says whose they are.
+    persist(model, network)
+    model.set(OUTPUT_SEARCH, {**record, "design": design_digest(model)})
+    return Explored(network, cost, explored, (*found, *over_part))
 
 
-def explore_partition(parent: ModelWrapper, strategy: Explorer) -> Explored:
-    """The partition of the build's parent graph ``parent`` explored by ``strategy``:
-    its body opened through the partition node (``partition_body``), explored
-    (``explore_kernel_choices``) and saved in its file. The parent graph is unchanged;
-    a later exploration of the body holds the keys this one recorded."""
-    _, body, body_file = partition_body(parent)
-    explored = explore_kernel_choices(body, strategy)
-    body.save(body_file)
-    return explored
-
-
-def exploration_summary(explored: Explored, label: str) -> list[str]:
-    """An exploration's lines for a build's log: how many values the strategy ``label``
-    changed; each value a debugging strategy set; the choices left open; and the FIFOs.
-    Its limitations are its ``findings``."""
+def exploration_summary(explored: Explored) -> list[str]:
+    """An exploration's lines for a build's log: a line for each entry, how many values it
+    changed and how it left the FIFOs (a ``max_throughput`` entry, how far it reached);
+    each value a debugging strategy set; and the choices left open. Its limitations are its
+    ``findings``."""
     report = explored.report
-    changed = len(report["strategy"]["changed"])
-    lines = [f"Kernel choices: {label} changed {changed}"]
+    lines: list[str] = []
+    for entry in report["strategies"]:
+        lines.append(
+            f"Kernel choices: {entry['strategy']} changed {len(entry['changed'])}; "
+            f"FIFOs: {entry['fifos']}"
+        )
+        if entry["strategy"] == "max_throughput":
+            lines.append(
+                f"Kernel choices: max_throughput reached {entry['bottleneck']['cycles']} cycles "
+                f"a frame within {entry['budget']} ({'fits' if entry['fits'] else 'does not fit'}; "
+                f"binding: {entry['binding']}; {len(entry['tried'])} budgets tried)"
+            )
     lines += [
         f"{entry['by']}: {node}.{attribute} = {entry['value']!r}"
         for node, held in report["choices"].items()
@@ -615,7 +644,6 @@ def exploration_summary(explored: Explored, label: str) -> list[str]:
     ]
     if report["open"]:
         lines.append(f"Kernel choices: open, refused at packaging: {', '.join(report['open'])}")
-    lines.append(f"FIFOs: {report['fifos']}")
     return lines
 
 
@@ -627,26 +655,9 @@ def shell_bottleneck(model: ModelWrapper) -> Bottleneck | None:
     return Seam(read_target(model).platform).cost(bound).bottleneck
 
 
-class ExploreKernelChoices(Transformation):
-    """A partition body's KernelOps explored by ``strategy`` and every value saved, on its
-    network in the shell of the model's target, the body's holds kept and recorded;
-    ``explored`` holds the result (``explore_kernel_choices``)."""
-
-    def __init__(self, strategy: Explorer | None = None) -> None:
-        super().__init__()
-        self.strategy = strategy
-        self.explored: Explored | None = None
-
-    def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
-        self.explored = explore_kernel_choices(model, self.strategy)
-        return model, False
-
-
 __all__ = [
-    "ExploreKernelChoices",
     "Explored",
     "explore_kernel_choices",
-    "explore_partition",
     "exploration_summary",
     "shell_bottleneck",
 ]

@@ -38,11 +38,12 @@ from finn.core.graph.annotations.channel import (
 )
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN, partition_body
+from finn.core.search import ExploreError, Hold, Ranked
 from finn.core.space import inspection
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import network, persist
 from finn.kernels.channels import Channel
-from finn.kernels.explore import Defaults, ExploreError, Hold, Ranked
+from finn.kernels.explore import Defaults
 from finn.transformation.kernels import (
     InferKernelTensors,
     explore_kernel_choices,
@@ -290,8 +291,8 @@ def test_the_defaults_strategy_resets_the_bodys_channel_choices_too() -> None:
     nothing (``MakeCutChoices``: conversion's policies late, the channel's)."""
     model = kernel_model()
     assert model.tensors_stating(CHANNEL)
-    explored = explore_kernel_choices(model, Defaults())
-    reset = explored.report["strategy"]
+    explored = explore_kernel_choices(model, [Defaults()])
+    reset = explored.report["strategies"][0]
     assert reset["strategy"] == "defaults" and reset["changed"]
     cleared = kernel_model()
     for node in cleared.graph.node:
@@ -307,25 +308,25 @@ def test_the_export_names_nodes_and_tensors_and_hold_takes_it() -> None:
     the tensors' channel choices, in graph order. ``Hold`` commits it on another body, and
     the report names each choice's owner the same way."""
     model = open_model()
-    explore_kernel_choices(model, Ranked(Lanes(2)))
+    explore_kernel_choices(model, [Ranked(Lanes(2))])
     config = kernel_choices_config(model)
     assert list(config) == ["x", "w1", "first", "hidden", "activate", "levels", "w2", "second", "y"]
     assert config["first"]["pe"] == 2
     assert config["w1"]["source.pumped_memory"] is False
     blank = open_model()
-    report = explore_kernel_choices(blank, Hold(config)).report
+    report = explore_kernel_choices(blank, [Hold(config)]).report
     assert kernel_choices_config(blank) == config
     # Every value is held, by its owner as the export names it; what it changed is logged
     # as the hold's.
     assert report["held"] == config
-    assert report["choices"]["first"]["pe"] == {"value": 2, "by": "held"}
+    assert report["choices"]["first"]["pe"] == {"value": 2, "by": "hold"}
     assert report["choices"]["levels"]["transport"]["value"] == config["levels"]["transport"]
     # A channel's key under its consumer is no Decision of the root: D8's form is
     # refused, named.
     with refused(
         "pin-refused", error=ExploreError, message=r"second\.x\.transport: not a Decision"
     ):
-        explore_kernel_choices(open_model(), Hold({"second": {"x.transport": "direct"}}))
+        explore_kernel_choices(open_model(), [Hold({"second": {"x.transport": "direct"}})])
 
 
 def test_the_export_is_in_graph_order_on_tfcs_body(tfc: ModelWrapper) -> None:
@@ -333,7 +334,7 @@ def test_the_export_is_in_graph_order_on_tfcs_body(tfc: ModelWrapper) -> None:
     channels not yet written (its weights, the parameter a MatMul owns, among them), the
     node, its output channel; a MultiThreshold's thresholds state no channel."""
     model = ModelWrapper(tfc.model.__deepcopy__())
-    explore_kernel_choices(model, Ranked(LANES))
+    explore_kernel_choices(model, [Ranked(LANES)])
     expected = ["Reshape_0_out0"]
     for layer in range(4):
         threshold, matmul = f"MultiThreshold_{layer}", f"MatMul_{layer}"

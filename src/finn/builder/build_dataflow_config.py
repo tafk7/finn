@@ -46,7 +46,7 @@ def config_finding(
     kind: FindingKind = FindingKind.REJECTION,
 ) -> Finding:
     """A finding about the configuration, a rejection by default, owned by its ``place``
-    in the configuration (``configuration.target_fps``, ``configuration.steps[3]``), the
+    in the configuration (``configuration.strategies``, ``configuration.steps[3]``), the
     whole configuration where it has no narrower one."""
     return Finding(kind, code, place, message)
 

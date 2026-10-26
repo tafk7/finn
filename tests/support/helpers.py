@@ -47,6 +47,7 @@ from typing import Any, TypedDict, TypeVar, cast
 
 from qonnx.core.ranges import TensorRange
 
+from finn.core.search import Choice, Key, dotted
 from finn.core.space import (
     Decision,
     Rejected,
@@ -70,7 +71,6 @@ from finn.kernels.channels import Channel
 from finn.kernels.composer import (
     ChannelDeclaration,
     Facts,
-    Key,
     PartitionDeclaration,
     Port,
     Stated,
@@ -79,7 +79,7 @@ from finn.kernels.composer import (
 from finn.kernels.configure import chosen, commit, describe
 from finn.kernels.declaration import KernelDeclaration, ModuleOrder, Product
 from finn.kernels.eltwise import EltwiseKernel
-from finn.kernels.explore import Choice, Defaults, Seam, dotted
+from finn.kernels.explore import Defaults, Seam
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.matmul import KnownWeights, MatMulKernel, datatype_range
@@ -746,7 +746,7 @@ def with_direct_transports(subject: P) -> P:
 
 
 class Lanes:
-    """A rank policy for tests (``finn.kernels.explore.Ranked``) that folds by hand: an
+    """A rank policy for tests (``finn.core.search.Ranked``) that folds by hand: an
     ordered choice of integers at ``lanes`` where that case is viable, otherwise at its
     largest viable case; every other choice, and every choice with no ``lanes``, in its
     domain's order, the kernel's baseline first. A test that needs a choice made on
