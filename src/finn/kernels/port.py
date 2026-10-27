@@ -783,8 +783,12 @@ def _child_types(child: object) -> tuple[type[Space], ...]:
     over children (a ``None`` case places none)."""
     record = unwrap(child)
     if isinstance(record, NodeDecision):
-        return tuple(case.space_type for case in record.candidates.values() if case is not None)
-    if isinstance(record, NodeDecl):
+        return tuple(
+            case.space_type
+            for case in record.candidates.values()
+            if case is not None and issubclass(case.space_type, Space)
+        )
+    if isinstance(record, NodeDecl) and issubclass(record.space_type, Space):
         return (record.space_type,)
     return ()
 

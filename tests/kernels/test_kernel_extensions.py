@@ -12,8 +12,11 @@ from support.refusals import refused
 from finn.core.space import (
     Available,
     Decision,
+    Group,
     Param,
     Rejected,
+    Select,
+    Space,
     composite,
     constraint,
     derived,
@@ -26,6 +29,7 @@ from finn.core.space.semantics import annotation_type, canonical
 from finn.dataflow.datatypes import QONNXDataType, resolve_qonnx_datatype_name
 from finn.kernels.base import KernelSpace
 from finn.kernels.configure import chosen, commit
+from finn.kernels.port import _child_types
 from finn.kernels.values.domains import Integer
 
 
@@ -187,3 +191,15 @@ def test_composite_extends_kernel_with_typed_optional_views_and_independent_node
     assert point.query(getattr(Pair.weights, "payload_bits")) == Available(32)
     authored = [key for key in views(point) if key.endswith("ports")]
     assert authored == ["activation.ports", "weights.ports"]
+
+
+def test_legacy_served_discovery_accepts_only_real_space_children() -> None:
+    class Child(Space):
+        pass
+
+    class Included(Group):
+        pass
+
+    assert _child_types(Child()) == (Child,)
+    assert _child_types(Select(child=Child(), absent=None)) == (Child,)
+    assert _child_types(Included()) == ()
