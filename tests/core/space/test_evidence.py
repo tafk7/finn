@@ -14,9 +14,9 @@ from finn.core.space import (
     Decision,
     Inapplicable,
     Param,
+    Rejected,
     Select,
     Space,
-    Unresolved,
     constraint,
     derived,
     design_space,
@@ -73,12 +73,12 @@ def test_static_alternatives_and_demanded_evidence_are_separate() -> None:
     assert first == second
     assert first.result == Available(12)
     assert calls == ["good"]
-    # The unselected candidate is never demanded by this readout.
+    # Owning validity observes the unselected case's guard, but not its body.
     bad = {
         node.declaration.key: node.result for node in first.nodes if ".bad." in node.declaration.key
     }
-    assert bad == {}
-    assert all(node.declaration.kind != "validity" for node in first.nodes)
+    assert bad == {"implementation.bad.$selected": Available(False)}
+    assert any(node.declaration.kind == "validity" for node in first.nodes)
     assert any(node.selector and node.result == Available("good") for node in first.nodes)
     assert any(node.is_guard for node in first.nodes)
     assert any(
@@ -123,7 +123,7 @@ def test_inactive_parameter_evidence_does_not_expose_unused_bound_value() -> Non
         assert isinstance(formal.result, Inapplicable)
 
 
-def test_refusal_causes_stay_visible_while_the_output_is_unresolved() -> None:
+def test_owning_refusal_stops_before_unresolved_output_input() -> None:
     class Example(Space):
         chosen: int = Decision(values=(1, 2))
 
@@ -139,17 +139,16 @@ def test_refusal_causes_stay_visible_while_the_output_is_unresolved() -> None:
         def selected(self) -> int:
             return self.value + self.chosen
 
-        physical = view(selected)  # waits on chosen, independently of supported
+        physical = view(selected)  # owning refusal precedes the unassigned output choice
 
     point = design_space(Example())
     evidence = inspection.explain(point, Example.physical)
-    assert isinstance(evidence.result, Unresolved)
+    assert isinstance(evidence.result, Rejected)
     assert evidence.assessment is not None
-    assert all(node.declaration.key != "supported" for node in evidence.nodes)
+    assert any(node.declaration.key == "supported" for node in evidence.nodes)
+    assert all(node.declaration.key != "selected" for node in evidence.nodes)
     assert inspection.validity(point).status == "refused"
-    choice = next(node for node in evidence.nodes if node.declaration.key == "chosen")
-    assert isinstance(choice.decision_state, Available)
-    assert choice.decision_state.value.status == "unassigned"
+    assert all(node.declaration.key != "chosen" for node in evidence.nodes)
     assert inspection.explain(point, Example.physical) == evidence
 
 

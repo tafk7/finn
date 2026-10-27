@@ -100,7 +100,9 @@ def _guard_assessment(
     node: Address, answer: NonValue, applicability: QueryResult[bool] | None = None
 ) -> Assessment | None:
     if node.kind == "view":
-        return assess_view(None, applicability=answer if applicability is None else applicability)
+        return assess_view(
+            None, validity=None, applicability=answer if applicability is None else applicability
+        )
     if node.kind == "constraint":
         return ConstraintAssessment({node.key: answer}, answer)
     if node.kind == "validity":
@@ -309,7 +311,7 @@ def copy_assessment(node: Address, assessment: Assessment) -> Assessment:
         if output is not None and assessment.result is assessment.output_result
         else copy_result(node, assessment.result)
     )
-    return ViewAssessment(result, assessment.applicability, output)
+    return ViewAssessment(result, assessment.applicability, assessment.validity, output)
 
 
 __all__ = [

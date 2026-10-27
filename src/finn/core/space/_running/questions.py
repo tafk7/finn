@@ -290,6 +290,8 @@ def _value_reads(ev: Evaluation, index: Address) -> Sequence[Address]:
     if spec.guard is not None and trace and trace[0][0] == spec.guard:
         trace = trace[1:]
     skipped = set(entry.existence)
+    if spec.kind == "view":
+        skipped.update(spec.constraints)  # the owning gate is not a body value input
     if spec.kind == "select" and spec.selector is not None:
         skipped.add(spec.selector)
     return [dep for dep, _ in trace if dep not in skipped]

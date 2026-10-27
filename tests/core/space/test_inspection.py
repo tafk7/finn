@@ -241,11 +241,12 @@ def test_statistics_counts_instantiated_members_and_direct_structure() -> None:
     small, large = repeated(2), repeated(4)
     # Each placement contributes its two effective members and the placement
     # itself, while the root scope is shared. Every scope has a validity node: a leaf's
-    # reads its Decision, the root's each leaf's. A view reads only its local output.
+    # reads its Decision, the root's each leaf's. A view reads its local output and
+    # real owning validity.
     assert small.authored_declarations == 6
     assert small.scopes == 3
     assert small.nodes == 2 * 3 + 1
-    assert small.potential_edges == 2 * 2 + 2
+    assert small.potential_edges == 2 * 3 + 2
     assert small.choices == 0
     assert small.owning_decisions == 2
     assert large.authored_declarations == 2 * small.authored_declarations

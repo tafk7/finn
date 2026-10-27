@@ -71,6 +71,8 @@ class Node:
     # A validity node: its pieces, in order: the
     # Space's constraints, its Decisions (each a piece only where its domain lists no
     # value, or its guard is refused), and its placed Spaces' validity nodes.
+    # A View's intrinsic owning-validity edge is resolved by Address.constraints
+    # after template placement, independently of its namespace (Groups have no validity).
     constraints: tuple[NodeRef, ...] = ()
     alternatives: tuple[tuple[str, NodeRef], ...] = ()
     selector: NodeRef | None = None

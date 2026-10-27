@@ -15,6 +15,7 @@ from support.helpers import FULL_DSP48E2, fifo_node
 from finn.core.space import (
     Available,
     QueryResult,
+    Rejected,
     Unresolved,
     design_space,
     inspection,
@@ -93,10 +94,12 @@ def test_fifo_refuses_an_unsupported_geometry_before_and_after_its_ram_style(dep
             ("capacity_supported", {"fifo-geometry"}),
             ("geometry_supported", {"fifo-geometry"}),
         ]
-    assert isinstance(base.inspect(FifoKernel.netlist).result, Unresolved)
+    assert isinstance(base.inspect(FifoKernel.netlist).result, Rejected)
     chosen = base.with_choices(ram_style="auto")
-    assert isinstance(chosen.inspect(FifoKernel.netlist).result, Available)
-    assert library_module(chosen).implementation_id == "finnlib.fifo"
+    assert isinstance(chosen.inspect(FifoKernel.netlist).result, Rejected)
+    assert chosen.inspect(FifoKernel.netlist).output_result is None
+    with pytest.raises(ValueUnavailableError):
+        library_module(chosen)
 
 
 @pytest.mark.parametrize(

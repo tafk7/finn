@@ -107,7 +107,7 @@ def test_threshold_states_its_result_type_initial_table_and_configuration() -> N
     assert threshold(bias=-4).result_dtype.name == "INT3"
     narrow_negative = threshold(bias=-5)
     assert narrow_negative.result_dtype.name == "INT33"
-    assert isinstance(narrow_negative.inspect(ThresholdingAxiKernel.netlist).result, Available)
+    assert isinstance(narrow_negative.inspect(ThresholdingAxiKernel.netlist).result, Rejected)
     assert inspection.validity(narrow_negative).status == "refused"
     enabled = library_module(threshold(axilite=True, deep=True))
     assert dict(enabled.parameters)["USE_AXILITE"] == 1
@@ -199,7 +199,7 @@ def test_threshold_rejects_unsupported_profiles_and_malformed_tables() -> None:
         threshold(bias=-10),
     )
     assert all(
-        isinstance(point.inspect(ThresholdingAxiKernel.netlist).result, Available)
+        isinstance(point.inspect(ThresholdingAxiKernel.netlist).result, Rejected)
         for point in profiles
     )
     assert all(inspection.validity(point).status == "refused" for point in profiles)
@@ -279,8 +279,8 @@ def test_a_refused_input_port_leaves_its_kernels_domains_and_refuses_its_product
     assert [piece.owner for piece in inspection.validity(committed.instance).pieces] == [
         "input_element_taken"
     ]
-    assert isinstance(committed.instance.query(ThresholdingAxiKernel.netlist), Unresolved)
-    assert isinstance(committed.instance.query(ThresholdingAxiKernel.cycles), Available)
+    assert isinstance(committed.instance.query(ThresholdingAxiKernel.netlist), Rejected)
+    assert isinstance(committed.instance.query(ThresholdingAxiKernel.cycles), Rejected)
 
 
 def placed_on(channels: int, table: IntegerTensor) -> ThresholdingAxiKernel:

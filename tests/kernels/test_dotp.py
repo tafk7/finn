@@ -225,8 +225,8 @@ def test_validity_reports_each_rule_and_readout_keeps_only_local_refusals(update
     # only the DSP's own bounds, so no node reports a cause twice.
     point = kernel(**updates)
     physical = point.inspect(DotpAxiKernel.netlist)
-    expected = Rejected if code in {"dotp-dsp", "dotp-clock-period"} else Available
-    assert isinstance(physical.result, expected)
+    assert isinstance(physical.result, Rejected)
+    assert (physical.output_result is None) == (code != "dotp-clock-period")
     validity = inspection.validity(point).result
     if code == "dotp-clock-period":
         assert validity == Available(True)  # only the local module calculation refuses
@@ -274,7 +274,8 @@ def test_a_folding_factor_given_that_does_not_divide_its_extent_refuses_the_core
 def test_constraints_gate_acceptance_and_the_module_does_not_revalidate_them():
     point = kernel(Int8Dsp58DotpKernel, result_dtype=DataType["INT59"], compute_pumping=True)
     physical = point.inspect(DotpAxiKernel.netlist)
-    assert isinstance(physical.result, Available)
+    assert isinstance(physical.result, Rejected)
+    assert physical.output_result is None
     refused = inspection.validity(point).result
     assert isinstance(refused, Rejected)
     assert [finding.code for finding in refused.findings] == ["dotp-accumulator-width"]
@@ -482,7 +483,7 @@ def test_only_the_packed_core_needs_two_bit_activations():
     its 9-bit lanes, so the INT8 core takes BINARY activations."""
     binary = {"activation_dtype": DataType["BINARY"], "result_dtype": DataType["INT6"]}
     packed = kernel(**binary)
-    assert isinstance(packed.query(DotpAxiKernel.netlist), Available)
+    assert isinstance(packed.query(DotpAxiKernel.netlist), Rejected)
     assert codes(inspection.validity(packed).result) == {"dtype-minimum-bits"}
     int8 = kernel(Int8Dsp58DotpKernel, **binary)
     assert dict(library_module(int8).parameters)["ACTIVATION_WIDTH"] == 1
@@ -611,7 +612,7 @@ def test_each_core_kernel_names_its_core_and_the_shared_base_places_none():
 )
 def test_the_int8_core_takes_signed_nine_by_eight_products_on_dsp58_only(updates, code):
     point = kernel(Int8Dsp58DotpKernel, **updates)
-    assert isinstance(point.query(DotpAxiKernel.netlist), Available)
+    assert isinstance(point.query(DotpAxiKernel.netlist), Rejected)
     assert code in codes(inspection.validity(point).result)
     for activation in ("INT9", "UINT8"):
         accepted = kernel(
@@ -630,7 +631,7 @@ def test_depthwise_activations_carry_pe_channels_of_simd_and_only_int8_reads_the
     lanes = [_axis(point, name).elements_per_beat for name in ("x", "w", "y")]
     assert lanes == [6, 6, 3]
     unsupported = kernel(form=Form.DEPTHWISE)
-    assert isinstance(unsupported.query(DotpAxiKernel.netlist), Available)
+    assert isinstance(unsupported.query(DotpAxiKernel.netlist), Rejected)
     assert codes(inspection.validity(unsupported).result) == {"dotp-form"}
 
 

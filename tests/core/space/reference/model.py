@@ -153,10 +153,10 @@ Each reading below is stated in full: the rule the semantics' author chose for t
 where the semantics leave room. A "§ 16.n" is the number its author gave the reading,
 kept as its label; the text here is the rule.
 
-1. *Views are independent readouts*: local inputs and the body determine the answer
-   after ordinary scope presence. Owning validity is never an implicit input. A
-   refusing body refuses only the view; no model piece reads a view, so a view is
-   never an origin in the pairs that govern admission of choices.
+1. *Views require a non-refused owning scope*: after ordinary presence, a false
+   owning validity blocks output entry. Open validity permits local computation;
+   only actual input waits determine an unresolved output. A view cannot be read
+   by a model piece and is never an origin governing admission of choices.
 2. *Only an origin feeding a false piece counts* (§ 16.2, kept by § 16.15). A piece's
    origins are found from it, following refused inputs back through derived values,
    ``Members`` (to their refused entries; a ``Members`` is never an origin), and
@@ -738,6 +738,8 @@ class _Evaluation:
             return Unresolved(tuple(sorted(presence.waits)))
         if kind == "members":
             return self._members(path, scope)
+        if kind == "view" and self.validity(scope).verdict is Verdict.FALSE:
+            return Refused((Reason(ReasonKind.SPACE_REFUSED, path, scope),))
         inputs = self.inputs(self.index.reads_of(path))
         body: Answer
         if inputs.refused:

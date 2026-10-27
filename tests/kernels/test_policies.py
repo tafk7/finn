@@ -162,7 +162,7 @@ class Refusing(Space):
 
     @constraint
     def holds(self) -> bool | Rejected:
-        return reject("toy-memory", "refused") if self.bits < 0 else True
+        return reject("toy-memory", "refused") if self.bits == -1 else True
 
     @view
     def ram_preference(self) -> tuple[str, ...] | Rejected:
@@ -382,16 +382,18 @@ def test_each_choice_takes_the_policy_of_its_member_s_owner() -> None:
     }
 
 
-def test_readable_ranking_is_independent_of_a_refused_model() -> None:
+def test_owning_refusal_blocks_an_otherwise_computable_ranking() -> None:
     ranking = owner(Refusing, {Refusing.ram_style: FirstValid(order=Refusing.ram_preference)})
     point = design_space(Refusing(bits=-1))
     assert inspection.validity(point).status == "refused"
-    assert point.ram_preference == memory_preference(-1)
+    assert isinstance(point.query(Refusing.ram_preference), Rejected)
+    assert point.inspect(Refusing.ram_preference).output_result is None
     (item,) = (each for each in inspection.decisions(point) if each.key == "ram_style")
     (listed,) = inspection.viable(point, [item.reference])
     values, fallback = ranked(point, ranking, item, listed.values or ())
     assert values == listed.values
-    assert fallback is None
+    assert fallback is not None
+    assert {cause.code for cause in fallback.causes} == {"toy-memory"}
 
 
 class Keeper(Space):

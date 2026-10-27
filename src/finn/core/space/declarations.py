@@ -938,11 +938,12 @@ class View(Declaration, Generic[T]):
     """A local readout of its Space, from a value or authored function.
 
     On a configuration it reads its value; unavailable inputs, local refusal and
-    ordinary presence determine its answer. It never implicitly queries model
-    validity. On the class it is a declaration, and on a placement a typed symbolic
-    reference. Views compose views but cannot feed model bindings, domains or rules.
-    ``point.inspect`` reports the local output and applicability; an operation needing
-    a valid, complete design explicitly checks that at its own boundary.
+    ordinary presence determine its answer after its real owning Space is checked.
+    Owning refusal blocks output entry; open validity permits local computation.
+    On the class it is a declaration, and on a placement a typed symbolic reference.
+    Views compose views but cannot feed model bindings, domains or rules.
+    ``point.inspect`` records applicability, the owning gate and attempted output.
+    An operation needing a valid, complete design still checks that at its boundary.
     """
 
     @overload

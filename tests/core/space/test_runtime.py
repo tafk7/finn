@@ -79,10 +79,12 @@ def test_fifo_configure_replace_and_inspect_is_immutable() -> None:
 def test_final_constraint_refusal_remains_visible_while_output_unresolved() -> None:
     base = design_space(Fifo(word_bits=0, depth=8))
     assessment = base.inspect(Fifo.physical)
-    assert isinstance(assessment.result, Unresolved)
+    assert isinstance(assessment.result, Rejected)
+    assert assessment.output_result is None
     assert [piece.owner for piece in inspection.validity(base).pieces] == ["supported"]
     ready = base.with_choices(ram_style="auto").inspect(Fifo.physical)
-    assert ready.result == Available(FifoShape(0, 8, "auto"))
+    assert isinstance(ready.result, Rejected)
+    assert ready.output_result is None
 
 
 def test_required_inputs_one_refused_and_another_waiting_read_as_refused() -> None:

@@ -136,7 +136,7 @@ def test_view_reducer_preserves_each_local_answer() -> None:
         Inapplicable(),
     )
     for answer in answers:
-        assessment = assess_view(answer)
+        assessment = assess_view(answer, validity=Available(True))
         assert assessment.result == answer
         assert assessment.output_result == answer
         assert assessment.applicability == Available(True)
@@ -144,12 +144,12 @@ def test_view_reducer_preserves_each_local_answer() -> None:
 
 def test_view_presence_prevents_output_entry() -> None:
     for presence in (Available(False), blocker(), reject("absent", "no presence"), Inapplicable()):
-        assessment: ViewAssessment[int] = assess_view(None, applicability=presence)
+        assessment: ViewAssessment[int] = assess_view(None, validity=None, applicability=presence)
         assert assessment.output_result is None
         assert assessment.applicability == presence
         assert assessment.result == (Inapplicable() if presence == Available(False) else presence)
     with pytest.raises(ValueError, match="requires its local output"):
-        assess_view(None)
+        assess_view(None, validity=Available(True))
 
 
 def test_errors_keep_boundary_and_programming_failures_distinct() -> None:
@@ -295,7 +295,8 @@ def test_a_view_and_a_view_reading_it_answer_its_accepted_result() -> None:
     assert isinstance(direct, ViewAssessment)
     assert point.query(Placed.parent) == direct.result
     assert point.query(Placed.inner.physical) == direct.result
-    assert direct.result == Available(4)
+    assert isinstance(direct.result, Rejected)
+    assert direct.output_result is None
     assert inspection.validity(point.inner).status == "refused"
 
 
@@ -313,7 +314,7 @@ def test_a_functions_output_of_the_wrong_type_is_its_owners_error() -> None:
     assert isinstance(raised.value.__cause__, TypeError)
 
 
-def test_a_view_and_explicit_validity_report_independent_answers() -> None:
+def test_refused_validity_prevents_attempting_output() -> None:
     class Grouped(Space):
         @derived
         def output(self) -> int:
@@ -334,14 +335,15 @@ def test_a_view_and_explicit_validity_report_independent_answers() -> None:
     point = design_space(Grouped())
     for _ in range(2):
         assessment = point.inspect(Grouped.physical)
-        assert assessment.output_result == Available(4)
-        assert assessment.result == Available(4)
+        assert assessment.output_result is None
+        assert isinstance(assessment.result, Rejected)
+        assert assessment.validity == assessment.result
         assert assessment.applicability == Available(True)
     validity = inspection.validity(point)
     assert validity.status == "refused"
     assert [piece.owner for piece in validity.pieces] == ["refused"]
     committed = point.with_choices(lanes=1)
-    assert committed.inspect(Grouped.physical).result == Available(4)
+    assert isinstance(committed.inspect(Grouped.physical).result, Rejected)
 
 
 def test_a_view_of_a_space_with_no_pieces_reads_its_output() -> None:

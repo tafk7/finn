@@ -238,6 +238,9 @@ class Address(tuple["ScopeRecord", int]):
     @property
     def constraints(self) -> tuple[Address, ...]:
         member, through, key, _ = self._read()
+        if member.kind == "view":
+            # A template may be included through Groups: its real owner is known here.
+            return (self.scope.owning_space.validity,)
         return tuple(through.mapped(edge, key) for edge in member.constraints)
 
     @property
@@ -254,13 +257,20 @@ class Address(tuple["ScopeRecord", int]):
 
     @property
     def dependencies(self) -> tuple[Address, ...]:
-        """Its edges mapped, in ``Node.dependencies``' order, each once."""
+        """Explicit edges mapped once, plus a View's intrinsic real-owner validity edge.
+
+        That owner is resolved at placement, so Group templates never need their own
+        validity node or an artificial dependency on an arbitrary enclosing class.
+        """
         member, through, key, _ = self._read()
         found = (
             through.guard_at(edge, key) if edge is member.guard else through.mapped(edge, key)
             for edge in member.dependencies
         )
-        return tuple(dict.fromkeys(address for address in found if address is not None))
+        dependencies = tuple(address for address in found if address is not None)
+        if member.kind == "view":
+            dependencies += self.constraints
+        return tuple(dict.fromkeys(dependencies))
 
 
 class _SelectionIndex(Mapping[str, Address]):
@@ -1201,7 +1211,10 @@ def _written_keys(registry: _Registry, compiled: Compiled) -> Mapping[str, int]:
 def _edges(address: Address) -> int:
     """How many addresses a member's edges read (each once)."""
     member, through, _, _ = address._read()
-    return len({found for edge in member.dependencies if (found := through.target(edge))})
+    targets = {found for edge in member.dependencies if (found := through.target(edge))}
+    if member.kind == "view":
+        targets.add(address.scope.owning_space.validity)
+    return len(targets)
 
 
 def _prefixes(record: ScopeRecord, rest: str) -> Iterator[tuple[int, str]]:

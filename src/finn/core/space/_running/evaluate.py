@@ -467,6 +467,14 @@ def _same_assessment(node: Address, left: Assessment | None, right: Assessment |
             _same_answer(node, left.result, right.result)
             and _same_bool(left.applicability, right.applicability)
             and (
+                left.validity is right.validity
+                or (
+                    left.validity is not None
+                    and right.validity is not None
+                    and _same_bool(left.validity, right.validity)
+                )
+            )
+            and (
                 left.output_result is right.output_result
                 or (
                     left.output_result is not None
@@ -1153,8 +1161,14 @@ def _select(ev: Evaluation, node: Address, trace: _Tr, reader: Address) -> Ans:
 
 def _view(ev: Evaluation, node: Address, trace: _Tr, reader: Address) -> Ans:
     assert node.output is not None
-    output = ev.read(trace, node.output, reader).result
-    view = assess_view(output)
+    (owner,) = node.constraints
+    validity = cast(QueryResult[bool], ev.read(trace, owner, reader).result)
+    output = (
+        None
+        if isinstance(validity, (Rejected, Inapplicable))
+        else ev.read(trace, node.output, reader).result
+    )
+    view = assess_view(output, validity=validity)
     return Ans(view.result, tuple(trace), view)
 
 

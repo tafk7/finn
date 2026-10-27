@@ -556,11 +556,12 @@ class RefusedSpace(Space):
         return 1
 
 
-def test_present_inapplicable_view_is_independent_of_refused_validity() -> None:
-    """Local applicability is independent of unrelated owner rules."""
+def test_invalid_owner_prevents_even_an_inapplicable_view_body() -> None:
+    """Presence holds, but owning refusal blocks entry before logical applicability."""
     point = design_space(RefusedSpace())
     answer = point.query(RefusedSpace.early)
-    assert isinstance(answer, Inapplicable)
+    assert isinstance(answer, Rejected)
+    assert point.inspect(RefusedSpace.early).output_result is None
     assert inspection.validity(point).status == "refused"
     assert isinstance(point.query(RefusedSpace.derived_early), Inapplicable)
 

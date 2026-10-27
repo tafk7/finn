@@ -74,9 +74,11 @@ def test_merged_findings_keeps_each_identical_finding_once_and_every_distinct_on
 
 def test_the_view_reducer_preserves_its_local_findings() -> None:
     kitchen = blocker("kitchen.finish")
-    waiting: ViewAssessment[int] = assess_view(Unresolved((kitchen,)))
+    waiting: ViewAssessment[int] = assess_view(Unresolved((kitchen,)), validity=Available(True))
     assert waiting.result == Unresolved((kitchen,))
-    refused: ViewAssessment[int] = assess_view(Rejected((refusal("kitchen.small_enough"),)))
+    refused: ViewAssessment[int] = assess_view(
+        Rejected((refusal("kitchen.small_enough"),)), validity=Available(True)
+    )
     assert refused.result == Rejected((refusal("kitchen.small_enough"),))
 
 
@@ -125,7 +127,8 @@ def test_a_refusal_through_output_and_validity_is_reported_once_per_owner() -> N
             return self.kitchen.cost + self.dining.cost
 
     point = design_space(Big()).with_choices({Big.kitchen.finish: 1, Big.dining.finish: 1})
-    assert point.inspect(Big.total).result == Available(90)
+    assert isinstance(point.inspect(Big.total).result, Rejected)
+    assert point.inspect(Big.total).output_result is None
     refused = inspection.validity(point).result
     assert isinstance(refused, Rejected)
     assert [(f.owner, f.message) for f in refused.findings] == [

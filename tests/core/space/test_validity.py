@@ -11,8 +11,8 @@ it wait on it. A stored value's type check is no piece either: it was made at
 assignment. A case not selected contributes nothing. ``inspection.validity`` answers it,
 with the pieces that are not true and their owners.
 
-A view is a local readout, independent of owning validity. Ordinary presence still
-blocks entry; a local output can be available, refused, unresolved or inapplicable.
+A view requires non-refused owning validity after ordinary presence. Open validity
+permits a local output; owning refusal prevents attempting that output.
 A constraint reads values; one that reads a view is refused at compile
 (``view-read-in``). A ``Members`` may read a derived value, which a holder reads as the
 value whatever the Space's validity; a holder reading a view of a ``Members`` is a view. A value is
@@ -296,7 +296,7 @@ class Product(Space):
         return self.width // 1
 
 
-def test_a_view_answers_independently_of_its_spaces_validity() -> None:
+def test_open_validity_permits_output_and_refused_validity_blocks_it() -> None:
     open_ = design_space(Product(width=4))
     assert inspection.validity(open_).status == "open"
     assert open_.cycles == 4
@@ -306,9 +306,9 @@ def test_a_view_answers_independently_of_its_spaces_validity() -> None:
     assert not report.accepted and broken(report) == {"divides": set()}
     refused = built(open_, {"lanes": 3})
     answer = refused.query(Product.cycles)
-    assert answer == Available(4)
+    assert isinstance(answer, Rejected)
     assert inspection.validity(refused).status == "refused"
-    assert refused.inspect(Product.cycles).output_result == Available(4)
+    assert refused.inspect(Product.cycles).output_result is None
 
 
 class Port(Space):
@@ -469,7 +469,7 @@ def test_a_derived_member_answers_while_its_space_is_refused_and_a_view_member_r
     assert owners(inspection.validity(point.stage)) == ["stage.fits"]
     assert point.total_width == 16
     refused = point.query(Holder.total_cost)
-    assert refused == Available(80)
+    assert isinstance(refused, Rejected)
     fine = commit(design_space(Holder()), {"stage.lanes": 2})
     assert fine.total_width == 4 and fine.total_cost == 20
 

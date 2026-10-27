@@ -347,7 +347,8 @@ class _Namespace(metaclass=SpaceMeta):
         """The assessment of a view or a constraint of this configuration.
 
         ``point.inspect(House.total)`` is the view's ``ViewAssessment``: its local
-        result, applicability and output (None when presence prevented entry). A view of a
+        result, applicability, owning validity and output (None when presence or
+        owning refusal prevented entry). A view of a
         child is inspected on the child's configuration,
         ``point.kitchen.inspect(Room.cost)`` (typed by the view declaration),
         or through a path, ``point.inspect(House.kitchen.cost)`` (a reference

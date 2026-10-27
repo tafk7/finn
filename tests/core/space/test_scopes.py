@@ -17,6 +17,7 @@ from finn.core.space import (
     Decision,
     Inapplicable,
     Param,
+    Rejected,
     Select,
     Space,
     Unresolved,
@@ -101,7 +102,7 @@ def test_composite_keeps_narrow_fields_available_and_reuses_accepted_children() 
     selected = successor.implementation
     assert isinstance(selected, Refused)
     direct = selected.inspect(Refused.physical).result
-    assert direct == Available(-1)
+    assert isinstance(direct, Rejected)
     assert successor.inspect(Composite.physical).result == direct
     assert successor.query(Composite.implementation.width) == Available(-1)
     assert successor.selected_width == -1

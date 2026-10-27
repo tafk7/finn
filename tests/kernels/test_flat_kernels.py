@@ -30,7 +30,6 @@ from support.xsim import requires_xsim
 
 from finn.core.rtlsim_bench import simulate
 from finn.core.space import (
-    Available,
     DefinitionError,
     Rejected,
     design_space,
@@ -226,26 +225,27 @@ def test_native_rtl_pin_names_directions_and_widths(factory, tmp_path):
 
 
 @pytest.mark.parametrize(
-    "factory, local_result",
+    "factory",
     [
-        (lambda: fifo(depth=1), Available),
-        (lambda: eltwise(operation="DIV"), Available),
-        (lambda: eltwise(lhs=DataType["INT4"]), Available),
-        (lambda: eltwise(lhs=DataType["BIPOLAR"]), Available),
-        (lambda: eltwise(b_scale=1e100), Rejected),
-        (lambda: eltwise(b_scale=0.5), Available),
-        (lambda: eltwise(operation="MUL", lhs=DataType["FLOAT32"], b_scale=0.5), Available),
-        (lambda: eltwise(lhs=DataType["FLOAT32"], platform=FULL_DSP48E2), Available),
-        (lambda: threshold(thresholds=(((2, 1),),)), Available),
-        (lambda: threshold(thresholds=(((0, 20),),)), Available),
-        (lambda: threshold(bias=1 << 31), Available),
-        (lambda: threshold(bias=-10), Available),
+        lambda: fifo(depth=1),
+        lambda: eltwise(operation="DIV"),
+        lambda: eltwise(lhs=DataType["INT4"]),
+        lambda: eltwise(lhs=DataType["BIPOLAR"]),
+        lambda: eltwise(b_scale=1e100),
+        lambda: eltwise(b_scale=0.5),
+        lambda: eltwise(operation="MUL", lhs=DataType["FLOAT32"], b_scale=0.5),
+        lambda: eltwise(lhs=DataType["FLOAT32"], platform=FULL_DSP48E2),
+        lambda: threshold(thresholds=(((2, 1),),)),
+        lambda: threshold(thresholds=(((0, 20),),)),
+        lambda: threshold(bias=1 << 31),
+        lambda: threshold(bias=-10),
     ],
 )
-def test_model_rules_and_local_netlist_results_are_separate(factory, local_result):
+def test_refused_model_prevents_attempting_a_netlist(factory):
     point = factory()
     assessment = point.inspect(type(point).netlist)
-    assert isinstance(assessment.result, local_result)
+    assert isinstance(assessment.result, Rejected)
+    assert assessment.output_result is None
     assert inspection.validity(point).status == "refused"
 
 

@@ -114,10 +114,12 @@ def test_an_unaccepted_view_read_raises_carrying_its_result() -> None:
     assert isinstance(unresolved.value.result, Unresolved)
     assert unresolved.value.result == base.query(Hall.kitchen.cost)
     assert {finding.owner for finding in unresolved.value.result.findings} == {"kitchen.finish"}
-    # Unrelated refusal is explicitly queried, not inherited by the view.
+    # The hall's own refusal blocks its output before entry.
     refused = too_large(hall=1)
-    assert refused.hall.cost == 36
-    assert refused.inspect(Hall.hall.cost).result == Available(36)
+    with pytest.raises(ValueUnavailableError):
+        _ = refused.hall.cost
+    assert isinstance(refused.inspect(Hall.hall.cost).result, Rejected)
+    assert refused.inspect(Hall.hall.cost).output_result is None
     assert inspection.validity(refused).status == "refused"
     # An absent node's view is inapplicable.
     without = base.with_choices(want_garage=False)
@@ -165,9 +167,9 @@ def test_a_derived_value_supplies_a_formal_by_assignment_and_at_the_call() -> No
     point = chosen()
     assert point.hall.area == 24  # hall.area = kitchen.price
     assert point.annex.area == 16  # Room(area=dining.price)
-    # Both formal and readout answer independently of the hall validity.
+    # The model formal remains available; owning refusal blocks the readout.
     big = too_large(hall=2)
-    assert big.hall.area == 36 and big.query(Hall.hall.cost) == Available(72)
+    assert big.hall.area == 36 and isinstance(big.query(Hall.hall.cost), Rejected)
 
 
 def test_a_view_refuses_with_its_space_and_answers_while_it_is_open_in_both_forms() -> None:
@@ -179,13 +181,13 @@ def test_a_view_refuses_with_its_space_and_answers_while_it_is_open_in_both_form
     assert [piece.owner for piece in validity.pieces] == ["garage.small_enough"]
     assert point.checked == 16 and point.total == 40
     assert point.inspect(Hall.checked).result == Available(16)
-    # A refused child refuses the hall validity; both forms of view stay local.
+    # A refused child refuses hall validity, blocking the hall views in both forms.
     refused = too_large(hall=1)
     validity = inspection.validity(refused)
     assert validity.status == "refused"
     assert [piece.owner for piece in validity.pieces] == ["hall.small_enough"]
-    assert refused.query(Hall.total) == Available(52)
-    assert refused.query(Hall.checked) == Available(16)
+    assert isinstance(refused.query(Hall.total), Rejected)
+    assert isinstance(refused.query(Hall.checked), Rejected)
     # The children that are valid still answer theirs.
     assert refused.kitchen.cost == 36 and refused.dining.cost == 16
 
@@ -198,8 +200,8 @@ def test_a_view_refuses_with_its_space_and_answers_while_it_is_open_in_both_form
         {Strict.kitchen.finish: 1, Strict.dining.finish: 1}
     )
     assert inspection.validity(strict).status == "refused"
-    assert strict.inspect(Strict.checked).result == Available(10)
-    assert strict.checked == 10
+    assert isinstance(strict.inspect(Strict.checked).result, Rejected)
+    assert strict.inspect(Strict.checked).output_result is None
 
 
 def test_inspect_and_query_are_explicit_calls_on_the_configuration() -> None:

@@ -642,7 +642,9 @@ def test_reading_1_a_views_local_refusal_never_governs_choice_admission() -> Non
     deep = rejected(change(base, Change(commit={"stage.depth": 4})))
     assert deep.refusals == (rule("stage.small", "too-deep", "stage"),)
     after = solve_at(staged(), {"stage.depth": 4})
-    assert after.view("stage.half") == Known(2)
+    assert after.view("stage.half") == Refused(
+        (Reason(ReasonKind.SPACE_REFUSED, "stage.half", "stage"),)
+    )
     assert false_kinds(after) == {(PieceKind.CONSTRAINT, "stage.small")}
 
 
@@ -1791,10 +1793,10 @@ def viewed() -> Space:
     )
 
 
-def test_a_view_answers_independently_of_its_refused_space() -> None:
+def test_refused_owning_space_blocks_view_before_output() -> None:
     solution = solve(viewed(), {"limit": 1, "name": "u"}, x=2)
     assert solution.validity().verdict is F
-    assert solution.view("doubled") == Known(4)
+    assert solution.view("doubled") == Refused((Reason(ReasonKind.SPACE_REFUSED, "doubled", ""),))
 
 
 def test_a_view_answers_while_its_space_is_open() -> None:
@@ -1832,9 +1834,7 @@ def test_a_derived_value_may_refuse_and_its_readers_receive_a_refused_input() ->
         F,
         (Reason(ReasonKind.INPUT_REFUSED, "fits", "", "too-wide", ("width",)),),
     )
-    assert odd.view("shown") == Refused(
-        (Reason(ReasonKind.INPUT_REFUSED, "shown", "", related=("width",)),)
-    )
+    assert odd.view("shown") == Refused((Reason(ReasonKind.SPACE_REFUSED, "shown", ""),))
     even = solve(width_read(), {"w": 4})
     assert even.read("width") == Known(4)
     assert even.validity().verdict is T
@@ -1854,7 +1854,7 @@ def stage(name: str) -> Scope:
 def test_a_parent_rules_on_its_childrens_derived_values_and_composes_their_views() -> None:
     """The parent's rule reads what its children state (derived values); its
     view ``total`` composes their views. The child is valid on its own, and its view
-    and the parent's view both answer independently of the parent's refused validity."""
+    answers while the parent is refused; the parent's own view is blocked."""
 
     space = Space(
         (),
@@ -1890,7 +1890,7 @@ def test_a_parent_rules_on_its_childrens_derived_values_and_composes_their_views
     # the child is valid on its own; its view answers while the parent is refused
     assert refused.validity("first").verdict is T
     assert refused.view("first.storage") == Known(32)
-    assert refused.view("total") == Known(64)
+    assert refused.view("total") == Refused((Reason(ReasonKind.SPACE_REFUSED, "total", ""),))
     assert solve_at(space, {"first.depth": 1, "second.depth": 2}).view("total") == Known(24)
 
 

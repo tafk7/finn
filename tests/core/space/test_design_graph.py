@@ -103,7 +103,8 @@ def test_a_relation_of_siblings_is_their_parents_and_owns_its_refusal() -> None:
     assert [(rule.rule, rule.standing) for rule in report.broken] == [("aligned", ())]
     apart = built(point, {"first.factor": 3, "second.factor": 4})
     refused = apart.inspect(Aligned.factor)
-    assert refused.result == Available(3)
+    assert isinstance(refused.result, Rejected)
+    assert refused.output_result is None
     assert [(f.owner, f.message) for f in apart.query(Aligned.aligned).findings] == [
         ("aligned", "first.factor=3, second.factor=4")
     ]
@@ -158,7 +159,7 @@ def test_members_range_over_present_nodes_and_the_budget_counts_them() -> None:
     ]
     over = built(third, {"use_third": True, "a.factor": 4, "b.factor": 2, "c.factor": 1})
     refused = over.query(Budgeted.total)
-    assert refused == Available(13)
+    assert isinstance(refused, Rejected)
     assert inspection.validity(over).status == "refused"
 
 

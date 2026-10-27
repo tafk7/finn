@@ -207,14 +207,17 @@ def assess_constraints(answers: Mapping[str, QueryResult[bool]]) -> ConstraintAs
 
 @dataclass(frozen=True, slots=True)
 class ViewAssessment(Generic[T]):
-    """One local readout: its result, presence and output when entered.
+    """One view result with its presence, owning validity and attempted output.
 
-    ``output_result`` is None only when presence prevented reading the output.
-    Model validity and choice completeness are separate, explicitly asked questions.
+    ``validity`` is None when presence prevented the gate. ``output_result`` is None
+    when presence or owning refusal prevented output entry. Open validity permits a
+    local result; its unrelated waits are not merged into that result. Completeness
+    remains a separate operation-level question.
     """
 
     result: QueryResult[T]
     applicability: QueryResult[bool]
+    validity: QueryResult[bool] | None
     output_result: QueryResult[T] | None
 
     def require_value(self) -> T:
@@ -236,18 +239,29 @@ def require_value(result: QueryResult[T], *, context: object | None = None) -> T
 def assess_view(
     output_result: QueryResult[T] | None,
     *,
+    validity: QueryResult[bool] | None,
     applicability: QueryResult[bool] = Available(True),
 ) -> ViewAssessment[T]:
-    """Reduce ordinary presence and a local output without asking model validity."""
+    """Presence first, then normalized owning validity, then the local output.
+
+    The evaluator observes this order before entering a body. This reducer records
+    what was attempted; open validity alone does not withhold an output.
+    """
 
     if not isinstance(applicability, Available) or applicability.value is False:
         inactive: QueryResult[T] = (
             applicability if not isinstance(applicability, Available) else Inapplicable()
         )
-        return ViewAssessment(inactive, applicability, None)
+        return ViewAssessment(inactive, applicability, None, None)
+    if validity is None:
+        raise ValueError("an applicable view requires its owning validity")
+    if isinstance(validity, (Rejected, Inapplicable)):
+        return ViewAssessment(validity, applicability, validity, None)
+    if isinstance(validity, Available) and validity.value is not True:
+        raise ValueError("owning validity must be normalized before assessing a view")
     if output_result is None:
         raise ValueError("an applicable view requires its local output")
-    return ViewAssessment(output_result, applicability, output_result)
+    return ViewAssessment(output_result, applicability, validity, output_result)
 
 
 __all__ = [
