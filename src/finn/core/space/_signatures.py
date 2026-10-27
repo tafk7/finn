@@ -10,7 +10,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Self, Union, cast, get_args, get_origin, get_type_hints
 
-from ._configuration import Space
+from ._configuration import _Namespace
 from ._nodes import selector_value
 from .declarations import (
     CaseRef,
@@ -266,7 +266,7 @@ def bind_function(
         receiver = hints.get("self", Self)
         if receiver is not Self and not (
             isinstance(receiver, type)
-            and issubclass(receiver, Space)
+            and issubclass(receiver, _Namespace)
             and issubclass(effective.space_type, receiver)
         ):
             raise DefinitionError.broken(

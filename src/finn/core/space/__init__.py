@@ -34,6 +34,7 @@ from .errors import (
 )
 from .extensions import composite
 from .graph import Located
+from .groups import Group
 from .occurrence import bind
 from .references import DecisionHandle, ValueHandle
 from .results import (
@@ -52,6 +53,7 @@ from .results import (
 __all__ = [
     # Space classes, node declarations and the compile step
     "Space",
+    "Group",
     "design_space",
     "bind",
     "Model",

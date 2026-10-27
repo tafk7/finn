@@ -41,7 +41,7 @@ from typing import Any, TypeAlias, cast
 from . import _compose
 from ._allocate import allocate
 from ._check import check
-from ._configuration import Space
+from ._configuration import _Namespace
 from ._lower import lower
 from ._nodes import NodeDecision, NodeDecl, slot_declaration
 from ._table import Binding, Table, member_key
@@ -83,7 +83,7 @@ class CompiledSlot:
     position: tuple[int, int]
 
     @property
-    def space_type(self) -> type[Space]:
+    def space_type(self) -> type[_Namespace]:
         return self.compiled.space_type
 
 
@@ -123,11 +123,12 @@ class Compiled:
     order). Its own maps, by record and slot: ``formals``, ``members``,
     ``children``, ``choices``, ``selections`` (each own selection's (choice, member))."""
 
-    space_type: type[Space]
+    space_type: type[_Namespace]
     records: tuple[Member, ...]
     slots: tuple[CompiledSlot, ...]
     choices: tuple[CompiledChoice, ...]
-    validity: int
+    validity: int | None
+    pieces: tuple[Edge, ...]
     value_members: tuple[int, ...]
     formals: Mapping[str, int]
     formal_names: Mapping[int, str]
@@ -185,13 +186,13 @@ class Compiled:
         return member_key(".".join(names), current.records[ref.member].key)
 
 
-def compiled(space_type: type[Space]) -> Compiled:
+def compiled(space_type: type[_Namespace]) -> Compiled:
     """The compiled form of a Space class: computed once (``link_template``), and cached on
     the class."""
     return link_template(space_type)
 
 
-def cached_compiled(space_type: type[Space]) -> Compiled:
+def cached_compiled(space_type: type[_Namespace]) -> Compiled:
     """The compiled form of a Space class already compiled (``compiled``), as cached."""
     found = _cached(space_type)
     if found is None:
@@ -201,13 +202,13 @@ def cached_compiled(space_type: type[Space]) -> Compiled:
     return found
 
 
-def link_template(space_type: type[Space]) -> Compiled:
+def link_template(space_type: type[_Namespace]) -> Compiled:
     """The compiled form of a Space class: computed once, cached on the class. The classes it
     places are compiled first, deepest first, so no chain of placements recurses."""
 
     from .compiler import _PREPARATION_LOCK  # noqa: PLC0415 - a cycle
 
-    if not isinstance(space_type, type) or not issubclass(space_type, Space):
+    if not isinstance(space_type, type) or not issubclass(space_type, _Namespace):
         raise DefinitionError.broken(
             "not-a-space", _OWNER, "link_template requires a Space subclass"
         )
@@ -221,7 +222,7 @@ def link_template(space_type: type[Space]) -> Compiled:
         return _link(space_type)
 
 
-def _cached(space_type: type[Space]) -> Compiled | None:
+def _cached(space_type: type[_Namespace]) -> Compiled | None:
     cached = space_type.__dict__.get("_space_compiled")
     if cached is not None and (
         not isinstance(cached, Compiled) or cached.space_type is not space_type
@@ -232,12 +233,12 @@ def _cached(space_type: type[Space]) -> Compiled | None:
     return cached
 
 
-def _placed_first(space_type: type[Space]) -> list[type[Space]]:
+def _placed_first(space_type: type[_Namespace]) -> list[type[_Namespace]]:
     """The Space classes ``space_type`` places, through any depth, each after those it
     places; none where it places itself (its compiling refuses it)."""
-    order: list[type[Space]] = []
-    done: set[type[Space]] = set()
-    stack: list[tuple[type[Space], Iterator[type[Space]]]] = [
+    order: list[type[_Namespace]] = []
+    done: set[type[_Namespace]] = set()
+    stack: list[tuple[type[_Namespace], Iterator[type[_Namespace]]]] = [
         (space_type, iter(_places(space_type)))
     ]
     open_ = {space_type}
@@ -259,14 +260,14 @@ def _placed_first(space_type: type[Space]) -> list[type[Space]]:
     return order
 
 
-def _places(space_type: type[Space]) -> list[type[Space]]:
+def _places(space_type: type[_Namespace]) -> list[type[_Namespace]]:
     """The Space classes a class's own members place (child nodes, candidates), read from
     its class attributes, the nearest definition of each name (what it places is compiled
     first; allocating it compiles anything else it places)."""
-    found: list[type[Space]] = []
+    found: list[type[_Namespace]] = []
     seen: set[str] = set()
     for base in space_type.__mro__:
-        if base is Space:
+        if base is _Namespace:
             break
         for name, value in vars(base).items():
             if name in seen:
@@ -284,7 +285,7 @@ def _places(space_type: type[Space]) -> list[type[Space]]:
     return found
 
 
-def _link(space_type: type[Space]) -> Compiled:
+def _link(space_type: type[_Namespace]) -> Compiled:
     from .compiler import _validate_constructors  # noqa: PLC0415 - a cycle
 
     # What the class is compiled from no longer changes: it was closed when it was created
@@ -295,7 +296,7 @@ def _link(space_type: type[Space]) -> Compiled:
     return form
 
 
-def _compile(space_type: type[Space]) -> Compiled:
+def _compile(space_type: type[_Namespace]) -> Compiled:
     table = allocate(space_type, link_template)
     lower(table)
     # What crosses a slot: cycles through the Spaces it places (``_compose``).
@@ -427,6 +428,7 @@ class _Freezing:
         refs: dict[Edge, Ref] = {}
         edges = [edge for member in records for edge in member.dependencies]
         edges.extend(slot.guard for slot in slots)
+        edges.extend(self.edge(piece) for piece in own.pieces)
         for edge in edges:
             if type(edge) is not Local and edge not in refs:
                 refs[edge] = _ref(edge, slots, formals, own_selection, chosen)
@@ -440,7 +442,8 @@ class _Freezing:
             records,
             slots,
             tuple(self.choice(index) for index in range(len(table.choice_drafts))),
-            cast(int, own.validity),
+            own.validity,
+            tuple(self.edge(piece) for piece in own.pieces),
             value_members,
             _frozen(formals),
             _frozen(self.formal_names),

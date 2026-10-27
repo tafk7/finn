@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, cast
 
 from ._bindings import PlacementBinding, Slot
-from ._configuration import Space
+from ._configuration import _Namespace
 from ._nodes import NodeDecl, SlotKind, slot_kind
 from ._signatures import BoundArgument
 from .collection import EffectiveSpace, collect_space
@@ -87,6 +87,7 @@ class ScopeDraft:
     choices: dict[object, int] = field(default_factory=dict)
     # The node answering the own scope's validity, reserved with the scope.
     validity: int | None = None
+    pieces: tuple[NodeRef, ...] = ()
     # A Space the class places: its slot (the own scope has none).
     placed: SlotDraft | None = None
     # A candidate of a Decision over nodes of the own scope (choice, case).
@@ -144,17 +145,17 @@ class Table:
     """The records and scopes of one Space class being compiled, and what each phase passes
     on."""
 
-    space_type: type[Space]
+    space_type: type[_Namespace]
     # Each placed class's compiled form, compiled first.
-    compiled_of: Callable[[type[Space]], Compiled]
+    compiled_of: Callable[[type[_Namespace]], Compiled]
     nodes: list[Node] = field(default_factory=list)
     drafts: list[ScopeDraft] = field(default_factory=list)
     choice_drafts: list[ChoiceDraft] = field(default_factory=list)
     # Each Space class collected once: the declarations each member name stands for, and
     # each member's slot kind.
-    effective: dict[type[Space], EffectiveSpace] = field(default_factory=dict)
-    aliases: dict[type[Space], dict[str, list[Declaration]]] = field(default_factory=dict)
-    kinds: dict[type[Space], dict[str, SlotKind]] = field(default_factory=dict)
+    effective: dict[type[_Namespace], EffectiveSpace] = field(default_factory=dict)
+    aliases: dict[type[_Namespace], dict[str, list[Declaration]]] = field(default_factory=dict)
+    kinds: dict[type[_Namespace], dict[str, SlotKind]] = field(default_factory=dict)
     # Allocation -> lowering: every member to lower, every guard to link.
     members: list[MemberTask] = field(default_factory=list)
     guards: list[GuardTask] = field(default_factory=list)
@@ -174,7 +175,7 @@ class Table:
     # class those slots reach, member).
     chooses: dict[int, tuple[tuple[int, ...], int, str]] = field(default_factory=dict)
 
-    def collected(self, space_type: type[Space]) -> EffectiveSpace:
+    def collected(self, space_type: type[_Namespace]) -> EffectiveSpace:
         effective = self.effective.get(space_type)
         if effective is None:
             effective = collect_space(space_type)

@@ -52,7 +52,7 @@ from .semantics import (
 )
 
 if TYPE_CHECKING:
-    from ._configuration import Space
+    from ._configuration import _Namespace
 
 _OWNER = "space.declarations"
 
@@ -69,7 +69,7 @@ def local_name(value: str, role: str) -> str:
     return value
 
 
-def class_namespace(space_type: type[Space]) -> dict[str, object]:
+def class_namespace(space_type: type[_Namespace]) -> dict[str, object]:
     namespace: dict[str, object] = {}
     for base in reversed(space_type.__mro__):
         namespace.update(vars(base))
@@ -266,9 +266,11 @@ class ValueDecl(ValueRef[T_co], Generic[T_co]):
     def __get__(self, instance: None, owner: type[object] | None = None) -> Self: ...
 
     @overload
-    def __get__(self, instance: Space, owner: type[object] | None = None) -> T_co: ...
+    def __get__(self, instance: _Namespace, owner: type[object] | None = None) -> T_co: ...
 
-    def __get__(self, instance: Space | None, owner: type[object] | None = None) -> Self | T_co:
+    def __get__(
+        self, instance: _Namespace | None, owner: type[object] | None = None
+    ) -> Self | T_co:
         if instance is None:
             return self
         path = declared_path(instance)
@@ -326,7 +328,7 @@ def declared_annotation(declaration: Declaration, kind: str) -> object:
         globals_ = vars(module) if module is not None else {}
         locals_: Mapping[str, object] = {
             **enclosing,
-            **class_namespace(cast("type[Space]", owner)),
+            **class_namespace(cast("type[_Namespace]", owner)),
         }
     elif body is not None:
         globals_, namespace, _ = body
@@ -400,10 +402,10 @@ def literal(
         ) from None
 
 
-def _annotated_space_type(annotation: object) -> type[Space] | None:
-    from ._configuration import Space
+def _annotated_space_type(annotation: object) -> type[_Namespace] | None:
+    from ._configuration import _Namespace
 
-    if isinstance(annotation, type) and issubclass(annotation, Space):
+    if isinstance(annotation, type) and issubclass(annotation, _Namespace):
         return annotation
     return None
 
@@ -489,9 +491,9 @@ class Param(ValueDecl[T], Generic[T]):
     def __get__(self, instance: None, owner: type[object] | None = None) -> Self: ...
 
     @overload
-    def __get__(self, instance: Space, owner: type[object] | None = None) -> T: ...
+    def __get__(self, instance: _Namespace, owner: type[object] | None = None) -> T: ...
 
-    def __get__(self, instance: Space | None, owner: type[object] | None = None) -> Any:
+    def __get__(self, instance: _Namespace | None, owner: type[object] | None = None) -> Any:
         if instance is None:
             return self
         return ValueDecl.__get__(self, instance, owner)
@@ -975,9 +977,9 @@ class View(Declaration, Generic[T]):
     def __get__(self, instance: None, owner: type[object] | None = None) -> Self: ...
 
     @overload
-    def __get__(self, instance: Space, owner: type[object] | None = None) -> T: ...
+    def __get__(self, instance: _Namespace, owner: type[object] | None = None) -> T: ...
 
-    def __get__(self, instance: Space | None, owner: type[object] | None = None) -> Self | T:
+    def __get__(self, instance: _Namespace | None, owner: type[object] | None = None) -> Self | T:
         if instance is None:
             return self
         path = declared_path(instance)
@@ -1104,10 +1106,10 @@ class _Symbolic:
     def __eq__(self, other: object) -> bool:
         if isinstance(other, _Symbolic):
             return type(self) is type(other) and self._key() == other._key()
-        from ._configuration import Space
+        from ._configuration import _Namespace
         from ._nodes import NodeChoice
 
-        if isinstance(other, (Declaration, Space, NodeChoice)):
+        if isinstance(other, (Declaration, _Namespace, NodeChoice)):
             return False
         self._misuse("equality comparison with a value")
 

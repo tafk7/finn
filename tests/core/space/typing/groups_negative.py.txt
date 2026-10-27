@@ -1,0 +1,23 @@
+from finn.core.space import Group, Param, Space, derived, design_space
+
+
+class Arithmetic(Group):
+    width: int = Param()
+
+    @derived
+    def doubled(self) -> int:
+        return 2 * self.width
+
+
+class Owner(Space):
+    first = Arithmetic(width=3)
+
+
+a = Arithmetic(width="bad")  # E
+b = Arithmetic(width=3, when=True)  # E
+point = design_space(Owner())
+point.first.width = "bad"  # E
+wrong: str = point.first.doubled  # E
+point.first.missing  # E
+point.first.with_choices(width=2)  # E
+design_space(Arithmetic(width=3))  # E

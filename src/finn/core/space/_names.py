@@ -25,7 +25,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from dataclasses import replace
 
-from ._configuration import Space
+from ._configuration import _Namespace
 from ._nodes import NodeChoice, NodeDecision, NodeDecl, unwrap
 from ._table import Place, ScopeDraft, Table, member_key
 from .declarations import (
@@ -37,6 +37,7 @@ from .declarations import (
     at,
 )
 from .errors import DefinitionError, RequestError
+from .groups import Group
 from .ir import NodeRef
 
 _OWNER = "space.names"
@@ -89,7 +90,7 @@ class Names:
     def __init__(self, table: Table) -> None:
         self.table = table
         self.choice_member_nodes: dict[tuple[int, str], int] = {}
-        self.placed_scopes: dict[int, tuple[int, ...]] = {}
+        self.placed_scopes: dict[int, tuple[Place, ...]] = {}
         # Selections made in a placed Space's choice, by (where, choice, member).
         self.placed_choice_members: dict[tuple[Place, int, str], int] = {}
 
@@ -104,23 +105,28 @@ class Names:
         result: list[tuple[str, str, NodeRef]] = []
         prefix = self.table.drafts[scope].name
         for child in self.placed(scope):
-            name = self.table.drafts[child].name
+            name = self.table.name(child)
             name = name[len(prefix) + 1 :] if prefix else name
-            compiled = self.table.placing(child).compiled
+            compiled = self.table.compiled_at(child)
             if not issubclass(compiled.space_type, base):
                 continue
             member = compiled.named_members.get(member_name)
             if member is not None:
-                result.append((name, member_name, self.table.lift(Place(child), member)))
+                result.append((name, member_name, self.table.lift(child, member)))
         return result
 
-    def members_member(self, declaration: Members[object]) -> tuple[type[Space], str]:
+    def members_member(self, declaration: Members[object]) -> tuple[type[_Namespace], str]:
         """The class a ``Members`` of a member ranges over, and the member's name there: the
         class that declares it, read now, when the class holding the ``Members`` is
         compiled (the member's class does not exist while a body spells it)."""
         member = declaration.member
         owner, name = getattr(member, "owner", None), getattr(member, "name", None)
-        if not (isinstance(owner, type) and issubclass(owner, Space) and name is not None):
+        if not (
+            isinstance(owner, type)
+            and issubclass(owner, _Namespace)
+            and not issubclass(owner, Group)
+            and name is not None
+        ):
             raise DefinitionError.broken(
                 "members-member-invalid",
                 _OWNER,
@@ -129,19 +135,33 @@ class Names:
             )
         return owner, name
 
-    def placed(self, scope: int) -> tuple[int, ...]:
-        """The scopes placed by a scope's members, in member order (candidates in case order)."""
+    def placed(self, scope: int) -> tuple[Place, ...]:
+        """Real children, traversing included namespaces in declaration/case order.
+
+        A real Space is a structural boundary; a Group is not counted as a child.
+        """
         placed = self.placed_scopes.get(scope)
         if placed is not None:
             return placed
         draft = self.table.drafts[scope]
-        children: list[int] = []
+        direct: list[Place] = []
         for name, declaration in draft.effective.members.items():
             if isinstance(declaration, NodeDecl):
-                children.append(draft.named_children[name])
+                direct.append(Place(draft.named_children[name]))
             elif isinstance(declaration, NodeDecision):
                 cases = self.table.choice_drafts[draft.choices[declaration]].cases
-                children.extend(child for _, child in cases if child is not None)
+                direct.extend(Place(child) for _, child in cases if child is not None)
+        children: list[Place] = []
+        pending = list(reversed(direct))
+        while pending:
+            child = pending.pop()
+            compiled = self.table.compiled_at(child)
+            if compiled.validity is None:
+                pending.extend(
+                    self.table.below(child, slot.index) for slot in reversed(compiled.slots)
+                )
+            else:
+                children.append(child)
         placed = self.placed_scopes[scope] = tuple(children)
         return placed
 

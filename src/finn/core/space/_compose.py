@@ -131,7 +131,7 @@ def pieces(compiled: Compiled) -> list[Ref]:
     own)."""
     own: list[Ref] = []
     placed: list[Ref] = []
-    for edge in compiled.records[compiled.validity].constraints:
+    for edge in compiled.pieces:
         piece = compiled.ref(edge)
         if isinstance(piece, Placed):
             placed.append(piece)

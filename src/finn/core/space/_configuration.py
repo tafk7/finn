@@ -62,7 +62,7 @@ class BoundValue(Generic[T]):
     a view (its accepted value) or a reference into a child.
     """
 
-    def __init__(self, instance: Space, reference: object) -> None:
+    def __init__(self, instance: _Namespace, reference: object) -> None:
         self.instance, self.reference = instance, reference
 
     def get(self) -> T:
@@ -122,7 +122,7 @@ def _when_field(*, default: None = None, kw_only: bool = True) -> Any:
     field_specifiers=(_when_field,),
 )
 class SpaceMeta(type):
-    """Declare nodes, and close each Space class when it is created.
+    """Declare namespaces, and close each Space or Group class when it is created.
 
     A class is closed when its class statement finishes (``__init__``, after
     ``__set_name__`` and ``__init_subclass__``, which may still add members): each
@@ -139,7 +139,7 @@ class SpaceMeta(type):
 
     if not TYPE_CHECKING:
 
-        def __call__(cls, *args: object, **keywords: object) -> Space:
+        def __call__(cls, *args: object, **keywords: object) -> _Namespace:
             if args:
                 raise DefinitionError.broken(
                     "formals-by-keyword",
@@ -208,11 +208,11 @@ def _structural(value: object) -> bool:
     from ._nodes import NodeChoice
 
     return isinstance(value, (Declaration, NodeChoice)) or (
-        isinstance(value, Space) and declared_path(value) is not None
+        isinstance(value, _Namespace) and declared_path(value) is not None
     )
 
 
-def _check_configuration_mutation(point: Space, name: str) -> None:
+def _check_configuration_mutation(point: _Namespace, name: str) -> None:
     from ._failure import driver_only
     from .occurrence import model_of
 
@@ -224,14 +224,13 @@ def _check_configuration_mutation(point: Space, name: str) -> None:
             raise AttributeError(f"{name} is an immutable configuration field; use with_choices()")
 
 
-class Space(metaclass=SpaceMeta):
-    """The base of every Space class.
+class _Namespace(metaclass=SpaceMeta):
+    """Shared declaration and read-access protocol of Space and Group.
 
-    A Space class describes a design space: calling it declares a node, and
-    ``design_space`` opens one.
+    This carries no independent evaluation or configuration machinery. Only Space
+    adds root opening, validity ownership and configuration-editing operations.
     """
 
-    when: _When = _when_field(default=None, kw_only=True)
     # A design space read at a scope (``_running.surface.At``), or a method's reader; the
     # scope's record (``_scopes.ScopeRecord``).
     _held: ClassVar[object]
@@ -269,7 +268,7 @@ class Space(metaclass=SpaceMeta):
             return cast(Self, path_proxy(type(self), (*outer, path[0])))
         from .occurrence import child
 
-        return cast(Self, child(cast(Space, instance), path[0]))
+        return cast(Self, child(cast(_Namespace, instance), path[0]))
 
     if not TYPE_CHECKING:
         # Hidden from type checkers: a declared __setattr__ would make mypy accept
@@ -377,6 +376,12 @@ class Space(metaclass=SpaceMeta):
         from .occurrence import bind_field
 
         return bind_field(self, cast("ValueRef[Any]", reference))
+
+
+class Space(_Namespace):
+    """An independently instantiable design space with model validity and choices."""
+
+    when: _When = _when_field(default=None, kw_only=True)
 
     def with_choices(
         self, /, *changes: ChangeRequest | Mapping[Any, object], **choices: object

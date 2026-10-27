@@ -18,6 +18,7 @@ import re
 from collections.abc import Iterable, Iterator
 
 from finn.core.space import Space
+from finn.core.space._configuration import _Namespace
 from finn.core.space._scopes import Address, Scopes
 from finn.core.space._template import Compiled, compiled
 from finn.core.space.domains import Domain
@@ -78,7 +79,8 @@ def canonical(scopes: Scopes) -> dict[str, object]:
             None if scope.parent is None else scope.parent.name,
             scope.space_type,
             key(scope.guard),
-            key(scope.validity),
+            None if scope.compiled.validity is None else key(scope.validity),
+            scope.owning_space.name,
             sorted((name, key(index)) for name, index in scope.named_members.items()),
             sorted((name, child.name) for name, child in scope.named_children.items()),
             # Keyed by declarations: the same objects in every model of the class.
@@ -161,9 +163,9 @@ def links(space_type: type[Space]) -> bool:
     return True
 
 
-def reached(form: Compiled) -> dict[type[Space], Compiled]:
+def reached(form: Compiled) -> dict[type[_Namespace], Compiled]:
     """Every compiled form reached from ``form`` through its slots, by class."""
-    found: dict[type[Space], Compiled] = {}
+    found: dict[type[_Namespace], Compiled] = {}
     pending = [form]
     while pending:
         current = pending.pop()

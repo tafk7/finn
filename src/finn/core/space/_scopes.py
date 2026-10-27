@@ -61,12 +61,12 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from ._table import Binding, member_key
-from .errors import DefinitionError
+from .errors import DefinitionError, RequestError
 from .ir import PLACING, Edge, Formal, Local, Member, NodeKind, Placed, Placing, Selected
 from .semantics import ValueSemantics
 
 if TYPE_CHECKING:
-    from ._configuration import Space
+    from ._configuration import _Namespace
     from ._nodes import NodeDecl
     from ._template import Compiled
     from ._whole import Flow, Whole
@@ -420,7 +420,7 @@ class ScopeRecord:
         return self.position > other.position
 
     @property
-    def space_type(self) -> type[Space]:
+    def space_type(self) -> type[_Namespace]:
         return self.compiled.space_type
 
     def within(self, other: ScopeRecord) -> bool:
@@ -772,8 +772,19 @@ class ScopeRecord:
         return self.parent.compiled.slots[cast(int, self.slot)].record
 
     @property
+    def owning_space(self) -> ScopeRecord:
+        """Nearest real Space; a Group is only a namespace in this same model."""
+        current = self
+        while current.compiled.validity is None:
+            assert current.parent is not None
+            current = current.parent
+        return current
+
+    @property
     def validity(self) -> Address:
         """The address answering its Space's validity."""
+        if self.compiled.validity is None:
+            raise RequestError("a Group has no independent validity; query its owning Space")
         return self.address(self.compiled.validity)
 
     def choice(self, index: int) -> ChoiceRecord:
@@ -1097,7 +1108,7 @@ class Scopes:
 
     # -- statistics
 
-    def statistics(self) -> tuple[int, int, int, int, int, int]:
+    def statistics(self) -> tuple[int, int, int, int, int, int, int]:
         """``inspection.statistics``' counts: authored declarations, scopes, members,
         potential edges, Decisions over nodes, owning decisions. Each class is counted at
         every placement: once per **shape** of placement (its class, whether it is placed
@@ -1106,7 +1117,7 @@ class Scopes:
         potential edges are the addresses its edges read there, each once."""
         with self.lock:
             totals: dict[tuple[object, ...], tuple[int, ...]] = {}
-            return cast(tuple[int, int, int, int, int, int], self._counted(self.root, totals))
+            return cast(tuple[int, int, int, int, int, int, int], self._counted(self.root, totals))
 
     def _counted(
         self, record: ScopeRecord, totals: dict[tuple[object, ...], tuple[int, ...]]
@@ -1130,7 +1141,15 @@ class Scopes:
             edges += _edges(address)
             if address.kind == "decision":
                 decisions += 1
-        found = [authored, 1, nodes, edges, len(compiled.choices), decisions]
+        found = [
+            authored,
+            int(compiled.validity is not None),
+            nodes,
+            edges,
+            len(compiled.choices),
+            decisions,
+            int(compiled.validity is None),
+        ]
         for slot in range(len(compiled.slots)):
             child = record.child(slot)
             found[0] += 1  # the placement

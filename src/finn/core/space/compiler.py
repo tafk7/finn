@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from threading import RLock
 from typing import TYPE_CHECKING, Generic, TypeVar, cast
 
-from ._configuration import Space
+from ._configuration import Space, _Namespace
 from ._nodes import (
     NodeDecl,
     missing_formal,
@@ -70,6 +70,8 @@ class Model(Generic[S]):
     per_class: PerClass = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
+        if self.compiled.validity is None:
+            raise DefinitionError.broken("not-a-space", _OWNER, "a Group cannot be a model root")
         from ._running.per_class import PerClass
 
         object.__setattr__(self, "lock", self.scopes.lock)
@@ -105,18 +107,18 @@ class Model(Generic[S]):
 _PREPARATION_LOCK = RLock()
 
 
-def _constructor_classes(space_type: type[Space]) -> tuple[type[object], ...]:
+def _constructor_classes(space_type: type[_Namespace]) -> tuple[type[object], ...]:
     """Return every class whose constructor protocol affects this Space class."""
 
     result: list[type[object]] = []
     for base in space_type.__mro__:
-        if base is Space:
+        if base is _Namespace:
             break
         result.append(base)
     return tuple(result)
 
 
-def _validate_constructors(space_types: tuple[type[Space], ...]) -> None:
+def _validate_constructors(space_types: tuple[type[_Namespace], ...]) -> None:
     checked: set[type[object]] = set()
     for space_type in space_types:
         for base in _constructor_classes(space_type):
@@ -184,7 +186,7 @@ def model_of(
         permuted=asked[0] if permuted is None else permuted,
         eager=asked[1] if eager is None else eager,
     )
-    return Model(root.space_type, root, scopes)
+    return Model(cast(type[Space], root.space_type), root, scopes)
 
 
 def compiled(space_type: type[Space]) -> Compiled:
@@ -200,6 +202,8 @@ def root_record(node: object) -> NodeDecl:
         raise RequestError(
             "design_space() takes a node declaration, as in design_space(House(budget=100))"
         )
+    if not issubclass(record.space_type, Space):
+        raise RequestError("a Group cannot be a root; include it in a Space")
     if record.placement is not None:
         raise RequestError(
             f"design_space() takes a root: {record.describe()} is already placed "
@@ -257,7 +261,7 @@ def design_space(node: S) -> S:
             declaration=record.describe(),
         )
     try:
-        model = cast(Model[Space], compile_model(record.space_type))
+        model = cast(Model[Space], compile_model(cast(type[Space], record.space_type)))
     except DefinitionError as error:
         raise DefinitionError(
             f"{error}; while opening the design space of {record.describe()}",
