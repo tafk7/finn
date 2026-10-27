@@ -68,7 +68,7 @@ class Node:
     domain: Domain[object] | None = None
     domain_arguments: tuple[Argument, ...] = ()
     output: NodeRef | None = None
-    # A view: its Space's validity node. A validity node: its pieces, in order: the
+    # A validity node: its pieces, in order: the
     # Space's constraints, its Decisions (each a piece only where its domain lists no
     # value, or its guard is refused), and its placed Spaces' validity nodes.
     constraints: tuple[NodeRef, ...] = ()

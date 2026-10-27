@@ -629,7 +629,7 @@ def staged() -> Space:
     return Space((), Scope("", children=(stage,)))
 
 
-def test_reading_1_a_view_refused_with_its_space_is_refused_through_and_never_an_origin() -> None:
+def test_reading_1_a_views_local_refusal_never_governs_choice_admission() -> None:
     """No model piece reads a view. Only its local body can refuse its readout."""
 
     base = Configuration(staged(), {}, {"stage.depth": 2})
@@ -1791,7 +1791,7 @@ def viewed() -> Space:
     )
 
 
-def test_a_view_refuses_when_its_space_is_refused() -> None:
+def test_a_view_answers_independently_of_its_refused_space() -> None:
     solution = solve(viewed(), {"limit": 1, "name": "u"}, x=2)
     assert solution.validity().verdict is F
     assert solution.view("doubled") == Known(4)
@@ -1854,7 +1854,7 @@ def stage(name: str) -> Scope:
 def test_a_parent_rules_on_its_childrens_derived_values_and_composes_their_views() -> None:
     """The parent's rule reads what its children state (derived values); its
     view ``total`` composes their views. The child is valid on its own, and its view
-    answers while the parent is refused; the parent's view refuses with its Space."""
+    and the parent's view both answer independently of the parent's refused validity."""
 
     space = Space(
         (),

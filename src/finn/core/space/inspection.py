@@ -385,7 +385,7 @@ class Validity:
 
 
 def presence(point: Space) -> tuple[tuple[str, QueryResult[bool]], ...]:
-    """Every real Space's presence below this point, including rule-free children.
+    """Every real Space's presence, in depth then declaration-position order.
 
     Available(True/False) means present/absent; Inapplicable means an ancestor is
     absent. Unresolved or Rejected presence is not complete. This asks only the
@@ -405,7 +405,9 @@ def presence(point: Space) -> tuple[tuple[str, QueryResult[bool]], ...]:
                 if scope.guard is None
                 else cast(QueryResult[bool], ev.result(scope.guard)),
             )
-            for scope in scopes_below(at.ds.model.scopes, at.scope)
+            for scope in sorted(
+                scopes_below(at.ds.model.scopes, at.scope), key=lambda each: each.position
+            )
         )
 
     return ask(at.ds.model, answer)
