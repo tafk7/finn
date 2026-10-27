@@ -365,6 +365,53 @@ def configured_network(
             f"{label}: refused by its members: " + "; ".join(map(Finding.subject_line, refused)),
             findings=refused,
         )
+    # Computable readouts do not prove that arbitrary rules or presence resolved.
+    # Refused rules retain their detailed diagnostics above; now require completeness.
+    validity = inspection.validity(bound.point)
+    waiting = [
+        key
+        for key, state in inspection.states(bound.point)
+        if isinstance(state, (inspection.Open, inspection.Waiting))
+    ]
+    unsettled = [
+        (name, result)
+        for name, result in inspection.presence(bound.point)
+        if not isinstance(result, (Available, Inapplicable))
+    ]
+    if validity.result != Available(True) or waiting or unsettled:
+        names = (
+            tuple(piece.owner for piece in validity.pieces)
+            + tuple(waiting)
+            + tuple(name for name, _ in unsettled)
+        )
+        text = f"{label}: validity or presence not complete at emission: " + ", ".join(names)
+        validity_findings = (
+            () if isinstance(validity.result, Available) else validity.result.findings
+        )
+        raise KernelOpError(
+            text,
+            findings=(
+                Finding(
+                    FindingKind.REJECTION,
+                    "design-incomplete",
+                    "configured_network",
+                    text,
+                    (("node", label),),
+                    tuple(
+                        dict.fromkeys(
+                            (
+                                *validity_findings,
+                                *(
+                                    finding
+                                    for _, result in unsettled
+                                    for finding in result.findings
+                                ),
+                            )
+                        )
+                    ),
+                ),
+            ),
+        )
     ports = dict(bound.boundary)
     initializers = {tensor.name for tensor in model.graph.initializer}
     inputs = [item.name for item in model.graph.input if item.name not in initializers]

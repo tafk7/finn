@@ -17,7 +17,6 @@ from finn.core.space import (
     Decision,
     Inapplicable,
     Param,
-    Rejected,
     Select,
     Space,
     Unresolved,
@@ -86,8 +85,8 @@ def test_composite_keeps_narrow_fields_available_and_reuses_accepted_children() 
 
     base = design_space(Composite())
     assert base.narrow == 12
-    assert isinstance(base.activation.inspect(Interface.physical).accepted_result, Unresolved)
-    assert isinstance(base.weights.inspect(Interface.physical).accepted_result, Unresolved)
+    assert isinstance(base.activation.inspect(Interface.physical).result, Unresolved)
+    assert isinstance(base.weights.inspect(Interface.physical).result, Unresolved)
     assert isinstance(base.optional.query(Interface.lanes), Inapplicable)
     field = base.optional.field(Interface.lanes)
     assert isinstance(field, BoundDecision)
@@ -101,12 +100,12 @@ def test_composite_keeps_narrow_fields_available_and_reuses_accepted_children() 
     successor = built(base, {"implementation": "refused"})
     selected = successor.implementation
     assert isinstance(selected, Refused)
-    direct = selected.inspect(Refused.physical).accepted_result
-    assert isinstance(direct, Rejected)
-    assert successor.inspect(Composite.physical).accepted_result == direct
+    direct = selected.inspect(Refused.physical).result
+    assert direct == Available(-1)
+    assert successor.inspect(Composite.physical).result == direct
     assert successor.query(Composite.implementation.width) == Available(-1)
     assert successor.selected_width == -1
-    assert isinstance(base.inspect(Composite.physical).accepted_result, Unresolved)
+    assert isinstance(base.inspect(Composite.physical).result, Unresolved)
 
 
 def test_a_decision_of_the_class_reads_its_suppliers_and_exposure_is_explicit() -> None:

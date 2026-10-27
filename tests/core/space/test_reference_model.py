@@ -630,9 +630,7 @@ def staged() -> Space:
 
 
 def test_reading_1_a_view_refused_with_its_space_is_refused_through_and_never_an_origin() -> None:
-    """No piece reads a view. ``half`` refusing an odd depth refuses the view
-    with its own reason, and no change: nothing rules on it. Refused with its Space, the
-    view is refused through: the child's rule is the origin."""
+    """No model piece reads a view. Only its local body can refuse its readout."""
 
     base = Configuration(staged(), {}, {"stage.depth": 2})
     assert base.solve().validity().verdict is T
@@ -644,9 +642,7 @@ def test_reading_1_a_view_refused_with_its_space_is_refused_through_and_never_an
     deep = rejected(change(base, Change(commit={"stage.depth": 4})))
     assert deep.refusals == (rule("stage.small", "too-deep", "stage"),)
     after = solve_at(staged(), {"stage.depth": 4})
-    assert after.view("stage.half") == Refused(
-        (Reason(ReasonKind.SPACE_REFUSED, "stage.half", "stage"),)
-    )
+    assert after.view("stage.half") == Known(2)
     assert false_kinds(after) == {(PieceKind.CONSTRAINT, "stage.small")}
 
 
@@ -1798,7 +1794,7 @@ def viewed() -> Space:
 def test_a_view_refuses_when_its_space_is_refused() -> None:
     solution = solve(viewed(), {"limit": 1, "name": "u"}, x=2)
     assert solution.validity().verdict is F
-    assert solution.view("doubled") == Refused((Reason(ReasonKind.SPACE_REFUSED, "doubled", ""),))
+    assert solution.view("doubled") == Known(4)
 
 
 def test_a_view_answers_while_its_space_is_open() -> None:
@@ -1837,10 +1833,7 @@ def test_a_derived_value_may_refuse_and_its_readers_receive_a_refused_input() ->
         (Reason(ReasonKind.INPUT_REFUSED, "fits", "", "too-wide", ("width",)),),
     )
     assert odd.view("shown") == Refused(
-        (
-            Reason(ReasonKind.INPUT_REFUSED, "shown", "", related=("width",)),
-            Reason(ReasonKind.SPACE_REFUSED, "shown", ""),
-        )
+        (Reason(ReasonKind.INPUT_REFUSED, "shown", "", related=("width",)),)
     )
     even = solve(width_read(), {"w": 4})
     assert even.read("width") == Known(4)
@@ -1897,7 +1890,7 @@ def test_a_parent_rules_on_its_childrens_derived_values_and_composes_their_views
     # the child is valid on its own; its view answers while the parent is refused
     assert refused.validity("first").verdict is T
     assert refused.view("first.storage") == Known(32)
-    assert refused.view("total") == Refused((Reason(ReasonKind.SPACE_REFUSED, "total", ""),))
+    assert refused.view("total") == Known(64)
     assert solve_at(space, {"first.depth": 1, "second.depth": 2}).view("total") == Known(24)
 
 

@@ -220,11 +220,19 @@ def test_dsp48_carries_the_segment_length_the_rtl_ignores():
         ),
     ],
 )
-def test_physical_view_reports_each_refusal_once(updates, code):
+def test_validity_reports_each_rule_and_readout_keeps_only_local_refusals(updates, code):
     # An encoding a port refuses is that port's finding; the core's own rules add
     # only the DSP's own bounds, so no node reports a cause twice.
-    physical = kernel(**updates).inspect(DotpAxiKernel.netlist)
-    refused = physical.accepted_result
+    point = kernel(**updates)
+    physical = point.inspect(DotpAxiKernel.netlist)
+    expected = Rejected if code in {"dotp-dsp", "dotp-clock-period"} else Available
+    assert isinstance(physical.result, expected)
+    validity = inspection.validity(point).result
+    if code == "dotp-clock-period":
+        assert validity == Available(True)  # only the local module calculation refuses
+        refused = physical.result
+    else:
+        refused = validity
     assert isinstance(refused, Rejected), refused
     found = [(finding.owner, finding.code) for finding in refused.findings]
     assert code in {code for _, code in found}
@@ -266,8 +274,8 @@ def test_a_folding_factor_given_that_does_not_divide_its_extent_refuses_the_core
 def test_constraints_gate_acceptance_and_the_module_does_not_revalidate_them():
     point = kernel(Int8Dsp58DotpKernel, result_dtype=DataType["INT59"], compute_pumping=True)
     physical = point.inspect(DotpAxiKernel.netlist)
-    # Refused with its Space, by the rule's one finding: the module states none of its own.
-    refused = physical.accepted_result
+    assert isinstance(physical.result, Available)
+    refused = inspection.validity(point).result
     assert isinstance(refused, Rejected)
     assert [finding.code for finding in refused.findings] == ["dotp-accumulator-width"]
 
@@ -377,7 +385,7 @@ def test_the_reducer_left_open_is_a_choice_no_platform_refuses(dsp):
     point = kernel(reducer=None, platform=full_platform(dsp))
     (choice,) = inspection.viable(point, [type(point).reducer])
     assert choice.cases == REDUCERS
-    assert not isinstance(point.inspect(DotpAxiKernel.netlist).accepted_result, Available)
+    assert not isinstance(point.inspect(DotpAxiKernel.netlist).result, Available)
 
 
 def test_the_core_refuses_before_its_folding_factors_are_chosen():
@@ -473,8 +481,9 @@ def test_only_the_packed_core_needs_two_bit_activations():
     """``dotp.sv`` refuses ACTIVATION_WIDTH below 2; ``dotp_8sx9_dsp58`` pads any width to
     its 9-bit lanes, so the INT8 core takes BINARY activations."""
     binary = {"activation_dtype": DataType["BINARY"], "result_dtype": DataType["INT6"]}
-    packed = kernel(**binary).inspect(DotpAxiKernel.netlist).accepted_result
-    assert codes(packed) == {"dtype-minimum-bits"}
+    packed = kernel(**binary)
+    assert isinstance(packed.query(DotpAxiKernel.netlist), Available)
+    assert codes(inspection.validity(packed).result) == {"dtype-minimum-bits"}
     int8 = kernel(Int8Dsp58DotpKernel, **binary)
     assert dict(library_module(int8).parameters)["ACTIVATION_WIDTH"] == 1
     assert dict(library_module(int8).parameters)["SIGNED_ACTIVATIONS"] == 0
@@ -601,8 +610,9 @@ def test_each_core_kernel_names_its_core_and_the_shared_base_places_none():
     ],
 )
 def test_the_int8_core_takes_signed_nine_by_eight_products_on_dsp58_only(updates, code):
-    refused = kernel(Int8Dsp58DotpKernel, **updates).query(DotpAxiKernel.netlist)
-    assert code in codes(refused)
+    point = kernel(Int8Dsp58DotpKernel, **updates)
+    assert isinstance(point.query(DotpAxiKernel.netlist), Available)
+    assert code in codes(inspection.validity(point).result)
     for activation in ("INT9", "UINT8"):
         accepted = kernel(
             Int8Dsp58DotpKernel,
@@ -619,8 +629,9 @@ def test_depthwise_activations_carry_pe_channels_of_simd_and_only_int8_reads_the
     assert rtl["ACTIVATION_BROADCASTING"] == 0
     lanes = [_axis(point, name).elements_per_beat for name in ("x", "w", "y")]
     assert lanes == [6, 6, 3]
-    refused = kernel(form=Form.DEPTHWISE).query(DotpAxiKernel.netlist)
-    assert codes(refused) == {"dotp-form"}
+    unsupported = kernel(form=Form.DEPTHWISE)
+    assert isinstance(unsupported.query(DotpAxiKernel.netlist), Available)
+    assert codes(inspection.validity(unsupported).result) == {"dotp-form"}
 
 
 @pytest.mark.parametrize(

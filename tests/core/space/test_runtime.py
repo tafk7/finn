@@ -55,7 +55,7 @@ def test_fifo_configure_replace_and_inspect_is_immutable() -> None:
     model = inspection.model(Fifo)
     assert inspection.model(base) is model
     assert base.space_type == "fifo"
-    assert isinstance(base.inspect(Fifo.physical).accepted_result, Unresolved)
+    assert isinstance(base.inspect(Fifo.physical).result, Unresolved)
     state = base.field(Fifo.ram_style).state
     assert isinstance(state, Available)
     assert state.value.status == "unassigned"
@@ -63,7 +63,7 @@ def test_fifo_configure_replace_and_inspect_is_immutable() -> None:
     assert base.field(Fifo.ram_style).candidates() == Available(("auto", "block", "shift"))
     chosen = base.with_choices(ram_style="block")
     assert chosen.physical == FifoShape(13, 8, "block")
-    assert chosen.inspect(Fifo.physical).accepted_result == chosen.query(Fifo.physical)
+    assert chosen.inspect(Fifo.physical).result == chosen.query(Fifo.physical)
     assert chosen.field(Fifo.physical).get() == FifoShape(13, 8, "block")
     assert chosen.query(Fifo.physical) == Available(FifoShape(13, 8, "block"))
     assert chosen.field(Fifo.ram_style).get() == "block"
@@ -79,11 +79,10 @@ def test_fifo_configure_replace_and_inspect_is_immutable() -> None:
 def test_final_constraint_refusal_remains_visible_while_output_unresolved() -> None:
     base = design_space(Fifo(word_bits=0, depth=8))
     assessment = base.inspect(Fifo.physical)
-    assert isinstance(assessment.accepted_result, Rejected)
-    assert isinstance(assessment.validity, Rejected)
+    assert isinstance(assessment.result, Unresolved)
     assert [piece.owner for piece in inspection.validity(base).pieces] == ["supported"]
     ready = base.with_choices(ram_style="auto").inspect(Fifo.physical)
-    assert isinstance(ready.accepted_result, Rejected)
+    assert ready.result == Available(FifoShape(0, 8, "auto"))
 
 
 def test_required_inputs_one_refused_and_another_waiting_read_as_refused() -> None:
@@ -169,7 +168,7 @@ def test_concurrent_reads_and_successors_are_deterministic() -> None:
     base = design_space(Fifo(word_bits=13, depth=8))
 
     def run(style: str) -> QueryResult[FifoShape]:
-        return base.with_choices(ram_style=style).inspect(Fifo.physical).accepted_result
+        return base.with_choices(ram_style=style).inspect(Fifo.physical).result
 
     styles = ["auto", "block", "shift"] * 10
     with ThreadPoolExecutor(max_workers=4) as pool:

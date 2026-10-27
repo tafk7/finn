@@ -2,9 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """One reason reached by two routes is reported once.
 
-A refusal reached through a view's output and through its Space's validity, and a
-computation reading two aliases of one blocked value, all merge the same finding more
-than once. Findings are frozen
+Explicit required inputs and aliases may reach the same finding more than once. Findings are frozen
 values, so identical ones are kept once where answers are merged; findings that
 differ in anything, their owner included, are all kept.
 """
@@ -13,12 +11,14 @@ from __future__ import annotations
 
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import (
+    Available,
     Decision,
     Param,
     Space,
     constraint,
     derived,
     design_space,
+    inspection,
     reject,
     view,
 )
@@ -72,24 +72,12 @@ def test_merged_findings_keeps_each_identical_finding_once_and_every_distinct_on
     )
 
 
-def test_the_view_reducer_reports_a_reason_from_output_and_validity_once() -> None:
-    kitchen, dining = blocker("kitchen.finish"), blocker("dining.finish")
-    waiting: ViewAssessment[int] = assess_view(
-        Unresolved((kitchen,)), owner="total", validity=Unresolved((dining, kitchen))
-    )
-    # An open Space leaves the view answering its output; readiness merges both.
-    assert waiting.accepted_result == Unresolved((kitchen,))
-    assert waiting.readiness.result == Unresolved((dining, kitchen))
-    assert waiting.readiness.results["$validity"] == Unresolved((dining, kitchen))
-
-    refused: ViewAssessment[int] = assess_view(
-        Rejected((refusal("kitchen.small_enough"),)),
-        owner="total",
-        validity=Rejected((refusal("dining.small_enough"), refusal("kitchen.small_enough"))),
-    )
-    assert refused.accepted_result == Rejected(
-        (refusal("dining.small_enough"), refusal("kitchen.small_enough"))
-    )
+def test_the_view_reducer_preserves_its_local_findings() -> None:
+    kitchen = blocker("kitchen.finish")
+    waiting: ViewAssessment[int] = assess_view(Unresolved((kitchen,)))
+    assert waiting.result == Unresolved((kitchen,))
+    refused: ViewAssessment[int] = assess_view(Rejected((refusal("kitchen.small_enough"),)))
+    assert refused.result == Rejected((refusal("kitchen.small_enough"),))
 
 
 class Room(Space):
@@ -116,13 +104,13 @@ class Hall(Space):
 
 def test_a_waiting_view_lists_its_outputs_blocker_once() -> None:
     base = design_space(Hall())
-    waiting = base.inspect(Hall.total).accepted_result
+    waiting = base.inspect(Hall.total).result
     assert isinstance(waiting, Unresolved)
     # The Space is valid (open choices are no pieces); the output halts at its first read.
     assert [(f.owner, f.code) for f in waiting.findings] == [
         ("kitchen.finish", "decision-unassigned"),
     ]
-    half = base.with_choices({Hall.kitchen.finish: 2}).inspect(Hall.total).accepted_result
+    half = base.with_choices({Hall.kitchen.finish: 2}).inspect(Hall.total).result
     assert isinstance(half, Unresolved)
     assert [f.owner for f in half.findings] == ["dining.finish"]
 
@@ -137,9 +125,9 @@ def test_a_refusal_through_output_and_validity_is_reported_once_per_owner() -> N
             return self.kitchen.cost + self.dining.cost
 
     point = design_space(Big()).with_choices({Big.kitchen.finish: 1, Big.dining.finish: 1})
-    refused = point.inspect(Big.total).accepted_result
+    assert point.inspect(Big.total).result == Available(90)
+    refused = inspection.validity(point).result
     assert isinstance(refused, Rejected)
-    # The output halts at kitchen; the Space refuses with both rooms: two owners, once each.
     assert [(f.owner, f.message) for f in refused.findings] == [
         ("dining.small_enough", "area 40 exceeds 30"),
         ("kitchen.small_enough", "area 50 exceeds 30"),

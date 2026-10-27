@@ -235,7 +235,7 @@ def _domain_origins(ev: Evaluation, index: Address, answer: Rejected) -> dict[Ad
 
 def _origins(ev: Evaluation, starts: Sequence[Address]) -> dict[Address, Rejected]:
     """Following what each refused node read that answered refused, to the nodes refused
-    on their own values (never into a view's Space validity)."""
+    on their own values."""
     found: dict[Address, Rejected] = {}
     seen: set[Address] = set()
     pending = list(reversed(tuple(starts)))
@@ -250,13 +250,7 @@ def _origins(ev: Evaluation, starts: Sequence[Address]) -> dict[Address, Rejecte
         if entry.own_refusal:
             found[index] = entry.result
             continue
-        node = index
-        space = node.constraints[0] if node.kind == "view" else None
-        pending.extend(
-            dep
-            for dep, answer in reversed(entry.trace)
-            if isinstance(answer, Rejected) and dep != space
-        )
+        pending.extend(dep for dep, answer in reversed(entry.trace) if isinstance(answer, Rejected))
     return found
 
 
@@ -289,17 +283,14 @@ def standing(ev: Evaluation, origin: Address, named: frozenset[Address]) -> tupl
 
 def _value_reads(ev: Evaluation, index: Address) -> Sequence[Address]:
     """What ``index`` read here as values: its trace, less its own guard (read first),
-    what it read only to know whether something exists, a view's Space validity and a
-    selection's selector."""
+    what it read only to know whether something exists and a selection's selector."""
     spec = index
     entry = ev.get(index)
     trace = entry.trace
     if spec.guard is not None and trace and trace[0][0] == spec.guard:
         trace = trace[1:]
     skipped = set(entry.existence)
-    if spec.kind == "view":
-        skipped.add(spec.constraints[0])
-    elif spec.kind == "select" and spec.selector is not None:
+    if spec.kind == "select" and spec.selector is not None:
         skipped.add(spec.selector)
     return [dep for dep, _ in trace if dep not in skipped]
 

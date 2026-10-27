@@ -296,7 +296,7 @@ def test_an_attribute_no_annotation_names_is_still_an_attribute_error() -> None:
             hasattr(rate, "__wrapped__"),
         ]
 
-    assert Office.missing == [False] * 4  # type: ignore[attr-defined]
+    assert Office.missing == [False] * 4
     with pytest.raises(AttributeError):
         getattr(Office.rate, "missing")
 

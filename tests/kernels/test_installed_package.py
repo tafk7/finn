@@ -75,7 +75,7 @@ class Tiles(Space):
 tile = design_space(Tiles(extent=12)).with_choices(lanes=3)
 assert tile.shape == (3, 4)
 assert tile.field(Tiles.shape).get() == (3, 4)
-assert tile.inspect(Tiles.shape).accepted_result == Available((3, 4))
+assert tile.inspect(Tiles.shape).result == Available((3, 4))
 assert tile.field(Tiles.cycles).get() == 4
 from finn.kernels.artifacts import build, module as artifact_module
 from qonnx.core.datatype import DataType

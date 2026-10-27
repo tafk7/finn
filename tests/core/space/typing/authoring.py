@@ -312,7 +312,7 @@ def views(point: Wing, house: House, fifo: Fifo) -> None:
     assert_type(point.query(Wing.total), QueryResult[int])
     assert_type(house.inspect(House.total), ViewAssessment[int])
     assert_type(house.query(House.total), QueryResult[int])
-    assert_type(point.inspect(Wing.checked).accepted_result, QueryResult[int])
+    assert_type(point.inspect(Wing.checked).result, QueryResult[int])
     # A view of a child: on the child's configuration (precise), or through a path.
     assert_type(point.kitchen.inspect(Room.cost), ViewAssessment[int])
     assert_type(point.kitchen.query(Room.cost), QueryResult[int])

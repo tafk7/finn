@@ -182,7 +182,8 @@ def test_composite_extends_kernel_with_typed_optional_views_and_independent_node
     activation_ports = getattr(Pair.activation, "ports")
     weights_ports = getattr(Pair.weights, "ports")
     assert point.query(activation_ports) == Available(Pins((("word", 8),), ()))
-    assert isinstance(point.query(weights_ports), Rejected)
+    assert point.query(weights_ports) == Available(Pins((("word", 32),), ()))
+    assert inspection.validity(point.weights).status == "refused"
     assert point.query(getattr(Pair.weights, "payload_bits")) == Available(32)
     authored = [key for key in views(point) if key.endswith("ports")]
     assert authored == ["activation.ports", "weights.ports"]

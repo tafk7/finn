@@ -933,23 +933,14 @@ def constraint(
 
 
 class View(Declaration, Generic[T]):
-    """A product of its Space, from either a value or an authored function.
+    """A local readout of its Space, from a value or authored function.
 
-    A view reads as its **accepted** value, like every member typed as its
-    value: on a configuration ``point.total`` is the accepted value (a view
-    that is not accepted raises ``ValueUnavailableError`` carrying its result,
-    and inside a method the read blocks like any other); on a node declaration
-    ``kitchen.cost`` is a reference to that accepted value, typed ``T``, which
-    supplies a formal. Class access, ``House.total``, is the declaration itself:
-    pass it to ``point.inspect`` for the assessment and to ``point.query`` for
-    the accepted result.
-
-    A view's accepted result is, in order: refused when its output is refused or its
-    Space is refused (``inspection.validity``), whatever else waits; unresolved when
-    its output is; else its output (inapplicable when its body returns
-    ``Inapplicable()``). A view answers while its Space is undecided. A rule that matters
-    for one product only refuses in the view's body. A constraint of the view's Space (or of an
-    ancestor) reading the view closes a dependency cycle: rules read values.
+    On a configuration it reads its value; unavailable inputs, local refusal and
+    ordinary presence determine its answer. It never implicitly queries model
+    validity. On the class it is a declaration, and on a placement a typed symbolic
+    reference. Views compose views but cannot feed model bindings, domains or rules.
+    ``point.inspect`` reports the local output and applicability; an operation needing
+    a valid, complete design explicitly checks that at its own boundary.
     """
 
     @overload

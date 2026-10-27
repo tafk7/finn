@@ -112,7 +112,7 @@ def test_the_relation_and_the_budget_own_their_refusals() -> None:
     assert set(results) == {"matched", "within_budget"}
     assert codes(results["matched"]) == {"mismatch"}
     assert "kitchen.finish=1, dining.finish=3" in {
-        finding.message for finding in refused.accepted_result.findings
+        finding.message for finding in results["matched"].findings
     }
     assert codes(results["within_budget"]) == {"over-budget"}
     assert isinstance(point.query(House.garage.cost), Available)

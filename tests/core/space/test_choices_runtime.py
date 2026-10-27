@@ -94,7 +94,7 @@ def test_false_outer_scope_suppresses_inner_commitments_and_callbacks() -> None:
     assert isinstance(point.child.query(Guarded.lanes), Inapplicable)
     assert isinstance(point.child.field(Guarded.lanes).state, Inapplicable)
     assert isinstance(point.child.query(Guarded.raw), Inapplicable)
-    assert isinstance(point.child.inspect(Guarded.physical).accepted_result, Inapplicable)
+    assert isinstance(point.child.inspect(Guarded.physical).result, Inapplicable)
     assert calls == []
     # A choice under a guard that never holds is kept, dormant: never read.
     dormant = point.child.with_choices(lanes=1)
@@ -130,15 +130,15 @@ def test_selected_view_preserves_direct_refusal_and_skips_other_alternatives() -
     point = base.with_choices(implementation="refused")
     child = point.implementation
     assert isinstance(child, Refused)
-    direct = child.inspect(Refused.physical).accepted_result
+    direct = child.inspect(Refused.physical).result
     assert isinstance(direct, Rejected)
     assert point.query(Root.accepted) == direct
-    assert point.inspect(Root.physical).accepted_result == direct
+    assert point.inspect(Root.physical).result == direct
     assert point.with_choices(implementation="refused") is point
     point.with_choices(implementation="explodes")
     unselected = inspection.candidate(point, Root.implementation, "explodes")
     assert isinstance(unselected, Explodes)
-    assert isinstance(unselected.inspect(Explodes.physical).accepted_result, Inapplicable)
+    assert isinstance(unselected.inspect(Explodes.physical).result, Inapplicable)
     assert isinstance(base.query(Root.accepted), Unresolved)
     assert calls == []
 

@@ -128,45 +128,28 @@ def test_a_refused_constraint_beside_an_unresolved_one_refuses_the_group() -> No
     assert assessment.results["width"] == refused
 
 
-def test_readiness_tracks_unresolved_results_without_erasing_refusal() -> None:
-    refused = reject("no", "unsupported", owner="support")
-    waiting: ViewAssessment[int] = assess_view(blocker(), owner="physical", validity=refused)
-    assert waiting.readiness.ready is None
-    assert waiting.validity == refused
-    assert waiting.accepted_result == refused
-    final = assess_view(Available(1), owner="physical", validity=refused)
-    assert final.readiness.ready is True
-    assert final.accepted_result == refused
-
-
-def test_view_reducer_obeys_readiness_output_and_refusal_precedence() -> None:
-    raw: QueryResult[int] = Available(4)
-    refused = reject("geometry", "too wide", owner="width")
-    # A refused Space refuses the view whatever waits; readiness still names what waits.
-    waiting = assess_view(raw, owner="physical", validity=refused, waiting={"lanes": blocker()})
-    assert waiting.output_result == raw
-    assert waiting.accepted_result == refused
-    assert waiting.readiness.ready is None
-    assert waiting.readiness.results["lanes"] == blocker()
-    inactive: ViewAssessment[int] = assess_view(Inapplicable(), owner="physical", validity=refused)
-    assert inactive.accepted_result == refused
-    # An open Space leaves the view answering its output.
-    absent: ViewAssessment[int] = assess_view(Inapplicable(), owner="physical", validity=blocker())
-    assert isinstance(absent.accepted_result, Inapplicable)
-    undecided = assess_view(raw, owner="physical", validity=blocker())
-    assert undecided.accepted_result == raw and undecided.readiness.ready is None
-    denied = assess_view(raw, owner="physical", validity=refused)
-    assert denied.accepted_result == refused
-    accepted = assess_view(raw, owner="physical")
-    assert accepted.readiness.ready is True
-    assert accepted.accepted_result == raw
-
-
-def test_view_applicability_precedes_unresolved_requirements() -> None:
-    result: ViewAssessment[int] = assess_view(
-        blocker(), owner="physical", applicability=Available(False)
+def test_view_reducer_preserves_each_local_answer() -> None:
+    answers: tuple[QueryResult[int], ...] = (
+        Available(4),
+        blocker(),
+        reject("geometry", "too wide", owner="width"),
+        Inapplicable(),
     )
-    assert isinstance(result.accepted_result, Inapplicable)
+    for answer in answers:
+        assessment = assess_view(answer)
+        assert assessment.result == answer
+        assert assessment.output_result == answer
+        assert assessment.applicability == Available(True)
+
+
+def test_view_presence_prevents_output_entry() -> None:
+    for presence in (Available(False), blocker(), reject("absent", "no presence"), Inapplicable()):
+        assessment: ViewAssessment[int] = assess_view(None, applicability=presence)
+        assert assessment.output_result is None
+        assert assessment.applicability == presence
+        assert assessment.result == (Inapplicable() if presence == Available(False) else presence)
+    with pytest.raises(ValueError, match="requires its local output"):
+        assess_view(None)
 
 
 def test_errors_keep_boundary_and_programming_failures_distinct() -> None:
@@ -310,10 +293,10 @@ def test_a_view_and_a_view_reading_it_answer_its_accepted_result() -> None:
     point = design_space(Placed())
     direct = point.inspect(Placed.inner.physical)
     assert isinstance(direct, ViewAssessment)
-    assert point.query(Placed.parent) == direct.accepted_result
-    assert point.query(Placed.inner.physical) == direct.accepted_result
-    assert isinstance(direct.accepted_result, Rejected)
-    assert direct.accepted_result.findings[0].owner == "inner.support"
+    assert point.query(Placed.parent) == direct.result
+    assert point.query(Placed.inner.physical) == direct.result
+    assert direct.result == Available(4)
+    assert inspection.validity(point.inner).status == "refused"
 
 
 class Broken(Space):
@@ -330,7 +313,7 @@ def test_a_functions_output_of_the_wrong_type_is_its_owners_error() -> None:
     assert isinstance(raised.value.__cause__, TypeError)
 
 
-def test_a_view_of_a_refused_space_refuses_and_keeps_what_waits_visible() -> None:
+def test_a_view_and_explicit_validity_report_independent_answers() -> None:
     class Grouped(Space):
         @derived
         def output(self) -> int:
@@ -352,21 +335,13 @@ def test_a_view_of_a_refused_space_refuses_and_keeps_what_waits_visible() -> Non
     for _ in range(2):
         assessment = point.inspect(Grouped.physical)
         assert assessment.output_result == Available(4)
-        assert isinstance(assessment.accepted_result, Rejected)
-        assert isinstance(assessment.validity, Rejected)
-        assert [finding.owner for finding in assessment.validity.findings] == ["refused"]
-        assert assessment.accepted_result == assessment.validity
-        # Readiness, a diagnostic, names what the refused Space still waits on.
-        readiness = assessment.readiness
-        assert readiness.ready is None
-        assert isinstance(readiness.results["$validity"], Rejected)
-        assert isinstance(readiness.results["pending"], Unresolved)
+        assert assessment.result == Available(4)
+        assert assessment.applicability == Available(True)
     validity = inspection.validity(point)
     assert validity.status == "refused"
     assert [piece.owner for piece in validity.pieces] == ["refused"]
     committed = point.with_choices(lanes=1)
-    assert isinstance(committed.inspect(Grouped.physical).accepted_result, Rejected)
-    assert committed.inspect(Grouped.physical).readiness.ready is True
+    assert committed.inspect(Grouped.physical).result == Available(4)
 
 
 def test_a_view_of_a_space_with_no_pieces_reads_its_output() -> None:
@@ -379,5 +354,5 @@ def test_a_view_of_a_space_with_no_pieces_reads_its_output() -> None:
 
     point = design_space(Empty())
     assert point.physical == 4
-    assert point.inspect(Empty.physical).readiness.ready is True
+    assert point.inspect(Empty.physical).result == Available(4)
     assert inspection.validity(point) == inspection.Validity("valid", (), Available(True))

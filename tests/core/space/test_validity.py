@@ -11,9 +11,9 @@ it wait on it. A stored value's type check is no piece either: it was made at
 assignment. A case not selected contributes nothing. ``inspection.validity`` answers it,
 with the pieces that are not true and their owners.
 
-A view is a product: it refuses when its output or its Space is refused, answers while
-its Space is open, and an inactive view answers ``Inapplicable`` without reading its
-Space's validity. A constraint reads values; one that reads a view is refused at compile
+A view is a local readout, independent of owning validity. Ordinary presence still
+blocks entry; a local output can be available, refused, unresolved or inapplicable.
+A constraint reads values; one that reads a view is refused at compile
 (``view-read-in``). A ``Members`` may read a derived value, which a holder reads as the
 value whatever the Space's validity; a holder reading a view of a ``Members`` is a view. A value is
 possible unless a rule it reaches refuses it (``inspection.viable``), and a value set is checked
@@ -296,18 +296,18 @@ class Product(Space):
         return self.width // 1
 
 
-def test_a_view_answers_while_its_space_is_open_and_refuses_with_it() -> None:
+def test_a_view_answers_independently_of_its_spaces_validity() -> None:
     open_ = design_space(Product(width=4))
     assert inspection.validity(open_).status == "open"
     assert open_.cycles == 4
     assessment = open_.inspect(Product.cycles)
-    assert isinstance(assessment.validity, Unresolved) and assessment.readiness.ready is None
+    assert assessment.result == Available(4)
     report = open_.try_with_choices(lanes=3)  # ``divides`` false on its own values
     assert not report.accepted and broken(report) == {"divides": set()}
     refused = built(open_, {"lanes": 3})
     answer = refused.query(Product.cycles)
-    assert isinstance(answer, Rejected)
-    assert [(f.owner, f.code) for f in answer.findings] == [("divides", "lanes-divide")]
+    assert answer == Available(4)
+    assert inspection.validity(refused).status == "refused"
     assert refused.inspect(Product.cycles).output_result == Available(4)
 
 
@@ -337,13 +337,13 @@ class Leaf(Space):
     y = Port(binds=False, tensor=1)
 
 
-def test_a_view_that_does_not_apply_answers_inapplicable_and_reads_its_spaces_validity() -> None:
+def test_a_view_that_does_not_apply_answers_inapplicable() -> None:
     point = design_space(Leaf())
     assert inspection.validity(point).status == "valid"
     assert isinstance(point.y.query(Port.access), Inapplicable)
     assessment = point.y.inspect(Port.access)
     assert assessment.output_result == Inapplicable()
-    assert assessment.validity == Available(True)
+    assert assessment.applicability == Available(True)
     # The bound port's view answers.
     assert point.x.access == 4
 
@@ -469,8 +469,7 @@ def test_a_derived_member_answers_while_its_space_is_refused_and_a_view_member_r
     assert owners(inspection.validity(point.stage)) == ["stage.fits"]
     assert point.total_width == 16
     refused = point.query(Holder.total_cost)
-    assert isinstance(refused, Rejected)
-    assert {f.code for f in refused.findings} == {"too-wide"}
+    assert refused == Available(80)
     fine = commit(design_space(Holder()), {"stage.lanes": 2})
     assert fine.total_width == 4 and fine.total_cost == 20
 

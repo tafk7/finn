@@ -19,10 +19,8 @@ reaches out of that Space lifted back through the slot (``lift``).
   by keys relative to it: its own records, the members its edges name, and the members of
   the Spaces it places on the way, as the one table of every placement named them (a
   cycle at two levels sharing members: the inner class's is found first, as that class is
-  compiled first). A view's edge to its Space's validity is not in the order: views are
-  read out (below), so it closes no cycle, and a read in is ``view-read-in``, not a cycle
-  through the validity. Edges among views stay: views reading each other in a ring are a
-  cycle.
+  compiled first). Views have only their local dependencies; edges among views stay:
+  views reading each other in a ring are a cycle.
 - **Views read out** (``check_views``): only a view reads a view. A constraint, a derived
   value, a guard (a Decision's or a placed Space's ``when``), a domain (its inputs) and a
   binding of a placed Space's formal read facts, choices and derived values; one reading a
@@ -166,8 +164,8 @@ class _Fields:
 
     def following(self) -> list[Ref]:
         """In the domain rule's order: arguments, alternatives, output, selector, guard. A
-        view's validity and a validity's pieces are not followed: the walk reaches no view
-        (``check_views``), the one record that lists its Space's validity."""
+        validity's pieces are not followed; model-domain checking cannot reach a view
+        (``check_views``)."""
         found: list[Ref] = [*self.arguments, *self.alternatives]
         found.extend(
             single for single in (self.output, self.selector, self.guard) if single is not None
@@ -256,26 +254,15 @@ def exits(compiled: Compiled, ref: int | Placed) -> frozenset[Exit]:
 
 
 def _successors(compiled: Compiled, ref: int | Placed) -> list[Ref]:
-    """A record's dependencies in the static order (a view's without its Space's validity:
-    ``_ordered``); a placed Space's member's, what it reaches there, lifted into this
-    class."""
+    """Static dependencies; lift a placed member's references into this class."""
     if isinstance(ref, Placed):
         return list(_through(compiled, ref.path, ref.member))
-    held = fields(compiled, ref)
-    if compiled.records[ref].kind == "view":
-        return [each for each in held.dependencies() if each not in held.constraints]
-    return held.dependencies()
+    return fields(compiled, ref).dependencies()
 
 
 def _ordered(node: Node) -> tuple[NodeRef, ...]:
-    """A node's dependencies in the static order. A view's edge to its Space's validity is
-    left out: a view is read out, so nothing its validity reads may read it (``view-read-in``,
-    checked per root) and the edge closes no cycle the order must find; a read in reaches
-    that check rather than a cycle through the validity. Evaluation keeps the edge (a view
-    is refused with its Space)."""
-    if node.kind != "view":
-        return node.dependencies
-    return tuple(ref for ref in node.dependencies if ref not in node.constraints)
+    """A node's explicit dependencies, including local view composition."""
+    return node.dependencies
 
 
 def _reaching(compiled: Compiled, ref: Ref) -> frozenset[Exit]:

@@ -107,9 +107,8 @@ def test_threshold_states_its_result_type_initial_table_and_configuration() -> N
     assert threshold(bias=-4).result_dtype.name == "INT3"
     narrow_negative = threshold(bias=-5)
     assert narrow_negative.result_dtype.name == "INT33"
-    assert isinstance(
-        narrow_negative.inspect(ThresholdingAxiKernel.netlist).accepted_result, Rejected
-    )
+    assert isinstance(narrow_negative.inspect(ThresholdingAxiKernel.netlist).result, Available)
+    assert inspection.validity(narrow_negative).status == "refused"
     enabled = library_module(threshold(axilite=True, deep=True))
     assert dict(enabled.parameters)["USE_AXILITE"] == 1
     assert dict(enabled.parameters)["DEEP_PIPELINE"] == 1
@@ -189,7 +188,7 @@ def test_threshold_partial_dtype_query_does_not_adopt_implementation_decisions()
     base = threshold_base()
     assert base.result_dtype.name == "INT3"
     assert isinstance(base.query(ThresholdingAxiKernel.deep_pipeline), Unresolved)
-    assert isinstance(base.inspect(ThresholdingAxiKernel.netlist).accepted_result, Unresolved)
+    assert isinstance(base.inspect(ThresholdingAxiKernel.netlist).result, Unresolved)
 
 
 def test_threshold_rejects_unsupported_profiles_and_malformed_tables() -> None:
@@ -200,9 +199,10 @@ def test_threshold_rejects_unsupported_profiles_and_malformed_tables() -> None:
         threshold(bias=-10),
     )
     assert all(
-        isinstance(point.inspect(ThresholdingAxiKernel.netlist).accepted_result, Rejected)
+        isinstance(point.inspect(ThresholdingAxiKernel.netlist).result, Available)
         for point in profiles
     )
+    assert all(inspection.validity(point).status == "refused" for point in profiles)
     # A table with no sets axis is refused on its facts, before any choice is set.
     flat = threshold_base(table=((-2, 0, 3),), channels=1)
     assert inspection.validity(flat).status == "refused"
@@ -279,8 +279,8 @@ def test_a_refused_input_port_leaves_its_kernels_domains_and_refuses_its_product
     assert [piece.owner for piece in inspection.validity(committed.instance).pieces] == [
         "input_element_taken"
     ]
-    for product in (ThresholdingAxiKernel.netlist, ThresholdingAxiKernel.cycles):
-        assert isinstance(committed.instance.query(product), Rejected)
+    assert isinstance(committed.instance.query(ThresholdingAxiKernel.netlist), Unresolved)
+    assert isinstance(committed.instance.query(ThresholdingAxiKernel.cycles), Available)
 
 
 def placed_on(channels: int, table: IntegerTensor) -> ThresholdingAxiKernel:

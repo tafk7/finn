@@ -6,7 +6,7 @@
 A supplied formal becomes its binding (a literal, or an alias of what it
 references); a Space class's own member becomes its kind's payload: a formal's
 requirement, a Decision's domain and its arguments, a callback with its arguments, a
-view's output and its Space's validity, and ``Members`` entries. Guards are linked after
+view's local output, and ``Members`` entries. Guards are linked after
 every member, references resolving through ``_names``. A reference into a placed Space is
 an edge out of the class, named as it is first read (``Table.lift``).
 """
@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import replace
-from typing import Any, cast
+from typing import Any
 
 from ._bindings import PlacementBinding
 from ._names import Names
@@ -146,7 +146,7 @@ class _Lowering:
     def view_output(
         self, node: Node, guard: NodeRef | None, declaration: View[object], name: str
     ) -> NodeRef:
-        """Both view forms lower to one accepted node with an explicit raw output."""
+        """Both view forms lower to one readout node with an explicit local output."""
         if declaration.source is not None:
             return self.names.reference(node.scope, declaration.source, owner=node.key)
         function = self.table.drafts[node.scope].effective.functions[name]
@@ -229,7 +229,6 @@ class _Lowering:
         if isinstance(declaration, View):
             return {
                 "output": self.view_output(node, guard, declaration, task.name),
-                "constraints": (cast(int, self.table.drafts[node.scope].validity),),
             }
         if isinstance(declaration, Members):
             entries = self.names.members_candidates(scope.index, declaration)

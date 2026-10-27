@@ -30,6 +30,7 @@ from support.xsim import requires_xsim
 
 from finn.core.rtlsim_bench import simulate
 from finn.core.space import (
+    Available,
     DefinitionError,
     Rejected,
     design_space,
@@ -225,26 +226,27 @@ def test_native_rtl_pin_names_directions_and_widths(factory, tmp_path):
 
 
 @pytest.mark.parametrize(
-    "factory",
+    "factory, local_result",
     [
-        lambda: fifo(depth=1),
-        lambda: eltwise(operation="DIV"),
-        lambda: eltwise(lhs=DataType["INT4"]),
-        lambda: eltwise(lhs=DataType["BIPOLAR"]),
-        lambda: eltwise(b_scale=1e100),
-        lambda: eltwise(b_scale=0.5),
-        lambda: eltwise(operation="MUL", lhs=DataType["FLOAT32"], b_scale=0.5),
-        lambda: eltwise(lhs=DataType["FLOAT32"], platform=FULL_DSP48E2),
-        lambda: threshold(thresholds=(((2, 1),),)),
-        lambda: threshold(thresholds=(((0, 20),),)),
-        lambda: threshold(bias=1 << 31),
-        lambda: threshold(bias=-10),
+        (lambda: fifo(depth=1), Available),
+        (lambda: eltwise(operation="DIV"), Available),
+        (lambda: eltwise(lhs=DataType["INT4"]), Available),
+        (lambda: eltwise(lhs=DataType["BIPOLAR"]), Available),
+        (lambda: eltwise(b_scale=1e100), Rejected),
+        (lambda: eltwise(b_scale=0.5), Available),
+        (lambda: eltwise(operation="MUL", lhs=DataType["FLOAT32"], b_scale=0.5), Available),
+        (lambda: eltwise(lhs=DataType["FLOAT32"], platform=FULL_DSP48E2), Available),
+        (lambda: threshold(thresholds=(((2, 1),),)), Available),
+        (lambda: threshold(thresholds=(((0, 20),),)), Available),
+        (lambda: threshold(bias=1 << 31), Available),
+        (lambda: threshold(bias=-10), Available),
     ],
 )
-def test_unsupported_cases_are_refused_without_constructing_invalid_interfaces(factory):
+def test_model_rules_and_local_netlist_results_are_separate(factory, local_result):
     point = factory()
     assessment = point.inspect(type(point).netlist)
-    assert isinstance(assessment.accepted_result, Rejected)
+    assert isinstance(assessment.result, local_result)
+    assert inspection.validity(point).status == "refused"
 
 
 @pytest.mark.parametrize(

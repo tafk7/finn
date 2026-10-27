@@ -21,7 +21,6 @@ from support.refusals import refused
 from support.space_cores import built
 
 from core.space._choices_support import committed, replay
-from core.space._results_support import codes
 from finn.core.space import (
     Available,
     Decision,
@@ -104,8 +103,8 @@ def test_a_relation_of_siblings_is_their_parents_and_owns_its_refusal() -> None:
     assert [(rule.rule, rule.standing) for rule in report.broken] == [("aligned", ())]
     apart = built(point, {"first.factor": 3, "second.factor": 4})
     refused = apart.inspect(Aligned.factor)
-    assert isinstance(refused.accepted_result, Rejected)
-    assert [(f.owner, f.message) for f in refused.accepted_result.findings] == [
+    assert refused.result == Available(3)
+    assert [(f.owner, f.message) for f in apart.query(Aligned.aligned).findings] == [
         ("aligned", "first.factor=3, second.factor=4")
     ]
     validity = inspection.validity(apart)
@@ -159,7 +158,8 @@ def test_members_range_over_present_nodes_and_the_budget_counts_them() -> None:
     ]
     over = built(third, {"use_third": True, "a.factor": 4, "b.factor": 2, "c.factor": 1})
     refused = over.query(Budgeted.total)
-    assert codes(refused) == {"over-budget"} and owners(refused) == {"within"}
+    assert refused == Available(13)
+    assert inspection.validity(over).status == "refused"
 
 
 # -- 3. a graph built as data, with edges assigned after their nodes -------------------

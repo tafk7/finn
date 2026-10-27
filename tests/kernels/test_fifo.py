@@ -15,7 +15,6 @@ from support.helpers import FULL_DSP48E2, fifo_node
 from finn.core.space import (
     Available,
     QueryResult,
-    Rejected,
     Unresolved,
     design_space,
     inspection,
@@ -37,7 +36,7 @@ def decided(answer: QueryResult[T]) -> T:
 
 def test_fifo_states_its_word_geometry_once_its_ram_style_is_chosen() -> None:
     base = design_space(fifo_node(word_bits=13, depth=8))
-    assert isinstance(base.inspect(FifoKernel.netlist).accepted_result, Unresolved)
+    assert isinstance(base.inspect(FifoKernel.netlist).result, Unresolved)
     with pytest.raises(ValueUnavailableError):
         _ = library_module(base)
     # Its word is its input port's: one lane of the tensor's INT13 a beat.
@@ -62,7 +61,7 @@ def test_fifo_states_its_word_geometry_once_its_ram_style_is_chosen() -> None:
         ("ordy", Direction.IN, 1),
     ]
     netlist = Fragment((("", requirements),))
-    assert chosen.inspect(FifoKernel.netlist).accepted_result == Available(netlist)
+    assert chosen.inspect(FifoKernel.netlist).result == Available(netlist)
     assert chosen.field(FifoKernel.netlist).get() == netlist
     assert chosen.field(FifoKernel.netlist).query() == Available(netlist)
     assert chosen.query(FifoKernel.netlist) == Available(netlist)
@@ -94,12 +93,10 @@ def test_fifo_refuses_an_unsupported_geometry_before_and_after_its_ram_style(dep
             ("capacity_supported", {"fifo-geometry"}),
             ("geometry_supported", {"fifo-geometry"}),
         ]
-    assert isinstance(base.inspect(FifoKernel.netlist).accepted_result, Rejected)
+    assert isinstance(base.inspect(FifoKernel.netlist).result, Unresolved)
     chosen = base.with_choices(ram_style="auto")
-    assert isinstance(chosen.inspect(FifoKernel.netlist).accepted_result, Rejected)
-    with pytest.raises(ValueUnavailableError) as error:
-        _ = library_module(chosen)
-    assert isinstance(error.value.result, Rejected)
+    assert isinstance(chosen.inspect(FifoKernel.netlist).result, Available)
+    assert library_module(chosen).implementation_id == "finnlib.fifo"
 
 
 @pytest.mark.parametrize(

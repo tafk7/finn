@@ -14,9 +14,9 @@ from finn.core.space import (
     Decision,
     Inapplicable,
     Param,
-    Rejected,
     Select,
     Space,
+    Unresolved,
     constraint,
     derived,
     design_space,
@@ -73,13 +73,12 @@ def test_static_alternatives_and_demanded_evidence_are_separate() -> None:
     assert first == second
     assert first.result == Available(12)
     assert calls == ["good"]
-    # The unselected candidate is read only as absent: the root's validity, which the view
-    # reads, reads the guard it is placed under, false, and so neither its validity nor
-    # anything of it is read.
+    # The unselected candidate is never demanded by this readout.
     bad = {
         node.declaration.key: node.result for node in first.nodes if ".bad." in node.declaration.key
     }
-    assert bad == {"implementation.bad.$selected": Available(False)}
+    assert bad == {}
+    assert all(node.declaration.kind != "validity" for node in first.nodes)
     assert any(node.selector and node.result == Available("good") for node in first.nodes)
     assert any(node.is_guard for node in first.nodes)
     assert any(
@@ -140,15 +139,14 @@ def test_refusal_causes_stay_visible_while_the_output_is_unresolved() -> None:
         def selected(self) -> int:
             return self.value + self.chosen
 
-        physical = view(selected)  # refused with its Space, which ``supported`` refuses
+        physical = view(selected)  # waits on chosen, independently of supported
 
     point = design_space(Example())
     evidence = inspection.explain(point, Example.physical)
-    assert isinstance(evidence.result, Rejected)
+    assert isinstance(evidence.result, Unresolved)
     assert evidence.assessment is not None
-    refused = next(node for node in evidence.nodes if node.declaration.key == "supported")
-    assert isinstance(refused.result, Rejected)
-    assert refused.result.findings[0].owner == "supported"
+    assert all(node.declaration.key != "supported" for node in evidence.nodes)
+    assert inspection.validity(point).status == "refused"
     choice = next(node for node in evidence.nodes if node.declaration.key == "chosen")
     assert isinstance(choice.decision_state, Available)
     assert choice.decision_state.value.status == "unassigned"

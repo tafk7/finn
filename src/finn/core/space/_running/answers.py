@@ -38,7 +38,6 @@ from ..results import (
     Inapplicable,
     NonValue,
     QueryResult,
-    ReadinessAssessment,
     Rejected,
     Unresolved,
     ViewAssessment,
@@ -97,9 +96,11 @@ def _guard_result(node: Address, answer: QueryResult[object]) -> NonValue | None
     return None if answer.value else INAPPLICABLE
 
 
-def _guard_assessment(node: Address, answer: NonValue) -> Assessment | None:
+def _guard_assessment(
+    node: Address, answer: NonValue, applicability: QueryResult[bool] | None = None
+) -> Assessment | None:
     if node.kind == "view":
-        return assess_view(answer, owner=node.key, applicability=answer)
+        return assess_view(None, applicability=answer if applicability is None else applicability)
     if node.kind == "constraint":
         return ConstraintAssessment({node.key: answer}, answer)
     if node.kind == "validity":
@@ -296,28 +297,19 @@ def copy_result(node: Address, answer: QueryResult[object]) -> QueryResult[objec
     return answer if value is answer.value else Available(value)
 
 
-def _copy_readiness(node: Address, assessment: ReadinessAssessment) -> ReadinessAssessment:
-    scope = node.scope
-    return ReadinessAssessment(
-        {key: copy_result(scope.find(key), answer) for key, answer in assessment.results.items()},
-        assessment.result,
-    )
-
-
 def copy_assessment(node: Address, assessment: Assessment) -> Assessment:
-    """An assessment as a reader receives it: every value in it handed out (a constraint's
-    answers are exact bools and findings, shared as they are)."""
+    """Hand out detached local view values; bool constraint results are immutable."""
     if isinstance(assessment, ConstraintAssessment):
         return assessment
-    output = copy_result(node, assessment.output_result)
-    accepted = (
+    output = (
+        None if assessment.output_result is None else copy_result(node, assessment.output_result)
+    )
+    result = (
         output
-        if assessment.accepted_result is assessment.output_result
-        else copy_result(node, assessment.accepted_result)
+        if output is not None and assessment.result is assessment.output_result
+        else copy_result(node, assessment.result)
     )
-    return ViewAssessment(
-        output, _copy_readiness(node, assessment.readiness), assessment.validity, accepted
-    )
+    return ViewAssessment(result, assessment.applicability, output)
 
 
 __all__ = [

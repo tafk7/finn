@@ -102,7 +102,7 @@ def test_a_view_reads_as_its_accepted_value_on_a_configuration() -> None:
     assert point.checked == 16
     # The read, the query and the assessment agree.
     assert point.query(Hall.total) == Available(40)
-    assert point.inspect(Hall.total).accepted_result == Available(40)
+    assert point.inspect(Hall.total).result == Available(40)
     with pytest.raises(TypeError, match="not callable"):
         point.total()  # type: ignore[operator]
 
@@ -114,13 +114,11 @@ def test_an_unaccepted_view_read_raises_carrying_its_result() -> None:
     assert isinstance(unresolved.value.result, Unresolved)
     assert unresolved.value.result == base.query(Hall.kitchen.cost)
     assert {finding.owner for finding in unresolved.value.result.findings} == {"kitchen.finish"}
-    # A refused Space: the read of its view carries the refusal.
+    # Unrelated refusal is explicitly queried, not inherited by the view.
     refused = too_large(hall=1)
-    with pytest.raises(ValueUnavailableError) as rejected:
-        _ = refused.hall.cost
-    assert isinstance(rejected.value.result, Rejected)
-    assert {finding.code for finding in rejected.value.result.findings} == {"too-large"}
-    assert rejected.value.result == refused.inspect(Hall.hall.cost).accepted_result
+    assert refused.hall.cost == 36
+    assert refused.inspect(Hall.hall.cost).result == Available(36)
+    assert inspection.validity(refused).status == "refused"
     # An absent node's view is inapplicable.
     without = base.with_choices(want_garage=False)
     with pytest.raises(ValueUnavailableError) as absent:
@@ -151,11 +149,11 @@ def test_a_derived_value_read_inside_a_computation_blocks_like_any_read() -> Non
     assert calls == ["started"]  # halted at the first unavailable read
     # The Space is valid (an open choice is no piece): the view waits on its output alone.
     assessment = base.inspect(Reader.total)
-    assert assessment.validity == Available(True)
+    assert assessment.applicability == Available(True)
     assert isinstance(assessment.output_result, Unresolved)
-    assert assessment.accepted_result == assessment.output_result
+    assert assessment.result == assessment.output_result
     half = base.with_choices({Reader.kitchen.finish: 2})
-    assert isinstance(half.inspect(Reader.total).accepted_result, Unresolved)
+    assert isinstance(half.inspect(Reader.total).result, Unresolved)
     point = half.with_choices({Reader.dining.finish: 1})
     assert point.total == 40
     assert calls[-1] == "finished"
@@ -167,9 +165,9 @@ def test_a_derived_value_supplies_a_formal_by_assignment_and_at_the_call() -> No
     point = chosen()
     assert point.hall.area == 24  # hall.area = kitchen.price
     assert point.annex.area == 16  # Room(area=dining.price)
-    # The formal answers where the hall is refused; its view is refused with it.
+    # Both formal and readout answer independently of the hall validity.
     big = too_large(hall=2)
-    assert big.hall.area == 36 and isinstance(big.query(Hall.hall.cost), Rejected)
+    assert big.hall.area == 36 and big.query(Hall.hall.cost) == Available(72)
 
 
 def test_a_view_refuses_with_its_space_and_answers_while_it_is_open_in_both_forms() -> None:
@@ -180,16 +178,14 @@ def test_a_view_refuses_with_its_space_and_answers_while_it_is_open_in_both_form
     assert validity.status == "open"
     assert [piece.owner for piece in validity.pieces] == ["garage.small_enough"]
     assert point.checked == 16 and point.total == 40
-    assert point.inspect(Hall.checked).validity == validity.result
-    # A child refused refuses the hall, and every view of it, in both forms.
+    assert point.inspect(Hall.checked).result == Available(16)
+    # A refused child refuses the hall validity; both forms of view stay local.
     refused = too_large(hall=1)
     validity = inspection.validity(refused)
     assert validity.status == "refused"
     assert [piece.owner for piece in validity.pieces] == ["hall.small_enough"]
-    for view_ in (Hall.total, Hall.checked):
-        answer = refused.query(view_)
-        assert isinstance(answer, Rejected)
-        assert {finding.code for finding in answer.findings} == {"too-large"}
+    assert refused.query(Hall.total) == Available(52)
+    assert refused.query(Hall.checked) == Available(16)
     # The children that are valid still answer theirs.
     assert refused.kitchen.cost == 36 and refused.dining.cost == 16
 
@@ -201,10 +197,9 @@ def test_a_view_refuses_with_its_space_and_answers_while_it_is_open_in_both_form
     strict = design_space(Strict()).with_choices(
         {Strict.kitchen.finish: 1, Strict.dining.finish: 1}
     )
-    assert isinstance(strict.inspect(Strict.checked).validity, Rejected)
-    with pytest.raises(ValueUnavailableError) as caught:
-        _ = strict.checked
-    assert isinstance(caught.value.result, Rejected)
+    assert inspection.validity(strict).status == "refused"
+    assert strict.inspect(Strict.checked).result == Available(10)
+    assert strict.checked == 10
 
 
 def test_inspect_and_query_are_explicit_calls_on_the_configuration() -> None:
@@ -212,7 +207,7 @@ def test_inspect_and_query_are_explicit_calls_on_the_configuration() -> None:
     # A view of a child: on the child's configuration, or through a path.
     on_child = point.kitchen.inspect(Room.cost)
     assert on_child == point.inspect(Hall.kitchen.cost)
-    assert on_child.accepted_result == Available(24)
+    assert on_child.result == Available(24)
     assert point.kitchen.query(Room.cost) == point.query(Hall.kitchen.cost) == Available(24)
     assert point.inspect(Hall.kitchen.small_enough).result == Available(True)
     with pytest.raises(RequestError, match="kitchen.area is not a view or a constraint"):

@@ -153,10 +153,10 @@ Each reading below is stated in full: the rule the semantics' author chose for t
 where the semantics leave room. A "§ 16.n" is the number its author gave the reading,
 kept as its label; the text here is the rule.
 
-1. *A view refused because its Space is refused is refused through, never an origin*:
-   its Space's false pieces are counted on their own. A view's body
-   refusing on its own values refuses the view with its own reason (§ 16.1); no piece
-   reads a view, so neither is ever in a pair.
+1. *Views are independent readouts*: local inputs and the body determine the answer
+   after ordinary scope presence. Owning validity is never an implicit input. A
+   refusing body refuses only the view; no model piece reads a view, so a view is
+   never an origin in the pairs that govern admission of choices.
 2. *Only an origin feeding a false piece counts* (§ 16.2, kept by § 16.15). A piece's
    origins are found from it, following refused inputs back through derived values,
    ``Members`` (to their refused entries; a ``Members`` is never an origin), and
@@ -196,7 +196,7 @@ kept as its label; the text here is the rule.
    a value (an entry answering inapplicable is skipped, never read). The exceptions,
    stated whole: reads made only to decide existence are not followed (each node's own
    guards, at every node read through and not only the origin; a member's existence
-   reads; a selector read to find its case; a view's Space's validity); less every
+   reads; a selector read to find its case); less every
    choice the change names (committed or cleared) and every choice deciding the
    origin's existence (the selectors of the scopes above it, its own included, and the
    choices its guards' ``when`` reads depend on). An empty domain, a choice's own
@@ -757,13 +757,6 @@ class _Evaluation:
                 body = Refused((Reason(reason_kind, path, scope, code=output.code),))
             else:
                 body = Known(output)
-        if kind == "derived":
-            return body
-        reasons = list(body.reasons) if isinstance(body, Refused) else []
-        if self.validity(scope).verdict is Verdict.FALSE:
-            reasons.append(Reason(ReasonKind.SPACE_REFUSED, path, scope))
-        if reasons:
-            return Refused(sorted_reasons(reasons))
         return body
 
     def _members(self, path: str, scope: str) -> Answer:

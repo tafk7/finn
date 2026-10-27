@@ -556,13 +556,12 @@ class RefusedSpace(Space):
         return 1
 
 
-def test_a_view_that_does_not_apply_in_a_refused_space_is_refused_through_its_space() -> None:
-    """A view answers refused whenever its Space is, as its answer is the Space's too; a
-    derived value answers inapplicable, as no Space's validity is read for it."""
+def test_present_inapplicable_view_is_independent_of_refused_validity() -> None:
+    """Local applicability is independent of unrelated owner rules."""
     point = design_space(RefusedSpace())
     answer = point.query(RefusedSpace.early)
-    assert isinstance(answer, Rejected)
-    assert {finding.code for finding in answer.findings} == {"never-holds"}
+    assert isinstance(answer, Inapplicable)
+    assert inspection.validity(point).status == "refused"
     assert isinstance(point.query(RefusedSpace.derived_early), Inapplicable)
 
 

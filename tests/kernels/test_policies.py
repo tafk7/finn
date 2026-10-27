@@ -155,7 +155,7 @@ def test_first_valid_is_in_listed_order_unless_its_policy_names_a_ranking() -> N
 
 
 class Refusing(Space):
-    """A memory whose ranking view refuses while the memory is refused."""
+    """Independent rule and local ranking refusals, with distinct triggers."""
 
     bits: int = Param()
     ram_style: str = Decision(domain=memory_styles())
@@ -165,17 +165,17 @@ class Refusing(Space):
         return reject("toy-memory", "refused") if self.bits < 0 else True
 
     @view
-    def ram_preference(self) -> tuple[str, ...]:
+    def ram_preference(self) -> tuple[str, ...] | Rejected:
         found: int = self.bits
+        if found < -1:
+            return reject("ranking-unavailable", "ranking cannot characterize this input")
         return memory_preference(found)
 
 
 def test_a_ranking_that_cannot_be_read_falls_back_to_listed_order_named() -> None:
-    """A ranking view refuses while its Space is refused: first valid takes the listed
-    order, and the fallback is named (``choice-order-unknown``): the choice, the view and
-    why, the view's findings its causes."""
+    """An own-refused ranking uses the named fallback, keeping only its local cause."""
     ranking = owner(Refusing, {Refusing.ram_style: FirstValid(order=Refusing.ram_preference)})
-    point = design_space(Refusing(bits=-1))
+    point = design_space(Refusing(bits=-2))
     (item,) = (each for each in inspection.decisions(point) if each.key == "ram_style")
     (listed,) = inspection.viable(point, [item.reference])
     values, fallback = ranked(point, ranking, item, listed.values or ())
@@ -190,7 +190,7 @@ def test_a_ranking_that_cannot_be_read_falls_back_to_listed_order_named() -> Non
         "policy": "first valid",
         "order": "Refusing.ram_preference",
     }
-    assert {cause.code for cause in fallback.causes} == {"toy-memory"}
+    assert {cause.code for cause in fallback.causes} == {"ranking-unavailable"}
     readable = design_space(Refusing(bits=BLOCK_FIRST_BITS))
     values, fallback = ranked(readable, ranking, item, listed.values or ())
     assert fallback is None and values[0].value == "block"
@@ -382,6 +382,18 @@ def test_each_choice_takes_the_policy_of_its_member_s_owner() -> None:
     }
 
 
+def test_readable_ranking_is_independent_of_a_refused_model() -> None:
+    ranking = owner(Refusing, {Refusing.ram_style: FirstValid(order=Refusing.ram_preference)})
+    point = design_space(Refusing(bits=-1))
+    assert inspection.validity(point).status == "refused"
+    assert point.ram_preference == memory_preference(-1)
+    (item,) = (each for each in inspection.decisions(point) if each.key == "ram_style")
+    (listed,) = inspection.viable(point, [item.reference])
+    values, fallback = ranked(point, ranking, item, listed.values or ())
+    assert values == listed.values
+    assert fallback is None
+
+
 class Keeper(Space):
     """A memory member whose ranking view refuses while the memory is refused: a channel's
     view reading its kernel's table, where the kernel is refused."""
@@ -402,7 +414,7 @@ def test_a_ranking_the_pass_cannot_read_is_named_beside_the_point() -> None:
     (``choice-order-unknown``, owned by the choice, naming the view): as a channel's view
     reads the table of a kernel the pass skipped as refused, and the channel is not."""
     ranking = owner(Keeper, {Refusing.ram_style: FirstValid(order=Refusing.ram_preference)})
-    done = defaulted(design_space(Keeper(bits=-1)), Unchecked({"memory": ranking}))
+    done = defaulted(design_space(Keeper(bits=-2)), Unchecked({"memory": ranking}))
     assert states(done.point)["memory.ram_style"] == inspection.Set("distributed")
     (fallback,) = done.fallbacks
     assert (fallback.code, fallback.owner) == ("choice-order-unknown", "memory.ram_style")

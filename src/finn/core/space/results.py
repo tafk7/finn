@@ -207,20 +207,20 @@ def assess_constraints(answers: Mapping[str, QueryResult[bool]]) -> ConstraintAs
 
 @dataclass(frozen=True, slots=True)
 class ViewAssessment(Generic[T]):
-    """A view's answer and what it was made of: its raw output, its Space's validity
-    (``Inapplicable`` where the view is inactive and its validity was never read),
-    readiness (a diagnostic: whether the output or the validity is still unresolved)
-    and the accepted result (``assess_view``)."""
+    """One local readout: its result, presence and output when entered.
 
-    output_result: QueryResult[T]
-    readiness: ReadinessAssessment
-    validity: QueryResult[bool]
-    accepted_result: QueryResult[T]
+    ``output_result`` is None only when presence prevented reading the output.
+    Model validity and choice completeness are separate, explicitly asked questions.
+    """
+
+    result: QueryResult[T]
+    applicability: QueryResult[bool]
+    output_result: QueryResult[T] | None
 
     def require_value(self) -> T:
         """Return the accepted value or raise with this assessment as context."""
 
-        return require_value(self.accepted_result, context=self)
+        return require_value(self.result, context=self)
 
 
 def require_value(result: QueryResult[T], *, context: object | None = None) -> T:
@@ -234,47 +234,20 @@ def require_value(result: QueryResult[T], *, context: object | None = None) -> T
 
 
 def assess_view(
-    output_result: QueryResult[T],
+    output_result: QueryResult[T] | None,
     *,
-    owner: str,
-    validity: QueryResult[bool] = Available(True),
-    validity_owner: str = "$validity",
-    waiting: Mapping[str, QueryResult[object]] | None = None,
     applicability: QueryResult[bool] = Available(True),
 ) -> ViewAssessment[T]:
-    """Reduce a view's raw output and its Space's validity identically for every view form.
-
-    In order: inapplicable while the view is inactive (``applicability``; the
-    evaluator then reads neither its output nor its Space's validity); refused when its
-    output or its Space is refused, whatever else waits; unresolved when its output is
-    (an undecided Space leaves the view answering); else its output. Readiness is a
-    diagnostic: whether the output, or anything the Space counts, is still unresolved
-    (the Space's validity, keyed ``validity_owner``, and the pieces still unresolved in
-    a refused Space, ``waiting``, by key), which does not decide refusal.
-    """
+    """Reduce ordinary presence and a local output without asking model validity."""
 
     if not isinstance(applicability, Available) or applicability.value is False:
         inactive: QueryResult[T] = (
             applicability if not isinstance(applicability, Available) else Inapplicable()
         )
-        readiness = ReadinessAssessment(
-            {owner: cast(QueryResult[object], inactive)}, Available(True)
-        )
-        return ViewAssessment(output_result, readiness, Inapplicable(), inactive)
-    required = {
-        owner: cast(QueryResult[object], output_result),
-        validity_owner: cast(QueryResult[object], validity),
-        **(waiting or {}),
-    }
-    unresolved = _unresolved(required.values())
-    readiness = ReadinessAssessment(
-        required, unresolved if unresolved is not None else Available(True)
-    )
-    refusal = _rejected(
-        (cast(QueryResult[object], output_result), cast(QueryResult[object], validity))
-    )
-    accepted: QueryResult[T] = refusal if refusal is not None else output_result
-    return ViewAssessment(output_result, readiness, validity, accepted)
+        return ViewAssessment(inactive, applicability, None)
+    if output_result is None:
+        raise ValueError("an applicable view requires its local output")
+    return ViewAssessment(output_result, applicability, output_result)
 
 
 __all__ = [

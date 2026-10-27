@@ -44,6 +44,7 @@ from .occurrence import ask, held, model_of
 from .occurrence import candidate as _candidate
 from .references import DecisionHandle, ValueHandle, decision_key
 from .results import (
+    Available,
     ConstraintAssessment,
     DecisionState,
     QueryResult,
@@ -383,6 +384,33 @@ class Validity:
     result: QueryResult[bool]
 
 
+def presence(point: Space) -> tuple[tuple[str, QueryResult[bool]], ...]:
+    """Every real Space's presence below this point, including rule-free children.
+
+    Available(True/False) means present/absent; Inapplicable means an ancestor is
+    absent. Unresolved or Rejected presence is not complete. This asks only the
+    ordinary guards, never member values or validity, and preserves dormant cases.
+    """
+    from ._running.evaluate import evaluation
+
+    driver_only("scope presence")
+    at = held(point)
+
+    def answer(session: Session) -> tuple[tuple[str, QueryResult[bool]], ...]:
+        ev = evaluation(at.ds, session)
+        return tuple(
+            (
+                scope.name,
+                Available(True)
+                if scope.guard is None
+                else cast(QueryResult[bool], ev.result(scope.guard)),
+            )
+            for scope in scopes_below(at.ds.model.scopes, at.scope)
+        )
+
+    return ask(at.ds.model, answer)
+
+
 def validity(point: Space) -> Validity:
     """The validity of this configuration's Space (its root's is the configuration's):
     every constraint of the Space and of each placed Space that is present (each unknown
@@ -585,6 +613,7 @@ __all__ = [
     "explain",
     "members",
     "model",
+    "presence",
     "states",
     "statistics",
     "validity",

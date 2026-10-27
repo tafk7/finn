@@ -347,8 +347,8 @@ class Space(metaclass=SpaceMeta):
     def inspect(self, view: object) -> ViewAssessment[Any] | ConstraintAssessment:
         """The assessment of a view or a constraint of this configuration.
 
-        ``point.inspect(House.total)`` is the view's ``ViewAssessment``: its raw
-        output, its Space's validity, readiness and accepted result. A view of a
+        ``point.inspect(House.total)`` is the view's ``ViewAssessment``: its local
+        result, applicability and output (None when presence prevented entry). A view of a
         child is inspected on the child's configuration,
         ``point.kitchen.inspect(Room.cost)`` (typed by the view declaration),
         or through a path, ``point.inspect(House.kitchen.cost)`` (a reference

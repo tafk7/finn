@@ -335,7 +335,7 @@ def test_the_core_is_one_possible_case_and_is_given_the_folding():
     # folding decides; its memory is the channel's.
     point = choose(point, {"x.adapter_ram_style": "auto"})
     compute = point.member("matmul").compute
-    assert isinstance(compute.inspect(DotpAxiKernel.netlist).accepted_result, Unresolved)
+    assert isinstance(compute.inspect(DotpAxiKernel.netlist).result, Unresolved)
     assert isinstance(module_of(point, "matmul"), Unresolved)
     point = choose(
         point,

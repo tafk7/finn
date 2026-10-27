@@ -453,7 +453,7 @@ def _same_bool(left: QueryResult[Any], right: QueryResult[Any]) -> bool:
 
 def _same_assessment(node: Address, left: Assessment | None, right: Assessment | None) -> bool:
     """Two assessments of ``node``: a constraint's pieces and result, each exactly; a
-    view's output and accepted result as values (``_same_answer``), and its validity."""
+    view's local output/result as values and its applicability."""
     if left is right:
         return True
     if isinstance(left, ConstraintAssessment) and isinstance(right, ConstraintAssessment):
@@ -464,9 +464,16 @@ def _same_assessment(node: Address, left: Assessment | None, right: Assessment |
         )
     if isinstance(left, ViewAssessment) and isinstance(right, ViewAssessment):
         return (
-            _same_answer(node, left.output_result, right.output_result)
-            and _same_answer(node, left.accepted_result, right.accepted_result)
-            and _same_bool(left.validity, right.validity)
+            _same_answer(node, left.result, right.result)
+            and _same_bool(left.applicability, right.applicability)
+            and (
+                left.output_result is right.output_result
+                or (
+                    left.output_result is not None
+                    and right.output_result is not None
+                    and _same_answer(node, left.output_result, right.output_result)
+                )
+            )
         )
     return False
 
@@ -717,7 +724,11 @@ class Evaluation:
                 and isinstance(inactive, Unresolved)
                 and self.refused_waiting(node.guard, trace, node) is None
             ):
-                return Ans(inactive, tuple(trace), _guard_assessment(node, inactive))
+                return Ans(
+                    inactive,
+                    tuple(trace),
+                    _guard_assessment(node, inactive, cast(QueryResult[bool], guard.result)),
+                )
         return _FRAMES[node.kind](self, node, trace, node)
 
     def _holds_here(self, node: Address, trace: _Tr) -> bool | None:
@@ -1140,35 +1151,11 @@ def _select(ev: Evaluation, node: Address, trace: _Tr, reader: Address) -> Ans:
     return Ans(ev.read(trace, target, reader).result, tuple(trace))
 
 
-def _waiting(ev: Evaluation, index: Address) -> dict[str, QueryResult[object]]:
-    """The pieces still unresolved in the refused Space whose validity is ``index``."""
-    keys, found = ev.scopes.keys, {}
-    pending = [index]
-    while pending:
-        assessment = ev.get(pending.pop()).assessment
-        if not isinstance(assessment, ConstraintAssessment):
-            continue
-        for key, answer in assessment.results.items():
-            if isinstance(answer, Unresolved):
-                found[key] = cast(QueryResult[object], answer)
-            elif isinstance(answer, Rejected) and keys[key].kind == "validity":
-                pending.append(keys[key])
-    return found
-
-
 def _view(ev: Evaluation, node: Address, trace: _Tr, reader: Address) -> Ans:
-    assert node.output is not None and len(node.constraints) == 1
+    assert node.output is not None
     output = ev.read(trace, node.output, reader).result
-    validity = ev.read(trace, node.constraints[0], reader).result
-    waiting = _waiting(ev, node.constraints[0]) if isinstance(validity, Rejected) else None
-    view = assess_view(
-        output,
-        owner=node.key,
-        validity=cast(QueryResult[bool], validity),
-        validity_owner=node.constraints[0].key,
-        waiting=waiting,
-    )
-    return Ans(view.accepted_result, tuple(trace), view)
+    view = assess_view(output)
+    return Ans(view.result, tuple(trace), view)
 
 
 Piece = tuple[str, QueryResult[bool]]

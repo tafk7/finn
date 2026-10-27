@@ -26,8 +26,9 @@ The one step that touches the filesystem, in two parts:
   when the polarities differ);
   each presented bus wired member by member to ``<port>_<MEMBER>``.
 
-Nothing here decides or checks what a configuration may be: a module arrives
-valid from the Space that derived it.
+A module is a detached description, carrying no producer-validity certificate.
+The owning build operation checks its source design before calling this emitter;
+local source, ABI and compilation checks still belong here.
 """
 
 from __future__ import annotations
