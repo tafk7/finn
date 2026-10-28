@@ -37,6 +37,7 @@ from finn.core.space import (
     Unresolved,
     design_space,
     divisors_of,
+    inspection,
     required,
     view,
 )
