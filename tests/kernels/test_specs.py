@@ -214,9 +214,9 @@ def _ports_checked(point: Partition) -> int:
         member = point.member(name)
         for port in _ports(member):
             surface = port_surface(type(member), port)
-            if surface.contract is None:
+            if surface.contract_reference() is None:
                 continue  # A structurally idle physical form has no logical contract.
-            offered = member.query(surface.contract)
+            offered = member.query(surface.contract_reference())
             if not isinstance(offered, Available):
                 continue
             contract: PortContract = offered.value
