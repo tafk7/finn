@@ -144,7 +144,7 @@ def test_explain_shows_per_channel_and_per_member_evidence():
     visited = {node.declaration.key.removeprefix("first_source.") for node in member.nodes}
     # A kernel's netlist with a module builds it from its ports' streams, its parameters,
     # its data and its bus: it places no member, whose netlists it reads none of.
-    assert {"output_stream", "parameters", "init_file", "config_presented", "netlists"} <= visited
+    assert {"output.stream", "parameters", "init_file", "config.presented"} <= visited
 
 
 def test_a_channel_waits_for_its_own_sides_only():

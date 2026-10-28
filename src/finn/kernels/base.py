@@ -106,7 +106,7 @@ from finn.dataflow.schedule import Access, Affine, Index, Refused, Schedule, bin
 from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import Clocking
 from finn.kernels.artifacts.module import BusExport, Fragment, Link, merge
-from finn.kernels.control import Control, ControlBus, presented
+from finn.kernels.control import Control, control_models, presented
 from finn.kernels.declaration import KernelDeclaration, Product, declarations, declared_reads
 from finn.kernels.library import LibraryModule, ModuleSpec
 from finn.kernels.transport import StreamContract
@@ -354,19 +354,24 @@ class UntimedKernel(Space):
         # this class for a kernel that takes no cycles, which gets no ``cycles`` answer.
         timed = issubclass(cls, KernelSpace)
         below: type[UntimedKernel] = KernelSpace if timed else UntimedKernel
-        # Counted before lowering: each bus lowers to the same members, which would collide
-        # first and hide the refusal.
-        buses = [
-            name
-            for name, declaration in declarations(cls, below).items()
-            if isinstance(declaration, ControlBus)
-        ]
+        # Included controls are structural Groups, not child kernels or lowering.
+        buses = list(control_models(cls))
         if len(buses) > 1:
             raise DefinitionError.broken(
                 "control-bus-repeated",
                 "KernelSpace",
                 f"{cls.__qualname__} declares the control buses {buses}: a kernel presents "
                 "one at most",
+                declaration=cls.__qualname__,
+            )
+        if buses and (
+            not _declared(cls, "bus_control", below) or not _declared(cls, "declares_bus", below)
+        ):
+            raise DefinitionError.broken(
+                "control-bus-unaddressed",
+                "KernelSpace",
+                f"{cls.__qualname__}: an included control states parent bus_control "
+                "and declares_bus answers",
                 declaration=cls.__qualname__,
             )
         _lower(cls)
@@ -615,14 +620,14 @@ class UntimedKernel(Space):
     @derived
     def declares_bus(self) -> bool:
         """Whether it declares a control bus (presented or not): False here, True in a
-        class declaring one (``ControlBus.lower``)."""
+        class declaring one through its own model answer."""
         return False
 
     @view
     def bus_control(self) -> Control | Rejected | Inapplicable:
         """The control bus it declares: a ``Control``, presenting nothing while the bus is
         not presented. A kernel declaring none answers inapplicable; one declaring a bus
-        reads that bus's own view here (``ControlBus.lower``)."""
+        states its own parent View here."""
         if not self.declares_bus:
             return Inapplicable()
         return reject("kernel-control", f"{type(self).__qualname__} declares no control bus")

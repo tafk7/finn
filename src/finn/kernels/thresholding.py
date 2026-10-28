@@ -53,7 +53,7 @@ disabled outputs may be unspecified. Bound by a network (or placed in a kernel w
 children), it reads an input tensor and (with several sets) a tensor of set indices,
 facts it is given, and writes its output tensor; it states the contract of each of its
 ports (``input_contract``, ``output_contract``, ``set_contract``), which the channels on
-them take; its AXI-Lite bus (``config``, a ``ControlBus``) is presented, at the port its
+them take; its AXI-Lite bus (``config``, a ``ControlModel``) is presented, at the port its
 placement names (``control``), when thresholds are runtime-writable (``use_axilite``), and
 otherwise held idle by its module, as is the set selector of a single set. Presented, the
 bus carries the writes that put the kernel's table into the memories (``register_map``),
@@ -68,7 +68,7 @@ Biases below -N-1 are refused: the native unsigned width expression creates a
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, ClassVar
+from typing import ClassVar
 
 from qonnx.core.ranges import TensorRange
 
@@ -90,17 +90,27 @@ from finn.dataflow.datatypes import (
     ordinary_integer_bounds,
     resolve_qonnx_datatype_name,
 )
-from finn.dataflow.schedule import Index, Schedule
+from finn.dataflow.schedule import Access, Index, Schedule
 from finn.dataflow.streams import Stream
-from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
-from finn.kernels.artifacts.abi import CLOCK, RESET, Bus, Endpoint, Member, StandardProtocol
+from finn.kernels.artifacts.abi import (
+    CLOCK,
+    RESET,
+    Bus,
+    Clocking,
+    Endpoint,
+    Member,
+    Pin,
+    StandardProtocol,
+)
 from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData, hex_image
-from finn.kernels.artifacts.module import RegisterMap
+from finn.kernels.artifacts.module import Fragment, Held, RegisterMap
 from finn.kernels.base import KernelSpace, extent_of
-from finn.kernels.control import ControlBus
-from finn.kernels.library import LibraryModule
-from finn.kernels.port import AxiStreamPort
+from finn.kernels.control import Control, ControlModel
+from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
+from finn.kernels.port import held, pins
+from finn.kernels.port_model import IndexedPort, ScheduledPort, SequencePort
 from finn.kernels.utilization import (
     Fit,
     auto_unstated,
@@ -336,7 +346,7 @@ class ThresholdingAxiKernel(KernelSpace):
     @derived
     def input_dtype(self) -> QONNXDataType:
         """The input's element type: its tensor's."""
-        return self.input_element.dtype
+        return self.input.element.dtype
 
     @derived
     def table_dtype(self) -> QONNXDataType:
@@ -528,7 +538,7 @@ class ThresholdingAxiKernel(KernelSpace):
         if self.set_tensor is None:
             return reject("threshold-set-channel", "several threshold sets take a set channel")
         shape = self.set_tensor.shape
-        if shape != (self.input_stream.sequence.form.beats,):
+        if shape != (self.input.stream.sequence.form.beats,):
             return reject("threshold-set-channel", "each input beat needs one set index")
         return BeatSequence(vector_major(shape, 1))
 
@@ -545,16 +555,24 @@ class ThresholdingAxiKernel(KernelSpace):
             return element
         return Tensor(shape, element)
 
-    input = AxiStreamPort(
+    @derived
+    def port_clocking(self) -> Clocking:
+        return type(self).clock_domain
+
+    input = IndexedPort(
         name="s_axis",
+        label="input",
+        clocking=port_clocking,
         endpoint=Endpoint.TARGET,
         tensor=input_tensor,
         schedule=schedule,
         index=indices,
         lanes=(c,),
     )
-    output = AxiStreamPort(
+    output = ScheduledPort(
         name="m_axis",
+        label="output",
+        clocking=port_clocking,
         endpoint=Endpoint.INITIATOR,
         tensor=output_tensor,
         schedule=schedule,
@@ -562,16 +580,18 @@ class ThresholdingAxiKernel(KernelSpace):
         lanes=(c,),
     )
     # The set port indexes beats (``c``'s folds), which no index of a tensor expresses.
-    set = AxiStreamPort(
+    set = SequencePort(
         name="s_axis_set",
+        label="set",
+        clocking=port_clocking,
         endpoint=Endpoint.TARGET,
         tensor=set_tensor,
         sequence=set_sequence,
         dtype=selector_dtype,
     )
-    if TYPE_CHECKING:  # members its ports lower to, which it reads
-        input_element: ClassVar[ScalarEncoding]
-        input_stream: ClassVar[Stream]
+
+    def _accesses(self) -> list[Access]:
+        return [self.input.access] if self.input.binds else []
 
     @view
     def thresholds_file(self) -> GeneratedData:
@@ -655,12 +675,11 @@ class ThresholdingAxiKernel(KernelSpace):
         return RegisterMap(tuple(writes))
 
     # AXI-Lite: presented with runtime writes (``control_for_writes``), held without.
-    config = ControlBus(config_bus, presented=use_axilite, port=control, registers=register_map)
+    config = ControlModel(bus=config_bus, presented=use_axilite)
 
-    module = LibraryModule(
+    module_spec: ClassVar[ModuleSpec] = ModuleSpec(
         "thresholding_axi",
-        parameters=parameters,
-        sources=(
+        constant_sources=(
             CopiedSource("finnlib", "rtl/infra/axilite.sv", provides=("module:axilite",)),
             CopiedSource(
                 "finnlib", "rtl/nonlin/thresholding.sv", provides=("module:thresholding",)
@@ -672,8 +691,113 @@ class ThresholdingAxiKernel(KernelSpace):
                 requires=("module:axilite", "module:thresholding"),
             ),
         ),
-        data=thresholds_file,
     )
+
+    @derived
+    def declares_bus(self) -> bool:
+        return True
+
+    @view
+    def bus_control(self) -> Control | Rejected:
+        if not self.config.presented:
+            return Control(None)
+        port = self.control
+        if port is None:
+            return reject(
+                "control-bus-unaddressed", "a bus it presents names the port it is presented at"
+            )
+        return Control(self.config.bus, port, self.register_map)
+
+    def _input_pins(self) -> tuple[Pin, ...] | Rejected:
+        presenting = self.input.presenting()
+        return pins(
+            self.input.physical_spec(idle=not isinstance(presenting, Stream)),
+            presenting,
+            self.input.clocking,
+        )
+
+    def _input_held(self) -> Held | Rejected:
+        if self.input.placed:
+            return Held()
+        return held(self.input.physical_spec(idle=True), self.input.element, self.input.clocking)
+
+    def _output_pins(self) -> tuple[Pin, ...] | Rejected:
+        presenting = self.output.presenting()
+        return pins(
+            self.output.physical_spec(idle=not isinstance(presenting, Stream)),
+            presenting,
+            self.output.clocking,
+        )
+
+    def _output_held(self) -> Held | Rejected:
+        if self.output.placed:
+            return Held()
+        return held(self.output.physical_spec(idle=True), self.output.element, self.output.clocking)
+
+    def _set_pins(self) -> tuple[Pin, ...] | Rejected:
+        presenting = self.set.presenting()
+        return pins(
+            self.set.physical_spec(idle=not isinstance(presenting, Stream)),
+            presenting,
+            self.set.clocking,
+        )
+
+    def _set_held(self) -> Held | Rejected:
+        if self.set.placed:
+            return Held()
+        return held(self.set.physical_spec(idle=True), self.set.element, self.set.clocking)
+
+    @view
+    def netlist(self) -> Fragment | Rejected:
+        clocking = self.clocking
+        parameters = tuple(sorted(self.parameters.items()))
+        pin_parts = _each(
+            (self.config.pin_values(), self._input_pins(), self._output_pins(), self._set_pins())
+        )
+        if isinstance(pin_parts, Rejected):
+            return pin_parts
+        spec = type(self).module_spec
+        sources = spec.constant_sources
+        assert sources is not None
+        refused = module_unprovided(spec, type(self).__qualname__, sources)
+        if isinstance(refused, Rejected):
+            return refused
+        data = self.thresholds_file
+        held_parts = _each(
+            (self._input_held(), self._output_held(), self._set_held(), self.config.held_values())
+        )
+        if isinstance(held_parts, Rejected):
+            return held_parts
+        leaf = assemble_module(
+            spec,
+            type(self).id,
+            type(self).__qualname__,
+            clocking,
+            parameters,
+            tuple(pin_parts),
+            sources,
+            data,
+            tuple(held_parts),
+            (self.config.presented, self.input.placed, self.output.placed, self.set.placed),
+        )
+        return leaf if isinstance(leaf, Rejected) else Fragment((("", leaf),))
+
+    @view
+    def cycles(self) -> int | Rejected:
+        beats: list[int] = []
+        if self.input.placed:
+            beats.append(self.input.stream.sequence.form.beats)
+        if self.output.placed:
+            beats.append(self.output.stream.sequence.form.beats)
+        if self.set.placed:
+            beats.append(self.set.stream.sequence.form.beats)
+        return (
+            max(beats)
+            if beats
+            else reject(
+                "kernel-cycles", f"no port of {type(self).__qualname__} carries a stream's beats"
+            )
+        )
 
 
 __all__ = [

@@ -31,7 +31,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.library import library_module
-from finn.kernels.port import AxiStreamPort
+from finn.kernels.port_model import IndexedPort
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel, c
 from finn.kernels.values.domains import Integer
@@ -239,8 +239,10 @@ def test_threshold_rejects_unsupported_profiles_and_malformed_tables() -> None:
 class NarrowInput(ThresholdingAxiKernel):
     """A thresholding whose input port takes only elements of up to 4 bits."""
 
-    input = AxiStreamPort(
+    input = IndexedPort(
         name="s_axis",
+        label="input",
+        clocking=ThresholdingAxiKernel.port_clocking,
         endpoint=Endpoint.TARGET,
         tensor=ThresholdingAxiKernel.input_tensor,
         schedule=ThresholdingAxiKernel.schedule,
@@ -272,12 +274,12 @@ def test_a_refused_input_port_leaves_its_kernels_domains_and_refuses_its_product
     assert point.field(ThresholdingAxiKernel.pe).candidates() == Available((1, 2))
     validity = inspection.validity(point)
     assert validity.status == "refused"
-    assert [piece.owner for piece in validity.pieces] == ["input_element_taken"]
+    assert [piece.owner for piece in validity.pieces] == ["input.element_taken"]
     # A commit is accepted all the same (a refusal elsewhere never refuses a commit).
     committed = point.try_with_choices(pe=1)
     assert committed.accepted
     assert [piece.owner for piece in inspection.validity(committed.instance).pieces] == [
-        "input_element_taken"
+        "input.element_taken"
     ]
     assert isinstance(committed.instance.query(ThresholdingAxiKernel.netlist), Rejected)
     assert isinstance(committed.instance.query(ThresholdingAxiKernel.cycles), Rejected)
@@ -350,10 +352,10 @@ def test_runtime_writable_thresholds_declare_the_writes_of_their_table() -> None
         for index, value in enumerate(row):
             expected.append((((row_index << 2) | index) << 2, value & 0x1FF))
     assert point.register_map.writes == tuple(expected)
-    assert point.config_control.registers == point.register_map
+    assert point.bus_control.registers == point.register_map
     shared = threshold(table=(((-2, 0, 3),),), pe=2, axilite=True)  # C = 1: one row, lane 0
     assert shared.register_map.writes == ((0, 0x1FE), (4, 0), (8, 3))
-    assert threshold(pe=1).config_control.bus is None  # held, not presented: nothing to write
+    assert threshold(pe=1).bus_control.bus is None  # held, not presented: nothing to write
 
 
 def test_a_writable_table_is_sized_from_the_input_never_its_initial_values() -> None:

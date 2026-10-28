@@ -25,13 +25,23 @@ import pytest
 from support import chain
 from support.helpers import by_hand, choose, keyed
 
-from finn.core.space import Available, Decision, Param, Unresolved, derived, inspection
+from finn.core.space import (
+    Available,
+    Decision,
+    Param,
+    Rejected,
+    Unresolved,
+    derived,
+    inspection,
+    reject,
+    view,
+)
 from finn.kernels.artifacts.abi import Bus, Endpoint, Member, StandardProtocol
 from finn.kernels.artifacts.module import RegisterMap
 from finn.kernels.base import KernelSpace
 from finn.kernels.budgets import SHELL, ShellBudgets, counts
 from finn.kernels.composer import Facts
-from finn.kernels.control import ControlBus
+from finn.kernels.control import Control, ControlModel
 from finn.kernels.explore import Refused, Seam
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.partition import Partition
@@ -51,7 +61,20 @@ class Presenting(KernelSpace):
 
     control: str | None = Param(default=None)
     on: bool = Decision(domain=(True, False))
-    config = ControlBus(LITE, presented=on, port=control, registers=RegisterMap())
+    config = ControlModel(bus=LITE, presented=on)
+
+    @derived
+    def declares_bus(self) -> bool:
+        return True
+
+    @view
+    def bus_control(self) -> Control | Rejected:
+        if not self.config.presented:
+            return Control(None)
+        port = self.control
+        if port is None:
+            return reject("control-bus-unaddressed", "a presented bus names its port")
+        return Control(self.config.bus, port, RegisterMap())
 
 
 class Initiating(KernelSpace):

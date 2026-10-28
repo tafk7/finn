@@ -120,8 +120,7 @@ from finn.kernels.budgets import (
     shell_members,
 )
 from finn.kernels.channels import Channel
-from finn.kernels.control import ControlBus
-from finn.kernels.declaration import declarations
+from finn.kernels.control import control_models
 from finn.kernels.port import port_endpoint, port_surface
 from finn.kernels.sides import Side, SideKind
 
@@ -667,8 +666,7 @@ def _control_bus(space_type: type[Space]) -> str | None:
     where it declares none."""
     if not issubclass(space_type, UntimedKernel):
         return None
-    found = declarations(space_type, UntimedKernel)
-    return next((name for name, each in found.items() if isinstance(each, ControlBus)), None)
+    return next(iter(control_models(space_type)), None)
 
 
 def _shell(
@@ -698,7 +696,11 @@ def _shell(
         bus = _control_bus(facts.space_type)
         if bus is not None:
             presented.append(member)
-            given[contributor(member, PRESENTED)] = getattr(nodes[member], f"{bus}_presented")
+            # Bind the actual placed occurrence, not a borrowed class reference.
+            control = nodes[member]
+            for segment in bus.split("."):
+                control = getattr(control, segment)
+            given[contributor(member, PRESENTED)] = control.presented
         for kind, name, found in (
             (INITIATORS, "memory_initiators", initiators),
             (DOUBLED, "takes_doubled_clock", doubled),

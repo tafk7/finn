@@ -45,14 +45,15 @@ from finn.kernels.artifacts.abi import (
     StandardProtocol,
 )
 from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.artifacts.module import Held, Leaf, RegisterMap
+from finn.kernels.artifacts.module import Fragment, Held, Leaf, RegisterMap
 from finn.kernels.base import NATIVE_CLOCKING, KernelSpace
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.configure import commit
-from finn.kernels.control import Control, ControlBus, held_bus
-from finn.kernels.library import LibraryModule, library_module
+from finn.kernels.control import Control, ControlModel, held_bus
+from finn.kernels.library import LibraryModule, ModuleSpec, _each, assemble_module, library_module
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.port import AxiStreamPort, served
+from finn.kernels.port import AxiStreamPort, pins, served
+from finn.kernels.port_model import SequencePort
 from finn.kernels.sides import Side
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import Resources
@@ -140,7 +141,7 @@ BUS = Bus(
 )
 
 
-class Controlled(Probe):
+class Controlled(KernelSpace):
     """The probe with a control bus it presents where ``writable``, at the port ``control``."""
 
     id = "test.probe.controlled"
@@ -156,7 +157,62 @@ class Controlled(Probe):
     def register_map(self) -> RegisterMap:
         return RegisterMap(((0, 7),))
 
-    config = ControlBus(config_bus, presented=writable, port=control, registers=register_map)
+    config = ControlModel(bus=config_bus, presented=writable)
+    tensor: Tensor = Param()
+    x = SequencePort(
+        name="s_axis", label="x", tensor=tensor, sequence=BeatSequence(vector_major((4,), 1))
+    )
+    module_spec = ModuleSpec("probe", (PROBE,))
+
+    @derived
+    def declares_bus(self) -> bool:
+        return True
+
+    @derived
+    def clocking(self) -> Clocking:
+        return replace(type(self).clock_domain, doubled="ap_clk2x", doubling=True)
+
+    @view
+    def bus_control(self) -> Control | Rejected:
+        if not self.config.presented:
+            return Control(None)
+        port = self.control
+        if port is None:
+            return reject("control-bus-unaddressed", "a presented bus names its port")
+        return Control(self.config.bus, port, self.register_map)
+
+    @view
+    def resource_use(self) -> Resources | Rejected:
+        return reject("kernel-resources", "a model only")
+
+    @view
+    def netlist(self) -> Fragment | Rejected:
+        clocking = self.clocking
+        pin_parts = _each(
+            (
+                (Signal("mode", Direction.IN, 2), Signal("busy", Direction.OUT, 1)),
+                self.config.pin_values(),
+                pins(self.x.physical_spec(idle=False), self.x.stream, self.x.clocking),
+            )
+        )
+        if isinstance(pin_parts, Rejected):
+            return pin_parts
+        held_parts = (Held((("mode", 1),)), Held(), self.config.held_values())
+        sources = type(self).module_spec.constant_sources
+        assert sources is not None
+        leaf = assemble_module(
+            type(self).module_spec,
+            type(self).id,
+            type(self).__qualname__,
+            clocking,
+            (),
+            tuple(pin_parts),
+            sources,
+            (),
+            held_parts,
+            (False, self.config.presented, True),
+        )
+        return leaf if isinstance(leaf, Rejected) else Fragment((("", leaf),))
 
 
 def controlled(**facts: object) -> Controlled:
@@ -165,8 +221,8 @@ def controlled(**facts: object) -> Controlled:
 
 def test_a_control_bus_held_holds_its_inputs_after_every_port_s_hold() -> None:
     point = controlled()
-    assert point.config_presented is False
-    assert point.config_control == Control(None)
+    assert point.config.presented is False
+    assert point.bus_control == Control(None)
     assert point.query(Controlled.bus_control) == Available(Control(None))
     module = library_module(point)
     names = [pin.name for pin in module.abi.pins]
@@ -179,7 +235,7 @@ def test_a_control_bus_held_holds_its_inputs_after_every_port_s_hold() -> None:
 
 def test_a_control_bus_presented_is_read_with_its_port_and_registers() -> None:
     point = controlled(writable=True, control="first_s_axilite")
-    assert point.config_presented is True
+    assert point.config.presented is True
     control = Control(BUS, "first_s_axilite", RegisterMap(((0, 7),)))
     assert point.query(Controlled.bus_control) == Available(control)
     assert library_module(point).held.inputs == (("mode", 1),)
@@ -190,8 +246,8 @@ def test_a_control_bus_presented_without_its_port_is_refused() -> None:
     # optional ``control`` left out, None), its control view refuses rather than present a
     # bus at port None.
     point = controlled(writable=True)
-    assert point.config_presented is True
-    answer = point.query(Controlled.config_control)
+    assert point.config.presented is True
+    answer = point.query(Controlled.bus_control)
     assert isinstance(answer, Rejected)
     assert codes(answer) == {"control-bus-unaddressed"}
 
@@ -206,7 +262,7 @@ def test_a_memstream_s_bus_is_held_by_construction() -> None:
         )
     )
     memory = commit(point, {"ram_style": "auto", "pumped_memory": False})
-    assert memory.config_presented is False and memory.config_control == Control(None)
+    assert memory.config.presented is False and memory.bus_control == Control(None)
     assert set(dict(held_bus(memory.config_bus).inputs)) <= set(
         dict(library_module(memory).held.inputs)
     )
@@ -217,7 +273,7 @@ def test_a_kernel_presents_one_control_bus_at_most() -> None:
 
         class Twice(Controlled):
             id = "test.probe.twice"
-            other = ControlBus(Controlled.config_bus)
+            other = ControlModel(bus=Controlled.config_bus)
 
 
 def test_two_control_buses_in_one_body_are_refused_as_repeated_before_lowering() -> None:
@@ -239,10 +295,8 @@ def test_two_control_buses_in_one_body_are_refused_as_repeated_before_lowering()
             def register_map(self) -> RegisterMap:
                 return RegisterMap(((0, 7),))
 
-            first = ControlBus(config_bus, presented=writable, port=control, registers=register_map)
-            second = ControlBus(
-                config_bus, presented=writable, port=control, registers=register_map
-            )
+            first = ControlModel(bus=config_bus, presented=writable)
+            second = ControlModel(bus=config_bus, presented=writable)
 
 
 def test_a_control_bus_it_may_present_names_its_port_and_registers() -> None:
@@ -256,7 +310,7 @@ def test_a_control_bus_it_may_present_names_its_port_and_registers() -> None:
             def config_bus(self) -> Bus:
                 return BUS
 
-            config = ControlBus(config_bus, presented=writable)
+            config = ControlModel(bus=config_bus, presented=writable)
 
 
 def test_a_kernel_s_cycles_are_the_most_beats_a_port_carries() -> None:

@@ -42,7 +42,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from math import ceil, prod
-from typing import TYPE_CHECKING, ClassVar
+from typing import ClassVar
 
 from qonnx.core.ranges import TensorRange
 
@@ -69,12 +69,14 @@ from finn.dataflow.traversal import (
     pack,
     vector_major,
 )
-from finn.kernels.artifacts.abi import Bus, Clocking, Endpoint, Member, StandardProtocol
+from finn.kernels.artifacts.abi import Bus, Clocking, Endpoint, Member, Pin, StandardProtocol
 from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData, hex_image
-from finn.kernels.base import NATIVE_CLOCKING, KernelSpace, PortContract
-from finn.kernels.control import ControlBus
-from finn.kernels.library import LibraryModule
-from finn.kernels.port import AxiStreamPort
+from finn.kernels.artifacts.module import Fragment, Held
+from finn.kernels.base import NATIVE_CLOCKING, KernelSpace
+from finn.kernels.control import Control, ControlModel
+from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
+from finn.kernels.port import held, pins
+from finn.kernels.port_model import SequencePort
 from finn.kernels.utilization import (
     Fit,
     auto_unstated,
@@ -320,24 +322,28 @@ class MemStreamKernel(KernelSpace):
             fabric=self.platform.fabric,
         )
 
-    set = AxiStreamPort(
+    @derived
+    def port_clocking(self) -> Clocking:
+        return type(self).clock_domain
+
+    set = SequencePort(
         name="set",
+        label="set",
+        clocking=port_clocking,
         endpoint=Endpoint.TARGET,
         tensor=set_tensor,
         sequence=set_sequence,
         dtype=set_dtype,
         signals=("s_axis_0_tdata", "s_axis_0_tvalid", "s_axis_0_tready"),
     )
-    output = AxiStreamPort(
+    output = SequencePort(
         name="m_axis_0",
+        label="output",
+        clocking=port_clocking,
         endpoint=Endpoint.INITIATOR,
         tensor=output_tensor,
         sequence=output_sequence,
     )
-    if TYPE_CHECKING:  # members its ports lower to, which its channel reads
-        output_stream: ClassVar[Stream]
-        output_data_width: ClassVar[int]
-        output_contract: ClassVar[PortContract]
 
     @derived
     def clocking(self) -> Clocking:
@@ -357,12 +363,11 @@ class MemStreamKernel(KernelSpace):
         }
 
     # AXI-Lite, always held: the contents are fixed at build time.
-    config = ControlBus(config_bus)
+    config = ControlModel(bus=config_bus)
 
-    module = LibraryModule(
+    module_spec: ClassVar[ModuleSpec] = ModuleSpec(
         "memstream_axi",
-        parameters=parameters,
-        sources=(
+        constant_sources=(
             CopiedSource("finnlib", "rtl/infra/axilite.sv", provides=("module:axilite",)),
             CopiedSource("finnlib", "rtl/infra/memstream.sv", provides=("module:memstream",)),
             CopiedSource(
@@ -372,8 +377,87 @@ class MemStreamKernel(KernelSpace):
                 requires=("module:axilite", "module:memstream"),
             ),
         ),
-        data=init_file,
     )
+
+    @derived
+    def declares_bus(self) -> bool:
+        return True
+
+    @view
+    def bus_control(self) -> Control | Rejected:
+        return Control(None)
+
+    def _set_pins(self) -> tuple[Pin, ...] | Rejected:
+        presenting = self.set.presenting()
+        return pins(
+            self.set.physical_spec(idle=not isinstance(presenting, Stream)),
+            presenting,
+            self.set.clocking,
+        )
+
+    def _set_held(self) -> Held | Rejected:
+        if self.set.placed:
+            return Held()
+        return held(self.set.physical_spec(idle=True), self.set.element, self.set.clocking)
+
+    def _output_pins(self) -> tuple[Pin, ...] | Rejected:
+        presenting = self.output.presenting()
+        return pins(
+            self.output.physical_spec(idle=not isinstance(presenting, Stream)),
+            presenting,
+            self.output.clocking,
+        )
+
+    def _output_held(self) -> Held | Rejected:
+        if self.output.placed:
+            return Held()
+        return held(self.output.physical_spec(idle=True), self.output.element, self.output.clocking)
+
+    @view
+    def netlist(self) -> Fragment | Rejected:
+        clocking = self.clocking
+        parameters = tuple(sorted(self.parameters.items()))
+        pin_parts = _each((self.config.pin_values(), self._set_pins(), self._output_pins()))
+        if isinstance(pin_parts, Rejected):
+            return pin_parts
+        spec = type(self).module_spec
+        sources = spec.constant_sources
+        assert sources is not None
+        refused = module_unprovided(spec, type(self).__qualname__, sources)
+        if isinstance(refused, Rejected):
+            return refused
+        data = self.init_file
+        held_parts = _each((self._set_held(), self._output_held(), self.config.held_values()))
+        if isinstance(held_parts, Rejected):
+            return held_parts
+        leaf = assemble_module(
+            spec,
+            type(self).id,
+            type(self).__qualname__,
+            clocking,
+            parameters,
+            tuple(pin_parts),
+            sources,
+            data,
+            tuple(held_parts),
+            (self.config.presented, self.set.placed, self.output.placed),
+        )
+        return leaf if isinstance(leaf, Rejected) else Fragment((("", leaf),))
+
+    @view
+    def cycles(self) -> int | Rejected:
+        beats: list[int] = []
+        if self.set.placed:
+            beats.append(self.set.stream.sequence.form.beats)
+        if self.output.placed:
+            beats.append(self.output.stream.sequence.form.beats)
+        return (
+            max(beats)
+            if beats
+            else reject(
+                "kernel-cycles", f"no port of {type(self).__qualname__} carries a stream's beats"
+            )
+        )
 
 
 __all__ = ["MemStreamKernel", "memstream_resources"]

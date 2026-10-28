@@ -263,7 +263,7 @@ def _own_source(channel: Channel) -> _End:
     """The producing end a channel holds itself: its source, below it at its label, or
     its boundary, the module's own pins."""
     if channel.valued:
-        offered: PortContract = channel.source.output_contract
+        offered: PortContract = channel.source.output.contract
         return (channel.source_label, offered.contract)
     return _own_boundary(channel)
 
@@ -567,7 +567,7 @@ class Channel(KernelSpace):
             return reject("channel-users", misplaced)
         source: Stream | None = producer.stream
         if self.valued:
-            source = self.source.output_stream
+            source = self.source.output.stream
         sink: Stream | None = consumer.stream
         # A boundary side presents what the other side presents. Seen from inside, the
         # module's input is the AXIS target and its output the initiator.
@@ -818,7 +818,7 @@ class Channel(KernelSpace):
         boundary: StreamContract | None = self.boundary
         if sides.consumer.kind is SideKind.BOUNDARY and boundary is not None:
             if width is None and sides.producer.kind is not SideKind.BOUNDARY:
-                width = self.source.output_data_width if self.valued else sides.producer.width
+                width = self.source.output.width if self.valued else sides.producer.width
             if width is not None and width > boundary.transport.data_width:
                 found.append(
                     Mismatch(
@@ -838,7 +838,7 @@ class Channel(KernelSpace):
         "boundary",
         "valued",
         "source_label",
-        "source.output_contract",
+        "source.output.contract",
         "stages",
     )
     def netlist(self) -> Fragment | Rejected:
@@ -854,7 +854,7 @@ class Channel(KernelSpace):
         boundary: StreamContract | None = self.boundary
         current: _End | None = None
         if self.valued:
-            offered: PortContract = self.source.output_contract
+            offered: PortContract = self.source.output.contract
             current = (self.source_label, offered.contract)
         elif sides.producer.kind is SideKind.BOUNDARY and boundary is not None:
             current = (None, boundary)
