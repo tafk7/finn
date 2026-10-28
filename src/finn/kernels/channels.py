@@ -138,7 +138,7 @@ from finn.kernels.library import leaf_at_root
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.movers import IodmaMover, MoverContract, MoverOffer
 from finn.kernels.policies import Alone, FirstValid, Policy, Required, defaulted, stated
-from finn.kernels.port import served
+from finn.kernels.port_model import PortSurface
 from finn.kernels.sides import BUILD, ROW_MAJOR, Outside, Side, SideKind, beat_times
 from finn.kernels.transport import (
     AxisBeat,
@@ -542,7 +542,39 @@ class Channel(KernelSpace):
     # source's label (``source.memstream.set``): the index tensor's channel's consumer. A
     # channel without a known value has no source, so no set port: nothing reads the
     # indices.
-    set = served(source, "set", label=SOURCE_LABEL)
+    @derived
+    def set_stream(self) -> Stream | Inapplicable:
+        if not self.valued:
+            return Inapplicable()
+        return self.source.set.stream
+
+    @derived
+    def set_data_width(self) -> int | Inapplicable:
+        if not self.valued:
+            return Inapplicable()
+        return self.source.set.width
+
+    @derived
+    def set_label(self) -> str | Inapplicable:
+        if not self.valued:
+            return Inapplicable()
+        return f"{SOURCE_LABEL}.set"
+
+    @derived
+    def set_side(self) -> Side | Inapplicable:
+        if not self.valued:
+            return Inapplicable()
+        return self.source.set.side.under(SOURCE_LABEL)
+
+    @view
+    def set_contract(self) -> PortContract | Inapplicable:
+        if not self.valued:
+            return Inapplicable()
+        return self.source.set.contract.under(SOURCE_LABEL)
+
+    set: ClassVar[PortSurface] = PortSurface(
+        None, Endpoint.TARGET, None, None, set_stream, set_data_width, set_side, set_contract
+    )
 
     @derived
     def takes_doubled_clock(self) -> bool:

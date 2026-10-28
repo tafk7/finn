@@ -843,6 +843,11 @@ def port_endpoint(space_type: type[Space], port: str) -> Endpoint | None:
     endpoint read from a member, or cases that disagree)."""
     if not (isinstance(space_type, type) and issubclass(space_type, UntimedKernel)):
         return None
+    from finn.kernels.port_model import PortSurface  # noqa: PLC0415
+
+    native = getattr(space_type, port, None)
+    if isinstance(native, PortSurface):
+        return native.endpoint if isinstance(native.endpoint, Endpoint) else None
     # A real port child's static endpoint is its explicit binding or formal default.
     child = _lexical_port(space_type, port)
     if child is not None:
@@ -879,6 +884,9 @@ def port_surface(namespace: type[Space] | Space, port: str) -> PortSurface:
         not isinstance(namespace, type) and declared_path(namespace) is None
     ):
         raise TypeError("port_surface requires a Space class or node declaration")
+    native = getattr(namespace, port, None)
+    if isinstance(native, PortSurface):
+        return native.at(namespace)
     child = _lexical_port(namespace, port)
     if child is not None:
         return PortSurface.of(child)

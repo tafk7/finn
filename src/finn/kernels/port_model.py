@@ -15,7 +15,7 @@ functions; it must not read these Views to collect directly returned refusals.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 
 from finn.core.space import (
     Group,
@@ -28,7 +28,7 @@ from finn.core.space import (
     reject,
     view,
 )
-from finn.core.space.declarations import declared_path
+from finn.core.space.declarations import Declaration, declared_path
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.schedule import Access, Affine, Index, Refused, Schedule, plain_index
 from finn.dataflow.streams import Stream
@@ -310,6 +310,20 @@ class PortSurface:
     width: int | None = None
     side: Side | None = None
     contract: PortContract | None = None
+
+    def at(self, namespace: type[Space] | Space) -> PortSurface:
+        """Rebase explicitly authored parent references for a driver/composer.
+
+        Plain metadata only; no method or read-list callback is introduced on a
+        Space. Actual native model/View declarations remain on their parent.
+        """
+        bound: dict[str, object] = {}
+        for field in fields(self):
+            value = getattr(self, field.name)
+            if isinstance(value, Declaration):
+                assert value.name is not None
+                bound[field.name] = getattr(namespace, value.name)
+        return replace(self, **bound)
 
     @classmethod
     def of(cls, port: PortModel) -> PortSurface:
