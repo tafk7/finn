@@ -10,6 +10,7 @@ from support.value_classes import frozen_dataclasses, mutable_fields
 
 from finn.dataflow.datatypes import QONNXDataType
 from finn.kernels.policies import Ranking
+from finn.kernels.port_model import PortSurface
 from finn.kernels.values.semantics import IntegerTensorValue
 
 #: Types outside the checker's rule that are immutable, and why.
@@ -20,8 +21,6 @@ IMMUTABLE: dict[object, str] = {
     IntegerTensorValue: "an integer tensor is immutable, a copy the value itself, and refuses "
     "attribute assignment (finn.kernels.values.semantics); MatMul's known weights hold one",
 }
-
-from finn.kernels.port_model import PortSurface
 
 
 def test_every_frozen_value_class_holds_immutable_values() -> None:

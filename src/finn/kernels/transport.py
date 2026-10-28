@@ -8,7 +8,7 @@ valid and ready, outside reset. Valid data and sidebands are held while
 stalled. ``ReadyValidTransport`` describes the native pins; ``AxisBeat`` a
 homogeneous AXIS beat, lane zero lowest, with only the complete beat padded to a
 byte boundary. Scalar encodings keep their QONNX widths. A kernel's
-``AxiStreamPort`` (``finn.kernels.port``) builds one from its lanes (``transport``).
+Pure resolved port functions (``finn.kernels.port``) build one from its lanes (``transport``).
 
 **Contracts.** A ``StreamContract`` joins three levels, each owned elsewhere
 and checked here together:

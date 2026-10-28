@@ -36,7 +36,7 @@ facts (``Composed``; ``Composed.design_space()`` opens it):
   the root, ``<channel>-producer`` or ``<channel>-consumer``, the port's ``<p>_side``
   ``under`` the member, so a channel's findings name the node as today's network's do.
 
-**The side is structural.** A producer side is an output port (its ``AxiStreamPort``'s
+**The side is structural.** A producer side is an output port (its actual port model's
 endpoint the initiator, or its served child's), a consumer side an input port, and a
 source is never a consumer: a declaration that breaks one is refused when the class is
 made (``channel-users``, the channel's text, owned by the channel's name). The channel's

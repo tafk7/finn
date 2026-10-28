@@ -87,7 +87,8 @@ def _given(port: PhysicalPort, name: str) -> Any:
     value = getattr(port, name)
     if isinstance(value, (Declaration, Required)):
         raise TypeError(
-            f"{port.name}: its {name} is a member of its kernel; resolve physical inputs before calculation"
+            f"{port.name}: its {name} is a member of its kernel; "
+            "resolve physical inputs before calculation"
         )
     return value
 

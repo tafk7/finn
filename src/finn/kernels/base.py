@@ -187,7 +187,8 @@ class UntimedKernel(Space):
             raise DefinitionError.broken(
                 "control-bus-repeated",
                 "KernelSpace",
-                f"{cls.__qualname__} declares the control buses {buses}: a kernel presents one at most",
+                f"{cls.__qualname__} declares the control buses {buses}: "
+                "a kernel presents one at most",
                 declaration=cls.__qualname__,
             )
         if buses and (
@@ -196,7 +197,8 @@ class UntimedKernel(Space):
             raise DefinitionError.broken(
                 "control-bus-unaddressed",
                 "KernelSpace",
-                f"{cls.__qualname__}: an included control states parent bus_control and declares_bus answers",
+                f"{cls.__qualname__}: an included control states parent bus_control "
+                "and declares_bus answers",
                 declaration=cls.__qualname__,
             )
         if type(cls.id) is not str or not cls.id:
@@ -223,7 +225,8 @@ class UntimedKernel(Space):
             raise DefinitionError.broken(
                 "library-module-repeated",
                 "KernelSpace",
-                f"{cls.__qualname__} binds the library modules {[name for name, _ in specs]}: a kernel binds one at most",
+                f"{cls.__qualname__} binds the library modules {[name for name, _ in specs]}: "
+                "a kernel binds one at most",
                 declaration=cls.__qualname__,
             )
         if unmet_required(cls) or not specs:
@@ -256,14 +259,16 @@ class UntimedKernel(Space):
             raise DefinitionError.broken(
                 "module-places-kernels",
                 "KernelSpace",
-                f"{cls.__qualname__} places the kernels {children}: a kernel with a module places none",
+                f"{cls.__qualname__} places the kernels {children}: "
+                "a kernel with a module places none",
                 declaration=cls.__qualname__,
             )
         if not _declared(cls, "resource_use", below):
             raise DefinitionError.broken(
                 "module-resources-unstated",
                 "KernelSpace",
-                f"{cls.__qualname__} states no resource_use: a kernel with a module states what it uses of the device",
+                f"{cls.__qualname__} states no resource_use: "
+                "a kernel with a module states what it uses of the device",
                 declaration=cls.__qualname__,
             )
 
