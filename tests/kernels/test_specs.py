@@ -172,11 +172,7 @@ def _binding_a_module() -> set[type[UntimedKernel]]:
             for base in reversed(each.__mro__):
                 effective.update(vars(base))
             native = any(isinstance(item, ModuleSpec) for item in effective.values())
-            if (
-                each.__module__.startswith("finn.kernels.")
-                and (each._module is not None or native)
-                and not unmet_required(each)
-            ):
+            if each.__module__.startswith("finn.kernels.") and native and not unmet_required(each):
                 found.add(each)
     return found
 

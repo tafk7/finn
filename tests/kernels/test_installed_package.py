@@ -113,7 +113,7 @@ answer = library_module(dotp)
 assert isinstance(answer, artifact_module.Leaf), answer
 assert dict(answer.parameters)["ACCU_WIDTH"] == 8
 assert dotp.x.element.dtype.name == "INT3"
-assert axis(*PackedDotpKernel.x.viewed(dotp, "x")).payload_bits == 6
+assert axis(dotp.x.physical_spec(idle=False), dotp.x.stream).payload_bits == 6
 
 dotp_sources = {
     "rtl/arith/add_multi_pkg.sv", "rtl/arith/compressor_pkg.sv",
