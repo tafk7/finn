@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import pytest
 from qonnx.core.datatype import DataType
 from support.helpers import FULL_DSP48E2, OtherPins, by_hand, codes
 from support.refusals import refused
@@ -26,6 +27,7 @@ from support.refusals import refused
 from finn.core.space import (
     Available,
     DefinitionError,
+    NativeEvaluationError,
     Param,
     Rejected,
     derived,
@@ -53,7 +55,7 @@ from finn.kernels.configure import commit
 from finn.kernels.control import Control, ControlModel, held_bus
 from finn.kernels.library import ModuleSpec, _each, assemble_module, library_module
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.port import held, pins
+from finn.kernels.port import held, pins, port_surface
 from finn.kernels.port_model import SequencePort
 from finn.kernels.sides import Side
 from finn.kernels.values.semantics import IntegerTensorValue
@@ -398,5 +400,8 @@ def test_a_kernel_with_children_presents_a_childs_port_as_its_own() -> None:
         def y_contract(self) -> PortContract:
             return self.kernel.y.contract
 
-    with refused("reference-not-in-scope", error=DefinitionError):
-        design_space(Unserved())
+    with pytest.raises(KeyError):
+        port_surface(Unserved, "y")
+    invalid = design_space(Unserved())
+    with pytest.raises(NativeEvaluationError, match="y"):
+        invalid.query(Unserved.y_contract)
