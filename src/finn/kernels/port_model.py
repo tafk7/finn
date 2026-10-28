@@ -335,8 +335,7 @@ class PortSurface:
         object.__setattr__(self, "side", side)
         object.__setattr__(self, "_contract", contract)
 
-    @property
-    def contract(self) -> PortContract | View[PortContract] | None:
+    def contract_reference(self) -> PortContract | View[PortContract] | None:
         # A View is stored as metadata, not installed as a descriptor of this
         # dataclass. Read its storage directly; its __get__ belongs to Space.
         return cast(
@@ -366,7 +365,7 @@ class PortSurface:
             bind(self.stream),
             bind(self.width),
             bind(self.side),
-            bind(self.contract),
+            bind(self.contract_reference()),
         )
 
     @classmethod

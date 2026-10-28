@@ -132,9 +132,9 @@ def test_actual_vpc_surfaces_are_typed_real_children_and_not_kernel_instances() 
     assert port_endpoint(VpcKernel, "input") is Endpoint.TARGET
     assert port_endpoint(VpcKernel, "output") is Endpoint.INITIATOR
     surface = port_surface(VpcKernel, "output")
-    assert surface.side is not None and surface.contract is not None
+    assert surface.side is not None and surface.contract_reference() is not None
     assert point.query(surface.side) == Available(point.output.side)
-    assert point.query(surface.contract) == Available(point.output.contract)
+    assert point.query(surface.contract_reference()) == Available(point.output.contract)
     with pytest.raises(KeyError):
         port_surface(VpcKernel, "missing")
     with pytest.raises(TypeError, match="node declaration"):

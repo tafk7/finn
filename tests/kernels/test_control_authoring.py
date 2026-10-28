@@ -34,7 +34,7 @@ from finn.kernels.artifacts.contributions import (
 )
 from finn.kernels.artifacts.module import Held, RegisterMap
 from finn.kernels.channels import Channel
-from finn.kernels.control import ControlModel, control_models
+from finn.kernels.control import Control, ControlModel, control_models
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port import port_endpoint, port_surface
 from finn.kernels.thresholding import ThresholdingAxiKernel
@@ -308,8 +308,8 @@ def test_parent_forwarding_surface_is_rebased_and_not_a_model_binding() -> None:
     assert port_endpoint(Channel, "set") is Endpoint.TARGET
     point = design_space(Envelope())
     assert isinstance(point.query(left.stream), Inapplicable)
-    assert left.contract is not None
-    assert isinstance(point.query(left.contract), Inapplicable)
+    assert left.contract_reference() is not None
+    assert isinstance(point.query(left.contract_reference()), Inapplicable)
     with pytest.raises(TypeError, match="node declaration"):
         right.at(point)
 
