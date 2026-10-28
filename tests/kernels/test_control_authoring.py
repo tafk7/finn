@@ -25,6 +25,8 @@ from finn.core.space import (
     view,
 )
 from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.dataflow.streams import Stream
+from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Bus, Endpoint, Member, Pin, StandardProtocol
 from finn.kernels.artifacts.contributions import (
     Contribution,
@@ -309,7 +311,24 @@ def test_parent_forwarding_surface_is_rebased_and_not_a_model_binding() -> None:
     point = design_space(Envelope())
     assert isinstance(point.query(left.stream), Inapplicable)
     assert left.contract_reference() is not None
-    assert isinstance(point.query(left.contract_reference()), Inapplicable)
+    # The deliberately unused channel is a known refused owning scope.
+    assert isinstance(point.query(left.contract_reference()), Rejected)
+
+    class ValidEnvelope(Space):
+        left = Channel(
+            tensor=TENSOR,
+            producer=Side.kernel(
+                Stream(TENSOR.element, BeatSequence(vector_major(TENSOR.shape, 1))),
+                "source.output",
+                8,
+            ),
+            consumer=Side.boundary("out"),
+            platform=FULL_DSP48E2,
+        )
+
+    valid = design_space(ValidEnvelope())
+    surface = port_surface(ValidEnvelope.left, "set")
+    assert isinstance(valid.query(surface.contract_reference()), Inapplicable)
     with pytest.raises(TypeError, match="node declaration"):
         right.at(point)
 
