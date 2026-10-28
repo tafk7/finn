@@ -24,11 +24,24 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels import eltwise
 from finn.kernels.artifacts.abi import Clocking, Endpoint, Pin
 from finn.kernels.eltwise import EltwiseKernel, c
-from finn.kernels.port import AxiStreamPort, PhysicalPort
+from finn.kernels.port import AxiStreamPort, PhysicalPort, pins
 from finn.kernels.port_model import IndexedPort, ScheduledPort
 
 LHS = Tensor((2, 4), ScalarEncoding(DataType["INT3"]))
 RHS = Tensor((4,), LHS.element)
+
+# Source analysis caches the native callable, including a replaced global, across
+# modes. Keep one observer identity so its log belongs to the current case.
+_PHYSICAL_CALLS: list[str] = []
+
+
+def observe_pins(
+    port: AxiStreamPort | PhysicalPort,
+    presenting: ScalarEncoding | Stream,
+    clocking: Clocking,
+) -> tuple[Pin, ...] | Rejected:
+    _PHYSICAL_CALLS.append(port.name)
+    return pins(port, presenting, clocking)
 
 
 def test_actual_eltwise_inputs_bind_early_and_result_is_structurally_nonbinding() -> None:
@@ -119,17 +132,7 @@ def test_actual_three_port_assembly_halts_or_accumulates_in_source_order(
 ) -> None:
     monkeypatch.setenv("FINN_SPACE_PERMUTE", "1" if permuted else "0")
     monkeypatch.setenv("FINN_SPACE_EAGER", "1" if eager else "0")
-    calls: list[str] = []
-    physical_pins = eltwise.pins
-
-    def observe_pins(
-        port: AxiStreamPort | PhysicalPort,
-        presenting: ScalarEncoding | Stream,
-        clocking: Clocking,
-    ) -> tuple[Pin, ...] | Rejected:
-        calls.append(port.name)
-        return physical_pins(port, presenting, clocking)
-
+    _PHYSICAL_CALLS.clear()
     monkeypatch.setattr(eltwise, "pins", observe_pins)
     point = design_space(
         SerialEltwise(
@@ -157,7 +160,7 @@ def test_actual_three_port_assembly_halts_or_accumulates_in_source_order(
             "result: signals are data, valid and ready",
             "rhs: signals are data, valid and ready",
         ]
-    assert calls == (
+    assert _PHYSICAL_CALLS == (
         []
         if first is None or first == "refused"
         else ["lhs"]
