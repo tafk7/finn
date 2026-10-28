@@ -846,9 +846,10 @@ def port_endpoint(space_type: type[Space], port: str) -> Endpoint | None:
     # A real port child's static endpoint is its explicit binding or formal default.
     child = _lexical_port(space_type, port)
     if child is not None:
-        record = unwrap(child)
-        if not isinstance(record, NodeDecl):
+        path = declared_path(child)
+        if not path or not isinstance(path[-1], NodeDecl):
             return None
+        record = path[-1]
         formals = space_formals(record.space_type)
         formal = formals.get("endpoint")
         endpoint = record.bindings.get("endpoint", None if formal is None else formal.default)
