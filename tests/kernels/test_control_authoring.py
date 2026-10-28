@@ -24,8 +24,8 @@ from finn.core.space import (
     reject,
     view,
 )
-from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.streams import Stream
+from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Bus, Endpoint, Member, Pin, StandardProtocol
 from finn.kernels.artifacts.contributions import (
@@ -39,8 +39,8 @@ from finn.kernels.channels import Channel
 from finn.kernels.control import Control, ControlModel, control_models
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port import port_endpoint, port_surface
-from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.sides import Side
+from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 
 BUS = Bus(
