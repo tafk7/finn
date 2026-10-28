@@ -132,6 +132,7 @@ from finn.kernels.composer import (
 from finn.kernels.explore import dotted
 from finn.kernels.movers import MoverOffer
 from finn.kernels.partition import Partition, partition
+from finn.kernels.port import port_surface
 from finn.kernels.sides import Side
 
 if TYPE_CHECKING:
@@ -330,7 +331,9 @@ def _neighbour(
     validity = inspection.validity(point)
     if isinstance(validity.result, Rejected):
         raise unaccepted("its kernel is refused", validity.result.findings)
-    answer = point.query(getattr(type(point), f"{named}_side"))
+    surface = port_surface(type(point), named)
+    assert surface.side is not None
+    answer = point.query(surface.side)
     if not isinstance(answer, Available) or not isinstance(answer.value, Side):
         why = (
             "its side waits on an open choice"
@@ -342,7 +345,9 @@ def _neighbour(
         raise unaccepted(why, getattr(answer, "findings", ()))
     found: Side = answer.value
     stated = Side.neighbour(cast(Stream, found.stream), found.label, found.width)
-    contract = point.query(getattr(type(point), f"{named}_contract"))
+    reference = surface.contract_reference()
+    assert reference is not None
+    contract = point.query(reference)
     given = contract.value if isinstance(contract, Available) else None
     return stated.under(node.name), (
         given.under(node.name) if isinstance(given, PortContract) else None

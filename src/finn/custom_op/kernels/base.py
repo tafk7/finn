@@ -125,6 +125,7 @@ from finn.kernels.composer import Facts
 from finn.kernels.configure import describe
 from finn.kernels.configure import refusal as refusal_of
 from finn.kernels.policies import Alone, Defaulted, Policy, defaulted, stated
+from finn.kernels.port import port_surface
 from finn.kernels.sides import Side
 from finn.platform.target import Target
 
@@ -625,7 +626,9 @@ class KernelOp(CustomOp):
         sides: list[tuple[str, Side | tuple[Finding, ...], bool]] = []
         for port, tensor, output in found:
             name = self.wiring[port].contract.removesuffix("_contract")
-            answer = point.query(getattr(type(point), f"{name}_side"))
+            reference = port_surface(type(point), name).side
+            assert reference is not None
+            answer = point.query(reference)
             if isinstance(answer, Available) and isinstance(answer.value, Side):
                 sides.append((tensor, answer.value.under(self.label), output))
             elif isinstance(answer, (Rejected, Unresolved)):
