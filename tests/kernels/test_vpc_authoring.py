@@ -196,8 +196,12 @@ def test_surface_lookup_supports_discovered_group_paths_at_the_actual_node() -> 
 
     declaration = Host()
     surface = port_surface(declaration, "group.port")
-    point = design_space(declaration)
+
+    class Envelope(Space):
+        host = declaration
+
+    point = design_space(Envelope())
     assert surface.stream is not None
-    assert point.query(surface.stream) == Available(point.group.port.stream)
+    assert point.query(surface.stream) == Available(point.host.group.port.stream)
     with pytest.raises(KeyError):
         port_surface(Host, "group.missing")
