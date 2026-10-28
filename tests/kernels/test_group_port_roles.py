@@ -126,3 +126,41 @@ def test_composer_refuses_known_wrong_roles_under_group_keys(port: str, role: st
     findings = checked(declared)
     assert [finding.code for finding in findings] == ["channel-users"]
     assert f"kernel.{port}" in findings[0].message
+
+
+def test_inherited_host_retains_group_placement_and_effective_port_roles() -> None:
+    class InheritedHost(Host):
+        id = "test.inherited-group-port-roles"
+
+    # The actual nested Group placement comes from Host, rather than a new
+    # placement containing only a Port subclass with an inherited formal default.
+    assert InheritedHost.group is Host.group
+    point = design_space(InheritedHost())
+    for port, expected in (
+        ("group.ports.target", Endpoint.TARGET),
+        ("group.ports.explicit", Endpoint.INITIATOR),
+        ("group.ports.default_output", Endpoint.INITIATOR),
+        ("group.ports.rebound", Endpoint.TARGET),
+    ):
+        assert port_endpoint(InheritedHost, port) is expected
+        surface = port_surface(InheritedHost, port)
+        assert point.query(surface.endpoint) == Available(expected)
+
+
+@pytest.mark.parametrize(
+    "port,role",
+    [("group.ports.target", "consumer"), ("group.ports.explicit", "producer")],
+)
+def test_composer_accepts_known_valid_group_producer_and_consumer_roles(
+    port: str, role: str
+) -> None:
+    expected = Endpoint.INITIATOR if role == "producer" else Endpoint.TARGET
+    assert port_endpoint(Host, port) is expected
+    endpoint = Port("kernel", port)
+    outside = Side.boundary("out0" if role == "producer" else "in0")
+    producer, consumer = (endpoint, outside) if role == "producer" else (outside, endpoint)
+    declared = PartitionDeclaration(
+        {"kernel": Facts(Host, {})},
+        {"link": channel(producer, consumer, tensor=TENSOR, platform=FULL_DSP48E2)},
+    )
+    assert checked(declared) == []
