@@ -19,7 +19,7 @@ from finn.core.space import (
     design_space,
     inspection,
 )
-from finn.core.space.domains import divisors_of, domain, finite
+from finn.core.space.domains import Domain, divisors_of, domain, finite
 from finn.core.space.results import Available, Unresolved
 
 
@@ -85,7 +85,7 @@ def test_domain_object_keeps_its_own_order_and_lazy_callbacks() -> None:
         calls.append("membership")
         return candidate > 0
 
-    allowed = domain(accepts=accepts, ordered=True)
+    allowed: Domain[int] = domain(accepts=accepts, ordered=True)
 
     class Choice(Space):
         number: int = Decision(domain=allowed)
