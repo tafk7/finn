@@ -295,7 +295,7 @@ def native_port(
 _SurfaceValue = TypeVar("_SurfaceValue")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class PortSurface:
     """Actual authored references for a logical ABI key, never an allowed-read list.
 
@@ -313,7 +313,35 @@ class PortSurface:
     stream: Stream | None = None
     width: int | None = None
     side: Side | None = None
-    contract: PortContract | View[PortContract] | None = None
+    _contract: PortContract | View[PortContract] | None = None
+
+    def __init__(
+        self,
+        element: ScalarEncoding | None,
+        endpoint: Endpoint | None,
+        physical_pins: tuple[Pin, ...] | None,
+        idle_pins: Held | None,
+        stream: Stream | None = None,
+        width: int | None = None,
+        side: Side | None = None,
+        contract: PortContract | View[PortContract] | None = None,
+    ) -> None:
+        object.__setattr__(self, "element", element)
+        object.__setattr__(self, "endpoint", endpoint)
+        object.__setattr__(self, "physical_pins", physical_pins)
+        object.__setattr__(self, "idle_pins", idle_pins)
+        object.__setattr__(self, "stream", stream)
+        object.__setattr__(self, "width", width)
+        object.__setattr__(self, "side", side)
+        object.__setattr__(self, "_contract", contract)
+
+    @property
+    def contract(self) -> PortContract | View[PortContract] | None:
+        # A View is stored as metadata, not installed as a descriptor of this
+        # dataclass. Read its storage directly; its __get__ belongs to Space.
+        return cast(
+            PortContract | View[PortContract] | None, object.__getattribute__(self, "_contract")
+        )
 
     def at(self, namespace: type[Space] | Space) -> PortSurface:
         """Rebase explicitly authored parent references for a driver/composer.
