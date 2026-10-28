@@ -89,6 +89,7 @@ from finn.core.space.occurrence import held
 from finn.core.space.semantics import OptionalSemantics, ValueSemantics, default_semantics
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.gemm import Form, Window
+from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.steps import Hop, Step, Steps
 from finn.dataflow.streams import Stream
 from finn.dataflow.traversal import LevelEnd, Repetition
@@ -121,6 +122,7 @@ class Verdict:
 
 
 VERDICTS: dict[str, Verdict] = {
+    "Schedule": Verdict("always", "a frozen value class of index names, extents and factors"),
     "AxisSpelling": Verdict("always", "an enum member, keyed by type and name"),
     "Endpoint": Verdict("always", "an enum member, keyed by type and name"),
     "Clocking": Verdict("always", "a value class of strings, bools and optional strings"),
@@ -238,6 +240,11 @@ def made() -> dict[str, tuple[object, ...]]:
     """Values of the types the Chain holds none of, or one value of: made here."""
     eight, four = stage_tensor(8), stage_tensor(8, words=4)
     return {
+        "Schedule": (
+            Schedule({Index("r"): 2, Index("c"): 4}, {Index("c"): 2}),
+            Schedule({Index("r"): 2, Index("c"): 4}, {Index("c"): 4}),
+            Schedule({Index("r"): 2, Index("c"): 4}, {Index("c"): 2}),
+        ),
         "AxisSpelling": (AxisSpelling.LOWER, AxisSpelling.UPPER, AxisSpelling.LOWER),
         "Endpoint": (Endpoint.TARGET, Endpoint.INITIATOR, Endpoint.TARGET),
         "Clocking": (Clocking(), Clocking(clock="clk", reset="rst", active_low=False), Clocking()),
