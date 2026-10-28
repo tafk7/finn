@@ -279,6 +279,13 @@ def _spanning(cls: type[UntimedKernel], below: type[UntimedKernel], spans: Itera
         setattr(cls, span.name, member)
         cast(Any, member).__set_name__(cls, span.name)
 
+    # An explicit native access method is actual model source, not a generated table.
+    if any(
+        "_accesses" in vars(base) and not getattr(vars(base)["_accesses"], "_spanning", False)
+        for base in cls.__mro__[: cls.__mro__.index(below)]
+    ):
+        return
+
     @declared_reads(*paths(("access",), ()))
     def _accesses(self: UntimedKernel) -> list[Access]:
         return [
@@ -287,6 +294,7 @@ def _spanning(cls: type[UntimedKernel], below: type[UntimedKernel], spans: Itera
             if (access := item.access(self, name)) is not None
         ]
 
+    cast(Any, _accesses)._spanning = True
     cast(Any, cls)._accesses = _accesses
 
 

@@ -15,7 +15,7 @@ functions; it must not read these Views to collect directly returned refusals.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from finn.core.space import (
     Group,
@@ -30,7 +30,7 @@ from finn.core.space import (
 )
 from finn.core.space.declarations import declared_path
 from finn.dataflow.datatypes import QONNXDataType
-from finn.dataflow.schedule import Index
+from finn.dataflow.schedule import Access, Affine, Index, Refused, Schedule, plain_index
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence
@@ -180,6 +180,87 @@ class SequencePort(PortModel):
         return found if isinstance(found, Rejected) else PortContract(self.label, found)
 
 
+class ScheduledPort(SequencePort):
+    """A scheduled tensor projection, with inward target-only index access.
+
+    Schedule/index/folding inputs are model values. Public physical contracts retain
+    pace; serial module assembly still uses undecorated model/native methods.
+    """
+
+    schedule: Schedule | None = Param(default=None)
+    index: tuple[Index | Affine, ...] = Param(default=())
+    reduces: tuple[Index, ...] = Param(default=())
+    holds: tuple[Index, ...] = Param(default=())
+    closes: tuple[Index, ...] = Param(default=())
+    reshaped: bool = Param(default=False)
+
+    @derived
+    def binds(self) -> bool:
+        if not self.placed:
+            return False
+        return self.endpoint is Endpoint.TARGET and bool(self.index)
+
+    @derived
+    def access(self) -> Access | Inapplicable:
+        """Only a placed target with indices reads its tensor to bind parent extents."""
+        if not self.binds:
+            return Inapplicable()
+        tensor = self.tensor
+        assert tensor is not None
+        return Access(self.label, tensor.shape, self.index, self.reshaped)
+
+    @derived
+    def stream(self) -> Stream | Rejected | Inapplicable:
+        if not self.placed:
+            return Inapplicable()
+        label = self.name
+        schedule, given = self.schedule, self.sequence
+        if (schedule is None) == (given is None):
+            return reject("port-presentation", f"{label}: exactly one of a schedule or a sequence")
+        if given is not None:
+            sequence = given
+        else:
+            assert schedule is not None
+            index = self.index
+            try:
+                shaped = None
+                if self.reshaped:
+                    plain = [each for each in map(plain_index, index) if each is not None]
+                    if len(plain) != len(index):
+                        raise Refused(
+                            "reshape-not-plain",
+                            "AxiStreamPort.presented",
+                            "a reshaped port reads plain indices",
+                        )
+                    shaped = tuple(schedule.extent(axis) for axis in plain)
+                tensor = self.tensor
+                assert tensor is not None
+                form = schedule.present(
+                    tensor.shape,
+                    index,
+                    lanes=self.lanes,
+                    reduces=self.reduces,
+                    holds=self.holds,
+                    view=shaped,
+                )
+                closes = self.closes
+                markers = (schedule.closing(closes),) if closes else ()
+                sequence = BeatSequence(form, markers=markers)
+            except Refused as error:
+                return reject("port-schedule", f"{label}: {error}")
+        return Stream(self.element, sequence)
+
+    @view
+    def contract(self) -> PortContract | Rejected | Inapplicable:
+        if not self.placed:
+            return Inapplicable()
+        stream = self.stream
+        physical = self.physical_spec(idle=False)
+        paced = replace(physical, schedule=self.schedule, reduces=self.reduces, holds=self.holds)
+        found = port_contract(paced, stream, self.clocking)
+        return found if isinstance(found, Rejected) else PortContract(self.label, found)
+
+
 def native_port(
     name: str,
     endpoint: Endpoint,
@@ -273,4 +354,11 @@ def port_surfaces(space_type: type[Space]) -> dict[str, PortSurface]:
     return below(space_type, None, "")
 
 
-__all__ = ["PortModel", "PortSurface", "SequencePort", "native_port", "port_surfaces"]
+__all__ = [
+    "PortModel",
+    "PortSurface",
+    "SequencePort",
+    "ScheduledPort",
+    "native_port",
+    "port_surfaces",
+]

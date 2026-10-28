@@ -476,9 +476,12 @@ def _port(kernel: Any, path: str) -> Any:
             except RequestError:
                 pass
         node = getattr(node, part)
-    from finn.kernels.port_model import SequencePort  # noqa: PLC0415
+    from finn.kernels.port_model import ScheduledPort, SequencePort  # noqa: PLC0415
 
     declaration = getattr(type(node), name)
+    if isinstance(declaration, ScheduledPort):
+        # Actual resolved model metadata; scheduled tensor binding keeps its index axes.
+        return getattr(node, name)
     if isinstance(declaration, SequencePort):
         # Given native sequences have no schedule or tensor-index binding metadata.
         return None
