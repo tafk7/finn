@@ -594,6 +594,7 @@ def port_transport(point: KernelSpace, name: str) -> ReadyValidTransport:
         port = getattr(point, name)
         found = transport(port.physical_spec(idle=False), port.stream, port.clocking)
     else:
+        assert isinstance(declaration, AxiStreamPort), declaration
         found = transport(*declaration.viewed(point, name), type(point).clock_domain)
     assert isinstance(found, ReadyValidTransport), found
     return found
