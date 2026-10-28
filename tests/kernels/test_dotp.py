@@ -86,16 +86,20 @@ def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_th
         # What its module and its resources read, and nothing in its space.
         "dsp_simd",
         "held_bits",
+        "module_sources",
         "netlist",
         "parameters",
         "resource_use",
         "resources",
         "segment_length",
-        # The contract each port states, which the channel on it takes.
-        "module_sources",
     ]
     for port in (point.x, point.w, point.y):
         assert isinstance(port, PortModel)
+    assert {
+        item.key
+        for item in inspection.members(point)
+        if item.kind == "view" and item.key.endswith(".contract")
+    } == {"x.contract", "w.contract", "y.contract"}
     found = {item.key: item.kind for item in inspection.members(point)}
     # Facts, bound from the network's (a window only where a convolution reads one).
     facts = {key for key, kind in found.items() if kind == "param" and "." not in key}

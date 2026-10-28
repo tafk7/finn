@@ -30,7 +30,7 @@ from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.module import Held
 from finn.kernels.base import NATIVE_CLOCKING, KernelSpace, PortContract, UntimedKernel
-from finn.kernels.port import AxiStreamPort, LoopEnds, contract, data_width, held, pins, transport
+from finn.kernels.port import LoopEnds, PhysicalPort, contract, data_width, held, pins, transport
 from finn.kernels.port_model import PortModel, PortSurface, SequencePort, native_port, port_surfaces
 from finn.kernels.sides import Side
 from finn.kernels.values.domains import Integer
@@ -92,7 +92,7 @@ def test_actual_native_values_parent_bindings_and_snapshot_history(
     chosen = point.with_choices({Ports.fold: 4})
     for name, endpoint in (("input", Endpoint.TARGET), ("output", Endpoint.INITIATOR)):
         port = chosen.input if name == "input" else chosen.output
-        old = AxiStreamPort(
+        old = PhysicalPort(
             name=name,
             endpoint=endpoint,
             signals=("idat", "ivld", "irdy") if name == "input" else ("odat", "ovld", "ordy"),
@@ -152,7 +152,7 @@ def test_optional_idle_skips_refused_sequence_and_keeps_physical_metadata() -> N
     assert not point.port.placed
     assert isinstance(point.query(Optional.port.stream), Inapplicable)
     assert isinstance(point.query(Optional.port.contract), Inapplicable)
-    old = AxiStreamPort(name="set", endpoint=Endpoint.TARGET)
+    old = PhysicalPort(name="set", endpoint=Endpoint.TARGET)
     assert point.port.physical_pins == pins(old, ELEMENT, NATIVE_CLOCKING)
     assert point.port.idle_pins == held(old, ELEMENT, NATIVE_CLOCKING)
     visited = inspection.explain(point, Optional.port.physical_pins)
@@ -212,7 +212,7 @@ def test_native_loop_markers_and_physical_refusals_use_actual_values() -> None:
         )
 
     point = design_space(Marked())
-    old = AxiStreamPort(
+    old = PhysicalPort(
         name="output",
         endpoint=Endpoint.INITIATOR,
         signals=("odat", "ovld", "ordy"),

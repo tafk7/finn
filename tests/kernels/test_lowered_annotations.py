@@ -1,124 +1,51 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
+"""Actual child annotations and clean removal of generated flat fields.
 
-"""A kernel's hand-written annotations of the members its ports lower to.
-
-A kernel reads the members its declarations add to it (``input_stream``, ``input_data_width``
-for a stream port named ``input``) by the names the lowering fixes, and states each with a
-plain ``ClassVar`` annotation so the type checker knows what it is. The class refuses an
-annotation that names a lowered member with another type, and one that names nothing the
-class declares or lowers, when it is made.
+Original unsupported lowered-ClassVar annotation xfails remain at their immutable
+historical source; current authoring uses typed real child declarations instead.
 """
 
 from __future__ import annotations
 
-from typing import ClassVar
-
 import pytest
+from qonnx.core.datatype import DataType
 
-from finn.core.space import DefinitionError, Param, view
+from finn.core.space import Available, DefinitionError, Param, Space, design_space
 from finn.core.space.compiler import compile_model
-from finn.dataflow.tensor import Tensor
-from finn.dataflow.traversal import BeatSequence
+from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.base import NATIVE_CLOCKING, KernelSpace
-from finn.kernels.library import LibraryModule
-from finn.kernels.port import native_stream
-from finn.platform.capabilities import Resources
+from finn.kernels.base import NATIVE_CLOCKING
+from finn.kernels.port_model import SequencePort, native_port
 
-PROBE = CopiedSource("finnlib", "rtl/probe.sv", provides=("module:probe",))
+TENSOR = Tensor((4,), ScalarEncoding(DataType["INT4"]))
+SEQUENCE = BeatSequence(vector_major((4,), 1))
 
 
-def test_an_annotation_matching_the_lowered_member_is_accepted() -> None:
-    class Annotated(KernelSpace):
-        id = "test.lowered_annotations.matching"
-        clock_domain = NATIVE_CLOCKING
-
-        input_tensor: Tensor = Param()
-        arriving: BeatSequence = Param()
-        input = native_stream("input", Endpoint.TARGET, input_tensor, arriving)
-        input_data_width: ClassVar[int]
-
-        @view
-        def parameters(self) -> dict[str, int | str]:
-            return {"WIDTH": 4}
-
-        @view
-        def resource_use(self) -> Resources:
-            return Resources(lut=3)
-
-        @view
-        def held_bits(self) -> int:
-            return 5
-
-        module = LibraryModule("probe", parameters=parameters, sources=(PROBE,))
-
-    assert "input_data_width" in Annotated.__annotations__
-    assert "input_data_width" in compile_model(Annotated).scopes.keys
+class Annotated(Space):
+    input_tensor: Tensor = Param(default=TENSOR)
+    input: SequencePort = native_port(
+        "input", Endpoint.TARGET, input_tensor, SEQUENCE, clocking=NATIVE_CLOCKING, label="input"
+    )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=pytest.fail.Exception,
-    reason="flips when the kernel base checks its annotations: a lowered member of another "
-    "type is refused when the class is made",
-)
-def test_an_annotation_of_the_wrong_type_for_a_lowered_member_is_refused() -> None:
-    with pytest.raises(DefinitionError, match="input_data_width"):
-
-        class Mistyped(KernelSpace):
-            id = "test.lowered_annotations.mistyped"
-            clock_domain = NATIVE_CLOCKING
-
-            input_tensor: Tensor = Param()
-            arriving: BeatSequence = Param()
-            input = native_stream("input", Endpoint.TARGET, input_tensor, arriving)
-            input_data_width: ClassVar[str]
-
-            @view
-            def parameters(self) -> dict[str, int | str]:
-                return {"WIDTH": 4}
-
-            @view
-            def resource_use(self) -> Resources:
-                return Resources(lut=3)
-
-            @view
-            def held_bits(self) -> int:
-                return 5
-
-            module = LibraryModule("probe", parameters=parameters, sources=(PROBE,))
+def test_an_annotation_matching_the_actual_child_is_accepted() -> None:
+    point = design_space(Annotated())
+    assert "input.width" in compile_model(Annotated).scopes.keys
+    assert point.query(Annotated.input.width) == Available(4)
+    assert not hasattr(Annotated, "input_data_width")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=pytest.fail.Exception,
-    reason="flips when the kernel base checks its annotations: one naming nothing the class "
-    "declares or lowers is refused when the class is made",
-)
-def test_an_annotation_naming_nothing_the_class_declares_or_lowers_is_refused() -> None:
-    with pytest.raises(DefinitionError, match="input_width"):
+def test_a_wrong_typed_child_model_binding_is_refused() -> None:
+    with pytest.raises(DefinitionError):
 
-        class Dangling(KernelSpace):
-            id = "test.lowered_annotations.dangling"
-            clock_domain = NATIVE_CLOCKING
+        class Mistyped(Space):
+            input = SequencePort(name=7, label="input", tensor=TENSOR, sequence=SEQUENCE)
 
-            input_tensor: Tensor = Param()
-            arriving: BeatSequence = Param()
-            input = native_stream("input", Endpoint.TARGET, input_tensor, arriving)
-            input_width: ClassVar[int]
+        design_space(Mistyped())
 
-            @view
-            def parameters(self) -> dict[str, int | str]:
-                return {"WIDTH": 4}
 
-            @view
-            def resource_use(self) -> Resources:
-                return Resources(lut=3)
-
-            @view
-            def held_bits(self) -> int:
-                return 5
-
-            module = LibraryModule("probe", parameters=parameters, sources=(PROBE,))
+def test_no_flat_field_is_manufactured_from_an_annotation() -> None:
+    assert not hasattr(Annotated, "input_width")
+    assert "input_width" not in compile_model(Annotated).scopes.keys

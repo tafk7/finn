@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import importlib
 import pkgutil
-from dataclasses import dataclass
 from typing import Any, cast
 
 import pytest
@@ -43,19 +42,26 @@ from finn.core.space import (
 )
 from finn.core.space._reads import summary
 from finn.core.space.compiler import compile_model
-from finn.core.space.declarations import View
+from finn.core.space.declarations import Declaration, Required, View
 from finn.core.space.semantics import default_semantics
+from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
-from finn.kernels.artifacts.abi import Direction, Endpoint, Signal
+from finn.kernels.artifacts.abi import Direction, Endpoint, Pin, Signal
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource
 from finn.kernels.artifacts.module import Fragment, Held
 from finn.kernels.base import NATIVE_CLOCKING, KernelSpace, Timed, UntimedKernel
 from finn.kernels.channels import ChannelFifo
-from finn.kernels.declaration import KernelDeclaration, is_member
 from finn.kernels.fifo import FifoKernel, fifo_resources
-from finn.kernels.library import LibraryModule, library_module
-from finn.kernels.port import native_stream, served
+from finn.kernels.library import (
+    ModuleSpec,
+    _each,
+    assemble_module,
+    library_module,
+    module_unprovided,
+)
+from finn.kernels.port import pins
+from finn.kernels.port_model import native_port
 from finn.platform.capabilities import Resources
 
 TENSOR = Tensor((4, 1), ScalarEncoding(DataType["INT4"]))
@@ -119,7 +125,9 @@ class Stage(KernelSpace):
 
     input_tensor: Tensor = Param()
     arriving: BeatSequence = Param()
-    input = native_stream("input", Endpoint.TARGET, input_tensor, arriving)
+    input = native_port(
+        "input", Endpoint.TARGET, input_tensor, arriving, clocking=NATIVE_CLOCKING, label="input"
+    )
 
     @view
     def parameters(self) -> dict[str, int | str]:
@@ -133,7 +141,54 @@ class Stage(KernelSpace):
     def held_bits(self) -> int:
         return 5
 
-    module = LibraryModule("probe", parameters=parameters, sources=(PROBE,))
+    module_spec = ModuleSpec("probe", (PROBE,))
+
+    def _extra_pins(self) -> tuple[Pin, ...]:
+        return ()
+
+    def _extra_held(self) -> Held:
+        return Held()
+
+    @view
+    def netlist(self) -> Fragment | Rejected:
+        clocking = self.clocking
+        parameters = tuple(sorted(self.parameters.items()))
+        presenting = self.input.presenting()
+        parts = _each(
+            (
+                self._extra_pins(),
+                pins(self.input.physical_spec(idle=False), presenting, self.input.clocking),
+            )
+        )
+        if isinstance(parts, Rejected):
+            return parts
+        spec = type(self).module_spec
+        sources = spec.constant_sources
+        if sources is None:
+            sources = self.module_sources
+        refused = module_unprovided(spec, type(self).__qualname__, sources)
+        if isinstance(refused, Rejected):
+            return refused
+        holding = _each((Held(), self._extra_held()))
+        if isinstance(holding, Rejected):
+            return holding
+        leaf = assemble_module(
+            spec,
+            type(self).id,
+            type(self).__qualname__,
+            clocking,
+            parameters,
+            tuple(parts),
+            sources,
+            (),
+            tuple(holding),
+            (False, self.input.placed),
+        )
+        return leaf if isinstance(leaf, Rejected) else Fragment((("", leaf),))
+
+    @view
+    def cycles(self) -> int:
+        return self.input.stream.sequence.form.beats
 
 
 class Pair(KernelSpace):
@@ -230,10 +285,11 @@ def test_constant_sources_must_provide_the_module_when_the_class_is_made() -> No
 
         class Unprovided(Stage):
             id = "test.kernel_space.unprovided"
-            module = LibraryModule(
+            module_spec = ModuleSpec(
                 "probe",
-                parameters=Stage.parameters,
-                sources=(CopiedSource("finnlib", "rtl/other.sv", provides=("module:other",)),),
+                constant_sources=(
+                    CopiedSource("finnlib", "rtl/other.sv", provides=("module:other",)),
+                ),
             )
 
 
@@ -243,10 +299,10 @@ class Referenced(Stage):
     id = "test.kernel_space.referenced"
 
     @view
-    def sources(self) -> tuple[Contribution, ...]:
+    def module_sources(self) -> tuple[Contribution, ...]:
         return (CopiedSource("finnlib", "rtl/other.sv", provides=("module:other",)),)
 
-    module = LibraryModule("probe", parameters=Stage.parameters, sources=sources)
+    module_spec = ModuleSpec("probe")
 
 
 def test_a_member_s_sources_must_provide_the_module_when_it_is_built() -> None:
@@ -262,7 +318,7 @@ def test_a_kernel_binds_one_library_module_at_most() -> None:
 
         class Twice(Stage):
             id = "test.kernel_space.twice"
-            other = LibraryModule("probe", parameters=Stage.parameters, sources=(PROBE,))
+            other = ModuleSpec("probe", (PROBE,))
 
 
 def test_a_kernel_with_a_module_states_its_ports_and_resources_and_places_no_kernel() -> None:
@@ -272,17 +328,26 @@ def test_a_kernel_with_a_module_states_its_ports_and_resources_and_places_no_ker
     def resource_use(self: KernelSpace) -> Resources:
         return Resources()
 
+    def netlist(self: KernelSpace) -> Fragment:
+        return Fragment()
+
+    def cycles(self: KernelSpace) -> int:
+        return 1
+
     def kernel(name: str, **members: object) -> type[KernelSpace]:
-        stated = view(parameters)
         body = {
             "id": f"test.{name}",
-            "parameters": stated,
-            "module": LibraryModule("probe", parameters=stated, sources=(PROBE,)),
+            "parameters": view(parameters),
+            "netlist": view(netlist),
+            "cycles": view(cycles),
+            "module_spec": ModuleSpec("probe", (PROBE,)),
             **members,
         }
         return type(name, (KernelSpace,), body)
 
-    port = native_stream("input", Endpoint.TARGET, TENSOR, ARRIVING)
+    port = native_port(
+        "input", Endpoint.TARGET, TENSOR, ARRIVING, clocking=NATIVE_CLOCKING, label="input"
+    )
     kernel("Complete", input=port, resource_use=view(resource_use))
     with refused("module-ports-unplaced", error=DefinitionError, message="Portless declares no"):
         kernel("Portless", resource_use=view(resource_use))
@@ -293,12 +358,19 @@ def test_a_kernel_with_a_module_states_its_ports_and_resources_and_places_no_ker
     ):
         kernel(
             "Nesting",
-            input=native_stream("input", Endpoint.TARGET, TENSOR, ARRIVING),
+            input=native_port(
+                "input", Endpoint.TARGET, TENSOR, ARRIVING, clocking=NATIVE_CLOCKING, label="input"
+            ),
             resource_use=view(resource_use),
             inner=Stage(input_tensor=TENSOR, arriving=ARRIVING),
         )
     with refused("module-resources-unstated", error=DefinitionError, message="states no"):
-        kernel("Unstated", input=native_stream("input", Endpoint.TARGET, TENSOR, ARRIVING))
+        kernel(
+            "Unstated",
+            input=native_port(
+                "input", Endpoint.TARGET, TENSOR, ARRIVING, clocking=NATIVE_CLOCKING, label="input"
+            ),
+        )
     with refused("kernel-id-invalid", error=DefinitionError):
 
         class Unnamed(KernelSpace):
@@ -308,22 +380,24 @@ def test_a_kernel_with_a_module_states_its_ports_and_resources_and_places_no_ker
 def test_a_kernel_stating_a_stream_port_binds_a_module() -> None:
     # A stream port's pins are a module's: on a kernel with children and no module of its
     # own, it is refused, naming the class and the port.
-    with refused(
-        "port-unbound",
-        error=DefinitionError,
-        message=r"Unbound declares the stream ports \['input'\] and binds no library module",
-    ):
+    class Unbound(KernelSpace):
+        id = "test.kernel_space.unbound"
+        input = native_port(
+            "input", Endpoint.TARGET, TENSOR, ARRIVING, clocking=NATIVE_CLOCKING, label="input"
+        )
 
-        class Unbound(KernelSpace):
-            id = "test.kernel_space.unbound"
-            inner = Stage(input_tensor=TENSOR, arriving=ARRIVING)
-            input = native_stream("input", Endpoint.TARGET, TENSOR, ARRIVING)
+    point = design_space(Unbound())
+    assert point.input.stream == Stream(TENSOR.element, ARRIVING)
+    assert codes(point.query(Unbound.netlist)) == {"kernel-module"}
 
     # A kernel with children presents its children's ports.
     class Serving(KernelSpace):
         id = "test.kernel_space.serving"
         inner = Stage(input_tensor=TENSOR, arriving=ARRIVING)
-        input = served(inner, "input")
+
+        @view
+        def input_contract(self):
+            return self.inner.input.contract.under("inner")
 
     serving: Any = design_space(Serving())  # its lowered members are untyped
     assert serving.input_contract.label == "inner.input"
@@ -334,7 +408,14 @@ def test_a_kernel_stating_a_stream_port_binds_a_module() -> None:
         id = "test.kernel_space.ported"
         clock_domain = NATIVE_CLOCKING
         input_tensor: Tensor = Param()
-        input = native_stream("input", Endpoint.TARGET, input_tensor, ARRIVING)
+        input = native_port(
+            "input",
+            Endpoint.TARGET,
+            input_tensor,
+            ARRIVING,
+            clocking=NATIVE_CLOCKING,
+            label="input",
+        )
         parameters = cast("dict[str, int | str]", required(dict))
 
     class Bound(Ported):
@@ -348,23 +429,70 @@ def test_a_kernel_stating_a_stream_port_binds_a_module() -> None:
         def resource_use(self) -> Resources:
             return Resources()
 
-        module = LibraryModule("probe", parameters=parameters, sources=(PROBE,))
+        module_spec = ModuleSpec("probe", (PROBE,))
+
+        def _extra_pins(self) -> tuple[Pin, ...]:
+            return ()
+
+        def _extra_held(self) -> Held:
+            return Held()
+
+        @view
+        def netlist(self) -> Fragment | Rejected:
+            clocking = self.clocking
+            parameters = tuple(sorted(self.parameters.items()))
+            presenting = self.input.presenting()
+            parts = _each(
+                (
+                    self._extra_pins(),
+                    pins(self.input.physical_spec(idle=False), presenting, self.input.clocking),
+                )
+            )
+            if isinstance(parts, Rejected):
+                return parts
+            spec = type(self).module_spec
+            sources = spec.constant_sources
+            if sources is None:
+                sources = self.module_sources
+            refused = module_unprovided(spec, type(self).__qualname__, sources)
+            if isinstance(refused, Rejected):
+                return refused
+            holding = _each((Held(), self._extra_held()))
+            if isinstance(holding, Rejected):
+                return holding
+            leaf = assemble_module(
+                spec,
+                type(self).id,
+                type(self).__qualname__,
+                clocking,
+                parameters,
+                tuple(parts),
+                sources,
+                (),
+                tuple(holding),
+                (False, self.input.placed),
+            )
+            return leaf if isinstance(leaf, Rejected) else Fragment((("", leaf),))
+
+        @view
+        def cycles(self) -> int:
+            return self.input.stream.sequence.form.beats
 
     assert library_module(design_space(Bound(input_tensor=TENSOR))).name == "probe"
 
 
-class Based(KernelSpace):
+class Based(Stage):
     """A base of kernels: its module names its sources, which it leaves required."""
 
     id = "test.kernel_space.based"
     clock_domain = NATIVE_CLOCKING
-    sources = cast("tuple[Contribution, ...]", required(tuple))
+    module_sources = cast("tuple[Contribution, ...]", required(tuple))
 
     @view
     def parameters(self) -> dict[str, int | str]:
         return {}
 
-    module = LibraryModule("probe", parameters=parameters, sources=sources)
+    module_spec = ModuleSpec("probe")
 
 
 class Sourced(Based):
@@ -372,10 +500,13 @@ class Sourced(Based):
 
     id = "test.kernel_space.sourced"
     input_tensor: Tensor = Param()
-    input = native_stream("input", Endpoint.TARGET, input_tensor, ARRIVING)
+    arriving: BeatSequence = Param(default=ARRIVING)
+    input = native_port(
+        "input", Endpoint.TARGET, input_tensor, ARRIVING, clocking=NATIVE_CLOCKING, label="input"
+    )
 
     @view
-    def sources(self) -> tuple[Contribution, ...]:
+    def module_sources(self) -> tuple[Contribution, ...]:
         return (PROBE,)
 
     @view
@@ -404,7 +535,10 @@ class Forgetful(Deep):
 
     id = "test.kernel_space.forgetful"
     input_tensor: Tensor = Param()
-    input = native_stream("input", Endpoint.TARGET, input_tensor, ARRIVING)
+    arriving: BeatSequence = Param(default=ARRIVING)
+    input = native_port(
+        "input", Endpoint.TARGET, input_tensor, ARRIVING, clocking=NATIVE_CLOCKING, label="input"
+    )
 
     @view
     def parameters(self) -> dict[str, int | str]:
@@ -414,7 +548,7 @@ class Forgetful(Deep):
     def resource_use(self) -> Resources:
         return Resources()
 
-    module = LibraryModule("probe", parameters=parameters, sources=(PROBE,))
+    module_spec = ModuleSpec("probe", (PROBE,))
 
 
 def test_a_kernel_forgetting_a_required_member_is_refused_where_placed() -> None:
@@ -448,7 +582,13 @@ class Loose(Stage):
     def held_pins(self) -> Held:
         return Held(((LOOSE.name, 0),)) if self.holding else Held()
 
-    other = OtherPins((LOOSE, Signal("busy", Direction.OUT, 1)), held_pins)
+    other = OtherPins(signals=(LOOSE, Signal("busy", Direction.OUT, 1)))
+
+    def _extra_pins(self) -> tuple[Pin, ...]:
+        return self.other.pin_values()
+
+    def _extra_held(self) -> Held:
+        return self.held_pins
 
 
 def test_an_input_neither_held_nor_presented_refuses_the_module() -> None:
@@ -464,21 +604,8 @@ def test_an_input_neither_held_nor_presented_refuses_the_module() -> None:
 # -- a declaration's arguments ----------------------------------------------------------------
 
 
-@dataclass(frozen=True, eq=False)
-class Given(KernelDeclaration):
-    """A declaration of one argument, read as its constant or its member."""
-
-    given: Any
-
-
 def test_a_constant_of_an_engine_type_is_a_constant_not_a_member() -> None:
     for constant in (default_semantics(int), divisors_of(4), 3, "x"):
-        assert not is_member(constant)
-        declaration = Given(constant)
-        assert declaration.references() == {}
-        point = design_space(Stage(input_tensor=TENSOR, arriving=ARRIVING))
-        assert declaration.value(point, "given") is constant
-    assert is_member(Stage.parameters) and Given(Stage.parameters).references() == {
-        "given": "parameters"
-    }
-    assert is_member(Based.sources)  # required(): a member a subclass states
+        assert not isinstance(constant, (Declaration, Required))
+    assert isinstance(Stage.parameters, View)
+    assert isinstance(Based.module_sources, Required)

@@ -33,6 +33,7 @@ from finn.core.space import (
     reject,
     view,
 )
+from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import (
@@ -50,9 +51,9 @@ from finn.kernels.base import NATIVE_CLOCKING, KernelSpace
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.configure import commit
 from finn.kernels.control import Control, ControlModel, held_bus
-from finn.kernels.library import LibraryModule, ModuleSpec, _each, assemble_module, library_module
+from finn.kernels.library import ModuleSpec, _each, assemble_module, library_module
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.port import AxiStreamPort, pins, served
+from finn.kernels.port import held, pins
 from finn.kernels.port_model import SequencePort
 from finn.kernels.sides import Side
 from finn.kernels.values.semantics import IntegerTensorValue
@@ -72,15 +73,22 @@ class Probe(KernelSpace):
 
     tensor: Tensor | None = Param(default=None)
 
-    x = AxiStreamPort(
+    @derived
+    def port_clocking(self) -> Clocking:
+        return type(self).clock_domain
+
+    x = SequencePort(
         name="s_axis",
+        label="x",
+        clocking=port_clocking,
         endpoint=Endpoint.TARGET,
         tensor=tensor,
         sequence=BeatSequence(vector_major((4,), 1)),
     )
     # The output is no one's to drive: left open.
     mode = OtherPins(
-        (Signal("mode", Direction.IN, 2), Signal("busy", Direction.OUT, 1)), Held((("mode", 1),))
+        signals=(Signal("mode", Direction.IN, 2), Signal("busy", Direction.OUT, 1)),
+        holding=Held((("mode", 1),)),
     )
 
     @derived
@@ -95,7 +103,53 @@ class Probe(KernelSpace):
     def resource_use(self) -> Resources | Rejected:
         return reject("kernel-resources", "a model only")
 
-    module = LibraryModule("probe", parameters=parameters, sources=(PROBE,))
+    module_spec = ModuleSpec("probe", (PROBE,))
+
+    @view
+    def netlist(self) -> Fragment | Rejected:
+        clocking = self.clocking
+        parameters = tuple(sorted(self.parameters.items()))
+        presenting = self.x.presenting()
+        parts = _each(
+            (
+                self.mode.pin_values(),
+                pins(
+                    self.x.physical_spec(idle=not isinstance(presenting, Stream)),
+                    presenting,
+                    self.x.clocking,
+                ),
+            )
+        )
+        if isinstance(parts, Rejected):
+            return parts
+        hold = (
+            Held()
+            if self.x.placed
+            else held(self.x.physical_spec(idle=True), presenting, self.x.clocking)
+        )
+        holding = _each((hold, self.mode.held_values()))
+        if isinstance(holding, Rejected):
+            return holding
+        spec = type(self).module_spec
+        sources = spec.constant_sources
+        assert sources is not None
+        leaf = assemble_module(
+            spec,
+            type(self).id,
+            type(self).__qualname__,
+            clocking,
+            parameters,
+            tuple(parts),
+            sources,
+            (),
+            tuple(holding),
+            (False, self.x.placed),
+        )
+        return leaf if isinstance(leaf, Rejected) else Fragment((("", leaf),))
+
+    @view
+    def cycles(self) -> int:
+        return self.x.stream.sequence.form.beats
 
 
 def probe(**facts: object) -> Probe:
@@ -322,16 +376,27 @@ def test_a_kernel_with_children_presents_a_childs_port_as_its_own() -> None:
     class Presenting(KernelSpace):
         id = "test.presenting"
         kernel = Probe(tensor=TENSOR)
-        x = served(kernel, "x")
+
+        @derived
+        def x_stream(self) -> Stream:
+            return self.kernel.x.stream
+
+        @view
+        def x_contract(self):
+            return self.kernel.x.contract.under("kernel")
 
     point = design_space(Presenting())
     assert point.x_contract.label == "kernel.x"
-    assert point.x_contract.contract == point.kernel.x_contract.contract
-    assert point.x_stream == point.kernel.x_stream
+    assert point.x_contract.contract == point.kernel.x.contract.contract
+    assert point.x_stream == point.kernel.x.stream
 
-    with refused("served-child-unknown", error=DefinitionError, message="serves y of no child"):
+    class Unserved(KernelSpace):
+        id = "test.unserved"
+        kernel = Probe(tensor=TENSOR)
 
-        class Unserved(KernelSpace):
-            id = "test.unserved"
-            kernel = Probe(tensor=TENSOR)
-            y = served(kernel, "y")
+        @view
+        def y_contract(self):
+            return self.kernel.y.contract
+
+    with refused("reference-not-in-scope", error=DefinitionError):
+        design_space(Unserved())

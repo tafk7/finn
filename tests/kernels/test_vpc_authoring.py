@@ -32,9 +32,9 @@ from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource
 from finn.kernels.artifacts.module import Fragment
 from finn.kernels.base import KernelSpace, UntimedKernel
-from finn.kernels.library import LibraryModule, ModuleSpec
-from finn.kernels.port import AxiStreamPort, port_endpoint, port_surface
-from finn.kernels.port_model import SequencePort
+from finn.kernels.library import ModuleSpec
+from finn.kernels.port import port_endpoint, port_surface
+from finn.kernels.port_model import PortSurface, SequencePort
 from finn.kernels.vpc import VpcKernel
 from finn.platform.capabilities import Resources
 
@@ -180,31 +180,23 @@ def test_plain_module_spec_rejects_symbolic_identity_and_sources() -> None:
         ModuleSpec("vpc", Inputs.sources)
 
 
-def test_real_port_children_do_not_get_silently_ignored_by_legacy_module_builders() -> None:
-    class Legacy(KernelSpace):
-        id = "fixture.legacy_builder"
-        input = AxiStreamPort(
-            name="input", endpoint=Endpoint.TARGET, tensor=TENSOR, sequence=SEQUENCE
-        )
+def test_a_module_requires_owned_physical_ports_not_parent_forwarding_metadata() -> None:
+    with pytest.raises(DefinitionError, match="declares no port"):
 
-        @view
-        def parameters(self) -> dict[str, int | str]:
-            return {}
+        class Unowned(KernelSpace):
+            id = "fixture.unowned_builder"
+            module_spec = ModuleSpec(
+                "probe", (CopiedSource("finnlib", "probe.sv", provides=("module:probe",)),)
+            )
+            input = PortSurface(None, Endpoint.TARGET, None, None)
 
-        @view
-        def resource_use(self) -> Resources:
-            return Resources()
+            @view
+            def netlist(self) -> Fragment:
+                return Fragment()
 
-        module = LibraryModule(
-            "probe",
-            parameters=parameters,
-            sources=(CopiedSource("finnlib", "probe.sv", provides=("module:probe",)),),
-        )
-
-    with pytest.raises(DefinitionError, match="real port children use a ModuleSpec"):
-
-        class Mixed(Legacy):
-            extra = SequencePort(name="extra", label="extra", tensor=TENSOR, sequence=SEQUENCE)
+            @view
+            def resource_use(self) -> Resources:
+                return Resources()
 
 
 def test_surface_lookup_supports_discovered_group_paths_at_the_actual_node() -> None:

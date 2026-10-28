@@ -51,10 +51,9 @@ from finn.harness.points import Covering, covering, refusal, refused_cases, reje
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.base import PortContract, UntimedKernel
 from finn.kernels.configure import undecided
-from finn.kernels.declaration import declarations
 from finn.kernels.library import ModuleSpec
 from finn.kernels.partition import Partition
-from finn.kernels.port import AxiStreamPort, Served, port_surface
+from finn.kernels.port import port_surface
 from finn.kernels.port_model import PortModel, port_surfaces
 from finn.kernels.sides import Side
 
@@ -196,13 +195,7 @@ def _ports(member: Space) -> tuple[str, ...]:
     presents for a child; none for a member that is no kernel."""
     if not isinstance(member, UntimedKernel):
         return ()
-    found = declarations(type(member), UntimedKernel)
-    legacy = tuple(
-        name for name, each in found.items() if isinstance(each, (AxiStreamPort, Served))
-    )
-    native = tuple(port_surfaces(type(member)))
-    assert not set(legacy) & set(native)
-    return (*legacy, *native)
+    return tuple(port_surfaces(type(member)))
 
 
 def _ports_checked(point: Partition) -> int:

@@ -207,7 +207,7 @@ def test_a_producer_presenting_another_order_is_steps_its_stream_adapts():
     assert rows.member("w_s").steps.kinds == (Step.REORDER, Step.WIDTH)
     # dotp's own port is untouched by the producer's order.
     compute = narrow.member("compute")
-    assert isinstance(compute.query(type(compute).w_contract), Available)
+    assert isinstance(compute.query(type(compute).w.contract), Available)
     # A channel that admits no adapter refuses the folding that needs one, naming the
     # adapter it would need (a change that breaks a rule is refused).
     with pytest.raises(ValueError, match="channel-form: needs a reorder adapter"):

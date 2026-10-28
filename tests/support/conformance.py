@@ -485,7 +485,7 @@ def _port(kernel: Any, path: str) -> Any:
     if isinstance(declaration, SequencePort):
         # Given native sequences have no schedule or tensor-index binding metadata.
         return None
-    return declaration.read(node, "schedule", "reduces", "holds", "index")
+    raise TypeError(f"{path} is not an actual scheduled/native port")
 
 
 def _stated(

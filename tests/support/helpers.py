@@ -49,6 +49,8 @@ from qonnx.core.ranges import TensorRange
 
 from finn.core.space import (
     Decision,
+    Group,
+    Param,
     Rejected,
     Space,
     design_space,
@@ -65,7 +67,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, Loop, Traversal, vector_major
 from finn.kernels.artifacts.abi import Pin
 from finn.kernels.artifacts.module import Composed, Held, Leaf, ProducerIdentity
-from finn.kernels.base import KernelSpace, Timed, UntimedKernel
+from finn.kernels.base import KernelSpace, Timed
 from finn.kernels.channels import Channel
 from finn.kernels.composer import (
     ChannelDeclaration,
@@ -77,7 +79,6 @@ from finn.kernels.composer import (
     channel,
 )
 from finn.kernels.configure import chosen, commit, describe
-from finn.kernels.declaration import KernelDeclaration, ModuleOrder, Product
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.explore import Choice, Defaults, Seam, dotted
 from finn.kernels.fifo import FifoKernel
@@ -85,7 +86,7 @@ from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.matmul import KnownWeights, MatMulKernel, datatype_range
 from finn.kernels.partition import Partition, partition
 from finn.kernels.policies import Alone, Unstated, defaulted, ranked
-from finn.kernels.port import AxiStreamPort, axis, transport
+from finn.kernels.port import axis, transport
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.transport import AxisBeat, ReadyValidTransport
@@ -590,42 +591,24 @@ def port_transport(point: KernelSpace, name: str) -> ReadyValidTransport:
     from finn.kernels.port_model import SequencePort  # noqa: PLC0415
 
     declaration = getattr(type(point), name)
-    if isinstance(declaration, SequencePort):
-        port = getattr(point, name)
-        found = transport(port.physical_spec(idle=False), port.stream, port.clocking)
-    else:
-        assert isinstance(declaration, AxiStreamPort), declaration
-        found = transport(*declaration.viewed(point, name), type(point).clock_domain)
+    assert isinstance(declaration, SequencePort), declaration
+    port = getattr(point, name)
+    found = transport(port.physical_spec(idle=False), port.stream, port.clocking)
     assert isinstance(found, ReadyValidTransport), found
     return found
 
 
-@dataclass(frozen=True, eq=False)
-class OtherPins(KernelDeclaration):
-    """A test kernel's module pins that are no port's and no control bus's (``signals``,
-    a constant or the kernel's member), and what of them it holds (``holding``): its pins
-    before every port's, its hold after theirs, as a control bus's
-    (``ModuleOrder.ENCLOSING``)."""
+class OtherPins(Group):
+    """Test-only literal physical inputs; a parent reads any holding View itself."""
 
-    signals: Any
-    holding: Any = Held()
+    signals: tuple[Pin, ...] = Param()
+    holding: Held = Param(default=Held())
 
-    module_order = ModuleOrder.ENCLOSING
+    def pin_values(self) -> tuple[Pin, ...]:
+        return self.signals
 
-    def lower(self, owner: type[UntimedKernel], name: str) -> Mapping[str, object]:
-        self.references()
-        return {}
-
-    def reads(self, name: str, product: Product) -> tuple[str, ...]:
-        return {"pins": self.paths("signals"), "held": self.paths("holding")}.get(product, ())
-
-    def pins(self, kernel: UntimedKernel, name: str) -> tuple[Pin, ...]:
-        found: tuple[Pin, ...] = self.value(kernel, "signals")
-        return found
-
-    def held(self, kernel: UntimedKernel, name: str) -> Held:
-        found: Held = self.value(kernel, "holding")
-        return found
+    def held_values(self) -> Held:
+        return self.holding
 
 
 def codes(result: object) -> set[str]:
