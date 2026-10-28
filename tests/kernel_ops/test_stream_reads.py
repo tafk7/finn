@@ -37,6 +37,7 @@ from support.models import chain_model
 
 from finn.core.space import (
     DefinitionError,
+    Group,
     Param,
     Rejected,
     Space,
@@ -136,7 +137,10 @@ def check(scopes: Scopes, reads: ModelReads) -> tuple[dict[str, int], list[str]]
         for scope in scopes.ordered():
             if scope.name != kernel and not scope.name.startswith(f"{kernel}."):
                 continue
-            for member in lowered(scope.space_type):
+            space_type = scope.space_type
+            if not issubclass(space_type, Space):
+                continue
+            for member in lowered(space_type):
                 node = scope.named_members.get(member)
                 if node is None:
                     continue
@@ -265,3 +269,48 @@ def test_a_stream_reading_a_formal_bound_to_its_sibling_s_value_fails() -> None:
     assert failures, "a's stream reads its sibling through its formal"
     assert all(failure.startswith("a.x_stream: a.x_stream -> a.sequence") for failure in failures)
     assert any(failure.endswith("a.sequence -> sibling_sequence") for failure in failures), failures
+
+
+@pytest.mark.parametrize("is_present", (False, True))
+def test_group_frames_preserve_kernel_descendant_reads_and_guards(is_present: bool) -> None:
+    class Components(Group):
+        active: bool = Param()
+
+        @derived
+        def enabled(self) -> bool:
+            return self.active
+
+        child = Given(tensor=TENSOR, sequence=SEQUENCE, when=enabled)
+
+    class Parent(Given):
+        components = Components(active=is_present)
+
+    whole = composite(
+        "grouped",
+        {
+            "a": Parent(tensor=TENSOR, sequence=SEQUENCE),
+            "b": Given(tensor=TENSOR, sequence=SEQUENCE),
+        },
+    )
+    scopes = line_scopes(whole)
+    namespaces = {scope.name: scope.space_type for scope in scopes.ordered()}
+    assert namespaces["a.components"] is Components
+    assert not issubclass(namespaces["a.components"], Space)
+    assert namespaces["a.components.child"] is Given
+    reads = infer(scopes)
+    checked, failures = check(scopes, reads)
+    assert checked == {"a": 6, "b": 3}
+    assert failures == []
+
+    stream = scopes.find("a.components.child.x_stream")
+    sibling = scopes.find("b.x_stream")
+    enabled = scopes.find("a.components.enabled")
+    assert enabled in existence(stream)
+    count, failures = check(scopes, _with_read(reads, stream, sibling))
+    assert count == checked
+    assert "a.components.child.x_stream: a.components.child.x_stream -> b.x_stream" in failures
+
+    count, failures = check(scopes, _with_read(reads, enabled, sibling))
+    assert count == checked
+    for member in LOWERED:
+        assert f"a.components.child.x_{member}: a.components.enabled -> b.x_stream" in failures
