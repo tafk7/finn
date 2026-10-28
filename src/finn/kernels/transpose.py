@@ -34,7 +34,7 @@ from finn.kernels.base import NATIVE_CLOCKING, KernelSpace, extent_of
 from finn.kernels.fifo import fifo_resources
 from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
 from finn.kernels.port import held, pins
-from finn.kernels.port_model import ScheduledPort
+from finn.kernels.port_model import IndexedPort, ScheduledPort
 from finn.kernels.utilization import (
     auto_unstated,
     memory,
@@ -171,7 +171,7 @@ class TransposeKernel(KernelSpace):
     def port_clocking(self) -> Clocking:
         return type(self).clock_domain
 
-    input = ScheduledPort(
+    input = IndexedPort(
         name="input",
         label="input",
         endpoint=Endpoint.TARGET,

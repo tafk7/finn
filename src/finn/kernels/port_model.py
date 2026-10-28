@@ -195,21 +195,6 @@ class ScheduledPort(SequencePort):
     reshaped: bool = Param(default=False)
 
     @derived
-    def binds(self) -> bool:
-        if not self.placed:
-            return False
-        return self.endpoint is Endpoint.TARGET and bool(self.index)
-
-    @derived
-    def access(self) -> Access | Inapplicable:
-        """Only a placed target with indices reads its tensor to bind parent extents."""
-        if not self.binds:
-            return Inapplicable()
-        tensor = self.tensor
-        assert tensor is not None
-        return Access(self.label, tensor.shape, self.index, self.reshaped)
-
-    @derived
     def stream(self) -> Stream | Rejected | Inapplicable:
         if not self.placed:
             return Inapplicable()
@@ -259,6 +244,25 @@ class ScheduledPort(SequencePort):
         paced = replace(physical, schedule=self.schedule, reduces=self.reduces, holds=self.holds)
         found = port_contract(paced, stream, self.clocking)
         return found if isinstance(found, Rejected) else PortContract(self.label, found)
+
+
+class IndexedPort(ScheduledPort):
+    """A potentially binding scheduled target; constant nonbinding uses ScheduledPort."""
+
+    @derived
+    def binds(self) -> bool:
+        if not self.placed:
+            return False
+        return self.endpoint is Endpoint.TARGET and bool(self.index)
+
+    @derived
+    def access(self) -> Access | Inapplicable:
+        """Only a placed target with indices reads its tensor to bind parent extents."""
+        if not self.binds:
+            return Inapplicable()
+        tensor = self.tensor
+        assert tensor is not None
+        return Access(self.label, tensor.shape, self.index, self.reshaped)
 
 
 def native_port(
@@ -359,6 +363,7 @@ __all__ = [
     "PortSurface",
     "SequencePort",
     "ScheduledPort",
+    "IndexedPort",
     "native_port",
     "port_surfaces",
 ]

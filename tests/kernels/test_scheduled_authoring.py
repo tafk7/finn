@@ -26,7 +26,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.base import KernelSpace
-from finn.kernels.port_model import ScheduledPort
+from finn.kernels.port_model import IndexedPort, ScheduledPort
 from finn.kernels.transpose import TransposeKernel, i
 
 R, C = Index("r"), Index("c")
@@ -41,7 +41,7 @@ class Projection(Space):
     def scheduled(self) -> Schedule:
         return Schedule({R: 2, C: 4}, {C: self.fold})
 
-    input = ScheduledPort(
+    input = IndexedPort(
         name="in", label="input", tensor=TENSOR, schedule=scheduled, index=(R, C), lanes=(C,)
     )
     output = ScheduledPort(
@@ -59,10 +59,10 @@ def test_access_and_element_are_early_and_output_never_binds_parent_extents() ->
     point = design_space(Projection())
     assert point.input.element == TENSOR.element
     assert point.input.access == Access("input", TENSOR.shape, (R, C), False)
-    assert point.output.binds is False
-    assert isinstance(point.query(Projection.output.access), Inapplicable)
+    assert not hasattr(type(point.output), "binds")
+    assert not hasattr(type(point.output), "access")
     assert isinstance(point.query(Projection.input.stream), Unresolved)
-    assert not inspection.decisions(ScheduledPort)
+    assert not inspection.decisions(ScheduledPort) and not inspection.decisions(IndexedPort)
 
 
 @pytest.mark.parametrize("fold", (1, 2, 4))
@@ -146,7 +146,7 @@ class SerialTranspose(TransposeKernel):
         _ = self.second_state
         return self.columns_out
 
-    input = ScheduledPort(
+    input = IndexedPort(
         name="input",
         label="input",
         tensor=TransposeKernel.input_tensor,
