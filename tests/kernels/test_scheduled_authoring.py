@@ -94,6 +94,57 @@ def test_schedule_and_sequence_conflict_remains_a_local_nonvalue() -> None:
     assert inspection.validity(point).status == "valid"
 
 
+@pytest.mark.parametrize("suppressed", ("reduces", "holds"))
+def test_closing_markers_and_suppressed_axes_keep_their_actual_pace(suppressed: str) -> None:
+    source = design_space(
+        ScheduledPort(
+            name="source",
+            label="source",
+            tensor=TENSOR,
+            schedule=SCHEDULE,
+            index=(R, C),
+            lanes=(C,),
+            closes=(C,),
+        )
+    )
+    assert source.stream.sequence.markers == (SCHEDULE.closing((C,)),)
+    assert source.contract.contract.markers[0][1] == SCHEDULE.closing((C,))
+    reduces = (C,) if suppressed == "reduces" else ()
+    holds = (C,) if suppressed == "holds" else ()
+    output = design_space(
+        ScheduledPort(
+            name="output",
+            label="output",
+            endpoint=Endpoint.INITIATOR,
+            tensor=Tensor((2,), TENSOR.element),
+            schedule=SCHEDULE,
+            index=(R,),
+            reduces=reduces,
+            holds=holds,
+        )
+    )
+    assert output.stream.sequence.form == SCHEDULE.present((2,), (R,), reduces=reduces, holds=holds)
+    assert output.contract.contract.pace == Pace(SCHEDULE, reduces, holds)
+
+
+def test_a_reshaped_affine_axis_preserves_the_local_schedule_refusal() -> None:
+    point = design_space(
+        ScheduledPort(
+            name="p",
+            label="p",
+            tensor=TENSOR,
+            schedule=SCHEDULE,
+            index=(2 * R, C),
+            lanes=(C,),
+            reshaped=True,
+        )
+    )
+    result = point.query(ScheduledPort.stream)
+    assert isinstance(result, Rejected)
+    assert [finding.code for finding in result.findings] == ["port-schedule"]
+    assert "reshaped port reads plain indices" in result.findings[0].message
+
+
 @pytest.mark.parametrize("enabled", (None, False, True))
 def test_scheduled_child_presence_is_checked_before_local_work(enabled: bool | None) -> None:
     class Guarded(Space):
