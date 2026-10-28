@@ -44,7 +44,7 @@ from dataclasses import KW_ONLY, dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, cast
 
 from finn.core.space import DefinitionError, Rejected, reject
-from finn.kernels.artifacts.abi import Direction, Pin, Signal
+from finn.kernels.artifacts.abi import Clocking, Direction, Pin, Signal
 from finn.kernels.artifacts.contributions import (
     Contribution,
     CopiedSource,
@@ -103,6 +103,117 @@ def _provided(sources: tuple[Contribution, ...]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(found))
 
 
+def _unprovided(stem: str, owner: str, sources: tuple[Contribution, ...]) -> str | None:
+    """Why the resolved sources do not provide the module, preserving symbol order."""
+    wanted = f"module:{stem}"
+    provided = _provided(sources)
+    if wanted in provided:
+        return None
+    return (
+        f"{owner}: its sources provide {list(provided)}, not the library module {stem} ({wanted})"
+    )
+
+
+@dataclass(frozen=True)
+class ModuleSpec:
+    """Plain module identity and optional constant sources, without symbolic fields.
+
+    None means the parent reads its dynamic sources explicitly. A constant tuple,
+    including an empty tuple, is checked at definition time by validate().
+    Parameters, data and physical products are resolved by ordinary parent source;
+    this object cannot query a Space or manufacture its read declarations.
+    """
+
+    rtl_module: str
+    constant_sources: tuple[Contribution, ...] | None = None
+
+    def __post_init__(self) -> None:
+        if type(self.rtl_module) is not str:
+            raise TypeError("ModuleSpec module name is a constant string")
+        sources = self.constant_sources
+        if sources is not None and (
+            not isinstance(sources, tuple)
+            or any(
+                not isinstance(source, (CopiedSource, HlsSource, GeneratedData))
+                for source in sources
+            )
+        ):
+            raise TypeError("ModuleSpec sources are constant contribution values")
+
+    def validate(self, owner: str, declaration: str) -> None:
+        """Definition-time provision check for constant sources, with authored context."""
+        if self.constant_sources is None:
+            return
+        why = _unprovided(self.rtl_module, owner, self.constant_sources)
+        if why is not None:
+            raise DefinitionError.broken(
+                "library-module-unprovided", "ModuleSpec", why, declaration=declaration
+            )
+
+
+def module_unprovided(
+    spec: ModuleSpec, owner: str, sources: tuple[Contribution, ...]
+) -> Rejected | None:
+    """Runtime provision check, called after successful pins and before data/held reads."""
+    why = _unprovided(spec.rtl_module, owner, sources)
+    return None if why is None else reject("library-module-unprovided", why)
+
+
+def assemble_module(
+    spec: ModuleSpec,
+    kernel_id: str,
+    owner: str,
+    clocking: Clocking,
+    parameters: tuple[tuple[str, int | str], ...],
+    pin_parts: tuple[tuple[Pin, ...], ...],
+    sources: tuple[Contribution, ...],
+    data: GeneratedData | tuple[GeneratedData, ...],
+    held_parts: tuple[Held, ...],
+    presented_parts: tuple[bool, ...],
+) -> Leaf | Rejected:
+    """Assemble resolved products into a Leaf, without a receiver or evaluation.
+
+    The parent sorts parameters at their original read step, evaluates pin and
+    held contributors serially, and checks source provision before reading data
+    and held products. Direct physical refusals are combined by _each there.
+    Pin parts retain control-before-ports; held parts retain ports-before-control.
+    Presented flags correspond to pin parts, exactly as input accounting requires.
+    """
+    pins = tuple(pin for part in pin_parts for pin in part)
+    contributions = (*sources, *((data,) if isinstance(data, GeneratedData) else data))
+    parts = (Held(clocking.held()), *held_parts)
+    holding = {pin for part in parts for pin, _ in part.inputs}
+    loose = [
+        pin
+        for presented, part in zip(presented_parts, pin_parts, strict=True)
+        if not presented
+        for item in part
+        for pin in _inputs(item)
+        if pin not in holding
+    ]
+    if loose:
+        return reject(
+            "kernel-pins",
+            f"{owner}: the inputs {loose} are neither held nor presented",
+        )
+    return Leaf(
+        kernel_id,
+        _module_name(spec.rtl_module, contributions),
+        parameters,
+        Abi(
+            (*clocking.signals(), *pins),
+            tuple((key, str(value)) for key, value in parameters),
+            clocking.alignments(),
+        ),
+        tuple(item for item in contributions if isinstance(item, (CopiedSource, HlsSource))),
+        tuple(item for item in contributions if isinstance(item, GeneratedData)),
+        Held(
+            tuple(pin for part in parts for pin in part.inputs),
+            tuple(pin for part in parts for pin in part.unused),
+        ),
+    )
+
+
 @dataclass(frozen=True, eq=False)
 class LibraryModule(KernelDeclaration):
     """The one module of the library a kernel binds: its name, and the kernel's members
@@ -122,14 +233,7 @@ class LibraryModule(KernelDeclaration):
 
     def unprovided(self, owner: str, sources: tuple[Contribution, ...]) -> str | None:
         """Why ``sources`` do not provide the module, for ``owner``; None when they do."""
-        wanted = f"module:{self.rtl_module}"
-        provided = _provided(sources)
-        if wanted in provided:
-            return None
-        return (
-            f"{owner}: its sources provide {list(provided)}, not the library module "
-            f"{self.rtl_module} ({wanted})"
-        )
+        return _unprovided(self.rtl_module, owner, sources)
 
     def lower(self, owner: type[UntimedKernel], name: str) -> Mapping[str, object]:
         label = f"{owner.__qualname__}.{name}"
@@ -217,5 +321,8 @@ def library_module(point: Kernel) -> Leaf:
 
 __all__ = [
     "LibraryModule",
+    "ModuleSpec",
+    "assemble_module",
     "library_module",
+    "module_unprovided",
 ]
