@@ -293,13 +293,20 @@ def test_group_frames_preserve_kernel_descendant_reads_and_guards(is_present: bo
         },
     )
     scopes = line_scopes(whole)
-    namespaces = {scope.name: scope.space_type for scope in scopes.ordered()}
+    records = {scope.name: scope for scope in scopes.ordered()}
+    namespaces = {name: scope.space_type for name, scope in records.items()}
     assert namespaces["a.components"] is Components
     assert not issubclass(namespaces["a.components"], Space)
     assert namespaces["a.components.child"] is Given
+    # Given has no tensor index: its nonbinding port emits no access member.
+    for name in ("a", "a.components.child", "b"):
+        assert {member for member in lowered(Given) if member in records[name].named_members} == {
+            "x_element",
+            "x_stream",
+        }
     reads = infer(scopes)
     checked, failures = check(scopes, reads)
-    assert checked == {"a": 6, "b": 3}
+    assert checked == {"a": 4, "b": 2}
     assert failures == []
 
     stream = scopes.find("a.components.child.x_stream")
@@ -312,5 +319,5 @@ def test_group_frames_preserve_kernel_descendant_reads_and_guards(is_present: bo
 
     count, failures = check(scopes, _with_read(reads, enabled, sibling))
     assert count == checked
-    for member in LOWERED:
+    for member in ("element", "stream"):
         assert f"a.components.child.x_{member}: a.components.enabled -> b.x_stream" in failures
