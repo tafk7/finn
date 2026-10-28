@@ -161,7 +161,7 @@ def test_a_channel_waits_for_its_own_sides_only():
     first = point.member("first")
     produced = point.member("first_source")
     assert first.producer == Side.kernel(
-        produced.output_stream, "first_source.output", produced.output_data_width
+        produced.output.stream, "first_source.output", produced.output.width
     )
     assert first.producer.width == 8
     assert first.consumer == Side.boundary("out0_V")

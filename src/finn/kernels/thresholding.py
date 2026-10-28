@@ -758,7 +758,8 @@ class ThresholdingAxiKernel(KernelSpace):
             return pin_parts
         spec = type(self).module_spec
         sources = spec.constant_sources
-        assert sources is not None
+        if sources is None:
+            sources = self.module_sources
         refused = module_unprovided(spec, type(self).__qualname__, sources)
         if isinstance(refused, Rejected):
             return refused

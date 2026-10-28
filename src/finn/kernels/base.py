@@ -49,7 +49,8 @@ a member that is no ``Timed`` (a channel's FIFO) is no candidate of ``member_cyc
 (``finn.kernels.port``), the ports it presents for its members
 (``finn.kernels.port.served``), the library module it binds
 (``finn.kernels.library.LibraryModule``) and its control bus
-(``finn.kernels.control.ControlBus``), each a plain frozen value in its class body. When
+(``finn.kernels.control.ControlModel``), an included model Group. Legacy stream
+ports/modules remain plain values until their callers migrate. When
 the class is made, the base lowers each into ordinary members of the kernel
 (``KernelDeclaration.lower``), and makes its answers read what each states of its module,
 pins, holds, reads and beats by name.
@@ -105,6 +106,7 @@ from finn.core.space.declarations import unmet_required
 from finn.dataflow.schedule import Access, Affine, Index, Refused, Schedule, bind_extents
 from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import Clocking
+from finn.kernels.artifacts.contributions import Contribution
 from finn.kernels.artifacts.module import BusExport, Fragment, Link, merge
 from finn.kernels.control import Control, control_models, presented
 from finn.kernels.declaration import KernelDeclaration, Product, declarations, declared_reads
@@ -392,6 +394,15 @@ class UntimedKernel(Space):
         specs = [(name, item) for name, item in members.items() if isinstance(item, ModuleSpec)]
         for name, spec in specs:
             spec.validate(cls.__qualname__, f"{cls.__qualname__}.{name}")
+        if any(spec.constant_sources is None for _, spec in specs) and not _declared(
+            cls, "module_sources", below
+        ):
+            raise DefinitionError.broken(
+                "library-module-sources-unstated",
+                "KernelSpace",
+                f"{cls.__qualname__}: a dynamic ModuleSpec states its module_sources View",
+                declaration=cls.__qualname__,
+            )
         if len(modules) + len(specs) > 1:
             raise DefinitionError.broken(
                 "library-module-repeated",
@@ -566,6 +577,15 @@ class UntimedKernel(Space):
         """What it uses of the device itself: nothing; a kernel with a module states its
         own (a refusal where it has no model of it, never nothing)."""
         return Resources()
+
+    @view
+    def module_sources(self) -> tuple[Contribution, ...] | Rejected:
+        """Explicit dynamic source product for a ModuleSpec with constant_sources=None.
+
+        Constant-source modules do not read this View. A dynamic module declares
+        its own implementation; the class definition check requires it.
+        """
+        return reject("library-module-sources-unstated", "a dynamic module states its sources")
 
     # -- its answers, written once ---------------------------------------------------------
 
