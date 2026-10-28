@@ -8,6 +8,8 @@ historical source; current authoring uses typed real child declarations instead.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from qonnx.core.datatype import DataType
 
@@ -38,10 +40,13 @@ def test_an_annotation_matching_the_actual_child_is_accepted() -> None:
 
 
 def test_a_wrong_typed_child_model_binding_is_refused() -> None:
+    # Dynamic external input exercises the actual runtime guard; production types remain narrow.
     with pytest.raises(DefinitionError):
 
         class Mistyped(Space):
-            input = SequencePort(name=7, label="input", tensor=TENSOR, sequence=SEQUENCE)
+            input = SequencePort(
+                name=json.loads("7"), label="input", tensor=TENSOR, sequence=SEQUENCE
+            )
 
         design_space(Mistyped())
 
