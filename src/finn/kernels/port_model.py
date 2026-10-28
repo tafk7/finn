@@ -15,7 +15,8 @@ functions; it must not read these Views to collect directly returned refusals.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, fields, replace
+from dataclasses import dataclass, replace
+from typing import TypeVar, cast
 
 from finn.core.space import (
     Group,
@@ -23,6 +24,7 @@ from finn.core.space import (
     Param,
     Rejected,
     Space,
+    View,
     constraint,
     derived,
     reject,
@@ -291,6 +293,9 @@ def native_port(
     )
 
 
+_SurfaceValue = TypeVar("_SurfaceValue")
+
+
 @dataclass(frozen=True)
 class PortSurface:
     """Actual authored references for a logical ABI key, never an allowed-read list.
@@ -309,7 +314,7 @@ class PortSurface:
     stream: Stream | None = None
     width: int | None = None
     side: Side | None = None
-    contract: PortContract | None = None
+    contract: PortContract | View[PortContract] | None = None
 
     def at(self, namespace: type[Space] | Space) -> PortSurface:
         """Rebase explicitly authored parent references for a driver/composer.
@@ -317,13 +322,23 @@ class PortSurface:
         Plain metadata only; no method or read-list callback is introduced on a
         Space. Actual native model/View declarations remain on their parent.
         """
-        bound: dict[str, object] = {}
-        for field in fields(self):
-            value = getattr(self, field.name)
+
+        def bind(value: _SurfaceValue) -> _SurfaceValue:
             if isinstance(value, Declaration):
                 assert value.name is not None
-                bound[field.name] = getattr(namespace, value.name)
-        return replace(self, **bound)
+                return cast(_SurfaceValue, getattr(namespace, value.name))
+            return value
+
+        return PortSurface(
+            bind(self.element),
+            bind(self.endpoint),
+            bind(self.physical_pins),
+            bind(self.idle_pins),
+            bind(self.stream),
+            bind(self.width),
+            bind(self.side),
+            bind(self.contract),
+        )
 
     @classmethod
     def of(cls, port: PortModel) -> PortSurface:
