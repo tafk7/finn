@@ -614,7 +614,7 @@ class Partition:
             if not isinstance(declared, Port):
                 continue
             point = self.member(declared.member)
-            reference = port_surface(type(point), declared.port).contract
+            reference = port_surface(type(point), declared.port).contract_reference()
             assert reference is not None
             answer = point.query(reference)
             if isinstance(answer, Available) and isinstance(answer.value, PortContract):
