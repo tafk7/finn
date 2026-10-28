@@ -182,6 +182,17 @@ def test_authored_access_method_is_preserved_through_inheritance() -> None:
         assert kind._accesses is Explicit._accesses
 
 
+def test_generated_empty_accesses_are_refreshed_for_an_unmigrated_subclass() -> None:
+    class Legacy(KernelSpace):
+        id = "test.scheduled.legacy_empty"
+
+    class Subclass(Legacy):
+        pass
+
+    assert Subclass._accesses is not Legacy._accesses
+    assert design_space(Legacy()).extents == design_space(Subclass()).extents == {}
+
+
 class SerialTranspose(TransposeKernel):
     first_state: str = Decision(domain=("ready", "refused"))
     second_state: str = Decision(domain=("ready",))
