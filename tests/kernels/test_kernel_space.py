@@ -93,12 +93,15 @@ def test_a_fifo_s_answers_wait_on_its_choices_and_refuse_with_it() -> None:
         assert "fifo-geometry" in codes(refused_point.query(answer))
 
 
-def test_a_fifo_s_own_statements_and_answers_are_views_read_by_fixed_names() -> None:
+def test_a_fifo_s_own_statements_and_answers_use_inferred_fixed_reads() -> None:
     for member in ("parameters", "held_bits", "resource_use", "netlist", "cycles"):
         assert isinstance(getattr(FifoKernel, member), View)
-    # Its netlist reads its library module's members and its ports' by name.
-    reads = cast(Any, FifoKernel.netlist).function.__reads__
-    assert {"parameters", "clocking", "input_stream", "output_stream"} <= set(reads)
+    # Native assembly infers its actual child/model dependencies from source.
+    point = design_space(fifo_node(word_bits=13, depth=8)).with_choices(ram_style="auto")
+    evidence = inspection.explain(point, FifoKernel.netlist)
+    assert isinstance(evidence.result, Available)
+    reads = {node.declaration.key for node in evidence.nodes}
+    assert {"parameters", "clocking", "input.stream", "output.stream"} <= reads
     for space_type in (FifoKernel, ChannelFifo):
         model = compile_model(space_type)
         assert summary(model.scopes, model.per_class.reads)["dynamic"] == 0
