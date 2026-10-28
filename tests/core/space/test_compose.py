@@ -134,6 +134,7 @@ def test_a_walk_back_into_the_decisions_own_scope_keeps_its_existence_guards() -
 def test_the_domain_rule_composed_equals_the_lines_on_the_corpus() -> None:
     modules = [f"core.space.{path.stem}" for path in sorted(HERE.glob("*.py"))] + [
         "support.space_cores",
+        "support.space_groups",
         "support.space_pipeline",
         "support.space_walk",
     ]

@@ -50,6 +50,7 @@ HERE = Path(__file__).resolve().parent
 def test_the_space_tests_classes_read_alike_in_any_order_their_scopes_are_made_in() -> None:
     modules = [f"core.space.{path.stem}" for path in sorted(HERE.glob("*.py"))] + [
         "support.space_cores",
+        "support.space_groups",
         "support.space_pipeline",
         "support.space_walk",
     ]

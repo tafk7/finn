@@ -92,6 +92,7 @@ def _unfound(space_type: type[Space]) -> list[str]:
 def test_the_space_tests_classes_find_each_address_by_its_key() -> None:
     modules = [f"core.space.{path.stem}" for path in sorted(HERE.glob("*.py"))] + [
         "support.space_cores",
+        "support.space_groups",
         "support.space_pipeline",
         "support.space_walk",
     ]

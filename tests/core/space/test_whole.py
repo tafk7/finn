@@ -20,10 +20,10 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from support.space_groups import Host as GroupHost
 
 from core.space._templates_support import defined, links
 from core.space._whole_support import differences
-from core.space.test_groups import Host as GroupHost
 from finn.core.space import (
     Decision,
     Group,
@@ -56,6 +56,7 @@ GAINED = {
 def _corpus() -> list[type[Space]]:
     modules = [f"core.space.{path.stem}" for path in sorted(HERE.glob("*.py"))] + [
         "support.space_cores",
+        "support.space_groups",
         "support.space_pipeline",
         "support.space_walk",
     ]

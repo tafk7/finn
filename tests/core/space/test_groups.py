@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import pytest
 from support.refusals import refused
+from support.space_groups import Bundle, Host
 
 from finn.core.space import (
     Available,
@@ -29,29 +30,6 @@ from finn.core.space import (
 from finn.core.space._template import compiled
 from finn.core.space.compiler import model_of
 from finn.core.space.errors import DefinitionError, EvaluationError, RequestError
-
-
-class Bundle(Group):
-    extent: int = Param()
-    lanes: int = Decision(values=(1, 2, 4))
-
-    @derived
-    def doubled(self) -> int:
-        return 2 * self.extent
-
-    @constraint
-    def fits(self) -> bool:
-        return self.lanes <= self.extent
-
-    @view
-    def shown(self) -> int:
-        return self.doubled // self.lanes
-
-
-class Host(Space):
-    extent: int = Param(default=3)
-    first = Bundle(extent=extent)
-    second = Bundle(extent=first.doubled)
 
 
 def test_included_members_are_lazy_and_choices_rules_belong_to_host() -> None:

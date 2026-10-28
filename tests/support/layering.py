@@ -445,6 +445,7 @@ LAYERS: tuple[Layer, ...] = (
         (
             "core.space",
             "support.space_cores",
+            "support.space_groups",
             "support.space_oracle",
             "support.space_pipeline",
             "support.space_walk",
