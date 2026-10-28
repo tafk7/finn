@@ -70,7 +70,7 @@ from finn.dataflow.traversal import Adaptation, BeatSequence, LevelEnd, classify
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.rtl import Declined, evaluate
-from finn.kernels.base import NATIVE_CLOCKING, KernelSpace
+from finn.kernels.base import NATIVE_CLOCKING, KernelSpace, PortContract
 from finn.kernels.library import LibraryModule
 from finn.kernels.port import LoopEnds, native_stream
 from finn.kernels.utilization import (
@@ -230,6 +230,11 @@ class InputGeneratorKernel(KernelSpace):
     if TYPE_CHECKING:  # members its ports lower to, which it reads
         input_stream: ClassVar[Stream]
         input_data_width: ClassVar[int]
+        # Existing lowered interface read by the now-explicit adapter chains.
+        output_stream: ClassVar[Stream]
+        output_data_width: ClassVar[int]
+        input_contract: ClassVar[PortContract]
+        output_contract: ClassVar[PortContract]
 
     @derived
     def frame_words(self) -> int:
