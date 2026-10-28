@@ -209,10 +209,12 @@ def test_a_producers_tensor_is_its_kernels_and_its_channel_refuses_another() -> 
 
 def test_an_input_without_its_tensor_is_idle_and_carries_one_lane() -> None:
     point = design_space(Pool())
-    assert not Pool.x.placed(point, "x")
+    assert not point.x.placed
     ((code, message),) = coded_messages(point.query(Pool.x.element))
     assert code == "port-element" and message == "s_axis_input: an idle port states its dtype"
-    ((code, message),) = coded_messages(lane_count(Pool.x, ScalarEncoding(DataType["INT4"])))
+    ((code, message),) = coded_messages(
+        lane_count(point.x.physical_spec(idle=True), ScalarEncoding(DataType["INT4"]))
+    )
     assert code == "port-idle" and message.startswith("s_axis_input: an idle port carries one")
 
 

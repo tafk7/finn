@@ -408,7 +408,16 @@ class UntimedKernel(Space):
     def netlist(self) -> Fragment | Rejected:
         """Its netlist, labelled relative to itself: its module at the empty label (``under``
         names it by its node where it is held), its members' under theirs."""
-        return UntimedKernel._netlist(self)
+        parts = [(str(item.node), item.value) for item in self.netlists]
+        if not parts:
+            return reject(
+                "kernel-module",
+                f"{type(self).__qualname__} declares no module and places no kernel",
+            )
+        buses = presented((str(item.node), item.value) for item in self.controls)
+        if isinstance(buses, Rejected):
+            return buses
+        return merged(parts, buses)
 
     @derived
     def declares_bus(self) -> bool:
@@ -428,12 +437,12 @@ class UntimedKernel(Space):
     @view
     def buffering(self) -> int:
         """The bits it and its members hold between a channel's sides."""
-        return UntimedKernel._buffering(self)
+        return self.held_bits + sum(item.value for item in self.member_buffering)
 
     @view
     def resources(self) -> Resources:
         """What it and its members use of the device."""
-        return UntimedKernel._resources(self)
+        return total((self.resource_use, *(item.value for item in self.member_resources)))
 
     # -- what it reaches of its members: their answers, read by its views only ------------
     # Each ``Members`` names the member it reads, so it follows the views it names.
@@ -471,7 +480,14 @@ class KernelSpace(UntimedKernel, Timed):
     def cycles(self) -> int | Rejected:
         """The clock cycles a frame takes through it: the most beats any of its ports carries
         a frame, or any of its members takes."""
-        return KernelSpace._cycles(self)
+        found = [item.value for item in self.member_cycles]
+        if found:
+            return max(found)
+        if type(self).module_spec is not None:
+            return reject(
+                "kernel-cycles", f"no port of {type(self).__qualname__} carries a stream's beats"
+            )
+        return reject("kernel-cycles", f"no member of {type(self).__qualname__} states cycles")
 
     member_cycles = Members(Timed.cycles)
 

@@ -47,7 +47,7 @@ from finn.kernels.artifacts.abi import (
 )
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Fragment, Held, Leaf, RegisterMap
-from finn.kernels.base import NATIVE_CLOCKING, KernelSpace
+from finn.kernels.base import NATIVE_CLOCKING, KernelSpace, PortContract
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.configure import commit
 from finn.kernels.control import Control, ControlModel, held_bus
@@ -382,7 +382,7 @@ def test_a_kernel_with_children_presents_a_childs_port_as_its_own() -> None:
             return self.kernel.x.stream
 
         @view
-        def x_contract(self):
+        def x_contract(self) -> PortContract:
             return self.kernel.x.contract.under("kernel")
 
     point = design_space(Presenting())
@@ -395,7 +395,7 @@ def test_a_kernel_with_children_presents_a_childs_port_as_its_own() -> None:
         kernel = Probe(tensor=TENSOR)
 
         @view
-        def y_contract(self):
+        def y_contract(self) -> PortContract:
             return self.kernel.y.contract
 
     with refused("reference-not-in-scope", error=DefinitionError):

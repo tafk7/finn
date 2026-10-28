@@ -50,7 +50,7 @@ from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Direction, Endpoint, Pin, Signal
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource
 from finn.kernels.artifacts.module import Fragment, Held
-from finn.kernels.base import NATIVE_CLOCKING, KernelSpace, Timed, UntimedKernel
+from finn.kernels.base import NATIVE_CLOCKING, KernelSpace, PortContract, Timed, UntimedKernel
 from finn.kernels.channels import ChannelFifo
 from finn.kernels.fifo import FifoKernel, fifo_resources
 from finn.kernels.library import (
@@ -396,7 +396,7 @@ def test_a_kernel_stating_a_stream_port_binds_a_module() -> None:
         inner = Stage(input_tensor=TENSOR, arriving=ARRIVING)
 
         @view
-        def input_contract(self):
+        def input_contract(self) -> PortContract:
             return self.inner.input.contract.under("inner")
 
     serving: Any = design_space(Serving())  # its lowered members are untyped
@@ -486,7 +486,11 @@ class Based(Stage):
 
     id = "test.kernel_space.based"
     clock_domain = NATIVE_CLOCKING
-    module_sources = cast("tuple[Contribution, ...]", required(tuple))
+    source_values = cast("tuple[Contribution, ...]", required(tuple))
+
+    @view
+    def module_sources(self) -> tuple[Contribution, ...]:
+        return self.source_values
 
     @view
     def parameters(self) -> dict[str, int | str]:
@@ -505,8 +509,8 @@ class Sourced(Based):
         "input", Endpoint.TARGET, input_tensor, ARRIVING, clocking=NATIVE_CLOCKING, label="input"
     )
 
-    @view
-    def module_sources(self) -> tuple[Contribution, ...]:
+    @derived
+    def source_values(self) -> tuple[Contribution, ...]:
         return (PROBE,)
 
     @view
@@ -608,4 +612,4 @@ def test_a_constant_of_an_engine_type_is_a_constant_not_a_member() -> None:
     for constant in (default_semantics(int), divisors_of(4), 3, "x"):
         assert not isinstance(constant, (Declaration, Required))
     assert isinstance(Stage.parameters, View)
-    assert isinstance(Based.module_sources, Required)
+    assert isinstance(Based.source_values, Required)
