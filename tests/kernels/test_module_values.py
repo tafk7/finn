@@ -17,8 +17,7 @@ from finn.kernels.artifacts.contributions import (
     GeneratedData,
     HlsSource,
 )
-from finn.kernels.artifacts.module import BuildError, Held, Leaf
-from finn.kernels.artifacts.projection import digest, project
+from finn.kernels.artifacts.module import BuildError, Held, Leaf, fingerprint
 from finn.kernels.base import NATIVE_CLOCKING
 from finn.kernels.library import ModuleSpec, assemble_module, library_module, module_unprovided
 from finn.kernels.vpc import VpcKernel
@@ -59,8 +58,8 @@ def test_resolved_module_matches_actual_existing_vpc_leaf(
         (True, True),
     )
     assert new == old
-    assert project(new) == project(old)
-    assert digest(new) == digest(old)
+    assert isinstance(new, Leaf)
+    assert fingerprint(new) == fingerprint(old)
 
 
 def test_constant_and_dynamic_source_provision_have_one_plain_contract() -> None:
@@ -85,7 +84,7 @@ def test_constant_and_dynamic_source_provision_have_one_plain_contract() -> None
     with pytest.raises(DefinitionError, match="provide"):
         ModuleSpec("empty", ()).validate("Owner", "Owner.module_spec")
     with pytest.raises(FrozenInstanceError):
-        constant.rtl_module = "changed"
+        setattr(constant, "rtl_module", "changed")
 
 
 def test_resolved_input_accounting_and_order_are_preserved() -> None:
