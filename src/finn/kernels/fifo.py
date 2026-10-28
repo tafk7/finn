@@ -27,7 +27,7 @@ is stated by a model of Vivado's placement (``_hi_style``).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar
+from typing import ClassVar
 
 from finn.core.space import (
     Decision,
@@ -38,14 +38,16 @@ from finn.core.space import (
     reject,
     view,
 )
-from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence
-from finn.kernels.artifacts.abi import Endpoint
+from finn.dataflow.streams import Stream
+from finn.kernels.artifacts.abi import Clocking, Endpoint, Pin
 from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.base import NATIVE_CLOCKING, KernelSpace, PortContract
-from finn.kernels.library import LibraryModule
-from finn.kernels.port import native_stream
+from finn.kernels.artifacts.module import Fragment, Held
+from finn.kernels.base import NATIVE_CLOCKING, KernelSpace
+from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
+from finn.kernels.port import held, pins
+from finn.kernels.port_model import native_port
 from finn.kernels.utilization import lutram, memory, uram_constraint
 from finn.platform.capabilities import Fabric, Platform, Resources
 
@@ -235,19 +237,21 @@ class FifoKernel(KernelSpace):
         sequence: BeatSequence = self.arriving
         return sequence
 
-    input = native_stream("input", Endpoint.TARGET, input_tensor, arriving)
-    output = native_stream("output", Endpoint.INITIATOR, output_tensor, leaving)
-    if TYPE_CHECKING:  # members its ports lower to, which it and its channel read
-        input_stream: ClassVar[Stream]
-        input_data_width: ClassVar[int]
-        input_contract: ClassVar[PortContract]
-        output_stream: ClassVar[Stream]
-        output_data_width: ClassVar[int]
-        output_contract: ClassVar[PortContract]
+    @derived
+    def port_clocking(self) -> Clocking:
+        """Native physical names follow the class clock_domain, including overrides."""
+        return type(self).clock_domain
+
+    input = native_port(
+        "input", Endpoint.TARGET, input_tensor, arriving, clocking=port_clocking, label="input"
+    )
+    output = native_port(
+        "output", Endpoint.INITIATOR, output_tensor, leaving, clocking=port_clocking, label="output"
+    )
 
     @constraint
     def geometry_supported(self) -> bool | Rejected:
-        if not _geometry_supported(self.input_data_width, self.depth):
+        if not _geometry_supported(self.input.width, self.depth):
             return reject(*_GEOMETRY)
         return True
 
@@ -260,15 +264,15 @@ class FifoKernel(KernelSpace):
     def rtl_ram_style(self) -> str:
         """The RAM_STYLE the RTL is given: ``ram_style``, except an ``auto`` the RTL would
         resolve to UltraRAM the platform lacks, which is block RAM."""
-        return _given(self.depth, self.input_data_width, self.ram_style, self.platform.uram)
+        return _given(self.depth, self.input.width, self.ram_style, self.platform.uram)
 
     @derived
     def planned_storage(self) -> FifoStorage | Rejected:
         """The storage the native RTL selects (``fifo_storage``), of a geometry it takes:
         refused, as ``geometry_supported`` is, for one it does not."""
-        if not _geometry_supported(self.input_data_width, self.depth):
+        if not _geometry_supported(self.input.width, self.depth):
             return reject(*_GEOMETRY)
-        found = fifo_storage(self.depth, self.input_data_width, self.rtl_ram_style)
+        found = fifo_storage(self.depth, self.input.width, self.rtl_ram_style)
         if found is None:
             return reject("fifo-capacity", "native memory size overflows unsigned int")
         return found
@@ -286,27 +290,88 @@ class FifoKernel(KernelSpace):
     @view
     def resource_use(self) -> Resources:
         return fifo_resources(
-            self.depth, self.input_data_width, self.rtl_ram_style, fabric=self.platform.fabric
+            self.depth, self.input.width, self.rtl_ram_style, fabric=self.platform.fabric
         )
 
     @view
     def held_bits(self) -> int:
         """What it holds: its depth of words."""
-        return self.depth * self.input_data_width
+        return self.depth * self.input.width
 
     @view
     def parameters(self) -> dict[str, int | str]:
         return {
-            "DATA_WIDTH": self.input_data_width,
+            "DATA_WIDTH": self.input.width,
             "DEPTH": self.depth,
             "RAM_STYLE": f'"{self.rtl_ram_style}"',
         }
 
-    module = LibraryModule(
-        "fifo",
-        parameters=parameters,
-        sources=(CopiedSource("finnlib", "rtl/infra/fifo.sv", provides=("module:fifo",)),),
+    module_spec: ClassVar[ModuleSpec] = ModuleSpec(
+        "fifo", (CopiedSource("finnlib", "rtl/infra/fifo.sv", provides=("module:fifo",)),)
     )
+
+    def _input_pins(self) -> tuple[Pin, ...] | Rejected:
+        presenting = self.input.presenting()
+        return pins(
+            self.input.physical_spec(idle=not isinstance(presenting, Stream)),
+            presenting,
+            self.input.clocking,
+        )
+
+    def _output_pins(self) -> tuple[Pin, ...] | Rejected:
+        presenting = self.output.presenting()
+        return pins(
+            self.output.physical_spec(idle=not isinstance(presenting, Stream)),
+            presenting,
+            self.output.clocking,
+        )
+
+    def _input_held(self) -> Held | Rejected:
+        if self.input.placed:
+            return Held()
+        element = self.input.element
+        return held(self.input.physical_spec(idle=True), element, self.input.clocking)
+
+    def _output_held(self) -> Held | Rejected:
+        if self.output.placed:
+            return Held()
+        element = self.output.element
+        return held(self.output.physical_spec(idle=True), element, self.output.clocking)
+
+    @view
+    def netlist(self) -> Fragment | Rejected:
+        clocking = self.clocking
+        parameters = tuple(sorted(self.parameters.items()))
+        pin_parts = _each((self._input_pins(), self._output_pins()))
+        if isinstance(pin_parts, Rejected):
+            return pin_parts
+        spec = type(self).module_spec
+        sources = spec.constant_sources
+        assert sources is not None  # Native module has constant sources; no dynamic source View.
+        refused = module_unprovided(spec, type(self).__qualname__, sources)
+        if isinstance(refused, Rejected):
+            return refused
+        data = ()
+        held_parts = _each((self._input_held(), self._output_held()))
+        if isinstance(held_parts, Rejected):
+            return held_parts
+        leaf = assemble_module(
+            spec,
+            type(self).id,
+            type(self).__qualname__,
+            clocking,
+            parameters,
+            tuple(pin_parts),
+            sources,
+            data,
+            tuple(held_parts),
+            (True, True),
+        )
+        return leaf if isinstance(leaf, Rejected) else Fragment((("", leaf),))
+
+    @view
+    def cycles(self) -> int:
+        return max(self.input.stream.sequence.form.beats, self.output.stream.sequence.form.beats)
 
 
 __all__ = [

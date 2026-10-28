@@ -51,7 +51,7 @@ from dataclasses import dataclass
 from functools import cache
 from math import prod
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar
+from typing import ClassVar
 
 from finn import resources
 from finn.core.reporting.findings import Finding, FindingKind, Refusal
@@ -64,15 +64,17 @@ from finn.core.space import (
     view,
 )
 from finn.dataflow.steps import Unrealizable
-from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import Adaptation, BeatSequence, LevelEnd, classify
-from finn.kernels.artifacts.abi import Endpoint
+from finn.dataflow.streams import Stream
+from finn.kernels.artifacts.abi import Clocking, Endpoint, Pin
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.rtl import Declined, evaluate
-from finn.kernels.base import NATIVE_CLOCKING, KernelSpace, PortContract
-from finn.kernels.library import LibraryModule
-from finn.kernels.port import LoopEnds, native_stream
+from finn.kernels.artifacts.module import Fragment, Held
+from finn.kernels.base import NATIVE_CLOCKING, KernelSpace
+from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
+from finn.kernels.port import LoopEnds, held, pins
+from finn.kernels.port_model import native_port
 from finn.kernels.utilization import (
     Fit,
     auto_unstated,
@@ -225,16 +227,23 @@ class InputGeneratorKernel(KernelSpace):
         """``olst``: one bit per loop, closing that loop and every inner one."""
         return LoopEnds("olst", self.nest.levels)
 
-    input = native_stream("input", Endpoint.TARGET, input_tensor, arriving)
-    output = native_stream("output", Endpoint.INITIATOR, output_tensor, presenting, loop_ends)
-    if TYPE_CHECKING:  # members its ports lower to, which it reads
-        input_stream: ClassVar[Stream]
-        input_data_width: ClassVar[int]
-        # Existing lowered interface read by the now-explicit adapter chains.
-        output_stream: ClassVar[Stream]
-        output_data_width: ClassVar[int]
-        input_contract: ClassVar[PortContract]
-        output_contract: ClassVar[PortContract]
+    @derived
+    def port_clocking(self) -> Clocking:
+        """Native physical names follow the class clock_domain, including overrides."""
+        return type(self).clock_domain
+
+    input = native_port(
+        "input", Endpoint.TARGET, input_tensor, arriving, clocking=port_clocking, label="input"
+    )
+    output = native_port(
+        "output",
+        Endpoint.INITIATOR,
+        output_tensor,
+        presenting,
+        clocking=port_clocking,
+        label="output",
+        loop_ends=loop_ends,
+    )
 
     @derived
     def frame_words(self) -> int:
@@ -256,7 +265,7 @@ class InputGeneratorKernel(KernelSpace):
         """The nest's arithmetic fits the RTL's native widths (a nest from two sequences
         is otherwise one it walks: positive extents and strides within its frame)."""
         values = (self.frame_words, *self.dims, *self.strides)
-        if self.input_data_width > 0xFFFFFFFF or any(value > 0x7FFFFFFF for value in values):
+        if self.input.width > 0xFFFFFFFF or any(value > 0x7FFFFFFF for value in values):
             return reject(
                 "input-generator-range", "loop arithmetic must fit native signed 32-bit increments"
             )
@@ -267,7 +276,7 @@ class InputGeneratorKernel(KernelSpace):
         """The most the buffer can hold: a frame's words. A ranking of its style reads it
         (its channel's), not ``BUF_SIZE``, which the RTL elaborates and which may be
         declined (its statement only)."""
-        return self.frame_words * self.input_data_width
+        return self.frame_words * self.input.width
 
     @view
     def buffer_words(self) -> int | Rejected:
@@ -281,7 +290,7 @@ class InputGeneratorKernel(KernelSpace):
     def held_bits(self) -> int:
         """What it holds: its buffer, ``BUF_SIZE`` input words, not one frame."""
         words: int = self.buffer_words
-        return words * self.input_data_width
+        return words * self.input.width
 
     @view
     def resource_use(self) -> Resources | Rejected:
@@ -289,7 +298,7 @@ class InputGeneratorKernel(KernelSpace):
             return auto_unstated("the input_gen buffer")
         return input_gen_resources(
             buf_size=self.buffer_words,
-            data_width=self.input_data_width,
+            data_width=self.input.width,
             d=len(self.dims),
             ram_style=self.ram_style,
             fabric=self.platform.fabric,
@@ -300,13 +309,84 @@ class InputGeneratorKernel(KernelSpace):
         return {
             "COEFS": _vector(self.strides),
             "D": len(self.dims),
-            "DATA_WIDTH": self.input_data_width,
+            "DATA_WIDTH": self.input.width,
             "DIMS": _vector(self.dims),
             "FM_SIZE": self.frame_words,
             "RAM_STYLE": f'"{self.ram_style}"',
         }
 
-    module = LibraryModule("input_gen", parameters=parameters, sources=(SOURCE,))
+    module_spec: ClassVar[ModuleSpec] = ModuleSpec("input_gen", (SOURCE,))
+
+    def _enclosing_pins(self) -> tuple[Pin, ...] | Rejected:
+        """Pins outside the two ports; staged native fixtures leave olst unused."""
+        return ()
+
+    def _enclosing_held(self) -> Held | Rejected:
+        """Enclosing holds follow port holds, as in native module assembly."""
+        return Held()
+
+    def _input_pins(self) -> tuple[Pin, ...] | Rejected:
+        presenting = self.input.presenting()
+        return pins(
+            self.input.physical_spec(idle=not isinstance(presenting, Stream)),
+            presenting,
+            self.input.clocking,
+        )
+
+    def _output_pins(self) -> tuple[Pin, ...] | Rejected:
+        presenting = self.output.presenting()
+        return pins(
+            self.output.physical_spec(idle=not isinstance(presenting, Stream)),
+            presenting,
+            self.output.clocking,
+        )
+
+    def _input_held(self) -> Held | Rejected:
+        if self.input.placed:
+            return Held()
+        element = self.input.element
+        return held(self.input.physical_spec(idle=True), element, self.input.clocking)
+
+    def _output_held(self) -> Held | Rejected:
+        if self.output.placed:
+            return Held()
+        element = self.output.element
+        return held(self.output.physical_spec(idle=True), element, self.output.clocking)
+
+    @view
+    def netlist(self) -> Fragment | Rejected:
+        clocking = self.clocking
+        parameters = tuple(sorted(self.parameters.items()))
+        pin_parts = _each((self._enclosing_pins(), self._input_pins(), self._output_pins()))
+        if isinstance(pin_parts, Rejected):
+            return pin_parts
+        spec = type(self).module_spec
+        sources = spec.constant_sources
+        assert sources is not None  # Native module has constant sources; no dynamic source View.
+        refused = module_unprovided(spec, type(self).__qualname__, sources)
+        if isinstance(refused, Rejected):
+            return refused
+        data = ()
+        held_parts = _each((self._input_held(), self._output_held(), self._enclosing_held()))
+        if isinstance(held_parts, Rejected):
+            return held_parts
+        leaf = assemble_module(
+            spec,
+            type(self).id,
+            type(self).__qualname__,
+            clocking,
+            parameters,
+            tuple(pin_parts),
+            sources,
+            data,
+            tuple(held_parts),
+            (False, True, True),
+        )
+        return leaf if isinstance(leaf, Rejected) else Fragment((("", leaf),))
+
+    @view
+    def cycles(self) -> int:
+        return max(self.input.stream.sequence.form.beats, self.output.stream.sequence.form.beats)
 
 
 # -- the buffer, as the RTL derives it -------------------------------------------------------

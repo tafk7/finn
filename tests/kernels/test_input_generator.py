@@ -56,8 +56,8 @@ def test_its_nest_is_the_reorder_between_its_sequences_closing_each_marker_requi
             ram_style="auto",
         )
     )
-    assert point.output_stream.sequence.markers == (LevelEnd(18), LevelEnd(6), LevelEnd(2))
-    assert dict(point.output_contract.contract.markers) == {
+    assert point.output.stream.sequence.markers == (LevelEnd(18), LevelEnd(6), LevelEnd(2))
+    assert dict(point.output.contract.contract.markers) == {
         "olst[0]": LevelEnd(18),
         "olst[1]": LevelEnd(6),
         "olst[2]": LevelEnd(2),

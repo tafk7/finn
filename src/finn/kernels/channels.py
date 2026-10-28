@@ -134,7 +134,7 @@ from finn.kernels.base import (
 )
 from finn.kernels.declaration import declared_reads
 from finn.kernels.fifo import FifoKernel
-from finn.kernels.library import library_module
+from finn.kernels.library import leaf_at_root
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.movers import IodmaMover, MoverContract, MoverOffer
 from finn.kernels.policies import Alone, FirstValid, Policy, Required, defaulted, stated
@@ -383,19 +383,18 @@ class ChannelFifo(UntimedKernel):
         ``Stage`` is."""
         buffer = self.buffer
         stage = StageStreams(
-            "fifo.buffer", buffer.input_stream, buffer.output_stream, buffer.output_data_width
+            "fifo.buffer", buffer.input.stream, buffer.output.stream, buffer.output.width
         )
         return (stage,)
 
     @view
-    @declared_reads("buffer.netlist", "buffer.input_contract", "buffer.output_contract")
     def stages(self) -> tuple[Stage, ...]:
         buffer = self.buffer
         return (
             Stage(
-                library_module(buffer),
-                buffer.input_contract.contract,
-                buffer.output_contract.contract,
+                leaf_at_root(buffer.netlist, type(buffer).__qualname__),
+                buffer.input.contract.contract,
+                buffer.output.contract.contract,
                 "fifo.buffer",
             ),
         )

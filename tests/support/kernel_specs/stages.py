@@ -19,7 +19,6 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-from finn.core.space import view
 from finn.dataflow.steps import steps
 from finn.dataflow.traversal import BeatSequence, Traversal, vector_major
 from finn.kernels.adapters import Convert, RealizedStage, realize
@@ -27,10 +26,10 @@ from finn.kernels.artifacts.abi import Direction, Endpoint, Pin, Signal
 from finn.kernels.artifacts.module import Held
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import Generate, InputGeneratorKernel
-from finn.kernels.port import native_stream
+from finn.kernels.port_model import native_port
 from finn.kernels.vpc import VpcKernel
 from support.adapted import columns_first
-from support.helpers import FULL_DSP48E2, OtherPins
+from support.helpers import FULL_DSP48E2
 from support.kernel_specs.base import TEST_SIDE, KernelSpec, Probe, SweepCases, placed
 from support.kernel_specs.thresholding import tensor
 
@@ -56,18 +55,20 @@ class StagedInputGenerator(InputGeneratorKernel):
 
     id = "test.staged.input_generator"
 
-    output = native_stream(
+    output = native_port(
         "output",
         Endpoint.INITIATOR,
         InputGeneratorKernel.output_tensor,
         InputGeneratorKernel.leaving,
+        clocking=InputGeneratorKernel.port_clocking,
+        label="output",
     )
 
-    @view
-    def loop_end_pins(self) -> tuple[Pin, ...]:
+    def _enclosing_pins(self) -> tuple[Pin, ...]:
         return (Signal("olst", Direction.OUT, len(self.dims)),)
 
-    unused = OtherPins(loop_end_pins, Held((), ("olst",)))
+    def _enclosing_held(self) -> Held:
+        return Held((), ("olst",))
 
 
 STAGED = (4, 6)
@@ -90,7 +91,7 @@ def fifo() -> dict[str, Any]:
     def storing(lanes: int, depth: int, ram_style: str) -> dict[str, object]:
         same = BeatSequence(vector_major(STAGED, lanes))
         return {
-            "input_data_width": 4 * lanes,
+            "input.width": 4 * lanes,
             "depth": depth,
             "ram_style": ram_style,
             "arriving": same,
@@ -139,7 +140,7 @@ def input_gen() -> dict[str, Any]:
         module = stage.module
         assert isinstance(module, Generate)
         return {
-            "input_data_width": 4 * source.lanes,
+            "input.width": 4 * source.lanes,
             "frame_words": module.frame,
             "dims": module.dims,
             "strides": module.coefs,

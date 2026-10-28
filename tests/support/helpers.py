@@ -587,8 +587,14 @@ def port_axis(point: KernelSpace, name: str) -> AxisBeat:
 def port_transport(point: KernelSpace, name: str) -> ReadyValidTransport:
     """Port ``name``'s transport on the kernel's configuration ``point``, on its clock domain
     (``finn.kernels.port.transport``)."""
-    port: AxiStreamPort = getattr(type(point), name)
-    found = transport(*port.viewed(point, name), type(point).clock_domain)
+    from finn.kernels.port_model import SequencePort  # noqa: PLC0415
+
+    declaration = getattr(type(point), name)
+    if isinstance(declaration, SequencePort):
+        port = getattr(point, name)
+        found = transport(port.physical_spec(idle=False), port.stream, port.clocking)
+    else:
+        found = transport(*declaration.viewed(point, name), type(point).clock_domain)
     assert isinstance(found, ReadyValidTransport), found
     return found
 

@@ -317,9 +317,9 @@ class input_gen(InputAdapter):
         return (
             StageStreams(
                 "input_gen.input_gen",
-                self.input_gen.input_stream,
-                self.input_gen.output_stream,
-                self.input_gen.output_data_width,
+                self.input_gen.input.stream,
+                self.input_gen.output.stream,
+                self.input_gen.output.width,
             ),
         )
 
@@ -327,8 +327,8 @@ class input_gen(InputAdapter):
         return (
             _stage(
                 "input_gen.input_gen",
-                self.input_gen.input_contract,
-                self.input_gen.output_contract,
+                self.input_gen.input.contract,
+                self.input_gen.output.contract,
                 self.input_gen.netlist,
                 type(self.input_gen).__qualname__,
             ),
@@ -357,9 +357,9 @@ class input_gen_vpc(InputAdapter):
         return (
             StageStreams(
                 "input_gen_vpc.input_gen",
-                self.input_gen.input_stream,
-                self.input_gen.output_stream,
-                self.input_gen.output_data_width,
+                self.input_gen.input.stream,
+                self.input_gen.output.stream,
+                self.input_gen.output.width,
             ),
             StageStreams(
                 "input_gen_vpc.vpc",
@@ -373,8 +373,8 @@ class input_gen_vpc(InputAdapter):
         return (
             _stage(
                 "input_gen_vpc.input_gen",
-                self.input_gen.input_contract,
-                self.input_gen.output_contract,
+                self.input_gen.input.contract,
+                self.input_gen.output.contract,
                 self.input_gen.netlist,
                 type(self.input_gen).__qualname__,
             ),
@@ -417,9 +417,9 @@ class input_gen_vpc_input_gen(InputAdapter):
         return (
             StageStreams(
                 "input_gen_vpc_input_gen.input_gen",
-                self.input_gen.input_stream,
-                self.input_gen.output_stream,
-                self.input_gen.output_data_width,
+                self.input_gen.input.stream,
+                self.input_gen.output.stream,
+                self.input_gen.output.width,
             ),
             StageStreams(
                 "input_gen_vpc_input_gen.vpc",
@@ -429,9 +429,9 @@ class input_gen_vpc_input_gen(InputAdapter):
             ),
             StageStreams(
                 "input_gen_vpc_input_gen.input_gen_1",
-                self.input_gen_1.input_stream,
-                self.input_gen_1.output_stream,
-                self.input_gen_1.output_data_width,
+                self.input_gen_1.input.stream,
+                self.input_gen_1.output.stream,
+                self.input_gen_1.output.width,
             ),
         )
 
@@ -439,8 +439,8 @@ class input_gen_vpc_input_gen(InputAdapter):
         return (
             _stage(
                 "input_gen_vpc_input_gen.input_gen",
-                self.input_gen.input_contract,
-                self.input_gen.output_contract,
+                self.input_gen.input.contract,
+                self.input_gen.output.contract,
                 self.input_gen.netlist,
                 type(self.input_gen).__qualname__,
             ),
@@ -453,8 +453,8 @@ class input_gen_vpc_input_gen(InputAdapter):
             ),
             _stage(
                 "input_gen_vpc_input_gen.input_gen_1",
-                self.input_gen_1.input_contract,
-                self.input_gen_1.output_contract,
+                self.input_gen_1.input.contract,
+                self.input_gen_1.output.contract,
                 self.input_gen_1.netlist,
                 type(self.input_gen_1).__qualname__,
             ),

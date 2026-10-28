@@ -476,7 +476,13 @@ def _port(kernel: Any, path: str) -> Any:
             except RequestError:
                 pass
         node = getattr(node, part)
-    return getattr(type(node), name).read(node, "schedule", "reduces", "holds", "index")
+    from finn.kernels.port_model import SequencePort  # noqa: PLC0415
+
+    declaration = getattr(type(node), name)
+    if isinstance(declaration, SequencePort):
+        # Given native sequences have no schedule or tensor-index binding metadata.
+        return None
+    return declaration.read(node, "schedule", "reduces", "holds", "index")
 
 
 def _stated(
@@ -511,6 +517,13 @@ def _tensors(
     return found
 
 
+def _path_member(node: Any, path: str) -> Any:
+    """An actual external authored reference or resolved value, including child members."""
+    for part in path.split("."):
+        node = getattr(node, part)
+    return node
+
+
 def _committed(
     space_type: type[KernelSpace],
     config: Mapping[str, object],
@@ -527,12 +540,12 @@ def _committed(
     given = {
         key: value
         for key, value in config.items()
-        if isinstance(getattr(space_type, key, None), Param)
+        if isinstance(_path_member(space_type, key), Param)
     }
     stated = {
         key: value
         for key, value in config.items()
-        if isinstance(getattr(space_type, key, None), Derived)
+        if isinstance(_path_member(space_type, key), Derived)
     }
     known = {**facts, **given}
     tensors = _tensors(space_type, inputs, outputs, known)
@@ -548,7 +561,7 @@ def _committed(
     point = with_direct_transports(_chosen(point, keys))
     kernel = design_member(point, KERNEL)
     for key, value in stated.items():
-        found = getattr(kernel, key)
+        found = _path_member(kernel, key)
         if found != value:
             raise AssertionError(
                 f"{space_type.__name__} derives {key}={found!r}; the configuration states {value!r}"
@@ -573,7 +586,7 @@ def unchosen(
     given = {
         key: value
         for key, value in first.items()
-        if isinstance(getattr(space_type, key, None), Param)
+        if isinstance(_path_member(space_type, key), Param)
     }
     return _committed(space_type, given, inputs, outputs, EMPTY, facts)
 
@@ -728,7 +741,7 @@ def _check_model(
         path = _user(point, name)
         form, port = contract.form, _port(kernel, path)
         assert _covers(form), f"{where}: {path} does not cover its {form.shape} tensor"
-        if port.schedule is not None:
+        if port is not None and port.schedule is not None:
             schedule = port.schedule
             dropped = prod(schedule.steps(index) for index in (*port.reduces, *port.holds))
             assert form.beats == schedule.beat_count // dropped, (
@@ -921,7 +934,8 @@ def _simulate(
 def _stream(point: Any, name: str, form: Traversal, contract: StreamContract) -> Stream:
     """Channel ``name``'s stream as the kernel's port declares it, its tensor's axes named
     by the port's index expressions where it reads one per axis."""
-    index = _port(design_member(point, KERNEL), _user(point, name)).index
+    port = _port(design_member(point, KERNEL), _user(point, name))
+    index = () if port is None else port.index
     axes = tuple(map(repr, index)) if len(index) == len(form.shape) else ()
     return Stream(form, contract.element.bits, axes)
 

@@ -32,7 +32,7 @@ from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import Contribution
 from finn.kernels.artifacts.module import Fragment
 from finn.kernels.base import KernelSpace, UntimedKernel
-from finn.kernels.fifo import FifoKernel
+from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port import port_endpoint, port_surface
 from finn.kernels.port_model import SequencePort
@@ -183,7 +183,7 @@ def test_plain_module_spec_rejects_symbolic_identity_and_sources() -> None:
 def test_real_port_children_do_not_get_silently_ignored_by_legacy_module_builders() -> None:
     with pytest.raises(DefinitionError, match="real port children use a ModuleSpec"):
 
-        class Mixed(FifoKernel):
+        class Mixed(EltwiseKernel):
             extra = SequencePort(name="extra", label="extra", tensor=TENSOR, sequence=SEQUENCE)
 
 
