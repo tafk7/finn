@@ -59,8 +59,8 @@ class SerialThreshold(ThresholdingAxiKernel):
     pin_set: str = Decision(domain=("ready",))
     source_state: str = Decision(domain=("ready", "wrong", "bad"))
     data_state: str = Decision(domain=("ready",))
-    hold_input: str = Decision(domain=("ready", "bad"))
-    hold_output: str = Decision(domain=("ready", "bad"))
+    hold_input: str = Decision(domain=("ready", "bad", "same"))
+    hold_output: str = Decision(domain=("ready", "bad", "same"))
     hold_set: str = Decision(domain=("ready",))
     shown: bool = Decision(domain=(False, True))
 
@@ -109,11 +109,15 @@ class SerialThreshold(ThresholdingAxiKernel):
         return ThresholdingAxiKernel._set_pins(self)
 
     def _input_held(self) -> Held | Rejected:
+        if self.hold_input == "same":
+            return reject("duplicate-held", "the same physical refusal")
         if self.hold_input == "bad":
             return reject("input-held", "direct physical input hold refusal")
         return ThresholdingAxiKernel._input_held(self)
 
     def _output_held(self) -> Held | Rejected:
+        if self.hold_output == "same":
+            return reject("duplicate-held", "the same physical refusal")
         if self.hold_output == "bad":
             return reject("output-held", "direct physical output hold refusal")
         return ThresholdingAxiKernel._output_held(self)
@@ -172,8 +176,9 @@ class SerialThreshold(ThresholdingAxiKernel):
             {"hold_input": "bad", "hold_output": "bad"},
             Rejected,
             ("input-held", "output-held"),
-            ("shown",),
+            (),
         ),
+        (None, {"hold_input": "same", "hold_output": "same"}, Rejected, ("duplicate-held",), ()),
         ("shown", {}, Unresolved, (), ()),
         (None, {}, Available, (), ()),
     ),
@@ -237,6 +242,9 @@ def test_production_netlist_preserves_first_nonvalue_and_serial_categories(
             "hold_set",
             "shown",
         } <= visited
+    if changes.get("hold_input") in ("bad", "same") and stop is None:
+        # Direct returned refusals do not stop the remaining native calls.
+        assert {"hold_set", "shown"} <= visited
     if isinstance(trace.result, Available):
         leaf = trace.result.value.instances[0][1]
         assert [p.name for p in leaf.abi.pins] == [
