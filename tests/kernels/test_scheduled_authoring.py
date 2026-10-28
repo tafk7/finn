@@ -62,7 +62,7 @@ def test_access_and_element_are_early_and_output_never_binds_parent_extents() ->
     assert point.output.binds is False
     assert isinstance(point.query(Projection.output.access), Inapplicable)
     assert isinstance(point.query(Projection.input.stream), Unresolved)
-    assert inspection.statistics(point.input).owning_decisions == 0
+    assert not inspection.decisions(ScheduledPort)
 
 
 @pytest.mark.parametrize("fold", (1, 2, 4))
@@ -84,7 +84,7 @@ def test_schedule_and_sequence_conflict_remains_a_local_nonvalue() -> None:
         label="p",
         tensor=TENSOR,
         schedule=SCHEDULE,
-        sequence=BeatSequence(SCHEDULE.present(TENSOR.shape, (R, C))),
+        sequence=BeatSequence(SCHEDULE.present(TENSOR.shape, (R, C), lanes=(C,))),
         index=(R, C),
     )
     point = design_space(port)
