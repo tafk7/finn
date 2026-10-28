@@ -312,7 +312,9 @@ def test_group_frames_preserve_kernel_descendant_reads_and_guards(is_present: bo
     stream = scopes.find("a.components.child.x_stream")
     sibling = scopes.find("b.x_stream")
     enabled = scopes.find("a.components.enabled")
-    assert enabled in existence(stream)
+    (guard,) = existence(stream)
+    assert enabled in guard.dependencies
+    assert existence(scopes.find("a.components.child.x_element")) == (guard,)
     count, failures = check(scopes, _with_read(reads, stream, sibling))
     assert count == checked
     assert "a.components.child.x_stream: a.components.child.x_stream -> b.x_stream" in failures
@@ -320,4 +322,7 @@ def test_group_frames_preserve_kernel_descendant_reads_and_guards(is_present: bo
     count, failures = check(scopes, _with_read(reads, enabled, sibling))
     assert count == checked
     for member in ("element", "stream"):
-        assert f"a.components.child.x_{member}: a.components.enabled -> b.x_stream" in failures
+        assert (
+            f"a.components.child.x_{member}: {guard.key} -> a.components.enabled -> b.x_stream"
+            in failures
+        )
