@@ -653,13 +653,11 @@ class UntimedKernel(Space):
         return reject("kernel-control", f"{type(self).__qualname__} declares no control bus")
 
     @view
-    @declared_reads("held_bits", "member_buffering")
     def buffering(self) -> int:
         """The bits it and its members hold between a channel's sides."""
         return UntimedKernel._buffering(self)
 
     @view
-    @declared_reads("resource_use", "member_resources")
     def resources(self) -> Resources:
         """What it and its members use of the device."""
         return UntimedKernel._resources(self)
@@ -720,14 +718,6 @@ _KERNEL_SPANS = (
         view,
     ),
     _Span("cycles", KernelSpace._cycles, ("member_cycles",), ("beats",), view),
-    _Span("buffering", UntimedKernel._buffering, ("held_bits", "member_buffering"), (), view),
-    _Span(
-        "resources",
-        UntimedKernel._resources,
-        ("resource_use", "member_resources"),
-        (),
-        view,
-    ),
 )
 """A kernel's answers: each spans its declarations."""
 
