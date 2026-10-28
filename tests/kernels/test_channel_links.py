@@ -21,18 +21,18 @@ from support.helpers import (
     with_direct_transports,
 )
 
-from finn.core.space import Available, Rejected, Space, derived, view
+from finn.core.space import Available, Inapplicable, Rejected, Space, view
 from finn.dataflow.datatypes import ordinary_integer_bounds
-from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.module import Fragment, Leaf
-from finn.kernels.base import PortContract
+from finn.kernels.base import PortContract, UntimedKernel
 from finn.kernels.channels import Channel
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.partition import Partition
+from finn.kernels.port_model import SequencePort
 from finn.kernels.sides import Side
 from finn.kernels.transport import AxisBeat, StreamContract
 
@@ -147,22 +147,24 @@ def reading() -> StreamContract:
     return StreamContract(transport, ScalarEncoding(INT3), vector_major((3, 4), 4))
 
 
-class Reader(Space):
-    """A consumer that presents its stream and contract itself, not through a kernel's
-    port."""
-
-    @derived
-    def port_stream(self) -> Stream:
-        contract = reading()
-        return Stream(contract.element, contract.sequence)
-
-    @derived
-    def port_side(self) -> Side:
-        return Side.kernel(self.port_stream, "port")
+class UnexportedPort(SequencePort):
+    """The original deliberately unlabelled contract, on a real model port."""
 
     @view
-    def port_contract(self) -> PortContract:
+    def contract(self) -> PortContract | Rejected | Inapplicable:
         return PortContract("", reading())
+
+
+class Reader(Space):
+    """A model reader, not a hardware kernel with an exported module port."""
+
+    port = UnexportedPort(
+        name="s_axis",
+        label="port",
+        endpoint=Endpoint.TARGET,
+        tensor=X,
+        sequence=reading().sequence,
+    )
 
 
 def test_a_contract_that_is_no_kernels_port_has_no_netlist() -> None:
@@ -175,6 +177,7 @@ def test_a_contract_that_is_no_kernels_port_has_no_netlist() -> None:
         }
     )
     point = with_direct_transports(bare)
+    assert not isinstance(point.member("reader"), UntimedKernel)
     edge = point.member("edge")
     assert edge.consumer.label == "reader.port"
     # The channel's own netlist has no hop to the reader; the partition's refuses it.

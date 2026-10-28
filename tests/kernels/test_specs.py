@@ -52,8 +52,10 @@ from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.base import PortContract, UntimedKernel
 from finn.kernels.configure import undecided
 from finn.kernels.declaration import declarations
+from finn.kernels.library import ModuleSpec
 from finn.kernels.partition import Partition
-from finn.kernels.port import AxiStreamPort, Served
+from finn.kernels.port import AxiStreamPort, Served, port_surface
+from finn.kernels.port_model import PortModel, port_surfaces
 from finn.kernels.sides import Side
 
 BY_NAME = {spec.name: spec for spec in SPECS}
@@ -167,9 +169,13 @@ def _binding_a_module() -> set[type[UntimedKernel]]:
     while pending:
         for each in pending.pop().__subclasses__():
             pending.append(each)
+            effective: dict[str, object] = {}
+            for base in reversed(each.__mro__):
+                effective.update(vars(base))
+            native = any(isinstance(item, ModuleSpec) for item in effective.values())
             if (
                 each.__module__.startswith("finn.kernels.")
-                and each._module is not None
+                and (each._module is not None or native)
                 and not unmet_required(each)
             ):
                 found.add(each)
@@ -178,6 +184,9 @@ def _binding_a_module() -> set[type[UntimedKernel]]:
 
 def test_every_kernel_binding_a_module_is_a_spec_s_so_its_module_is_built() -> None:
     kernels = _binding_a_module()
+    assert {
+        BY_NAME[name].kernel for name in ("FifoKernel", "InputGeneratorKernel", "VpcKernel")
+    } <= kernels
     assert len(kernels) >= 11
     assert kernels <= {spec.kernel for spec in SPECS}, kernels - {spec.kernel for spec in SPECS}
 
@@ -188,7 +197,12 @@ def _ports(member: Space) -> tuple[str, ...]:
     if not isinstance(member, UntimedKernel):
         return ()
     found = declarations(type(member), UntimedKernel)
-    return tuple(name for name, each in found.items() if isinstance(each, (AxiStreamPort, Served)))
+    legacy = tuple(
+        name for name, each in found.items() if isinstance(each, (AxiStreamPort, Served))
+    )
+    native = tuple(port_surfaces(type(member)))
+    assert not set(legacy) & set(native)
+    return (*legacy, *native)
 
 
 def _ports_checked(point: Partition) -> int:
@@ -199,17 +213,32 @@ def _ports_checked(point: Partition) -> int:
     for name in point.members:
         member = point.member(name)
         for port in _ports(member):
-            offered = member.query(getattr(type(member), f"{port}_contract"))
+            surface = port_surface(type(member), port)
+            if surface.contract is None:
+                continue  # A structurally idle physical form has no logical contract.
+            offered = member.query(surface.contract)
             if not isinstance(offered, Available):
                 continue
             contract: PortContract = offered.value
-            label: str = getattr(member, f"{port}_label")
-            side: Side = getattr(member, f"{port}_side")
-            stream: Stream = getattr(member, f"{port}_stream")
+            frame: object = type(member)
+            for part in port.split("."):
+                frame = getattr(frame, part)
+            label: str = (
+                member.field(frame.label).get()
+                if isinstance(frame, PortModel)
+                else getattr(member, f"{port}_label")
+            )
+            assert surface.side is not None and surface.stream is not None
+            side: Side = member.field(surface.side).get()
+            stream: Stream = member.field(surface.stream).get()
             where = f"{name}.{port}"
             assert label == contract.label, where
             output = contract.contract.transport.endpoint is Endpoint.INITIATOR
-            width = getattr(member, f"{port}_data_width") if output else None
+            if output:
+                assert surface.width is not None, where
+                width = member.field(surface.width).get()
+            else:
+                width = None
             assert side == Side.kernel(stream, label, width), where
             checked += 1
     return checked

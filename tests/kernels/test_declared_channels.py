@@ -31,7 +31,6 @@ from finn.core.space import (
     derived,
     design_space,
     inspection,
-    view,
 )
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
@@ -45,13 +44,14 @@ from finn.dataflow.traversal import (
     vector_major,
 )
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.base import KernelSpace, PortContract
+from finn.kernels.base import KernelSpace
 from finn.kernels.channels import Channel, boundary_contract, stated_by, stated_form
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.configure import commit
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.movers import IODMA_HLS, iodma_hls
 from finn.kernels.partition import Partition
+from finn.kernels.port_model import SequencePort
 from finn.kernels.sides import BUILD, ROW_MAJOR, Outside, Side, Steady
 from finn.kernels.transport import AxisBeat, StreamContract
 from finn.kernels.values.semantics import IntegerTensorValue
@@ -190,21 +190,19 @@ def replaying() -> StreamContract:
 
 
 class Replaying(Space):
-    """A consumer reading each two-beat group of its input three times, framed: its port's
-    stream and its contract."""
+    """A logical reader with an actual typed port; it remains a plain Space."""
 
     @derived
-    def port_stream(self) -> Stream:
-        contract = replaying()
-        return Stream(contract.element, contract.sequence)
+    def sequence(self) -> BeatSequence:
+        return replaying().sequence
 
-    @derived
-    def port_side(self) -> Side:
-        return Side.kernel(self.port_stream, "port")
-
-    @view
-    def port_contract(self) -> PortContract:
-        return PortContract("port", replaying())
+    port = SequencePort(
+        name="s_axis",
+        label="port",
+        endpoint=Endpoint.TARGET,
+        tensor=Tensor((2, 4), INT4),
+        sequence=sequence,
+    )
 
 
 def test_a_boundary_presents_its_free_side_without_the_replay_the_receiver_realizes():

@@ -91,14 +91,16 @@ from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.gemm import Form, Window
 from finn.dataflow.steps import Hop, Step, Steps
 from finn.dataflow.streams import Stream
-from finn.dataflow.traversal import Repetition
+from finn.dataflow.traversal import LevelEnd, Repetition
 from finn.kernels import composer
-from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.abi import Clocking, Endpoint
 from finn.kernels.channels import boundary_contract
 from finn.kernels.matmul import KnownWeights
 from finn.kernels.movers import MoverOffer, iodma_hls
+from finn.kernels.port import LoopEnds
 from finn.kernels.sides import Side, SideKind
-from finn.kernels.transport import MarkerKind
+from finn.kernels.transport import AxisSpelling, MarkerKind
+from finn.kernels.values.domains import Integer
 from finn.kernels.values.semantics import (
     IntegerTensorValue,
     integer_bytes,
@@ -119,6 +121,11 @@ class Verdict:
 
 
 VERDICTS: dict[str, Verdict] = {
+    "AxisSpelling": Verdict("always", "an enum member, keyed by type and name"),
+    "Endpoint": Verdict("always", "an enum member, keyed by type and name"),
+    "Clocking": Verdict("always", "a value class of strings, bools and optional strings"),
+    "Integer": Verdict("always", "a frozen admission policy of ints, bools and None"),
+    "LoopEnds": Verdict("always", "a value class of a string and level-end integer records"),
     "bool": Verdict("always", "a plain type"),
     "int": Verdict("always", "a plain type"),
     "str": Verdict("always", "a plain type"),
@@ -231,6 +238,15 @@ def made() -> dict[str, tuple[object, ...]]:
     """Values of the types the Chain holds none of, or one value of: made here."""
     eight, four = stage_tensor(8), stage_tensor(8, words=4)
     return {
+        "AxisSpelling": (AxisSpelling.LOWER, AxisSpelling.UPPER, AxisSpelling.LOWER),
+        "Endpoint": (Endpoint.TARGET, Endpoint.INITIATOR, Endpoint.TARGET),
+        "Clocking": (Clocking(), Clocking(clock="clk", reset="rst", active_low=False), Clocking()),
+        "Integer": (Integer(), Integer(min_bits=2, signed=True), Integer()),
+        "LoopEnds": (
+            LoopEnds("olst", (LevelEnd(1), LevelEnd(8))),
+            LoopEnds("end", (LevelEnd(4),)),
+            LoopEnds("olst", (LevelEnd(1), LevelEnd(8))),
+        ),
         "float": (0.0, -0.0, 0.5, 1.0),
         "tuple": (
             (-3, 4),
@@ -380,6 +396,7 @@ def test_a_key_hit_is_a_value_the_semantics_hold_equal(name: str) -> None:
 
 
 ENUMS: tuple[type[Enum], ...] = (
+    AxisSpelling,
     Form,
     Repetition,
     Step,
