@@ -24,13 +24,12 @@ from finn.core.space import (
     Param,
     Rejected,
     Space,
-    View,
     constraint,
     derived,
     reject,
     view,
 )
-from finn.core.space.declarations import Declaration, declared_path
+from finn.core.space.declarations import Declaration, View, declared_path
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.schedule import Access, Affine, Index, Refused, Schedule, plain_index
 from finn.dataflow.streams import Stream
