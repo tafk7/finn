@@ -10,7 +10,15 @@ from typing import Any, cast
 import pytest
 from support.refusals import refused
 
-from finn.core.space import Decision, DefinitionError, Param, Space, design_space, inspection
+from finn.core.space import (
+    Decision,
+    DefinitionError,
+    Param,
+    RequestError,
+    Space,
+    design_space,
+    inspection,
+)
 from finn.core.space.domains import divisors_of, domain, finite
 from finn.core.space.results import Available, Unresolved
 
@@ -34,7 +42,8 @@ def test_finite_domain_normalizes_without_changing_cases_or_order(
     for number in expected:
         assert point.with_choices(number=number).query(Choice.number) == Available(number)
     assert not point.try_with_choices(number=9).accepted
-    assert not point.try_with_choices(number=True).accepted
+    with pytest.raises(RequestError, match="nominal type int"):
+        point.try_with_choices(number=True)
 
 
 def test_finite_iterable_is_snapshotted_and_empty_means_no_choices() -> None:
@@ -99,7 +108,7 @@ def test_fact_dependent_domain_keeps_keys_and_recomputes_allowed_values() -> Non
     point = design_space(Choice(extent=12))
     (viable,) = inspection.viable(point, [Choice.factor])
     assert viable.cases == (1, 2, 3, 4, 6, 12)
-    changed = point.with_facts(extent=10)
+    changed = point.with_facts({Choice.extent: 10})
     (viable,) = inspection.viable(changed, [Choice.factor])
     assert viable.cases == (1, 2, 5, 10)
     assert changed.with_choices(factor=5).factor == 5
