@@ -12,6 +12,7 @@ about the whole design space, from compiled forms, equal to the line's
 from __future__ import annotations
 
 import pkgutil
+from collections.abc import Iterable
 from pathlib import Path
 
 import pytest
@@ -26,7 +27,7 @@ import finn.kernels
 from finn.core.graph.annotations.platform import read_target
 from finn.core.space import Space, inspection
 from finn.core.space._running.evaluate import evaluation
-from finn.core.space._scopes import EAGER, Address, ScopeRecord
+from finn.core.space._scopes import EAGER, Address, ScopeRecord, Scopes
 from finn.core.space._template import link_template
 from finn.core.space.compiler import compile_model
 from finn.core.space.occurrence import ask, held
@@ -35,7 +36,11 @@ from finn.custom_op.kernels.network import declaration
 from finn.custom_op.kernels.shell import in_shell
 from finn.kernels.composer import Composed, clear_classes, compose
 from finn.kernels.configure import commit
+from finn.kernels.fifo import FifoKernel
+from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.matmul import MatMulKernel
+from finn.kernels.port_model import PortModel, SequencePort, port_surfaces
+from finn.kernels.vpc import VpcKernel
 from finn.platform.shells import shell_row
 
 SUPPORT = Path(__file__).resolve().parents[1] / "support"
@@ -80,19 +85,42 @@ def test_the_chains_members_read_alike_in_any_order_their_scopes_are_made_in() -
     assert assert_reads_alike(classes) == 3  # the MatMul, the thresholding, the channel
 
 
+def _port_scopes(records: Iterable[ScopeRecord]) -> set[ScopeRecord]:
+    return {record for record in records if issubclass(record.space_type, PortModel)}
+
+
+def _assert_native_scope_ownership(records: Iterable[ScopeRecord]) -> set[ScopeRecord]:
+    """Real port children are their own owners, paired below each native kernel."""
+    ports = _port_scopes(records)
+    parents: set[ScopeRecord] = set()
+    for record in ports:
+        assert record.space_type is SequencePort
+        assert record.owning_space is record and not record.compiled.choices
+        parent = record.parent
+        assert parent is not None
+        assert parent.space_type in {FifoKernel, InputGeneratorKernel, VpcKernel}
+        assert issubclass(parent.space_type, Space)
+        assert set(port_surfaces(parent.space_type)) == {"input", "output"}
+        parents.add(parent)
+    assert {record.name for record in ports} == {
+        f"{parent.name}.{port}" for parent in parents for port in ("input", "output")
+    }
+    assert len(ports) == 2 * len(parents)
+    return ports
+
+
 def test_stage_7s_chain_of_eight_kernels_reads_alike_in_any_order_its_scopes_are_made_in() -> None:
     whole = chain_class()
     assert_reads_alike([whole])
     templates = reached(link_template(whole))
-    # Fifteen classes, the shell member's (its budgets, in its shell) and the composite (a
-    # port is a declaration of its kernel, no class).
-    assert len(templates) == 17
-    # A channel's source and mover are placements: compiled where their guard's formal is
-    # not supplied too (their members inapplicable there), so each of the 9 channels
-    # without a value has its source's scope, and each of the 13 its mover's, where the
-    # one-case selectors compiled none; a direct transport places none. The shell member
-    # is one scope more.
-    assert len(compile_model(whole).scopes.ordered()) == 226
+    # The original seventeen non-port classes remain; one real port class is added.
+    assert len([kind for kind in templates if not issubclass(kind, PortModel)]) == 17
+    assert {kind for kind in templates if issubclass(kind, PortModel)} == {SequencePort}
+    records = compile_model(whole).scopes.ordered()
+    ports = _assert_native_scope_ownership(records)
+    # All original226 structural scopes remain;208 paired native child scopes are real.
+    assert len(records) - len(ports) == 226
+    assert len(ports) == 208
 
 
 def _answers_as_the_line(classes: list[type[Space]]) -> int:
@@ -189,7 +217,33 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
 # ``adapter_ram_style`` where no adapter is placed (+9: the 4 ``h`` and 4 ``w`` channels and
 # ``y``; the style answers inapplicable, and the rule with it). After ``viable``, -35 + 9:
 # the trial's int8 core's ``w_access`` and ``x_access`` guards as well.
-EVALUATED = ((1181, 42), (1255, 42))
+# Historical flat-port totals were ((1181,42),(1255,42)). The real port scope
+# accounting retains42 non-port constants and moves native reads into their owners.
+NONPORT_EVALUATED = ((1157, 42), (1221, 42))
+PORT_EVALUATED = ((100, 52), (140, 70))
+EVALUATED = ((1257, 94), (1361, 112))
+
+
+def _assert_evaluated(scopes: Scopes, stage: int) -> None:
+    """Exact functional demand accounting by real owner, without a readiness walk."""
+    with scopes.lock:
+        evaluated = tuple(scopes.registry.evaluated)
+    port_reads = [
+        address for address in evaluated if issubclass(address.scope.space_type, PortModel)
+    ]
+    nonport_reads = [
+        address for address in evaluated if not issubclass(address.scope.space_type, PortModel)
+    ]
+    assert (
+        len(port_reads),
+        sum(address.kind == "const" for address in port_reads),
+    ) == PORT_EVALUATED[stage]
+    assert (
+        len(nonport_reads),
+        sum(address.kind == "const" for address in nonport_reads),
+    ) == NONPORT_EVALUATED[stage]
+    counted = scopes.counts()
+    assert (counted["members evaluated"], counted["constants evaluated"]) == EVALUATED[stage]
 
 
 def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
@@ -202,8 +256,8 @@ def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
     its scope reads it. An absent scope's validity is read from its guard and its choices'
     presence from their guards, so no scope absent at the baseline has a member evaluated
     for either, and none of unknown presence in the design space before the change
-    either: the scopes with a member evaluated (in play) are exactly the 38 present at the
-    baseline (the line's present scopes). Each MatMul's ``compute.int8_dsp58`` case, of
+    either: in-play scopes are the38 original non-port scopes plus8 real port children,
+    all present at the baseline. Each MatMul's ``compute.int8_dsp58`` case, of
     unknown presence before the change, has none evaluated.
     Then ``viable`` of the middle MatMul's choices and one change of its ``pe``: what trials
     evaluate more (the middle MatMul's ``int8_dsp58`` case, which a trial selects, and the
@@ -215,12 +269,13 @@ def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
     scopes = inspection.model(point).scopes
     committed = commit(point, stored)
     counted = scopes.counts()
-    assert {key: counted[key] for key in ("scopes made", "scopes in play")} == {
-        "scopes made": 225,
-        "scopes in play": 38,
-    }
-    assert (counted["members evaluated"], counted["constants evaluated"]) == EVALUATED[0]
+    made_ports = _assert_native_scope_ownership(scopes.registry.records.values())
     in_play = set(scopes.in_play())
+    active_ports = _port_scopes(in_play)
+    assert counted["scopes made"] - len(made_ports) == 225
+    assert counted["scopes in play"] - len(active_ports) == 38
+    assert len(made_ports) == 208 and len(active_ports) == 8
+    _assert_evaluated(scopes, 0)
 
     def answer(of: Space, index: Address) -> QueryResult[object]:
         """``index``'s answer in the design space ``of`` holds, in its model's session."""
@@ -239,7 +294,8 @@ def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
 
     records = scopes.ordered()
     present_scopes = {record for record in records if present(record)}
-    assert len(present_scopes) == 38
+    assert len(present_scopes - _port_scopes(present_scopes)) == 38
+    assert len(_port_scopes(present_scopes)) == 8
     assert in_play == present_scopes
     unknown = {record for record in records if record.name.endswith(".compute.int8_dsp58")}
     assert {record.name for record in unknown} == {
@@ -256,17 +312,27 @@ def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
     assert len(middle) == 6 and "mm2.realization" not in middle
     inspection.viable(committed, [handles[key] for key in middle])
     counted = scopes.counts()
-    assert (counted["scopes made"], counted["scopes in play"]) == (225, 43)
-    assert (counted["members evaluated"], counted["constants evaluated"]) == EVALUATED[1]
-    assert {record.name for record in set(scopes.in_play()) - in_play} == {
+    assert counted["scopes made"] - len(made_ports) == 225
+    assert counted["scopes in play"] - len(_port_scopes(scopes.in_play())) == 43
+    assert len(_port_scopes(scopes.in_play())) == 12
+    _assert_evaluated(scopes, 1)
+    additional = set(scopes.in_play()) - in_play
+    assert {record.name for record in additional - _port_scopes(additional)} == {
         "mm2.compute.int8_dsp58",
         "a1.output_adapter",
         "a1.output_adapter.vpc",
         "h2.output_adapter",
         "h2.output_adapter.vpc",
     }
+    assert {record.name for record in _port_scopes(additional)} == {
+        f"{parent}.{port}"
+        for parent in ("a1.output_adapter.vpc", "h2.output_adapter.vpc")
+        for port in ("input", "output")
+    }
     report = committed.try_with_choices({handles["mm2.pe"]: 2})
     assert report.accepted
     counted = scopes.counts()
-    assert (counted["scopes made"], counted["scopes in play"]) == (225, 43)
-    assert (counted["members evaluated"], counted["constants evaluated"]) == EVALUATED[1]
+    assert counted["scopes made"] - len(made_ports) == 225
+    assert counted["scopes in play"] - len(_port_scopes(scopes.in_play())) == 43
+    assert len(_port_scopes(scopes.in_play())) == 12
+    _assert_evaluated(scopes, 1)
