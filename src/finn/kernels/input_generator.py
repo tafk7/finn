@@ -64,13 +64,13 @@ from finn.core.space import (
     view,
 )
 from finn.dataflow.steps import Unrealizable
+from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import Adaptation, BeatSequence, LevelEnd, classify
-from finn.dataflow.streams import Stream
 from finn.kernels.artifacts.abi import Clocking, Endpoint, Pin
 from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.artifacts.rtl import Declined, evaluate
 from finn.kernels.artifacts.module import Fragment, Held
+from finn.kernels.artifacts.rtl import Declined, evaluate
 from finn.kernels.base import NATIVE_CLOCKING, KernelSpace
 from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
 from finn.kernels.port import LoopEnds, held, pins
