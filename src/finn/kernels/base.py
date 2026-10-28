@@ -404,9 +404,17 @@ class UntimedKernel(Space):
                     declaration=cls.__qualname__,
                 )
             return
-        if specs:
-            from finn.kernels.port_model import port_surfaces  # noqa: PLC0415
+        from finn.kernels.port_model import port_surfaces  # noqa: PLC0415
 
+        child_ports = port_surfaces(cls)
+        if modules and child_ports:
+            raise DefinitionError.broken(
+                "module-authoring-mixed",
+                "KernelSpace",
+                f"{cls.__qualname__}: real port children use a ModuleSpec and native products",
+                declaration=cls.__qualname__,
+            )
+        if specs:
             if ports:
                 raise DefinitionError.broken(
                     "module-authoring-mixed",
@@ -414,7 +422,7 @@ class UntimedKernel(Space):
                     f"{cls.__qualname__}: a ModuleSpec uses real port children and native products",
                     declaration=cls.__qualname__,
                 )
-            ports = list(port_surfaces(cls))
+            ports = list(child_ports)
             if not any(
                 "netlist" in vars(base) and not _made(vars(base)["netlist"])
                 for base in cls.__mro__[: cls.__mro__.index(below)]

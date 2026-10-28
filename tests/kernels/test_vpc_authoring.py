@@ -13,6 +13,7 @@ from finn.core.space import (
     Available,
     Decision,
     DefinitionError,
+    Group,
     Param,
     Rejected,
     Space,
@@ -31,6 +32,7 @@ from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import Contribution
 from finn.kernels.artifacts.module import Fragment
 from finn.kernels.base import KernelSpace, UntimedKernel
+from finn.kernels.fifo import FifoKernel
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port import port_endpoint, port_surface
 from finn.kernels.port_model import SequencePort
@@ -176,3 +178,26 @@ def test_plain_module_spec_rejects_symbolic_identity_and_sources() -> None:
     # Runtime class reference deliberately crosses the plain-value boundary.
     with pytest.raises(TypeError, match="constant contribution"):
         ModuleSpec("vpc", Inputs.sources)
+
+
+def test_real_port_children_do_not_get_silently_ignored_by_legacy_module_builders() -> None:
+    with pytest.raises(DefinitionError, match="real port children use a ModuleSpec"):
+
+        class Mixed(FifoKernel):
+            extra = SequencePort(name="extra", label="extra", tensor=TENSOR, sequence=SEQUENCE)
+
+
+def test_surface_lookup_supports_discovered_group_paths_at_the_actual_node() -> None:
+    class Included(Group):
+        port = SequencePort(name="p", label="p", tensor=TENSOR, sequence=SEQUENCE)
+
+    class Host(Space):
+        group = Included()
+
+    declaration = Host()
+    surface = port_surface(declaration, "group.port")
+    point = design_space(declaration)
+    assert surface.stream is not None
+    assert point.query(surface.stream) == Available(point.group.port.stream)
+    with pytest.raises(KeyError):
+        port_surface(Host, "group.missing")

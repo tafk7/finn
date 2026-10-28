@@ -82,6 +82,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from finn.core.space import (
     DefinitionError,
+    Group,
     Inapplicable,
     Param,
     Rejected,
@@ -864,10 +865,18 @@ def port_surface(namespace: type[Space] | Space, port: str) -> PortSurface:
         not isinstance(namespace, type) and declared_path(namespace) is None
     ):
         raise TypeError("port_surface requires a Space class or node declaration")
-    child = getattr(namespace, port, None)
+    # Dotted keys from discovery traverse lexical Group frames only.
+    frame: object = namespace
+    segments = port.split(".")
+    for segment in segments[:-1]:
+        group = getattr(frame, segment, None)
+        if not isinstance(group, Group):
+            raise KeyError(port)
+        frame = group
+    child = getattr(frame, segments[-1], None)
     if isinstance(child, PortModel):
         return PortSurface.of(child)
-    if not issubclass(space_type, UntimedKernel):
+    if len(segments) != 1 or not issubclass(space_type, UntimedKernel):
         raise KeyError(port)
     declaration = declarations(space_type, UntimedKernel).get(port)
     if not isinstance(declaration, (AxiStreamPort, Served)):
