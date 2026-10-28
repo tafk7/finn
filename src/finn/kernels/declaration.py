@@ -7,7 +7,8 @@ A **declaration of a kernel** (``KernelDeclaration``) is a plain frozen value in
 body, not a Space: a stream port (``finn.kernels.port``), a port a kernel presents for one
 of its members (``finn.kernels.port.served``), the library module it binds
 (``finn.kernels.library.LibraryModule``), or its control bus
-(other physical declarations in still-unmigrated module fixtures). When the class is made, the kernel base
+(other physical declarations in still-unmigrated module fixtures). When the class is
+made, the kernel base
 (``finn.kernels.base.UntimedKernel``) lowers each into ordinary members of the kernel, named
 ``<name>_<what>``: derived values, constraints and views (``KernelDeclaration.lower``),
 each reading the kernel's members by the names its declaration gives, never dynamically.

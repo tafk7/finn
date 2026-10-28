@@ -15,9 +15,9 @@ which it refuses what it cannot build, and its declarations (below). It may stat
 for its choices: those are the compiler's (``finn.kernels.policies``); a ranking it knows
 is a view a policy may name.
 
-**Its four answers**, each a view written once in the bases (``_netlist``, ``_cycles``,
-``_buffering``, ``_resources``) and made for each class when it is made, reading its
-declarations by the names their lowering fixes:
+**Its four answers** are outward Views. Buffering/resources use ordinary native
+source in the bases. Still-unmigrated module/port callers retain generated
+netlist/cycles products until their actual lowering responsibilities migrate:
 
 - ``netlist``: its library module at the empty label (``finn.kernels.library``), its
   members' netlists under their nodes, and the control buses its members present
@@ -335,9 +335,8 @@ class UntimedKernel(Space):
     does not range over it; every other kernel derives ``KernelSpace``, which adds
     ``Timed``. A check or a type admitting any kernel names this class.
 
-    Its answers are views, each written once here (``_netlist``, ``_buffering``,
-    ``_resources``; ``KernelSpace._cycles``) and made for each class when it is made,
-    reading the class's declarations by the names their lowering fixes (``_spanning``). A
+    Its answers are Views. Buffering/resources call ordinary source helpers; legacy
+    netlist/cycles still use class-specific lowering while their callers migrate. A
     class may state one itself, calling these. Its members' answers it reaches through
     ``Members`` over the member each states, which only these views read."""
 
