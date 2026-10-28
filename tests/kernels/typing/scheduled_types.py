@@ -4,7 +4,7 @@
 
 from typing import assert_type
 
-from finn.core.space import BoundValue, ViewAssessment
+from finn.core.space import QueryResult, ViewAssessment
 from finn.dataflow.schedule import Access, Schedule
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding
@@ -23,5 +23,6 @@ def check(port: ScheduledPort, transpose: TransposeKernel) -> None:
     assert_type(port.binds, bool)
     assert_type(port.access, Access)
     assert_type(port.contract, PortContract)
-    assert_type(port.field(ScheduledPort.access), BoundValue[Access])
+    assert_type(port.field(ScheduledPort.access).get(), Access)
+    assert_type(port.query(ScheduledPort.access), QueryResult[Access])
     assert_type(port.inspect(ScheduledPort.contract), ViewAssessment[PortContract])
