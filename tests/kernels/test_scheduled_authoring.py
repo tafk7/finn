@@ -99,7 +99,13 @@ def test_scheduled_child_presence_is_checked_before_local_work(enabled: bool | N
     class Guarded(Space):
         enabled: bool = Decision(domain=(False, True))
         port = ScheduledPort(
-            when=enabled, name="p", label="p", tensor=TENSOR, schedule=SCHEDULE, index=(R, C)
+            when=enabled,
+            name="p",
+            label="p",
+            tensor=TENSOR,
+            schedule=SCHEDULE,
+            index=(R, C),
+            lanes=(C,),
         )
 
     point = design_space(Guarded())
