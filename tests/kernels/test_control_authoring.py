@@ -218,7 +218,7 @@ def test_production_netlist_preserves_first_nonvalue_and_serial_categories(
             bias=0,
             platform=FULL_DSP48E2,
         )
-    ).with_choices(choices)
+    ).with_choices(**choices)
     trace = inspection.explain(point, SerialThreshold.netlist)
     assert isinstance(trace.result, variant)
     if isinstance(trace.result, Rejected):
@@ -269,7 +269,7 @@ def test_control_group_discovery_inheritance_and_real_space_boundary() -> None:
     point = design_space(Inherited())
     assert point.included.config.physical_pins == (BUS,)
     assert point.included.config.idle_pins.inputs == (("cfg_awvalid", 0),)
-    assert not inspection.decisions(ControlModel)
+    assert not inspection.decisions(Inherited)
 
 
 def test_control_physical_view_keeps_parent_refusal_and_model_access() -> None:
