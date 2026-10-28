@@ -120,7 +120,7 @@ def test_actual_native_values_parent_bindings_and_snapshot_history(
     assert chosen.checked.contract == point.with_choices({Ports.fold: 4}).checked.contract
     assert isinstance(point.query(Ports.input.stream), Unresolved)
     info = next(p for p in inspection.members(chosen) if p.key == "checked.element_taken")
-    assert (info.scope, info.owner) == ("checked", "element_taken")
+    assert (info.scope, info.owner) == ("checked", "checked.element_taken")
 
 
 def test_open_owner_does_not_merge_unrelated_waits_into_actual_stream_inputs() -> None:
@@ -247,13 +247,13 @@ def test_surface_discovery_rebases_overrides_groups_and_stops_at_real_children()
         )
 
     class Child(Base):
-        first = PortModel(name="replaced", label="first", dtype=DataType["INT3"])
-        second = 42  # a non-port override removes the original from discovery
+        first = SequencePort(name="replaced", label="first", tensor=TENSOR, sequence=SEQUENCE)
         group = Included()
         real = Base()
 
     surfaces = port_surfaces(Child)
-    assert list(surfaces) == ["first", "group.nested"]
+    assert list(surfaces) == ["first", "second", "group.nested"]
+    assert surfaces["first"].stream is not None
     point = design_space(Child())
     assert point.query(surfaces["group.nested"].stream) == Available(Stream(ELEMENT, SEQUENCE))
     with pytest.raises(TypeError, match="node declaration"):
