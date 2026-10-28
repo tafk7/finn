@@ -34,6 +34,7 @@ from finn.core.space import (
     Param,
     Rejected,
     Unresolved,
+    derived,
     design_space,
     divisors_of,
     inspection,
