@@ -122,7 +122,7 @@ from finn.kernels.transport import (
 from finn.kernels.values.domains import Integer, admit_element
 
 if TYPE_CHECKING:
-    from finn.kernels.port_model import PortSurface
+    from finn.kernels.port_model import PortModel, PortSurface
 
 
 def _applies(space: Space, guard: str | None) -> bool:
@@ -820,6 +820,21 @@ def _child_types(child: object) -> tuple[type[Space], ...]:
     return ()
 
 
+def _lexical_port(namespace: type[Space] | Space, port: str) -> PortModel | None:
+    """Find a real port through Group frames, stopping at other real Spaces."""
+    from finn.kernels.port_model import PortModel  # noqa: PLC0415 - breaks base/port cycle
+
+    frame: object = namespace
+    segments = port.split(".")
+    for segment in segments[:-1]:
+        group = getattr(frame, segment, None)
+        if not isinstance(group, Group):
+            return None
+        frame = group
+    child = getattr(frame, segments[-1], None)
+    return child if isinstance(child, PortModel) else None
+
+
 def port_endpoint(space_type: type[Space], port: str) -> Endpoint | None:
     """The endpoint port ``port`` of ``space_type`` declares, as the class states it: an
     ``AxiStreamPort``'s (``INITIATOR`` for an output, ``TARGET`` for an input), or a served
@@ -829,16 +844,14 @@ def port_endpoint(space_type: type[Space], port: str) -> Endpoint | None:
     if not (isinstance(space_type, type) and issubclass(space_type, UntimedKernel)):
         return None
     # A real port child's static endpoint is its explicit binding or formal default.
-    from finn.kernels.port_model import PortModel  # noqa: PLC0415 - breaks base/port cycle
-
-    child = getattr(space_type, port, None)
-    if isinstance(child, PortModel):
+    child = _lexical_port(space_type, port)
+    if child is not None:
         record = unwrap(child)
         if not isinstance(record, NodeDecl):
             return None
-        endpoint = record.bindings.get(
-            "endpoint", space_formals(record.space_type)["endpoint"].default
-        )
+        formals = space_formals(record.space_type)
+        formal = formals.get("endpoint")
+        endpoint = record.bindings.get("endpoint", None if formal is None else formal.default)
         return endpoint if isinstance(endpoint, Endpoint) else None
     declared = declarations(space_type, UntimedKernel).get(port)
     if isinstance(declared, AxiStreamPort):
@@ -858,25 +871,17 @@ def port_surface(namespace: type[Space] | Space, port: str) -> PortSurface:
     exception fallback or guessed same-spelled references repair an unknown key.
     Parent served declarations intentionally expose no physical/element fields.
     """
-    from finn.kernels.port_model import PortModel, PortSurface  # noqa: PLC0415
+    from finn.kernels.port_model import PortSurface  # noqa: PLC0415
 
     space_type = namespace if isinstance(namespace, type) else type(namespace)
     if not issubclass(space_type, Space) or (
         not isinstance(namespace, type) and declared_path(namespace) is None
     ):
         raise TypeError("port_surface requires a Space class or node declaration")
-    # Dotted keys from discovery traverse lexical Group frames only.
-    frame: object = namespace
-    segments = port.split(".")
-    for segment in segments[:-1]:
-        group = getattr(frame, segment, None)
-        if not isinstance(group, Group):
-            raise KeyError(port)
-        frame = group
-    child = getattr(frame, segments[-1], None)
-    if isinstance(child, PortModel):
+    child = _lexical_port(namespace, port)
+    if child is not None:
         return PortSurface.of(child)
-    if len(segments) != 1 or not issubclass(space_type, UntimedKernel):
+    if "." in port or not issubclass(space_type, UntimedKernel):
         raise KeyError(port)
     declaration = declarations(space_type, UntimedKernel).get(port)
     if not isinstance(declaration, (AxiStreamPort, Served)):
