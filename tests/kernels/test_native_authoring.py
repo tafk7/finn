@@ -347,3 +347,87 @@ def test_conformance_factors_check_actual_child_width_and_native_metadata(family
             stream = _stream(point, name, contract.form, contract)
             assert stream.bits == 4
         assert "input.width" in sample.factors
+
+
+class SerialGenerator(InputGeneratorKernel):
+    first_state: str = Decision(domain=("ready", "refused"))
+    second_state: str = Decision(domain=("ready",))
+
+    @derived
+    def first(self) -> BeatSequence | Rejected:
+        if self.first_state == "refused":
+            return reject("first-sequence", "first blocks")
+        return ARRIVING
+
+    @derived
+    def second(self) -> BeatSequence:
+        _ = self.second_state
+        return ARRIVING
+
+    input = SequencePort(
+        name="input",
+        label="input",
+        tensor=InputGeneratorKernel.input_tensor,
+        sequence=first,
+        signals=("idat", "ivld"),
+        clocking=InputGeneratorKernel.port_clocking,
+    )
+    output = SequencePort(
+        name="output",
+        label="output",
+        endpoint=Endpoint.INITIATOR,
+        tensor=InputGeneratorKernel.output_tensor,
+        sequence=second,
+        signals=("odat", "ovld"),
+        clocking=InputGeneratorKernel.port_clocking,
+    )
+
+    @view
+    def parameters(self) -> dict[str, int | str]:
+        return {
+            "DATA_WIDTH": 13,
+            "FM_SIZE": 6,
+            "D": 2,
+            "DIMS": "'{3, 6}",
+            "COEFS": "'{0, 1}",
+            "RAM_STYLE": '"auto"',
+        }
+
+
+@pytest.mark.parametrize("permuted,eager", [(False, False), (True, False), (False, True)])
+@pytest.mark.parametrize(
+    "first,second", [(None, "ready"), ("ready", "ready"), ("ready", None), ("refused", "ready")]
+)
+def test_input_generator_native_assembly_halts_on_raised_inputs_and_accumulates_direct_refusals(
+    permuted: bool,
+    eager: bool,
+    first: str | None,
+    second: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FINN_SPACE_PERMUTE", "1" if permuted else "0")
+    monkeypatch.setenv("FINN_SPACE_EAGER", "1" if eager else "0")
+    point = design_space(
+        SerialGenerator(input_tensor=TENSOR, arriving=ARRIVING, depth=8, platform=FULL_DSP48E2)
+    )
+    choices: dict[object, object] = {}
+    if first is not None:
+        choices[SerialGenerator.first_state] = first
+    if second is not None:
+        choices[SerialGenerator.second_state] = second
+    point = point.with_choices(choices)
+    evidence = inspection.explain(point, SerialGenerator.netlist)
+    keys = {node.declaration.key for node in evidence.nodes}
+    if first is None or second is None and first != "refused":
+        assert isinstance(evidence.result, Unresolved)
+    elif first == "refused":
+        assert isinstance(evidence.result, Rejected)
+        assert [f.code for f in evidence.result.findings] == ["first-sequence"]
+    else:
+        assert isinstance(evidence.result, Rejected)
+        assert [f.message for f in evidence.result.findings] == [
+            "input: signals are data, valid and ready",
+            "output: signals are data, valid and ready",
+        ]
+    if first is None or first == "refused":
+        assert not keys & {"second", "second_state", "output.stream", "output.signals"}
