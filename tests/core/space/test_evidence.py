@@ -125,7 +125,7 @@ def test_inactive_parameter_evidence_does_not_expose_unused_bound_value() -> Non
 
 def test_owning_refusal_stops_before_unresolved_output_input() -> None:
     class Example(Space):
-        chosen: int = Decision(values=(1, 2))
+        chosen: int = Decision(domain=(1, 2))
 
         @derived
         def value(self) -> int:

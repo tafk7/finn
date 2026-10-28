@@ -44,6 +44,7 @@ from finn.core.space import (
     view,
 )
 from finn.core.space.declarations import View
+from finn.core.space.domains import domain, finite
 
 
 @dataclass(frozen=True)
@@ -54,7 +55,7 @@ class DType:
 class Room(Space):
     area: int = Param()
     label: str | None = Param(default=None)
-    finish: int = Decision(values=(1, 2, 3))
+    finish: int = Decision(domain=(1, 2, 3))
 
     @derived
     def price(self) -> int:
@@ -71,7 +72,7 @@ class Boiler(Space):
 
 class HeatPump(Space):
     kw: int = Param()
-    cop: int = Decision(values=(3, 4))
+    cop: int = Decision(domain=(3, 4))
 
 
 class Thermostat(Space):
@@ -84,7 +85,7 @@ def _case_name(case: str) -> str:
 
 class House(Space):
     budget: int = Param()
-    want_garage: bool = Decision(values=(False, True))
+    want_garage: bool = Decision(domain=(False, True))
     hall = Room()  # a bare call: its area is assigned below
     kitchen = Room(area=12)
     dining = Room(area=budget, label="dining")
@@ -123,15 +124,15 @@ class House(Space):
 
 
 class Graph(Space):
-    shared: int = Decision(values=(1, 2))
+    shared: int = Decision(domain=(1, 2))
     assert_type(shared, int)
 
 
 class Fifo(Space):
     word_bits: int = Param()
     depth: int = Param()
-    ram_style: str = Decision(values=("auto", "block"))
-    banks: int = Decision(values=(1, 2))
+    ram_style: str = Decision(domain=("auto", "block"))
+    banks: int = Decision(domain=(1, 2))
 
     @derived
     def minimum_depth(self) -> int:
@@ -167,7 +168,7 @@ class Eltwise(Space):
 
 class GuardedAssembly(Space):
     enabled: bool = Param()
-    slots: int = Decision(values=(1, 2), when=enabled)
+    slots: int = Decision(domain=(1, 2), when=enabled)
     fifo = Fifo(word_bits=8, depth=4, when=enabled)
 
     @derived
@@ -244,7 +245,7 @@ class Spec:
 
 class Buffer(Space):
     word_bits: int = Param()
-    depth: int = Decision(values=(2, 4, 8))
+    depth: int = Decision(domain=(2, 4, 8))
 
 
 class Kernel(Space):
@@ -323,3 +324,24 @@ def views(point: Wing, house: House, fifo: Fifo) -> None:
     # A view binds as a value accessor of its accepted value.
     assert_type(point.field(Wing.total), BoundValue[int])
     assert_type(point.field(Wing.total).get(), int)
+
+
+def positive_candidate(*, candidate: int) -> bool:
+    return candidate > 0
+
+
+class DomainForms(Space):
+    finite_list: int = Decision(domain=[3, 1, 2], ordered=True)
+    finite_range: int = Decision(domain=range(1, 4))
+    finite_object: int = Decision(domain=finite((1, 2), ordered=True))
+    membership_only: int = Decision(domain=domain(accepts=positive_candidate))
+    tuple_choice: tuple[int, int] = Decision(domain=((1, 2), (3, 4)))
+
+
+def domain_forms() -> None:
+    point = design_space(DomainForms())
+    assert_type(DomainForms.finite_list, int)
+    assert_type(point.finite_range, int)
+    assert_type(point.finite_object, int)
+    assert_type(point.membership_only, int)
+    assert_type(point.tuple_choice, tuple[int, int])

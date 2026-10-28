@@ -56,7 +56,7 @@ class Reusable(Space):
 def test_outer_params_and_decisions_supply_interface_slots_without_new_choices() -> None:
     class Parent(Space):
         dtype: str = Param()
-        lanes: int = Decision(values=(1, 2, 4))
+        lanes: int = Decision(domain=(1, 2, 4))
         kernel = Reusable(count=1, dtype=dtype, lanes=lanes)
 
     base = design_space(Parent(dtype="INT8"))
@@ -111,8 +111,8 @@ def test_a_decision_bound_into_a_child_reads_the_enclosing_class_for_its_domain_
 
 def test_a_decision_bound_into_two_nodes_is_one_decision_of_its_class() -> None:
     class Shared(Space):
-        use_first: bool = Decision(values=(False, True))
-        lanes: int = Decision(values=(1, 2, 4))
+        use_first: bool = Decision(domain=(False, True))
+        lanes: int = Decision(domain=(1, 2, 4))
         first = Port(dtype="INT4", lanes=lanes, when=use_first)
         second = Port(dtype="INT8", lanes=lanes)
 
@@ -240,7 +240,7 @@ def test_a_graph_built_as_data_binds_formals_and_keeps_their_types() -> None:
 
 def test_nested_decision_reference_can_traverse_concrete_reference_layers() -> None:
     class Leaf(Space):
-        value: int = Decision(values=(1, 2))
+        value: int = Decision(domain=(1, 2))
 
     class Middle(Space):
         leaf = Leaf()

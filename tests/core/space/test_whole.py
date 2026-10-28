@@ -86,7 +86,7 @@ def test_the_space_tests_classes_answer_as_the_line() -> None:
 
 class Inner(Space):
     depth: int = Param()
-    lanes: int = Decision(values=(1, 2))
+    lanes: int = Decision(domain=(1, 2))
 
 
 #: The name a dynamic method reads by: a module global, so its source does not fix it.
@@ -99,21 +99,21 @@ class Dynamic(Space):
     Decision of this class."""
 
     width: int = Param()
-    depth: int = Decision(values=(3, 4))
+    depth: int = Decision(domain=(3, 4))
     inner = Inner(depth=depth)
 
     @derived
     def wide(self) -> bool:
         return cast(int, getattr(self.inner, LANES)) > 1
 
-    gated: int = Decision(values=(1, 2), when=wide)
+    gated: int = Decision(domain=(1, 2), when=wide)
 
 
 class PlacesDynamic(Space):
-    pick: bool = Decision(values=(False, True))
-    owned: int = Decision(values=(5, 6))
+    pick: bool = Decision(domain=(False, True))
+    owned: int = Decision(domain=(5, 6))
     dynamic = Dynamic(width=owned)
-    later: int = Decision(values=(1, 2), when=dynamic.wide)
+    later: int = Decision(domain=(1, 2), when=dynamic.wide)
 
 
 class Room(Space):
@@ -124,7 +124,7 @@ class Pieces(Space):
     """A guard reading a derived value of a placed Space's formal, which a Decision of the
     class is bound into: the walk from the guard reaches that Decision."""
 
-    depth: int = Decision(values=(1, 2))
+    depth: int = Decision(domain=(1, 2))
     room = Room(depth=depth)
 
     @derived
@@ -135,7 +135,7 @@ class Pieces(Space):
     def shown(self) -> bool:
         return self.flag
 
-    extra: int = Decision(values=(1, 2), when=shown)
+    extra: int = Decision(domain=(1, 2), when=shown)
 
 
 @pytest.mark.parametrize(
@@ -193,7 +193,7 @@ class IncludedLeaf(Space):
 
 class DeclarationSet(Group):
     bound: int = Param(default=2)
-    pick: int = Decision(values=(1, 2))
+    pick: int = Decision(domain=(1, 2))
 
     @constraint
     def fits(self) -> bool:

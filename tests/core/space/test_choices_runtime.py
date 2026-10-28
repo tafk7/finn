@@ -73,8 +73,8 @@ def test_false_outer_scope_suppresses_inner_commitments_and_callbacks() -> None:
     calls: list[str] = []
 
     class Guarded(Space):
-        inner: bool = Decision(values=(True, False))
-        lanes: int = Decision(values=(1, 2), when=inner)
+        inner: bool = Decision(domain=(True, False))
+        lanes: int = Decision(domain=(1, 2), when=inner)
 
         @derived
         def raw() -> int:
@@ -256,7 +256,7 @@ def test_exposed_inputs_and_supplier_aliases_keep_distinct_rights() -> None:
         physical = view(width)
 
     class Root(Space):
-        supplier: int = Decision(values=(2, 4))
+        supplier: int = Decision(domain=(2, 4))
         # The formal is declared here and bound to the child by name.
         exposed_width: int = Param()
         aliased = Child(width=supplier)

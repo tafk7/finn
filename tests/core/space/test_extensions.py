@@ -142,8 +142,8 @@ def test_stream_shape_takes_the_pairs_choices_and_keeps_narrow_fields_available(
         # The formals the children take, and the choices bound to them, are declared here.
         left_dtype: Encoding = Param()
         right_dtype: Encoding = Param()
-        left_lanes: int = Decision(values=(1, 2, 4))
-        right_lanes: int = Decision(values=(1, 2, 4))
+        left_lanes: int = Decision(domain=(1, 2, 4))
+        right_lanes: int = Decision(domain=(1, 2, 4))
         left = stream_shape(dtype=left_dtype, lanes=left_lanes, maximum_bits=limit)
         right = stream_shape(dtype=right_dtype, lanes=right_lanes, maximum_bits=limit)
 
@@ -186,7 +186,7 @@ def test_composite_is_pure_and_nodes_share_only_the_space_class() -> None:
         calls.append(value)
         return value * choice
 
-    choice: int = Decision(values=(1, 2))
+    choice: int = Decision(domain=(1, 2))
     output = derived(compute)
     reported = view(output)
     members = {"choice": choice, "output": output, "reported": reported}
@@ -220,7 +220,7 @@ def test_a_compiled_composite_rejects_structural_changes() -> None:
     with refused("structure-finalized", error=DefinitionError):
         setattr(space_type, "too_late", derived(_two))
     with refused("structure-finalized", error=DefinitionError):
-        setattr(space_type, "too_late", Decision(values=(1,)))
+        setattr(space_type, "too_late", Decision(domain=(1,)))
     with refused("structure-finalized", error=DefinitionError):
         delattr(space_type, "value")
     with refused("structure-finalized", error=DefinitionError):

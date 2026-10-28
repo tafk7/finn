@@ -49,7 +49,7 @@ from finn.core.space.occurrence import held
 
 class Fed(Space):
     u: int = Param()
-    b: int = Decision(values=(1, 2))
+    b: int = Decision(domain=(1, 2))
 
 
 class Looped(Space):
@@ -65,7 +65,7 @@ class Looped(Space):
     def wide(self) -> bool:
         return self.fed.b > 1
 
-    a: int = Decision(values=(1, 2), when=wide)
+    a: int = Decision(domain=(1, 2), when=wide)
 
 
 CLASSES: dict[str, type[Space]] = {
@@ -119,7 +119,7 @@ CALLS: list[int] = []
 
 
 class Brittle(Space):
-    size: int = Decision(values=(1, 2, 3))
+    size: int = Decision(domain=(1, 2, 3))
 
     @derived
     def half(self) -> int:

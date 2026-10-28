@@ -89,8 +89,8 @@ def test_nonvalue_cleanup_preserves_primary_and_outer_cleanup(kind: str, warm: b
     class Example(Space):
         fact: int = Param()
         enabled: bool = Param()
-        unavailable: int = Decision(values=(1, 2))
-        inapplicable: int = Decision(values=(1,), when=enabled)
+        unavailable: int = Decision(domain=(1, 2))
+        inapplicable: int = Decision(domain=(1,), when=enabled)
 
         @derived
         def rejected(self) -> int | Rejected:

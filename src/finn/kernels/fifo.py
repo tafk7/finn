@@ -252,7 +252,7 @@ class FifoKernel(KernelSpace):
         return True
 
     ram_style: str = Decision(
-        values=("auto", "shift", "distributed", "block", "ultra"),
+        domain=("auto", "shift", "distributed", "block", "ultra"),
     )
     uram_present = uram_constraint(platform, ram_style, ("ultra",))
 

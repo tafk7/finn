@@ -47,7 +47,7 @@ def _name(case: str) -> str:
 
 class Boiler(Space):
     kw: int = Param()
-    stages: int = Decision(values=(1, 2, 3))
+    stages: int = Decision(domain=(1, 2, 3))
 
     @constraint
     def fits(self) -> bool | Rejected:
@@ -62,7 +62,7 @@ class Boiler(Space):
 
 class HeatPump(Space):
     kw: int = Param()
-    cop: int = Decision(values=(2, 3, 4))
+    cop: int = Decision(domain=(2, 3, 4))
 
     @derived
     def output(self) -> int:
@@ -73,8 +73,8 @@ class HeatPump(Space):
 
 
 class BySelect(Space):
-    load: int = Decision(values=(8, 16, 24))
-    gate: int = Decision(values=(0, 1, 2))
+    load: int = Decision(domain=(8, 16, 24))
+    gate: int = Decision(domain=(0, 1, 2))
 
     @derived
     def heated(self) -> bool | Rejected:
@@ -131,7 +131,7 @@ def test_a_chosen_select_reads_its_cases() -> None:
 
 
 class Guarded(Space):
-    gate: int = Decision(values=(0, 1))
+    gate: int = Decision(domain=(0, 1))
 
     @derived
     def heated(self) -> bool | Rejected:
@@ -167,12 +167,12 @@ def test_a_chosen_selector_under_a_refused_when_is_one_piece() -> None:
 
 class _Coil(Space):
     kw: int = Param()
-    turns: int = Decision(values=(1, 2))
+    turns: int = Decision(domain=(1, 2))
 
 
 class _Pump(Space):
     kw: int = Param()
-    speed: int = Decision(values=(1, 2))
+    speed: int = Decision(domain=(1, 2))
 
 
 class _Heated(Space):
@@ -271,7 +271,7 @@ def test_two_nested_refused_whens_below_an_open_selector_are_one_unknown_piece()
 
 class Fifo(Space):
     width: int = Param()
-    depth: int = Decision(values=(2, 4, 8))
+    depth: int = Decision(domain=(2, 4, 8))
 
     @constraint
     def fits(self) -> bool | Rejected:
@@ -286,7 +286,7 @@ class Fifo(Space):
 
 class Reg(Space):
     width: int = Param()
-    stages: int = Decision(values=(1, 2))
+    stages: int = Decision(domain=(1, 2))
 
 
 CASES = ("fifo", "reg", "direct", "zz")
@@ -297,8 +297,8 @@ class Channel(Space):
     ``zz`` naming none), and ``chain`` refuses where ``x`` is 3."""
 
     w: int = Param()
-    x: int = Decision(values=(0, 1, 2, 3))
-    y: int = Decision(values=(1, 2))
+    x: int = Decision(domain=(0, 1, 2, 3))
+    y: int = Decision(domain=(1, 2))
 
     @derived
     def chain(self) -> str | Rejected:
@@ -414,7 +414,7 @@ def test_a_change_flipping_the_picker_moves_its_cases_choices() -> None:
 def test_the_picker_never_answers_nothing() -> None:
     # a None case is named by its key; a picker answering None names no case
     class Picked(Space):
-        x: int = Decision(values=(0, 1))
+        x: int = Decision(domain=(0, 1))
 
         @derived
         def chain(self) -> str | None:
@@ -431,15 +431,15 @@ def test_the_picker_never_answers_nothing() -> None:
 
 def test_a_derived_selector_is_listed_only_as_a_choice_and_its_cases_flow_after_its_reads() -> None:
     class Late(Space):
-        early: int = Decision(values=(0, 1))
+        early: int = Decision(domain=(0, 1))
 
         @derived
         def chain(self) -> str:
             return ("fifo", "reg", "direct")[(self.late + self.later) % 3]
 
         adapter: Fifo | Reg | None = Select(by=chain, fifo=Fifo, reg=Reg, direct=None, width=4)
-        late: int = Decision(values=(0, 1, 2))
-        later: int = Decision(values=(0, 1))
+        late: int = Decision(domain=(0, 1, 2))
+        later: int = Decision(domain=(0, 1))
 
     point = design_space(Late())
     order = ["early", "late", "later", "adapter.fifo.depth", "adapter.reg.stages"]
@@ -461,7 +461,7 @@ def test_a_derived_selector_is_listed_only_as_a_choice_and_its_cases_flow_after_
 
 def test_a_none_case_places_nothing() -> None:
     class Holder(Space):
-        x: int = Decision(values=(0, 1))
+        x: int = Decision(domain=(0, 1))
 
         @derived
         def chain(self) -> str:
@@ -511,7 +511,7 @@ def test_a_derived_value_of_nothing_carries_a_class_to_a_shared_binding() -> Non
     and that member is what the cases' formal binds."""
 
     class Holder(Space):
-        pick: int = Decision(values=(0, 1))
+        pick: int = Decision(domain=(0, 1))
 
         @derived
         def chain(self) -> str:
@@ -574,7 +574,7 @@ def _no_reg(case: str) -> bool | Rejected:
 
 
 class ByArgument(Space):
-    x: int = Decision(values=(0, 1, 2))
+    x: int = Decision(domain=(0, 1, 2))
 
     @derived
     def chain(self) -> str:
@@ -591,7 +591,7 @@ class ByArgument(Space):
     picked_rule = constraint(case=picked)(_no_reg)
     # a guard reading the selector's case through a derived value binding it
     fifo_chosen: bool = derived(case=chosen)(_is_fifo)
-    fifo_only: int = Decision(values=(1, 2), when=fifo_chosen)
+    fifo_only: int = Decision(domain=(1, 2), when=fifo_chosen)
 
     @derived
     def body(self) -> str:

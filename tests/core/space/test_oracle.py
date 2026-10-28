@@ -429,11 +429,11 @@ def test_differences_name_their_keys() -> None:
 
 
 class Leaf(Space):
-    x: int = Decision(values=(1, 2))
+    x: int = Decision(domain=(1, 2))
 
 
 class Inner(Space):
-    on: bool = Decision(values=(False, True))
+    on: bool = Decision(domain=(False, True))
     leaf = Leaf(when=on)
     pick: Leaf = Select(a=Leaf(), b=Leaf())
 

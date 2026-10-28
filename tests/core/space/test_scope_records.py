@@ -34,7 +34,7 @@ HERE = Path(__file__).resolve().parent
 
 class Leaf(Space):
     width: int = Param()
-    lanes: int = Decision(values=(1, 2))
+    lanes: int = Decision(domain=(1, 2))
 
     @derived
     def bits(*, width: int, lanes: int) -> int:
@@ -43,7 +43,7 @@ class Leaf(Space):
 
 class Wide(Space):
     width: int = Param()
-    extra: int = Decision(values=(3, 4))
+    extra: int = Decision(domain=(3, 4))
 
 
 class Narrow(Space):

@@ -529,7 +529,7 @@ class _Builder:
         domain_ = info.domain
         simple = domain_.values is not None and domain_.member is None and not domain_.reads
         if simple and domain_.values:
-            return Decision(values=domain_.values)
+            return Decision(domain=domain_.values)
         reads = domain_.reads
         names = [f"a{position}" for position in range(len(reads))]
 

@@ -44,7 +44,7 @@ from finn.core.space.declarations import View
 
 class Room(Space):
     area: int = Param()
-    finish: int = Decision(values=(1, 2, 3))
+    finish: int = Decision(domain=(1, 2, 3))
 
     @constraint
     def small_enough(self) -> bool | Rejected:
@@ -58,7 +58,7 @@ class Room(Space):
 
 
 class Hall(Space):
-    want_garage: bool = Decision(values=(False, True))
+    want_garage: bool = Decision(domain=(False, True))
     kitchen = Room(area=12)
     dining = Room(area=16)
     garage = Room(area=30, when=want_garage)

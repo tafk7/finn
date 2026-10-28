@@ -35,7 +35,7 @@ class Packed(Space):
     """Refuses more than 64 lanes; its ``pe`` divides its width."""
 
     width: int = Param()
-    pe: int = Decision(values=(1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20))
+    pe: int = Decision(domain=(1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20))
 
     @constraint
     def fits(self) -> bool | Rejected:
@@ -54,7 +54,7 @@ class Stub(Space):
     """Refuses an odd width."""
 
     width: int = Param()
-    rows: int = Decision(values=(1, 2, 4))
+    rows: int = Decision(domain=(1, 2, 4))
 
     @constraint
     def even(self) -> bool | Rejected:
@@ -112,8 +112,8 @@ class Link(Space):
     adapter: Direct | Gearbox = Select(
         direct=Direct, gearbox=Gearbox, width=width, upstream_packed=upstream_packed
     )
-    burst: int = Decision(values=(1, 2, 4))
-    beat: int = Decision(values=(1, 2))
+    burst: int = Decision(domain=(1, 2, 4))
+    beat: int = Decision(domain=(1, 2))
 
     @constraint
     def bursts(self) -> bool | Rejected:
@@ -134,7 +134,7 @@ class Link(Space):
 
 
 class Probe(Space):
-    enabled: bool = Decision(values=(False, True))
+    enabled: bool = Decision(domain=(False, True))
 
     @derived
     def level(self) -> int | Inapplicable:
@@ -153,7 +153,7 @@ class Meter(Space):
     def valued(self) -> bool:
         return self.reading is not None
 
-    scale: int = Decision(values=(1, 2), when=valued)
+    scale: int = Decision(domain=(1, 2), when=valued)
 
     @derived
     def seen(self) -> int:

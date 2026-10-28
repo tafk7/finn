@@ -173,7 +173,7 @@ def test_a_declared_input_no_callable_reads_is_a_definition_error() -> None:
 
 def test_a_domain_reading_a_choice_is_a_definition_error_naming_the_way() -> None:
     class Direct(Space):
-        extent: int = Decision(values=(8, 12))
+        extent: int = Decision(domain=(8, 12))
         lanes: int = Decision(domain=divisors_of(extent))
 
     with refused(
@@ -185,7 +185,7 @@ def test_a_domain_reading_a_choice_is_a_definition_error_naming_the_way() -> Non
 
     class Through(Space):
         width: int = Param()
-        wide: bool = Decision(values=(False, True))
+        wide: bool = Decision(domain=(False, True))
 
         @derived
         def extent(self) -> int:
@@ -226,7 +226,7 @@ class Core(Space):
     exists holds wherever it is read."""
 
     channels: int = Param()
-    enabled: bool = Decision(values=(False, True))
+    enabled: bool = Decision(domain=(False, True))
     form: Window | Whole = Select(window=Window(channels=channels), whole=Whole, when=enabled)
 
 

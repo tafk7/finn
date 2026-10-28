@@ -154,7 +154,7 @@ def test_keys_commitments_and_inspection_use_declaration_paths() -> None:
 
 
 class FixedRoom(Room):
-    finish: int = Decision(values=(2,))
+    finish: int = Decision(domain=(2,))
 
 
 class Estate(House):

@@ -4,6 +4,7 @@
 where it is written, naming its replacement, or gone from the API.
 
 - ``Decision({...})`` (a Decision over nodes): ``Select``; ``Decision`` keeps value domains;
+- ``Decision(values=...)``: removed; use ``domain=``;
 - ``optional=``: a ``None`` case;
 - ``required=``: a policy, the compiler's;
 - ``name=`` and a Decision given at a call: a Decision of the class, bound;
@@ -17,6 +18,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from support.refusals import refused
 
 import finn.core.space as space
@@ -45,13 +47,13 @@ def test_a_decision_over_nodes_is_refused_pointing_to_select() -> None:
     with refused("decision-over-nodes", message=r"keeps value domains.*Select\(name=Class"):
         Decision(entries, area=2)  # type: ignore[call-overload]
     with refused("node-decision-not-entries", message="a choice among Space classes is a selector"):
-        Decision(values=entries)
+        Decision(domain=entries)
 
 
 def test_optional_is_refused_pointing_to_a_none_case() -> None:
     retired: Any = {"optional": True}
     with refused("decision-optional", message=r"None case of a selector: write Select\(none=None"):
-        Decision(values=(1, 2), **retired)
+        Decision(domain=(1, 2), **retired)
     with refused("select-optional", message=r"Select\(none=None, \.\.\.\)"):
         Select(room=Room, hall=Hall, area=2, **retired)
 
@@ -59,7 +61,7 @@ def test_optional_is_refused_pointing_to_a_none_case() -> None:
 def test_required_is_refused_pointing_to_a_policy() -> None:
     retired: Any = {"required": True}
     with refused("decision-required", message="the compiler's"):
-        Decision(values=(1, 2), **retired)
+        Decision(domain=(1, 2), **retired)
     with refused("select-required", message="the compiler's"):
         Select(room=Room, hall=Hall, area=2, **retired)
 
@@ -67,35 +69,42 @@ def test_required_is_refused_pointing_to_a_policy() -> None:
 def test_a_named_decision_is_refused_pointing_to_the_class() -> None:
     retired: Any = {"name": "depth"}
     with refused("decision-named", message="write it as a class attribute"):
-        Decision(values=(1, 2), **retired)
+        Decision(domain=(1, 2), **retired)
 
 
 def test_an_unknown_keyword_is_a_type_error() -> None:
     retired: Any = {"shared": 1}
     try:
-        Decision(values=(1, 2), **retired)
+        Decision(domain=(1, 2), **retired)
     except TypeError as error:
         assert "unexpected keyword arguments ['shared']" in str(error)
     else:
         raise AssertionError("Decision(shared=...) was accepted")
 
 
+def test_values_is_removed_even_when_domain_is_supplied() -> None:
+    keywords: Any
+    for keywords in ({"values": (1, 2)}, {"domain": (1, 2), "values": (1, 2)}):
+        with pytest.raises(TypeError, match=r"unexpected keyword arguments \['values'\]"):
+            Decision(**keywords)
+
+
 def test_a_decision_given_at_a_call_is_refused_where_it_is_written() -> None:
     with refused("decision-inline", message=r"Room\.area .*write it as a class attribute"):
 
         class Inline(Space):
-            room = Room(area=Decision(values=(1, 2)))
+            room = Room(area=Decision(domain=(1, 2)))
 
     # A sibling declared on the class is bound, and owns the choice.
     class Owned(Space):
-        area: int = Decision(values=(1, 2))
+        area: int = Decision(domain=(1, 2))
         room = Room(area=area)
 
     assert design_space(Owned()).with_choices(area=2).room.area == 2
 
 
 def test_a_decision_given_at_a_call_outside_a_class_body_is_refused_when_linked() -> None:
-    built = composite("Built", {"room": Room(area=Decision(values=(1, 2)))})
+    built = composite("Built", {"room": Room(area=Decision(domain=(1, 2)))})
     with refused("decision-inline", message="room.area"):
         design_space(built())
 

@@ -54,7 +54,7 @@ from finn.kernels.utilization import BLOCK_FIRST_BITS, memory_preference, memory
 
 class Narrow(Space):
     width: int = Param()
-    lanes: int = Decision(values=(4, 2, 1))
+    lanes: int = Decision(domain=(4, 2, 1))
 
     @constraint
     def fits(self) -> bool | Rejected:
@@ -65,14 +65,14 @@ class Narrow(Space):
 
 class Wide(Space):
     width: int = Param()
-    lanes: int = Decision(values=(8, 16))
+    lanes: int = Decision(domain=(8, 16))
 
 
 class Toy(Space):
     width: int = Param()
     core: Narrow | Wide = Select(narrow=Narrow, wide=Wide, width=width)
     depth: int = Decision(domain=domain(accepts=lambda *, candidate: candidate > 0))
-    style: str = Decision(values=("small", "large"))
+    style: str = Decision(domain=("small", "large"))
 
     @constraint
     def style_fits(self) -> bool | Rejected:
@@ -234,13 +234,13 @@ def test_a_choice_no_value_can_be_set_for_is_left_open_named_and_the_rest_are_se
 
 
 class Source(Space):
-    lanes: int = Decision(values=(4, 2, 1))
+    lanes: int = Decision(domain=(4, 2, 1))
 
 
 class Sink(Space):
     width: int = Param()
-    style: str = Decision(values=("a", "b"))
-    pad: int = Decision(values=(1, 2))
+    style: str = Decision(domain=("a", "b"))
+    pad: int = Decision(domain=(1, 2))
 
     @constraint
     def holds(self) -> bool | Rejected:
@@ -466,9 +466,9 @@ class Stuck(Space):
     """Two choices none of whose values fits the limit, and a third that is free."""
 
     limit: int = Param()
-    first: int = Decision(values=(1, 2))
-    second: int = Decision(values=(1, 2))
-    free: int = Decision(values=(1, 2))
+    first: int = Decision(domain=(1, 2))
+    second: int = Decision(domain=(1, 2))
+    free: int = Decision(domain=(1, 2))
 
     @constraint
     def first_fits(self) -> bool | Rejected:
@@ -540,7 +540,7 @@ def test_one_reader_gives_each_decision_its_owner_s_policy_or_first_valid() -> N
 
 
 class Other(Space):
-    lanes: int = Decision(values=(1, 2))
+    lanes: int = Decision(domain=(1, 2))
 
     @view
     def ranking(self) -> tuple[int, ...]:

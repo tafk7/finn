@@ -305,7 +305,7 @@ def test_compile_holds_values_domains_and_callback_references() -> None:
         def constant(self) -> tuple[int]:
             return (1,)
 
-        choice: tuple[int, ...] = Decision(values=((1,), (2,)))
+        choice: tuple[int, ...] = Decision(domain=((1,), (2,)))
         calculated = derived(first)
 
     old = compile_model(Example)

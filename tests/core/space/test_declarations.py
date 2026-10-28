@@ -407,7 +407,7 @@ def test_param_defaults_are_values_and_decision_domain_contract() -> None:
         class Mutable(Space):
             pair: list[int] = Param(default=[1, 2])
 
-    with refused("decision-domain-ambiguous", error=DefinitionError, message="exactly one"):
+    with refused("decision-domain-required", error=DefinitionError, message="needs domain="):
         Decision()  # type: ignore[call-overload]
     with pytest.raises(TypeError, match="truth value"):
         bool(Param(default=1))
@@ -427,10 +427,10 @@ def test_binding_forms_and_local_edit_ownership() -> None:
     # A root keeps its values as runtime parameters.
     class Child(Space):
         size: int = Param()
-        internal: str = Decision(values=("auto", "block"))
+        internal: str = Decision(domain=("auto", "block"))
 
     class Parent(Space):
-        supplied: int = Decision(values=(1, 2))
+        supplied: int = Decision(domain=(1, 2))
         literal = Child(size=4)
         alias = Child(size=supplied)
 
@@ -451,7 +451,7 @@ def test_binding_forms_and_local_edit_ownership() -> None:
         point.with_choices({Parent.alias.size: 1})
 
     class Reader(Space):
-        supplier: int = Decision(values=(1, 2))
+        supplier: int = Decision(domain=(1, 2))
         child = Child(size=supplier)
 
         @derived(value=child.size)
@@ -504,7 +504,7 @@ def test_guards_are_collected_separately_and_respect_inherited_overrides() -> No
 
     class Guarded(Space):
         enabled: bool = Param()
-        selected: int = Decision(values=(1, 2), when=enabled)
+        selected: int = Decision(domain=(1, 2), when=enabled)
 
         @derived
         def result(*, selected: int) -> int:
@@ -547,7 +547,7 @@ def test_guards_on_cases_use_the_placement_scope() -> None:
 def test_nonboolean_and_foreign_guards_fail_during_collection() -> None:
     class Wrong(Space):
         count: int = Param()
-        choice: int = Decision(values=(1,), when=cast(ValueRef[bool], count))
+        choice: int = Decision(domain=(1,), when=cast(ValueRef[bool], count))
 
     with refused("guard-not-boolean", error=DefinitionError, message="Wrong.choice guard.*Boolean"):
         collect_space(Wrong)
@@ -556,7 +556,7 @@ def test_nonboolean_and_foreign_guards_fail_during_collection() -> None:
         enabled: bool = Param()
 
     class Unrelated(Space):
-        choice: int = Decision(values=(1,), when=Foreign.enabled)
+        choice: int = Decision(domain=(1,), when=Foreign.enabled)
 
     with refused(
         "dependency-undeclared",
@@ -571,7 +571,7 @@ def test_a_guard_whose_value_admits_none_is_refused_and_a_derived_test_is_taken(
     (the lists would prune, validity fail), so ``when=`` takes a ``bool`` only."""
 
     class Shelf(Space):
-        style: str = Decision(values=("a", "b"))
+        style: str = Decision(domain=("a", "b"))
 
     class Cellar(Space):
         deep: bool | None = Param(default=None)

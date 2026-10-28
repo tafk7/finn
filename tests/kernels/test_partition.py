@@ -198,7 +198,7 @@ class Board(Space):
     """A member that states the platform of the Chain's hidden channel: with UltraRAM or
     without, by its own choice."""
 
-    uram: bool = Decision(values=(True, False))
+    uram: bool = Decision(domain=(True, False))
 
     @derived
     def platform(self) -> Platform:

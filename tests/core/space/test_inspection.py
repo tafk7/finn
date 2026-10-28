@@ -87,10 +87,10 @@ def test_inspection_does_not_run_domains_or_evaluators() -> None:
 def test_discovery_reports_owning_decisions_and_author_names_for_selectors() -> None:
     class Child(Space):
         supplied: int = Param()
-        local: int = Decision(values=(1, 2))
+        local: int = Decision(domain=(1, 2))
 
     class Root(Space):
-        source: int = Decision(values=(2, 4))
+        source: int = Decision(domain=(2, 4))
         child = Child(supplied=source)
         implementation: Child = Select(a=Child(supplied=1), b=Child(supplied=2))
 
@@ -126,7 +126,7 @@ def test_discovery_reports_owning_decisions_and_author_names_for_selectors() -> 
 
 def test_typed_handles_preserve_types_and_match_repeated_discovery() -> None:
     class Example(Space):
-        lanes: int = Decision(values=(1, 2))
+        lanes: int = Decision(domain=(1, 2))
 
         @view
         def physical(*, lanes: int) -> int:
@@ -185,7 +185,7 @@ def test_foreign_handles_fail_before_callbacks_and_aliases_cannot_be_upgraded() 
 def test_handles_follow_model_identity_across_starts_without_retaining_point_state() -> None:
     class Example(Space):
         source: int = Param()
-        lanes: int = Decision(values=(1, 2))
+        lanes: int = Decision(domain=(1, 2))
 
     model = inspection.model(Example)
     first, second = design_space(Example(source=4)), design_space(Example(source=8))
@@ -231,7 +231,7 @@ def test_singleton_choice_metadata_exposes_an_ordinary_editable_selector() -> No
 
 def test_statistics_counts_instantiated_members_and_direct_structure() -> None:
     class Leaf(Space):
-        value: int = Decision(values=(1, 2))
+        value: int = Decision(domain=(1, 2))
         physical = view(value)
 
     def repeated(count: int) -> inspection.ModelStatistics:
@@ -264,16 +264,16 @@ class Bare(Space):
 
 
 class Wide(Space):
-    lanes: int = Decision(values=(1, 2))
+    lanes: int = Decision(domain=(1, 2))
 
 
 class Deep(Space):
-    depth: int = Decision(values=(1, 2))
+    depth: int = Decision(domain=(1, 2))
     mode: Wide | Bare = Select(wide=Wide(), bare=Bare())
 
 
 class Top(Space):
-    first: int = Decision(values=(1, 2))
+    first: int = Decision(domain=(1, 2))
     outer: Deep | Bare = Select(deep=Deep(), bare=Bare())
 
 
@@ -292,7 +292,7 @@ def test_an_enclosing_selector_comes_before_the_choices_in_its_cases() -> None:
 
 
 class Source(Space):
-    b: int = Decision(values=(1, 2))
+    b: int = Decision(domain=(1, 2))
 
 
 class Listed(Space):
@@ -302,7 +302,7 @@ class Listed(Space):
     def wide(self) -> bool:
         return self.source.b > 1
 
-    a: int = Decision(values=(1, 2), when=wide)
+    a: int = Decision(domain=(1, 2), when=wide)
 
 
 def test_a_choice_whose_presence_reads_another_choice_comes_after_it() -> None:
@@ -314,7 +314,7 @@ def test_a_choice_whose_presence_reads_another_choice_comes_after_it() -> None:
 
 class Fed(Space):
     u: int = Param()
-    b: int = Decision(values=(1, 2))
+    b: int = Decision(domain=(1, 2))
 
 
 class Looped(Space):
@@ -328,7 +328,7 @@ class Looped(Space):
     def wide(self) -> bool:
         return self.fed.b > 1
 
-    a: int = Decision(values=(1, 2), when=wide)
+    a: int = Decision(domain=(1, 2), when=wide)
 
 
 def test_choices_reading_one_another_are_taken_in_declaration_order_and_noted(
@@ -343,11 +343,11 @@ def test_choices_reading_one_another_are_taken_in_declaration_order_and_noted(
 
 
 class Gated(Space):
-    lanes: int = Decision(values=(1, 2))
+    lanes: int = Decision(domain=(1, 2))
 
 
 class Knob(Space):
-    level: int = Decision(values=(1, 2))
+    level: int = Decision(domain=(1, 2))
 
 
 #: The name a dynamic method reads by: a module global, so its source does not fix it.

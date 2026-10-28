@@ -14,7 +14,7 @@ from finn.core.space import Decision, Param, Space, derived
 
 class Arithmetic(Space):
     extent: int = Param()
-    lanes: int = Decision(values=(1, 2))
+    lanes: int = Decision(domain=(1, 2))
 
     @derived
     def doubled(*, extent: int) -> int:

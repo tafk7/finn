@@ -84,7 +84,7 @@ def test_the_view_reducer_preserves_its_local_findings() -> None:
 
 class Room(Space):
     area: int = Param()
-    finish: int = Decision(values=(1, 2, 3))
+    finish: int = Decision(domain=(1, 2, 3))
 
     @constraint
     def small_enough(self) -> bool | Rejected:
@@ -139,7 +139,7 @@ def test_a_refusal_through_output_and_validity_is_reported_once_per_owner() -> N
 
 def test_a_computation_reading_two_aliases_of_one_blocked_value_lists_it_once() -> None:
     class Twice(Space):
-        width: int = Decision(values=(2, 4))
+        width: int = Decision(domain=(2, 4))
         left = Room(area=width)
         right = Room(area=width)
 

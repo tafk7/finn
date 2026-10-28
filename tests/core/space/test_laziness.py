@@ -42,7 +42,7 @@ from finn.core.space.occurrence import ask, held
 
 class Fast(Space):
     width: int = Param()
-    lanes: int = Decision(values=(1, 2, 4))
+    lanes: int = Decision(domain=(1, 2, 4))
 
     @constraint
     def fits(self) -> bool | Rejected:
@@ -52,7 +52,7 @@ class Fast(Space):
 
 
 class Slow(Space):
-    depth: int = Decision(values=(1, 2))
+    depth: int = Decision(domain=(1, 2))
 
 
 def _blank() -> Space:
@@ -69,13 +69,13 @@ def _blank() -> Space:
 class Gated(Space):
     """A candidate whose choice has its own guard (``when``), inside the candidate's."""
 
-    lanes: int = Decision(values=(1, 2))
+    lanes: int = Decision(domain=(1, 2))
 
     @derived
     def wide(self) -> bool:
         return self.lanes > 1
 
-    deep: int = Decision(values=(1, 2), when=wide)
+    deep: int = Decision(domain=(1, 2), when=wide)
 
 
 class GatedKernel(Space):

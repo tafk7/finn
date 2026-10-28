@@ -41,7 +41,7 @@ def test_an_optional_value_input_left_out_is_none() -> None:
         forwarded = Rated(rate=rate)  # bound to the enclosing formal
         literal = Rated(rate=3)
         unbound = Rated()  # an optional formal nobody binds: its default
-        level: int = Decision(values=(1, 2))
+        level: int = Decision(domain=(1, 2))
         chosen = Rated(rate=level)
 
     omitted = design_space(Office())

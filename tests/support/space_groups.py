@@ -9,7 +9,7 @@ from finn.core.space import Decision, Group, Param, Space, constraint, derived, 
 
 class Bundle(Group):
     extent: int = Param()
-    lanes: int = Decision(values=(1, 2, 4))
+    lanes: int = Decision(domain=(1, 2, 4))
 
     @derived
     def doubled(self) -> int:

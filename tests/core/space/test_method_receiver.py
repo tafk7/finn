@@ -51,7 +51,7 @@ RUNNING: Implementation = load("core.space._running_type:RUNNING")
 
 class Part(Space):
     v: int | None = Param(default=None)
-    pe: int = Decision(values=(1, 2, 4))
+    pe: int = Decision(domain=(1, 2, 4))
 
     @derived
     def given(self) -> bool:
@@ -64,7 +64,7 @@ class Spare(Space):
 
 class Reads(Space):
     w: int = Param()
-    pick: int = Decision(values=(0, 1))
+    pick: int = Decision(domain=(0, 1))
 
     @derived
     def on(self) -> bool:

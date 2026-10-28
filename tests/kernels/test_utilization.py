@@ -353,8 +353,8 @@ class Stored(Space):
     """A memory whose style and stage count may store in UltraRAM, with initial contents."""
 
     platform: Platform = Param()
-    ram_style: str = Decision(values=("block", "ultra"))
-    stages: int = Decision(values=(0, 1, 2))
+    ram_style: str = Decision(domain=("block", "ultra"))
+    stages: int = Decision(domain=(0, 1, 2))
     uram_present = uram_constraint(platform, ram_style, ("ultra",))
     uram_init_taken = uram_init_constraint(platform, ram_style, ("ultra",))
     stages_present = uram_constraint(platform, stages, lambda count: count != 0)

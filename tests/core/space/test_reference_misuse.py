@@ -37,7 +37,7 @@ from finn.core.space import (
 
 class Room(Space):
     area: int = Param()
-    finish: int = Decision(values=(1, 2))
+    finish: int = Decision(domain=(1, 2))
 
     @view
     def cost(self) -> int:
@@ -178,7 +178,7 @@ REFERENCES: dict[str, tuple[Callable[[], object], str]] = {
     "a formal": (lambda: Param(), "declared at "),
     "a derived value": (one(value_two), "declared at "),
     "a Derived": (lambda: derived(value_two), "declared at "),
-    "a decision": (lambda: Decision(values=(1, 2)), "declared at "),
+    "a decision": (lambda: Decision(domain=(1, 2)), "declared at "),
 }
 
 

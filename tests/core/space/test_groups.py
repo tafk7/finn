@@ -129,8 +129,8 @@ def test_effective_overrides_rebase_included_and_sibling_references() -> None:
 def test_flat_and_included_primitives_agree_by_mapped_names() -> None:
     class Flat(Space):
         extent: int = Param(default=3)
-        first_lanes: int = Decision(values=(1, 2, 4))
-        second_lanes: int = Decision(values=(1, 2, 4))
+        first_lanes: int = Decision(domain=(1, 2, 4))
+        second_lanes: int = Decision(domain=(1, 2, 4))
 
         @derived
         def first_doubled(self) -> int:
@@ -175,7 +175,7 @@ def test_flat_and_included_primitives_agree_by_mapped_names() -> None:
 
 def test_nested_inclusion_real_children_and_selectors_preserve_presence() -> None:
     class Child(Space):
-        choice: int = Decision(values=(1, 2))
+        choice: int = Decision(domain=(1, 2))
 
         @view
         def shown(self) -> int:
@@ -387,7 +387,7 @@ def test_cross_group_explicit_cycle_and_local_view_cycle_are_refused() -> None:
 
 def test_group_domain_still_reads_facts_only_and_group_is_not_a_fact() -> None:
     class WrongDomain(Group):
-        choice: int = Decision(values=(2, 4))
+        choice: int = Decision(domain=(2, 4))
         width: int = Decision(domain=divisors_of(choice))
 
     class Owner(Space):

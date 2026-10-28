@@ -12,12 +12,13 @@ from finn.core.space import (
     design_space,
     view,
 )
+from finn.core.space.domains import finite
 
 
 class Child(Space):
     width: int = Param()
     label: str | None = Param(default=None)
-    lanes: int = Decision(values=(1, 2))
+    lanes: int = Decision(domain=(1, 2))
 
     @view
     def physical(self) -> int:
@@ -30,7 +31,7 @@ class Boiler(Space):
 
 class HeatPump(Space):
     kw: int = Param()
-    cop: int = Decision(values=(3, 4))
+    cop: int = Decision(domain=(3, 4))
 
 
 @dataclass(frozen=True)
@@ -110,7 +111,7 @@ def wrong_answer() -> QueryResult[str]:
 
 wrong_answer_type: int = wrong_answer  # E
 
-bad_guard: int = Decision(values=(1,), when=Child.width)  # E
+bad_guard: int = Decision(domain=(1,), when=Child.width)  # E
 
 
 class Holder(Space):
@@ -131,6 +132,11 @@ class Retired(Space):
     """The retired spellings of a Decision: no overload takes them."""
 
     entries: Boiler | HeatPump = Decision({"boiler": Boiler(kw=1)})  # E
-    required: int = Decision(values=(1, 2), required=True)  # E
-    named: int = Decision(values=(1, 2), name="other")  # E
-    optional: Boiler | None = Decision(values=(1, 2), optional=True)  # E
+    required: int = Decision(domain=(1, 2), required=True)  # E
+    named: int = Decision(domain=(1, 2), name="other")  # E
+    optional: Boiler | None = Decision(domain=(1, 2), optional=True)  # E
+    old_values: int = Decision(values=(1, 2))  # E
+    both: int = Decision(domain=(1, 2), values=(1, 2))  # E
+    scalar_domain: int = Decision(domain=2)  # E
+    wrong_item_type: tuple[int, ...] = Decision(domain=(1, 2))  # E
+    override_domain_order: int = Decision(domain=finite((1, 2)), ordered=True)  # E

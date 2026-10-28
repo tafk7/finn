@@ -222,7 +222,7 @@ def test_a_deep_read_evaluates_only_what_it_reads_each_once() -> None:
 
 class Guarded(Space):
     enabled: bool = Param()
-    lanes: int = Decision(values=(1, 2), when=enabled)
+    lanes: int = Decision(domain=(1, 2), when=enabled)
 
     @derived
     def body(self) -> int | Inapplicable:
@@ -230,7 +230,7 @@ class Guarded(Space):
             return Inapplicable()
         raise AssertionError("an enabled body ran")
 
-    active: int = Decision(values=(1, 2))
+    active: int = Decision(domain=(1, 2))
 
 
 def test_a_guard_suppresses_functions_and_both_decision_questions_agree() -> None:
@@ -320,7 +320,7 @@ def test_refused_validity_prevents_attempting_output() -> None:
         def output(self) -> int:
             return 4
 
-        lanes: int = Decision(values=(1, 2))
+        lanes: int = Decision(domain=(1, 2))
 
         @constraint
         def refused() -> bool:

@@ -20,7 +20,7 @@ from finn.core.space import (
 
 class Arithmetic(Group):
     width: int = Param()
-    factor: int = Decision(values=(1, 2))
+    factor: int = Decision(domain=(1, 2))
 
     @derived
     def product(self) -> int:

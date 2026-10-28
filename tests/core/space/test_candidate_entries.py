@@ -52,7 +52,7 @@ class ProtoKernel(Space):
 
 class PackedCore(ProtoKernel):
     pe: int = Decision(domain=divisors_of(ProtoKernel.width))
-    simd: int = Decision(values=(1, 2))
+    simd: int = Decision(domain=(1, 2))
     narrow_weights: bool = Param(default=False)
 
     @derived
@@ -71,7 +71,7 @@ class PackedCore(ProtoKernel):
 
 
 class StubCore(ProtoKernel):
-    rows: int = Decision(values=(1, 2, 4))
+    rows: int = Decision(domain=(1, 2, 4))
 
     @derived
     def schedule(self) -> str:

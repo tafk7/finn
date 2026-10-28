@@ -197,7 +197,7 @@ def test_when_stays_on_a_placement_and_a_decision() -> None:
 
     class Gated(Space):
         on: bool = Param(default=True)
-        lanes: int = Decision(values=(1, 2), when=on)
+        lanes: int = Decision(domain=(1, 2), when=on)
         child = Child(when=on)
 
     off = design_space(Gated(on=False))
@@ -461,7 +461,7 @@ class Placed(Space):
     def placed(self) -> bool:
         return self.chain != "none"
 
-    style: str = Decision(values=("lut", "ultra"), when=placed)
+    style: str = Decision(domain=("lut", "ultra"), when=placed)
 
 
 def _absent_ultra(*, choice: str, platform: bool) -> bool | Rejected:
@@ -610,7 +610,7 @@ class PlacedFirst(Placed):
     under ``placed`` (so the rule's presence is the choice's), then a platform fact that is
     still open, as a method."""
 
-    open_ultra: bool = Decision(values=(False, True))
+    open_ultra: bool = Decision(domain=(False, True))
 
     @constraint
     def uram_present(self) -> bool | Rejected:
@@ -652,14 +652,14 @@ class Chosen(Space):
     """A choice ``a`` deciding whether a memory is placed, its style placed under that, and a
     platform fact still open."""
 
-    a: int = Decision(values=(1, 2))
-    open_ultra: bool = Decision(values=(False, True))
+    a: int = Decision(domain=(1, 2))
+    open_ultra: bool = Decision(domain=(False, True))
 
     @derived
     def placed(self) -> bool:
         return self.a == 2
 
-    style: str = Decision(values=("lut", "ultra"), when=placed)
+    style: str = Decision(domain=("lut", "ultra"), when=placed)
 
 
 class ChoiceFirst(Chosen):

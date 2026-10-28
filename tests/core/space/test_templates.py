@@ -75,8 +75,8 @@ class BoundIntoChildren(Space):
     """Decisions of the class bound into its children's formals: one bound twice into one
     child, one into two children. Each is the class's own, keyed by its name."""
 
-    width: int = Decision(values=(1, 2, 4))
-    depth: int = Decision(values=(2, 3))
+    width: int = Decision(domain=(1, 2, 4))
+    depth: int = Decision(domain=(2, 3))
     pair = Pair(first=width, second=width)
     other = Pair(first=1, second=depth)
     again = Pair(first=depth, second=4)
@@ -129,7 +129,7 @@ class Memory(Space):
 
 class Fetcher(Space):
     contents: int = Param()
-    lanes: int = Decision(values=(1, 2))
+    lanes: int = Decision(domain=(1, 2))
 
     @view
     def words(self) -> int:
@@ -178,7 +178,7 @@ class WideStream(Space):
 
     contents: int = Param()
     wide: bool = Param()
-    lanes: int = Decision(values=(1, 2), when=wide)
+    lanes: int = Decision(domain=(1, 2), when=wide)
 
     @view
     def words(self) -> int:
@@ -191,8 +191,8 @@ class Guarded(Space):
     and a Decision of the class its cases share, which exists wherever the class does."""
 
     contents: int | None = Param(default=None)
-    wide: bool = Decision(values=(False, True))
-    split: int = Decision(values=(1, 4))
+    wide: bool = Decision(domain=(False, True))
+    split: int = Decision(domain=(1, 4))
 
     @derived
     def valued(self) -> bool:
@@ -229,8 +229,8 @@ class GuardedOnceAndNot(Space):
 class GuardedDecision(Space):
     """A formal bound to a Decision of the class with a ``when``."""
 
-    big: bool = Decision(values=(False, True))
-    area: int = Decision(values=(10, 20), when=big)
+    big: bool = Decision(domain=(False, True))
+    area: int = Decision(domain=(10, 20), when=big)
     room = Room(area=area)
     hall = Room(area=12, when=big)
 

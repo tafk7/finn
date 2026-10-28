@@ -135,7 +135,7 @@ def flat_space(api, count: int):
 def repeated_space(api, count: int):
     class Child(api.Space):
         extent: int = api.Param()
-        lanes: int = api.Decision(values=(1, 2, 4))
+        lanes: int = api.Decision(domain=(1, 2, 4))
         width = api.derived(extent=extent, lanes=lanes)(multiply)
         physical = api.view(width)
 

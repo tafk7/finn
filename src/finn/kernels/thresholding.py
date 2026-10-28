@@ -253,7 +253,7 @@ class ThresholdingAxiKernel(KernelSpace):
         reach it by."""
         return self.control is not None
 
-    use_axilite: bool = Decision(values=(False, True))
+    use_axilite: bool = Decision(domain=(False, True))
 
     # Runtime-writable thresholds need a control bus to export their AXI-Lite
     # interface through; how many buses a shell takes is the shell's to count, not theirs.
@@ -280,7 +280,7 @@ class ThresholdingAxiKernel(KernelSpace):
             return reject("threshold-set-channel", "several threshold sets take a set channel")
         return True
 
-    deep_pipeline: bool = Decision(values=(False, True))
+    deep_pipeline: bool = Decision(domain=(False, True))
 
     @derived
     def stages(self) -> int:
@@ -302,7 +302,7 @@ class ThresholdingAxiKernel(KernelSpace):
         return self.ultra_stages < self.stages
 
     # ``distributed`` first; ``auto`` (Vivado's placement) states no resources.
-    ram_style: str = Decision(values=("distributed", "auto"), when=left)
+    ram_style: str = Decision(domain=("distributed", "auto"), when=left)
 
     @derived
     def distributed(self) -> bool:

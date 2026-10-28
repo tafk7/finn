@@ -34,7 +34,7 @@ class FifoShape:
 class Fifo(Space):
     word_bits: int = Param()
     depth: int = Param()
-    ram_style: str = Decision(values=("auto", "block", "shift"))
+    ram_style: str = Decision(domain=("auto", "block", "shift"))
 
     @derived
     def space_type(self) -> str:
@@ -89,7 +89,7 @@ def test_final_constraint_refusal_remains_visible_while_output_unresolved() -> N
 
 def test_required_inputs_one_refused_and_another_waiting_read_as_refused() -> None:
     class Inputs(Space):
-        lanes: int = Decision(values=(1, 2))
+        lanes: int = Decision(domain=(1, 2))
 
         @derived
         def refusing() -> int | Rejected:
@@ -108,8 +108,8 @@ def test_atomic_refinement_follows_dependencies_and_never_publishes_partial_stat
     class Tiles(Space):
         """The lanes divide the extent: a relation of two choices, so a constraint."""
 
-        extent: int = Decision(values=(8, 12))
-        lanes: int = Decision(values=(1, 2, 3, 4, 5, 6, 8, 12))
+        extent: int = Decision(domain=(8, 12))
+        lanes: int = Decision(domain=(1, 2, 3, 4, 5, 6, 8, 12))
 
         @constraint
         def divides(self) -> bool:

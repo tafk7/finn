@@ -24,13 +24,13 @@ from finn.core.space.domains import finite
 
 class Buffer(Space):
     depth: int = Decision(domain=domain(accepts=lambda *, candidate: candidate >= 2, ordered=True))
-    style: str = Decision(values=("auto", "block"))
+    style: str = Decision(domain=("auto", "block"))
 
 
 class Core(Space):
     width: int = Param()
     pe: int = Decision(domain=divisors_of(width))
-    stages: int = Decision(values=(0, 1, 2), ordered=True)
+    stages: int = Decision(domain=(0, 1, 2), ordered=True)
     buffer = Buffer()
 
 
@@ -49,7 +49,7 @@ def test_a_decision_names_the_space_class_that_declares_it() -> None:
 
 def test_ordered_applies_to_listed_values_only() -> None:
     with refused(
-        "ordered-invalid", error=DefinitionError, message="ordered= is a bool, for listed values="
+        "ordered-invalid", error=DefinitionError, message="ordered= is a bool for finite iterables"
     ):
         Decision(domain=divisors_of(4), ordered=True)  # type: ignore[call-overload]
 

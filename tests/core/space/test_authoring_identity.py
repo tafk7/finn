@@ -55,7 +55,7 @@ def test_malformed_candidates_fail_as_definitions() -> None:
         error=DefinitionError,
         message="a choice among Space classes is a selector",
     ):
-        Decision(values={"case": Holder()})
+        Decision(domain={"case": Holder()})
     with refused(
         "node-not-value",
         error=DefinitionError,

@@ -64,7 +64,7 @@ class Meter(Space):
     spec: Rate = Param(default=Rate(1.0, (0.5,)))
     members: frozenset[float] | None = Param(default=None)
     box: Box | None = Param(default=None)
-    level: float = Decision(values=(0.0, 1.0))
+    level: float = Decision(domain=(0.0, 1.0))
 
     @derived
     def sign(self) -> float:

@@ -128,7 +128,7 @@ def test_a_domain_reading_a_view_of_a_choice_is_view_read_in() -> None:
     before it the refusal was the domain's own, for the choice the view reads."""
 
     class Picky(Space):
-        depth: int = Decision(values=(1, 2, 4))
+        depth: int = Decision(domain=(1, 2, 4))
 
         @view
         def storage(self) -> int:

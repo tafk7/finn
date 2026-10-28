@@ -37,7 +37,7 @@ from finn.core.space.inspection import ChoiceInfo
 
 class FixedImplementation(Space):
     size: int = Param()
-    lanes: int = Decision(values=(1, 2, 4))
+    lanes: int = Decision(domain=(1, 2, 4))
 
     @derived
     def minimum(self) -> int:

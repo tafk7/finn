@@ -137,10 +137,10 @@ class _Draw:
         if self.maybe(0.5):
             members["valued"] = derived(v=members["b"])(given)
         if self.maybe(0.6):
-            members["flag"] = Decision(values=(False, True))
+            members["flag"] = Decision(domain=(False, True))
             annotations["flag"] = bool
         if self.maybe(0.5):
-            members["d"] = Decision(values=(1, 2, 4))
+            members["d"] = Decision(domain=(1, 2, 4))
             annotations["d"] = int
         children: list[str] = []
         if level > 0:
@@ -224,11 +224,11 @@ class _Draw:
                     {"when": members["flag"]} if "flag" in members and self.maybe(0.5) else {}
                 )
                 name = f"given{len(members)}_{formal}"
-                members[name], annotations[name] = Decision(values=(2, 4), **fresh), int
+                members[name], annotations[name] = Decision(domain=(2, 4), **fresh), int
                 bindings[formal] = members[name]
             elif form == "named" and not candidate:
                 if "shared" not in members:
-                    members["shared"], annotations["shared"] = Decision(values=(2, 4)), int
+                    members["shared"], annotations["shared"] = Decision(domain=(2, 4)), int
                 bindings[formal] = members["shared"]
             elif form == "sibling" and children:
                 bindings[formal] = getattr(members[self.rng.choice(children)], "x")

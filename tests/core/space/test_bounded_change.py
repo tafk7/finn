@@ -77,13 +77,13 @@ def test_a_house_whose_budget_refuses() -> None:
 
 
 class Option(Space):
-    size: int = Decision(values=(1, 2, 3))
+    size: int = Decision(domain=(1, 2, 3))
 
 
 class Host(Space):
     """A Decision under a guard that reads a Decision, read from outside the guard."""
 
-    want: bool = Decision(values=(False, True))
+    want: bool = Decision(domain=(False, True))
     extra = Option(when=want)
 
     @derived
@@ -226,10 +226,10 @@ def test_a_choice_whose_selector_settles_to_another_case_goes_dormant_and_comes_
 @pytest.mark.parametrize("stored", (False, True))
 def test_fresh_preserves_real_scope_through_group_namespaces(stored: bool) -> None:
     class Child(Space):
-        choice: int = Decision(values=(1, 2))
+        choice: int = Decision(domain=(1, 2))
 
     class Declarations(Group):
-        local: int = Decision(values=(1, 2))
+        local: int = Decision(domain=(1, 2))
         child = Child()
 
     class Root(Space):

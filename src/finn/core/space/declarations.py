@@ -549,7 +549,7 @@ def _refuse_retired(entries: tuple[object, ...], retired: Mapping[str, object]) 
         raise DefinitionError.broken(
             "decision-over-nodes",
             _OWNER,
-            f"Decision{where}: a Decision keeps value domains (values= or domain=); a choice "
+            f"Decision{where}: a Decision keeps value domains (domain=); a choice "
             "among Space classes is a selector: write Select(name=Class, other=Class(...), "
             "shared=...), a case that places nothing as None, Select(none=None, ...)",
         )
@@ -559,23 +559,24 @@ def _refuse_retired(entries: tuple[object, ...], retired: Mapping[str, object]) 
             raise DefinitionError.broken(code, _OWNER, f"Decision{where}: {replacement}")
     if retired:
         raise TypeError(
-            f"Decision() got unexpected keyword arguments {sorted(retired)}; it takes values= "
-            "or domain=, when= and ordered="
+            f"Decision() got unexpected keyword arguments {sorted(retired)}; it takes "
+            "domain=, when= and ordered="
         )
 
 
 class Decision(ValueDecl[T], Generic[T]):
     """An independently editable choice, annotated with its value type.
 
-    ``finish: int = Decision(values=(1, 2, 3))`` chooses a value; the
+    ``finish: int = Decision(domain=(1, 2, 3))`` chooses a value; the
     annotation is its value type and its check, and a value is compared by ``==``.
     A Decision keeps value domains only: a choice among Space classes is a selector,
     ``Select`` (``heating = Select(boiler=Boiler, pump=HeatPump(cop=4), area=area)``).
     A Decision's values are its domain, whose membership reads facts only:
     a rule linking a value to anything else (``ultra`` needs UltraRAM) is a
     ``@constraint`` of the Space that owns the choice, and a change that breaks it
-    is refused, naming it. ``ordered=True`` states that listed values
-    are in an order (a domain states its own, ``divisors_of``); otherwise they
+    is refused, naming it. ``domain=`` accepts a finite iterable or a ``Domain``.
+    ``ordered=True`` states that a finite iterable's listed values
+    are in an order (a Domain states its own, ``divisors_of``); otherwise they
     are unordered. The engine sets no choice itself, by default or otherwise, and holds
     no policy: whether a policy may set a choice, and how, is the compiler's.
 
@@ -599,7 +600,7 @@ class Decision(ValueDecl[T], Generic[T]):
         cls,
         /,
         *,
-        values: Iterable[T],
+        domain: Iterable[T],
         when: Guard = None,
         ordered: bool = False,
     ) -> T: ...
@@ -617,34 +618,33 @@ class Decision(ValueDecl[T], Generic[T]):
         cls,
         *entries: object,
         domain: object = None,
-        values: object = None,
         when: object = None,
         ordered: object = None,
         **retired: object,
     ) -> Any:
         _refuse_retired(entries, retired)
-        if domain is None and isinstance(values, Mapping):
+        if isinstance(domain, Mapping):
             raise DefinitionError.broken(
                 "node-decision-not-entries",
                 _OWNER,
                 f"Decision{at(source_origin())}: a choice among Space classes is a selector: "
                 "write Select(key=Room, other=Room(...)); a case that places nothing is None",
             )
-        if (domain is None) == (values is None):
+        if domain is None:
             raise DefinitionError.broken(
-                "decision-domain-ambiguous",
+                "decision-domain-required",
                 _OWNER,
-                "a Decision needs exactly one of domain= or values=",
+                "a Decision needs domain= (a finite iterable or a Domain)",
             )
-        if domain is not None and not isinstance(domain, Domain):
+        if not isinstance(domain, (Domain, Iterable)):
             raise DefinitionError.broken(
-                "domain-argument-invalid", _OWNER, "domain= must be a Domain"
+                "domain-argument-invalid", _OWNER, "domain= must be a finite iterable or a Domain"
             )
-        if ordered is not None and (domain is not None or type(ordered) is not bool):
+        if ordered is not None and (isinstance(domain, Domain) or type(ordered) is not bool):
             raise DefinitionError.broken(
                 "ordered-invalid",
                 _OWNER,
-                "ordered= is a bool, for listed values= (a domain= states its own order)",
+                "ordered= is a bool for finite iterables (a Domain states its own order)",
             )
         instance = cast(Decision[object], super().__new__(cls))
         object.__setattr__(instance, "_body", class_body())
@@ -654,8 +654,8 @@ class Decision(ValueDecl[T], Generic[T]):
         # The domain is bound to the value's type check when the model is linked.
         instance.domain = (
             cast(Domain[object], domain)
-            if domain is not None
-            else finite(cast(Iterable[object], values), ordered=ordered is True)
+            if isinstance(domain, Domain)
+            else finite(cast(Iterable[object], domain), ordered=ordered is True)
         )
         return instance
 

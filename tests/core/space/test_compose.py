@@ -73,7 +73,7 @@ class Realized(Space):
 
     channels: int = Param()
     depthwise: bool = Param()
-    realization: str = Decision(values=("native", "dense"), when=depthwise)
+    realization: str = Decision(domain=("native", "dense"), when=depthwise)
 
     @derived
     def datapath(self) -> int:

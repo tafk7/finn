@@ -37,7 +37,7 @@ def test_view_surfaces_observe_owner_before_output(rule: str, validity_first: bo
     class Example(Space):
         policy: str = Param()
         fact: int = Param(default=6)
-        choice: int = Decision(values=(1, 2))
+        choice: int = Decision(domain=(1, 2))
 
         @constraint
         def unrelated(self) -> bool:
@@ -112,7 +112,7 @@ def test_scope_presence_still_precedes_an_immediately_inapplicable_body(presence
 
     class Owner(Space):
         mode: str = Param()
-        choice: bool = Decision(values=(False, True))
+        choice: bool = Decision(domain=(False, True))
 
         @derived
         def enabled(self) -> bool | Rejected:
@@ -151,7 +151,7 @@ def test_scope_presence_still_precedes_an_immediately_inapplicable_body(presence
 
 def test_local_answers_and_detached_values_do_not_imply_completeness() -> None:
     class Producer(Space):
-        choice: int = Decision(values=(1, 2))
+        choice: int = Decision(domain=(1, 2))
         allowed: bool = Param(default=True)
 
         @constraint
@@ -208,8 +208,8 @@ def test_local_answers_and_detached_values_do_not_imply_completeness() -> None:
 
 def test_open_owner_waits_do_not_pollute_an_unresolved_view_input() -> None:
     class Example(Space):
-        gate: int = Decision(values=(1, 2))
-        output: int = Decision(values=(1, 2))
+        gate: int = Decision(domain=(1, 2))
+        output: int = Decision(domain=(1, 2))
 
         @constraint
         def waiting(self) -> bool:

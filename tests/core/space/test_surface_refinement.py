@@ -87,12 +87,12 @@ def test_failed_preparation_does_not_poison_cache_and_subclasses_do_not_borrow_i
 def test_prepared_structure_and_configuration_fields_are_immutable() -> None:
     class Example(Space):
         value: int = Param()
-        choice: int = Decision(values=(1, 2))
+        choice: int = Decision(domain=(1, 2))
 
     node = Example(value=3)
     instance = design_space(node)
     with refused("structure-finalized", error=DefinitionError, message="finalized"):
-        Example.choice = Decision(values=(3, 4))
+        Example.choice = Decision(domain=(3, 4))
     with refused("structure-finalized", error=DefinitionError):
         del Example.value
     with pytest.raises(AttributeError, match="immutable configuration field"):
@@ -179,8 +179,8 @@ def test_structural_choices_cannot_be_shadowed_on_instances() -> None:
 @pytest.mark.parametrize("name", ["self", "point"])
 def test_choice_keywords_do_not_collide_with_receiver_arguments(method: str, name: str) -> None:
     class Example(Space):
-        self: int = Decision(values=(1, 2))
-        point: int = Decision(values=(1, 2))
+        self: int = Decision(domain=(1, 2))
+        point: int = Decision(domain=(1, 2))
 
     instance = design_space(Example())
     result = getattr(instance, method)(**{name: 1})
@@ -191,7 +191,7 @@ def test_choice_keywords_do_not_collide_with_receiver_arguments(method: str, nam
 def test_call_keywords_do_not_steal_formal_names_and_request_errors_refuse_the_call() -> None:
     class Example(Space):
         parameters: int = Param()
-        choice: int = Decision(values=(1, 2))
+        choice: int = Decision(domain=(1, 2))
 
     point = design_space(Example(parameters=3))
     assert point.parameters == 3
@@ -223,8 +223,8 @@ def test_dynamic_prepared_space_class_and_bound_metadata_are_collectable() -> No
 
 def test_replacement_revalidates_retained_choices_and_supports_atomic_clear() -> None:
     class Example(Space):
-        extent: int = Decision(values=(8, 12))
-        lanes: int = Decision(values=(1, 2, 3, 4))
+        extent: int = Decision(domain=(8, 12))
+        lanes: int = Decision(domain=(1, 2, 3, 4))
 
         @constraint
         def divides(self) -> bool:
@@ -250,7 +250,7 @@ def test_replacement_revalidates_retained_choices_and_supports_atomic_clear() ->
 
 def test_value_reads_preserve_result_and_view_context() -> None:
     class Example(Space):
-        choice: int = Decision(values=(0, 1))
+        choice: int = Decision(domain=(0, 1))
         result = view(choice)
 
     base = design_space(Example())
@@ -277,11 +277,11 @@ def test_value_reads_preserve_result_and_view_context() -> None:
 
 def test_child_replacement_returns_child_and_revalidates_the_whole_root() -> None:
     class Child(Space):
-        local: int = Decision(values=(1, 2))
+        local: int = Decision(domain=(1, 2))
 
     class Root(Space):
-        extent: int = Decision(values=(2, 4))
-        sibling: int = Decision(values=(1, 2, 4))
+        extent: int = Decision(domain=(2, 4))
+        sibling: int = Decision(domain=(1, 2, 4))
         child = Child()
 
         @constraint
@@ -308,7 +308,7 @@ def test_replacement_reuses_frozen_facts_keeps_views_lazy_and_drops_what_it_reac
 
     class Example(Space):
         source: tuple[object, ...] = Param()
-        choice: int = Decision(values=(1, 2))
+        choice: int = Decision(domain=(1, 2))
 
         @derived
         def output(*, source: tuple[object, ...], choice: int) -> int:
@@ -340,7 +340,7 @@ def test_all_replacement_request_errors_precede_domain_callbacks() -> None:
         return True
 
     class Example(Space):
-        first: int = Decision(values=(1, 2))
+        first: int = Decision(domain=(1, 2))
         second: int = Decision(domain=domain(accepts=accepts))
 
     base = design_space(Example())

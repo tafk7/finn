@@ -117,7 +117,7 @@ def test_a_relation_of_siblings_is_their_parents_and_owns_its_refusal() -> None:
 
 class Budgeted(Space):
     limit: int = Param()
-    use_third: bool = Decision(values=(False, True))
+    use_third: bool = Decision(domain=(False, True))
     a = Tiles(extent=12)
     b = Tiles(extent=8)
     c = Tiles(extent=6, when=use_third)
@@ -177,7 +177,7 @@ class Wide(Space):
 
 class Stage(Wide):
     width_in: int = Param()
-    growth: int = Decision(values=(0, 1, 2))
+    growth: int = Decision(domain=(0, 1, 2))
 
     @derived
     def width_out(self) -> int:
@@ -345,7 +345,7 @@ class Fixed(Space):
 
 class Tuned(Space):
     base: int = Param()
-    extra: int = Decision(values=(1, 2))
+    extra: int = Decision(domain=(1, 2))
 
     @view
     def physical(self) -> int:
@@ -364,7 +364,7 @@ class WithPrimitives(Space):
     """The same choice spelled with the primitives it lowers onto."""
 
     base: int = Param()
-    choice: str = Decision(values=("fixed", "tuned"))
+    choice: str = Decision(domain=("fixed", "tuned"))
 
     @derived
     def is_fixed(self) -> bool:

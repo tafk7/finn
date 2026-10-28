@@ -36,7 +36,7 @@ from finn.core.space.occurrence import ask, held
 @pytest.mark.parametrize("field", ("caught", "finally_return", "blocked"))
 def test_caught_failure_and_nonvalue_cannot_publish_fallback(field: str) -> None:
     class Example(Space):
-        choice: int = Decision(values=(1, 2))
+        choice: int = Decision(domain=(1, 2))
 
         @derived
         def broken(self) -> int:
@@ -96,7 +96,7 @@ def test_caught_failure_and_nonvalue_cannot_publish_fallback(field: str) -> None
 def test_driver_operations_remain_sticky_when_caught(operation: str) -> None:
     class Example(Space):
         fact: int = Param()
-        choice: int = Decision(values=(1, 2))
+        choice: int = Decision(domain=(1, 2))
 
         @view
         def output(self) -> int:
@@ -176,7 +176,7 @@ def test_contextual_domain_error_is_one_primary_failure() -> None:
 
 def test_blocked_self_constraint_keeps_its_inspectable_assessment() -> None:
     class Example(Space):
-        choice: int = Decision(values=(1, 2))
+        choice: int = Decision(domain=(1, 2))
 
         @constraint
         def positive(self) -> bool:
@@ -233,7 +233,7 @@ def test_self_cycles_are_reached_through_scopes_admission_and_guards() -> None:
         def enabled(self) -> bool:
             return self.choice > 0
 
-        choice: int = Decision(values=(1,), when=enabled)
+        choice: int = Decision(domain=(1,), when=enabled)
 
     point = design_space(Parent())
     with pytest.raises(EvaluationError, match="dependency cycle") as scoped:
@@ -251,8 +251,8 @@ def test_an_answer_a_query_keeps_has_read_what_a_fresh_evaluation_reads() -> Non
     choices and facts it read) an evaluation from nothing records for it."""
 
     class Example(Space):
-        want: bool = Decision(values=(True, False))
-        choice: int = Decision(values=(1, 2), when=want)
+        want: bool = Decision(domain=(True, False))
+        choice: int = Decision(domain=(1, 2), when=want)
 
     def read(found: Ans) -> tuple[Address, ...]:
         return tuple(dict.fromkeys(node for node, _ in found.trace))

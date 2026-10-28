@@ -87,12 +87,12 @@ IN_AN_OPEN_CASE = Case(
 
 class Lane(Space):
     width: int = Param()
-    depth: int = Decision(values=(1, 2, 4))
+    depth: int = Decision(domain=(1, 2, 4))
 
 
 class Stage(Space):
     width: int = Param()
-    stages: int = Decision(values=(1, 2))
+    stages: int = Decision(domain=(1, 2))
 
 
 def _name(case: str) -> str:
@@ -108,7 +108,7 @@ def _no_stage(case: str) -> bool | Rejected:
 
 
 class ByArgument(Space):
-    x: int = Decision(values=(0, 1, 2))
+    x: int = Decision(domain=(0, 1, 2))
 
     @derived
     def chain(self) -> str:
@@ -124,7 +124,7 @@ class ByArgument(Space):
     chosen_rule = constraint(case=chosen)(_no_stage)
     picked_rule = constraint(case=picked)(_no_stage)
     lane_chosen: bool = derived(case=chosen)(_is_lane)
-    lane_only: int = Decision(values=(1, 2), when=lane_chosen)
+    lane_only: int = Decision(domain=(1, 2), when=lane_chosen)
 
     @derived
     def body(self) -> str:
@@ -164,7 +164,7 @@ class Capped(Space):
 
 class PickedByAChoice(Space):
     f: int = Param()
-    x: int = Decision(values=(0, 1))
+    x: int = Decision(domain=(0, 1))
 
     @derived
     def pick(self) -> str:

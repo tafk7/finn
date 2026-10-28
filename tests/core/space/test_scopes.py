@@ -39,7 +39,7 @@ def _always() -> bool:
 def test_composite_keeps_narrow_fields_available_and_reuses_accepted_children() -> None:
     class Interface(Space):
         width: int = Param()
-        lanes: int = Decision(values=(1, 2))
+        lanes: int = Decision(domain=(1, 2))
 
         @derived
         def complete(*, width: int, lanes: int) -> int:
@@ -293,7 +293,7 @@ def test_false_choice_guard_does_not_demand_selector_or_case_condition() -> None
         def disabled(self) -> bool:
             return False
 
-        unknown: bool = Decision(values=(False, True))
+        unknown: bool = Decision(domain=(False, True))
         choice: Leaf = Select(a=Leaf(when=unknown), b=Leaf(), when=disabled)
 
     point = design_space(Root())

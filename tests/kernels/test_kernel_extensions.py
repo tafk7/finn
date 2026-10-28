@@ -104,7 +104,7 @@ def test_a_dtype_choice_replays_the_exact_datatype() -> None:
     class DtypeKernel(KernelSpace):
         id = "test.dtype"
         dtype: QONNXDataType = Decision(
-            values=(resolve_qonnx_datatype_name("TERNARY"), resolve_qonnx_datatype_name("INT2"))
+            domain=(resolve_qonnx_datatype_name("TERNARY"), resolve_qonnx_datatype_name("INT2"))
         )
 
     base = design_space(DtypeKernel())

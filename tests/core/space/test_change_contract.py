@@ -22,7 +22,7 @@ def test_malformed_last_candidate_prevents_first_membership_callback() -> None:
 
     class Trial(Space):
         first: int = Decision(domain=Domain((), membership))
-        second: int = Decision(values=(1, 2))
+        second: int = Decision(domain=(1, 2))
 
     base = design_space(Trial())
     with pytest.raises(RequestError):

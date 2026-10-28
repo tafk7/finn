@@ -23,8 +23,8 @@ def test_settled_values_and_acceptance_survive_unrelated_added_choices() -> None
 
     class Example(Space):
         extent: int = Param()
-        lanes: int = Decision(values=(1, 2))
-        style: str = Decision(values=("small", "fast"))
+        lanes: int = Decision(domain=(1, 2))
+        style: str = Decision(domain=("small", "fast"))
 
         @derived
         def cycles(self) -> int:

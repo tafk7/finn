@@ -290,7 +290,7 @@ class DotpAxiKernel(KernelSpace):
 
     # Pumping needs lanes to split (``pumping_has_lanes``, so SIMD 1 does not offer it),
     # and a doubled clock, which the shell supplies.
-    compute_pumping: bool = Decision(values=(False, True))
+    compute_pumping: bool = Decision(domain=(False, True))
 
     @constraint
     def pumping_has_lanes(self) -> bool | Rejected:
@@ -575,7 +575,7 @@ class PackedDotpKernel(DotpAxiKernel):
 
     #: How add_multi reduces the SIMD products: a choice within this core, the adder tree
     #: first (``REDUCERS``: why).
-    reducer: str = Decision(values=REDUCERS)
+    reducer: str = Decision(domain=REDUCERS)
 
     @derived
     def narrow_weights(self) -> bool:

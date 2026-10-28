@@ -14,7 +14,7 @@ class Leaf(Space):
 
 
 class OptionalChildren(Space):
-    enabled: bool = Decision(values=(False, True))
+    enabled: bool = Decision(domain=(False, True))
     first = Leaf(when=enabled)
     second = Leaf(when=enabled)
     third = Leaf(when=enabled)

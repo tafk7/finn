@@ -63,7 +63,7 @@ class Wide(Space):
 class Root(Space):
     extent: int = Param()
     mode: Leaf | Wide = Select(leaf=Leaf(extent=extent), wide=Wide)
-    width: int = Decision(values=(8, 16))
+    width: int = Decision(domain=(8, 16))
 
     @constraint
     def fits(self) -> bool:
@@ -188,7 +188,7 @@ class Fed(Space):
     def has_size(self) -> bool:
         return self.size is not None
 
-    gated: int = Decision(values=(1, 2), when=has_size)
+    gated: int = Decision(domain=(1, 2), when=has_size)
 
 
 def test_answers_and_values() -> None:

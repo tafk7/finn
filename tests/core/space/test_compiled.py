@@ -31,7 +31,7 @@ from finn.core.space.ir import PLACING, Formal, Local, Placed, Selected
 
 class Leaf(Space):
     width: int = Param()
-    lanes: int = Decision(values=(1, 2))
+    lanes: int = Decision(domain=(1, 2))
 
     @derived
     def bits(*, width: int, lanes: int) -> int:
@@ -54,7 +54,7 @@ class Narrow(Space):
 
 class Top(Space):
     w: int = Param()
-    enabled: bool = Decision(values=(False, True))
+    enabled: bool = Decision(domain=(False, True))
     middle = Middle(depth=w)  # bound by reference
     fixed = Leaf(width=4)  # bound to a literal
     guarded = Leaf(width=w, when=enabled)

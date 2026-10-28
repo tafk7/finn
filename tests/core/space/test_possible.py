@@ -110,7 +110,7 @@ def test_a_choice_nested_under_an_open_selector_is_stored_and_waits_on_it() -> N
 def test_a_validity_waiting_on_an_open_choice_does_not_refuse() -> None:
     class Waiting(Space):
         width: int = Param()
-        pe: int = Decision(values=(1, 2, 8))
+        pe: int = Decision(domain=(1, 2, 8))
 
         @constraint
         def small(self) -> bool | Rejected:
@@ -134,7 +134,7 @@ def test_a_validity_waiting_on_an_open_choice_does_not_refuse() -> None:
 def test_a_validity_refused_beside_a_piece_waiting_refuses() -> None:
     class Both(Space):
         width: int = Param()
-        pe: int = Decision(values=(1, 2))
+        pe: int = Decision(domain=(1, 2))
 
         @constraint
         def waits(self) -> bool:
@@ -163,8 +163,8 @@ def test_a_validity_refused_beside_a_piece_waiting_refuses() -> None:
 
 def test_a_value_decision_with_one_case_is_open() -> None:
     class Lanes(Space):
-        lanes: int = Decision(values=(4,))
-        many: int = Decision(values=(1, 2))
+        lanes: int = Decision(domain=(4,))
+        many: int = Decision(domain=(1, 2))
 
     point = design_space(Lanes())
     assert unassigned(point.query(Lanes.lanes)) and unassigned(point.query(Lanes.many))
@@ -179,8 +179,8 @@ class Capabilities:
 
 class Memory(Space):
     capabilities: Capabilities = Param(default=Capabilities())
-    style: str = Decision(values=("auto", "fast"))
-    writable: bool = Decision(values=(False, True))
+    style: str = Decision(domain=("auto", "fast"))
+    writable: bool = Decision(domain=(False, True))
 
     @constraint
     def fast_present(self) -> bool | Rejected:
@@ -221,7 +221,7 @@ def test_a_case_a_constraint_refuses_is_refused_and_a_configuration_holding_it_r
 
 class Limited(Space):
     width: int = Param()
-    limit: int = Decision(values=(1, 8))
+    limit: int = Decision(domain=(1, 8))
     pe: int = Decision(domain=divisors_of(width))
 
     @constraint
@@ -241,7 +241,7 @@ class Hop(Space):
     def stubbed(self) -> bool:
         return isinstance(self.compute, Stub)
 
-    burst: int = Decision(values=(1, 2))
+    burst: int = Decision(domain=(1, 2))
     compute: Limited | Stub = Select(**entries, width=width)
 
     @constraint
@@ -252,7 +252,7 @@ class Hop(Space):
 
 
 class Other(Space):
-    size: int = Decision(values=(1, 2, 3))
+    size: int = Decision(domain=(1, 2, 3))
 
 
 class HopsFirst(Space):
@@ -332,7 +332,7 @@ def test_a_values_trial_keeps_what_the_value_does_not_reach() -> None:
             return self.lanes
 
         # Read first, on the configuration itself: the constraint on ``wide`` reads ``width``.
-        wide: bool = Decision(values=(False, True))
+        wide: bool = Decision(domain=(False, True))
         compute: Packed | Stub = Select(**CORES, width=width)
 
         @constraint

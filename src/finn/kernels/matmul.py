@@ -320,7 +320,7 @@ class MatMulKernel(KernelSpace):
 
     # A depthwise operation runs natively (one channel per PE lane, a core that reads
     # it) or on the dense datapath with block-diagonal weights, on any core.
-    realization: str = Decision(values=("native", "dense"), when=depthwise)
+    realization: str = Decision(domain=("native", "dense"), when=depthwise)
 
     @constraint
     def native_readable(self) -> bool | Rejected | Inapplicable:

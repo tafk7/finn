@@ -22,7 +22,7 @@ from finn.core.space.compiler import compile_model
 
 class Leaf(Space):
     width: int = Param()
-    lanes: int = Decision(values=(1, 2))
+    lanes: int = Decision(domain=(1, 2))
 
     @derived
     def bits(self) -> int:
@@ -38,7 +38,7 @@ class Leaf(Space):
 
 class Wide(Space):
     width: int = Param()
-    span: int = Decision(values=(2, 4))
+    span: int = Decision(domain=(2, 4))
 
 
 NAME = "width"
@@ -46,7 +46,7 @@ NAME = "width"
 
 class Outer(Space):
     width: int = Param()
-    enabled: bool = Decision(values=(False, True))
+    enabled: bool = Decision(domain=(False, True))
     leaf = Leaf(width=width)
     guarded = Leaf(width=width, when=enabled)
     mode: Leaf | Wide = Select(leaf=Leaf(width=width), wide=Wide(width=width))
@@ -138,7 +138,7 @@ class Mutual(Space):
     """Two helpers that call each other, each reading another member."""
 
     width: int = Param()
-    lanes: int = Decision(values=(1, 2))
+    lanes: int = Decision(domain=(1, 2))
 
     def first(self, depth: int) -> int:
         return self.width if depth == 0 else self.second(depth - 1)
@@ -297,7 +297,7 @@ def test_existence_guards_innermost_first() -> None:
 def test_nested_guards_reach_the_root() -> None:
     class Inner(Space):
         on: bool = Param()
-        value: int = Decision(values=(1,), when=on)
+        value: int = Decision(domain=(1,), when=on)
 
     class Middle(Space):
         on: bool = Param()

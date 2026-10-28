@@ -154,7 +154,7 @@ class MemStreamKernel(KernelSpace):
         return memory_preference(bits)
 
     # A pumped memory takes a doubled clock, which the shell admits.
-    pumped_memory: bool = Decision(values=(False, True))
+    pumped_memory: bool = Decision(domain=(False, True))
 
     @derived
     def value_range(self) -> tuple[int, ...] | Rejected:

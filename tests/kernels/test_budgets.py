@@ -50,7 +50,7 @@ class Presenting(KernelSpace):
     id = "test.presenting"
 
     control: str | None = Param(default=None)
-    on: bool = Decision(values=(True, False))
+    on: bool = Decision(domain=(True, False))
     config = ControlBus(LITE, presented=on, port=control, registers=RegisterMap())
 
 
@@ -59,7 +59,7 @@ class Initiating(KernelSpace):
 
     id = "test.initiating"
 
-    on: bool = Decision(values=(True, False))
+    on: bool = Decision(domain=(True, False))
 
     @derived
     def memory_initiators(self) -> int:
@@ -71,7 +71,7 @@ class Pumping(KernelSpace):
 
     id = "test.pumping"
 
-    on: bool = Decision(values=(True, False))
+    on: bool = Decision(domain=(True, False))
 
     @derived
     def takes_doubled_clock(self) -> bool:

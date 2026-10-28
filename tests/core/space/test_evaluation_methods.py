@@ -47,7 +47,7 @@ def value(world: Evaluation, key: str) -> object:
 
 class Leaf(Space):
     width: int = Param()
-    lanes: int = Decision(values=(1, 2))
+    lanes: int = Decision(domain=(1, 2))
 
     @derived
     def bits(self) -> int:
@@ -56,12 +56,12 @@ class Leaf(Space):
 
 class Wide(Space):
     width: int = Param()
-    span: int = Decision(values=(2, 4))
+    span: int = Decision(domain=(2, 4))
 
 
 class Outer(Space):
     width: int = Param()
-    enabled: bool = Decision(values=(False, True))
+    enabled: bool = Decision(domain=(False, True))
     leaf = Leaf(width=width)
     guarded = Leaf(width=width, when=enabled)
     mode: Leaf | Wide = Select(leaf=Leaf(width=width), wide=Wide(width=width))

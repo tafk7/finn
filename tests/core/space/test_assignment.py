@@ -126,7 +126,7 @@ def test_the_canons_pair_a_change_alone_is_refused_and_both_at_once_accepted() -
 
 class Memory(Space):
     uram: bool = Param()
-    style: str = Decision(values=("block", "ultra"))
+    style: str = Decision(domain=("block", "ultra"))
 
     @constraint
     def ultra_needs_uram(self) -> bool | Rejected:
@@ -149,8 +149,8 @@ def test_the_canons_memory_a_case_the_facts_refuse_is_refused_naming_its_rule() 
 
 
 class Pumped(Space):
-    simd: int = Decision(values=(1, 2, 4))
-    pumping: bool = Decision(values=(False, True))
+    simd: int = Decision(domain=(1, 2, 4))
+    pumping: bool = Decision(domain=(False, True))
 
     @derived
     def lanes(self) -> int | Rejected:
@@ -182,8 +182,8 @@ def test_a_refusal_through_a_refused_input_is_blamed_at_its_origin_once() -> Non
 
 
 class Packed(Space):
-    simd: int = Decision(values=(1, 2))
-    pumping: bool = Decision(values=(False, True))
+    simd: int = Decision(domain=(1, 2))
+    pumping: bool = Decision(domain=(False, True))
 
     @constraint
     def pumping_has_lanes(self) -> bool:
@@ -205,9 +205,9 @@ def test_a_rule_in_a_case_never_names_its_selector_standing() -> None:
 
 
 class Sum(Space):
-    a: int = Decision(values=tuple(range(11)))
-    b: int = Decision(values=tuple(range(11)))
-    c: int = Decision(values=tuple(range(11)))
+    a: int = Decision(domain=tuple(range(11)))
+    b: int = Decision(domain=tuple(range(11)))
+    c: int = Decision(domain=tuple(range(11)))
 
     @constraint
     def total(self) -> bool:
@@ -224,11 +224,11 @@ def test_a_new_value_is_refused_with_every_stored_choice_it_reads_standing() -> 
 
 
 class Gate(Space):
-    c: int = Decision(values=(1, 2))
+    c: int = Decision(domain=(1, 2))
 
 
 class Gated(Space):
-    s: str = Decision(values=("a", "b"))
+    s: str = Decision(domain=("a", "b"))
 
     @derived
     def is_b(self) -> bool:
@@ -256,7 +256,7 @@ def test_a_choice_the_rule_reads_as_a_value_stands_though_it_decides_what_else_e
 
 
 class Alternative(Space):
-    p: int = Decision(values=(1, 2))
+    p: int = Decision(domain=(1, 2))
 
 
 class Selected(Space):
@@ -278,8 +278,8 @@ def test_a_selector_read_only_to_find_its_candidate_does_not_stand() -> None:
 
 class Facts(Space):
     w: int = Param()
-    x: int = Decision(values=(1, 2))
-    y: int = Decision(values=(1, 2))
+    x: int = Decision(domain=(1, 2))
+    y: int = Decision(domain=(1, 2))
 
     @derived
     def d(self) -> int | Rejected:
@@ -322,7 +322,7 @@ class Shallow(Space):
 
 class Switch(Space):
     w: int = Param()
-    c: int = Decision(values=(1, 2))
+    c: int = Decision(domain=(1, 2))
 
     @derived
     def depth(self) -> int | Rejected:
@@ -353,8 +353,8 @@ def test_switching_into_a_case_whose_rule_is_false_outside_it_is_refused() -> No
 
 
 class Guarded(Space):
-    size: int = Decision(values=(-1, 8))
-    scale: int = Decision(values=(1, 2))
+    size: int = Decision(domain=(-1, 8))
+    scale: int = Decision(domain=(1, 2))
 
     @derived
     def big(self) -> bool | Rejected:
@@ -390,7 +390,7 @@ def test_a_guard_refused_through_its_input_names_the_inputs_origin() -> None:
 
 
 class Stage(Space):
-    lanes: int = Decision(values=(1, 2, 3))
+    lanes: int = Decision(domain=(1, 2, 3))
 
     @view
     def beats(self) -> int | Rejected:
@@ -474,8 +474,8 @@ def test_an_addition_never_moves_a_view_down() -> None:
 
 class Store(Space):
     ultra: bool = Param()
-    style: str = Decision(values=("block", "ultra"))
-    depth: int = Decision(values=(1, 2))
+    style: str = Decision(domain=("block", "ultra"))
+    depth: int = Decision(domain=(1, 2))
 
     @constraint
     def has_ultra(self) -> bool | Rejected:
@@ -485,7 +485,7 @@ class Store(Space):
 
 
 class Wire(Space):
-    taps: int = Decision(values=(1, 2))
+    taps: int = Decision(domain=(1, 2))
 
 
 class Sourced(Space):
@@ -540,8 +540,8 @@ def test_a_choice_under_an_open_selector_waits_and_clearing_the_selector_reports
 
 
 class Optional(Space):
-    enabled: bool = Decision(values=(False, True))
-    lanes: int = Decision(values=(1, 2), when=enabled)
+    enabled: bool = Decision(domain=(False, True))
+    lanes: int = Decision(domain=(1, 2), when=enabled)
 
 
 def test_a_when_guard_puts_its_choices_dormant_and_back_into_play() -> None:
@@ -555,7 +555,7 @@ def test_a_when_guard_puts_its_choices_dormant_and_back_into_play() -> None:
 
 
 class Leaf(Space):
-    lanes: int = Decision(values=(1, 2))
+    lanes: int = Decision(domain=(1, 2))
 
     @constraint
     def two(self) -> bool:
@@ -590,7 +590,7 @@ def test_presence_is_the_and_over_the_whole_path_above_a_choice() -> None:
 
 
 class Behind(Space):
-    x: int = Decision(values=(1,))
+    x: int = Decision(domain=(1,))
 
 
 class Threshold(Space):
@@ -612,7 +612,7 @@ class Over(Space):
 
 
 class OverChoice(Space):
-    k: int = Decision(values=(0, 5))
+    k: int = Decision(domain=(0, 5))
     s: Threshold | Bare = Select(a=Threshold(k=k), b=Bare())
 
 
@@ -644,7 +644,7 @@ def test_turning_a_when_off_beneath_an_open_selector_puts_its_choice_dormant() -
 
 
 class OwnGate(Space):
-    c: int = Decision(values=(0, 5))
+    c: int = Decision(domain=(0, 5))
 
     @derived
     def big(self) -> bool:
@@ -654,7 +654,7 @@ class OwnGate(Space):
 
 
 class Switched(Space):
-    c: bool = Decision(values=(False, True))
+    c: bool = Decision(domain=(False, True))
     g: Behind = Behind(when=c)
 
 
@@ -681,7 +681,7 @@ class Sized(Space):
     extent: int = Param()
     uram: bool = Param()
     lanes: int = Decision(domain=divisors_of(extent))
-    style: str = Decision(values=("block", "ultra"))
+    style: str = Decision(domain=("block", "ultra"))
 
     @constraint
     def ultra_needs_uram(self) -> bool | Rejected:
@@ -839,7 +839,7 @@ def domain_of_positive() -> Domain[int]:
 class States(Space):
     extent: int = Param()
     source: Store | Wire = Select(memory=Store(ultra=True), wire=Wire)
-    enabled: bool = Decision(values=(False, True))
+    enabled: bool = Decision(domain=(False, True))
     lanes: int = Decision(domain=divisors_of(extent))
     depth: int = Decision(domain=domain_of_positive(), when=enabled)
 

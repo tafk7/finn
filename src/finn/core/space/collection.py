@@ -89,7 +89,7 @@ def _member_declaration(value: object) -> Declaration | None:
 
 
 def _check_choice_annotation(decision: NodeDecision) -> None:
-    """``heating: Boiler | HeatPump = Decision(values=...)``: the union names the candidates."""
+    """``heating: Boiler | HeatPump = Decision(domain=...)``: the union names the candidates."""
     annotation = declared_annotation(decision, "Decision")
     if annotation is MISSING:
         return  # a Decision over nodes persists its key; its annotation only types it

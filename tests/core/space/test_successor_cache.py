@@ -42,8 +42,8 @@ def test_a_successor_keeps_what_its_change_does_not_reach_and_derives_the_rest()
 
     class Room(Space):
         width: int = Param()
-        lanes: int = Decision(values=(1, 2, 4))
-        finish: str = Decision(values=("matte", "gloss"))
+        lanes: int = Decision(domain=(1, 2, 4))
+        finish: str = Decision(domain=("matte", "gloss"))
 
         @derived
         def area(self) -> int:
@@ -128,7 +128,7 @@ def test_a_change_does_not_evaluate_the_guard_of_a_choice_it_does_not_reach() ->
 
     class Guarded(Space):
         width: int = Param()
-        finish: str = Decision(values=("matte", "gloss"))
+        finish: str = Decision(domain=("matte", "gloss"))
         compute: Packed | Stub = Select(**CORES, width=width)
 
         @derived
