@@ -408,7 +408,13 @@ def test_input_generator_native_assembly_halts_on_raised_inputs_and_accumulates_
     monkeypatch.setenv("FINN_SPACE_PERMUTE", "1" if permuted else "0")
     monkeypatch.setenv("FINN_SPACE_EAGER", "1" if eager else "0")
     point = design_space(
-        SerialGenerator(input_tensor=TENSOR, arriving=ARRIVING, depth=8, platform=FULL_DSP48E2)
+        SerialGenerator(
+            input_tensor=TENSOR,
+            arriving=ARRIVING,
+            leaving=LEAVING,
+            platform=FULL_DSP48E2,
+            ram_style="auto",
+        )
     )
     choices: dict[object, object] = {}
     if first is not None:
