@@ -1,6 +1,6 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Resolved module products and the existing Vpc leaf, before its authoring migration."""
+"""Resolved products and Vpc artifact parity with the immutable pre-migration leaf."""
 
 from dataclasses import FrozenInstanceError
 
@@ -22,6 +22,13 @@ from finn.kernels.base import NATIVE_CLOCKING
 from finn.kernels.library import ModuleSpec, assemble_module, library_module, module_unprovided
 from finn.kernels.vpc import VpcKernel
 
+# Captured from immutable FINN0dd7e4ac5; full canonical values/pins are retained
+# in the output record. This is the original public module fingerprint, not a new oracle.
+VPC_FINGERPRINTS = {
+    "INT3": "45f1010f94349b82ada2b4fad92e36004f61c6f695caf3837474d6101fb021e1",
+    "UINT7": "84415cda7375d1bebcdcb25332828e349e1efc1ca7f7513e09951cab4014a819",
+}
+
 VPC_SOURCE = CopiedSource("finnlib", "rtl/shape/vpc.sv", provides=("module:vpc",))
 
 
@@ -40,9 +47,9 @@ def test_resolved_module_matches_actual_existing_vpc_leaf(
     old = library_module(point)
     spec = ModuleSpec("vpc", (VPC_SOURCE,))
     spec.validate("VpcKernel", "VpcKernel.module_spec")
-    pin_parts = (VpcKernel.input.pins(point, "input"), VpcKernel.output.pins(point, "output"))
+    pin_parts = (point.input.physical_pins, point.output.physical_pins)
     assert not isinstance(pin_parts[0], Rejected) and not isinstance(pin_parts[1], Rejected)
-    held_parts = (VpcKernel.input.held(point, "input"), VpcKernel.output.held(point, "output"))
+    held_parts = (point.input.idle_pins, point.output.idle_pins)
     assert not isinstance(held_parts[0], Rejected) and not isinstance(held_parts[1], Rejected)
     assert module_unprovided(spec, "VpcKernel", (VPC_SOURCE,)) is None
     new = assemble_module(
@@ -59,7 +66,7 @@ def test_resolved_module_matches_actual_existing_vpc_leaf(
     )
     assert new == old
     assert isinstance(new, Leaf)
-    assert fingerprint(new) == fingerprint(old)
+    assert fingerprint(new) == fingerprint(old) == VPC_FINGERPRINTS[dtype]
 
 
 def test_constant_and_dynamic_source_provision_have_one_plain_contract() -> None:

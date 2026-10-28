@@ -83,6 +83,7 @@ from finn.kernels.control import presented as presented_buses
 from finn.kernels.explore import Trial, dotted
 from finn.kernels.movers import MoverOffer
 from finn.kernels.policies import Defaulted, Owner, Unstated, defaulted
+from finn.kernels.port import port_surface
 from finn.kernels.sides import Side, SideKind
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
@@ -613,7 +614,9 @@ class Partition:
             if not isinstance(declared, Port):
                 continue
             point = self.member(declared.member)
-            answer = point.query(getattr(type(point), f"{declared.port}_contract"))
+            reference = port_surface(type(point), declared.port).contract
+            assert reference is not None
+            answer = point.query(reference)
             if isinstance(answer, Available) and isinstance(answer.value, PortContract):
                 found[side] = answer.value.under(self.node(declared.member))
         return Neighbours(found.get("producer"), found.get("consumer"))
@@ -731,7 +734,9 @@ class Partition:
         for declared in self._sides.get(name, ()):
             if isinstance(declared, Port):
                 point = self.member(declared.member)
-                answer = point.query(getattr(type(point), f"{declared.port}_side"))
+                reference = port_surface(type(point), declared.port).side
+                assert reference is not None
+                answer = point.query(reference)
                 label = f"{declared.member}.{declared.port}"
                 (absent if isinstance(answer, Inapplicable) else present).append(label)
         if not absent:

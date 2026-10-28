@@ -24,17 +24,19 @@ side presenting padded beats, which no beat sequence (``finn.dataflow``) states.
 from __future__ import annotations
 
 from math import lcm
-from typing import TYPE_CHECKING, ClassVar
+from typing import ClassVar
 
-from finn.core.space import Param, derived, view
+from finn.core.space import Param, Rejected, derived, view
 from finn.dataflow.streams import Stream
-from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence
-from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.abi import Clocking, Endpoint, Pin
 from finn.kernels.artifacts.contributions import CopiedSource
+from finn.kernels.artifacts.module import Fragment, Held
 from finn.kernels.base import NATIVE_CLOCKING, KernelSpace
-from finn.kernels.library import LibraryModule
-from finn.kernels.port import native_stream
+from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
+from finn.kernels.port import held, pins
+from finn.kernels.port_model import native_port
 from finn.kernels.utilization import Fit
 from finn.platform.capabilities import Resources
 
@@ -69,29 +71,34 @@ class VpcKernel(KernelSpace):
         tensor: Tensor = self.input_tensor
         return tensor
 
-    input = native_stream("input", Endpoint.TARGET, input_tensor, arriving)
-    output = native_stream("output", Endpoint.INITIATOR, output_tensor, leaving)
-    if TYPE_CHECKING:  # members its ports lower to, which it reads
-        input_element: ClassVar[ScalarEncoding]
-        input_stream: ClassVar[Stream]
-        output_stream: ClassVar[Stream]
+    @derived
+    def port_clocking(self) -> Clocking:
+        """Physical port clock names remain the class's clock_domain, including overrides."""
+        return type(self).clock_domain
+
+    input = native_port(
+        "input", Endpoint.TARGET, input_tensor, arriving, clocking=port_clocking, label="input"
+    )
+    output = native_port(
+        "output", Endpoint.INITIATOR, output_tensor, leaving, clocking=port_clocking, label="output"
+    )
 
     @derived
     def element_bits(self) -> int:
         """W: the bits of its tensor's element."""
-        bits: int = self.input_element.bits
+        bits: int = self.input.element.bits
         return bits
 
     @derived
     def lanes_in(self) -> int:
         """PI: the elements a beat its input presents."""
-        lanes: int = self.input_stream.sequence.form.lanes
+        lanes: int = self.input.stream.sequence.form.lanes
         return lanes
 
     @derived
     def lanes_out(self) -> int:
         """PO: the elements a beat its output presents."""
-        lanes: int = self.output_stream.sequence.form.lanes
+        lanes: int = self.output.stream.sequence.form.lanes
         return lanes
 
     # Its lanes and element come from its ports, positive by construction: the RTL
@@ -112,11 +119,72 @@ class VpcKernel(KernelSpace):
             "W": self.element_bits,
         }
 
-    module = LibraryModule(
-        "vpc",
-        parameters=parameters,
-        sources=(CopiedSource("finnlib", "rtl/shape/vpc.sv", provides=("module:vpc",)),),
+    module_spec: ClassVar[ModuleSpec] = ModuleSpec(
+        "vpc", (CopiedSource("finnlib", "rtl/shape/vpc.sv", provides=("module:vpc",)),)
     )
+
+    def _input_pins(self) -> tuple[Pin, ...] | Rejected:
+        presenting = self.input.presenting()
+        return pins(
+            self.input.physical_spec(idle=not isinstance(presenting, Stream)),
+            presenting,
+            self.input.clocking,
+        )
+
+    def _output_pins(self) -> tuple[Pin, ...] | Rejected:
+        presenting = self.output.presenting()
+        return pins(
+            self.output.physical_spec(idle=not isinstance(presenting, Stream)),
+            presenting,
+            self.output.clocking,
+        )
+
+    def _input_held(self) -> Held | Rejected:
+        if self.input.placed:
+            return Held()
+        element = self.input.element
+        return held(self.input.physical_spec(idle=True), element, self.input.clocking)
+
+    def _output_held(self) -> Held | Rejected:
+        if self.output.placed:
+            return Held()
+        element = self.output.element
+        return held(self.output.physical_spec(idle=True), element, self.output.clocking)
+
+    @view
+    def netlist(self) -> Fragment | Rejected:
+        clocking = self.clocking
+        parameters = tuple(sorted(self.parameters.items()))
+        pin_parts = _each((self._input_pins(), self._output_pins()))
+        if isinstance(pin_parts, Rejected):
+            return pin_parts
+        spec = type(self).module_spec
+        sources = spec.constant_sources
+        assert sources is not None  # Vpc has constant sources; no dynamic source View.
+        refused = module_unprovided(spec, type(self).__qualname__, sources)
+        if isinstance(refused, Rejected):
+            return refused
+        data = ()
+        held_parts = _each((self._input_held(), self._output_held()))
+        if isinstance(held_parts, Rejected):
+            return held_parts
+        leaf = assemble_module(
+            spec,
+            type(self).id,
+            type(self).__qualname__,
+            clocking,
+            parameters,
+            tuple(pin_parts),
+            sources,
+            data,
+            tuple(held_parts),
+            (True, True),
+        )
+        return leaf if isinstance(leaf, Rejected) else Fragment((("", leaf),))
+
+    @view
+    def cycles(self) -> int:
+        return max(self.input.stream.sequence.form.beats, self.output.stream.sequence.form.beats)
 
 
 __all__ = ["VpcKernel", "vpc_resources"]

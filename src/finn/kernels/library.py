@@ -52,7 +52,7 @@ from finn.kernels.artifacts.contributions import (
     HlsSource,
     request_stem,
 )
-from finn.kernels.artifacts.module import Abi, BuildError, Held, Leaf
+from finn.kernels.artifacts.module import Abi, BuildError, Fragment, Held, Leaf
 from finn.kernels.declaration import KernelDeclaration, ModuleOrder, Product, is_member
 
 if TYPE_CHECKING:
@@ -310,6 +310,14 @@ class LibraryModule(KernelDeclaration):
         )
 
 
+def leaf_at_root(netlist: Fragment, owner: str) -> Leaf:
+    """Extract a resolved module at its empty label; no receiver enters this helper."""
+    found = dict(netlist.instances).get("")
+    if found is None:
+        raise ValueError(f"{owner} binds no library module")
+    return found
+
+
 def library_module(point: Kernel) -> Leaf:
     """The module at the empty label of ``point``'s accepted netlist: the library module a
     kernel binds."""
@@ -324,5 +332,6 @@ __all__ = [
     "ModuleSpec",
     "assemble_module",
     "library_module",
+    "leaf_at_root",
     "module_unprovided",
 ]

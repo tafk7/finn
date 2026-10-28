@@ -122,7 +122,7 @@ from finn.kernels.budgets import (
 from finn.kernels.channels import Channel
 from finn.kernels.control import ControlBus
 from finn.kernels.declaration import declarations
-from finn.kernels.port import port_endpoint
+from finn.kernels.port import port_endpoint, port_surface
 from finn.kernels.sides import Side, SideKind
 
 Key = tuple[str, str]
@@ -429,6 +429,17 @@ def _checked(declared: PartitionDeclaration) -> list[Finding]:
                 findings.append(
                     _refused("channel-read", name, f"reads {read.member}, which is no member")
                 )
+            elif isinstance(read, Port):
+                try:
+                    surface = port_surface(_class_of(declared, read.member), read.port)
+                except KeyError:
+                    surface = None
+                if surface is None or surface.side is None:
+                    findings.append(
+                        _refused(
+                            "channel-read", name, f"reads {read.member}, which states no {stated}"
+                        )
+                    )
             elif not _states(_class_of(declared, read.member), stated):
                 findings.append(
                     _refused("channel-read", name, f"reads {read.member}, which states no {stated}")
@@ -622,7 +633,10 @@ def _made(
             root = root_name(member, role)
             roots[root] = (owner, role)
             if isinstance(side, Port):
-                read = getattr(nodes[names[side.member]], f"{side.port}_side")
+                node = nodes[names[side.member]]
+                assert isinstance(node, Space)
+                read = port_surface(node, side.port).side
+                assert read is not None  # _checked validates the logical side before construction
                 channels[root] = given[role] = derived(side=read)(_under(names[side.member]))
             else:
                 params[root] = given[role] = _param(Channel, role, owner, annotations, root)

@@ -78,7 +78,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from finn.core.space import (
     DefinitionError,
@@ -89,9 +89,11 @@ from finn.core.space import (
     constraint,
     derived,
     reject,
+    space_formals,
     view,
 )
 from finn.core.space._nodes import NodeDecision, NodeDecl, selected, unwrap
+from finn.core.space.declarations import declared_path
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.schedule import Access, Affine, Index, Pace, Refused, Schedule, plain_index
 from finn.dataflow.streams import Stream
@@ -117,6 +119,9 @@ from finn.kernels.transport import (
     StreamMarker,
 )
 from finn.kernels.values.domains import Integer, admit_element
+
+if TYPE_CHECKING:
+    from finn.kernels.port_model import PortSurface
 
 
 def _applies(space: Space, guard: str | None) -> bool:
@@ -822,6 +827,18 @@ def port_endpoint(space_type: type[Space], port: str) -> Endpoint | None:
     endpoint read from a member, or cases that disagree)."""
     if not (isinstance(space_type, type) and issubclass(space_type, UntimedKernel)):
         return None
+    # A real port child's static endpoint is its explicit binding or formal default.
+    from finn.kernels.port_model import PortModel  # noqa: PLC0415 - breaks base/port cycle
+
+    child = getattr(space_type, port, None)
+    if isinstance(child, PortModel):
+        record = unwrap(child)
+        if not isinstance(record, NodeDecl):
+            return None
+        endpoint = record.bindings.get(
+            "endpoint", space_formals(record.space_type)["endpoint"].default
+        )
+        return endpoint if isinstance(endpoint, Endpoint) else None
     declared = declarations(space_type, UntimedKernel).get(port)
     if isinstance(declared, AxiStreamPort):
         return None if is_member(declared.endpoint) else declared.endpoint
@@ -829,6 +846,47 @@ def port_endpoint(space_type: type[Space], port: str) -> Endpoint | None:
         found = {port_endpoint(child, declared.port) for child in _child_types(declared.child)}
         return found.pop() if len(found) == 1 else None
     return None
+
+
+def port_surface(namespace: type[Space] | Space, port: str) -> PortSurface:
+    """Actual references for a validated logical port key, at an authoring namespace.
+
+    Child ports and still-unmigrated declarations are distinct authored forms.
+    The latter's already-lowered members are captured here only for drivers and
+    composition; this metadata never authorizes a receiver's reads. No aliases,
+    exception fallback or guessed same-spelled references repair an unknown key.
+    Parent served declarations intentionally expose no physical/element fields.
+    """
+    from finn.kernels.port_model import PortModel, PortSurface  # noqa: PLC0415
+
+    space_type = namespace if isinstance(namespace, type) else type(namespace)
+    if not issubclass(space_type, Space) or (
+        not isinstance(namespace, type) and declared_path(namespace) is None
+    ):
+        raise TypeError("port_surface requires a Space class or node declaration")
+    child = getattr(namespace, port, None)
+    if isinstance(child, PortModel):
+        return PortSurface.of(child)
+    if not issubclass(space_type, UntimedKernel):
+        raise KeyError(port)
+    declaration = declarations(space_type, UntimedKernel).get(port)
+    if not isinstance(declaration, (AxiStreamPort, Served)):
+        raise KeyError(port)
+    element: ScalarEncoding | None = (
+        getattr(namespace, f"{port}_element") if isinstance(declaration, AxiStreamPort) else None
+    )
+    if isinstance(declaration, AxiStreamPort) and declaration.placement() is False:
+        return PortSurface(element, port_endpoint(space_type, port), None, None)
+    return PortSurface(
+        element,
+        port_endpoint(space_type, port),
+        None,
+        None,
+        getattr(namespace, f"{port}_stream"),
+        getattr(namespace, f"{port}_data_width"),
+        getattr(namespace, f"{port}_side"),
+        getattr(namespace, f"{port}_contract"),
+    )
 
 
 __all__ = [
@@ -845,6 +903,7 @@ __all__ = [
     "lane_count",
     "native_stream",
     "port_endpoint",
+    "port_surface",
     "pace",
     "pins",
     "served",

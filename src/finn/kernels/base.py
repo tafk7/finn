@@ -108,7 +108,7 @@ from finn.kernels.artifacts.abi import Clocking
 from finn.kernels.artifacts.module import BusExport, Fragment, Link, merge
 from finn.kernels.control import Control, ControlBus, presented
 from finn.kernels.declaration import KernelDeclaration, Product, declarations, declared_reads
-from finn.kernels.library import LibraryModule
+from finn.kernels.library import LibraryModule, ModuleSpec
 from finn.kernels.transport import StreamContract
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
@@ -375,11 +375,16 @@ class UntimedKernel(Space):
             for name, declaration in found.items()
             if isinstance(declaration, LibraryModule)
         ]
-        if len(modules) > 1:
+        members = _members(cls, below)
+        specs = [(name, item) for name, item in members.items() if isinstance(item, ModuleSpec)]
+        for name, spec in specs:
+            spec.validate(cls.__qualname__, f"{cls.__qualname__}.{name}")
+        if len(modules) + len(specs) > 1:
             raise DefinitionError.broken(
                 "library-module-repeated",
                 "KernelSpace",
-                f"{cls.__qualname__} binds the library modules {[name for name, _ in modules]}: "
+                f"{cls.__qualname__} binds the library modules "
+                f"{[name for name, _ in (*modules, *specs)]}: "
                 "a kernel binds one at most",
                 declaration=cls.__qualname__,
             )
@@ -388,7 +393,7 @@ class UntimedKernel(Space):
         if unmet_required(cls):
             return  # a base of kernels (the dot-product cores'), which cannot be placed
         ports = [name for name, declaration in found.items() if declaration.module_port]
-        if not modules:
+        if not modules and not specs:
             if ports:
                 raise DefinitionError.broken(
                     "port-unbound",
@@ -399,6 +404,24 @@ class UntimedKernel(Space):
                     declaration=cls.__qualname__,
                 )
             return
+        if specs:
+            from finn.kernels.port_model import port_surfaces  # noqa: PLC0415
+
+            if ports:
+                raise DefinitionError.broken(
+                    "module-authoring-mixed",
+                    "KernelSpace",
+                    f"{cls.__qualname__}: a ModuleSpec uses real port children and native products",
+                    declaration=cls.__qualname__,
+                )
+            ports = list(port_surfaces(cls))
+            if not _declared(cls, "netlist", below):
+                raise DefinitionError.broken(
+                    "module-netlist-unstated",
+                    "KernelSpace",
+                    f"{cls.__qualname__}: a ModuleSpec kernel states its native netlist assembly",
+                    declaration=cls.__qualname__,
+                )
         if not ports:
             raise DefinitionError.broken(
                 "module-ports-unplaced",

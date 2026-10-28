@@ -90,7 +90,7 @@ def test_it_presents_the_same_elements_in_the_same_order_at_another_lane_count(
     realizes: the tensor row-major, ``lanes_in`` elements a beat in and ``lanes_out`` out."""
     kernel = _staged(conversion)
     lanes_in, lanes_out = conversion["lanes_in"], conversion["lanes_out"]
-    arriving, leaving = kernel.input_stream.sequence.form, kernel.output_stream.sequence.form
+    arriving, leaving = kernel.input.stream.sequence.form, kernel.output.stream.sequence.form
     assert arriving == vector_major(STAGED, lanes_in)
     assert leaving == vector_major(STAGED, lanes_out)
 

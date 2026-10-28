@@ -212,14 +212,15 @@ class PortSurface:
 
     Construct only from node declarations. Fields are typed as their values,
     like ordinary core authored references; they are queried against the owning
-    real Space. Logical fields are None for structurally idle ports. This is
+    real Space. Fields are None when that authored form omits them; logical fields are
+    absent for structurally idle ports and physical fields for parent forwarding. This is
     authoring/driver metadata, not a model Param or a validity certificate.
     """
 
-    element: ScalarEncoding
-    endpoint: Endpoint
-    physical_pins: tuple[Pin, ...]
-    idle_pins: Held
+    element: ScalarEncoding | None
+    endpoint: Endpoint | None
+    physical_pins: tuple[Pin, ...] | None
+    idle_pins: Held | None
     stream: Stream | None = None
     width: int | None = None
     side: Side | None = None
