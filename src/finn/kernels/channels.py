@@ -131,8 +131,9 @@ from finn.kernels.base import (
     KernelSpace,
     PortContract,
     UntimedKernel,
+    merged,
 )
-from finn.kernels.declaration import declared_reads
+from finn.kernels.control import presented
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.library import leaf_at_root
 from finn.kernels.memstream import MemStreamKernel
@@ -863,16 +864,6 @@ class Channel(KernelSpace):
     # -- its answers: the base's, with its own hops, and none of a channel of wires' cycles --
 
     @view
-    @declared_reads(
-        "netlists",
-        "controls",
-        "sides",
-        "boundary",
-        "valued",
-        "source_label",
-        "source.output.contract",
-        "stages",
-    )
     def netlist(self) -> Fragment | Rejected:
         """Its members' netlists under their nodes, in the order the stream runs through
         them (its source, its output adapter's stages, its FIFO, its input adapter's
@@ -907,10 +898,17 @@ class Channel(KernelSpace):
             # A hop that does not connect (another element, say) is refused by the
             # channel's constraints; its wires do not exist.
             return reject("channel-link", str(error))
-        return KernelSpace._netlist(self, tuple(links), _PLACED)
+        parts = [
+            (_PLACED.get(str(item.node), str(item.node)), item.value) for item in self.netlists
+        ]
+        buses = presented(
+            (_PLACED.get(str(item.node), str(item.node)), item.value) for item in self.controls
+        )
+        if isinstance(buses, Rejected):
+            return buses
+        return merged(parts, buses, tuple(links))
 
     @view
-    @declared_reads("member_cycles", "producer", "consumer", "boundary")
     def cycles(self) -> int | Rejected:
         """The clock cycles a frame takes through its own members: the slowest's (its
         source's, its adapters' stages', its mover's), one beat a cycle at best; a FIFO
@@ -919,7 +917,7 @@ class Channel(KernelSpace):
         (``finn.kernels.sides.beat_times``): the partition runs no faster than its outside
         supplies an input or takes an output. A side the outside leaves unstated, or
         states without a pace (a mover's, its contract's), bounds nothing more."""
-        found = KernelSpace._cycles(self, default=0)
+        found = max((item.value for item in self.member_cycles), default=0)
         paces = [
             side.outside.pace
             for side in (self.producer, self.consumer)
