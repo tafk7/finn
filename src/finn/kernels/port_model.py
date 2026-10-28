@@ -349,6 +349,8 @@ class PortSurface:
         Plain metadata only; no method or read-list callback is introduced on a
         Space. Actual native model/View declarations remain on their parent.
         """
+        if not isinstance(namespace, type) and declared_path(namespace) is None:
+            raise TypeError("PortSurface.at requires a class or node declaration")
 
         def bind(value: _SurfaceValue) -> _SurfaceValue:
             if isinstance(value, Declaration):

@@ -32,7 +32,7 @@ from finn.kernels.artifacts.contributions import (
     GeneratedData,
     hex_image,
 )
-from finn.kernels.artifacts.module import Held
+from finn.kernels.artifacts.module import Held, RegisterMap
 from finn.kernels.channels import Channel
 from finn.kernels.control import ControlModel, control_models
 from finn.kernels.library import ModuleSpec
@@ -308,6 +308,40 @@ def test_parent_forwarding_surface_is_rebased_and_not_a_model_binding() -> None:
     assert port_endpoint(Channel, "set") is Endpoint.TARGET
     point = design_space(Envelope())
     assert isinstance(point.query(left.stream), Inapplicable)
+    assert left.contract is not None
+    assert isinstance(point.query(left.contract), Inapplicable)
+    with pytest.raises(TypeError, match="node declaration"):
+        right.at(point)
+
+
+@pytest.mark.parametrize("shown", (False, True))
+def test_actual_parent_control_skips_or_demands_register_map_view(shown: bool) -> None:
+    class WaitingRegisters(ThresholdingAxiKernel):
+        register_state: str = Decision(domain=("ready",))
+
+        @view
+        def register_map(self) -> RegisterMap:
+            _ = self.register_state
+            return RegisterMap(((0, 7),))
+
+    point = design_space(
+        WaitingRegisters(
+            input_tensor=TENSOR,
+            threshold_dtype=DataType["INT8"],
+            thresholds=TABLE,
+            bias=0,
+            control="cfg",
+            platform=FULL_DSP48E2,
+        )
+    ).with_choices(pe=1, use_axilite=shown, deep_pipeline=False, ultra_stages=0, ram_style="auto")
+    trace = inspection.explain(point, WaitingRegisters.bus_control)
+    visited = {n.declaration.key for n in trace.nodes}
+    if shown:
+        assert isinstance(trace.result, Unresolved)
+        assert {"register_map", "register_state"} <= visited
+    else:
+        assert trace.result == Available(Control(None))
+        assert not {"register_map", "register_state"}.intersection(visited)
 
 
 def test_dynamic_module_spec_requires_actual_parent_source_view() -> None:
