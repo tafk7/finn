@@ -154,7 +154,7 @@ def placed(
 def test_every_port_presents_what_the_schedule_derives():
     point = placed()
     compute = point.member("compute")
-    x, w, y = (compute.x_stream.sequence, compute.w_stream.sequence, compute.y_stream.sequence)
+    x, w, y = (compute.x.stream.sequence, compute.w.stream.sequence, compute.y.stream.sequence)
     assert x.form == vector_major((ROWS, REDUCTION), SIMD).replayed(
         OUTPUTS // PE, inner_beats=REDUCTION // SIMD
     )
@@ -174,7 +174,7 @@ def test_every_port_presents_what_the_schedule_derives():
 
 def test_depthwise_activations_carry_pe_channels_of_simd_window_positions():
     point = placed(Form.DEPTHWISE)
-    form = point.member("compute").x_stream.sequence.form
+    form = point.member("compute").x.stream.sequence.form
     assert form.lanes == PE * SIMD and form.shape == (ROWS, REDUCTION, OUTPUTS)
     # Lane s * PE + p is window position s of channel p (FinnLib's order).
     assert next(form.positions()) == ((0, 0, 0), (0, 0, 1), (0, 1, 0), (0, 1, 1))
@@ -226,7 +226,7 @@ def test_a_producer_s_lane_order_is_wires():
     )
     # hlslib's per-channel order (window positions fastest) is likewise a
     # lane permutation of FinnLib's.
-    finnlib = placed(Form.DEPTHWISE).member("compute").x_stream.sequence.form
+    finnlib = placed(Form.DEPTHWISE).member("compute").x.stream.sequence.form
     window_fastest = Traversal(
         finnlib.shape, finnlib.beat_loops, tuple(reversed(finnlib.lane_loops))
     )
@@ -261,7 +261,7 @@ def test_one_kernel_refusal_reaches_the_change_that_selects_it():
     )
     assert not trial.accepted
     assert {(f.code, f.owner) for why in trial.refused.values() for f in why} == {
-        ("dtype-family", "compute.packed.w_element_taken")
+        ("dtype-family", "compute.packed.w.element_taken")
     }
 
 

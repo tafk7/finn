@@ -51,7 +51,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from math import ceil, floor, prod
-from typing import TYPE_CHECKING, ClassVar, cast
+from typing import ClassVar, cast
 
 from qonnx.core.ranges import TensorRange
 
@@ -73,14 +73,16 @@ from finn.dataflow.datatypes import (
     qonnx_datatype_width,
 )
 from finn.dataflow.gemm import Form, Window, c, k, kh, kw, m, n, oh, ow
-from finn.dataflow.schedule import Affine, Index, Schedule
+from finn.dataflow.schedule import Access, Affine, Index, Schedule
 from finn.dataflow.streams import Stream
-from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels.artifacts.abi import CLOCK2X, Clocking, Endpoint
+from finn.dataflow.tensor import Tensor
+from finn.kernels.artifacts.abi import CLOCK2X, Clocking, Endpoint, Pin
 from finn.kernels.artifacts.contributions import CopiedSource
+from finn.kernels.artifacts.module import Fragment, Held
 from finn.kernels.base import KernelSpace, extent_of
-from finn.kernels.library import LibraryModule
-from finn.kernels.port import AxiStreamPort, axis
+from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
+from finn.kernels.port import axis, held, pins
+from finn.kernels.port_model import IndexedPort, ScheduledPort
 from finn.kernels.utilization import Fit
 from finn.kernels.values.domains import Integer, admit_element, integer_bounds, range_dtype
 from finn.platform.capabilities import DspBlock, Platform, Resources, dsp_widths
@@ -164,6 +166,7 @@ class DotpAxiKernel(KernelSpace):
     id = "finnlib.dotp_axi"
     # FinnLib's CORE parameter: the name of the compute core module.
     core: ClassVar[str] = ""
+    module_spec: ClassVar[ModuleSpec]
 
     # What each core states (the module docstring).
     accumulator = required(QONNXDataType)  # type: ignore[type-abstract]
@@ -360,8 +363,22 @@ class DotpAxiKernel(KernelSpace):
         """The activation encodings the core takes (``activations``)."""
         return self.activations
 
-    x = AxiStreamPort(
+    def _accesses(self) -> list[Access]:
+        found: list[Access] = []
+        if self.x.binds:
+            found.append(self.x.access)
+        if self.w.binds:
+            found.append(self.w.access)
+        return found
+
+    @derived
+    def port_clocking(self) -> Clocking:
+        return type(self).clock_domain
+
+    x = IndexedPort(
         name="s_axis_input",
+        label="x",
+        clocking=port_clocking,
         endpoint=Endpoint.TARGET,
         tensor=x_tensor,
         admits=activation_policy,
@@ -371,8 +388,10 @@ class DotpAxiKernel(KernelSpace):
         closes=reduced,
         reshaped=x_viewed,
     )
-    w = AxiStreamPort(
+    w = IndexedPort(
         name="s_axis_weights",
+        label="w",
+        clocking=port_clocking,
         endpoint=Endpoint.TARGET,
         tensor=w_tensor,
         admits=Integer(min_bits=2, signed=True),
@@ -381,8 +400,10 @@ class DotpAxiKernel(KernelSpace):
         lanes=w_lanes,
         reshaped=windowed,
     )
-    y = AxiStreamPort(
+    y = ScheduledPort(
         name="m_axis_output",
+        label="y",
+        clocking=port_clocking,
         endpoint=Endpoint.INITIATOR,
         tensor=y_tensor,
         admits=Integer(),
@@ -392,13 +413,6 @@ class DotpAxiKernel(KernelSpace):
         reduces=reduced,
         reshaped=rows_viewed,
     )
-    if TYPE_CHECKING:  # members its ports lower to, which it reads
-        x_element: ClassVar[ScalarEncoding]
-        w_element: ClassVar[ScalarEncoding]
-        y_element: ClassVar[ScalarEncoding]
-        x_stream: ClassVar[Stream]
-        w_stream: ClassVar[Stream]
-        y_stream: ClassVar[Stream]
 
     @derived
     def dsp(self) -> DspBlock | Rejected:
@@ -412,7 +426,7 @@ class DotpAxiKernel(KernelSpace):
         """Whether the activations are an ordinary integer encoding: a core's bounds read
         them; another is the activation port's to refuse."""
         try:
-            ordinary_integer_bounds(self.x_element.dtype)
+            ordinary_integer_bounds(self.x.element.dtype)
         except DatatypeError:
             return False
         return True
@@ -420,13 +434,13 @@ class DotpAxiKernel(KernelSpace):
     @constraint
     def stream_widths_supported(self) -> bool | Rejected:
         # The native payload and byte-aligned carrier localparams are uint32.
-        x = axis(DotpAxiKernel.x, self.x_stream)
+        x = axis(self.x.physical_spec(idle=False), self.x.stream)
         if isinstance(x, Rejected):
             return x
-        w = axis(DotpAxiKernel.w, self.w_stream)
+        w = axis(self.w.physical_spec(idle=False), self.w.stream)
         if isinstance(w, Rejected):
             return w
-        y = axis(DotpAxiKernel.y, self.y_stream)
+        y = axis(self.y.physical_spec(idle=False), self.y.stream)
         if isinstance(y, Rejected):
             return y
         if any(port.carrier_bits > 0xFFFFFFFF for port in (x, w, y)):
@@ -458,7 +472,7 @@ class DotpAxiKernel(KernelSpace):
 
     @view
     def parameters(self) -> dict[str, int | str]:
-        x, w, y = self.x_element, self.w_element, self.y_element
+        x, w, y = self.x.element, self.w.element, self.y.element
         return {
             "PE": self.pe,
             "SIMD": self.simd,
@@ -475,6 +489,94 @@ class DotpAxiKernel(KernelSpace):
             "CORE": f'"{type(self).core}"',
             "REDUCER": f'"{self.reducer}"',
         }
+
+    def _x_pins(self) -> tuple[Pin, ...] | Rejected:
+        presenting = self.x.presenting()
+        return pins(
+            self.x.physical_spec(idle=not isinstance(presenting, Stream)),
+            presenting,
+            self.x.clocking,
+        )
+
+    def _x_held(self) -> Held | Rejected:
+        if self.x.placed:
+            return Held()
+        return held(self.x.physical_spec(idle=True), self.x.element, self.x.clocking)
+
+    def _w_pins(self) -> tuple[Pin, ...] | Rejected:
+        presenting = self.w.presenting()
+        return pins(
+            self.w.physical_spec(idle=not isinstance(presenting, Stream)),
+            presenting,
+            self.w.clocking,
+        )
+
+    def _w_held(self) -> Held | Rejected:
+        if self.w.placed:
+            return Held()
+        return held(self.w.physical_spec(idle=True), self.w.element, self.w.clocking)
+
+    def _y_pins(self) -> tuple[Pin, ...] | Rejected:
+        presenting = self.y.presenting()
+        return pins(
+            self.y.physical_spec(idle=not isinstance(presenting, Stream)),
+            presenting,
+            self.y.clocking,
+        )
+
+    def _y_held(self) -> Held | Rejected:
+        if self.y.placed:
+            return Held()
+        return held(self.y.physical_spec(idle=True), self.y.element, self.y.clocking)
+
+    @view
+    def netlist(self) -> Fragment | Rejected:
+        clocking = self.clocking
+        parameters = tuple(sorted(self.parameters.items()))
+        pin_parts = _each((self._x_pins(), self._w_pins(), self._y_pins()))
+        if isinstance(pin_parts, Rejected):
+            return pin_parts
+        spec = type(self).module_spec
+        sources = spec.constant_sources
+        if sources is None:
+            sources = self.module_sources
+        refused = module_unprovided(spec, type(self).__qualname__, sources)
+        if isinstance(refused, Rejected):
+            return refused
+        data = ()
+        held_parts = _each((self._x_held(), self._w_held(), self._y_held()))
+        if isinstance(held_parts, Rejected):
+            return held_parts
+        leaf = assemble_module(
+            spec,
+            type(self).id,
+            type(self).__qualname__,
+            clocking,
+            parameters,
+            tuple(pin_parts),
+            sources,
+            data,
+            tuple(held_parts),
+            (self.x.placed, self.w.placed, self.y.placed),
+        )
+        return leaf if isinstance(leaf, Rejected) else Fragment((("", leaf),))
+
+    @view
+    def cycles(self) -> int | Rejected:
+        beats: list[int] = []
+        if self.x.placed:
+            beats.append(self.x.stream.sequence.form.beats)
+        if self.w.placed:
+            beats.append(self.w.stream.sequence.form.beats)
+        if self.y.placed:
+            beats.append(self.y.stream.sequence.form.beats)
+        return (
+            max(beats)
+            if beats
+            else reject(
+                "kernel-cycles", f"no port of {type(self).__qualname__} carries a stream's beats"
+            )
+        )
 
 
 _COUNTERS = tuple(
@@ -533,14 +635,13 @@ _ADD_MULTI = (
 REDUCERS = ("tree", "compressor")
 
 
-def dotp_axi(core: str, *sources: CopiedSource) -> LibraryModule:
+def dotp_axi(core: str, *sources: CopiedSource) -> ModuleSpec:
     """``dotp_axi`` on the core module ``core`` (``module:dotp``), which ``sources``
     provide, providers first: a core kernel's library module, its parameters
     ``DotpAxiKernel``'s."""
-    return LibraryModule(
+    return ModuleSpec(
         "dotp_axi",
-        parameters=DotpAxiKernel.parameters,
-        sources=(
+        constant_sources=(
             *sources,
             CopiedSource(
                 "finnlib", "rtl/linalg/dotp_axi.sv", provides=("module:dotp_axi",), requires=(core,)
@@ -580,7 +681,7 @@ class PackedDotpKernel(DotpAxiKernel):
     @derived
     def narrow_weights(self) -> bool:
         """No weight its tensor holds is its type's minimum."""
-        element = self.w_element
+        element = self.w.element
         try:
             least = ordinary_integer_bounds(element.dtype)[0]
         except DatatypeError:
@@ -594,7 +695,7 @@ class PackedDotpKernel(DotpAxiKernel):
         if self.form is not Form.DENSE:
             return reject("dotp-form", "the packed core broadcasts activations to every PE lane")
         a_bits, b_bits, _ = dsp_widths(self.dsp)
-        activation, weights = self.x_element, self.w_element
+        activation, weights = self.x.element, self.w.element
         if activation.bits + (not activation.signed) > b_bits:
             return reject(
                 "dotp-activation-width", "activation values must fit the signed DSP B input"
@@ -610,7 +711,7 @@ class PackedDotpKernel(DotpAxiKernel):
     def accumulator_width_supported(self) -> bool | Rejected:
         """Any width of a bit or more (FinnLib's ``ACCU_WIDTH >= 1``): the packed
         lanes resolve the sum modulo ``2**ACCU_WIDTH``."""
-        bits = self.y_element.bits
+        bits = self.y.element.bits
         if bits < 1:
             return reject(
                 "dotp-accumulator-width",
@@ -638,13 +739,13 @@ class PackedDotpKernel(DotpAxiKernel):
         return packed_dotp_resources(
             pe=self.pe,
             simd=self.dsp_simd,
-            weight_width=self.w_element.bits,
-            activation_width=self.x_element.bits,
+            weight_width=self.w.element.bits,
+            activation_width=self.x.element.bits,
             narrow_weights=self.narrow_weights,
             dsp=self.dsp,
         )
 
-    module = dotp_axi(
+    module_spec: ClassVar[ModuleSpec] = dotp_axi(
         "module:dotp",
         *_ADD_MULTI,
         CopiedSource(
@@ -691,12 +792,12 @@ class Int8Dsp58DotpKernel(DotpAxiKernel):
     def core_supported(self) -> bool | Rejected:
         if not self.integer_activations():
             return True
-        refused = self.operand_refusal(self.dsp, self.x_element.dtype, self.w_element.dtype)
+        refused = self.operand_refusal(self.dsp, self.x.element.dtype, self.w.element.dtype)
         return True if refused is None else refused
 
     @constraint
     def accumulator_width_supported(self) -> bool | Rejected:
-        bits = self.y_element.bits
+        bits = self.y.element.bits
         if bits > 58:
             return reject(
                 "dotp-accumulator-width",
@@ -731,7 +832,7 @@ class Int8Dsp58DotpKernel(DotpAxiKernel):
     def resource_use(self) -> Resources:
         return int8_dsp58_dotp_resources(pe=self.pe, simd=self.dsp_simd)
 
-    module = dotp_axi(
+    module_spec: ClassVar[ModuleSpec] = dotp_axi(
         "module:dotp_8sx9_dsp58",
         CopiedSource(
             "finnlib", "rtl/linalg/dotp_8sx9_dsp58.sv", provides=("module:dotp_8sx9_dsp58",)

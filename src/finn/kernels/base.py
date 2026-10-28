@@ -429,7 +429,11 @@ class UntimedKernel(Space):
             return
         from finn.kernels.port_model import port_surfaces  # noqa: PLC0415
 
-        child_ports = port_surfaces(cls)
+        child_ports = {
+            name: surface
+            for name, surface in port_surfaces(cls).items()
+            if surface.physical_pins is not None
+        }
         if modules and child_ports:
             raise DefinitionError.broken(
                 "module-authoring-mixed",

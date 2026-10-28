@@ -99,7 +99,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import prod
-from typing import cast
+from typing import ClassVar, cast
 
 from qonnx.core.ranges import TensorRange
 
@@ -115,17 +115,21 @@ from finn.core.space import (
     reject,
     view,
 )
+from finn.core.space._nodes import selected
 from finn.dataflow.datatypes import (
     QONNXDataType,
     is_ordinary_integer,
     ordinary_integer_bounds,
 )
 from finn.dataflow.gemm import Form, Window
+from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import require_positive
-from finn.kernels.base import KernelSpace
+from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.base import KernelSpace, PortContract
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
-from finn.kernels.port import served
+from finn.kernels.port_model import PortSurface
+from finn.kernels.sides import Side
 from finn.kernels.values.domains import (
     admit_element,
     integer_bounds,
@@ -568,10 +572,80 @@ class MatMulKernel(KernelSpace):
         simd=simd,
     )
 
-    # Its ports: the selected core's activations, weights and results.
-    x = served(compute, "x")
-    w = served(compute, "w")
-    y = served(compute, "y")
+    # Actual model forwards and outward contracts of the selected core only.
+    compute_case = selected(compute)
+
+    @derived
+    def x_stream(self) -> Stream:
+        return self.compute.x.stream
+
+    @derived
+    def x_data_width(self) -> int:
+        return self.compute.x.width
+
+    @derived
+    def x_label(self) -> str:
+        return f"compute.{self.compute_case}.{self.compute.x.label}"
+
+    @derived
+    def x_side(self) -> Side:
+        return self.compute.x.side.under(f"compute.{self.compute_case}")
+
+    @view
+    def x_contract(self) -> PortContract:
+        return self.compute.x.contract.under(f"compute.{self.compute_case}")
+
+    x: ClassVar[PortSurface] = PortSurface(
+        None, Endpoint.TARGET, None, None, x_stream, x_data_width, x_side, x_contract
+    )
+
+    @derived
+    def w_stream(self) -> Stream:
+        return self.compute.w.stream
+
+    @derived
+    def w_data_width(self) -> int:
+        return self.compute.w.width
+
+    @derived
+    def w_label(self) -> str:
+        return f"compute.{self.compute_case}.{self.compute.w.label}"
+
+    @derived
+    def w_side(self) -> Side:
+        return self.compute.w.side.under(f"compute.{self.compute_case}")
+
+    @view
+    def w_contract(self) -> PortContract:
+        return self.compute.w.contract.under(f"compute.{self.compute_case}")
+
+    w: ClassVar[PortSurface] = PortSurface(
+        None, Endpoint.TARGET, None, None, w_stream, w_data_width, w_side, w_contract
+    )
+
+    @derived
+    def y_stream(self) -> Stream:
+        return self.compute.y.stream
+
+    @derived
+    def y_data_width(self) -> int:
+        return self.compute.y.width
+
+    @derived
+    def y_label(self) -> str:
+        return f"compute.{self.compute_case}.{self.compute.y.label}"
+
+    @derived
+    def y_side(self) -> Side:
+        return self.compute.y.side.under(f"compute.{self.compute_case}")
+
+    @view
+    def y_contract(self) -> PortContract:
+        return self.compute.y.contract.under(f"compute.{self.compute_case}")
+
+    y: ClassVar[PortSurface] = PortSurface(
+        None, Endpoint.INITIATOR, None, None, y_stream, y_data_width, y_side, y_contract
+    )
 
     @derived
     def takes_doubled_clock(self) -> bool:

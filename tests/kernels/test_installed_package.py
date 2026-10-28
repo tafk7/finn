@@ -112,7 +112,7 @@ dotp = design_space(PackedDotpKernel(
 answer = library_module(dotp)
 assert isinstance(answer, artifact_module.Leaf), answer
 assert dict(answer.parameters)["ACCU_WIDTH"] == 8
-assert dotp.x_element.dtype.name == "INT3"
+assert dotp.x.element.dtype.name == "INT3"
 assert axis(*PackedDotpKernel.x.viewed(dotp, "x")).payload_bits == 6
 
 dotp_sources = {
@@ -218,8 +218,8 @@ for memory in ("none", "memstream"):
     matmul = root.member("matmul")
     beats = (
         root.member("x").streams.source.sequence.form.beats,
-        matmul.compute.w_stream.sequence.form.beats,
-        matmul.compute.y_stream.sequence.form.beats,
+        matmul.compute.w.stream.sequence.form.beats,
+        matmul.compute.y.stream.sequence.form.beats,
     )
     assert beats == (6, 12, 6), beats
     composed = root.module(TEST, "finn_placed").value

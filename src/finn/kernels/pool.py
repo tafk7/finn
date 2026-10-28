@@ -34,7 +34,7 @@ reaches it: ``tests/support/kernel_specs/pool.py``.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar
+from typing import ClassVar
 
 from finn.core.space import (
     Decision,
@@ -48,15 +48,17 @@ from finn.core.space import (
 )
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.gemm import ZERO
-from finn.dataflow.schedule import Affine, Index, Schedule
+from finn.dataflow.schedule import Access, Affine, Index, Schedule
 from finn.dataflow.streams import Stream
-from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels.artifacts.abi import Endpoint
+from finn.dataflow.tensor import Tensor
+from finn.kernels.artifacts.abi import Clocking, Endpoint, Pin
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource, HlsSource
 from finn.kernels.artifacts.hls import axis_type
+from finn.kernels.artifacts.module import Fragment, Held
 from finn.kernels.base import KernelSpace, extent_of
-from finn.kernels.library import LibraryModule
-from finn.kernels.port import AxiStreamPort, axis
+from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
+from finn.kernels.port import axis, held, pins
+from finn.kernels.port_model import IndexedPort, ScheduledPort
 from finn.kernels.transport import AxisSpelling
 from finn.kernels.values.domains import Integer
 from finn.platform.capabilities import Platform, Resources
@@ -221,8 +223,20 @@ class PoolKernel(KernelSpace):
         """Window by window, PE channels a beat, the window's positions innermost."""
         return self.bound_schedule(order=(oh, ow, c, kh, kw), factors={c: self.pe})
 
-    input = AxiStreamPort(
+    def _accesses(self) -> list[Access]:
+        found: list[Access] = []
+        if self.input.binds:
+            found.append(self.input.access)
+        return found
+
+    @derived
+    def port_clocking(self) -> Clocking:
+        return type(self).clock_domain
+
+    input = IndexedPort(
         name="s_axis",
+        label="input",
+        clocking=port_clocking,
         endpoint=Endpoint.TARGET,
         tensor=input_tensor,
         admits=ELEMENTS,
@@ -236,7 +250,7 @@ class PoolKernel(KernelSpace):
     @view
     def element_dtype(self) -> QONNXDataType:
         """The input's element: a window's maximum is one of its values."""
-        return self.input_element.dtype
+        return self.input.element.dtype
 
     @derived
     def output_tensor(self) -> Tensor | Rejected:
@@ -244,10 +258,12 @@ class PoolKernel(KernelSpace):
         shape = self.spanned(self.output_index)
         if isinstance(shape, Rejected):
             return shape
-        return Tensor(shape, self.input_element)
+        return Tensor(shape, self.input.element)
 
-    output = AxiStreamPort(
+    output = ScheduledPort(
         name="m_axis",
+        label="output",
+        clocking=port_clocking,
         endpoint=Endpoint.INITIATOR,
         tensor=output_tensor,
         admits=ELEMENTS,
@@ -257,10 +273,6 @@ class PoolKernel(KernelSpace):
         reduces=(kh, kw),
         spelling=AxisSpelling.UPPER,
     )
-    if TYPE_CHECKING:  # members its ports lower to, which it reads
-        input_element: ClassVar[ScalarEncoding]
-        input_stream: ClassVar[Stream]
-        output_stream: ClassVar[Stream]
 
     @constraint
     def element_supported(self) -> bool | Rejected:
@@ -277,14 +289,14 @@ class PoolKernel(KernelSpace):
         return {}
 
     @view
-    def sources(self) -> tuple[Contribution, ...] | Rejected:
+    def module_sources(self) -> tuple[Contribution, ...] | Rejected:
         """Its HLS request, written from the point's values: checked to provide the
         module when it is built."""
         element, pe = self.element_dtype, self.pe
-        input_axis = axis(PoolKernel.input, self.input_stream)
+        input_axis = axis(self.input.physical_spec(idle=False), self.input.stream)
         if isinstance(input_axis, Rejected):
             return input_axis
-        output_axis = axis(PoolKernel.output, self.output_stream)
+        output_axis = axis(self.output.physical_spec(idle=False), self.output.stream)
         if isinstance(output_axis, Rejected):
             return output_axis
         input_bits, output_bits = input_axis.carrier_bits, output_axis.carrier_bits
@@ -298,7 +310,80 @@ class PoolKernel(KernelSpace):
             ),
         )
 
-    module = LibraryModule(STEM, parameters=parameters, sources=sources)
+    module_spec: ClassVar[ModuleSpec] = ModuleSpec(STEM)
+
+    def _input_pins(self) -> tuple[Pin, ...] | Rejected:
+        presenting = self.input.presenting()
+        return pins(
+            self.input.physical_spec(idle=not isinstance(presenting, Stream)),
+            presenting,
+            self.input.clocking,
+        )
+
+    def _input_held(self) -> Held | Rejected:
+        if self.input.placed:
+            return Held()
+        return held(self.input.physical_spec(idle=True), self.input.element, self.input.clocking)
+
+    def _output_pins(self) -> tuple[Pin, ...] | Rejected:
+        presenting = self.output.presenting()
+        return pins(
+            self.output.physical_spec(idle=not isinstance(presenting, Stream)),
+            presenting,
+            self.output.clocking,
+        )
+
+    def _output_held(self) -> Held | Rejected:
+        if self.output.placed:
+            return Held()
+        return held(self.output.physical_spec(idle=True), self.output.element, self.output.clocking)
+
+    @view
+    def netlist(self) -> Fragment | Rejected:
+        clocking = self.clocking
+        parameters = tuple(sorted(self.parameters.items()))
+        pin_parts = _each((self._input_pins(), self._output_pins()))
+        if isinstance(pin_parts, Rejected):
+            return pin_parts
+        spec = type(self).module_spec
+        sources = spec.constant_sources
+        if sources is None:
+            sources = self.module_sources
+        refused = module_unprovided(spec, type(self).__qualname__, sources)
+        if isinstance(refused, Rejected):
+            return refused
+        data = ()
+        held_parts = _each((self._input_held(), self._output_held()))
+        if isinstance(held_parts, Rejected):
+            return held_parts
+        leaf = assemble_module(
+            spec,
+            type(self).id,
+            type(self).__qualname__,
+            clocking,
+            parameters,
+            tuple(pin_parts),
+            sources,
+            data,
+            tuple(held_parts),
+            (self.input.placed, self.output.placed),
+        )
+        return leaf if isinstance(leaf, Rejected) else Fragment((("", leaf),))
+
+    @view
+    def cycles(self) -> int | Rejected:
+        beats: list[int] = []
+        if self.input.placed:
+            beats.append(self.input.stream.sequence.form.beats)
+        if self.output.placed:
+            beats.append(self.output.stream.sequence.form.beats)
+        return (
+            max(beats)
+            if beats
+            else reject(
+                "kernel-cycles", f"no port of {type(self).__qualname__} carries a stream's beats"
+            )
+        )
 
 
 __all__ = ["DIRECTIVES", "HEADERS", "PoolKernel", "STEM", "element_type"]

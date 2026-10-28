@@ -298,7 +298,7 @@ def test_the_result_range_follows_what_the_weight_channel_carries():
     assert external.result_range == (-48, 64)
     assert external.result_type == DataType["INT8"]
     core = configured(base(weights=WEIGHTS), style="block").member("matmul").compute
-    assert core.y_element == ScalarEncoding(DataType["INT7"], TensorRange(-30, 40))
+    assert core.y.element == ScalarEncoding(DataType["INT7"], TensorRange(-30, 40))
     assert core.parameters["ACCU_WIDTH"] == 7
 
 
@@ -317,7 +317,7 @@ def test_a_narrow_result_range_is_the_result_and_the_accumulator(weights, value_
     matmul = point.member("matmul")
     assert matmul.result_range == value_range
     assert matmul.result_type == DataType[result]
-    assert matmul.compute.y_element == ScalarEncoding(DataType[result], TensorRange(*value_range))
+    assert matmul.compute.y.element == ScalarEncoding(DataType[result], TensorRange(*value_range))
     assert matmul.compute.parameters["ACCU_WIDTH"] == DataType[result].bitwidth()
     assert isinstance(module_of(point, "matmul"), Available)
 

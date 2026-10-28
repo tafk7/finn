@@ -85,7 +85,7 @@ def _layer(
 def _period(layer: Facts) -> Traversal:
     """One pass of a layer's weights, in the order it reads them at its folding."""
     folded = commit(layer.bind(), {"compute_pumping": False, "reducer": "tree"})
-    return period(folded.w_stream.sequence.form)
+    return period(folded.w.stream.sequence.form)
 
 
 def layered(*, adaptable: bool = True) -> Partition:

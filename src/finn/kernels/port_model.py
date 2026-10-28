@@ -342,7 +342,7 @@ class PortSurface:
             PortContract | View[PortContract] | None, object.__getattribute__(self, "_contract")
         )
 
-    def at(self, namespace: type[Space] | Space) -> PortSurface:
+    def at(self, namespace: type[Space] | type[Group] | Space | Group) -> PortSurface:
         """Rebase explicitly authored parent references for a driver/composer.
 
         Plain metadata only; no method or read-list callback is introduced on a
@@ -405,6 +405,8 @@ def port_surfaces(space_type: type[Space]) -> dict[str, PortSurface]:
             if isinstance(declaration, PortModel):
                 port = declaration if placed is None else getattr(placed, name)
                 result[prefix + name] = PortSurface.of(port)
+            elif isinstance(declaration, PortSurface):
+                result[prefix + name] = declaration.at(namespace if placed is None else placed)
             elif isinstance(declaration, Group):
                 group = declaration if placed is None else getattr(placed, name)
                 result.update(below(type(declaration), group, prefix + name + "."))

@@ -578,8 +578,8 @@ def eltwise(
 def port_axis(point: KernelSpace, name: str) -> AxisBeat:
     """Port ``name``'s AXIS beat on the kernel's configuration ``point``
     (``finn.kernels.port.axis``)."""
-    port: AxiStreamPort = getattr(type(point), name)
-    found = axis(*port.viewed(point, name))
+    port = getattr(point, name)
+    found = axis(port.physical_spec(idle=False), port.stream)
     assert isinstance(found, AxisBeat), found
     return found
 
@@ -903,8 +903,8 @@ def matmul_assembly(
     w = network.member("w")
     return MatMulAssembly(
         network.member("x").streams.source.sequence.form.beats,
-        matmul.compute.w_stream.sequence.form.beats,
-        matmul.compute.y_stream.sequence.form.beats,
+        matmul.compute.w.stream.sequence.form.beats,
+        matmul.compute.y.stream.sequence.form.beats,
         matmul.result_type,
         weight_delivery,
         module.value,

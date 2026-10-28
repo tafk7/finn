@@ -28,6 +28,8 @@ KernelOp reaches it: ``tests/support/kernel_specs/pwpolyf.py``.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from finn.core.space import (
     Decision,
     Param,
@@ -39,13 +41,16 @@ from finn.core.space import (
     view,
 )
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
-from finn.dataflow.schedule import Index, Schedule
+from finn.dataflow.schedule import Access, Index, Schedule
+from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import Tensor
-from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.abi import Clocking, Endpoint, Pin
 from finn.kernels.artifacts.contributions import CopiedSource
+from finn.kernels.artifacts.module import Fragment, Held
 from finn.kernels.base import NATIVE_CLOCKING, KernelSpace, extent_of
-from finn.kernels.library import LibraryModule
-from finn.kernels.port import AxiStreamPort
+from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
+from finn.kernels.port import held, pins
+from finn.kernels.port_model import IndexedPort, ScheduledPort
 from finn.kernels.values.domains import admit_element
 from finn.platform.capabilities import DspBlock, Platform, Resources
 
@@ -106,8 +111,20 @@ class PwPolyKernel(KernelSpace):
             return element
         return Tensor(shape, element)
 
-    input = AxiStreamPort(
+    def _accesses(self) -> list[Access]:
+        found: list[Access] = []
+        if self.input.binds:
+            found.append(self.input.access)
+        return found
+
+    @derived
+    def port_clocking(self) -> Clocking:
+        return type(self).clock_domain
+
+    input = IndexedPort(
         name="x",
+        label="input",
+        clocking=port_clocking,
         endpoint=Endpoint.TARGET,
         tensor=input_tensor,
         schedule=schedule,
@@ -115,8 +132,10 @@ class PwPolyKernel(KernelSpace):
         lanes=(c,),
         signals=("xdat", "xvld", "xrdy"),
     )
-    output = AxiStreamPort(
+    output = ScheduledPort(
         name="y",
+        label="output",
+        clocking=port_clocking,
         endpoint=Endpoint.INITIATOR,
         tensor=output_tensor,
         schedule=schedule,
@@ -163,7 +182,80 @@ class PwPolyKernel(KernelSpace):
     def parameters(self) -> dict[str, int | str]:
         return {"PE": self.pe, "FUNC": f'"{self.function}"'}
 
-    module = LibraryModule("pwpolyf", parameters=parameters, sources=SOURCES)
+    module_spec: ClassVar[ModuleSpec] = ModuleSpec("pwpolyf", SOURCES)
+
+    def _input_pins(self) -> tuple[Pin, ...] | Rejected:
+        presenting = self.input.presenting()
+        return pins(
+            self.input.physical_spec(idle=not isinstance(presenting, Stream)),
+            presenting,
+            self.input.clocking,
+        )
+
+    def _input_held(self) -> Held | Rejected:
+        if self.input.placed:
+            return Held()
+        return held(self.input.physical_spec(idle=True), self.input.element, self.input.clocking)
+
+    def _output_pins(self) -> tuple[Pin, ...] | Rejected:
+        presenting = self.output.presenting()
+        return pins(
+            self.output.physical_spec(idle=not isinstance(presenting, Stream)),
+            presenting,
+            self.output.clocking,
+        )
+
+    def _output_held(self) -> Held | Rejected:
+        if self.output.placed:
+            return Held()
+        return held(self.output.physical_spec(idle=True), self.output.element, self.output.clocking)
+
+    @view
+    def netlist(self) -> Fragment | Rejected:
+        clocking = self.clocking
+        parameters = tuple(sorted(self.parameters.items()))
+        pin_parts = _each((self._input_pins(), self._output_pins()))
+        if isinstance(pin_parts, Rejected):
+            return pin_parts
+        spec = type(self).module_spec
+        sources = spec.constant_sources
+        if sources is None:
+            sources = self.module_sources
+        refused = module_unprovided(spec, type(self).__qualname__, sources)
+        if isinstance(refused, Rejected):
+            return refused
+        data = ()
+        held_parts = _each((self._input_held(), self._output_held()))
+        if isinstance(held_parts, Rejected):
+            return held_parts
+        leaf = assemble_module(
+            spec,
+            type(self).id,
+            type(self).__qualname__,
+            clocking,
+            parameters,
+            tuple(pin_parts),
+            sources,
+            data,
+            tuple(held_parts),
+            (self.input.placed, self.output.placed),
+        )
+        return leaf if isinstance(leaf, Rejected) else Fragment((("", leaf),))
+
+    @view
+    def cycles(self) -> int | Rejected:
+        beats: list[int] = []
+        if self.input.placed:
+            beats.append(self.input.stream.sequence.form.beats)
+        if self.output.placed:
+            beats.append(self.output.stream.sequence.form.beats)
+        return (
+            max(beats)
+            if beats
+            else reject(
+                "kernel-cycles", f"no port of {type(self).__qualname__} carries a stream's beats"
+            )
+        )
 
 
 __all__ = ["FLOAT32", "FUNCTIONS", "SOURCES", "PwPolyKernel"]

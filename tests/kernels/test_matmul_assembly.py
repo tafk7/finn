@@ -344,9 +344,9 @@ def test_the_core_is_one_possible_case_and_is_given_the_folding():
     matmul = point.member("matmul")
     assert matmul.result_type == DataType["INT8"]
     assert inspection.validity(matmul).status == "valid"
-    assert matmul.compute.y_element.dtype == matmul.result_type
+    assert matmul.compute.y.element.dtype == matmul.result_type
     _ = library_module(matmul.compute)
-    assert matmul.compute.y_stream.sequence.form.beats == 4
+    assert matmul.compute.y.stream.sequence.form.beats == 4
     # The MatMul contributes its children's netlist; the network's module adds the
     # channels.
     assert [label for label, _ in matmul.netlist.instances] == ["compute.packed"]

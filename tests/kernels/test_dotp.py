@@ -41,14 +41,16 @@ from finn.kernels.configure import commit
 from finn.kernels.dotp import REDUCERS, DotpAxiKernel, Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.library import library_module
 from finn.kernels.matmul import MatMulKernel
-from finn.kernels.port import AxiStreamPort, axis
+from finn.kernels.port import axis
+from finn.kernels.port_model import PortModel
 from finn.kernels.transport import AxisBeat
 from finn.platform.capabilities import DspBlock
 
 
 def _axis(point, name: str) -> AxisBeat:
     """Port ``name``'s AXIS beat on ``point``."""
-    found = axis(*getattr(DotpAxiKernel, name).viewed(point, name))
+    port = getattr(point, name)
+    found = axis(port.physical_spec(idle=False), port.stream)
     assert isinstance(found, AxisBeat), found
     return found
 
@@ -90,15 +92,13 @@ def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_th
         "resources",
         "segment_length",
         # The contract each port states, which the channel on it takes.
-        "w_contract",
-        "x_contract",
-        "y_contract",
+        "module_sources",
     ]
     for port in (point.x, point.w, point.y):
-        assert isinstance(port, AxiStreamPort)
+        assert isinstance(port, PortModel)
     found = {item.key: item.kind for item in inspection.members(point)}
     # Facts, bound from the network's (a window only where a convolution reads one).
-    facts = {key for key, kind in found.items() if kind == "param"}
+    facts = {key for key, kind in found.items() if kind == "param" and "." not in key}
     assert facts == {
         "form",
         "reshape_activations",
@@ -139,8 +139,8 @@ def test_assessed_view_preserves_geometry_and_clocks(target, pumping):
         ("ap_clk", "ap_clk2x") if pumping else ("ap_clk",)
     )
     for name, width in (("x", 16), ("w", 24), ("y", 24)):
-        port = getattr(DotpAxiKernel, name)
-        assert port.pins(point, name) == (ports[port.name],)
+        port = getattr(point, name)
+        assert port.physical_pins == (ports[port.name],)
         tdata = next(signal for signal in ports[port.name].signals if signal.logical == "tdata")
         assert tdata.width == width
     assert library_module(point).held.inputs == (() if pumping else (("ap_clk2x", 0),))
@@ -160,14 +160,14 @@ def test_the_schedule_splits_n_by_pe_and_k_by_simd():
     point = kernel(pe=2, simd=2, outputs=4, reduction=6, rows=3)
     assert (point.rows, point.outputs, point.reduction) == (3, 4, 6)
     x, w, y = (
-        point.x_stream.sequence.form,
-        point.w_stream.sequence.form,
-        point.y_stream.sequence.form,
+        point.x.stream.sequence.form,
+        point.w.stream.sequence.form,
+        point.y.stream.sequence.form,
     )
     assert (x.beats, x.lanes) == (3 * 2 * 3, 2)  # each row replayed per output fold
     assert (w.beats, w.lanes) == (3 * 2 * 3, 4)
     assert (y.beats, y.lanes) == (3 * 2, 2)
-    assert [rule.beats for rule in point.x_stream.sequence.markers] == [3]
+    assert [rule.beats for rule in point.x.stream.sequence.markers] == [3]
 
 
 @pytest.mark.parametrize(
@@ -401,7 +401,7 @@ def test_the_core_refuses_before_its_folding_factors_are_chosen():
     open_factors = commit(role(), {"compute": "packed"})
     assert isinstance(open_factors.query(MatMulKernel.pe), Unresolved)
     assert isinstance(open_factors.query(MatMulKernel.netlist), Unresolved)
-    assert open_factors.compute.x_element.bits == 3
+    assert open_factors.compute.x.element.bits == 3
 
 
 @pytest.mark.parametrize(
@@ -446,7 +446,7 @@ def test_the_platform_is_a_required_fact():
 @pytest.mark.parametrize("bits", (5, 9, 12, 58))
 def test_the_results_stream_selects_accumulator_capacity(bits):
     point = kernel(result_dtype=DataType[f"INT{bits}"])
-    assert point.y_element.dtype == DataType[f"INT{bits}"]
+    assert point.y.element.dtype == DataType[f"INT{bits}"]
     assert dict(library_module(point).parameters)["ACCU_WIDTH"] == bits
 
 
@@ -513,7 +513,7 @@ def test_each_core_accumulates_in_the_ranges_own_encoding(space_type, result_ran
         space_type, **facts, result_dtype=DataType[accumulator], result_range=result_range
     )
     assert point.accumulator == DataType[accumulator]
-    assert point.y_element == ScalarEncoding(DataType[accumulator], TensorRange(*result_range))
+    assert point.y.element == ScalarEncoding(DataType[accumulator], TensorRange(*result_range))
     assert dict(library_module(point).parameters)["ACCU_WIDTH"] == DataType[accumulator].bitwidth()
 
 
