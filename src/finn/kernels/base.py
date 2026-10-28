@@ -415,7 +415,10 @@ class UntimedKernel(Space):
                     declaration=cls.__qualname__,
                 )
             ports = list(port_surfaces(cls))
-            if not _declared(cls, "netlist", below):
+            if not any(
+                "netlist" in vars(base) and not _made(vars(base)["netlist"])
+                for base in cls.__mro__[: cls.__mro__.index(below)]
+            ):
                 raise DefinitionError.broken(
                     "module-netlist-unstated",
                     "KernelSpace",

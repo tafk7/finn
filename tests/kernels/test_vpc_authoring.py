@@ -17,6 +17,7 @@ from finn.core.space import (
     Rejected,
     Space,
     Unresolved,
+    ViewAssessment,
     constraint,
     derived,
     design_space,
@@ -147,7 +148,8 @@ def test_actual_parent_refusal_blocks_module_body_but_not_valid_child_characteri
     point = design_space(Refused(input_tensor=TENSOR, arriving=SEQUENCE, leaving=SEQUENCE))
     evidence = inspection.explain(point, Refused.netlist)
     assert isinstance(evidence.result, Rejected)
-    assert evidence.assessment is not None and evidence.assessment.output is None
+    assert isinstance(evidence.assessment, ViewAssessment)
+    assert evidence.assessment.output_result is None
     assert isinstance(point.query(Refused.input.physical_pins), Available)
 
 
