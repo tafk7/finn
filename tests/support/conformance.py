@@ -109,7 +109,7 @@ from finn.core.space import (
     RequestError,
     inspection,
 )
-from finn.core.space.declarations import Derived, declared_path
+from finn.core.space.declarations import Derived, MemberRef
 from finn.dataflow.datatypes import DatatypeError, ordinary_integer_bounds
 from finn.dataflow.steps import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
@@ -527,8 +527,7 @@ def _path_member(node: Any, path: str) -> Any:
 def _path_declaration(space_type: type[KernelSpace], path: str) -> object:
     """Terminal authored declaration, rather than the rebased child value reference."""
     reference = _path_member(space_type, path)
-    chain = declared_path(reference)
-    return reference if chain is None else chain[-1]
+    return reference.member if isinstance(reference, MemberRef) else reference
 
 
 def _committed(
