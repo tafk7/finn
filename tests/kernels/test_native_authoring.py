@@ -382,6 +382,12 @@ class SerialGenerator(InputGeneratorKernel):
         clocking=InputGeneratorKernel.port_clocking,
     )
 
+    @constraint
+    def traversal_supported(self) -> bool:
+        # Isolate native physical collection from the separate model geometry rule.
+        # The original rule is exercised by real generator and adapter controls above.
+        return True
+
     @view
     def parameters(self) -> dict[str, int | str]:
         return {
