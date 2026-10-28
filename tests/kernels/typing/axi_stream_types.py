@@ -14,6 +14,7 @@ from finn.kernels.artifacts.abi import Pin
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.port import AxiStreamPort, Presenting, axis, pins, transport
+from finn.kernels.port_model import IndexedPort
 from finn.kernels.transport import AxisBeat, ReadyValidTransport
 
 
@@ -35,6 +36,6 @@ def check(point: DotpAxiKernel, eltwise: EltwiseKernel) -> None:
     assert_type(axis(*viewed), AxisBeat | Rejected)
     assert_type(pins(*viewed, DotpAxiKernel.clock_domain), tuple[Pin, ...] | Rejected)
     assert_type(DotpAxiKernel.x.pins(point, "x"), tuple[Pin, ...] | Rejected)
-    assert_type(eltwise.lhs, AxiStreamPort)
-    lhs = EltwiseKernel.lhs.viewed(eltwise, "lhs")
-    assert_type(transport(*lhs, EltwiseKernel.clock_domain), ReadyValidTransport | Rejected)
+    assert_type(eltwise.lhs, IndexedPort)
+    lhs = (eltwise.lhs.physical_spec(idle=False), eltwise.lhs.stream)
+    assert_type(transport(*lhs, eltwise.lhs.clocking), ReadyValidTransport | Rejected)

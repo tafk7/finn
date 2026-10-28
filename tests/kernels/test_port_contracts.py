@@ -308,7 +308,7 @@ def test_eltwise_broadcasts_a_channel_vector_once_per_pixel():
     # The rhs port presents the channel vector once per pixel it meets: a whole
     # pass repeated, which a boundary presents as it is.
     repeated = vector_major((4,), 2).repeated(3)
-    assert point.member("add").rhs_stream.sequence.form == repeated
+    assert point.member("add").rhs.stream.sequence.form == repeated
     assert point.member("rhs").sides.source.sequence.form == repeated
     assert all(
         stream.steps.kinds == ()
@@ -329,7 +329,7 @@ def test_eltwise_refuses_an_operand_it_cannot_broadcast_or_does_not_carry():
     # refuses the pair on its facts, its PE still open; setting PE breaks no rule that
     # was not broken before, so it is accepted, and the kernel stays refused.
     other = eltwise_between((4,), rhs_dtype="INT3", pe=None)
-    assert other.member("add").rhs_element == ScalarEncoding(DataType["INT3"])
+    assert other.member("add").rhs.element == ScalarEncoding(DataType["INT3"])
     pair = {("eltwise-integer-pair", "implementation_supported")}
     assert {(f.code, f.owner) for f in refusal(other.validity("add"))} == pair
     trial = other.trial(keyed({"add.pe": 2}))

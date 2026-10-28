@@ -29,14 +29,14 @@ from finn.core.space import (
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.artifacts.contributions import Contribution
+from finn.kernels.artifacts.contributions import Contribution, CopiedSource
 from finn.kernels.artifacts.module import Fragment
 from finn.kernels.base import KernelSpace, UntimedKernel
-from finn.kernels.eltwise import EltwiseKernel
-from finn.kernels.library import ModuleSpec
-from finn.kernels.port import port_endpoint, port_surface
+from finn.kernels.library import LibraryModule, ModuleSpec
+from finn.kernels.port import AxiStreamPort, port_endpoint, port_surface
 from finn.kernels.port_model import SequencePort
 from finn.kernels.vpc import VpcKernel
+from finn.platform.capabilities import Resources
 
 TENSOR = Tensor((2, 4), ScalarEncoding(DataType["INT3"]))
 SEQUENCE = BeatSequence(vector_major(TENSOR.shape, 4))
@@ -181,9 +181,29 @@ def test_plain_module_spec_rejects_symbolic_identity_and_sources() -> None:
 
 
 def test_real_port_children_do_not_get_silently_ignored_by_legacy_module_builders() -> None:
+    class Legacy(KernelSpace):
+        id = "fixture.legacy_builder"
+        input = AxiStreamPort(
+            name="input", endpoint=Endpoint.TARGET, tensor=TENSOR, sequence=SEQUENCE
+        )
+
+        @view
+        def parameters(self) -> dict[str, int | str]:
+            return {}
+
+        @view
+        def resource_use(self) -> Resources:
+            return Resources()
+
+        module = LibraryModule(
+            "probe",
+            parameters=parameters,
+            sources=(CopiedSource("finnlib", "probe.sv", provides=("module:probe",)),),
+        )
+
     with pytest.raises(DefinitionError, match="real port children use a ModuleSpec"):
 
-        class Mixed(EltwiseKernel):
+        class Mixed(Legacy):
             extra = SequencePort(name="extra", label="extra", tensor=TENSOR, sequence=SEQUENCE)
 
 

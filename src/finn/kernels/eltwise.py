@@ -19,7 +19,7 @@ from __future__ import annotations
 import math
 import struct
 from collections.abc import Callable
-from typing import TYPE_CHECKING, ClassVar, cast
+from typing import ClassVar, cast
 
 from finn.core.space import (
     Decision,
@@ -34,13 +34,16 @@ from finn.core.space import (
     view,
 )
 from finn.dataflow.datatypes import QONNXDataType, resolve_qonnx_datatype_name
-from finn.dataflow.schedule import Index, Schedule
-from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels.artifacts.abi import Endpoint
+from finn.dataflow.schedule import Access, Index, Schedule
+from finn.dataflow.streams import Stream
+from finn.dataflow.tensor import Tensor
+from finn.kernels.artifacts.abi import Clocking, Endpoint, Pin
 from finn.kernels.artifacts.contributions import CopiedSource
+from finn.kernels.artifacts.module import Fragment, Held
 from finn.kernels.base import NATIVE_CLOCKING, KernelSpace, extent_of
-from finn.kernels.library import LibraryModule
-from finn.kernels.port import AxiStreamPort
+from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
+from finn.kernels.port import held, pins
+from finn.kernels.port_model import IndexedPort, ScheduledPort
 from finn.kernels.values.domains import Integer, admit_element
 from finn.platform.capabilities import DspBlock, Platform, Resources
 
@@ -95,12 +98,12 @@ class EltwiseKernel(KernelSpace):
     @derived
     def lhs_dtype(self) -> QONNXDataType:
         """``lhs``'s element type: its tensor's."""
-        return self.lhs_element.dtype
+        return self.lhs.element.dtype
 
     @derived
     def rhs_dtype(self) -> QONNXDataType:
         """``rhs``'s element type: its tensor's."""
-        return self.rhs_element.dtype
+        return self.rhs.element.dtype
 
     @derived
     def result_dtype(self) -> QONNXDataType:
@@ -191,36 +194,51 @@ class EltwiseKernel(KernelSpace):
             return element
         return Tensor(shape, element)
 
-    lhs = AxiStreamPort(
+    @derived
+    def port_clocking(self) -> Clocking:
+        return type(self).clock_domain
+
+    lhs = IndexedPort(
         name="lhs",
+        label="lhs",
         endpoint=Endpoint.TARGET,
         tensor=lhs_tensor,
         schedule=schedule,
         index=indices,
         lanes=(c,),
         signals=("adat", "avld", "ardy"),
+        clocking=port_clocking,
     )
-    rhs = AxiStreamPort(
+    rhs = IndexedPort(
         name="rhs",
+        label="rhs",
         endpoint=Endpoint.TARGET,
         tensor=rhs_tensor,
         schedule=schedule,
         index=rhs_indices,
         lanes=(c,),
         signals=("bdat", "bvld", "brdy"),
+        clocking=port_clocking,
     )
-    result = AxiStreamPort(
+    result = ScheduledPort(
         name="result",
+        label="result",
         endpoint=Endpoint.INITIATOR,
         tensor=result_tensor,
         schedule=schedule,
         index=indices,
         lanes=(c,),
         signals=("odat", "ovld", "ordy"),
+        clocking=port_clocking,
     )
-    if TYPE_CHECKING:  # members its ports lower to, which it reads
-        lhs_element: ClassVar[ScalarEncoding]
-        rhs_element: ClassVar[ScalarEncoding]
+
+    def _accesses(self) -> list[Access]:
+        found: list[Access] = []
+        if self.lhs.binds:
+            found.append(self.lhs.access)
+        if self.rhs.binds:
+            found.append(self.rhs.access)
+        return found
 
     @view
     def resource_use(self) -> Resources | Rejected:
@@ -242,10 +260,9 @@ class EltwiseKernel(KernelSpace):
             "FORCE_BEHAVIORAL": 0,
         }
 
-    module = LibraryModule(
+    module_spec: ClassVar[ModuleSpec] = ModuleSpec(
         "eltwise",
-        parameters=parameters,
-        sources=tuple(
+        tuple(
             CopiedSource("finnlib", path, provides=(f"module:{name}",), requires=requires)
             for path, name, requires in (
                 ("rtl/arith/binopi.sv", "binopi", ()),
@@ -260,6 +277,84 @@ class EltwiseKernel(KernelSpace):
             )
         ),
     )
+
+    def _lhs_pins(self) -> tuple[Pin, ...] | Rejected:
+        presenting = self.lhs.presenting()
+        return pins(
+            self.lhs.physical_spec(idle=not isinstance(presenting, Stream)),
+            presenting,
+            self.lhs.clocking,
+        )
+
+    def _lhs_held(self) -> Held | Rejected:
+        if self.lhs.placed:
+            return Held()
+        return held(self.lhs.physical_spec(idle=True), self.lhs.element, self.lhs.clocking)
+
+    def _rhs_pins(self) -> tuple[Pin, ...] | Rejected:
+        presenting = self.rhs.presenting()
+        return pins(
+            self.rhs.physical_spec(idle=not isinstance(presenting, Stream)),
+            presenting,
+            self.rhs.clocking,
+        )
+
+    def _rhs_held(self) -> Held | Rejected:
+        if self.rhs.placed:
+            return Held()
+        return held(self.rhs.physical_spec(idle=True), self.rhs.element, self.rhs.clocking)
+
+    def _result_pins(self) -> tuple[Pin, ...] | Rejected:
+        presenting = self.result.presenting()
+        return pins(
+            self.result.physical_spec(idle=not isinstance(presenting, Stream)),
+            presenting,
+            self.result.clocking,
+        )
+
+    def _result_held(self) -> Held | Rejected:
+        if self.result.placed:
+            return Held()
+        return held(self.result.physical_spec(idle=True), self.result.element, self.result.clocking)
+
+    @view
+    def netlist(self) -> Fragment | Rejected:
+        clocking = self.clocking
+        parameters = tuple(sorted(self.parameters.items()))
+        pin_parts = _each((self._lhs_pins(), self._rhs_pins(), self._result_pins()))
+        if isinstance(pin_parts, Rejected):
+            return pin_parts
+        spec = type(self).module_spec
+        sources = spec.constant_sources
+        assert sources is not None
+        refused = module_unprovided(spec, type(self).__qualname__, sources)
+        if isinstance(refused, Rejected):
+            return refused
+        data = ()
+        held_parts = _each((self._lhs_held(), self._rhs_held(), self._result_held()))
+        if isinstance(held_parts, Rejected):
+            return held_parts
+        leaf = assemble_module(
+            spec,
+            type(self).id,
+            type(self).__qualname__,
+            clocking,
+            parameters,
+            tuple(pin_parts),
+            sources,
+            data,
+            tuple(held_parts),
+            (True, True, True),
+        )
+        return leaf if isinstance(leaf, Rejected) else Fragment((("", leaf),))
+
+    @view
+    def cycles(self) -> int:
+        return max(
+            self.lhs.stream.sequence.form.beats,
+            self.rhs.stream.sequence.form.beats,
+            self.result.stream.sequence.form.beats,
+        )
 
 
 __all__ = ["EltwiseKernel"]
