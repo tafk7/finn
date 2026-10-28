@@ -134,6 +134,25 @@ class LoopEnds:
     levels: tuple[LevelEnd, ...]
 
 
+@dataclass(frozen=True)
+class PhysicalPort:
+    """Resolved port inputs for pure physical calculations, without authoring callbacks.
+
+    A PortModel reads these literal fields in an ordinary method. This record is
+    neither a Space nor a symbolic binding/allowed-read table.
+    """
+
+    name: str
+    endpoint: Endpoint
+    signals: tuple[str, ...] = ()
+    loop_ends: LoopEnds | None = None
+    spelling: AxisSpelling = AxisSpelling.LOWER
+    lanes: tuple[Index, ...] = ()
+    schedule: Schedule | None = None
+    reduces: tuple[Index, ...] = ()
+    holds: tuple[Index, ...] = ()
+
+
 # -- the declaration -------------------------------------------------------------------------
 
 
@@ -496,7 +515,7 @@ Presenting = Stream | ScalarEncoding
 its pins carry (``<name>_element``)."""
 
 
-def _given(port: AxiStreamPort, name: str) -> Any:
+def _given(port: AxiStreamPort | PhysicalPort, name: str) -> Any:
     """Argument ``name`` of ``port`` as a value: a view reads its declaration with its
     arguments read from its kernel (``AxiStreamPort.read``)."""
     value = getattr(port, name)
@@ -515,7 +534,7 @@ def _markers(presenting: Presenting) -> tuple[LevelEnd, ...]:
     return presenting.sequence.markers if isinstance(presenting, Stream) else ()
 
 
-def lane_count(port: AxiStreamPort, presenting: Presenting) -> int | Rejected:
+def lane_count(port: AxiStreamPort | PhysicalPort, presenting: Presenting) -> int | Rejected:
     """The lanes a beat carries: what it presents; idle, one."""
     if isinstance(presenting, Stream):
         return presenting.sequence.form.lanes
@@ -528,7 +547,7 @@ def lane_count(port: AxiStreamPort, presenting: Presenting) -> int | Rejected:
     return 1
 
 
-def axis(port: AxiStreamPort, presenting: Presenting) -> AxisBeat | Rejected:
+def axis(port: AxiStreamPort | PhysicalPort, presenting: Presenting) -> AxisBeat | Rejected:
     """Its AXIS beat: its element's lanes, with a ``TLAST`` when it presents a marker."""
     label = _given(port, "name")
     markers = _markers(presenting)
@@ -551,7 +570,7 @@ def axis(port: AxiStreamPort, presenting: Presenting) -> AxisBeat | Rejected:
 
 
 def transport(
-    port: AxiStreamPort, presenting: Presenting, clocking: Clocking | None
+    port: AxiStreamPort | PhysicalPort, presenting: Presenting, clocking: Clocking | None
 ) -> ReadyValidTransport | Rejected:
     """Its ready/valid pins, on its kernel's clock and reset: its AXIS beat's, or its
     ``signals`` with its loop-completion vector."""
@@ -590,7 +609,7 @@ def transport(
         return reject("port-signals", f"{label}: {error}")
 
 
-def data_width(port: AxiStreamPort, presenting: Presenting) -> int | Rejected:
+def data_width(port: AxiStreamPort | PhysicalPort, presenting: Presenting) -> int | Rejected:
     """The bits of its words: its lanes times its element's bits, padded to bytes for
     AXIS."""
     found = transport(port, presenting, None)
@@ -598,7 +617,7 @@ def data_width(port: AxiStreamPort, presenting: Presenting) -> int | Rejected:
 
 
 def pins(
-    port: AxiStreamPort, presenting: Presenting, clocking: Clocking
+    port: AxiStreamPort | PhysicalPort, presenting: Presenting, clocking: Clocking
 ) -> tuple[Pin, ...] | Rejected:
     """Its pins of the module: its ready/valid signals, or its AXIS bus."""
     if _given(port, "signals"):
@@ -610,7 +629,9 @@ def pins(
     return (beat.bus(clock=clocking.clock, reset=clocking.reset),)
 
 
-def held(port: AxiStreamPort, presenting: Presenting, clocking: Clocking) -> Held | Rejected:
+def held(
+    port: AxiStreamPort | PhysicalPort, presenting: Presenting, clocking: Clocking
+) -> Held | Rejected:
     """While idle (its element alone): its forward pins of a target and its ready of an
     initiator held low; placed, none."""
     if isinstance(presenting, Stream):
@@ -633,7 +654,7 @@ def beats(stream: Stream) -> int:
     return stream.sequence.form.beats
 
 
-def pace(port: AxiStreamPort) -> Pace | None:
+def pace(port: AxiStreamPort | PhysicalPort) -> Pace | None:
     """When it presents each beat: its schedule, with its ``reduces`` and ``holds``; None
     for a given sequence."""
     schedule: Schedule | None = _given(port, "schedule")
@@ -643,7 +664,7 @@ def pace(port: AxiStreamPort) -> Pace | None:
 
 
 def contract(
-    port: AxiStreamPort, stream: Stream, clocking: Clocking | None
+    port: AxiStreamPort | PhysicalPort, stream: Stream, clocking: Clocking | None
 ) -> StreamContract | Rejected:
     """What it states to a channel: its transport, its stream (element, form, repetition,
     markers, each by the transport pin that carries it) and its pace."""
@@ -817,6 +838,7 @@ __all__ = [
     "axis",
     "beats",
     "Presenting",
+    "PhysicalPort",
     "contract",
     "data_width",
     "held",

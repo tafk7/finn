@@ -1,0 +1,12 @@
+from finn.core.space import Group
+from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.base import NATIVE_CLOCKING
+from finn.kernels.port_model import PortModel, PortSurface, SequencePort, native_port
+
+SequencePort(name="x", label="x", tensor=3)
+SequencePort(name="x", label="x", sequence="wrong")
+PortModel(name="x", label="x", signals=(1, 2, 3))
+native_port("x", "target", None, None, clocking=NATIVE_CLOCKING, label="x")
+PortSurface.of(Group())
+PortModel.stream
+PortModel(name="x", label="x").access
