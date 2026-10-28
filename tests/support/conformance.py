@@ -109,7 +109,7 @@ from finn.core.space import (
     RequestError,
     inspection,
 )
-from finn.core.space.declarations import Derived
+from finn.core.space.declarations import Derived, declared_path
 from finn.dataflow.datatypes import DatatypeError, ordinary_integer_bounds
 from finn.dataflow.steps import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
@@ -524,6 +524,13 @@ def _path_member(node: Any, path: str) -> Any:
     return node
 
 
+def _path_declaration(space_type: type[KernelSpace], path: str) -> object:
+    """Terminal authored declaration, rather than the rebased child value reference."""
+    reference = _path_member(space_type, path)
+    chain = declared_path(reference)
+    return reference if chain is None else chain[-1]
+
+
 def _committed(
     space_type: type[KernelSpace],
     config: Mapping[str, object],
@@ -540,12 +547,12 @@ def _committed(
     given = {
         key: value
         for key, value in config.items()
-        if isinstance(_path_member(space_type, key), Param)
+        if isinstance(_path_declaration(space_type, key), Param)
     }
     stated = {
         key: value
         for key, value in config.items()
-        if isinstance(_path_member(space_type, key), Derived)
+        if isinstance(_path_declaration(space_type, key), Derived)
     }
     known = {**facts, **given}
     tensors = _tensors(space_type, inputs, outputs, known)
@@ -586,7 +593,7 @@ def unchosen(
     given = {
         key: value
         for key, value in first.items()
-        if isinstance(_path_member(space_type, key), Param)
+        if isinstance(_path_declaration(space_type, key), Param)
     }
     return _committed(space_type, given, inputs, outputs, EMPTY, facts)
 

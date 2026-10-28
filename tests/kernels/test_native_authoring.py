@@ -14,6 +14,8 @@ from support.kernel_specs.stages import StagedInputGenerator, fifo, input_gen
 from finn.core.space import (
     Available,
     Decision,
+    Inapplicable,
+    constraint,
     Rejected,
     Space,
     Unresolved,
@@ -29,7 +31,7 @@ from finn.dataflow.traversal import BeatSequence
 from finn.kernels.adapters import input_gen as InputAdapterChain
 from finn.kernels.artifacts.abi import Clocking, Direction, Endpoint, Signal
 from finn.kernels.artifacts.module import Fragment
-from finn.kernels.base import Timed, UntimedKernel
+from finn.kernels.base import PortContract, Timed, UntimedKernel
 from finn.kernels.channels import ChannelFifo
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import InputGeneratorKernel
@@ -58,7 +60,18 @@ def test_native_model_width_is_early_and_child_characterization_is_local() -> No
     assert isinstance(fifo_point.query(FifoKernel.input.contract), Available)
     assessment = fifo_point.inspect(FifoKernel.netlist)
     assert isinstance(assessment.result, Rejected) and assessment.output_result is None
-    partial = design_space(InputGeneratorKernel(input_tensor=TENSOR, arriving=ARRIVING))
+
+    class Partial(Space):
+        leaving: BeatSequence = Decision(domain=(LEAVING,))
+        kernel = InputGeneratorKernel(
+            input_tensor=TENSOR,
+            arriving=ARRIVING,
+            leaving=leaving,
+            platform=FULL_DSP48E2,
+            ram_style="auto",
+        )
+
+    partial = design_space(Partial()).kernel
     assert partial.input.element == TENSOR.element
     assert partial.input.width == 13
     assert isinstance(partial.query(InputGeneratorKernel.input.contract), Available)
@@ -113,11 +126,11 @@ class SerialFifo(FifoKernel):
     )
 
     # Keep geometry/model checks independent of intentionally bad physical signals.
-    @derived
+    @constraint
     def geometry_supported(self) -> bool:
         return True
 
-    @derived
+    @constraint
     def capacity_supported(self) -> bool:
         return True
 
@@ -268,7 +281,7 @@ def test_adapter_reads_contracts_before_netlist(monkeypatch: pytest.MonkeyPatch)
 
     class RefusedContract(SequencePort):
         @view
-        def contract(self) -> Rejected:
+        def contract(self) -> PortContract | Rejected | Inapplicable:
             calls.append("contract")
             return reject("native-contract", "contract first")
 
@@ -281,7 +294,7 @@ def test_adapter_reads_contracts_before_netlist(monkeypatch: pytest.MonkeyPatch)
         )
 
         @view
-        def netlist(self) -> Fragment:
+        def netlist(self) -> Fragment | Rejected:
             calls.append("netlist")
             return Fragment()
 
