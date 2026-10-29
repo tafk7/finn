@@ -25,14 +25,20 @@ from support.space_walk import fresh
 
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import (
+    Available,
     Decision,
+    Group,
+    Param,
     QueryResult,
+    RequestError,
     Select,
     Space,
     Unresolved,
     design_space,
+    inspection,
 )
 
+from ._running_type import Running
 from ._toys_support import House
 
 TOYS = toys.TOYS
@@ -461,3 +467,22 @@ def test_every_scope_is_reached_under_open_selectors_and_guards() -> None:
     )
     found = forms.space(answers)
     assert all("status" in validity for validity in found["validity"].values()), found
+
+
+def test_group_members_are_compared_without_independent_validity_scopes() -> None:
+    class Included(Group):
+        number: int = Param(default=7)
+
+    class Host(Space):
+        group = Included()
+
+    point = design_space(Host())
+    public = PUBLIC.open(point)
+    uncached = Running().open(point)
+    assert public.scopes() == uncached.scopes() == ("",)
+    assert public.members() == uncached.members() == (("group.number", "const"),)
+    assert public.query("group.number") == uncached.query("group.number") == Available(7)
+    assert forms.space(public) == forms.space(uncached)
+    for query in (lambda: inspection.validity(point.group), lambda: uncached.validity("group")):
+        with pytest.raises(RequestError, match="a Group has no independent validity"):
+            query()

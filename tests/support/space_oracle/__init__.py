@@ -66,7 +66,8 @@ class Answers(Protocol):
         ...
 
     def scopes(self) -> Sequence[str]:
-        """Every scope below the root, by name (the root is ``""``), sorted."""
+        """Every Space scope by name (root ``""``), sorted; Group namespaces have no
+        independent validity scope."""
         ...
 
     def query(self, key: str) -> QueryResult[object]:
