@@ -27,9 +27,13 @@ from finn.core.space import (
 from finn.core.space.errors import DefinitionError, RequestError
 from finn.core.space.semantics import annotation_type, canonical
 from finn.dataflow.datatypes import QONNXDataType, resolve_qonnx_datatype_name
+from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.dataflow.traversal import BeatSequence, vector_major
+from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.base import KernelSpace
 from finn.kernels.configure import chosen, commit
-from finn.kernels.port import _child_types
+from finn.kernels.port import port_endpoint, port_surface
+from finn.kernels.port_model import SequencePort, port_surfaces
 from finn.kernels.values.domains import Integer
 
 
@@ -62,6 +66,7 @@ def test_kernel_identity_is_validated_at_class_creation() -> None:
         "bus_control",
         "cycles",
         "held_bits",
+        "module_sources",
         "netlist",
         "resource_use",
         "resources",
@@ -193,13 +198,33 @@ def test_composite_extends_kernel_with_typed_optional_views_and_independent_node
     assert authored == ["activation.ports", "weights.ports"]
 
 
-def test_legacy_served_discovery_accepts_only_real_space_children() -> None:
+def test_port_discovery_reads_lexical_groups_without_implicit_child_lowering() -> None:
+    tensor = Tensor((2, 4), ScalarEncoding(resolve_qonnx_datatype_name("INT3")))
+    sequence = BeatSequence(vector_major((2, 4), 4))
+
     class Child(Space):
-        pass
+        inner = SequencePort(name="inner", label="inner", tensor=tensor, sequence=sequence)
 
     class Included(Group):
-        pass
+        nested = SequencePort(
+            name="nested",
+            label="nested",
+            endpoint=Endpoint.INITIATOR,
+            tensor=tensor,
+            sequence=sequence,
+        )
 
-    assert _child_types(Child()) == (Child,)
-    assert _child_types(Select(child=Child(), absent=None)) == (Child,)
-    assert _child_types(Included()) == ()
+    class Host(KernelSpace):
+        id = "test.discovery"
+        group = Included()
+        child = Child()
+        choice = Select(child=Child(), absent=None)
+
+    # Groups are the parent's lexical frame, not children. Real child scopes and
+    # selector candidates publish no implicit parent endpoint after Served retirement.
+    assert list(port_surfaces(Host)) == ["group.nested"]
+    assert port_endpoint(Host, "group.nested") is Endpoint.INITIATOR
+    for hidden in ("child.inner", "choice.child.inner"):
+        assert port_endpoint(Host, hidden) is None
+        with pytest.raises(KeyError):
+            port_surface(Host, hidden)
