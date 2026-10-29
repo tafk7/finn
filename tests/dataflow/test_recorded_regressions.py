@@ -16,11 +16,16 @@ from typing import Any
 import pytest
 
 from dataflow.harness.checks import undelivered
-from finn.dataflow.steps import steps
+from finn.dataflow.maps import identity
+from finn.dataflow.reindex import Reader, Reindex, Route, route, route_cost
+from finn.dataflow.steps import Cost, Hop, Step, Steps, cost, steps
 from finn.dataflow.traversal import (
     BeatSequence,
     Grouped,
+    LevelDone,
+    LevelEnd,
     Loop,
+    Reorder,
     Repetition,
     Traversal,
     grouped,
@@ -30,6 +35,7 @@ from finn.dataflow.traversal import (
 )
 
 CASES = json.loads(Path(__file__).with_name("recorded_cases.json").read_text())
+IDENTITIES = json.loads(Path(__file__).with_name("recorded_identity_cases.json").read_text())
 
 
 def form(record: dict[str, Any]) -> Traversal | Grouped:
@@ -89,3 +95,43 @@ def test_recorded_inventory_keeps_every_case_and_both_replay_differences() -> No
         (64, 512),
         (64, 1024),
     ]
+    assert len(IDENTITIES) == 101
+
+
+def sequence(value: dict[str, Any]) -> BeatSequence:
+    markers = tuple(
+        LevelEnd(marker["beats"])
+        if marker["kind"] == "LevelEnd"
+        else LevelDone(marker["beats"], marker["inner"])
+        for marker in value["markers"]
+    )
+    return BeatSequence(form(value["form"]), Repetition[value["repetition"]], markers)
+
+
+def literal_steps(value: dict[str, Any]) -> Steps:
+    hops = []
+    for hop in value["hops"]:
+        reorder = hop["reorder"]
+        moved = (
+            None
+            if reorder is None
+            else Reorder(
+                reorder["frame_beats"],
+                tuple(reorder["dims"]),
+                tuple(reorder["coefs"]),
+            )
+        )
+        hops.append(Hop(Step[hop["step"]], sequence(hop["source"]), sequence(hop["sink"]), moved))
+    return Steps(tuple(hops))
+
+
+@pytest.mark.parametrize("case", IDENTITIES, ids=lambda case: case["id"])
+def test_every_recorded_steps_case_keeps_its_literal_identity_route(case: dict[str, Any]) -> None:
+    source, sink = sequence(case["input"]["source"]), sequence(case["input"]["sink"])
+    expected = literal_steps(case["expected"]["steps"])
+    expected_cost = Cost(**case["expected"]["cost"])
+    assert steps(source, sink) == expected
+    reindex = Reindex(source, (Reader(identity(sink.form.shape), sink),))
+    assert route(reindex) == Route(Steps(), None, expected)
+    assert route_cost(reindex) == expected_cost == cost(expected, sink)
+    assert undelivered(expected, source, sink) == ""
