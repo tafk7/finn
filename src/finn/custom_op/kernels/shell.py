@@ -538,9 +538,14 @@ def verify_partition(model: ModelWrapper, label: str) -> tuple[Configured, FifoC
     ``held-owner-unknown``). A FIFO not held that no longer keeps its producer within its
     idle time is refused, named (``fifo-stale``: add size_fifos to step_explore's strategies), and
     nothing is recorded; a held one (``fifo-held-stale``) and a ``direct`` that throttles
-    its producer (``direct-throttles``) are limitations, the check's ``findings``. The model
-    is changed only by the record; its caller saves it."""
+    its producer (``direct-throttles``) are limitations, the check's ``findings``. This
+    held timed path explicitly requests cycles first; unavailable/refused estimates
+    leave the verification marker unchanged. The model is changed only by the record;
+    its caller saves it."""
     point, _ = configured_network(model, label)
+    # This held consumer performs a timed FIFO check. Retain its former eager
+    # cycle-refusal precondition explicitly: FifoCheck(None) is not verification.
+    _ = point.cycles
     seam = Seam(read_target(model).platform)
     _, record = search_record(model)
     seam.held.update(_held_values(point.network, {} if record is None else record["held"]))
