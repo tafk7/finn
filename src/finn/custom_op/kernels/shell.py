@@ -228,13 +228,38 @@ def _resources(network: InShell) -> QueryResult[ShellResources]:
 
 @dataclass(frozen=True)
 class Configured:
-    """A partition's network as emission builds it (``configured_network``): every choice
-    in play stored, none open, within its shell's budgets (its shell member's rules); its
-    ``module`` and its ``cycles`` a frame, its slowest member's."""
+    """A logically configured partition and its physical module, without a timing query.
+
+    Every choice in play is stored and validity/presence and shell budgets are complete.
+    Emission does not prove a rate or timed FIFO sufficiency. The existing ``cycles``
+    readout remains an explicit, separate request until timing consumers migrate.
+    """
 
     network: InShell
     module: Composed
-    cycles: int
+
+    @property
+    def cycles(self) -> int:
+        """Request the existing cycle readout; never infer it from logical configuration.
+
+        A missing or refused member estimate fails this request, not configuration or
+        emission. This preserves the held timing consumers' contract without making
+        them a prerequisite of the untimed build bridge.
+        """
+        cycles = {name: self.network.query(name, Timed.cycles) for name in self.network.members}
+        found = tuple(
+            self.network.located(name, finding)
+            for name, each in cycles.items()
+            if not isinstance(each, Available)
+            for finding in each.findings
+        )
+        if found or not cycles or not all(isinstance(each, Available) for each in cycles.values()):
+            raise KernelOpError(
+                "cycle characterization unavailable: "
+                + "; ".join(map(Finding.subject_line, found)),
+                findings=found,
+            )
+        return max(each.value for each in cycles.values() if isinstance(each, Available))
 
     @property
     def row(self) -> ShellRow:
@@ -272,7 +297,7 @@ def configured_network(
     debug_placeholder to step_explore's strategies"), any other one never set ("not set: the cut,
     MakeCutChoices, or a strategy sets it"; one finding, ``choices-open``); a partition
     over the shell's budgets (its shell member's validity: "refused by the <shell> shell",
-    each broken budget a finding), or whose module or cycles its members refuse, or a
+    each broken budget a finding), or whose module its members refuse, or a
     member's validity refuses (a rule its stored choices break, which the bind binds:
     "refused by its members", each finding naming its member); or graph inputs and outputs
     out of port order refuse, named. Its netlist's count (``bus_counts`` and its movers')
@@ -346,14 +371,10 @@ def configured_network(
             findings=over_budget,
         )
     module = bound.module_of(PRODUCER)
-    cycles = {name: bound.query(name, Timed.cycles) for name in bound.members}
     found = [] if isinstance(module, Available) else list(module.findings)
-    for name, each in cycles.items():
-        if not isinstance(each, Available):
-            found.extend(bound.located(name, finding) for finding in each.findings)
     if not found and isinstance(module, Available):
         _counts_agree(bound, label)
-        # A rule a member's stored choices break that its module and cycles do not read.
+        # A rule a member's stored choices break that its module does not read.
         found = [
             bound.located(name, finding)
             for name in bound.members
@@ -425,8 +446,7 @@ def configured_network(
             f" outputs in order {expected}",
             node=label,
         )
-    slowest = max(each.value for each in cycles.values() if isinstance(each, Available))
-    return Configured(bound, module.value, slowest), bound.boundary
+    return Configured(bound, module.value), bound.boundary
 
 
 def _impossible(
