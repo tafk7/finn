@@ -5,14 +5,17 @@
 
 from __future__ import annotations
 
+import copy
+
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.infer_shapes import InferShapes
 
 from finn.core.graph.annotations.channel import CHANNEL, channel_choices
 from finn.core.graph.annotations.platform import write_target
 from finn.custom_op.kernels.base import kernel_op
+from finn.kernels.explore import KernelExplorer
 from finn.platform.target import Target
-from finn.transformation.kernels import InferKernelTensors, ToKernelOps
+from finn.transformation.kernels import InferKernelTensors, ToKernelOps, explore_kernel_choices
 from support.models import TARGET, chain_source
 
 
@@ -32,4 +35,12 @@ def choices(model: ModelWrapper) -> dict[str, dict[str, object]]:
     }
     for tensor in model.tensors_stating(CHANNEL):
         found[tensor] = channel_choices(model, tensor)
+    return found
+
+
+def explored(model: ModelWrapper, *strategies: KernelExplorer) -> ModelWrapper:
+    """A copy of ``model`` explored by ``strategies``, in order, on one seam
+    (``explore_kernel_choices``): the model itself is not changed."""
+    found = ModelWrapper(copy.deepcopy(model.model))
+    explore_kernel_choices(found, strategies)
     return found

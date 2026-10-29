@@ -8,10 +8,8 @@ packaging and integration (``package``, ``hls``, ``integration``).
 
 from finn.transformation.kernels.choose import (
     Explored,
-    ExploreKernelChoices,
     exploration_summary,
     explore_kernel_choices,
-    explore_partition,
     shell_bottleneck,
 )
 from finn.transformation.kernels.config import kernel_choices_config
@@ -29,7 +27,6 @@ from finn.transformation.kernels.package import ElaboratePartition, PackageParti
 
 __all__ = [
     "ElaboratePartition",
-    "ExploreKernelChoices",
     "Explored",
     "InferKernelTensors",
     "Outcome",
@@ -37,7 +34,6 @@ __all__ = [
     "ToKernelOps",
     "between_kernel_ops",
     "explore_kernel_choices",
-    "explore_partition",
     "exploration_summary",
     "infer_node",
     "kernel_choices_config",

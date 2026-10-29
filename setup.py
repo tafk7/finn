@@ -139,6 +139,8 @@ if __name__ == "__main__":
             "finn.shells.pynq": resource_files(
                 "src/finn/shells/pynq/data", prefix="data/", extra=(".py",)
             ),
+            "finn.core.reporting": ["py.typed"],
+            "finn.core.search": ["py.typed"],
             "finn.core.space": ["py.typed"],
             "finn.dataflow": ["py.typed"],
             "finn.dataflow_next": ["py.typed"],

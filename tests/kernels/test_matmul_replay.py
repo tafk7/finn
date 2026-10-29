@@ -29,6 +29,7 @@ from support.helpers import (
 )
 from support.netlist import Const, Drive, Pin
 
+from finn.core.search import dotted
 from finn.dataflow.gemm import Form
 from finn.dataflow.steps import Step
 from finn.dataflow.tensor import ScalarEncoding
@@ -36,7 +37,6 @@ from finn.dataflow.traversal import LevelEnd, vector_major
 from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.build import emit_module
-from finn.kernels.explore import dotted
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.transport import MarkerKind, ReadyValidTransport, StreamContract, StreamMarker
 

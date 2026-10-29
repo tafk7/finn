@@ -99,7 +99,12 @@ def test_setting_a_choice_is_refused_and_leaves_the_node(key: str) -> None:
     op = matmul(model)
     before = model.graph.node[0].SerializeToString()
     with refused(
-        "choice-set-refused", owner=MatMul.op_type, error=KernelOpError, node="first", keys=(key,)
+        "choice-set-refused",
+        owner=MatMul.op_type,
+        error=KernelOpError,
+        node="first",
+        keys=(key,),
+        message="step_explore",  # the route a user takes: a hold in the strategies
     ):
         op.set_nodeattr(key, FOLDING[key])
     assert model.graph.node[0].SerializeToString() == before

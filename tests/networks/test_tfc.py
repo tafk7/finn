@@ -22,6 +22,7 @@ import numpy as np
 import pytest
 from qonnx.core.modelwrapper import ModelWrapper
 from support.configure import write_raw
+from support.explore_models import explored
 from support.helpers import refused_codes
 from support.models import DOMAIN
 from support.packaging import reaches_vivado, read_back
@@ -37,14 +38,15 @@ from finn.core.onnx_exec import RanBy, execute_onnx
 from finn.core.rtlsim_bench import pack_lanes, stream_through
 from finn.core.rtlsim_exec import XSim
 from finn.core.rtlsim_pacing import FREE, STALLED
+from finn.core.search import Ranked, Refused
 from finn.core.space import Available, inspection
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import PRODUCER
 from finn.custom_op.kernels.shell import configured_network, in_shell
 from finn.kernels.budgets import SHELL, counts
-from finn.kernels.explore import Ranked, Refused, Seam
+from finn.kernels.explore import Seam
 from finn.toolchain.launcher import host_toolchain
-from finn.transformation.kernels import ExploreKernelChoices, PackagePartition
+from finn.transformation.kernels import PackagePartition
 from finn.transformation.kernels.package import ElaboratePartition, boundary_facts
 
 LOGITS = "MatMul_3_out0"
@@ -107,7 +109,7 @@ def test_tfc_w2a2s_kernel_ops_verify_open_and_explored(
     """Every KernelOp TFC converts to verifies with its choices open, as the cut
     leaves its partition's body, and with them committed, as exploration leaves it."""
     _, body, _ = cut(ModelWrapper(str(tfc_streamlined)), tmp_path)
-    for stage in (body, body.transform(ExploreKernelChoices(Ranked(LANES)))):
+    for stage in (body, explored(body, Ranked(LANES))):
         kernel_ops = [kernel_op(stage, node) for node in stage.graph.node if node.domain == DOMAIN]
         assert len(kernel_ops) == 8
         assert {op.label: op.verify_node() for op in kernel_ops} == {

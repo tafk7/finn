@@ -39,7 +39,6 @@ from finn.builder.build_dataflow_config import (
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
 from finn.builder.build_dataflow_steps import (
     DEFAULT_LIST,
-    KERNEL_STRATEGY_STEPS,
     build_dataflow_lists,
     build_dataflow_phases,
     build_dataflow_step_lookup,
@@ -50,6 +49,7 @@ from finn.builder.build_dataflow_steps import (
     step_deployment_package,
     step_make_driver,
 )
+from finn.builder.build_dataflow_strategies import Named
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.partition import partition_body
 from finn.core.reporting.findings import Finding, FindingKind
@@ -80,7 +80,7 @@ def test_a_build_targets_ip_and_sizes_fifos_by_default() -> None:
     assert cfg.settings == {}
     assert cfg.steps is None and cfg.toolchain is None and cfg.base_dir is None
     # Every setting at its default: the export's own inputs and outputs, and FIFO sizing
-    # at the baseline folding, the default strategy step, without a margin.
+    # at the baseline folding, the default strategy list, without a margin.
     plan = build_plan(cfg)
     settings = plan.settings
     assert {name: setting.value for name, setting in settings.items()} == {
@@ -89,12 +89,11 @@ def test_a_build_targets_ip_and_sizes_fifos_by_default() -> None:
         "preprocessing": None,
         "input_datatype": None,
         "topk": None,
-        "fifo_margin": 0,
-        "fifo_ram_style": None,
+        "strategies": (Named.SIZE_FIFOS,),
     }
     assert not any(setting.given for setting in settings.values())
     assert [step.name for step in plan.steps] == default_steps()
-    assert "step_size_fifos" in default_steps()
+    assert "step_explore" in default_steps()
 
 
 #: Every setting of the build's steps, none at its default.
@@ -104,11 +103,13 @@ SETTINGS: dict[str, Any] = {
     "preprocessing": "preproc.onnx",
     "input_datatype": "UINT8",
     "topk": 1,
-    "fifo_margin": 2,
-    "fifo_ram_style": "block",
+    "strategies": [
+        {"hold": {"MatMul_0": {"simd": 8}}},
+        {"target_throughput": {"fps": 1_000_000.0, "relax": False}},
+        "size_fifos",
+    ],
     "ooc_synth": True,
     "hw_debug": True,
-    "target_fps": 1_000_000,
 }
 
 
@@ -124,7 +125,7 @@ def test_a_configuration_holds_through_json() -> None:
             "finn.builder.build_dataflow_steps.step_tidy_up",
             "step_package_partition",
         ],
-        start_step="step_size_fifos",
+        start_step="step_explore",
         stop_step="phase_optimize_hardware",
         save_intermediate_models=False,
         enable_build_pdb_debug=False,
@@ -164,9 +165,9 @@ def test_a_key_no_step_declares_is_refused_naming_the_settings_the_steps_read() 
         "configuration.board",
     )
     assert finding.message == (
-        "no step of this build declares it; the settings its steps read: fifo_margin, "
-        "fifo_ram_style, input_datatype, max_multithreshold_bit_width, override_inpsize, "
-        "preprocessing, topk"
+        "no step of this build declares it; the settings its steps read: "
+        "input_datatype, max_multithreshold_bit_width, override_inpsize, preprocessing, "
+        "strategies, topk"
     )
 
 
@@ -365,8 +366,11 @@ def test_json_names_steps_so_a_python_object_in_a_list_is_refused_when_written()
     [
         ({"topk": "one"}, "configuration.topk: an int, not 'one'"),
         ({"max_multithreshold_bit_width": "8"}, "configuration.max_multithreshold_bit_width: "),
-        ({"fifo_margin": "2"}, "configuration.fifo_margin: an int, not '2'"),
-        ({"fifo_ram_style": 3}, "configuration.fifo_ram_style: a str, not 3"),
+        ({"strategies": "size_fifos"}, "configuration.strategies: a list, not 'size_fifos'"),
+        (
+            {"strategies": [{"size_fifos": {"margin": "2"}}]},
+            "configuration.strategies[0].size_fifos.margin: an int, not '2'",
+        ),
         ({"steps": ["list_bitfile"], "hw_debug": "yes"}, "configuration.hw_debug: a bool, not"),
         ({"steps": ["list_ip"], "ooc_synth": 1}, "configuration.ooc_synth: a bool, not 1"),
         ({"override_inpsize": [1, "28"]}, "configuration.override_inpsize: "),
@@ -689,11 +693,10 @@ def test_the_premade_lists_end_at_their_outputs() -> None:
 
 
 def test_the_lookup_is_the_phase_tables() -> None:
-    """Every step once, by its name: the phases' steps in order, then the strategy steps
-    no phase runs; every premade list's steps among them."""
+    """Every step once, by its name: the phases' steps in order; every premade list's steps
+    among them."""
     in_phases = [step for steps in build_dataflow_phases.values() for step in steps]
-    others = [step for step in KERNEL_STRATEGY_STEPS if step not in in_phases]
-    assert list(build_dataflow_step_lookup.values()) == [*in_phases, *others]
+    assert list(build_dataflow_step_lookup.values()) == in_phases
     assert all(name == step.__name__ for name, step in build_dataflow_step_lookup.items())
     assert len(set(in_phases)) == len(in_phases)
     listed = {step for steps in build_dataflow_lists.values() for step in steps}
@@ -711,8 +714,7 @@ def test_the_steps_declare_their_settings_each_with_a_default() -> None:
         "input_datatype": ("step_add_pre_post_processing",),
         "topk": ("step_add_pre_post_processing",),
         "max_multithreshold_bit_width": ("step_qonnx_to_finn",),
-        "fifo_margin": ("step_size_fifos",),
-        "fifo_ram_style": ("step_size_fifos",),
+        "strategies": ("step_explore",),
     }
 
 
@@ -735,11 +737,11 @@ def test_a_build_starts_and_stops_at_any_step_or_named_list() -> None:
     inside = {
         **STATED,
         "steps": ["list_ip"],
-        "start_step": "step_size_fifos",
+        "start_step": "step_explore",
         "stop_step": "step_package_partition",
     }
     cfg = DataflowBuildConfig.from_json(json.dumps(inside))
-    assert names(cfg) == ["step_size_fifos", "step_verify_partition", "step_package_partition"]
+    assert names(cfg) == ["step_explore", "step_verify_partition", "step_package_partition"]
     assert saved_before_start(cfg) == "step_create_dataflow_partition"
     phases = {
         **STATED,
@@ -748,7 +750,7 @@ def test_a_build_starts_and_stops_at_any_step_or_named_list() -> None:
         "stop_step": "phase_emit_hardware",
     }
     cfg = DataflowBuildConfig.from_json(json.dumps(phases))
-    assert names(cfg) == ["step_size_fifos", "step_verify_partition", "step_package_partition"]
+    assert names(cfg) == ["step_explore", "step_verify_partition", "step_package_partition"]
     assert saved_before_start(cfg) == "step_create_dataflow_partition"
     cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, "stop_step": "phase_prepare_model"}))
     assert names(cfg) == [step.__name__ for step in build_dataflow_phases["phase_prepare_model"]]
@@ -759,11 +761,11 @@ def test_a_build_starts_and_stops_at_any_step_or_named_list() -> None:
 
 def test_a_name_the_build_does_not_have_is_refused_naming_its_steps_and_lists() -> None:
     cfg = DataflowBuildConfig.from_json(
-        json.dumps({**STATED, "steps": ["phase_emit_hardware"], "start_step": "step_size_fifos"})
+        json.dumps({**STATED, "steps": ["phase_emit_hardware"], "start_step": "step_explore"})
     )
     lists = ", ".join([*build_dataflow_phases, *build_dataflow_lists])
     message = (
-        "'step_size_fifos' is not one of this build's steps; its steps: "
+        "'step_explore' is not one of this build's steps; its steps: "
         f"step_package_partition; the named lists: {lists}"
     )
     (finding,) = refusal(cfg).findings
@@ -853,7 +855,8 @@ def test_a_configuration_is_refused_with_every_rejection_at_once(tmp_path: Path)
         **STATED,
         "output_dir": str(tmp_path / "output"),
         "target": {"period_ns": 5.0, "board": "U250"},
-        "steps": ["phase_create_accelerator", "step_target_throughput"],
+        "steps": ["phase_create_accelerator", "step_explore"],
+        "strategies": [{"size_fifos": {"margin": -1}}],
         "fifo_margins": 2,
     }
     cfg = DataflowBuildConfig.from_json(json.dumps(stated))
@@ -863,10 +866,10 @@ def test_a_configuration_is_refused_with_every_rejection_at_once(tmp_path: Path)
     assert codes == [
         ("unknown-board", "configuration.target.board"),
         ("setting-unknown", "configuration.fifo_margins"),
-        ("setting-required", "configuration.target_fps"),
+        ("setting-invalid", "configuration.strategies[0]"),
     ]
-    required = refused.value.findings[2].message
-    assert required == "step_target_throughput require it, and it is not given"
+    invalid = refused.value.findings[2].message
+    assert invalid.startswith("size_fifos: sizing-invalid: a margin of -1 words")
     manifest = json.loads((tmp_path / "output" / MANIFEST_FILE).read_text())
     assert manifest["outcome"] == {
         "status": "refused",
@@ -880,11 +883,11 @@ def test_a_configuration_is_refused_with_every_rejection_at_once(tmp_path: Path)
     assert manifest["plan"] is None and manifest["steps"] == []
     log = (tmp_path / "output" / "build_dataflow.log").read_text()
     assert "Configuration refused: 3 findings" in log
-    assert log.count("configuration.target_fps: setting-required: ") == 1
+    assert log.count("configuration.strategies[0]: setting-invalid: ") == 1
     # The target resolves, the plan too: the checks' rejections, and their warnings once.
     # The board requires a Vivado release, and the toolchain's route has no Vivado.
     target = {"period_ns": 5.0, "board": "AUP-ZU3_8GB", "shell": "pynq"}
-    stated = {**stated, "target": target, "target_fps": 1e6}
+    stated = {**stated, "target": target, "strategies": ["size_fifos"]}
     del stated["fifo_margins"]
     stated["stop_step"] = "step_create_dataflow_partition"
     cfg = DataflowBuildConfig.from_json(json.dumps(stated))
@@ -899,7 +902,7 @@ def test_a_configuration_is_refused_with_every_rejection_at_once(tmp_path: Path)
     ]
     assert manifest["plan"] is not None
     log = (tmp_path / "output" / "build_dataflow.log").read_text()
-    assert log.count("configuration.target_fps: setting-unread: ") == 1
+    assert log.count("configuration.strategies: setting-unread: ") == 1
 
 
 def test_a_build_directory_states_its_configuration(tmp_path: Path) -> None:
@@ -1060,11 +1063,10 @@ def test_tfc_builds_on_ip_through_the_directory_entry(tmp_path: Path, tfc_export
     cfg = DataflowBuildConfig(
         output_dir=str(tmp_path / "output"),
         target=TargetRequest(period_ns=5.0, board="Ultra96"),
-        settings={**io_settings(directory), "target_fps": 1_000_000},
-        steps=[
-            "step_target_throughput" if step == "step_size_fifos" else step
-            for step in default_steps()
-        ],
+        settings={
+            **io_settings(directory),
+            "strategies": [{"target_throughput": {"fps": 1_000_000}}],
+        },
         enable_build_pdb_debug=False,
     )
     (directory / "dataflow_build_config.json").write_text(cfg.to_json())
@@ -1075,7 +1077,7 @@ def test_tfc_builds_on_ip_through_the_directory_entry(tmp_path: Path, tfc_export
     assert read_target(body) == resolve_target(part=ULTRA96.part, period_ns=5.0)
     logged = json.loads((output / "report" / "kernel_choices.json").read_text())
     assert logged == kernel_choices_config(body)
-    report = json.loads((output / "report" / "step_target_throughput.json").read_text())
+    report = json.loads((output / "report" / "step_explore.json").read_text())
     assert report["bottleneck"]["cycles"] == 196
 
 

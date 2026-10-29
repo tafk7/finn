@@ -17,10 +17,12 @@ from qonnx.core.metadata import MetadataError
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
 from support.configure import configured
+from support.explore_models import choices
+from support.explore_models import kernel_model as open_model
+from support.helpers import Lanes
 from support.models import TARGET, chain_source, configure_partition, kernel_model
 from support.refusals import refused
 
-from finn.core.graph.annotations.choices import HELD
 from finn.core.graph.annotations.outputs import (
     OUTPUT_BITFILE,
     OUTPUT_BITFILE_IP_KEY,
@@ -31,6 +33,7 @@ from finn.core.graph.annotations.outputs import (
     OUTPUT_IP,
     OUTPUT_IP_KEY,
     OUTPUT_IP_OPTIONS,
+    OUTPUT_SEARCH,
     OUTPUT_VLNV,
 )
 from finn.core.graph.annotations.platform import (
@@ -41,11 +44,14 @@ from finn.core.graph.annotations.platform import (
     write_target,
 )
 from finn.core.graph.errors import KernelOpError
-from finn.core.graph.partition import design_digest
+from finn.core.graph.partition import design_digest, search_record
 from finn.core.reporting.findings import by_code
+from finn.core.search import Hold, Ranked
+from finn.kernels.explore import KernelExplorer, SizeFifos, TargetThroughput
 from finn.platform.resolve import resolve_target
 from finn.platform.target import Target
-from finn.transformation.kernels import ToKernelOps
+from finn.transformation.kernels import ToKernelOps, explore_kernel_choices
+from finn.transformation.kernels.cut import MakeCutChoices
 
 
 def entries(model: ModelWrapper) -> dict[str, str]:
@@ -267,6 +273,11 @@ def test_what_a_build_made_is_typed_in_finn_outputs() -> None:
 # -- the design digest: what an artifact was made from ----------------------------------
 
 
+def cut_model() -> ModelWrapper:
+    """The Chain as the cut leaves it (``MakeCutChoices``), for Ultra96."""
+    return open_model().transform(MakeCutChoices())
+
+
 def chain() -> ModelWrapper:
     """The Chain as KernelOps for Ultra96 in the Zynq shell, its choices saved."""
     model = kernel_model()
@@ -299,15 +310,81 @@ def test_the_design_digest_ignores_what_a_build_made_and_changes_nothing() -> No
     assert entries(model) == stated
 
 
-def test_the_design_digest_ignores_a_hold() -> None:
-    """The held mark names the keys strategies leave alone: it changes no hardware, so
-    marking a key held at its own value leaves the digest as it was (the IP cache keys on
-    it)."""
+def test_the_search_record_is_checked() -> None:
+    """The search's record states exactly its design (a digest), the keys it held, by owner,
+    and the objective (a positive number or null): one that is not that is refused when it is
+    written."""
+    model = holder()
+    for objective in (None, 1_000_000.0, 3):
+        record = {"design": DIGEST, "held": {"first": ["simd"]}, "objective_fps": objective}
+        model.set(OUTPUT_SEARCH, record)
+        written = ModelWrapper(model.model.SerializeToString())
+        assert written.get(OUTPUT_SEARCH) == record
+    model.set(OUTPUT_SEARCH, {"design": DIGEST, "held": {}, "objective_fps": None})
+    assert all(key.startswith("finn.outputs/") for key in entries(model))
+    good: dict[str, object] = {"design": DIGEST, "held": {}, "objective_fps": None}
+    for bad in (
+        {"design": DIGEST, "held": {}},
+        {**good, "extra": 1},
+        {**good, "design": DIGEST.upper()},
+        {**good, "design": ""},
+        {**good, "held": ["first.simd"]},
+        {**good, "held": {"first": "simd"}},
+        {**good, "held": {"first": [1]}},
+        {**good, "objective_fps": 0},
+        {**good, "objective_fps": -1.0},
+        {**good, "objective_fps": True},
+        {**good, "objective_fps": "fast"},
+        ["design"],
+    ):
+        with pytest.raises(MetadataError, match=f"{OUTPUT_SEARCH.entry}: cannot store"):
+            model.set(OUTPUT_SEARCH, bad)
+
+
+def test_the_design_digest_clears_the_search_record() -> None:
+    """The search's record is a build's output (``finn.outputs``), not the design: it names
+    the design it was made for, so it cannot be part of it, and a hold changes no hardware.
+    The record is the body's own while its design is the body's, stale once the body's design
+    changes, and none where no search wrote one."""
     model = chain()
+    assert search_record(model) == ("none", None)
     digest = design_digest(model)
-    model.set(HELD, {"activate": ["pe"]})
-    assert model.get(HELD) == {"activate": ["pe"]}
+    record = {"design": digest, "held": {"activate": ["pe"]}, "objective_fps": 1e6}
+    model.set(OUTPUT_SEARCH, record)
     assert design_digest(model) == digest
+    assert search_record(model) == ("current", record)
+    changed_choice(model)
+    assert design_digest(model) != digest
+    assert search_record(model) == ("stale", None)
+    assert model.get(OUTPUT_SEARCH) == record
+
+
+def test_the_objective_stays_until_an_entry_changes_a_kernel() -> None:
+    """A target throughput records its frames a second in the search's record; a later entry
+    of the same list that changes no kernel's choice (FIFO sizing, a hold of a value the
+    kernel already has) keeps it, and one that changes a kernel's choice, whatever its
+    strategy, removes it. A list without a target throughput records none."""
+    fps = 1_000_000_000 // (5 * 6)
+
+    def objective(*strategies: KernelExplorer) -> object:
+        model = cut_model()
+        explore_kernel_choices(model, list(strategies))
+        state, record = search_record(model)
+        assert state == "current" and record is not None
+        return record["objective_fps"]
+
+    assert objective(TargetThroughput(fps)) == fps
+    assert objective(TargetThroughput(fps), SizeFifos()) == fps
+    # A hold of the folding the target throughput found changes no kernel's choice.
+    folded = cut_model()
+    explore_kernel_choices(folded, [TargetThroughput(fps)])
+    kept = {"first": {"pe": choices(folded)["first"]["pe"]}}
+    assert objective(TargetThroughput(fps), Hold(kept)) == fps
+    # A later entry that changes a kernel's choice removes it.
+    assert objective(TargetThroughput(fps), Hold({"first": {"pe": 1, "simd": 1}})) is None
+    assert objective(TargetThroughput(fps), Ranked(Lanes(2))) is None
+    assert objective(SizeFifos()) is None
+    assert objective() is None
 
 
 def test_the_design_digest_ignores_orders_that_carry_no_meaning() -> None:

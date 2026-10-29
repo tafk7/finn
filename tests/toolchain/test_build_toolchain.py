@@ -132,11 +132,11 @@ def test_a_build_directorys_relative_paths_name_its_files(tmp_path):
     directory = tmp_path / "build"
     directory.mkdir()
     steps = ["phase_prepare_model", "step_convert_to_hw", "step_create_dataflow_partition"]
-    steps += ["step_size_fifos", f"{__name__}.step_reading"]
+    steps += ["step_explore", f"{__name__}.step_reading"]
     settings = {
         "preprocessing": "preproc.onnx",
         "topk": 1,
-        "fifo_margin": 2,
+        "strategies": [{"size_fifos": {"margin": 2}}],
         "input_datatype": "UINT8",
         "frames": "inputs/input.npy",
     }

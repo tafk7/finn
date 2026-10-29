@@ -18,12 +18,12 @@ from support.kernel_specs.base import placed
 from support.kernel_specs.thresholding import tensor
 from support.kernel_specs.transpose import MATRICES, transpose
 
+from finn.core.search import dotted
 from finn.core.space import Space, design_space, inspection
 from finn.dataflow.steps import Step, steps
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.harness.points import rejected
 from finn.kernels.artifacts.abi import Signal
-from finn.kernels.explore import dotted
 from finn.kernels.library import library_module
 from finn.kernels.transpose import TransposeKernel
 

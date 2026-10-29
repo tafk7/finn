@@ -37,27 +37,21 @@ from support.refusals import refused
 
 import finn.kernels.explore as explore_module
 from finn.core.reporting.findings import Finding, FindingKind
+from finn.core.search import Accepted, ExploreError, Hold, Ranked, Refused, dotted, explore
 from finn.core.space import inspection
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels import composer
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.explore import (
-    Accepted,
     Bottleneck,
     DebugPlaceholder,
     Defaults,
-    ExploreError,
-    Hold,
     MaxThroughput,
-    Ranked,
-    Refused,
     Seam,
     SizeFifos,
     Stated,
     TargetCycles,
     TargetThroughput,
-    dotted,
-    explore,
 )
 from finn.kernels.matmul import KnownWeights, MatMulKernel
 from finn.kernels.partition import Partition
@@ -339,6 +333,34 @@ def test_target_cycles_folds_the_least_parallelism_that_meets_the_budget() -> No
     assert isinstance(cases, dict)
     assert {key: row["taken"] for key, row in cases.items()} == CASES_12
     assert strategy.relaxed_to is None
+
+
+def test_a_fold_that_the_engine_refuses_with_a_choice_standing_takes_another_value() -> None:
+    """FINN's fold meets the engine's refusal in ``Seam.restore``, not in the strategy: the Chain
+    stored with pumping on at SIMD 2, a budget of 48 cycles a frame wants SIMD 1. The fold
+    reopens pumping with its SIMD (``TargetCycles`` never sees a ``Refused``, and the fold rule
+    clears nothing), and ``restore`` then proposes the stored pumping (on) at SIMD 1: the engine
+    refuses it (pumping needs lanes), the SIMD standing in its way (``Refused.standing``; the
+    direct ``set`` below, SIMD 1 over a standing pumping, shows a refusal's shape).
+    ``restore`` takes another value for the choice, its policy's (off: ``_set_by_policy``). At
+    24 cycles SIMD 2 still meets the budget, the stored pumping is accepted, and it stays on."""
+    explorer, base = seam()
+    pumped = explorer.set(
+        base, keyed({"first.simd": 2, "first.compute.packed.compute_pumping": True})
+    )
+    assert isinstance(pumped, Accepted)
+    asked = Seam(FULL_DSP48E2).set(pumped.network, keyed({"first.simd": 1}))
+    assert isinstance(asked, Refused)
+    rule = ("first", "compute.packed.pumping_has_lanes")
+    assert asked.standing == {rule: (("first", "compute.packed.compute_pumping"),)}
+    pumping = "first.compute.packed.compute_pumping"
+    for cycles, simd, taken in ((48, 1, False), (24, 2, True)):
+        fold, _ = seam()
+        strategy = TargetCycles(cycles)
+        folded = strategy.explore(fold, pumped.network)
+        values = chosen(fold, folded)
+        assert (values["first.simd"], values[pumping]) == (simd, taken)
+        assert strategy.report()["met"] is True
 
 
 def test_a_budget_no_member_meets_is_relaxed_to_the_bottleneck_reached() -> None:
@@ -720,7 +742,7 @@ def test_a_hold_a_rule_refuses_names_the_rule_and_what_stands_in_its_way() -> No
     with refused(
         "pin-refused",
         error=ExploreError,
-        owner="held",
+        owner="hold",
         message=r"pumping_has_lanes: .*dotp-pumping.*\(standing: first\.simd\)",
     ):
         Hold({"first": {"compute.packed.compute_pumping": True}}).explore(explorer, base)
@@ -745,7 +767,7 @@ def test_the_debug_placeholder_takes_a_required_choice_s_first_case_or_refuses_i
     explorer, base = seam()
     placeholder = DebugPlaceholder()
     assert explorer.chosen(placeholder.explore(explorer, base)) == explorer.chosen(base)
-    assert placeholder.report() == {"strategy": "placeholder", "set": {}}
+    assert placeholder.report() == {"strategy": "debug_placeholder", "set": {}}
     assert placeholder.label == "DEBUG: set by placeholder"
     fifo = explorer.set(base, keyed({"levels.transport": "fifo"}))
     assert isinstance(fifo, Accepted)

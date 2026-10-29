@@ -94,6 +94,7 @@ from types import MappingProxyType
 from typing import Any, cast
 
 from finn.core.reporting.findings import Finding, FindingKind, Refusal
+from finn.core.search import Key
 from finn.core.space import (
     MISSING,
     RESERVED_NAMES,
@@ -123,9 +124,6 @@ from finn.kernels.channels import Channel
 from finn.kernels.control import control_models
 from finn.kernels.port import port_endpoint, port_surface
 from finn.kernels.sides import Side, SideKind
-
-Key = tuple[str, str]
-"""A choice at FINN's surface: its owner's graph name and its key in the owner's space."""
 
 SEPARATOR = "-"
 """Between a root member's member name and its fact: a member's name never holds it."""
@@ -773,7 +771,6 @@ __all__ = [
     "ChannelDeclaration",
     "Composed",
     "Facts",
-    "Key",
     "Names",
     "PartitionDeclaration",
     "PartitionRefused",

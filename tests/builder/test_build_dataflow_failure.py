@@ -275,9 +275,9 @@ def test_a_refused_configuration_is_logged_each_finding_once_then_raises(capsys,
     cfg = DataflowBuildConfig(
         output_dir=output,
         target=TargetRequest(period_ns=10.0, board="AUP-ZU3_8GB", shell="pynq"),
-        steps=[step_says, "step_size_fifos"],
+        steps=[step_says, "step_explore"],
         stop_step="step_says",
-        settings={"fifo_margin": 2},
+        settings={"strategies": [{"size_fifos": {"margin": 2}}]},
     )
     cfg.prepared_toolchain = Toolchain(Selection(), {"PATH": output})
     refusal = "configuration.toolchain: board-vivado: AUP-ZU3_8GB requires Vivado 2024.1"
@@ -291,7 +291,7 @@ def test_a_refused_configuration_is_logged_each_finding_once_then_raises(capsys,
     err = capsys.readouterr().err
     with open(f"{output}/{build.LOG_FILE}") as f:
         log = f.read()
-    warning = "configuration.fifo_margin: setting-unread: only step_size_fifos read it"
+    warning = "configuration.strategies: setting-unread: only step_explore read it"
     lines = err.splitlines()
     assert lines[:2] == [
         f"WARNING: {warning}, and start_step/stop_step leave them out",

@@ -15,7 +15,7 @@ partition and the label select (TopK) after it, both on the host.
 Every kernel choice is created at its baseline, a KernelOp's own at conversion and a
 channel's at the cut; then every one (folding, memories, transports) is set again on the
 partition's body, as the build explores it, ranked by hand
-(``ExploreKernelChoices(Ranked(Lanes(16)))``, ``support.helpers.Lanes``): 16 lanes
+(``explore_kernel_choices(body, [Ranked(Lanes(16))])``, ``support.helpers.Lanes``): 16 lanes
 where they divide, the whole extent otherwise, every other choice its kernel's baseline.
 
 Building TFC takes about 17 s (torch, the export, streamlining). A test that only
@@ -36,13 +36,13 @@ from qonnx.transformation.infer_datatypes import InferDataTypes
 
 from finn.builder.build_dataflow import build_plan
 from finn.builder.build_dataflow_config import DataflowBuildConfig
-from finn.kernels.explore import Ranked
+from finn.core.search import Ranked
 from finn.platform.request import TargetRequest
 from finn.platform.resolve import resolve_target
 from finn.transformation.kernels import (
-    ExploreKernelChoices,
     InferKernelTensors,
     ToKernelOps,
+    explore_kernel_choices,
 )
 from finn.transformation.kernels.cut import CutKernelPartition
 from support.helpers import Lanes
@@ -152,7 +152,7 @@ def partition(source: ModelWrapper, directory: Path) -> tuple[ModelWrapper, Mode
     partition's body, cut first, then every choice committed at 16 lanes (``LANES``), the
     body verified (``support.packaging.verified``) and saved again in its file."""
     parent, body, body_file = cut(source, directory)
-    body = body.transform(ExploreKernelChoices(Ranked(LANES)))
+    explore_kernel_choices(body, [Ranked(LANES)])
     verified(body, parent.graph.node[1].name)
     body.save(body_file)
     return parent, body

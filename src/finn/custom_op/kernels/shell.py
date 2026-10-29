@@ -42,28 +42,27 @@ its shell, which alone holds both sides of a boundary channel, by the channel's 
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from onnx import NodeProto
 
-from finn.core.graph.annotations.choices import held_keys
 from finn.core.graph.annotations.outputs import OUTPUT_VERIFIED
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.errors import KernelOpError
-from finn.core.graph.partition import design_digest
+from finn.core.graph.partition import design_digest, search_record
 from finn.core.reporting.findings import Finding, FindingKind
+from finn.core.search import Key, dotted
 from finn.core.space import Available, Inapplicable, QueryResult, Rejected, inspection
 from finn.custom_op.kernels.network import PARTITION, PRODUCER, _network, persist, stale_text
 from finn.kernels.artifacts.module import Composed
 from finn.kernels.base import Timed
 from finn.kernels.budgets import SHELL, counts
 from finn.kernels.channels import Channel
-from finn.kernels.composer import Key
 from finn.kernels.configure import refusal
-from finn.kernels.explore import FifoCheck, Seam, dotted
+from finn.kernels.explore import FifoCheck, Seam
 from finn.kernels.movers import MoverContract
 from finn.kernels.partition import Partition, _together
 from finn.kernels.policies import Required, policy
@@ -269,8 +268,8 @@ def configured_network(
     nothing is completed here. A stale choice; an open choice in play, each by name: one no
     value of which is possible (each refused value's rules; a ``choice-no-valid-value``
     cause each, owned by the key, the rules' findings its causes, as the cut reports it), a
-    required one no strategy set ("required: run step_size_fifos or
-    step_placeholder_choices"), any other one never set ("not set: the cut,
+    required one no strategy set ("required: add size_fifos or
+    debug_placeholder to step_explore's strategies"), any other one never set ("not set: the cut,
     MakeCutChoices, or a strategy sets it"; one finding, ``choices-open``); a partition
     over the shell's budgets (its shell member's validity: "refused by the <shell> shell",
     each broken budget a finding), or whose module or cycles its members refuse, or a
@@ -317,7 +316,8 @@ def configured_network(
         named = [
             f"{dotted(key)}: {impossible[key].message}"
             if key in impossible
-            else f"{dotted(key)} (required: run step_size_fifos or step_placeholder_choices)"
+            else f"{dotted(key)} (required: add size_fifos or debug_placeholder to "
+            "step_explore's strategies)"
             if key in required
             else f"{dotted(key)} (not set: the cut, MakeCutChoices, or a strategy sets it)"
             for key in open_keys
@@ -460,35 +460,77 @@ def _impossible(
     )
 
 
+def _held_values(network: Partition, held: Mapping[str, Sequence[str]]) -> dict[Key, object]:
+    """The values of the keys the search's record holds (``held``, by owner), the ones
+    ``network`` states. A held key is the user's exact value, so one the network does not
+    take is refused, by name, never dropped: an owner that is no member of the network
+    (``held-owner-unknown``), or a key the bound network states no value for, because the
+    bind dropped the stored one or it is gone (``held-not-taken``; the bind's findings are
+    its causes). A key stored out of play (dormant) or waiting is stated, by its stored
+    value."""
+    members = set(network.members)
+    kernels = set(network.kernels)
+    saved = network.chosen()
+    values: dict[Key, object] = {}
+    lost: list[Finding] = []
+    refused_keys: list[str] = []
+    for owner, keys in held.items():
+        for key in keys:
+            if owner not in members:
+                code, reason = "held-owner-unknown", "no member of the network owns it"
+                subject: tuple[tuple[str, str], ...] = ()
+            elif (owner, key) not in saved:
+                code, reason = "held-not-taken", "the bound network states no value for it"
+                subject = (("node" if owner in kernels else "tensor", owner),)
+            else:
+                values[(owner, key)] = saved[(owner, key)]
+                continue
+            refused_keys.append(dotted((owner, key)))
+            lost.append(
+                Finding(
+                    FindingKind.REJECTION,
+                    code,
+                    "verify_partition",
+                    f"{dotted((owner, key))}: held by the search's record, but {reason}; the "
+                    "held value was not taken, and nothing takes its place",
+                    (("keys", (key,)), *subject),
+                    causes=network.dropped.get((owner, key), ()),
+                )
+            )
+    if lost:
+        raise KernelOpError(
+            "a held choice is refused: " + "; ".join(each.message for each in lost),
+            tuple(refused_keys),
+            findings=lost,
+        )
+    return values
+
+
 def verify_partition(model: ModelWrapper, label: str) -> tuple[Configured, FifoCheck]:
     """A partition model's configured network (``configured_network``, whose refusals it
     keeps) with its FIFOs checked against their streams at its bottleneck period
     (``Seam.check_fifos``: sizing's own model, whatever changed since a FIFO was sized, an
     edit by hand included), and what the check found; the design it verified recorded on
     the model (``OUTPUT_VERIFIED``: its ``design_digest``), which emission compares
-    (``refuse_unverified``). A FIFO not held that no longer keeps its producer within its
-    idle time is refused, named (``fifo-stale``: run step_size_fifos), and nothing is
-    recorded; a held one (``fifo-held-stale``) and a ``direct`` that throttles its
-    producer (``direct-throttles``) are limitations, the check's ``findings``. The model
+    (``refuse_unverified``). The keys the search held are the ones of its record, read only
+    while the record is the body's own (``search_record``: current; a stale one or none holds
+    nothing); one the network does not take is refused, named (``held-not-taken``,
+    ``held-owner-unknown``). A FIFO not held that no longer keeps its producer within its
+    idle time is refused, named (``fifo-stale``: add size_fifos to step_explore's strategies), and
+    nothing is recorded; a held one (``fifo-held-stale``) and a ``direct`` that throttles
+    its producer (``direct-throttles``) are limitations, the check's ``findings``. The model
     is changed only by the record; its caller saves it."""
     point, _ = configured_network(model, label)
     seam = Seam(read_target(model).platform)
-    # Only which keys are held matters here, not their values (exploration checks those).
-    stated = seam.chosen(point.network)
-    seam.held.update(
-        {
-            (owner, key): stated[(owner, key)]
-            for owner, keys in held_keys(model).items()
-            for key in keys
-            if (owner, key) in stated
-        }
-    )
+    _, record = search_record(model)
+    seam.held.update(_held_values(point.network, {} if record is None else record["held"]))
     found = seam.check_fifos(point.network)
     stale = tuple(finding for each in found.stale.values() for finding in each)
     if stale:
         raise KernelOpError(
-            f"{label}: FIFOs too small for their streams, refused at verification (run "
-            "step_size_fifos): " + "; ".join(map(Finding.subject_line, stale)),
+            f"{label}: FIFOs too small for their streams, refused at verification (add "
+            "size_fifos to step_explore's strategies): "
+            + "; ".join(map(Finding.subject_line, stale)),
             findings=stale,
         )
     model.set(OUTPUT_VERIFIED, design_digest(model))

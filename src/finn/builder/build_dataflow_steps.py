@@ -12,8 +12,8 @@ on, when it runs, saying what to change: a setting's refusal is a
 ``ConfigurationRefused`` naming the setting.
 
 The steps prepare a Brevitas export into a streamlined graph; convert its nodes to
-KernelOps and cut them into one partition; choose the partition's parameters, one
-strategy step at a time; and make the outputs. Each output is a step, and a list makes
+KernelOps and cut them into one partition; choose the partition's parameters, in one
+search step (``step_explore``); and make the outputs. Each output is a step, and a list makes
 the outputs whose steps it names: the packaged IP, the bitfile, the driver and the
 deployment package. A step whose input an earlier step makes refuses when that input is
 missing, naming the step to list before it. Each step only calls the transformations
@@ -22,6 +22,7 @@ that do its work.
 
 import logging
 import math
+from collections.abc import Sequence
 from pathlib import Path
 
 from onnx import helper
@@ -56,23 +57,15 @@ from finn.builder.build_dataflow_resources import (
     built_reports,
     shell_resources_report,
 )
+from finn.builder.build_dataflow_strategies import Named, StrategyEntry
 from finn.builder.build_dataflow_testbench import TESTBENCH_DIR, generated_frame, write_testbench
-from finn.core.graph.annotations.choices import OBJECTIVE_FPS
 from finn.core.graph.annotations.platform import read_target
-from finn.core.graph.partition import partition_body
+from finn.core.graph.partition import partition_body, search_record
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.reporting.manifest import note, reported, write_report
 from finn.custom_op.kernels.network import partition_ports, stale_text
 from finn.custom_op.kernels.shell import verify_partition
-from finn.kernels.explore import (
-    FIFOS_BY_MODEL,
-    DebugPlaceholder,
-    Defaults,
-    Explorer,
-    MaxThroughput,
-    SizeFifos,
-    TargetThroughput,
-)
+from finn.kernels.explore import FIFOS_BY_MODEL
 from finn.kernels.sides import BeatTimes, Outside
 from finn.platform.resolve import refuse_drift
 from finn.platform.shells import VIVADO_BLOCK_DESIGN, shell_row
@@ -80,10 +73,9 @@ from finn.shells.pynq.deploy import MakePynqDeployment
 from finn.shells.pynq.driver import DRIVER_DIR, DRIVER_REPORT, MakePynqDriver
 from finn.shells.pynq.runner import REPORTS, BuildPynqBitfile
 from finn.transformation.kernels import (
-    Explored,
     ToKernelOps,
     exploration_summary,
-    explore_partition,
+    explore_kernel_choices,
     kernel_choices_config,
     kernel_ops_report,
     kernel_ops_summary,
@@ -245,90 +237,55 @@ def step_convert_to_hw(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWr
     return model
 
 
-def _explore(
-    model: ModelWrapper, cfg: DataflowBuildConfig, step: str, strategy: Explorer
-) -> Explored:
-    """Explore the partition by ``strategy``, the graph's holds kept, and save it; write the
-    step's report, report/<step>.json, log its summary and note each limitation found as
-    a warning."""
-    explored = explore_partition(model, strategy)
-    write_report(Path(cfg.output_dir) / "report" / f"{step}.json", explored.report)
-    for line in exploration_summary(explored, step):
+def step_explore(
+    model: ModelWrapper,
+    cfg: DataflowBuildConfig,
+    *,
+    strategies: Sequence[StrategyEntry] = (Named.SIZE_FIFOS,),
+) -> ModelWrapper:
+    """Explore the partition's choices by each of ``strategies``, in order, on one seam, and
+    save the result: one search, one step. An entry is a name or a one-key object
+    (``finn.builder.build_dataflow_strategies``):
+
+    - ``{"hold": {"MatMul_0": {"simd": 8}}}``: fix those choices; no later entry changes
+      them, and the build's verification holds them too;
+    - ``{"target_throughput": {"fps": 1e6, "relax": true}}``: fold each kernel to the least
+      parallelism that meets ``fps`` frames a second at the target's clock; with ``relax``,
+      a throughput the folding cannot reach is relaxed to the fastest it reaches. The
+      partition's body records ``fps``, the objective step_build_bitfile reports the
+      delivered clock against, until a later entry that changes a kernel's choice removes
+      it;
+    - ``{"max_throughput": {"within": {"lut": 0.5}}}``: fold to the most throughput whose
+      shell's resources stay within a fraction of the part's for each resource named. A
+      budget even the least parallelism exceeds is a limitation, and that point is kept;
+    - ``"size_fifos"`` or ``{"size_fifos": {"margin": 2, "ram_style": "block"}}``: size each
+      channel from the beat patterns at both its sides, at the folding before it: a direct
+      connection, or a FIFO of the least depth that keeps its producer within its idle time,
+      plus ``margin`` words. A held channel is kept. ``ram_style`` commits a memory style
+      with each depth; with none the FIFO keeps its held style, else its earlier one, else
+      takes ``auto``;
+    - ``"defaults"``: set every choice not held to its default, so a resumed build starts
+      over: each by its policy, a kernel's its KernelOp's, a channel's its own; a FIFO's
+      depth is left open;
+    - ``"debug_placeholder"``: for debugging, set every open required choice to its first
+      allowed value, so a design can be generated where no entry makes that choice. A
+      FIFO's depth has no first value and is refused.
+
+    The default sizes the FIFOs at conversion's folding. FIFO depths are sized at the folding
+    before them: list ``size_fifos`` after the entries that change it. A refusal (a hold the
+    seam refuses, a held choice not kept, a point a member's validity or the shell's budgets
+    refuse) leaves the body and its report as they were. Writes report/step_explore.json,
+    one entry for each strategy, then what the whole point has, and the search's record in the
+    body."""
+    made = [entry.strategy() for entry in strategies]
+    _, body, body_file = partition_body(model)
+    explored = explore_kernel_choices(body, made)
+    body.save(body_file)
+    write_report(Path(cfg.output_dir) / "report" / "step_explore.json", explored.report)
+    for line in exploration_summary(explored):
         _LOG.info(line)
     for finding in explored.findings:
         note(finding)
-    return explored
-
-
-def step_target_throughput(
-    model: ModelWrapper,
-    cfg: DataflowBuildConfig,
-    *,
-    target_fps: float,
-    relax_target_fps: bool = True,
-) -> ModelWrapper:
-    """Fold the partition's kernels to the least parallelism that meets ``target_fps``
-    frames a second at the target's clock, the holds kept. With ``relax_target_fps``, a
-    throughput the folding cannot reach is relaxed to the fastest it reaches. Writes
-    report/step_target_throughput.json. The partition's body records ``target_fps``, the
-    objective step_build_bitfile reports the delivered clock against, until a later step
-    that may change the folding removes it."""
-    strategy = TargetThroughput(target_fps, relax=relax_target_fps)
-    _explore(model, cfg, "step_target_throughput", strategy)
-    return model
-
-
-def step_max_throughput(
-    model: ModelWrapper, cfg: DataflowBuildConfig, *, max_throughput_within: dict[str, float]
-) -> ModelWrapper:
-    """Fold the partition's kernels to the most throughput whose shell's resources stay
-    within ``max_throughput_within``, a fraction of the part's for each resource named
-    (``{"lut": 0.5}``), the holds kept. A budget even the least parallelism exceeds is a
-    limitation, and that point is kept. Writes report/step_max_throughput.json."""
-    explored = _explore(model, cfg, "step_max_throughput", MaxThroughput(max_throughput_within))
-    each = explored.report["strategy"]
-    _LOG.info(
-        f"Kernel choices: max_throughput reached {each['bottleneck']['cycles']} cycles a "
-        f"frame within {each['budget']} ({'fits' if each['fits'] else 'does not fit'}; "
-        f"binding: {each['binding']}; {len(each['tried'])} budgets tried)"
-    )
-    return model
-
-
-def step_size_fifos(
-    model: ModelWrapper,
-    cfg: DataflowBuildConfig,
-    *,
-    fifo_margin: int = 0,
-    fifo_ram_style: str | None = None,
-) -> ModelWrapper:
-    """Size each channel of the partition from the beat patterns at both its sides, at the
-    current folding: a direct connection, or a FIFO of the least depth that keeps its
-    producer within its idle time, plus ``fifo_margin`` words. A held channel is kept.
-    ``fifo_ram_style`` commits a memory style with each FIFO's depth; with None the FIFO
-    keeps its held style, else its earlier one, else takes ``auto`` (FinnLib's own choice by
-    depth and width, the channel's policy's first valid), and its depth is sized for that style.
-    Writes report/step_size_fifos.json."""
-    strategy = SizeFifos(margin=fifo_margin, ram_style=fifo_ram_style)
-    _explore(model, cfg, "step_size_fifos", strategy)
-    return model
-
-
-def step_default_choices(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """Set every choice of the partition that is not held back to its default, so a
-    resumed build starts over: each by its policy, a kernel's its KernelOp's, a channel's
-    its own; a FIFO's depth is left open. Writes
-    report/step_default_choices.json."""
-    _explore(model, cfg, "step_default_choices", Defaults())
-    return model
-
-
-def step_placeholder_choices(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """For debugging: set every open required choice of the partition to its first
-    allowed value, so a design can be generated where no strategy makes that choice. A
-    FIFO's depth has no first value and is refused (run step_size_fifos). Writes
-    report/step_placeholder_choices.json."""
-    _explore(model, cfg, "step_placeholder_choices", DebugPlaceholder())
     return model
 
 
@@ -439,18 +396,27 @@ def step_verify_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mode
     a log FINN never reads, then verify the partition before a shell builds it
     (``verify_partition``): its choices are complete and current, its ports match its
     graph's inputs and outputs, its target is the configuration's, and its FIFOs keep their
-    streams at its bottleneck period (the build's one check of them, by sizing's model). A
-    FIFO not held that does not is refused (``fifo-stale``: run step_size_fifos); a held one
-    (``fifo-held-stale``) and a ``direct`` that throttles its producer
-    (``direct-throttles``) are noted as warnings. Writes report/step_verify_partition.json,
-    what the check found. The body records the design it verified: packaging, the shell's
-    integration and the testbench refuse one not verified, or changed since."""
+    streams at its bottleneck period (the build's one check of them, by sizing's model). The
+    keys held are the ones of the search's record, while it is the body's own. A FIFO not
+    held that does not is refused (``fifo-stale``: add size_fifos to step_explore's
+    strategies); a held one (``fifo-held-stale``) and a ``direct`` that throttles its
+    producer (``direct-throttles``) are noted as warnings. Writes report/step_verify_partition.json,
+    the search's record state (``search``: current, stale or none) and the keys it held
+    (``held``), and what the check found. The body records the design it verified:
+    packaging, the shell's integration and the testbench refuse one not verified, or changed
+    since."""
     node, body, body_file = partition_body(model)
     write_report(
         Path(cfg.output_dir) / "report" / "kernel_choices.json", kernel_choices_config(body)
     )
+    state, record = search_record(body)
     _, check = verify_partition(body, node.name)
-    stated = {"fifos_judged": FIFOS_BY_MODEL, "fifo_check": check.report()}
+    stated = {
+        "search": state,
+        "held": {} if record is None else record["held"],
+        "fifos_judged": FIFOS_BY_MODEL,
+        "fifo_check": check.report(),
+    }
     write_report(Path(cfg.output_dir) / "report" / "step_verify_partition.json", stated)
     for finding in check.findings:
         note(finding)
@@ -533,18 +499,25 @@ def step_build_bitfile(
     another target than the configuration's. The model records the bitfile and its
     hardware handoff, what it was built from (the design and the IP) and with which
     options; the build's reports are collected under report/. A shortfall of the
-    delivered clock is noted as a warning, against the throughput step_target_throughput
-    folded to, where the partition's body records one.
+    delivered clock is noted as a warning, against the throughput a target_throughput
+    entry of step_explore folded to, where the search's record of the partition's body is
+    its own and states one.
 
     ``hw_debug``: insert integrated logic analyzers on the movers' streams."""
     _refuse_shell(cfg, "step_build_bitfile")
     _refuse_drift(model, cfg, "bitfile")
     _, body, _ = partition_body(model)
+    state, record = search_record(body)
+    objective = None if record is None else record["objective_fps"]
+    if objective is None:
+        _LOG.info(
+            f"no current objective recorded (search record: {state}): the delivered clock alone"
+        )
     building = BuildPynqBitfile(
         Path(cfg.output_dir),
         toolchain=cfg.step_toolchain("step_build_bitfile"),
         hw_debug=hw_debug,
-        objective_fps=body.get(OBJECTIVE_FPS),
+        objective_fps=objective,
     )
     model = model.transform(building)
     for report in REPORTS.values():
@@ -620,8 +593,8 @@ build_dataflow_phases: dict[str, list[StepFunction]] = {
     ],
     "phase_convert_to_hardware": [step_convert_to_hw],
     "phase_create_accelerator": [step_create_dataflow_partition],
-    # By default only the FIFOs are sized; a list adds the other strategy steps by name.
-    "phase_optimize_hardware": [step_size_fifos, step_verify_partition],
+    # By default only the FIFOs are sized; the step's ``strategies`` setting lists the others.
+    "phase_optimize_hardware": [step_explore, step_verify_partition],
     "phase_emit_hardware": [step_package_partition],
     "phase_generate_outputs": [
         step_build_bitfile,
@@ -631,22 +604,10 @@ build_dataflow_phases: dict[str, list[StepFunction]] = {
     ],
 }
 
-#: The steps that choose the partition's parameters, one strategy each.
-KERNEL_STRATEGY_STEPS: list[StepFunction] = [
-    step_target_throughput,
-    step_max_throughput,
-    step_size_fifos,
-    step_default_choices,
-    step_placeholder_choices,
-]
-
 #: The build's steps by name.
 build_dataflow_step_lookup: dict[str, StepFunction] = {
     step.__name__: step
-    for step in [
-        *(step for steps in build_dataflow_phases.values() for step in steps),
-        *KERNEL_STRATEGY_STEPS,
-    ]
+    for step in (step for steps in build_dataflow_phases.values() for step in steps)
 }
 
 
