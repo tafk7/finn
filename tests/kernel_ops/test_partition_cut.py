@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import subprocess
 from dataclasses import replace
+from itertools import product
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +46,7 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN, design_digest, partition_body
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import configured_network, in_shell
+from finn.dataflow.traversal import Loop, Reorder, Traversal, offsets
 from finn.platform.resolve import resolve_target
 from finn.transformation.kernels import (
     InferKernelTensors,
@@ -312,35 +314,102 @@ def streamed_on_pynq(rows: int, choices: dict[str, Any]) -> ModelWrapper:
     return model
 
 
+def delivered(form: Any, hops: tuple[Any, ...]) -> list[int]:
+    """The flat offsets ``hops`` deliver from ``form``, by each step's own definition: a
+    width step keeps the element order, regrouping only its lanes; a reorder emits, of each
+    frame of ``frame_beats`` beats, the beat at ``sum(index * coefs)`` over ``dims``, outer
+    first (``traversal.Reorder``). A coordinate oracle (``offsets``), independent of the
+    forms the steps derive between."""
+    at = [int(offset) for offset in offsets(form)]
+    for hop in hops:
+        if hop.reorder is not None:
+            lanes, frame = hop.source.form.lanes, hop.reorder.frame_beats
+            beats = [at[first : first + lanes] for first in range(0, len(at), lanes)]
+            at = [
+                offset
+                for start in range(0, len(beats), frame)
+                for index in product(*(range(extent) for extent in hop.reorder.dims))
+                for offset in beats[start + sum(i * c for i, c in zip(index, hop.reorder.coefs))]
+            ]
+    return at
+
+
 @pytest.mark.parametrize("case", sorted(TILED_W2))
-def test_a_tiled_w2_is_refused_by_channel_steps_naming_its_mover(case: str) -> None:
-    """The mover states w2's side row-major, one pass a frame; the second MatMul reads it
-    in 2 x 2 tiles, on three rows each pass three times. No chain of modules regroups four
-    lanes of a row into four of a tile (the steps regroup lanes only through the gcd of
-    the two lane counts), so the edge channel refuses w2 by its own code, ``channel-steps``,
-    naming the mover that states the side, at every one of these foldings; emission
-    refuses it by that code alone. Where only the order differs the steps name the lane
-    axis; where the passes differ too, the positions."""
+def test_a_tiled_w2_is_regrouped_after_its_mover_by_a_vpc_and_an_input_gen(case: str) -> None:
+    """The mover states w2's side row-major, one pass a frame, four lanes a beat; the second
+    MatMul reads it in 2 x 2 tiles, on three rows each pass three times. The steps regroup
+    four lanes of a row into four of a tile through one lane, the only count dividing both
+    at which the two orders differ by a reorder: a ``vpc`` from four lanes to one before the
+    transport, an ``input_gen`` reordering the pass's 16 elements into the tiles (on three
+    rows replaying it three times, a stride-0 level outermost), and a ``vpc`` from one lane
+    to four, at every one of these foldings. What they deliver is what the MatMul reads,
+    position for position; the mover moves the one pass, 4 beats of 16 bits. The cut makes
+    the channel's choices, and emission builds those three modules on w2's path from the
+    boundary to the MatMul's weights."""
     rows, choices = TILED_W2[case]
     model = streamed_on_pynq(rows, choices)
-    choose_memories(model)
-    reason = (
-        "the sequences present different positions"
-        if rows == 3
-        else "the same positions under another lane axis"
+    bound = in_shell(model, model.graph.node)
+    assert bound.validity("w2").status == "valid"
+    assert {key: value for key, value in bound.chosen().items() if key[0] == "w2"} == {
+        ("w2", "transport"): "direct",
+        ("w2", "adapter_ram_style"): "distributed",
+    }
+    w2 = bound.member("w2")
+    row_major = Traversal((4, 4), (Loop(4, 4),), (Loop(4, 1),))
+    assert w2.boundary.form == row_major and w2.boundary.transport.data_width == 16
+    read = w2.streams.sink.sequence.form
+    assert read == Traversal(
+        (4, 4),
+        (*((Loop(3, 0),) if rows == 3 else ()), Loop(2, 2), Loop(2, 8)),
+        (Loop(2, 1), Loop(2, 4)),
     )
-    with refused(
-        "channel-steps",
-        error=KernelOpError,
-        owner="steps",
-        message=(
-            r"^the boundary s_axis_1, stated by the iodma_hls mover \(row-major, one pass a "
-            rf"frame\): no adapter can join the streams: {reason}$"
+    replay = ((3, 0),) if rows == 3 else ()
+    dims = (*(extent for extent, _ in replay), 2, 2, 2, 2)
+    coefs = (*(coef for _, coef in replay), 2, 8, 1, 4)
+    hops = w2.steps.hops
+    assert w2.steps.describe() == "width_conversion -> reorder -> width_conversion"
+    assert hops[0].source.form == row_major and hops[-1].sink.form == read
+    assert [hop.reorder for hop in hops] == [None, Reorder(16, dims, coefs), None]
+    assert delivered(row_major, hops) == [int(offset) for offset in offsets(read)]
+    assert w2.output_adapting and w2.input_chain == "input_gen_vpc"
+    assert w2.adapter.frame_bits == 16 * 3
+    mover = w2.mover_contract
+    assert (mover.beats, mover.tdata, mover.memory_width, mover.words) == (4, 16, 64, 1)
+    choose_memories(model)
+    configured, boundary = configured_network(model, "partition")
+    assert boundary == (("x", "s_axis_0"), ("w2", "s_axis_1"), ("y", "m_axis_0"))
+    stages = {
+        name: (leaf.implementation_id, dict(leaf.parameters))
+        for name, leaf in configured.module.fragment.instances
+        if name.startswith("w2.")
+    }
+    vpc = {"N": 4, "PAD_ZEROS": 1, "RELAX_THROUGHPUT": 0, "W": 3}
+    assert stages == {
+        "w2.output_adapter.vpc.vpc": ("finnlib.vpc", {**vpc, "PI": 4, "PO": 1}),
+        "w2.adapter.input_gen_vpc.input_gen": (
+            "finnlib.input_generator",
+            {
+                "COEFS": "'{" + ", ".join(map(str, coefs)) + "}",
+                "D": len(dims),
+                "DATA_WIDTH": 3,
+                "DIMS": "'{" + ", ".join(map(str, dims)) + "}",
+                "FM_SIZE": 16,
+                "RAM_STYLE": '"distributed"',
+            },
         ),
-        tensor="w2",
-    ) as caught:
-        configured_network(model, "partition")
-    assert {f.code for f in caught.error.findings} == {"channel-steps", "guard-refused"}
+        "w2.adapter.input_gen_vpc.vpc": ("finnlib.vpc", {**vpc, "PI": 1, "PO": 4}),
+    }
+    path = [
+        (link.source.instance, link.source.data, link.sink.instance, link.sink.data)
+        for link in configured.module.fragment.links
+        if "w2." in f"{link.source.instance}{link.sink.instance}"
+    ]
+    assert path == [
+        (None, "s_axis_1_tdata", "w2.output_adapter.vpc.vpc", "idat"),
+        ("w2.output_adapter.vpc.vpc", "odat", "w2.adapter.input_gen_vpc.input_gen", "idat"),
+        ("w2.adapter.input_gen_vpc.input_gen", "odat", "w2.adapter.input_gen_vpc.vpc", "idat"),
+        ("w2.adapter.input_gen_vpc.vpc", "odat", "second.compute.packed", "s_axis_weights_tdata"),
+    ]
     assert in_shell(model, model.graph.node).validity("x").status == "valid"
 
 

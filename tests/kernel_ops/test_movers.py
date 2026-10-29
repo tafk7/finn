@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import replace
+from itertools import product
 from pathlib import Path
 from typing import Any
 
@@ -50,16 +51,27 @@ from finn.custom_op.kernels.shell import (
     in_shell,
     shell_resources,
 )
+from finn.dataflow.steps import Hop
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.dataflow.traversal import BeatSequence, Traversal, tile, vector_major
+from finn.dataflow.traversal import (
+    BeatSequence,
+    Loop,
+    Reorder,
+    Traversal,
+    offsets,
+    tile,
+    vector_major,
+)
 from finn.harness.ops import check_parity
+from finn.kernels.adapters import Convert
 from finn.kernels.artifacts.module import module_name
 from finn.kernels.base import KernelSpace
 from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
 from finn.kernels.explore import KernelExplorer, SizeFifos, TargetThroughput
 from finn.kernels.fifo_sizing import NotModelled, Pattern, sides
+from finn.kernels.input_generator import Generate
 from finn.kernels.movers import (
     DIVISIBLE,
     IODMA_HLS,
@@ -176,10 +188,10 @@ def test_an_iodma_states_its_resources_by_its_widths() -> None:
 UINT8 = ScalarEncoding(DataType["UINT8"])
 
 
-def iodma_edge(form: Traversal) -> Any:
+def iodma_edge(form: Traversal, *, adaptable: bool = True) -> Any:
     """An input's edge channel, alone, whose boundary side the ``IODMA_hls`` offer at a
     128-bit port states (``MoverOffer.states``) and whose reader takes UINT8 lanes in
-    ``form``."""
+    ``form``; admitting adapters unless not ``adaptable``."""
     offer = iodma_hls(128)
     reader = Side.kernel(Stream(UINT8, BeatSequence(form)), "reader.x")
     return design_space(
@@ -188,8 +200,44 @@ def iodma_edge(form: Traversal) -> Any:
             producer=Side.boundary("s_axis_0", (offer,), offer.states()),
             consumer=reader,
             platform=FULL_DSP48E2,
+            adaptable=adaptable,
         )
     )
+
+
+def iodma_exit(form: Traversal) -> Any:
+    """An output's edge channel, alone, whose boundary side the ``IODMA_hls`` offer at a
+    128-bit port states and whose writer presents UINT8 lanes in ``form``."""
+    offer = iodma_hls(128)
+    writer = Side.kernel(Stream(UINT8, BeatSequence(form)), "writer.y", 8 * form.lanes)
+    return design_space(
+        Channel(
+            tensor=Tensor(form.shape, UINT8),
+            producer=writer,
+            consumer=Side.boundary("m_axis_0", (offer,), offer.states()),
+            platform=FULL_DSP48E2,
+        )
+    )
+
+
+def delivered(form: Traversal, hops: tuple[Hop, ...]) -> list[int]:
+    """The flat offsets ``hops`` deliver from ``form``, by each step's own definition: a
+    width step keeps the element order, regrouping only its lanes; a reorder emits, of each
+    frame of ``frame_beats`` beats, the beat at ``sum(index * coefs)`` over ``dims``, outer
+    first (``traversal.Reorder``). A coordinate oracle (``offsets``), independent of the
+    forms the steps derive between."""
+    at = [int(offset) for offset in offsets(form)]
+    for hop in hops:
+        if hop.reorder is not None:
+            lanes, frame = hop.source.form.lanes, hop.reorder.frame_beats
+            beats = [at[first : first + lanes] for first in range(0, len(at), lanes)]
+            at = [
+                offset
+                for start in range(0, len(beats), frame)
+                for index in product(*(range(extent) for extent in hop.reorder.dims))
+                for offset in beats[start + sum(i * c for i, c in zip(index, hop.reorder.coefs))]
+            ]
+    return at
 
 
 def valid(point: Any) -> bool:
@@ -216,20 +264,66 @@ def test_an_iodma_s_side_read_again_or_reordered_is_joined_by_an_input_gen_at_th
         assert (joined.mover_contract.beats, joined.mover_contract.tdata) == (8, 24)
 
 
-def test_an_iodma_s_side_nothing_joins_is_refused_by_channel_steps_naming_the_mover() -> None:
+def test_an_iodma_s_side_read_in_tiles_is_regrouped_by_a_vpc_and_an_input_gen() -> None:
     """A reader taking the pass in 2 x 3 tiles: the mover's row-major side at the reader's
-    six lanes spans a row where the reader's spans two, and no chain of modules regroups
-    them. The edge channel refuses it by its own code, naming the mover's statement; the
-    mover states no rule of its own."""
-    refused = iodma_edge(tile(4, 6, 2, 3))
+    six lanes spans a row where the reader's spans two. The steps regroup them through
+    three lanes, the most dividing both at which the two orders differ by a reorder: a
+    ``vpc`` from six lanes to three before the transport, then an ``input_gen`` reordering
+    each two rows' half-rows into tiles, its buffer four beats of three, and a ``vpc`` from
+    three lanes to six. What they deliver is the tiles, position for position; the mover
+    moves the one pass, 4 beats of 48 bits."""
+    tiles = tile(4, 6, 2, 3)
+    six, three = vector_major((4, 6), 6), vector_major((4, 6), 3)
+    halves = Traversal((4, 6), (Loop(2, 12), Loop(2, 3), Loop(2, 6)), (Loop(3, 1),))
+    joined = iodma_edge(tiles)
+    assert joined.boundary.form == six and joined.boundary.transport.data_width == 48
+    hops = joined.steps.hops
+    assert joined.steps.describe() == "width_conversion -> reorder -> width_conversion"
+    assert [hop.source.form for hop in hops] == [six, three, halves]
+    assert [hop.sink.form for hop in hops] == [three, halves, tiles]
+    assert [hop.reorder for hop in hops] == [None, Reorder(4, (2, 2), (1, 2)), None]
+    assert delivered(six, hops) == [int(offset) for offset in offsets(tiles)]
+    assert joined.output_adapting and joined.input_chain == "input_gen_vpc"
+    assert [stage.module for stage in joined.output_adapter.realization] == [Convert(6, 3)]
+    assert [stage.module for stage in joined.adapter.realization] == [
+        Generate(4, (2, 2), (1, 2)),
+        Convert(3, 6),
+    ]
+    assert joined.adapter.frame_bits == 4 * 3 * 8
+    assert (joined.mover_contract.beats, joined.mover_contract.tdata) == (4, 48)
+    assert valid(joined)
+
+
+def test_an_iodma_s_side_nothing_joins_is_refused_by_channel_steps_naming_the_mover() -> None:
+    """The same tiled reader on an edge admitting no adapter: the steps it needs refuse it
+    (``channel-steps``, by ``realizable``). A writer presenting rows 0 and 2 alone, its
+    mover stating every row on its way out: no chain presents a position it is not given
+    (``channel-steps``, by ``steps``). Each refusal is the edge channel's own code, naming
+    the mover's statement; the mover states no rule of its own."""
+    prefix = "stated by the iodma_hls mover (row-major, one pass a frame): "
+    closed = iodma_edge(tile(4, 6, 2, 3), adaptable=False)
+    assert isinstance(closed.query(Channel.steps), Available)
+    found = closed.query(Channel.realizable)
+    assert isinstance(found, Rejected)
+    assert [(finding.code, finding.message) for finding in found.findings] == [
+        (
+            "channel-steps",
+            f"the boundary s_axis_0, {prefix}the streams need width_conversion -> reorder -> "
+            "width_conversion, and this channel admits no adapter",
+        )
+    ]
+    assert inspection.validity(closed).status == "refused"
+    half = Traversal.over((4, 6), ((0, 2, 2),), ((1, 6, 1),))
+    assert sorted(int(offset) for offset in offsets(half)) == [*range(6), *range(12, 18)]
+    refused = iodma_exit(half)
+    assert refused.boundary.form == vector_major((4, 6), 6)
     found = refused.query(Channel.steps)
     assert isinstance(found, Rejected)
     assert [(finding.code, finding.message) for finding in found.findings] == [
         (
             "channel-steps",
-            "the boundary s_axis_0, stated by the iodma_hls mover (row-major, one pass a "
-            "frame): no adapter can join the streams: the same positions under another "
-            "lane axis",
+            f"the boundary m_axis_0, {prefix}no adapter can join the streams: the sequences "
+            "present different positions",
         )
     ]
     assert inspection.validity(refused).status == "refused"
