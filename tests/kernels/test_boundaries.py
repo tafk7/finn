@@ -42,6 +42,7 @@ from finn.kernels.artifacts.module import Composed, Leaf
 from finn.kernels.base import KernelSpace
 from finn.kernels.library import library_module
 from finn.kernels.configure import commit
+from finn.kernels.port import axis
 from finn.kernels.transport import AxisBeat
 from finn.kernels.artifacts.module import ProducerIdentity
 from finn.kernels.composer import Facts, PartitionDeclaration, Port, Stated, channel
@@ -76,7 +77,7 @@ point = design_space(PackedDotpKernel(
 )).with_choices(compute_pumping=False, reducer="tree")
 answer = library_module(point)
 assert isinstance(answer, Leaf)
-x_axis = point.x.contract.contract.transport
+x_axis = axis(point.x.physical_spec(idle=False), point.x.stream)
 assert isinstance(x_axis, AxisBeat)
 assert x_axis.payload_bits == 6
 
