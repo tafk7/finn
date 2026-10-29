@@ -139,7 +139,7 @@ def test_a_positive_graph_no_kernel_admits_is_a_gap_record() -> None:
             {"owner": owner, "code": code, "rows": [list(row) for row in ROWS]}
             for owner, code in (
                 *(
-                    (f"compute.{core}.{port}_element_taken", "dtype-family")
+                    (f"compute.{core}.{port}.element_taken", "dtype-family")
                     for core in ("int8_dsp58", "packed")
                     for port in ("w", "x")
                 ),
