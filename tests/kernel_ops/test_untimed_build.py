@@ -13,6 +13,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from support.models import choose_memories, configure_partition, kernel_model
 
 import finn.builder.build_dataflow_testbench as testbench
+import finn.core.rtlsim_exec as rtlsim
 import finn.custom_op.kernels.shell as shell
 from finn.core.graph.annotations.outputs import OUTPUT_VERIFIED
 from finn.core.graph.errors import KernelOpError
@@ -138,10 +139,14 @@ def test_held_timed_actions_refuse_before_reference_or_directory_work(
     parent = (
         model.transform(CutKernelPartition(tmp_path / "partition")) if consumer == "xsim" else None
     )
+    point, _ = shell.configured_network(model, "known-timing")
+    members = list(point.network.members)
     query = Partition.query
+    reads: list[str] = []
 
     def unavailable(self: Partition, name: str, member: object) -> QueryResult[Any]:
         if member is Timed.cycles:
+            reads.append(name)
             if timing == "refused":
                 return reject("timed-cycles", "cycle estimate unavailable")
             return Unresolved(
@@ -157,20 +162,35 @@ def test_held_timed_actions_refuse_before_reference_or_directory_work(
         return query(self, name, member)
 
     def must_not_act(*args: Any, **kwargs: Any) -> None:
-        raise AssertionError("unavailable timing reached reference or hardware work")
+        raise AssertionError("unavailable timing reached reference, input, or hardware work")
 
     monkeypatch.setattr(Partition, "query", unavailable)
-    with pytest.raises(KernelOpError):
+    with pytest.raises(KernelOpError, match="^cycle characterization unavailable: ") as refused:
         if consumer == "testbench":
             monkeypatch.setattr(testbench, "execute_onnx", must_not_act)
             monkeypatch.setattr(testbench, "stream_bench", must_not_act)
             testbench.write_testbench(model, target, {}, toolchain=toolchain)
         else:
             assert parent is not None
+            monkeypatch.setattr(rtlsim, "_integers", must_not_act)
             monkeypatch.setattr(XSim, "_run_directory", must_not_act)
             XSim(directory=target, toolchain=toolchain).run(
                 parent.graph.node[0],
                 parent.make_empty_exec_context(),
                 parent,
             )
+    assert reads == members
+    expected_local = Finding(
+        FindingKind.REJECTION if timing == "refused" else FindingKind.BLOCKER,
+        "timed-cycles",
+        "" if timing == "refused" else "cycles",
+        "cycle estimate unavailable" if timing == "refused" else "cycle estimate not supplied",
+    )
+    expected = tuple(point.network.located(name, expected_local) for name in members)
+    assert type(refused.value) is KernelOpError
+    assert len(refused.value.findings) == len(members)
+    assert set(refused.value.findings) == set(expected)
+    assert str(refused.value) == "cycle characterization unavailable: " + "; ".join(
+        finding.subject_line() for finding in expected
+    )
     assert not target.exists()
