@@ -24,9 +24,10 @@ WEIGHTS = KnownWeights(
     DTYPE,
 )
 
-# Actual compute authoring is MatMulKernel -> PackedDotpKernel with included
-# ControlModel and child Indexed/Scheduled Ports. Result/weight facts stay owned
-# by MatMul; the composer reads Stated values rather than recreating them.
+# Actual compute authoring is MatMulKernel -> PackedDotpKernel with child
+# Indexed/Scheduled Ports; the source MemStream includes the ControlModel,
+# not PackedDotpKernel. Result/weight facts stay owned by MatMul; the composer
+# reads Stated values rather than recreating them.
 DECLARATION = PartitionDeclaration(
     {"matmul": Facts(MatMulKernel, {"x_tensor": INPUT, "weights": WEIGHTS, "platform": PLATFORM})},
     {
