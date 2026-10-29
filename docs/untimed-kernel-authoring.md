@@ -43,7 +43,8 @@ or certify that the chosen FIFO capacity is temporally sufficient.
 | [FIFO definition](../src/finn/kernels/fifo.py) | Explicit depth, memory-style `Decision`, geometry and platform validity, and realized storage capacity. |
 | [Compute example](../examples/untimed/compute.py) | A real known-weight `MatMulKernel`, selected packed implementation/folding, owned result/weight facts, source memory and a fixed-capacity channel FIFO. |
 | [MatMul definition](../src/finn/kernels/matmul.py) | Model facts, range/type ownership, implementation selectors and authored parent Port surfaces. |
-| [Packed compute definition](../src/finn/kernels/dotp.py) | Real scheduled/indexed Ports and included control on the selected compute implementation. |
+| [Packed compute definition](../src/finn/kernels/dotp.py) | Real scheduled/indexed Ports on the selected compute implementation; no included `ControlModel` on MatMul/Dotp. |
+| [Source memory definition](../src/finn/kernels/memstream.py) | `MemStream.config` is the included AXI-Lite `ControlModel`; the weight source owns its physical pins and held/tied-off values for build-time known contents. |
 | [Port models](../src/finn/kernels/port_model.py) | Ordinary child Spaces; placed/idle direction and datatype rules; native, scheduled and indexed projections. |
 | [Control models](../src/finn/kernels/control.py) | Included control and physical ownership, separate from logical dataflow. |
 | [Composer](../src/finn/kernels/composer.py) / [Partition](../src/finn/kernels/partition.py) | Real model/serial module assembly, source and port discovery, stable choice ownership and module wiring. |
