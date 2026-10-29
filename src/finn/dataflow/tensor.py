@@ -1,19 +1,19 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The fact a channel carries: a tensor of one element.
+"""The fact a channel carries: a tensor whose elements share one encoding.
 
-A ``Tensor`` is a row-major shape of positive extents and the element
-``ScalarEncoding`` every position holds. Both sides of a channel read it; each
+A ``Tensor`` is a row-major shape of positive extents and the encoding
+``ScalarEncoding`` of every element. Both sides of a channel read it; each
 port presents its own traversal of it (``finn.dataflow.traversal``). Its
 identity is the channel that carries it, so it holds no name.
 
-An element is a datatype and the range of its values (qonnx's ``TensorRange``,
+An encoding is a datatype and the range of its values (qonnx's ``TensorRange``,
 ``qonnx.core.ranges``), by default the datatype's full range. They are one fact, as
 they are on the graph: a tensor's range is part of its datatype annotation, for any
 numeric datatype (exact dyadic endpoints, possibly unbounded, and whether it may hold
 NaN). A producer that knows its values (a value owner, or a kernel stating its output)
-states a tighter range; one element ``fits`` another when its values are values of the
+states a tighter range; one encoding ``fits`` another when its values are values of the
 other, which is what a channel checks between each stream and its tensor
 (``finn.dataflow.streams.misfit``).
 """
@@ -103,7 +103,7 @@ class ScalarEncoding:
 
 @dataclass(frozen=True)
 class Tensor:
-    """A row-major tensor: positive ``shape`` extents, every position an ``element``."""
+    """A row-major tensor: positive ``shape`` extents, ``element`` the encoding of every element."""
 
     shape: tuple[int, ...]
     element: ScalarEncoding

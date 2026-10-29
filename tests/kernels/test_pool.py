@@ -204,7 +204,7 @@ def test_it_takes_a_beat_a_cycle_as_its_schedule_states(tmp_path: Path) -> None:
     window = contracts["input_channel"]
     x = values["input_channel"]
     expected = case["reference"](input_channel=x)["output_channel"]
-    beats = design_member(point, KERNEL).schedule.beat_count
+    beats = design_member(point, KERNEL).schedule.iterations
     module = design_module(point, PoolKernel)
     assert isinstance(module, Available)
     found = design_cycles(point)

@@ -38,7 +38,7 @@ from finn.core.rtlsim_pacing import FREE, STALLED
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.steps import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.dataflow.traversal import Traversal, period
+from finn.dataflow.traversal import Traversal, one_pass
 from finn.kernels.base import KernelSpace
 from finn.kernels.channels import Channel
 from finn.kernels.composer import Facts, Port, channel
@@ -85,7 +85,7 @@ def _layer(
 def _period(layer: Facts) -> Traversal:
     """One pass of a layer's weights, in the order it reads them at its folding."""
     folded = commit(layer.bind(), {"compute_pumping": False, "reducer": "tree"})
-    return period(folded.w.stream.sequence.form)
+    return one_pass(folded.w.stream.sequence.form)
 
 
 def layered(*, adaptable: bool = True) -> Partition:

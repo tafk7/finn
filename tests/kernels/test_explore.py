@@ -298,7 +298,7 @@ def test_cost_names_what_a_member_waits_on_then_its_cycles_and_the_bottleneck_ti
     explored = Ranked(Lanes(2)).explore(explorer, network)
     cost = explorer.cost(explored)
     first = explored.member("first")
-    assert cost.cycles["first"] == first.compute.schedule.beat_count == 3 * 2 * 2
+    assert cost.cycles["first"] == first.compute.schedule.iterations == 3 * 2 * 2
     # Every member at the most cycles is named, kernels first: the activation replays
     # feed the MatMuls at their pace.
     assert cost.bottleneck == Bottleneck(("first", "second", "x", "levels"), 12)

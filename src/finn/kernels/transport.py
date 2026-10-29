@@ -372,6 +372,8 @@ def lane_permutation(source: StreamContract, sink: StreamContract) -> tuple[int,
         produced = presented(source.sequence, sink.sequence)
     except Unrealizable:
         return tuple(range(sink.lanes))
+    if not isinstance(produced, Traversal):
+        raise Unrealizable("the physical wiring schema does not yet support Grouped")
     verdict = classify(produced, sink.form)
     if verdict.adaptation is Adaptation.LANE_PERMUTATION:
         return verdict.lane_permutation

@@ -55,7 +55,7 @@ budget check and resources.
 
 A channel whose tensor has a known value (``contents``) places its ``source`` (a
 memory, ``MemStreamKernel``) as its producer (its producer side the source's,
-``channel-users``), storing one period in the order its consumer reads it; with several
+``channel-users``), storing one one_pass in the order its consumer reads it; with several
 sets, the source's set port is the channel's port (``set``, served by its source:
 ``set_stream``), which the index tensor's channel consumes.
 
@@ -108,10 +108,11 @@ from finn.dataflow.streams import Stream, Streams, misfit
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import (
     BeatSequence,
+    LevelEnd,
     Loop,
     Traversal,
+    one_pass,
     passes,
-    period,
     regrouped,
     unreplayed,
 )
@@ -179,9 +180,17 @@ def boundary_contract(
     if len(sequence.markers) > 1:
         raise ValueError("an AXIS boundary carries at most one marker")
     form = sequence.form
+    if not isinstance(form, Traversal):
+        raise ValueError("the physical boundary schema does not yet support Grouped")
+    if any(not isinstance(rule, LevelEnd) for rule in sequence.markers):
+        raise ValueError("the physical boundary does not yet support held LevelDone markers")
     beat = AxisBeat(name, element.dtype, form.lanes, endpoint=endpoint, last=bool(sequence.markers))
     transport = beat.native(clock=CLOCK, reset=RESET)
-    markers = ((transport.markers[0].signal, sequence.markers[0]),) if sequence.markers else ()
+    markers = (
+        ((transport.markers[0].signal, cast(LevelEnd, sequence.markers[0])),)
+        if sequence.markers
+        else ()
+    )
     return StreamContract(transport, element, form, sequence.repetition, markers)
 
 
@@ -513,9 +522,12 @@ class Channel(KernelSpace):
         return consumer.stream
 
     @derived
-    def source_form(self) -> Traversal:
-        """One period of the value in the order its consumer reads it."""
-        return period(self.consumed.sequence.form)
+    def source_form(self) -> Traversal | Rejected:
+        """One pass of the value, retaining the existing source loop-nest schema."""
+        form = one_pass(self.consumed.sequence.form)
+        if not isinstance(form, Traversal):
+            return reject("channel-source-unsupported", "memory sources do not yet support Grouped")
+        return form
 
     @derived
     def source_dtype(self) -> QONNXDataType:
@@ -623,6 +635,8 @@ class Channel(KernelSpace):
         form = inside.sequence.form
         if endpoint is Endpoint.TARGET:
             form = unreplayed(form)
+        if not isinstance(form, Traversal):
+            raise ValueError("the physical boundary schema does not yet support Grouped")
         if side.outside is not None:
             form = stated_form(side.label, side.outside, form)
         return boundary_contract(side.label, self.tensor.element, BeatSequence(form), endpoint)
@@ -1005,7 +1019,7 @@ def open_boundary_refusal(
 
 def stated_form(port: str, outside: Outside, presented: Traversal) -> Traversal:
     """What a boundary ``port`` stated by ``outside`` presents, where unstated it presents
-    ``presented`` (the boundary rule's form: ``Channel._boundary``). Each pass (``period``)
+    ``presented`` (the boundary rule's form: ``Channel._boundary``). Each pass (``one_pass``)
     in the stated order, row-major (``Traversal.row_major``) where ``outside.order`` is
     ``ROW_MAJOR``, else as presented; at the stated lanes a beat, else at the presented
     pass's (with the order as presented: the same elements in the same order, regrouped,
@@ -1014,7 +1028,10 @@ def stated_form(port: str, outside: Outside, presented: Traversal) -> Traversal:
     ``ValueError`` where the stated lanes do not divide a pass's elements, or where they
     do but the presented order cannot be regrouped to them (a nest whose loops do not
     split at that many lanes: a tiled pass)."""
-    once = period(presented)
+    if not isinstance(presented, Traversal):
+        raise ValueError(f"{port}: the physical boundary schema does not yet support Grouped")
+    once = one_pass(presented)
+    assert isinstance(once, Traversal)
     lanes = once.lanes if outside.lanes is None else outside.lanes
     count = passes(presented) if outside.passes is None else outside.passes
     size = prod(once.shape)
@@ -1028,7 +1045,10 @@ def stated_form(port: str, outside: Outside, presented: Traversal) -> Traversal:
         one = Traversal(once.shape, (Loop(size // lanes, lanes),), (Loop(lanes, 1),))
     elif outside.lanes is not None:
         try:
-            one = regrouped(once, lanes)
+            regroup = regrouped(once, lanes)
+            if not isinstance(regroup, Traversal):
+                raise ValueError("the physical boundary schema does not yet support Grouped")
+            one = regroup
         except ValueError:
             raise ValueError(
                 f"{port}: the presented order of a pass of {list(once.shape)} cannot be "

@@ -12,6 +12,7 @@ from finn.dataflow.traversal import (
     BeatSequence,
     LevelEnd,
     Loop,
+    Reorder,
     Repetition,
     Traversal,
     regrouped,
@@ -63,16 +64,22 @@ def test_a_lane_regroup_goes_through_the_common_lane_count() -> None:
     assert found.hops[0].sink.form.lanes == 1
 
 
-def test_a_cyclic_source_repeats_by_elements_into_its_consumer_s_pass() -> None:
+def test_a_cyclic_source_repeats_once_a_consumer_pass() -> None:
     period = tile(4, 4, 2, 2)
     cyclic = BeatSequence(period, Repetition.CYCLIC)
     assert presented(cyclic, BeatSequence(period.repeated(3))) == period.repeated(3)
-    # Another lane count: the pass holds the same elements.
+    # Another lane count: a pass for each of the consumer's.
     assert steps(cyclic, BeatSequence(regrouped(period, 2).repeated(2))).kinds == (Step.WIDTH,)
-    # A pass of half the tensor is no whole number of the source's passes.
+    # A pass of half the tensor reads one pass of the source, the other half dropped: from
+    # (4, 4) row by row at 4 lanes, one reorder reading the first two of four beats.
     half = Traversal.over((4, 4), ((0, 2, 1),), ((1, 4, 1),))
+    rows = BeatSequence(vector_major((4, 4), 4), Repetition.CYCLIC)
+    assert presented(rows, BeatSequence(half)) == vector_major((4, 4), 4)
+    found = steps(rows, BeatSequence(half))
+    assert [hop.reorder for hop in found.hops] == [Reorder(4, (2,), (1,))]
+    # A source repeating its own pass twice feeds a consumer of whole multiples of it.
     with pytest.raises(Unrealizable, match="whole repetitions"):
-        steps(cyclic, BeatSequence(half))
+        steps(BeatSequence(period.repeated(2), Repetition.CYCLIC), BeatSequence(period.repeated(3)))
 
 
 def test_what_no_chain_repairs_is_unrealizable() -> None:

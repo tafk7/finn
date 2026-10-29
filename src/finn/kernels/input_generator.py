@@ -66,7 +66,7 @@ from finn.core.space import (
 from finn.dataflow.steps import Unrealizable
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import Tensor
-from finn.dataflow.traversal import Adaptation, BeatSequence, LevelEnd, classify
+from finn.dataflow.traversal import Adaptation, BeatSequence, LevelEnd, Traversal, classify
 from finn.kernels.artifacts.abi import Clocking, Endpoint, Pin
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Fragment, Held
@@ -163,6 +163,10 @@ def generated(arriving: BeatSequence, leaving: BeatSequence) -> Generate:
     ``leaving`` requires; split or grouped until it closes each of ``leaving``'s markers.
     ``Unrealizable`` where no nest does."""
     source, sink = arriving.form, leaving.form
+    if not isinstance(source, Traversal) or not isinstance(sink, Traversal):
+        raise Unrealizable("no existing input_gen recipe carries Grouped forms")
+    if any(not isinstance(rule, LevelEnd) for rule in leaving.markers):
+        raise Unrealizable("no existing input_gen recipe produces held LevelDone markers")
     if source != sink:
         verdict = classify(source, sink)
         reorder = verdict.reorder
@@ -174,7 +178,11 @@ def generated(arriving: BeatSequence, leaving: BeatSequence) -> Generate:
             raise Unrealizable("the same order and no marker: nothing for an input_gen to do")
         widest = max(rule.beats for rule in leaving.markers)
         generate = Generate(widest, (widest,), (1,))
-    return _closing(generate, leaving.markers, source.beats)
+    return _closing(
+        generate,
+        tuple(rule for rule in leaving.markers if isinstance(rule, LevelEnd)),
+        source.beats,
+    )
 
 
 def presented(generate: Generate, leaving: BeatSequence) -> BeatSequence:

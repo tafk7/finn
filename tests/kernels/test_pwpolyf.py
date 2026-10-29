@@ -109,7 +109,7 @@ def test_its_cycles_are_its_beats() -> None:
     """Elementwise, a beat a cycle: its pace is exact."""
     for pe, beats in ((1, 48), (4, 12), (8, 6)):
         point, _, _ = placed(pwpolyf_gelu(), pe)
-        assert design_member(point, KERNEL).schedule.beat_count == beats
+        assert design_member(point, KERNEL).schedule.iterations == beats
         assert design_cycles(point) == Available(beats), pe
 
 

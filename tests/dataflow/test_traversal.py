@@ -10,9 +10,13 @@ hard-coded values in ``finn-rtllib`` and baseline FINN's ``transpose_decompositi
 (``shuffle_perfect_loopnest_coeffs``, copied here).
 """
 
+from __future__ import annotations
+
 import operator
 import random
+from collections.abc import Sequence
 from math import prod
+from typing import Any
 
 import numpy as np
 import pytest
@@ -35,7 +39,7 @@ from finn.dataflow.traversal import (
 )
 
 
-def test_tile_is_the_mvau_weight_order_and_packs_the_known_image():
+def test_tile_is_the_mvau_weight_order_and_packs_the_known_image() -> None:
     weights = tile(4, 4, 2, 2)
     assert (weights.lanes, weights.beats, weights.shape) == (4, 4, (4, 4))
     first, second = list(weights.positions())[:2]
@@ -46,7 +50,7 @@ def test_tile_is_the_mvau_weight_order_and_packs_the_known_image():
     assert pack(weights, sum(matrix, ()), 3) == (0x22C, 0x6BE, 0xDD3, 0x941)
 
 
-def test_repetition_and_replay_are_stride_zero_loops():
+def test_repetition_and_replay_are_stride_zero_loops() -> None:
     vector = vector_major((4,), 2)
     assert list(vector.repeated(2).positions()) == [((0,), (1,)), ((2,), (3,))] * 2
     rows = vector_major((2, 4), 2)
@@ -63,7 +67,7 @@ def test_repetition_and_replay_are_stride_zero_loops():
 # -- pack and unpack ------------------------------------------------------------
 
 
-def _packed_by_position(form, integers, bits):
+def _packed_by_position(form: Traversal, integers: Sequence[int], bits: int) -> tuple[int, ...]:
     """``pack`` by its definition: each beat's positions, raveled row-major, low bits first."""
     strides, mask = axis_strides(form.shape), (1 << bits) - 1
     return tuple(
@@ -75,7 +79,7 @@ def _packed_by_position(form, integers, bits):
     )
 
 
-def _random_form(rng):
+def _random_form(rng: random.Random) -> Traversal:
     """A traversal of a random operand: vector-major, tiled, or loops of random extents
     along random axes, replay loops (stride 0) among them."""
     shape = tuple(rng.randint(1, 6) for _ in range(rng.randint(1, 3)))
@@ -98,7 +102,7 @@ def _random_form(rng):
             continue
 
 
-def test_pack_is_its_definition_at_every_width_signedness_and_lane_count():
+def test_pack_is_its_definition_at_every_width_signedness_and_lane_count() -> None:
     """The words are each beat's lanes at their positions, the low ``bits`` of each
     integer's two's complement, lane zero lowest: for lanes 1..8 bits wide and wider
     than an int64, integers narrower or wider than their lanes, signed or not, and as a
@@ -122,28 +126,35 @@ def test_pack_is_its_definition_at_every_width_signedness_and_lane_count():
 
 
 @pytest.mark.parametrize("bits", (1, 63, 64, 65, 128))
-def test_pack_uses_numpy_exactly_up_to_int64_and_python_ints_beyond(bits, monkeypatch):
+def test_pack_uses_numpy_exactly_up_to_int64_and_python_ints_beyond(
+    bits: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """At the int64 bounds pack stays with numpy (an exact-path call fails the test);
     one integer beyond them takes the exact path. Both give the words by definition."""
     form = vector_major((2, 4), 2)
 
-    def refused(*args):
+    def refused(*args: Any) -> tuple[int, ...]:
         raise AssertionError("integers within int64 took the exact path")
 
     edges = (2**63 - 1, -(2**63), -1, 0, 1, 2**62, -(2**62) - 1, 5)
     with monkeypatch.context() as patched:
         patched.setattr(traversal, "_pack_exact", refused)
         assert pack(form, edges, bits) == _packed_by_position(form, edges, bits)
-    taken = []
+    taken: list[int] = []
     exact = traversal._pack_exact
-    monkeypatch.setattr(traversal, "_pack_exact", lambda *args: taken.append(1) or exact(*args))
+
+    def counted(*args: Any) -> tuple[int, ...]:
+        taken.append(1)
+        return exact(*args)
+
+    monkeypatch.setattr(traversal, "_pack_exact", counted)
     for beyond in (2**63, -(2**63) - 1, 2**64 + 3, -(2**100)):
         found = (*edges[:-1], beyond)
         assert pack(form, found, bits) == _packed_by_position(form, found, bits)
     assert len(taken) == 4
 
 
-def test_unpack_inverts_pack_at_every_width_signedness_and_lane_count():
+def test_unpack_inverts_pack_at_every_width_signedness_and_lane_count() -> None:
     """The operand read back from its words is the operand, for every traversal that
     presents each element (replays among them), lanes of 1 to 64 bits, signed or not."""
     rng = random.Random(11)
@@ -163,7 +174,7 @@ def test_unpack_inverts_pack_at_every_width_signedness_and_lane_count():
         checked += 1
 
 
-def test_unpack_refuses_words_that_are_no_operand():
+def test_unpack_refuses_words_that_are_no_operand() -> None:
     vector = vector_major((4,), 2)
     assert unpack(vector, (0x1F, 0x23), 4, signed=True).tolist() == [-1, 1, 3, 2]
     assert unpack(vector, (0x1F, 0x23), 4, signed=False).tolist() == [15, 1, 3, 2]
@@ -191,7 +202,7 @@ def test_unpack_refuses_words_that_are_no_operand():
 # -- canonical equality ---------------------------------------------------------
 
 
-def _random_traversal(rng):
+def _random_traversal(rng: random.Random) -> Traversal:
     while True:
         loops = [
             Loop(rng.choice((1, 2, 3)), rng.choice((0, 1, 2, 3, 6, 12)))
@@ -204,7 +215,7 @@ def _random_traversal(rng):
             continue
 
 
-def test_canonical_equality_is_equality_of_presented_sequences():
+def test_canonical_equality_is_equality_of_presented_sequences() -> None:
     rng = random.Random(1)
     for _ in range(4000):
         first, second = _random_traversal(rng), _random_traversal(rng)
@@ -215,7 +226,7 @@ def test_canonical_equality_is_equality_of_presented_sequences():
 # -- stress cases: tiled MVU and Shuffle ----------------------------------------
 
 
-def test_tiled_mvu_input_adapter_is_derived_from_the_two_orders():
+def test_tiled_mvu_input_adapter_is_derived_from_the_two_orders() -> None:
     boundary = vector_major((R, MW), SIMD_T)
     core = Traversal.over(
         (R, MW), ((0, R // T, T), (None, NF, 0), (1, SF, SIMD_T), (0, T, 1)), ((1, SIMD_T, 1),)
@@ -226,7 +237,7 @@ def test_tiled_mvu_input_adapter_is_derived_from_the_two_orders():
     assert verdict.reorder == Reorder(SF * T, (NF, SF, T), (0, 1, SF))
 
 
-def test_tiled_mvu_output_reorder_is_derived_from_the_two_orders():
+def test_tiled_mvu_output_reorder_is_derived_from_the_two_orders() -> None:
     core = Traversal.over((R, MH), ((0, R // T, T), (1, NF, PE_T), (0, T, 1)), ((1, PE_T, 1),))
     verdict = classify(core, vector_major((R, MH), PE_T))
     # mvu_tiled_axi.sv genReorder: FM_SIZE=NF*TH, DIMS='{TH,NF}, COEFS='{1,TH}.
@@ -234,32 +245,33 @@ def test_tiled_mvu_output_reorder_is_derived_from_the_two_orders():
     assert verdict.reorder == Reorder(NF * T, (T, NF), (1, T))
 
 
-def shuffle_perfect_loopnest_coeffs(shape, perm):
+def shuffle_perfect_loopnest_coeffs(shape: Sequence[int], perm: Sequence[int]) -> tuple[int, ...]:
     """Baseline FINN's coefficients of the perfect loop nest of a permutation (its
     ``transpose_decomposition``, the HWCustomOp flow's, deleted): the input's strides
     in the output's order."""
     adjusted_shape = list(shape) + [1]
-    input_coeffs = [np.prod(adjusted_shape[i + 1 :]) for i in range(len(shape))]
+    input_coeffs = [int(np.prod(adjusted_shape[i + 1 :])) for i in range(len(shape))]
     return tuple(input_coeffs[i] for i in perm)
 
 
-def test_outer_shuffle_coefficients_match_finn():
+def test_outer_shuffle_coefficients_match_finn() -> None:
     shape, perm, simd = (2, 3, 4), (1, 0, 2), 2
     moved = Traversal.over(shape, ((1, 3, 1), (0, 2, 1), (2, 2, simd)), ((2, simd, 1),))
     verdict = classify(vector_major(shape, simd), moved)
     finn = [1 if x == 1 else x // simd for x in shuffle_perfect_loopnest_coeffs(shape, perm)]
     assert verdict.adaptation is Adaptation.REORDER
+    assert verdict.reorder is not None
     assert verdict.reorder.coefs == tuple(finn)
     assert verdict.reorder.dims == (3, 2, 2)
 
 
-def test_inner_shuffle_moves_the_lane_axis():
+def test_inner_shuffle_moves_the_lane_axis() -> None:
     transposed = Traversal.over((4, 6), ((1, 6, 1), (0, 2, 2)), ((0, 2, 1),))
     verdict = classify(vector_major((4, 6), 2), transposed)
     assert verdict.adaptation is Adaptation.LANE_REGROUP
 
 
-def test_different_operands_and_positions_never_presented_are_incompatible():
+def test_different_operands_and_positions_never_presented_are_incompatible() -> None:
     assert classify(vector_major((4,), 2), vector_major((8,), 2)).adaptation is (
         Adaptation.INCOMPATIBLE
     )

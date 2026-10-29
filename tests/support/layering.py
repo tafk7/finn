@@ -128,7 +128,8 @@ LAYERS: tuple[Layer, ...] = (
     Layer("search", ("finn.core.search",), ("reporting", "space"), (), "tests/core/search"),
     # Canonical logical values: QONNX's datatypes and their ranges (a tensor's range is
     # part of its datatype fact, qonnx.core.ranges) and numpy, no engine; the findings
-    # their refusals carry.
+    # their refusals carry. violations permits islpy only in the exact private
+    # finn.dataflow._isl module; no other value/kernel module may import native handles.
     Layer(
         "dataflow",
         ("finn.dataflow",),
@@ -488,8 +489,26 @@ LAYERS: tuple[Layer, ...] = (
     Layer(
         "tests.dataflow",
         ("dataflow", "support.tiled_mvu"),
-        ("dataflow", "tests.layering", "tests.refusals", "tests.value_classes"),
+        ("reporting", "dataflow", "tests.layering", "tests.refusals", "tests.value_classes"),
         ("pytest", "numpy", "qonnx.core.datatype", "qonnx.core.ranges"),
+        "tests/dataflow",
+        # Independent test oracle only; the production map layer imports no ONNX.
+        also=("qonnx.custom_op.general.im2col.im2col_indices_nchw",),
+    ),
+    # Native query probes and the engine's value audit are test-only, not additional
+    # dependencies of the canonical logical production layer.
+    Layer(
+        "tests.dataflow.native",
+        ("dataflow.test_native_maps",),
+        ("dataflow", "tests.dataflow"),
+        ("pytest", "numpy", "islpy"),
+        "tests/dataflow",
+    ),
+    Layer(
+        "tests.dataflow.values",
+        ("dataflow.test_value_classes",),
+        ("dataflow", "space", "tests.dataflow", "tests.value_classes"),
+        ("pytest", "numpy", "islpy", "qonnx.core.datatype"),
         "tests/dataflow",
     ),
     # The kernel tests need no graph either: the kernel stack, the harness and the
@@ -500,6 +519,15 @@ LAYERS: tuple[Layer, ...] = (
         "tests.kernels",
         (
             "kernels",
+            # Tests that compare logical/reference timing with existing kernel
+            # extraction live above kernels; the pure logical package stays below.
+            "dataflow.harness.fifo",
+            "dataflow.harness.fifo_record",
+            "dataflow.test_harness_fifo",
+            "dataflow.test_timing",
+            "dataflow.test_timing_chains",
+            "dataflow.test_residual_timing",
+            "dataflow.test_position_map_geometries",
             "support.adapted",
             "support.chain",
             "support.conformance",
@@ -669,6 +697,11 @@ def violations(layer: Layer) -> list[str]:
         for path in sources(layer)
         for line, name in path_imports(path)
         if not permits(layer, name)
+        and not (
+            layer.name == "dataflow"
+            and module_name(path) == "finn.dataflow._isl"
+            and within(name, "islpy")
+        )
     ]
 
 

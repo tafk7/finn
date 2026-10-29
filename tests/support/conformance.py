@@ -752,10 +752,10 @@ def _check_model(
         assert _covers(form), f"{where}: {path} does not cover its {form.shape} tensor"
         if port is not None and port.schedule is not None:
             schedule = port.schedule
-            dropped = prod(schedule.steps(index) for index in (*port.reduces, *port.holds))
-            assert form.beats == schedule.beat_count // dropped, (
+            dropped = prod(schedule.fold(index) for index in (*port.reduces, *port.holds))
+            assert form.beats == schedule.iterations // dropped, (
                 f"{where}: {path} presents {form.beats} beats; its schedule walks "
-                f"{schedule.beat_count} less {dropped} dropped"
+                f"{schedule.iterations} less {dropped} dropped"
             )
         if name != fed:
             boundary = _value(

@@ -38,7 +38,15 @@ from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.abi import Clocking, Endpoint, Pin
 from finn.kernels.artifacts.module import Held
 from finn.kernels.base import PortContract
-from finn.kernels.port import LoopEnds, PhysicalPort, Presenting, data_width, held, pins
+from finn.kernels.port import (
+    LoopEnds,
+    PhysicalPort,
+    Presenting,
+    data_width,
+    held,
+    pins,
+    stream_refusal,
+)
 from finn.kernels.port import contract as port_contract
 from finn.kernels.sides import Side
 from finn.kernels.transport import AxisSpelling
@@ -143,7 +151,9 @@ class SequencePort(PortModel):
             return reject(
                 "port-presentation", f"{self.name}: exactly one of a schedule or a sequence"
             )
-        return Stream(self.element, sequence)
+        stream = Stream(self.element, sequence)
+        unsupported = stream_refusal(stream)
+        return unsupported if unsupported is not None else stream
 
     @derived
     def width(self) -> int | Rejected | Inapplicable:
@@ -227,14 +237,16 @@ class ScheduledPort(SequencePort):
                     lanes=self.lanes,
                     reduces=self.reduces,
                     holds=self.holds,
-                    view=shaped,
+                    reshape=shaped,
                 )
                 closes = self.closes
                 markers = (schedule.closing(closes),) if closes else ()
                 sequence = BeatSequence(form, markers=markers)
             except Refused as error:
                 return reject("port-schedule", f"{label}: {error}")
-        return Stream(self.element, sequence)
+        stream = Stream(self.element, sequence)
+        unsupported = stream_refusal(stream)
+        return unsupported if unsupported is not None else stream
 
     @view
     def contract(self) -> PortContract | Rejected | Inapplicable:

@@ -14,7 +14,7 @@ real Space boundaries; metadata never authorizes a model's reads.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from finn.core.space import (
     Group,
@@ -28,7 +28,7 @@ from finn.core.space.declarations import Declaration, Required, declared_path
 from finn.dataflow.schedule import Index, Pace, Schedule
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding
-from finn.dataflow.traversal import LevelEnd
+from finn.dataflow.traversal import LevelEnd, Marker, Traversal
 from finn.kernels.artifacts.abi import Clocking, Direction, Endpoint, Pin
 from finn.kernels.artifacts.module import Held
 from finn.kernels.base import UntimedKernel
@@ -97,7 +97,23 @@ def _element_of(presenting: Presenting) -> ScalarEncoding:
     return presenting.element if isinstance(presenting, Stream) else presenting
 
 
-def _markers(presenting: Presenting) -> tuple[LevelEnd, ...]:
+def stream_refusal(stream: Stream) -> Rejected | None:
+    """The existing physical schemas cover loop nests and one-beat level-end markers.
+
+    Grouped and held LevelDone remain useful logical values, not implicit new
+    hardware capabilities. Refuse them before creating pins or a stored interface.
+    """
+    sequence = stream.sequence
+    if not isinstance(sequence.form, Traversal):
+        return reject("port-presentation-unsupported", "physical ports do not yet support Grouped")
+    if any(not isinstance(rule, LevelEnd) for rule in sequence.markers):
+        return reject(
+            "port-marker-unsupported", "physical ports do not yet support held LevelDone markers"
+        )
+    return None
+
+
+def _markers(presenting: Presenting) -> tuple[Marker, ...]:
     return presenting.sequence.markers if isinstance(presenting, Stream) else ()
 
 
@@ -117,6 +133,9 @@ def lane_count(port: PhysicalPort, presenting: Presenting) -> int | Rejected:
 def axis(port: PhysicalPort, presenting: Presenting) -> AxisBeat | Rejected:
     """Its AXIS beat: its element's lanes, with a ``TLAST`` when it presents a marker."""
     label = _given(port, "name")
+    unsupported = stream_refusal(presenting) if isinstance(presenting, Stream) else None
+    if unsupported is not None:
+        return unsupported
     markers = _markers(presenting)
     if len(markers) > 1:
         return reject("port-markers", f"{label} has one TLAST; the sequence needs more")
@@ -141,6 +160,9 @@ def transport(
 ) -> ReadyValidTransport | Rejected:
     """Its ready/valid pins, on its kernel's clock and reset: its AXIS beat's, or its
     ``signals`` with its loop-completion vector."""
+    unsupported = stream_refusal(presenting) if isinstance(presenting, Stream) else None
+    if unsupported is not None:
+        return unsupported
     clock = None if clocking is None else clocking.clock
     reset = None if clocking is None else clocking.reset
     label, signals = _given(port, "name"), _given(port, "signals")
@@ -234,6 +256,10 @@ def contract(
     """What it states to a channel: its transport, its stream (element, form, repetition,
     markers, each by the transport pin that carries it) and its pace."""
     sequence = stream.sequence
+    unsupported = stream_refusal(stream)
+    if unsupported is not None:
+        return unsupported
+    assert isinstance(sequence.form, Traversal)
     found = transport(port, stream, clocking)
     if isinstance(found, Rejected):
         return found
@@ -247,7 +273,7 @@ def contract(
             if level in sequence.markers
         )
     elif found.markers:
-        markers = ((found.markers[0].signal, sequence.markers[0]),)
+        markers = ((found.markers[0].signal, cast(LevelEnd, sequence.markers[0])),)
     else:
         markers = ()
     return StreamContract(

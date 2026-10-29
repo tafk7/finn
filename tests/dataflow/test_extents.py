@@ -110,25 +110,25 @@ def test_given_extents_bind_and_must_agree_with_the_axes() -> None:
         bind_extents(dense(3, 8, 6), {k: 0})
 
 
-def test_a_view_binds_nothing_and_is_checked_against_the_bound_extents() -> None:
+def test_a_reshape_binds_nothing_and_is_checked_against_the_bound_extents() -> None:
     # dotp's dense realization of a depthwise product: X (M, K, N) read as (M, K * N).
     M, K, N = 2, 3, 4
     x = Access("x", (M, K, N), Form.DENSE.x, reshaped=True)
     w, y = Access("w", (K * N, N), Form.DENSE.w), Access("y", (M, N), Form.DENSE.y)
     assert bind_extents([x, w, y]) == {k: K * N, n: N, m: M}
-    # Without the ports that bind its indices, a view cannot bind itself.
+    # Without the ports that bind its indices, a reshape cannot bind itself.
     with refused("extent-unbound", error=Refused, message=r"^x axis 0: m "):
         bind_extents([x, w])
     with refused("extent-unbound", error=Refused, message=r"^x axis 1: k "):
         bind_extents([x, y])
     # Its indices given, it binds from them.
     assert bind_extents([x], {m: M, k: K * N}) == {m: M, k: K * N}
-    # A view is the tensor's size, or it is refused.
+    # A reshape is the tensor's size, or it is refused.
     wider = Access("x", (M, K, N + 1), Form.DENSE.x, reshaped=True)
     with refused(
-        "view-size-mismatch",
+        "reshape-size-mismatch",
         error=Refused,
-        message=r"^x: a \(2, 3, 5\) tensor cannot be viewed as \(2, 12\)$",
+        message=r"^x: a \(2, 3, 5\) tensor cannot be reshaped to \(2, 12\)$",
     ):
         bind_extents([wider, w, y])
     with refused(
@@ -148,7 +148,7 @@ def test_a_view_binds_nothing_and_is_checked_against_the_bound_extents() -> None
         ([Access("x", (6, 4), (oh * 2 + kh, c))], {oh: 3, kh: 3}, "window-out-of-extent"),
         (dense(3, 8, 6), {k: 0}, "extent-invalid"),
         ([Access("x", (2, 3, 4), (m, k * 1 + n), reshaped=True)], {}, "reshape-not-plain"),
-        ([Access("x", (2, 3, 5), (m, k), reshaped=True)], {m: 2, k: 12}, "view-size-mismatch"),
+        ([Access("x", (2, 3, 5), (m, k), reshaped=True)], {m: 2, k: 12}, "reshape-size-mismatch"),
     ),
 )
 def test_each_rule_refuses_by_its_own_code_owned_by_bind_extents(
@@ -250,11 +250,11 @@ class Member:
             {i: bound[i] for i in self.order}, factors=self.factors, order=self.order
         )
         access = port.access
-        view = None
+        reshape = None
         if access.reshaped:
-            view = tuple(schedule.extent(Affine.of(axis).indices[0]) for axis in access.index)
+            reshape = tuple(schedule.extent(Affine.of(axis).indices[0]) for axis in access.index)
         return schedule.present(
-            access.shape, access.index, lanes=port.lanes, reduces=port.reduces, view=view
+            access.shape, access.index, lanes=port.lanes, reduces=port.reduces, reshape=reshape
         )
 
 
@@ -283,7 +283,7 @@ ROSTER = {
         {m: 3, k: 4, n: 6},
         x_lanes=(k, n),
     ),
-    "per-channel as a dense view": gemm_member(
+    "per-channel as a dense reshape": gemm_member(
         Access("x", (2, 3, 6), Form.DENSE.x, reshaped=True),
         Access("w", (18, 6), Form.DENSE.w),
         Access("y", (2, 6), Form.DENSE.y),
@@ -370,7 +370,7 @@ def test_the_s0_roster_binds_and_its_bound_ports_cover_their_tensors(name: str) 
     for port in member.ports:
         label = port.access.name
         assert covers(member.present(port)) is (label not in member.uncovered), label
-        # A port whose every axis is bound (or read through a view) covers.
+        # A port whose every axis is bound (or read through a reshape) covers.
         if label in member.uncovered:
             assert not plain(port.access)
 

@@ -41,7 +41,7 @@ from the configured network's boundary channels, each the stream at its free sid
 the mover the shell places there (``boundary_facts``), wherever it is needed (the
 interface description, the testbench).
 
-The part and the clock period are the model's build target (``read_target(model)``,
+The part and the clock one_pass are the model's build target (``read_target(model)``,
 ``finn.platform``), which a partition body carries from the graph it was cut from.
 
 The partition's choices are its nodes' and its channels' (each on its tensor,
@@ -65,7 +65,7 @@ parameters bound, the ports compared, the files read and the time taken.
 
 Beside the IP, PackagePartition writes the **interface description**,
 ``interface.json`` (``finn.kernels.artifacts.interface``, ``interface_description``):
-the IP's name, VLNV and top, the part and period, and the module's pins with what
+the IP's name, VLNV and top, the part and one_pass, and the module's pins with what
 they carry (each stream's boundary facts, each clock's ``FREQ_HZ``, each AXI-Lite
 bus's register map), for a user who integrates the IP in their own design.
 
@@ -111,7 +111,7 @@ from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import shape
 from finn.custom_op.kernels.shell import Configured, configured_network, refuse_unverified
-from finn.dataflow.traversal import Traversal, passes, period
+from finn.dataflow.traversal import Traversal, one_pass, passes
 from finn.kernels.artifacts.build import EmittedModule, emit_module, instance_name
 from finn.kernels.artifacts.interface import INTERFACE_FILE, describe_interface
 from finn.kernels.artifacts.ipxact import interface_names, package_tcl, vlnv
@@ -158,14 +158,16 @@ def free_side(point: Configured, tensor: str) -> Any:
 
 def stream_order(form: Traversal) -> dict[str, Any]:
     """The order a stream presents its tensor in, as the interface description states
-    it: whether each pass is row-major (``Traversal.row_major`` of its ``period``), the
+    it: whether each pass is row-major (``Traversal.row_major`` of its ``one_pass``), the
     passes a frame repeats (``passes``), and its traversal: the shape it walks and its
     beat and lane loops, outer first, each ``[extent, stride]``, a stride in elements
     of that shape's row-major index (0: a repetition or a replay). Read at a free side,
     which presents what the outside states of it where it states it
     (``finn.kernels.sides.Outside``): there the order and the passes are the
     statement's (a mover's: row-major, one pass a frame); unstated, the inside's."""
-    one = period(form)
+    if not isinstance(form, Traversal):
+        raise TypeError("the packaged interface schema supports Traversal, not Grouped")
+    one = one_pass(form)
     return {
         "row_major": one.row_major,
         "passes": passes(form),
@@ -215,7 +217,7 @@ def interface_description(
 ) -> dict[str, Any]:
     """The interface description of a partition model's IP (``describe_interface``): its
     name, VLNV and top, then the module's pins with the boundary facts of its streams, at
-    the model's target (part and period), each stream's order its free side's
+    the model's target (part and one_pass), each stream's order its free side's
     (``stream_order``: on a side the outside states, the statement's)."""
     built = read_target(model)
     inputs, outputs = boundary_facts(model, point, boundary, ip_name)
@@ -383,7 +385,7 @@ class PackagePartition(Transformation):
     """Package a partition model of KernelOps as the shells' IP, the design its check
     verified (``refuse_unverified``); see the module docstring.
 
-    ``ip_name`` is the partition node's name; the part and the clock period are the
+    ``ip_name`` is the partition node's name; the part and the clock one_pass are the
     model's target. ``directory`` is the packaging project, whose ``ip`` the IP is, a new
     build directory by default: the stored project is copied there, replacing what it
     holds of the same names; ``toolchain`` the prepared toolchain Vivado and HLS run

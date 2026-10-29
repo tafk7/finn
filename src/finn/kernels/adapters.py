@@ -71,7 +71,7 @@ from finn.core.space import (
 from finn.dataflow.steps import Hop, Step, Steps, Unrealizable
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import Tensor
-from finn.dataflow.traversal import BeatSequence
+from finn.dataflow.traversal import BeatSequence, LevelEnd, Traversal
 from finn.kernels.artifacts.module import Fragment, Leaf
 from finn.kernels.base import KernelSpace, PortContract
 from finn.kernels.input_generator import Generate, InputGeneratorKernel, generated
@@ -146,6 +146,14 @@ def realize(steps: Steps) -> tuple[RealizedStage, ...]:
     """The FinnLib modules that carry out ``steps``, in order."""
     stages: list[RealizedStage] = []
     hops = list(steps.hops)
+    for hop in hops:
+        for sequence in (hop.source, hop.sink):
+            if not isinstance(sequence.form, Traversal):
+                raise Unrealizable("no existing hardware adapter recipe carries Grouped forms")
+            if any(not isinstance(rule, LevelEnd) for rule in sequence.markers):
+                raise Unrealizable(
+                    "no existing hardware adapter recipe carries held LevelDone markers"
+                )
     index = 0
     while index < len(hops):
         hop = hops[index]
