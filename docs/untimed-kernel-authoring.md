@@ -138,6 +138,10 @@ and [`test_untimed_build.py`](../tests/kernel_ops/test_untimed_build.py).
 
 ## Remaining boundaries
 
+This candidate keeps the supported MemStream/source and native set-Port contract.
+Fetched wrapper/source-serving behavior is not adapted or emitted here; no example
+or generated source should be read as a fetched-source wrapper demonstration.
+
 Runtime-input/container mechanisms, the provisional set-index revisit, fetched
 wrapper/source-serving assembly, a native executor, new kernels, adapter DSE,
 timing readouts/search/FIFO strategies/timeouts and physical validation are not
