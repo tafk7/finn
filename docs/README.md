@@ -12,7 +12,9 @@ Environment and runtime:
 
 The experimental `finn.core.space`, `finn.dataflow` and `finn.kernels`
 packages, and the KernelOps built on them (`finn.custom_op.kernels`,
-`finn.transformation.kernels`), are documented outside this repository until
-they are final; their code checks are `bash scripts/check-space.sh`,
+`finn.transformation.kernels`), have a readable starting point with real definitions
+and one-command examples in [Untimed kernel authoring](untimed-kernel-authoring.md).
+Their broader design material is maintained separately; their code checks are
+`bash scripts/check-space.sh`,
 `scripts/check-dataflow-design.sh` and `scripts/check-kernels.sh` (which also
 checks the KernelOps).
