@@ -115,7 +115,7 @@ def test_the_image_enters_once_and_its_channel_reads_the_windows(
     assert streams.source.sequence.markers == ()
     (marker,) = streams.sink.sequence.markers
     kernel = point.network.member(node.name).compute
-    assert marker.beats == kernel.schedule.beat_count // kernel.y_stream.sequence.form.beats
+    assert marker.beats == kernel.schedule.beat_count // kernel.y.stream.sequence.form.beats
     instances = dict(point.module.fragment.instances)
     parameters = dict(instances[f"{node.input[0]}.adapter.input_gen.input_gen"].parameters)
     assert (parameters["FM_SIZE"], parameters["DIMS"], parameters["COEFS"]) == nest
