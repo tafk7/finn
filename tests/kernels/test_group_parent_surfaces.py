@@ -115,7 +115,7 @@ def reference_path(value: object) -> tuple[Declaration, ...]:
 @pytest.mark.parametrize("host", [Host, InheritedHost, ReplacedHost])
 @pytest.mark.parametrize("key", ["group.receive.forwarded", "group.send.forwarded"])
 def test_discovery_lookup_and_real_source_agree_for_inherited_nested_groups(
-    host: type[KernelSpace], key: str
+    host: type[Host], key: str
 ) -> None:
     discovered = port_surfaces(host)
     assert list(discovered) == [
