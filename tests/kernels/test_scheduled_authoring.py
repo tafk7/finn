@@ -189,7 +189,8 @@ def test_empty_accesses_are_inherited_without_a_generated_method() -> None:
     class Subclass(Empty):
         pass
 
-    # The shared traversal reads actual Ports; no lowering hook generates per-class tables.
+    # Indexed kernels author access reads over actual Ports; no lowering hook generates
+    # per-class methods. The empty base method is inherited here unchanged.
     assert Subclass._accesses is Empty._accesses
     assert design_space(Empty()).extents == design_space(Subclass()).extents == {}
 
