@@ -3,17 +3,17 @@
 
 """The kernel base, ``KernelSpace``: its four answers, its library module, its checks.
 
-A kernel answers four questions of its hardware, each a view written once in the base:
+A kernel answers four questions of its hardware through Views:
 its netlist (its library module at the empty label, its members' netlists under their
 nodes), its cycles, its buffering and its resources, its own part and its members'. Each
-class's views read its declarations by the names their lowering fixes, so none reads
-dynamically. A kernel binds at most one library module (``LibraryModule``), whose
+class's native netlist reads typed model inputs serially and calls pure physical
+helpers. A kernel binds at most one library module (``ModuleSpec``), whose
 sources must provide it: constant sources when the class is made, a member's when the
 module is built. A kernel with a module states its ports and its resources and places
-no kernel, and a kernel stating a stream port binds a module; one leaving a member
-``required()`` is a base of kernels, which these checks pass by. A declaration's
-argument is a member of its kernel (a declaration of the engine, or one ``required()``),
-or a constant, of whatever type.
+no kernel, and a kernel owning a physical stream port binds a module; one leaving a member
+``required()`` is a base of kernels, which these checks pass by. A child model
+binding is a fact, derived member or constant; outward Views do not bind
+model Params. Generic primitive inclusion without a module remains usable.
 """
 
 from __future__ import annotations

@@ -54,10 +54,10 @@ class Kernel(Protocol):
     ``UntimedKernel`` alone (a channel's FIFO) states no cycles and is no ``Kernel``: it is
     read through its channel.
 
-    These read-out answers are the whole Protocol. A kernel's streams are members of its
-    design space, one per port and named by it (``x_stream``), so each class types its own
-    and the Protocol holds none of them; a generic reader finds them through the class's
-    declarations (``finn.kernels.declaration.declarations``). What a kernel admits, its
+    These read-out answers are the whole Protocol. A kernel's streams are typed model
+    members of its real child ports or direct parent forwards. A generic reader finds
+    their authored references through ``finn.kernels.port.port_surface``; the Protocol
+    holds none of those members. What a kernel admits, its
     choices and a trial of them are the engine's, asked of any Space.
 
     Reading an answer here gives its accepted value, and raises where the kernel refuses
@@ -167,10 +167,10 @@ class UntimedKernel(Space):
     does not range over it; every other kernel derives ``KernelSpace``, which adds
     ``Timed``. A check or a type admitting any kernel names this class.
 
-    Its answers are Views. Buffering/resources call ordinary source helpers; legacy
-    netlist/cycles still use class-specific lowering while their callers migrate. A
-    class may state one itself, calling these. Its members' answers it reaches through
-    ``Members`` over the member each states, which only these views read."""
+    Its answers are Views. A native kernel states its netlist in ordinary serial
+    source over typed model inputs and pure physical helpers. Buffering/resources
+    read its own statements and its members' answers. A composed kernel reaches
+    those answers through ``Members`` over the member each states."""
 
     id: ClassVar[str] = ""
 
@@ -461,14 +461,13 @@ class UntimedKernel(Space):
 class KernelSpace(UntimedKernel, Timed):
     """A kernel that takes clock cycles: every kernel but a channel's FIFO, which derives
     ``UntimedKernel`` alone. The base a kernel derives. To the untimed base's answers it adds
-    ``cycles``, the most beats any of its declarations carries a frame, or any of its
-    members takes (``_cycles``), reaching its members' through ``member_cycles``, over
-    ``Timed.cycles``."""
+    ``cycles``, aggregating its members through ``member_cycles`` over ``Timed.cycles``.
+    A native kernel states its own cycle calculation; the base refuses an absent
+    calculation rather than assuming zero."""
 
     def _cycles(self, default: int | None = None) -> int | Rejected:
-        """``cycles``: the most beats any declaration carries a frame, or any member takes,
-        one beat a cycle at best; ``default`` where there is none (a channel of wires
-        takes none of its own), else refused."""
+        """The most cycles any timed member takes; ``default`` where there is none
+        (a channel of wires takes none of its own), else refused."""
         space_type = type(self)
         found = [item.value for item in self.member_cycles]
         if found:
@@ -483,8 +482,7 @@ class KernelSpace(UntimedKernel, Timed):
 
     @view
     def cycles(self) -> int | Rejected:
-        """The clock cycles a frame takes through it: the most beats any of its ports carries
-        a frame, or any of its members takes."""
+        """The most cycles any timed member takes; a native kernel states its own."""
         found = [item.value for item in self.member_cycles]
         if found:
             return max(found)

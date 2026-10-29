@@ -1,17 +1,15 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""One port declaration, and extents bound from the tensors a kernel's input ports read.
+"""Real child ports and extents bound from the tensors a kernel's inputs read.
 
-``AxiStreamPort`` presents its kernel's schedule through the indices it reads,
-or a given sequence (exactly one). An input placed with a schedule states its read of
-the tensor (``x_access``), and its kernel binds each index's extent from those reads
-(``KernelSpace.extents``): a kernel writes no extent getter, and its folding factors'
-domains read ``extent_of`` members. A producer's tensor is its kernel's statement,
-derived from those extents, and its element is that tensor's. An input without its
-tensor is idle: a port not used. A port's rule (``x_element_taken``) is its
-kernel's constraint, counted in its validity, while what the kernel reads to bind its
-extents are values: a refused port still answers them.
+``IndexedPort`` states an input's tensor access (``x.access``); its parent reads
+the binding inputs in ``_accesses`` to derive ``KernelSpace.extents``. Folding
+domains read ``extent_of`` members. ``ScheduledPort`` presents an output tensor
+derived from those extents without binding them back into its parent. A child
+states its intrinsic element rule; parent composition constraints remain on the
+kernel. Model element/access members remain usable before presentation resolves,
+while public physical Views obey child validity and owning-scope refusal.
 """
 
 from __future__ import annotations

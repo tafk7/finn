@@ -3,15 +3,16 @@
 
 """The kernel contract: its bases, and what a kernel binding a module states.
 
-A kernel binding a module (``KernelSpace`` with a ``LibraryModule``) states its
+A kernel binding a module (``KernelSpace`` with a plain ``ModuleSpec``) states its
 parameters, sources and resources, and its ports; it places no kernel (checked when the
-class is made: ``tests/kernels/test_kernel_space.py``). Its control bus is a declaration
-(``ControlBus``): held idle while it is not presented, presented (read as
+class is made: ``tests/kernels/test_kernel_space.py``). Its control bus is an included
+``ControlModel``: held idle while it is not presented, presented (read as
 ``KernelSpace.bus_control``) while it is, so a bus is accounted for by construction; its
 pins come before every port's, its hold after theirs. Every port runs on its kernel's clock domain
 (``clock_domain``). Its module is the ``Leaf`` at the empty label of its netlist
 (``library_module``). A kernel with children presents a child's port as its own
-(``served``: ``<name>_contract``, labelled below it), and its netlist merges its members'.
+through typed model forwards and an outward contract View, labelled below the
+child; its netlist merges its members'.
 Every kernel is an ``UntimedKernel``, and every one but a channel's FIFO a ``KernelSpace``.
 """
 
@@ -333,9 +334,9 @@ def test_a_kernel_presents_one_control_bus_at_most() -> None:
 
 
 def test_two_control_buses_in_one_body_are_refused_as_repeated_before_lowering() -> None:
-    """Counted before any declaration is lowered: each bus lowers to ``declares_bus`` and
-    ``bus_control``, so lowering first would answer ``declaration-member-taken`` for the
-    second and hide the refusal. (A second bus from a subclass is the case above.)"""
+    """Count included control models before checking parent addressing declarations,
+    so the second bus reports ``control-bus-repeated``. A second bus inherited by
+    a subclass is covered above; this case declares both in one body."""
     with refused("control-bus-repeated", error=DefinitionError, message="Both declares"):
 
         class Both(Probe):
