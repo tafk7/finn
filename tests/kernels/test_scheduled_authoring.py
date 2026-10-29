@@ -182,15 +182,16 @@ def test_authored_access_method_is_preserved_through_inheritance() -> None:
         assert kind._accesses is Explicit._accesses
 
 
-def test_generated_empty_accesses_are_refreshed_for_an_unmigrated_subclass() -> None:
-    class Legacy(KernelSpace):
-        id = "test.scheduled.legacy_empty"
+def test_empty_accesses_are_inherited_without_a_generated_method() -> None:
+    class Empty(KernelSpace):
+        id = "test.scheduled.empty"
 
-    class Subclass(Legacy):
+    class Subclass(Empty):
         pass
 
-    assert Subclass._accesses is not Legacy._accesses
-    assert design_space(Legacy()).extents == design_space(Subclass()).extents == {}
+    # The shared traversal reads actual Ports; no lowering hook generates per-class tables.
+    assert Subclass._accesses is Empty._accesses
+    assert design_space(Empty()).extents == design_space(Subclass()).extents == {}
 
 
 class SerialTranspose(TransposeKernel):
