@@ -191,7 +191,7 @@ def presented(source: BeatSequence, sink: BeatSequence) -> Traversal | Grouped:
     So consumer pass ``j`` reads only source pass ``j``, whatever its reads count. This
     is the boundary rule (``traversal.unreplayed``): the receiver realizes its replay and
     its window, and whole-pass repetition is part of the stream. It is why the source
-    ``traversal.stored`` or ``traversal.period`` derives for a consumer, one pass of what
+    ``traversal.stored`` or ``traversal.one_pass`` derives for a consumer, one pass of what
     the consumer reads, serves it.
 
     The rule counts passes, not elements, and so differs from counting how many of the
