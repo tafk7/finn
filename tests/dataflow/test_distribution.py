@@ -111,12 +111,14 @@ def test_wheel_and_sdist_metadata_and_markers() -> None:
     assert len(wheels) == len(sdists) == 1
     with zipfile.ZipFile(wheels[0]) as wheel:
         assert "finn/dataflow/py.typed" in wheel.namelist()
+        assert not any(name.startswith("finn/dataflow_next/") for name in wheel.namelist())
         metadata_files = [n for n in wheel.namelist() if n.endswith(".dist-info/METADATA")]
         assert len(metadata_files) == 1
         wheel_meta = BytesParser().parsebytes(wheel.read(metadata_files[0]))
     with tarfile.open(sdists[0]) as sdist:
         names = sdist.getnames()
         assert any(n.endswith("/src/finn/dataflow/py.typed") for n in names)
+        assert not any("/src/finn/dataflow_next/" in name for name in names)
         package_info = [n for n in names if n.count("/") == 1 and n.endswith("/PKG-INFO")]
         assert len(package_info) == 1
         member = sdist.extractfile(package_info[0])

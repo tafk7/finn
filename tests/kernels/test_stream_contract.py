@@ -8,6 +8,8 @@ stress cases) are in ``tests/dataflow/test_traversal.py``; the tiled MVU's weigh
 stay here, where a memory delivers them.
 """
 
+from itertools import product
+
 import pytest
 from qonnx.core.datatype import DataType
 from support.helpers import (
@@ -19,6 +21,7 @@ from support.helpers import (
     fifo_node,
     keyed,
     port_transport,
+    with_adapter_memories,
     with_direct_transports,
 )
 from support.tiled_mvu import MH, MW, NF, PE_T, SF, SIMD_T, R, T
@@ -26,14 +29,18 @@ from support.xsim import requires_xsim
 
 from finn.core.rtlsim_bench import pack_lanes, stream_through
 from finn.core.space import Rejected, Unresolved, design_space
+from finn.dataflow.steps import Hop
+from finn.dataflow.steps import steps as between
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import (
     Adaptation,
     LevelEnd,
+    Reorder,
     Repetition,
     Traversal,
     classify,
+    offsets,
     tile,
     vector_major,
 )
@@ -77,6 +84,26 @@ def streamed(given: StreamContract) -> Stream:
 
 def mismatch_codes(mismatches):
     return {item.code for item in mismatches}
+
+
+def delivered(form: Traversal, hops: tuple[Hop, ...]) -> list[int]:
+    """The flat offsets ``hops`` deliver from ``form``, by each step's own definition: a
+    width step keeps the element order, regrouping only its lanes; a reorder emits, of each
+    frame of ``frame_beats`` beats, the beat at ``sum(index * coefs)`` over ``dims``, outer
+    first (``traversal.Reorder``). A coordinate oracle (``offsets``), independent of the
+    forms the steps derive between."""
+    at = [int(offset) for offset in offsets(form)]
+    for hop in hops:
+        if hop.reorder is not None:
+            lanes, frame = hop.source.form.lanes, hop.reorder.frame_beats
+            beats = [at[first : first + lanes] for first in range(0, len(at), lanes)]
+            at = [
+                offset
+                for start in range(0, len(beats), frame)
+                for index in product(*(range(extent) for extent in hop.reorder.dims))
+                for offset in beats[start + sum(i * c for i, c in zip(index, hop.reorder.coefs))]
+            ]
+    return at
 
 
 # -- the tiled MVU's weight chunks ---------------------------------------------------------
@@ -126,15 +153,39 @@ def test_mismatches_name_the_adapter_that_would_repair_them():
     )
     assert mismatch_codes(wider) == {"channel-form"}
     assert next(iter(wider)).message == "needs a width_conversion adapter"
+    rows, columns = tile(4, 4, 1, 4), tile(4, 4, 4, 1)
     found = compatibility(
-        streamed(contract(tile(4, 4, 1, 4), Endpoint.INITIATOR)),
-        streamed(contract(tile(4, 4, 4, 1), Endpoint.TARGET)),
+        streamed(contract(rows, Endpoint.INITIATOR)),
+        streamed(contract(columns, Endpoint.TARGET)),
     )
-    # Equal lanes and widths, different positions per beat: a lane regroup, which no
-    # chain of adapters realizes.
-    assert mismatch_codes(found) == {"channel-form"}
-    message = next(iter(found)).message
-    assert message.startswith("no chain of adapters repairs it") and "lane axis" in message
+    # Equal lanes and widths, different positions per beat: a lane regroup of the same
+    # positions, through one lane a beat (the only count dividing both at which the two
+    # orders differ by a reorder), the adapter this direct connection lacks.
+    assert [(item.code, item.message) for item in found] == [
+        (
+            "channel-form",
+            "needs a width_conversion -> reorder -> width_conversion adapter: "
+            "Reorder(frame_beats=16, dims=(4, 4), coefs=(1, 4))",
+        )
+    ]
+    regroup = between(
+        contract(rows, Endpoint.INITIATOR).sequence, contract(columns, Endpoint.TARGET).sequence
+    )
+    assert delivered(rows, regroup.hops) == [int(offset) for offset in offsets(columns)]
+    # Rows 0 and 2 alone, the columns read: positions the source never presents, which no
+    # chain of adapters repairs.
+    halves = Traversal.over((4, 4), ((0, 2, 2),), ((1, 4, 1),))
+    assert sorted(int(offset) for offset in offsets(halves)) == [*range(4), *range(8, 12)]
+    missing = compatibility(
+        streamed(contract(halves, Endpoint.INITIATOR)),
+        streamed(contract(columns, Endpoint.TARGET)),
+    )
+    assert [(item.code, item.message) for item in missing] == [
+        (
+            "channel-form",
+            "no chain of adapters repairs it: the sequences present different positions",
+        )
+    ]
 
 
 def test_repetition_and_marker_rules_are_checked():
@@ -264,6 +315,10 @@ def test_delivery_refuses_values_outside_the_operand_contract(values, dtype, mes
 
 CHANNELS, PE, PIXELS = 4, 2, 3
 PARAMETERS = (1, -2, 7, -8)
+STRIDED = Traversal.over((CHANNELS,), ((0, 2, 1),), ((0, 2, 2),))
+"""Two lanes a beat carrying positions (0, 2), then (1, 3): eltwise's under another lane axis."""
+DOUBLED = Traversal.over((CHANNELS,), ((0, 2, 1),), ((0, 2, 1),))
+"""Two lanes a beat carrying positions (0, 1), then (1, 2): position 3 is never presented."""
 
 
 def eltwise_with_constant(form=None):
@@ -330,31 +385,111 @@ def test_the_delivery_kernel_serves_a_second_consumer_through_the_same_contract(
     # Lane for lane: the memory's channels are the ones eltwise reads.
     assert (into.source.instance, into.sink.instance) == ("rhs", "add")
     assert (into.lanes, into.lane_bits) == ((0, 1), 4)
-    # A delivery whose lanes carry other positions (0,2),(1,3) needs a lane regroup: the
+    # A delivery whose lanes carry other positions (0,2),(1,3) needs a lane regroup, a
+    # width step, a reorder and a width step, on a channel that admits no adapter: the
     # channel is refused with its transport open, and joining it directly is refused by
-    # the rule it breaks, for the same reason.
-    strided = constant_network(Traversal.over((CHANNELS,), ((0, 2, 1),), ((0, 2, 2),)))
+    # the rule it breaks, naming the same chain.
+    strided = constant_network(STRIDED)
     refused = strided.member("c").query(Channel.netlist)
     assert isinstance(refused, Rejected)
     (refusal,) = [finding for finding in refused.findings if finding.code == "channel-steps"]
-    assert "another lane axis" in refusal.message
+    assert refusal.message == (
+        "the streams need width_conversion -> reorder -> width_conversion, "
+        "and this channel admits no adapter"
+    )
     trial = strided.trial(keyed({"c.transport": "direct"}))
     assert not trial.accepted
     ((rule, (form,)),) = trial.refused.items()
     assert (rule, form.code) == (("c", "compatible"), "channel-form")
-    assert "another lane axis" in form.message
+    assert form.message == (
+        "channel-form: needs a width_conversion -> reorder -> width_conversion adapter: "
+        "Reorder(frame_beats=4, dims=(2, 2), coefs=(1, 2))"
+    )
+
+
+def test_a_lane_regroup_on_an_adaptable_channel_is_built_from_existing_stages():
+    # The same lane regroup on a channel that admits adapters: its steps are the width step
+    # before the transport (a vpc) and the reorder and width step after it (an input_gen,
+    # then a vpc), delivering what eltwise reads, position for position, each pixel's pass.
+    # Only physical choices are open (its transport, its adapter's memory); the first of
+    # each builds them, with each stage's parameters the steps'.
+    strided = constant_network(STRIDED, adaptable=True)
+    validity = strided.validity("c")
+    assert validity.status == "open"
+    assert {(f.code, f.owner) for piece in validity.pieces for f in piece.result.findings} == {
+        ("decision-unassigned", "transport"),
+        ("decision-unassigned", "adapter_ram_style"),
+    }
+    found = strided.member("c")
+    hops = found.steps.hops
+    assert found.steps.describe() == "width_conversion -> reorder -> width_conversion"
+    assert hops[0].source.form == STRIDED.repeated(PIXELS)
+    assert hops[-1].sink.form == vector_major((CHANNELS,), PE).repeated(PIXELS)
+    assert [hop.reorder for hop in hops] == [None, Reorder(4, (2, 2), (1, 2)), None]
+    assert delivered(hops[0].source.form, hops) == [
+        int(offset) for offset in offsets(vector_major((CHANNELS,), PE).repeated(PIXELS))
+    ]
+    assert found.output_adapting and found.input_chain == "input_gen_vpc"
+    assert [stage.kind for stage in found.output_adapter.realization] == ["vpc"]
+    assert [stage.kind for stage in found.adapter.realization] == ["input_gen", "vpc"]
+    defaults = with_adapter_memories(with_direct_transports(strided))
+    assert defaults.validity("c").status == "valid"
+    module = built(defaults, "constant")
+    leaves = {
+        name: (leaf.implementation_id, dict(leaf.parameters))
+        for name, leaf in module.fragment.instances
+        if name.startswith("c.")
+    }
+    assert leaves == {
+        "c.output_adapter.vpc.vpc": (
+            "finnlib.vpc",
+            {"N": 2, "PAD_ZEROS": 1, "PI": 2, "PO": 1, "RELAX_THROUGHPUT": 0, "W": 4},
+        ),
+        "c.adapter.input_gen_vpc.input_gen": (
+            "finnlib.input_generator",
+            {
+                "COEFS": "'{1, 2}",
+                "D": 2,
+                "DATA_WIDTH": 4,
+                "DIMS": "'{2, 2}",
+                "FM_SIZE": 4,
+                "RAM_STYLE": '"distributed"',
+            },
+        ),
+        "c.adapter.input_gen_vpc.vpc": (
+            "finnlib.vpc",
+            {"N": 2, "PAD_ZEROS": 1, "PI": 1, "PO": 2, "RELAX_THROUGHPUT": 0, "W": 4},
+        ),
+    }
+    path = [
+        (link.source.instance, link.sink.instance, link.sink.data)
+        for link in module.fragment.links
+        if "c." in f"{link.source.instance}{link.sink.instance}"
+    ]
+    assert path == [
+        ("rhs", "c.output_adapter.vpc.vpc", "idat"),
+        ("c.output_adapter.vpc.vpc", "c.adapter.input_gen_vpc.input_gen", "idat"),
+        ("c.adapter.input_gen_vpc.input_gen", "c.adapter.input_gen_vpc.vpc", "idat"),
+        ("c.adapter.input_gen_vpc.vpc", "add", "bdat"),
+    ]
 
 
 def test_steps_that_refuse_refuse_the_input_adapter_once():
-    # The same lane regroup on a channel that admits adapters: its steps refuse
-    # (channel-steps), so the picker of its input adapter refuses with them, one piece keyed
-    # by the selector, as the guard of the chosen selector it replaces did; its adapter's
-    # memory, which the picker guards, one guard piece; and that memory's UltraRAM rule,
-    # reading the memory first, refused through that read with no guard piece of its own.
-    strided = constant_network(
-        Traversal.over((CHANNELS,), ((0, 2, 1),), ((0, 2, 2),)), adaptable=True
+    # A delivery presenting position 1 twice and position 3 never, on a channel that admits
+    # adapters: no chain presents a position it is not given, so its steps refuse
+    # (channel-steps), and the picker of its input adapter refuses with them, one piece
+    # keyed by the selector, as the guard of the chosen selector it replaces did; its
+    # adapter's memory, which the picker guards, one guard piece; and that memory's
+    # UltraRAM rule, reading the memory first, refused through that read with no guard
+    # piece of its own.
+    assert sorted(int(offset) for offset in offsets(DOUBLED)) == [0, 1, 1, 2]
+    doubled = constant_network(DOUBLED, adaptable=True)
+    (refusal,) = doubled.member("c").query(Channel.steps).findings
+    assert (refusal.code, refusal.message) == (
+        "channel-steps",
+        "no adapter can join the streams: the sequences present different positions",
     )
-    validity = strided.validity("c")
+    validity = doubled.validity("c")
     assert validity.status == "refused"
     pieces = {
         piece.owner: {(f.code, f.owner) for f in piece.result.findings} for piece in validity.pieces

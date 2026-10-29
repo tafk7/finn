@@ -40,7 +40,7 @@ from support.xsim import requires_xsim
 from finn.core.rtlsim_bench import Receive, measure, stream_out
 from finn.core.space import Available
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.dataflow.traversal import unreplayed
+from finn.dataflow.traversal import Traversal, unreplayed
 from finn.harness.points import rejected
 from finn.kernels.artifacts.abi import Signal
 from finn.kernels.artifacts.contributions import CopiedSource
@@ -256,7 +256,9 @@ def test_it_takes_a_beat_a_cycle_as_it_states(tmp_path: Path) -> None:
     module = design_module(point, PwPolyKernel)
     cycles = design_cycles(point)
     assert isinstance(module, Available) and isinstance(cycles, Available)
-    driven = {"input_channel": _words(unreplayed(source.form), x, source.element)}
+    input_form = unreplayed(source.form)
+    assert isinstance(input_form, Traversal)
+    driven = {"input_channel": _words(input_form, x, source.element)}
     bits = result.form.lanes * 32
     words = stream_out(
         module.value,
