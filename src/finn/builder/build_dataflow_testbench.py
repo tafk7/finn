@@ -156,6 +156,8 @@ def write_testbench(
     (``finn.core.rtlsim_bench.materialize``)."""
     refuse_unverified(body, label)
     point, boundary = configured_network(body, label)
+    # Keep this held timed path's refusal before reference execution or file setup.
+    cycles = int(point.cycles)
     context = execute_onnx(body, dict(frame), return_full_exec_context=True)
     inputs, outputs = boundary_words(body, point, boundary, context, label)
     directory.mkdir(parents=True, exist_ok=True)
@@ -164,7 +166,7 @@ def write_testbench(
         directory,
         inputs=inputs,
         outputs=outputs,
-        cycles=int(point.cycles),
+        cycles=cycles,
         toolchain=toolchain,
     )
     (directory / "check.sv").write_text("`timescale 1ns/1ps\n" + bench.text)

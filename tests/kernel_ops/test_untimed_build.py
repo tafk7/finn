@@ -5,23 +5,28 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
 from qonnx.core.modelwrapper import ModelWrapper
 from support.models import choose_memories, configure_partition, kernel_model
 
+import finn.builder.build_dataflow_testbench as testbench
 import finn.custom_op.kernels.shell as shell
 from finn.core.graph.annotations.outputs import OUTPUT_VERIFIED
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import design_digest
 from finn.core.reporting.findings import Finding, FindingKind
+from finn.core.rtlsim_exec import XSim
 from finn.core.space import Available, QueryResult, Unresolved, reject
 from finn.custom_op.kernels.network import PRODUCER
 from finn.kernels.artifacts.build import netlist
 from finn.kernels.base import Timed
 from finn.kernels.explore import Seam
 from finn.kernels.partition import Partition
+from finn.toolchain.launcher import Selection, Toolchain
+from finn.transformation.kernels.cut import CutKernelPartition
 
 
 def test_configuration_and_emission_do_not_read_refused_cycles(
@@ -116,3 +121,56 @@ def test_known_cycle_verification_keeps_its_period_and_design_marker() -> None:
     assert configured.module == expected.module
     assert checked.period == period and period > 0
     assert model.get(OUTPUT_VERIFIED) == design_digest(model)
+
+
+@pytest.mark.parametrize("consumer", ("testbench", "xsim"))
+@pytest.mark.parametrize("timing", ("refused", "waiting"))
+def test_held_timed_actions_refuse_before_reference_or_directory_work(
+    consumer: str,
+    timing: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = _unverified_model()
+    shell.verify_partition(model, "known-timing")
+    target = tmp_path / "timed-action"
+    toolchain = Toolchain(Selection(), {})
+    parent = (
+        model.transform(CutKernelPartition(tmp_path / "partition")) if consumer == "xsim" else None
+    )
+    query = Partition.query
+
+    def unavailable(self: Partition, name: str, member: object) -> QueryResult[Any]:
+        if member is Timed.cycles:
+            if timing == "refused":
+                return reject("timed-cycles", "cycle estimate unavailable")
+            return Unresolved(
+                (
+                    Finding(
+                        FindingKind.BLOCKER,
+                        "timed-cycles",
+                        "cycles",
+                        "cycle estimate not supplied",
+                    ),
+                )
+            )
+        return query(self, name, member)
+
+    def must_not_act(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("unavailable timing reached reference or hardware work")
+
+    monkeypatch.setattr(Partition, "query", unavailable)
+    with pytest.raises(KernelOpError):
+        if consumer == "testbench":
+            monkeypatch.setattr(testbench, "execute_onnx", must_not_act)
+            monkeypatch.setattr(testbench, "stream_bench", must_not_act)
+            testbench.write_testbench(model, target, {}, toolchain=toolchain)
+        else:
+            assert parent is not None
+            monkeypatch.setattr(XSim, "_run_directory", must_not_act)
+            XSim(directory=target, toolchain=toolchain).run(
+                parent.graph.node[0],
+                parent.make_empty_exec_context(),
+                parent,
+            )
+    assert not target.exists()
