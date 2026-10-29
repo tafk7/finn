@@ -75,6 +75,29 @@ for per-edge packing/adapter queries. Source identities remain distinct even for
 equal Tensor values. It does not infer atomic firing groups or profiles from
 kernel structure, and is not a new production extractor or executor.
 
+## Composition changes carried by the canonical swap
+
+The native and compute definitions above are existing hardware kernels, not new
+recipes. The refined logical package can now derive some compositions the earlier
+logical implementation refused: for example, a same-position lane-axis regroup
+can connect through width conversion → reorder → width conversion, using the
+registered VPC and input-generator stages. Direct connection still refuses when
+an adapter is needed, and missing source positions still cannot be repaired.
+Cyclic presentation counts whole passes rather than receiver-replayed elements;
+lower logical reads/storage bookkeeping is not a faster physical rate.
+
+Logical `Schedule.closing` accepts one contiguous reduced block, not only a
+suffix. A non-suffix block whose inner folded extent is one can normalize to a
+`LevelEnd` and use an existing TLAST; this is a deliberate authoring behavior
+change. A genuine held `LevelDone` remains refused by the physical ScheduledPort
+and adapter contracts. In-tree kernels still close their original suffixes;
+no held-marker hardware or new kernel capability is added.
+
+These changes do not waive shape/range/source/pass/marker/ownership or physical
+capacity checks. Held timed verification, simulation and watchdog clients still
+explicitly request their existing cycle readout before timed actions; untimed
+configuration/source emission makes no rate or timing-verification claim.
+
 ## Logical order is not time
 
 `Schedule.iterations` and `Schedule.fold` describe logical iteration/folding;

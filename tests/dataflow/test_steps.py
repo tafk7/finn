@@ -77,6 +77,10 @@ def test_a_cyclic_source_repeats_once_a_consumer_pass() -> None:
     assert presented(rows, BeatSequence(half)) == vector_major((4, 4), 4)
     found = steps(rows, BeatSequence(half))
     assert [hop.reorder for hop in found.hops] == [Reorder(4, (2,), (1,))]
+    # Keep the earlier exact cyclic-tile/half input too: it still refuses, now for
+    # its missing-position relation rather than a non-whole repetition count.
+    with pytest.raises(Unrealizable, match="^the sequences present different positions$"):
+        steps(cyclic, BeatSequence(half))
     # A source repeating its own pass twice feeds a consumer of whole multiples of it.
     with pytest.raises(Unrealizable, match="whole repetitions"):
         steps(BeatSequence(period.repeated(2), Repetition.CYCLIC), BeatSequence(period.repeated(3)))
