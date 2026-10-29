@@ -101,7 +101,7 @@ def test_tiled_mvu_weight_chunks_are_a_width_conversion_a_delivery_can_avoid():
         )
     )
     sink = contract(chunked.repeated(R // T), Endpoint.TARGET)
-    produced = source.output_contract.contract
+    produced = source.output.contract.contract
     assert compatibility(streamed(produced), streamed(sink)) == ()
 
 
@@ -226,7 +226,7 @@ def delivery(form=None, values=(1, -2, 7, -8), **choices):
 
 def test_delivery_publishes_a_cyclic_contract_and_waits_only_for_its_own_choice():
     base = delivery()
-    output = base.output_contract.contract
+    output = base.output.contract.contract
     assert output.repetition is Repetition.CYCLIC and output.form == vector_major((4,), 2)
     assert output.payload_bits == output.transport.data_width == 8
     assert base.image == (0xE1, 0x87)
@@ -391,8 +391,8 @@ def test_a_pure_lane_permutation_is_realized_as_free_wiring():
     fifo = design_space(fifo_node(word_bits=16, depth=2)).with_choices(ram_style="auto")
     # The hop connects directly, and its link crosses the lanes: no adapter.
     sink = StreamContract(port_transport(fifo, "input"), INT4, wanted)
-    assert compatibility(streamed(source.output_contract.contract), streamed(sink)) == ()
-    link = wired("source", source.output_contract.contract, "fifo", sink)
+    assert compatibility(streamed(source.output.contract.contract), streamed(sink)) == ()
+    link = wired("source", source.output.contract.contract, "fifo", sink)
     assert (link.source.data, link.sink.data) == ("m_axis_0_tdata", "idat")
     assert (link.lanes, link.lane_bits) == ((0, 2, 1, 3), 4)
 
