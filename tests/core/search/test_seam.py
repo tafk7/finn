@@ -48,15 +48,15 @@ from finn.core.space import (
 
 
 class Fold(Space):
-    pe: int = Decision(values=(1, 2, 4))
+    pe: int = Decision(domain=(1, 2, 4))
 
 
 class Link(Space):
     pe: int = Param()
-    depth: int = Decision(values=(1, 2, 4, 8))
-    style: str = Decision(values=("lut", "bram"))
-    wide: bool = Decision(values=(False, True))
-    lanes: int = Decision(values=(1, 2), when=wide)
+    depth: int = Decision(domain=(1, 2, 4, 8))
+    style: str = Decision(domain=("lut", "bram"))
+    wide: bool = Decision(domain=(False, True))
+    lanes: int = Decision(domain=(1, 2), when=wide)
 
     @constraint
     def deep_enough(self) -> bool | Rejected:
