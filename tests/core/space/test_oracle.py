@@ -16,7 +16,7 @@ from __future__ import annotations
 import enum
 import random
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from support.space_oracle import IMPLEMENTATIONS, Answers, compare, forms, toys
@@ -483,6 +483,7 @@ def test_group_members_are_compared_without_independent_validity_scopes() -> Non
     assert public.members() == uncached.members() == (("group.number", "const"),)
     assert public.query("group.number") == uncached.query("group.number") == Available(7)
     assert forms.space(public) == forms.space(uncached)
-    for query in (lambda: inspection.validity(point.group), lambda: uncached.validity("group")):
-        with pytest.raises(RequestError, match="a Group has no independent validity"):
-            query()
+    with pytest.raises(RequestError, match="a Group has no independent validity"):
+        inspection.validity(cast(Any, point.group))  # intentionally invalid public request
+    with pytest.raises(RequestError, match="a Group has no independent validity"):
+        uncached.validity("group")
