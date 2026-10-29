@@ -17,6 +17,7 @@ from __future__ import annotations
 import copy
 import re
 from dataclasses import replace
+from typing import Any, cast
 
 from qonnx.core.modelwrapper import ModelWrapper
 from support.configure import write_raw
@@ -32,6 +33,7 @@ from finn.kernels.base import KernelSpace
 from finn.kernels.channels import Channel, OuterHops
 from finn.kernels.composer import ChannelDeclaration, PartitionDeclaration
 from finn.kernels.partition import Partition, partition
+from finn.kernels.port import port_surface
 from finn.kernels.sides import Side, SideKind
 from finn.transformation.kernels import ToKernelOps
 
@@ -41,15 +43,17 @@ def _slice(model: ModelWrapper, *names: str) -> Partition:
     return network(model, [node for node in model.graph.node if node.name in names])
 
 
-def _side(point: object, port: str) -> Side:
-    """A KernelOp's point's ``<port>_side``."""
-    found = point.query(getattr(type(point), f"{port}_side"))  # type: ignore[attr-defined]
+def _side(point: KernelSpace, port: str) -> Side:
+    """A KernelOp's actual native port side, resolved through its parent surface."""
+    reference = port_surface(type(point), port).side
+    assert reference is not None
+    found = point.query(cast(Any, reference))
     assert isinstance(found, Available) and isinstance(found.value, Side)
     return found.value
 
 
-def _frozen(point: object, port: str, label: str) -> Side:
-    """A KernelOp's point's ``<port>_side`` as a frozen neighbour's, labelled ``label``."""
+def _frozen(point: KernelSpace, port: str, label: str) -> Side:
+    """The actual port side as a frozen neighbour's, labelled ``label``."""
     found = _side(point, port)
     assert found.stream is not None
     return Side.neighbour(found.stream, label, found.width)
