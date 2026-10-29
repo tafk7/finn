@@ -14,6 +14,7 @@ from __future__ import annotations
 import pkgutil
 from collections.abc import Iterable
 from pathlib import Path
+from typing import cast
 
 import pytest
 from core.space._domains_support import domain_differences
@@ -143,9 +144,13 @@ def _assert_native_scope_ownership(records: Iterable[ScopeRecord]) -> set[ScopeR
         assert set(port_surfaces(parent.space_type)) == set(expected)
         parents.add(parent)
     assert {record.name for record in ports} == {
-        f"{parent.name}.{port}" for parent in parents for port in PORT_TYPES[parent.space_type]
+        f"{parent.name}.{port}"
+        for parent in parents
+        for port in PORT_TYPES[cast(type[Space], parent.space_type)]
     }
-    assert len(ports) == sum(len(PORT_TYPES[parent.space_type]) for parent in parents)
+    assert len(ports) == sum(
+        len(PORT_TYPES[cast(type[Space], parent.space_type)]) for parent in parents
+    )
     return ports
 
 
