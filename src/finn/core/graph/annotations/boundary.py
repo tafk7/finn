@@ -10,7 +10,8 @@ partition's body is cut, so the body carries them. Keyed by tensor, a statement 
 wherever a selection's boundary side is that tensor's (``finn.custom_op.kernels.network``):
 the whole partition's port, or a slice's edge that is one, whatever the slice names its
 own ports. Each statement is the build's (``finn.kernels.sides.Outside``, its source
-``BUILD``), its pace kept as given: a ``Steady`` shorthand stays one.
+``BUILD``), its pace kept as given: a ``Steady`` shorthand stays one. An absent pace
+is stored as the explicit empty object, leaving timing unstated.
 """
 
 from __future__ import annotations
@@ -76,10 +77,12 @@ def _stored(outside: Outside) -> dict[str, Any]:
 
 
 def _read(tensor: str, stored: Mapping[str, Any]) -> Outside:
-    """The build's statement stored for ``tensor``; ``ValueError`` where it is none."""
+    """The build's statement stored for ``tensor``; an empty pace leaves timing unstated."""
     pace = dict(stored["pace"])
-    made: Steady | BeatTimes
-    if set(pace) == {"every"}:
+    made: Steady | BeatTimes | None
+    if not pace:
+        made = None
+    elif set(pace) == {"every"}:
         made = Steady(pace["every"])
     elif set(pace) == {"times", "span"} and isinstance(pace["times"], list):
         made = BeatTimes(tuple(pace["times"]), pace["span"])

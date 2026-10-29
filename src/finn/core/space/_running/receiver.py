@@ -105,7 +105,7 @@ class MethodReader:
             self.node.owner,
             "read-undeclared",
             f"read {member}, which its source does not name: read it through a path from "
-            "its receiver, or declare it in __reads__",
+            "its receiver",
         )
         fault(self.call, error)
         raise error

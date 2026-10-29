@@ -37,8 +37,8 @@ outside states (``Outside``) and its pace (``BeatTimes``, or the steady shorthan
 on the boundary (a ``MOVERS`` kind, ``iodma_hls``), or the build (``BUILD``). It states
 the order of each pass (``ROW_MAJOR``, or None: as the inside presents it), the passes a
 frame (1, or None: as presented), the lanes a beat (the edge's word, or None: the inside's),
-the pace (the outside's beat times over a frame, or None where a mover states it, whose
-pace is its contract's) and the host's buffer layout (``ROW_MAJOR_HOST``). The pace is
+the pace (the outside's beat times over a frame, or None when timing is not stated; a
+mover's pace comes from its contract) and the host's buffer layout (``ROW_MAJOR_HOST``). The pace is
 kept as given: ``Steady`` is expanded where the edge's beats are known, in one place
 (``beat_times``), which FIFO sizing (``finn.kernels.fifo_sizing.stated_pattern``) and a
 boundary channel's cycles (``finn.kernels.channels.Channel.cycles``: no fewer than its
@@ -144,7 +144,7 @@ class Outside:
     ``passes`` a frame (1), the ``lanes`` a beat (at least 1), the ``pace``
     (``BeatTimes`` or ``Steady``) and the host buffer's ``layout`` (``ROW_MAJOR_HOST``).
     ``order``, ``passes`` and ``lanes`` left None are as the inside presents them; the
-    ``pace`` left None is a mover's (its contract's), so the build states one."""
+    ``pace`` left None leaves timing unstated; a mover's pace comes from its contract."""
 
     source: str
     order: str | None = None
@@ -167,8 +167,6 @@ class Outside:
             raise ValueError(f"the outside states one lane a beat or more, not {self.lanes!r}")
         if self.pace is not None and not isinstance(self.pace, (BeatTimes, Steady)):
             raise ValueError("the outside's pace is its beat times or a steady beat")
-        if self.source == BUILD and self.pace is None:
-            raise ValueError("the build's statement states its pace")
         if self.layout != ROW_MAJOR_HOST:
             raise ValueError(f"the host's buffer is laid out {ROW_MAJOR_HOST}, not {self.layout!r}")
 

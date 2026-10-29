@@ -434,7 +434,7 @@ class _Refusal:
         if self.dynamic is not None:
             detail = (
                 f"{owner}: its domain's membership reads {self.dynamic}, whose reads its "
-                "source does not fix: declare them with __reads__ (a domain reads facts only)"
+                "source does not fix (a domain reads facts only)"
             )
         else:
             steps = list(reversed(dict.fromkeys(reversed(self.route))))

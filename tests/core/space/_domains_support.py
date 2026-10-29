@@ -70,8 +70,7 @@ def _refusal(reads: ModelReads, decision: Address) -> DefinitionError | None:
                     "domain-reads-choice",
                     decision.key,
                     f"{decision.key}: its domain's membership reads {current.owner}, whose "
-                    "reads its source does not fix: declare them with __reads__ (a domain "
-                    "reads facts only)",
+                    "reads its source does not fix (a domain reads facts only)",
                     declaration=decision.key,
                 )
             # In address order: a set of addresses iterates by identity, which no run fixes.

@@ -6,8 +6,8 @@ The evaluation core checks every read a ``self`` method makes against these read
 (``finn.core.space._reads``), so each way a method reads its Space is pinned here: a
 member, a child's member, a candidate's member through its selector, ``getattr`` with a
 fixed name, a helper method or property (in the scope it is reached through),
-``present()``, a local bound once to a path, declared ``__reads__``, and what makes a
-method dynamic.
+``present()``, a local bound once to a path, and what makes a method dynamic.
+Function metadata cannot change those inferred reads.
 """
 
 from __future__ import annotations
@@ -198,14 +198,20 @@ def test_explicit_functions_name_their_inputs_and_are_not_inferred() -> None:
     assert all(index.call_style == "self" for index in reads.methods)
 
 
-def test_dynamic_methods_and_declared_reads() -> None:
+def test_function_metadata_cannot_replace_source_inference() -> None:
     def computed(self: Space) -> int:
         return sum(cast(int, getattr(self, name)) for name in ("a", "b"))
 
-    def declared(self: Space) -> int:
+    def metadata(self: Space) -> int:
         return sum(cast(int, getattr(self, name)) for name in ("a", "b"))
 
-    declared.__reads__ = ("a", "b")  # type: ignore[attr-defined]
+    setattr(metadata, "__reads__", ("a", "b"))
+
+    def fixed(self: Space) -> int:
+        return cast(int, self.a) + cast(int, self.b)  # type: ignore[attr-defined]
+
+    # A stale list can neither remove b nor add an invented source.
+    setattr(fixed, "__reads__", ("a", "invented"))
 
     def handed_on(self: Space) -> int:
         return len(repr(self))
@@ -215,17 +221,19 @@ def test_dynamic_methods_and_declared_reads() -> None:
         "a": Param(),
         "b": Param(),
         "computed": derived(computed),
-        "declared": derived(declared),
+        "metadata": derived(metadata),
+        "fixed": derived(fixed),
         "handed_on": derived(handed_on),
     }
     linked = compile_model(cast(type[Space], type("Dynamic", (Space,), members))).scopes
     reads = infer(linked)
-    assert reads.methods[linked.keys["computed"]] is None
-    assert reads.methods[linked.keys["handed_on"]] is None
-    assert _reads(linked, reads, "declared") == {"a", "b"}
+    for name in ("computed", "metadata", "handed_on"):
+        assert reads.methods[linked.keys[name]] is None
+    assert _reads(linked, reads, "fixed") == {"a", "b"}
+    assert reads.unresolved.get(linked.keys["fixed"], ()) == ()
     found = summary(linked, reads)
-    assert found["dynamic"] == 2 and found["dynamic_by_class"] == {
-        "Dynamic": ["computed", "handed_on"]
+    assert found["dynamic"] == 3 and found["dynamic_by_class"] == {
+        "Dynamic": ["computed", "handed_on", "metadata"]
     }
 
 

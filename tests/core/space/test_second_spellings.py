@@ -4,8 +4,9 @@
 
 A Space's shapes have one spelling each. A derived value, a constraint or a view that does
 not apply returns ``Inapplicable()`` from its body, reading its guard first; ``when=`` is for
-a placement and a Decision, and is refused by name on a computation. ``getattr(self, name)``
-and ``__reads__`` give way to a closed set of reads, and a declaration closes with its class.
+a placement and a Decision, and is refused by name on a computation. Function metadata
+does not replace source inference; dynamic outward reads remain permitted, while domains
+read fixed fact dependencies only. A declaration closes with its class.
 A constant beside a derived value of nothing, and integer arithmetic or an attribute read on
 a reference in a class body beside a named derived value, are refused by name. A view of a
 reference and a view of a function are one ``view``. This file holds the hand cases of the

@@ -77,7 +77,7 @@ class PortStatement:
     presents it there (``DataflowBuildConfig.boundary``): the ``order`` of each pass
     (``"row_major"``), the ``passes`` a frame (1) and the ``lanes`` a beat (at least 1: the
     port's word, whose AXIS width follows), each left out (None) as the partition presents
-    it, and the ``pace``, which a statement always states: a steady beat every ``k``
+    it, and the optional ``pace``: None leaves timing unstated; otherwise a steady beat every ``k``
     cycles (``{"every": k}``, ``Steady``) or each beat's cycle over a frame and the frame's
     span (``{"times": [...], "span": n}``, ``BeatTimes``). Beat times are one a beat, so
     they state ``lanes`` and ``passes`` too; their count is checked against the port's
@@ -87,7 +87,7 @@ class PortStatement:
     order: str | None = None
     passes: int | None = None
     lanes: int | None = None
-    pace: Steady | BeatTimes
+    pace: Steady | BeatTimes | None = None
 
     def __post_init__(self) -> None:
         self.outside()
@@ -118,9 +118,10 @@ class DataflowBuildConfig:
 
     #: What the build states of the partition's boundary, by the partition's port names
     #: (``s_axis_<i>`` for its i-th input, ``m_axis_<j>`` for its j-th output), each a
-    #: ``PortStatement``: the pace the outside presents or takes the port's stream at, and
-    #: optionally its order, passes and lanes. A port left out, or an order, passes or lanes
-    #: left out, is as the partition presents it: an output is "as produced" by default.
+    #: ``PortStatement``: optionally the pace the outside presents or takes the port's
+    #: stream at, its order, passes and lanes. An absent pace leaves timing unstated.
+    #: A port left out, or an order, passes or lanes left out, is as the partition presents
+    #: it: an output is "as produced" by default.
     #: In effect the ``ip`` shell's: a shell whose row offers a mover (``pynq``) states each
     #: port by its mover, and a statement there is refused before the first step
     #: (``boundary-stated-twice``); an empty one states nothing. A port the partition does
