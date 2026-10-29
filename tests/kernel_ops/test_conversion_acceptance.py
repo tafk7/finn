@@ -37,7 +37,7 @@ from finn.core.space import (
     inspection,
     reject,
 )
-from finn.core.space.declarations import declared_path
+from finn.core.space.declarations import MemberRef
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.thresholding import Thresholding
 from finn.dataflow.traversal import LevelEnd
@@ -407,16 +407,25 @@ def test_only_a_port_that_is_not_placed_is_skipped_by_the_stream_check(
     def streamed(**answers: QueryResult[Side]) -> Any:
         # Keep the actual kernel and native Port references; intercept only the two
         # sides under test, delegating every other query to the real implementation.
-        def answer(receiver: KernelSpace, request: Any) -> QueryResult[object]:
-            if receiver is point:
+        observed: list[str] = []
+
+        def answer(receiver: KernelSpace, request: Any) -> QueryResult[Any]:
+            if (
+                receiver is point
+                and isinstance(request, MemberRef)
+                and request.member.name == "side"
+            ):
                 for port, value in answers.items():
-                    if declared_path(request) == f"{port}.side":
+                    if [node.name for node in request.path] == [port]:
+                        observed.append(port)
                         return value
             return original_query(receiver, request)
 
         with monkeypatch.context() as control:
             control.setattr(type(point), "query", answer)
-            return op.streamed(point)
+            result = op.streamed(point)
+        assert observed == ["input", "output"]
+        return result
 
     assert streamed(input=Inapplicable(), output=known) == (("y", known.value.under("mt"), True),)
     assert streamed(input=known, output=Inapplicable()) == (("x", known.value.under("mt"), False),)
