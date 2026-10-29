@@ -11,7 +11,7 @@ from qonnx.core.datatype import DataType
 from support.helpers import FULL_DSP48E2
 
 from finn.core.space import Available, Decision, Group, Param, Space, derived, design_space, view
-from finn.core.space.declarations import declared_path
+from finn.core.space.declarations import Declaration, MemberRef, declared_path
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
@@ -106,6 +106,12 @@ class ReplacedHost(Host):
     group = ReplacedFrame()
 
 
+def reference_path(value: object) -> tuple[Declaration, ...]:
+    """A captured member reference has a path; declared_path describes node placements."""
+    assert isinstance(value, MemberRef)
+    return value.path
+
+
 @pytest.mark.parametrize("host", [Host, InheritedHost, ReplacedHost])
 @pytest.mark.parametrize("key", ["group.receive.forwarded", "group.send.forwarded"])
 def test_discovery_lookup_and_real_source_agree_for_inherited_nested_groups(
@@ -123,23 +129,24 @@ def test_discovery_lookup_and_real_source_agree_for_inherited_nested_groups(
     assert surface == discovered[key]
     sending = key == "group.send.forwarded"
     group = host.group.send if sending else host.group.receive
-    assert declared_path(surface.stream) == declared_path(group.stream)
-    assert declared_path(surface.side) == declared_path(group.side)
-    assert declared_path(surface.contract_reference()) == declared_path(group.contract)
+    assert reference_path(surface.stream) == declared_path(group)
+    assert reference_path(surface.side) == declared_path(group)
+    assert reference_path(surface.contract_reference()) == declared_path(group)
+    assert surface.stream == group.stream
+    assert surface.contract_reference() == group.contract
     expected = Endpoint.INITIATOR if sending else Endpoint.TARGET
     assert port_endpoint(host, key) is expected
     tensor = OTHER if sending or host is ReplacedHost else SMALL
     sequence = OTHER_SEQUENCE if tensor is OTHER else SMALL_SEQUENCE
     point = design_space(host())
     assert point.query(surface.stream) == Available(Stream(tensor.element, sequence))
-    assert point.query(surface.width) == Available(
-        tensor.element.dtype.bitwidth() * sequence.form.lanes
-    )
+    bits = tensor.element.dtype.bitwidth() * sequence.form.lanes
+    assert point.query(surface.width) == Available(((bits + 7) // 8) * 8)
     assert point.query(surface.contract_reference()) == Available(
         point.group.send.native.contract if sending else point.group.receive.native.contract
     )
     # Lookup must not borrow the root's same-spelling stream reference.
-    assert declared_path(surface.stream) != declared_path(port_surface(host, "forwarded").stream)
+    assert surface.stream != port_surface(host, "forwarded").stream
     if not sending and host is not ReplacedHost:
         assert point.query(surface.stream) != point.query(host.stream)
 
@@ -157,9 +164,11 @@ def test_placed_node_surfaces_keep_the_exact_group_and_kernel_occurrence(
     surface = port_surface(namespace, key)
     sending = key == "group.send.forwarded"
     group = namespace.group.send if sending else namespace.group.receive
-    assert declared_path(surface.stream) == declared_path(group.stream)
-    assert declared_path(surface.contract_reference()) == declared_path(group.contract)
-    assert declared_path(surface.stream) != declared_path(
+    assert reference_path(surface.stream) == declared_path(group)
+    assert reference_path(surface.contract_reference()) == declared_path(group)
+    assert surface.stream == group.stream
+    assert surface.contract_reference() == group.contract
+    assert reference_path(surface.stream) != reference_path(
         port_surface(Holder.right if placement == "left" else Holder.left, key).stream
     )
     tensor = OTHER if sending or placement == "right" else SMALL
