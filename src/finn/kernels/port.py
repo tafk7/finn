@@ -258,11 +258,14 @@ def contract(
 # -- a port a kernel with children presents for a child -------------------------------------
 
 
-def _lexical_port(namespace: type[Space] | Space, port: str) -> PortModel | None:
-    """Find a real port through Group frames, stopping at other real Spaces."""
-    from finn.kernels.port_model import PortModel  # noqa: PLC0415 - breaks base/port cycle
+def _lexical_port(namespace: type[Space] | Space, port: str) -> PortModel | PortSurface | None:
+    """Find an actual child or authored surface, rebased through its lexical Groups."""
+    from finn.kernels.port_model import (  # noqa: PLC0415 - breaks base/port cycle
+        PortModel,
+        PortSurface,
+    )
 
-    frame: object = namespace
+    frame: type[Space] | Space | Group = namespace
     segments = port.split(".")
     for segment in segments[:-1]:
         group = getattr(frame, segment, None)
@@ -270,6 +273,8 @@ def _lexical_port(namespace: type[Space] | Space, port: str) -> PortModel | None
             return None
         frame = group
     child = getattr(frame, segments[-1], None)
+    if isinstance(child, PortSurface):
+        return child.at(frame)
     return child if isinstance(child, PortModel) else None
 
 
@@ -279,10 +284,9 @@ def port_endpoint(space_type: type[Space], port: str) -> Endpoint | None:
         return None
     from finn.kernels.port_model import PortSurface  # noqa: PLC0415
 
-    native = getattr(space_type, port, None)
-    if isinstance(native, PortSurface):
-        return native.endpoint if isinstance(native.endpoint, Endpoint) else None
     child = _lexical_port(space_type, port)
+    if isinstance(child, PortSurface):
+        return child.endpoint if isinstance(child.endpoint, Endpoint) else None
     if child is not None:
         path = declared_path(child)
         if not path or not isinstance(path[-1], NodeDecl):
@@ -303,10 +307,9 @@ def port_surface(namespace: type[Space] | Space, port: str) -> PortSurface:
         not isinstance(namespace, type) and declared_path(namespace) is None
     ):
         raise TypeError("port_surface requires a Space class or node declaration")
-    native = getattr(namespace, port, None)
-    if isinstance(native, PortSurface):
-        return native.at(namespace)
     child = _lexical_port(namespace, port)
+    if isinstance(child, PortSurface):
+        return child
     if child is not None:
         return PortSurface.of(child)
     raise KeyError(port)
