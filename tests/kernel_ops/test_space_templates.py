@@ -247,9 +247,17 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
     scopes = inspection.model(point).scopes
     assert isinstance(point.mm0.query(MatMulKernel.cycles), Unresolved)  # type: ignore[attr-defined]
     read = scopes.counts()
-    # Keep the original laziness ratio over real non-port owners; a native Port or
-    # lexical Group is not an extra hardware-kernel owner.
-    assert len(_real_nonport_scopes(scopes.registry.records.values())) < 225 // 8
+    # Keep the original real-owner ratio, and bound unevaluated Port/Group allocation
+    # separately before any whole-model address walk can make additional records.
+    made = tuple(scopes.registry.records.values())
+    assert len(_real_nonport_scopes(made)) < 225 // 8
+    ports = _assert_native_scope_ownership(made)
+    assert {record.name for record in ports} == {
+        f"mm0.compute.{core}.{port}"
+        for core in ("int8_dsp58", "packed")
+        for port in ("x", "w", "y")
+    }
+    assert not _group_scopes(made)
     assert read["scopes in play"] < read["scopes made"]
     assert read["members evaluated"] < len(list(scopes.all_addresses())) // 100
 
