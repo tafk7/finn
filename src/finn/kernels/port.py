@@ -32,9 +32,9 @@ from finn.dataflow.traversal import LevelEnd, Marker, Traversal
 from finn.kernels.artifacts.abi import Clocking, Direction, Endpoint, Pin
 from finn.kernels.artifacts.module import Held
 from finn.kernels.base import Kernel
+from finn.kernels.laws import AXIS, AXIS_MARKERS, IDLE_LEVEL, Axis, Native, TransportKind
 from finn.kernels.transport import (
     AxisBeat,
-    AxisSpelling,
     MarkerKind,
     ReadyValidTransport,
     StreamContract,
@@ -53,10 +53,10 @@ def _applies(space: Space, guard: str | None) -> bool:
 
 @dataclass(frozen=True)
 class LoopEnds:
-    """A native loop-completion vector on ready/valid pins (FinnLib's ``olst``): its
-    ``signal``, and the level each of its bits closes, ``levels[bit]``."""
+    """A native loop-completion vector (L9's exception, FinnLib's ``olst``): the level each
+    of its bits closes, ``levels[bit]``. Its pin is its transport's
+    (``finn.kernels.laws.Native.loop_ends``)."""
 
-    signal: str
     levels: tuple[LevelEnd, ...]
 
 
@@ -65,14 +65,14 @@ class PhysicalPort:
     """Resolved port inputs for pure physical calculations, without authoring callbacks.
 
     A PortModel reads these literal fields in an ordinary method. This record is
-    neither a Space nor a symbolic binding/allowed-read table.
+    neither a Space nor a symbolic binding/allowed-read table. ``name`` is the port's
+    name; its pins follow from its ``transport`` (``finn.kernels.laws``).
     """
 
     name: str
     endpoint: Endpoint
-    signals: tuple[str, ...] = ()
+    transport: TransportKind = AXIS
     loop_ends: LoopEnds | None = None
-    spelling: AxisSpelling = AxisSpelling.LOWER
     lanes: tuple[Index, ...] = ()
     schedule: Schedule | None = None
     reduces: tuple[Index, ...] = ()
@@ -131,67 +131,77 @@ def lane_count(port: PhysicalPort, presenting: Presenting) -> int | Rejected:
 
 
 def axis(port: PhysicalPort, presenting: Presenting) -> AxisBeat | Rejected:
-    """Its AXIS beat: its element's lanes, with a ``TLAST`` when it presents a marker."""
+    """Its AXIS beat: on its bus, its element's lanes, with a ``TLAST`` when it presents a
+    marker (L9)."""
     label = _given(port, "name")
+    kind = _given(port, "transport")
+    if not isinstance(kind, Axis):
+        return reject("port-transport", f"{label}: a native port has no AXIS beat")
     unsupported = stream_refusal(presenting) if isinstance(presenting, Stream) else None
     if unsupported is not None:
         return unsupported
+    endpoint = _given(port, "endpoint")
+    bus = kind.bus_name(label, endpoint)
     markers = _markers(presenting)
-    if len(markers) > 1:
-        return reject("port-markers", f"{label} has one TLAST; the sequence needs more")
+    if len(markers) > AXIS_MARKERS:
+        return reject("port-markers", f"{bus} has one TLAST; the sequence needs more (L9)")
     lanes = lane_count(port, presenting)
     if isinstance(lanes, Rejected):
         return lanes
     try:
         return AxisBeat(
-            label,
+            bus,
             _element_of(presenting).dtype,
             lanes,
-            endpoint=_given(port, "endpoint"),
+            endpoint=endpoint,
             last=bool(markers),
-            spelling=_given(port, "spelling"),
+            spelling=kind.spelling,
         )
     except ValueError as error:
-        return reject("port-lanes", f"{label}: {error}")
+        return reject("port-lanes", f"{bus}: {error}")
 
 
 def transport(
     port: PhysicalPort, presenting: Presenting, clocking: Clocking | None
 ) -> ReadyValidTransport | Rejected:
-    """Its ready/valid pins, on its kernel's clock and reset: its AXIS beat's, or its
-    ``signals`` with its loop-completion vector."""
+    """Its ready/valid pins, on its kernel's clock and reset: its AXIS beat's, or its native
+    pins with its loop-completion vector, named by its transport (``finn.kernels.laws``)."""
     unsupported = stream_refusal(presenting) if isinstance(presenting, Stream) else None
     if unsupported is not None:
         return unsupported
     clock = None if clocking is None else clocking.clock
     reset = None if clocking is None else clocking.reset
-    label, signals = _given(port, "name"), _given(port, "signals")
-    if not signals:
+    label, kind = _given(port, "name"), _given(port, "transport")
+    if isinstance(kind, Axis):
         beat = axis(port, presenting)
         return beat if isinstance(beat, Rejected) else beat.native(clock=clock, reset=reset)
-    if len(signals) != 3:
-        return reject("port-signals", f"{label}: signals are data, valid and ready")
-    data, valid, ready = signals
+    assert isinstance(kind, Native)
+    endpoint = _given(port, "endpoint")
+    data, valid, ready = kind.pins(endpoint)
     markers: tuple[StreamMarker, ...] = ()
     ends: LoopEnds | None = _given(port, "loop_ends")
     presented = _markers(presenting)
     if ends is not None:
+        signal = kind.loop_ends(endpoint)
+        if signal is None:
+            return reject(
+                "port-markers", f"{label}: a native port named in full has no loop-completion pin"
+            )
         unclosed = [rule.beats for rule in presented if rule not in ends.levels]
         if not ends.levels or unclosed:
             return reject(
                 "port-markers",
-                f"{label}: no bit of {ends.signal} closes every {unclosed} beats"
+                f"{label}: no bit of {signal} closes every {unclosed} beats"
                 if unclosed
-                else f"{label}: {ends.signal} closes no level",
+                else f"{label}: {signal} closes no level",
             )
-        markers = (StreamMarker(ends.signal, MarkerKind.LOOP_END, len(ends.levels)),)
+        markers = (StreamMarker(signal, MarkerKind.LOOP_END, len(ends.levels)),)
     elif presented:
-        return reject("port-markers", f"{label}: ready/valid pins carry no marker")
+        return reject("port-markers", f"{label}: ready/valid pins carry no marker (L9)")
     lanes = lane_count(port, presenting)
     if isinstance(lanes, Rejected):
         return lanes
     bits = lanes * _element_of(presenting).bits
-    endpoint = _given(port, "endpoint")
     try:
         return ReadyValidTransport(label, bits, endpoint, data, valid, ready, clock, reset, markers)
     except ValueError as error:
@@ -208,8 +218,8 @@ def data_width(port: PhysicalPort, presenting: Presenting) -> int | Rejected:
 def pins(
     port: PhysicalPort, presenting: Presenting, clocking: Clocking
 ) -> tuple[Pin, ...] | Rejected:
-    """Its pins of the module: its ready/valid signals, or its AXIS bus."""
-    if _given(port, "signals"):
+    """Its pins of the module: its native ready/valid signals, or its AXIS bus."""
+    if isinstance(_given(port, "transport"), Native):
         found = transport(port, presenting, clocking)
         return found if isinstance(found, Rejected) else found.pins()
     beat = axis(port, presenting)
@@ -220,7 +230,7 @@ def pins(
 
 def held(port: PhysicalPort, presenting: Presenting, clocking: Clocking) -> Held | Rejected:
     """While idle (its element alone): its forward pins of a target and its ready of an
-    initiator held low; placed, none."""
+    initiator held low (L10); placed, none."""
     if isinstance(presenting, Stream):
         return Held()
     found = transport(port, presenting, clocking)
@@ -230,7 +240,7 @@ def held(port: PhysicalPort, presenting: Presenting, clocking: Clocking) -> Held
     unused: list[str] = []
     for signal in found.pins():
         if signal.direction is Direction.IN:
-            inputs.append((signal.name, 0))
+            inputs.append((signal.name, IDLE_LEVEL))
         else:
             unused.append(signal.name)
     return Held(tuple(inputs), tuple(unused))
@@ -268,7 +278,7 @@ def contract(
     if ends is not None:
         # Each bit whose level it presents, by its bit (``olst[1]``).
         markers = tuple(
-            (f"{ends.signal}[{bit}]", level)
+            (f"{found.markers[0].signal}[{bit}]", level)
             for bit, level in enumerate(ends.levels)
             if level in sequence.markers
         )

@@ -38,6 +38,7 @@ from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.abi import Clocking, Endpoint, Pin
 from finn.kernels.artifacts.module import Held
 from finn.kernels.base import PortContract
+from finn.kernels.laws import AXIS, AXIS_CLOCKING, TransportKind
 from finn.kernels.port import (
     LoopEnds,
     PhysicalPort,
@@ -49,37 +50,36 @@ from finn.kernels.port import (
 )
 from finn.kernels.port import contract as port_contract
 from finn.kernels.sides import Side
-from finn.kernels.transport import AxisSpelling
 from finn.kernels.values.domains import Integer, admit_element
 
 
 class PortModel(Space):
     """A real physical port, constant idle unless a logical subtype adds presentation.
 
-    ``name`` names hardware pins; ``label`` names the port in its kernel's ABI.
-    Neither is inferred from its model path. A genuinely guarded absent child
-    retains ordinary Space presence; an idle logical port remains present.
+    ``label`` names the port in its kernel's ABI, not inferred from its model path.
+    It declares its ``transport`` kind, not its pins: they follow from the library's
+    defaults (``finn.kernels.laws``: ``AXIS``, ``NATIVE``) and the names its kernel states
+    where its RTL differs (``Axis(bus=...)``, ``Native(prefix=...)``). A genuinely guarded
+    absent child retains ordinary Space presence; an idle logical port remains present.
     """
 
-    name: str = Param()
     label: str = Param()
     endpoint: Endpoint = Param(default=Endpoint.TARGET)
     dtype: QONNXDataType | None = Param(default=None)
     admits: Integer | None = Param(default=None)
-    signals: tuple[str, ...] = Param(default=())
+    transport: TransportKind = Param(default=AXIS)
     loop_ends: LoopEnds | None = Param(default=None)
-    spelling: AxisSpelling = Param(default=AxisSpelling.LOWER)
     lanes: tuple[Index, ...] = Param(default=())
-    clocking: Clocking = Param(default=Clocking())
+    clocking: Clocking = Param(default=AXIS_CLOCKING)
 
     @derived
     def element(self) -> ScalarEncoding | Rejected:
         dtype = self.dtype
         if dtype is not None:
             if self.endpoint is Endpoint.INITIATOR:
-                return reject("port-element", f"{self.name}: a producer's element is its tensor's")
+                return reject("port-element", f"{self.label}: a producer's element is its tensor's")
             return admit_element(dtype, None)
-        return reject("port-element", f"{self.name}: an idle port states its dtype")
+        return reject("port-element", f"{self.label}: an idle port states its dtype")
 
     @constraint
     def element_taken(self) -> bool | Rejected:
@@ -93,11 +93,10 @@ class PortModel(Space):
         no generated names or manually declared reads participate.
         """
         return PhysicalPort(
-            name=self.name,
+            name=self.label,
             endpoint=self.endpoint,
-            signals=self.signals,
+            transport=self.transport,
             loop_ends=self.loop_ends,
-            spelling=self.spelling,
             lanes=self.lanes if idle else (),
         )
 
@@ -135,11 +134,11 @@ class SequencePort(PortModel):
         dtype = self.dtype
         if dtype is not None:
             if self.endpoint is Endpoint.INITIATOR:
-                return reject("port-element", f"{self.name}: a producer's element is its tensor's")
+                return reject("port-element", f"{self.label}: a producer's element is its tensor's")
             return admit_element(dtype, None)
         tensor = self.tensor
         if tensor is None:
-            return reject("port-element", f"{self.name}: an idle port states its dtype")
+            return reject("port-element", f"{self.label}: an idle port states its dtype")
         return tensor.element
 
     @derived
@@ -149,7 +148,7 @@ class SequencePort(PortModel):
         sequence = self.sequence
         if sequence is None:
             return reject(
-                "port-presentation", f"{self.name}: exactly one of a schedule or a sequence"
+                "port-presentation", f"{self.label}: exactly one of a schedule or a sequence"
             )
         stream = Stream(self.element, sequence)
         unsupported = stream_refusal(stream)
@@ -209,7 +208,7 @@ class ScheduledPort(SequencePort):
     def stream(self) -> Stream | Rejected | Inapplicable:
         if not self.placed:
             return Inapplicable()
-        label = self.name
+        label = self.label
         schedule, given = self.schedule, self.sequence
         if (schedule is None) == (given is None):
             return reject("port-presentation", f"{label}: exactly one of a schedule or a sequence")
@@ -276,32 +275,6 @@ class IndexedPort(ScheduledPort):
         tensor = self.tensor
         assert tensor is not None
         return Access(self.label, tensor.shape, self.index, self.reshaped)
-
-
-def native_port(
-    name: str,
-    endpoint: Endpoint,
-    tensor: Tensor | None,
-    sequence: BeatSequence | None,
-    *,
-    clocking: Clocking,
-    label: str,
-    loop_ends: LoopEnds | None = None,
-) -> SequencePort:
-    """Fresh native placement; hardware names remain idat/ivld/irdy or odat/ovld/ordy."""
-    if not isinstance(endpoint, Endpoint):
-        raise TypeError("native_port requires a constant hardware endpoint")
-    side = "i" if endpoint is Endpoint.TARGET else "o"
-    return SequencePort(
-        name=name,
-        label=label,
-        endpoint=endpoint,
-        tensor=tensor,
-        sequence=sequence,
-        clocking=clocking,
-        signals=(f"{side}dat", f"{side}vld", f"{side}rdy"),
-        loop_ends=loop_ends,
-    )
 
 
 _SurfaceValue = TypeVar("_SurfaceValue")
@@ -435,6 +408,5 @@ __all__ = [
     "SequencePort",
     "ScheduledPort",
     "IndexedPort",
-    "native_port",
     "port_surfaces",
 ]

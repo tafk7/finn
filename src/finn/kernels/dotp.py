@@ -49,7 +49,6 @@ it, every partial sum included.
 
 from __future__ import annotations
 
-from dataclasses import replace
 from math import ceil, floor, prod
 from typing import ClassVar, cast
 
@@ -76,10 +75,11 @@ from finn.dataflow.gemm import Form, Window, c, k, kh, kw, m, n, oh, ow
 from finn.dataflow.schedule import Access, Affine, Index, Schedule
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import Tensor
-from finn.kernels.artifacts.abi import CLOCK2X, Clocking, Endpoint, Pin
+from finn.kernels.artifacts.abi import Clocking, Endpoint, Pin
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Fragment, Held
 from finn.kernels.base import Kernel, extent_of
+from finn.kernels.laws import Axis, doubled
 from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
 from finn.kernels.port import axis, held, pins
 from finn.kernels.port_model import IndexedPort, ScheduledPort
@@ -376,8 +376,8 @@ class DotpAxiKernel(Kernel):
         return type(self).clock_domain
 
     x = IndexedPort(
-        name="s_axis_input",
         label="x",
+        transport=Axis(bus="s_axis_input"),
         clocking=port_clocking,
         endpoint=Endpoint.TARGET,
         tensor=x_tensor,
@@ -389,8 +389,8 @@ class DotpAxiKernel(Kernel):
         reshaped=x_viewed,
     )
     w = IndexedPort(
-        name="s_axis_weights",
         label="w",
+        transport=Axis(bus="s_axis_weights"),
         clocking=port_clocking,
         endpoint=Endpoint.TARGET,
         tensor=w_tensor,
@@ -401,8 +401,8 @@ class DotpAxiKernel(Kernel):
         reshaped=windowed,
     )
     y = ScheduledPort(
-        name="m_axis_output",
         label="y",
+        transport=Axis(bus="m_axis_output"),
         clocking=port_clocking,
         endpoint=Endpoint.INITIATOR,
         tensor=y_tensor,
@@ -463,7 +463,7 @@ class DotpAxiKernel(Kernel):
     @derived
     def clocking(self) -> Clocking:
         # Unpumped, the RTL ignores its 2x clock input: it is held low.
-        return replace(type(self).clock_domain, doubled=CLOCK2X, doubling=self.compute_pumping)
+        return doubled(type(self).clock_domain, self.compute_pumping)
 
     @view
     def dsp_simd(self) -> int:

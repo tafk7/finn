@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeVar, cast
 
 from finn.core.space import DefinitionError, Rejected, reject
-from finn.kernels.artifacts.abi import Clocking, Direction, Pin, Signal
+from finn.kernels.artifacts.abi import Clocking, Direction, Pin, Signal, physical_names
 from finn.kernels.artifacts.contributions import (
     Contribution,
     CopiedSource,
@@ -152,6 +152,21 @@ def assemble_module(
     Presented flags correspond to pin parts, exactly as input accounting requires.
     """
     pins = tuple(pin for part in pin_parts for pin in part)
+    named = (*clocking.signals(), *pins)
+    repeated = sorted(
+        {
+            name
+            for names in ([pin.name for pin in named], physical_names(named))
+            for name in names
+            if names.count(name) > 1
+        }
+    )
+    if repeated:
+        return reject(
+            "port-pins-collide",
+            f"{owner}: its ports and clocks name the pins {repeated} more than once; "
+            "a kernel states its own names for one",
+        )
     contributions = (*sources, *((data,) if isinstance(data, GeneratedData) else data))
     parts = (Held(clocking.held()), *held_parts)
     holding = {pin for part in parts for pin, _ in part.inputs}
@@ -173,7 +188,7 @@ def assemble_module(
         _module_name(spec.rtl_module, contributions),
         parameters,
         Abi(
-            (*clocking.signals(), *pins),
+            named,
             tuple((key, str(value)) for key, value in parameters),
             clocking.alignments(),
         ),

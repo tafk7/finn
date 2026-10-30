@@ -40,7 +40,6 @@ doubled clock, which its module states and the shell admits (``clock-unavailable
 
 from __future__ import annotations
 
-from dataclasses import replace
 from math import ceil, prod
 from typing import ClassVar
 
@@ -72,8 +71,9 @@ from finn.dataflow.traversal import (
 from finn.kernels.artifacts.abi import Bus, Clocking, Endpoint, Member, Pin, StandardProtocol
 from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData, hex_image
 from finn.kernels.artifacts.module import Fragment, Held
-from finn.kernels.base import NATIVE_CLOCKING, Kernel
+from finn.kernels.base import Kernel
 from finn.kernels.control import Control, ControlModel
+from finn.kernels.laws import NATIVE_CLOCKING, Axis, Native, doubled
 from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
 from finn.kernels.port import held, pins
 from finn.kernels.port_model import SequencePort
@@ -327,18 +327,17 @@ class MemStreamKernel(Kernel):
         return type(self).clock_domain
 
     set = SequencePort(
-        name="set",
         label="set",
+        transport=Native(names=("s_axis_0_tdata", "s_axis_0_tvalid", "s_axis_0_tready")),
         clocking=port_clocking,
         endpoint=Endpoint.TARGET,
         tensor=set_tensor,
         sequence=set_sequence,
         dtype=set_dtype,
-        signals=("s_axis_0_tdata", "s_axis_0_tvalid", "s_axis_0_tready"),
     )
     output = SequencePort(
-        name="m_axis_0",
         label="output",
+        transport=Axis(bus="m_axis_0"),
         clocking=port_clocking,
         endpoint=Endpoint.INITIATOR,
         tensor=output_tensor,
@@ -349,7 +348,7 @@ class MemStreamKernel(Kernel):
     def clocking(self) -> Clocking:
         """``clk2x`` runs a pumped memory, and is held low otherwise."""
         pumped = self.pumped_memory
-        return replace(type(self).clock_domain, doubled="clk2x", doubling=pumped)
+        return doubled(type(self).clock_domain, pumped)
 
     @view
     def parameters(self) -> dict[str, int | str]:

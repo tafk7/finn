@@ -40,7 +40,8 @@ from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import Clocking, Endpoint, Pin
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Fragment, Held
-from finn.kernels.base import NATIVE_CLOCKING, Kernel, extent_of
+from finn.kernels.base import Kernel, extent_of
+from finn.kernels.laws import NATIVE, NATIVE_CLOCKING, Native
 from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
 from finn.kernels.port import held, pins
 from finn.kernels.port_model import IndexedPort, ScheduledPort
@@ -199,36 +200,33 @@ class EltwiseKernel(Kernel):
         return type(self).clock_domain
 
     lhs = IndexedPort(
-        name="lhs",
         label="lhs",
+        transport=Native(prefix="a"),
         endpoint=Endpoint.TARGET,
         tensor=lhs_tensor,
         schedule=schedule,
         index=indices,
         lanes=(c,),
-        signals=("adat", "avld", "ardy"),
         clocking=port_clocking,
     )
     rhs = IndexedPort(
-        name="rhs",
         label="rhs",
+        transport=Native(prefix="b"),
         endpoint=Endpoint.TARGET,
         tensor=rhs_tensor,
         schedule=schedule,
         index=rhs_indices,
         lanes=(c,),
-        signals=("bdat", "bvld", "brdy"),
         clocking=port_clocking,
     )
     result = ScheduledPort(
-        name="result",
         label="result",
+        transport=NATIVE,
         endpoint=Endpoint.INITIATOR,
         tensor=result_tensor,
         schedule=schedule,
         index=indices,
         lanes=(c,),
-        signals=("odat", "ovld", "ordy"),
         clocking=port_clocking,
     )
 

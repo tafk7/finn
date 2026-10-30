@@ -132,7 +132,7 @@ from finn.kernels.adapters import (
     realize,
 )
 from finn.kernels.artifacts import ArtifactError
-from finn.kernels.artifacts.abi import CLOCK, RESET, Bus, Endpoint
+from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.artifacts.module import Fragment, Link, LinkEnd, Marker
 from finn.kernels.base import (
     Kernel,
@@ -141,6 +141,7 @@ from finn.kernels.base import (
 )
 from finn.kernels.control import presented
 from finn.kernels.fifo import FifoKernel
+from finn.kernels.laws import AXIS_CLOCKING
 from finn.kernels.library import leaf_at_root
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.movers import IodmaMover, MoverContract, MoverOffer
@@ -190,7 +191,7 @@ def boundary_contract(
     if any(not isinstance(rule, LevelEnd) for rule in sequence.markers):
         raise ValueError("the physical boundary does not yet support held LevelDone markers")
     beat = AxisBeat(name, element.dtype, form.lanes, endpoint=endpoint, last=bool(sequence.markers))
-    transport = beat.native(clock=CLOCK, reset=RESET)
+    transport = beat.native(clock=AXIS_CLOCKING.clock, reset=AXIS_CLOCKING.reset)
     markers = (
         ((transport.markers[0].signal, cast(LevelEnd, sequence.markers[0])),)
         if sequence.markers

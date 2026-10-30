@@ -59,6 +59,7 @@ from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Fragment, Held
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
+from finn.kernels.laws import Axis
 from finn.kernels.library import ModuleSpec, assemble_module
 from finn.kernels.port import pins
 from finn.kernels.port_model import PortModel, PortSurface, SequencePort
@@ -196,7 +197,11 @@ class Given(Kernel):
     tensor: Tensor = Param()
     sequence: BeatSequence = Param()
     x = SequencePort(
-        name="s_axis", label="x", endpoint=Endpoint.TARGET, tensor=tensor, sequence=sequence
+        label="x",
+        endpoint=Endpoint.TARGET,
+        tensor=tensor,
+        sequence=sequence,
+        transport=Axis(bus="s_axis"),
     )
 
     @view

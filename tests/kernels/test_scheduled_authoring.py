@@ -23,11 +23,17 @@ from finn.core.space import (
 from finn.dataflow.schedule import Access, Index, Pace, Schedule
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.dataflow.traversal import BeatSequence
+from finn.dataflow.traversal import BeatSequence, LevelEnd
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.base import Kernel
+from finn.kernels.laws import Axis, Native
+from finn.kernels.port import LoopEnds
 from finn.kernels.port_model import IndexedPort, ScheduledPort
 from finn.kernels.transpose import TransposeKernel, i
+
+UNNAMED_ENDS = LoopEnds((LevelEnd(1),))
+"""A loop-completion vector, which a native port named in full has no pin for: each port
+so declared refuses its pins directly."""
 
 R, C = Index("r"), Index("c")
 TENSOR = Tensor((2, 4), ScalarEncoding(DataType["INT3"]))
@@ -42,11 +48,16 @@ class Projection(Space):
         return Schedule({R: 2, C: 4}, {C: self.fold})
 
     input = IndexedPort(
-        name="in", label="input", tensor=TENSOR, schedule=scheduled, index=(R, C), lanes=(C,)
+        label="input",
+        tensor=TENSOR,
+        schedule=scheduled,
+        index=(R, C),
+        lanes=(C,),
+        transport=Axis(bus="in"),
     )
     output = ScheduledPort(
-        name="out",
         label="output",
+        transport=Axis(bus="out"),
         endpoint=Endpoint.INITIATOR,
         tensor=Tensor((2,), TENSOR.element),
         schedule=scheduled,
@@ -80,7 +91,6 @@ def test_projection_reduction_and_pace_are_the_current_schedule_values(fold: int
 
 def test_schedule_and_sequence_conflict_remains_a_local_nonvalue() -> None:
     port = ScheduledPort(
-        name="p",
         label="p",
         tensor=TENSOR,
         schedule=SCHEDULE,
@@ -98,7 +108,6 @@ def test_schedule_and_sequence_conflict_remains_a_local_nonvalue() -> None:
 def test_closing_markers_and_suppressed_axes_keep_their_actual_pace(suppressed: str) -> None:
     source = design_space(
         ScheduledPort(
-            name="source",
             label="source",
             tensor=TENSOR,
             schedule=SCHEDULE,
@@ -113,7 +122,6 @@ def test_closing_markers_and_suppressed_axes_keep_their_actual_pace(suppressed: 
     holds = (C,) if suppressed == "holds" else ()
     output = design_space(
         ScheduledPort(
-            name="output",
             label="output",
             endpoint=Endpoint.INITIATOR,
             tensor=Tensor((2,), TENSOR.element),
@@ -130,7 +138,6 @@ def test_closing_markers_and_suppressed_axes_keep_their_actual_pace(suppressed: 
 def test_a_reshaped_affine_axis_preserves_the_local_schedule_refusal() -> None:
     point = design_space(
         ScheduledPort(
-            name="p",
             label="p",
             tensor=TENSOR,
             schedule=SCHEDULE,
@@ -151,7 +158,6 @@ def test_scheduled_child_presence_is_checked_before_local_work(enabled: bool | N
         enabled: bool = Decision(domain=(False, True))
         port = ScheduledPort(
             when=enabled,
-            name="p",
             label="p",
             tensor=TENSOR,
             schedule=SCHEDULE,
@@ -211,25 +217,25 @@ class SerialTranspose(TransposeKernel):
         return self.columns_out
 
     input = IndexedPort(
-        name="input",
         label="input",
         tensor=TransposeKernel.input_tensor,
         schedule=first,
         index=TransposeKernel.columns,
         lanes=(i,),
         reshaped=True,
-        signals=("idat", "ivld"),
+        transport=Native(names=("idat", "ivld", "irdy")),
+        loop_ends=UNNAMED_ENDS,
         clocking=TransposeKernel.port_clocking,
     )
     output = ScheduledPort(
-        name="output",
         label="output",
         endpoint=Endpoint.INITIATOR,
         tensor=TransposeKernel.output_tensor,
         schedule=second,
         index=TransposeKernel.indices,
         lanes=(i,),
-        signals=("odat", "ovld"),
+        transport=Native(names=("odat", "ovld", "ordy")),
+        loop_ends=UNNAMED_ENDS,
         clocking=TransposeKernel.port_clocking,
     )
 
@@ -264,9 +270,9 @@ def test_transpose_assembly_has_real_serial_schedule_and_physical_demand(
     else:
         assert isinstance(evidence.result, Rejected)
         assert [f.message for f in evidence.result.findings] == [
-            "input: signals are data, valid and ready",
-            "output: signals are data, valid and ready",
+            "input: a native port named in full has no loop-completion pin",
+            "output: a native port named in full has no loop-completion pin",
         ]
     keys = {node.declaration.key for node in evidence.nodes}
     if first is None or first == "refused":
-        assert not keys & {"second", "second_state", "output.stream", "output.signals"}
+        assert not keys & {"second", "second_state", "output.stream", "output.transport"}

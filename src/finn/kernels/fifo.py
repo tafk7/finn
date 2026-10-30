@@ -44,10 +44,11 @@ from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.abi import Clocking, Endpoint, Pin
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Fragment, Held
-from finn.kernels.base import NATIVE_CLOCKING, Kernel
+from finn.kernels.base import Kernel
+from finn.kernels.laws import NATIVE, NATIVE_CLOCKING
 from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
 from finn.kernels.port import held, pins
-from finn.kernels.port_model import native_port
+from finn.kernels.port_model import SequencePort
 from finn.kernels.utilization import lutram, memory, uram_constraint
 from finn.platform.capabilities import Fabric, Platform, Resources
 
@@ -242,11 +243,21 @@ class FifoKernel(Kernel):
         """Native physical names follow the class clock_domain, including overrides."""
         return type(self).clock_domain
 
-    input = native_port(
-        "input", Endpoint.TARGET, input_tensor, arriving, clocking=port_clocking, label="input"
+    input = SequencePort(
+        label="input",
+        endpoint=Endpoint.TARGET,
+        transport=NATIVE,
+        tensor=input_tensor,
+        sequence=arriving,
+        clocking=port_clocking,
     )
-    output = native_port(
-        "output", Endpoint.INITIATOR, output_tensor, leaving, clocking=port_clocking, label="output"
+    output = SequencePort(
+        label="output",
+        endpoint=Endpoint.INITIATOR,
+        transport=NATIVE,
+        tensor=output_tensor,
+        sequence=leaving,
+        clocking=port_clocking,
     )
 
     @constraint

@@ -28,14 +28,15 @@ class DefaultOutput(SequencePort):
 
 
 class Ports(Group):
-    target = SequencePort(name="t", label="t", tensor=TENSOR, sequence=SEQUENCE)
+    target = SequencePort(label="t", tensor=TENSOR, sequence=SEQUENCE)
     explicit = SequencePort(
-        name="o", label="o", tensor=TENSOR, sequence=SEQUENCE, endpoint=Endpoint.INITIATOR
+        label="o",
+        tensor=TENSOR,
+        sequence=SEQUENCE,
+        endpoint=Endpoint.INITIATOR,
     )
-    default_output = DefaultOutput(name="d", label="d", tensor=TENSOR, sequence=SEQUENCE)
-    rebound = DefaultOutput(
-        name="b", label="b", tensor=TENSOR, sequence=SEQUENCE, endpoint=Endpoint.TARGET
-    )
+    default_output = DefaultOutput(label="d", tensor=TENSOR, sequence=SEQUENCE)
+    rebound = DefaultOutput(label="b", tensor=TENSOR, sequence=SEQUENCE, endpoint=Endpoint.TARGET)
 
 
 class Nested(Group):
@@ -66,7 +67,7 @@ def test_constant_default_and_explicit_bound_group_endpoints(port: str, expected
 def test_open_model_endpoint_remains_unknown_without_reading_or_repairing_configuration() -> None:
     class OpenPorts(Group):
         role: Endpoint = Decision(domain=(Endpoint.TARGET, Endpoint.INITIATOR))
-        port = SequencePort(name="p", label="p", tensor=TENSOR, sequence=SEQUENCE, endpoint=role)
+        port = SequencePort(label="p", tensor=TENSOR, sequence=SEQUENCE, endpoint=role)
 
     class OpenHost(Kernel):
         id = "test.open-group-port-role"
@@ -83,7 +84,7 @@ def test_open_model_endpoint_remains_unknown_without_reading_or_repairing_config
 def test_fact_bound_endpoint_is_not_mistaken_for_a_literal_static_binding() -> None:
     class BoundPorts(Group):
         role: Endpoint = Param()
-        port = SequencePort(name="p", label="p", tensor=TENSOR, sequence=SEQUENCE, endpoint=role)
+        port = SequencePort(label="p", tensor=TENSOR, sequence=SEQUENCE, endpoint=role)
 
     class BoundHost(Kernel):
         id = "test.bound-group-port-role"

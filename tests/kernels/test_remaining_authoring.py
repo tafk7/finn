@@ -20,10 +20,17 @@ from finn.core.space import (
 )
 from finn.dataflow.schedule import Schedule
 from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.dataflow.traversal import LevelEnd
 from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.laws import Native
 from finn.kernels.pool import PoolKernel, c, kh, kw
+from finn.kernels.port import LoopEnds
 from finn.kernels.port_model import IndexedPort, ScheduledPort
 from finn.kernels.pwpolyf import PwPolyKernel
+
+UNNAMED_ENDS = LoopEnds((LevelEnd(1),))
+"""A loop-completion vector, which a native port named in full has no pin for: each port
+so declared refuses its pins directly."""
 
 TENSOR = Tensor((1, 3, 3, 4), ScalarEncoding(DataType["INT4"]))
 
@@ -66,18 +73,17 @@ class SerialPool(PoolKernel):
         return self.schedule
 
     input = IndexedPort(
-        name="s_axis",
         label="input",
         tensor=PoolKernel.input_tensor,
         schedule=first,
         index=PoolKernel.input_index,
         lanes=(c,),
         closes=(kh, kw),
-        signals=("data", "valid"),
+        transport=Native(names=("data", "valid", "ready")),
+        loop_ends=UNNAMED_ENDS,
         clocking=PoolKernel.port_clocking,
     )
     output = ScheduledPort(
-        name="m_axis",
         label="output",
         endpoint=Endpoint.INITIATOR,
         tensor=PoolKernel.output_tensor,
@@ -85,7 +91,8 @@ class SerialPool(PoolKernel):
         index=PoolKernel.output_index,
         lanes=(c,),
         reduces=(kh, kw),
-        signals=("result", "valid"),
+        transport=Native(names=("result", "valid", "ready")),
+        loop_ends=UNNAMED_ENDS,
         clocking=PoolKernel.port_clocking,
     )
 
@@ -125,10 +132,10 @@ def test_actual_pool_native_source_keeps_serial_physical_inputs_before_hls_sourc
     else:
         assert isinstance(trace.result, Rejected)
         assert [f.message for f in trace.result.findings] == [
-            "m_axis: signals are data, valid and ready",
-            "s_axis: signals are data, valid and ready",
+            "input: a native port named in full has no loop-completion pin",
+            "output: a native port named in full has no loop-completion pin",
         ]
     visited = {n.declaration.key for n in trace.nodes}
     assert "module_sources" not in visited
     if first is None or first == "refused":
-        assert not visited & {"second", "second_state", "output.stream", "output.signals"}
+        assert not visited & {"second", "second_state", "output.stream", "output.transport"}

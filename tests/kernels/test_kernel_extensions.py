@@ -203,11 +203,10 @@ def test_port_discovery_reads_lexical_groups_without_implicit_child_lowering() -
     sequence = BeatSequence(vector_major((2, 4), 4))
 
     class Child(Space):
-        inner = SequencePort(name="inner", label="inner", tensor=tensor, sequence=sequence)
+        inner = SequencePort(label="inner", tensor=tensor, sequence=sequence)
 
     class Included(Group):
         nested = SequencePort(
-            name="nested",
             label="nested",
             endpoint=Endpoint.INITIATOR,
             tensor=tensor,

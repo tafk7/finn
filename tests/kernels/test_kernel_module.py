@@ -50,10 +50,11 @@ from finn.kernels.artifacts.abi import (
 )
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Fragment, Held, Leaf, RegisterMap
-from finn.kernels.base import NATIVE_CLOCKING, Kernel, PortContract
+from finn.kernels.base import Kernel, PortContract
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.configure import commit
 from finn.kernels.control import Control, ControlModel, held_bus
+from finn.kernels.laws import NATIVE_CLOCKING, Axis
 from finn.kernels.library import ModuleSpec, _each, assemble_module, library_module
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port import held, pins, port_surface
@@ -81,8 +82,8 @@ class Probe(Kernel):
         return type(self).clock_domain
 
     x = SequencePort(
-        name="s_axis",
         label="x",
+        transport=Axis(bus="s_axis"),
         clocking=port_clocking,
         endpoint=Endpoint.TARGET,
         tensor=tensor,
@@ -217,7 +218,10 @@ class Controlled(Kernel):
     config = ControlModel(bus=config_bus, presented=writable)
     tensor: Tensor = Param()
     x = SequencePort(
-        name="s_axis", label="x", tensor=tensor, sequence=BeatSequence(vector_major((4,), 1))
+        label="x",
+        tensor=tensor,
+        sequence=BeatSequence(vector_major((4,), 1)),
+        transport=Axis(bus="s_axis"),
     )
     module_spec = ModuleSpec("probe", (PROBE,))
 

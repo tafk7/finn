@@ -26,7 +26,8 @@ from finn.kernels.artifacts.abi import Direction, Endpoint, Pin, Signal
 from finn.kernels.artifacts.module import Held
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import Generate, InputGeneratorKernel
-from finn.kernels.port_model import native_port
+from finn.kernels.laws import NATIVE
+from finn.kernels.port_model import SequencePort
 from finn.kernels.vpc import VpcKernel
 from support.adapted import columns_first
 from support.helpers import FULL_DSP48E2
@@ -55,13 +56,13 @@ class StagedInputGenerator(InputGeneratorKernel):
 
     id = "test.staged.input_generator"
 
-    output = native_port(
-        "output",
-        Endpoint.INITIATOR,
-        InputGeneratorKernel.output_tensor,
-        InputGeneratorKernel.leaving,
-        clocking=InputGeneratorKernel.port_clocking,
+    output = SequencePort(
         label="output",
+        endpoint=Endpoint.INITIATOR,
+        transport=NATIVE,
+        tensor=InputGeneratorKernel.output_tensor,
+        sequence=InputGeneratorKernel.leaving,
+        clocking=InputGeneratorKernel.port_clocking,
     )
 
     def _enclosing_pins(self) -> tuple[Pin, ...]:

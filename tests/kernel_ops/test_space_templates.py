@@ -292,9 +292,12 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
 # ((100,52),(140,70)) for Ports. The assembled native Dotp/Thresholding/MemStream
 # models move reads to their actual owners; Group primitives use the owning Space.
 # Exact counts observed on assembled edb7cbd7d, not a readiness or timing budget.
+# Ports' ((540, 304), (637, 356)) and the totals ((1557, 346), (1698, 398)) became these
+# when a port's pins were named by its transport kind, one Param, in place of its pin name,
+# signals and spelling: two constants fewer each port's physical inputs read (-44, -52).
 NONPORT_EVALUATED = ((1017, 42), (1061, 42))
-PORT_EVALUATED = ((540, 304), (637, 356))
-EVALUATED = ((1557, 346), (1698, 398))
+PORT_EVALUATED = ((496, 260), (585, 304))
+EVALUATED = ((1513, 302), (1646, 346))
 
 
 def _assert_evaluated(scopes: Scopes, stage: int) -> None:

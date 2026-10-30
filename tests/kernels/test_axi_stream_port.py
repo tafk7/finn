@@ -44,6 +44,7 @@ from finn.kernels.artifacts.module import Fragment, Held
 from finn.kernels.base import Kernel, extent_of
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.dotp import PackedDotpKernel
+from finn.kernels.laws import Axis
 from finn.kernels.library import ModuleSpec, _each, assemble_module, library_module
 from finn.kernels.partition import Partition
 from finn.kernels.port import lane_count, pins
@@ -76,8 +77,8 @@ class Pool(Kernel):
         return Tensor(shape, ScalarEncoding(DataType["INT8"]))
 
     x = IndexedPort(
-        name="s_axis_input",
         label="x",
+        transport=Axis(bus="s_axis_input"),
         endpoint=Endpoint.TARGET,
         tensor=x_tensor,
         schedule=schedule,
@@ -85,8 +86,8 @@ class Pool(Kernel):
         lanes=(c,),
     )
     y = ScheduledPort(
-        name="m_axis_output",
         label="y",
+        transport=Axis(bus="m_axis_output"),
         endpoint=Endpoint.INITIATOR,
         tensor=y_tensor,
         schedule=schedule,
@@ -209,11 +210,11 @@ def test_an_input_without_its_tensor_is_idle_and_carries_one_lane() -> None:
     point = design_space(Pool())
     assert not point.x.placed
     ((code, message),) = coded_messages(point.query(Pool.x.element))
-    assert code == "port-element" and message == "s_axis_input: an idle port states its dtype"
+    assert code == "port-element" and message == "x: an idle port states its dtype"
     ((code, message),) = coded_messages(
         lane_count(point.x.physical_spec(idle=True), ScalarEncoding(DataType["INT4"]))
     )
-    assert code == "port-idle" and message.startswith("s_axis_input: an idle port carries one")
+    assert code == "port-idle" and message.startswith("x: an idle port carries one")
 
 
 def test_extent_of_is_a_named_member() -> None:
@@ -229,8 +230,8 @@ def test_a_port_presents_a_schedule_or_a_sequence_not_both() -> None:
     class Both(Pool):
         id = "test.accpool.both"
         x = IndexedPort(
-            name="s_axis_input",
             label="x",
+            transport=Axis(bus="s_axis_input"),
             endpoint=Endpoint.TARGET,
             tensor=Pool.x_tensor,
             schedule=Pool.schedule,
@@ -243,15 +244,15 @@ def test_a_port_presents_a_schedule_or_a_sequence_not_both() -> None:
     trial = placing(Facts(Both, {"x_tensor": X})).trial(keyed({"kernel.pe": 8}))
     ((code, message),) = coded_messages(Rejected(trial.refused[("kernel", "x.stream")]))
     assert code == "port-presentation"
-    assert message.startswith("s_axis_input: exactly one of a schedule or a sequence")
+    assert message.startswith("x: exactly one of a schedule or a sequence")
 
 
 def test_a_producers_element_is_its_tensors() -> None:
     class Stated(Pool):
         id = "test.accpool.stated"
         y = ScheduledPort(
-            name="m_axis_output",
             label="y",
+            transport=Axis(bus="m_axis_output"),
             endpoint=Endpoint.INITIATOR,
             tensor=Pool.y_tensor,
             schedule=Pool.schedule,
@@ -264,7 +265,7 @@ def test_a_producers_element_is_its_tensors() -> None:
     trial = placing(Facts(Stated, {"x_tensor": X})).trial(keyed({"kernel.pe": 4}))
     ((code, message),) = coded_messages(Rejected(trial.refused[("kernel", "y.element")]))
     assert code == "port-element"
-    assert message.startswith("m_axis_output: a producer's element is its tensor's")
+    assert message.startswith("y: a producer's element is its tensor's")
 
 
 def test_dotp_binds_from_its_inputs_through_the_dense_view() -> None:
@@ -308,8 +309,8 @@ class Holding(Kernel):
     id = "test.holding"
     admits: Integer | None = Param(default=None)
     x = IndexedPort(
-        name="s_axis_input",
         label="x",
+        transport=Axis(bus="s_axis_input"),
         endpoint=Endpoint.TARGET,
         tensor=X,
         sequence=BeatSequence(vector_major((1, 4, 8), 8)),

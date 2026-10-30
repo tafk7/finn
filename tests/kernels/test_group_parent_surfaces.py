@@ -34,7 +34,10 @@ class Receiving(Group):
     sequence: BeatSequence = Param()
     role: Endpoint = Param(default=Endpoint.TARGET)
     native = SequencePort(
-        name="source", label="source", tensor=tensor, sequence=sequence, endpoint=role
+        label="source",
+        tensor=tensor,
+        sequence=sequence,
+        endpoint=role,
     )
 
     @derived

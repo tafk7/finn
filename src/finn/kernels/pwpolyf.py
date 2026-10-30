@@ -47,7 +47,8 @@ from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import Clocking, Endpoint, Pin
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Fragment, Held
-from finn.kernels.base import NATIVE_CLOCKING, Kernel, extent_of
+from finn.kernels.base import Kernel, extent_of
+from finn.kernels.laws import NATIVE_CLOCKING, Native
 from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
 from finn.kernels.port import held, pins
 from finn.kernels.port_model import IndexedPort, ScheduledPort
@@ -122,26 +123,24 @@ class PwPolyKernel(Kernel):
         return type(self).clock_domain
 
     input = IndexedPort(
-        name="x",
         label="input",
+        transport=Native(prefix="x"),
         clocking=port_clocking,
         endpoint=Endpoint.TARGET,
         tensor=input_tensor,
         schedule=schedule,
         index=indices,
         lanes=(c,),
-        signals=("xdat", "xvld", "xrdy"),
     )
     output = ScheduledPort(
-        name="y",
         label="output",
+        transport=Native(prefix="y"),
         clocking=port_clocking,
         endpoint=Endpoint.INITIATOR,
         tensor=output_tensor,
         schedule=schedule,
         index=indices,
         lanes=(c,),
-        signals=("ydat", "yvld", "yrdy"),
     )
 
     @constraint

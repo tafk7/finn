@@ -9,8 +9,9 @@ from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.base import NATIVE_CLOCKING, PortContract
-from finn.kernels.port_model import PortModel, PortSurface, SequencePort, native_port, port_surfaces
+from finn.kernels.base import PortContract
+from finn.kernels.laws import NATIVE, NATIVE_CLOCKING
+from finn.kernels.port_model import PortModel, PortSurface, SequencePort, port_surfaces
 from finn.kernels.sides import Side
 
 
@@ -24,7 +25,14 @@ def check(
     assert_type(port.contract, PortContract)
     assert_type(port.query(SequencePort.stream), QueryResult[Stream])
     assert_type(
-        native_port("x", Endpoint.TARGET, tensor, sequence, clocking=NATIVE_CLOCKING, label="x"),
+        SequencePort(
+            label="x",
+            endpoint=Endpoint.TARGET,
+            transport=NATIVE,
+            tensor=tensor,
+            sequence=sequence,
+            clocking=NATIVE_CLOCKING,
+        ),
         SequencePort,
     )
     surface = PortSurface.of(port)  # declaration argument; never a configuration at runtime

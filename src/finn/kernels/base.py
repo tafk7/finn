@@ -41,6 +41,7 @@ from finn.kernels.artifacts.abi import Clocking
 from finn.kernels.artifacts.contributions import Contribution
 from finn.kernels.artifacts.module import BusExport, Fragment, Link, merge
 from finn.kernels.control import Control, control_models, presented
+from finn.kernels.laws import AXIS_CLOCKING
 from finn.kernels.library import ModuleSpec
 from finn.kernels.transport import StreamContract
 from finn.kernels.utilization import total
@@ -62,10 +63,6 @@ class PortContract:
     def under(self, member: str) -> PortContract:
         """The contract as seen from where ``member`` is held."""
         return PortContract(f"{member}.{self.label}" if self.label else member, self.contract)
-
-
-NATIVE_CLOCKING = Clocking(clock="clk", reset="rst", active_low=False)
-"""FinnLib's native ``clk`` and synchronous active-high ``rst``."""
 
 
 def merged(
@@ -213,15 +210,16 @@ class Kernel(Space):
 
     # -- its clock, extents --------------------------------------------------------------
 
-    # The clock and reset (and its polarity) its ports and its module run on: a class
-    # constant, since no kernel computes their names. A kernel on FinnLib's native pins
-    # states ``NATIVE_CLOCKING``.
-    clock_domain: ClassVar[Clocking] = Clocking()
+    # The clock and reset (and its polarity) its ports and its module run on (L8): a class
+    # constant, one of the library's two domains (``finn.kernels.laws``), chosen by its
+    # module's family, never by its ports' transports. The AXIS family's by default; a
+    # FinnLib native module states ``NATIVE_CLOCKING``.
+    clock_domain: ClassVar[Clocking] = AXIS_CLOCKING
 
     @derived
     def clocking(self) -> Clocking:
         """Its module's clocking: its ``clock_domain``; a kernel with a doubled clock builds
-        on it (``replace(type(self).clock_domain, doubled=..., doubling=...)``)."""
+        on it (``finn.kernels.laws.doubled(type(self).clock_domain, doubling)``)."""
         return type(self).clock_domain
 
     @derived
@@ -435,7 +433,6 @@ def extent_of(index: Index) -> int:
 
 __all__ = [
     "Kernel",
-    "NATIVE_CLOCKING",
     "PortContract",
     "extent_of",
     "merged",

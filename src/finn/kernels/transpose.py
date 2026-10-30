@@ -30,8 +30,9 @@ from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import Clocking, Endpoint, Pin
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Fragment, Held
-from finn.kernels.base import NATIVE_CLOCKING, Kernel, extent_of
+from finn.kernels.base import Kernel, extent_of
 from finn.kernels.fifo import fifo_resources
+from finn.kernels.laws import NATIVE, NATIVE_CLOCKING
 from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
 from finn.kernels.port import held, pins
 from finn.kernels.port_model import IndexedPort, ScheduledPort
@@ -172,26 +173,24 @@ class TransposeKernel(Kernel):
         return type(self).clock_domain
 
     input = IndexedPort(
-        name="input",
         label="input",
+        transport=NATIVE,
         endpoint=Endpoint.TARGET,
         tensor=input_tensor,
         schedule=columns_out,
         index=columns,
         lanes=(i,),
         reshaped=True,
-        signals=("idat", "ivld", "irdy"),
         clocking=port_clocking,
     )
     output = ScheduledPort(
-        name="output",
         label="output",
+        transport=NATIVE,
         endpoint=Endpoint.INITIATOR,
         tensor=output_tensor,
         schedule=columns_out,
         index=indices,
         lanes=(i,),
-        signals=("odat", "ovld", "ordy"),
         clocking=port_clocking,
     )
 

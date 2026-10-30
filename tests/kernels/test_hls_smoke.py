@@ -34,7 +34,8 @@ from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.abi import Bus, Clock, Direction, Endpoint, Free, Reset, Signal
 from finn.kernels.artifacts.contributions import CopiedSource, HlsSource
 from finn.kernels.artifacts.module import Abi, Composed, Fragment, Leaf, Link, LinkEnd
-from finn.kernels.transport import AxisBeat, AxisSpelling
+from finn.kernels.laws import AxisSpelling
+from finn.kernels.transport import AxisBeat
 from finn.toolchain.launcher import host_toolchain
 
 Array = npt.NDArray[np.int64]

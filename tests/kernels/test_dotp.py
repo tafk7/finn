@@ -142,10 +142,14 @@ def test_assessed_view_preserves_geometry_and_clocks(target, pumping):
     assert ports["ap_rst_n"].role.synchronous_to == (
         ("ap_clk", "ap_clk2x") if pumping else ("ap_clk",)
     )
-    for name, width in (("x", 16), ("w", 24), ("y", 24)):
+    for name, bus, width in (
+        ("x", "s_axis_input", 16),
+        ("w", "s_axis_weights", 24),
+        ("y", "m_axis_output", 24),
+    ):
         port = getattr(point, name)
-        assert port.physical_pins == (ports[port.name],)
-        tdata = next(signal for signal in ports[port.name].signals if signal.logical == "tdata")
+        assert port.physical_pins == (ports[bus],)
+        tdata = next(signal for signal in ports[bus].signals if signal.logical == "tdata")
         assert tdata.width == width
     assert library_module(point).held.inputs == (() if pumping else (("ap_clk2x", 0),))
 

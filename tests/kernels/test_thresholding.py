@@ -30,6 +30,7 @@ from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.composer import Facts, Port, channel
+from finn.kernels.laws import Axis
 from finn.kernels.library import library_module
 from finn.kernels.port_model import IndexedPort
 from finn.kernels.sides import Side
@@ -240,8 +241,8 @@ class NarrowInput(ThresholdingAxiKernel):
     """A thresholding whose input port takes only elements of up to 4 bits."""
 
     input = IndexedPort(
-        name="s_axis",
         label="input",
+        transport=Axis(bus="s_axis"),
         clocking=ThresholdingAxiKernel.port_clocking,
         endpoint=Endpoint.TARGET,
         tensor=ThresholdingAxiKernel.input_tensor,

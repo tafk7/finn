@@ -100,7 +100,6 @@ def test_non_suffix_closing_uses_existing_tlast_only_when_it_normalizes_to_level
     schedule = Schedule({m: 2, k: 4, t: inner_fold}, {k: 2}, (m, k, t))
     point = design_space(
         ScheduledPort(
-            name="x",
             label="x",
             tensor=Tensor((2, 4), ELEMENT),
             schedule=schedule,
@@ -118,7 +117,7 @@ def test_non_suffix_closing_uses_existing_tlast_only_when_it_normalizes_to_level
         assert stream.value.sequence.markers == (LevelEnd(2),)
         contract = point.query(ScheduledPort.contract)
         assert isinstance(contract, SpaceAvailable)
-        assert contract.value.contract.transport.markers[0].signal == "x_tlast"
+        assert contract.value.contract.transport.markers[0].signal == "s_axis_x_tlast"
     else:
         assert isinstance(stream, Rejected)
         assert {finding.code for finding in stream.findings} == {"port-marker-unsupported"}

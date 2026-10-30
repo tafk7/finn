@@ -56,10 +56,10 @@ from finn.kernels.artifacts.contributions import Contribution, CopiedSource, Hls
 from finn.kernels.artifacts.hls import axis_type
 from finn.kernels.artifacts.module import Fragment, Held
 from finn.kernels.base import Kernel, extent_of
+from finn.kernels.laws import Axis, AxisSpelling
 from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
 from finn.kernels.port import axis, held, pins
 from finn.kernels.port_model import IndexedPort, ScheduledPort
-from finn.kernels.transport import AxisSpelling
 from finn.kernels.values.domains import Integer
 from finn.platform.capabilities import Platform, Resources
 
@@ -234,8 +234,8 @@ class PoolKernel(Kernel):
         return type(self).clock_domain
 
     input = IndexedPort(
-        name="s_axis",
         label="input",
+        transport=Axis(bus="s_axis", spelling=AxisSpelling.UPPER),
         clocking=port_clocking,
         endpoint=Endpoint.TARGET,
         tensor=input_tensor,
@@ -244,7 +244,6 @@ class PoolKernel(Kernel):
         index=input_index,
         lanes=(c,),
         closes=(kh, kw),
-        spelling=AxisSpelling.UPPER,
     )
 
     @view
@@ -261,8 +260,8 @@ class PoolKernel(Kernel):
         return Tensor(shape, self.input.element)
 
     output = ScheduledPort(
-        name="m_axis",
         label="output",
+        transport=Axis(bus="m_axis", spelling=AxisSpelling.UPPER),
         clocking=port_clocking,
         endpoint=Endpoint.INITIATOR,
         tensor=output_tensor,
@@ -271,7 +270,6 @@ class PoolKernel(Kernel):
         index=output_index,
         lanes=(c,),
         reduces=(kh, kw),
-        spelling=AxisSpelling.UPPER,
     )
 
     @constraint

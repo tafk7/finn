@@ -71,10 +71,11 @@ from finn.kernels.artifacts.abi import Clocking, Endpoint, Pin
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Fragment, Held
 from finn.kernels.artifacts.rtl import Declined, evaluate
-from finn.kernels.base import NATIVE_CLOCKING, Kernel
+from finn.kernels.base import Kernel
+from finn.kernels.laws import NATIVE, NATIVE_CLOCKING
 from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
 from finn.kernels.port import LoopEnds, held, pins
-from finn.kernels.port_model import native_port
+from finn.kernels.port_model import SequencePort
 from finn.kernels.utilization import (
     Fit,
     auto_unstated,
@@ -233,23 +234,28 @@ class InputGeneratorKernel(Kernel):
     @derived
     def loop_ends(self) -> LoopEnds:
         """``olst``: one bit per loop, closing that loop and every inner one."""
-        return LoopEnds("olst", self.nest.levels)
+        return LoopEnds(self.nest.levels)
 
     @derived
     def port_clocking(self) -> Clocking:
         """Native physical names follow the class clock_domain, including overrides."""
         return type(self).clock_domain
 
-    input = native_port(
-        "input", Endpoint.TARGET, input_tensor, arriving, clocking=port_clocking, label="input"
-    )
-    output = native_port(
-        "output",
-        Endpoint.INITIATOR,
-        output_tensor,
-        presenting,
+    input = SequencePort(
+        label="input",
+        endpoint=Endpoint.TARGET,
+        transport=NATIVE,
+        tensor=input_tensor,
+        sequence=arriving,
         clocking=port_clocking,
+    )
+    output = SequencePort(
         label="output",
+        endpoint=Endpoint.INITIATOR,
+        transport=NATIVE,
+        tensor=output_tensor,
+        sequence=presenting,
+        clocking=port_clocking,
         loop_ends=loop_ends,
     )
 

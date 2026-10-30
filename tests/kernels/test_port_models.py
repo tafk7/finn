@@ -29,9 +29,10 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.module import Held
-from finn.kernels.base import NATIVE_CLOCKING, Kernel, PortContract
+from finn.kernels.base import Kernel, PortContract
+from finn.kernels.laws import NATIVE, NATIVE_CLOCKING, Axis, Native
 from finn.kernels.port import LoopEnds, PhysicalPort, contract, data_width, held, pins, transport
-from finn.kernels.port_model import PortModel, PortSurface, SequencePort, native_port, port_surfaces
+from finn.kernels.port_model import PortModel, PortSurface, SequencePort, port_surfaces
 from finn.kernels.sides import Side
 from finn.kernels.values.domains import Integer
 
@@ -50,20 +51,25 @@ class Ports(Space):
     def sequence(self) -> BeatSequence:
         return BeatSequence(vector_major((2, 4), self.fold))
 
-    input = native_port(
-        "input", Endpoint.TARGET, tensor, sequence, clocking=NATIVE_CLOCKING, label="input"
-    )
-    output = native_port(
-        "output",
-        Endpoint.INITIATOR,
-        tensor,
-        input.sequence,
+    input = SequencePort(
+        label="input",
+        endpoint=Endpoint.TARGET,
+        transport=NATIVE,
+        tensor=tensor,
+        sequence=sequence,
         clocking=NATIVE_CLOCKING,
+    )
+    output = SequencePort(
         label="output",
+        endpoint=Endpoint.INITIATOR,
+        transport=NATIVE,
+        tensor=tensor,
+        sequence=input.sequence,
+        clocking=NATIVE_CLOCKING,
     )
     checked = SequencePort(
-        name="s_axis_x",
         label="checked",
+        transport=Axis(bus="s_axis_x"),
         tensor=tensor,
         sequence=sequence,
         admits=policy,
@@ -92,11 +98,7 @@ def test_actual_native_values_parent_bindings_and_snapshot_history(
     chosen = point.with_choices({Ports.fold: 4})
     for name, endpoint in (("input", Endpoint.TARGET), ("output", Endpoint.INITIATOR)):
         port = chosen.input if name == "input" else chosen.output
-        old = PhysicalPort(
-            name=name,
-            endpoint=endpoint,
-            signals=("idat", "ivld", "irdy") if name == "input" else ("odat", "ovld", "ordy"),
-        )
+        old = PhysicalPort(name=name, endpoint=endpoint, transport=NATIVE)
         expected = Stream(ELEMENT, SEQUENCE)
         assert port.stream == expected
         assert port.width == data_width(old, expected) == 12
@@ -144,7 +146,10 @@ def test_optional_idle_skips_refused_sequence_and_keeps_physical_metadata() -> N
             return reject("unused-sequence", "must not be demanded")
 
         port = SequencePort(
-            name="set", label="set", dtype=DataType["INT3"], sequence=bad, clocking=NATIVE_CLOCKING
+            label="set",
+            dtype=DataType["INT3"],
+            sequence=bad,
+            clocking=NATIVE_CLOCKING,
         )
 
     point = design_space(Optional())
@@ -161,8 +166,8 @@ def test_optional_idle_skips_refused_sequence_and_keeps_physical_metadata() -> N
 
 def test_static_idle_and_nonbinding_ports_omit_members() -> None:
     class Shape(Space):
-        idle = PortModel(name="idle", label="idle", dtype=DataType["INT3"])
-        live = SequencePort(name="live", label="live", tensor=TENSOR, sequence=SEQUENCE)
+        idle = PortModel(label="idle", dtype=DataType["INT3"])
+        live = SequencePort(label="live", tensor=TENSOR, sequence=SEQUENCE)
 
     point = design_space(Shape())
     keys = {n.key for n in inspection.members(point)}
@@ -188,7 +193,7 @@ def test_static_idle_and_nonbinding_ports_omit_members() -> None:
 def test_real_child_presence_is_distinct_from_idle(state: bool | None) -> None:
     class Guarded(Space):
         enabled: bool = Decision(domain=(False, True))
-        port = SequencePort(name="x", label="x", tensor=TENSOR, sequence=SEQUENCE, when=enabled)
+        port = SequencePort(label="x", tensor=TENSOR, sequence=SEQUENCE, when=enabled)
 
     point = design_space(Guarded())
     if state is not None:
@@ -201,22 +206,22 @@ def test_native_loop_markers_and_physical_refusals_use_actual_values() -> None:
     sequence = BeatSequence(SEQUENCE.form, markers=(LevelEnd(2),))
 
     class Marked(Space):
-        port = native_port(
-            "output",
-            Endpoint.INITIATOR,
-            TENSOR,
-            sequence,
-            clocking=NATIVE_CLOCKING,
+        port = SequencePort(
             label="output",
-            loop_ends=LoopEnds("olst", (LevelEnd(2),)),
+            endpoint=Endpoint.INITIATOR,
+            transport=NATIVE,
+            tensor=TENSOR,
+            sequence=sequence,
+            clocking=NATIVE_CLOCKING,
+            loop_ends=LoopEnds((LevelEnd(2),)),
         )
 
     point = design_space(Marked())
     old = PhysicalPort(
         name="output",
         endpoint=Endpoint.INITIATOR,
-        signals=("odat", "ovld", "ordy"),
-        loop_ends=LoopEnds("olst", (LevelEnd(2),)),
+        transport=NATIVE,
+        loop_ends=LoopEnds((LevelEnd(2),)),
     )
     expected = Stream(ELEMENT, sequence)
     assert point.port.physical_pins == pins(old, expected, NATIVE_CLOCKING)
@@ -226,7 +231,10 @@ def test_native_loop_markers_and_physical_refusals_use_actual_values() -> None:
 
     class Bad(Space):
         port = SequencePort(
-            name="bad", label="bad", tensor=TENSOR, sequence=sequence, signals=("data", "valid")
+            label="bad",
+            tensor=TENSOR,
+            sequence=sequence,
+            transport=Native(names=("data", "valid", "ready")),
         )
 
     bad = design_space(Bad())
@@ -236,18 +244,24 @@ def test_native_loop_markers_and_physical_refusals_use_actual_values() -> None:
 
 def test_surface_discovery_rebases_overrides_groups_and_stops_at_real_children() -> None:
     class Included(Group):
-        nested = SequencePort(name="nested", label="nested", tensor=TENSOR, sequence=SEQUENCE)
+        nested = SequencePort(label="nested", tensor=TENSOR, sequence=SEQUENCE)
 
     class Base(Space):
         first: PortModel = SequencePort(
-            name="first", label="first", tensor=TENSOR, sequence=SEQUENCE
+            label="first",
+            tensor=TENSOR,
+            sequence=SEQUENCE,
         )
         second: object = SequencePort(
-            name="second", label="second", tensor=TENSOR, sequence=SEQUENCE
+            label="second",
+            tensor=TENSOR,
+            sequence=SEQUENCE,
         )
 
     class Child(Base):
-        first = SequencePort(name="replaced", label="first", tensor=TENSOR, sequence=SEQUENCE)
+        first = SequencePort(
+            label="first", tensor=TENSOR, sequence=SEQUENCE, transport=Axis(bus="replaced")
+        )
         group = Included()
         real = Base()
 
@@ -263,7 +277,7 @@ def test_surface_discovery_rebases_overrides_groups_and_stops_at_real_children()
 def test_port_children_are_not_hardware_kernels_or_member_netlists() -> None:
     class Host(Kernel):
         id = "test.port-host"
-        p = SequencePort(name="p", label="p", tensor=TENSOR, sequence=SEQUENCE)
+        p = SequencePort(label="p", tensor=TENSOR, sequence=SEQUENCE)
 
     point = design_space(Host())
     assert isinstance(point.p, Space)
@@ -281,7 +295,7 @@ def test_view_bindings_remain_model_read_in_errors() -> None:
         def inward(self) -> BeatSequence:
             return self.outward
 
-        port = SequencePort(name="bad", label="bad", tensor=TENSOR, sequence=inward)
+        port = SequencePort(label="bad", tensor=TENSOR, sequence=inward)
 
     with pytest.raises(DefinitionError, match="view"):
         design_space(Bad())

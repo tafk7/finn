@@ -20,9 +20,16 @@ from finn.core.space import (
 )
 from finn.dataflow.schedule import Schedule
 from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.dataflow.traversal import LevelEnd
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.eltwise import EltwiseKernel, c
+from finn.kernels.laws import Native
+from finn.kernels.port import LoopEnds
 from finn.kernels.port_model import IndexedPort, ScheduledPort
+
+UNNAMED_ENDS = LoopEnds((LevelEnd(1),))
+"""A loop-completion vector, which a native port named in full has no pin for: each port
+so declared refuses its pins directly."""
 
 LHS = Tensor((2, 4), ScalarEncoding(DataType["INT3"]))
 RHS = Tensor((4,), LHS.element)
@@ -71,34 +78,34 @@ class SerialEltwise(EltwiseKernel):
         return self.schedule
 
     lhs = IndexedPort(
-        name="lhs",
         label="lhs",
         tensor=EltwiseKernel.lhs_tensor,
         schedule=first,
         index=EltwiseKernel.indices,
         lanes=(c,),
-        signals=("adat", "avld"),
+        transport=Native(names=("adat", "avld", "ardy")),
+        loop_ends=UNNAMED_ENDS,
         clocking=EltwiseKernel.port_clocking,
     )
     rhs = IndexedPort(
-        name="rhs",
         label="rhs",
         tensor=EltwiseKernel.rhs_tensor,
         schedule=second,
         index=EltwiseKernel.rhs_indices,
         lanes=(c,),
-        signals=("bdat", "bvld"),
+        transport=Native(names=("bdat", "bvld", "brdy")),
+        loop_ends=UNNAMED_ENDS,
         clocking=EltwiseKernel.port_clocking,
     )
     result = ScheduledPort(
-        name="result",
         label="result",
         endpoint=Endpoint.INITIATOR,
         tensor=EltwiseKernel.result_tensor,
         schedule=EltwiseKernel.schedule,
         index=EltwiseKernel.indices,
         lanes=(c,),
-        signals=("odat", "ovld"),
+        transport=Native(names=("odat", "ovld", "ordy")),
+        loop_ends=UNNAMED_ENDS,
         clocking=EltwiseKernel.port_clocking,
     )
 
@@ -138,12 +145,12 @@ def test_actual_three_port_assembly_halts_or_accumulates_in_source_order(
         # Rejected canonicalizes diagnostics by finding key. Actual source
         # order is lhs/rhs/result; demanded-node boundaries are checked below.
         assert [item.message for item in trace.result.findings] == [
-            "lhs: signals are data, valid and ready",
-            "result: signals are data, valid and ready",
-            "rhs: signals are data, valid and ready",
+            "lhs: a native port named in full has no loop-completion pin",
+            "result: a native port named in full has no loop-completion pin",
+            "rhs: a native port named in full has no loop-completion pin",
         ]
     keys = {node.declaration.key for node in trace.nodes}
     if first is None or first == "refused":
-        assert not keys & {"second", "second_state", "rhs.stream", "rhs.signals", "result.stream"}
+        assert not keys & {"second", "second_state", "rhs.stream", "rhs.transport", "result.stream"}
     if second is None and first == "ready":
-        assert not keys & {"result.stream", "result.signals"}
+        assert not keys & {"result.stream", "result.transport"}

@@ -78,6 +78,7 @@ from finn.harness.orders import decode
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.base import Kernel
 from finn.kernels.eltwise import EltwiseKernel
+from finn.kernels.laws import Axis
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port_model import IndexedPort, ScheduledPort, SequencePort
 from finn.kernels.thresholding import ThresholdingAxiKernel
@@ -125,8 +126,8 @@ co, ci = Index("co"), Index("ci")
 def split_ports(schedule: Any, lanes: tuple[Index, ...]) -> tuple[IndexedPort, ScheduledPort]:
     """Input and output reading channel ``c = 3 co + ci``, lanes in ``lanes`` order."""
     input = IndexedPort(
-        name="s_axis",
         label="input",
+        transport=Axis(bus="s_axis"),
         clocking=ThresholdingAxiKernel.port_clocking,
         endpoint=Endpoint.TARGET,
         tensor=ThresholdingAxiKernel.input_tensor,
@@ -135,8 +136,8 @@ def split_ports(schedule: Any, lanes: tuple[Index, ...]) -> tuple[IndexedPort, S
         lanes=lanes,
     )
     output = ScheduledPort(
-        name="m_axis",
         label="output",
+        transport=Axis(bus="m_axis"),
         clocking=ThresholdingAxiKernel.port_clocking,
         endpoint=Endpoint.INITIATOR,
         tensor=ThresholdingAxiKernel.output_tensor,
@@ -341,8 +342,8 @@ class Misnamed(MemStreamKernel):
 
     id = "test.memstream_axi.misnamed"
     output = SequencePort(
-        name="m_axis_1",
         label="output",
+        transport=Axis(bus="m_axis_1"),
         clocking=MemStreamKernel.port_clocking,
         endpoint=Endpoint.INITIATOR,
         tensor=MemStreamKernel.output_tensor,

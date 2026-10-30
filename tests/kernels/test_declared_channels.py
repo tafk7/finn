@@ -53,6 +53,7 @@ from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel, ChannelFifo, boundary_contract, stated_by, stated_form
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.configure import commit
+from finn.kernels.laws import Axis
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.movers import IODMA_HLS, iodma_hls
 from finn.kernels.partition import Partition
@@ -202,8 +203,8 @@ class Replaying(Space):
         return replaying().sequence
 
     port = SequencePort(
-        name="s_axis",
         label="port",
+        transport=Axis(bus="s_axis"),
         endpoint=Endpoint.TARGET,
         tensor=Tensor((2, 4), INT4),
         sequence=sequence,

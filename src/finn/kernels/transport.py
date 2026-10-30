@@ -55,6 +55,7 @@ from finn.dataflow.traversal import (
     classify,
 )
 from finn.kernels.artifacts.abi import Bus, Direction, Endpoint, Member, Signal, StandardProtocol
+from finn.kernels.laws import AXIS_MARKERS, AXIS_MEMBERS, AxisSpelling, axis_carrier, axis_pin
 
 # -- native ready/valid ------------------------------------------------------------------
 
@@ -122,20 +123,21 @@ class ReadyValidTransport:
 
     def axis_bus(self) -> Bus:
         """Map compatible native signals onto AXI; adapters must supply any padding."""
-        if self.data_width % 8:
+        if axis_carrier(self.data_width) != self.data_width:
             raise ValueError("AXI stream data width must be byte aligned")
-        if len(self.markers) > 1 or any(
+        if len(self.markers) > AXIS_MARKERS or any(
             marker.kind is not MarkerKind.LAST for marker in self.markers
         ):
             raise ValueError("AXI lowering supports only a single LAST marker")
+        tdata, tvalid, tready, tlast = AXIS_MEMBERS
         return Bus(
             self.name,
             StandardProtocol.AXIS,
             (
-                Member("tdata", self.data, self.data_width),
-                Member("tvalid", self.valid),
-                Member("tready", self.ready),
-                *(Member("tlast", marker.signal) for marker in self.markers),
+                Member(tdata, self.data, self.data_width),
+                Member(tvalid, self.valid),
+                Member(tready, self.ready),
+                *(Member(tlast, marker.signal) for marker in self.markers),
             ),
             endpoint=self.endpoint,
             associated_clock=self.clock,
@@ -146,14 +148,6 @@ class ReadyValidTransport:
 # -- AXIS ----------------------------------------------------------------------------------
 
 
-class AxisSpelling(Enum):
-    """How a module spells its AXIS member pins after the bus's name: FinnLib's RTL in
-    lower case (``s_axis_tdata``), HLS's exported RTL in upper case (``s_axis_TDATA``)."""
-
-    LOWER = "lower"
-    UPPER = "upper"
-
-
 @dataclass(frozen=True, init=False)
 class AxisBeat:
     """A homogeneous beat with lane zero in the least-significant bits.
@@ -161,7 +155,7 @@ class AxisBeat:
     ``last`` declares the pin. Its workload-dependent meaning is supplied when
     binding to a logical port. ``dtype`` is the datatype value itself (qonnx's
     are interned and frozen), not reduced to a bit width. ``spelling`` is how its
-    module spells the member pins.
+    module spells the member pins (``finn.kernels.laws.axis_pin``).
     """
 
     name: str
@@ -213,7 +207,7 @@ class AxisBeat:
 
     @property
     def carrier_bits(self) -> int:
-        return (self.payload_bits + 7) // 8 * 8
+        return axis_carrier(self.payload_bits)
 
     def bus(self, *, clock: str | None = None, reset: str | None = None) -> Bus:
         """Lower to the existing, purely physical ABI representation."""
@@ -221,21 +215,19 @@ class AxisBeat:
 
     def native(self, *, clock: str | None = None, reset: str | None = None) -> ReadyValidTransport:
         """The native transport underlying this typed, padded AXI profile."""
-
-        def pin(member: str) -> str:
-            spelled = member.upper() if self.spelling is AxisSpelling.UPPER else member
-            return f"{self.name}_{spelled}"
-
+        tdata, tvalid, tready, tlast = (
+            axis_pin(self.name, member, self.spelling) for member in AXIS_MEMBERS
+        )
         return ReadyValidTransport(
             self.name,
             self.data_width,
             self.endpoint,
-            pin("tdata"),
-            pin("tvalid"),
-            pin("tready"),
+            tdata,
+            tvalid,
+            tready,
             clock,
             reset,
-            (StreamMarker(pin("tlast"), MarkerKind.LAST),) if self.last else (),
+            (StreamMarker(tlast, MarkerKind.LAST),) if self.last else (),
         )
 
 
@@ -401,7 +393,6 @@ def marker_pairs(
 
 
 __all__ = [
-    "AxisSpelling",
     "AxisBeat",
     "MarkerKind",
     "Mismatch",

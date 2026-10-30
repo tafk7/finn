@@ -27,7 +27,7 @@ from finn.core.space import (
     view,
 )
 from finn.dataflow.steps import steps
-from finn.dataflow.traversal import BeatSequence
+from finn.dataflow.traversal import BeatSequence, LevelEnd
 from finn.kernels.adapters import input_gen as InputAdapterChain
 from finn.kernels.artifacts.abi import Clocking, Direction, Endpoint, Signal
 from finn.kernels.artifacts.module import Fragment
@@ -35,7 +35,13 @@ from finn.kernels.base import Kernel, PortContract
 from finn.kernels.channels import ChannelFifo
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import InputGeneratorKernel
+from finn.kernels.laws import Native
+from finn.kernels.port import LoopEnds
 from finn.kernels.port_model import SequencePort
+
+UNNAMED_ENDS = LoopEnds((LevelEnd(1),))
+"""A loop-completion vector, which a native port named in full has no pin for: each port
+so declared refuses its pins directly."""
 
 TENSOR = stage_tensor(13)
 ARRIVING, LEAVING = nested(6, (3, 6), (0, 1))
@@ -108,20 +114,20 @@ class SerialFifo(FifoKernel):
         return ARRIVING
 
     input = SequencePort(
-        name="input",
         label="input",
         tensor=FifoKernel.input_tensor,
         sequence=first,
-        signals=("idat", "ivld"),
+        transport=Native(names=("idat", "ivld", "irdy")),
+        loop_ends=UNNAMED_ENDS,
         clocking=FifoKernel.port_clocking,
     )
     output = SequencePort(
-        name="output",
         label="output",
         endpoint=Endpoint.INITIATOR,
         tensor=FifoKernel.output_tensor,
         sequence=second,
-        signals=("odat", "ovld"),
+        transport=Native(names=("odat", "ovld", "ordy")),
+        loop_ends=UNNAMED_ENDS,
         clocking=FifoKernel.port_clocking,
     )
 
@@ -171,11 +177,11 @@ def test_fifo_native_assembly_halts_on_raised_inputs_and_accumulates_direct_refu
     else:
         assert isinstance(evidence.result, Rejected)
         assert [f.message for f in evidence.result.findings] == [
-            "input: signals are data, valid and ready",
-            "output: signals are data, valid and ready",
+            "input: a native port named in full has no loop-completion pin",
+            "output: a native port named in full has no loop-completion pin",
         ]
     if first is None or first == "refused":
-        assert not keys & {"second", "second_state", "output.stream", "output.signals"}
+        assert not keys & {"second", "second_state", "output.stream", "output.transport"}
 
 
 def test_staged_unused_marker_has_real_pin_and_hold_category_order(
@@ -288,7 +294,6 @@ def test_adapter_reads_contracts_before_netlist(monkeypatch: pytest.MonkeyPatch)
 
     class Child(InputGeneratorKernel):
         input = RefusedContract(
-            name="input",
             label="input",
             tensor=InputGeneratorKernel.input_tensor,
             sequence=InputGeneratorKernel.arriving,
@@ -366,20 +371,20 @@ class SerialGenerator(InputGeneratorKernel):
         return ARRIVING
 
     input = SequencePort(
-        name="input",
         label="input",
         tensor=InputGeneratorKernel.input_tensor,
         sequence=first,
-        signals=("idat", "ivld"),
+        transport=Native(names=("idat", "ivld", "irdy")),
+        loop_ends=UNNAMED_ENDS,
         clocking=InputGeneratorKernel.port_clocking,
     )
     output = SequencePort(
-        name="output",
         label="output",
         endpoint=Endpoint.INITIATOR,
         tensor=InputGeneratorKernel.output_tensor,
         sequence=second,
-        signals=("odat", "ovld"),
+        transport=Native(names=("odat", "ovld", "ordy")),
+        loop_ends=UNNAMED_ENDS,
         clocking=InputGeneratorKernel.port_clocking,
     )
 
@@ -439,8 +444,8 @@ def test_input_generator_native_assembly_halts_on_raised_inputs_and_accumulates_
     else:
         assert isinstance(evidence.result, Rejected)
         assert [f.message for f in evidence.result.findings] == [
-            "input: signals are data, valid and ready",
-            "output: signals are data, valid and ready",
+            "input: a native port named in full has no loop-completion pin",
+            "output: a native port named in full has no loop-completion pin",
         ]
     if first is None or first == "refused":
-        assert not keys & {"second", "second_state", "output.stream", "output.signals"}
+        assert not keys & {"second", "second_state", "output.stream", "output.transport"}

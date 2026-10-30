@@ -31,6 +31,7 @@ from finn.kernels.base import Kernel, PortContract
 from finn.kernels.channels import Channel
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.dotp import PackedDotpKernel
+from finn.kernels.laws import Axis
 from finn.kernels.partition import Partition
 from finn.kernels.port_model import SequencePort
 from finn.kernels.sides import Side
@@ -159,8 +160,8 @@ class Reader(Space):
     """A model reader, not a hardware kernel with an exported module port."""
 
     port = UnexportedPort(
-        name="s_axis",
         label="port",
+        transport=Axis(bus="s_axis"),
         endpoint=Endpoint.TARGET,
         tensor=X,
         sequence=reading().sequence,

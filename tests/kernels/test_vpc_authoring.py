@@ -27,16 +27,21 @@ from finn.core.space import (
     view,
 )
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.dataflow.traversal import BeatSequence, vector_major
+from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource
 from finn.kernels.artifacts.module import Fragment
 from finn.kernels.base import Kernel
+from finn.kernels.laws import Native
 from finn.kernels.library import ModuleSpec
-from finn.kernels.port import port_endpoint, port_surface
+from finn.kernels.port import LoopEnds, port_endpoint, port_surface
 from finn.kernels.port_model import PortSurface, SequencePort
 from finn.kernels.vpc import VpcKernel
 from finn.platform.capabilities import Resources
+
+UNNAMED_ENDS = LoopEnds((LevelEnd(1),))
+"""A loop-completion vector, which a native port named in full has no pin for: each port
+so declared refuses its pins directly."""
 
 TENSOR = Tensor((2, 4), ScalarEncoding(DataType["INT3"]))
 SEQUENCE = BeatSequence(vector_major(TENSOR.shape, 4))
@@ -58,20 +63,20 @@ class SerialVpc(VpcKernel):
         return SEQUENCE
 
     input = SequencePort(
-        name="input",
         label="input",
         tensor=VpcKernel.input_tensor,
         sequence=first,
-        signals=("idat", "ivld"),
+        transport=Native(names=("idat", "ivld", "irdy")),
+        loop_ends=UNNAMED_ENDS,
         clocking=VpcKernel.port_clocking,
     )
     output = SequencePort(
-        name="output",
         label="output",
         endpoint=Endpoint.INITIATOR,
         tensor=VpcKernel.output_tensor,
         sequence=second,
-        signals=("odat", "ovld"),
+        transport=Native(names=("odat", "ovld", "ordy")),
+        loop_ends=UNNAMED_ENDS,
         clocking=VpcKernel.port_clocking,
     )
 
@@ -113,13 +118,13 @@ def test_actual_vpc_netlist_keeps_serial_body_demand_and_direct_refusal_order(
     else:
         assert isinstance(result, Rejected)
         assert [f.message for f in result.findings] == [
-            "input: signals are data, valid and ready",
-            "output: signals are data, valid and ready",
+            "input: a native port named in full has no loop-completion pin",
+            "output: a native port named in full has no loop-completion pin",
         ]
     if first is None or first == "refused":
         # Both child admission rules remain real owner-gate dependencies.
         # Later physical/body inputs must still be untouched.
-        assert not keys & {"second", "second_state", "output.stream", "output.signals"}
+        assert not keys & {"second", "second_state", "output.stream", "output.transport"}
 
 
 def test_actual_vpc_surfaces_are_typed_real_children_and_not_kernel_instances() -> None:
@@ -201,7 +206,7 @@ def test_a_module_requires_owned_physical_ports_not_parent_forwarding_metadata()
 
 def test_surface_lookup_supports_discovered_group_paths_at_the_actual_node() -> None:
     class Included(Group):
-        port = SequencePort(name="p", label="p", tensor=TENSOR, sequence=SEQUENCE)
+        port = SequencePort(label="p", tensor=TENSOR, sequence=SEQUENCE)
 
     class Host(Space):
         group = Included()

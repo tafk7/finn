@@ -18,7 +18,7 @@ from finn.kernels.artifacts.contributions import (
     HlsSource,
 )
 from finn.kernels.artifacts.module import BuildError, Held, Leaf, fingerprint
-from finn.kernels.base import NATIVE_CLOCKING
+from finn.kernels.laws import NATIVE_CLOCKING
 from finn.kernels.library import ModuleSpec, assemble_module, library_module, module_unprovided
 from finn.kernels.vpc import VpcKernel
 

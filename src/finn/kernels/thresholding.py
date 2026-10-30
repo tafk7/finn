@@ -108,6 +108,7 @@ from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData, he
 from finn.kernels.artifacts.module import Fragment, Held, RegisterMap
 from finn.kernels.base import Kernel, extent_of
 from finn.kernels.control import Control, ControlModel
+from finn.kernels.laws import AXIS, Axis
 from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
 from finn.kernels.port import held, pins
 from finn.kernels.port_model import IndexedPort, ScheduledPort, SequencePort
@@ -560,8 +561,8 @@ class ThresholdingAxiKernel(Kernel):
         return type(self).clock_domain
 
     input = IndexedPort(
-        name="s_axis",
         label="input",
+        transport=Axis(bus="s_axis"),
         clocking=port_clocking,
         endpoint=Endpoint.TARGET,
         tensor=input_tensor,
@@ -570,8 +571,8 @@ class ThresholdingAxiKernel(Kernel):
         lanes=(c,),
     )
     output = ScheduledPort(
-        name="m_axis",
         label="output",
+        transport=Axis(bus="m_axis"),
         clocking=port_clocking,
         endpoint=Endpoint.INITIATOR,
         tensor=output_tensor,
@@ -581,8 +582,8 @@ class ThresholdingAxiKernel(Kernel):
     )
     # The set port indexes beats (``c``'s folds), which no index of a tensor expresses.
     set = SequencePort(
-        name="s_axis_set",
         label="set",
+        transport=AXIS,
         clocking=port_clocking,
         endpoint=Endpoint.TARGET,
         tensor=set_tensor,

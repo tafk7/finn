@@ -96,11 +96,12 @@ from finn.dataflow.traversal import LevelEnd, Repetition
 from finn.kernels import composer
 from finn.kernels.artifacts.abi import Clocking, Endpoint
 from finn.kernels.channels import boundary_contract
+from finn.kernels.laws import NATIVE, Axis, AxisSpelling, Native
 from finn.kernels.matmul import KnownWeights
 from finn.kernels.movers import MoverOffer, iodma_hls
 from finn.kernels.port import LoopEnds
 from finn.kernels.sides import Side, SideKind
-from finn.kernels.transport import AxisSpelling, MarkerKind
+from finn.kernels.transport import MarkerKind
 from finn.kernels.values.domains import Integer
 from finn.kernels.values.semantics import (
     IntegerTensorValue,
@@ -123,11 +124,15 @@ class Verdict:
 
 VERDICTS: dict[str, Verdict] = {
     "Schedule": Verdict("always", "a frozen value class of index names, extents and factors"),
-    "AxisSpelling": Verdict("always", "an enum member, keyed by type and name"),
+    "Axis | Native": Verdict(
+        "always",
+        "a port's transport kind: a value class of an optional string and an enum member, "
+        "keyed by type and name (Axis), or of optional strings (Native)",
+    ),
     "Endpoint": Verdict("always", "an enum member, keyed by type and name"),
     "Clocking": Verdict("always", "a value class of strings, bools and optional strings"),
     "Integer": Verdict("always", "a frozen admission policy of ints, bools and None"),
-    "LoopEnds": Verdict("always", "a value class of a string and level-end integer records"),
+    "LoopEnds": Verdict("always", "a value class of level-end integer records"),
     "bool": Verdict("always", "a plain type"),
     "int": Verdict("always", "a plain type"),
     "str": Verdict("always", "a plain type"),
@@ -245,14 +250,22 @@ def made() -> dict[str, tuple[object, ...]]:
             Schedule({Index("r"): 2, Index("c"): 4}, {Index("c"): 4}),
             Schedule({Index("r"): 2, Index("c"): 4}, {Index("c"): 2}),
         ),
-        "AxisSpelling": (AxisSpelling.LOWER, AxisSpelling.UPPER, AxisSpelling.LOWER),
+        "Axis | Native": (
+            Axis(bus="s_axis"),
+            Axis(bus="s_axis", spelling=AxisSpelling.UPPER),
+            Native(prefix="a"),
+            NATIVE,
+            Native(names=("s_axis_0_tdata", "s_axis_0_tvalid", "s_axis_0_tready")),
+            Axis(bus="s_axis"),
+            Native(),
+        ),
         "Endpoint": (Endpoint.TARGET, Endpoint.INITIATOR, Endpoint.TARGET),
         "Clocking": (Clocking(), Clocking(clock="clk", reset="rst", active_low=False), Clocking()),
         "Integer": (Integer(), Integer(min_bits=2, signed=True), Integer()),
         "LoopEnds": (
-            LoopEnds("olst", (LevelEnd(1), LevelEnd(8))),
-            LoopEnds("end", (LevelEnd(4),)),
-            LoopEnds("olst", (LevelEnd(1), LevelEnd(8))),
+            LoopEnds((LevelEnd(1), LevelEnd(8))),
+            LoopEnds((LevelEnd(4),)),
+            LoopEnds((LevelEnd(1), LevelEnd(8))),
         ),
         "float": (0.0, -0.0, 0.5, 1.0),
         "tuple": (

@@ -49,9 +49,10 @@ from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Direction, Endpoint, Pin, Signal
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource
 from finn.kernels.artifacts.module import Fragment, Held
-from finn.kernels.base import NATIVE_CLOCKING, Kernel, PortContract
+from finn.kernels.base import Kernel, PortContract
 from finn.kernels.channels import ChannelFifo
 from finn.kernels.fifo import FifoKernel, fifo_resources
+from finn.kernels.laws import NATIVE, NATIVE_CLOCKING
 from finn.kernels.library import (
     ModuleSpec,
     _each,
@@ -60,7 +61,7 @@ from finn.kernels.library import (
     module_unprovided,
 )
 from finn.kernels.port import pins
-from finn.kernels.port_model import native_port
+from finn.kernels.port_model import SequencePort
 from finn.platform.capabilities import Resources
 
 TENSOR = Tensor((4, 1), ScalarEncoding(DataType["INT4"]))
@@ -124,8 +125,13 @@ class Stage(Kernel):
 
     input_tensor: Tensor = Param()
     arriving: BeatSequence = Param()
-    input = native_port(
-        "input", Endpoint.TARGET, input_tensor, arriving, clocking=NATIVE_CLOCKING, label="input"
+    input = SequencePort(
+        label="input",
+        endpoint=Endpoint.TARGET,
+        transport=NATIVE,
+        tensor=input_tensor,
+        sequence=arriving,
+        clocking=NATIVE_CLOCKING,
     )
 
     @view
@@ -342,8 +348,13 @@ def test_a_kernel_with_a_module_states_its_ports_and_resources_and_places_no_ker
         }
         return type(name, (Kernel,), body)
 
-    port = native_port(
-        "input", Endpoint.TARGET, TENSOR, ARRIVING, clocking=NATIVE_CLOCKING, label="input"
+    port = SequencePort(
+        label="input",
+        endpoint=Endpoint.TARGET,
+        transport=NATIVE,
+        tensor=TENSOR,
+        sequence=ARRIVING,
+        clocking=NATIVE_CLOCKING,
     )
     kernel("Complete", input=port, resource_use=view(resource_use))
     with refused("module-ports-unplaced", error=DefinitionError, message="Portless declares no"):
@@ -355,8 +366,13 @@ def test_a_kernel_with_a_module_states_its_ports_and_resources_and_places_no_ker
     ):
         kernel(
             "Nesting",
-            input=native_port(
-                "input", Endpoint.TARGET, TENSOR, ARRIVING, clocking=NATIVE_CLOCKING, label="input"
+            input=SequencePort(
+                label="input",
+                endpoint=Endpoint.TARGET,
+                transport=NATIVE,
+                tensor=TENSOR,
+                sequence=ARRIVING,
+                clocking=NATIVE_CLOCKING,
             ),
             resource_use=view(resource_use),
             inner=Stage(input_tensor=TENSOR, arriving=ARRIVING),
@@ -364,8 +380,13 @@ def test_a_kernel_with_a_module_states_its_ports_and_resources_and_places_no_ker
     with refused("module-resources-unstated", error=DefinitionError, message="states no"):
         kernel(
             "Unstated",
-            input=native_port(
-                "input", Endpoint.TARGET, TENSOR, ARRIVING, clocking=NATIVE_CLOCKING, label="input"
+            input=SequencePort(
+                label="input",
+                endpoint=Endpoint.TARGET,
+                transport=NATIVE,
+                tensor=TENSOR,
+                sequence=ARRIVING,
+                clocking=NATIVE_CLOCKING,
             ),
         )
     with refused("kernel-id-invalid", error=DefinitionError):
@@ -379,8 +400,13 @@ def test_a_kernel_stating_a_stream_port_binds_a_module() -> None:
     # own, it is refused, naming the class and the port.
     class Unbound(Kernel):
         id = "test.kernel_space.unbound"
-        input = native_port(
-            "input", Endpoint.TARGET, TENSOR, ARRIVING, clocking=NATIVE_CLOCKING, label="input"
+        input = SequencePort(
+            label="input",
+            endpoint=Endpoint.TARGET,
+            transport=NATIVE,
+            tensor=TENSOR,
+            sequence=ARRIVING,
+            clocking=NATIVE_CLOCKING,
         )
 
     point = design_space(Unbound())
@@ -405,13 +431,13 @@ def test_a_kernel_stating_a_stream_port_binds_a_module() -> None:
         id = "test.kernel_space.ported"
         clock_domain = NATIVE_CLOCKING
         input_tensor: Tensor = Param()
-        input = native_port(
-            "input",
-            Endpoint.TARGET,
-            input_tensor,
-            ARRIVING,
-            clocking=NATIVE_CLOCKING,
+        input = SequencePort(
             label="input",
+            endpoint=Endpoint.TARGET,
+            transport=NATIVE,
+            tensor=input_tensor,
+            sequence=ARRIVING,
+            clocking=NATIVE_CLOCKING,
         )
         parameters = cast("dict[str, int | str]", required(dict))
 
@@ -502,8 +528,13 @@ class Sourced(Based):
     id = "test.kernel_space.sourced"
     input_tensor: Tensor = Param()
     arriving: BeatSequence = Param(default=ARRIVING)
-    input = native_port(
-        "input", Endpoint.TARGET, input_tensor, ARRIVING, clocking=NATIVE_CLOCKING, label="input"
+    input = SequencePort(
+        label="input",
+        endpoint=Endpoint.TARGET,
+        transport=NATIVE,
+        tensor=input_tensor,
+        sequence=ARRIVING,
+        clocking=NATIVE_CLOCKING,
     )
 
     @derived
@@ -537,8 +568,13 @@ class Forgetful(Deep):
     id = "test.kernel_space.forgetful"
     input_tensor: Tensor = Param()
     arriving: BeatSequence = Param(default=ARRIVING)
-    input = native_port(
-        "input", Endpoint.TARGET, input_tensor, ARRIVING, clocking=NATIVE_CLOCKING, label="input"
+    input = SequencePort(
+        label="input",
+        endpoint=Endpoint.TARGET,
+        transport=NATIVE,
+        tensor=input_tensor,
+        sequence=ARRIVING,
+        clocking=NATIVE_CLOCKING,
     )
 
     @view
