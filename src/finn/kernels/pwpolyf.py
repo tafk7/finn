@@ -47,7 +47,7 @@ from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import Clocking, Endpoint, Pin
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Fragment, Held
-from finn.kernels.base import NATIVE_CLOCKING, KernelSpace, extent_of
+from finn.kernels.base import NATIVE_CLOCKING, Kernel, extent_of
 from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
 from finn.kernels.port import held, pins
 from finn.kernels.port_model import IndexedPort, ScheduledPort
@@ -72,7 +72,7 @@ SOURCES = (
 )
 
 
-class PwPolyKernel(KernelSpace):
+class PwPolyKernel(Kernel):
     """``function`` of each element of its input, PE elements a beat; see the module
     docstring."""
 

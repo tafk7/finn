@@ -29,7 +29,7 @@ from finn.core.space import Available, Rejected, inspection
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import PRODUCER, declaration, network
 from finn.kernels import fifo_sizing
-from finn.kernels.base import KernelSpace
+from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel, OuterHops
 from finn.kernels.composer import ChannelDeclaration, PartitionDeclaration
 from finn.kernels.partition import Partition, partition
@@ -43,7 +43,7 @@ def _slice(model: ModelWrapper, *names: str) -> Partition:
     return network(model, [node for node in model.graph.node if node.name in names])
 
 
-def _side(point: KernelSpace, port: str) -> Side:
+def _side(point: Kernel, port: str) -> Side:
     """A KernelOp's actual native port side, resolved through its parent surface."""
     reference = port_surface(type(point), port).side
     assert reference is not None
@@ -52,7 +52,7 @@ def _side(point: KernelSpace, port: str) -> Side:
     return found.value
 
 
-def _frozen(point: KernelSpace, port: str, label: str) -> Side:
+def _frozen(point: Kernel, port: str, label: str) -> Side:
     """The actual port side as a frozen neighbour's, labelled ``label``."""
     found = _side(point, port)
     assert found.stream is not None
@@ -217,7 +217,7 @@ def test_a_downstream_neighbour_brings_the_input_chain_it_needs_into_the_slice()
         assert part.member(name).query(Channel.input_chain) == Available("input_gen")
         assert part.neighbours(name) == whole.neighbours(name)
         assert part.hops(name) == whole.hops(name)
-        assert part.query(name, KernelSpace.resources) == whole.query(name, KernelSpace.resources)
+        assert part.query(name, Kernel.resources) == whole.query(name, Kernel.resources)
         assert fifo_sizing.size(part.member(name), part.neighbours(name), 1024) == (
             fifo_sizing.size(whole.member(name), whole.neighbours(name), 1024)
         )

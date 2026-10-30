@@ -130,7 +130,7 @@ from finn.kernels.artifacts.contributions import HlsSource
 from finn.kernels.artifacts.hls import stage_hls
 from finn.kernels.artifacts.module import Composed, Leaf
 from finn.kernels.artifacts.rtl import Declined, extract
-from finn.kernels.base import KernelSpace
+from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.configure import chosen, describe
@@ -187,7 +187,7 @@ class NonConformance(AssertionError):
 
 
 def conformance(
-    space_type: type[KernelSpace],
+    space_type: type[Kernel],
     *,
     inputs: Mapping[str, Tensor],
     outputs: Outputs,
@@ -228,7 +228,7 @@ def conformance(
 
 
 def samples(
-    space_type: type[KernelSpace],
+    space_type: type[Kernel],
     *,
     inputs: Mapping[str, Tensor],
     outputs: Outputs,
@@ -361,13 +361,13 @@ def _port_name(name: str) -> str:
     return name.removesuffix("_channel")
 
 
-def _stem(space_type: type[KernelSpace]) -> str:
+def _stem(space_type: type[Kernel]) -> str:
     """A sample's module's stem: ``<kernel>conformance``, lower case."""
     return f"{space_type.__name__}Conformance".lower()
 
 
 def _design(
-    space_type: type[KernelSpace],
+    space_type: type[Kernel],
     inputs: Mapping[str, Tensor],
     outputs: Mapping[str, Tensor],
     facts: Mapping[str, object],
@@ -422,7 +422,7 @@ def design_member(design: Partition, name: str) -> Any:
     return design.member(name)
 
 
-def design_module(design: Any, space_type: type[KernelSpace]) -> QueryResult[Any]:
+def design_module(design: Any, space_type: type[Kernel]) -> QueryResult[Any]:
     """A design's module, ``finn_<kernel>conformance``."""
     return module_of(design, _stem(space_type))
 
@@ -489,7 +489,7 @@ def _port(kernel: Any, path: str) -> Any:
 
 
 def _stated(
-    space_type: type[KernelSpace],
+    space_type: type[Kernel],
     name: str,
     inputs: Mapping[str, Tensor],
     facts: Mapping[str, object],
@@ -506,7 +506,7 @@ def _stated(
 
 
 def _tensors(
-    space_type: type[KernelSpace],
+    space_type: type[Kernel],
     inputs: Mapping[str, Tensor],
     outputs: Outputs,
     facts: Mapping[str, object],
@@ -527,14 +527,14 @@ def _path_member(node: Any, path: str) -> Any:
     return node
 
 
-def _path_declaration(space_type: type[KernelSpace], path: str) -> object:
+def _path_declaration(space_type: type[Kernel], path: str) -> object:
     """Terminal authored declaration, rather than the rebased child value reference."""
     reference = _path_member(space_type, path)
     return reference.member if isinstance(reference, MemberRef) else reference
 
 
 def _committed(
-    space_type: type[KernelSpace],
+    space_type: type[Kernel],
     config: Mapping[str, object],
     inputs: Mapping[str, Tensor],
     outputs: Outputs,
@@ -579,7 +579,7 @@ def _committed(
 
 
 def unchosen(
-    space_type: type[KernelSpace],
+    space_type: type[Kernel],
     *,
     inputs: Mapping[str, Tensor],
     outputs: Outputs,
@@ -605,7 +605,7 @@ def _nested(values: object) -> object:
 
 
 def place(
-    space_type: type[KernelSpace],
+    space_type: type[Kernel],
     sample: Sample,
     inputs: Mapping[str, Tensor],
     outputs: Outputs,
@@ -655,11 +655,11 @@ def place(
 # -- checks --------------------------------------------------------------------------------
 
 
-def _where(space_type: type[KernelSpace], sample: Sample) -> str:
+def _where(space_type: type[Kernel], sample: Sample) -> str:
     return f"{space_type.__name__} [{sample.label}]"
 
 
-def _value(found: QueryResult[Any], space_type: type[KernelSpace], sample: Sample) -> Any:
+def _value(found: QueryResult[Any], space_type: type[Kernel], sample: Sample) -> Any:
     assert isinstance(found, Available), f"{_where(space_type, sample)}: {describe((found,))}"
     return found.value
 
@@ -675,7 +675,7 @@ def _kernel_leaves(module: Composed) -> tuple[tuple[str, Leaf], ...]:
 
 
 def _check_rtl(
-    space_type: type[KernelSpace],
+    space_type: type[Kernel],
     sample: Sample,
     label: str,
     leaf: Leaf,
@@ -717,7 +717,7 @@ def _check_rtl(
 
 
 def _contracts(
-    point: Any, space_type: type[KernelSpace], sample: Sample, names: Sequence[str]
+    point: Any, space_type: type[Kernel], sample: Sample, names: Sequence[str]
 ) -> dict[str, StreamContract]:
     """The contract the kernel presents on each channel: its port beside the channel, as
     the partition reads it (``Partition.neighbours``)."""
@@ -738,7 +738,7 @@ def _covers(form: Traversal) -> bool:
 
 def _check_model(
     point: Any,
-    space_type: type[KernelSpace],
+    space_type: type[Kernel],
     sample: Sample,
     inputs: Mapping[str, Tensor],
     outputs: Outputs,
@@ -773,7 +773,7 @@ def _floating(element: ScalarEncoding) -> bool:
 
 
 def _values(
-    space_type: type[KernelSpace], sample: Sample, inputs: Mapping[str, Tensor]
+    space_type: type[Kernel], sample: Sample, inputs: Mapping[str, Tensor]
 ) -> dict[str, np.ndarray]:
     """Random values of each input, seeded by the kernel and the sample: integers in its
     range, or binary32 values in [-FLOAT_BOUND, FLOAT_BOUND]."""
@@ -841,7 +841,7 @@ def _brief(message: str) -> str:
 
 def _simulate(
     point: Any,
-    space_type: type[KernelSpace],
+    space_type: type[Kernel],
     sample: Sample,
     values: Mapping[str, np.ndarray],
     reference: Reference,

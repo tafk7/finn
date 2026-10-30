@@ -4,7 +4,7 @@
 """Real child ports and extents bound from the tensors a kernel's inputs read.
 
 ``IndexedPort`` states an input's tensor access (``x.access``); its parent reads
-the binding inputs in ``_accesses`` to derive ``KernelSpace.extents``. Folding
+the binding inputs in ``_accesses`` to derive ``Kernel.extents``. Folding
 domains read ``extent_of`` members. ``ScheduledPort`` presents an output tensor
 derived from those extents without binding them back into its parent. A child
 states its intrinsic element rule; parent composition constraints remain on the
@@ -41,7 +41,7 @@ from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Fragment, Held
-from finn.kernels.base import KernelSpace, extent_of
+from finn.kernels.base import Kernel, extent_of
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.library import ModuleSpec, _each, assemble_module, library_module
@@ -55,7 +55,7 @@ from finn.platform.capabilities import Resources
 b, s, c = Index("b"), Index("s"), Index("c")
 
 
-class Pool(KernelSpace):
+class Pool(Kernel):
     """Global sum pooling, model only: Y[b, c] = sum_s X[b, s, c], PE channels a beat."""
 
     id = "test.accpool"
@@ -302,7 +302,7 @@ def test_dotp_binds_from_its_inputs_through_the_dense_view() -> None:
     }
 
 
-class Holding(KernelSpace):
+class Holding(Kernel):
     """A kernel of one input port, given the integer policy its hardware takes."""
 
     id = "test.holding"

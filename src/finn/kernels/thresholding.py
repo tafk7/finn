@@ -106,7 +106,7 @@ from finn.kernels.artifacts.abi import (
 )
 from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData, hex_image
 from finn.kernels.artifacts.module import Fragment, Held, RegisterMap
-from finn.kernels.base import KernelSpace, extent_of
+from finn.kernels.base import Kernel, extent_of
 from finn.kernels.control import Control, ControlModel
 from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
 from finn.kernels.port import held, pins
@@ -210,7 +210,7 @@ _THRESHOLD_LUT = Fit(81.7, (0.271,))
 _THRESHOLD_FF = Fit(31.3, (0.948,))
 
 
-class ThresholdingAxiKernel(KernelSpace):
+class ThresholdingAxiKernel(Kernel):
     """Integer ``thresholding_axi``: the input's channels counted against a table of
     thresholds, plus a bias; see the module docstring."""
 

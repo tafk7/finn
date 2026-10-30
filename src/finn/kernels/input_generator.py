@@ -71,7 +71,7 @@ from finn.kernels.artifacts.abi import Clocking, Endpoint, Pin
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Fragment, Held
 from finn.kernels.artifacts.rtl import Declined, evaluate
-from finn.kernels.base import NATIVE_CLOCKING, KernelSpace
+from finn.kernels.base import NATIVE_CLOCKING, Kernel
 from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
 from finn.kernels.port import LoopEnds, held, pins
 from finn.kernels.port_model import native_port
@@ -194,7 +194,7 @@ def presented(generate: Generate, leaving: BeatSequence) -> BeatSequence:
     )
 
 
-class InputGeneratorKernel(KernelSpace):
+class InputGeneratorKernel(Kernel):
     """FinnLib ``input_gen``: its tensor's words in another order, with its loop ends; see
     the module docstring."""
 

@@ -76,7 +76,7 @@ from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.artifacts.module import Composed as Module
 from finn.kernels.artifacts.module import Fragment, ProducerIdentity
 from finn.kernels.artifacts.top import compose as top
-from finn.kernels.base import KernelSpace, PortContract, merged
+from finn.kernels.base import Kernel, PortContract, merged
 from finn.kernels.channels import Channel, Neighbours, OuterHops, outer_hops
 from finn.kernels.composer import Composed, Names, PartitionDeclaration, Port, compose
 from finn.kernels.control import Control
@@ -350,9 +350,9 @@ class Partition:
 
     def query(self, name: str, member: object) -> QueryResult[Any]:
         """Member ``name``'s ``member``, a view or a derived value declared on a Space class
-        ``Base`` (``KernelSpace.netlist``, ``Timed.cycles``): the member of that name of the
+        ``Base`` (``Kernel.netlist``, ``Timed.cycles``): the member of that name of the
         member's own class. ``Inapplicable`` where the member's class does not derive from
-        ``Base`` (``Channel`` is no class with ``KernelSpace.bus_control``'s bus), or where
+        ``Base`` (``Channel`` is no class with ``Kernel.bus_control``'s bus), or where
         the member's own answer is inapplicable (a kernel declaring no control bus)."""
         point = self.member(name)
         base, declared = getattr(member, "owner", None), getattr(member, "name", None)
@@ -631,7 +631,7 @@ class Partition:
         """What its top is made of, read once: each member's netlist under its node, in its
         module's order, a channel's with its hops to the ports beside it around its own
         links (``hops``: the producer's first, the consumer's last), merged with each
-        control bus its kernels present (``KernelSpace.bus_control``, at the port each was
+        control bus its kernels present (``Kernel.bus_control``, at the port each was
         given), and each boundary channel's AXIS bus; or why not, every member's refusal
         (or, where none refuses, what they wait on; a channel's hops' own, ``channel-port``
         or ``channel-link``), each finding naming its member (``located``), or the merge's own
@@ -673,7 +673,7 @@ class Partition:
         controls: list[tuple[str, Control]] = []
         failed: list[tuple[str, QueryResult[object]]] = []
         for name in self._order:
-            netlist = self.query(name, KernelSpace.netlist)
+            netlist = self.query(name, Kernel.netlist)
             if name in self._sides and isinstance(netlist, Available):
                 hops = self.hops(name)
                 netlist = (
@@ -684,7 +684,7 @@ class Partition:
             else:
                 failed.append((name, netlist))
             if name not in self._sides:
-                control = self.query(name, KernelSpace.bus_control)
+                control = self.query(name, Kernel.bus_control)
                 if isinstance(control, Available):
                     controls.append((self.node(name), control.value))
                 elif not isinstance(control, Inapplicable):
@@ -783,7 +783,7 @@ class Partition:
         (``finn.custom_op.kernels.shell``)."""
 
         def read() -> QueryResult[Resources]:
-            used = [self.query(name, KernelSpace.resources) for name in self.members]
+            used = [self.query(name, Kernel.resources) for name in self.members]
             missing = [each for each in used if not isinstance(each, Available)]
             if missing:
                 return _together(missing)

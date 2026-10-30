@@ -12,7 +12,7 @@ from typing import Any
 
 from finn.core.space import Space
 from finn.harness.points import Refused
-from finn.kernels.base import KernelSpace
+from finn.kernels.base import Kernel
 from support.conformance import KERNEL, configured, design_member, unchosen
 
 Case = Callable[[], dict[str, Any]]
@@ -66,7 +66,7 @@ class KernelSpec:
     - ``sweeps``: the numeric sweeps' cases that place it; ``unit``: its unit tests.
     """
 
-    kernel: type[KernelSpace]
+    kernel: type[Kernel]
     reference: str
     cases: Mapping[str, Case]
     space: str

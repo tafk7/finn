@@ -1,8 +1,8 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""The ``Kernel`` Protocol: a design point of every ``KernelSpace`` satisfies it, its four
-answers read out as their values, and a class missing one answer does not: a channel's FIFO,
-which states no cycles, among them."""
+"""The ``Kernel`` base, as a reader types a design point: its four answers read out as their
+values, for a kernel binding a module, a kernel with children and a channel alike; a Space
+that is no kernel is no ``Kernel``, whatever answers it states."""
 
 from typing import assert_type
 
@@ -33,7 +33,7 @@ def check(fifo: FifoKernel, matmul: MatMulKernel, channel: Channel) -> None:
 
 
 class Unbuffered(Space):
-    """Three of the four answers: no ``buffering``."""
+    """Three of the four answers, and no kernel."""
 
     @view
     def netlist(self) -> Fragment:

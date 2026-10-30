@@ -68,7 +68,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, Loop, Traversal, vector_major
 from finn.kernels.artifacts.abi import Pin
 from finn.kernels.artifacts.module import Composed, Held, Leaf, ProducerIdentity
-from finn.kernels.base import KernelSpace, Timed
+from finn.kernels.base import Kernel, Timed
 from finn.kernels.channels import Channel
 from finn.kernels.composer import (
     ChannelDeclaration,
@@ -576,7 +576,7 @@ def eltwise(
     return point if pe is None else commit(point, {"pe": pe})
 
 
-def port_axis(point: KernelSpace, name: str) -> AxisBeat:
+def port_axis(point: Kernel, name: str) -> AxisBeat:
     """Port ``name``'s AXIS beat on the kernel's configuration ``point``
     (``finn.kernels.port.axis``)."""
     port = getattr(point, name)
@@ -585,7 +585,7 @@ def port_axis(point: KernelSpace, name: str) -> AxisBeat:
     return found
 
 
-def port_transport(point: KernelSpace, name: str) -> ReadyValidTransport:
+def port_transport(point: Kernel, name: str) -> ReadyValidTransport:
     """Port ``name``'s transport on the kernel's configuration ``point``, on its clock domain
     (``finn.kernels.port.transport``)."""
     from finn.kernels.port_model import SequencePort  # noqa: PLC0415

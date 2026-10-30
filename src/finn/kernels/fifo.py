@@ -44,7 +44,7 @@ from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.abi import Clocking, Endpoint, Pin
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Fragment, Held
-from finn.kernels.base import NATIVE_CLOCKING, KernelSpace
+from finn.kernels.base import NATIVE_CLOCKING, Kernel
 from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
 from finn.kernels.port import held, pins
 from finn.kernels.port_model import native_port
@@ -212,7 +212,7 @@ def least_depth_holding(words: int, bits: int, style: str, uram: bool) -> int:
         depth += 1
 
 
-class FifoKernel(KernelSpace):
+class FifoKernel(Kernel):
     """FinnLib ``fifo``: what arrives of its tensor, presented again on its output; see the
     module docstring."""
 

@@ -57,7 +57,7 @@ from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Fragment, Held
-from finn.kernels.base import KernelSpace, UntimedKernel
+from finn.kernels.base import Kernel, UntimedKernel
 from finn.kernels.channels import Channel
 from finn.kernels.library import ModuleSpec, assemble_module
 from finn.kernels.port import pins
@@ -189,7 +189,7 @@ TENSOR = Tensor((4,), INT4)
 SEQUENCE = BeatSequence(vector_major((4,), 1))
 
 
-class Given(KernelSpace):
+class Given(Kernel):
     """A model-only kernel presenting a given sequence of a given tensor."""
 
     id = "test.reads.given"

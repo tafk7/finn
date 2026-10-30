@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The kernel base, ``KernelSpace``: its four answers, its library module, its checks.
+"""The kernel base, ``Kernel``: its four answers, its library module, its checks.
 
 A kernel answers four questions of its hardware through Views:
 its netlist (its library module at the empty label, its members' netlists under their
@@ -51,7 +51,7 @@ from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Direction, Endpoint, Pin, Signal
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource
 from finn.kernels.artifacts.module import Fragment, Held
-from finn.kernels.base import NATIVE_CLOCKING, KernelSpace, PortContract, Timed, UntimedKernel
+from finn.kernels.base import NATIVE_CLOCKING, Kernel, PortContract, Timed, UntimedKernel
 from finn.kernels.channels import ChannelFifo
 from finn.kernels.fifo import FifoKernel, fifo_resources
 from finn.kernels.library import (
@@ -118,7 +118,7 @@ def test_a_fifo_s_own_statements_and_answers_use_inferred_fixed_reads() -> None:
 # -- a kernel with members --------------------------------------------------------------------
 
 
-class Stage(KernelSpace):
+class Stage(Kernel):
     """A model-only stage on a library module: one input port, three LUTs."""
 
     id = "test.kernel_space.stage"
@@ -192,7 +192,7 @@ class Stage(KernelSpace):
         return self.input.stream.sequence.form.beats
 
 
-class Pair(KernelSpace):
+class Pair(Kernel):
     """Two stages, no module of its own."""
 
     id = "test.kernel_space.pair"
@@ -200,7 +200,7 @@ class Pair(KernelSpace):
     second = Stage(input_tensor=TENSOR, arriving=ARRIVING)
 
 
-class Empty(KernelSpace):
+class Empty(Kernel):
     """Neither a module nor a member."""
 
     id = "test.kernel_space.empty"
@@ -233,7 +233,7 @@ class Untimed(UntimedKernel):
     stage = Stage(input_tensor=TENSOR, arriving=ARRIVING)
 
 
-class Beside(KernelSpace):
+class Beside(Kernel):
     """A stage, and beside it a kernel that counts no cycles."""
 
     id = "test.kernel_space.beside"
@@ -257,7 +257,7 @@ def test_a_kernel_counting_no_cycles_is_a_kernel_but_for_its_cycles() -> None:
 
 def test_a_channel_s_fifo_is_the_one_kernel_of_the_library_counting_no_cycles() -> None:
     """A channel's FIFO presents what arrives, whose beats are counted where they are made:
-    it derives ``UntimedKernel`` alone; every other kernel class derives ``KernelSpace``."""
+    it derives ``UntimedKernel`` alone; every other kernel class derives ``Kernel``."""
     for module in pkgutil.iter_modules(finn.kernels.__path__):
         importlib.import_module(f"finn.kernels.{module.name}")
     found: list[type[UntimedKernel]] = []
@@ -265,7 +265,7 @@ def test_a_channel_s_fifo_is_the_one_kernel_of_the_library_counting_no_cycles() 
     while pending:
         for each in pending.pop().__subclasses__():
             pending.append(each)
-            if each.__module__.startswith("finn.kernels.") and not issubclass(each, KernelSpace):
+            if each.__module__.startswith("finn.kernels.") and not issubclass(each, Kernel):
                 found.append(each)
     assert found == [ChannelFifo]
     assert not issubclass(ChannelFifo, Timed)
@@ -323,19 +323,19 @@ def test_a_kernel_binds_one_library_module_at_most() -> None:
 
 
 def test_a_kernel_with_a_module_states_its_ports_and_resources_and_places_no_kernel() -> None:
-    def parameters(self: KernelSpace) -> dict[str, int | str]:
+    def parameters(self: Kernel) -> dict[str, int | str]:
         return {}
 
-    def resource_use(self: KernelSpace) -> Resources:
+    def resource_use(self: Kernel) -> Resources:
         return Resources()
 
-    def netlist(self: KernelSpace) -> Fragment:
+    def netlist(self: Kernel) -> Fragment:
         return Fragment()
 
-    def cycles(self: KernelSpace) -> int:
+    def cycles(self: Kernel) -> int:
         return 1
 
-    def kernel(name: str, **members: object) -> type[KernelSpace]:
+    def kernel(name: str, **members: object) -> type[Kernel]:
         body = {
             "id": f"test.{name}",
             "parameters": view(parameters),
@@ -344,7 +344,7 @@ def test_a_kernel_with_a_module_states_its_ports_and_resources_and_places_no_ker
             "module_spec": ModuleSpec("probe", (PROBE,)),
             **members,
         }
-        return type(name, (KernelSpace,), body)
+        return type(name, (Kernel,), body)
 
     port = native_port(
         "input", Endpoint.TARGET, TENSOR, ARRIVING, clocking=NATIVE_CLOCKING, label="input"
@@ -374,14 +374,14 @@ def test_a_kernel_with_a_module_states_its_ports_and_resources_and_places_no_ker
         )
     with refused("kernel-id-invalid", error=DefinitionError):
 
-        class Unnamed(KernelSpace):
+        class Unnamed(Kernel):
             pass
 
 
 def test_a_kernel_stating_a_stream_port_binds_a_module() -> None:
     # A stream port's pins are a module's: on a kernel with children and no module of its
     # own, it is refused, naming the class and the port.
-    class Unbound(KernelSpace):
+    class Unbound(Kernel):
         id = "test.kernel_space.unbound"
         input = native_port(
             "input", Endpoint.TARGET, TENSOR, ARRIVING, clocking=NATIVE_CLOCKING, label="input"
@@ -392,7 +392,7 @@ def test_a_kernel_stating_a_stream_port_binds_a_module() -> None:
     assert codes(point.query(Unbound.netlist)) == {"kernel-module"}
 
     # A kernel with children presents its children's ports.
-    class Serving(KernelSpace):
+    class Serving(Kernel):
         id = "test.kernel_space.serving"
         inner = Stage(input_tensor=TENSOR, arriving=ARRIVING)
 
@@ -405,7 +405,7 @@ def test_a_kernel_stating_a_stream_port_binds_a_module() -> None:
 
     # A base of kernels, leaving a required() member unmet, states its ports for the
     # kernels on it, which bind the module.
-    class Ported(KernelSpace):
+    class Ported(Kernel):
         id = "test.kernel_space.ported"
         clock_domain = NATIVE_CLOCKING
         input_tensor: Tensor = Param()
@@ -527,7 +527,7 @@ def test_a_module_naming_a_required_member_makes_a_base_of_kernels() -> None:
     assert library_module(point).sources == (PROBE,)
 
 
-class Deep(KernelSpace):
+class Deep(Kernel):
     """A stand-in base of kernels: every kernel on it states its ``depth``."""
 
     id = "test.kernel_space.deep"
@@ -567,7 +567,7 @@ def test_a_kernel_forgetting_a_required_member_is_refused_where_placed() -> None
         design_space(Forgetful(input_tensor=TENSOR))
     with refused("required-unmet", error=DefinitionError, message=r"Deep\.depth"):
 
-        class Holder(KernelSpace):
+        class Holder(Kernel):
             id = "test.kernel_space.holder"
             inner = Forgetful(input_tensor=TENSOR)
 

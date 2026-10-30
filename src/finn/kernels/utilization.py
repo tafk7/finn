@@ -3,7 +3,7 @@
 
 """The kernels' cost model, in the platform's resource units
 (``finn.platform.capabilities.Resources``): what a configuration uses of the part
-(``finn.kernels.base.KernelSpace.resources``).
+(``finn.kernels.base.Kernel.resources``).
 
 A leaf states its own use from its RTL's parameters: the counts its RTL fixes
 exactly (DSP slices, the memory primitives an array maps to) and its LUTs and

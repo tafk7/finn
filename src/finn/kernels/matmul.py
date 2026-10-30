@@ -91,7 +91,7 @@ which its ``y`` port writes.
 - The steps between the activation channel's two streams replay each dense row and
   frame each reduction; the channel's adapter carries that out.
 
-It binds no module of its own: its netlist (``finn.kernels.base.KernelSpace``) merges its
+It binds no module of its own: its netlist (``finn.kernels.base.Kernel``) merges its
 children's.
 """
 
@@ -126,7 +126,7 @@ from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import require_positive
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.base import KernelSpace, PortContract
+from finn.kernels.base import Kernel, PortContract
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.port_model import PortSurface
 from finn.kernels.sides import Side
@@ -231,7 +231,7 @@ class KnownWeights:
                 )
 
 
-class MatMulKernel(KernelSpace):
+class MatMulKernel(Kernel):
     """Operation facts, and the kernels and selectors over kernels on its tensors."""
 
     id = "finn.matmul"

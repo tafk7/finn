@@ -66,7 +66,7 @@ from finn.dataflow.traversal import (
 from finn.harness.ops import check_parity
 from finn.kernels.adapters import Convert
 from finn.kernels.artifacts.module import module_name
-from finn.kernels.base import KernelSpace
+from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
 from finn.kernels.explore import KernelExplorer, SizeFifos, TargetThroughput
@@ -420,7 +420,7 @@ def test_the_shell_s_resources_are_its_partition_s_its_movers_and_its_static_reg
     )
     assert (x.memory_width, x.tdata, y.memory_width) == (16, 8, 32)
     assert split.static_region == ZYNQ_STATIC_REGION.resources(masters=2, slaves=2)
-    members = [bound.query(name, KernelSpace.resources) for name in bound.members]
+    members = [bound.query(name, Kernel.resources) for name in bound.members]
     assert split.partition == total(each.value for each in members if isinstance(each, Available))
     assert (
         bound.own_resources()

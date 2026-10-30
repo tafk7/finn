@@ -39,7 +39,7 @@ from finn.kernels.matmul import KnownWeights, MatMulKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import DspBlock, Fabric, Platform
 from finn.kernels.artifacts.module import Composed, Leaf
-from finn.kernels.base import KernelSpace
+from finn.kernels.base import Kernel
 from finn.kernels.library import library_module
 from finn.kernels.configure import commit
 from finn.kernels.port import axis

@@ -31,7 +31,7 @@ from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource
 from finn.kernels.artifacts.module import Fragment
-from finn.kernels.base import KernelSpace, UntimedKernel
+from finn.kernels.base import Kernel, UntimedKernel
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port import port_endpoint, port_surface
 from finn.kernels.port_model import PortSurface, SequencePort
@@ -163,7 +163,7 @@ def test_plain_module_definition_still_requires_provision_and_native_assembly() 
 
     with pytest.raises(DefinitionError, match="native netlist"):
 
-        class Unstated(KernelSpace):
+        class Unstated(Kernel):
             id = "fixture.unstated"
             module_spec = VpcKernel.module_spec
 
@@ -183,7 +183,7 @@ def test_plain_module_spec_rejects_symbolic_identity_and_sources() -> None:
 def test_a_module_requires_owned_physical_ports_not_parent_forwarding_metadata() -> None:
     with pytest.raises(DefinitionError, match="declares no port"):
 
-        class Unowned(KernelSpace):
+        class Unowned(Kernel):
             id = "fixture.unowned_builder"
             module_spec = ModuleSpec(
                 "probe", (CopiedSource("finnlib", "probe.sv", provides=("module:probe",)),)

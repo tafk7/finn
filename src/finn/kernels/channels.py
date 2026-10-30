@@ -63,7 +63,7 @@ The source and the output adapter are placed where their condition holds, not ch
 and each keeps the label it is placed at (``SOURCE_LABEL``, ``OUTPUT_ADAPTER_LABEL``),
 so the names emitted from them do not depend on its node.
 
-As a kernel with children (a ``KernelSpace`` binding no module), its members are its
+As a kernel with children (a ``Kernel`` binding no module), its members are its
 source, its adapters' stages, its FIFO (``ChannelFifo``) and its mover, in the order the
 stream runs through them. It checks its stages by their streams (``staged``, each stage's
 own derived values) and wires them by their contracts (``stages``, a view). Its answers
@@ -129,7 +129,7 @@ from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import CLOCK, RESET, Bus, Endpoint
 from finn.kernels.artifacts.module import Fragment, Link, LinkEnd, Marker
 from finn.kernels.base import (
-    KernelSpace,
+    Kernel,
     PortContract,
     UntimedKernel,
     merged,
@@ -446,7 +446,7 @@ class ChannelSides:
         return (source, sink)
 
 
-class Channel(KernelSpace):
+class Channel(Kernel):
     """One tensor between the two sides it takes: one producer, one consumer.
 
     ``producer`` and ``consumer`` are its sides, each one value (``Side``): a kernel's

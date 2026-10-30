@@ -34,7 +34,7 @@ step: the connection ties it high. A width conversion is a ``vpc`` over vectors 
 the two lane counts' least common multiple: its two sides carry the same elements in
 whole beats, a common multiple of both lane counts, so the vectors are whole.
 
-Each chain is a kernel with children (a ``KernelSpace`` binding no module): it
+Each chain is a kernel with children (a ``Kernel`` binding no module): it
 places its modules as kernel children (``InputGeneratorKernel``, ``VpcKernel``) named by
 stage, each given its tensor and the two sides of its step, the beat sequences its ports
 present, from which it derives its generics. Each child's streams and output word width
@@ -73,7 +73,7 @@ from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, Traversal
 from finn.kernels.artifacts.module import Fragment, Leaf
-from finn.kernels.base import KernelSpace, PortContract
+from finn.kernels.base import Kernel, PortContract
 from finn.kernels.input_generator import Generate, InputGeneratorKernel, generated
 from finn.kernels.library import leaf_at_root
 from finn.kernels.transport import StreamContract
@@ -195,7 +195,7 @@ def _side(name: str, side: str) -> BeatSequence:
     return derived(read)
 
 
-class StreamAdapter(KernelSpace):
+class StreamAdapter(Kernel):
     """A fixed chain of FinnLib modules carrying out the steps between a channel's two
     streams: the chain they take (``realize``), which its channel places for them.
 

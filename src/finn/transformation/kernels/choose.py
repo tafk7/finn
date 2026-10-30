@@ -71,7 +71,7 @@ sized before a fold that leaves it too small for its stream is refused when the 
 verifies the partition (``fifo-stale``), unless a strategy dropped it to be sized again.
 
 The resources are the shell's (``shell_resources``), each member its own
-statement (``finn.kernels.base.KernelSpace.resources``): its partition (the partition's kernels
+statement (``finn.kernels.base.Kernel.resources``): its partition (the partition's kernels
 and its channels, boundary channels included), each mover and its static region, and
 their sum, ``used``; where members state none (a memory in ``auto``, which
 Vivado places), ``used`` is the sum of those that

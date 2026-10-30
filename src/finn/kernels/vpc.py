@@ -33,7 +33,7 @@ from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.abi import Clocking, Endpoint, Pin
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Fragment, Held
-from finn.kernels.base import NATIVE_CLOCKING, KernelSpace
+from finn.kernels.base import NATIVE_CLOCKING, Kernel
 from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
 from finn.kernels.port import held, pins
 from finn.kernels.port_model import native_port
@@ -53,7 +53,7 @@ _VPC_LUT = Fit(9.9, (0.022,))
 _VPC_FF = Fit(6.8, (1.0,))
 
 
-class VpcKernel(KernelSpace):
+class VpcKernel(Kernel):
     """FinnLib ``vpc``: its tensor's elements in the order they arrive, at another lane
     count; see the module docstring."""
 

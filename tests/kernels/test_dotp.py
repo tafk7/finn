@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Physical dotp on the Kernel protocol: three ports, its own folding factors, one validity.
+"""Physical dotp on the Kernel base: three ports, its own folding factors, one validity.
 
 Each compute core is its own kernel over the shared ``DotpAxiKernel``
 declaration; most cases exercise the packed core, which every DSP target has.
@@ -36,7 +36,7 @@ from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.abi import Clock, Data
 from finn.kernels.artifacts.abi import Derived as DerivedClock
 from finn.kernels.artifacts.build import emit_module
-from finn.kernels.base import KernelSpace
+from finn.kernels.base import Kernel
 from finn.kernels.configure import commit
 from finn.kernels.dotp import REDUCERS, DotpAxiKernel, Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.library import library_module
@@ -74,7 +74,7 @@ def kernel(space_type=PackedDotpKernel, **updates):
 
 
 def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_the_module():
-    assert DotpAxiKernel.__bases__ == (KernelSpace,)
+    assert DotpAxiKernel.__bases__ == (Kernel,)
     assert PackedDotpKernel.__bases__ == Int8Dsp58DotpKernel.__bases__ == (DotpAxiKernel,)
     point = kernel()
     assert [

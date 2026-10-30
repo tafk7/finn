@@ -204,7 +204,7 @@ def test_a_derived_value_reading_a_childs_view_bound_back_to_it_is_cyclic_depend
 
 
 def test_a_view_side_members_read_only_by_views_is_accepted_and_answers() -> None:
-    """A ``Members`` over views read only by a view (as ``KernelSpace`` reads its members'
+    """A ``Members`` over views read only by a view (as ``Kernel`` reads its members'
     netlists and cycles): the Space is accepted and the view answers the sum of the
     members' views."""
 

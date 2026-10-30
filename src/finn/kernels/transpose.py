@@ -30,7 +30,7 @@ from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import Clocking, Endpoint, Pin
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Fragment, Held
-from finn.kernels.base import NATIVE_CLOCKING, KernelSpace, extent_of
+from finn.kernels.base import NATIVE_CLOCKING, Kernel, extent_of
 from finn.kernels.fifo import fifo_resources
 from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
 from finn.kernels.port import held, pins
@@ -64,7 +64,7 @@ def inner_shuffle_resources(
     return banks + rotators + skids
 
 
-class TransposeKernel(KernelSpace):
+class TransposeKernel(Kernel):
     """FinnLib ``inner_shuffle``: an (I, J) matrix's rows in, its columns out.
 
     The input is the last two axes of its tensor in row-major order, SIMD

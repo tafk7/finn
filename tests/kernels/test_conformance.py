@@ -76,7 +76,7 @@ from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.traversal import offsets, pack, vector_major
 from finn.harness.orders import decode
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.base import KernelSpace
+from finn.kernels.base import Kernel
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port_model import IndexedPort, ScheduledPort, SequencePort
@@ -350,11 +350,11 @@ class Misnamed(MemStreamKernel):
     )
 
 
-def without(kernel: type[KernelSpace], omitted: str) -> Any:
+def without(kernel: type[Kernel], omitted: str) -> Any:
     """A ``parameters`` view: ``kernel``'s, less ``omitted``."""
     stated = cast(Any, vars(kernel)["parameters"]).function
 
-    def parameters(self: KernelSpace) -> dict[str, int | str]:
+    def parameters(self: Kernel) -> dict[str, int | str]:
         return {key: value for key, value in stated(self).items() if key != omitted}
 
     return view(parameters)
@@ -380,11 +380,11 @@ class Unpipelined(ThresholdingAxiKernel):
     parameters = without(ThresholdingAxiKernel, "DEEP_PIPELINE")
 
 
-def misspelled(kernel: type[KernelSpace], name: str, misspelling: str) -> Any:
+def misspelled(kernel: type[Kernel], name: str, misspelling: str) -> Any:
     """A ``parameters`` view: ``kernel``'s, with ``name`` spelled ``misspelling``."""
     stated = cast(Any, vars(kernel)["parameters"]).function
 
-    def parameters(self: KernelSpace) -> dict[str, int | str]:
+    def parameters(self: Kernel) -> dict[str, int | str]:
         return {(misspelling if key == name else key): value for key, value in stated(self).items()}
 
     return view(parameters)

@@ -39,7 +39,7 @@ from finn.core.space import (
 )
 from finn.kernels.artifacts.abi import Bus, Endpoint, Member, StandardProtocol
 from finn.kernels.artifacts.module import RegisterMap
-from finn.kernels.base import KernelSpace
+from finn.kernels.base import Kernel
 from finn.kernels.budgets import SHELL, ShellBudgets, counts
 from finn.kernels.composer import Facts
 from finn.kernels.control import Control, ControlModel
@@ -55,7 +55,7 @@ LITE = Bus(
 )
 
 
-class Presenting(KernelSpace):
+class Presenting(Kernel):
     """A kernel presenting its AXI-Lite bus where it is ``on``, listed first."""
 
     id = "test.presenting"
@@ -78,7 +78,7 @@ class Presenting(KernelSpace):
         return Control(self.config.bus, port, RegisterMap())
 
 
-class Initiating(KernelSpace):
+class Initiating(Kernel):
     """A kernel initiating a memory port of its own where it is ``on``, listed first."""
 
     id = "test.initiating"
@@ -90,7 +90,7 @@ class Initiating(KernelSpace):
         return int(self.on)
 
 
-class Pumping(KernelSpace):
+class Pumping(Kernel):
     """A kernel taking the doubled clock where it is ``on``, listed first."""
 
     id = "test.pumping"
@@ -117,7 +117,7 @@ IP: Mapping[str, object] = {
 
 
 def kernels(
-    *kinds: type[KernelSpace],
+    *kinds: type[Kernel],
     shell: Mapping[str, object] | None,
     stored: Mapping[str, object] | None = None,
 ) -> Partition:
@@ -155,7 +155,7 @@ CASES = [
     ("kind", "shell", "rule", "code"), CASES, ids=["control-buses", "memory-ports", "clock"]
 )
 def test_a_value_that_breaks_a_budget_is_refused_at_the_partition(
-    kind: type[KernelSpace], shell: Mapping[str, object], rule: str, code: str
+    kind: type[Kernel], shell: Mapping[str, object], rule: str, code: str
 ) -> None:
     network = kernels(kind, shell=shell)
     assert viable(network, "k0.on") == {True: (f"{SHELL}.{rule}",), False: ()}

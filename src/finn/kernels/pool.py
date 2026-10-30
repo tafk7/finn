@@ -55,7 +55,7 @@ from finn.kernels.artifacts.abi import Clocking, Endpoint, Pin
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource, HlsSource
 from finn.kernels.artifacts.hls import axis_type
 from finn.kernels.artifacts.module import Fragment, Held
-from finn.kernels.base import KernelSpace, extent_of
+from finn.kernels.base import Kernel, extent_of
 from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
 from finn.kernels.port import axis, held, pins
 from finn.kernels.port_model import IndexedPort, ScheduledPort
@@ -160,7 +160,7 @@ void {name}(hls::stream<InBeat> &s_axis, hls::stream<OutBeat> &m_axis) {{
 STEM = "finn_pool"
 
 
-class PoolKernel(KernelSpace):
+class PoolKernel(Kernel):
     """Max pooling of each ``window`` at ``stride`` (rows, columns) of an HWC tensor;
     see the module docstring."""
 

@@ -30,7 +30,7 @@ from finn.dataflow.datatypes import QONNXDataType, resolve_qonnx_datatype_name
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.base import KernelSpace
+from finn.kernels.base import Kernel
 from finn.kernels.configure import chosen, commit
 from finn.kernels.port import port_endpoint, port_surface
 from finn.kernels.port_model import SequencePort, port_surfaces
@@ -54,9 +54,9 @@ def test_kernel_identity_is_validated_at_class_creation() -> None:
         message="nonempty string id",
         declaration="Unnamed",
     ):
-        type("Unnamed", (KernelSpace,), {})
+        type("Unnamed", (Kernel,), {})
 
-    class Empty(KernelSpace):
+    class Empty(Kernel):
         id = "test.empty"
 
     # The base's views; a kernel that binds no module and places none has no netlist.
@@ -106,7 +106,7 @@ def test_the_datatype_annotation_takes_each_qonnx_datatype_as_it_is(name: str) -
 
 
 def test_a_dtype_choice_replays_the_exact_datatype() -> None:
-    class DtypeKernel(KernelSpace):
+    class DtypeKernel(Kernel):
         id = "test.dtype"
         dtype: QONNXDataType = Decision(
             domain=(resolve_qonnx_datatype_name("TERNARY"), resolve_qonnx_datatype_name("INT2"))
@@ -122,7 +122,7 @@ def test_a_dtype_choice_replays_the_exact_datatype() -> None:
 
 
 def test_a_datatype_fact_and_derived_value_are_the_datatype_itself() -> None:
-    class Typed(KernelSpace):
+    class Typed(Kernel):
         id = "test.typed"
         dtype: QONNXDataType = Param()
 
@@ -145,7 +145,7 @@ def test_composite_extends_kernel_with_typed_optional_views_and_independent_node
     # The declarations are built in plain Python and ``composite`` names them as a
     # Space class on the kernel base. ``dtype`` is a formal each placing node binds
     # by name; each node call is an independent scope.
-    class InterfaceKernel(KernelSpace):
+    class InterfaceKernel(Kernel):
         id = "test.interface"
 
     def bits(*, dtype: QONNXDataType, lanes: int) -> int:
@@ -175,7 +175,7 @@ def test_composite_extends_kernel_with_typed_optional_views_and_independent_node
     )
     assert issubclass(word, InterfaceKernel) and word.id == InterfaceKernel.id
 
-    class Pair(KernelSpace):
+    class Pair(Kernel):
         id = "test.interface_pair"
         activation_dtype: QONNXDataType = Param()
         weights_dtype: QONNXDataType = Param()
@@ -214,7 +214,7 @@ def test_port_discovery_reads_lexical_groups_without_implicit_child_lowering() -
             sequence=sequence,
         )
 
-    class Host(KernelSpace):
+    class Host(Kernel):
         id = "test.discovery"
         group = Included()
         child = Child()

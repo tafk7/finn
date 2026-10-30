@@ -41,7 +41,7 @@ from finn.core.space.declarations import MemberRef
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.thresholding import Thresholding
 from finn.dataflow.traversal import LevelEnd
-from finn.kernels.base import KernelSpace
+from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel, ChannelFifo, open_boundary_refusal
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.policies import FirstValid, Fixed, Required, stated
@@ -273,9 +273,7 @@ class MarkedThresholding(Thresholding):
 
     op_type = "MarkedThresholding"
 
-    def streamed(
-        self, point: KernelSpace
-    ) -> tuple[tuple[str, Side | tuple[Finding, ...], bool], ...]:
+    def streamed(self, point: Kernel) -> tuple[tuple[str, Side | tuple[Finding, ...], bool], ...]:
         found = []
         for tensor, side, output in super().streamed(point):
             if not output and isinstance(side, Side) and side.stream is not None:
@@ -409,7 +407,7 @@ def test_only_a_port_that_is_not_placed_is_skipped_by_the_stream_check(
         # sides under test, delegating every other query to the real implementation.
         observed: list[str] = []
 
-        def answer(receiver: KernelSpace, request: Any) -> QueryResult[Any]:
+        def answer(receiver: Kernel, request: Any) -> QueryResult[Any]:
             if (
                 receiver is point
                 and isinstance(request, MemberRef)

@@ -12,7 +12,7 @@ from finn.core.space import Available, Decision, Group, Param, Unresolved, desig
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.base import KernelSpace
+from finn.kernels.base import Kernel
 from finn.kernels.composer import Facts, PartitionDeclaration, Port, channel
 from finn.kernels.composer import _checked as checked
 from finn.kernels.port import port_endpoint, port_surface
@@ -42,7 +42,7 @@ class Nested(Group):
     ports = Ports()
 
 
-class Host(KernelSpace):
+class Host(Kernel):
     id = "test.group-port-roles"
     group = Nested()
 
@@ -68,7 +68,7 @@ def test_open_model_endpoint_remains_unknown_without_reading_or_repairing_config
         role: Endpoint = Decision(domain=(Endpoint.TARGET, Endpoint.INITIATOR))
         port = SequencePort(name="p", label="p", tensor=TENSOR, sequence=SEQUENCE, endpoint=role)
 
-    class OpenHost(KernelSpace):
+    class OpenHost(Kernel):
         id = "test.open-group-port-role"
         group = OpenPorts()
 
@@ -85,7 +85,7 @@ def test_fact_bound_endpoint_is_not_mistaken_for_a_literal_static_binding() -> N
         role: Endpoint = Param()
         port = SequencePort(name="p", label="p", tensor=TENSOR, sequence=SEQUENCE, endpoint=role)
 
-    class BoundHost(KernelSpace):
+    class BoundHost(Kernel):
         id = "test.bound-group-port-role"
         role: Endpoint = Param()
         group = BoundPorts(role=role)
@@ -96,7 +96,7 @@ def test_fact_bound_endpoint_is_not_mistaken_for_a_literal_static_binding() -> N
 
 
 def test_static_group_lookup_stops_at_real_spaces_and_unknown_names() -> None:
-    class Parent(KernelSpace):
+    class Parent(Kernel):
         id = "test.group-port-stop"
         child = Host()
 

@@ -16,7 +16,7 @@ from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.base import KernelSpace, PortContract
+from finn.kernels.base import Kernel, PortContract
 from finn.kernels.composer import Facts, PartitionDeclaration, Port, channel
 from finn.kernels.composer import _checked as checked
 from finn.kernels.port import port_endpoint, port_surface
@@ -85,7 +85,7 @@ class ReplacedFrame(InheritedFrame):
     receive = Receiving(tensor=OTHER, sequence=OTHER_SEQUENCE)
 
 
-class Host(KernelSpace):
+class Host(Kernel):
     id = "test.group-parent-surfaces"
     group = InheritedFrame()
 
@@ -220,7 +220,7 @@ class UnknownRoles(Group):
 
 @pytest.mark.parametrize("key", ["omitted", "fact_bound", "derived_bound", "decision_bound"])
 def test_endpoint_metadata_stays_unknown_even_when_configuration_resolves_it(key: str) -> None:
-    class UnknownHost(KernelSpace):
+    class UnknownHost(Kernel):
         id = "test.group-forwarded-unknown-role"
         group = UnknownRoles()
 

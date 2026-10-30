@@ -119,7 +119,7 @@ from finn.core.space import (
     inspection,
 )
 from finn.dataflow.tensor import Tensor
-from finn.kernels.base import KernelSpace
+from finn.kernels.base import Kernel
 from finn.kernels.composer import Facts
 from finn.kernels.configure import describe
 from finn.kernels.configure import refusal as refusal_of
@@ -336,7 +336,7 @@ class KernelOp(CustomOp):
     wants_model = True
     op_type: ClassVar[str]
     op_version: ClassVar[int]
-    kernel: ClassVar[type[KernelSpace]]
+    kernel: ClassVar[type[Kernel]]
     ports: ClassVar[tuple[str | None, ...]]
     outputs: ClassVar[tuple[str, ...]] = ("y",)
     wiring: ClassVar[Mapping[str, Wiring]]
@@ -459,9 +459,9 @@ class KernelOp(CustomOp):
             if port is not None and port not in skipped
         }
 
-    def bound(self) -> KernelSpace:
+    def bound(self) -> Kernel:
         """The node's kernel bound to its facts, nothing chosen: its own design space."""
-        point: KernelSpace = self.facts().bind()  # type: ignore[assignment]
+        point: Kernel = self.facts().bind()  # type: ignore[assignment]
         return point
 
     def _channel_hint(self, names: Iterable[str]) -> str:
@@ -535,12 +535,12 @@ class KernelOp(CustomOp):
         """The node's choices (``choices``), as its kernel's Decisions take them."""
         return typed(type(self).kernel, self.choices())
 
-    def point(self, extra: Mapping[str, object] | None = None) -> KernelSpace:
+    def point(self, extra: Mapping[str, object] | None = None) -> Kernel:
         """The node's point: its kernel bound to its facts, with its stored choices (and
         ``extra``, by attribute) committed together; refused, each choice by name."""
         return self._replayed({**self.choices(), **(extra or {})})
 
-    def _replayed(self, choices: Mapping[str, object]) -> KernelSpace:
+    def _replayed(self, choices: Mapping[str, object]) -> Kernel:
         """``point``, with ``choices`` (by attribute) in place of the node's: bound on its
         kernel (``replayed``), as a partition binds its stored choices; refused where a
         value is outside its domain, or a rule they break together, each by name with its
@@ -548,7 +548,7 @@ class KernelOp(CustomOp):
         found, refused = replayed(self.bound(), typed(type(self).kernel, choices))
         if refused:
             raise refusal(self.op_type, self.label, refused, node=self.label)
-        point: KernelSpace = found  # type: ignore[assignment]
+        point: Kernel = found  # type: ignore[assignment]
         return point
 
     def _saved(self, choices: Mapping[str, object]) -> dict[str, int | str]:
@@ -603,9 +603,7 @@ class KernelOp(CustomOp):
         """The tensor of each of this node's input channels, by port."""
         return {port: tensor for port, tensor in zip(self.ports, self.onnx_node.input) if port}
 
-    def streamed(
-        self, point: KernelSpace
-    ) -> tuple[tuple[str, Side | tuple[Finding, ...], bool], ...]:
+    def streamed(self, point: Kernel) -> tuple[tuple[str, Side | tuple[Finding, ...], bool], ...]:
         """Each streamed port of this node at ``point``, its kernel's design space: the
         tensor it carries, by graph name, the side it gives a channel (its kernel's
         ``<p>_side``, labelled below the node's name) or, where ``point`` does not know that
@@ -680,13 +678,13 @@ class KernelOp(CustomOp):
         for name, tensor in self.infer_output_tensors(model).items():
             state(model, name, tensor.element)
 
-    def refusals(self, point: KernelSpace) -> tuple[Finding, ...]:
+    def refusals(self, point: Kernel) -> tuple[Finding, ...]:
         """What stops its kernel from building ``point``: its validity's refusal, the
         findings of its false pieces (``finn.kernels.configure.refusal``). Empty where it is
         valid or open."""
         return refusal_of(inspection.validity(point))
 
-    def defaulted(self) -> Defaulted[KernelSpace] | tuple[Finding, ...]:
+    def defaulted(self) -> Defaulted[Kernel] | tuple[Finding, ...]:
         """Conversion's answer (the module docstring): the node's kernel bound to its facts
         with the op's policies applied once (``finn.kernels.policies.defaulted``), every
         choice in play given its fixed or first valid value, a required one left open, and

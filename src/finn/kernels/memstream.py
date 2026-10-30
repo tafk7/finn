@@ -72,7 +72,7 @@ from finn.dataflow.traversal import (
 from finn.kernels.artifacts.abi import Bus, Clocking, Endpoint, Member, Pin, StandardProtocol
 from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData, hex_image
 from finn.kernels.artifacts.module import Fragment, Held
-from finn.kernels.base import NATIVE_CLOCKING, KernelSpace
+from finn.kernels.base import NATIVE_CLOCKING, Kernel
 from finn.kernels.control import Control, ControlModel
 from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
 from finn.kernels.port import held, pins
@@ -120,7 +120,7 @@ _MEMSTREAM_LUT = Fit(4.2, (1.026,))
 _MEMSTREAM_FF = Fit(4.4, (2.028,))
 
 
-class MemStreamKernel(KernelSpace):
+class MemStreamKernel(Kernel):
     """A stored operand streamed in its consumer's order; see the module docstring."""
 
     id = "finnlib.memstream_axi"

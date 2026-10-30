@@ -103,7 +103,7 @@ from finn.core.space import (
     inspection,
 )
 from finn.core.space.declarations import View
-from finn.kernels.base import KernelSpace, Timed
+from finn.kernels.base import Kernel, Timed
 from finn.kernels.channels import ChannelFifo, Neighbours
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.fifo_sizing import FRAMES, NotModelled, Sized, holds, size
@@ -463,7 +463,7 @@ class Seam(search.Seam):
 
     def cost(self, network: KernelComposition, members: Iterable[str] | None = None) -> Cost:
         """Each member's cycles a frame, buffering and resources (``Timed.cycles``,
-        ``KernelSpace.buffering``, ``KernelSpace.resources``; only ``members``' when named),
+        ``Kernel.buffering``, ``Kernel.resources``; only ``members``' when named),
         one member at a time, so a member that waits
         hides no other."""
         cycles: dict[str, int] = {}
@@ -473,10 +473,10 @@ class Seam(search.Seam):
         resources: dict[str, Resources] = {}
         unstated: dict[str, tuple[Finding, ...]] = {}
         for name in network.members if members is None else members:
-            held = network.query(name, KernelSpace.buffering)
+            held = network.query(name, Kernel.buffering)
             if isinstance(held, Available):
                 buffering[name] = held.value
-            used = network.query(name, KernelSpace.resources)
+            used = network.query(name, Kernel.resources)
             if isinstance(used, Available):
                 resources[name] = used.value
             else:
@@ -502,7 +502,7 @@ class Seam(search.Seam):
                 return Stated(own.value, {})
             if isinstance(own, Unresolved):
                 return own.findings
-        answers = {name: network.query(name, KernelSpace.resources) for name in network.members}
+        answers = {name: network.query(name, Kernel.resources) for name in network.members}
         waiting = [answer for answer in answers.values() if isinstance(answer, Unresolved)]
         if own is None and waiting:
             return tuple(dict.fromkeys(f for answer in waiting for f in answer.findings))

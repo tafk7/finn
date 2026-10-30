@@ -3,17 +3,17 @@
 
 """The kernel contract: its bases, and what a kernel binding a module states.
 
-A kernel binding a module (``KernelSpace`` with a plain ``ModuleSpec``) states its
+A kernel binding a module (``Kernel`` with a plain ``ModuleSpec``) states its
 parameters, sources and resources, and its ports; it places no kernel (checked when the
 class is made: ``tests/kernels/test_kernel_space.py``). Its control bus is an included
 ``ControlModel``: held idle while it is not presented, presented (read as
-``KernelSpace.bus_control``) while it is, so a bus is accounted for by construction; its
+``Kernel.bus_control``) while it is, so a bus is accounted for by construction; its
 pins come before every port's, its hold after theirs. Every port runs on its kernel's clock domain
 (``clock_domain``). Its module is the ``Leaf`` at the empty label of its netlist
 (``library_module``). A kernel with children presents a child's port as its own
 through typed model forwards and an outward contract View, labelled below the
 child; its netlist merges its members'.
-Every kernel is an ``UntimedKernel``, and every one but a channel's FIFO a ``KernelSpace``.
+Every kernel is an ``UntimedKernel``, and every one but a channel's FIFO a ``Kernel``.
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ from finn.kernels.artifacts.abi import (
 )
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Fragment, Held, Leaf, RegisterMap
-from finn.kernels.base import NATIVE_CLOCKING, KernelSpace, PortContract
+from finn.kernels.base import NATIVE_CLOCKING, Kernel, PortContract
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.configure import commit
 from finn.kernels.control import Control, ControlModel, held_bus
@@ -69,7 +69,7 @@ TENSOR = Tensor((4,), ScalarEncoding(INT4))
 PROBE = CopiedSource("finnlib", "rtl/probe.sv", provides=("module:probe",))
 
 
-class Probe(KernelSpace):
+class Probe(Kernel):
     """A model-only kernel: one input port, a mode pin held, and a doubled clock."""
 
     id = "test.probe"
@@ -184,7 +184,7 @@ def test_a_port_runs_on_its_kernels_clock_domain() -> None:
         clock_domain = NATIVE_CLOCKING
 
     point = design_space(Native(tensor=TENSOR))
-    assert isinstance(point.query(KernelSpace.netlist), Available)
+    assert isinstance(point.query(Kernel.netlist), Available)
     pins = library_module(point).abi.pins
     assert [pin.name for pin in pins[:3]] == ["clk", "ap_clk2x", "rst"]
     bus = pins[-1]
@@ -198,7 +198,7 @@ BUS = Bus(
 )
 
 
-class Controlled(KernelSpace):
+class Controlled(Kernel):
     """The probe with a control bus it presents where ``writable``, at the port ``control``."""
 
     id = "test.probe.controlled"
@@ -372,11 +372,11 @@ def test_a_control_bus_it_may_present_names_its_port_and_registers() -> None:
 
 def test_a_kernel_s_cycles_are_the_most_beats_a_port_carries() -> None:
     assert probe().cycles == 4
-    assert codes(probe().query(KernelSpace.resources)) == {"kernel-resources"}
+    assert codes(probe().query(Kernel.resources)) == {"kernel-resources"}
 
 
 def test_a_kernel_with_children_presents_a_childs_port_as_its_own() -> None:
-    class Presenting(KernelSpace):
+    class Presenting(Kernel):
         id = "test.presenting"
         kernel = Probe(tensor=TENSOR)
 
@@ -393,7 +393,7 @@ def test_a_kernel_with_children_presents_a_childs_port_as_its_own() -> None:
     assert point.x_contract.contract == point.kernel.x.contract.contract
     assert point.x_stream == point.kernel.x.stream
 
-    class Unserved(KernelSpace):
+    class Unserved(Kernel):
         id = "test.unserved"
         kernel = Probe(tensor=TENSOR)
 

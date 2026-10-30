@@ -25,7 +25,7 @@ from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.base import KernelSpace
+from finn.kernels.base import Kernel
 from finn.kernels.port_model import IndexedPort, ScheduledPort
 from finn.kernels.transpose import TransposeKernel, i
 
@@ -168,7 +168,7 @@ def test_scheduled_child_presence_is_checked_before_local_work(enabled: bool | N
 
 
 def test_authored_access_method_is_preserved_through_inheritance() -> None:
-    class Explicit(KernelSpace):
+    class Explicit(Kernel):
         id = "test.scheduled.explicit_access"
 
         def _accesses(self) -> list[Access]:
@@ -183,7 +183,7 @@ def test_authored_access_method_is_preserved_through_inheritance() -> None:
 
 
 def test_empty_accesses_are_inherited_without_a_generated_method() -> None:
-    class Empty(KernelSpace):
+    class Empty(Kernel):
         id = "test.scheduled.empty"
 
     class Subclass(Empty):

@@ -48,7 +48,7 @@ from finn.dataflow.traversal import (
     vector_major,
 )
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.base import KernelSpace
+from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel, boundary_contract, stated_by, stated_form
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.configure import commit
@@ -122,8 +122,8 @@ def test_each_channel_owns_its_refusal_and_independent_refusals_are_all_visible(
     # A source traversing four elements cannot carry an eight-element tensor.
     wide = Tensor((8,), INT4)
     point = constants(first=wide, second=wide)
-    assert isinstance(point.query("first", KernelSpace.netlist), Rejected)
-    assert isinstance(point.query("second", KernelSpace.netlist), Rejected)
+    assert isinstance(point.query("first", Kernel.netlist), Rejected)
+    assert isinstance(point.query("second", Kernel.netlist), Rejected)
     refusal = module_of(point, "constants")
     assert isinstance(refusal, Rejected)
     # Each finding keeps its owner, the channel's own declaration; the partition names the
@@ -144,7 +144,7 @@ def test_explain_shows_per_channel_and_per_member_evidence():
     channel = inspection.explain(point.member("first"), Channel.netlist)
     visited = {node.declaration.key.removeprefix("first.") for node in channel.nodes}
     assert {"netlist", "well_formed", "compatible", "streams"} <= visited
-    member = inspection.explain(point.member("first_source"), KernelSpace.netlist)
+    member = inspection.explain(point.member("first_source"), Kernel.netlist)
     visited = {node.declaration.key.removeprefix("first_source.") for node in member.nodes}
     # A kernel's netlist with a module builds it from its ports' streams, its parameters,
     # its data and its bus: it places no member, whose netlists it reads none of.

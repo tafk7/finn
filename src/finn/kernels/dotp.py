@@ -79,7 +79,7 @@ from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import CLOCK2X, Clocking, Endpoint, Pin
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Fragment, Held
-from finn.kernels.base import KernelSpace, extent_of
+from finn.kernels.base import Kernel, extent_of
 from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
 from finn.kernels.port import axis, held, pins
 from finn.kernels.port_model import IndexedPort, ScheduledPort
@@ -145,7 +145,7 @@ _DOTP_LUT = Fit(55.4, (1.032, 0.999))
 _DOTP_FF = Fit(80.9, (1.026, 1.625))
 
 
-class DotpAxiKernel(KernelSpace):
+class DotpAxiKernel(Kernel):
     """The ``dotp_axi`` space shared by its core kernels, which state what is theirs.
 
     The ``platform``'s ``period_ns`` is the clock period the module must meet. It sets
