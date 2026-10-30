@@ -185,15 +185,18 @@ RUN --mount=type=bind,source=pyproject.toml,target=/tmp/finn-lock/pyproject.toml
     uv sync --frozen --no-install-project && \
     chmod -R a+rwX /opt/venv
 
-# Fail the build on an inconsistent environment. The pytest run is not redundant
-# with the metadata check: a plugin import failure (as with jupyter/anyio) has no
-# metadata conflict.
-RUN test "$(uv pip list --format freeze | wc -l)" -gt 100 && \
+# Fail the build on an empty or inconsistent environment, saying why. The venv
+# must match the lock exactly (sync --check names what it would change). The
+# pytest run is not redundant with the metadata check: a plugin import failure
+# (as with jupyter/anyio) has no metadata conflict.
+RUN --mount=type=bind,source=pyproject.toml,target=/tmp/finn-lock/pyproject.toml \
+    --mount=type=bind,source=uv.lock,target=/tmp/finn-lock/uv.lock \
+    (cd /tmp/finn-lock && uv sync --frozen --no-install-project --offline --check) && \
     uv pip check && \
     python -c "import numpy, onnx, onnxruntime, torch, qonnx, brevitas" && \
     mkdir -p /tmp/pytest-probe && \
     printf 'def test_probe():\n    assert True\n' > /tmp/pytest-probe/test_probe.py && \
-    (cd /tmp/pytest-probe && pytest -q -p no:cacheprovider >/dev/null) && \
+    (cd /tmp/pytest-probe && pytest -q -p no:cacheprovider) && \
     rm -rf /tmp/pytest-probe
 
 # Redistributable external resources (finn-hlslib) in the read-only system cache,
