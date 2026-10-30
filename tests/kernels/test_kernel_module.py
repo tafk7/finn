@@ -28,6 +28,7 @@ from support.refusals import refused
 from finn.core.space import (
     Available,
     DefinitionError,
+    Group,
     Param,
     Rejected,
     derived,
@@ -182,21 +183,8 @@ class Controlled(Kernel):
     module_spec = ModuleSpec("probe", (PROBE,))
 
     @derived
-    def declares_bus(self) -> bool:
-        return True
-
-    @derived
     def clocking(self) -> Clocking:
         return replace(type(self).clock_domain, doubled="ap_clk2x", doubling=True)
-
-    @view
-    def bus_control(self) -> Control | Rejected:
-        if not self.config.presented:
-            return Control(None)
-        port = self.control
-        if port is None:
-            return reject("control-bus-unaddressed", "a presented bus names its port")
-        return Control(self.config.bus, port, self.register_map)
 
     @view
     def resource_use(self) -> Resources | Rejected:
@@ -292,7 +280,7 @@ def test_two_control_buses_in_one_body_are_refused_as_repeated_before_lowering()
 
 
 def test_a_control_bus_it_may_present_names_its_port_and_registers() -> None:
-    with refused("control-bus-unaddressed", error=DefinitionError):
+    with refused("control-bus-unaddressed", error=DefinitionError, message="register_map"):
 
         class Unaddressed(Probe):
             id = "test.probe.unaddressed"
@@ -303,6 +291,45 @@ def test_a_control_bus_it_may_present_names_its_port_and_registers() -> None:
                 return BUS
 
             config = ControlModel(bus=config_bus, presented=writable)
+
+
+def test_a_control_bus_is_declared_once_and_the_base_derives_what_is_read_of_it() -> None:
+    """A kernel declares its bus, a ``ControlModel`` in its own body, and the base derives
+    ``declares_bus`` and ``bus_control``: one it never presents is held with no port or
+    writes stated; one stating either answer itself, or declared in a Group, is refused."""
+
+    class Kept(Probe):
+        id = "test.probe.kept"
+        config = ControlModel(bus=BUS)
+
+    point = design_space(Kept(tensor=TENSOR))
+    assert point.declares_bus is True and point.bus_control == Control(None)
+    assert library_module(point).held.inputs == (("mode", 1), *held_bus(BUS).inputs)
+
+    with refused("control-bus-restated", error=DefinitionError, message="states bus_control"):
+
+        class Restated(Probe):
+            id = "test.probe.restated"
+            config = ControlModel(bus=BUS)
+
+            @view
+            def bus_control(self) -> Control:
+                return Control(None)
+
+    class Included(Group):
+        config = ControlModel(bus=BUS)
+
+    with refused("control-bus-nested", error=DefinitionError, message="included.config"):
+
+        class Nested(Kernel):
+            id = "test.probe.nested"
+            included = Included()
+
+    with refused("module-part-nested", error=DefinitionError, message="included.config"):
+
+        class NestedPart(Probe):
+            id = "test.probe.nested_part"
+            included = Included()
 
 
 def test_a_kernel_s_cycles_are_the_most_beats_a_port_carries() -> None:

@@ -3,17 +3,19 @@
 
 """Included control-bus model inputs and pure physical assembly.
 
-A kernel includes ControlModel(bus=config_bus, presented=use_axilite). Its
-parent bus_control View reads config.presented first, then its control port,
-config.bus and register_map View; the false path returns Control(None) and
-skips port/register inputs. RegisterMap never becomes a Group Param.
+A kernel includes ControlModel(bus=config_bus, presented=use_axilite) in its own
+body, its one declaration of the bus. The base derives its bus_control and
+declares_bus from it (``finn.kernels.base``): bus_control reads config.presented
+first, then the kernel's control port, config.bus and register_map View; the false
+path returns Control(None) and skips port/register inputs, and a bus whose
+presented is left unbound is held without either. RegisterMap never becomes a
+Group Param.
 
 Public physical Views share the enclosing kernel's ownership. The base's module
 assembly (``Kernel.netlist``) calls pin_values/held_values/pins_presented directly,
-with control-before-ports pins and ports-before-control held order. The kernel
-declares its own bus_control and declares_bus answers. control_models discovers
-only lexical Group occurrences, not controls of child kernels. Every kernel
-declares at most one control bus.
+with control-before-ports pins and ports-before-control held order. control_models
+discovers only lexical Group occurrences, not controls of child kernels. Every
+kernel declares at most one control bus.
 
 presented collects actual Control values as BusExports in their existing order;
 held_bus retains input/output physical directions without numerical changes.

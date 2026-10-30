@@ -102,7 +102,7 @@ from finn.kernels.artifacts.abi import (
 from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData, hex_image
 from finn.kernels.artifacts.module import RegisterMap
 from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
-from finn.kernels.control import Control, ControlModel
+from finn.kernels.control import ControlModel
 from finn.kernels.laws import AXIS, Axis, Intake, PortIntake, Standing
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port_model import StreamPort
@@ -710,21 +710,6 @@ class ThresholdingAxiKernel(Kernel):
     def module_data(self) -> tuple[GeneratedData, ...]:
         """Its module reads its table from ``thresholds_file``."""
         return (self.thresholds_file,)
-
-    @derived
-    def declares_bus(self) -> bool:
-        return True
-
-    @view
-    def bus_control(self) -> Control | Rejected:
-        if not self.config.presented:
-            return Control(None)
-        port = self.control
-        if port is None:
-            return reject(
-                "control-bus-unaddressed", "a bus it presents names the port it is presented at"
-            )
-        return Control(self.config.bus, port, self.register_map)
 
 
 __all__ = [

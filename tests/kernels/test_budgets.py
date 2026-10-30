@@ -30,11 +30,9 @@ from finn.core.space import (
     Available,
     Decision,
     Param,
-    Rejected,
     Unresolved,
     derived,
     inspection,
-    reject,
     view,
 )
 from finn.kernels.artifacts.abi import Bus, Endpoint, Member, StandardProtocol
@@ -42,7 +40,7 @@ from finn.kernels.artifacts.module import RegisterMap
 from finn.kernels.base import Kernel
 from finn.kernels.budgets import SHELL, ShellBudgets, counts
 from finn.kernels.composer import Facts
-from finn.kernels.control import Control, ControlModel
+from finn.kernels.control import ControlModel
 from finn.kernels.explore import Seam
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.partition import Partition
@@ -64,18 +62,9 @@ class Presenting(Kernel):
     on: bool = Decision(domain=(True, False))
     config = ControlModel(bus=LITE, presented=on)
 
-    @derived
-    def declares_bus(self) -> bool:
-        return True
-
     @view
-    def bus_control(self) -> Control | Rejected:
-        if not self.config.presented:
-            return Control(None)
-        port = self.control
-        if port is None:
-            return reject("control-bus-unaddressed", "a presented bus names its port")
-        return Control(self.config.bus, port, RegisterMap())
+    def register_map(self) -> RegisterMap:
+        return RegisterMap()
 
 
 class Initiating(Kernel):

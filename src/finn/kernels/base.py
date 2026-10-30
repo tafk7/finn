@@ -14,12 +14,13 @@ cycles by the rate law (``Kernel.cycles``) and answers its intake unstated unles
 states its own (``Kernel.intake``). Parents compose resolved child Members in ordinary
 source. Importing it registers FINN's value types (``finn.kernels.values.semantics``),
 which a kernel's facts hold and the engine admits only registered. No setter, read-list
-or flat callback table is installed on a kernel. Two things are installed when its class
+or flat callback table is installed on a kernel. Three things are installed when its class
 is made, each a function reading by names its closure fixes, so that its source states its
 reads: on a kernel with a module, one helper a part of its module; on a kernel with
 children, each port it serves (``served``) lowered into the members a channel and its
 sizing read of a port, ``<port>_side``, ``<port>_stream_pins``, ``<port>_pace`` and
-``<port>_advance``, and, for a selector, ``<child>_case``.
+``<port>_advance``, and, for a selector, ``<child>_case``; on a kernel declaring a control
+bus (``ControlModel``), what is read of it, ``declares_bus`` and ``bus_control``.
 
 Hardware configuration facts/Choices/rules remain inward model computations.
 Outward Views keep selected owning non-refusal and actual unresolved inputs.
@@ -439,6 +440,110 @@ def _serve_ports(cls: type[Kernel]) -> None:
     cls.served_names = MappingProxyType(served)
 
 
+# -- its control bus ------------------------------------------------------------------------
+#
+# A kernel declares its control bus once, a ``ControlModel`` in its own body, and the base
+# derives what is read of it, ``declares_bus`` and ``bus_control``, when its class is made. A
+# bus its model may present (its ``presented`` bound) is presented at the port the kernel's
+# ``control`` names, with the writes its ``register_map`` states; a bus never presented is
+# held, ``Control(None)``. As for the module's parts, it reads its model by the name its
+# closure fixes, and its port and writes only once it is presented.
+
+
+def _declares_bus() -> Callable[[Any], Any]:
+    def declares_bus(self: Any) -> bool:
+        return True
+
+    return declares_bus
+
+
+def _bus_held() -> Callable[[Any], Any]:
+    def bus_control(self: Any) -> Any:
+        return Control(None)
+
+    return bus_control
+
+
+def _bus_presented(model: str) -> Callable[[Any], Any]:
+    def bus_control(self: Any) -> Any:
+        if not getattr(self, model).presented:
+            return Control(None)
+        port = self.control
+        if port is None:
+            return reject(
+                "control-bus-unaddressed", "a bus it presents names the port it is presented at"
+            )
+        return Control(getattr(self, model).bus, port, self.register_map)
+
+    return bus_control
+
+
+def _derive_control(cls: type[Kernel]) -> None:
+    """Derive ``cls``'s ``declares_bus`` and ``bus_control`` from the control bus its own body
+    declares (above). Refused where it declares more than one (``control-bus-repeated``),
+    one in a Group (``control-bus-nested``; a kernel with a module, ``module-part-nested``
+    with its module's other parts), states either answer itself
+    (``control-bus-restated``), or may present its bus without stating ``control`` and
+    ``register_map`` (``control-bus-unaddressed``)."""
+    buses = list(control_models(cls))
+    if len(buses) > 1:
+        raise DefinitionError.broken(
+            "control-bus-repeated",
+            "Kernel",
+            f"{cls.__qualname__} declares the control buses {buses}: a kernel presents one at most",
+            declaration=cls.__qualname__,
+        )
+    if not buses:
+        return
+    (name,) = buses
+    if "." in name:
+        if any(isinstance(item, ModuleSpec) for item in _members(cls).values()):
+            return  # a module's part, refused with its others (``module-part-nested``)
+        raise DefinitionError.broken(
+            "control-bus-nested",
+            "Kernel",
+            f"{cls.__qualname__} declares its control bus {name} in a Group: a kernel declares "
+            "it in its own body, where the base derives what is read of it",
+            declaration=cls.__qualname__,
+        )
+    stated = [key for key in ("declares_bus", "bus_control") if key in vars(cls)]
+    if stated:
+        raise DefinitionError.broken(
+            "control-bus-restated",
+            "Kernel",
+            f"{cls.__qualname__} states {' and '.join(stated)}: the base derives them from "
+            f"its control bus {name}",
+            declaration=cls.__qualname__,
+        )
+    record = node_record(vars(cls).get(name))
+    if record is None:
+        return  # inherited, with what its class derived
+    may_present = record.bindings.get("presented", False) is not False
+    members = _members(cls)
+    if may_present and not ("control" in members and "register_map" in members):
+        raise DefinitionError.broken(
+            "control-bus-unaddressed",
+            "Kernel",
+            f"{cls.__qualname__} may present its control bus {name}: it states the port it "
+            "is presented at (control) and the writes its configuration takes (register_map)",
+            declaration=cls.__qualname__,
+        )
+    declares = _declares_bus()
+    declares.__annotations__ = {"return": bool}
+    declares.__doc__ = f"Whether it declares a control bus: it does, {name}."
+    control = _bus_presented(name) if may_present else _bus_held()
+    control.__annotations__ = {"return": Control | Rejected}
+    control.__doc__ = (
+        f"Its control bus, {name}: presented at the port ``control`` names, with the writes "
+        "``register_map`` states, where its model presents it; else held, ``Control(None)``."
+        if may_present
+        else f"Its control bus, {name}, which it never presents: held, ``Control(None)``."
+    )
+    for key, member in (("declares_bus", derived(declares)), ("bus_control", view(control))):
+        setattr(cls, key, member)
+        getattr(member, "__set_name__")(cls, key)
+
+
 def _install(
     cls: type[Kernel],
     prefix: str,
@@ -487,24 +592,8 @@ class Kernel(Space):
         _supply_ports(cls)
         _check_advance(cls)
         _serve_ports(cls)
+        _derive_control(cls)
         super().__init_subclass__(**kwargs)
-        buses = list(control_models(cls))
-        if len(buses) > 1:
-            raise DefinitionError.broken(
-                "control-bus-repeated",
-                "Kernel",
-                f"{cls.__qualname__} declares the control buses {buses}: "
-                "a kernel presents one at most",
-                declaration=cls.__qualname__,
-            )
-        if buses and (not _declared(cls, "bus_control") or not _declared(cls, "declares_bus")):
-            raise DefinitionError.broken(
-                "control-bus-unaddressed",
-                "Kernel",
-                f"{cls.__qualname__}: an included control states parent bus_control "
-                "and declares_bus answers",
-                declaration=cls.__qualname__,
-            )
         if type(cls.id) is not str or not cls.id:
             raise DefinitionError.broken(
                 "kernel-id-invalid",
@@ -779,15 +868,16 @@ class Kernel(Space):
 
     @derived
     def declares_bus(self) -> bool:
-        """Whether it declares a control bus (presented or not): False here, True in a
-        class declaring one through its own model answer."""
+        """Whether it declares a control bus (presented or not): False here; the base derives
+        True for a kernel declaring one (``ControlModel``) when its class is made."""
         return False
 
     @view
     def bus_control(self) -> Control | Rejected | Inapplicable:
         """The control bus it declares: a ``Control``, presenting nothing while the bus is
-        not presented. A kernel declaring none answers inapplicable; one declaring a bus
-        states its own parent View here."""
+        not presented. A kernel declaring none answers inapplicable; for one declaring a
+        bus the base derives it when its class is made, from the bus's model, the kernel's
+        ``control`` and its ``register_map``."""
         if not self.declares_bus:
             return Inapplicable()
         return reject("kernel-control", f"{type(self).__qualname__} declares no control bus")

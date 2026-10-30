@@ -70,7 +70,7 @@ from finn.dataflow.traversal import (
 from finn.kernels.artifacts.abi import Bus, Clocking, Endpoint, Member, StandardProtocol
 from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData, hex_image
 from finn.kernels.base import Kernel
-from finn.kernels.control import Control, ControlModel
+from finn.kernels.control import ControlModel
 from finn.kernels.laws import (
     NATIVE_CLOCKING,
     Axis,
@@ -416,14 +416,6 @@ class MemStreamKernel(Kernel):
     def module_data(self) -> tuple[GeneratedData, ...]:
         """Its module reads its contents from ``init_file``."""
         return (self.init_file,)
-
-    @derived
-    def declares_bus(self) -> bool:
-        return True
-
-    @view
-    def bus_control(self) -> Control | Rejected:
-        return Control(None)
 
     @view
     def cycles(self) -> int | Rejected:
