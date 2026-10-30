@@ -325,10 +325,11 @@ class ServedPort:
     Declared in a kernel's own body, after its child (``x = served(compute, "x")``); when
     the kernel's class is made (``finn.kernels.base.Kernel``), it is lowered into the
     members a channel and its sizing read of a port, ``<name>_side`` and
-    ``<name>_stream_pins``, each the child's port's labelled below it, and ``<name>_pace``,
-    the child's port's, and, for a selector, ``<child>_case``, its case. A reader finds them
-    by the port's name (``finn.kernels.port.port_side``, ``port_stream_pins``,
-    ``port_pace``), never by the members' names."""
+    ``<name>_stream_pins``, each the child's port's labelled below it, ``<name>_pace`` and
+    ``<name>_advance``, the child's port's, and, for a selector, ``<child>_case``, its case.
+    A reader finds them by the port's name (``finn.kernels.port.port_side``,
+    ``port_stream_pins``, ``port_pace``, ``port_advance``), never by the members' names. Its
+    intake is its child's, under its name (``finn.kernels.base.Kernel.intake``)."""
 
     child: object
     port: str

@@ -345,6 +345,16 @@ def port_pace(namespace: type[Space] | Space, port: str) -> Any:
     return getattr(frame, f"{port.rsplit('.', 1)[-1]}_pace")
 
 
+def port_advance(namespace: type[Space] | Space, port: str) -> Any:
+    """Kernel ``namespace``'s port ``port``'s advance rule, as a reference to query
+    (``port_side``'s): a stream port's ``advance``, a served port's (its child's port's)
+    (CONTRACT.md § 3)."""
+    frame, child = _found(namespace, port)
+    if isinstance(child, Space):
+        return child.advance
+    return getattr(frame, f"{port.rsplit('.', 1)[-1]}_advance")
+
+
 def _declared_endpoint(record: NodeDecl) -> Endpoint | None:
     """The endpoint a stream port's declaration binds, or its default."""
     formal = space_formals(record.space_type).get("endpoint")
@@ -405,6 +415,7 @@ __all__ = [
     "port_stream_pins",
     "port_endpoint",
     "port_side",
+    "port_advance",
     "port_pace",
     "served_ports",
     "pins",

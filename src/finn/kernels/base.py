@@ -16,7 +16,8 @@ when its class is made, each a function reading by names its closure fixes, so t
 its source states its reads: on a kernel with a module, one helper a part of its
 module; on a kernel with children, each port it serves (``served``) lowered into the
 members a channel and its sizing read of a port, ``<port>_side``,
-``<port>_stream_pins`` and ``<port>_pace``, and, for a selector, ``<child>_case``.
+``<port>_stream_pins``, ``<port>_pace`` and ``<port>_advance``, and, for a selector,
+``<child>_case``.
 
 Hardware configuration facts/Choices/rules remain inward model computations.
 Outward Views keep selected owning non-refusal and actual unresolved inputs.
@@ -28,7 +29,8 @@ module ownership, required declarations and resource statements are checked.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from types import MappingProxyType
 from typing import Any, ClassVar
 
 from finn.core.space import (
@@ -60,7 +62,7 @@ from finn.kernels.artifacts.abi import Clocking, Pin
 from finn.kernels.artifacts.contributions import Contribution, GeneratedData
 from finn.kernels.artifacts.module import BusExport, Fragment, Held, Link, merge
 from finn.kernels.control import Control, ControlModel, control_models, presented
-from finn.kernels.laws import AXIS_CLOCKING
+from finn.kernels.laws import AXIS_CLOCKING, INTAKE_UNSTATED, Advance, Intake
 from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
 from finn.kernels.transport import StreamPins
 from finn.kernels.utilization import total
@@ -290,11 +292,11 @@ def _nested_served(group: type[Group], prefix: str) -> list[str]:
 #
 # A served port (``finn.kernels.port_model.served``) is lowered, when its kernel's class is
 # made, into the members a channel and its sizing read of a port: its side and its stream
-# pins, each the child's port's labelled below it, and its pace, the child's port's. They are
-# derived members of the kernel, not of a child: the engine reads a member through a
-# selector one level deep (``compute.x``), never two (``compute.x.side``), and a Group reads
-# nothing of its kernel. Each reads its child, its port and its case by the names its
-# closure fixes, so that its source states its reads.
+# pins, each the child's port's labelled below it, and its pace and its advance rule, the
+# child's port's. They are derived members of the kernel, not of a child: the engine reads
+# a member through a selector one level deep (``compute.x``), never two
+# (``compute.x.side``), and a Group reads nothing of its kernel. Each reads its child, its
+# port and its case by the names its closure fixes, so that its source states its reads.
 
 
 def _served_side(child: str, port: str, case: str | None, label: str) -> Callable[[Any], Any]:
@@ -333,13 +335,23 @@ def _served_pace(child: str, port: str) -> Callable[[Any], Any]:
     return pace
 
 
+def _served_advance(child: str, port: str) -> Callable[[Any], Any]:
+    def advance(self: Any) -> Any:
+        return getattr(getattr(self, child), port).advance
+
+    return advance
+
+
 def _serve_ports(cls: type[Kernel]) -> None:
     """Lower each port ``cls``'s own body serves (above): ``<name>_side``,
-    ``<name>_stream_pins`` and ``<name>_pace``, and, for a selector, ``<child>_case``, its
-    case, where the body does not declare it. Refused where the child is not the kernel's
-    (``served-child-unknown``), has no stream port so named (``served-port-unknown``), the
-    body declares a member the port is lowered into (``served-port-repeated``), or a port
-    is served in a Group, which reads nothing of its kernel (``served-port-nested``)."""
+    ``<name>_stream_pins``, ``<name>_pace`` and ``<name>_advance``, and, for a selector,
+    ``<child>_case``, its case, where the body does not declare it; and record it, by its
+    child and the child's port, in ``Kernel.served_names`` (what its intake names it,
+    ``Kernel.intake``).
+    Refused where the child is not the kernel's (``served-child-unknown``), has no stream
+    port so named (``served-port-unknown``), the body declares a member the port is lowered
+    into (``served-port-repeated``), or a port is served in a Group, which reads nothing of
+    its kernel (``served-port-nested``)."""
     from finn.core.space._nodes import NodeChoice, selected  # noqa: PLC0415
     from finn.kernels.port import served_ports  # noqa: PLC0415
     from finn.kernels.port_model import ServedPort  # noqa: PLC0415
@@ -360,6 +372,7 @@ def _serve_ports(cls: type[Kernel]) -> None:
             "in its own body",
             declaration=cls.__qualname__,
         )
+    served = dict(cls.served_names)
     for name, value in own.items():
         if not isinstance(value, ServedPort):
             continue
@@ -399,9 +412,16 @@ def _serve_ports(cls: type[Kernel]) -> None:
         pace = _served_pace(child, value.port)
         pace.__annotations__ = {"return": Pace | Inapplicable}
         pace.__doc__ = f"Its port {name}'s pace: {child}'s {value.port}'s (CONTRACT.md § 4)."
+        advance = _served_advance(child, value.port)
+        advance.__annotations__ = {"return": Advance}
+        advance.__doc__ = (
+            f"Its port {name}'s advance rule: {child}'s {value.port}'s (CONTRACT.md § 3)."
+        )
         members[f"{name}_side"] = derived(side)
         members[f"{name}_stream_pins"] = view(pins)
         members[f"{name}_pace"] = derived(pace)
+        members[f"{name}_advance"] = derived(advance)
+        served[(child, value.port)] = name
         for key, member in members.items():
             if key in own:
                 raise DefinitionError.broken(
@@ -413,6 +433,7 @@ def _serve_ports(cls: type[Kernel]) -> None:
                 )
             setattr(cls, key, member)
             getattr(member, "__set_name__")(cls, key)
+    cls.served_names = MappingProxyType(served)
 
 
 def _install(
@@ -452,6 +473,10 @@ class Kernel(Space):
     id: ClassVar[str] = ""
 
     module_spec: ClassVar[ModuleSpec | None] = None
+
+    # The ports it serves, each by its child and the child's port: what its intake names
+    # the child's (``intake``). Recorded when its class is made (``_serve_ports``).
+    served_names: ClassVar[Mapping[tuple[str, str], str]] = MappingProxyType({})
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         _supply_ports(cls)
@@ -594,6 +619,32 @@ class Kernel(Space):
         and moves its beats at its pace (§ 4). A kernel with scheduled ports states it, over
         its ``extents`` (``bound_schedule``); one with none has none."""
         return Inapplicable()
+
+    # -- its intake ------------------------------------------------------------------------
+
+    @derived
+    def intake(self) -> Intake | Rejected:
+        """How far it takes input ahead of delivering output (CONTRACT.md § 5): one
+        ``finn.kernels.laws.PortIntake`` an input port it places.
+
+        A kernel with a module states its own, read from its RTL (an HLS kernel's
+        measured); one that does not answers ``intake-unstated``, by name, never zero, and
+        no refusal of its design point: no rule reads it. A kernel with children derives
+        its own from its members' (``member_intake``), never states it beside them: a port
+        it serves takes the name it serves it under (``served_names``), any other member's
+        port its path below the member (``adapter.input_gen.input``). A member that states
+        none leaves its parent's unstated too."""
+        if type(self).module_spec is not None:
+            return reject(INTAKE_UNSTATED, f"{type(self).__qualname__} states no intake")
+        served = type(self).served_names
+        found = []
+        for item in self.member_intake:
+            node = str(item.node)
+            child = node.split(".", 1)[0]
+            for each in item.value.ports:
+                name = served.get((child, each.port))
+                found.append(each.under(node) if name is None else replace(each, port=name))
+        return Intake(tuple(found))
 
     # -- its own parts of its answers ----------------------------------------------------
 
@@ -770,14 +821,16 @@ class Kernel(Space):
             )
         return max(beats)
 
-    # -- what it reaches of its members: their answers, read by its views only ------------
-    # Each ``Members`` names the member it reads, so it follows the views it names.
+    # -- what it reaches of its members: their answers, read by its views, and their intake,
+    # read by its own (a derived value, contract) ------------------------------------------
+    # Each ``Members`` names the member it reads, so it follows the members it names.
 
     netlists = Members(netlist)
     controls = Members(bus_control)
     member_buffering = Members(buffering)
     member_resources = Members(resources)
     member_cycles = Members(cycles)
+    member_intake = Members(intake)
 
 
 # -- a kernel's extents and schedule, by finn.dataflow's rules ------------------------------

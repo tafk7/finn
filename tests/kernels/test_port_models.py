@@ -44,6 +44,7 @@ from finn.kernels.port import (
     data_width,
     held,
     pins,
+    port_advance,
     port_endpoint,
     port_side,
     port_stream_pins,
@@ -500,6 +501,10 @@ def test_a_kernel_serves_its_child_s_port_labelled_below_the_child() -> None:
     assert port_endpoint(Serving, "x") is Endpoint.TARGET
     assert port_endpoint(Serving, "y") is Endpoint.INITIATOR
     assert port_endpoint(Serving, "z") is Endpoint.INITIATOR
+    # Its advance rule is its child's port's (W6a), found by the port's name too.
+    assert port_advance(Serving, "x") is getattr(Serving, "x_advance")
+    assert point.query(port_advance(Serving, "x")) == Available(Advance.BUFFERED)
+    assert point.query(port_advance(Serving, "y")) == Available(point.core.output.advance)
     # Served ports are not the kernel's own stream ports: a module's ports are.
     assert stream_ports(Serving) == {}
     # Open, the case is not known, so neither is the label.

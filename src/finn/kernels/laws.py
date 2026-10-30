@@ -19,6 +19,11 @@ read here rather than spell themselves:
   family, never by its ports' transports, and the doubled clock's name (``doubled``);
 - the idle level (``IDLE_LEVEL``), AXIS's byte padding (``axis_carrier``) and the one
   marker an AXIS beat carries (``AXIS_MARKERS``).
+
+And the terms a kernel states its intake in (``Intake``, ``PortIntake``, ``Standing``):
+intake is no law, every kernel states its own from its RTL, but its shape, its unit and
+its standing are the library's, and so is its answer where a kernel states none
+(``INTAKE_UNSTATED``).
 """
 
 from __future__ import annotations
@@ -156,6 +161,87 @@ _ADVANCE_LAWS = {
     Advance.SELECTED: ADVANCE_SELECTED,
     Advance.SOURCED: ADVANCE_SOURCED,
 }
+
+
+# -- intake (CONTRACT.md § 5) -------------------------------------------------------------
+
+
+class Standing(Enum):
+    """What an intake stands on: ``STRUCTURAL``, read from the RTL (exact or bounded, cited
+    by file and line); ``MEASURED``, from a recorded trace of an HLS kernel's RTL, with its
+    conditions. Never fitted or guessed."""
+
+    STRUCTURAL = "structural"
+    MEASURED = "measured"
+
+
+@dataclass(frozen=True)
+class PortIntake:
+    """How far a kernel takes input ahead of delivering output, at one input port (its
+    ``port``, a label below the kernel stating it), in beats of that port.
+
+    ``before_stop``: the beats it takes, from reset with its output stalled, before it
+    **may** stop accepting, a lower bound (what a FIFO sizing must assume it takes);
+    ``most``: the most beats it can hold, delivered or not, an upper bound (a kernel that
+    drops input it never presents may take more than it holds). Where the RTL counts
+    something else than the port's beats, ``before_stop`` rounds down and ``most`` up.
+    ``rule``: when it stops and when it resumes; ``source``: where both are read, the RTL's
+    file and lines at the library's pin, or the trace and its conditions."""
+
+    port: str
+    before_stop: int
+    most: int
+    rule: str
+    standing: Standing
+    source: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.port, str) or not self.port:
+            raise ValueError("an intake names its port")
+        for name in ("before_stop", "most"):
+            count = getattr(self, name)
+            if type(count) is not int or count < 0:
+                raise ValueError(f"{self.port}: {name} is a count of beats, not {count!r}")
+        if not isinstance(self.standing, Standing):
+            raise ValueError(f"{self.port}: an intake's standing is a Standing")
+        if not self.rule or not self.source:
+            raise ValueError(f"{self.port}: an intake states its rule and where it is read")
+
+    def under(self, member: str) -> PortIntake:
+        """The intake as seen from where ``member`` is held."""
+        return replace(self, port=f"{member}.{self.port}")
+
+
+@dataclass(frozen=True)
+class Intake:
+    """A kernel's intake (contract item 5): one ``PortIntake`` an input port it places, by
+    its label. A kernel with children derives its own from its members': a port it serves
+    by the name it serves it under, any other member's below the member."""
+
+    ports: tuple[PortIntake, ...] = ()
+
+    def __post_init__(self) -> None:
+        names = [each.port for each in self.ports]
+        twice = sorted({name for name in names if names.count(name) > 1})
+        if twice:
+            raise ValueError(f"an intake states each port once, not {twice}")
+
+    def of(self, port: str) -> PortIntake:
+        """Port ``port``'s; ``KeyError`` for a port it states none of."""
+        for each in self.ports:
+            if each.port == port:
+                return each
+        raise KeyError(port)
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        """The ports it states, in order."""
+        return tuple(each.port for each in self.ports)
+
+
+INTAKE_UNSTATED = "intake-unstated"
+"""The answer of a kernel that states no intake (CONTRACT.md § 5): named, never zero, and
+no refusal of its design point, since no rule reads intake."""
 
 
 # -- the transports' pin defaults ---------------------------------------------------------
@@ -300,14 +386,18 @@ __all__ = [
     "HANDSHAKE",
     "IDLE",
     "IDLE_LEVEL",
+    "INTAKE_UNSTATED",
+    "Intake",
     "LAWS",
     "Law",
     "MARKERS",
     "NATIVE",
     "NATIVE_CLOCKING",
     "Native",
+    "PortIntake",
     "RATE",
     "RESET_LAW",
+    "Standing",
     "TransportKind",
     "axis_carrier",
     "axis_pin",
