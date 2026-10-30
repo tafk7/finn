@@ -15,8 +15,8 @@ read-list or flat callback table is installed on a kernel. Two things are instal
 when its class is made, each a function reading by names its closure fixes, so that
 its source states its reads: on a kernel with a module, one helper a part of its
 module; on a kernel with children, each port it serves (``served``) lowered into the
-members a channel and its sizing read of a port, ``<port>_side``, ``<port>_contract``
-and ``<port>_pace``, and, for a selector, ``<child>_case``.
+members a channel and its sizing read of a port, ``<port>_side``,
+``<port>_stream_pins`` and ``<port>_pace``, and, for a selector, ``<child>_case``.
 
 Hardware configuration facts/Choices/rules remain inward model computations.
 Outward Views keep selected owning non-refusal and actual unresolved inputs.
@@ -62,26 +62,27 @@ from finn.kernels.artifacts.module import BusExport, Fragment, Held, Link, merge
 from finn.kernels.control import Control, ControlModel, control_models, presented
 from finn.kernels.laws import AXIS_CLOCKING
 from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
-from finn.kernels.transport import StreamContract
+from finn.kernels.transport import StreamPins
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
 
 
 @dataclass(frozen=True)
-class PortContract:
-    """The contract a port presents to a channel: its ``contract`` and its ``label``, the
-    port's path relative to the member that states it (``x`` for a module's port,
-    ``compute.packed.x`` for MatMul's, ``source.memstream.set`` for a channel's source's
-    set port, below the label its channel states for it; empty for a contract the member
-    presents itself, which is no port's). ``under`` labels it from the network (or kernel
-    with children) that holds the member."""
+class PortPins:
+    """The stream pins a port gives a channel to wire to (``pins``,
+    ``finn.kernels.transport.StreamPins``: its stream on its transport's pins) under its
+    ``label``, the port's path relative to the member that states it (``x`` for a module's
+    port, ``compute.packed.x`` for MatMul's, ``source.memstream.set`` for a channel's source's
+    set port, below the label its channel states for it; empty for pins the member presents
+    itself, which are no port's). ``under`` labels it from the network (or kernel with
+    children) that holds the member."""
 
     label: str
-    contract: StreamContract
+    pins: StreamPins
 
-    def under(self, member: str) -> PortContract:
-        """The contract as seen from where ``member`` is held."""
-        return PortContract(f"{member}.{self.label}" if self.label else member, self.contract)
+    def under(self, member: str) -> PortPins:
+        """The pins as seen from where ``member`` is held."""
+        return PortPins(f"{member}.{self.label}" if self.label else member, self.pins)
 
 
 def merged(
@@ -288,8 +289,8 @@ def _nested_served(group: type[Group], prefix: str) -> list[str]:
 # -- the ports a kernel with children serves ------------------------------------------------
 #
 # A served port (``finn.kernels.port_model.served``) is lowered, when its kernel's class is
-# made, into the members a channel and its sizing read of a port: its side and its contract,
-# each the child's port's labelled below it, and its pace, the child's port's. They are
+# made, into the members a channel and its sizing read of a port: its side and its stream
+# pins, each the child's port's labelled below it, and its pace, the child's port's. They are
 # derived members of the kernel, not of a child: the engine reads a member through a
 # selector one level deep (``compute.x``), never two (``compute.x.side``), and a Group reads
 # nothing of its kernel. Each reads its child, its port and its case by the names its
@@ -310,18 +311,19 @@ def _served_side(child: str, port: str, case: str | None, label: str) -> Callabl
     return side_of_case
 
 
-def _served_contract(child: str, port: str, case: str | None, label: str) -> Callable[[Any], Any]:
+def _served_pins(child: str, port: str, case: str | None, label: str) -> Callable[[Any], Any]:
     if case is None:
 
-        def contract(self: Any) -> Any:
-            return getattr(getattr(self, child), port).contract.under(label)
+        def stream_pins(self: Any) -> Any:
+            return getattr(getattr(self, child), port).stream_pins.under(label)
 
-        return contract
+        return stream_pins
 
-    def contract_of_case(self: Any) -> Any:
-        return getattr(getattr(self, child), port).contract.under(f"{child}.{getattr(self, case)}")
+    def stream_pins_of_case(self: Any) -> Any:
+        found = getattr(getattr(self, child), port).stream_pins
+        return found.under(f"{child}.{getattr(self, case)}")
 
-    return contract_of_case
+    return stream_pins_of_case
 
 
 def _served_pace(child: str, port: str) -> Callable[[Any], Any]:
@@ -333,7 +335,7 @@ def _served_pace(child: str, port: str) -> Callable[[Any], Any]:
 
 def _serve_ports(cls: type[Kernel]) -> None:
     """Lower each port ``cls``'s own body serves (above): ``<name>_side``,
-    ``<name>_contract`` and ``<name>_pace``, and, for a selector, ``<child>_case``, its
+    ``<name>_stream_pins`` and ``<name>_pace``, and, for a selector, ``<child>_case``, its
     case, where the body does not declare it. Refused where the child is not the kernel's
     (``served-child-unknown``), has no stream port so named (``served-port-unknown``), the
     body declares a member the port is lowered into (``served-port-repeated``), or a port
@@ -391,14 +393,14 @@ def _serve_ports(cls: type[Kernel]) -> None:
         side = _served_side(child, value.port, case, label)
         side.__annotations__ = {"return": Side}
         side.__doc__ = f"The side its port {name} gives a channel: {child}'s {value.port}'s."
-        contract = _served_contract(child, value.port, case, label)
-        contract.__annotations__ = {"return": PortContract}
-        contract.__doc__ = f"What its port {name} states to a channel: {child}'s {value.port}'s."
+        pins = _served_pins(child, value.port, case, label)
+        pins.__annotations__ = {"return": PortPins}
+        pins.__doc__ = f"The stream pins its port {name} gives a channel: {child}'s {value.port}'s."
         pace = _served_pace(child, value.port)
         pace.__annotations__ = {"return": Pace | Inapplicable}
         pace.__doc__ = f"Its port {name}'s pace: {child}'s {value.port}'s (CONTRACT.md § 4)."
         members[f"{name}_side"] = derived(side)
-        members[f"{name}_contract"] = view(contract)
+        members[f"{name}_stream_pins"] = view(pins)
         members[f"{name}_pace"] = derived(pace)
         for key, member in members.items():
             if key in own:
@@ -848,7 +850,7 @@ def extent_of(index: Index) -> int:
 
 __all__ = [
     "Kernel",
-    "PortContract",
+    "PortPins",
     "bound_extents",
     "bound_schedule",
     "extent_of",

@@ -7,7 +7,7 @@ A ``Channel`` (``finn.kernels.channels``) takes two sides, its ``producer`` and 
 ``consumer``, each a ``Side`` of one of four kinds (``SideKind``):
 
 - a **kernel**'s port (``Side.kernel``): the stream it presents (``x.stream``), its label
-  (``compute.packed.x``, the label its contract carries) and, on an output port, its word
+  (``compute.packed.x``, the label its stream pins carry) and, on an output port, its word
   width (``x.width``), read from its stream. Each port states it (``x.side``; a served
   port's, ``x_side``, is its child's port's, labelled below the child: ``port_side`` in
   ``finn.kernels.port`` finds either);
@@ -258,7 +258,7 @@ class Side:
 
     def under(self, member: str) -> Self:
         """A stated side as seen from where ``member``, which states it, is held: its label
-        below ``member`` (``first.compute.packed.x``), as ``PortContract.under``."""
+        below ``member`` (``first.compute.packed.x``), as ``PortPins.under``."""
         if not self.stated:
             raise ValueError(f"a {self.kind.value}'s side is labelled by no member")
         return replace(self, label=f"{member}.{self.label}")

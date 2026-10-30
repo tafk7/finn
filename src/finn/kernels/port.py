@@ -5,7 +5,7 @@
 
 Actual authoring uses StreamPort real children, and served ports for a kernel with
 children. Native module source reads model inputs serially, then calls these pure helpers.
-``port_side``, ``port_contract``, ``port_pace`` and ``port_endpoint`` find a kernel's port by
+``port_side``, ``port_stream_pins``, ``port_pace`` and ``port_endpoint`` find a kernel's port by
 its name, through its lexical Group paths, stopping at real Space boundaries: what a channel
 and its sizing read of it, and its direction; they never authorize a model's reads.
 """
@@ -36,8 +36,8 @@ from finn.kernels.transport import (
     AxisBeat,
     MarkerKind,
     ReadyValidTransport,
-    StreamContract,
     StreamMarker,
+    StreamPins,
 )
 
 if TYPE_CHECKING:
@@ -252,11 +252,11 @@ def beats(stream: Stream) -> int:
     return stream.sequence.form.beats
 
 
-def contract(
+def stream_pins(
     port: PhysicalPort, stream: Stream, clocking: Clocking | None
-) -> StreamContract | Rejected:
-    """What it states to a channel: its transport and its stream (element, form,
-    repetition, markers, each by the transport pin that carries it)."""
+) -> StreamPins | Rejected:
+    """What a channel wires to: its stream on its transport's pins, each marker of it by the
+    pin that carries it."""
     sequence = stream.sequence
     unsupported = stream_refusal(stream)
     if unsupported is not None:
@@ -278,7 +278,7 @@ def contract(
         markers = ((found.markers[0].signal, cast(LevelEnd, sequence.markers[0])),)
     else:
         markers = ()
-    return StreamContract(found, stream.element, sequence.form, sequence.repetition, markers)
+    return StreamPins(found, stream, markers)
 
 
 # -- a port a kernel with children presents for a child -------------------------------------
@@ -326,13 +326,13 @@ def port_side(namespace: type[Space] | Space, port: str) -> Any:
     return getattr(frame, f"{port.rsplit('.', 1)[-1]}_side")
 
 
-def port_contract(namespace: type[Space] | Space, port: str) -> Any:
-    """What kernel ``namespace``'s port ``port`` states to a channel, as a reference to query
-    (``port_side``'s): a stream port's ``contract``, a served port's."""
+def port_stream_pins(namespace: type[Space] | Space, port: str) -> Any:
+    """The stream pins kernel ``namespace``'s port ``port`` gives a channel to wire to, as a
+    reference to query (``port_side``'s): a stream port's ``stream_pins``, a served port's."""
     frame, child = _found(namespace, port)
     if isinstance(child, Space):
-        return child.contract
-    return getattr(frame, f"{port.rsplit('.', 1)[-1]}_contract")
+        return child.stream_pins
+    return getattr(frame, f"{port.rsplit('.', 1)[-1]}_stream_pins")
 
 
 def port_pace(namespace: type[Space] | Space, port: str) -> Any:
@@ -399,15 +399,15 @@ __all__ = [
     "beats",
     "Presenting",
     "PhysicalPort",
-    "contract",
     "data_width",
     "held",
     "lane_count",
-    "port_contract",
+    "port_stream_pins",
     "port_endpoint",
     "port_side",
     "port_pace",
     "served_ports",
     "pins",
+    "stream_pins",
     "transport",
 ]

@@ -29,21 +29,22 @@ operation runs natively (one channel per PE lane, INT8 DSP58 only) or, by the
 ``realization`` Decision, on the dense datapath with block-diagonal weights
 (``block_diagonal``), reading its (M, K, N) activations as (M, K * N).
 
-``MatMulKernel`` is a kernel with children: the compute cores, which read the
-activations' tensor it is given (``x_tensor``) and the weights' tensor it carries
+``MatMulKernel`` is a kernel with children: the compute cores, which read the activations'
+tensor it is given (``x_tensor``) and the weights' tensor it carries
 (``carried_weights``), its folding factors (``pe``, ``simd``), and N and the widest K
 (``widest_reduction``), stated from its facts alone; it serves their ports (``x``, ``w``,
 ``y``) as its own: each the selected core's (``finn.kernels.port_model.served``), its side
-and contract labelled ``compute.<core>.x`` (``x_side``, ``x_contract``,
-``finn.kernels.base.PortContract``). Each channel, its adapter, its FIFO and its source are
-its network's: the network (a test harness's, or the graph's, a KernelOp's alone or a
-partition's) declares each channel, gives it the tensor MatMul's port reads or writes, and
-gives it MatMul's ports' streams, labels and widths. MatMul's own view of each tensor
-(``activation_tensor``, ``weight_tensor``, and its results, ``y_tensor``) reads only its
-facts and ``realization``, never a port; ``carried`` refuses a given input tensor that is
-not what MatMul requires of it (the activations' element count and last axis, the
-weights' shape), or whose values do not fit what MatMul reads (``matmul-tensor``). A
-boundary channel there presents its ``port`` name (``in0_V``).
+and stream pins labelled ``compute.<core>.x`` (``x_side``, ``x_stream_pins``,
+``finn.kernels.base.PortPins``), and its pace the core's port's (``x_pace``). Each
+channel, its adapter, its FIFO and its source are its network's: the network (a test
+harness's, or the graph's, a KernelOp's alone or a partition's) declares each channel,
+gives it the tensor MatMul's port reads or writes, and gives it MatMul's ports' streams,
+labels and widths. MatMul's own view of each tensor (``activation_tensor``,
+``weight_tensor``, and its results, ``y_tensor``) reads only its facts and
+``realization``, never a port; ``carried`` refuses a given input tensor that is not what
+MatMul requires of it (the activations' element count and last axis, the weights' shape),
+or whose values do not fit what MatMul reads (``matmul-tensor``). A boundary channel there
+presents its ``port`` name (``in0_V``).
 
 MatMul consumes its weights; it never holds them. Its weights are one fact,
 ``weights``: known at build (``KnownWeights``, given by the value's owner: their values

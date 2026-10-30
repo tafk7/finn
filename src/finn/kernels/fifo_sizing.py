@@ -74,13 +74,13 @@ from typing import Protocol
 
 from finn.dataflow.schedule import Pace
 from finn.kernels.adapters import Convert
-from finn.kernels.base import PortContract
+from finn.kernels.base import PortPins
 from finn.kernels.channels import Channel, Neighbours
 from finn.kernels.fifo import least_depth_holding
 from finn.kernels.input_generator import Generate, NestBuffer, nest_buffer
 from finn.kernels.movers import MoverContract
 from finn.kernels.sides import BeatTimes, Side, SideKind, Steady, beat_times
-from finn.kernels.transport import StreamContract
+from finn.kernels.transport import StreamPins
 
 
 @dataclass(frozen=True)
@@ -327,7 +327,7 @@ class NotModelled(ValueError):
 def _paced(neighbours: Neighbours, side: str) -> Pattern:
     """The pace of the port beside the channel on ``side`` (``Neighbours``): a scheduled
     port's; ``NotModelled`` for a port of another rule, which has none."""
-    port: PortContract | None = getattr(neighbours, side)
+    port: PortPins | None = getattr(neighbours, side)
     if port is None:
         raise ValueError(f"the channel's {side} is a port, and none is given beside it")
     pace: Pace | None = getattr(neighbours, f"{side}_pace")
@@ -359,7 +359,7 @@ def _free(channel: Channel, side: Side) -> Pattern:
     modelled ("a boundary: not modelled")."""
     outside = side.outside
     if outside is not None and outside.pace is not None:
-        edge: StreamContract | None = channel.boundary
+        edge: StreamPins | None = channel.boundary
         assert edge is not None  # a channel with a boundary side presents its port
         return stated_pattern(outside.pace, edge.form.beats)
     if not channel.offered:

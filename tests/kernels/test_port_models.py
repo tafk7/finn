@@ -36,18 +36,18 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.module import Held
-from finn.kernels.base import Kernel, PortContract
+from finn.kernels.base import Kernel, PortPins
 from finn.kernels.laws import AXIS, AXIS_CLOCKING, NATIVE, NATIVE_CLOCKING, Advance, Axis, Native
 from finn.kernels.port import (
     LoopEnds,
     PhysicalPort,
-    contract,
     data_width,
     held,
     pins,
-    port_contract,
     port_endpoint,
     port_side,
+    port_stream_pins,
+    stream_pins,
     transport,
 )
 from finn.kernels.port_model import StreamPort, served, stream_ports
@@ -100,8 +100,8 @@ class Ports(Space):
         return self.ok
 
     @view
-    def aggregate(self) -> PortContract:
-        return self.input.contract
+    def aggregate(self) -> PortPins:
+        return self.input.stream_pins
 
 
 @pytest.mark.parametrize("permuted,eager", [(False, False), (True, False), (False, True)])
@@ -126,19 +126,19 @@ def test_actual_native_values_parent_bindings_and_snapshot_history(
         )
         assert port.physical_pins == pins(old, expected, NATIVE_CLOCKING)
         assert port.idle_pins == Held()
-        found = contract(old, expected, NATIVE_CLOCKING)
+        found = stream_pins(old, expected, NATIVE_CLOCKING)
         assert not isinstance(found, Rejected)
-        assert port.contract == PortContract(name, found)
+        assert port.stream_pins == PortPins(name, found)
         assert transport(port.physical_spec(idle=False), expected, NATIVE_CLOCKING) == transport(
             old, expected, NATIVE_CLOCKING
         )
     refused_parent = chosen.with_facts({Ports.ok: False})
     assert isinstance(refused_parent.query(Ports.aggregate), Rejected)
-    assert refused_parent.input.contract == chosen.input.contract
+    assert refused_parent.input.stream_pins == chosen.input.stream_pins
     refused_child = chosen.with_facts({Ports.policy: Integer(max_bits=2)})
-    assert isinstance(refused_child.query(Ports.checked.contract), Rejected)
+    assert isinstance(refused_child.query(Ports.checked.stream_pins), Rejected)
     assert refused_child.checked.stream == chosen.checked.stream
-    assert chosen.checked.contract == point.with_choices({Ports.fold: 4}).checked.contract
+    assert chosen.checked.stream_pins == point.with_choices({Ports.fold: 4}).checked.stream_pins
     assert isinstance(point.query(Ports.input.stream), Unresolved)
     info = next(p for p in inspection.members(chosen) if p.key == "checked.element_taken")
     assert (info.scope, info.owner) == ("checked", "checked.element_taken")
@@ -176,7 +176,7 @@ def test_optional_idle_skips_refused_sequence_and_keeps_physical_metadata() -> N
     assert point.port.element == ELEMENT
     assert not point.port.placed
     assert isinstance(point.query(Optional.port.stream), Inapplicable)
-    assert isinstance(point.query(Optional.port.contract), Inapplicable)
+    assert isinstance(point.query(Optional.port.stream_pins), Inapplicable)
     old = PhysicalPort(name="set", endpoint=Endpoint.TARGET)
     assert point.port.physical_pins == pins(old, ELEMENT, NATIVE_CLOCKING)
     assert point.port.idle_pins == held(old, ELEMENT, NATIVE_CLOCKING)
@@ -195,7 +195,7 @@ def test_an_idle_port_answers_its_stream_inapplicable_and_an_unindexed_one_binds
 
     point = design_space(Shape())
     assert not point.idle.placed
-    for member in ("stream", "width", "side", "contract", "access"):
+    for member in ("stream", "width", "side", "stream_pins", "access"):
         assert isinstance(point.query(getattr(Shape.idle, member)), Inapplicable), member
     assert point.live.binds is False
     assert isinstance(point.query(Shape.live.access), Inapplicable)
@@ -248,9 +248,9 @@ def test_native_loop_markers_and_physical_refusals_use_actual_values() -> None:
     )
     expected = Stream(ELEMENT, sequence)
     assert point.port.physical_pins == pins(old, expected, NATIVE_CLOCKING)
-    found = contract(old, expected, NATIVE_CLOCKING)
+    found = stream_pins(old, expected, NATIVE_CLOCKING)
     assert not isinstance(found, Rejected)
-    assert point.port.contract == PortContract("output", found)
+    assert point.port.stream_pins == PortPins("output", found)
 
     class Bad(Space):
         port = StreamPort(
@@ -431,7 +431,7 @@ def test_a_kernel_gives_each_port_of_its_body_its_name_and_its_clock_domain() ->
     point = design_space(Native_())
     assert point.input.label == "input" and point.input.clocking == NATIVE_CLOCKING
     assert point.named.label == "other"
-    assert point.input.contract.contract.transport.clock == "clk"
+    assert point.input.stream_pins.pins.transport.clock == "clk"
     # A port declared outside a kernel's body states both.
     with pytest.raises(DefinitionError, match="clocking is not supplied"):
         design_space(StreamPort(label="p", transport=AXIS, tensor=TENSOR, sequence=SEQUENCE))
@@ -472,7 +472,7 @@ class Serving(Kernel):
 
 
 def test_a_kernel_serves_its_child_s_port_labelled_below_the_child() -> None:
-    """A served port's side and contract are its child's port's, labelled below the selected
+    """A served port's side and stream pins are its child's port's, labelled below the selected
     case (``core.<case>.input``) or below the child, or the label the kernel states."""
     point = design_space(Serving()).with_choices({Serving.core: "other"})
 
@@ -481,21 +481,21 @@ def test_a_kernel_serves_its_child_s_port_labelled_below_the_child() -> None:
         assert isinstance(found, Available), port
         return found.value
 
-    def contract_of(port: str) -> PortContract:
-        found = point.query(port_contract(Serving, port))
-        assert isinstance(found, Available) and isinstance(found.value, PortContract), port
+    def contract_of(port: str) -> PortPins:
+        found = point.query(port_stream_pins(Serving, port))
+        assert isinstance(found, Available) and isinstance(found.value, PortPins), port
         return found.value
 
     child = point.core.input
     assert side("x") == child.side.under("core.other")
-    assert contract_of("x") == child.contract.under("core.other")
+    assert contract_of("x") == child.stream_pins.under("core.other")
     assert contract_of("x").label == "core.other.input"
     assert side("y") == point.core.output.side.under("core.other")
     assert contract_of("z").label == "kept.leaf.output"
     assert side("w") == point.kept.input.side.under("kept")
     # Lowered into members of the kernel, which the engine reads like any other.
     assert port_side(Serving, "x") is getattr(Serving, "x_side")
-    assert port_contract(Serving, "x") is getattr(Serving, "x_contract")
+    assert port_stream_pins(Serving, "x") is getattr(Serving, "x_stream_pins")
     assert getattr(point, "core_case") == "other"
     assert port_endpoint(Serving, "x") is Endpoint.TARGET
     assert port_endpoint(Serving, "y") is Endpoint.INITIATOR
@@ -503,7 +503,7 @@ def test_a_kernel_serves_its_child_s_port_labelled_below_the_child() -> None:
     # Served ports are not the kernel's own stream ports: a module's ports are.
     assert stream_ports(Serving) == {}
     # Open, the case is not known, so neither is the label.
-    assert isinstance(design_space(Serving()).query(port_contract(Serving, "x")), Unresolved)
+    assert isinstance(design_space(Serving()).query(port_stream_pins(Serving, "x")), Unresolved)
 
 
 def test_a_served_port_names_a_child_and_a_stream_port_of_it() -> None:

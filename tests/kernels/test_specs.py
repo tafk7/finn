@@ -49,13 +49,13 @@ from finn.core.space.declarations import unmet_required
 from finn.dataflow.streams import Stream
 from finn.harness.points import Covering, covering, refusal, refused_cases, rejected
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.base import Kernel, PortContract
+from finn.kernels.base import Kernel, PortPins
 from finn.kernels.configure import undecided
 from finn.kernels.laws import Advance
 from finn.kernels.library import ModuleSpec
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.partition import Partition
-from finn.kernels.port import port_contract, port_pace, port_side
+from finn.kernels.port import port_pace, port_side, port_stream_pins
 from finn.kernels.port_model import ServedPort, StreamPort, stream_ports
 from finn.kernels.sides import Side
 
@@ -217,10 +217,10 @@ def _ports_checked(point: Partition) -> int:
     for name in point.members:
         member = point.member(name)
         for port in _ports(member):
-            offered = member.query(port_contract(type(member), port))
+            offered = member.query(port_stream_pins(type(member), port))
             if not isinstance(offered, Available):
                 continue
-            contract: PortContract = offered.value
+            contract: PortPins = offered.value
             given = member.query(port_side(type(member), port))
             where = f"{name}.{port}"
             assert isinstance(given, Available), where
@@ -234,7 +234,7 @@ def _ports_checked(point: Partition) -> int:
             else:
                 label, stream = contract.label, cast(Stream, side.stream)
             assert label == contract.label, where
-            transport = contract.contract.transport
+            transport = contract.pins.transport
             output = transport.endpoint is Endpoint.INITIATOR
             width = transport.data_width if output else None
             assert side == Side.kernel(stream, label, width), where

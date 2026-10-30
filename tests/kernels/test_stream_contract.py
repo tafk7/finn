@@ -35,6 +35,7 @@ from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import (
     Adaptation,
+    BeatSequence,
     LevelEnd,
     Reorder,
     Repetition,
@@ -54,8 +55,8 @@ from finn.kernels.sides import Side
 from finn.kernels.transport import (
     MarkerKind,
     ReadyValidTransport,
-    StreamContract,
     StreamMarker,
+    StreamPins,
     compatibility,
     marker_pairs,
 )
@@ -72,14 +73,21 @@ def native(name, bits, endpoint, clock="clk", reset="rst", markers=()):
     )
 
 
+def pins(transport, element, form, repetition=Repetition.ONCE, markers=()):
+    """``transport``'s pins carrying ``element`` in ``form``, each marker on the pin keyed."""
+    rules = tuple(rule for _, rule in sorted(markers))
+    sequence = BeatSequence(form, repetition, rules)
+    return StreamPins(transport, Stream(element, sequence), markers)
+
+
 def contract(form, endpoint, *, element=INT3, repetition=Repetition.ONCE, width=None, **kw):
     bits = width or form.lanes * element.bits
-    return StreamContract(native("s", bits, endpoint), element, form, repetition, **kw)
+    return pins(native("s", bits, endpoint), element, form, repetition, **kw)
 
 
-def streamed(given: StreamContract) -> Stream:
-    """The stream a contract states: its element and its beat sequence."""
-    return Stream(given.element, given.sequence)
+def streamed(given: StreamPins) -> Stream:
+    """The stream the pins carry: its element and its beat sequence."""
+    return given.stream
 
 
 def mismatch_codes(mismatches):
@@ -128,7 +136,7 @@ def test_tiled_mvu_weight_chunks_are_a_width_conversion_a_delivery_can_avoid():
         )
     )
     sink = contract(chunked.repeated(R // T), Endpoint.TARGET)
-    produced = source.output.contract.contract
+    produced = source.output.stream_pins.pins
     assert compatibility(streamed(produced), streamed(sink)) == ()
 
 
@@ -196,19 +204,19 @@ def test_repetition_and_marker_rules_are_checked():
         compatibility(streamed(ok), streamed(cyclic_sink))
     )
     last = (StreamMarker("s_m", MarkerKind.LAST),)
-    produced = StreamContract(
+    produced = pins(
         native("s", 6, Endpoint.INITIATOR, markers=last),
         INT3,
         form,
         markers=(("s_m", LevelEnd(1)),),
     )
-    required = StreamContract(
+    required = pins(
         native("s", 6, Endpoint.TARGET, markers=last), INT3, form, markers=(("s_m", LevelEnd(2)),)
     )
     assert "channel-marker" in mismatch_codes(compatibility(streamed(produced), streamed(required)))
     # A marker closing every beat is a constant: met by any producer, from the producer's
     # own marker where it offers one, otherwise tied high.
-    every = StreamContract(
+    every = pins(
         native("s", 6, Endpoint.TARGET, markers=last), INT3, form, markers=(("s_m", LevelEnd(1)),)
     )
     unmarked = contract(form, Endpoint.INITIATOR)
@@ -221,13 +229,13 @@ def test_a_marker_after_an_adapter_is_one_the_adapter_must_make():
     """A sequence step invalidates the markers before it (``finn.dataflow.steps``): a
     consumer's marker past a width conversion is refused as one none survives."""
     last = (StreamMarker("s_m", MarkerKind.LAST),)
-    produced = StreamContract(
+    produced = pins(
         native("s", 6, Endpoint.INITIATOR, markers=last),
         INT3,
         vector_major((8,), 2),
         markers=(("s_m", LevelEnd(4)),),
     )
-    required = StreamContract(
+    required = pins(
         native("s", 12, Endpoint.TARGET, markers=last),
         INT3,
         vector_major((8,), 4),
@@ -251,7 +259,7 @@ def test_contracts_reject_lanes_wider_than_the_word_and_unknown_marker_rules():
     # A marker closes a loop level of its form: three beats close none of two.
     last = (StreamMarker("s_m", MarkerKind.LAST),)
     with pytest.raises(ValueError, match="closes no loop level"):
-        StreamContract(
+        pins(
             native("s", 6, Endpoint.TARGET, markers=last),
             INT3,
             vector_major((4,), 2),
@@ -277,8 +285,8 @@ def delivery(form=None, values=(1, -2, 7, -8), **choices):
 
 def test_delivery_publishes_a_cyclic_contract_and_waits_only_for_its_own_choice():
     base = delivery()
-    output = base.output.contract.contract
-    assert output.repetition is Repetition.CYCLIC and output.form == vector_major((4,), 2)
+    output = base.output.stream_pins.pins
+    assert output.sequence.repetition is Repetition.CYCLIC and output.form == vector_major((4,), 2)
     assert output.payload_bits == output.transport.data_width == 8
     assert base.image == (0xE1, 0x87)
     assert isinstance(base.query(MemStreamKernel.netlist), Unresolved)
@@ -525,9 +533,9 @@ def test_a_pure_lane_permutation_is_realized_as_free_wiring():
     )
     fifo = design_space(fifo_node(word_bits=16, depth=2)).with_choices(ram_style="auto")
     # The hop connects directly, and its link crosses the lanes: no adapter.
-    sink = StreamContract(port_transport(fifo, "input"), INT4, wanted)
-    assert compatibility(streamed(source.output.contract.contract), streamed(sink)) == ()
-    link = wired("source", source.output.contract.contract, "fifo", sink)
+    sink = pins(port_transport(fifo, "input"), INT4, wanted)
+    assert compatibility(streamed(source.output.stream_pins.pins), streamed(sink)) == ()
+    link = wired("source", source.output.stream_pins.pins, "fifo", sink)
     assert (link.source.data, link.sink.data) == ("m_axis_0_tdata", "idat")
     assert (link.lanes, link.lane_bits) == ((0, 2, 1, 3), 4)
 

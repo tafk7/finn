@@ -31,7 +31,7 @@ from finn.dataflow.traversal import BeatSequence, LevelEnd
 from finn.kernels.adapters import input_gen as InputAdapterChain
 from finn.kernels.artifacts.abi import Clocking, Direction, Endpoint, Signal
 from finn.kernels.artifacts.module import Fragment
-from finn.kernels.base import Kernel, PortContract
+from finn.kernels.base import Kernel, PortPins
 from finn.kernels.channels import ChannelFifo
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import InputGeneratorKernel
@@ -63,7 +63,7 @@ def test_native_model_width_is_early_and_child_characterization_is_local() -> No
     assert_type(fifo_point.input.width, int)
     assert fifo_point.input.width == 13
     assert inspection.validity(fifo_point).status == "refused"
-    assert isinstance(fifo_point.query(FifoKernel.input.contract), Available)
+    assert isinstance(fifo_point.query(FifoKernel.input.stream_pins), Available)
     assessment = fifo_point.inspect(FifoKernel.netlist)
     assert isinstance(assessment.result, Rejected) and assessment.output_result is None
 
@@ -80,8 +80,8 @@ def test_native_model_width_is_early_and_child_characterization_is_local() -> No
     partial = design_space(Partial()).kernel
     assert partial.input.element == TENSOR.element
     assert partial.input.width == 13
-    assert isinstance(partial.query(InputGeneratorKernel.input.contract), Available)
-    assert isinstance(partial.query(InputGeneratorKernel.output.contract), Unresolved)
+    assert isinstance(partial.query(InputGeneratorKernel.input.stream_pins), Available)
+    assert isinstance(partial.query(InputGeneratorKernel.output.stream_pins), Unresolved)
     assert isinstance(partial.query(InputGeneratorKernel.netlist), Unresolved)
 
 
@@ -93,7 +93,7 @@ def test_native_ports_are_not_kernel_members_and_keep_choice_keys() -> None:
     assert point.field(FifoKernel.ram_style).candidates() == Available(
         ("auto", "shift", "distributed", "block", "ultra")
     )
-    for flat in ("input_data_width", "input_stream", "output_contract"):
+    for flat in ("input_data_width", "input_stream", "output_stream_pins"):
         assert not hasattr(FifoKernel, flat)
         assert not hasattr(InputGeneratorKernel, flat)
 
@@ -209,7 +209,7 @@ def test_staged_unused_marker_has_real_pin_and_hold_category_order() -> None:
     ]
     assert leaf.held.unused == ("olst",)
     assert point.output.stream.sequence == LEAVING
-    assert point.output.contract.contract.markers == ()
+    assert point.output.stream_pins.pins.markers == ()
     marker = leaf.abi.pins[2]
     assert isinstance(marker, Signal) and marker.direction is Direction.OUT and marker.width == 2
 
@@ -227,9 +227,9 @@ def test_native_clock_overrides_are_physical_inputs() -> None:
             ram_style="auto",
         )
     )
-    assert point.output.contract.contract.transport.clock == "fast"
-    assert point.output.contract.contract.transport.reset == "clear"
-    assert point.output.contract.contract.markers[0][0] == "olst[0]"
+    assert point.output.stream_pins.pins.transport.clock == "fast"
+    assert point.output.stream_pins.pins.transport.reset == "clear"
+    assert point.output.stream_pins.pins.markers[0][0] == "olst[0]"
 
 
 def test_channel_fifo_counts_no_cycles_and_reads_netlist_before_contracts() -> None:
@@ -255,7 +255,7 @@ def test_channel_fifo_counts_no_cycles_and_reads_netlist_before_contracts() -> N
     assert [f.code for f in evidence.result.findings] == ["native-module"]
     keys = {node.declaration.key for node in evidence.nodes}
     assert "buffer.netlist" in keys
-    assert not keys & {"buffer.input.contract", "buffer.output.contract"}
+    assert not keys & {"buffer.input.stream_pins", "buffer.output.stream_pins"}
     streams = point.stage_streams
     assert streams[0].label == "fifo.buffer" and streams[0].width == 13
 
@@ -265,8 +265,8 @@ def test_adapter_reads_contracts_before_netlist(monkeypatch: pytest.MonkeyPatch)
 
     class RefusedContract(StreamPort):
         @view
-        def contract(self) -> PortContract | Rejected | Inapplicable:
-            calls.append("contract")
+        def stream_pins(self) -> PortPins | Rejected | Inapplicable:
+            calls.append("stream_pins")
             return reject("native-contract", "contract first")
 
     class Child(InputGeneratorKernel):
@@ -301,7 +301,7 @@ def test_adapter_reads_contracts_before_netlist(monkeypatch: pytest.MonkeyPatch)
     )
     assessment = point.inspect(Holder.stages)
     assert isinstance(assessment.result, Rejected)
-    assert calls == ["contract"]
+    assert calls == ["stream_pins"]
     assert isinstance(assessment, ViewAssessment)
 
 

@@ -90,7 +90,7 @@ def test_projection_reduction_and_pace_are_the_current_schedule_values(fold: int
     assert point.output.stream == Stream(TENSOR.element, expected_output)
     assert point.input.pace == Pace(schedule, (), ())
     assert point.output.pace == Pace(schedule, (C,), ())
-    assert point.output.contract.label == "output"
+    assert point.output.stream_pins.label == "output"
 
 
 def test_schedule_and_sequence_conflict_remains_a_local_nonvalue() -> None:
@@ -125,7 +125,7 @@ def test_closing_markers_and_suppressed_axes_keep_their_actual_pace(suppressed: 
         )
     )
     assert source.stream.sequence.markers == (SCHEDULE.closing((C,)),)
-    assert source.contract.contract.markers[0][1] == SCHEDULE.closing((C,))
+    assert source.stream_pins.pins.markers[0][1] == SCHEDULE.closing((C,))
     reduces = (C,) if suppressed == "reduces" else ()
     holds = (C,) if suppressed == "holds" else ()
     output = design_space(
@@ -182,7 +182,7 @@ def test_scheduled_child_presence_is_checked_before_local_work(enabled: bool | N
     point = design_space(Guarded())
     if enabled is not None:
         point = point.with_choices(enabled=enabled)
-    result = point.query(Guarded.port.contract)
+    result = point.query(Guarded.port.stream_pins)
     expected = Unresolved if enabled is None else Available if enabled else Inapplicable
     assert isinstance(result, expected)
 

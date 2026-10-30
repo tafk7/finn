@@ -9,7 +9,7 @@ from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.base import PortContract
+from finn.kernels.base import PortPins
 from finn.kernels.laws import NATIVE, NATIVE_CLOCKING
 from finn.kernels.port import port_side
 from finn.kernels.port_model import ServedPort, StreamPort, served, stream_ports
@@ -23,7 +23,7 @@ def check(
     assert_type(port.element, ScalarEncoding)
     assert_type(port.stream, Stream)
     assert_type(port.side, Side)
-    assert_type(port.contract, PortContract)
+    assert_type(port.stream_pins, PortPins)
     assert_type(port.query(StreamPort.stream), QueryResult[Stream])
     assert_type(
         StreamPort(

@@ -30,7 +30,7 @@ from finn.kernels.laws import (
     axis_pin,
     doubled,
 )
-from finn.kernels.port import LoopEnds, PhysicalPort, contract, pins
+from finn.kernels.port import LoopEnds, PhysicalPort, pins, stream_pins
 from finn.kernels.port_model import StreamPort
 
 TARGET, INITIATOR = Endpoint.TARGET, Endpoint.INITIATOR
@@ -142,7 +142,7 @@ def test_an_axis_port_stating_a_loop_completion_vector_is_refused() -> None:
     )
     for sequence in (BeatSequence(marked.form), marked):
         stream = Stream(element, sequence)
-        for found in (pins(port, stream, AXIS_CLOCKING), contract(port, stream, AXIS_CLOCKING)):
+        for found in (pins(port, stream, AXIS_CLOCKING), stream_pins(port, stream, AXIS_CLOCKING)):
             assert isinstance(found, Rejected)
             ((finding,),) = [found.findings]
             assert finding.code == "port-markers"

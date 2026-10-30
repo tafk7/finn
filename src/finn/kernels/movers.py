@@ -82,7 +82,7 @@ from finn.core.space import (
 )
 from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.transport import StreamContract
+from finn.kernels.transport import StreamPins
 from finn.kernels.utilization import Fit
 from finn.platform.capabilities import Resources
 
@@ -274,7 +274,7 @@ class IodmaMover(Space):
     on it."""
 
     offers: tuple[MoverOffer, ...] = Param()
-    side: StreamContract = Param()
+    side: StreamPins = Param()
 
     @constraint
     def offered(self) -> bool | Rejected:

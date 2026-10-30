@@ -23,11 +23,12 @@ from support.helpers import (
 
 from finn.core.space import Available, Inapplicable, Rejected, Space, view
 from finn.dataflow.datatypes import ordinary_integer_bounds
+from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.dataflow.traversal import vector_major
+from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.module import Fragment, Leaf
-from finn.kernels.base import Kernel, PortContract
+from finn.kernels.base import Kernel, PortPins
 from finn.kernels.channels import Channel
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.dotp import PackedDotpKernel
@@ -35,7 +36,7 @@ from finn.kernels.laws import AXIS_CLOCKING, Axis
 from finn.kernels.partition import Partition
 from finn.kernels.port_model import StreamPort
 from finn.kernels.sides import Side
-from finn.kernels.transport import AxisBeat, StreamContract
+from finn.kernels.transport import AxisBeat, StreamPins
 
 INT3, INT8 = DataType["INT3"], DataType["INT8"]
 X = Tensor((3, 4), ScalarEncoding(INT3))
@@ -141,19 +142,20 @@ def test_a_buffered_channel_places_its_fifo_below_its_transport() -> None:
     ]
 
 
-def reading() -> StreamContract:
+def reading() -> StreamPins:
     """What ``Reader`` states at its port."""
     beat = AxisBeat("s_axis", INT3, 4, endpoint=Endpoint.TARGET)
     transport = beat.native(clock="ap_clk", reset="ap_rst_n")
-    return StreamContract(transport, ScalarEncoding(INT3), vector_major((3, 4), 4))
+    sequence = BeatSequence(vector_major((3, 4), 4))
+    return StreamPins(transport, Stream(ScalarEncoding(INT3), sequence))
 
 
 class UnexportedPort(StreamPort):
     """The original deliberately unlabelled contract, on a real model port."""
 
     @view
-    def contract(self) -> PortContract | Rejected | Inapplicable:
-        return PortContract("", reading())
+    def stream_pins(self) -> PortPins | Rejected | Inapplicable:
+        return PortPins("", reading())
 
 
 class Reader(Space):
@@ -192,7 +194,7 @@ def test_a_contract_that_is_no_kernels_port_has_no_netlist() -> None:
         (
             "channel-port",
             "edge",
-            "reader presents a contract, but is no kernel's port",
+            "reader presents stream pins, but is no kernel's port",
             {"tensor": "edge"},
         )
     ]

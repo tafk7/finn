@@ -151,7 +151,7 @@ def mover_facts(contract: MoverContract) -> dict[str, Any]:
 def free_side(point: Configured, tensor: str) -> Any:
     """The stream at the free side of the boundary channel carrying ``tensor`` in a
     configured network (``configured_network``): the channel's side no kernel of the
-    partition owns (a ``StreamContract``), as the channel derives it
+    partition owns (a ``StreamPins``), as the channel derives it
     (``Channel.free_side``)."""
     return point.channel(tensor).free_side
 

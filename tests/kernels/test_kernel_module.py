@@ -317,8 +317,8 @@ def test_a_kernel_with_children_presents_a_childs_port_as_its_own() -> None:
         x = served(kernel, "x")
 
     point = design_space(Presenting())
-    assert point.x_contract.label == "kernel.x"
-    assert point.x_contract.contract == point.kernel.x.contract.contract
+    assert point.x_stream_pins.label == "kernel.x"
+    assert point.x_stream_pins.pins == point.kernel.x.stream_pins.pins
     assert point.x_side.stream == point.kernel.x.stream
 
     class Unserved(Kernel):

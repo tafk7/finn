@@ -44,7 +44,7 @@ from finn.kernels.channels import Channel
 from finn.kernels.control import Control, ControlModel, control_models
 from finn.kernels.laws import AXIS, Axis
 from finn.kernels.library import ModuleSpec
-from finn.kernels.port import port_contract, port_endpoint, port_side
+from finn.kernels.port import port_endpoint, port_side, port_stream_pins
 from finn.kernels.port_model import StreamPort
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
@@ -361,7 +361,7 @@ def test_a_served_port_is_read_at_its_kernel_s_occurrence() -> None:
     # Without a known value the channel places no source, so its set port does not apply.
     assert isinstance(point.query(left), Inapplicable)
     # The deliberately unused channel is a known refused owning scope.
-    assert isinstance(point.query(port_contract(Envelope.left, "set")), Rejected)
+    assert isinstance(point.query(port_stream_pins(Envelope.left, "set")), Rejected)
 
     class ValidEnvelope(Space):
         left = Channel(
@@ -376,7 +376,7 @@ def test_a_served_port_is_read_at_its_kernel_s_occurrence() -> None:
         )
 
     valid = design_space(ValidEnvelope())
-    assert isinstance(valid.query(port_contract(ValidEnvelope.left, "set")), Inapplicable)
+    assert isinstance(valid.query(port_stream_pins(ValidEnvelope.left, "set")), Inapplicable)
     with pytest.raises(TypeError, match="node declaration"):
         port_side(point, "set")
 

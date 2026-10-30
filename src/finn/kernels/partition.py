@@ -77,14 +77,14 @@ from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.artifacts.module import Composed as Module
 from finn.kernels.artifacts.module import Fragment, ProducerIdentity
 from finn.kernels.artifacts.top import compose as top
-from finn.kernels.base import Kernel, PortContract, merged
+from finn.kernels.base import Kernel, PortPins, merged
 from finn.kernels.channels import Channel, Neighbours, OuterHops, outer_hops
 from finn.kernels.composer import Composed, Names, PartitionDeclaration, Port, compose
 from finn.kernels.control import Control
 from finn.kernels.control import presented as presented_buses
 from finn.kernels.movers import MoverOffer
 from finn.kernels.policies import Defaulted, Owner, Unstated, defaulted
-from finn.kernels.port import port_contract, port_pace, port_side
+from finn.kernels.port import port_pace, port_side, port_stream_pins
 from finn.kernels.sides import Side, SideKind
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
@@ -599,18 +599,18 @@ class Partition:
     # -- what it is -------------------------------------------------------------------------
 
     def neighbours(self, name: str) -> Neighbours:
-        """The ports beside channel ``name`` (each kernel's ``<p>_contract`` view, labelled
+        """The ports beside channel ``name`` (each kernel's ``<p>_stream_pins`` view, labelled
         below its member's node): the producing kernel's and the consuming kernel's, by the
         side each is declared on; a frozen neighbour's, outside a slice, as given at its
         stored choices (``frozen``); and each one's pace (``<p>_pace``, a scheduled port's).
         FIFO sizing reads their paces (``finn.kernels.fifo_sizing``), and the netlist its
         hops to them (``hops``)."""
-        found: dict[str, PortContract] = {}
+        found: dict[str, PortPins] = {}
         paces: dict[str, Pace] = {}
         frozen = self._frozen.get(name, Neighbours())
         for side, declared in zip(("producer", "consumer"), self._sides[name], strict=True):
             if isinstance(declared, Side) and declared.kind is SideKind.NEIGHBOUR:
-                given: PortContract | None = getattr(frozen, side)
+                given: PortPins | None = getattr(frozen, side)
                 if given is not None:
                     found[side] = given
                 pace: Pace | None = getattr(frozen, f"{side}_pace")
@@ -620,8 +620,8 @@ class Partition:
             if not isinstance(declared, Port):
                 continue
             point = self.member(declared.member)
-            answer = point.query(port_contract(type(point), declared.port))
-            if isinstance(answer, Available) and isinstance(answer.value, PortContract):
+            answer = point.query(port_stream_pins(type(point), declared.port))
+            if isinstance(answer, Available) and isinstance(answer.value, PortPins):
                 found[side] = answer.value.under(self.node(declared.member))
             paced = point.query(port_pace(type(point), declared.port))
             if isinstance(paced, Available) and isinstance(paced.value, Pace):

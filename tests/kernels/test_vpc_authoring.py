@@ -34,7 +34,7 @@ from finn.kernels.artifacts.module import Fragment
 from finn.kernels.base import Kernel
 from finn.kernels.laws import AXIS, AXIS_CLOCKING, Native
 from finn.kernels.library import ModuleSpec
-from finn.kernels.port import LoopEnds, port_contract, port_endpoint, port_side
+from finn.kernels.port import LoopEnds, port_endpoint, port_side, port_stream_pins
 from finn.kernels.port_model import StreamPort
 from finn.kernels.vpc import VpcKernel
 from finn.platform.capabilities import Resources
@@ -135,7 +135,7 @@ def test_actual_vpc_surfaces_are_typed_real_children_and_not_kernel_instances() 
     assert port_endpoint(VpcKernel, "input") is Endpoint.TARGET
     assert port_endpoint(VpcKernel, "output") is Endpoint.INITIATOR
     assert point.query(port_side(VpcKernel, "output")) == Available(point.output.side)
-    assert point.query(port_contract(VpcKernel, "output")) == Available(point.output.contract)
+    assert point.query(port_stream_pins(VpcKernel, "output")) == Available(point.output.stream_pins)
     with pytest.raises(KeyError):
         port_side(VpcKernel, "missing")
     with pytest.raises(TypeError, match="node declaration"):

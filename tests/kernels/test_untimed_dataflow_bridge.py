@@ -118,9 +118,9 @@ def test_non_suffix_closing_uses_existing_tlast_only_when_it_normalizes_to_level
 
         assert isinstance(stream, SpaceAvailable)
         assert stream.value.sequence.markers == (LevelEnd(2),)
-        contract = point.query(StreamPort.contract)
+        contract = point.query(StreamPort.stream_pins)
         assert isinstance(contract, SpaceAvailable)
-        assert contract.value.contract.transport.markers[0].signal == "s_axis_x_tlast"
+        assert contract.value.pins.transport.markers[0].signal == "s_axis_x_tlast"
     else:
         assert isinstance(stream, Rejected)
         assert {finding.code for finding in stream.findings} == {"port-marker-unsupported"}

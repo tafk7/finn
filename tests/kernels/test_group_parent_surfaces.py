@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 """A stream port declared in a Group keeps its actual lexical Group occurrence: discovery
-(``stream_ports``), lookup (``port_side``, ``port_contract``, ``port_endpoint``) and the
+(``stream_ports``), lookup (``port_side``, ``port_stream_pins``, ``port_endpoint``) and the
 composer find it there, and nothing forwards it by hand (W4: ``PortSurface`` is gone)."""
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from finn.kernels.base import Kernel
 from finn.kernels.composer import Facts, PartitionDeclaration, Port, channel
 from finn.kernels.composer import _checked as checked
 from finn.kernels.laws import AXIS, AXIS_CLOCKING
-from finn.kernels.port import port_contract, port_endpoint, port_side
+from finn.kernels.port import port_endpoint, port_side, port_stream_pins
 from finn.kernels.port_model import StreamPort, stream_ports
 from finn.kernels.sides import Side
 
@@ -98,11 +98,11 @@ def test_discovery_lookup_and_real_source_agree_for_inherited_nested_groups(
     group = host.group.send if sending else host.group.receive
     assert discovered[key] is not None
     assert declared_path(discovered[key]) == declared_path(group.native)
-    side, contract = port_side(host, key), port_contract(host, key)
+    side, contract = port_side(host, key), port_stream_pins(host, key)
     assert reference_path(side) == reference_path(group.native.side)
-    assert reference_path(contract) == reference_path(group.native.contract)
+    assert reference_path(contract) == reference_path(group.native.stream_pins)
     assert side == group.native.side
-    assert contract == group.native.contract
+    assert contract == group.native.stream_pins
     expected = Endpoint.INITIATOR if sending else Endpoint.TARGET
     assert port_endpoint(host, key) is expected
     tensor = OTHER if sending or host is ReplacedHost else SMALL
@@ -112,7 +112,7 @@ def test_discovery_lookup_and_real_source_agree_for_inherited_nested_groups(
     assert isinstance(found, Available)
     assert found.value.stream == Stream(tensor.element, sequence)
     assert point.query(contract) == Available(
-        point.group.send.native.contract if sending else point.group.receive.native.contract
+        point.group.send.native.stream_pins if sending else point.group.receive.native.stream_pins
     )
     # Lookup must not borrow the root's same-spelling port.
     assert side != port_side(host, "native")
@@ -132,7 +132,7 @@ def test_placed_node_ports_keep_the_exact_group_and_kernel_occurrence(
     sending = key == "group.send.native"
     group = namespace.group.send if sending else namespace.group.receive
     assert side == group.native.side
-    assert port_contract(namespace, key) == group.native.contract
+    assert port_stream_pins(namespace, key) == group.native.stream_pins
     assert reference_path(side) != reference_path(
         port_side(Holder.right if placement == "left" else Holder.left, key)
     )
@@ -235,4 +235,4 @@ def test_unknown_keys_and_real_space_crossing_remain_rejected(key: str) -> None:
     with pytest.raises(KeyError, match=key):
         port_side(Parent, key)
     with pytest.raises(KeyError, match=key):
-        port_contract(Parent, key)
+        port_stream_pins(Parent, key)

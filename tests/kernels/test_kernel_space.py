@@ -50,7 +50,7 @@ from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Direction, Endpoint, Signal
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource, GeneratedData
 from finn.kernels.artifacts.module import Fragment, Held
-from finn.kernels.base import Kernel, PortContract
+from finn.kernels.base import Kernel, PortPins
 from finn.kernels.channels import ChannelFifo
 from finn.kernels.fifo import FifoKernel, fifo_resources
 from finn.kernels.laws import NATIVE, NATIVE_CLOCKING
@@ -417,11 +417,11 @@ def test_a_kernel_stating_a_stream_port_binds_a_module() -> None:
         inner = Stage(input_tensor=TENSOR, arriving=ARRIVING)
 
         @view
-        def input_contract(self) -> PortContract:
-            return self.inner.input.contract.under("inner")
+        def input_stream_pins(self) -> PortPins:
+            return self.inner.input.stream_pins.under("inner")
 
     serving: Any = design_space(Serving())  # its lowered members are untyped
-    assert serving.input_contract.label == "inner.input"
+    assert serving.input_stream_pins.label == "inner.input"
 
     # A base of kernels, leaving a required() member unmet, states its ports for the
     # kernels on it, which bind the module.

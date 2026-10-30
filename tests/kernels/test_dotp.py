@@ -99,8 +99,8 @@ def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_th
     assert {
         item.key
         for item in inspection.members(point)
-        if item.kind == "view" and item.key.endswith(".contract")
-    } == {"x.contract", "w.contract", "y.contract"}
+        if item.kind == "view" and item.key.endswith(".stream_pins")
+    } == {"x.stream_pins", "w.stream_pins", "y.stream_pins"}
     found = {item.key: item.kind for item in inspection.members(point)}
     # Facts, bound from the network's (a window only where a convolution reads one).
     facts = {key for key, kind in found.items() if kind == "param" and "." not in key}

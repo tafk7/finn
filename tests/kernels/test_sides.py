@@ -414,7 +414,7 @@ def test_a_channel_s_set_port_states_its_source_s_label_and_side() -> None:
         },
     )
     w = folded.member("w")
-    assert w.set_contract.label == "source.memstream.set"
+    assert w.set_stream_pins.label == "source.memstream.set"
     assert w.set_side == Side.kernel(w.source.set.stream, "source.memstream.set")
     assert folded.member("set").consumer == w.set_side.under("w")
 

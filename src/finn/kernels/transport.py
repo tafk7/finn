@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Transport: native ready/valid pins, AXIS, and the contract of one side of a channel.
+"""Transport: native ready/valid pins, AXIS, and a port's stream on its pins.
 
 **Ready/valid.** A transfer occurs on the associated rising clock edge with
 valid and ready, outside reset. Valid data and sidebands are held while
@@ -10,8 +10,8 @@ homogeneous AXIS beat, lane zero lowest, with only the complete beat padded to a
 byte boundary. Scalar encodings keep their QONNX widths. A kernel's
 Pure resolved port functions (``finn.kernels.port``) build one from its lanes (``transport``).
 
-**Contracts.** A ``StreamContract`` joins three levels, each owned elsewhere
-and checked here together:
+**Stream pins.** A ``StreamPins`` is a port's stream on its pins, what a channel wires
+to; it joins three levels, each owned elsewhere and checked here together:
 
 - logical: element encoding, lanes, beat form, repetition and marker rules;
 - physical: packing of the lanes into the transport word, lane zero lowest;
@@ -49,7 +49,6 @@ from finn.dataflow.traversal import (
     Adaptation,
     BeatSequence,
     LevelEnd,
-    Repetition,
     Traversal,
     classify,
 )
@@ -230,7 +229,7 @@ class AxisBeat:
         )
 
 
-# -- the contract of one side of a channel -------------------------------------------------
+# -- a port's stream on its pins, one side of a channel ------------------------------------
 
 
 @dataclass(frozen=True)
@@ -240,33 +239,31 @@ class Mismatch:
 
 
 @dataclass(frozen=True)
-class StreamContract:
-    """One side of a channel: its transport plus the logical sequence it carries.
+class StreamPins:
+    """A port's stream on its pins: what a channel wires to, the realization of one side.
 
-    ``markers`` pairs a transport marker with the rule it follows, in key
-    order: a one-bit marker by its signal (``olast``), or one bit of a wider
-    loop-completion marker as ``signal[bit]`` (``olst[1]``). For a producer these are
-    guarantees; for a consumer, requirements. Transport markers without a rule
-    can be neither required nor matched.
+    ``stream`` is the port's stream (its element and its beat sequence: form, repetition,
+    markers), the contract item, a ``finn.dataflow`` value; ``transport`` its ready/valid
+    pins on its carrier (its transport kind's names, its data word's width, its clock and
+    reset); ``markers`` which pin carries each marker of the stream, in key order: a one-bit
+    marker by its signal (``olast``), or one bit of a wider loop-completion marker as
+    ``signal[bit]`` (``olst[1]``). For a producer these are guarantees; for a consumer,
+    requirements. Transport markers without a rule can be neither required nor matched.
 
-    It carries no pace: a scheduled port's pace is the port's own
-    (``finn.kernels.port_model.StreamPort.pace``), and whether two sides connect does not
-    read it.
+    It carries no label (the port's name, ``finn.kernels.base.PortPins``) and no pace (a
+    scheduled port's own, ``finn.kernels.port_model.StreamPort.pace``): whether two sides
+    connect reads neither.
     """
 
     transport: ReadyValidTransport
-    element: ScalarEncoding
-    form: Traversal
-    repetition: Repetition = Repetition.ONCE
+    stream: Stream
     markers: tuple[tuple[str, LevelEnd], ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.transport, ReadyValidTransport):
-            raise TypeError("a stream contract has a ReadyValidTransport transport")
-        if not isinstance(self.element, ScalarEncoding) or not isinstance(self.form, Traversal):
-            raise TypeError("a stream contract has a ScalarEncoding element and a Traversal")
-        if not isinstance(self.repetition, Repetition):
-            raise TypeError("a stream contract has a Repetition")
+            raise TypeError("stream pins are a ReadyValidTransport's")
+        if not isinstance(self.stream, Stream) or not isinstance(self.form, Traversal):
+            raise TypeError("stream pins carry a Stream over a Traversal")
         if self.payload_bits > self.transport.data_width:
             raise ValueError(
                 f"{self.transport.name}: {self.form.lanes} x {self.element.bits}-bit lanes "
@@ -281,9 +278,24 @@ class StreamContract:
             width = widths.get(signal, 0)
             if (width != 1 if bit is None else bit >= width) or not isinstance(rule, LevelEnd):
                 raise ValueError(f"{key}: a rule needs a one-bit transport marker or marker bit")
-            if not rule.aligned(self.form):
-                raise ValueError(f"{key}: a marker every {rule.beats} beats closes no loop level")
+            if rule not in self.stream.sequence.markers:
+                raise ValueError(f"{key}: a marker every {rule.beats} beats is no stream's marker")
         object.__setattr__(self, "markers", tuple(sorted(markers.items())))
+
+    @property
+    def element(self) -> ScalarEncoding:
+        return self.stream.element
+
+    @property
+    def sequence(self) -> BeatSequence:
+        """The beat sequence its stream presents."""
+        return self.stream.sequence
+
+    @property
+    def form(self) -> Traversal:
+        form = self.stream.sequence.form
+        assert isinstance(form, Traversal)
+        return form
 
     @property
     def lanes(self) -> int:
@@ -296,11 +308,6 @@ class StreamContract:
     @property
     def rules(self) -> dict[str, LevelEnd]:
         return dict(self.markers)
-
-    @property
-    def sequence(self) -> BeatSequence:
-        """The logical sequence this side presents, without its transport."""
-        return BeatSequence(self.form, self.repetition, tuple(self.rules.values()))
 
 
 def marker_bit(key: str) -> tuple[str, int | None]:
@@ -353,7 +360,7 @@ def compatibility(source: Stream, sink: Stream) -> tuple[Mismatch, ...]:
     return tuple(found)
 
 
-def lane_permutation(source: StreamContract, sink: StreamContract) -> tuple[int, ...]:
+def lane_permutation(source: StreamPins, sink: StreamPins) -> tuple[int, ...]:
     """Sink lane -> source lane; the identity unless the lanes are only reordered."""
     try:
         produced = presented(source.sequence, sink.sequence)
@@ -367,9 +374,7 @@ def lane_permutation(source: StreamContract, sink: StreamContract) -> tuple[int,
     return tuple(range(sink.lanes))
 
 
-def marker_pairs(
-    source: StreamContract, sink: StreamContract
-) -> tuple[tuple[str | None, str], ...]:
+def marker_pairs(source: StreamPins, sink: StreamPins) -> tuple[tuple[str | None, str], ...]:
     """(source signal, sink signal) for each required sink marker; a source of None ties
     a constant marker (one closing every beat) the source does not offer high."""
     offered = source.rules
@@ -392,8 +397,8 @@ __all__ = [
     "MarkerKind",
     "Mismatch",
     "ReadyValidTransport",
-    "StreamContract",
     "StreamMarker",
+    "StreamPins",
     "compatibility",
     "lane_permutation",
     "marker_bit",

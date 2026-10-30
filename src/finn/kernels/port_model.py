@@ -9,7 +9,7 @@ kernel's schedule's projection, or idle. Folding and composition remain on the p
 kernel with children presents a child's port as its own by serving it (``served``), which
 its base lowers into the members a channel reads; nothing forwards a port by hand.
 
-Public physical Views characterize the child's contract. Module assembly (the
+Public physical Views characterize the child's realization. Module assembly (the
 base's, ``Kernel.netlist``) calls each port's ordinary methods, ``pin_values``,
 ``held_values`` and ``pins_presented``, over literal model inputs and the pure
 physical functions; it must not read these Views, so that it collects directly
@@ -40,7 +40,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.abi import Clocking, Endpoint, Pin
 from finn.kernels.artifacts.module import Held
-from finn.kernels.base import PortContract
+from finn.kernels.base import PortPins
 from finn.kernels.laws import Advance, TransportKind
 from finn.kernels.port import (
     LoopEnds,
@@ -51,7 +51,7 @@ from finn.kernels.port import (
     pins,
     stream_refusal,
 )
-from finn.kernels.port import contract as port_contract
+from finn.kernels.port import stream_pins as pins_of
 from finn.kernels.sides import Side
 from finn.kernels.values.domains import Integer, admit_element
 
@@ -283,14 +283,15 @@ class StreamPort(Space):
         return self.held_values()
 
     @view
-    def contract(self) -> PortContract | Rejected | Inapplicable:
-        """What it states to a channel: its stream on its transport
-        (``finn.kernels.port.contract``)."""
+    def stream_pins(self) -> PortPins | Rejected | Inapplicable:
+        """What a channel wires to, realization: its stream on its transport's pins, under
+        its label (``finn.kernels.port.stream_pins``). Its contract is its stream, its
+        carrier (``transport``, ``width``), its label and, scheduled, its pace."""
         if not self.placed:
             return Inapplicable()
         stream = self.stream
-        found = port_contract(self.physical_spec(idle=False), stream, self.clocking)
-        return found if isinstance(found, Rejected) else PortContract(self.label, found)
+        found = pins_of(self.physical_spec(idle=False), stream, self.clocking)
+        return found if isinstance(found, Rejected) else PortPins(self.label, found)
 
 
 class OtherPins(Group):
@@ -316,17 +317,18 @@ class OtherPins(Group):
 class ServedPort:
     """A port a kernel with children presents as one of its child's stream ports (canon
     AUTHORING's ``served``): ``child``, a child of the kernel or a selector over children,
-    and that child's port ``port``. Its stream, contract, advance rule and intake are the
+    and that child's port ``port``. Its stream, pins, pace, advance rule and intake are the
     child's port's; its label is the port's below the child's case (``compute.<case>.x`` for
     a selector's, MatMul's), or below the ``label`` the kernel states for its child
     (``source.memstream.set``, a channel's source's).
 
     Declared in a kernel's own body, after its child (``x = served(compute, "x")``); when
-    the kernel's class is made (``finn.kernels.base.Kernel``), it is lowered into the two
-    members a channel reads of a port, ``<name>_side`` and ``<name>_contract``, each the
-    child's port's labelled below it, and, for a selector, ``<child>_case``, its case. A
-    reader finds them by the port's name (``finn.kernels.port.port_side``,
-    ``port_contract``), never by the members' names."""
+    the kernel's class is made (``finn.kernels.base.Kernel``), it is lowered into the
+    members a channel and its sizing read of a port, ``<name>_side`` and
+    ``<name>_stream_pins``, each the child's port's labelled below it, and ``<name>_pace``,
+    the child's port's, and, for a selector, ``<child>_case``, its case. A reader finds them
+    by the port's name (``finn.kernels.port.port_side``, ``port_stream_pins``,
+    ``port_pace``), never by the members' names."""
 
     child: object
     port: str

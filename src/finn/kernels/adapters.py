@@ -40,7 +40,7 @@ stage, each given its tensor and the two sides of its step, the beat sequences i
 present, from which it derives its generics. Each child's streams and output word width
 are a ``StageStreams`` (``stage_streams``, from the child's derived values), which the
 channel checks like any other port's streams; and a ``Stage``: the child's module (read
-from its netlist, ``finn.kernels.library.library_module``) and its ports' contracts
+from its netlist, ``finn.kernels.library.library_module``) and its ports' stream pins
 (``stages``, a view), which the channel wires hop by hop, so an adapter presents no port
 of its own. Its netlist, cycles (the most
 beats any of its stages' ports carries), buffering (the buffers its ``input_gen`` stages
@@ -73,17 +73,17 @@ from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, Traversal
 from finn.kernels.artifacts.module import Fragment, Leaf
-from finn.kernels.base import Kernel, PortContract
+from finn.kernels.base import Kernel, PortPins
 from finn.kernels.input_generator import Generate, InputGeneratorKernel, generated
 from finn.kernels.library import leaf_at_root
-from finn.kernels.transport import StreamContract
+from finn.kernels.transport import StreamPins
 from finn.kernels.vpc import VpcKernel
 from finn.platform.capabilities import Platform
 
 
 @dataclass(frozen=True)
 class Stage:
-    """A module inside a channel, with the contracts of its two ports.
+    """A module inside a channel, with the stream pins of its two ports.
 
     ``module`` is its leaf, placed at ``label``: the node path of its kernel
     below whatever places it (``input_gen.input_gen`` below an adapter
@@ -91,8 +91,8 @@ class Stage:
     """
 
     module: Leaf
-    input: StreamContract
-    output: StreamContract
+    input: StreamPins
+    output: StreamPins
     label: str
 
 
@@ -248,7 +248,7 @@ class StreamAdapter(Kernel):
 
     @view
     def stages(self) -> tuple[Stage, ...]:
-        """Each child's module and its ports' contracts, labelled below what holds the
+        """Each child's module and its ports' stream pins, labelled below what holds the
         chain: the chain, then the stage (``vpc.vpc``). Each finite chain's native helper
         states its actual reads; this base places no stage."""
         return self._stages()
@@ -285,10 +285,10 @@ class InputAdapter(StreamAdapter):
 
 
 def _stage(
-    label: str, given: PortContract, presented: PortContract, netlist: Fragment, owner: str
+    label: str, given: PortPins, presented: PortPins, netlist: Fragment, owner: str
 ) -> Stage:
-    """Pure stage assembly; callers read contracts then the netlist in original order."""
-    return Stage(leaf_at_root(netlist, owner), given.contract, presented.contract, label)
+    """Pure stage assembly; callers read stream pins then the netlist in original order."""
+    return Stage(leaf_at_root(netlist, owner), given.pins, presented.pins, label)
 
 
 class vpc(StreamAdapter):
@@ -310,8 +310,8 @@ class vpc(StreamAdapter):
         return (
             _stage(
                 "vpc.vpc",
-                self.vpc.input.contract,
-                self.vpc.output.contract,
+                self.vpc.input.stream_pins,
+                self.vpc.output.stream_pins,
                 self.vpc.netlist,
                 type(self.vpc).__qualname__,
             ),
@@ -342,8 +342,8 @@ class input_gen(InputAdapter):
         return (
             _stage(
                 "input_gen.input_gen",
-                self.input_gen.input.contract,
-                self.input_gen.output.contract,
+                self.input_gen.input.stream_pins,
+                self.input_gen.output.stream_pins,
                 self.input_gen.netlist,
                 type(self.input_gen).__qualname__,
             ),
@@ -388,15 +388,15 @@ class input_gen_vpc(InputAdapter):
         return (
             _stage(
                 "input_gen_vpc.input_gen",
-                self.input_gen.input.contract,
-                self.input_gen.output.contract,
+                self.input_gen.input.stream_pins,
+                self.input_gen.output.stream_pins,
                 self.input_gen.netlist,
                 type(self.input_gen).__qualname__,
             ),
             _stage(
                 "input_gen_vpc.vpc",
-                self.vpc.input.contract,
-                self.vpc.output.contract,
+                self.vpc.input.stream_pins,
+                self.vpc.output.stream_pins,
                 self.vpc.netlist,
                 type(self.vpc).__qualname__,
             ),
@@ -454,22 +454,22 @@ class input_gen_vpc_input_gen(InputAdapter):
         return (
             _stage(
                 "input_gen_vpc_input_gen.input_gen",
-                self.input_gen.input.contract,
-                self.input_gen.output.contract,
+                self.input_gen.input.stream_pins,
+                self.input_gen.output.stream_pins,
                 self.input_gen.netlist,
                 type(self.input_gen).__qualname__,
             ),
             _stage(
                 "input_gen_vpc_input_gen.vpc",
-                self.vpc.input.contract,
-                self.vpc.output.contract,
+                self.vpc.input.stream_pins,
+                self.vpc.output.stream_pins,
                 self.vpc.netlist,
                 type(self.vpc).__qualname__,
             ),
             _stage(
                 "input_gen_vpc_input_gen.input_gen_1",
-                self.input_gen_1.input.contract,
-                self.input_gen_1.output.contract,
+                self.input_gen_1.input.stream_pins,
+                self.input_gen_1.output.stream_pins,
                 self.input_gen_1.netlist,
                 type(self.input_gen_1).__qualname__,
             ),

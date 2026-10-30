@@ -138,7 +138,7 @@ from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.partition import Partition
 from finn.kernels.policies import Alone, FirstValid, Policy, defaulted
 from finn.kernels.sides import Side
-from finn.kernels.transport import StreamContract
+from finn.kernels.transport import StreamPins
 from finn.kernels.transpose import TransposeKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.toolchain.launcher import host_toolchain
@@ -717,17 +717,17 @@ def _check_rtl(
 
 def _contracts(
     point: Any, space_type: type[Kernel], sample: Sample, names: Sequence[str]
-) -> dict[str, StreamContract]:
+) -> dict[str, StreamPins]:
     """The contract the kernel presents on each channel: its port beside the channel, as
     the partition reads it (``Partition.neighbours``)."""
-    found: dict[str, StreamContract] = {}
+    found: dict[str, StreamPins] = {}
     for name in names:
         owner = f"{KERNEL}.{_user(point, name)}"
         beside = point.neighbours(name)
         ports = [each for each in (beside.producer, beside.consumer) if each is not None]
         (port,) = [each for each in ports if each.label == owner] or [None]
         assert port is not None, f"{name} is not {owner}'s: {beside}"
-        found[name] = port.contract
+        found[name] = port.pins
     return found
 
 
@@ -939,7 +939,7 @@ def _simulate(
     return failures
 
 
-def _stream(point: Any, name: str, form: Traversal, contract: StreamContract) -> Stream:
+def _stream(point: Any, name: str, form: Traversal, contract: StreamPins) -> Stream:
     """Channel ``name``'s stream as the kernel's port declares it, its tensor's axes named
     by the port's index expressions where it reads one per axis."""
     port = _port(design_member(point, KERNEL), _user(point, name))

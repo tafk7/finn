@@ -60,7 +60,7 @@ def test_parent_arithmetic_refusal_keeps_intrinsic_child_input_characterization(
     ).with_choices(pe=2)
     assessment = bad.inspect(EltwiseKernel.netlist)
     assert isinstance(assessment.result, Rejected) and assessment.output_result is None
-    assert isinstance(bad.query(EltwiseKernel.lhs.contract), Available)
+    assert isinstance(bad.query(EltwiseKernel.lhs.stream_pins), Available)
 
 
 class SerialEltwise(EltwiseKernel):

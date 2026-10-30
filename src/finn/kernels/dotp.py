@@ -20,16 +20,17 @@ each reduction.
 
 Its ports ``x`` and ``w`` read the tensors its parent gives (``x_tensor``, ``w_tensor``),
 and ``y`` writes its results, ``y_tensor``; each presents its stream (``x.stream``,
-``w.stream``, ``y.stream``) and states its contract (``x.contract``, ``w.contract``,
-``y.contract``). The extents are bound from the input tensors: x reads ``(m, k)`` (``(m, k,
-n)`` depthwise), w ``(k, n)``, and the results are ``(m, n)``. Dense activations at the
-graph's rank, ``(..., K)``, are read through the view ``(m, k)`` (``rows_viewed``), the
-results stated at that rank; ``reshape_activations`` reads ``(M, K, N)`` as ``(M, K *
-N)``, a densely realized depthwise operation. PE and SIMD fold ``n`` and ``k``, and the
-``schedule`` walks ``m``, then ``n``, then ``k`` innermost. A dense form read through a
-``window`` (``finn.dataflow.gemm.Window``, a lowered convolution) reads the image's
-pixels and window positions, ``(oh, ow, n, kh, kw, c)``; the core sees the beats of a
-dense form of ``K = KH * KW * C``, the window being the activation channel's.
+``w.stream``, ``y.stream``) and its pace (``x.pace``, ``w.pace``, ``y.pace``), and gives
+a channel its stream pins (``x.stream_pins``, ``w.stream_pins``, ``y.stream_pins``). The
+extents are bound from the input tensors: x reads ``(m, k)`` (``(m, k, n)`` depthwise), w
+``(k, n)``, and the results are ``(m, n)``. Dense activations at the graph's rank,
+``(..., K)``, are read through the view ``(m, k)`` (``rows_viewed``), the results stated
+at that rank; ``reshape_activations`` reads ``(M, K, N)`` as ``(M, K * N)``, a densely
+realized depthwise operation. PE and SIMD fold ``n`` and ``k``, and the ``schedule``
+walks ``m``, then ``n``, then ``k`` innermost. A dense form read through a ``window``
+(``finn.dataflow.gemm.Window``, a lowered convolution) reads the image's pixels and
+window positions, ``(oh, ow, n, kh, kw, c)``; the core sees the beats of a dense form of
+``K = KH * KW * C``, the window being the activation channel's.
 
 PE and SIMD are given (``pe``, ``simd``): the role that places a core holds them, so a
 switch of cores keeps them (MatMul declares them over N and the widest SIMD extent). A

@@ -296,7 +296,7 @@ def test_several_threshold_sets_take_a_set_selector_stream():
     point = selected(selectors)
     assert isinstance(point.query("sets", Kernel.netlist), Available)
     # Its consumer, the set selector port beside it, as the partition reads it.
-    assert point.neighbours("sets").consumer.contract.transport.name == "s_axis_set"
+    assert point.neighbours("sets").consumer.pins.transport.name == "s_axis_set"
     # One set index for every input beat: with a shorter selector channel, the folding
     # that places the set port is refused by it, its set sequence's rule.
     short = Tensor((HEIGHT,), ScalarEncoding(DataType["UINT1"]))

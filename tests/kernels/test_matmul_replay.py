@@ -32,13 +32,14 @@ from support.netlist import Const, Drive, Pin
 from finn.core.search import dotted
 from finn.dataflow.gemm import Form
 from finn.dataflow.steps import Step
+from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding
-from finn.dataflow.traversal import LevelEnd, vector_major
+from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
 from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.matmul import MatMulKernel
-from finn.kernels.transport import MarkerKind, ReadyValidTransport, StreamContract, StreamMarker
+from finn.kernels.transport import MarkerKind, ReadyValidTransport, StreamMarker, StreamPins
 
 FACTS = dict(
     m=3,
@@ -170,8 +171,9 @@ def test_a_marker_rule_names_a_whole_one_bit_marker_or_one_bit_of_a_wider_one():
         (StreamMarker("olst", MarkerKind.LOOP_END, 2),),
     )
     element, form = ScalarEncoding(DataType["INT3"]), vector_major((3, 4), 2)
-    contract = StreamContract(transport, element, form, markers=(("olst[1]", LevelEnd(2)),))
+    stream = Stream(element, BeatSequence(form, markers=(LevelEnd(2),)))
+    contract = StreamPins(transport, stream, markers=(("olst[1]", LevelEnd(2)),))
     assert contract.rules == {"olst[1]": LevelEnd(2)}
     for key in ("olst[2]", "olst"):
         with pytest.raises(ValueError, match="marker bit"):
-            StreamContract(transport, element, form, markers=((key, LevelEnd(2)),))
+            StreamPins(transport, stream, markers=((key, LevelEnd(2)),))

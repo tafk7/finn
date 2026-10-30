@@ -95,7 +95,7 @@ from finn.dataflow.streams import Stream
 from finn.dataflow.traversal import LevelEnd, Repetition
 from finn.kernels import composer
 from finn.kernels.artifacts.abi import Clocking, Endpoint
-from finn.kernels.channels import boundary_contract
+from finn.kernels.channels import boundary_pins
 from finn.kernels.laws import NATIVE, Axis, AxisSpelling, Native
 from finn.kernels.matmul import KnownWeights
 from finn.kernels.movers import MoverOffer, iodma_hls
@@ -161,7 +161,7 @@ VERDICTS: dict[str, Verdict] = {
     "Tensor": Verdict(
         "always", "a value class whose element's datatype is a QONNX datatype, a value type"
     ),
-    "StreamContract": Verdict(
+    "StreamPins": Verdict(
         "always",
         "a value class holding its element's QONNX datatype, a value type, and enums (the "
         "transport's endpoint and marker kinds and its repetition)",
@@ -335,8 +335,8 @@ def samples() -> dict[str, list[object]]:
     sides = cast(list[Side], found.get("Side", []))
     sides.append(dataclasses.replace(sides[0]))  # an equal one, another object
     streams = [side.stream for side in sides if side.stream is not None]
-    found["StreamContract"] = [
-        boundary_contract("stream", stream.element, stream.sequence, endpoint)
+    found["StreamPins"] = [
+        boundary_pins("stream", stream.element, stream.sequence, endpoint)
         for stream in streams
         for endpoint in Endpoint
     ]

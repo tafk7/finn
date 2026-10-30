@@ -52,7 +52,7 @@ from finn.dataflow.traversal import (
 from finn.kernels.adapters import StreamAdapter
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.base import Kernel
-from finn.kernels.channels import Channel, ChannelFifo, boundary_contract, stated_by, stated_form
+from finn.kernels.channels import Channel, ChannelFifo, boundary_pins, stated_by, stated_form
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.configure import commit
 from finn.kernels.laws import AXIS_CLOCKING, Axis
@@ -61,7 +61,7 @@ from finn.kernels.movers import IODMA_HLS, IodmaMover, iodma_hls
 from finn.kernels.partition import Partition
 from finn.kernels.port_model import StreamPort
 from finn.kernels.sides import BUILD, ROW_MAJOR, Outside, Side, Steady
-from finn.kernels.transport import AxisBeat, StreamContract
+from finn.kernels.transport import AxisBeat, StreamPins
 from finn.kernels.values.semantics import IntegerTensorValue
 
 INT4 = ScalarEncoding(DataType["INT4"])
@@ -181,20 +181,19 @@ def test_a_channel_waits_for_its_own_sides_only():
 
 
 def test_boundary_ports_are_axis_and_byte_aligned():
-    contract = boundary_contract(
-        "in0_V", INT4, BeatSequence(vector_major((3,), 3)), Endpoint.TARGET
-    )
+    contract = boundary_pins("in0_V", INT4, BeatSequence(vector_major((3,), 3)), Endpoint.TARGET)
     assert contract.transport.data_width == 16
     assert contract.payload_bits == 12
 
 
-def replaying() -> StreamContract:
+def replaying() -> StreamPins:
     """What a consumer reading each two-beat group of its input three times, framed,
     states at its port."""
     beat = AxisBeat("s_axis", DataType["INT4"], 2, endpoint=Endpoint.TARGET, last=True)
     transport = beat.native(clock="ap_clk", reset="ap_rst_n")
     form = vector_major((2, 4), 2).replayed(3, inner_beats=2)
-    return StreamContract(transport, INT4, form, markers=(("s_axis_tlast", LevelEnd(2)),))
+    stream = Stream(INT4, BeatSequence(form, markers=(LevelEnd(2),)))
+    return StreamPins(transport, stream, markers=(("s_axis_tlast", LevelEnd(2)),))
 
 
 class Replaying(Space):

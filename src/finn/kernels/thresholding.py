@@ -51,13 +51,13 @@ constraint of the kernel, refusing the case by name (``uram-absent``, ``uram-ini
 All native pins remain present when AXI-Lite or set selection is disabled;
 disabled outputs may be unspecified. Bound by a network (or placed in a kernel with
 children), it reads an input tensor and (with several sets) a tensor of set indices,
-facts it is given, and writes its output tensor; it states the contract of each of its
-ports (``input_contract``, ``output_contract``, ``set_contract``), which the channels on
-them take; its AXI-Lite bus (``config``, a ``ControlModel``) is presented, at the port its
-placement names (``control``), when thresholds are runtime-writable (``use_axilite``), and
-otherwise held idle by its module, as is the set selector of a single set. Presented, the
-bus carries the writes that put the kernel's table into the memories (``register_map``),
-at the addresses thresholding_axi decodes. Multi-set AXI-Lite access is refused: the
+facts it is given, and writes its output tensor; each of its ports gives the channel on it
+its stream pins (``input.stream_pins``, ``output.stream_pins``, ``set.stream_pins``); its
+AXI-Lite bus (``config``, a ``ControlModel``) is presented, at the port its placement names
+(``control``), when thresholds are runtime-writable (``use_axilite``), and otherwise held
+idle by its module, as is the set selector of a single set. Presented, the bus carries the
+writes that put the kernel's table into the memories (``register_map``), at the addresses
+thresholding_axi decodes. Multi-set AXI-Lite access is refused: the
 pinned wrapper's configuration address width omits set bits. Static multi-set
 selection is supported. Floating-point threshold comparison is outside this
 profile.
