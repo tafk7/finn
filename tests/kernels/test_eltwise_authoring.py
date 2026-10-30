@@ -19,7 +19,7 @@ from finn.core.space import (
     inspection,
     reject,
 )
-from finn.dataflow.schedule import Schedule
+from finn.dataflow.schedule import Index
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import LevelEnd
 from finn.kernels.artifacts.abi import Endpoint
@@ -67,32 +67,33 @@ class SerialEltwise(EltwiseKernel):
     first_state: str = Decision(domain=("ready", "refused"))
     second_state: str = Decision(domain=("ready",))
 
+    # Each port's lanes wait on a choice of its own: the first port's demand comes first.
     @derived
-    def first(self) -> Schedule | Rejected:
+    def first(self) -> tuple[Index, ...] | Rejected:
         if self.first_state == "refused":
-            return reject("first-schedule", "first model input blocks")
-        return self.schedule
+            return reject("first-lanes", "first model input blocks")
+        return (c,)
 
     @derived
-    def second(self) -> Schedule:
+    def second(self) -> tuple[Index, ...]:
         _ = self.second_state
-        return self.schedule
+        return (c,)
 
     lhs = StreamPort(
         label="lhs",
         tensor=EltwiseKernel.lhs_tensor,
-        schedule=first,
+        schedule=EltwiseKernel.schedule,
         index=EltwiseKernel.indices,
-        lanes=(c,),
+        lanes=first,
         transport=Native(names=("adat", "avld", "ardy")),
         loop_ends=UNNAMED_ENDS,
     )
     rhs = StreamPort(
         label="rhs",
         tensor=EltwiseKernel.rhs_tensor,
-        schedule=second,
+        schedule=EltwiseKernel.schedule,
         index=EltwiseKernel.rhs_indices,
-        lanes=(c,),
+        lanes=second,
         transport=Native(names=("bdat", "bvld", "brdy")),
         loop_ends=UNNAMED_ENDS,
     )
@@ -137,7 +138,7 @@ def test_actual_three_port_assembly_halts_or_accumulates_in_source_order(
         assert isinstance(trace.result, Unresolved)
     elif first == "refused":
         assert isinstance(trace.result, Rejected)
-        assert [item.code for item in trace.result.findings] == ["first-schedule"]
+        assert [item.code for item in trace.result.findings] == ["first-lanes"]
     else:
         assert isinstance(trace.result, Rejected)
         # Rejected canonicalizes diagnostics by finding key. Actual source

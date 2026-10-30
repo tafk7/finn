@@ -42,7 +42,6 @@ from finn.dataflow.datatypes import (
     canonical_qonnx_datatype,
     qonnx_datatype_width,
 )
-from finn.dataflow.schedule import Pace
 from finn.dataflow.steps import Hop, Step, Unrealizable, Unrepeatable, presented, steps
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding
@@ -250,10 +249,9 @@ class StreamContract:
     guarantees; for a consumer, requirements. Transport markers without a rule
     can be neither required nor matched.
 
-    ``pace`` is when the side presents its beats (``finn.dataflow.schedule.Pace``):
-    a kernel's port states its schedule's; ``None`` for a side no schedule paces (a
-    given sequence, a memory, a boundary, a channel's stage). Sizing a FIFO reads
-    it; whether two sides connect does not.
+    It carries no pace: a scheduled port's pace is the port's own
+    (``finn.kernels.port_model.StreamPort.pace``), and whether two sides connect does not
+    read it.
     """
 
     transport: ReadyValidTransport
@@ -261,7 +259,6 @@ class StreamContract:
     form: Traversal
     repetition: Repetition = Repetition.ONCE
     markers: tuple[tuple[str, LevelEnd], ...] = ()
-    pace: Pace | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.transport, ReadyValidTransport):
@@ -270,8 +267,6 @@ class StreamContract:
             raise TypeError("a stream contract has a ScalarEncoding element and a Traversal")
         if not isinstance(self.repetition, Repetition):
             raise TypeError("a stream contract has a Repetition")
-        if self.pace is not None and not isinstance(self.pace, Pace):
-            raise TypeError("a stream contract's pace is a Pace")
         if self.payload_bits > self.transport.data_width:
             raise ValueError(
                 f"{self.transport.name}: {self.form.lanes} x {self.element.bits}-bit lanes "

@@ -31,8 +31,8 @@ a strategy sets it (the channel's policies at the cut, the seam's fold rule afte
 edge: a channel one of whose sides is a kernel's outside it, given as a fact
 (``Side.neighbour``, its stream at the neighbour's stored choices). The edge channel is the
 slice's (its adapters and their memory style are its choices), and its hops to the
-neighbour, its sizing (the neighbour's pace, from its port's contract view at its stored
-choices, given beside the declaration: ``frozen``) and its resources derive. Its netlist and
+neighbour, its sizing (the neighbour's port's pace at its stored choices, given beside the
+declaration with its contract view: ``frozen``) and its resources derive. Its netlist and
 module do not: a frozen edge is a kernel's port outside the module, no AXIS port of it, and
 a slice is not emitted (``slice-not-emitted``).
 
@@ -71,6 +71,7 @@ from finn.core.space import (
     reject,
 )
 from finn.core.space.declarations import View
+from finn.dataflow.schedule import Pace
 from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.artifacts.module import Composed as Module
@@ -83,7 +84,7 @@ from finn.kernels.control import Control
 from finn.kernels.control import presented as presented_buses
 from finn.kernels.movers import MoverOffer
 from finn.kernels.policies import Defaulted, Owner, Unstated, defaulted
-from finn.kernels.port import port_contract, port_side
+from finn.kernels.port import port_contract, port_pace, port_side
 from finn.kernels.sides import Side, SideKind
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
@@ -601,15 +602,20 @@ class Partition:
         """The ports beside channel ``name`` (each kernel's ``<p>_contract`` view, labelled
         below its member's node): the producing kernel's and the consuming kernel's, by the
         side each is declared on; a frozen neighbour's, outside a slice, as given at its
-        stored choices (``frozen``). FIFO sizing reads their paces
-        (``finn.kernels.fifo_sizing``), and the netlist its hops to them (``hops``)."""
+        stored choices (``frozen``); and each one's pace (``<p>_pace``, a scheduled port's).
+        FIFO sizing reads their paces (``finn.kernels.fifo_sizing``), and the netlist its
+        hops to them (``hops``)."""
         found: dict[str, PortContract] = {}
+        paces: dict[str, Pace] = {}
         frozen = self._frozen.get(name, Neighbours())
         for side, declared in zip(("producer", "consumer"), self._sides[name], strict=True):
             if isinstance(declared, Side) and declared.kind is SideKind.NEIGHBOUR:
                 given: PortContract | None = getattr(frozen, side)
                 if given is not None:
                     found[side] = given
+                pace: Pace | None = getattr(frozen, f"{side}_pace")
+                if pace is not None:
+                    paces[side] = pace
                 continue
             if not isinstance(declared, Port):
                 continue
@@ -617,7 +623,15 @@ class Partition:
             answer = point.query(port_contract(type(point), declared.port))
             if isinstance(answer, Available) and isinstance(answer.value, PortContract):
                 found[side] = answer.value.under(self.node(declared.member))
-        return Neighbours(found.get("producer"), found.get("consumer"))
+            paced = point.query(port_pace(type(point), declared.port))
+            if isinstance(paced, Available) and isinstance(paced.value, Pace):
+                paces[side] = paced.value
+        return Neighbours(
+            found.get("producer"),
+            found.get("consumer"),
+            paces.get("producer"),
+            paces.get("consumer"),
+        )
 
     def hops(self, name: str) -> OuterHops | Rejected:
         """Channel ``name``'s hops to the ports beside it (``outer_hops``, from

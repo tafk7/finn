@@ -252,9 +252,16 @@ class MoverContract:
         return self.cycles_at(self.frames_per_call)
 
     @property
+    def span(self) -> int:
+        """The cycles its frame spans: its ``cycles``, the span its ``times`` lie within,
+        as FIFO sizing reads them (``finn.kernels.fifo_sizing.pattern``)."""
+        return self.cycles
+
+    @property
     def times(self) -> tuple[int, ...]:
         """Each stream beat's cycle from the frame's first: one a cycle, or once the
-        memory word that completes it arrived (a word a cycle)."""
+        memory word that completes it arrived (a word a cycle). Its own: FIFO sizing reads
+        them with its ``span`` (``finn.kernels.fifo_sizing.pattern``)."""
         beats, words = self.beats, self.words
         return tuple(max(beat, ceil((beat + 1) * words / beats) - 1) for beat in range(beats))
 

@@ -214,12 +214,12 @@ def test_a_larger_depth_from_a_stated_latency_is_counted_and_named() -> None:
     """A kernel of latency 1 holds a word in flight in the FIFO's slots: one more than the
     line's 3 (the line's latency is a constant shift)."""
     supply, accept, period, _ = CASES[2][1:]
-    steady = tuple(range(supply.beats))
+    steady = tuple(range(supply.span))
     network = Network(
         (
-            Source("feed", steady, supply.beats, period),
-            Kernel("producer", supply.beats, (steady,), (supply.times,), 1),
-            Kernel("consumer", accept.beats, (accept.times,), ()),
+            Source("feed", steady, supply.span, period),
+            Kernel("producer", supply.span, (steady,), (supply.times,), 1),
+            Kernel("consumer", accept.span, (accept.times,), ()),
         ),
         (Channel("in", "feed", "producer", 0), Channel("c", "producer", "consumer", None)),
     )

@@ -162,8 +162,8 @@ CHAINS = [
 def paced(supply: Pattern, accept: Pattern, period: int, depth: int) -> Network:
     return Network(
         (
-            Source("s", supply.times, supply.beats, period),
-            Kernel("k", accept.beats, (accept.times,), ()),
+            Source("s", supply.times, supply.span, period),
+            Kernel("k", accept.span, (accept.times,), ()),
         ),
         (Channel("c", "s", "k", depth),),
     )

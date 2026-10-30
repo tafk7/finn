@@ -107,6 +107,7 @@ from finn.core.space import (
     view,
 )
 from finn.dataflow.datatypes import QONNXDataType
+from finn.dataflow.schedule import Pace
 from finn.dataflow.steps import Steps, Unrealizable
 from finn.dataflow.steps import steps as between
 from finn.dataflow.streams import Stream, Streams, misfit
@@ -231,10 +232,15 @@ class Neighbours:
     contract view, labelled below its member's node: ``matmul.compute.packed.x``; a frozen
     neighbour's, outside a slice, read at its stored choices): the producing kernel's and
     the consuming kernel's, each None where that side is the channel's own, its source (a
-    known value) or its boundary."""
+    known value) or its boundary; and each port's pace (its ``pace``, read where it is
+    read), None where that port is no scheduled port's or the side is the channel's own.
+    Its network wires the hops to them (``outer_hops``); FIFO sizing reads the paces
+    (``finn.kernels.fifo_sizing``)."""
 
     producer: PortContract | None = None
     consumer: PortContract | None = None
+    producer_pace: Pace | None = None
+    consumer_pace: Pace | None = None
 
 
 @dataclass(frozen=True)

@@ -30,7 +30,7 @@ from finn.core.space import (
     reject,
     view,
 )
-from finn.dataflow.schedule import Index, Schedule
+from finn.dataflow.schedule import Index, Pace, Schedule
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
@@ -364,6 +364,13 @@ def test_a_port_follows_the_advance_rule_its_declaration_gives(
         rule.law.id
         == {"scheduled": "L2", "buffered": "L3", "selected": "L4", "sourced": "L5"}[rule.value]
     )
+    # A scheduled port has a pace, its schedule's; a port of another rule has none (W6).
+    pace = point.query(StreamPort.pace)
+    if rule is Advance.SCHEDULED:
+        assert isinstance(pace, Available)
+        assert pace.value == Pace(cast(Schedule, declared["schedule"]), (), ())
+    else:
+        assert isinstance(pace, Inapplicable)
 
 
 SCHED, BUF, SEL, SRC = Advance.SCHEDULED, Advance.BUFFERED, Advance.SELECTED, Advance.SOURCED
@@ -592,3 +599,46 @@ def test_a_port_states_one_thing_its_advance_rule_follows_from() -> None:
         set = StreamPort(transport=AXIS, tensor=TENSOR, sequence=SEQUENCE, governs="input")
 
     assert design_space(Governing()).set.advance is Advance.SELECTED
+
+
+def test_a_scheduled_port_presents_its_kernel_s_one_schedule() -> None:
+    """W5's open decision 6, taken in W6: a port of a kernel's body presents its kernel's
+    ``schedule`` or no schedule (``port-schedule-foreign``), so its kernel's scheduled
+    ports present one index point at each iteration and their paces count the same
+    iterations; a subclass's override of ``schedule`` is the one its inherited ports read."""
+    r, c = Index("r"), Index("c")
+
+    class Scheduled(Kernel):
+        id = "test.schedule.own"
+
+        @derived
+        def schedule(self) -> Schedule:
+            return Schedule({r: 2, c: 4})
+
+        input = StreamPort(transport=AXIS, tensor=TENSOR, schedule=schedule, index=(r, c))
+
+    class Rows(Scheduled):
+        @derived
+        def schedule(self) -> Schedule:
+            return Schedule({r: 2, c: 4}, {c: 2})
+
+    for kind, factors in ((Scheduled, {}), (Rows, {c: 2})):
+        point = design_space(kind())
+        assert point.input.pace == Pace(Schedule({r: 2, c: 4}, factors), (), ())
+
+    for given, named in ((Schedule({r: 2, c: 4}), "a Schedule of its own"), (None, "'other'")):
+        with refused("port-schedule-foreign", error=DefinitionError, message=named):
+
+            class Foreign(Kernel):
+                id = "test.schedule.foreign"
+
+                @derived
+                def other(self) -> Schedule:
+                    return Schedule({r: 2, c: 4})
+
+                input = StreamPort(
+                    transport=AXIS,
+                    tensor=TENSOR,
+                    schedule=other if given is None else given,
+                    index=(r, c),
+                )

@@ -5,9 +5,9 @@
 
 Actual authoring uses StreamPort real children, and served ports for a kernel with
 children. Native module source reads model inputs serially, then calls these pure helpers.
-``port_side``, ``port_contract`` and ``port_endpoint`` find a kernel's port by its name,
-through its lexical Group paths, stopping at real Space boundaries: what a channel reads of
-it, and its direction; they never authorize a model's reads.
+``port_side``, ``port_contract``, ``port_pace`` and ``port_endpoint`` find a kernel's port by
+its name, through its lexical Group paths, stopping at real Space boundaries: what a channel
+and its sizing read of it, and its direction; they never authorize a model's reads.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from finn.core.space import (
 )
 from finn.core.space._nodes import NodeDecision, NodeDecl, node_record, unwrap
 from finn.core.space.declarations import Declaration, Required, declared_path
-from finn.dataflow.schedule import Index, Pace, Schedule
+from finn.dataflow.schedule import Index
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import LevelEnd, Marker, Traversal
@@ -73,9 +73,6 @@ class PhysicalPort:
     transport: TransportKind = AXIS
     loop_ends: LoopEnds | None = None
     lanes: tuple[Index, ...] = ()
-    schedule: Schedule | None = None
-    reduces: tuple[Index, ...] = ()
-    holds: tuple[Index, ...] = ()
 
 
 Presenting = ScalarEncoding | Stream
@@ -255,20 +252,11 @@ def beats(stream: Stream) -> int:
     return stream.sequence.form.beats
 
 
-def pace(port: PhysicalPort) -> Pace | None:
-    """When it presents each beat: its schedule, with its ``reduces`` and ``holds``; None
-    for a given sequence."""
-    schedule: Schedule | None = _given(port, "schedule")
-    if schedule is None:
-        return None
-    return Pace(schedule, _given(port, "reduces"), _given(port, "holds"))
-
-
 def contract(
     port: PhysicalPort, stream: Stream, clocking: Clocking | None
 ) -> StreamContract | Rejected:
-    """What it states to a channel: its transport, its stream (element, form, repetition,
-    markers, each by the transport pin that carries it) and its pace."""
+    """What it states to a channel: its transport and its stream (element, form,
+    repetition, markers, each by the transport pin that carries it)."""
     sequence = stream.sequence
     unsupported = stream_refusal(stream)
     if unsupported is not None:
@@ -290,9 +278,7 @@ def contract(
         markers = ((found.markers[0].signal, cast(LevelEnd, sequence.markers[0])),)
     else:
         markers = ()
-    return StreamContract(
-        found, stream.element, sequence.form, sequence.repetition, markers, pace(port)
-    )
+    return StreamContract(found, stream.element, sequence.form, sequence.repetition, markers)
 
 
 # -- a port a kernel with children presents for a child -------------------------------------
@@ -347,6 +333,16 @@ def port_contract(namespace: type[Space] | Space, port: str) -> Any:
     if isinstance(child, Space):
         return child.contract
     return getattr(frame, f"{port.rsplit('.', 1)[-1]}_contract")
+
+
+def port_pace(namespace: type[Space] | Space, port: str) -> Any:
+    """Kernel ``namespace``'s port ``port``'s pace, as a reference to query (``port_side``'s):
+    a stream port's ``pace``, a served port's (its child's port's). Inapplicable for a port
+    no schedule paces (CONTRACT.md § 4)."""
+    frame, child = _found(namespace, port)
+    if isinstance(child, Space):
+        return child.pace
+    return getattr(frame, f"{port.rsplit('.', 1)[-1]}_pace")
 
 
 def _declared_endpoint(record: NodeDecl) -> Endpoint | None:
@@ -410,8 +406,8 @@ __all__ = [
     "port_contract",
     "port_endpoint",
     "port_side",
+    "port_pace",
     "served_ports",
-    "pace",
     "pins",
     "transport",
 ]

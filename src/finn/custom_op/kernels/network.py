@@ -85,8 +85,8 @@ the partition (its stem ``finn_<name>``) and identified as the partition's IP
 the IP, not in it. Its views are read out of the design space, composed from its members'
 (the netlist with each channel's outer hops from the kernels' contract views, FIFO
 sizing's paces, resources), never bound into it; a frozen neighbour's port contract, which
-sizing reads its pace from, is read at its stored choices and given beside the
-declaration.
+its hop is wired to, and its port's pace, which sizing reads, are read at its stored
+choices and given beside the declaration.
 
 A partition's resources (``Partition.own_resources``) are its members'. A partition in its
 shell (``finn.custom_op.kernels.shell.in_shell``) holds the shell's budgets as rules of its
@@ -118,6 +118,7 @@ from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.search import Key, dotted
 from finn.core.space import Available, Rejected, Space, Unresolved, inspection
 from finn.custom_op.kernels.base import KernelOp, kernel_op, typed
+from finn.dataflow.schedule import Pace
 from finn.dataflow.streams import Stream
 from finn.kernels.artifacts.module import ProducerIdentity
 from finn.kernels.base import PortContract
@@ -131,7 +132,7 @@ from finn.kernels.composer import (
 )
 from finn.kernels.movers import MoverOffer
 from finn.kernels.partition import Partition, partition
-from finn.kernels.port import port_contract, port_side
+from finn.kernels.port import port_contract, port_pace, port_side
 from finn.kernels.sides import Side
 
 if TYPE_CHECKING:
@@ -292,13 +293,14 @@ def _beyond(
 
 def _neighbour(
     model: ModelWrapper, tensor: str, side: str, node: NodeProto
-) -> tuple[Side, PortContract | None]:
+) -> tuple[Side, PortContract | None, Pace | None]:
     """The side a frozen neighbour, KernelOp ``node`` beyond the selection on ``side`` of
     ``tensor``, gives the edge channel, as a fact: its port's ``<p>_side`` at its stored
     choices (``KernelOp.point``; its facts alone, where it stores none), as a frozen
     neighbour's (``Side.neighbour``: an upstream one's stream, label and word width, a
-    downstream one's stream and label), its label below the node's name; and that port's
-    contract view there (``<p>_contract``), which sizing reads its pace from. Only an
+    downstream one's stream and label), its label below the node's name; that port's
+    contract view there (``<p>_contract``), which its hop is wired to; and its pace there
+    (``<p>_pace``, a scheduled port's), which sizing reads. Only an
     accepted value is a fact: refused (``neighbour-unaccepted``, naming the neighbour, its
     port and why) where its stored choices are refused, its kernel is refused, or its side
     is not known there (it waits on an open choice, or is refused)."""
@@ -344,8 +346,12 @@ def _neighbour(
     stated = Side.neighbour(cast(Stream, found.stream), found.label, found.width)
     contract = point.query(port_contract(type(point), named))
     given = contract.value if isinstance(contract, Available) else None
-    return stated.under(node.name), (
-        given.under(node.name) if isinstance(given, PortContract) else None
+    paced = point.query(port_pace(type(point), named))
+    pace = paced.value if isinstance(paced, Available) else None
+    return (
+        stated.under(node.name),
+        given.under(node.name) if isinstance(given, PortContract) else None,
+        pace if isinstance(pace, Pace) else None,
     )
 
 
@@ -543,9 +549,13 @@ def _graph(
                 facts[tensor]["contents"] = Stated(node.name, str(wiring.stored))
     frozen: dict[str, Neighbours] = {}
     for tensor, (side, node) in beyond.items():
-        neighbour, contract = _neighbour(model, tensor, side, node)
+        neighbour, contract, pace = _neighbour(model, tensor, side, node)
         sides[tensor][side] = neighbour
-        frozen[tensor] = Neighbours(**{side: contract})
+        frozen[tensor] = (
+            Neighbours(producer=contract, producer_pace=pace)
+            if side == "producer"
+            else Neighbours(consumer=contract, consumer_pace=pace)
+        )
     channels: dict[str, ChannelDeclaration] = {}
     for tensor in tensors:
         given = facts[tensor]

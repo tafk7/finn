@@ -19,7 +19,7 @@ outside its ports and its control bus.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any
 
 from finn.core.space import (
@@ -34,7 +34,7 @@ from finn.core.space import (
     view,
 )
 from finn.dataflow.datatypes import QONNXDataType
-from finn.dataflow.schedule import Access, Affine, Index, Refused, Schedule, plain_index
+from finn.dataflow.schedule import Access, Affine, Index, Pace, Refused, Schedule, plain_index
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence
@@ -130,6 +130,20 @@ class StreamPort(Space):
         if self.stored:
             return Advance.SOURCED
         return Advance.BUFFERED
+
+    @derived
+    def pace(self) -> Pace | Inapplicable:
+        """Its pace (CONTRACT.md § 4), a scheduled port's only: the iterations of its
+        kernel's schedule at which it moves a beat (``Pace.times``, a reduced index's on its
+        last value, a held one's on its first; an output's are when it issues them) and the
+        iterations a frame takes (``Pace.span``). Derived, never declared. A port of
+        another rule has none (its rule states its relation), nor has an idle port."""
+        if not self.placed:
+            return Inapplicable()
+        schedule = self.schedule
+        if schedule is None:
+            return Inapplicable()
+        return Pace(schedule, self.reduces, self.holds)
 
     @derived
     def stream(self) -> Stream | Rejected | Inapplicable:
@@ -261,14 +275,12 @@ class StreamPort(Space):
 
     @view
     def contract(self) -> PortContract | Rejected | Inapplicable:
-        """What it states to a channel: its stream on its transport, and, scheduled, its
-        pace (``finn.kernels.port.contract``)."""
+        """What it states to a channel: its stream on its transport
+        (``finn.kernels.port.contract``)."""
         if not self.placed:
             return Inapplicable()
         stream = self.stream
-        physical = self.physical_spec(idle=False)
-        paced = replace(physical, schedule=self.schedule, reduces=self.reduces, holds=self.holds)
-        found = port_contract(paced, stream, self.clocking)
+        found = port_contract(self.physical_spec(idle=False), stream, self.clocking)
         return found if isinstance(found, Rejected) else PortContract(self.label, found)
 
 

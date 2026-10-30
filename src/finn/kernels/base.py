@@ -15,8 +15,8 @@ read-list or flat callback table is installed on a kernel. Two things are instal
 when its class is made, each a function reading by names its closure fixes, so that
 its source states its reads: on a kernel with a module, one helper a part of its
 module; on a kernel with children, each port it serves (``served``) lowered into the
-two members a channel reads of a port, ``<port>_side`` and ``<port>_contract``, and,
-for a selector, ``<child>_case``.
+members a channel and its sizing read of a port, ``<port>_side``, ``<port>_contract``
+and ``<port>_pace``, and, for a selector, ``<child>_case``.
 
 Hardware configuration facts/Choices/rules remain inward model computations.
 Outward Views keep selected owning non-refusal and actual unresolved inputs.
@@ -43,11 +43,12 @@ from finn.core.space import (
     view,
 )
 from finn.core.space._nodes import assign, node_record
-from finn.core.space.declarations import unmet_required
+from finn.core.space.declarations import Declaration, unmet_required
 from finn.dataflow.schedule import (
     Access,
     Affine,
     Index,
+    Pace,
     Refused,
     Schedule,
     bind_extents,
@@ -192,7 +193,14 @@ def _check_advance(cls: type[Kernel]) -> None:
     """Refuse a stream port of ``cls``'s own body stating more than one of what an advance
     rule follows from, its kernel's schedule, the port it governs or stored values
     (``port-advance-ambiguous``), or governing a port its kernel does not have
-    (``port-governs-unknown``). CONTRACT.md § 3: a port states what it is, one thing."""
+    (``port-governs-unknown``). CONTRACT.md § 3: a port states what it is, one thing.
+
+    And refuse one presenting a schedule other than its kernel's one ``schedule``
+    (``port-schedule-foreign``): its kernel's scheduled ports are projections of one
+    schedule, so they present one index point at each iteration (their association) and
+    their paces count the same iterations (§ 4). A port presents its kernel's schedule by
+    binding it by name (``schedule=schedule``), which a subclass overriding ``schedule``
+    then gives it."""
     from finn.kernels.port_model import StreamPort  # noqa: PLC0415
 
     ports = {name for name, item in _members(cls).items() if isinstance(item, StreamPort)}
@@ -220,6 +228,31 @@ def _check_advance(cls: type[Kernel]) -> None:
                 f"{where} governs {governs!r}, which is no other stream port of {cls.__qualname__}",
                 declaration=where,
             )
+        schedule = bound.get("schedule")
+        if schedule is not None and not _kernel_schedule(cls, schedule):
+            named = schedule.name if isinstance(schedule, Declaration) else None
+            raise DefinitionError.broken(
+                "port-schedule-foreign",
+                "Kernel",
+                f"{where} presents "
+                + (f"{named!r}" if named else f"a {type(schedule).__name__} of its own")
+                + f", not {cls.__qualname__}'s schedule: a scheduled port is a projection of "
+                "its kernel's one schedule (schedule=schedule)",
+                declaration=where,
+            )
+
+
+def _kernel_schedule(cls: type[Kernel], bound: object) -> bool:
+    """Whether ``bound``, what a port of ``cls``'s body binds as its schedule, is its
+    kernel's ``schedule``: the declaration of that name of ``cls`` or a kernel class it
+    derives (the engine reads a binding by its name, so a subclass's override is read)."""
+    return (
+        isinstance(bound, Declaration)
+        and bound.name == "schedule"
+        and isinstance(bound.owner, type)
+        and issubclass(cls, bound.owner)
+        and issubclass(bound.owner, Kernel)
+    )
 
 
 def _nested_served(group: type[Group], prefix: str) -> list[str]:
@@ -241,11 +274,12 @@ def _nested_served(group: type[Group], prefix: str) -> list[str]:
 # -- the ports a kernel with children serves ------------------------------------------------
 #
 # A served port (``finn.kernels.port_model.served``) is lowered, when its kernel's class is
-# made, into the two members a channel reads of a port, its side and its contract, each the
-# child's port's labelled below it. They are derived members of the kernel, not of a child:
-# the engine reads a member through a selector one level deep (``compute.x``), never two
-# (``compute.x.side``), and a Group reads nothing of its kernel. Each reads its child, its
-# port and its case by the names its closure fixes, so that its source states its reads.
+# made, into the members a channel and its sizing read of a port: its side and its contract,
+# each the child's port's labelled below it, and its pace, the child's port's. They are
+# derived members of the kernel, not of a child: the engine reads a member through a
+# selector one level deep (``compute.x``), never two (``compute.x.side``), and a Group reads
+# nothing of its kernel. Each reads its child, its port and its case by the names its
+# closure fixes, so that its source states its reads.
 
 
 def _served_side(child: str, port: str, case: str | None, label: str) -> Callable[[Any], Any]:
@@ -276,13 +310,20 @@ def _served_contract(child: str, port: str, case: str | None, label: str) -> Cal
     return contract_of_case
 
 
+def _served_pace(child: str, port: str) -> Callable[[Any], Any]:
+    def pace(self: Any) -> Any:
+        return getattr(getattr(self, child), port).pace
+
+    return pace
+
+
 def _serve_ports(cls: type[Kernel]) -> None:
-    """Lower each port ``cls``'s own body serves (above): ``<name>_side`` and
-    ``<name>_contract``, and, for a selector, ``<child>_case``, its case, where the body does
-    not declare it. Refused where the child is not the kernel's (``served-child-unknown``),
-    has no stream port so named (``served-port-unknown``), the body declares a member the
-    port is lowered into (``served-port-repeated``), or a port is served in a Group, which
-    reads nothing of its kernel (``served-port-nested``)."""
+    """Lower each port ``cls``'s own body serves (above): ``<name>_side``,
+    ``<name>_contract`` and ``<name>_pace``, and, for a selector, ``<child>_case``, its
+    case, where the body does not declare it. Refused where the child is not the kernel's
+    (``served-child-unknown``), has no stream port so named (``served-port-unknown``), the
+    body declares a member the port is lowered into (``served-port-repeated``), or a port
+    is served in a Group, which reads nothing of its kernel (``served-port-nested``)."""
     from finn.core.space._nodes import NodeChoice, selected  # noqa: PLC0415
     from finn.kernels.port import served_ports  # noqa: PLC0415
     from finn.kernels.port_model import ServedPort  # noqa: PLC0415
@@ -339,8 +380,12 @@ def _serve_ports(cls: type[Kernel]) -> None:
         contract = _served_contract(child, value.port, case, label)
         contract.__annotations__ = {"return": PortContract}
         contract.__doc__ = f"What its port {name} states to a channel: {child}'s {value.port}'s."
+        pace = _served_pace(child, value.port)
+        pace.__annotations__ = {"return": Pace | Inapplicable}
+        pace.__doc__ = f"Its port {name}'s pace: {child}'s {value.port}'s (CONTRACT.md § 4)."
         members[f"{name}_side"] = derived(side)
         members[f"{name}_contract"] = view(contract)
+        members[f"{name}_pace"] = derived(pace)
         for key, member in members.items():
             if key in own:
                 raise DefinitionError.broken(

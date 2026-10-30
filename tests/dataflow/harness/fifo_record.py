@@ -191,7 +191,7 @@ class _Open:
 
 def beats_of(pattern: Any) -> Beats:
     """The plain beats of a line ``Pattern``."""
-    return Beats(tuple(pattern.times), pattern.beats)
+    return Beats(tuple(pattern.times), pattern.span)
 
 
 def acceptance_of(accept: Any) -> Acceptance:
@@ -208,9 +208,10 @@ def _message(error: BaseException) -> str:
     return f"{type(error).__name__}: {error}"
 
 
-def _end(side_name: str, declared: Any, port: Any, channel: Any, side: Any) -> End:
+def _end(side_name: str, declared: Any, pace: Any, channel: Any, side: Any) -> End:
     """One end of a channel: a kernel's port, a boundary's free side, a memory source, or an
-    end the line does not pace."""
+    end the line does not pace. ``pace`` is the port's beside the channel, where it has one
+    (``Neighbours``)."""
     from finn.kernels.composer import Port as Declared  # noqa: PLC0415
     from finn.kernels.fifo_sizing import NotModelled, _free  # noqa: PLC0415
     from finn.kernels.sides import SideKind  # noqa: PLC0415
@@ -218,7 +219,6 @@ def _end(side_name: str, declared: Any, port: Any, channel: Any, side: Any) -> E
     if channel.valued and side_name == "producer":
         return Stored()
     if isinstance(declared, Declared):
-        pace = None if port is None else port.contract.pace
         return Port(declared.member, declared.port, pace)
     if side.kind is SideKind.BOUNDARY:
         try:
@@ -233,8 +233,8 @@ def _wire(name: str, channel: Any, neighbours: Any, declared: tuple[Any, Any]) -
     from finn.kernels.input_generator import Generate, nest_buffer  # noqa: PLC0415
 
     found = channel.sides
-    producer = _end("producer", declared[0], neighbours.producer, channel, found.producer)
-    consumer = _end("consumer", declared[1], neighbours.consumer, channel, found.consumer)
+    producer = _end("producer", declared[0], neighbours.producer_pace, channel, found.producer)
+    consumer = _end("consumer", declared[1], neighbours.consumer_pace, channel, found.consumer)
     convert: tuple[int, int] | None = None
     buffer: Buffer | None = None
     refused = ""

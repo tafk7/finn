@@ -44,16 +44,17 @@ from support.kernel_specs.base import ORACLE, TEST_SIDE, KernelSpec, Probe
 from support.layering import ROOT
 
 import finn.kernels
-from finn.core.space import Available, Space
+from finn.core.space import Available, Inapplicable, Space
 from finn.core.space.declarations import unmet_required
 from finn.dataflow.streams import Stream
 from finn.harness.points import Covering, covering, refusal, refused_cases, rejected
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.base import Kernel, PortContract
 from finn.kernels.configure import undecided
+from finn.kernels.laws import Advance
 from finn.kernels.library import ModuleSpec
 from finn.kernels.partition import Partition
-from finn.kernels.port import port_contract, port_side
+from finn.kernels.port import port_contract, port_pace, port_side
 from finn.kernels.port_model import ServedPort, StreamPort, stream_ports
 from finn.kernels.sides import Side
 
@@ -236,6 +237,18 @@ def _ports_checked(point: Partition) -> int:
             output = transport.endpoint is Endpoint.INITIATOR
             width = transport.data_width if output else None
             assert side == Side.kernel(stream, label, width), where
+            # Its pace (W6): a scheduled port's, over its kernel's one schedule; a port of
+            # another rule has none; a served port's is its child's port's.
+            paced = member.query(port_pace(type(member), port))
+            if isinstance(frame, StreamPort):
+                scheduled = member.field(frame.advance).get() is Advance.SCHEDULED
+                assert isinstance(paced, Available) is scheduled, where
+                if scheduled:
+                    schedule = member.query(Kernel.schedule)
+                    assert isinstance(schedule, Available), where
+                    assert paced.value.schedule == schedule.value, where
+            else:
+                assert isinstance(paced, (Available, Inapplicable)), where
             checked += 1
     return checked
 

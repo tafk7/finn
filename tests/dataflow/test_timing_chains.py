@@ -79,12 +79,12 @@ def kernels(
     """A producer kernel (a source feeds it a word a step; it writes at ``supply``'s beat
     times, visible ``latency`` cycles late) and a consumer kernel reading at ``accept``'s,
     joined by channel ``c`` of ``depth`` words."""
-    steady = tuple(range(supply.beats))
+    steady = tuple(range(supply.span))
     return Network(
         (
-            Source("feed", steady, supply.beats, period),
-            Kernel("producer", supply.beats, (steady,), (supply.times,), latency),
-            Kernel("consumer", accept.beats, (accept.times,), ()),
+            Source("feed", steady, supply.span, period),
+            Kernel("producer", supply.span, (steady,), (supply.times,), latency),
+            Kernel("consumer", accept.span, (accept.times,), ()),
         ),
         (Channel("in", "feed", "producer", 0), Channel("c", "producer", "consumer", depth)),
     )
@@ -136,7 +136,7 @@ def test_two_kernels_have_the_lines_least_depth_on_every_small_pair() -> None:
     assert len(patterns) == 10  # 1 + 3 + 6
     positive = 0
     for supply, accept in itertools.product(patterns, patterns):
-        period = max(supply.beats, accept.beats)
+        period = max(supply.span, accept.span)
         line = least_depth(supply, accept, period)
         assert least(kernels(supply, accept, period), "c", FINNLIB) == line, (supply, accept)
         positive += bool(line)
@@ -165,7 +165,7 @@ def converted_supply(producer: Pattern, lanes_in: int, lanes_out: int) -> Patter
     """The line's supply behind an output width conversion: the converted word times over
     the producer's span, or the conversion's if that is longer."""
     times = converted(producer.times, lanes_in, lanes_out)
-    return Pattern(times, max(producer.beats, times[-1] - times[0] + 1))
+    return Pattern(times, max(producer.span, times[-1] - times[0] + 1))
 
 
 def generated(
@@ -175,9 +175,9 @@ def generated(
     ``reads`` (the generator's output direct)."""
     return Network(
         (
-            Source("s", supply.times, supply.beats, period),
+            Source("s", supply.times, supply.span, period),
             ReorderStage("g", buffer.reads, buffer.freed, buffer.capacity),
-            Kernel("k", reads.beats, (reads.times,), ()),
+            Kernel("k", reads.span, (reads.times,), ()),
         ),
         (Channel("c", "s", "g", depth), Channel("o", "g", "k", 0)),
     )
@@ -195,10 +195,10 @@ def widened(
     the step."""
     return Network(
         (
-            Source("s", producer.times, producer.beats, period),
+            Source("s", producer.times, producer.span, period),
             WidthStage("w", *lanes),
             ReorderStage("g", buffer.reads, buffer.freed, buffer.capacity),
-            Kernel("k", reads.beats, (reads.times,), ()),
+            Kernel("k", reads.span, (reads.times,), ()),
         ),
         (
             Channel("a", "s", "w", 0),
@@ -396,7 +396,7 @@ def test_latency_changes_the_least_depth_by_one_word_at_most_on_every_small_pair
     for latency, above, below in ((0, 0, 0), (1, 12, 30), (2, 0, 54)):
         differences = []
         for supply, accept in itertools.product(patterns, patterns):
-            period = max(supply.beats, accept.beats)
+            period = max(supply.span, accept.span)
             found = least(kernels(supply, accept, period, latency=latency), "c", FINNLIB)
             line = least_depth(supply, accept, period)
             assert found is not None and line is not None

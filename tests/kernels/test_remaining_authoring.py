@@ -19,7 +19,7 @@ from finn.core.space import (
     reject,
     view,
 )
-from finn.dataflow.schedule import Schedule
+from finn.dataflow.schedule import Index
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import LevelEnd
 from finn.kernels.artifacts.abi import Endpoint
@@ -62,23 +62,24 @@ class SerialPool(PoolKernel):
     first_state: str = Decision(domain=("ready", "refused"))
     second_state: str = Decision(domain=("ready",))
 
+    # Each port's lanes wait on a choice of its own: the first port's demand comes first.
     @derived
-    def first(self) -> Schedule | Rejected:
+    def first(self) -> tuple[Index, ...] | Rejected:
         if self.first_state == "refused":
-            return reject("first-schedule", "first model input blocks")
-        return self.schedule
+            return reject("first-lanes", "first model input blocks")
+        return (c,)
 
     @derived
-    def second(self) -> Schedule:
+    def second(self) -> tuple[Index, ...]:
         _ = self.second_state
-        return self.schedule
+        return (c,)
 
     input = StreamPort(
         label="input",
         tensor=PoolKernel.input_tensor,
-        schedule=first,
+        schedule=PoolKernel.schedule,
         index=PoolKernel.input_index,
-        lanes=(c,),
+        lanes=first,
         closes=(kh, kw),
         transport=Native(names=("data", "valid", "ready")),
         loop_ends=UNNAMED_ENDS,
@@ -87,9 +88,9 @@ class SerialPool(PoolKernel):
         label="output",
         endpoint=Endpoint.INITIATOR,
         tensor=PoolKernel.output_tensor,
-        schedule=second,
+        schedule=PoolKernel.schedule,
         index=PoolKernel.output_index,
-        lanes=(c,),
+        lanes=second,
         reduces=(kh, kw),
         transport=Native(names=("result", "valid", "ready")),
         loop_ends=UNNAMED_ENDS,
@@ -127,7 +128,7 @@ def test_actual_pool_native_source_keeps_serial_physical_inputs_before_hls_sourc
         assert isinstance(trace.result, Unresolved)
     elif first == "refused":
         assert isinstance(trace.result, Rejected)
-        assert [f.code for f in trace.result.findings] == ["first-schedule"]
+        assert [f.code for f in trace.result.findings] == ["first-lanes"]
     else:
         assert isinstance(trace.result, Rejected)
         assert [f.message for f in trace.result.findings] == [

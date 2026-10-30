@@ -88,8 +88,8 @@ def test_projection_reduction_and_pace_are_the_current_schedule_values(fold: int
     expected_output = BeatSequence(schedule.present((2,), (R,), reduces=(C,)))
     assert point.input.stream == Stream(TENSOR.element, expected_input)
     assert point.output.stream == Stream(TENSOR.element, expected_output)
-    assert point.input.contract.contract.pace == Pace(schedule, (), ())
-    assert point.output.contract.contract.pace == Pace(schedule, (C,), ())
+    assert point.input.pace == Pace(schedule, (), ())
+    assert point.output.pace == Pace(schedule, (C,), ())
     assert point.output.contract.label == "output"
 
 
@@ -142,7 +142,7 @@ def test_closing_markers_and_suppressed_axes_keep_their_actual_pace(suppressed: 
         )
     )
     assert output.stream.sequence.form == SCHEDULE.present((2,), (R,), reduces=reduces, holds=holds)
-    assert output.contract.contract.pace == Pace(SCHEDULE, reduces, holds)
+    assert output.pace == Pace(SCHEDULE, reduces, holds)
 
 
 def test_a_reshaped_affine_axis_preserves_the_local_schedule_refusal() -> None:
@@ -255,23 +255,24 @@ class SerialTranspose(TransposeKernel):
     first_state: str = Decision(domain=("ready", "refused"))
     second_state: str = Decision(domain=("ready",))
 
+    # Each port's lanes wait on a choice of its own: the first port's demand comes first.
     @derived
-    def first(self) -> Schedule | Rejected:
+    def first(self) -> tuple[Index, ...] | Rejected:
         if self.first_state == "refused":
-            return reject("first-schedule", "first input blocks")
-        return self.schedule
+            return reject("first-lanes", "first input blocks")
+        return (i,)
 
     @derived
-    def second(self) -> Schedule:
+    def second(self) -> tuple[Index, ...]:
         _ = self.second_state
-        return self.schedule
+        return (i,)
 
     input = StreamPort(
         label="input",
         tensor=TransposeKernel.input_tensor,
-        schedule=first,
+        schedule=TransposeKernel.schedule,
         index=TransposeKernel.columns,
-        lanes=(i,),
+        lanes=first,
         reshaped=True,
         transport=Native(names=("idat", "ivld", "irdy")),
         loop_ends=UNNAMED_ENDS,
@@ -280,9 +281,9 @@ class SerialTranspose(TransposeKernel):
         label="output",
         endpoint=Endpoint.INITIATOR,
         tensor=TransposeKernel.output_tensor,
-        schedule=second,
+        schedule=TransposeKernel.schedule,
         index=TransposeKernel.indices,
-        lanes=(i,),
+        lanes=second,
         transport=Native(names=("odat", "ovld", "ordy")),
         loop_ends=UNNAMED_ENDS,
     )
@@ -314,7 +315,7 @@ def test_transpose_assembly_has_real_serial_schedule_and_physical_demand(
         assert isinstance(evidence.result, Unresolved)
     elif first == "refused":
         assert isinstance(evidence.result, Rejected)
-        assert [f.code for f in evidence.result.findings] == ["first-schedule"]
+        assert [f.code for f in evidence.result.findings] == ["first-lanes"]
     else:
         assert isinstance(evidence.result, Rejected)
         assert [f.message for f in evidence.result.findings] == [
