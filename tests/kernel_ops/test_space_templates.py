@@ -296,9 +296,12 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
 # port classes became one (``StreamPort``): a port of a given sequence reads, to present it,
 # that it states no schedule as well (+12, +16 constants, the ``schedule`` of each such port
 # whose stream is evaluated).
-NONPORT_EVALUATED = ((1017, 42), (1061, 42))
+# Then (1061, 42) and (1662, 362) after ``viable`` became these when a vpc stated its
+# association (``VpcKernel.width_only``): the constraint of each output adapter's vpc the
+# trials evaluate, ``a1``'s and ``h2``'s (+2).
+NONPORT_EVALUATED = ((1017, 42), (1063, 42))
 PORT_EVALUATED = ((508, 272), (601, 320))
-EVALUATED = ((1525, 314), (1662, 362))
+EVALUATED = ((1525, 314), (1664, 362))
 
 
 def _assert_evaluated(scopes: Scopes, stage: int) -> None:
