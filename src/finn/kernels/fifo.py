@@ -43,7 +43,7 @@ from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel
-from finn.kernels.laws import NATIVE, NATIVE_CLOCKING
+from finn.kernels.laws import NATIVE, NATIVE_CLOCKING, Intake, PortIntake, Standing
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port_model import StreamPort
 from finn.kernels.utilization import lutram, memory, uram_constraint
@@ -191,6 +191,15 @@ def _geometry_supported(bits: int, depth: int) -> bool:
 _GEOMETRY = ("fifo-geometry", "input_data_width must be positive and depth at least two")
 
 
+#: Where each storage of ``rtl/infra/fifo.sv`` refuses a word: its ready, from its fill.
+_INTAKE_SOURCES = {
+    "shift": "rtl/infra/fifo.sv:108, :124-137 (Rdy)",
+    "distributed": "rtl/infra/fifo.sv:158-162 (Credit)",
+    "block": "rtl/infra/fifo.sv:268-271 (Credit)",
+    "ultra": "rtl/infra/fifo.sv:268-271 (Credit), :280-292 (QCredit)",
+}
+
+
 def _given(depth: int, bits: int, style: str, uram: bool) -> str:
     """The RAM_STYLE the RTL is given for ``style``: block RAM where ``auto`` would
     resolve to UltraRAM a platform without it lacks."""
@@ -278,6 +287,17 @@ class FifoKernel(Kernel):
 
     # The storage, the product its holder reads; its rule reads the value.
     storage = view(planned_storage)
+
+    @derived
+    def intake(self) -> Intake:
+        """Its storage's capacity (``planned_storage``), exact, both before it stops and at
+        most: it takes a word while it holds fewer, whatever its output does, and the next
+        once a word leaves (CONTRACT.md § 5)."""
+        storage: FifoStorage = self.planned_storage
+        words = storage.capacity
+        rule = "takes a word while it holds fewer than its capacity; resumes as one leaves"
+        source = _INTAKE_SOURCES[storage.effective_style]
+        return Intake((PortIntake("input", words, words, rule, Standing.STRUCTURAL, source),))
 
     @constraint
     def capacity_supported(self) -> bool | Rejected:

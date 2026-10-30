@@ -29,8 +29,8 @@ from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
-from finn.kernels.fifo import fifo_resources
-from finn.kernels.laws import NATIVE, NATIVE_CLOCKING
+from finn.kernels.fifo import fifo_resources, fifo_storage
+from finn.kernels.laws import NATIVE, NATIVE_CLOCKING, Intake, PortIntake, Standing
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port_model import StreamPort
 from finn.kernels.utilization import (
@@ -43,6 +43,11 @@ from finn.kernels.utilization import (
 from finn.platform.capabilities import Fabric, Platform, Resources
 
 i, j = Index("i"), Index("j")
+_SKID = fifo_storage(2, 1, "auto")
+assert _SKID is not None  # a shift register, no memory to overflow
+#: The words each of its skid FIFOs holds (``inner_shuffle.sv:394``, ``:413``): FinnLib
+#: ``fifo`` at DEPTH 2, a shift register at any width.
+_SKID_WORDS = _SKID.capacity
 
 
 def inner_shuffle_resources(
@@ -184,6 +189,28 @@ class TransposeKernel(Kernel):
         index=indices,
         lanes=(i,),
     )
+
+    @derived
+    def intake(self) -> Intake:
+        """Its two pages, from its RTL (CONTRACT.md § 5): it takes a beat while either page
+        is not wholly written, a page ``PAGE_OFFSET = I * J / SIMD`` beats, and frees a page
+        once every read of it has been issued. Its reads wait on two depth-two skid FIFOs
+        (its read patterns and its output, ``fifo``'s shift storage, five words each), so
+        with its output stalled it takes at least both pages before it may stop. It holds at
+        most both pages and what its skids hold of a freed one: ten output beats, each of
+        ``SIMD`` elements of as many input beats at most, and at most the page."""
+        page = self.rows * self.cols // self.simd
+        skids = 2 * _SKID_WORDS
+        before, most = 2 * page, 2 * page + min(page, skids * self.simd)
+        rule = (
+            f"takes a beat while either page ({page} beats) is not wholly written; resumes "
+            "as each page's last read is issued"
+        )
+        source = (
+            "rtl/shape/inner_shuffle.sv:96-97 (PAGE_OFFSET), :335-353 (WrJobsDone, irdy), "
+            ":394-424 (the skid FIFOs); rtl/infra/fifo.sv:102-144 (a shift FIFO's words)"
+        )
+        return Intake((PortIntake("input", before, most, rule, Standing.STRUCTURAL, source),))
 
     @view
     def resource_use(self) -> Resources | Rejected:

@@ -46,7 +46,7 @@ from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
-from finn.kernels.laws import NATIVE_CLOCKING, Native
+from finn.kernels.laws import NATIVE_CLOCKING, Intake, Native, PortIntake, Standing
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port_model import StreamPort
 from finn.kernels.values.domains import admit_element
@@ -68,6 +68,11 @@ SOURCES = (
         requires=("package:pwpolyf_pkg", "module:fifo"),
     ),
 )
+
+
+#: FinnLib's polynomial degree (``rtl/nonlin/pwpolyf_pkg.sv:25``), which its latency, and so
+#: its intake, follows.
+_DEGREE = 2
 
 
 class PwPolyKernel(Kernel):
@@ -163,6 +168,25 @@ class PwPolyKernel(Kernel):
         if self.platform.dsp is not DspBlock.DSP58:
             return reject("pwpolyf-target", "the polynomial's DSPFP32 chain requires DSP58")
         return True
+
+    @derived
+    def intake(self) -> Intake:
+        """Its issue credit, from its RTL (CONTRACT.md § 5): it issues an evaluation while
+        fewer than ``CREDIT = LATENCY + 3`` results are undelivered, ``LATENCY = DEGREE *
+        4`` (FinnLib's ``DEGREE``, 2), and parks one more beat in its sidestep register:
+        ``CREDIT + 1`` beats before it stops, exact, and at most."""
+        credit = _DEGREE * 4 + 3
+        rule = (
+            f"issues an evaluation while fewer than {credit} results are undelivered, and "
+            "parks one more beat; resumes as the output takes each result"
+        )
+        source = (
+            "rtl/nonlin/pwpolyf.sv:147-149 (LATENCY), :172-191 (sidestep), :194-201 "
+            "(CREDIT, take); rtl/nonlin/pwpolyf_pkg.sv:25 (DEGREE)"
+        )
+        return Intake(
+            (PortIntake("input", credit + 1, credit + 1, rule, Standing.STRUCTURAL, source),)
+        )
 
     @view
     def resource_use(self) -> Resources | Rejected:

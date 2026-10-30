@@ -39,7 +39,7 @@ from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
-from finn.kernels.laws import NATIVE, NATIVE_CLOCKING, Native
+from finn.kernels.laws import NATIVE, NATIVE_CLOCKING, Intake, Native, PortIntake, Standing
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port_model import StreamPort
 from finn.kernels.values.domains import Integer, admit_element
@@ -227,6 +227,37 @@ class EltwiseKernel(Kernel):
         index=indices,
         lanes=(c,),
     )
+
+    @derived
+    def intake(self) -> Intake:
+        """Its issue credit, from its RTL (CONTRACT.md § 5): it issues an operation while
+        fewer than ``CREDIT = LATENCY + 3`` results are undelivered, each taking a beat of
+        each operand, and parks one more beat of each in its sidestep register, so each
+        operand takes ``CREDIT + 1`` beats before it stops, exact, with both offered, and
+        holds at most as many. ``LATENCY`` is its datapath's: integer, 3 multiplying else
+        1; float, 4 scaled else 2, 3 multiplying, and one more converting an integer."""
+        a, b = (dtype.name == "FLOAT32" for dtype in (self.lhs_dtype, self.rhs_dtype))
+        multiply = self.operation == "MUL"
+        if not (a or b):
+            latency = 3 if multiply else 1
+        else:
+            latency = (4 if self.native_scale != 1.0 else 2 + multiply) + (a != b)
+        beats = latency + 3 + 1
+        rule = (
+            f"issues an operation while fewer than {latency + 3} results are undelivered, "
+            "one beat of each operand an operation, and parks one more of each; resumes as "
+            "the output takes each result"
+        )
+        source = (
+            "rtl/arith/eltwise.sv:52-61 (LATENCY, CREDIT), :94-111 (sidestep A, B), "
+            ":113-120 (take, Credit)"
+        )
+        return Intake(
+            tuple(
+                PortIntake(port, beats, beats, rule, Standing.STRUCTURAL, source)
+                for port in ("lhs", "rhs")
+            )
+        )
 
     @view
     def resource_use(self) -> Resources | Rejected:

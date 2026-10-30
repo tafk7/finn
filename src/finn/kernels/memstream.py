@@ -71,7 +71,15 @@ from finn.kernels.artifacts.abi import Bus, Clocking, Endpoint, Member, Standard
 from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData, hex_image
 from finn.kernels.base import Kernel
 from finn.kernels.control import Control, ControlModel
-from finn.kernels.laws import NATIVE_CLOCKING, Axis, Native, doubled
+from finn.kernels.laws import (
+    NATIVE_CLOCKING,
+    Axis,
+    Intake,
+    Native,
+    PortIntake,
+    Standing,
+    doubled,
+)
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port_model import StreamPort
 from finn.kernels.utilization import (
@@ -334,6 +342,41 @@ class MemStreamKernel(Kernel):
         sequence=output_sequence,
         stored=True,
     )
+
+    @derived
+    def intake(self) -> Intake:
+        """Its set port's, from its RTL (CONTRACT.md § 5); none with one set, whose set port
+        is idle. ``memstream`` takes a set index while it streams none, or as it issues
+        the last read of the set it streams; it issues a read while fewer than
+        ``FULL_CREDIT`` (8) words are undelivered. So with its output stalled it takes the
+        first index and one more for each set whose reads all issue: ``1 + 8 // DEPTH``
+        from reset; it holds at most the set it streams and those its undelivered words
+        span. A pumped memory streams ``2 * DEPTH`` half-words a set at the doubled clock,
+        its output assembly holding four more, and its wrapper holds one index ahead
+        (``IBuf``): ``2 + 12 // (2 * DEPTH)`` from reset, at most one more set and those
+        twelve half-words span."""
+        if not self.set.placed:
+            return Intake()
+        depth = self.form.beats
+        if self.pumped_memory:
+            words = 2 * depth  # half-words a set
+            before, most = 2 + 12 // words, 3 + -(-11 // words)
+            source = (
+                "rtl/infra/memstream.sv:104-118 (srdy, Vld), :131-150 (FULL_CREDIT, got0); "
+                "rtl/infra/memstream_axi.sv:110 (DEPTH_EFF), :213-228 (IBuf, IVld), "
+                ":230-258 (SBuf, mem_rdy)"
+            )
+        else:
+            before, most = 1 + 8 // depth, 2 + -(-7 // depth)
+            source = (
+                "rtl/infra/memstream.sv:104-118 (srdy, Vld), :131-150 (FULL_CREDIT, got0); "
+                "rtl/infra/memstream_axi.sv:132 (s_axis_0_tready)"
+            )
+        rule = (
+            "takes a set index while it streams none, or as it issues the last read of the "
+            "set it streams; reads wait on its credit, which the output returns"
+        )
+        return Intake((PortIntake("set", before, most, rule, Standing.STRUCTURAL, source),))
 
     @derived
     def clocking(self) -> Clocking:

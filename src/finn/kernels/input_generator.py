@@ -70,7 +70,7 @@ from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.rtl import Declined, evaluate
 from finn.kernels.base import Kernel
-from finn.kernels.laws import NATIVE, NATIVE_CLOCKING
+from finn.kernels.laws import NATIVE, NATIVE_CLOCKING, Intake, PortIntake, Standing
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port import LoopEnds
 from finn.kernels.port_model import StreamPort
@@ -288,6 +288,26 @@ class InputGeneratorKernel(Kernel):
             return nest_geometry(self.frame_words, self.dims, self.strides).buffer_words
         except GeometryError as error:
             return reject("input-generator-geometry", str(error))
+
+    @derived
+    def intake(self) -> Intake | Rejected:
+        """From its buffer as the RTL derives it (``nest_buffer``), exact (CONTRACT.md § 5):
+        it accepts a word while fewer than ``BUF_SIZE - 1`` accepted words are unfreed, and
+        moves its first output beat into its output register as soon as that beat's word
+        is in, freeing what that advance frees; with its output stalled it advances no
+        further. So it takes ``BUF_SIZE - 1`` words and those freed before it stops. It
+        holds at most its unfreed words and the word in its output register."""
+        try:
+            buffer = nest_buffer(self.frame_words, self.dims, self.strides)
+        except GeometryError as error:
+            return reject("input-generator-geometry", str(error))
+        before, most = buffer.capacity + buffer.freed[0], buffer.capacity + 1
+        rule = (
+            f"takes a word while fewer than {buffer.capacity} accepted words are unfreed; "
+            "resumes as each output beat frees the words no later beat reads"
+        )
+        source = "rtl/shape/input_gen.sv:220-249 (Cap, irdy :224), :254-269 (OBuf, advance)"
+        return Intake((PortIntake("input", before, most, rule, Standing.STRUCTURAL, source),))
 
     @view
     def held_bits(self) -> int:

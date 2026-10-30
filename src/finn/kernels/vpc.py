@@ -23,7 +23,7 @@ side presenting padded beats, which no beat sequence (``finn.dataflow``) states.
 
 from __future__ import annotations
 
-from math import lcm
+from math import gcd, lcm
 from typing import ClassVar
 
 from finn.core.space import Param, derived, view
@@ -32,7 +32,7 @@ from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel
-from finn.kernels.laws import NATIVE, NATIVE_CLOCKING
+from finn.kernels.laws import NATIVE, NATIVE_CLOCKING, Intake, PortIntake, Standing
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port_model import StreamPort
 from finn.kernels.utilization import Fit
@@ -102,6 +102,53 @@ class VpcKernel(Kernel):
 
     # Its lanes and element come from its ports, positive by construction: the RTL
     # refuses nothing they present, so it states no constraint of its own.
+
+    @derived
+    def intake(self) -> Intake:
+        """By the branch its lanes select (``vpc.sv``, its lanes normalized by their GCD,
+        ``PI0`` and ``PO0``; ``N0 = PI0 * PO0``, whole vectors; ``RELAX_THROUGHPUT`` 0),
+        from reset with its output stalled, in input beats (CONTRACT.md § 5):
+
+        - the wire (``PI0 == PO0 == 1``) takes nothing ahead: its ready is its output's;
+        - the serializer (``PO0 == 1``) takes one beat into its buffer, its first element
+          sidestepped, and stops until the buffer drains: at most that beat and one element
+          of the one before;
+        - the deserializer (``PI0 == 1``) takes ``PO0`` beats into its buffer and one more
+          into its sidestep;
+        - the general branch takes a beat while it holds at most ``PO0`` elements (its
+          capacity counter): ``PO0 // PI0 + 1`` beats from reset, and holds at most
+          ``PI0 + PO0`` elements, the beats they span ``1 + ceil(PO0 / PI0)``.
+        """
+        common = gcd(self.lanes_in, self.lanes_out)
+        pi0, po0 = self.lanes_in // common, self.lanes_out // common
+        if pi0 == po0 == 1:
+            counts = (0, 0)
+            rule = "takes a beat only as its output takes one (ready passes through)"
+            source = "rtl/shape/vpc.sv:78-86 (genWire)"
+        elif po0 == 1:
+            counts = (1, 2)
+            rule = (
+                "takes a beat into an empty buffer, its first element into the sidestep; "
+                "resumes once the buffer has shifted out"
+            )
+            source = "rtl/shape/vpc.sv:118-168 (genSer, genFull: Cnt, irdy :163)"
+        elif pi0 == 1:
+            counts = (po0 + 1, po0 + 1)
+            rule = (
+                "takes beats until its buffer is full and one into its sidestep; resumes "
+                "when the output takes the buffer"
+            )
+            source = "rtl/shape/vpc.sv:202-252 (genDes, genFull: Cnt, SRdy :249)"
+        else:
+            counts = (po0 // pi0 + 1, 1 + -(-po0 // pi0))
+            rule = (
+                f"takes a beat while it holds at most {po0} of the {pi0 + po0} words it has "
+                "room for (a word: the lanes' GCD of elements); resumes as the output takes "
+                "words"
+            )
+            source = "rtl/shape/vpc.sv:261-347 (genGeneric: CAP :266, ICap :316-322, irdy :325)"
+        before, most = counts
+        return Intake((PortIntake("input", before, most, rule, Standing.STRUCTURAL, source),))
 
     @view
     def resource_use(self) -> Resources:

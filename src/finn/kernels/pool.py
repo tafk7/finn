@@ -54,7 +54,7 @@ from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource, HlsSource
 from finn.kernels.artifacts.hls import axis_type
 from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
-from finn.kernels.laws import Axis, AxisSpelling
+from finn.kernels.laws import Axis, AxisSpelling, Intake, PortIntake, Standing
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port import axis
 from finn.kernels.port_model import StreamPort
@@ -152,6 +152,16 @@ void {name}(hls::stream<InBeat> &s_axis, hls::stream<OutBeat> &m_axis) {{
 	to_axis(dst0, m_axis);
 }}
 """
+
+
+#: Where its intake is measured, and under what conditions.
+_INTAKE_MEASURED = (
+    "Vivado 2025.2 simulation traces of pool_top as Vitis HLS 2025.2 synthesizes it for "
+    "an xczu3eg (kernels-vdwi, shelf pool-intake/: measure.py, results.json): windows 2x2, "
+    "2x3, 3x3 (strides equal and 1), PE 1, 3, 6, INT4 and INT8, at 5 ns; 2x2 at 2.5 and "
+    "10 ns, 3x3 at 2.5 ns; the output stalled from reset, and paced one beat in 64 cycles, "
+    "two in 48, five in 96"
+)
 
 
 #: The stem of its HLS top: the module is ``finn_pool_<key16>``.
@@ -261,6 +271,32 @@ class PoolKernel(Kernel):
     def element_supported(self) -> bool | Rejected:
         """An ordinary integer: ``std::max`` over ``ap_int`` or ``ap_uint`` lanes."""
         return ELEMENTS.check(self.input_tensor.element.dtype)
+
+    @derived
+    def intake(self) -> Intake:
+        """Measured (CONTRACT.md § 5): an HLS top's registers and FIFOs are its synthesis's,
+        not text it states, so they are read from a trace of its RTL. ``pooling_stream``
+        reduces each window's ``K = KH * KW`` beats into one result, and its top's FIFOs and
+        AXIS registers hold whole results; with its output stalled from reset it took
+        ``4K + 5`` beats and stopped, and under stalls between output beats it held at most
+        ``5K + 5``, at every window, stride, PE and element measured (``_INTAKE_MEASURED``),
+        at 5 and 10 ns. At 2.5 ns its synthesis adds a register, one beat more on each. So
+        below 5 ns it holds at most one more, and at 2.5 ns or less takes one more before it
+        stops: between, the register's period is not measured, and each bound keeps its
+        side."""
+        rows, columns = self.window
+        window = rows * columns
+        period = self.platform.period_ns
+        before = 4 * window + 5 + int(period <= 2.5)
+        most = 5 * window + 5 + int(period < 5.0)
+        rule = (
+            f"takes a beat while its pipeline and FIFOs have room: four windows of results and "
+            f"five beats or more with its output stalled ({window} beats a window); resumes "
+            "as the output takes each window's result"
+        )
+        return Intake(
+            (PortIntake("input", before, most, rule, Standing.MEASURED, _INTAKE_MEASURED),)
+        )
 
     @view
     def resource_use(self) -> Resources | Rejected:

@@ -78,7 +78,7 @@ from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import Clocking, Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
-from finn.kernels.laws import Axis, doubled
+from finn.kernels.laws import Axis, Intake, PortIntake, Standing, doubled
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port import axis
 from finn.kernels.port_model import StreamPort
@@ -434,6 +434,38 @@ class DotpAxiKernel(Kernel):
         if any(port.carrier_bits > 0xFFFFFFFF for port in (x, w, y)):
             return reject("dotp-stream-width", "packed stream widths must fit native unsigned int")
         return True
+
+    @derived
+    def intake(self) -> Intake:
+        """dotp_axi's output queue, from its RTL (CONTRACT.md § 5): ``x`` and ``w`` advance
+        together (L2), so each states the same beats, ``SF`` of them a result (the
+        reduction's beats). With its output stalled it locks its inputs once a second result
+        waits in its queue (``OLock``), so it takes at least ``2 * SF`` beats before it
+        may stop, more as its pipeline's tail lands; it holds at most the results its queue
+        and output register hold, ``MAX_IN_FLIGHT + 2`` (``CORE_PIPELINE_DEPTH + 3``),
+        and a partial result of ``SF - 1`` beats. ``CORE_PIPELINE_DEPTH`` is bounded above
+        for DSP58 at a ``SEGMENTLEN`` of one: the segment length is a view, which no
+        derived value reads, and a longer one shortens the pipeline."""
+        sf = prod(self.extents[index] for index in self.reduced) // self.simd
+        simd = self.simd
+        depth = 3 + (simd).bit_length() + (simd == 1)  # SOFTVEC_PIPELINE_DEPTH
+        if self.dsp is DspBlock.DSP58:
+            depth = max(depth, 3 + ((simd + 2) // 3 - 1))  # INT8_PIPELINE_DEPTH, SEGMENTLEN 1
+        before, most = 2 * sf, (depth + 4) * sf - 1
+        rule = (
+            f"takes x and w together; locks both once a second result waits with the output "
+            f"stalled ({sf} beats a result), and resumes once its queue has drained"
+        )
+        source = (
+            "rtl/linalg/dotp_axi.sv:143-146 (ardy, s_axis_weights_tready), :318-372 "
+            "(CORE_PIPELINE_DEPTH, MAX_IN_FLIGHT :332, OBuf :337, OLock :363-364, idle :372)"
+        )
+        return Intake(
+            tuple(
+                PortIntake(port, before, most, rule, Standing.STRUCTURAL, source)
+                for port in ("x", "w")
+            )
+        )
 
     @view
     def segment_length(self) -> int | Rejected:

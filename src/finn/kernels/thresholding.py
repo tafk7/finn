@@ -103,7 +103,7 @@ from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData, he
 from finn.kernels.artifacts.module import RegisterMap
 from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
 from finn.kernels.control import Control, ControlModel
-from finn.kernels.laws import AXIS, Axis
+from finn.kernels.laws import AXIS, Axis, Intake, PortIntake, Standing
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port_model import StreamPort
 from finn.kernels.utilization import (
@@ -581,6 +581,30 @@ class ThresholdingAxiKernel(Kernel):
         governs="input",
         dtype=selector_dtype,
     )
+
+    @derived
+    def intake(self) -> Intake:
+        """Its input guard, from its RTL (CONTRACT.md § 5): it takes an input beat while
+        fewer than ``MAX_PENDING = (DEEP_PIPELINE + 1) * M + 3`` thresholdings are pending
+        across its pipeline and output queue, exact both before it stops and at most; a
+        configuration access takes precedence. With several sets its set port's beats join
+        its input's, one each (L4), so it states the same."""
+        pending = (int(self.deep_pipeline) + 1) * self.stages + 3
+        rule = (
+            f"takes a beat while fewer than {pending} results are pending and no "
+            "configuration access is in progress; resumes as the output takes each result"
+        )
+        source = "rtl/nonlin/thresholding.sv:106-130 (MAX_PENDING, GuardSem), :190 (irdy)"
+        ports = ["input"]
+        if self.set.placed:
+            ports.append("set")
+            source += "; rtl/nonlin/thresholding_axi.sv:131-144 (the set join)"
+        return Intake(
+            tuple(
+                PortIntake(port, pending, pending, rule, Standing.STRUCTURAL, source)
+                for port in ports
+            )
+        )
 
     @view
     def thresholds_file(self) -> GeneratedData:
