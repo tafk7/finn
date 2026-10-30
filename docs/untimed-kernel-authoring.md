@@ -39,10 +39,10 @@ or certify that the chosen FIFO capacity is temporally sufficient.
 | Start with | What to look for |
 |---|---|
 | [Native example](../examples/untimed/native.py) | Existing `VpcKernel` and `FifoKernel` placed by `Facts`, real `Port` references, and an explicit depth-four FIFO. |
-| [VPC definition](../src/finn/kernels/vpc.py) | Tensor and arriving/leaving `Param`s; native input/output PortModel children; module parameters and actual source/pin assembly. |
+| [VPC definition](../src/finn/kernels/vpc.py) | Tensor and arriving/leaving `Param`s; native input/output `StreamPort` children; module parameters and sources, from which the base assembles its pins. |
 | [FIFO definition](../src/finn/kernels/fifo.py) | Explicit depth, memory-style `Decision`, geometry and platform validity, and realized storage capacity. |
 | [Compute example](../examples/untimed/compute.py) | A real known-weight `MatMulKernel`, selected packed implementation/folding, owned result/weight facts, source memory and a fixed-capacity channel FIFO. |
-| [MatMul definition](../src/finn/kernels/matmul.py) | Model facts, range/type ownership, implementation selectors and authored parent Port surfaces. |
+| [MatMul definition](../src/finn/kernels/matmul.py) | Model facts, range/type ownership, implementation selectors and the selected core's ports, served (`served`). |
 | [Packed compute definition](../src/finn/kernels/dotp.py) | Real scheduled/indexed Ports on the selected compute implementation; no included `ControlModel` on MatMul/Dotp. |
 | [Source memory definition](../src/finn/kernels/memstream.py) | `MemStream.config` is the included AXI-Lite `ControlModel`; the weight source owns its physical pins and held/tied-off values for build-time known contents. |
 | [Port models](../src/finn/kernels/port_model.py) | Ordinary child Spaces; placed/idle direction and datatype rules; native, scheduled and indexed projections. |
@@ -90,7 +90,7 @@ lower logical reads/storage bookkeeping is not a faster physical rate.
 Logical `Schedule.closing` accepts one contiguous reduced block, not only a
 suffix. A non-suffix block whose inner folded extent is one can normalize to a
 `LevelEnd` and use an existing TLAST; this is a deliberate authoring behavior
-change. A genuine held `LevelDone` remains refused by the physical ScheduledPort
+change. A genuine held `LevelDone` remains refused by the physical scheduled `StreamPort`
 and adapter contracts. In-tree kernels still close their original suffixes;
 no held-marker hardware or new kernel capability is added.
 

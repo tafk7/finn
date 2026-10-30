@@ -10,10 +10,13 @@ describe sources.
 A kernel binding a module states its binding (ModuleSpec, parameters, sources,
 data) and its ports; the base assembles its netlist from them, serially, in the
 order the module's pins and holds take (``Kernel.netlist``). Each states its own
-frame count. Parents compose resolved child Members in ordinary source. No
-lowering/setter/read-list or flat callback table is installed on a kernel: what is
-installed on a kernel with a module is one helper a part of its module, each reading
-its part by a name its closure fixes, so that its source states its reads.
+frame count. Parents compose resolved child Members in ordinary source. No setter,
+read-list or flat callback table is installed on a kernel. Two things are installed
+when its class is made, each a function reading by names its closure fixes, so that
+its source states its reads: on a kernel with a module, one helper a part of its
+module; on a kernel with children, each port it serves (``served``) lowered into the
+two members a channel reads of a port, ``<port>_side`` and ``<port>_contract``, and,
+for a selector, ``<child>_case``.
 
 Hardware configuration facts/Choices/rules remain inward model computations.
 Outward Views keep selected owning non-refusal and actual unresolved inputs.
@@ -30,6 +33,7 @@ from typing import Any, ClassVar
 
 from finn.core.space import (
     DefinitionError,
+    Group,
     Inapplicable,
     Members,
     Rejected,
@@ -184,6 +188,56 @@ def _supply_ports(cls: type[Kernel]) -> None:
             assign(value, "clocking", Kernel.port_clocking)
 
 
+def _check_advance(cls: type[Kernel]) -> None:
+    """Refuse a stream port of ``cls``'s own body stating more than one of what an advance
+    rule follows from, its kernel's schedule, the port it governs or stored values
+    (``port-advance-ambiguous``), or governing a port its kernel does not have
+    (``port-governs-unknown``). CONTRACT.md § 3: a port states what it is, one thing."""
+    from finn.kernels.port_model import StreamPort  # noqa: PLC0415
+
+    ports = {name for name, item in _members(cls).items() if isinstance(item, StreamPort)}
+    for name, value in vars(cls).items():
+        record = node_record(value)
+        if record is None or not issubclass(record.space_type, StreamPort):
+            continue
+        where = f"{cls.__qualname__}.{name}"
+        bound = record.bindings
+        stated = [key for key in ("schedule", "governs") if bound.get(key) is not None]
+        stated += ["stored"] if bound.get("stored") is True else []
+        if len(stated) > 1:
+            raise DefinitionError.broken(
+                "port-advance-ambiguous",
+                "Kernel",
+                f"{where} states {' and '.join(stated)}: a port's advance rule follows from "
+                "one of its kernel's schedule, the port it governs or stored values",
+                declaration=where,
+            )
+        governs = bound.get("governs")
+        if isinstance(governs, str) and (governs == name or governs not in ports):
+            raise DefinitionError.broken(
+                "port-governs-unknown",
+                "Kernel",
+                f"{where} governs {governs!r}, which is no other stream port of {cls.__qualname__}",
+                declaration=where,
+            )
+
+
+def _nested_served(group: type[Group], prefix: str) -> list[str]:
+    """The served ports declared in ``group`` and its Groups, by dotted path."""
+    from finn.kernels.port_model import ServedPort  # noqa: PLC0415
+
+    effective: dict[str, object] = {}
+    for base in reversed(group.__mro__):
+        effective.update(vars(base))
+    found: list[str] = []
+    for name, item in effective.items():
+        if isinstance(item, ServedPort):
+            found.append(prefix + name)
+        elif isinstance(item, Group):
+            found += _nested_served(type(item), f"{prefix}{name}.")
+    return found
+
+
 # -- the ports a kernel with children serves ------------------------------------------------
 #
 # A served port (``finn.kernels.port_model.served``) is lowered, when its kernel's class is
@@ -225,14 +279,30 @@ def _served_contract(child: str, port: str, case: str | None, label: str) -> Cal
 def _serve_ports(cls: type[Kernel]) -> None:
     """Lower each port ``cls``'s own body serves (above): ``<name>_side`` and
     ``<name>_contract``, and, for a selector, ``<child>_case``, its case, where the body does
-    not declare it. Refused where the child is not the kernel's (``served-child-unknown``)
-    or has no stream port so named (``served-port-unknown``)."""
+    not declare it. Refused where the child is not the kernel's (``served-child-unknown``),
+    has no stream port so named (``served-port-unknown``), the body declares a member the
+    port is lowered into (``served-port-repeated``), or a port is served in a Group, which
+    reads nothing of its kernel (``served-port-nested``)."""
     from finn.core.space._nodes import NodeChoice, selected  # noqa: PLC0415
     from finn.kernels.port import served_ports  # noqa: PLC0415
     from finn.kernels.port_model import ServedPort  # noqa: PLC0415
     from finn.kernels.sides import Side  # noqa: PLC0415
 
     own = dict(vars(cls))
+    nested = [
+        path
+        for name, value in own.items()
+        if isinstance(value, Group)
+        for path in _nested_served(type(value), f"{name}.")
+    ]
+    if nested:
+        raise DefinitionError.broken(
+            "served-port-nested",
+            "Kernel",
+            f"{cls.__qualname__} serves {nested} in a Group: a kernel serves a child's port "
+            "in its own body",
+            declaration=cls.__qualname__,
+        )
     for name, value in own.items():
         if not isinstance(value, ServedPort):
             continue
@@ -258,7 +328,9 @@ def _serve_ports(cls: type[Kernel]) -> None:
         members: dict[str, object] = {}
         if isinstance(value.child, NodeChoice):
             case = f"{child}_case"
-            if case not in vars(cls):  # one for every port served of the selector
+            # Lowered once for every port served of the selector; one the body declares is
+            # refused below (served-port-repeated).
+            if case in own or case not in vars(cls):
                 members[case] = selected(value.child)
         label = value.label or child
         side = _served_side(child, value.port, case, label)
@@ -322,6 +394,7 @@ class Kernel(Space):
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         _supply_ports(cls)
+        _check_advance(cls)
         _serve_ports(cls)
         super().__init_subclass__(**kwargs)
         buses = list(control_models(cls))

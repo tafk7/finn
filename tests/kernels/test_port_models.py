@@ -8,6 +8,9 @@ from typing import Any, cast
 
 import pytest
 from qonnx.core.datatype import DataType
+from support.conformance import KERNEL, design_member, place, samples
+from support.kernel_specs import SPECS
+from support.refusals import refused
 
 from finn.core.space import (
     Available,
@@ -27,7 +30,6 @@ from finn.core.space import (
     reject,
     view,
 )
-from finn.core.space._nodes import node_record
 from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
@@ -35,9 +37,7 @@ from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.module import Held
 from finn.kernels.base import Kernel, PortContract
-from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.laws import AXIS, AXIS_CLOCKING, NATIVE, NATIVE_CLOCKING, Advance, Axis, Native
-from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port import (
     LoopEnds,
     PhysicalPort,
@@ -52,7 +52,6 @@ from finn.kernels.port import (
 )
 from finn.kernels.port_model import StreamPort, served, stream_ports
 from finn.kernels.sides import Side
-from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.domains import Integer
 from finn.kernels.vpc import VpcKernel
 
@@ -367,40 +366,52 @@ def test_a_port_follows_the_advance_rule_its_declaration_gives(
     )
 
 
-def test_library_ports_follow_their_rtl_s_advance_rules() -> None:
-    def rules(space_type: type[Kernel]) -> dict[str, Advance]:
-        found: dict[str, Advance] = {}
-        declared: dict[str, object] = {}
-        for base in reversed(space_type.__mro__):
-            declared.update(vars(base))
-        for name, port in declared.items():
-            if isinstance(port, StreamPort):
-                record = node_record(port)
-                assert record is not None
-                bound = record.bindings
-                found[name] = (
-                    Advance.SCHEDULED
-                    if "schedule" in bound
-                    else Advance.SELECTED
-                    if "governs" in bound
-                    else Advance.SOURCED
-                    if bound.get("stored") is True
-                    else Advance.BUFFERED
-                )
-        return found
+SCHED, BUF, SEL, SRC = Advance.SCHEDULED, Advance.BUFFERED, Advance.SELECTED, Advance.SOURCED
+LIBRARY_RULES = {
+    # CONTRACT.md § 9: each module kernel's ports, by the rule its RTL follows.
+    "PackedDotpKernel": {"x": SCHED, "w": SCHED, "y": SCHED},
+    "Int8Dsp58DotpKernel": {"x": SCHED, "w": SCHED, "y": SCHED},
+    "ThresholdingAxiKernel": {"input": SCHED, "output": SCHED, "set": SEL},
+    "EltwiseKernel": {"lhs": SCHED, "rhs": SCHED, "result": SCHED},
+    "TransposeKernel": {"input": SCHED, "output": SCHED},
+    "MemStreamKernel": {"set": SEL, "output": SRC},
+    "FifoKernel": {"input": BUF, "output": BUF},
+    "VpcKernel": {"input": BUF, "output": BUF},
+    "InputGeneratorKernel": {"input": BUF, "output": BUF},
+    "PoolKernel": {"input": SCHED, "output": SCHED},
+    "PwPolyKernel": {"input": SCHED, "output": SCHED},
+}
 
-    assert rules(PackedDotpKernel) == {
-        "x": Advance.SCHEDULED,
-        "w": Advance.SCHEDULED,
-        "y": Advance.SCHEDULED,
+
+@pytest.mark.parametrize("name", sorted(LIBRARY_RULES))
+def test_library_ports_follow_their_rtl_s_advance_rules(name: str) -> None:
+    """Every port of each module kernel, at its spec's first sampled design point, answers
+    the advance rule CONTRACT.md § 9 states (R2 F4: evaluated, not re-derived)."""
+    (spec,) = [spec for spec in SPECS if spec.name == name]
+    case = {key: value for key, value in spec.cases[spec.space]().items() if key != "reference"}
+    given = {key: value for key, value in case.items() if key != "tolerance"}
+    sample = samples(**given)[0]
+    point = place(
+        case["space_type"],
+        sample,
+        case["inputs"],
+        case["outputs"],
+        choices=case.get("choices", {}),
+        facts=case.get("facts", {}),
+    )
+    kernel = design_member(point, KERNEL)
+    assert {port: getattr(kernel, port).advance for port in stream_ports(type(kernel))} == (
+        LIBRARY_RULES[name]
+    )
+
+
+def test_every_module_kernel_of_the_specs_has_its_rules_stated() -> None:
+    module_kernels = {
+        spec.name
+        for spec in SPECS
+        if spec.kernel.module_spec is not None or stream_ports(spec.kernel)
     }
-    assert rules(ThresholdingAxiKernel) == {
-        "input": Advance.SCHEDULED,
-        "output": Advance.SCHEDULED,
-        "set": Advance.SELECTED,
-    }
-    assert rules(MemStreamKernel) == {"set": Advance.SELECTED, "output": Advance.SOURCED}
-    assert rules(VpcKernel) == {"input": Advance.BUFFERED, "output": Advance.BUFFERED}
+    assert module_kernels == set(LIBRARY_RULES)
 
 
 def test_a_kernel_gives_each_port_of_its_body_its_name_and_its_clock_domain() -> None:
@@ -519,3 +530,65 @@ def test_a_served_port_names_a_child_and_a_stream_port_of_it() -> None:
             @derived
             def x_side(self) -> Side:
                 return self.kept.input.side
+
+
+def test_a_served_port_is_served_in_its_kernel_s_own_body() -> None:
+    """R2 F2, F6: a port served in a Group (which reads nothing of its kernel) is refused,
+    and so is a body declaring the case a selector's served ports are lowered with."""
+
+    class InGroup(Group):
+        x = served(Leaf(), "input")
+
+    with refused("served-port-nested", error=DefinitionError, message=r"\['g\.x'\]"):
+
+        class Holder(Kernel):
+            id = "test.served.holder"
+            kept = Leaf()
+            g = InGroup()
+
+    with refused("served-port-repeated", error=DefinitionError, message="core_case"):
+
+        class OwnCase(Kernel):
+            id = "test.served.own_case"
+            core = Select(one=Leaf, other=OtherLeaf)
+            x = served(core, "input")
+
+            @derived
+            def core_case(self) -> str:
+                return "one"
+
+
+def test_a_port_states_one_thing_its_advance_rule_follows_from() -> None:
+    """R2 F3: one of a schedule, the port it governs, or stored values; and a port governs
+    another stream port of its kernel."""
+    with refused(
+        "port-advance-ambiguous", error=DefinitionError, message="schedule and governs and stored"
+    ):
+
+        class Both(Kernel):
+            id = "test.advance.both"
+            input = StreamPort(
+                transport=AXIS,
+                tensor=TENSOR,
+                schedule=Schedule({Index("r"): 2, Index("c"): 4}),
+                index=(Index("r"), Index("c")),
+                governs="other",
+                stored=True,
+            )
+            other = StreamPort(transport=AXIS, tensor=TENSOR, sequence=SEQUENCE)
+
+    for governs in ("no_such_port", "input"):
+        with refused("port-governs-unknown", error=DefinitionError, message=repr(governs)):
+
+            class Governs(Kernel):
+                id = "test.advance.governs"
+                input = StreamPort(
+                    transport=AXIS, tensor=TENSOR, sequence=SEQUENCE, governs=governs
+                )
+
+    class Governing(Kernel):
+        id = "test.advance.governing"
+        input = StreamPort(transport=AXIS, tensor=TENSOR, sequence=SEQUENCE)
+        set = StreamPort(transport=AXIS, tensor=TENSOR, sequence=SEQUENCE, governs="input")
+
+    assert design_space(Governing()).set.advance is Advance.SELECTED
