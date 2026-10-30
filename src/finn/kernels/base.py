@@ -68,7 +68,7 @@ from finn.kernels.laws import AXIS_CLOCKING, INTAKE_UNSTATED, Advance, Intake
 from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
 from finn.kernels.transport import StreamPins
 from finn.kernels.utilization import total
-from finn.kernels.values import semantics as _value_types  # noqa: F401 - registers FINN's value types
+from finn.kernels.values import semantics as _value_types  # noqa: F401 (registers value types)
 from finn.platform.capabilities import Resources
 
 
