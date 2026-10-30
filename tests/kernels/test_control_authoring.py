@@ -32,7 +32,7 @@ from finn.dataflow.schedule import Index
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
-from finn.kernels.artifacts.abi import Bus, Endpoint, Member, Pin, StandardProtocol
+from finn.kernels.artifacts.abi import Bus, Direction, Member, Pin, StandardProtocol
 from finn.kernels.artifacts.contributions import (
     Contribution,
     CopiedSource,
@@ -44,7 +44,7 @@ from finn.kernels.channels import Channel
 from finn.kernels.control import Control, ControlModel, control_models
 from finn.kernels.laws import AXIS, Axis
 from finn.kernels.library import ModuleSpec
-from finn.kernels.port import port_endpoint, port_side, port_stream_pins
+from finn.kernels.port import port_direction, port_side, port_stream_pins
 from finn.kernels.port_model import StreamPort
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
@@ -125,7 +125,7 @@ class SerialThreshold(ThresholdingAxiKernel):
     input = GatedIndexed(
         label="input",
         transport=Axis(bus="s_axis"),
-        endpoint=Endpoint.TARGET,
+        direction=Direction.IN,
         tensor=ThresholdingAxiKernel.input_tensor,
         schedule=ThresholdingAxiKernel.schedule,
         index=ThresholdingAxiKernel.indices,
@@ -136,7 +136,7 @@ class SerialThreshold(ThresholdingAxiKernel):
     output = GatedScheduled(
         label="output",
         transport=Axis(bus="m_axis"),
-        endpoint=Endpoint.INITIATOR,
+        direction=Direction.OUT,
         tensor=ThresholdingAxiKernel.output_tensor,
         schedule=ThresholdingAxiKernel.schedule,
         index=ThresholdingAxiKernel.indices,
@@ -147,7 +147,7 @@ class SerialThreshold(ThresholdingAxiKernel):
     set = GatedSet(
         label="set",
         transport=AXIS,
-        endpoint=Endpoint.TARGET,
+        direction=Direction.IN,
         tensor=ThresholdingAxiKernel.set_tensor,
         sequence=ThresholdingAxiKernel.set_sequence,
         dtype=ThresholdingAxiKernel.selector_dtype,
@@ -356,7 +356,7 @@ def test_a_served_port_is_read_at_its_kernel_s_occurrence() -> None:
     left = port_side(Envelope.left, "set")
     right = port_side(Channel, "set")
     assert left is not right and left == getattr(Envelope.left, "set_side")
-    assert port_endpoint(Channel, "set") is Endpoint.TARGET
+    assert port_direction(Channel, "set") is Direction.IN
     point = design_space(Envelope())
     # Without a known value the channel places no source, so its set port does not apply.
     assert isinstance(point.query(left), Inapplicable)

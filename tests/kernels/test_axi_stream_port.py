@@ -38,7 +38,7 @@ from finn.dataflow.gemm import Form
 from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
-from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.abi import Direction
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
 from finn.kernels.composer import Facts, Port, channel
@@ -82,7 +82,7 @@ class Pool(Kernel):
     x = StreamPort(
         label="x",
         transport=Axis(bus="s_axis_input"),
-        endpoint=Endpoint.TARGET,
+        direction=Direction.IN,
         tensor=x_tensor,
         schedule=schedule,
         index=(b, s, c),
@@ -91,7 +91,7 @@ class Pool(Kernel):
     y = StreamPort(
         label="y",
         transport=Axis(bus="m_axis_output"),
-        endpoint=Endpoint.INITIATOR,
+        direction=Direction.OUT,
         tensor=y_tensor,
         schedule=schedule,
         index=(b, c),
@@ -198,24 +198,21 @@ def test_extent_of_is_a_named_member() -> None:
 
 
 def test_a_port_presents_a_schedule_or_a_sequence_not_both() -> None:
-    class Both(Pool):
-        id = "test.accpool.both"
-        x = StreamPort(
-            label="x",
-            transport=Axis(bus="s_axis_input"),
-            endpoint=Endpoint.TARGET,
-            tensor=Pool.x_tensor,
-            schedule=Pool.schedule,
-            sequence=BeatSequence(vector_major((1, 4, 8), 8)),
-            index=(b, s, c),
-            lanes=(c,),
-        )
+    """Refused when its kernel's class is made (``port-presentation``, R3's level 2)."""
+    with refused("port-presentation", error=DefinitionError, message="schedule and sequence"):
 
-    # The fold that places the port is refused by it, its stream's rule.
-    trial = placing(Facts(Both, {"x_tensor": X})).trial(keyed({"kernel.pe": 8}))
-    ((code, message),) = coded_messages(Rejected(trial.refused[("kernel", "x.stream")]))
-    assert code == "port-presentation"
-    assert message.startswith("x: exactly one of a schedule or a sequence")
+        class Both(Pool):
+            id = "test.accpool.both"
+            x = StreamPort(
+                label="x",
+                transport=Axis(bus="s_axis_input"),
+                direction=Direction.IN,
+                tensor=Pool.x_tensor,
+                schedule=Pool.schedule,
+                sequence=BeatSequence(vector_major((1, 4, 8), 8)),
+                index=(b, s, c),
+                lanes=(c,),
+            )
 
 
 def test_a_producers_element_is_its_tensors() -> None:
@@ -224,7 +221,7 @@ def test_a_producers_element_is_its_tensors() -> None:
         y = StreamPort(
             label="y",
             transport=Axis(bus="m_axis_output"),
-            endpoint=Endpoint.INITIATOR,
+            direction=Direction.OUT,
             tensor=Pool.y_tensor,
             schedule=Pool.schedule,
             index=(b, c),
@@ -236,7 +233,7 @@ def test_a_producers_element_is_its_tensors() -> None:
     trial = placing(Facts(Stated, {"x_tensor": X})).trial(keyed({"kernel.pe": 4}))
     ((code, message),) = coded_messages(Rejected(trial.refused[("kernel", "y.element")]))
     assert code == "port-element"
-    assert message.startswith("y: a producer's element is its tensor's")
+    assert message.startswith("y: an output's element is its tensor's")
 
 
 def test_dotp_binds_from_its_inputs_through_the_dense_view() -> None:
@@ -279,12 +276,17 @@ class Holding(Kernel):
 
     id = "test.holding"
     admits: Integer | None = Param(default=None)
+
+    @derived
+    def schedule(self) -> Schedule | Rejected:
+        return bound_schedule(self.extents, order=(b, s, c))
+
     x = StreamPort(
         label="x",
         transport=Axis(bus="s_axis_input"),
-        endpoint=Endpoint.TARGET,
+        direction=Direction.IN,
         tensor=X,
-        sequence=BeatSequence(vector_major((1, 4, 8), 8)),
+        schedule=schedule,
         index=(b, s, c),
         lanes=(c,),
         admits=admits,

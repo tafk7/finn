@@ -8,6 +8,7 @@ from typing import assert_type
 
 import pytest
 from qonnx.core.datatype import DataType
+from support.ports import UncheckedPort
 
 from finn.core.space import (
     Available,
@@ -28,13 +29,13 @@ from finn.core.space import (
 )
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
-from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.abi import Direction
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource
 from finn.kernels.artifacts.module import Fragment
 from finn.kernels.base import Kernel
 from finn.kernels.laws import AXIS, AXIS_CLOCKING, Native
 from finn.kernels.library import ModuleSpec
-from finn.kernels.port import LoopEnds, port_endpoint, port_side, port_stream_pins
+from finn.kernels.port import LoopEnds, port_direction, port_side, port_stream_pins
 from finn.kernels.port_model import StreamPort
 from finn.kernels.vpc import VpcKernel
 from finn.platform.capabilities import Resources
@@ -62,16 +63,17 @@ class SerialVpc(VpcKernel):
         _ = self.second_state
         return SEQUENCE
 
-    input = StreamPort(
+    input = UncheckedPort(
+        direction=Direction.IN,
         label="input",
         tensor=VpcKernel.input_tensor,
         sequence=first,
         transport=Native(names=("idat", "ivld", "irdy")),
         loop_ends=UNNAMED_ENDS,
     )
-    output = StreamPort(
+    output = UncheckedPort(
         label="output",
-        endpoint=Endpoint.INITIATOR,
+        direction=Direction.OUT,
         tensor=VpcKernel.output_tensor,
         sequence=second,
         transport=Native(names=("odat", "ovld", "ordy")),
@@ -132,8 +134,8 @@ def test_actual_vpc_surfaces_are_typed_real_children_and_not_kernel_instances() 
     assert point.netlists == ()
     assert isinstance(point.netlist, Fragment)
     assert inspection.statistics(point).owning_decisions == 0
-    assert port_endpoint(VpcKernel, "input") is Endpoint.TARGET
-    assert port_endpoint(VpcKernel, "output") is Endpoint.INITIATOR
+    assert port_direction(VpcKernel, "input") is Direction.IN
+    assert port_direction(VpcKernel, "output") is Direction.OUT
     assert point.query(port_side(VpcKernel, "output")) == Available(point.output.side)
     assert point.query(port_stream_pins(VpcKernel, "output")) == Available(point.output.stream_pins)
     with pytest.raises(KeyError):
@@ -203,7 +205,12 @@ def test_a_module_requires_its_own_stream_ports() -> None:
 def test_port_lookup_supports_discovered_group_paths_at_the_actual_node() -> None:
     class Included(Group):
         port = StreamPort(
-            clocking=AXIS_CLOCKING, transport=AXIS, label="p", tensor=TENSOR, sequence=SEQUENCE
+            direction=Direction.IN,
+            clocking=AXIS_CLOCKING,
+            transport=AXIS,
+            label="p",
+            tensor=TENSOR,
+            sequence=SEQUENCE,
         )
 
     class Host(Space):

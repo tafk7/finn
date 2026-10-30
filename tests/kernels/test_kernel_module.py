@@ -43,7 +43,6 @@ from finn.kernels.artifacts.abi import (
     Bus,
     Clocking,
     Direction,
-    Endpoint,
     Member,
     Signal,
     StandardProtocol,
@@ -80,7 +79,7 @@ class Probe(Kernel):
     x = StreamPort(
         label="x",
         transport=Axis(bus="s_axis"),
-        endpoint=Endpoint.TARGET,
+        direction=Direction.IN,
         tensor=tensor,
         sequence=BeatSequence(vector_major((4,), 1)),
     )
@@ -176,6 +175,7 @@ class Controlled(Kernel):
     config = ControlModel(bus=config_bus, presented=writable)
     tensor: Tensor = Param()
     x = StreamPort(
+        direction=Direction.IN,
         label="x",
         tensor=tensor,
         sequence=BeatSequence(vector_major((4,), 1)),

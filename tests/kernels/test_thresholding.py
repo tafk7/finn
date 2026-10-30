@@ -28,7 +28,7 @@ from finn.core.space import (
 )
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels.artifacts.abi import Bus, Endpoint
+from finn.kernels.artifacts.abi import Bus, Direction
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.laws import Axis
 from finn.kernels.library import library_module
@@ -155,9 +155,12 @@ def test_a_set_port_that_does_not_match_the_sets_is_refused_both_ways() -> None:
             for piece in validity.pieces
             for finding in piece.result.findings
         ]
+    # The set port presents the set order its kernel refuses: its presentation is refused
+    # too (R3's level 1).
     assert pieces == [
         ("selected", "threshold-set-channel", "several threshold sets take a set channel"),
         ("selected", "threshold-set-channel", "a single threshold set takes no set channel"),
+        ("set.presented", "threshold-set-channel", "a single threshold set takes no set channel"),
     ]
     # Given its set indices, the two sets stand.
     given = threshold_base(table=two_sets, set_tensor=set_indices(2, 2))
@@ -243,7 +246,7 @@ class NarrowInput(ThresholdingAxiKernel):
     input = StreamPort(
         label="input",
         transport=Axis(bus="s_axis"),
-        endpoint=Endpoint.TARGET,
+        direction=Direction.IN,
         tensor=ThresholdingAxiKernel.input_tensor,
         schedule=ThresholdingAxiKernel.schedule,
         index=ThresholdingAxiKernel.indices,

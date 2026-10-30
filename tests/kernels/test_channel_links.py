@@ -26,7 +26,7 @@ from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
-from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.abi import Direction, Endpoint
 from finn.kernels.artifacts.module import Fragment, Leaf
 from finn.kernels.base import Kernel, PortPins
 from finn.kernels.channels import Channel
@@ -165,7 +165,7 @@ class Reader(Space):
         clocking=AXIS_CLOCKING,
         label="port",
         transport=Axis(bus="s_axis"),
-        endpoint=Endpoint.TARGET,
+        direction=Direction.IN,
         tensor=X,
         sequence=reading().sequence,
     )

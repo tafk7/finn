@@ -53,7 +53,7 @@ from finn.custom_op.kernels.shell import in_shell
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
-from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.abi import Direction
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
@@ -193,7 +193,7 @@ class Given(Kernel):
     sequence: BeatSequence = Param()
     x = StreamPort(
         label="x",
-        endpoint=Endpoint.TARGET,
+        direction=Direction.IN,
         tensor=tensor,
         sequence=sequence,
         transport=Axis(bus="s_axis"),

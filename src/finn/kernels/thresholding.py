@@ -95,7 +95,7 @@ from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import (
     Bus,
-    Endpoint,
+    Direction,
     Member,
     StandardProtocol,
 )
@@ -557,7 +557,7 @@ class ThresholdingAxiKernel(Kernel):
 
     input = StreamPort(
         transport=Axis(bus="s_axis"),
-        endpoint=Endpoint.TARGET,
+        direction=Direction.IN,
         tensor=input_tensor,
         schedule=schedule,
         index=indices,
@@ -565,7 +565,7 @@ class ThresholdingAxiKernel(Kernel):
     )
     output = StreamPort(
         transport=Axis(bus="m_axis"),
-        endpoint=Endpoint.INITIATOR,
+        direction=Direction.OUT,
         tensor=output_tensor,
         schedule=schedule,
         index=indices,
@@ -575,7 +575,7 @@ class ThresholdingAxiKernel(Kernel):
     # selector, its beat accepted with each input beat (L4).
     set = StreamPort(
         transport=AXIS,
-        endpoint=Endpoint.TARGET,
+        direction=Direction.IN,
         tensor=set_tensor,
         sequence=set_sequence,
         governs="input",

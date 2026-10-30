@@ -26,7 +26,7 @@ from finn.core.space import (
 )
 from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.tensor import Tensor
-from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.abi import Direction
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
 from finn.kernels.fifo import fifo_resources, fifo_storage
@@ -174,7 +174,7 @@ class TransposeKernel(Kernel):
 
     input = StreamPort(
         transport=NATIVE,
-        endpoint=Endpoint.TARGET,
+        direction=Direction.IN,
         tensor=input_tensor,
         schedule=schedule,
         index=columns,
@@ -183,7 +183,7 @@ class TransposeKernel(Kernel):
     )
     output = StreamPort(
         transport=NATIVE,
-        endpoint=Endpoint.INITIATOR,
+        direction=Direction.OUT,
         tensor=output_tensor,
         schedule=schedule,
         index=indices,

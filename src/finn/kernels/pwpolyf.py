@@ -43,7 +43,7 @@ from finn.core.space import (
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.dataflow.schedule import Access, Index, Schedule
 from finn.dataflow.tensor import Tensor
-from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.abi import Direction
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
 from finn.kernels.laws import NATIVE_CLOCKING, Intake, Native, PortIntake, Standing
@@ -124,7 +124,7 @@ class PwPolyKernel(Kernel):
 
     input = StreamPort(
         transport=Native(prefix="x"),
-        endpoint=Endpoint.TARGET,
+        direction=Direction.IN,
         tensor=input_tensor,
         schedule=schedule,
         index=indices,
@@ -132,7 +132,7 @@ class PwPolyKernel(Kernel):
     )
     output = StreamPort(
         transport=Native(prefix="y"),
-        endpoint=Endpoint.INITIATOR,
+        direction=Direction.OUT,
         tensor=output_tensor,
         schedule=schedule,
         index=indices,

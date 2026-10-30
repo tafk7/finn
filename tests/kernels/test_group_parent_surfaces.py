@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 """A stream port declared in a Group keeps its actual lexical Group occurrence: discovery
-(``stream_ports``), lookup (``port_side``, ``port_stream_pins``, ``port_endpoint``) and the
+(``stream_ports``), lookup (``port_side``, ``port_stream_pins``, ``port_direction``) and the
 composer find it there, and nothing forwards it by hand."""
 
 from __future__ import annotations
@@ -15,12 +15,12 @@ from finn.core.space.declarations import Declaration, MemberRef, declared_path
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
-from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.abi import Direction
 from finn.kernels.base import Kernel
 from finn.kernels.composer import Facts, PartitionDeclaration, Port, channel
 from finn.kernels.composer import _checked as checked
 from finn.kernels.laws import AXIS, AXIS_CLOCKING
-from finn.kernels.port import port_endpoint, port_side, port_stream_pins
+from finn.kernels.port import port_direction, port_side, port_stream_pins
 from finn.kernels.port_model import StreamPort, stream_ports
 from finn.kernels.sides import Side
 
@@ -34,7 +34,12 @@ class Receiving(Group):
     tensor: Tensor = Param()
     sequence: BeatSequence = Param()
     native = StreamPort(
-        clocking=AXIS_CLOCKING, transport=AXIS, label="source", tensor=tensor, sequence=sequence
+        direction=Direction.IN,
+        clocking=AXIS_CLOCKING,
+        transport=AXIS,
+        label="source",
+        tensor=tensor,
+        sequence=sequence,
     )
 
 
@@ -47,7 +52,7 @@ class Sending(Group):
         label="source",
         tensor=tensor,
         sequence=sequence,
-        endpoint=Endpoint.INITIATOR,
+        direction=Direction.OUT,
     )
 
 
@@ -69,7 +74,9 @@ class Host(Kernel):
     group = InheritedFrame()
 
     # A port of its own, with the same name as the Groups' ports.
-    native = StreamPort(tensor=OTHER, sequence=OTHER_SEQUENCE, transport=AXIS)
+    native = StreamPort(
+        direction=Direction.IN, tensor=OTHER, sequence=OTHER_SEQUENCE, transport=AXIS
+    )
 
 
 class InheritedHost(Host):
@@ -103,8 +110,8 @@ def test_discovery_lookup_and_real_source_agree_for_inherited_nested_groups(
     assert reference_path(contract) == reference_path(group.native.stream_pins)
     assert side == group.native.side
     assert contract == group.native.stream_pins
-    expected = Endpoint.INITIATOR if sending else Endpoint.TARGET
-    assert port_endpoint(host, key) is expected
+    expected = Direction.OUT if sending else Direction.IN
+    assert port_direction(host, key) is expected
     tensor = OTHER if sending or host is ReplacedHost else SMALL
     sequence = OTHER_SEQUENCE if tensor is OTHER else SMALL_SEQUENCE
     point = design_space(host())
@@ -171,17 +178,17 @@ def test_actual_composer_accepts_valid_and_refuses_wrong_group_port_roles(
 
 
 class UnknownRoles(Group):
-    fact: Endpoint = Param(default=Endpoint.TARGET)
-    choice: Endpoint = Decision(domain=(Endpoint.TARGET, Endpoint.INITIATOR))
+    fact: Direction = Param(default=Direction.IN)
+    choice: Direction = Decision(domain=(Direction.IN, Direction.OUT))
 
     @derived
-    def inferred(self) -> Endpoint:
-        return Endpoint.INITIATOR
+    def inferred(self) -> Direction:
+        return Direction.OUT
 
     fact_bound = StreamPort(
         tensor=SMALL,
         sequence=SMALL_SEQUENCE,
-        endpoint=fact,
+        direction=fact,
         transport=AXIS,
         label="fact_bound",
         clocking=AXIS_CLOCKING,
@@ -189,7 +196,7 @@ class UnknownRoles(Group):
     derived_bound = StreamPort(
         tensor=SMALL,
         sequence=SMALL_SEQUENCE,
-        endpoint=inferred,
+        direction=inferred,
         transport=AXIS,
         label="derived_bound",
         clocking=AXIS_CLOCKING,
@@ -197,7 +204,7 @@ class UnknownRoles(Group):
     decision_bound = StreamPort(
         tensor=SMALL,
         sequence=SMALL_SEQUENCE,
-        endpoint=choice,
+        direction=choice,
         transport=AXIS,
         label="decision_bound",
         clocking=AXIS_CLOCKING,
@@ -205,7 +212,7 @@ class UnknownRoles(Group):
 
 
 @pytest.mark.parametrize("key", ["fact_bound", "derived_bound", "decision_bound"])
-def test_an_endpoint_bound_to_a_member_stays_unknown_even_when_configuration_resolves_it(
+def test_a_direction_bound_to_a_member_stays_unknown_even_when_configuration_resolves_it(
     key: str,
 ) -> None:
     class UnknownHost(Kernel):
@@ -213,13 +220,13 @@ def test_an_endpoint_bound_to_a_member_stays_unknown_even_when_configuration_res
         group = UnknownRoles()
 
     dotted = "group." + key
-    assert port_endpoint(UnknownHost, dotted) is None
+    assert port_direction(UnknownHost, dotted) is None
     assert dotted in stream_ports(UnknownHost)
     port_side(UnknownHost, dotted)
     # Static metadata inspection accepts a class, not a bound runtime instance.
-    point = design_space(UnknownHost()).with_choices({UnknownHost.group.choice: Endpoint.INITIATOR})
-    assert port_endpoint(type(point), dotted) is None
-    assert port_endpoint(UnknownHost, "group.unknown") is None
+    point = design_space(UnknownHost()).with_choices({UnknownHost.group.choice: Direction.OUT})
+    assert port_direction(type(point), dotted) is None
+    assert port_direction(UnknownHost, "group.unknown") is None
 
 
 @pytest.mark.parametrize(
@@ -231,7 +238,7 @@ def test_unknown_keys_and_real_space_crossing_remain_rejected(key: str) -> None:
         child = Host()
 
     assert key not in stream_ports(Parent)
-    assert port_endpoint(Parent, key) is None
+    assert port_direction(Parent, key) is None
     with pytest.raises(KeyError, match=key):
         port_side(Parent, key)
     with pytest.raises(KeyError, match=key):

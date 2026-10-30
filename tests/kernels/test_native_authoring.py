@@ -10,6 +10,7 @@ import pytest
 from support.conformance import _check_model, _contracts, _stream, _values, place, samples
 from support.helpers import FULL_DSP48E2, fifo_node, nested, stage_tensor
 from support.kernel_specs.stages import StagedInputGenerator, fifo, input_gen
+from support.ports import UncheckedPort
 
 from finn.core.space import (
     Available,
@@ -29,7 +30,7 @@ from finn.core.space import (
 from finn.dataflow.steps import steps
 from finn.dataflow.traversal import BeatSequence, LevelEnd
 from finn.kernels.adapters import input_gen as InputAdapterChain
-from finn.kernels.artifacts.abi import Clocking, Direction, Endpoint, Signal
+from finn.kernels.artifacts.abi import Clocking, Direction, Signal
 from finn.kernels.artifacts.module import Fragment
 from finn.kernels.base import Kernel, PortPins
 from finn.kernels.channels import ChannelFifo
@@ -113,16 +114,17 @@ class SerialFifo(FifoKernel):
         _ = self.second_state
         return ARRIVING
 
-    input = StreamPort(
+    input = UncheckedPort(
+        direction=Direction.IN,
         label="input",
         tensor=FifoKernel.input_tensor,
         sequence=first,
         transport=Native(names=("idat", "ivld", "irdy")),
         loop_ends=UNNAMED_ENDS,
     )
-    output = StreamPort(
+    output = UncheckedPort(
         label="output",
-        endpoint=Endpoint.INITIATOR,
+        direction=Direction.OUT,
         tensor=FifoKernel.output_tensor,
         sequence=second,
         transport=Native(names=("odat", "ovld", "ordy")),
@@ -271,6 +273,7 @@ def test_adapter_reads_contracts_before_netlist(monkeypatch: pytest.MonkeyPatch)
 
     class Child(InputGeneratorKernel):
         input = RefusedContract(
+            direction=Direction.IN,
             transport=NATIVE,
             label="input",
             tensor=InputGeneratorKernel.input_tensor,
@@ -348,16 +351,17 @@ class SerialGenerator(InputGeneratorKernel):
         _ = self.second_state
         return ARRIVING
 
-    input = StreamPort(
+    input = UncheckedPort(
+        direction=Direction.IN,
         label="input",
         tensor=InputGeneratorKernel.input_tensor,
         sequence=first,
         transport=Native(names=("idat", "ivld", "irdy")),
         loop_ends=UNNAMED_ENDS,
     )
-    output = StreamPort(
+    output = UncheckedPort(
         label="output",
-        endpoint=Endpoint.INITIATOR,
+        direction=Direction.OUT,
         tensor=InputGeneratorKernel.output_tensor,
         sequence=second,
         transport=Native(names=("odat", "ovld", "ordy")),

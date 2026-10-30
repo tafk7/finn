@@ -17,7 +17,7 @@ from finn.core.space import Available, DefinitionError, Param, Space, design_spa
 from finn.core.space.compiler import compile_model
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
-from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.abi import Direction
 from finn.kernels.laws import AXIS, NATIVE, NATIVE_CLOCKING
 from finn.kernels.port_model import StreamPort
 
@@ -29,7 +29,7 @@ class Annotated(Space):
     input_tensor: Tensor = Param(default=TENSOR)
     input: StreamPort = StreamPort(
         label="input",
-        endpoint=Endpoint.TARGET,
+        direction=Direction.IN,
         transport=NATIVE,
         tensor=input_tensor,
         sequence=SEQUENCE,
@@ -50,7 +50,11 @@ def test_a_wrong_typed_child_model_binding_is_refused() -> None:
 
         class Mistyped(Space):
             input = StreamPort(
-                transport=AXIS, label=json.loads("7"), tensor=TENSOR, sequence=SEQUENCE
+                direction=Direction.IN,
+                transport=AXIS,
+                label=json.loads("7"),
+                tensor=TENSOR,
+                sequence=SEQUENCE,
             )
 
         design_space(Mistyped())

@@ -23,7 +23,7 @@ from finn.core.space import derived
 from finn.dataflow.steps import steps
 from finn.dataflow.traversal import BeatSequence, Traversal, vector_major
 from finn.kernels.adapters import Convert, RealizedStage, realize
-from finn.kernels.artifacts.abi import Direction, Endpoint, Pin, Signal
+from finn.kernels.artifacts.abi import Direction, Pin, Signal
 from finn.kernels.artifacts.module import Held
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import Generate, InputGeneratorKernel
@@ -59,7 +59,7 @@ class StagedInputGenerator(InputGeneratorKernel):
 
     output = StreamPort(
         label="output",
-        endpoint=Endpoint.INITIATOR,
+        direction=Direction.OUT,
         transport=NATIVE,
         tensor=InputGeneratorKernel.output_tensor,
         sequence=InputGeneratorKernel.leaving,

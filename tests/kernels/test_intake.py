@@ -42,7 +42,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.harness.points import covering
 from finn.harness.toolchain import finnlib_root
-from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.abi import Direction
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.rtl import Declined, evaluate
 from finn.kernels.base import Kernel
@@ -121,9 +121,11 @@ class Stage(Kernel):
 
     input_tensor: Tensor = Param()
     arriving: BeatSequence = Param()
-    input = StreamPort(transport=NATIVE, tensor=input_tensor, sequence=arriving)
+    input = StreamPort(
+        direction=Direction.IN, transport=NATIVE, tensor=input_tensor, sequence=arriving
+    )
     output = StreamPort(
-        endpoint=Endpoint.INITIATOR, transport=NATIVE, tensor=input_tensor, sequence=arriving
+        direction=Direction.OUT, transport=NATIVE, tensor=input_tensor, sequence=arriving
     )
 
     @view
@@ -216,7 +218,7 @@ def _targets(member: Kernel) -> tuple[str, ...]:
     return tuple(
         name
         for name, port in stream_ports(type(member)).items()
-        if member.field(port.endpoint).get() is Endpoint.TARGET and member.field(port.placed).get()
+        if member.field(port.direction).get() is Direction.IN and member.field(port.placed).get()
     )
 
 

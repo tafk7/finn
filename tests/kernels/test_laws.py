@@ -14,7 +14,7 @@ from finn.core.space import Available, Rejected, design_space
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
-from finn.kernels.artifacts.abi import Clocking, Endpoint
+from finn.kernels.artifacts.abi import Clocking, Direction, Endpoint
 from finn.kernels.base import Kernel
 from finn.kernels.eltwise import EltwiseKernel, c
 from finn.kernels.laws import (
@@ -98,7 +98,7 @@ class Undistinguished(EltwiseKernel):
     lhs = StreamPort(
         label="lhs",
         transport=NATIVE,
-        endpoint=TARGET,
+        direction=Direction.IN,
         tensor=EltwiseKernel.lhs_tensor,
         schedule=EltwiseKernel.schedule,
         index=EltwiseKernel.indices,
@@ -107,7 +107,7 @@ class Undistinguished(EltwiseKernel):
     rhs = StreamPort(
         label="rhs",
         transport=NATIVE,
-        endpoint=TARGET,
+        direction=Direction.IN,
         tensor=EltwiseKernel.rhs_tensor,
         schedule=EltwiseKernel.schedule,
         index=EltwiseKernel.rhs_indices,

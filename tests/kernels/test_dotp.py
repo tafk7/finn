@@ -264,16 +264,27 @@ def test_space_rejects_mistyped_values_at_binding(updates, error):
         kernel(**updates)
 
 
+# A refused schedule refuses each port's presentation too (R3's level 1, ``presented``).
+PRESENTED = {(f"{port}.presented", "kernel-schedule") for port in ("x", "w", "y")}
+
+
 @pytest.mark.parametrize(
     ("factor", "pieces"),
     (
-        ("pe", {("stream_widths_supported", "kernel-schedule")}),
-        ("simd", {("simd_fits", "dotp-simd"), ("stream_widths_supported", "kernel-schedule")}),
+        ("pe", {("stream_widths_supported", "kernel-schedule"), *PRESENTED}),
+        (
+            "simd",
+            {
+                ("simd_fits", "dotp-simd"),
+                ("stream_widths_supported", "kernel-schedule"),
+                *PRESENTED,
+            },
+        ),
     ),
 )
 def test_a_folding_factor_given_that_does_not_divide_its_extent_refuses_the_core(factor, pieces):
     """The role's domains list only divisors (``role``); a core given another is refused
-    by its schedule, and SIMD by its own rule too."""
+    by its schedule, and with it each port's presentation, and SIMD by its own rule too."""
     point = kernel(**{"outputs": 6, "reduction": 6, "pe": 2, "simd": 2, factor: 4})
     status, found = validity_of(point)
     assert status == "refused"

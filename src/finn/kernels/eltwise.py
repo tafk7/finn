@@ -36,7 +36,7 @@ from finn.core.space import (
 from finn.dataflow.datatypes import QONNXDataType, resolve_qonnx_datatype_name
 from finn.dataflow.schedule import Access, Index, Schedule
 from finn.dataflow.tensor import Tensor
-from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.abi import Direction
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
 from finn.kernels.laws import NATIVE, NATIVE_CLOCKING, Intake, Native, PortIntake, Standing
@@ -205,7 +205,7 @@ class EltwiseKernel(Kernel):
 
     lhs = StreamPort(
         transport=Native(prefix="a"),
-        endpoint=Endpoint.TARGET,
+        direction=Direction.IN,
         tensor=lhs_tensor,
         schedule=schedule,
         index=indices,
@@ -213,7 +213,7 @@ class EltwiseKernel(Kernel):
     )
     rhs = StreamPort(
         transport=Native(prefix="b"),
-        endpoint=Endpoint.TARGET,
+        direction=Direction.IN,
         tensor=rhs_tensor,
         schedule=schedule,
         index=rhs_indices,
@@ -221,7 +221,7 @@ class EltwiseKernel(Kernel):
     )
     result = StreamPort(
         transport=NATIVE,
-        endpoint=Endpoint.INITIATOR,
+        direction=Direction.OUT,
         tensor=result_tensor,
         schedule=schedule,
         index=indices,

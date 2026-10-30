@@ -67,7 +67,7 @@ from finn.dataflow.traversal import (
     pack,
     vector_major,
 )
-from finn.kernels.artifacts.abi import Bus, Clocking, Endpoint, Member, StandardProtocol
+from finn.kernels.artifacts.abi import Bus, Clocking, Direction, Member, StandardProtocol
 from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData, hex_image
 from finn.kernels.base import Kernel
 from finn.kernels.control import ControlModel
@@ -329,7 +329,7 @@ class MemStreamKernel(Kernel):
 
     set = StreamPort(
         transport=Native(names=("s_axis_0_tdata", "s_axis_0_tvalid", "s_axis_0_tready")),
-        endpoint=Endpoint.TARGET,
+        direction=Direction.IN,
         tensor=set_tensor,
         sequence=set_sequence,
         dtype=set_dtype,
@@ -337,7 +337,7 @@ class MemStreamKernel(Kernel):
     )
     output = StreamPort(
         transport=Axis(bus="m_axis_0"),
-        endpoint=Endpoint.INITIATOR,
+        direction=Direction.OUT,
         tensor=output_tensor,
         sequence=output_sequence,
         stored=True,

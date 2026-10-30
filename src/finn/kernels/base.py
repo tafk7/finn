@@ -34,7 +34,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from types import MappingProxyType
-from typing import Any, ClassVar
+from typing import Any, ClassVar, get_args, get_type_hints
 
 from finn.core.space import (
     DefinitionError,
@@ -61,7 +61,7 @@ from finn.dataflow.schedule import (
     span,
 )
 from finn.kernels.artifacts import ArtifactError
-from finn.kernels.artifacts.abi import Clocking, Pin
+from finn.kernels.artifacts.abi import Clocking, Direction, Pin
 from finn.kernels.artifacts.contributions import Contribution, GeneratedData
 from finn.kernels.artifacts.module import BusExport, Fragment, Held, Link, merge
 from finn.kernels.control import Control, ControlModel, control_models, presented
@@ -210,57 +210,176 @@ def _supply_ports(cls: type[Kernel]) -> None:
             assign(value, "clocking", Kernel.port_clocking)
 
 
-def _check_advance(cls: type[Kernel]) -> None:
-    """Refuse a stream port of ``cls``'s own body stating more than one of what an advance
-    rule follows from, its kernel's schedule, the port it governs or stored values
-    (``port-advance-ambiguous``), or governing a port its kernel does not have
-    (``port-governs-unknown``). CONTRACT.md § 3: a port states what it is, one thing.
+# -- its stream ports' declarations ---------------------------------------------------------
+#
+# What a constraint cannot see is refused when a kernel's class is made (R3's level 2): each
+# stream port its body declares, in the body or in a Group of it, states its header's
+# direction, binds exactly one presentation and its relation only where it applies; a port of
+# its body presents its kernel's one schedule, which is stated and never inapplicable, and
+# governs a port its kernel has. A placed port's presentation at a design point is the port's
+# own constraint (``StreamPort.presented``, R3's level 1).
 
-    And refuse one presenting a schedule other than its kernel's one ``schedule``
-    (``port-schedule-foreign``): its kernel's scheduled ports are projections of one
-    schedule, so they present one index point at each iteration (their association) and
-    their paces count the same iterations (§ 4). A port presents its kernel's schedule by
-    binding it by name (``schedule=schedule``), which a subclass overriding ``schedule``
-    then gives it."""
+_PROJECTION = ("index", "lanes", "reduces", "holds", "closes", "reshaped")
+
+
+def _declared_ports(cls: type[Kernel]) -> list[tuple[str, Any, bool]]:
+    """Each stream port ``cls``'s own body declares, by its path (``group.port`` in a
+    Group), with its declaration's record and whether it is in the body itself."""
+    from finn.kernels.port_model import StreamPort  # noqa: PLC0415
+
+    def below(namespace: type[Any], prefix: str, own: bool) -> list[tuple[str, Any, bool]]:
+        effective: dict[str, object] = {}
+        for base in reversed(namespace.__mro__ if not own else (namespace,)):
+            effective.update(vars(base))
+        found: list[tuple[str, Any, bool]] = []
+        for name, value in effective.items():
+            record = node_record(value)
+            if record is not None and issubclass(record.space_type, StreamPort):
+                found.append((prefix + name, record, own))
+            elif isinstance(value, Group):
+                found += below(type(value), f"{prefix}{name}.", False)
+        return found
+
+    return below(cls, "", True)
+
+
+def _check_ports(cls: type[Kernel]) -> None:
+    """Refuse, when ``cls`` is made, a stream port its own body declares (above) that:
+
+    - states no direction, or ``INOUT`` (``port-direction``): a stream is an input or an
+      output, and its bus role follows (``finn.kernels.port.stream_endpoint``);
+    - binds no presentation or both, its kernel's ``schedule`` and a given ``sequence``, or a
+      given sequence with a projection's parameters (``index``, ``lanes``, ``reduces``,
+      ``holds``, ``closes``, ``reshaped``) (``port-presentation``);
+    - states more than one of what an advance rule follows from, its kernel's schedule, the
+      port it governs or stored values, or states ``governs`` or ``stored`` bound to other
+      than a literal (``port-advance-ambiguous``; CONTRACT.md § 3: a port states what it
+      is, one thing), or ``governs`` on an output, ``stored`` on an input
+      (``port-direction``);
+    - in its body, governs a port its kernel does not have (``port-governs-unknown``), or
+      presents a schedule other than its kernel's one ``schedule``
+      (``port-schedule-foreign``): its kernel's scheduled ports are projections of one
+      schedule, so they present one index point at each iteration (their association) and
+      their paces count the same iterations (§ 4). A port presents its kernel's schedule
+      by binding it by name (``schedule=schedule``), which a subclass overriding
+      ``schedule`` then gives it.
+
+    And refuse ``cls`` where a port it places presents its schedule and it states none
+    (``port-schedule-unstated``) or states one whose declared answer admits
+    ``Inapplicable`` (``port-schedule-inapplicable``): a scheduled port's stream would be
+    inapplicable, which no constraint refuses."""
     from finn.kernels.port_model import StreamPort  # noqa: PLC0415
 
     ports = {name for name, item in _members(cls).items() if isinstance(item, StreamPort)}
-    for name, value in vars(cls).items():
-        record = node_record(value)
-        if record is None or not issubclass(record.space_type, StreamPort):
-            continue
+    for name, record, own in _declared_ports(cls):
         where = f"{cls.__qualname__}.{name}"
+
+        def refused(code: str, message: str, where: str = where) -> DefinitionError:
+            return DefinitionError.broken(code, "Kernel", f"{where} {message}", declaration=where)
+
         bound = record.bindings
+        direction = bound.get("direction")
+        if "direction" not in bound or direction is Direction.INOUT:
+            raise refused(
+                "port-direction",
+                ("states no direction" if "direction" not in bound else "is stated INOUT")
+                + ": a stream port is an input or an output (direction=Direction.IN, OUT)",
+            )
+        presentations = [key for key in ("schedule", "sequence") if bound.get(key) is not None]
+        if len(presentations) != 1:
+            raise refused(
+                "port-presentation",
+                ("binds " + " and ".join(presentations) if presentations else "binds none")
+                + ": a port presents exactly one of its kernel's schedule's projection "
+                "(schedule) or a given sequence (sequence)",
+            )
+        projecting = [key for key in _PROJECTION if key in bound]
+        if presentations == ["sequence"] and projecting:
+            raise refused(
+                "port-presentation",
+                f"binds {', '.join(projecting)} with a given sequence: a schedule's "
+                "projection's parameters go with schedule",
+            )
         stated = [key for key in ("schedule", "governs") if bound.get(key) is not None]
         stated += ["stored"] if bound.get("stored") is True else []
         if len(stated) > 1:
-            raise DefinitionError.broken(
+            raise refused(
                 "port-advance-ambiguous",
-                "Kernel",
-                f"{where} states {' and '.join(stated)}: a port's advance rule follows from "
-                "one of its kernel's schedule, the port it governs or stored values",
-                declaration=where,
+                f"states {' and '.join(stated)}: a port's advance rule follows from one of "
+                "its kernel's schedule, the port it governs or stored values",
             )
-        governs = bound.get("governs")
+        governs, stored = bound.get("governs"), bound.get("stored", False)
+        for key, value, kind in (("governs", governs, str), ("stored", stored, bool)):
+            if value is not None and not isinstance(value, kind):
+                raise refused(
+                    "port-advance-ambiguous",
+                    f"binds {key} to {value!r}: its advance rule is its declaration's, a literal",
+                )
+        if governs is not None and direction is Direction.OUT:
+            raise refused(
+                "port-direction", "governs a port and is an output: a selector is an input"
+            )
+        if stored is True and direction is Direction.IN:
+            raise refused("port-direction", "is stored and an input: stored values are an output's")
+        if not own:
+            continue
         if isinstance(governs, str) and (governs == name or governs not in ports):
-            raise DefinitionError.broken(
+            raise refused(
                 "port-governs-unknown",
-                "Kernel",
-                f"{where} governs {governs!r}, which is no other stream port of {cls.__qualname__}",
-                declaration=where,
+                f"governs {governs!r}, which is no other stream port of {cls.__qualname__}",
             )
         schedule = bound.get("schedule")
         if schedule is not None and not _kernel_schedule(cls, schedule):
             named = schedule.name if isinstance(schedule, Declaration) else None
-            raise DefinitionError.broken(
+            raise refused(
                 "port-schedule-foreign",
-                "Kernel",
-                f"{where} presents "
+                "presents "
                 + (f"{named!r}" if named else f"a {type(schedule).__name__} of its own")
                 + f", not {cls.__qualname__}'s schedule: a scheduled port is a projection of "
                 "its kernel's one schedule (schedule=schedule)",
-                declaration=where,
             )
+    _check_schedule(cls)
+
+
+def _check_schedule(cls: type[Kernel]) -> None:
+    """``port-schedule-unstated`` and ``port-schedule-inapplicable`` (``_check_ports``)."""
+    from finn.kernels.port_model import StreamPort  # noqa: PLC0415
+
+    members = _members(cls)
+    records = {
+        name: node_record(item) for name, item in members.items() if isinstance(item, StreamPort)
+    }
+    scheduled = [
+        name
+        for name, record in records.items()
+        if record is not None and _kernel_schedule(cls, record.bindings.get("schedule"))
+    ]
+    if not scheduled:
+        return
+    if not _declared(cls, "schedule"):
+        raise DefinitionError.broken(
+            "port-schedule-unstated",
+            "Kernel",
+            f"{cls.__qualname__} presents its schedule on {scheduled} and states none: a "
+            "kernel with scheduled ports states its schedule",
+            declaration=cls.__qualname__,
+        )
+    item = members["schedule"]
+    if not isinstance(item, Derived):
+        return
+    owner = next(base for base in cls.__mro__ if vars(base).get("schedule") is item)
+    try:
+        answer = get_type_hints(item.function, localns=dict(vars(owner))).get("return")
+    except (NameError, TypeError, ValueError):
+        return  # the engine refuses it, with its own text (``annotation-unresolved``)
+    if answer is Inapplicable or Inapplicable in get_args(answer):
+        raise DefinitionError.broken(
+            "port-schedule-inapplicable",
+            "Kernel",
+            f"{cls.__qualname__} presents its schedule on {scheduled} and declares it "
+            f"{answer}: a scheduled port's schedule is never inapplicable",
+            declaration=cls.__qualname__,
+        )
 
 
 def _kernel_schedule(cls: type[Kernel], bound: object) -> bool:
@@ -603,7 +722,7 @@ class Kernel(Space):
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         _supply_ports(cls)
-        _check_advance(cls)
+        _check_ports(cls)
         _serve_ports(cls)
         _derive_control(cls)
         super().__init_subclass__(**kwargs)

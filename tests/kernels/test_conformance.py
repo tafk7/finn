@@ -75,7 +75,7 @@ from finn.core.space import Rejected, derived, view
 from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.traversal import offsets, pack, vector_major
 from finn.harness.orders import decode
-from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.abi import Direction
 from finn.kernels.base import Kernel, bound_extents, bound_schedule
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.laws import Axis
@@ -128,7 +128,7 @@ def split_ports(schedule: Any, lanes: tuple[Index, ...]) -> tuple[StreamPort, St
     input = StreamPort(
         label="input",
         transport=Axis(bus="s_axis"),
-        endpoint=Endpoint.TARGET,
+        direction=Direction.IN,
         tensor=ThresholdingAxiKernel.input_tensor,
         schedule=schedule,
         index=(r, co * 3 + ci),
@@ -137,7 +137,7 @@ def split_ports(schedule: Any, lanes: tuple[Index, ...]) -> tuple[StreamPort, St
     output = StreamPort(
         label="output",
         transport=Axis(bus="m_axis"),
-        endpoint=Endpoint.INITIATOR,
+        direction=Direction.OUT,
         tensor=ThresholdingAxiKernel.output_tensor,
         schedule=schedule,
         index=(r, co * 3 + ci),
@@ -343,7 +343,7 @@ class Misnamed(MemStreamKernel):
     output = StreamPort(
         label="output",
         transport=Axis(bus="m_axis_1"),
-        endpoint=Endpoint.INITIATOR,
+        direction=Direction.OUT,
         tensor=MemStreamKernel.output_tensor,
         sequence=MemStreamKernel.output_sequence,
     )

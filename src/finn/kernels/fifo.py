@@ -40,7 +40,7 @@ from finn.core.space import (
 )
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence
-from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.abi import Direction
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel
 from finn.kernels.laws import NATIVE, NATIVE_CLOCKING, Intake, PortIntake, Standing
@@ -245,13 +245,13 @@ class FifoKernel(Kernel):
         return sequence
 
     input = StreamPort(
-        endpoint=Endpoint.TARGET,
+        direction=Direction.IN,
         transport=NATIVE,
         tensor=input_tensor,
         sequence=arriving,
     )
     output = StreamPort(
-        endpoint=Endpoint.INITIATOR,
+        direction=Direction.OUT,
         transport=NATIVE,
         tensor=output_tensor,
         sequence=leaving,

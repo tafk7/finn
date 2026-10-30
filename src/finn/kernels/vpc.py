@@ -32,7 +32,7 @@ from typing import ClassVar
 from finn.core.space import Param, Rejected, constraint, derived, reject, view
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, regrouped
-from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.abi import Direction
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel
 from finn.kernels.laws import NATIVE, NATIVE_CLOCKING, Intake, PortIntake, Standing
@@ -73,13 +73,13 @@ class VpcKernel(Kernel):
         return tensor
 
     input = StreamPort(
-        endpoint=Endpoint.TARGET,
+        direction=Direction.IN,
         transport=NATIVE,
         tensor=input_tensor,
         sequence=arriving,
     )
     output = StreamPort(
-        endpoint=Endpoint.INITIATOR,
+        direction=Direction.OUT,
         transport=NATIVE,
         tensor=output_tensor,
         sequence=leaving,

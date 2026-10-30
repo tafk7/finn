@@ -25,6 +25,7 @@ from finn.dataflow.steps import Step, Steps, Unrealizable, steps
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, Grouped, LevelDone, Loop, vector_major
 from finn.kernels.adapters import realize
+from finn.kernels.artifacts.abi import Direction
 from finn.kernels.laws import AXIS, AXIS_CLOCKING
 from finn.kernels.port import stream_refusal
 from finn.kernels.port_model import StreamPort
@@ -101,6 +102,7 @@ def test_non_suffix_closing_uses_existing_tlast_only_when_it_normalizes_to_level
     schedule = Schedule({m: 2, k: 4, t: inner_fold}, {k: 2}, (m, k, t))
     point = design_space(
         StreamPort(
+            direction=Direction.IN,
             clocking=AXIS_CLOCKING,
             transport=AXIS,
             label="x",

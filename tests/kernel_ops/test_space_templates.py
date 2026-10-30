@@ -299,9 +299,13 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
 # Then (1061, 42) and (1662, 362) after ``viable`` became these when a vpc stated its
 # association (``VpcKernel.width_only``): the constraint of each output adapter's vpc the
 # trials evaluate, ``a1``'s and ``h2``'s (+2).
+# Then ports' ((508, 272), (601, 320)) and the totals ((1525, 314), (1664, 362)) became these
+# when each port's presentation became its own constraint (``StreamPort.presented``, R3's
+# level 1): a placed port's commit reads its direction and its width, its transport's word,
+# beside its stream (+96 members, +32 constants at the baseline; +115, +40 after ``viable``).
 NONPORT_EVALUATED = ((1017, 42), (1063, 42))
-PORT_EVALUATED = ((508, 272), (601, 320))
-EVALUATED = ((1525, 314), (1664, 362))
+PORT_EVALUATED = ((604, 304), (716, 360))
+EVALUATED = ((1621, 346), (1779, 402))
 
 
 def _assert_evaluated(scopes: Scopes, stage: int) -> None:

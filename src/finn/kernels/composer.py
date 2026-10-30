@@ -37,10 +37,10 @@ facts (``Composed``; ``Composed.design_space()`` opens it):
   ``under`` the member, so a channel's findings name the node as today's network's do.
 
 **The side is structural.** A producer side is an output port (its actual port model's
-endpoint the initiator, or its served child's), a consumer side an input port, and a
+direction ``OUT``, or its served child's), a consumer side an input port, and a
 source is never a consumer: a declaration that breaks one is refused when the class is
 made (``channel-users``, the channel's text, owned by the channel's name). The channel's
-own role check (``Channel.sides``) stays the backstop where a port's endpoint is not known
+own role check (``Channel.sides``) stays the backstop where a port's direction is not known
 when its class is made.
 
 **In a shell**: a declaration that states its shell's row (``PartitionDeclaration.shell``,
@@ -108,7 +108,7 @@ from finn.core.space import (
     space_formals,
 )
 from finn.core.space.compiler import compile_model
-from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.abi import Direction
 from finn.kernels.base import Kernel
 from finn.kernels.budgets import (
     DOUBLED,
@@ -122,7 +122,7 @@ from finn.kernels.budgets import (
 )
 from finn.kernels.channels import Channel
 from finn.kernels.control import control_models
-from finn.kernels.port import port_endpoint, port_side
+from finn.kernels.port import port_direction, port_side
 from finn.kernels.sides import Side, SideKind
 
 SEPARATOR = "-"
@@ -459,9 +459,9 @@ def _roles(declared: PartitionDeclaration, name: str, each: ChannelDeclaration) 
     for role, side in (("producer", producer), ("consumer", consumer)):
         if not isinstance(side, Port) or side.member not in members:
             continue
-        endpoint = port_endpoint(_class_of(declared, side.member), side.port)
+        direction = port_direction(_class_of(declared, side.member), side.port)
         label = f"{side.member}.{side.port}"
-        if role == "producer" and endpoint is Endpoint.TARGET:
+        if role == "producer" and direction is Direction.IN:
             found.append(
                 _refused(
                     "channel-users",
@@ -469,7 +469,7 @@ def _roles(declared: PartitionDeclaration, name: str, each: ChannelDeclaration) 
                     f"a channel's producer is an output port, and {label} is an input's",
                 )
             )
-        if role == "consumer" and endpoint is Endpoint.INITIATOR:
+        if role == "consumer" and direction is Direction.OUT:
             found.append(
                 _refused(
                     "channel-users",

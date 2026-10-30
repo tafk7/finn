@@ -47,7 +47,7 @@ from finn.core.space.semantics import default_semantics
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
-from finn.kernels.artifacts.abi import Direction, Endpoint, Signal
+from finn.kernels.artifacts.abi import Direction, Signal
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource, GeneratedData
 from finn.kernels.artifacts.module import Fragment, Held
 from finn.kernels.base import Kernel, PortPins
@@ -124,7 +124,7 @@ class Stage(Kernel):
     arriving: BeatSequence = Param()
     input = StreamPort(
         label="input",
-        endpoint=Endpoint.TARGET,
+        direction=Direction.IN,
         transport=NATIVE,
         tensor=input_tensor,
         sequence=arriving,
@@ -283,7 +283,7 @@ def test_a_kernel_with_a_module_declares_its_module_s_parts_in_its_own_body() ->
     class Ports(Group):
         input = StreamPort(
             label="input",
-            endpoint=Endpoint.TARGET,
+            direction=Direction.IN,
             transport=NATIVE,
             tensor=TENSOR,
             sequence=ARRIVING,
@@ -348,7 +348,7 @@ def test_a_kernel_with_a_module_states_its_ports_and_resources_and_places_no_ker
 
     port = StreamPort(
         label="input",
-        endpoint=Endpoint.TARGET,
+        direction=Direction.IN,
         transport=NATIVE,
         tensor=TENSOR,
         sequence=ARRIVING,
@@ -366,7 +366,7 @@ def test_a_kernel_with_a_module_states_its_ports_and_resources_and_places_no_ker
             "Nesting",
             input=StreamPort(
                 label="input",
-                endpoint=Endpoint.TARGET,
+                direction=Direction.IN,
                 transport=NATIVE,
                 tensor=TENSOR,
                 sequence=ARRIVING,
@@ -380,7 +380,7 @@ def test_a_kernel_with_a_module_states_its_ports_and_resources_and_places_no_ker
             "Unstated",
             input=StreamPort(
                 label="input",
-                endpoint=Endpoint.TARGET,
+                direction=Direction.IN,
                 transport=NATIVE,
                 tensor=TENSOR,
                 sequence=ARRIVING,
@@ -400,7 +400,7 @@ def test_a_kernel_stating_a_stream_port_binds_a_module() -> None:
         id = "test.kernel_space.unbound"
         input = StreamPort(
             label="input",
-            endpoint=Endpoint.TARGET,
+            direction=Direction.IN,
             transport=NATIVE,
             tensor=TENSOR,
             sequence=ARRIVING,
@@ -431,7 +431,7 @@ def test_a_kernel_stating_a_stream_port_binds_a_module() -> None:
         input_tensor: Tensor = Param()
         input = StreamPort(
             label="input",
-            endpoint=Endpoint.TARGET,
+            direction=Direction.IN,
             transport=NATIVE,
             tensor=input_tensor,
             sequence=ARRIVING,
@@ -489,7 +489,7 @@ class Sourced(Based):
     arriving: BeatSequence = Param(default=ARRIVING)
     input = StreamPort(
         label="input",
-        endpoint=Endpoint.TARGET,
+        direction=Direction.IN,
         transport=NATIVE,
         tensor=input_tensor,
         sequence=ARRIVING,
@@ -529,7 +529,7 @@ class Forgetful(Deep):
     arriving: BeatSequence = Param(default=ARRIVING)
     input = StreamPort(
         label="input",
-        endpoint=Endpoint.TARGET,
+        direction=Direction.IN,
         transport=NATIVE,
         tensor=input_tensor,
         sequence=ARRIVING,

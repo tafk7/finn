@@ -38,7 +38,7 @@ from finn.dataflow.schedule import Access, Affine, Index, Pace, Refused, Schedul
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence
-from finn.kernels.artifacts.abi import Clocking, Endpoint, Pin
+from finn.kernels.artifacts.abi import Clocking, Direction, Pin
 from finn.kernels.artifacts.module import Held
 from finn.kernels.base import PortPins
 from finn.kernels.laws import Advance, TransportKind
@@ -49,6 +49,7 @@ from finn.kernels.port import (
     data_width,
     held,
     pins,
+    stream_endpoint,
     stream_refusal,
 )
 from finn.kernels.port import stream_pins as pins_of
@@ -58,34 +59,49 @@ from finn.kernels.values.domains import Integer, admit_element
 
 class StreamPort(Space):
     """A stream port: where one tensor leaves or enters its kernel as one stream, the one
-    construct every port of a kernel with a module is declared by (CONTRACT.md § 7).
+    construct every port of a kernel with a module is declared by (CONTRACT.md § 7). It is
+    declared as a module header states a port, its **header**, with exactly one
+    **presentation** and its **relation**; it is read by its readouts.
 
-    It declares its role (``endpoint``), its tensor, how the tensor is presented and its
-    ``transport`` kind (``finn.kernels.laws``: ``AXIS``, ``NATIVE``, or the names its RTL
-    states, ``Axis(bus=...)``, ``Native(prefix=...)``), never its pins: they, its idle holds
-    and its packing follow from the library. Its presentation is a given ``sequence`` (a
-    stage's side) or its kernel's ``schedule`` projected through its ``index`` (``lanes``,
-    ``reduces``, ``holds``, ``closes``, ``reshaped``); a port with no tensor is idle, and
-    states its element (``dtype``). Its advance rule follows from how it is declared
-    (``advance``). A target with an index reads its tensor to bind its kernel's extents
-    (``access``).
+    Its header: its ``direction`` (``finn.kernels.artifacts.abi.Direction``, ``IN`` or
+    ``OUT``, stated, never ``INOUT``: ``port-direction``), from which its bus role follows
+    (``finn.kernels.port.stream_endpoint``); its tensor, an idle port's element (``dtype``)
+    and the elements an input admits (``admits``); its ``transport`` kind
+    (``finn.kernels.laws``: ``AXIS``, ``NATIVE``, or the names its RTL states,
+    ``Axis(bus=...)``, ``Native(prefix=...)``), never its pins: they, its idle holds and its
+    packing follow from the library. ``label`` is the port's name in its kernel and
+    ``clocking`` its kernel's clock domain (L8: the kernel's, never the port's): a kernel
+    supplies both for a port declared in its own body that does not state them
+    (``finn.kernels.base.Kernel``). Its ``transport`` has no default: a native port taken
+    for AXIS would be a bus the RTL does not have.
 
-    ``label`` is the port's name in its kernel and ``clocking`` its kernel's clock domain
-    (L8: the kernel's, never the port's): a kernel supplies both for a port declared in its
-    own body that does not state them (``finn.kernels.base.Kernel``). Its ``transport`` has
-    no default: a native port taken for AXIS would be a bus the RTL does not have.
+    Its presentation, exactly one of: its kernel's ``schedule`` projected through its
+    ``index`` (``lanes``, ``reduces``, ``holds``, ``closes``, ``reshaped``), or a given
+    ``sequence`` (a stage's side); with either, a native port's ``loop_ends``. Its kernel's
+    class refuses a port binding none, both, or another presentation's parameters
+    (``port-presentation``, ``finn.kernels.base``). A port with no tensor is idle and
+    presents nothing, whatever it declares; it states its element (``dtype``).
+
+    Its relation, with a given sequence: an input selecting another port's beats
+    (``governs``), an output of stored values (``stored``); its advance rule follows
+    (``advance``). Its readouts: ``placed``, ``element``, ``stream``, ``advance``, ``pace``,
+    ``width``, ``side``, ``binds`` and ``access`` (an input with an index reads its tensor
+    to bind its kernel's extents), derived; ``stream_pins``, a view. A placed port's
+    presentation is accepted and carried, or its design point is refused (``presented``,
+    R3's level 1).
     """
 
-    label: str = Param()
-    endpoint: Endpoint = Param(default=Endpoint.TARGET)
-    transport: TransportKind = Param()
-    clocking: Clocking = Param()
+    # -- its header: what a module header states of the port ----------------------------
+    direction: Direction = Param()
     tensor: Tensor | None = Param(default=None)
     dtype: QONNXDataType | None = Param(default=None)
     admits: Integer | None = Param(default=None)
-    loop_ends: LoopEnds | None = Param(default=None)
-    # A given sequence, or the schedule's projection.
-    sequence: BeatSequence | None = Param(default=None)
+    transport: TransportKind = Param()
+    label: str = Param()
+    clocking: Clocking = Param()
+
+    # -- its presentation: exactly one of (a) and (b), checked when its kernel's class is made
+    # (a) a projection of its kernel's schedule
     schedule: Schedule | None = Param(default=None)
     index: tuple[Index | Affine, ...] = Param(default=())
     lanes: tuple[Index, ...] = Param(default=())
@@ -93,7 +109,12 @@ class StreamPort(Space):
     holds: tuple[Index, ...] = Param(default=())
     closes: tuple[Index, ...] = Param(default=())
     reshaped: bool = Param(default=False)
-    # What makes a port of a given sequence selected or sourced (``advance``).
+    # (b) a given sequence, a stage's side
+    sequence: BeatSequence | None = Param(default=None)
+    # with (a) or (b): a native port's loop-completion vector (L9)
+    loop_ends: LoopEnds | None = Param(default=None)
+
+    # -- its relation: what makes a port of a given sequence selected or sourced ---------
     governs: str | None = Param(default=None)
     stored: bool = Param(default=False)
 
@@ -105,8 +126,8 @@ class StreamPort(Space):
     def element(self) -> ScalarEncoding | Rejected:
         dtype = self.dtype
         if dtype is not None:
-            if self.endpoint is Endpoint.INITIATOR:
-                return reject("port-element", f"{self.label}: a producer's element is its tensor's")
+            if self.direction is Direction.OUT:
+                return reject("port-element", f"{self.label}: an output's element is its tensor's")
             return admit_element(dtype, None)
         tensor = self.tensor
         if tensor is None:
@@ -151,8 +172,12 @@ class StreamPort(Space):
             return Inapplicable()
         schedule, given = self.schedule, self.sequence
         if (schedule is None) == (given is None):
+            # Its kernel's class admits a port binding exactly one (``port-presentation``):
+            # here a bound presentation answers nothing at this design point.
+            answered = "neither" if schedule is None else "both"
             return reject(
-                "port-presentation", f"{self.label}: exactly one of a schedule or a sequence"
+                "port-presented",
+                f"{self.label}: its presentation answers {answered} of a schedule and a sequence",
             )
         if given is not None:
             sequence = given
@@ -196,6 +221,22 @@ class StreamPort(Space):
         stream = self.stream
         return data_width(self.physical_spec(idle=False), stream)
 
+    @constraint
+    def presented(self) -> bool | Rejected:
+        """R3's level 1 (``port-presented``): a stream port is an input or an output, and a
+        placed port's presentation is applicable, accepted and carried: its ``stream`` (its
+        schedule's projection, or its given sequence, on the physical schemas) and its
+        ``width`` (its transport carries the stream) are answers, or its design point is
+        refused with their refusal (a native port presenting markers its pins cannot
+        carry, ``port-markers``). An idle port presents nothing."""
+        if self.direction not in (Direction.IN, Direction.OUT):
+            return reject("port-direction", f"{self.label}: a stream port is an input or an output")
+        if not self.placed:
+            return True
+        _ = self.stream
+        _ = self.width
+        return True
+
     @derived
     def side(self) -> Side | Inapplicable:
         """The side it gives a channel: its stream, its label and, an output, its width."""
@@ -203,21 +244,21 @@ class StreamPort(Space):
             return Inapplicable()
         stream = self.stream
         label = self.label
-        if self.endpoint is Endpoint.INITIATOR:
+        if self.direction is Direction.OUT:
             return Side.kernel(stream, label, self.width)
         return Side.kernel(stream, label)
 
     @derived
     def binds(self) -> bool:
-        """Whether it reads its tensor to bind its kernel's extents: a placed target with
-        an index."""
+        """Whether it reads its tensor to bind its kernel's extents: a placed input with an
+        index."""
         if not self.placed:
             return False
-        return self.endpoint is Endpoint.TARGET and bool(self.index)
+        return self.direction is Direction.IN and bool(self.index)
 
     @derived
     def access(self) -> Access | Inapplicable:
-        """Only a placed target with indices reads its tensor to bind parent extents."""
+        """Only a placed input with indices reads its tensor to bind parent extents."""
         if not self.binds:
             return Inapplicable()
         tensor = self.tensor
@@ -232,7 +273,7 @@ class StreamPort(Space):
         """
         return PhysicalPort(
             name=self.label,
-            endpoint=self.endpoint,
+            endpoint=stream_endpoint(self.direction),
             transport=self.transport,
             loop_ends=self.loop_ends,
             lanes=self.lanes if idle else (),

@@ -75,7 +75,7 @@ from finn.dataflow.datatypes import (
 from finn.dataflow.gemm import Form, Window, c, k, kh, kw, m, n, oh, ow
 from finn.dataflow.schedule import Access, Affine, Index, Schedule
 from finn.dataflow.tensor import Tensor
-from finn.kernels.artifacts.abi import Clocking, Endpoint
+from finn.kernels.artifacts.abi import Clocking, Direction
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
 from finn.kernels.laws import Axis, Intake, PortIntake, Standing, doubled
@@ -371,7 +371,7 @@ class DotpAxiKernel(Kernel):
 
     x = StreamPort(
         transport=Axis(bus="s_axis_input"),
-        endpoint=Endpoint.TARGET,
+        direction=Direction.IN,
         tensor=x_tensor,
         admits=activation_policy,
         schedule=schedule,
@@ -382,7 +382,7 @@ class DotpAxiKernel(Kernel):
     )
     w = StreamPort(
         transport=Axis(bus="s_axis_weights"),
-        endpoint=Endpoint.TARGET,
+        direction=Direction.IN,
         tensor=w_tensor,
         admits=Integer(min_bits=2, signed=True),
         schedule=schedule,
@@ -392,7 +392,7 @@ class DotpAxiKernel(Kernel):
     )
     y = StreamPort(
         transport=Axis(bus="m_axis_output"),
-        endpoint=Endpoint.INITIATOR,
+        direction=Direction.OUT,
         tensor=y_tensor,
         admits=Integer(),
         schedule=schedule,

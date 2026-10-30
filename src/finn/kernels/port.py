@@ -5,7 +5,7 @@
 
 Actual authoring uses StreamPort real children, and served ports for a kernel with
 children. Native module source reads model inputs serially, then calls these pure helpers.
-``port_side``, ``port_stream_pins``, ``port_pace`` and ``port_endpoint`` find a kernel's port by
+``port_side``, ``port_stream_pins``, ``port_pace`` and ``port_direction`` find a kernel's port by
 its name, through its lexical Group paths, stopping at real Space boundaries: what a channel
 and its sizing read of it, and its direction; they never authorize a model's reads.
 """
@@ -20,7 +20,6 @@ from finn.core.space import (
     Rejected,
     Space,
     reject,
-    space_formals,
 )
 from finn.core.space._nodes import NodeDecision, NodeDecl, node_record, unwrap
 from finn.core.space.declarations import Declaration, Required, declared_path
@@ -59,13 +58,25 @@ class LoopEnds:
     levels: tuple[LevelEnd, ...]
 
 
+def stream_endpoint(direction: Direction) -> Endpoint:
+    """A stream's bus role, from its port's direction: an input is a target (an AXIS
+    slave, ``s_axis_*``), an output an initiator (a master, ``m_axis_*``). No stream is
+    ``INOUT``: its port refuses it (``port-direction``)."""
+    if direction is Direction.IN:
+        return Endpoint.TARGET
+    if direction is Direction.OUT:
+        return Endpoint.INITIATOR
+    raise ValueError(f"a stream is an input or an output, not {direction}")
+
+
 @dataclass(frozen=True)
 class PhysicalPort:
     """Resolved port inputs for pure physical calculations, without authoring callbacks.
 
     A StreamPort reads these literal fields in an ordinary method. This record is
     neither a Space nor a symbolic binding/allowed-read table. ``name`` is the port's
-    name; its pins follow from its ``transport`` (``finn.kernels.laws``).
+    name; ``endpoint`` its bus role, from its direction (``stream_endpoint``); its pins
+    follow from its ``transport`` (``finn.kernels.laws``).
     """
 
     name: str
@@ -355,18 +366,17 @@ def port_advance(namespace: type[Space] | Space, port: str) -> Any:
     return getattr(frame, f"{port.rsplit('.', 1)[-1]}_advance")
 
 
-def _declared_endpoint(record: NodeDecl) -> Endpoint | None:
-    """The endpoint a stream port's declaration binds, or its default."""
-    formal = space_formals(record.space_type).get("endpoint")
-    endpoint = record.bindings.get("endpoint", None if formal is None else formal.default)
-    return endpoint if isinstance(endpoint, Endpoint) else None
+def _declared_direction(record: NodeDecl) -> Direction | None:
+    """The direction a stream port's declaration binds, a literal; None for any other."""
+    direction = record.bindings.get("direction")
+    return direction if isinstance(direction, Direction) else None
 
 
-def port_endpoint(space_type: type[Space], port: str) -> Endpoint | None:
-    """Whether kernel ``space_type``'s port ``port`` is an input's (a target) or an
-    output's (an initiator), from its declaration: a served port's is its child's port's, the
-    one every case of a selector agrees on. None where it is not known: no such port, or a
-    child's port bound otherwise than by a literal."""
+def port_direction(space_type: type[Space], port: str) -> Direction | None:
+    """Whether kernel ``space_type``'s port ``port`` is an input or an output, from its
+    declaration: a served port's is its child's port's, the one every case of a selector
+    agrees on. None where it is not known: no such port, or a port bound otherwise than by
+    a literal."""
     if not (isinstance(space_type, type) and issubclass(space_type, Kernel)):
         return None
     found = _lexical_port(space_type, port)
@@ -377,12 +387,12 @@ def port_endpoint(space_type: type[Space], port: str) -> Endpoint | None:
         path = declared_path(child)
         if not path or not isinstance(path[-1], NodeDecl):
             return None
-        return _declared_endpoint(path[-1])
-    endpoints = {
-        None if declared is None else _declared_endpoint(declared)
+        return _declared_direction(path[-1])
+    directions = {
+        None if declared is None else _declared_direction(declared)
         for declared in served_ports(child)
     }
-    return endpoints.pop() if len(endpoints) == 1 else None
+    return directions.pop() if len(directions) == 1 else None
 
 
 def served_ports(port: ServedPort) -> tuple[NodeDecl | None, ...]:
@@ -413,12 +423,13 @@ __all__ = [
     "held",
     "lane_count",
     "port_stream_pins",
-    "port_endpoint",
+    "port_direction",
     "port_side",
     "port_advance",
     "port_pace",
     "served_ports",
     "pins",
+    "stream_endpoint",
     "stream_pins",
     "transport",
 ]

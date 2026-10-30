@@ -8,7 +8,7 @@ from finn.core.space import QueryResult, Space
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence
-from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.abi import Direction
 from finn.kernels.base import PortPins
 from finn.kernels.laws import NATIVE, NATIVE_CLOCKING
 from finn.kernels.port import port_side
@@ -28,7 +28,7 @@ def check(
     assert_type(
         StreamPort(
             label="x",
-            endpoint=Endpoint.TARGET,
+            direction=Direction.IN,
             transport=NATIVE,
             tensor=tensor,
             sequence=sequence,

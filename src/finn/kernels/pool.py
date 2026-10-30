@@ -50,7 +50,7 @@ from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.gemm import ZERO
 from finn.dataflow.schedule import Affine, Index, Schedule
 from finn.dataflow.tensor import Tensor
-from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.abi import Direction
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource, HlsSource
 from finn.kernels.artifacts.hls import axis_type
 from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
@@ -235,7 +235,7 @@ class PoolKernel(Kernel):
 
     input = StreamPort(
         transport=Axis(bus="s_axis", spelling=AxisSpelling.UPPER),
-        endpoint=Endpoint.TARGET,
+        direction=Direction.IN,
         tensor=input_tensor,
         admits=ELEMENTS,
         schedule=schedule,
@@ -259,7 +259,7 @@ class PoolKernel(Kernel):
 
     output = StreamPort(
         transport=Axis(bus="m_axis", spelling=AxisSpelling.UPPER),
-        endpoint=Endpoint.INITIATOR,
+        direction=Direction.OUT,
         tensor=output_tensor,
         admits=ELEMENTS,
         schedule=schedule,

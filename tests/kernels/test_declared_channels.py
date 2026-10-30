@@ -50,7 +50,7 @@ from finn.dataflow.traversal import (
     vector_major,
 )
 from finn.kernels.adapters import StreamAdapter
-from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.abi import Direction, Endpoint
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel, ChannelFifo, boundary_pins, stated_by, stated_form
 from finn.kernels.composer import Facts, Port, channel
@@ -207,7 +207,7 @@ class Replaying(Space):
         clocking=AXIS_CLOCKING,
         label="port",
         transport=Axis(bus="s_axis"),
-        endpoint=Endpoint.TARGET,
+        direction=Direction.IN,
         tensor=Tensor((2, 4), INT4),
         sequence=sequence,
     )

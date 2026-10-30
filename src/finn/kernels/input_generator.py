@@ -66,7 +66,7 @@ from finn.core.space import (
 from finn.dataflow.steps import Unrealizable
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import Adaptation, BeatSequence, LevelEnd, Traversal, classify
-from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.abi import Direction
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.rtl import Declined, evaluate
 from finn.kernels.base import Kernel
@@ -235,13 +235,13 @@ class InputGeneratorKernel(Kernel):
         return LoopEnds(self.nest.levels)
 
     input = StreamPort(
-        endpoint=Endpoint.TARGET,
+        direction=Direction.IN,
         transport=NATIVE,
         tensor=input_tensor,
         sequence=arriving,
     )
     output = StreamPort(
-        endpoint=Endpoint.INITIATOR,
+        direction=Direction.OUT,
         transport=NATIVE,
         tensor=output_tensor,
         sequence=presenting,
