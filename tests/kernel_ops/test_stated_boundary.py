@@ -207,7 +207,7 @@ def test_stated_lanes_place_a_width_step_and_the_port_takes_the_stated_word(
         cut(tmp_path, {"m_axis_0": Y_STATED}), build(tmp_path, {"m_axis_0": Y_STATED})
     )
     y = body_of(parent).member("y")
-    assert y.output_adapting and [stage.kind for stage in y.output_adapter.realization] == ["vpc"]
+    assert y.output_adapting and [stage.kind for stage in y.output_adapter.chain] == ["vpc"]
     assert (y.boundary.form.lanes, y.boundary.form.beats) == (4, 3)
     assert y.boundary.transport.data_width == 24
     unstated = body_of(cut(tmp_path / "unstated", {})).member("y")

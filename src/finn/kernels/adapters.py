@@ -201,7 +201,7 @@ class StreamAdapter(Kernel):
 
     Each chain places its modules as kernel children named by stage
     (``input_gen``, ``vpc``, then ``input_gen_1``), each given the channel's tensor and
-    the two sides of its step of the realization, which its ports present, on the
+    the two sides of its step of the chain, which its ports present, on the
     channel's ``platform``. Its netlist, cycles, buffering and resources are its stages',
     by the base; it restates ``cycles`` as the base's, so that a channel counts its
     adapters' by their kind (``Channel.stage_cycles``). It presents no port: its channel
@@ -217,16 +217,19 @@ class StreamAdapter(Kernel):
     platform: Platform = Param()
 
     @derived
-    def realization(self) -> tuple[RealizedStage, ...] | Rejected:
+    def chain(self) -> tuple[RealizedStage, ...] | Rejected:
+        """The stages that carry out its steps (``realize``), each its module and the two
+        sides of its step: what its children are given and what its channel's rules read,
+        not the HDL they bind."""
         try:
             return realize(self.steps)
         except Unrealizable as error:
             return reject("adapter-steps", f"no FinnLib chain carries out the steps: {error}")
 
     def _named(self, name: str) -> RealizedStage | Rejected:
-        realization: tuple[RealizedStage, ...] = self.realization
-        kinds = [stage.kind for stage in realization]
-        for index, stage in enumerate(realization):
+        chain: tuple[RealizedStage, ...] = self.chain
+        kinds = [stage.kind for stage in chain]
+        for index, stage in enumerate(chain):
             if _stage_name(kinds, index) == name:
                 return stage
         return reject("adapter-steps", f"the steps' chain has no {name} stage")

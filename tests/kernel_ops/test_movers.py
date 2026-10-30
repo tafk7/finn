@@ -284,8 +284,8 @@ def test_an_iodma_s_side_read_in_tiles_is_regrouped_by_a_vpc_and_an_input_gen() 
     assert [hop.reorder for hop in hops] == [None, Reorder(4, (2, 2), (1, 2)), None]
     assert delivered(six, hops) == [int(offset) for offset in offsets(tiles)]
     assert joined.output_adapting and joined.input_chain == "input_gen_vpc"
-    assert [stage.module for stage in joined.output_adapter.realization] == [Convert(6, 3)]
-    assert [stage.module for stage in joined.adapter.realization] == [
+    assert [stage.module for stage in joined.output_adapter.chain] == [Convert(6, 3)]
+    assert [stage.module for stage in joined.adapter.chain] == [
         Generate(4, (2, 2), (1, 2)),
         Convert(3, 6),
     ]

@@ -442,8 +442,8 @@ def test_a_lane_regroup_on_an_adaptable_channel_is_built_from_existing_stages():
         int(offset) for offset in offsets(vector_major((CHANNELS,), PE).repeated(PIXELS))
     ]
     assert found.output_adapting and found.input_chain == "input_gen_vpc"
-    assert [stage.kind for stage in found.output_adapter.realization] == ["vpc"]
-    assert [stage.kind for stage in found.adapter.realization] == ["input_gen", "vpc"]
+    assert [stage.kind for stage in found.output_adapter.chain] == ["vpc"]
+    assert [stage.kind for stage in found.adapter.chain] == ["input_gen", "vpc"]
     defaults = with_adapter_memories(with_direct_transports(strided))
     assert defaults.validity("c").status == "valid"
     module = built(defaults, "constant")

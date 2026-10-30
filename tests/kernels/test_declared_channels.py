@@ -333,7 +333,7 @@ def test_a_stated_input_s_lanes_place_a_vpc_before_the_transport_and_widen_the_p
     assert wide.boundary.transport.data_width == 24
     assert wide.boundary_bus == (wide.boundary.transport.axis_bus(),)
     assert wide.steps.describe() == "width_conversion" and wide.output_adapting
-    assert [stage.kind for stage in wide.output_adapter.realization] == ["vpc"]
+    assert [stage.kind for stage in wide.output_adapter.chain] == ["vpc"]
     assert wide.input_chain == "none"
 
 
@@ -343,7 +343,7 @@ def test_a_stated_output_s_lanes_place_a_vpc_before_the_transport_and_widen_the_
     wide = edge(writer(vector_major((4, 6), 2)), Side.boundary("m_axis_0", outside=stated(lanes=4)))
     assert (wide.boundary.form.lanes, wide.boundary.transport.data_width) == (4, 16)
     assert wide.boundary.transport.endpoint is Endpoint.INITIATOR
-    assert [stage.kind for stage in wide.output_adapter.realization] == ["vpc"]
+    assert [stage.kind for stage in wide.output_adapter.chain] == ["vpc"]
     assert wide.input_chain == "none"
     assert inspection.validity(with_direct(wide)).status == "valid"
 
@@ -421,8 +421,8 @@ def regroups_rows_into_tiles(point: Any) -> None:
     assert [hop.reorder for hop in hops] == [None, Reorder(4, (2, 2), (1, 2)), None]
     assert delivered(SIX, hops) == [int(offset) for offset in offsets(TILES)]
     assert point.output_adapting and point.input_chain == "input_gen_vpc"
-    assert [stage.kind for stage in point.output_adapter.realization] == ["vpc"]
-    assert [stage.kind for stage in point.adapter.realization] == ["input_gen", "vpc"]
+    assert [stage.kind for stage in point.output_adapter.chain] == ["vpc"]
+    assert [stage.kind for stage in point.adapter.chain] == ["input_gen", "vpc"]
     assert inspection.validity(with_direct(point)).status == "valid"
 
 

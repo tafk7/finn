@@ -389,7 +389,7 @@ def sides(channel: Channel, neighbours: Neighbours) -> tuple[Pattern, Acceptance
     )
     times = producer.times
     if channel.output_adapting:
-        stages = channel.output_adapter.realization
+        stages = channel.output_adapter.chain
         modules = [stage.module for stage in stages]
         if len(modules) != 1 or not isinstance(modules[0], Convert):
             kinds = " -> ".join(stage.kind for stage in stages)
@@ -401,7 +401,7 @@ def sides(channel: Channel, neighbours: Neighbours) -> tuple[Pattern, Acceptance
     adapter = channel.adapter
     if adapter is None:
         return supply, consumer
-    stages = adapter.realization
+    stages = adapter.chain
     if len(stages) != 1 or not isinstance(stages[0].module, Generate):
         kinds = " -> ".join(stage.kind for stage in stages)
         raise NotModelled(f"an input adapter of {kinds}: not modelled")

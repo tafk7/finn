@@ -367,7 +367,7 @@ def test_a_channel_s_rules_and_its_fifo_read_the_values_its_views_present(
     values, through its holder's ``stage_streams``), not the channel's ``stages`` view,
     which its netlist and its network's hops to the ports beside it read; and the FIFO
     candidate reads what arrives through its formal, after the output adapter's
-    realization: valid, refused and open each answer, with no dependency cycle."""
+    chain: valid, refused and open each answer, with no dependency cycle."""
     network = channel()
     point = network.member("x")
     assert validity_of(point) == (status, pieces)

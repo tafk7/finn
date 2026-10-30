@@ -239,14 +239,14 @@ def _wire(name: str, channel: Any, neighbours: Any, declared: tuple[Any, Any]) -
     buffer: Buffer | None = None
     refused = ""
     if channel.output_adapting:
-        stages = channel.output_adapter.realization
+        stages = channel.output_adapter.chain
         if len(stages) == 1 and isinstance(stages[0].module, Convert):
             convert = (stages[0].module.lanes_in, stages[0].module.lanes_out)
         else:
             kinds = " -> ".join(stage.kind for stage in stages)
             refused = f"an output adapter of {kinds}: not modelled"
     if channel.adapter is not None:
-        stages = channel.adapter.realization
+        stages = channel.adapter.chain
         if len(stages) == 1 and isinstance(stages[0].module, Generate):
             module = stages[0].module
             nest = nest_buffer(module.frame, module.dims, module.coefs)

@@ -729,12 +729,12 @@ class Channel(Kernel):
     @derived
     def arriving(self) -> BeatSequence:
         """What arrives at the transport: what the output adapter's last stage presents
-        (the last ``sink`` of its realization), or without one what the producer
+        (the last ``sink`` of its ``chain``), or without one what the producer
         presents."""
         if not self.output_adapting:
             return self.sides.source.sequence
-        realization: tuple[RealizedStage, ...] = self.output_adapter.realization
-        return realization[-1].sink
+        chain: tuple[RealizedStage, ...] = self.output_adapter.chain
+        return chain[-1].sink
 
     # ``direct`` places nothing: the hop across the transport connects directly.
     transport: ChannelFifo | None = Select(
@@ -751,10 +751,10 @@ class Channel(Kernel):
         if not self.adapting:
             return "none"
         try:
-            realization = realize(self.input_steps)
+            chain = realize(self.input_steps)
         except Unrealizable as error:
             return reject("adapter-steps", f"no FinnLib chain carries out the steps: {error}")
-        return "_".join(stage.kind for stage in realization)
+        return "_".join(stage.kind for stage in chain)
 
     @derived
     def adapter_placed(self) -> bool:
