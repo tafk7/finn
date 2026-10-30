@@ -10,7 +10,7 @@ from support.value_classes import frozen_dataclasses, mutable_fields
 
 from finn.dataflow.datatypes import QONNXDataType
 from finn.kernels.policies import Ranking
-from finn.kernels.port_model import PortSurface
+from finn.kernels.port_model import ServedPort
 from finn.kernels.values.semantics import IntegerTensorValue
 
 #: Types outside the checker's rule that are immutable, and why.
@@ -26,7 +26,7 @@ IMMUTABLE: dict[object, str] = {
 def test_every_frozen_value_class_holds_immutable_values() -> None:
     # A declaration of a kernel (a port) is no value the engine holds: it lives in a class
     # body, and holds the kernel's members it reads.
-    # Authored references are metadata, not runtime immutable values.
-    classes = tuple(cls for cls in frozen_dataclasses("finn.kernels") if cls is not PortSurface)
+    # A served port is a declaration too: it holds its child's, which its kernel lowers.
+    classes = tuple(cls for cls in frozen_dataclasses("finn.kernels") if cls is not ServedPort)
     assert classes
     assert mutable_fields(classes, IMMUTABLE) == []

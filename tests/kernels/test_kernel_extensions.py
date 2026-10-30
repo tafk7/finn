@@ -34,8 +34,8 @@ from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.base import Kernel
 from finn.kernels.configure import chosen, commit
 from finn.kernels.laws import AXIS
-from finn.kernels.port import port_endpoint, port_surface
-from finn.kernels.port_model import StreamPort, port_surfaces
+from finn.kernels.port import port_endpoint, port_side
+from finn.kernels.port_model import StreamPort, stream_ports
 from finn.kernels.values.domains import Integer
 
 
@@ -226,10 +226,10 @@ def test_port_discovery_reads_lexical_groups_without_implicit_child_lowering() -
         choice = Select(child=Child(), absent=None)
 
     # Groups are the parent's lexical frame, not children. Real child scopes and
-    # selector candidates publish no implicit parent endpoint after Served retirement.
-    assert list(port_surfaces(Host)) == ["group.nested"]
+    # selector candidates publish no implicit parent port: a parent serves one explicitly.
+    assert list(stream_ports(Host)) == ["group.nested"]
     assert port_endpoint(Host, "group.nested") is Endpoint.INITIATOR
     for hidden in ("child.inner", "choice.child.inner"):
         assert port_endpoint(Host, hidden) is None
         with pytest.raises(KeyError):
-            port_surface(Host, hidden)
+            port_side(Host, hidden)

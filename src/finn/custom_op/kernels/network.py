@@ -131,7 +131,7 @@ from finn.kernels.composer import (
 )
 from finn.kernels.movers import MoverOffer
 from finn.kernels.partition import Partition, partition
-from finn.kernels.port import port_surface
+from finn.kernels.port import port_contract, port_side
 from finn.kernels.sides import Side
 
 if TYPE_CHECKING:
@@ -308,7 +308,7 @@ def _neighbour(
         if side == "producer"
         else op.ports[list(node.input).index(tensor)]
     )
-    named = "" if port is None else op.wiring[port].contract.removesuffix("_contract")
+    named = "" if port is None else op.wiring[port].port
 
     def unaccepted(why: str, causes: Iterable[Finding] = ()) -> KernelOpError:
         message = (
@@ -330,9 +330,7 @@ def _neighbour(
     validity = inspection.validity(point)
     if isinstance(validity.result, Rejected):
         raise unaccepted("its kernel is refused", validity.result.findings)
-    surface = port_surface(type(point), named)
-    assert surface.side is not None
-    answer = point.query(surface.side)
+    answer = point.query(port_side(type(point), named))
     if not isinstance(answer, Available) or not isinstance(answer.value, Side):
         why = (
             "its side waits on an open choice"
@@ -344,9 +342,7 @@ def _neighbour(
         raise unaccepted(why, getattr(answer, "findings", ()))
     found: Side = answer.value
     stated = Side.neighbour(cast(Stream, found.stream), found.label, found.width)
-    reference = surface.contract_reference()
-    assert reference is not None
-    contract = point.query(reference)
+    contract = point.query(port_contract(type(point), named))
     given = contract.value if isinstance(contract, Available) else None
     return stated.under(node.name), (
         given.under(node.name) if isinstance(given, PortContract) else None
@@ -540,7 +536,7 @@ def _graph(
         wired += [("producer", port, tensor) for port, tensor in zip(op.outputs, node.output)]
         for side, port, tensor in wired:
             wiring = op.wiring[port]
-            sides[tensor][side] = Port(node.name, wiring.contract.removesuffix("_contract"))
+            sides[tensor][side] = Port(node.name, wiring.port)
             readers.setdefault(tensor, op.label)
             if port in held:
                 facts[tensor]["tensor"] = Stated(node.name, str(wiring.carried))

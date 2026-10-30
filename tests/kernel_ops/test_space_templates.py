@@ -46,7 +46,7 @@ from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port_model import (
     StreamPort,
-    port_surfaces,
+    stream_ports,
 )
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.vpc import VpcKernel
@@ -138,7 +138,7 @@ def _assert_native_scope_ownership(records: Iterable[ScopeRecord]) -> set[ScopeR
         assert parent.space_type in PORT_TYPES
         expected = PORT_TYPES[parent.space_type]
         assert record.space_type is expected[record.name.rsplit(".", 1)[-1]]
-        assert set(port_surfaces(parent.space_type)) == set(expected)
+        assert set(stream_ports(parent.space_type)) == set(expected)
         parents.add(parent)
     assert {record.name for record in ports} == {
         f"{parent.name}.{port}"

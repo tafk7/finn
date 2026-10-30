@@ -6,10 +6,11 @@
 A ``Channel`` (``finn.kernels.channels``) takes two sides, its ``producer`` and its
 ``consumer``, each a ``Side`` of one of four kinds (``SideKind``):
 
-- a **kernel**'s port (``Side.kernel``): the stream it presents (``x_stream``), its label
+- a **kernel**'s port (``Side.kernel``): the stream it presents (``x.stream``), its label
   (``compute.packed.x``, the label its contract carries) and, on an output port, its word
-  width (``x_data_width``). A kernel states it for each of its ports (``x_side``,
-  ``finn.kernels.port``);
+  width (``x.width``), read from its stream. Each port states it (``x.side``; a served
+  port's, ``x_side``, is its child's port's, labelled below the child: ``port_side`` in
+  ``finn.kernels.port`` finds either);
 - a **frozen neighbour**'s (``Side.neighbour``): the same three, given as a fact read from a
   kernel outside the selection at its accepted point;
 - the **boundary**'s (``Side.boundary``): the module's AXIS port, its name as its label

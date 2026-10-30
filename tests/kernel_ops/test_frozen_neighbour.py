@@ -33,7 +33,7 @@ from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel, OuterHops
 from finn.kernels.composer import ChannelDeclaration, PartitionDeclaration
 from finn.kernels.partition import Partition, partition
-from finn.kernels.port import port_surface
+from finn.kernels.port import port_side
 from finn.kernels.sides import Side, SideKind
 from finn.transformation.kernels import ToKernelOps
 
@@ -44,10 +44,8 @@ def _slice(model: ModelWrapper, *names: str) -> Partition:
 
 
 def _side(point: Kernel, port: str) -> Side:
-    """A KernelOp's actual native port side, resolved through its parent surface."""
-    reference = port_surface(type(point), port).side
-    assert reference is not None
-    found = point.query(cast(Any, reference))
+    """A KernelOp's port's side, its own or served."""
+    found = point.query(cast(Any, port_side(type(point), port)))
     assert isinstance(found, Available) and isinstance(found.value, Side)
     return found.value
 

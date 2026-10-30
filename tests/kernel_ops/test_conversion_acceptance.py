@@ -45,7 +45,7 @@ from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel, ChannelFifo, open_boundary_refusal
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.policies import FirstValid, Fixed, Required, stated
-from finn.kernels.port import port_surface
+from finn.kernels.port import port_side
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.transformation.kernels import (
@@ -396,7 +396,7 @@ def test_only_a_port_that_is_not_placed_is_skipped_by_the_stream_check(
     converted, _ = convert(multithreshold())
     op = kernel_op(converted, converted.graph.node[0])
     point = op.point()
-    known = point.query(cast(Any, port_surface(type(point), "input").side))
+    known = point.query(cast(Any, port_side(type(point), "input")))
     assert isinstance(known, Available) and isinstance(known.value, Side)
     waits = Unresolved(reject("decision-unassigned", "pe is open", owner="pe").findings)
     refused = reject("channel-form", "no form", owner="x")

@@ -34,8 +34,8 @@ from finn.kernels.artifacts.module import Fragment
 from finn.kernels.base import Kernel
 from finn.kernels.laws import AXIS, AXIS_CLOCKING, Native
 from finn.kernels.library import ModuleSpec
-from finn.kernels.port import LoopEnds, port_endpoint, port_surface
-from finn.kernels.port_model import PortSurface, StreamPort
+from finn.kernels.port import LoopEnds, port_contract, port_endpoint, port_side
+from finn.kernels.port_model import StreamPort
 from finn.kernels.vpc import VpcKernel
 from finn.platform.capabilities import Resources
 
@@ -134,14 +134,12 @@ def test_actual_vpc_surfaces_are_typed_real_children_and_not_kernel_instances() 
     assert inspection.statistics(point).owning_decisions == 0
     assert port_endpoint(VpcKernel, "input") is Endpoint.TARGET
     assert port_endpoint(VpcKernel, "output") is Endpoint.INITIATOR
-    surface = port_surface(VpcKernel, "output")
-    assert surface.side is not None and surface.contract_reference() is not None
-    assert point.query(surface.side) == Available(point.output.side)
-    assert point.query(surface.contract_reference()) == Available(point.output.contract)
+    assert point.query(port_side(VpcKernel, "output")) == Available(point.output.side)
+    assert point.query(port_contract(VpcKernel, "output")) == Available(point.output.contract)
     with pytest.raises(KeyError):
-        port_surface(VpcKernel, "missing")
+        port_side(VpcKernel, "missing")
     with pytest.raises(TypeError, match="node declaration"):
-        port_surface(point, "input")
+        port_side(point, "input")
 
 
 def test_actual_parent_refusal_blocks_module_body_but_not_valid_child_characterization() -> None:
@@ -184,7 +182,7 @@ def test_plain_module_spec_rejects_symbolic_identity_and_sources() -> None:
         ModuleSpec("vpc", Inputs.sources)
 
 
-def test_a_module_requires_owned_physical_ports_not_parent_forwarding_metadata() -> None:
+def test_a_module_requires_its_own_stream_ports() -> None:
     with pytest.raises(DefinitionError, match="declares no port"):
 
         class Unowned(Kernel):
@@ -192,7 +190,6 @@ def test_a_module_requires_owned_physical_ports_not_parent_forwarding_metadata()
             module_spec = ModuleSpec(
                 "probe", (CopiedSource("finnlib", "probe.sv", provides=("module:probe",)),)
             )
-            input = PortSurface(None, Endpoint.TARGET, None, None)
 
             @view
             def parameters(self) -> dict[str, int | str]:
@@ -203,7 +200,7 @@ def test_a_module_requires_owned_physical_ports_not_parent_forwarding_metadata()
                 return Resources()
 
 
-def test_surface_lookup_supports_discovered_group_paths_at_the_actual_node() -> None:
+def test_port_lookup_supports_discovered_group_paths_at_the_actual_node() -> None:
     class Included(Group):
         port = StreamPort(
             clocking=AXIS_CLOCKING, transport=AXIS, label="p", tensor=TENSOR, sequence=SEQUENCE
@@ -213,13 +210,12 @@ def test_surface_lookup_supports_discovered_group_paths_at_the_actual_node() -> 
         group = Included()
 
     declaration = Host()
-    surface = port_surface(declaration, "group.port")
+    side = port_side(declaration, "group.port")
 
     class Envelope(Space):
         host = declaration
 
     point = design_space(Envelope())
-    assert surface.stream is not None
-    assert point.query(surface.stream) == Available(point.host.group.port.stream)
+    assert point.query(side) == Available(point.host.group.port.side)
     with pytest.raises(KeyError):
-        port_surface(Host, "group.missing")
+        port_side(Host, "group.missing")

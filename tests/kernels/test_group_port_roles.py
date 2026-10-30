@@ -16,8 +16,8 @@ from finn.kernels.base import Kernel
 from finn.kernels.composer import Facts, PartitionDeclaration, Port, channel
 from finn.kernels.composer import _checked as checked
 from finn.kernels.laws import AXIS, AXIS_CLOCKING
-from finn.kernels.port import port_endpoint, port_surface
-from finn.kernels.port_model import StreamPort
+from finn.kernels.port import port_endpoint, port_side
+from finn.kernels.port_model import StreamPort, stream_ports
 from finn.kernels.sides import Side
 
 TENSOR = Tensor((2, 4), ScalarEncoding(DataType["INT3"]))
@@ -73,9 +73,8 @@ class Host(Kernel):
 )
 def test_constant_default_and_explicit_bound_group_endpoints(port: str, expected: Endpoint) -> None:
     assert port_endpoint(Host, port) is expected
-    surface = port_surface(Host, port)
     point = design_space(Host())
-    assert point.query(surface.endpoint) == Available(expected)
+    assert point.query(stream_ports(Host)[port].endpoint) == Available(expected)
 
 
 def test_open_model_endpoint_remains_unknown_without_reading_or_repairing_configuration() -> None:
@@ -132,7 +131,7 @@ def test_static_group_lookup_stops_at_real_spaces_and_unknown_names() -> None:
     assert port_endpoint(Parent, "child.group.ports.target") is None
     assert port_endpoint(Host, "group.ports.missing") is None
     with pytest.raises(KeyError):
-        port_surface(Parent, "child.group.ports.target")
+        port_side(Parent, "child.group.ports.target")
 
 
 @pytest.mark.parametrize(
@@ -172,8 +171,7 @@ def test_inherited_host_retains_group_placement_and_effective_port_roles() -> No
         ("group.ports.rebound", Endpoint.TARGET),
     ):
         assert port_endpoint(InheritedHost, port) is expected
-        surface = port_surface(InheritedHost, port)
-        assert point.query(surface.endpoint) == Available(expected)
+        assert point.query(stream_ports(InheritedHost)[port].endpoint) == Available(expected)
 
 
 @pytest.mark.parametrize(

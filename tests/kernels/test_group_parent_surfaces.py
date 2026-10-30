@@ -1,27 +1,27 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Authored forwarding surfaces retain their actual lexical Group occurrence."""
+"""A stream port declared in a Group keeps its actual lexical Group occurrence: discovery
+(``stream_ports``), lookup (``port_side``, ``port_contract``, ``port_endpoint``) and the
+composer find it there, and nothing forwards it by hand (W4: ``PortSurface`` is gone)."""
 
 from __future__ import annotations
-
-from typing import ClassVar
 
 import pytest
 from qonnx.core.datatype import DataType
 from support.helpers import FULL_DSP48E2
 
-from finn.core.space import Available, Decision, Group, Param, Space, derived, design_space, view
+from finn.core.space import Available, Decision, Group, Param, Space, derived, design_space
 from finn.core.space.declarations import Declaration, MemberRef, declared_path
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.base import Kernel, PortContract
+from finn.kernels.base import Kernel
 from finn.kernels.composer import Facts, PartitionDeclaration, Port, channel
 from finn.kernels.composer import _checked as checked
 from finn.kernels.laws import AXIS, AXIS_CLOCKING
-from finn.kernels.port import port_endpoint, port_surface
-from finn.kernels.port_model import PortSurface, StreamPort, port_surfaces
+from finn.kernels.port import port_contract, port_endpoint, port_side
+from finn.kernels.port_model import StreamPort, stream_ports
 from finn.kernels.sides import Side
 
 SMALL = Tensor((2, 4), ScalarEncoding(DataType["INT3"]))
@@ -33,48 +33,21 @@ OTHER_SEQUENCE = BeatSequence(vector_major(OTHER.shape, 2))
 class Receiving(Group):
     tensor: Tensor = Param()
     sequence: BeatSequence = Param()
-    role: Endpoint = Param(default=Endpoint.TARGET)
+    native = StreamPort(
+        clocking=AXIS_CLOCKING, transport=AXIS, label="source", tensor=tensor, sequence=sequence
+    )
+
+
+class Sending(Group):
+    tensor: Tensor = Param()
+    sequence: BeatSequence = Param()
     native = StreamPort(
         clocking=AXIS_CLOCKING,
         transport=AXIS,
         label="source",
         tensor=tensor,
         sequence=sequence,
-        endpoint=role,
-    )
-
-    @derived
-    def stream(self) -> Stream:
-        return self.native.stream
-
-    @derived
-    def width(self) -> int:
-        return self.native.width
-
-    @derived
-    def side(self) -> Side:
-        return self.native.side
-
-    @view
-    def contract(self) -> PortContract:
-        return self.native.contract
-
-    forwarded: ClassVar[PortSurface] = PortSurface(
-        None, Endpoint.TARGET, None, None, stream, width, side, contract
-    )
-
-
-class Sending(Receiving):
-    role: Endpoint = Param(default=Endpoint.INITIATOR)
-    forwarded: ClassVar[PortSurface] = PortSurface(
-        None,
-        Endpoint.INITIATOR,
-        None,
-        None,
-        Receiving.stream,
-        Receiving.width,
-        Receiving.side,
-        Receiving.contract,
+        endpoint=Endpoint.INITIATOR,
     )
 
 
@@ -84,7 +57,7 @@ class Frame(Group):
 
 
 class InheritedFrame(Frame):
-    """Inherit the actual Group placements as well as the forwarding declarations."""
+    """Inherit the actual Group placements as well as the ports."""
 
 
 class ReplacedFrame(InheritedFrame):
@@ -95,12 +68,8 @@ class Host(Kernel):
     id = "test.group-parent-surfaces"
     group = InheritedFrame()
 
-    @derived
-    def stream(self) -> Stream:
-        # Same spelling as the Group's real-source readout, different value.
-        return Stream(OTHER.element, OTHER_SEQUENCE)
-
-    forwarded: ClassVar[PortSurface] = PortSurface(None, Endpoint.INITIATOR, None, None, stream)
+    # A port of its own, with the same name as the Groups' ports.
+    native = StreamPort(tensor=OTHER, sequence=OTHER_SEQUENCE, transport=AXIS)
 
 
 class InheritedHost(Host):
@@ -119,47 +88,39 @@ def reference_path(value: object) -> tuple[Declaration, ...]:
 
 
 @pytest.mark.parametrize("host", [Host, InheritedHost, ReplacedHost])
-@pytest.mark.parametrize("key", ["group.receive.forwarded", "group.send.forwarded"])
+@pytest.mark.parametrize("key", ["group.receive.native", "group.send.native"])
 def test_discovery_lookup_and_real_source_agree_for_inherited_nested_groups(
     host: type[Host], key: str
 ) -> None:
-    discovered = port_surfaces(host)
-    assert list(discovered) == [
-        "group.receive.native",
-        "group.receive.forwarded",
-        "group.send.native",
-        "group.send.forwarded",
-        "forwarded",
-    ]
-    surface = port_surface(host, key)
-    assert surface == discovered[key]
-    sending = key == "group.send.forwarded"
+    discovered = stream_ports(host)
+    assert list(discovered) == ["group.receive.native", "group.send.native", "native"]
+    sending = key == "group.send.native"
     group = host.group.send if sending else host.group.receive
-    assert reference_path(surface.stream) == declared_path(group)
-    assert reference_path(surface.side) == declared_path(group)
-    assert reference_path(surface.contract_reference()) == declared_path(group)
-    assert surface.stream == group.stream
-    assert surface.contract_reference() == group.contract
+    assert discovered[key] is not None
+    assert declared_path(discovered[key]) == declared_path(group.native)
+    side, contract = port_side(host, key), port_contract(host, key)
+    assert reference_path(side) == reference_path(group.native.side)
+    assert reference_path(contract) == reference_path(group.native.contract)
+    assert side == group.native.side
+    assert contract == group.native.contract
     expected = Endpoint.INITIATOR if sending else Endpoint.TARGET
     assert port_endpoint(host, key) is expected
     tensor = OTHER if sending or host is ReplacedHost else SMALL
     sequence = OTHER_SEQUENCE if tensor is OTHER else SMALL_SEQUENCE
     point = design_space(host())
-    assert point.query(surface.stream) == Available(Stream(tensor.element, sequence))
-    bits = tensor.element.dtype.bitwidth() * sequence.form.lanes
-    assert point.query(surface.width) == Available(((bits + 7) // 8) * 8)
-    assert point.query(surface.contract_reference()) == Available(
+    found = point.query(side)
+    assert isinstance(found, Available)
+    assert found.value.stream == Stream(tensor.element, sequence)
+    assert point.query(contract) == Available(
         point.group.send.native.contract if sending else point.group.receive.native.contract
     )
-    # Lookup must not borrow the root's same-spelling stream reference.
-    assert surface.stream != port_surface(host, "forwarded").stream
-    if not sending and host is not ReplacedHost:
-        assert point.query(surface.stream) != point.query(host.stream)
+    # Lookup must not borrow the root's same-spelling port.
+    assert side != port_side(host, "native")
 
 
 @pytest.mark.parametrize("placement", ["left", "right"])
-@pytest.mark.parametrize("key", ["group.receive.forwarded", "group.send.forwarded"])
-def test_placed_node_surfaces_keep_the_exact_group_and_kernel_occurrence(
+@pytest.mark.parametrize("key", ["group.receive.native", "group.send.native"])
+def test_placed_node_ports_keep_the_exact_group_and_kernel_occurrence(
     placement: str, key: str
 ) -> None:
     class Holder(Space):
@@ -167,25 +128,24 @@ def test_placed_node_surfaces_keep_the_exact_group_and_kernel_occurrence(
         right = ReplacedHost()
 
     namespace = Holder.left if placement == "left" else Holder.right
-    surface = port_surface(namespace, key)
-    sending = key == "group.send.forwarded"
+    side = port_side(namespace, key)
+    sending = key == "group.send.native"
     group = namespace.group.send if sending else namespace.group.receive
-    assert reference_path(surface.stream) == declared_path(group)
-    assert reference_path(surface.contract_reference()) == declared_path(group)
-    assert surface.stream == group.stream
-    assert surface.contract_reference() == group.contract
-    assert reference_path(surface.stream) != reference_path(
-        port_surface(Holder.right if placement == "left" else Holder.left, key).stream
+    assert side == group.native.side
+    assert port_contract(namespace, key) == group.native.contract
+    assert reference_path(side) != reference_path(
+        port_side(Holder.right if placement == "left" else Holder.left, key)
     )
     tensor = OTHER if sending or placement == "right" else SMALL
     sequence = OTHER_SEQUENCE if tensor is OTHER else SMALL_SEQUENCE
-    point = design_space(Holder())
-    assert point.query(surface.stream) == Available(Stream(tensor.element, sequence))
+    found = design_space(Holder()).query(side)
+    assert isinstance(found, Available)
+    assert found.value.stream == Stream(tensor.element, sequence)
 
 
-@pytest.mark.parametrize("key", ["group.receive.forwarded", "group.send.forwarded"])
+@pytest.mark.parametrize("key", ["group.receive.native", "group.send.native"])
 @pytest.mark.parametrize("role", ["producer", "consumer"])
-def test_actual_composer_accepts_valid_and_refuses_wrong_group_forwarding_roles(
+def test_actual_composer_accepts_valid_and_refuses_wrong_group_port_roles(
     key: str, role: str
 ) -> None:
     endpoint = Port("kernel", key)
@@ -196,7 +156,7 @@ def test_actual_composer_accepts_valid_and_refuses_wrong_group_forwarding_roles(
         {"group-link": channel(producer, consumer, tensor=SMALL, platform=FULL_DSP48E2)},
     )
     findings = checked(declaration)
-    valid = (key == "group.send.forwarded") == (role == "producer")
+    valid = (key == "group.send.native") == (role == "producer")
     if valid:
         assert findings == []
     else:
@@ -218,40 +178,61 @@ class UnknownRoles(Group):
     def inferred(self) -> Endpoint:
         return Endpoint.INITIATOR
 
-    omitted: ClassVar[PortSurface] = PortSurface(None, None, None, None)
-    fact_bound: ClassVar[PortSurface] = PortSurface(None, fact, None, None)
-    derived_bound: ClassVar[PortSurface] = PortSurface(None, inferred, None, None)
-    decision_bound: ClassVar[PortSurface] = PortSurface(None, choice, None, None)
+    fact_bound = StreamPort(
+        tensor=SMALL,
+        sequence=SMALL_SEQUENCE,
+        endpoint=fact,
+        transport=AXIS,
+        label="fact_bound",
+        clocking=AXIS_CLOCKING,
+    )
+    derived_bound = StreamPort(
+        tensor=SMALL,
+        sequence=SMALL_SEQUENCE,
+        endpoint=inferred,
+        transport=AXIS,
+        label="derived_bound",
+        clocking=AXIS_CLOCKING,
+    )
+    decision_bound = StreamPort(
+        tensor=SMALL,
+        sequence=SMALL_SEQUENCE,
+        endpoint=choice,
+        transport=AXIS,
+        label="decision_bound",
+        clocking=AXIS_CLOCKING,
+    )
 
 
-@pytest.mark.parametrize("key", ["omitted", "fact_bound", "derived_bound", "decision_bound"])
-def test_endpoint_metadata_stays_unknown_even_when_configuration_resolves_it(key: str) -> None:
+@pytest.mark.parametrize("key", ["fact_bound", "derived_bound", "decision_bound"])
+def test_an_endpoint_bound_to_a_member_stays_unknown_even_when_configuration_resolves_it(
+    key: str,
+) -> None:
     class UnknownHost(Kernel):
-        id = "test.group-forwarded-unknown-role"
+        id = "test.group-port-unknown-role"
         group = UnknownRoles()
 
     dotted = "group." + key
     assert port_endpoint(UnknownHost, dotted) is None
-    surface = port_surface(UnknownHost, dotted)
-    assert surface == port_surfaces(UnknownHost)[dotted]
-    point = design_space(UnknownHost()).with_choices({UnknownHost.group.choice: Endpoint.INITIATOR})
-    if surface.endpoint is not None:
-        expected = Endpoint.TARGET if key == "fact_bound" else Endpoint.INITIATOR
-        assert point.query(surface.endpoint) == Available(expected)
+    assert dotted in stream_ports(UnknownHost)
+    port_side(UnknownHost, dotted)
     # Static metadata inspection accepts a class, not a bound runtime instance.
+    point = design_space(UnknownHost()).with_choices({UnknownHost.group.choice: Endpoint.INITIATOR})
     assert port_endpoint(type(point), dotted) is None
     assert port_endpoint(UnknownHost, "group.unknown") is None
 
 
 @pytest.mark.parametrize(
-    "key", ["missing", "group.missing", "group.receive.missing", "child.group.receive.forwarded"]
+    "key", ["missing", "group.missing", "group.receive.missing", "child.group.receive.native"]
 )
 def test_unknown_keys_and_real_space_crossing_remain_rejected(key: str) -> None:
     class Parent(Host):
-        id = "test.group-forwarded-no-crossing"
+        id = "test.group-port-no-crossing"
         child = Host()
 
-    assert key not in port_surfaces(Parent)
+    assert key not in stream_ports(Parent)
     assert port_endpoint(Parent, key) is None
     with pytest.raises(KeyError, match=key):
-        port_surface(Parent, key)
+        port_side(Parent, key)
+    with pytest.raises(KeyError, match=key):
+        port_contract(Parent, key)

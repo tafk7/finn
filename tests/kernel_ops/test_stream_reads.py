@@ -3,19 +3,19 @@
 """Each port's members read only their own kernel: its element, its stream and its read of
 its tensor, each with the guards that decide whether it exists.
 
-A port lowers into members of its kernel (``finn.kernels.port``): ``<p>_element``,
-``<p>_stream`` and ``<p>_access`` (a kernel with children serves its child's,
-``<p>_stream``). For every kernel of a partition, one Space as the graph layer binds it in
-its shell (``in_shell``: stage 7's chain of eight kernels, and TFC's partition from its cut
-body), every such member at any depth below it, and each of its existence guards
-(``_scopes.existence``): the reads the engine infers (``_reads.infer``: a method's, the
-model's reads, not its source) and each member's own edges (its arguments, guard, binding,
-selector and cases), followed through every address reached and through each formal to its
-binding in the placing Space (every scope of a model of the partition made,
-``_line_reads.line_scopes``), all lie inside the kernel's own subtree (its members, its
-children at any depth and the selectors that choose them), the partition's facts (the root's
-formals) or literals. A neighbour's value of any kind, or a channel's, fails, naming the
-member and the path read.
+A port is a child of its kernel (``finn.kernels.port_model.StreamPort``), its members its
+``element``, ``stream`` and ``access``; a kernel with children serves its child's port,
+lowered into members of its own (``<p>_side``). For every kernel of a partition, one Space
+as the graph layer binds it in its shell (``in_shell``: stage 7's chain of eight kernels,
+and TFC's partition from its cut body), every such member at any depth below it, and each
+of its existence guards (``_scopes.existence``): the reads the engine infers
+(``_reads.infer``: a method's, the model's reads, not its source) and each member's own
+edges (its arguments, guard, binding, selector and cases), followed through every address
+reached and through each formal to its binding in the placing Space (every scope of a model
+of the partition made, ``_line_reads.line_scopes``), all lie inside the kernel's own
+subtree (its members, its children at any depth and the selectors that choose them), the
+partition's facts (the root's formals) or literals. A neighbour's value of any kind, or a
+channel's, fails, naming the member and the path read.
 
 Two negative controls, small composites, fail the same check: a stream reading a sibling
 directly, and a stream reading a formal bound to a sibling's value. The engine refuses the
@@ -49,7 +49,6 @@ from finn.core.space import (
 )
 from finn.core.space._reads import ModelReads, infer
 from finn.core.space._scopes import Address, Scopes, existence
-from finn.core.space.declarations import Declaration
 from finn.custom_op.kernels.shell import in_shell
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
@@ -60,7 +59,7 @@ from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.laws import Axis
 from finn.kernels.library import ModuleSpec
-from finn.kernels.port_model import PortSurface, StreamPort
+from finn.kernels.port_model import ServedPort, StreamPort
 from finn.platform.capabilities import Resources
 
 MODEL_FIELDS = ("element", "stream", "access")
@@ -76,11 +75,9 @@ def model_port_members(space_type: type[Space]) -> Iterator[str]:
         effective: dict[str, object] = {}
         for base in reversed(space_type.__mro__):
             effective.update(vars(base))
-        for declaration in effective.values():
-            if isinstance(declaration, PortSurface):
-                source = declaration.stream
-                if isinstance(source, Declaration) and source.name is not None:
-                    yield source.name
+        for name, declaration in effective.items():
+            if isinstance(declaration, ServedPort):
+                yield f"{name}_side"  # a served port's side, lowered by the base
 
 
 def kernels(scopes: Scopes) -> list[str]:

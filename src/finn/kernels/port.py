@@ -3,12 +3,11 @@
 
 """Resolved physical port values and pure protocol calculations.
 
-Actual authoring uses StreamPort real
-children and explicitly authored parent PortSurface references. Native module
-source reads model inputs serially, then calls these pure helpers. No flat
-lowering, named callback tables, read lists or compatibility aliases remain.
-port_surface/port_endpoint discover actual lexical Group paths and stop at
-real Space boundaries; metadata never authorizes a model's reads.
+Actual authoring uses StreamPort real children, and served ports for a kernel with
+children. Native module source reads model inputs serially, then calls these pure helpers.
+``port_side``, ``port_contract`` and ``port_endpoint`` find a kernel's port by its name,
+through its lexical Group paths, stopping at real Space boundaries: what a channel reads of
+it, and its direction; they never authorize a model's reads.
 """
 
 from __future__ import annotations
@@ -23,7 +22,7 @@ from finn.core.space import (
     reject,
     space_formals,
 )
-from finn.core.space._nodes import NodeDecl
+from finn.core.space._nodes import NodeDecision, NodeDecl, node_record, unwrap
 from finn.core.space.declarations import Declaration, Required, declared_path
 from finn.dataflow.schedule import Index, Pace, Schedule
 from finn.dataflow.streams import Stream
@@ -42,7 +41,7 @@ from finn.kernels.transport import (
 )
 
 if TYPE_CHECKING:
-    from finn.kernels.port_model import PortSurface, StreamPort
+    from finn.kernels.port_model import ServedPort, StreamPort
 
 
 def _applies(space: Space, guard: str | None) -> bool:
@@ -299,12 +298,13 @@ def contract(
 # -- a port a kernel with children presents for a child -------------------------------------
 
 
-def _lexical_port(namespace: type[Space] | Space, port: str) -> StreamPort | PortSurface | None:
-    """Find an actual child or authored surface, rebased through its lexical Groups."""
-    from finn.kernels.port_model import (  # noqa: PLC0415 - breaks base/port cycle
-        PortSurface,
-        StreamPort,
-    )
+def _lexical_port(
+    namespace: type[Space] | Space, port: str
+) -> tuple[type[Space] | Space | Group, StreamPort | ServedPort] | None:
+    """The stream port or served port ``port`` names in ``namespace`` (a dotted path through
+    its Groups, ``group.port``), with the frame declaring it; None where it names neither.
+    Stops at child Spaces: a child's port is its parent's only where the parent serves it."""
+    from finn.kernels.port_model import ServedPort, StreamPort  # noqa: PLC0415 - base/port cycle
 
     frame: type[Space] | Space | Group = namespace
     segments = port.split(".")
@@ -314,46 +314,87 @@ def _lexical_port(namespace: type[Space] | Space, port: str) -> StreamPort | Por
             return None
         frame = group
     child = getattr(frame, segments[-1], None)
-    if isinstance(child, PortSurface):
-        return child.at(frame)
-    return child if isinstance(child, StreamPort) else None
+    return (frame, child) if isinstance(child, (StreamPort, ServedPort)) else None
 
 
-def port_endpoint(space_type: type[Space], port: str) -> Endpoint | None:
-    """Known child binding/default or parent surface; unknown inputs remain unknown."""
-    if not (isinstance(space_type, type) and issubclass(space_type, Kernel)):
-        return None
-    from finn.kernels.port_model import PortSurface  # noqa: PLC0415
-
-    child = _lexical_port(space_type, port)
-    if isinstance(child, PortSurface):
-        return child.endpoint if isinstance(child.endpoint, Endpoint) else None
-    if child is not None:
-        path = declared_path(child)
-        if not path or not isinstance(path[-1], NodeDecl):
-            return None
-        record = path[-1]
-        formal = space_formals(record.space_type).get("endpoint")
-        endpoint = record.bindings.get("endpoint", None if formal is None else formal.default)
-        return endpoint if isinstance(endpoint, Endpoint) else None
-    return None
-
-
-def port_surface(namespace: type[Space] | Space, port: str) -> PortSurface:
-    """Actual child or parent references, with lexical Group and real-Space boundaries."""
-    from finn.kernels.port_model import PortSurface  # noqa: PLC0415
-
+def _found(namespace: type[Space] | Space, port: str) -> tuple[Any, StreamPort | ServedPort]:
     space_type = namespace if isinstance(namespace, type) else type(namespace)
     if not issubclass(space_type, Space) or (
         not isinstance(namespace, type) and declared_path(namespace) is None
     ):
-        raise TypeError("port_surface requires a Space class or node declaration")
-    child = _lexical_port(namespace, port)
-    if isinstance(child, PortSurface):
-        return child
-    if child is not None:
-        return PortSurface.of(child)
-    raise KeyError(port)
+        raise TypeError("a port is read of a Space class or node declaration")
+    found = _lexical_port(namespace, port)
+    if found is None:
+        raise KeyError(port)
+    return found
+
+
+def port_side(namespace: type[Space] | Space, port: str) -> Any:
+    """The side kernel ``namespace``'s port ``port`` gives a channel, as a reference to query
+    (``namespace`` a Space class, or a node declaration for a reference below it): a stream
+    port's ``side``, a served port's (``finn.kernels.port_model.ServedPort``). KeyError where
+    ``port`` names no port of it."""
+    frame, child = _found(namespace, port)
+    if isinstance(child, Space):
+        return child.side
+    return getattr(frame, f"{port.rsplit('.', 1)[-1]}_side")
+
+
+def port_contract(namespace: type[Space] | Space, port: str) -> Any:
+    """What kernel ``namespace``'s port ``port`` states to a channel, as a reference to query
+    (``port_side``'s): a stream port's ``contract``, a served port's."""
+    frame, child = _found(namespace, port)
+    if isinstance(child, Space):
+        return child.contract
+    return getattr(frame, f"{port.rsplit('.', 1)[-1]}_contract")
+
+
+def _declared_endpoint(record: NodeDecl) -> Endpoint | None:
+    """The endpoint a stream port's declaration binds, or its default."""
+    formal = space_formals(record.space_type).get("endpoint")
+    endpoint = record.bindings.get("endpoint", None if formal is None else formal.default)
+    return endpoint if isinstance(endpoint, Endpoint) else None
+
+
+def port_endpoint(space_type: type[Space], port: str) -> Endpoint | None:
+    """Whether kernel ``space_type``'s port ``port`` is an input's (a target) or an
+    output's (an initiator), from its declaration: a served port's is its child's port's, the
+    one every case of a selector agrees on. None where it is not known: no such port, or a
+    child's port bound otherwise than by a literal."""
+    if not (isinstance(space_type, type) and issubclass(space_type, Kernel)):
+        return None
+    found = _lexical_port(space_type, port)
+    if found is None:
+        return None
+    _, child = found
+    if isinstance(child, Space):
+        path = declared_path(child)
+        if not path or not isinstance(path[-1], NodeDecl):
+            return None
+        return _declared_endpoint(path[-1])
+    endpoints = {
+        None if declared is None else _declared_endpoint(declared)
+        for declared in served_ports(child)
+    }
+    return endpoints.pop() if len(endpoints) == 1 else None
+
+
+def served_ports(port: ServedPort) -> tuple[NodeDecl | None, ...]:
+    """The declaration of the stream port ``port`` serves in its child, or in each case of a
+    selector; None for a child that has no stream port so named."""
+    from finn.kernels.port_model import StreamPort  # noqa: PLC0415 - base/port cycle
+
+    record = unwrap(port.child)
+    if isinstance(record, NodeDecision):
+        records = tuple(each for each in record.candidates.values() if each is not None)
+    else:
+        records = (record,) if isinstance(record, NodeDecl) else ()
+    found: list[NodeDecl | None] = []
+    for each in records:
+        declared = node_record(getattr(each.space_type, port.port, None))
+        is_port = declared is not None and issubclass(declared.space_type, StreamPort)
+        found.append(declared if is_port else None)
+    return tuple(found)
 
 
 __all__ = [
@@ -366,8 +407,10 @@ __all__ = [
     "data_width",
     "held",
     "lane_count",
+    "port_contract",
     "port_endpoint",
-    "port_surface",
+    "port_side",
+    "served_ports",
     "pace",
     "pins",
     "transport",

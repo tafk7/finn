@@ -56,8 +56,8 @@ budget check and resources.
 A channel whose tensor has a known value (``contents``) places its ``source`` (a
 memory, ``MemStreamKernel``) as its producer (its producer side the source's,
 ``channel-users``), storing one one_pass in the order its consumer reads it; with several
-sets, the source's set port is the channel's port (``set``, served by its source:
-``set_stream``), which the index tensor's channel consumes.
+sets, the source's set port is the channel's port (``set``, served from its source,
+``finn.kernels.port_model.served``), which the index tensor's channel consumes.
 
 The source and the output adapter are placed where their condition holds, not chosen,
 and each keeps the label it is placed at (``SOURCE_LABEL``, ``OUTPUT_ADAPTER_LABEL``),
@@ -146,7 +146,7 @@ from finn.kernels.library import leaf_at_root
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.movers import IodmaMover, MoverContract, MoverOffer
 from finn.kernels.policies import Alone, FirstValid, Policy, Required, defaulted, stated
-from finn.kernels.port_model import PortSurface
+from finn.kernels.port_model import served
 from finn.kernels.sides import BUILD, ROW_MAJOR, Outside, Side, SideKind, beat_times
 from finn.kernels.transport import (
     AxisBeat,
@@ -466,8 +466,8 @@ class Channel(Kernel):
     label names, presented as ``boundary``, where the ``mover`` sits where the shell
     offers one: ``offered``), or its source's. A channel with a known value places its
     ``source`` as its producer; with several sets, the source reads the set indices
-    (``index_tensor``) from the channel whose consumer is ``set_stream``, the one port it
-    presents (``set``, its source's). ``platform`` is the target's: its source, its
+    (``index_tensor``) from the channel whose consumer is its ``set`` port, the one port it
+    serves (its source's). ``platform`` is the target's: its source, its
     adapters' stages and its FIFO read it. Its members are declared in the order the stream
     runs through them, so its netlist places them in that order.
     """
@@ -562,43 +562,11 @@ class Channel(Kernel):
             return Inapplicable()
         return SOURCE_LABEL
 
-    # With several sets, its source's set port, a port of the channel labelled below the
-    # source's label (``source.memstream.set``): the index tensor's channel's consumer. A
-    # channel without a known value has no source, so no set port: nothing reads the
-    # indices.
-    @derived
-    def set_stream(self) -> Stream | Inapplicable:
-        if not self.valued:
-            return Inapplicable()
-        return self.source.set.stream
-
-    @derived
-    def set_data_width(self) -> int | Inapplicable:
-        if not self.valued:
-            return Inapplicable()
-        return self.source.set.width
-
-    @derived
-    def set_label(self) -> str | Inapplicable:
-        if not self.valued:
-            return Inapplicable()
-        return f"{SOURCE_LABEL}.set"
-
-    @derived
-    def set_side(self) -> Side | Inapplicable:
-        if not self.valued:
-            return Inapplicable()
-        return self.source.set.side.under(SOURCE_LABEL)
-
-    @view
-    def set_contract(self) -> PortContract | Inapplicable:
-        if not self.valued:
-            return Inapplicable()
-        return self.source.set.contract.under(SOURCE_LABEL)
-
-    set: ClassVar[PortSurface] = PortSurface(
-        None, Endpoint.TARGET, None, None, set_stream, set_data_width, set_side, set_contract
-    )
+    # With several sets, its source's set port, served as a port of the channel labelled
+    # below the source's label (``source.memstream.set``): the index tensor's channel's
+    # consumer. A channel without a known value has no source, so its set port does not
+    # apply: nothing reads the indices.
+    set = served(source, "set", label=SOURCE_LABEL)
 
     @derived
     def takes_doubled_clock(self) -> bool:

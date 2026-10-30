@@ -138,20 +138,10 @@ def _presented_from(part: str, following: str) -> Callable[[Kernel], tuple[Any, 
 
 def _module_parts(cls: type[Kernel]) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """The names of its module's parts in pin order and in hold order (above)."""
-    from finn.kernels.port_model import OtherPins, StreamPort, port_surfaces  # noqa: PLC0415
+    from finn.kernels.port_model import OtherPins, StreamPort, stream_ports  # noqa: PLC0415
 
     nested = [
-        name
-        for names in (
-            control_models(cls),
-            (
-                name
-                for name, surface in port_surfaces(cls).items()
-                if surface.physical_pins is not None
-            ),
-        )
-        for name in names
-        if "." in name
+        name for names in (control_models(cls), stream_ports(cls)) for name in names if "." in name
     ]
     if nested:
         raise DefinitionError.broken(
@@ -183,6 +173,104 @@ def _supply_ports(cls: type[Kernel]) -> None:
             assign(value, "label", name)
         if "clocking" not in record.settings:
             assign(value, "clocking", Kernel.port_clocking)
+
+
+# -- the ports a kernel with children serves ------------------------------------------------
+#
+# A served port (``finn.kernels.port_model.served``) is lowered, when its kernel's class is
+# made, into the two members a channel reads of a port, its side and its contract, each the
+# child's port's labelled below it. They are derived members of the kernel, not of a child:
+# the engine reads a member through a selector one level deep (``compute.x``), never two
+# (``compute.x.side``), and a Group reads nothing of its kernel. Each reads its child, its
+# port and its case by the names its closure fixes, so that its source states its reads.
+
+
+def _served_side(child: str, port: str, case: str | None, label: str) -> Callable[[Any], Any]:
+    if case is None:
+
+        def side(self: Any) -> Any:
+            return getattr(getattr(self, child), port).side.under(label)
+
+        return side
+
+    def side_of_case(self: Any) -> Any:
+        return getattr(getattr(self, child), port).side.under(f"{child}.{getattr(self, case)}")
+
+    return side_of_case
+
+
+def _served_contract(child: str, port: str, case: str | None, label: str) -> Callable[[Any], Any]:
+    if case is None:
+
+        def contract(self: Any) -> Any:
+            return getattr(getattr(self, child), port).contract.under(label)
+
+        return contract
+
+    def contract_of_case(self: Any) -> Any:
+        return getattr(getattr(self, child), port).contract.under(f"{child}.{getattr(self, case)}")
+
+    return contract_of_case
+
+
+def _serve_ports(cls: type[Kernel]) -> None:
+    """Lower each port ``cls``'s own body serves (above): ``<name>_side`` and
+    ``<name>_contract``, and, for a selector, ``<child>_case``, its case, where the body does
+    not declare it. Refused where the child is not the kernel's (``served-child-unknown``)
+    or has no stream port so named (``served-port-unknown``)."""
+    from finn.core.space._nodes import NodeChoice, selected  # noqa: PLC0415
+    from finn.kernels.port import served_ports  # noqa: PLC0415
+    from finn.kernels.port_model import ServedPort  # noqa: PLC0415
+    from finn.kernels.sides import Side  # noqa: PLC0415
+
+    own = dict(vars(cls))
+    for name, value in own.items():
+        if not isinstance(value, ServedPort):
+            continue
+        where = f"{cls.__qualname__}.{name}"
+        child = next((key for key, item in own.items() if item is value.child), None)
+        if child is None:
+            raise DefinitionError.broken(
+                "served-child-unknown",
+                "Kernel",
+                f"{where} serves a port of no child declared in {cls.__qualname__}'s body",
+                declaration=where,
+            )
+        declared = served_ports(value)
+        if not declared or None in declared:
+            raise DefinitionError.broken(
+                "served-port-unknown",
+                "Kernel",
+                f"{where} serves {child}.{value.port}, which is no stream port of "
+                f"{'each case of ' if isinstance(value.child, NodeChoice) else ''}{child}",
+                declaration=where,
+            )
+        case: str | None = None
+        members: dict[str, object] = {}
+        if isinstance(value.child, NodeChoice):
+            case = f"{child}_case"
+            if case not in vars(cls):  # one for every port served of the selector
+                members[case] = selected(value.child)
+        label = value.label or child
+        side = _served_side(child, value.port, case, label)
+        side.__annotations__ = {"return": Side}
+        side.__doc__ = f"The side its port {name} gives a channel: {child}'s {value.port}'s."
+        contract = _served_contract(child, value.port, case, label)
+        contract.__annotations__ = {"return": PortContract}
+        contract.__doc__ = f"What its port {name} states to a channel: {child}'s {value.port}'s."
+        members[f"{name}_side"] = derived(side)
+        members[f"{name}_contract"] = view(contract)
+        for key, member in members.items():
+            if key in own:
+                raise DefinitionError.broken(
+                    "served-port-repeated",
+                    "Kernel",
+                    f"{where}: {cls.__qualname__} declares {key}, which its served port {name} "
+                    "is lowered into",
+                    declaration=where,
+                )
+            setattr(cls, key, member)
+            getattr(member, "__set_name__")(cls, key)
 
 
 def _install(
@@ -225,6 +313,7 @@ class Kernel(Space):
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         _supply_ports(cls)
+        _serve_ports(cls)
         super().__init_subclass__(**kwargs)
         buses = list(control_models(cls))
         if len(buses) > 1:
@@ -278,13 +367,9 @@ class Kernel(Space):
             _install(cls, _PRESENTED, _presented_from, pins)
         if unmet_required(cls) or not specs:
             return
-        from finn.kernels.port_model import port_surfaces  # noqa: PLC0415
+        from finn.kernels.port_model import stream_ports  # noqa: PLC0415
 
-        ports = [
-            name
-            for name, surface in port_surfaces(cls).items()
-            if surface.physical_pins is not None
-        ]
+        ports = list(stream_ports(cls))
         if not _declared(cls, "parameters"):
             raise DefinitionError.broken(
                 "module-parameters-unstated",

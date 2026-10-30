@@ -13,8 +13,8 @@
 - every kernel of ``finn.kernels`` that binds a library module is a spec's, so its
   covering points build its module, checking that its sources provide it;
 - every stream port of every member of every conformance case, at each of the case's
-  covering points, states its contract's label (``x_label``) and the side it gives a
-  channel (``x_side``: its stream, that label and, an output's, its word width), so the
+  covering points, states its contract's label (``x.label``) and the side it gives a
+  channel (``x.side``: its stream, that label and, an output's, its word width), so the
   side a channel is bound to and the contract its network reads cannot drift.
 
 The simulations are elsewhere: its conformance cases in ``test_conformance.py``,
@@ -28,7 +28,7 @@ import importlib.util
 import pkgutil
 import sys
 from dataclasses import replace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from support.conformance import (
@@ -53,8 +53,8 @@ from finn.kernels.base import Kernel, PortContract
 from finn.kernels.configure import undecided
 from finn.kernels.library import ModuleSpec
 from finn.kernels.partition import Partition
-from finn.kernels.port import port_surface
-from finn.kernels.port_model import StreamPort, port_surfaces
+from finn.kernels.port import port_contract, port_side
+from finn.kernels.port_model import ServedPort, StreamPort, stream_ports
 from finn.kernels.sides import Side
 
 BY_NAME = {spec.name: spec for spec in SPECS}
@@ -196,46 +196,45 @@ def test_the_base_assembles_every_library_module_s_netlist() -> None:
 
 def _ports(member: Space) -> tuple[str, ...]:
     """The stream ports ``member``'s class declares, by name: its module's, and those it
-    presents for a child; none for a member that is no kernel."""
+    serves for a child; none for a member that is no kernel."""
     if not isinstance(member, Kernel):
         return ()
-    return tuple(port_surfaces(type(member)))
+    effective: dict[str, object] = {}
+    for base in reversed(type(member).__mro__):
+        effective.update(vars(base))
+    served = tuple(name for name, value in effective.items() if isinstance(value, ServedPort))
+    return (*stream_ports(type(member)), *served)
 
 
 def _ports_checked(point: Partition) -> int:
     """Each placed stream port of each member of ``point``, checked: its label is its
     contract's, and its side states its stream, that label and, on an output port, its
-    word width. How many it checked."""
+    word width; a served port's, its child's port's, labelled as its contract. How many it
+    checked."""
     checked = 0
     for name in point.members:
         member = point.member(name)
         for port in _ports(member):
-            surface = port_surface(type(member), port)
-            if surface.contract_reference() is None:
-                continue  # A structurally idle physical form has no logical contract.
-            offered = member.query(surface.contract_reference())
+            offered = member.query(port_contract(type(member), port))
             if not isinstance(offered, Available):
                 continue
             contract: PortContract = offered.value
+            given = member.query(port_side(type(member), port))
+            where = f"{name}.{port}"
+            assert isinstance(given, Available), where
+            side: Side = given.value
             frame: object = type(member)
             for part in port.split("."):
                 frame = getattr(frame, part)
-            label: str = (
-                member.field(frame.label).get()
-                if isinstance(frame, StreamPort)
-                else getattr(member, f"{port}_label")
-            )
-            assert surface.side is not None and surface.stream is not None
-            side: Side = member.field(surface.side).get()
-            stream: Stream = member.field(surface.stream).get()
-            where = f"{name}.{port}"
-            assert label == contract.label, where
-            output = contract.contract.transport.endpoint is Endpoint.INITIATOR
-            if output:
-                assert surface.width is not None, where
-                width = member.field(surface.width).get()
+            if isinstance(frame, StreamPort):
+                label: str = member.field(frame.label).get()
+                stream: Stream = member.field(frame.stream).get()
             else:
-                width = None
+                label, stream = contract.label, cast(Stream, side.stream)
+            assert label == contract.label, where
+            transport = contract.contract.transport
+            output = transport.endpoint is Endpoint.INITIATOR
+            width = transport.data_width if output else None
             assert side == Side.kernel(stream, label, width), where
             checked += 1
     return checked

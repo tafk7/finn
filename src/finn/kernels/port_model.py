@@ -1,11 +1,13 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""A kernel's ports: real child Spaces, and typed authoring surfaces.
+"""A kernel's ports: real child Spaces, and the ports a kernel with children serves.
 
 ``StreamPort`` is the one stream-port construct: a child Space with zero Decisions and
 intrinsic element admission at the port's real scope, presenting a given sequence or its
-kernel's schedule's projection, or idle. Folding and composition remain on the parent.
+kernel's schedule's projection, or idle. Folding and composition remain on the parent. A
+kernel with children presents a child's port as its own by serving it (``served``), which
+its base lowers into the members a channel reads; nothing forwards a port by hand.
 
 Public physical Views characterize the child's contract. Module assembly (the
 base's, ``Kernel.netlist``) calls each port's ordinary methods, ``pin_values``,
@@ -18,7 +20,7 @@ outside its ports and its control bus.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import TypeVar, cast
+from typing import Any
 
 from finn.core.space import (
     Group,
@@ -31,7 +33,6 @@ from finn.core.space import (
     reject,
     view,
 )
-from finn.core.space.declarations import Declaration, View, declared_path
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.schedule import Access, Affine, Index, Refused, Schedule, plain_index
 from finn.dataflow.streams import Stream
@@ -290,132 +291,62 @@ class OtherPins(Group):
         return False
 
 
-_SurfaceValue = TypeVar("_SurfaceValue")
+@dataclass(frozen=True)
+class ServedPort:
+    """A port a kernel with children presents as one of its child's stream ports (canon
+    AUTHORING's ``served``): ``child``, a child of the kernel or a selector over children,
+    and that child's port ``port``. Its stream, contract, advance rule and intake are the
+    child's port's; its label is the port's below the child's case (``compute.<case>.x`` for
+    a selector's, MatMul's), or below the ``label`` the kernel states for its child
+    (``source.memstream.set``, a channel's source's).
+
+    Declared in a kernel's own body, after its child (``x = served(compute, "x")``); when
+    the kernel's class is made (``finn.kernels.base.Kernel``), it is lowered into the two
+    members a channel reads of a port, ``<name>_side`` and ``<name>_contract``, each the
+    child's port's labelled below it, and, for a selector, ``<child>_case``, its case. A
+    reader finds them by the port's name (``finn.kernels.port.port_side``,
+    ``port_contract``), never by the members' names."""
+
+    child: object
+    port: str
+    label: str | None = None
 
 
-@dataclass(frozen=True, init=False)
-class PortSurface:
-    """Actual authored references for a logical ABI key, never an allowed-read list.
-
-    Construct only from node declarations. Fields are typed as their values,
-    like ordinary core authored references; they are queried against the owning
-    real Space. Fields are None when that authored form omits them; logical fields are
-    absent for structurally idle ports and physical fields for parent forwarding. This is
-    authoring/driver metadata, not a model Param or a validity certificate.
-    """
-
-    element: ScalarEncoding | None
-    endpoint: Endpoint | None
-    physical_pins: tuple[Pin, ...] | None
-    idle_pins: Held | None
-    stream: Stream | None = None
-    width: int | None = None
-    side: Side | None = None
-    _contract: PortContract | View[PortContract] | None = None
-
-    def __init__(
-        self,
-        element: ScalarEncoding | None,
-        endpoint: Endpoint | None,
-        physical_pins: tuple[Pin, ...] | None,
-        idle_pins: Held | None,
-        stream: Stream | None = None,
-        width: int | None = None,
-        side: Side | None = None,
-        contract: PortContract | View[PortContract] | None = None,
-    ) -> None:
-        object.__setattr__(self, "element", element)
-        object.__setattr__(self, "endpoint", endpoint)
-        object.__setattr__(self, "physical_pins", physical_pins)
-        object.__setattr__(self, "idle_pins", idle_pins)
-        object.__setattr__(self, "stream", stream)
-        object.__setattr__(self, "width", width)
-        object.__setattr__(self, "side", side)
-        object.__setattr__(self, "_contract", contract)
-
-    def contract_reference(self) -> PortContract | View[PortContract] | None:
-        # A View is stored as metadata, not installed as a descriptor of this
-        # dataclass. Read its storage directly; its __get__ belongs to Space.
-        return cast(
-            PortContract | View[PortContract] | None, object.__getattribute__(self, "_contract")
-        )
-
-    def at(self, namespace: type[Space] | type[Group] | Space | Group) -> PortSurface:
-        """Rebase explicitly authored parent references for a driver/composer.
-
-        Plain metadata only; no method or read-list callback is introduced on a
-        Space. Actual native model/View declarations remain on their parent.
-        """
-        if not isinstance(namespace, type) and declared_path(namespace) is None:
-            raise TypeError("PortSurface.at requires a class or node declaration")
-
-        def bind(value: _SurfaceValue) -> _SurfaceValue:
-            if isinstance(value, Declaration):
-                assert value.name is not None
-                return cast(_SurfaceValue, getattr(namespace, value.name))
-            return value
-
-        return PortSurface(
-            bind(self.element),
-            bind(self.endpoint),
-            bind(self.physical_pins),
-            bind(self.idle_pins),
-            bind(self.stream),
-            bind(self.width),
-            bind(self.side),
-            bind(self.contract_reference()),
-        )
-
-    @classmethod
-    def of(cls, port: StreamPort) -> PortSurface:
-        if not isinstance(port, StreamPort) or declared_path(port) is None:
-            raise TypeError("PortSurface requires a StreamPort node declaration")
-        return cls(
-            port.element,
-            port.endpoint,
-            port.physical_pins,
-            port.idle_pins,
-            port.stream,
-            port.width,
-            port.side,
-            port.contract,
-        )
+def served(child: Any, port: str, *, label: str | None = None) -> ServedPort:
+    """A port the kernel declaring it presents as ``child``'s stream port ``port``
+    (``ServedPort``)."""
+    return ServedPort(child, port, label)
 
 
-def port_surfaces(space_type: type[Space]) -> dict[str, PortSurface]:
-    """Effective port declarations in inherited declaration order, through Group frames.
-
-    Stops at real Space boundaries: grandchildren of hardware kernels are not
-    this kernel's ports. Group paths are explicit dotted keys, with lexical
-    order retained; this does not claim Members(Group.member) support.
-    """
+def stream_ports(space_type: type[Space]) -> dict[str, StreamPort]:
+    """The stream ports ``space_type`` declares, in inherited declaration order, through
+    its Groups (by dotted path, ``group.port``), each bound where it is declared. Stops at
+    child Spaces: a child's ports are not its parent's; a served port is not one."""
 
     def below(
         namespace: type[Space] | type[Group], placed: Space | Group | None, prefix: str
-    ) -> dict[str, PortSurface]:
+    ) -> dict[str, StreamPort]:
         effective: dict[str, object] = {}
         for base in reversed(namespace.__mro__):
             effective.update(vars(base))
-        result: dict[str, PortSurface] = {}
+        result: dict[str, StreamPort] = {}
         for name, declaration in effective.items():
             if isinstance(declaration, StreamPort):
-                port = declaration if placed is None else getattr(placed, name)
-                result[prefix + name] = PortSurface.of(port)
-            elif isinstance(declaration, PortSurface):
-                result[prefix + name] = declaration.at(namespace if placed is None else placed)
+                result[prefix + name] = declaration if placed is None else getattr(placed, name)
             elif isinstance(declaration, Group):
                 group = declaration if placed is None else getattr(placed, name)
                 result.update(below(type(declaration), group, prefix + name + "."))
         return result
 
     if not isinstance(space_type, type) or not issubclass(space_type, Space):
-        raise TypeError("port_surfaces requires a real Space class")
+        raise TypeError("stream_ports requires a real Space class")
     return below(space_type, None, "")
 
 
 __all__ = [
     "OtherPins",
-    "PortSurface",
+    "ServedPort",
     "StreamPort",
-    "port_surfaces",
+    "served",
+    "stream_ports",
 ]

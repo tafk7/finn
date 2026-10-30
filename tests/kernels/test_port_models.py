@@ -1,6 +1,6 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Actual lean port values, local ownership, sparse demand and authored discovery."""
+"""Actual lean port values, local ownership, sparse demand, discovery and served ports."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from finn.core.space import (
     Inapplicable,
     Param,
     Rejected,
+    Select,
     Space,
     Unresolved,
     constraint,
@@ -37,8 +38,19 @@ from finn.kernels.base import Kernel, PortContract
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.laws import AXIS, AXIS_CLOCKING, NATIVE, NATIVE_CLOCKING, Advance, Axis, Native
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.port import LoopEnds, PhysicalPort, contract, data_width, held, pins, transport
-from finn.kernels.port_model import PortSurface, StreamPort, port_surfaces
+from finn.kernels.port import (
+    LoopEnds,
+    PhysicalPort,
+    contract,
+    data_width,
+    held,
+    pins,
+    port_contract,
+    port_endpoint,
+    port_side,
+    transport,
+)
+from finn.kernels.port_model import StreamPort, served, stream_ports
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.domains import Integer
@@ -190,8 +202,8 @@ def test_an_idle_port_answers_its_stream_inapplicable_and_an_unindexed_one_binds
     assert isinstance(point.query(Shape.live.access), Inapplicable)
     assert inspection.statistics(point).owning_decisions == 0
     assert point.idle.element == ELEMENT
-    surfaces = port_surfaces(Shape)
-    assert point.query(surfaces["live"].stream) == Available(Stream(ELEMENT, SEQUENCE))
+    ports = stream_ports(Shape)
+    assert point.query(ports["live"].stream) == Available(Stream(ELEMENT, SEQUENCE))
 
 
 @pytest.mark.parametrize("state", [None, False, True])
@@ -255,7 +267,7 @@ def test_native_loop_markers_and_physical_refusals_use_actual_values() -> None:
     assert inspection.validity(bad).status == "valid"  # no invented physical model rule
 
 
-def test_surface_discovery_rebases_overrides_groups_and_stops_at_real_children() -> None:
+def test_port_discovery_rebases_overrides_groups_and_stops_at_real_children() -> None:
     class Included(Group):
         nested = StreamPort(
             clocking=AXIS_CLOCKING, transport=AXIS, label="nested", tensor=TENSOR, sequence=SEQUENCE
@@ -288,13 +300,12 @@ def test_surface_discovery_rebases_overrides_groups_and_stops_at_real_children()
         group = Included()
         real = Base()
 
-    surfaces = port_surfaces(Child)
-    assert list(surfaces) == ["first", "second", "group.nested"]
-    assert surfaces["first"].stream is not None
+    ports = stream_ports(Child)
+    assert list(ports) == ["first", "second", "group.nested"]
     point = design_space(Child())
-    assert point.query(surfaces["group.nested"].stream) == Available(Stream(ELEMENT, SEQUENCE))
+    assert point.query(ports["group.nested"].stream) == Available(Stream(ELEMENT, SEQUENCE))
     with pytest.raises(TypeError, match="node declaration"):
-        PortSurface.of(point.first)
+        port_side(point, "first")
 
 
 def test_port_children_are_not_hardware_kernels_or_member_netlists() -> None:
@@ -418,3 +429,93 @@ def test_a_port_states_its_transport() -> None:
             input = StreamPort(tensor=TENSOR, sequence=SEQUENCE)
 
         design_space(Untransported())
+
+
+class Leaf(Kernel):
+    id = "test.served.leaf"
+    input = StreamPort(transport=AXIS, tensor=TENSOR, sequence=SEQUENCE)
+    output = StreamPort(
+        transport=AXIS, tensor=TENSOR, sequence=SEQUENCE, endpoint=Endpoint.INITIATOR
+    )
+
+
+class OtherLeaf(Leaf):
+    id = "test.served.other_leaf"
+
+
+class Serving(Kernel):
+    id = "test.served"
+    core = Select(one=Leaf, other=OtherLeaf)
+    x = served(core, "input")
+    y = served(core, "output")
+    kept = Leaf()
+    z = served(kept, "output", label="kept.leaf")
+    w = served(kept, "input")
+
+
+def test_a_kernel_serves_its_child_s_port_labelled_below_the_child() -> None:
+    """A served port's side and contract are its child's port's, labelled below the selected
+    case (``core.<case>.input``) or below the child, or the label the kernel states."""
+    point = design_space(Serving()).with_choices({Serving.core: "other"})
+
+    def side(port: str) -> object:
+        found = point.query(port_side(Serving, port))
+        assert isinstance(found, Available), port
+        return found.value
+
+    def contract_of(port: str) -> PortContract:
+        found = point.query(port_contract(Serving, port))
+        assert isinstance(found, Available) and isinstance(found.value, PortContract), port
+        return found.value
+
+    child = point.core.input
+    assert side("x") == child.side.under("core.other")
+    assert contract_of("x") == child.contract.under("core.other")
+    assert contract_of("x").label == "core.other.input"
+    assert side("y") == point.core.output.side.under("core.other")
+    assert contract_of("z").label == "kept.leaf.output"
+    assert side("w") == point.kept.input.side.under("kept")
+    # Lowered into members of the kernel, which the engine reads like any other.
+    assert port_side(Serving, "x") is getattr(Serving, "x_side")
+    assert port_contract(Serving, "x") is getattr(Serving, "x_contract")
+    assert getattr(point, "core_case") == "other"
+    assert port_endpoint(Serving, "x") is Endpoint.TARGET
+    assert port_endpoint(Serving, "y") is Endpoint.INITIATOR
+    assert port_endpoint(Serving, "z") is Endpoint.INITIATOR
+    # Served ports are not the kernel's own stream ports: a module's ports are.
+    assert stream_ports(Serving) == {}
+    # Open, the case is not known, so neither is the label.
+    assert isinstance(design_space(Serving()).query(port_contract(Serving, "x")), Unresolved)
+
+
+def test_a_served_port_names_a_child_and_a_stream_port_of_it() -> None:
+    with pytest.raises(DefinitionError, match="no child declared"):
+
+        class Orphan(Kernel):
+            id = "test.served.orphan"
+            x = served(Leaf(), "input")
+
+    with pytest.raises(DefinitionError, match="no stream port"):
+
+        class Misnamed(Kernel):
+            id = "test.served.misnamed"
+            kept = Leaf()
+            x = served(kept, "missing")
+
+    with pytest.raises(DefinitionError, match="each case"):
+
+        class Partial(Kernel):
+            id = "test.served.partial"
+            core = Select(one=Leaf, other=VpcKernel)
+            x = served(core, "x")
+
+    with pytest.raises(DefinitionError, match="served port x"):
+
+        class Repeated(Kernel):
+            id = "test.served.repeated"
+            kept = Leaf()
+            x = served(kept, "input")
+
+            @derived
+            def x_side(self) -> Side:
+                return self.kept.input.side

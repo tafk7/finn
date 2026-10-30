@@ -19,9 +19,9 @@ carries PE * SIMD lanes, SIMD fastest; each result beat PE lanes; activation TLA
 each reduction.
 
 Its ports ``x`` and ``w`` read the tensors its parent gives (``x_tensor``, ``w_tensor``),
-and ``y`` writes its results, ``y_tensor``; each presents its stream (``x_stream``,
-``w_stream``, ``y_stream``) and states its contract (``x_contract``, ``w_contract``,
-``y_contract``). The extents are bound from the input tensors: x reads ``(m, k)`` (``(m, k,
+and ``y`` writes its results, ``y_tensor``; each presents its stream (``x.stream``,
+``w.stream``, ``y.stream``) and states its contract (``x.contract``, ``w.contract``,
+``y.contract``). The extents are bound from the input tensors: x reads ``(m, k)`` (``(m, k,
 n)`` depthwise), w ``(k, n)``, and the results are ``(m, n)``. Dense activations at the
 graph's rank, ``(..., K)``, are read through the view ``(m, k)`` (``rows_viewed``), the
 results stated at that rank; ``reshape_activations`` reads ``(M, K, N)`` as ``(M, K *

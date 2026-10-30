@@ -28,7 +28,6 @@ from support.refusals import refused
 from finn.core.space import (
     Available,
     DefinitionError,
-    NativeEvaluationError,
     Param,
     Rejected,
     derived,
@@ -36,7 +35,6 @@ from finn.core.space import (
     reject,
     view,
 )
-from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import (
@@ -50,15 +48,15 @@ from finn.kernels.artifacts.abi import (
 )
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Held, Leaf, RegisterMap
-from finn.kernels.base import Kernel, PortContract
+from finn.kernels.base import Kernel
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.configure import commit
 from finn.kernels.control import Control, ControlModel, held_bus
 from finn.kernels.laws import NATIVE_CLOCKING, Axis
 from finn.kernels.library import ModuleSpec, library_module
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.port import port_surface
-from finn.kernels.port_model import OtherPins, StreamPort
+from finn.kernels.port import port_side
+from finn.kernels.port_model import OtherPins, StreamPort, served
 from finn.kernels.sides import Side
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import Resources
@@ -316,30 +314,17 @@ def test_a_kernel_with_children_presents_a_childs_port_as_its_own() -> None:
     class Presenting(Kernel):
         id = "test.presenting"
         kernel = Probe(tensor=TENSOR)
-
-        @derived
-        def x_stream(self) -> Stream:
-            return self.kernel.x.stream
-
-        @view
-        def x_contract(self) -> PortContract:
-            return self.kernel.x.contract.under("kernel")
+        x = served(kernel, "x")
 
     point = design_space(Presenting())
     assert point.x_contract.label == "kernel.x"
     assert point.x_contract.contract == point.kernel.x.contract.contract
-    assert point.x_stream == point.kernel.x.stream
+    assert point.x_side.stream == point.kernel.x.stream
 
     class Unserved(Kernel):
         id = "test.unserved"
         kernel = Probe(tensor=TENSOR)
 
-        @view
-        def y_contract(self) -> PortContract:
-            return self.kernel.y.contract
-
+    # A child's port is its parent's only where the parent serves it.
     with pytest.raises(KeyError):
-        port_surface(Unserved, "y")
-    invalid = design_space(Unserved())
-    with pytest.raises(NativeEvaluationError, match="y"):
-        invalid.query(Unserved.y_contract)
+        port_side(Unserved, "y")

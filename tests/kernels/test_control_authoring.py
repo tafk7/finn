@@ -44,7 +44,7 @@ from finn.kernels.channels import Channel
 from finn.kernels.control import Control, ControlModel, control_models
 from finn.kernels.laws import AXIS, Axis
 from finn.kernels.library import ModuleSpec
-from finn.kernels.port import port_endpoint, port_surface
+from finn.kernels.port import port_contract, port_endpoint, port_side
 from finn.kernels.port_model import StreamPort
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
@@ -344,7 +344,7 @@ def test_control_physical_view_keeps_parent_refusal_and_model_access() -> None:
     assert isinstance(point.query(Refused.config.physical_pins), Rejected)
 
 
-def test_parent_forwarding_surface_is_rebased_and_not_a_model_binding() -> None:
+def test_a_served_port_is_read_at_its_kernel_s_occurrence() -> None:
     class Envelope(Space):
         left = Channel(
             tensor=TENSOR,
@@ -353,15 +353,15 @@ def test_parent_forwarding_surface_is_rebased_and_not_a_model_binding() -> None:
             platform=FULL_DSP48E2,
         )
 
-    left = port_surface(Envelope.left, "set")
-    right = port_surface(Channel, "set")
-    assert left.stream is not right.stream
+    left = port_side(Envelope.left, "set")
+    right = port_side(Channel, "set")
+    assert left is not right and left == getattr(Envelope.left, "set_side")
     assert port_endpoint(Channel, "set") is Endpoint.TARGET
     point = design_space(Envelope())
-    assert isinstance(point.query(left.stream), Inapplicable)
-    assert left.contract_reference() is not None
+    # Without a known value the channel places no source, so its set port does not apply.
+    assert isinstance(point.query(left), Inapplicable)
     # The deliberately unused channel is a known refused owning scope.
-    assert isinstance(point.query(left.contract_reference()), Rejected)
+    assert isinstance(point.query(port_contract(Envelope.left, "set")), Rejected)
 
     class ValidEnvelope(Space):
         left = Channel(
@@ -376,10 +376,9 @@ def test_parent_forwarding_surface_is_rebased_and_not_a_model_binding() -> None:
         )
 
     valid = design_space(ValidEnvelope())
-    surface = port_surface(ValidEnvelope.left, "set")
-    assert isinstance(valid.query(surface.contract_reference()), Inapplicable)
+    assert isinstance(valid.query(port_contract(ValidEnvelope.left, "set")), Inapplicable)
     with pytest.raises(TypeError, match="node declaration"):
-        right.at(point)
+        port_side(point, "set")
 
 
 @pytest.mark.parametrize("shown", (False, True))

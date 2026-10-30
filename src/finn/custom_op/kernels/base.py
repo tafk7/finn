@@ -78,8 +78,8 @@ of that statement: a network that finds the two differ refuses the graph as stal
 ``y``) meets the kernel as a ``Wiring``: an input's the kernel's Param its tensor is
 given as, an output's the kernel's derived value of the tensor it writes (``tensor``,
 ``x_tensor``, ``result_tensor``: an output's tensor is the kernel's statement, never
-given to it), and the view of the contract its channel takes of the kernel's port
-(``contract``, ``x_contract``, a view of a ``finn.kernels.base.PortContract``). A parameter port,
+given to it), and the kernel's port its channel takes the side and contract of (``port``,
+``x``: a stream port, or a served one, ``finn.kernels.port.port_side``). A parameter port,
 whose initializer the node may hold (MatMul's weights), also names the kernel's Param
 the held values are given as, in place of its tensor (``contents``; MatMul's ``weights``,
 the same Param, known weights or a tensor) and the kernel's derived values of what its
@@ -124,7 +124,7 @@ from finn.kernels.composer import Facts
 from finn.kernels.configure import describe
 from finn.kernels.configure import refusal as refusal_of
 from finn.kernels.policies import Alone, Defaulted, Policy, defaulted, stated
-from finn.kernels.port import port_surface
+from finn.kernels.port import port_side
 from finn.kernels.sides import Side
 from finn.platform.target import Target
 
@@ -149,12 +149,12 @@ def _decoded(attribute: AttributeProto, kind: str) -> int | str:
 @dataclass(frozen=True)
 class Wiring:
     """How one port of a KernelOp meets its kernel (the module docstring): the kernel's
-    Param of an input's tensor, or its derived value of an output's, and the view of its
-    port's contract; for a parameter port, the kernel's Param of the held values and its
+    Param of an input's tensor, or its derived value of an output's, and the name of its
+    port; for a parameter port, the kernel's Param of the held values and its
     derived values of the tensor and the values the port's channel carries."""
 
     tensor: str
-    contract: str
+    port: str
     contents: str | None = None
     carried: str | None = None
     stored: str | None = None
@@ -622,10 +622,7 @@ class KernelOp(CustomOp):
         found += [(port, tensor, True) for port, tensor in zip(self.outputs, node.output)]
         sides: list[tuple[str, Side | tuple[Finding, ...], bool]] = []
         for port, tensor, output in found:
-            name = self.wiring[port].contract.removesuffix("_contract")
-            reference = port_surface(type(point), name).side
-            assert reference is not None
-            answer = point.query(reference)
+            answer = point.query(port_side(type(point), self.wiring[port].port))
             if isinstance(answer, Available) and isinstance(answer.value, Side):
                 sides.append((tensor, answer.value.under(self.label), output))
             elif isinstance(answer, (Rejected, Unresolved)):

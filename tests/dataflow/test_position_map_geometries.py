@@ -337,12 +337,12 @@ def placed_stream(name: str, pe: int) -> Any:
     case["facts"] = {**case["facts"], "weights": weights}
     case["outputs"] = {"y_channel": matmul_spec._results(x, weights, window=window)}
     kernel: Any = placed(case, {"pe": pe, "simd": simd, **case["choices"]}, window=window)
-    return kernel.x_stream.sequence
+    return kernel.x_side.stream.sequence
 
 
 @pytest.mark.parametrize(("name", "pe"), CASES, ids=CASE_IDS)
 def test_the_composed_window_is_a_placed_kernels_activation_stream(name: str, pe: int) -> None:
-    # The kernel's ``x_stream`` has the composition's loops, elements and marker.
+    # The kernel's ``x`` port has the composition's loops, elements and marker.
     composed, marker, _ = composed_window(name, pe)
     stream = placed_stream(name, pe)
     assert isinstance(stream, BeatSequence)
