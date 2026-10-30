@@ -9,15 +9,16 @@ included ControlModel Groups share their real parent, and plain ModuleSpec value
 describe sources.
 A kernel binding a module states its binding (ModuleSpec, parameters, sources,
 data) and its ports; the base assembles its netlist from them, serially, in the
-order the module's pins and holds take (``Kernel.netlist``). Each states its own
-frame count. Parents compose resolved child Members in ordinary source. No setter,
-read-list or flat callback table is installed on a kernel. Two things are installed
-when its class is made, each a function reading by names its closure fixes, so that
-its source states its reads: on a kernel with a module, one helper a part of its
-module; on a kernel with children, each port it serves (``served``) lowered into the
-members a channel and its sizing read of a port, ``<port>_side``,
-``<port>_stream_pins``, ``<port>_pace`` and ``<port>_advance``, and, for a selector,
-``<child>_case``.
+order the module's pins and holds take (``Kernel.netlist``). The base derives its
+cycles by the rate law (``Kernel.cycles``) and answers its intake unstated unless it
+states its own (``Kernel.intake``). Parents compose resolved child Members in ordinary
+source. No setter, read-list or flat callback table is installed on a kernel. Two
+things are installed when its class is made, each a function reading by names its
+closure fixes, so that its source states its reads: on a kernel with a module, one
+helper a part of its module; on a kernel with children, each port it serves
+(``served``) lowered into the members a channel and its sizing read of a port,
+``<port>_side``, ``<port>_stream_pins``, ``<port>_pace`` and ``<port>_advance``, and,
+for a selector, ``<child>_case``.
 
 Hardware configuration facts/Choices/rules remain inward model computations.
 Outward Views keep selected owning non-refusal and actual unresolved inputs.
@@ -45,7 +46,7 @@ from finn.core.space import (
     view,
 )
 from finn.core.space._nodes import assign, node_record
-from finn.core.space.declarations import Declaration, unmet_required
+from finn.core.space.declarations import Declaration, Derived, unmet_required
 from finn.dataflow.schedule import (
     Access,
     Affine,
@@ -457,13 +458,15 @@ class Kernel(Space):
     The one base every kernel derives, and the class a check or a type admitting any
     kernel names. Its answers are Views: its netlist, the cycles a frame takes through it,
     the bits it holds and what it uses of the device. A native kernel states its netlist
-    in ordinary serial source over typed model inputs and pure physical helpers, and its
-    own cycle calculation; the base refuses an absent calculation rather than assuming
-    zero. Buffering/resources read its own statements and its members' answers. A
-    composed kernel reaches those answers through ``Members`` over the member each
-    states. A kernel that counts no cycles of its own, a channel's FIFO
-    (``finn.kernels.channels.ChannelFifo``), whose beats are counted where they are made,
-    answers its ``cycles`` inapplicable, and its parent's ``member_cycles`` leaves it out.
+    in ordinary serial source over typed model inputs and pure physical helpers; the base
+    derives its cycles by the rate law, and a kernel restates them only to be counted by
+    its kind (MemStream; a composite, StreamAdapter). Its contract's intake (``intake``)
+    it states from its RTL, else the base answers it unstated, by name. Buffering and
+    resources read its own statements and its members' answers. A composed kernel
+    reaches those answers through ``Members`` over the member each states. A kernel that
+    counts no cycles of its own, a channel's FIFO (``finn.kernels.channels.ChannelFifo``),
+    whose beats are counted where they are made, answers its ``cycles`` inapplicable, and
+    its parent's ``member_cycles`` leaves it out.
 
     A reader of a kernel's design point types it ``Kernel``: its four answers (``netlist``,
     ``cycles``, ``buffering``, ``resources``) read as their accepted values, and raise where
@@ -508,6 +511,19 @@ class Kernel(Space):
                 declaration=cls.__qualname__,
             )
         members = _members(cls)
+        readers = [
+            name
+            for name, item in members.items()
+            if isinstance(item, Derived) and getattr(item.function, _READS_EXTENTS, False)
+        ]
+        if readers and not _declared(cls, "extents"):
+            raise DefinitionError.broken(
+                "kernel-extents-unstated",
+                "Kernel",
+                f"{cls.__qualname__} reads its extents ({', '.join(readers)}, extent_of) "
+                "and states none: a kernel reading an extent states its extents",
+                declaration=cls.__qualname__,
+            )
         specs = [(name, item) for name, item in members.items() if isinstance(item, ModuleSpec)]
         for name, spec in specs:
             spec.validate(cls.__qualname__, f"{cls.__qualname__}.{name}")
@@ -898,7 +914,13 @@ def extent_of(index: Index) -> int:
             return reject("kernel-extents", f"{index!r} is bound by no placed port")
         return extents[index]
 
+    # Marked, so that a kernel reading it and stating no extents is refused when its class
+    # is made (``kernel-extents-unstated``), not when it is evaluated.
+    setattr(extent, _READS_EXTENTS, True)
     return derived(extent)
+
+
+_READS_EXTENTS = "_finn_reads_extents"
 
 
 __all__ = [

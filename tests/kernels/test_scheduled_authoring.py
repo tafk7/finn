@@ -9,10 +9,12 @@ import re
 import pytest
 from qonnx.core.datatype import DataType
 from support.helpers import FULL_DSP48E2
+from support.refusals import refused
 
 from finn.core.space import (
     Available,
     Decision,
+    DefinitionError,
     Inapplicable,
     Rejected,
     Space,
@@ -27,7 +29,7 @@ from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.base import Kernel, bound_extents, bound_schedule, spanned
+from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
 from finn.kernels.laws import AXIS, AXIS_CLOCKING, Axis, Native
 from finn.kernels.port import LoopEnds
 from finn.kernels.port_model import StreamPort
@@ -217,6 +219,32 @@ def test_a_kernel_with_no_scheduled_port_has_no_schedule_and_no_extents() -> Non
     assert isinstance(design_space(Empty()).query(Empty.schedule), Inapplicable)
     for gone in ("extents", "_accesses", "_bound", "bound_schedule", "spanned"):
         assert not hasattr(Kernel, gone), gone
+
+
+def test_a_kernel_reading_an_extent_states_its_extents_or_is_refused_when_made() -> None:
+    """``extent_of`` reads the kernel's ``extents``, which the base does not declare: a
+    kernel naming one and stating none is refused when its class is made (R3 F1), not
+    when its value is evaluated."""
+    with refused(
+        "kernel-extents-unstated",
+        error=DefinitionError,
+        message=r"NoExtents reads its extents \(channels, extent_of\) and states none",
+    ):
+
+        class NoExtents(Kernel):
+            id = "test.scheduled.no_extents"
+            channels = extent_of(C)
+
+    class Stated(Kernel):
+        id = "test.scheduled.stated_extents"
+
+        @derived
+        def extents(self) -> dict[Index, int]:
+            return {C: 4}
+
+        channels = extent_of(C)
+
+    assert design_space(Stated()).query(Stated.channels) == Available(4)
 
 
 @pytest.mark.parametrize(
