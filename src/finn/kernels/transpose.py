@@ -194,21 +194,23 @@ class TransposeKernel(Kernel):
     def intake(self) -> Intake:
         """Its two pages, from its RTL (CONTRACT.md § 5): it takes a beat while either page
         is not wholly written, a page ``PAGE_OFFSET = I * J / SIMD`` beats, and frees a page
-        once every read of it has been issued. Its reads wait on two depth-two skid FIFOs
-        (its read patterns and its output, ``fifo``'s shift storage, five words each), so
-        with its output stalled it takes at least both pages before it may stop. It holds at
-        most both pages and what its skids hold of a freed one: ten output beats, each of
-        ``SIMD`` elements of as many input beats at most, and at most the page."""
+        once every read of it has been issued. With its output stalled it takes at least
+        both pages before it may stop. A read is issued while its read-pattern skid
+        (``fifo`` at depth two, a shift FIFO of five words) has room, and its pattern leaves
+        as its data enters its output skid (five words more): so at most ten output beats
+        are read and not yet given, each of ``SIMD`` elements, one input beat's worth. It
+        holds at most both pages' unread beats and those ten, whatever the page: a short
+        page is freed and written again while its reads wait in the skids."""
         page = self.rows * self.cols // self.simd
-        skids = 2 * _SKID_WORDS
-        before, most = 2 * page, 2 * page + min(page, skids * self.simd)
+        before, most = 2 * page, 2 * page + 2 * _SKID_WORDS
         rule = (
             f"takes a beat while either page ({page} beats) is not wholly written; resumes "
             "as each page's last read is issued"
         )
         source = (
             "rtl/shape/inner_shuffle.sv:96-97 (PAGE_OFFSET), :335-353 (WrJobsDone, irdy), "
-            ":394-424 (the skid FIFOs); rtl/infra/fifo.sv:102-144 (a shift FIFO's words)"
+            ":332 (rd_req_en), :394-424 (the skid FIFOs); rtl/infra/fifo.sv:102-144 (a "
+            "shift FIFO's words)"
         )
         return Intake((PortIntake("input", before, most, rule, Standing.STRUCTURAL, source),))
 

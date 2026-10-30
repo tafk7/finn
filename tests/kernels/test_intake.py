@@ -287,12 +287,13 @@ def test_thresholding_states_its_rtl_s_pending_cap() -> None:
             assert entry.before_stop == entry.most == pending, where
 
 
-def test_transpose_states_both_its_rtl_s_pages_before_it_stops() -> None:
+def test_transpose_states_both_its_rtl_s_pages_and_its_skids() -> None:
+    """Both pages before it stops; at most both and the ten output beats its two skids hold
+    (an XSim trace at a page of four beats held eighteen, rtl-intake on the shelf)."""
     for where, member, intake in _kernel("transpose"):
         page = _rtl(member, "inner_shuffle", ("PAGE_OFFSET",))["PAGE_OFFSET"]
         entry = intake.of("input")
-        assert entry.before_stop == 2 * page, where
-        assert 2 * page < entry.most <= 3 * page, where
+        assert (entry.before_stop, entry.most) == (2 * page, 2 * page + 10), where
 
 
 def test_vpc_states_its_intake_by_the_branch_its_rtl_takes() -> None:
