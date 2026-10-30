@@ -28,7 +28,7 @@ from support.tiled_mvu import MH, MW, NF, PE_T, SF, SIMD_T, R, T
 from support.xsim import requires_xsim
 
 from finn.core.rtlsim_bench import pack_lanes, stream_through
-from finn.core.space import Rejected, Unresolved, design_space
+from finn.core.space import Inapplicable, Rejected, Unresolved, design_space
 from finn.dataflow.steps import Hop
 from finn.dataflow.steps import steps as between
 from finn.dataflow.streams import Stream
@@ -49,8 +49,11 @@ from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.channels import Channel, wired
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.eltwise import EltwiseKernel
+from finn.kernels.input_generator import InputGeneratorKernel
+from finn.kernels.laws import Advance, Standing
 from finn.kernels.library import library_module
 from finn.kernels.memstream import MemStreamKernel
+from finn.kernels.port_model import StreamPort
 from finn.kernels.sides import Side
 from finn.kernels.transport import (
     MarkerKind,
@@ -61,6 +64,7 @@ from finn.kernels.transport import (
     marker_pairs,
 )
 from finn.kernels.values.semantics import IntegerTensorValue
+from finn.kernels.vpc import VpcKernel
 from finn.toolchain.launcher import host_toolchain
 
 INT3 = ScalarEncoding(DataType["INT3"])
@@ -479,6 +483,33 @@ def test_a_lane_regroup_on_an_adaptable_channel_is_built_from_existing_stages():
         ("c.output_adapter.vpc.vpc", "c.adapter.input_gen_vpc.input_gen", "idat"),
         ("c.adapter.input_gen_vpc.input_gen", "c.adapter.input_gen_vpc.vpc", "idat"),
         ("c.adapter.input_gen_vpc.vpc", "add", "bdat"),
+    ]
+
+
+def test_a_lane_regroup_s_stages_are_library_kernels_that_keep_their_own_contracts():
+    # The regroup adds no kernel and no rule: its three stages are the library's vpc and
+    # input generator, each port buffered (CONTRACT.md § 3, L3), none with a pace, and the
+    # channel lists each stage's intake below the stage, structural from its RTL (§ 5).
+    point = with_adapter_memories(with_direct_transports(constant_network(STRIDED, adaptable=True)))
+    found = point.member("c")
+    stages = (found.output_adapter.vpc, found.adapter.input_gen, found.adapter.vpc)
+    assert [type(stage) for stage in stages] == [VpcKernel, InputGeneratorKernel, VpcKernel]
+    for stage in stages:
+        for port in (stage.input, stage.output):
+            assert port.advance is Advance.BUFFERED
+            assert isinstance(port.query(StreamPort.pace), Inapplicable)
+    intake = found.intake
+    assert intake.names == (
+        "output_adapter.vpc.input",
+        "adapter.input_gen_vpc.input_gen.input",
+        "adapter.input_gen_vpc.vpc.input",
+    )
+    assert [(entry.before_stop, entry.most) for entry in intake.ports] == [(1, 2), (7, 8), (3, 3)]
+    assert {entry.standing for entry in intake.ports} == {Standing.STRUCTURAL}
+    assert [entry.source.split(":")[0] for entry in intake.ports] == [
+        "rtl/shape/vpc.sv",
+        "rtl/shape/input_gen.sv",
+        "rtl/shape/vpc.sv",
     ]
 
 
