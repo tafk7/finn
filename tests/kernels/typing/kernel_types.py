@@ -23,12 +23,14 @@ def answers(kernel: Kernel) -> tuple[Fragment, int, int, Resources]:
     return kernel.netlist, kernel.cycles, kernel.buffering, kernel.resources
 
 
-def check(fifo: FifoKernel, matmul: MatMulKernel, channel: Channel) -> None:
-    # A kernel binding a module, a kernel with children, and a channel, each a Kernel.
+def check(fifo: FifoKernel, matmul: MatMulKernel, channel: Channel, stage: ChannelFifo) -> None:
+    # A kernel binding a module, a kernel with children, a channel and a channel's FIFO
+    # (whose cycles are inapplicable), each a Kernel.
     answers(fifo)
     answers(matmul)
     answers(channel)
-    each: list[Kernel] = [fifo, matmul, channel]
+    answers(stage)
+    each: list[Kernel] = [fifo, matmul, channel, stage]
     assert_type(each[0].netlist, Fragment)
 
 
@@ -50,8 +52,3 @@ class Unbuffered(Space):
 
 def refuse(point: Unbuffered) -> None:
     answers(point)  # type: ignore[arg-type]
-
-
-def untimed(fifo: ChannelFifo) -> None:
-    # A kernel that counts no cycles of its own (an ``UntimedKernel`` alone) is no Kernel.
-    answers(fifo)  # type: ignore[arg-type]

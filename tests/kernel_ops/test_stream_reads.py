@@ -57,7 +57,7 @@ from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Fragment, Held
-from finn.kernels.base import Kernel, UntimedKernel
+from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.library import ModuleSpec, assemble_module
 from finn.kernels.port import pins
@@ -73,7 +73,7 @@ def model_port_members(space_type: type[Space]) -> Iterator[str]:
         for name in MODEL_FIELDS:
             if hasattr(space_type, name):
                 yield name
-    elif issubclass(space_type, UntimedKernel):
+    elif issubclass(space_type, Kernel):
         effective: dict[str, object] = {}
         for base in reversed(space_type.__mro__):
             effective.update(vars(base))
@@ -89,7 +89,7 @@ def kernels(scopes: Scopes) -> list[str]:
     return sorted(
         name
         for name, scope in scopes.root.named_children.items()
-        if issubclass(scope.space_type, UntimedKernel) and not issubclass(scope.space_type, Channel)
+        if issubclass(scope.space_type, Kernel) and not issubclass(scope.space_type, Channel)
     )
 
 

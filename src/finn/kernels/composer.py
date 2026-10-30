@@ -109,7 +109,7 @@ from finn.core.space import (
 )
 from finn.core.space.compiler import compile_model
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.base import UntimedKernel
+from finn.kernels.base import Kernel
 from finn.kernels.budgets import (
     DOUBLED,
     INITIATORS,
@@ -662,7 +662,7 @@ def _made(
 def _control_bus(space_type: type[Space]) -> str | None:
     """The control bus a kernel class declares, by name (``finn.kernels.control``); None
     where it declares none."""
-    if not issubclass(space_type, UntimedKernel):
+    if not issubclass(space_type, Kernel):
         return None
     return next(iter(control_models(space_type)), None)
 

@@ -31,7 +31,7 @@ from finn.dataflow.traversal import BeatSequence
 from finn.kernels.adapters import input_gen as InputAdapterChain
 from finn.kernels.artifacts.abi import Clocking, Direction, Endpoint, Signal
 from finn.kernels.artifacts.module import Fragment
-from finn.kernels.base import PortContract, Timed, UntimedKernel
+from finn.kernels.base import Kernel, PortContract
 from finn.kernels.channels import ChannelFifo
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import InputGeneratorKernel
@@ -81,7 +81,7 @@ def test_native_model_width_is_early_and_child_characterization_is_local() -> No
 
 def test_native_ports_are_not_kernel_members_and_keep_choice_keys() -> None:
     point = design_space(fifo_node(word_bits=13, depth=8))
-    assert isinstance(point.input, Space) and not isinstance(point.input, UntimedKernel)
+    assert isinstance(point.input, Space) and not isinstance(point.input, Kernel)
     assert point.netlists == ()
     assert [info.key for info in inspection.decisions(point)] == ["ram_style"]
     assert point.field(FifoKernel.ram_style).candidates() == Available(
@@ -249,7 +249,7 @@ def test_native_clock_overrides_are_physical_inputs() -> None:
     assert point.output.contract.contract.markers[0][0] == "olst[0]"
 
 
-def test_channel_fifo_remains_untimed_and_reads_netlist_before_contracts() -> None:
+def test_channel_fifo_counts_no_cycles_and_reads_netlist_before_contracts() -> None:
     class RefusedModule(FifoKernel):
         @view
         def netlist(self) -> Fragment | Rejected:
@@ -264,8 +264,9 @@ def test_channel_fifo_remains_untimed_and_reads_netlist_before_contracts() -> No
         )
 
     point = design_space(Holder(tensor=TENSOR, arriving=ARRIVING, platform=FULL_DSP48E2))
-    assert isinstance(point, UntimedKernel) and not isinstance(point, Timed)
+    assert isinstance(point, Kernel)
     point = point.with_choices({Holder.depth: 4, Holder.buffer.ram_style: "auto"})
+    assert isinstance(point.query(Holder.cycles), Inapplicable)
     evidence = inspection.explain(point, Holder.stages)
     assert isinstance(evidence.result, Rejected)
     assert [f.code for f in evidence.result.findings] == ["native-module"]

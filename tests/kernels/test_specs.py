@@ -49,7 +49,7 @@ from finn.core.space.declarations import unmet_required
 from finn.dataflow.streams import Stream
 from finn.harness.points import Covering, covering, refusal, refused_cases, rejected
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.base import PortContract, UntimedKernel
+from finn.kernels.base import Kernel, PortContract
 from finn.kernels.configure import undecided
 from finn.kernels.library import ModuleSpec
 from finn.kernels.partition import Partition
@@ -158,13 +158,13 @@ def test_what_a_spec_gathers_is_there(name: str) -> None:
     assert spec.reference == TEST_SIDE or spec.reference.startswith(ORACLE.split("{")[0])
 
 
-def _binding_a_module() -> set[type[UntimedKernel]]:
+def _binding_a_module() -> set[type[Kernel]]:
     """Every kernel class of ``finn.kernels`` that binds a library module and can be
     placed (no ``required()`` member left unmet)."""
     for module in pkgutil.iter_modules(finn.kernels.__path__):
         importlib.import_module(f"finn.kernels.{module.name}")
-    found: set[type[UntimedKernel]] = set()
-    pending: list[type[UntimedKernel]] = [UntimedKernel]
+    found: set[type[Kernel]] = set()
+    pending: list[type[Kernel]] = [Kernel]
     while pending:
         for each in pending.pop().__subclasses__():
             pending.append(each)
@@ -189,7 +189,7 @@ def test_every_kernel_binding_a_module_is_a_spec_s_so_its_module_is_built() -> N
 def _ports(member: Space) -> tuple[str, ...]:
     """The stream ports ``member``'s class declares, by name: its module's, and those it
     presents for a child; none for a member that is no kernel."""
-    if not isinstance(member, UntimedKernel):
+    if not isinstance(member, Kernel):
         return ()
     return tuple(port_surfaces(type(member)))
 

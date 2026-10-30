@@ -23,7 +23,7 @@ from finn.core.rtlsim_exec import XSim
 from finn.core.space import Available, QueryResult, Unresolved, reject
 from finn.custom_op.kernels.network import PRODUCER
 from finn.kernels.artifacts.build import netlist
-from finn.kernels.base import Timed
+from finn.kernels.base import Kernel
 from finn.kernels.explore import Seam
 from finn.kernels.partition import Partition
 from finn.toolchain.launcher import Selection, Toolchain
@@ -40,9 +40,9 @@ def test_configuration_and_emission_do_not_read_refused_cycles(
     reads: list[str] = []
 
     def untimed(self: Partition, name: str, member: object) -> QueryResult[Any]:
-        if member is Timed.cycles:
+        if member is Kernel.cycles:
             reads.append(name)
-            return reject("timed-cycles", "no cycle estimate supplied")
+            return reject("kernel-cycles", "no cycle estimate supplied")
         return query(self, name, member)
 
     monkeypatch.setattr(Partition, "query", untimed)
@@ -85,15 +85,15 @@ def test_held_verification_does_not_stamp_unchecked_timing(
     reads: list[str] = []
 
     def unavailable(self: Partition, name: str, member: object) -> QueryResult[Any]:
-        if member is Timed.cycles:
+        if member is Kernel.cycles:
             reads.append(name)
             if timing == "refused":
-                return reject("timed-cycles", "cycle estimate unavailable")
+                return reject("kernel-cycles", "cycle estimate unavailable")
             return Unresolved(
                 (
                     Finding(
                         FindingKind.BLOCKER,
-                        "timed-cycles",
+                        "kernel-cycles",
                         "cycles",
                         "cycle estimate not supplied",
                     ),
@@ -110,7 +110,7 @@ def test_held_verification_does_not_stamp_unchecked_timing(
         shell.verify_partition(model, "unknown-timing")
     assert reads == members
     assert len(refused.value.findings) == len(members)
-    assert {finding.code for finding in refused.value.findings} == {"timed-cycles"}
+    assert {finding.code for finding in refused.value.findings} == {"kernel-cycles"}
     assert model.get(OUTPUT_VERIFIED) == previous
 
 
@@ -145,15 +145,15 @@ def test_held_timed_actions_refuse_before_reference_or_directory_work(
     reads: list[str] = []
 
     def unavailable(self: Partition, name: str, member: object) -> QueryResult[Any]:
-        if member is Timed.cycles:
+        if member is Kernel.cycles:
             reads.append(name)
             if timing == "refused":
-                return reject("timed-cycles", "cycle estimate unavailable")
+                return reject("kernel-cycles", "cycle estimate unavailable")
             return Unresolved(
                 (
                     Finding(
                         FindingKind.BLOCKER,
-                        "timed-cycles",
+                        "kernel-cycles",
                         "cycles",
                         "cycle estimate not supplied",
                     ),
@@ -182,7 +182,7 @@ def test_held_timed_actions_refuse_before_reference_or_directory_work(
     assert reads == members
     expected_local = Finding(
         FindingKind.REJECTION if timing == "refused" else FindingKind.BLOCKER,
-        "timed-cycles",
+        "kernel-cycles",
         "" if timing == "refused" else "cycles",
         "cycle estimate unavailable" if timing == "refused" else "cycle estimate not supplied",
     )

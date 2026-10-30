@@ -203,8 +203,10 @@ class StreamAdapter(Kernel):
     (``input_gen``, ``vpc``, then ``input_gen_1``), each given the channel's tensor and
     the two sides of its step of the realization, which its ports present, on the
     channel's ``platform``. Its netlist, cycles, buffering and resources are its stages',
-    by the base. It presents no port: its channel checks its stages' streams
-    (``stage_streams``) and wires its stages hop by hop (``stages``).
+    by the base; it restates ``cycles`` as the base's, so that a channel counts its
+    adapters' by their kind (``Channel.stage_cycles``). It presents no port: its channel
+    checks its stages' streams (``stage_streams``) and wires its stages hop by hop
+    (``stages``).
     """
 
     id = "finn.channel.adapter"
@@ -256,6 +258,11 @@ class StreamAdapter(Kernel):
 
     def _stages(self) -> tuple[Stage, ...]:
         return ()
+
+    @view
+    def cycles(self) -> int | Rejected:
+        """The most cycles any of its stages takes: the base's (the class docstring)."""
+        return self._cycles()
 
 
 class InputAdapter(StreamAdapter):

@@ -26,6 +26,7 @@ from support.helpers import (
 
 from finn.core.space import (
     Available,
+    Inapplicable,
     Rejected,
     Space,
     Unresolved,
@@ -49,7 +50,7 @@ from finn.dataflow.traversal import (
 )
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.base import Kernel
-from finn.kernels.channels import Channel, boundary_contract, stated_by, stated_form
+from finn.kernels.channels import Channel, ChannelFifo, boundary_contract, stated_by, stated_form
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.configure import commit
 from finn.kernels.memstream import MemStreamKernel
@@ -420,6 +421,24 @@ def regroups_rows_into_tiles(point: Any) -> None:
     assert [stage.kind for stage in point.output_adapter.realization] == ["vpc"]
     assert [stage.kind for stage in point.adapter.realization] == ["input_gen", "vpc"]
     assert inspection.validity(with_direct(point)).status == "valid"
+
+
+def test_a_channel_s_cycles_wait_on_no_transport_and_count_every_member_but_its_fifo():
+    """A channel counts its members' cycles by kind (``source_cycles``, ``stage_cycles``,
+    ``mover_cycles``), not through the base's ``member_cycles``, which ranges over its
+    transport too: whether it places a FIFO is a choice FIFO sizing reads cycles before, so
+    the base's waits on it, and the channel's do not. With a FIFO placed, the base's names
+    the members the kinds name: the FIFO's cycles are inapplicable, and left out."""
+    entering = edge(Side.boundary("s_axis_0", outside=stated(order=ROW_MAJOR)), reader(TILES))
+    point = with_adapter_memories(entering)
+    assert isinstance(point.query(Channel.cycles), Available)
+    assert isinstance(point.query(Channel.member_cycles), Unresolved)
+    fifo = commit(point, {"transport": "fifo"})
+    assert isinstance(fifo.transport.query(ChannelFifo.cycles), Inapplicable)
+    counted = [item.node for item in (*fifo.source_cycles, *fifo.stage_cycles)]
+    assert counted == ["output_adapter", "adapter.input_gen_vpc"]
+    assert [item.node for item in fifo.member_cycles] == counted
+    assert fifo.cycles == point.cycles
 
 
 def test_a_stated_side_is_regrouped_and_one_nothing_bridges_is_refused_by_channel_steps():

@@ -31,7 +31,7 @@ from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import LevelEnd, Marker, Traversal
 from finn.kernels.artifacts.abi import Clocking, Direction, Endpoint, Pin
 from finn.kernels.artifacts.module import Held
-from finn.kernels.base import UntimedKernel
+from finn.kernels.base import Kernel
 from finn.kernels.transport import (
     AxisBeat,
     AxisSpelling,
@@ -306,7 +306,7 @@ def _lexical_port(namespace: type[Space] | Space, port: str) -> PortModel | Port
 
 def port_endpoint(space_type: type[Space], port: str) -> Endpoint | None:
     """Known child binding/default or parent surface; unknown inputs remain unknown."""
-    if not (isinstance(space_type, type) and issubclass(space_type, UntimedKernel)):
+    if not (isinstance(space_type, type) and issubclass(space_type, Kernel)):
         return None
     from finn.kernels.port_model import PortSurface  # noqa: PLC0415
 

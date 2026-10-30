@@ -18,8 +18,6 @@ model Params. Generic primitive inclusion without a module remains usable.
 
 from __future__ import annotations
 
-import importlib
-import pkgutil
 from typing import Any, cast
 
 import pytest
@@ -27,10 +25,10 @@ from qonnx.core.datatype import DataType
 from support.helpers import FULL_DSP48E2, OtherPins, codes, fifo_node
 from support.refusals import refused
 
-import finn.kernels
 from finn.core.space import (
     Available,
     DefinitionError,
+    Inapplicable,
     Param,
     Rejected,
     Unresolved,
@@ -51,7 +49,7 @@ from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Direction, Endpoint, Pin, Signal
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource
 from finn.kernels.artifacts.module import Fragment, Held
-from finn.kernels.base import NATIVE_CLOCKING, Kernel, PortContract, Timed, UntimedKernel
+from finn.kernels.base import NATIVE_CLOCKING, Kernel, PortContract
 from finn.kernels.channels import ChannelFifo
 from finn.kernels.fifo import FifoKernel, fifo_resources
 from finn.kernels.library import (
@@ -226,11 +224,16 @@ def test_a_kernel_with_neither_a_module_nor_a_member_is_refused_its_answers() ->
     assert point.buffering == 0 and point.resources == Resources()
 
 
-class Untimed(UntimedKernel):
-    """A kernel that counts no cycles of its own, placing one stage."""
+class Uncounted(Kernel):
+    """A kernel that counts no cycles of its own, placing one stage: its cycles are
+    inapplicable, as a channel's FIFO's are."""
 
-    id = "test.kernel_space.untimed"
+    id = "test.kernel_space.uncounted"
     stage = Stage(input_tensor=TENSOR, arriving=ARRIVING)
+
+    @view
+    def cycles(self) -> int | Inapplicable:
+        return Inapplicable()
 
 
 class Beside(Kernel):
@@ -238,39 +241,32 @@ class Beside(Kernel):
 
     id = "test.kernel_space.beside"
     first = Stage(input_tensor=TENSOR, arriving=ARRIVING)
-    held = Untimed()
+    held = Uncounted()
 
 
-def test_a_kernel_counting_no_cycles_is_a_kernel_but_for_its_cycles() -> None:
-    """It derives the untimed base alone: no ``Timed``, no ``cycles``, so its parent's
-    cycles are its other members'; its netlist, buffering and resources count as any
-    kernel's."""
-    assert not issubclass(Untimed, Timed)
-    for member in ("cycles", "member_cycles"):
-        assert not hasattr(Untimed, member)
-    assert design_space(Untimed()).buffering == 5
+def test_a_kernel_counting_no_cycles_is_left_out_of_its_parent_s_cycles() -> None:
+    """Its cycles are inapplicable, so its parent's ``member_cycles`` leaves it out and the
+    parent's cycles are its other members'; its netlist, buffering and resources count as
+    any kernel's."""
+    alone = design_space(Uncounted())
+    assert isinstance(alone.query(Uncounted.cycles), Inapplicable)
+    assert alone.buffering == 5
     point = design_space(Beside())
+    assert [str(item.node) for item in point.member_cycles] == ["first"]
     assert point.cycles == 4
     assert point.buffering == 10
     assert point.resources == Resources(lut=6)
 
 
-def test_a_channel_s_fifo_is_the_one_kernel_of_the_library_counting_no_cycles() -> None:
+def test_a_channel_s_fifo_is_a_kernel_whose_cycles_are_inapplicable() -> None:
     """A channel's FIFO presents what arrives, whose beats are counted where they are made:
-    it derives ``UntimedKernel`` alone; every other kernel class derives ``Kernel``."""
-    for module in pkgutil.iter_modules(finn.kernels.__path__):
-        importlib.import_module(f"finn.kernels.{module.name}")
-    found: list[type[UntimedKernel]] = []
-    pending: list[type[UntimedKernel]] = [UntimedKernel]
-    while pending:
-        for each in pending.pop().__subclasses__():
-            pending.append(each)
-            if each.__module__.startswith("finn.kernels.") and not issubclass(each, Kernel):
-                found.append(each)
-    assert found == [ChannelFifo]
-    assert not issubclass(ChannelFifo, Timed)
-    for member in ("cycles", "counts_cycles", "member_cycles"):
-        assert not hasattr(ChannelFifo, member)
+    a kernel like any other, its netlist, buffering and resources its FIFO's, its cycles
+    inapplicable."""
+    point = design_space(ChannelFifo(tensor=TENSOR, arriving=ARRIVING, platform=FULL_DSP48E2))
+    point = point.with_choices({ChannelFifo.depth: 4, ChannelFifo.buffer.ram_style: "auto"})
+    assert isinstance(point, Kernel)
+    assert isinstance(point.query(ChannelFifo.cycles), Inapplicable)
+    assert point.buffering == point.buffer.buffering > 0
 
 
 # -- the library module's sources -------------------------------------------------------------

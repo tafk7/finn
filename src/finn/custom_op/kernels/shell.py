@@ -58,7 +58,7 @@ from finn.core.search import Key, dotted
 from finn.core.space import Available, Inapplicable, QueryResult, Rejected, inspection
 from finn.custom_op.kernels.network import PARTITION, PRODUCER, _network, persist, stale_text
 from finn.kernels.artifacts.module import Composed
-from finn.kernels.base import Timed
+from finn.kernels.base import Kernel
 from finn.kernels.budgets import SHELL, counts
 from finn.kernels.channels import Channel
 from finn.kernels.configure import refusal
@@ -246,7 +246,7 @@ class Configured:
         emission. This preserves the held timing consumers' contract without making
         them a prerequisite of the untimed build bridge.
         """
-        cycles = {name: self.network.query(name, Timed.cycles) for name in self.network.members}
+        cycles = {name: self.network.query(name, Kernel.cycles) for name in self.network.members}
         found = tuple(
             self.network.located(name, finding)
             for name, each in cycles.items()

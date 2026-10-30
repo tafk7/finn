@@ -192,6 +192,16 @@ def test_known_weights_give_the_weight_channel_its_source():
     assert [item.node for item in matmul.netlists] == ["compute.packed"]
 
 
+def test_the_weight_channel_counts_its_source_s_cycles_by_kind():
+    """A channel counts its members' cycles by kind (``Channel.source_cycles``,
+    ``stage_cycles``, ``mover_cycles``), not through the base's ``member_cycles``: the kinds
+    name every member the base's does, here its source."""
+    w = configured(base(weights=WEIGHTS), style="block").member("w")
+    assert [item.node for item in w.source_cycles] == ["source"]
+    assert [item.node for item in w.member_cycles] == ["source"]
+    assert w.cycles == w.source.cycles
+
+
 def test_an_unvalued_channel_never_demands_its_source():
     w = configured(base()).member("w")
     evidence = inspection.explain(w, Channel.netlist)

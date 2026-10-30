@@ -59,7 +59,8 @@ stream side, the free side's contract:
 A boundary channel states its mover's contract as its member ``mover_contracts`` (one, or
 none without a mover), which the shell sums with its static region
 (``finn.custom_op.kernels.shell``). The mover states its cycles a frame as its member
-``cycles``, the channel's member that it is: the channel's are at least its mover's.
+``cycles``, the channel's member that it is: the channel's are at least its mover's
+(``Channel.mover_cycles``).
 A mover is not a channel's stream (``finn.dataflow.streams``: the two beat sequences a
 channel's producer and consumer present, ``Stream``, ``Streams``).
 """
@@ -81,7 +82,6 @@ from finn.core.space import (
 )
 from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.base import Timed
 from finn.kernels.transport import StreamContract
 from finn.kernels.utilization import Fit
 from finn.platform.capabilities import Resources
@@ -259,9 +259,10 @@ class MoverContract:
         return tuple(max(beat, ceil((beat + 1) * words / beats) - 1) for beat in range(beats))
 
 
-class IodmaMover(Timed):
+class IodmaMover(Space):
     """The ``IODMA_hls`` mover on a free side (``side``), where ``offers`` offer it. It is
-    ``Timed``: its ``cycles`` count in its channel's. The side is the one it states
+    no kernel (it binds no RTL in the partition's module), but its ``cycles`` count in its
+    channel's (``Channel.mover_cycles``). The side is the one it states
     (``MoverOffer.states``: row-major, one pass a frame), so it states no rule of its own
     on it."""
 

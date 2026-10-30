@@ -29,7 +29,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.module import Held
-from finn.kernels.base import NATIVE_CLOCKING, Kernel, PortContract, UntimedKernel
+from finn.kernels.base import NATIVE_CLOCKING, Kernel, PortContract
 from finn.kernels.port import LoopEnds, PhysicalPort, contract, data_width, held, pins, transport
 from finn.kernels.port_model import PortModel, PortSurface, SequencePort, native_port, port_surfaces
 from finn.kernels.sides import Side
@@ -267,7 +267,7 @@ def test_port_children_are_not_hardware_kernels_or_member_netlists() -> None:
 
     point = design_space(Host())
     assert isinstance(point.p, Space)
-    assert not isinstance(point.p, UntimedKernel)
+    assert not isinstance(point.p, Kernel)
     assert point.netlists == ()
 
 

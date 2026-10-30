@@ -103,7 +103,7 @@ from finn.core.space import (
     inspection,
 )
 from finn.core.space.declarations import View
-from finn.kernels.base import Kernel, Timed
+from finn.kernels.base import Kernel
 from finn.kernels.channels import ChannelFifo, Neighbours
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.fifo_sizing import FRAMES, NotModelled, Sized, holds, size
@@ -462,7 +462,7 @@ class Seam(search.Seam):
         return self.reopen(network, found.stale)[0], found
 
     def cost(self, network: KernelComposition, members: Iterable[str] | None = None) -> Cost:
-        """Each member's cycles a frame, buffering and resources (``Timed.cycles``,
+        """Each member's cycles a frame, buffering and resources (``Kernel.cycles``,
         ``Kernel.buffering``, ``Kernel.resources``; only ``members``' when named),
         one member at a time, so a member that waits
         hides no other."""
@@ -481,7 +481,7 @@ class Seam(search.Seam):
                 resources[name] = used.value
             else:
                 unstated[name] = _findings_of(used)
-            answer = network.query(name, Timed.cycles)
+            answer = network.query(name, Kernel.cycles)
             if isinstance(answer, Available):
                 cycles[name] = answer.value
             elif isinstance(answer, Unresolved):

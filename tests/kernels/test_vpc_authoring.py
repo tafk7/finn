@@ -31,7 +31,7 @@ from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource
 from finn.kernels.artifacts.module import Fragment
-from finn.kernels.base import Kernel, UntimedKernel
+from finn.kernels.base import Kernel
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port import port_endpoint, port_surface
 from finn.kernels.port_model import PortSurface, SequencePort
@@ -125,7 +125,7 @@ def test_actual_vpc_netlist_keeps_serial_body_demand_and_direct_refusal_order(
 def test_actual_vpc_surfaces_are_typed_real_children_and_not_kernel_instances() -> None:
     point = design_space(VpcKernel(input_tensor=TENSOR, arriving=SEQUENCE, leaving=SEQUENCE))
     assert_type(VpcKernel.input, SequencePort)
-    assert isinstance(point.input, Space) and not isinstance(point.input, UntimedKernel)
+    assert isinstance(point.input, Space) and not isinstance(point.input, Kernel)
     assert point.netlists == ()
     assert isinstance(point.netlist, Fragment)
     assert inspection.statistics(point).owning_decisions == 0

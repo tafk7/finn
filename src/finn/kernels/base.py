@@ -3,9 +3,10 @@
 
 """Hardware design Spaces with actual model children and native outward source.
 
-UntimedKernel states netlist/buffering/resources; Kernel also inherits
-Timed.cycles. Real PortModel children own intrinsic rules, included ControlModel
-Groups share their real parent, and plain ModuleSpec values describe sources.
+Kernel, the one base, states netlist/cycles/buffering/resources; a channel's FIFO
+answers its cycles inapplicable. Real PortModel children own intrinsic rules,
+included ControlModel Groups share their real parent, and plain ModuleSpec values
+describe sources.
 Each module kernel authors its serial native netlist and frame count. Parents
 compose resolved child Members in ordinary source. No lowering/setter/read-list
 or generated flat callback table is installed on a kernel.
@@ -85,53 +86,38 @@ def merged(
         return reject("kernel-netlist", str(error))
 
 
-def _declared(cls: type[UntimedKernel], name: str, below: type[UntimedKernel]) -> bool:
-    """Whether a class from ``cls`` down to, not including, ``below`` declares ``name``."""
-    return any(name in vars(base) for base in cls.__mro__[: cls.__mro__.index(below)])
+def _declared(cls: type[Kernel], name: str) -> bool:
+    """Whether a class from ``cls`` down to, not including, ``Kernel`` declares ``name``."""
+    return any(name in vars(base) for base in cls.__mro__[: cls.__mro__.index(Kernel)])
 
 
-def _members(cls: type[UntimedKernel], below: type[UntimedKernel]) -> dict[str, object]:
-    """The class attributes ``cls`` and its bases down to ``below`` declare, by name."""
+def _members(cls: type[Kernel]) -> dict[str, object]:
+    """The class attributes ``cls`` and its bases down to ``Kernel`` declare, by name."""
     found: dict[str, object] = {}
-    for base in reversed(cls.__mro__[: cls.__mro__.index(below)]):
+    for base in reversed(cls.__mro__[: cls.__mro__.index(Kernel)]):
         found.update(vars(base))
     return found
 
 
-class Timed(Space):
-    """A Space stating the clock cycles a frame takes through it: its view ``cycles``.
-
-    The base of what a channel's ``cycles`` counts: ``Kernel`` and the movers derive
-    from it, and ``member_cycles`` collects ``Timed.cycles`` of the members of a kernel.
-    A member that takes none a channel counts (``ChannelFifo``) does not derive it (it is
-    an ``UntimedKernel``), so it is no candidate of ``member_cycles``.
-
-    Its own ``cycles`` is the one a class stating none would answer: a refusal, so that a
-    ``Timed`` class that is placed without stating its cycles is never taken to take none.
-    Every class placed states its own.
-    """
-
-    @view
-    def cycles(self) -> int | Rejected:
-        """The clock cycles a frame takes through it: what a class stating none refuses."""
-        return reject("timed-cycles", f"{type(self).__qualname__} states no cycles")
-
-
-class UntimedKernel(Space):
+class Kernel(Space):
     """A kernel: the design space of its hardware, binding a library module or placing
     kernels, never both (the module docstring). ``id`` names it, a nonempty string.
 
-    The base of every kernel, which states everything a kernel states but its ``cycles``:
-    it exists for a kernel that counts no cycles of its own, a channel's FIFO
-    (``finn.kernels.channels.ChannelFifo``), whose beats are counted where they are made.
-    That kernel derives it alone, so it is no ``Timed`` and its channel's ``member_cycles``
-    does not range over it; every other kernel derives ``Kernel``, which adds
-    ``Timed``. A check or a type admitting any kernel names this class.
+    The one base every kernel derives, and the class a check or a type admitting any
+    kernel names. Its answers are Views: its netlist, the cycles a frame takes through it,
+    the bits it holds and what it uses of the device. A native kernel states its netlist
+    in ordinary serial source over typed model inputs and pure physical helpers, and its
+    own cycle calculation; the base refuses an absent calculation rather than assuming
+    zero. Buffering/resources read its own statements and its members' answers. A
+    composed kernel reaches those answers through ``Members`` over the member each
+    states. A kernel that counts no cycles of its own, a channel's FIFO
+    (``finn.kernels.channels.ChannelFifo``), whose beats are counted where they are made,
+    answers its ``cycles`` inapplicable, and its parent's ``member_cycles`` leaves it out.
 
-    Its answers are Views. A native kernel states its netlist in ordinary serial
-    source over typed model inputs and pure physical helpers. Buffering/resources
-    read its own statements and its members' answers. A composed kernel reaches
-    those answers through ``Members`` over the member each states."""
+    A reader of a kernel's design point types it ``Kernel``: its four answers (``netlist``,
+    ``cycles``, ``buffering``, ``resources``) read as their accepted values, and raise where
+    the kernel refuses them; ``point.query(type(point).netlist)`` gives the result,
+    ``Available`` with the value or the refusal."""
 
     id: ClassVar[str] = ""
 
@@ -139,10 +125,6 @@ class UntimedKernel(Space):
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
-        if cls.__module__ == __name__ and cls.__qualname__ == "Kernel":
-            return
-        timed = issubclass(cls, Kernel)
-        below: type[UntimedKernel] = Kernel if timed else UntimedKernel
         buses = list(control_models(cls))
         if len(buses) > 1:
             raise DefinitionError.broken(
@@ -152,9 +134,7 @@ class UntimedKernel(Space):
                 "a kernel presents one at most",
                 declaration=cls.__qualname__,
             )
-        if buses and (
-            not _declared(cls, "bus_control", below) or not _declared(cls, "declares_bus", below)
-        ):
+        if buses and (not _declared(cls, "bus_control") or not _declared(cls, "declares_bus")):
             raise DefinitionError.broken(
                 "control-bus-unaddressed",
                 "Kernel",
@@ -169,12 +149,12 @@ class UntimedKernel(Space):
                 f"{cls.__qualname__} must declare a nonempty string id",
                 declaration=cls.__qualname__,
             )
-        members = _members(cls, below)
+        members = _members(cls)
         specs = [(name, item) for name, item in members.items() if isinstance(item, ModuleSpec)]
         for name, spec in specs:
             spec.validate(cls.__qualname__, f"{cls.__qualname__}.{name}")
         if any(spec.constant_sources is None for _, spec in specs) and not _declared(
-            cls, "module_sources", below
+            cls, "module_sources"
         ):
             raise DefinitionError.broken(
                 "library-module-sources-unstated",
@@ -199,7 +179,7 @@ class UntimedKernel(Space):
             for name, surface in port_surfaces(cls).items()
             if surface.physical_pins is not None
         ]
-        if not _declared(cls, "netlist", below):
+        if not _declared(cls, "netlist"):
             raise DefinitionError.broken(
                 "module-netlist-unstated",
                 "Kernel",
@@ -213,9 +193,7 @@ class UntimedKernel(Space):
                 f"{cls.__qualname__} declares no port: a kernel with a module states its ports",
                 declaration=cls.__qualname__,
             )
-        children = sorted(
-            name for name, value in members.items() if isinstance(value, UntimedKernel)
-        )
+        children = sorted(name for name, value in members.items() if isinstance(value, Kernel))
         if children:
             raise DefinitionError.broken(
                 "module-places-kernels",
@@ -224,7 +202,7 @@ class UntimedKernel(Space):
                 "a kernel with a module places none",
                 declaration=cls.__qualname__,
             )
-        if not _declared(cls, "resource_use", below):
+        if not _declared(cls, "resource_use"):
             raise DefinitionError.broken(
                 "module-resources-unstated",
                 "Kernel",
@@ -410,45 +388,15 @@ class UntimedKernel(Space):
         """What it and its members use of the device."""
         return total((self.resource_use, *(item.value for item in self.member_resources)))
 
-    # -- what it reaches of its members: their answers, read by its views only ------------
-    # Each ``Members`` names the member it reads, so it follows the views it names.
-
-    netlists = Members(netlist)
-    controls = Members(bus_control)
-    member_buffering = Members(buffering)
-    member_resources = Members(resources)
-
-
-class Kernel(UntimedKernel, Timed):
-    """A kernel that takes clock cycles: every kernel but a channel's FIFO, which derives
-    ``UntimedKernel`` alone. The base a kernel derives. To the untimed base's answers it adds
-    ``cycles``, aggregating its members through ``member_cycles`` over ``Timed.cycles``.
-    A native kernel states its own cycle calculation; the base refuses an absent
-    calculation rather than assuming zero.
-
-    A reader of a kernel's design point types it ``Kernel``: its four answers (``netlist``,
-    ``cycles``, ``buffering``, ``resources``) read as their accepted values, and raise where
-    the kernel refuses them; ``point.query(type(point).netlist)`` gives the result,
-    ``Available`` with the value or the refusal."""
-
-    def _cycles(self, default: int | None = None) -> int | Rejected:
-        """The most cycles any timed member takes; ``default`` where there is none
-        (a channel of wires takes none of its own), else refused."""
-        space_type = type(self)
-        found = [item.value for item in self.member_cycles]
-        if found:
-            return max(found)
-        if default is not None:
-            return default
-        if space_type.module_spec is not None:
-            return reject(
-                "kernel-cycles", f"no port of {space_type.__qualname__} carries a stream's beats"
-            )
-        return reject("kernel-cycles", f"no member of {space_type.__qualname__} states cycles")
-
     @view
     def cycles(self) -> int | Rejected:
-        """The most cycles any timed member takes; a native kernel states its own."""
+        """The clock cycles a frame takes through it: the most any member takes, a member
+        counting none (inapplicable) left out; a native kernel states its own."""
+        return self._cycles()
+
+    def _cycles(self) -> int | Rejected:
+        """``cycles``: the most any member takes (``member_cycles``), else refused. A class
+        restating ``cycles`` as the base's, to be counted by its own kind, calls it."""
         found = [item.value for item in self.member_cycles]
         if found:
             return max(found)
@@ -458,7 +406,14 @@ class Kernel(UntimedKernel, Timed):
             )
         return reject("kernel-cycles", f"no member of {type(self).__qualname__} states cycles")
 
-    member_cycles = Members(Timed.cycles)
+    # -- what it reaches of its members: their answers, read by its views only ------------
+    # Each ``Members`` names the member it reads, so it follows the views it names.
+
+    netlists = Members(netlist)
+    controls = Members(bus_control)
+    member_buffering = Members(buffering)
+    member_resources = Members(resources)
+    member_cycles = Members(cycles)
 
 
 def extent_of(index: Index) -> int:
@@ -469,7 +424,7 @@ def extent_of(index: Index) -> int:
     declaration it is not a member of the class, and linking refuses it.
     """
 
-    def extent(self: UntimedKernel) -> int | Rejected:
+    def extent(self: Kernel) -> int | Rejected:
         extents = self.extents
         if index not in extents:
             return reject("kernel-extents", f"{index!r} is bound by no placed port")
@@ -482,7 +437,6 @@ __all__ = [
     "Kernel",
     "NATIVE_CLOCKING",
     "PortContract",
-    "UntimedKernel",
     "extent_of",
     "merged",
 ]

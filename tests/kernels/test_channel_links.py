@@ -27,7 +27,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.module import Fragment, Leaf
-from finn.kernels.base import PortContract, UntimedKernel
+from finn.kernels.base import Kernel, PortContract
 from finn.kernels.channels import Channel
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.dotp import PackedDotpKernel
@@ -177,7 +177,7 @@ def test_a_contract_that_is_no_kernels_port_has_no_netlist() -> None:
         }
     )
     point = with_direct_transports(bare)
-    assert not isinstance(point.member("reader"), UntimedKernel)
+    assert not isinstance(point.member("reader"), Kernel)
     edge = point.member("edge")
     assert edge.consumer.label == "reader.port"
     # The channel's own netlist has no hop to the reader; the partition's refuses it.

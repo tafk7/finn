@@ -13,7 +13,7 @@ pins come before every port's, its hold after theirs. Every port runs on its ker
 (``library_module``). A kernel with children presents a child's port as its own
 through typed model forwards and an outward contract View, labelled below the
 child; its netlist merges its members'.
-Every kernel is an ``UntimedKernel``, and every one but a channel's FIFO a ``Kernel``.
+Every kernel is a ``Kernel``; a channel's FIFO answers its cycles inapplicable.
 """
 
 from __future__ import annotations

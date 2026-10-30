@@ -71,7 +71,11 @@ are the base's views over theirs, but for two it states itself, calling the base
 netlist places its source and its output adapter at their labels and adds the hops between
 its own ends (its source, its stages, its boundary; ``netlist``), and a channel of wires
 takes no cycles of its own (0); a boundary whose outside states a pace takes no fewer than
-that pace's span a frame (``cycles``). Its hops to the ports beside it need those ports'
+that pace's span a frame (``cycles``). Its cycles count its source's, its adapters' and
+its mover's, by kind (``source_cycles``, ``stage_cycles``, ``mover_cycles``), not through
+the base's ``member_cycles``: its mover is no kernel (it binds no RTL in the module), and
+its transport, whose cycles are inapplicable, is a choice still open when FIFO sizing reads
+them. Its hops to the ports beside it need those ports'
 contracts, which its network holds: the network wires them (``outer_hops``, from the ports
 it read, ``Neighbours``) and places them around the channel's netlist. It states its
 boundary's AXIS bus (``boundary_bus``) and its mover's contract (``mover_contracts``, one or none:
@@ -90,6 +94,7 @@ from finn.core.reporting.findings import Finding
 from finn.core.space import (
     Decision,
     Inapplicable,
+    Members,
     Param,
     Rejected,
     Select,
@@ -123,6 +128,7 @@ from finn.kernels.adapters import (
     RealizedStage,
     Stage,
     StageStreams,
+    StreamAdapter,
     realize,
 )
 from finn.kernels.artifacts import ArtifactError
@@ -131,7 +137,6 @@ from finn.kernels.artifacts.module import Fragment, Link, LinkEnd, Marker
 from finn.kernels.base import (
     Kernel,
     PortContract,
-    UntimedKernel,
     merged,
 )
 from finn.kernels.control import presented
@@ -339,16 +344,16 @@ def _below_stages(holder: str, stages: tuple[Stage, ...]) -> tuple[Stage, ...]:
     return tuple(replace(stage, label=f"{holder}.{stage.label}") for stage in stages)
 
 
-class ChannelFifo(UntimedKernel):
+class ChannelFifo(Kernel):
     """An identity stage: what arrives at it, presented on both sides of a native FIFO.
 
-    Its netlist, buffering and resources are its FIFO's, by the base. It states no cycles:
-    it derives ``UntimedKernel``, not ``Timed``, so a channel's ``member_cycles`` does not
-    range over it. A FIFO presents what arrives, whose beats are counted where they are made
-    (the channel's producer, its source, its output adapter), so its channel's cycles are
-    its other members'. It presents no port: its channel checks it by its FIFO's
-    streams (``stage_streams``) and wires it hop by hop (``stages``: its FIFO's module,
-    read from the FIFO's netlist, and its ports' contracts).
+    Its netlist, buffering and resources are its FIFO's, by the base. Its cycles are
+    inapplicable, which a kernel's ``member_cycles`` leaves out: a FIFO presents what
+    arrives, whose beats are counted where they are made (the channel's producer, its
+    source, its output adapter), so its channel's cycles are its other members'. It
+    presents no port: its channel checks it by its FIFO's streams (``stage_streams``) and
+    wires it hop by hop (``stages``: its FIFO's module, read from the FIFO's netlist, and
+    its ports' contracts).
     """
 
     id = "finn.channel.fifo"
@@ -375,6 +380,11 @@ class ChannelFifo(UntimedKernel):
         depth=depth,
         platform=platform,
     )
+
+    @view
+    def cycles(self) -> int | Inapplicable:
+        """Inapplicable: it counts no cycles of its own (the class docstring)."""
+        return Inapplicable()
 
     @constraint
     def carries_data(self) -> bool | Rejected:
@@ -925,13 +935,14 @@ class Channel(Kernel):
     @view
     def cycles(self) -> int | Rejected:
         """The clock cycles a frame takes through its own members: the slowest's (its
-        source's, its adapters' stages', its mover's), one beat a cycle at best; a FIFO
-        states none, and a channel of wires takes none of its own. On a boundary whose
+        source's, its adapters' stages', its mover's), one beat a cycle at best; a FIFO's
+        are inapplicable, and a channel of wires takes none of its own. On a boundary whose
         outside states a pace, no fewer than that pace's span at the edge's beats
         (``finn.kernels.sides.beat_times``): the partition runs no faster than its outside
         supplies an input or takes an output. A side the outside leaves unstated, or
         states without a pace (a mover's, its contract's), bounds nothing more."""
-        found = max((item.value for item in self.member_cycles), default=0)
+        counted = (*self.source_cycles, *self.stage_cycles, *self.mover_cycles)
+        found = max((item.value for item in counted), default=0)
         paces = [
             side.outside.pace
             for side in (self.producer, self.consumer)
@@ -942,6 +953,14 @@ class Channel(Kernel):
         edge: StreamContract | None = self.boundary
         assert edge is not None  # a side the outside states is a boundary's
         return max(found, *(beat_times(pace, edge.form.beats).span for pace in paces))
+
+    # What its cycles count, by kind: its source's, its adapters' and its mover's. Not the
+    # base's ``member_cycles``, which ranges over its transport too: a FIFO's cycles are
+    # inapplicable, but whether it places one is a choice FIFO sizing reads cycles before,
+    # so the base's would wait on it. Its mover is no kernel; its cycles count here.
+    source_cycles = Members(MemStreamKernel.cycles)
+    stage_cycles = Members(StreamAdapter.cycles)
+    mover_cycles = Members(IodmaMover.cycles)
 
     @view
     def boundary_bus(self) -> tuple[Bus, ...]:
