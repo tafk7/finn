@@ -879,7 +879,7 @@ def _simulate(
     module = _value(design_module(point, space_type), space_type, sample)
     # A cyclic source (the adapter sample's memory, or the kernel itself) never stops.
     repeating = sample.adapter or any(
-        contracts[name].repetition is Repetition.CYCLIC for name in produced
+        contracts[name].sequence.repetition is Repetition.CYCLIC for name in produced
     )
     cycles = design_cycles(point)
     failures = []
