@@ -17,7 +17,15 @@ from typing import Any
 import pytest
 from qonnx.core.datatype import DataType
 from support.conformance import KERNEL, configured, kernel_space, unchosen
-from support.helpers import FULL_DSP48E2, codes
+from support.helpers import (
+    FULL_DSP48E2,
+    FULL_DSP58,
+    codes,
+    fifo_node,
+    nested,
+    placed_dotp,
+    stage_tensor,
+)
 from support.kernel_specs import conformance_cases
 
 from finn.core.space import (
@@ -38,6 +46,8 @@ from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.rtl import Declined, evaluate
 from finn.kernels.base import Kernel
+from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
+from finn.kernels.input_generator import InputGeneratorKernel, nest_buffer
 from finn.kernels.laws import (
     INTAKE_UNSTATED,
     NATIVE,
@@ -287,6 +297,89 @@ def test_thresholding_states_its_rtl_s_pending_cap() -> None:
             assert entry.before_stop == entry.most == pending, where
 
 
+def test_dotp_states_its_rtl_s_output_queue_by_its_core_s_pipeline_depth() -> None:
+    """``CORE_PIPELINE_DEPTH`` and ``MAX_IN_FLIGHT``, its RTL's own text (inside a generate
+    block, so pinned as written): ``2 * SF`` beats before it stops, ``(depth + 4) * SF - 1``
+    at most, on ``x`` and ``w`` alike. The INT8 depth is read at a ``SEGMENTLEN`` of one,
+    and wins only on DSP58 at a SIMD where it exceeds the soft vector's (30: 12 against 8)."""
+    text = " ".join((finnlib_root() / "rtl/linalg/dotp_axi.sv").read_text().split())
+    for line in (
+        "localparam int unsigned INT8_PIPELINE_DEPTH = "
+        "3 + (SEGMENTLEN == 0? 0 : ((SIMD+2)/3 -1)/SEGMENTLEN);",
+        "localparam int unsigned SOFTVEC_PIPELINE_DEPTH = 3 + $clog2(SIMD+1) + (SIMD == 1);",
+        "localparam int unsigned CORE_PIPELINE_DEPTH = VERSION == 3 && "
+        "INT8_PIPELINE_DEPTH > SOFTVEC_PIPELINE_DEPTH? INT8_PIPELINE_DEPTH : "
+        "SOFTVEC_PIPELINE_DEPTH;",
+        "localparam int unsigned MAX_IN_FLIGHT = CORE_PIPELINE_DEPTH + 1;",
+    ):
+        assert line in text, line
+    for core, platform, simd, depth in (
+        (PackedDotpKernel, FULL_DSP48E2, 1, 5),  # the soft vector's, SIMD 1: 3 + 1 + 1
+        (PackedDotpKernel, FULL_DSP58, 4, 6),  # the soft vector's: 3 + 3, the INT8's 4
+        (PackedDotpKernel, FULL_DSP58, 30, 12),  # the INT8's: 3 + 9, the soft vector's 8
+        (Int8Dsp58DotpKernel, FULL_DSP58, 30, 12),
+    ):
+        point = placed_dotp(
+            core,
+            pe=2,
+            simd=simd,
+            reduction=2 * simd,
+            activation_dtype=DataType["INT8"],
+            weights_dtype=DataType["INT8"],
+            result_dtype=DataType["INT32"],
+            platform=platform,
+        )
+        where = (core.__name__, simd)
+        for port in ("x", "w"):
+            entry = point.intake.of(port)
+            assert (entry.before_stop, entry.most) == (2 * 2, (depth + 4) * 2 - 1), where
+
+
+def test_a_fifo_states_its_storage_s_capacity_in_each_style() -> None:
+    """Both before it stops and at most: the words its storage accepts, in the style the RTL
+    selects; a shift register's ``DEPTH_IMPL`` and its output register, five at least."""
+    text = (finnlib_root() / "rtl/infra/fifo.sv").read_text()
+    assert "localparam int unsigned  DEPTH_IMPL = DEPTH > 4? DEPTH-1 : 4;" in text
+    for style, depth, capacity in (
+        ("shift", 3, 5),
+        ("shift", 40, 40),
+        ("auto", 20, 20),  # shift, at 33 words or fewer
+        ("distributed", 100, 100),
+        ("block", 1000, 1026),
+        ("ultra", 5000, 5137),
+    ):
+        point = design_space(fifo_node(depth=depth)).with_choices(ram_style=style)
+        storage = point.planned_storage
+        entry = point.intake.of("input")
+        assert storage.capacity == capacity, (style, depth)
+        assert entry.before_stop == entry.most == capacity, (style, depth)
+        assert entry.source.startswith("rtl/infra/fifo.sv:"), (style, depth)
+
+
+def test_an_input_generator_states_its_buffer_and_the_words_its_first_beat_frees() -> None:
+    """``BUF_SIZE - 1`` words and those its first output beat frees before it stops; at most
+    its unfreed words and its output register's. Striding past words (every other one), its
+    first beat frees two, so it takes one more before it stops than it holds."""
+    for (frame, dims, strides), freed, counts in (
+        ((2, (2, 2), (0, 1)), 0, (7, 8)),  # a repeat: its first beat frees nothing
+        ((8, (4,), (2,)), 2, (9, 8)),  # every other word
+    ):
+        arriving, leaving = nested(frame, dims, strides)
+        point = design_space(
+            InputGeneratorKernel(
+                input_tensor=stage_tensor(13),
+                arriving=arriving,
+                leaving=leaving,
+                platform=FULL_DSP48E2,
+                ram_style="auto",
+            )
+        )
+        buffer = nest_buffer(point.frame_words, point.dims, point.strides)
+        assert buffer.freed[0] == freed, (frame, dims, strides)
+        entry = point.intake.of("input")
+        assert (entry.before_stop, entry.most) == counts, (frame, dims, strides)
+
+
 def test_transpose_states_both_its_rtl_s_pages_and_its_skids() -> None:
     """Both pages before it stops; at most both and the ten output beats its two skids hold
     (an XSim trace at a page of four beats held eighteen, rtl-intake on the shelf)."""
@@ -373,3 +466,5 @@ def test_pool_states_its_measured_intake_by_its_window_and_period() -> None:
         expected = (4 * k + 5 + (period <= 2.5), 5 * k + 5 + (period < 5.0))
         assert (entry.before_stop, entry.most) == expected, where
         assert entry.standing is Standing.MEASURED and "Vitis HLS" in entry.source, where
+        # A form fitted to the traces, which its source says it states beyond them.
+        assert "stated beyond them" in entry.source, where
