@@ -25,10 +25,10 @@ from finn.core.space import (
     BoundValue,
     Change,
     ConfigurationResult,
-    Const,
     ConstraintAssessment,
     Decision,
     DecisionHandle,
+    Inapplicable,
     Located,
     Members,
     Param,
@@ -36,7 +36,6 @@ from finn.core.space import (
     Select,
     Space,
     ValueHandle,
-    View,
     ViewAssessment,
     constraint,
     derived,
@@ -44,6 +43,8 @@ from finn.core.space import (
     inspection,
     view,
 )
+from finn.core.space.declarations import View
+from finn.core.space.domains import domain, finite
 
 
 @dataclass(frozen=True)
@@ -54,7 +55,7 @@ class DType:
 class Room(Space):
     area: int = Param()
     label: str | None = Param(default=None)
-    finish: int = Decision(values=(1, 2, 3))
+    finish: int = Decision(domain=(1, 2, 3))
 
     @derived
     def price(self) -> int:
@@ -71,7 +72,7 @@ class Boiler(Space):
 
 class HeatPump(Space):
     kw: int = Param()
-    cop: int = Decision(values=(3, 4))
+    cop: int = Decision(domain=(3, 4))
 
 
 class Thermostat(Space):
@@ -84,7 +85,7 @@ def _case_name(case: str) -> str:
 
 class House(Space):
     budget: int = Param()
-    want_garage: bool = Decision(values=(False, True))
+    want_garage: bool = Decision(domain=(False, True))
     hall = Room()  # a bare call: its area is assigned below
     kitchen = Room(area=12)
     dining = Room(area=budget, label="dining")
@@ -123,16 +124,19 @@ class House(Space):
 
 
 class Graph(Space):
-    shared: int = Decision(values=(1, 2))
+    shared: int = Decision(domain=(1, 2))
     assert_type(shared, int)
 
 
 class Fifo(Space):
     word_bits: int = Param()
     depth: int = Param()
-    ram_style: str = Decision(values=("auto", "block"))
-    banks: int = Decision(values=(1, 2))
-    minimum_depth = Const(2)
+    ram_style: str = Decision(domain=("auto", "block"))
+    banks: int = Decision(domain=(1, 2))
+
+    @derived
+    def minimum_depth(self) -> int:
+        return 2
 
     @constraint
     def supported(self) -> bool:
@@ -146,7 +150,7 @@ class Fifo(Space):
     def physical(self) -> int:
         return self.capacity + len(self.ram_style)
 
-    detached = View(capacity)
+    detached = view(capacity)
 
 
 class Eltwise(Space):
@@ -164,25 +168,29 @@ class Eltwise(Space):
 
 class GuardedAssembly(Space):
     enabled: bool = Param()
-    slots: int = Decision(values=(1, 2), when=enabled)
+    slots: int = Decision(domain=(1, 2), when=enabled)
     fifo = Fifo(word_bits=8, depth=4, when=enabled)
 
-    @derived(when=enabled)
-    def value(*, slots: int) -> int:
-        return slots
+    @derived
+    def value(self) -> int | Inapplicable:
+        if not self.enabled:
+            return Inapplicable()
+        return self.slots
 
-    @constraint(when=enabled)
-    def supported(*, slots: int) -> bool:
-        return slots > 0
+    @constraint
+    def supported(self) -> bool | Inapplicable:
+        if not self.enabled:
+            return Inapplicable()
+        return self.slots > 0
 
-    physical = View(value, when=enabled)
+    physical = view(value)
 
 
 def check(point: Fifo, house: House, eltwise: Eltwise) -> None:
     # Class access is the schema key, typed as its value like every reference.
     assert_type(Fifo.word_bits, int)
     assert_type(Fifo.ram_style, str)
-    assert_type(Fifo.minimum_depth, Const[int])
+    assert_type(Fifo.minimum_depth, int)
     assert_type(Fifo.capacity, int)
     assert_type(Fifo.physical, View[int])
     assert_type(House.kitchen, Room)
@@ -222,7 +230,7 @@ def check(point: Fifo, house: House, eltwise: Eltwise) -> None:
     assert_type(GuardedAssembly.physical, View[int])
 
 
-# -- annotated formals and reads of their values' attributes ---------------------------
+# -- annotated formals and derived values over their attributes ----------------------------
 
 
 @dataclass(frozen=True)
@@ -237,14 +245,18 @@ class Spec:
 
 class Buffer(Space):
     word_bits: int = Param()
-    depth: int = Decision(values=(2, 4, 8))
+    depth: int = Decision(domain=(2, 4, 8))
 
 
 class Kernel(Space):
     spec: Spec = Param()  # a formal annotated with its value type
-    buffer = Buffer(word_bits=spec.payload_bits)  # typed in the class body
     assert_type(spec, Spec)
-    assert_type(spec.payload_bits, int)
+
+    @derived(spec=spec)
+    def payload_bits(*, spec: Spec) -> int:
+        return spec.payload_bits
+
+    buffer = Buffer(word_bits=payload_bits)
 
 
 class Board(Space):
@@ -285,7 +297,7 @@ class Wing(Space):
         assert_type(self.hall.cost, int)
         return self.kitchen.cost + self.dining.cost
 
-    checked = View(kitchen.cost)
+    checked = view(kitchen.cost)
     assert_type(checked, View[int])
 
 
@@ -301,7 +313,7 @@ def views(point: Wing, house: House, fifo: Fifo) -> None:
     assert_type(point.query(Wing.total), QueryResult[int])
     assert_type(house.inspect(House.total), ViewAssessment[int])
     assert_type(house.query(House.total), QueryResult[int])
-    assert_type(point.inspect(Wing.checked).accepted_result, QueryResult[int])
+    assert_type(point.inspect(Wing.checked).result, QueryResult[int])
     # A view of a child: on the child's configuration (precise), or through a path.
     assert_type(point.kitchen.inspect(Room.cost), ViewAssessment[int])
     assert_type(point.kitchen.query(Room.cost), QueryResult[int])
@@ -312,3 +324,24 @@ def views(point: Wing, house: House, fifo: Fifo) -> None:
     # A view binds as a value accessor of its accepted value.
     assert_type(point.field(Wing.total), BoundValue[int])
     assert_type(point.field(Wing.total).get(), int)
+
+
+def positive_candidate(*, candidate: int) -> bool:
+    return candidate > 0
+
+
+class DomainForms(Space):
+    finite_list: int = Decision(domain=[3, 1, 2], ordered=True)
+    finite_range: int = Decision(domain=range(1, 4))
+    finite_object: int = Decision(domain=finite((1, 2), ordered=True))
+    membership_only: int = Decision(domain=domain(accepts=positive_candidate))
+    tuple_choice: tuple[int, int] = Decision(domain=((1, 2), (3, 4)))
+
+
+def domain_forms() -> None:
+    point = design_space(DomainForms())
+    assert_type(DomainForms.finite_list, int)
+    assert_type(point.finite_range, int)
+    assert_type(point.finite_object, int)
+    assert_type(point.membership_only, int)
+    assert_type(point.tuple_choice, tuple[int, int])

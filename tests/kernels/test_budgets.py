@@ -26,13 +26,21 @@ from support import chain
 from support.helpers import by_hand, choose, keyed
 
 from finn.core.search import Refused
-from finn.core.space import Available, Decision, Param, Unresolved, derived, inspection
+from finn.core.space import (
+    Available,
+    Decision,
+    Param,
+    Unresolved,
+    derived,
+    inspection,
+    view,
+)
 from finn.kernels.artifacts.abi import Bus, Endpoint, Member, StandardProtocol
 from finn.kernels.artifacts.module import RegisterMap
-from finn.kernels.base import KernelSpace
+from finn.kernels.base import Kernel
 from finn.kernels.budgets import SHELL, ShellBudgets, counts
 from finn.kernels.composer import Facts
-from finn.kernels.control import ControlBus
+from finn.kernels.control import ControlModel
 from finn.kernels.explore import Seam
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.partition import Partition
@@ -45,34 +53,38 @@ LITE = Bus(
 )
 
 
-class Presenting(KernelSpace):
+class Presenting(Kernel):
     """A kernel presenting its AXI-Lite bus where it is ``on``, listed first."""
 
     id = "test.presenting"
 
     control: str | None = Param(default=None)
-    on: bool = Decision(values=(True, False))
-    config = ControlBus(LITE, presented=on, port=control, registers=RegisterMap())
+    on: bool = Decision(domain=(True, False))
+    config = ControlModel(bus=LITE, presented=on)
+
+    @view
+    def register_map(self) -> RegisterMap:
+        return RegisterMap()
 
 
-class Initiating(KernelSpace):
+class Initiating(Kernel):
     """A kernel initiating a memory port of its own where it is ``on``, listed first."""
 
     id = "test.initiating"
 
-    on: bool = Decision(values=(True, False))
+    on: bool = Decision(domain=(True, False))
 
     @derived
     def memory_initiators(self) -> int:
         return int(self.on)
 
 
-class Pumping(KernelSpace):
+class Pumping(Kernel):
     """A kernel taking the doubled clock where it is ``on``, listed first."""
 
     id = "test.pumping"
 
-    on: bool = Decision(values=(True, False))
+    on: bool = Decision(domain=(True, False))
 
     @derived
     def takes_doubled_clock(self) -> bool:
@@ -94,7 +106,7 @@ IP: Mapping[str, object] = {
 
 
 def kernels(
-    *kinds: type[KernelSpace],
+    *kinds: type[Kernel],
     shell: Mapping[str, object] | None,
     stored: Mapping[str, object] | None = None,
 ) -> Partition:
@@ -132,7 +144,7 @@ CASES = [
     ("kind", "shell", "rule", "code"), CASES, ids=["control-buses", "memory-ports", "clock"]
 )
 def test_a_value_that_breaks_a_budget_is_refused_at_the_partition(
-    kind: type[KernelSpace], shell: Mapping[str, object], rule: str, code: str
+    kind: type[Kernel], shell: Mapping[str, object], rule: str, code: str
 ) -> None:
     network = kernels(kind, shell=shell)
     assert viable(network, "k0.on") == {True: (f"{SHELL}.{rule}",), False: ()}

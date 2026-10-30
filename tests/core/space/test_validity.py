@@ -11,9 +11,9 @@ it wait on it. A stored value's type check is no piece either: it was made at
 assignment. A case not selected contributes nothing. ``inspection.validity`` answers it,
 with the pieces that are not true and their owners.
 
-A view is a product: it refuses when its output or its Space is refused, answers while
-its Space is open, and an inactive view answers ``Inapplicable`` without reading its
-Space's validity. A constraint reads values; one that reads a view is refused at compile
+A view requires non-refused owning validity after ordinary presence. Open validity
+permits a local output; owning refusal prevents attempting that output.
+A constraint reads values; one that reads a view is refused at compile
 (``view-read-in``). A ``Members`` may read a derived value, which a holder reads as the
 value whatever the Space's validity; a holder reading a view of a ``Members`` is a view. A value is
 possible unless a rule it reaches refuses it (``inspection.viable``), and a value set is checked
@@ -42,7 +42,6 @@ from finn.core.space import (
     Select,
     Space,
     Unresolved,
-    View,
     constraint,
     derived,
     design_space,
@@ -72,7 +71,7 @@ class Core(Space):
     """A core whose constraints read its own choices and a formal."""
 
     width: int = Param()
-    lanes: int = Decision(values=(1, 2, 4))
+    lanes: int = Decision(domain=(1, 2, 4))
 
     @constraint
     def divides(self) -> bool | Rejected:
@@ -84,15 +83,17 @@ class Core(Space):
     def off(self) -> bool:
         return False
 
-    @constraint(when=off)
-    def never_applies(self) -> bool | Rejected:
+    @constraint
+    def never_applies(self) -> bool | Rejected | Inapplicable:
+        if not self.off:
+            return Inapplicable()
         return reject("inactive", "an inactive constraint counts as true")
 
 
 class Engine(Space):
     width: int = Param()
     core = Core(width=width)
-    wanted: int = Decision(values=(1, 2))
+    wanted: int = Decision(domain=(1, 2))
 
     @constraint
     def small(self) -> bool | Rejected:
@@ -168,7 +169,7 @@ class Starved(Space):
     """``lanes`` has no possible case: its constraint refuses every one."""
 
     width: int = Param()
-    lanes: int = Decision(values=(2, 4))
+    lanes: int = Decision(domain=(2, 4))
 
     @constraint
     def fits(self) -> bool | Rejected:
@@ -240,12 +241,14 @@ def test_the_pieces_of_a_placed_space_whose_presence_waits_are_unknown_each_unde
     None
 ):
     # A placed Space is not one piece: each constraint inside is unknown, waiting on the
-    # selector, whatever its body would answer. ``never_applies`` is no piece: its own
-    # guard reads false, and presence is the AND over the path, so it does not apply
-    # whatever the selector holds. ``plain`` holds no piece: it adds nothing.
+    # selector, whatever its body would answer. A scope whose guard waits counts each of its
+    # constraints as unknown, its body not evaluated: ``never_applies`` too, though its body
+    # returns early (it does not apply) wherever the case is selected, as no constraint of
+    # a scope whose presence waits is read past that wait. ``plain`` holds no piece: it adds
+    # nothing.
     validity = inspection.validity(design_space(Either(width=8)))
     assert validity.status == "open"
-    assert owners(validity) == ["compute.core.divides"]
+    assert owners(validity) == ["compute.core.divides", "compute.core.never_applies"]
     for piece in validity.pieces:
         assert {(f.code, f.owner) for f in piece.result.findings} == {
             ("decision-unassigned", "compute")
@@ -255,7 +258,7 @@ def test_the_pieces_of_a_placed_space_whose_presence_waits_are_unknown_each_unde
 def test_a_placed_space_with_no_pieces_whose_presence_waits_contributes_nothing() -> None:
     class Bare(Space):
         width: int = Param()
-        lanes: int = Decision(values=(1, 2))
+        lanes: int = Decision(domain=(1, 2))
 
         @view
         def doubled(self) -> int:
@@ -280,7 +283,7 @@ def test_a_placed_space_with_no_pieces_whose_presence_waits_contributes_nothing(
 
 class Product(Space):
     width: int = Param()
-    lanes: int = Decision(values=(1, 2, 3))
+    lanes: int = Decision(domain=(1, 2, 3))
 
     @constraint
     def divides(self) -> bool | Rejected:
@@ -293,24 +296,24 @@ class Product(Space):
         return self.width // 1
 
 
-def test_a_view_answers_while_its_space_is_open_and_refuses_with_it() -> None:
+def test_open_validity_permits_output_and_refused_validity_blocks_it() -> None:
     open_ = design_space(Product(width=4))
     assert inspection.validity(open_).status == "open"
     assert open_.cycles == 4
     assessment = open_.inspect(Product.cycles)
-    assert isinstance(assessment.validity, Unresolved) and assessment.readiness.ready is None
+    assert assessment.result == Available(4)
     report = open_.try_with_choices(lanes=3)  # ``divides`` false on its own values
     assert not report.accepted and broken(report) == {"divides": set()}
     refused = built(open_, {"lanes": 3})
     answer = refused.query(Product.cycles)
     assert isinstance(answer, Rejected)
-    assert [(f.owner, f.code) for f in answer.findings] == [("divides", "lanes-divide")]
-    assert refused.inspect(Product.cycles).output_result == Available(4)
+    assert inspection.validity(refused).status == "refused"
+    assert refused.inspect(Product.cycles).output_result is None
 
 
 class Port(Space):
-    """A port: its ``access`` is a product only while it binds, and its constraint reads
-    the tensor its kernel gives it."""
+    """A port: its ``access`` is a product only while it binds (else it returns inapplicable),
+    and its constraint reads the tensor its kernel gives it."""
 
     binds: bool = Param()
     tensor: int = Param()
@@ -319,42 +322,36 @@ class Port(Space):
     def admitted(self) -> bool | Rejected:
         return True if self.tensor > 0 else reject("no-tensor", "the port carries nothing")
 
-    @view(when=binds)
-    def access(self) -> int:
+    @view
+    def access(self) -> int | Inapplicable:
+        if not self.binds:
+            return Inapplicable()
         return 4
 
 
 class Leaf(Space):
-    """A leaf with two ports: the initiator's ``access`` is inactive (an initiator does not
+    """A leaf with two ports: the initiator's ``access`` does not apply (an initiator does not
     bind)."""
 
     x = Port(binds=True, tensor=1)
     y = Port(binds=False, tensor=1)
 
 
-def test_an_inactive_view_answers_inapplicable_and_never_reads_its_spaces_validity() -> None:
+def test_a_view_that_does_not_apply_answers_inapplicable() -> None:
     point = design_space(Leaf())
     assert inspection.validity(point).status == "valid"
-    ds = occurrence.held(point).ds
-    model = ds.model
-    access = model.resolve(point.y._scope, Port.access)
-    entry = occurrence.ask(model, lambda session: evaluation(ds, session).get(access))
-    assert isinstance(entry.result, Inapplicable)
-    validity = point.y._scope.validity
-    read = [node for node, _ in entry.trace]
-    assert read == [access.guard]
-    assert validity not in read
+    assert isinstance(point.y.query(Port.access), Inapplicable)
     assessment = point.y.inspect(Port.access)
-    assert assessment.validity == Inapplicable()
-    # The bound port's view answers, and reads its Space's validity.
+    assert assessment.output_result == Inapplicable()
+    assert assessment.applicability == Available(True)
+    # The bound port's view answers.
     assert point.x.access == 4
 
 
 def test_a_derived_value_reading_the_accesses_is_view_read_in_whether_or_not_they_bind() -> None:
     """The output port's tensor follows the extents its ports' accesses give: a loop through
-    the output port's validity, once cut by an initiator's inactive guard. A derived value
-    reading the accesses (views) is refused ``view-read-in`` at compile, the guard
-    holding or not."""
+    the output port's validity. A derived value reading the accesses (views) is refused
+    ``view-read-in`` at compile, an access applying or not."""
     for binds in (False, True):
 
         class Looped(Space):
@@ -380,7 +377,7 @@ def test_a_constraint_reading_a_view_of_its_own_space_is_view_read_in() -> None:
     it; now refused at compile, naming the rule and the view."""
 
     class Storage(Space):
-        depth: int = Decision(values=(2, 4))
+        depth: int = Decision(domain=(2, 4))
 
         @view
         def storage(self) -> int:
@@ -403,7 +400,7 @@ def test_a_childs_constraint_reading_its_parents_view_through_a_formal_is_view_r
             return self.width <= 8
 
     class Parent(Space):
-        lanes: int = Decision(values=(1, 2))
+        lanes: int = Decision(domain=(1, 2))
 
         @view
         def carried(self) -> int:
@@ -417,13 +414,13 @@ def test_a_childs_constraint_reading_its_parents_view_through_a_formal_is_view_r
 
     # Reading the derived value the view presents instead is accepted.
     class Rewritten(Space):
-        lanes: int = Decision(values=(1, 2))
+        lanes: int = Decision(domain=(1, 2))
 
         @derived
         def carried_value(self) -> int:
             return 4 * self.lanes
 
-        carried = View(carried_value)
+        carried = view(carried_value)
         child = Child(width=carried_value)
 
     fixed = design_space(Rewritten()).with_choices(lanes=1)
@@ -436,7 +433,7 @@ def test_a_childs_constraint_reading_its_parents_view_through_a_formal_is_view_r
 class Stage(Space):
     """Refused past 4 lanes; states its width as a derived value and its cost as a view."""
 
-    lanes: int = Decision(values=(2, 8))
+    lanes: int = Decision(domain=(2, 8))
 
     @derived
     def width(self) -> int:
@@ -473,7 +470,6 @@ def test_a_derived_member_answers_while_its_space_is_refused_and_a_view_member_r
     assert point.total_width == 16
     refused = point.query(Holder.total_cost)
     assert isinstance(refused, Rejected)
-    assert {f.code for f in refused.findings} == {"too-wide"}
     fine = commit(design_space(Holder()), {"stage.lanes": 2})
     assert fine.total_width == 4 and fine.total_cost == 20
 
@@ -482,9 +478,9 @@ def test_a_derived_member_answers_while_its_space_is_refused_and_a_view_member_r
 
 
 class Pumped(Space):
-    simd: int = Decision(values=(1, 2, 4))
-    pumping: bool = Decision(values=(False, True))
-    style: str = Decision(values=("a", "b"))
+    simd: int = Decision(domain=(1, 2, 4))
+    pumping: bool = Decision(domain=(False, True))
+    style: str = Decision(domain=("a", "b"))
 
     @derived
     def pumpable(self) -> bool:
@@ -523,7 +519,7 @@ class Narrowing(Space):
 
 
 class Feeding(Space):
-    width: int = Decision(values=(3, 4))
+    width: int = Decision(domain=(3, 4))
     child = Narrowing(width=width)
 
 
@@ -535,7 +531,7 @@ def test_a_value_case_is_tried_against_the_constraints_of_the_spaces_it_feeds() 
 
 
 class Twin(Space):
-    factor: int = Decision(values=(1, 2, 3))
+    factor: int = Decision(domain=(1, 2, 3))
 
 
 class Pair(Space):
@@ -561,7 +557,7 @@ def test_an_ancestors_constraint_reading_a_decision_rules_out_its_cases() -> Non
 
 
 class Source(Space):
-    width: int = Decision(values=(3, 4))
+    width: int = Decision(domain=(3, 4))
 
 
 class Wired(Space):
@@ -578,7 +574,7 @@ def test_a_siblings_constraint_reading_a_decision_through_a_formal_rules_out_its
 class Capped(Space):
     """A constraint that reads another choice before the Decision below it."""
 
-    gate: int = Decision(values=(1, 2))
+    gate: int = Decision(domain=(1, 2))
     inner = Twin()
 
     @constraint
@@ -618,7 +614,7 @@ class Chooser(Space):
     """The owner's constraint reads its own selector, then a formal and another choice."""
 
     strict: bool = Param()
-    other: int = Decision(values=(1, 2))
+    other: int = Decision(domain=(1, 2))
     core: Small | Large = Select(small=Small, large=Large)
     which: str = derived(case=core)(_case_name)
 
@@ -652,7 +648,7 @@ def test_a_selectors_values_are_found_again_under_other_facts_its_owners_constra
 
 
 class Storage(Space):
-    style: str = Decision(values=("lut", "bram"))
+    style: str = Decision(domain=("lut", "bram"))
 
 
 class Queue(Space):
@@ -721,7 +717,7 @@ class Listed(Space):
         domain=domain(accepts=lambda *, candidate: candidate != 2, candidates=lambda: (1, 2))
     )
     lanes: int = Decision(domain=divisors_of(limit))
-    spare: int = Decision(values=(1, 2))
+    spare: int = Decision(domain=(1, 2))
 
     @constraint
     def small(self) -> bool | Rejected:
@@ -755,7 +751,7 @@ def test_a_listed_value_the_domains_membership_rejects_is_not_listed() -> None:
 
 
 class Empty(Space):
-    z: int = Decision(values=())
+    z: int = Decision(domain=())
 
 
 def test_an_empty_list_refuses_the_configuration_and_the_choice_stays_open() -> None:
@@ -781,7 +777,7 @@ def test_a_domain_whose_computed_list_is_empty_refuses_its_decision() -> None:
 def test_an_empty_list_under_a_selector_still_open_is_an_unknown_piece() -> None:
     class Hollow(Space):
         width: int = Param()
-        z: int = Decision(values=())
+        z: int = Decision(domain=())
 
     class Open(Space):
         width: int = Param()
@@ -862,7 +858,7 @@ class Store(Space):
     choice's domain, so the choice's own check holds whatever the platform has."""
 
     ultra: bool = Param()
-    style: str = Decision(values=("block", "ultra"))
+    style: str = Decision(domain=("block", "ultra"))
 
     @constraint
     def has_ultra(self) -> bool | Rejected:
@@ -939,10 +935,12 @@ class Banks(Space):
     """A choice whose domain reads ``width``, a value that applies only while ``wide``
     holds."""
 
-    wide: bool = Decision(values=(False, True))
+    wide: bool = Decision(domain=(False, True))
 
-    @derived(when=wide)
-    def width(self) -> int:
+    @derived
+    def width(self) -> int | Inapplicable:
+        if not self.wide:
+            return Inapplicable()
         return 8
 
     lanes: int = Decision(

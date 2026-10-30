@@ -69,9 +69,9 @@ from finn.core.space import (
     Rejected,
     Space,
     Unresolved,
-    View,
     inspection,
 )
+from finn.core.space.declarations import View
 from finn.core.space.references import ValueHandle
 
 S = TypeVar("S", bound=Space)
@@ -89,7 +89,7 @@ class Fixed:
 
 class Ranking(Protocol):
     """What a first valid policy's ``order`` names: a view of the Decision's class, by
-    class access (``MemStreamKernel.ram_preference``, a ``finn.core.space.View``), its
+    class access (``MemStreamKernel.ram_preference``, a view), its
     declaring class and name fixed once its class is made."""
 
     @property

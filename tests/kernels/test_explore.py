@@ -279,7 +279,7 @@ def test_a_fifo_depth_is_known_by_membership_and_proposed_through_a_change() -> 
     levels = explored.member("levels")
     labels = [stage.label for stage in levels.stages]
     assert labels.index("transport.fifo.buffer") < labels.index("adapter.input_gen.input_gen")
-    word = levels.transport.buffer.input_data_width
+    word = levels.transport.buffer.input.width
     assert explorer.cost(explored).buffering["levels"] >= 16 * word
 
 
@@ -298,7 +298,7 @@ def test_cost_names_what_a_member_waits_on_then_its_cycles_and_the_bottleneck_ti
     explored = Ranked(Lanes(2)).explore(explorer, network)
     cost = explorer.cost(explored)
     first = explored.member("first")
-    assert cost.cycles["first"] == first.compute.schedule.beat_count == 3 * 2 * 2
+    assert cost.cycles["first"] == first.compute.schedule.iterations == 3 * 2 * 2
     # Every member at the most cycles is named, kernels first: the activation replays
     # feed the MatMuls at their pace.
     assert cost.bottleneck == Bottleneck(("first", "second", "x", "levels"), 12)
@@ -867,7 +867,7 @@ def test_a_core_no_value_of_which_is_possible_refuses_the_cost_strategies_naming
         weights_dtype=DataType["UINT3"],
         platform=PART,
     )
-    with pytest.raises(ValueError, match="compute.packed.w_element_taken: dtype-family"):
+    with pytest.raises(ValueError, match="compute.packed.w.element_taken: dtype-family"):
         choose(unsigned, {"matmul.compute": "packed"})
     with refused(
         "cycles-unknown",
@@ -879,10 +879,10 @@ def test_a_core_no_value_of_which_is_possible_refuses_the_cost_strategies_naming
         "choice-no-valid-value",
         error=ExploreError,
         owner="matmul.compute",
-        message="'packed': matmul.compute.packed.w_element_taken: .*dtype-family",
+        message="'packed': matmul.compute.packed.w.element_taken: .*dtype-family",
     ) as caught:
         MaxThroughput({"dsp": 0.5}).explore(Seam(PART), unsigned)
-    assert ("compute.packed.w_element_taken", "dtype-family") in {
+    assert ("compute.packed.w.element_taken", "dtype-family") in {
         (cause.owner, cause.code) for cause in caught.finding.causes
     }
 

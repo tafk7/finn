@@ -4,20 +4,20 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import replace
-from typing import Any, cast
+from dataclasses import dataclass, replace
+from typing import Any, ClassVar, cast
 
 import pytest
 
 from finn.core.space import (
     Decision,
-    Derived,
     Param,
     Select,
     Space,
     bind,
     composite,
     constraint,
+    derived,
     design_space,
     domain,
     inspection,
@@ -43,7 +43,7 @@ def test_malformed_batch_structure_and_types_precede_every_membership_callback()
 
     class Trial(Space):
         first: int = Decision(domain=domain(accepts=membership))
-        second: int = Decision(values=(1, 2))
+        second: int = Decision(domain=(1, 2))
 
     # A change applies to any design space equal to its own: a foreign one is a design
     # space of other stored choices.
@@ -75,8 +75,8 @@ def test_a_change_applies_to_any_design_space_equal_to_its_own() -> None:
     design space equal to it, another object included; not to one of other choices."""
 
     class Pair(Space):
-        first: int = Decision(values=(1, 2))
-        second: int = Decision(values=(1, 2))
+        first: int = Decision(domain=(1, 2))
+        second: int = Decision(domain=(1, 2))
 
     point = design_space(Pair()).with_choices(first=1)
     equal = bind(design_space(Pair()), {Pair.first: 1}).instance
@@ -111,13 +111,13 @@ def test_foreign_model_handles_are_rejected_before_evaluators() -> None:
     assert calls == []
 
 
+@dataclass(frozen=True, eq=False)
 class Flaky:
     """A value whose ``==`` raises while ``failing`` is set."""
 
-    failing = False
+    failing: ClassVar[bool] = False
 
-    def __init__(self, n: int) -> None:
-        self.n = n
+    n: int
 
     def __eq__(self, other: object) -> bool:
         if Flaky.failing:
@@ -174,7 +174,7 @@ def test_independent_batch_reuses_trial_dependencies_and_publishes_only_once() -
 
     class Seeded(Space):
         seed: int = Param()
-        limit = Derived(limit_value)
+        limit = derived(limit_value)
 
     limit = Seeded.limit
     members: list[int] = [
@@ -221,7 +221,7 @@ def test_a_chain_of_related_choices_is_order_independent_as_its_constraints() ->
     in any order, the chain is accepted; one step off breaks the rule beside it."""
     calls: list[int] = []
     steps: tuple[int, ...] = tuple(range(1, 34))
-    members = [Decision(values=steps) for _ in range(32)]
+    members = [Decision(domain=steps) for _ in range(32)]
     rules: dict[str, object] = {}
 
     def follows(at: int) -> Callable[..., bool]:
@@ -255,7 +255,7 @@ def test_a_chain_of_related_choices_is_order_independent_as_its_constraints() ->
 
 def test_selector_and_nested_edit_share_atomic_order_and_inactive_edits_are_dormant() -> None:
     class Child(Space):
-        value: int = Decision(values=(1, 2))
+        value: int = Decision(domain=(1, 2))
 
     class Root(Space):
         implementation: Child = Select(a=Child(), b=Child())
@@ -314,7 +314,7 @@ def test_programmer_failure_after_provisional_admission_never_publishes_a_succes
         raise RuntimeError("membership failed")
 
     class Trial(Space):
-        first: int = Decision(values=(1, 2))
+        first: int = Decision(domain=(1, 2))
         second: int = Decision(domain=domain(accepts=broken))
 
     base = design_space(Trial())

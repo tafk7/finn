@@ -92,8 +92,8 @@ class Thresholding(KernelOp):
     kernel = ThresholdingAxiKernel
     ports = ("x", None)
     wiring = {
-        "x": Wiring("input_tensor", "input_contract"),
-        "y": Wiring("output_tensor", "output_contract"),
+        "x": Wiring("input_tensor", "input"),
+        "y": Wiring("output_tensor", "output"),
     }
     semantic = {"bias": ("i", True, 0)}
     anchor = ("qonnx.custom_op.general", "MultiThreshold")

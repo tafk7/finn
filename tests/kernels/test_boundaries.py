@@ -39,7 +39,7 @@ from finn.kernels.matmul import KnownWeights, MatMulKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import DspBlock, Fabric, Platform
 from finn.kernels.artifacts.module import Composed, Leaf
-from finn.kernels.base import KernelSpace
+from finn.kernels.base import Kernel
 from finn.kernels.library import library_module
 from finn.kernels.configure import commit
 from finn.kernels.port import axis
@@ -77,7 +77,7 @@ point = design_space(PackedDotpKernel(
 )).with_choices(compute_pumping=False, reducer="tree")
 answer = library_module(point)
 assert isinstance(answer, Leaf)
-x_axis = axis(*PackedDotpKernel.x.viewed(point, "x"))
+x_axis = axis(point.x.physical_spec(idle=False), point.x.stream)
 assert isinstance(x_axis, AxisBeat)
 assert x_axis.payload_bits == 6
 

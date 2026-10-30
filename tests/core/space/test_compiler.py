@@ -15,11 +15,8 @@ from finn.core.space._nodes import node_record
 from finn.core.space._template import compiled
 from finn.core.space.compiler import compile_model
 from finn.core.space.declarations import (
-    Const,
     Decision,
-    Derived,
     Param,
-    View,
     constraint,
     derived,
     view,
@@ -28,6 +25,14 @@ from finn.core.space.domains import divisors_of, domain
 from finn.core.space.errors import DefinitionError, RequestError
 from finn.core.space.ir import Local
 from finn.core.space.results import Available
+
+
+def _zero() -> int:
+    return 0
+
+
+def _one() -> int:
+    return 1
 
 
 def test_compile_links_forward_dependencies_without_executing_callbacks() -> None:
@@ -41,14 +46,17 @@ def test_compile_links_forward_dependencies_without_executing_callbacks() -> Non
 
         extent: int = Param()
         lanes: int = Decision(domain=divisors_of(extent))
-        label = Const("flat space")
+
+        @derived
+        def label(self) -> str:
+            return "flat space"
 
         @constraint
         def supported(*, extent: int) -> bool:
             calls.append("supported")
             return extent > 0
 
-        result = View(cycles)
+        result = view(cycles)
 
     model = compile_model(Example)
     assert calls == []
@@ -152,7 +160,7 @@ def test_function_and_value_views_have_an_explicit_raw_output() -> None:
         def doubled(*, size: int) -> int:
             return size * 2
 
-        value_view = View(doubled)
+        value_view = view(doubled)
 
         @view
         def function_view(*, size: int) -> int:
@@ -197,7 +205,9 @@ def test_a_transitive_triangle_is_acyclic_and_cycles_name_only_their_members() -
         def self_cycle(*, self_cycle: int) -> int:
             return self_cycle
 
-        unrelated = Const(1)
+        @derived
+        def unrelated(self) -> int:
+            return 1
 
     with pytest.raises(DefinitionError) as error:
         compile_model(Cyclic)
@@ -212,11 +222,9 @@ def test_twenty_thousand_dependencies_compile_and_evaluate_iteratively() -> None
     def step(*, previous: int) -> int:
         return previous + 1
 
-    members: dict[str, object] = {"value0": Const(0)}
+    members: dict[str, object] = {"value0": derived(_zero)}
     for number in range(1, 20_001):
-        members[f"value{number}"] = Derived(
-            step, aliases={"previous": members[f"value{number - 1}"]}
-        )
+        members[f"value{number}"] = derived(previous=members[f"value{number - 1}"])(step)
     space_type = cast(type[Space], type("Deep", (Space,), members))
     model = compile_model(space_type)
     last = model.resolve(model.root, members["value20000"])
@@ -226,9 +234,7 @@ def test_twenty_thousand_dependencies_compile_and_evaluate_iteratively() -> None
     form = compiled(space_type)
     assert len(form.order) == len(form.records) == 20_002
     assert form.order[-2:] == (form.keys["value20000"], form.validity)
-    assert design_space(space_type()).query(cast(Derived[int], members["value20000"])) == Available(
-        20_000
-    )
+    assert design_space(space_type()).query(cast(int, members["value20000"])) == Available(20_000)
 
 
 def test_compiled_handles_do_not_follow_later_class_rebinding() -> None:
@@ -255,27 +261,36 @@ def test_compiled_handles_do_not_follow_later_class_rebinding() -> None:
 
 def test_inherited_dependencies_bind_to_overrides_without_mutating_base() -> None:
     class Base(Space):
-        size = Const(4)
+        @derived
+        def size(self) -> int:
+            return 4
 
         @derived
         def doubled(*, size: int) -> int:
             return size * 2
 
     class Child(Base):
-        size = Const(8)
+        @derived
+        def size(self) -> int:
+            return 8
 
     original = compile_model(Base)
     child = compile_model(Child)
     assert child.resolve(child.root, Base.size) == child.resolve(child.root, Child.size)
     original_node = original.resolve(original.root, Base.size)
     child_node = child.resolve(child.root, Child.size)
-    assert (original_node.value, child_node.value) == (4, 8)
+    # A derived node holds its function: each class's own, and the inherited reader
+    # is bound to the override.
+    assert original_node.kind == child_node.kind == "derived"
+    assert original_node.function is not child_node.function
     assert child.resolve(child.root, Base.doubled).arguments[0].node == child_node
+    assert (design_space(Base()).size, design_space(Child()).size) == (4, 8)
+    assert (design_space(Base()).doubled, design_space(Child()).doubled) == (8, 16)
 
 
 def test_compile_holds_values_domains_and_callback_references() -> None:
-    """A model holds the values its declarations took (immutable: a constant, a domain's
-    listed values) and the callbacks it bound, whatever is rebound on the class later."""
+    """A model holds the values its declarations took (immutable: a domain's listed values)
+    and the callbacks it bound; a declaration's callback cannot be rebound later."""
 
     def first(*, value: int) -> int:
         return value + 1
@@ -285,17 +300,24 @@ def test_compile_holds_values_domains_and_callback_references() -> None:
 
     class Example(Space):
         value: int = Param()
-        constant = Const((1,))
-        choice: tuple[int, ...] = Decision(values=((1,), (2,)))
-        calculated = Derived(first)
+
+        @derived
+        def constant(self) -> tuple[int]:
+            return (1,)
+
+        choice: tuple[int, ...] = Decision(domain=((1,), (2,)))
+        calculated = derived(first)
 
     old = compile_model(Example)
-    Example.calculated.function = second
+    # A declaration is frozen with its class: its callback cannot be rebound.
+    with refused("declaration-frozen", error=DefinitionError, message="Example was created"):
+        cast(Any, Example.calculated).function = second
     new = compile_model(Example)
     old_constant = old.resolve(old.root, Example.constant)
+    constant_function = old_constant.function
     old_choice = old.resolve(old.root, Example.choice)
     old_function = old.resolve(old.root, Example.calculated)
-    assert old_constant.value == (1,)
+    assert constant_function is not None and constant_function(None) == (1,)
     assert old_choice.domain is not None and old_choice.domain.candidates is not None
     assert old_choice.domain.candidates() == ((1,), (2,))
     assert old_function.function is first
@@ -305,10 +327,12 @@ def test_compile_holds_values_domains_and_callback_references() -> None:
 
 def test_a_foreign_value_reference_is_a_definition_error() -> None:
     class Other(Space):
-        value = Const(1)
+        @derived
+        def value(self) -> int:
+            return 1
 
     class ForeignView(Space):
-        result = View(Other.value)
+        result = view(Other.value)
 
     with pytest.raises(DefinitionError):
         compile_model(ForeignView)
@@ -352,7 +376,7 @@ def test_domain_binding_is_validated_without_invocation() -> None:
 @pytest.mark.parametrize("name", ["query", "field", "with_choices", "root", "_held"])
 def test_reserved_names_are_not_declarations(name: str) -> None:
     with refused("name-reserved", error=DefinitionError, message="reserved"):
-        compile_model(type("Reserved", (Space,), {name: Const(1)}))
+        compile_model(type("Reserved", (Space,), {name: derived(_one)}))
 
 
 def test_incompatible_inferred_derived_override_is_rejected() -> None:
@@ -364,7 +388,7 @@ def test_incompatible_inferred_derived_override_is_rejected() -> None:
     def output() -> str:
         return "different"
 
-    changed = cast(type[Space], type("Changed", (Base,), {"output": Derived(output)}))
+    changed = cast(type[Space], type("Changed", (Base,), {"output": derived(output)}))
 
     with refused("override-changes-semantics", error=DefinitionError):
         compile_model(changed)
@@ -375,7 +399,7 @@ def test_missing_binding_names_fail_before_any_callback() -> None:
         raise AssertionError("a compiler must never discover dependencies by execution")
 
     class Example(Space):
-        result = Derived(invalid)
+        result = derived(invalid)
 
     with refused("declaration-unknown", error=DefinitionError):
         compile_model(Example)

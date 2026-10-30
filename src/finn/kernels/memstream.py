@@ -19,11 +19,11 @@ values it streams, so it states their ``value_range`` in its output's tensor
 - Its AXI-Lite port is tied off: the contents are fixed at build time.
 
 It is a channel's ``source`` candidate (``finn.kernels.channels``): placed by the
-channel it drives, its output presents its given sequence, and its set port reads
-the channel's ``index_tensor``. Placed by a parent, it states its ports' contracts
-(``output_contract``, ``set_contract``), which the channels on them take. Its cycles are
-the beats its output carries a frame, as every leaf's: one pass with one set, one pass
-an index with several.
+channel it drives, its output presents its given sequence, and its set port reads the
+channel's ``index_tensor``. Placed by a parent, its ports give the channels on them
+their stream pins (``output.stream_pins``, ``set.stream_pins``). Its cycles are the
+beats its output carries a frame, by the rate law, as every leaf's without a schedule:
+one pass with one set, one pass an index with several.
 
 ``ram_style`` and ``pumped_memory`` are its choices. A pumped memory runs at
 ``ap_clk2x`` on half-width words and doubles the depth; its 2x clock pin is
@@ -40,9 +40,8 @@ doubled clock, which its module states and the shell admits (``clock-unavailable
 
 from __future__ import annotations
 
-from dataclasses import replace
 from math import ceil, prod
-from typing import TYPE_CHECKING, ClassVar
+from typing import ClassVar
 
 from qonnx.core.ranges import TensorRange
 
@@ -60,7 +59,6 @@ from finn.dataflow.datatypes import (
     ordinary_integer_bounds,
     qonnx_datatype_width,
 )
-from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import (
     BeatSequence,
@@ -71,10 +69,19 @@ from finn.dataflow.traversal import (
 )
 from finn.kernels.artifacts.abi import Bus, Clocking, Endpoint, Member, StandardProtocol
 from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData, hex_image
-from finn.kernels.base import NATIVE_CLOCKING, KernelSpace, PortContract
-from finn.kernels.control import ControlBus
-from finn.kernels.library import LibraryModule
-from finn.kernels.port import AxiStreamPort
+from finn.kernels.base import Kernel
+from finn.kernels.control import ControlModel
+from finn.kernels.laws import (
+    NATIVE_CLOCKING,
+    Axis,
+    Intake,
+    Native,
+    PortIntake,
+    Standing,
+    doubled,
+)
+from finn.kernels.library import ModuleSpec
+from finn.kernels.port_model import StreamPort
 from finn.kernels.utilization import (
     Fit,
     auto_unstated,
@@ -118,7 +125,7 @@ _MEMSTREAM_LUT = Fit(4.2, (1.026,))
 _MEMSTREAM_FF = Fit(4.4, (2.028,))
 
 
-class MemStreamKernel(KernelSpace):
+class MemStreamKernel(Kernel):
     """A stored operand streamed in its consumer's order; see the module docstring."""
 
     id = "finnlib.memstream_axi"
@@ -154,7 +161,7 @@ class MemStreamKernel(KernelSpace):
         return memory_preference(bits)
 
     # A pumped memory takes a doubled clock, which the shell admits.
-    pumped_memory: bool = Decision(values=(False, True))
+    pumped_memory: bool = Decision(domain=(False, True))
 
     @derived
     def value_range(self) -> tuple[int, ...] | Rejected:
@@ -282,8 +289,8 @@ class MemStreamKernel(KernelSpace):
                     ("rdata", 32),
                 )
             ),
-            associated_clock=NATIVE_CLOCKING.clock,
-            associated_reset=NATIVE_CLOCKING.reset,
+            associated_clock=type(self).clock_domain.clock,
+            associated_reset=type(self).clock_domain.reset,
         )
 
     @derived
@@ -320,30 +327,62 @@ class MemStreamKernel(KernelSpace):
             fabric=self.platform.fabric,
         )
 
-    set = AxiStreamPort(
-        name="set",
+    set = StreamPort(
+        transport=Native(names=("s_axis_0_tdata", "s_axis_0_tvalid", "s_axis_0_tready")),
         endpoint=Endpoint.TARGET,
         tensor=set_tensor,
         sequence=set_sequence,
         dtype=set_dtype,
-        signals=("s_axis_0_tdata", "s_axis_0_tvalid", "s_axis_0_tready"),
+        governs="output",
     )
-    output = AxiStreamPort(
-        name="m_axis_0",
+    output = StreamPort(
+        transport=Axis(bus="m_axis_0"),
         endpoint=Endpoint.INITIATOR,
         tensor=output_tensor,
         sequence=output_sequence,
+        stored=True,
     )
-    if TYPE_CHECKING:  # members its ports lower to, which its channel reads
-        output_stream: ClassVar[Stream]
-        output_data_width: ClassVar[int]
-        output_contract: ClassVar[PortContract]
+
+    @derived
+    def intake(self) -> Intake:
+        """Its set port's, from its RTL (CONTRACT.md § 5); none with one set, whose set port
+        is idle. ``memstream`` takes a set index while it streams none, or as it issues
+        the last read of the set it streams; it issues a read while fewer than
+        ``FULL_CREDIT`` (8) words are undelivered. So with its output stalled it takes the
+        first index and one more for each set whose reads all issue: ``1 + 8 // DEPTH``
+        from reset; it holds at most the set it streams and those its undelivered words
+        span. A pumped memory streams ``2 * DEPTH`` half-words a set at the doubled clock,
+        its output assembly holding four more, and its wrapper holds one index ahead
+        (``IBuf``): ``2 + 12 // (2 * DEPTH)`` from reset, at most one more set and those
+        twelve half-words span."""
+        if not self.set.placed:
+            return Intake()
+        depth = self.form.beats
+        if self.pumped_memory:
+            words = 2 * depth  # half-words a set
+            before, most = 2 + 12 // words, 3 + -(-11 // words)
+            source = (
+                "rtl/infra/memstream.sv:104-118 (srdy, Vld), :131-150 (FULL_CREDIT, got0); "
+                "rtl/infra/memstream_axi.sv:110 (DEPTH_EFF), :213-228 (IBuf, IVld), "
+                ":230-258 (SBuf, mem_rdy)"
+            )
+        else:
+            before, most = 1 + 8 // depth, 2 + -(-7 // depth)
+            source = (
+                "rtl/infra/memstream.sv:104-118 (srdy, Vld), :131-150 (FULL_CREDIT, got0); "
+                "rtl/infra/memstream_axi.sv:132 (s_axis_0_tready)"
+            )
+        rule = (
+            "takes a set index while it streams none, or as it issues the last read of the "
+            "set it streams; reads wait on its credit, which the output returns"
+        )
+        return Intake((PortIntake("set", before, most, rule, Standing.STRUCTURAL, source),))
 
     @derived
     def clocking(self) -> Clocking:
         """``clk2x`` runs a pumped memory, and is held low otherwise."""
         pumped = self.pumped_memory
-        return replace(type(self).clock_domain, doubled="clk2x", doubling=pumped)
+        return doubled(type(self).clock_domain, pumped)
 
     @view
     def parameters(self) -> dict[str, int | str]:
@@ -357,12 +396,11 @@ class MemStreamKernel(KernelSpace):
         }
 
     # AXI-Lite, always held: the contents are fixed at build time.
-    config = ControlBus(config_bus)
+    config = ControlModel(bus=config_bus)
 
-    module = LibraryModule(
+    module_spec: ClassVar[ModuleSpec] = ModuleSpec(
         "memstream_axi",
-        parameters=parameters,
-        sources=(
+        constant_sources=(
             CopiedSource("finnlib", "rtl/infra/axilite.sv", provides=("module:axilite",)),
             CopiedSource("finnlib", "rtl/infra/memstream.sv", provides=("module:memstream",)),
             CopiedSource(
@@ -372,8 +410,19 @@ class MemStreamKernel(KernelSpace):
                 requires=("module:axilite", "module:memstream"),
             ),
         ),
-        data=init_file,
     )
+
+    @view
+    def module_data(self) -> tuple[GeneratedData, ...]:
+        """Its module reads its contents from ``init_file``."""
+        return (self.init_file,)
+
+    @view
+    def cycles(self) -> int | Rejected:
+        """The base's, by the rate law (``Kernel.cycles``: the most beats a frame its placed
+        ports carry), declared here so that its channel counts it by its kind
+        (``finn.kernels.channels.Channel.source_cycles``)."""
+        return self._cycles()
 
 
 __all__ = ["MemStreamKernel", "memstream_resources"]

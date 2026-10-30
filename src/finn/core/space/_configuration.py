@@ -22,6 +22,7 @@ from typing import (
     Any,
     ClassVar,
     Generic,
+    NoReturn,
     Self,
     TypeVar,
     cast,
@@ -61,7 +62,7 @@ class BoundValue(Generic[T]):
     a view (its accepted value) or a reference into a child.
     """
 
-    def __init__(self, instance: Space, reference: object) -> None:
+    def __init__(self, instance: _Namespace, reference: object) -> None:
         self.instance, self.reference = instance, reference
 
     def get(self) -> T:
@@ -121,7 +122,12 @@ def _when_field(*, default: None = None, kw_only: bool = True) -> Any:
     field_specifiers=(_when_field,),
 )
 class SpaceMeta(type):
-    """Declare nodes, and protect prepared declaration structure.
+    """Declare namespaces, and close each Space or Group class when it is created.
+
+    A class is closed when its class statement finishes (``__init__``, after
+    ``__set_name__`` and ``__init_subclass__``, which may still add members): each
+    declaration it holds is frozen, and a structural member (``_structural``) can no
+    longer be set or removed on it (``structure-finalized``). Compiling stays lazy.
 
     ``dataclass_transform`` types each Space class's call from its annotated
     formals and Decisions (``area: int = Param()``) plus the ``when`` guard.
@@ -133,7 +139,7 @@ class SpaceMeta(type):
 
     if not TYPE_CHECKING:
 
-        def __call__(cls, *args: object, **keywords: object) -> Space:
+        def __call__(cls, *args: object, **keywords: object) -> _Namespace:
             if args:
                 raise DefinitionError.broken(
                     "formals-by-keyword",
@@ -146,42 +152,67 @@ class SpaceMeta(type):
 
             return declare_node(cls, keywords)
 
+    def __init__(
+        cls, name: str, bases: tuple[type, ...], namespace: dict[str, Any], /, **kwargs: Any
+    ) -> None:
+        super().__init__(name, bases, namespace, **kwargs)
+        _close(cls)
+
     def __setattr__(cls, name: str, value: object) -> None:
-        if cls.__dict__.get("_space_definition_finalized", False) and not name.startswith(
-            "_space_"
-        ):
+        if cls.__dict__.get("_space_closed", False) and not name.startswith("_space_"):
             existing = cls.__dict__.get(name, getattr(cls, name, None))
             if _structural(existing) or _structural(value):
-                raise DefinitionError.broken(
-                    "structure-finalized",
-                    _OWNER,
-                    f"{cls.__qualname__}.{name}: prepared declaration structure is finalized",
-                    declaration=f"{cls.__qualname__}.{name}",
-                )
+                _refuse_structure(cls, name)
         super().__setattr__(name, value)
 
     def __delattr__(cls, name: str) -> None:
-        if cls.__dict__.get("_space_definition_finalized", False):
+        if cls.__dict__.get("_space_closed", False):
             existing = cls.__dict__.get(name)
             if _structural(existing):
-                raise DefinitionError.broken(
-                    "structure-finalized",
-                    _OWNER,
-                    f"{cls.__qualname__}.{name}: prepared declaration structure is finalized",
-                    declaration=f"{cls.__qualname__}.{name}",
-                )
+                _refuse_structure(cls, name)
         super().__delattr__(name)
+
+
+def _close(cls: SpaceMeta) -> None:
+    """Close a Space class as it is created: freeze each declaration it holds (a node's
+    record, a selector's and each of its cases' included), and mark it closed."""
+    from ._nodes import NodeDecision, slot_declaration
+
+    reason = f"{cls.__name__} was created"
+    # The Space base itself (no Space among its bases) holds none, and is made before its
+    # name is bound, which ``slot_declaration`` reads.
+    placed = any(isinstance(base, SpaceMeta) for base in cls.__bases__)
+    for value in vars(cls).values() if placed else ():
+        declaration = slot_declaration(value)
+        if declaration is None:
+            continue
+        if isinstance(declaration, NodeDecision):
+            for case in declaration.candidates.values():
+                if case is not None:
+                    case.freeze(reason)
+        declaration.freeze(reason)
+    type.__setattr__(cls, "_space_closed", True)
+
+
+def _refuse_structure(cls: SpaceMeta, name: str) -> NoReturn:
+    raise DefinitionError.broken(
+        "structure-finalized",
+        _OWNER,
+        f"{cls.__qualname__}.{name}: a Space class's structure is finalized when the class is "
+        "created; declare the member in its class body, or in a subclass",
+        declaration=f"{cls.__qualname__}.{name}",
+    )
 
 
 def _structural(value: object) -> bool:
     from ._nodes import NodeChoice
 
     return isinstance(value, (Declaration, NodeChoice)) or (
-        isinstance(value, Space) and declared_path(value) is not None
+        isinstance(value, _Namespace) and declared_path(value) is not None
     )
 
 
-def _check_configuration_mutation(point: Space, name: str) -> None:
+def _check_configuration_mutation(point: _Namespace, name: str) -> None:
     from ._failure import driver_only
     from .occurrence import model_of
 
@@ -193,14 +224,13 @@ def _check_configuration_mutation(point: Space, name: str) -> None:
             raise AttributeError(f"{name} is an immutable configuration field; use with_choices()")
 
 
-class Space(metaclass=SpaceMeta):
-    """The base of every Space class.
+class _Namespace(metaclass=SpaceMeta):
+    """Shared declaration and read-access protocol of Space and Group.
 
-    A Space class describes a design space: calling it declares a node, and
-    ``design_space`` opens one.
+    This carries no independent evaluation or configuration machinery. Only Space
+    adds root opening, validity ownership and configuration-editing operations.
     """
 
-    when: _When = _when_field(default=None, kw_only=True)
     # A design space read at a scope (``_running.surface.At``), or a method's reader; the
     # scope's record (``_scopes.ScopeRecord``).
     _held: ClassVar[object]
@@ -238,7 +268,7 @@ class Space(metaclass=SpaceMeta):
             return cast(Self, path_proxy(type(self), (*outer, path[0])))
         from .occurrence import child
 
-        return cast(Self, child(cast(Space, instance), path[0]))
+        return cast(Self, child(cast(_Namespace, instance), path[0]))
 
     if not TYPE_CHECKING:
         # Hidden from type checkers: a declared __setattr__ would make mypy accept
@@ -316,8 +346,9 @@ class Space(metaclass=SpaceMeta):
     def inspect(self, view: object) -> ViewAssessment[Any] | ConstraintAssessment:
         """The assessment of a view or a constraint of this configuration.
 
-        ``point.inspect(House.total)`` is the view's ``ViewAssessment``: its raw
-        output, its Space's validity, readiness and accepted result. A view of a
+        ``point.inspect(House.total)`` is the view's ``ViewAssessment``: its local
+        result, applicability, owning validity and output (None when presence or
+        owning refusal prevented entry). A view of a
         child is inspected on the child's configuration,
         ``point.kitchen.inspect(Room.cost)`` (typed by the view declaration),
         or through a path, ``point.inspect(House.kitchen.cost)`` (a reference
@@ -346,6 +377,12 @@ class Space(metaclass=SpaceMeta):
         from .occurrence import bind_field
 
         return bind_field(self, cast("ValueRef[Any]", reference))
+
+
+class Space(_Namespace):
+    """An independently instantiable design space with model validity and choices."""
+
+    when: _When = _when_field(default=None, kw_only=True)
 
     def with_choices(
         self, /, *changes: ChangeRequest | Mapping[Any, object], **choices: object

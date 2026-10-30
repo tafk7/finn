@@ -38,7 +38,7 @@ def test_the_chain_leaves_a_frame_per_bottleneck_beat_count(tmp_path: Path) -> N
     bound = network(model, model.graph.node, name="chain")
     point, boundary = configured_network(model, "chain")
     inputs, outputs = boundary_words(model, point, boundary, context, "chain")
-    beats = {node.name: schedule_of(bound, node).beat_count for node in model.graph.node}
+    beats = {node.name: schedule_of(bound, node).iterations for node in model.graph.node}
     assert beats == {"first": 12, "activate": 6, "second": 12}
     measured = measure(
         point.module,

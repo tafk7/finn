@@ -61,12 +61,12 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from ._table import Binding, member_key
-from .errors import DefinitionError
+from .errors import DefinitionError, RequestError
 from .ir import PLACING, Edge, Formal, Local, Member, NodeKind, Placed, Placing, Selected
 from .semantics import ValueSemantics
 
 if TYPE_CHECKING:
-    from ._configuration import Space
+    from ._configuration import _Namespace
     from ._nodes import NodeDecl
     from ._template import Compiled
     from ._whole import Flow, Whole
@@ -238,6 +238,9 @@ class Address(tuple["ScopeRecord", int]):
     @property
     def constraints(self) -> tuple[Address, ...]:
         member, through, key, _ = self._read()
+        if member.kind == "view":
+            # A template may be included through Groups: its real owner is known here.
+            return (self.scope.owning_space.validity,)
         return tuple(through.mapped(edge, key) for edge in member.constraints)
 
     @property
@@ -254,13 +257,20 @@ class Address(tuple["ScopeRecord", int]):
 
     @property
     def dependencies(self) -> tuple[Address, ...]:
-        """Its edges mapped, in ``Node.dependencies``' order, each once."""
+        """Explicit edges mapped once, plus a View's intrinsic real-owner validity edge.
+
+        That owner is resolved at placement, so Group templates never need their own
+        validity node or an artificial dependency on an arbitrary enclosing class.
+        """
         member, through, key, _ = self._read()
         found = (
             through.guard_at(edge, key) if edge is member.guard else through.mapped(edge, key)
             for edge in member.dependencies
         )
-        return tuple(dict.fromkeys(address for address in found if address is not None))
+        dependencies = tuple(address for address in found if address is not None)
+        if member.kind == "view":
+            dependencies += self.constraints
+        return tuple(dict.fromkeys(dependencies))
 
 
 class _SelectionIndex(Mapping[str, Address]):
@@ -420,7 +430,7 @@ class ScopeRecord:
         return self.position > other.position
 
     @property
-    def space_type(self) -> type[Space]:
+    def space_type(self) -> type[_Namespace]:
         return self.compiled.space_type
 
     def within(self, other: ScopeRecord) -> bool:
@@ -772,8 +782,19 @@ class ScopeRecord:
         return self.parent.compiled.slots[cast(int, self.slot)].record
 
     @property
+    def owning_space(self) -> ScopeRecord:
+        """Nearest real Space; a Group is only a namespace in this same model."""
+        current = self
+        while current.compiled.validity is None:
+            assert current.parent is not None
+            current = current.parent
+        return current
+
+    @property
     def validity(self) -> Address:
         """The address answering its Space's validity."""
+        if self.compiled.validity is None:
+            raise RequestError("a Group has no independent validity; query its owning Space")
         return self.address(self.compiled.validity)
 
     def choice(self, index: int) -> ChoiceRecord:
@@ -1097,7 +1118,7 @@ class Scopes:
 
     # -- statistics
 
-    def statistics(self) -> tuple[int, int, int, int, int, int]:
+    def statistics(self) -> tuple[int, int, int, int, int, int, int]:
         """``inspection.statistics``' counts: authored declarations, scopes, members,
         potential edges, Decisions over nodes, owning decisions. Each class is counted at
         every placement: once per **shape** of placement (its class, whether it is placed
@@ -1106,7 +1127,7 @@ class Scopes:
         potential edges are the addresses its edges read there, each once."""
         with self.lock:
             totals: dict[tuple[object, ...], tuple[int, ...]] = {}
-            return cast(tuple[int, int, int, int, int, int], self._counted(self.root, totals))
+            return cast(tuple[int, int, int, int, int, int, int], self._counted(self.root, totals))
 
     def _counted(
         self, record: ScopeRecord, totals: dict[tuple[object, ...], tuple[int, ...]]
@@ -1130,7 +1151,15 @@ class Scopes:
             edges += _edges(address)
             if address.kind == "decision":
                 decisions += 1
-        found = [authored, 1, nodes, edges, len(compiled.choices), decisions]
+        found = [
+            authored,
+            int(compiled.validity is not None),
+            nodes,
+            edges,
+            len(compiled.choices),
+            decisions,
+            int(compiled.validity is None),
+        ]
         for slot in range(len(compiled.slots)):
             child = record.child(slot)
             found[0] += 1  # the placement
@@ -1182,7 +1211,10 @@ def _written_keys(registry: _Registry, compiled: Compiled) -> Mapping[str, int]:
 def _edges(address: Address) -> int:
     """How many addresses a member's edges read (each once)."""
     member, through, _, _ = address._read()
-    return len({found for edge in member.dependencies if (found := through.target(edge))})
+    targets = {found for edge in member.dependencies if (found := through.target(edge))}
+    if member.kind == "view":
+        targets.add(address.scope.owning_space.validity)
+    return len(targets)
 
 
 def _prefixes(record: ScopeRecord, rest: str) -> Iterator[tuple[int, str]]:

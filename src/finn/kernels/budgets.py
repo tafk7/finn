@@ -46,11 +46,12 @@ values are facts, so every row shares one class.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
-from typing import Any
+from collections.abc import Sequence
+from typing import cast
 
 from finn.core.space import (
     Available,
+    Group,
     Param,
     QueryResult,
     Rejected,
@@ -60,7 +61,6 @@ from finn.core.space import (
     derived,
     reject,
 )
-from finn.kernels.declaration import declared_reads
 from finn.kernels.movers import MoverContract
 
 SHELL = "shell"
@@ -150,32 +150,123 @@ class ShellBudgets(Space):
         return True
 
 
-def _sum(names: Sequence[str], value: Callable[[Any], int]) -> Callable[[ShellBudgets], int]:
-    @declared_reads(*names)
-    def counted(self: ShellBudgets) -> int:
-        return sum(value(getattr(self, name)) for name in names)
+class _Sum(Group):
+    """A finite sum step included in the shell's model, head before tail."""
 
-    return counted
+    head: int = Param()
+    tail: int = Param()
+
+    @derived
+    def result(self) -> int:
+        head = int(self.head)
+        tail = self.tail
+        return head + tail
 
 
-def _buses(contracts: tuple[MoverContract, ...]) -> int:
-    return sum(contract.control_buses for contract in contracts)
+class _PresentedSum(Group):
+    """A presented bus contributes one to the included sum."""
+
+    head: bool = Param()
+    tail: int = Param()
+
+    @derived
+    def result(self) -> int:
+        head = int(self.head)
+        tail = self.tail
+        return head + tail
 
 
-def _clock(doubled: str) -> object:
-    """The rule of the contributor whose doubled clock is ``doubled``."""
+class _MoverSum(Group):
+    """Count only a mover tuple's control buses, before the next contributor."""
 
-    @declared_reads("clk2x", "shell", doubled)
-    def clocked(self: ShellBudgets) -> bool | Rejected:
-        if self.clk2x or not getattr(self, doubled):
-            return True
-        return reject(
-            "clock-unavailable",
-            f"the partition takes an aligned doubled clock (ap_clk2x), which the "
-            f"{self.shell!r} shell does not supply",
-        )
+    head: tuple[MoverContract, ...] = Param()
+    tail: int = Param()
 
-    return constraint(clocked)
+    @derived
+    def result(self) -> int:
+        head = sum(contract.control_buses for contract in self.head)
+        tail = self.tail
+        return head + tail
+
+
+class _DoubledAny(Group):
+    """The old eager boolean list: even a true head demands its tail."""
+
+    head: bool = Param()
+    tail: bool = Param()
+
+    @derived
+    def result(self) -> bool:
+        head = self.head
+        tail = self.tail
+        return head or tail
+
+
+def _integer(*, result: int) -> int:
+    return result
+
+
+def _boolean(*, result: bool) -> bool:
+    return result
+
+
+def _zero() -> int:
+    return 0
+
+
+def _false() -> bool:
+    return False
+
+
+def _sum(
+    members: dict[str, object],
+    names: Sequence[str],
+    kind: str,
+    step: type[_Sum] | type[_PresentedSum] | type[_MoverSum],
+) -> object:
+    """Bind finite model occurrences; contributor names are declaration edges."""
+    if not names:
+        return derived(_zero)
+    tail = 0
+    for index in reversed(range(len(names))):
+        # The same kind typed each contributor Param above; casts describe symbolic
+        # values at the object-typed composite dictionary boundary, not runtime data.
+        head = members[names[index]]
+        part: _Sum | _PresentedSum | _MoverSum
+        if step is _PresentedSum:
+            part = _PresentedSum(head=cast(bool, head), tail=tail)
+        elif step is _MoverSum:
+            part = _MoverSum(head=cast(tuple[MoverContract, ...], head), tail=tail)
+        else:
+            part = _Sum(head=cast(int, head), tail=tail)
+        members[f"_sum_{kind}_{index}"] = part
+        tail = part.result
+    return derived(result=tail)(_integer)
+
+
+class _ClockRequirement(Group):
+    """Resolve the clock's supplying shell only when this contributor needs it."""
+
+    supplied: bool = Param()
+    doubled: bool = Param()
+    shell: str = Param()
+
+    @derived
+    def missing_from(self) -> str | None:
+        if self.supplied or not self.doubled:
+            return None
+        return self.shell
+
+
+def _clock(*, missing_from: str | None) -> bool | Rejected:
+    """Keep the actual rejection on the shell's named contributor rule."""
+    if missing_from is None:
+        return True
+    return reject(
+        "clock-unavailable",
+        f"the partition takes an aligned doubled clock (ap_clk2x), which the "
+        f"{missing_from!r} shell does not supply",
+    )
 
 
 def shell_members(
@@ -202,24 +293,33 @@ def shell_members(
         for member in owners:
             members[contributor(member, kind)] = Param()
             annotations[contributor(member, kind)] = annotation
-    members["presented_buses"] = derived(
-        _sum([contributor(member, PRESENTED) for member in presented], int)
+    members["presented_buses"] = _sum(
+        members, [contributor(member, PRESENTED) for member in presented], PRESENTED, _PresentedSum
     )
-    members["mover_buses"] = derived(
-        _sum([contributor(member, MOVER) for member in movers], _buses)
+    members["mover_buses"] = _sum(
+        members, [contributor(member, MOVER) for member in movers], MOVER, _MoverSum
     )
-    members["memory_initiators"] = derived(
-        _sum([contributor(member, INITIATORS) for member in initiators], int)
+    members["memory_initiators"] = _sum(
+        members, [contributor(member, INITIATORS) for member in initiators], INITIATORS, _Sum
     )
     clocks = [contributor(member, DOUBLED) for member in doubled]
 
-    @declared_reads(*clocks)
-    def doubled_clock(self: ShellBudgets) -> bool:
-        return any([bool(getattr(self, each)) for each in clocks])
-
-    members["doubled_clock"] = derived(doubled_clock)
-    for member in doubled:
-        members[contributor(member, CLOCK)] = _clock(contributor(member, DOUBLED))
+    tail = False
+    for index in reversed(range(len(clocks))):
+        part = _DoubledAny(head=cast(bool, members[clocks[index]]), tail=tail)
+        members[f"_any_doubled_{index}"] = part
+        tail = part.result
+    members["doubled_clock"] = derived(result=tail)(_boolean) if clocks else derived(_false)
+    for index, member in enumerate(doubled):
+        requirement = _ClockRequirement(
+            supplied=ShellBudgets.clk2x,
+            doubled=cast(bool, members[contributor(member, DOUBLED)]),
+            shell=ShellBudgets.shell,
+        )
+        members[f"_require_clock_{index}"] = requirement
+        members[contributor(member, CLOCK)] = constraint(missing_from=requirement.missing_from)(
+            _clock
+        )
     return members, annotations
 
 

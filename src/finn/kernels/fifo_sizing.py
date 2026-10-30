@@ -11,10 +11,10 @@ partition's bottleneck period ``P`` (its ``cycles``, which count a boundary's st
 ``Channel.cycles``):
 
 - the **supply**: when each word arrives at the transport, unthrottled. The
-  producer's beat times, which its port states with its contract (``Pace``: one
-  schedule beat a cycle), carried through the output adapter's width
+  producer's beat times, its port's pace (``StreamPort.pace``, ``Pace``: an iteration a
+  cycle, by the rate law, CONTRACT.md L6), carried through the output adapter's width
   conversion (a word leaves once its last element arrived, one a cycle), and the
-  producer's span, the beats its kernel takes a frame;
+  producer's span, the cycles its kernel takes a frame;
 - the **acceptance**: when the input side takes a word. With no input adapter,
   the consumer's beat times (it takes a word on the beat that reads it, no sooner
   than its own spacing). With an ``input_gen``, its buffer (``nest_buffer``, read
@@ -33,9 +33,10 @@ within that, and ``least_depth`` is the least depth that does, by bisection. A k
 pipeline latency is a constant shift of a side's times, and the acceptance follows the
 supply's data, so they do not change the depth.
 
-``size`` reads a channel's sides, its producer's and its consumer's paces from the
-contracts of the ports beside it (its network's ``neighbours``; at a slice's edge, a frozen
-neighbour's port's, at its stored choices, as a kernel's), and gives its ``Sized``: a
+``size`` reads a channel's sides, its producer's and its consumer's paces from the ports
+beside it (its network's ``neighbours``: each a scheduled port's ``pace``; at a slice's
+edge, a frozen neighbour's port's, at its stored choices, as a kernel's), and gives its
+``Sized``: a
 depth (``0``: direct) and why. The least depth counts the words the FIFO must
 hold; the DEPTH proposed is the least whose native storage holds them
 (``least_depth_holding``: FinnLib's FIFO is a shift register of five words up to
@@ -43,10 +44,13 @@ hold; the DEPTH proposed is the least whose native storage holds them
 the pace the outside states of it (``Side.outside``, ``finn.kernels.sides``: its beat
 times, or a steady beat expanded at the edge's beats, ``stated_pattern``), else by the
 mover the shell places there (``Channel.mover``, ``finn.kernels.movers``): its beat
-times over a frame, and its cycles a frame as its span. An unstated boundary without a
-mover (the ``ip`` shell: its integrator's pacing), a memory source (paced by its
-consumer) and a side no schedule paces are not modelled: direct, with that
-reason. So is an adapter
+times over a frame, and its cycles a frame as its span. Each side's times are read from
+their owner (a port's pace, the outside's statement, the mover's contract) when a channel
+is sized, by one reader (``pattern``); a ``Pattern`` is the model's working value and is
+kept nowhere. An unstated boundary without a mover (the ``ip`` shell: its integrator's
+pacing), a memory source (paced by its consumer: its output is sourced) and a port no
+schedule paces (buffered, selected or sourced: it has no pace, CONTRACT.md § 4) are not
+modelled: direct, with that reason. So is an adapter
 chain other than one ``vpc`` before the transport and one ``input_gen`` after it.
 The strategy proposing the depths is ``finn.kernels.explore.SizeFifos``; an rtlsim
 check is evidence outside it.
@@ -66,37 +70,60 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from itertools import accumulate
 from math import ceil
+from typing import Protocol
 
+from finn.dataflow.schedule import Pace
 from finn.kernels.adapters import Convert
-from finn.kernels.base import PortContract
+from finn.kernels.base import PortPins
 from finn.kernels.channels import Channel, Neighbours
 from finn.kernels.fifo import least_depth_holding
 from finn.kernels.input_generator import Generate, NestBuffer, nest_buffer
 from finn.kernels.movers import MoverContract
 from finn.kernels.sides import BeatTimes, Side, SideKind, Steady, beat_times
-from finn.kernels.transport import StreamContract
+from finn.kernels.transport import StreamPins
 
 
 @dataclass(frozen=True)
 class Pattern:
     """One side's beat times over a frame (cycles from the frame's first beat) and its
-    kernel's span, the beats it takes a frame."""
+    kernel's span, the cycles it takes a frame: the model's working value, made from an
+    owner's times when a channel is sized (``pattern``), or by the model (a width
+    conversion's, ``converted``)."""
 
     times: tuple[int, ...]
-    beats: int
+    span: int
 
     def __post_init__(self) -> None:
         if not self.times or any(b < a for a, b in zip(self.times, self.times[1:])):
             raise ValueError("a side presents at least one beat, in time order")
-        if self.beats <= self.times[-1] - self.times[0]:
+        if self.span <= self.times[-1] - self.times[0]:
             raise ValueError("a frame's beats lie within its kernel's span")
 
     def gaps(self) -> tuple[int, ...]:
         """The least spacing before each beat: to the beat before it, the first to the
         last of the frame before."""
         times = self.times
-        first = times[0] + self.beats - times[-1]
+        first = times[0] + self.span - times[-1]
         return (first, *(b - a for a, b in zip(times, times[1:])))
+
+
+class Paced(Protocol):
+    """What owns a side's beat times over a frame and its span: a scheduled port's pace
+    (``finn.dataflow.schedule.Pace``, iterations, a cycle each by the rate law), the beat
+    times the outside states (``finn.kernels.sides.BeatTimes``), a mover's contract
+    (``finn.kernels.movers.MoverContract``)."""
+
+    @property
+    def times(self) -> tuple[int, ...]: ...
+
+    @property
+    def span(self) -> int: ...
+
+
+def pattern(paced: Paced) -> Pattern:
+    """The ``Pattern`` of an owner's beat times: read when a channel is sized, kept
+    nowhere."""
+    return Pattern(paced.times, paced.span)
 
 
 @dataclass(frozen=True)
@@ -256,7 +283,7 @@ FRAMES = 16
 
 def within(late: Sequence[int], supply: Pattern, period: int) -> bool:
     """The producer starts every frame on time: late by no more than its idle time."""
-    return all(each <= period - supply.beats for each in late)
+    return all(each <= period - supply.span for each in late)
 
 
 def keeps(
@@ -275,8 +302,8 @@ def least_depth(
     """The least FIFO depth (0: direct) for which the producer, throttled only by a full
     FIFO, is never later than its idle time a period (``keeps``); ``None`` when none up to
     ``frames`` frames of words is."""
-    if supply.beats > period:
-        raise ValueError(f"a producer of {supply.beats} beats cannot keep a period of {period}")
+    if supply.span > period:
+        raise ValueError(f"a producer of {supply.span} cycles cannot keep a period of {period}")
 
     def meets(depth: int) -> bool:
         return keeps(supply, accept, period, depth, frames)
@@ -297,14 +324,16 @@ class NotModelled(ValueError):
     """A channel whose sides the model does not read, and why."""
 
 
-def _pattern(port: PortContract | None, side: str) -> Pattern:
-    """The pace the port beside the channel on ``side`` states with its contract."""
+def _paced(neighbours: Neighbours, side: str) -> Pattern:
+    """The pace of the port beside the channel on ``side`` (``Neighbours``): a scheduled
+    port's; ``NotModelled`` for a port of another rule, which has none."""
+    port: PortPins | None = getattr(neighbours, side)
     if port is None:
         raise ValueError(f"the channel's {side} is a port, and none is given beside it")
-    pace = port.contract.pace
+    pace: Pace | None = getattr(neighbours, f"{side}_pace")
     if pace is None:
         raise NotModelled(f"the {side} presents a given sequence, which no schedule paces")
-    return Pattern(pace.times, pace.span)
+    return pattern(pace)
 
 
 def stated_pattern(pace: BeatTimes | Steady, beats: int) -> Pattern:
@@ -320,7 +349,7 @@ def stated_pattern(pace: BeatTimes | Steady, beats: int) -> Pattern:
             f"a boundary's stated pace times {len(found.times)} beats a frame, and its edge "
             f"presents {beats}"
         )
-    return Pattern(found.times, found.span)
+    return pattern(found)
 
 
 def _free(channel: Channel, side: Side) -> Pattern:
@@ -330,13 +359,13 @@ def _free(channel: Channel, side: Side) -> Pattern:
     modelled ("a boundary: not modelled")."""
     outside = side.outside
     if outside is not None and outside.pace is not None:
-        edge: StreamContract | None = channel.boundary
+        edge: StreamPins | None = channel.boundary
         assert edge is not None  # a channel with a boundary side presents its port
         return stated_pattern(outside.pace, edge.form.beats)
     if not channel.offered:
         raise NotModelled("a boundary: not modelled")
     contract: MoverContract = channel.mover_contract
-    return Pattern(contract.times, contract.cycles)
+    return pattern(contract)
 
 
 def sides(channel: Channel, neighbours: Neighbours) -> tuple[Pattern, Acceptance]:
@@ -351,16 +380,16 @@ def sides(channel: Channel, neighbours: Neighbours) -> tuple[Pattern, Acceptance
     producer = (
         _free(channel, found.producer)
         if found.producer.kind is SideKind.BOUNDARY
-        else _pattern(neighbours.producer, "producer")
+        else _paced(neighbours, "producer")
     )
     consumer = (
         _free(channel, found.consumer)
         if found.consumer.kind is SideKind.BOUNDARY
-        else _pattern(neighbours.consumer, "consumer")
+        else _paced(neighbours, "consumer")
     )
     times = producer.times
     if channel.output_adapting:
-        stages = channel.output_adapter.realization
+        stages = channel.output_adapter.chain
         modules = [stage.module for stage in stages]
         if len(modules) != 1 or not isinstance(modules[0], Convert):
             kinds = " -> ".join(stage.kind for stage in stages)
@@ -368,11 +397,11 @@ def sides(channel: Channel, neighbours: Neighbours) -> tuple[Pattern, Acceptance
         times = converted(times, modules[0].lanes_in, modules[0].lanes_out)
     # A width conversion sending more words than its producer has beats spans them: the
     # producer and its conversion are one source, as slow as the slower of the two.
-    supply = Pattern(times, max(producer.beats, times[-1] - times[0] + 1))
+    supply = Pattern(times, max(producer.span, times[-1] - times[0] + 1))
     adapter = channel.adapter
     if adapter is None:
         return supply, consumer
-    stages = adapter.realization
+    stages = adapter.chain
     if len(stages) != 1 or not isinstance(stages[0].module, Generate):
         kinds = " -> ".join(stage.kind for stage in stages)
         raise NotModelled(f"an input adapter of {kinds}: not modelled")
@@ -439,6 +468,7 @@ __all__ = [
     "Acceptance",
     "Flow",
     "NotModelled",
+    "Paced",
     "Pattern",
     "Buffered",
     "Sized",
@@ -446,6 +476,7 @@ __all__ = [
     "holds",
     "keeps",
     "least_depth",
+    "pattern",
     "sides",
     "simulate",
     "size",

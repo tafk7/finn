@@ -90,9 +90,14 @@ def fresh(point: Space) -> Space:
     """The recomputation: the design space of ``point``'s model, facts and stored choices,
     bound from nothing in a session of its own with no cache (``_rebound``), read at
     ``point``'s scope. A design space equal to ``point``'s: a test asks it in a session of
-    its own to evaluate it from nothing."""
+    its own to evaluate it from nothing. The input remains a real Space, including a
+    child reached through a Group; a Group namespace is not an independent walk point."""
+    if not isinstance(point, Space):
+        raise TypeError("fresh takes a real Space, not a Group namespace")
     at = occurrence.held(point)
-    return occurrence.place(At(_rebound(at.ds), at.scope))
+    recomputed = occurrence.place(At(_rebound(at.ds), at.scope))
+    assert isinstance(recomputed, Space)  # the same real scope, not its enclosing namespace
+    return recomputed
 
 
 def _pairs(ds: DesignSpace) -> dict[tuple[str, bool], dict[Address, object]]:

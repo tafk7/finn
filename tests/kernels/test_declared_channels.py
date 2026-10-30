@@ -9,6 +9,7 @@ channel's tensor is a fact. A side on the wrong role, and channels whose facts r
 other, are the composer's to refuse (``tests/kernels/test_composer.py``).
 """
 
+from itertools import product
 from math import ceil
 from typing import Any
 
@@ -25,35 +26,42 @@ from support.helpers import (
 
 from finn.core.space import (
     Available,
+    Inapplicable,
     Rejected,
     Space,
     Unresolved,
     derived,
     design_space,
     inspection,
-    view,
 )
+from finn.core.space._nodes import NodeDecision, NodeDecl, slot_declaration
+from finn.dataflow.steps import Hop
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import (
     BeatSequence,
     LevelEnd,
     Loop,
+    Reorder,
     Traversal,
+    offsets,
     regrouped,
     tile,
     vector_major,
 )
+from finn.kernels.adapters import StreamAdapter
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.base import KernelSpace, PortContract
-from finn.kernels.channels import Channel, boundary_contract, stated_by, stated_form
+from finn.kernels.base import Kernel
+from finn.kernels.channels import Channel, ChannelFifo, boundary_pins, stated_by, stated_form
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.configure import commit
+from finn.kernels.laws import AXIS_CLOCKING, Axis
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.movers import IODMA_HLS, iodma_hls
+from finn.kernels.movers import IODMA_HLS, IodmaMover, iodma_hls
 from finn.kernels.partition import Partition
+from finn.kernels.port_model import StreamPort
 from finn.kernels.sides import BUILD, ROW_MAJOR, Outside, Side, Steady
-from finn.kernels.transport import AxisBeat, StreamContract
+from finn.kernels.transport import AxisBeat, StreamPins
 from finn.kernels.values.semantics import IntegerTensorValue
 
 INT4 = ScalarEncoding(DataType["INT4"])
@@ -118,8 +126,8 @@ def test_each_channel_owns_its_refusal_and_independent_refusals_are_all_visible(
     # A source traversing four elements cannot carry an eight-element tensor.
     wide = Tensor((8,), INT4)
     point = constants(first=wide, second=wide)
-    assert isinstance(point.query("first", KernelSpace.netlist), Rejected)
-    assert isinstance(point.query("second", KernelSpace.netlist), Rejected)
+    assert isinstance(point.query("first", Kernel.netlist), Rejected)
+    assert isinstance(point.query("second", Kernel.netlist), Rejected)
     refusal = module_of(point, "constants")
     assert isinstance(refusal, Rejected)
     # Each finding keeps its owner, the channel's own declaration; the partition names the
@@ -140,11 +148,11 @@ def test_explain_shows_per_channel_and_per_member_evidence():
     channel = inspection.explain(point.member("first"), Channel.netlist)
     visited = {node.declaration.key.removeprefix("first.") for node in channel.nodes}
     assert {"netlist", "well_formed", "compatible", "streams"} <= visited
-    member = inspection.explain(point.member("first_source"), KernelSpace.netlist)
+    member = inspection.explain(point.member("first_source"), Kernel.netlist)
     visited = {node.declaration.key.removeprefix("first_source.") for node in member.nodes}
     # A kernel's netlist with a module builds it from its ports' streams, its parameters,
     # its data and its bus: it places no member, whose netlists it reads none of.
-    assert {"output_stream", "parameters", "init_file", "config_presented", "netlists"} <= visited
+    assert {"output.stream", "parameters", "init_file", "config.presented"} <= visited
 
 
 def test_a_channel_waits_for_its_own_sides_only():
@@ -161,7 +169,7 @@ def test_a_channel_waits_for_its_own_sides_only():
     first = point.member("first")
     produced = point.member("first_source")
     assert first.producer == Side.kernel(
-        produced.output_stream, "first_source.output", produced.output_data_width
+        produced.output.stream, "first_source.output", produced.output.width
     )
     assert first.producer.width == 8
     assert first.consumer == Side.boundary("out0_V")
@@ -173,38 +181,36 @@ def test_a_channel_waits_for_its_own_sides_only():
 
 
 def test_boundary_ports_are_axis_and_byte_aligned():
-    contract = boundary_contract(
-        "in0_V", INT4, BeatSequence(vector_major((3,), 3)), Endpoint.TARGET
-    )
+    contract = boundary_pins("in0_V", INT4, BeatSequence(vector_major((3,), 3)), Endpoint.TARGET)
     assert contract.transport.data_width == 16
     assert contract.payload_bits == 12
 
 
-def replaying() -> StreamContract:
+def replaying() -> StreamPins:
     """What a consumer reading each two-beat group of its input three times, framed,
     states at its port."""
     beat = AxisBeat("s_axis", DataType["INT4"], 2, endpoint=Endpoint.TARGET, last=True)
     transport = beat.native(clock="ap_clk", reset="ap_rst_n")
     form = vector_major((2, 4), 2).replayed(3, inner_beats=2)
-    return StreamContract(transport, INT4, form, markers=(("s_axis_tlast", LevelEnd(2)),))
+    stream = Stream(INT4, BeatSequence(form, markers=(LevelEnd(2),)))
+    return StreamPins(transport, stream, markers=(("s_axis_tlast", LevelEnd(2)),))
 
 
 class Replaying(Space):
-    """A consumer reading each two-beat group of its input three times, framed: its port's
-    stream and its contract."""
+    """A logical reader with an actual typed port; it remains a plain Space."""
 
     @derived
-    def port_stream(self) -> Stream:
-        contract = replaying()
-        return Stream(contract.element, contract.sequence)
+    def sequence(self) -> BeatSequence:
+        return replaying().sequence
 
-    @derived
-    def port_side(self) -> Side:
-        return Side.kernel(self.port_stream, "port")
-
-    @view
-    def port_contract(self) -> PortContract:
-        return PortContract("port", replaying())
+    port = StreamPort(
+        clocking=AXIS_CLOCKING,
+        label="port",
+        transport=Axis(bus="s_axis"),
+        endpoint=Endpoint.TARGET,
+        tensor=Tensor((2, 4), INT4),
+        sequence=sequence,
+    )
 
 
 def test_a_boundary_presents_its_free_side_without_the_replay_the_receiver_realizes():
@@ -327,7 +333,7 @@ def test_a_stated_input_s_lanes_place_a_vpc_before_the_transport_and_widen_the_p
     assert wide.boundary.transport.data_width == 24
     assert wide.boundary_bus == (wide.boundary.transport.axis_bus(),)
     assert wide.steps.describe() == "width_conversion" and wide.output_adapting
-    assert [stage.kind for stage in wide.output_adapter.realization] == ["vpc"]
+    assert [stage.kind for stage in wide.output_adapter.chain] == ["vpc"]
     assert wide.input_chain == "none"
 
 
@@ -337,7 +343,7 @@ def test_a_stated_output_s_lanes_place_a_vpc_before_the_transport_and_widen_the_
     wide = edge(writer(vector_major((4, 6), 2)), Side.boundary("m_axis_0", outside=stated(lanes=4)))
     assert (wide.boundary.form.lanes, wide.boundary.transport.data_width) == (4, 16)
     assert wide.boundary.transport.endpoint is Endpoint.INITIATOR
-    assert [stage.kind for stage in wide.output_adapter.realization] == ["vpc"]
+    assert [stage.kind for stage in wide.output_adapter.chain] == ["vpc"]
     assert wide.input_chain == "none"
     assert inspection.validity(with_direct(wide)).status == "valid"
 
@@ -372,36 +378,114 @@ def test_a_stated_row_major_side_is_reordered_by_an_input_gen():
     assert inspection.validity(with_direct(entering)).status == "valid"
 
 
-def test_a_stated_side_nothing_bridges_is_refused_by_channel_steps():
-    """A reader taking 2 x 3 tiles, stated row-major: the edge's six lanes span a row,
-    the reader's two rows, and no chain regroups them (``channel-steps``, its message
-    naming what states the side before the steps' own reason). Unstated, the edge
-    presents the tiles."""
-    tiles = tile(4, 6, 2, 3)
-    assert edge(Side.boundary("s_axis_0"), reader(tiles)).input_chain == "none"
-    refused = edge(Side.boundary("s_axis_0", outside=stated(order=ROW_MAJOR)), reader(tiles))
+SIX = vector_major((4, 6), 6)
+"""Row-major, a row a beat: four beats a pass."""
+TILES = tile(4, 6, 2, 3)
+"""2 x 3 tiles, a tile a beat: four beats a pass."""
+TILE_ROWS = Traversal((4, 6), (Loop(2, 12), Loop(2, 3), Loop(2, 6)), (Loop(3, 1),))
+"""The tiles' rows of three, a row a beat: ``TILES`` at three lanes."""
+HALF = Traversal.over((4, 6), ((0, 2, 2),), ((1, 6, 1),))
+"""Rows 0 and 2 alone, a row a beat: rows 1 and 3 are never presented."""
+
+
+def delivered(form: Traversal, hops: tuple[Hop, ...]) -> list[int]:
+    """The flat offsets ``hops`` deliver from ``form``, by each step's own definition: a
+    width step keeps the element order, regrouping only its lanes; a reorder emits, of each
+    frame of ``frame_beats`` beats, the beat at ``sum(index * coefs)`` over ``dims``, outer
+    first (``traversal.Reorder``). A coordinate oracle (``offsets``), independent of the
+    forms the steps derive between."""
+    at = [int(offset) for offset in offsets(form)]
+    for hop in hops:
+        if hop.reorder is not None:
+            lanes, frame = hop.source.form.lanes, hop.reorder.frame_beats
+            beats = [at[first : first + lanes] for first in range(0, len(at), lanes)]
+            at = [
+                offset
+                for start in range(0, len(beats), frame)
+                for index in product(*(range(extent) for extent in hop.reorder.dims))
+                for offset in beats[start + sum(i * c for i, c in zip(index, hop.reorder.coefs))]
+            ]
+    return at
+
+
+def regroups_rows_into_tiles(point: Any) -> None:
+    """``point``'s steps take a row a beat (``SIX``) to ``TILES``: a lane regroup of the same
+    positions, through three lanes, the most dividing both sides' at which the two orders
+    differ by a reorder. A width step (``vpc``) before the transport, a reorder and a width
+    step after it (``input_gen``, then ``vpc``), each an existing stage; what they deliver
+    is the tiles, position for position."""
+    hops = point.steps.hops
+    assert point.steps.describe() == "width_conversion -> reorder -> width_conversion"
+    assert [hop.source.form for hop in hops] == [SIX, ROWS, TILE_ROWS]
+    assert [hop.sink.form for hop in hops] == [ROWS, TILE_ROWS, TILES]
+    assert [hop.reorder for hop in hops] == [None, Reorder(4, (2, 2), (1, 2)), None]
+    assert delivered(SIX, hops) == [int(offset) for offset in offsets(TILES)]
+    assert point.output_adapting and point.input_chain == "input_gen_vpc"
+    assert [stage.kind for stage in point.output_adapter.chain] == ["vpc"]
+    assert [stage.kind for stage in point.adapter.chain] == ["input_gen", "vpc"]
+    assert inspection.validity(with_direct(point)).status == "valid"
+
+
+def test_a_channel_s_cycles_wait_on_no_transport_and_count_every_member_but_its_fifo():
+    """A channel counts its members' cycles by kind (``source_cycles``, ``stage_cycles``,
+    ``mover_cycles``), not through the base's ``member_cycles``, which ranges over its
+    transport too: whether it places a FIFO is a choice FIFO sizing reads cycles before, so
+    the base's waits on it, and the channel's do not. With a FIFO placed, the base's names
+    the members the kinds name: the FIFO's cycles are inapplicable, and left out."""
+    entering = edge(Side.boundary("s_axis_0", outside=stated(order=ROW_MAJOR)), reader(TILES))
+    point = with_adapter_memories(entering)
+    assert isinstance(point.query(Channel.cycles), Available)
+    assert isinstance(point.query(Channel.member_cycles), Unresolved)
+    fifo = commit(point, {"transport": "fifo"})
+    assert isinstance(fifo.transport.query(ChannelFifo.cycles), Inapplicable)
+    counted = [item.node for item in (*fifo.source_cycles, *fifo.stage_cycles)]
+    assert counted == ["output_adapter", "adapter.input_gen_vpc"]
+    assert [item.node for item in fifo.member_cycles] == counted
+    assert fifo.cycles == point.cycles
+
+
+def test_a_stated_side_is_regrouped_and_one_nothing_bridges_is_refused_by_channel_steps():
+    """A reader taking 2 x 3 tiles, stated row-major: the edge presents a row a beat (six
+    lanes, its AXIS word 24 bits), and the steps regroup it into the tiles. Unstated, the
+    edge presents the tiles. A writer presenting rows 0 and 2 alone, stated row-major on
+    its way out: the boundary presents all four rows, two of which the writer never writes,
+    and no chain presents a position it is not given (``channel-steps``, its message naming
+    what states the side before the steps' own reason); unstated, the edge presents the
+    writer's two rows."""
+    assert edge(Side.boundary("s_axis_0"), reader(TILES)).input_chain == "none"
+    entering = edge(Side.boundary("s_axis_0", outside=stated(order=ROW_MAJOR)), reader(TILES))
+    assert entering.boundary.form == SIX and entering.boundary.transport.data_width == 24
+    regroups_rows_into_tiles(entering)
+    unstated = edge(writer(HALF), Side.boundary("m_axis_0"))
+    assert unstated.boundary.form == HALF and not unstated.steps
+    refused = edge(writer(HALF), Side.boundary("m_axis_0", outside=stated(order=ROW_MAJOR)))
+    assert sorted(int(offset) for offset in offsets(HALF)) == [*range(6), *range(12, 18)]
+    assert refused.boundary.form == SIX
     assert findings(refused.query(Channel.steps)) == [
         (
             "channel-steps",
-            "the boundary s_axis_0, stated by the build (row-major): no adapter can join the "
-            "streams: the same positions under another lane axis",
+            "the boundary m_axis_0, stated by the build (row-major): no adapter can join the "
+            "streams: the sequences present different positions",
         )
     ]
     assert inspection.validity(refused).status == "refused"
 
 
 def test_an_interior_channel_s_channel_steps_names_no_statement():
-    """Between two kernels' ports, the same rows written and tiles read: refused by
-    ``channel-steps`` in the steps' words alone, as before a boundary could be stated;
+    """Between two kernels' ports, the same rows written and tiles read: regrouped by the
+    same steps as a stated boundary's. Rows 0 and 2 alone written and the tiles read: refused
+    by ``channel-steps`` in the steps' words alone, as before a boundary could be stated;
     only a stated boundary side names what states it (``stated_by``)."""
-    rows, tiles = writer(vector_major((4, 6), 6)), reader(tile(4, 6, 2, 3))
-    refused = edge(rows, tiles)
+    rows, tiles = writer(SIX), reader(TILES)
+    regroups_rows_into_tiles(edge(rows, tiles))
+    refused = edge(writer(HALF), tiles)
     assert findings(refused.query(Channel.steps)) == [
         (
             "channel-steps",
-            "no adapter can join the streams: the same positions under another lane axis",
+            "no adapter can join the streams: the sequences present different positions",
         )
     ]
+    assert inspection.validity(refused).status == "refused"
     assert stated_by(rows, tiles) == stated_by(Side.boundary("s_axis_0"), tiles) == ""
     mover = Outside(IODMA_HLS, ROW_MAJOR, 1)
     offered = Side.boundary("s_axis_1", (iodma_hls(128),), mover)
@@ -461,3 +545,27 @@ def test_a_statement_of_nothing_the_inside_does_not_present_answers_as_unstated(
             point = edge(producer or side, consumer or side)
             answers.append((point.boundary, point.steps, point.input_chain, point.output_adapting))
         assert answers[0] == answers[1]
+
+
+def test_every_member_of_a_channel_but_its_transport_counts_by_exactly_one_kind():
+    """The by-kind count holds while each kind declares ``cycles`` itself (``Members``
+    reads the class declaring the member; a kind relying on the base's would range over
+    the transport again) and every placed class but the FIFO is one kind's: a new member,
+    or a kind losing its own ``cycles``, fails here by name."""
+    kinds = (MemStreamKernel, StreamAdapter, IodmaMover)
+    for kind in kinds:
+        assert "cycles" in vars(kind), kind
+    placed: dict[str, list[type]] = {}
+    for name, value in vars(Channel).items():
+        declaration = slot_declaration(value)
+        if isinstance(declaration, NodeDecision):
+            placed[name] = [
+                case.space_type for case in declaration.candidates.values() if case is not None
+            ]
+        elif isinstance(declaration, NodeDecl):
+            placed[name] = [declaration.space_type]
+    assert set(placed) == {"source", "mover", "output_adapter", "transport", "adapter"}
+    assert placed.pop("transport") == [ChannelFifo]
+    for name, classes in placed.items():
+        for each in classes:
+            assert sum(issubclass(each, kind) for kind in kinds) == 1, (name, each)

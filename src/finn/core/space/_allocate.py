@@ -23,12 +23,13 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, cast
 
 from ._bindings import PlacementBinding, Slot, classify
-from ._configuration import Space
+from ._configuration import Space, _Namespace
 from ._nodes import (
     NodeDecision,
     NodeDecl,
     fallback,
     missing_formal,
+    space_members,
 )
 from ._ordering import dependency_order
 from ._signatures import resolve_source
@@ -46,7 +47,6 @@ from .declarations import (
     MISSING,
     CaseRef,
     ChoiceMemberRef,
-    Const,
     Constraint,
     Decision,
     Declaration,
@@ -58,13 +58,12 @@ from .declarations import (
 )
 from .domains import Domain, finite
 from .errors import DefinitionError
-from .expressions import Expr
-from .ir import PLACING, Argument, NodeKind, NodeRef
+from .ir import PLACING, Argument, NodeKind, NodeRef, Placing
 from .results import reject
 from .semantics import BOOL, STRING, ValueSemantics
 
 if TYPE_CHECKING:
-    from ._template import Compiled
+    from ._template import Compiled, Ref
 
 _OWNER = "space.allocate"
 
@@ -105,7 +104,9 @@ _BINDING_KINDS: Mapping[str, NodeKind] = {
 }
 
 
-def allocate(space_type: type[Space], compiled_of: Callable[[type[Space]], Compiled]) -> Table:
+def allocate(
+    space_type: type[_Namespace], compiled_of: Callable[[type[_Namespace]], Compiled]
+) -> Table:
     """A new table with ``space_type``'s own scope and a slot per Space it places, each
     placed class's compiled form from ``compiled_of``."""
     allocation = _Allocation(Table(space_type, compiled_of))
@@ -116,9 +117,7 @@ def allocate(space_type: type[Space], compiled_of: Callable[[type[Space]], Compi
 
 def _declared_kind(declaration: Declaration) -> NodeKind | None:
     """The node kind of a Space class's own member that is neither a formal nor a Decision."""
-    if isinstance(declaration, Const):
-        return "const"
-    if isinstance(declaration, (Derived, Expr)):
+    if isinstance(declaration, Derived):
         return "derived"
     if isinstance(declaration, Constraint):
         return "constraint"
@@ -145,7 +144,7 @@ class _Allocation:
         there."""
 
         pending = [self.table.space_type]
-        children_of: dict[type[Space], tuple[type[Space], ...]] = {}
+        children_of: dict[type[_Namespace], tuple[type[_Namespace], ...]] = {}
         cursor = 0
         while cursor < len(pending):
             space_type = pending[cursor]
@@ -156,7 +155,7 @@ class _Allocation:
                 children_of[space_type] = ()
                 continue
             effective = self.table.collected(space_type)
-            children: list[type[Space]] = []
+            children: list[type[_Namespace]] = []
             for declaration in effective.members.values():
                 if isinstance(declaration, NodeDecl):
                     children.append(declaration.space_type)
@@ -194,7 +193,7 @@ class _Allocation:
 
     def new_scope(
         self,
-        space_type: type[Space],
+        space_type: type[_Namespace],
         parent: int | None,
         name: str,
         guard: NodeRef | None,
@@ -232,9 +231,10 @@ class _Allocation:
             if member_name in draft.named_members:
                 draft.members[declaration] = draft.named_members[member_name]
         key = member_key(name, "$validity")
-        draft.validity = self.table.reserve(
-            index, key, "validity", BOOL, guard=guard, source_owner=key
-        )
+        if issubclass(space_type, Space):
+            draft.validity = self.table.reserve(
+                index, key, "validity", BOOL, guard=guard, source_owner=key
+            )
         return index
 
     def member(self, draft: ScopeDraft, member_name: str, declaration: Declaration) -> None:
@@ -525,6 +525,39 @@ class _Allocation:
         # All scope identities and membership maps are now stable. Later phases replace
         # node payloads, never scope identities.
 
+    def piece_position(self, reference: NodeRef) -> tuple[int, ...]:
+        """An included primitive's position in the expanded source declaration order.
+
+        As in an ordinary class, scalar primitives precede structural selectors and
+        real children's validity. Namespaces contribute at their declaration position.
+        """
+        if isinstance(reference, int):
+            key = self.table.nodes[reference].key
+        else:
+            assert not isinstance(reference, Placing)
+            key = self.table.edge_name(reference)
+        current = self.table.space_type
+        names = iter(key.split("."))
+        position: list[int] = []
+        declaration: Declaration | None = None
+        for name in names:
+            if name == "$validity":
+                return (2, *position)
+            members = space_members(current)
+            position.append(tuple(members).index(name))
+            declaration = members[name]
+            if isinstance(declaration, NodeDecl):
+                current = declaration.space_type
+            elif isinstance(declaration, NodeDecision):
+                case = next(names, None)
+                if case is None:
+                    return (1, *position)
+                position.append(tuple(declaration.candidates).index(case))
+                child = declaration.candidates[case]
+                assert child is not None
+                current = child.space_type
+        return (0, *position)
+
     def validity_pieces(self) -> None:
         """The own scope's validity pieces: its constraints, its Decisions (each a piece
         only where its domain lists no value, or its guard is refused) and its formals
@@ -539,10 +572,30 @@ class _Allocation:
                 own[node.scope].append(node.index)
         for draft in drafts:
             if draft.placed is not None:
-                validity = self.table.lift(Place(draft.index), draft.placed.compiled.validity)
-                own[cast(int, draft.parent)].append(validity)
+                compiled = draft.placed.compiled
+                refs: Iterable[Ref]
+                if compiled.validity is None:
+                    # Inclusion exports its primitives directly to the nearest real Space.
+                    refs = (
+                        ref
+                        for edge in compiled.pieces
+                        if (ref := compiled.ref(edge)) not in compiled.formal_names
+                    )
+                else:
+                    refs = iter((compiled.validity,))
+                own[cast(int, draft.parent)].extend(
+                    self.table.lift(Place(draft.index), ref) for ref in refs
+                )
         for draft in drafts:
             if draft.placed is not None:
                 continue
-            index = cast(int, draft.validity)
-            nodes[index] = replace(nodes[index], constraints=tuple(own[draft.index]))
+            parts = own[draft.index]
+            if any(
+                placed.compiled.validity is None
+                for placed in (each.placed for each in drafts if each.placed is not None)
+            ):
+                parts.sort(key=self.piece_position)
+            draft.pieces = tuple(parts)
+            if draft.validity is not None:
+                index = draft.validity
+                nodes[index] = replace(nodes[index], constraints=draft.pieces)

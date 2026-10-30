@@ -19,13 +19,11 @@ from typing import assert_type
 from finn.core.space import (
     BoundValue,
     ConfigurationResult,
-    Const,
     Decision,
     Param,
     QueryResult,
     Select,
     Space,
-    View,
     ViewAssessment,
     constraint,
     derived,
@@ -33,19 +31,23 @@ from finn.core.space import (
     inspection,
     view,
 )
+from finn.core.space.declarations import View
 from finn.core.space.inspection import ChoiceInfo
 
 
 class FixedImplementation(Space):
     size: int = Param()
-    lanes: int = Decision(values=(1, 2, 4))
-    minimum = Const(1)
+    lanes: int = Decision(domain=(1, 2, 4))
+
+    @derived
+    def minimum(self) -> int:
+        return 1
 
     @derived
     def result(self) -> int:
         return self.size // self.lanes
 
-    physical = View(result)
+    physical = view(result)
 
 
 class SmallImplementation(Space):
@@ -55,7 +57,7 @@ class SmallImplementation(Space):
     def result(self) -> int:
         return self.size
 
-    physical = View(result)
+    physical = view(result)
 
 
 def _case_name(case: str) -> str:
@@ -93,7 +95,7 @@ class Pipeline(Space):
     assert_type(implementation, FixedImplementation | SmallImplementation)
     # A member every candidate has is read through the choice.
     assert_type(implementation.result, int)
-    chosen = View(implementation.physical)
+    chosen = view(implementation.physical)
     case: str = derived(case=implementation)(_case_name)  # a binding reads the case's name
 
     @derived
@@ -109,7 +111,7 @@ assert_type(Pipeline.fixed.result, int)
 assert_type(Pipeline.implementation, FixedImplementation | SmallImplementation)
 assert_type(Pipeline.size, int)
 assert_type(Pipeline.chosen, View[int])
-assert_type(FixedImplementation.minimum, Const[int])
+assert_type(FixedImplementation.minimum, int)
 assert_type(FixedImplementation.result, int)
 assert_type(FixedImplementation.physical, View[int])
 assert_type(FixedImplementation.lanes, int)

@@ -38,7 +38,7 @@ from finn.core.space.results import DecisionState
 class Core(Space):
     extent: int = Param()
     lanes: int = Decision(domain=divisors_of(extent))
-    width: int = Decision(values=(8, 16))
+    width: int = Decision(domain=(8, 16))
 
     @constraint
     def small(self) -> bool:
@@ -159,7 +159,7 @@ def test_a_choice_under_an_open_selector_is_checked_at_its_case_and_waits() -> N
 
 class Gated(Space):
     extent: int = Param()
-    enabled: bool = Decision(values=(False, True))
+    enabled: bool = Decision(domain=(False, True))
     lanes: int = Decision(domain=divisors_of(extent), when=enabled)
 
 
@@ -269,8 +269,10 @@ class Banks(Space):
     wide: bool = Param()
     width: int = Param(default=8)
 
-    @derived(when=wide)
-    def span(self) -> int:
+    @derived
+    def span(self) -> int | Inapplicable:
+        if not self.wide:
+            return Inapplicable()
         return self.width
 
     lanes: int = Decision(

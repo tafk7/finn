@@ -19,7 +19,7 @@ from __future__ import annotations
 import math
 import struct
 from collections.abc import Callable
-from typing import TYPE_CHECKING, ClassVar, cast
+from typing import ClassVar, cast
 
 from finn.core.space import (
     Decision,
@@ -34,13 +34,14 @@ from finn.core.space import (
     view,
 )
 from finn.dataflow.datatypes import QONNXDataType, resolve_qonnx_datatype_name
-from finn.dataflow.schedule import Index, Schedule
-from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.dataflow.schedule import Access, Index, Schedule
+from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.base import NATIVE_CLOCKING, KernelSpace, extent_of
-from finn.kernels.library import LibraryModule
-from finn.kernels.port import AxiStreamPort
+from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
+from finn.kernels.laws import NATIVE, NATIVE_CLOCKING, Intake, Native, PortIntake, Standing
+from finn.kernels.library import ModuleSpec
+from finn.kernels.port_model import StreamPort
 from finn.kernels.values.domains import Integer, admit_element
 from finn.platform.capabilities import DspBlock, Platform, Resources
 
@@ -69,7 +70,7 @@ def _pe_values(extent: object) -> Domain[int]:
     )
 
 
-class EltwiseKernel(KernelSpace):
+class EltwiseKernel(Kernel):
     """PE results a beat of ``lhs`` and ``rhs``, element by element.
 
     Each operand's tensor is walked row-major, PE elements of its innermost axis a
@@ -87,6 +88,17 @@ class EltwiseKernel(KernelSpace):
     # The tensors its operand ports read: facts it is given.
     lhs_tensor: Tensor = Param()
     rhs_tensor: Tensor = Param()
+
+    @derived
+    def extents(self) -> dict[Index, int] | Rejected:
+        """Each index's extent, bound from the tensors ``lhs`` and ``rhs`` read."""
+        found: list[Access] = []
+        if self.lhs.binds:
+            found.append(self.lhs.access)
+        if self.rhs.binds:
+            found.append(self.rhs.access)
+        return bound_extents(found)
+
     channels = extent_of(c)  # the innermost axis
     # PE elements of the innermost axis a beat: a divisor of the channels the RTL's PE
     # parameter, a 32-bit integer, holds.
@@ -95,12 +107,12 @@ class EltwiseKernel(KernelSpace):
     @derived
     def lhs_dtype(self) -> QONNXDataType:
         """``lhs``'s element type: its tensor's."""
-        return self.lhs_element.dtype
+        return self.lhs.element.dtype
 
     @derived
     def rhs_dtype(self) -> QONNXDataType:
         """``rhs``'s element type: its tensor's."""
-        return self.rhs_element.dtype
+        return self.rhs.element.dtype
 
     @derived
     def result_dtype(self) -> QONNXDataType:
@@ -178,12 +190,12 @@ class EltwiseKernel(KernelSpace):
     @derived
     def schedule(self) -> Schedule | Rejected:
         """Row-major over lhs's axes, ``c`` split by PE innermost."""
-        return self.bound_schedule(self.indices, {c: self.pe})
+        return bound_schedule(self.extents, self.indices, {c: self.pe})
 
     @derived
     def result_tensor(self) -> Tensor | Rejected:
         """Its results: ``lhs``'s shape, in ``result_dtype``."""
-        shape = self.spanned(self.indices)
+        shape = spanned(self.indices, self.extents)
         if isinstance(shape, Rejected):
             return shape
         element = admit_element(self.result_dtype, None)
@@ -191,36 +203,61 @@ class EltwiseKernel(KernelSpace):
             return element
         return Tensor(shape, element)
 
-    lhs = AxiStreamPort(
-        name="lhs",
+    lhs = StreamPort(
+        transport=Native(prefix="a"),
         endpoint=Endpoint.TARGET,
         tensor=lhs_tensor,
         schedule=schedule,
         index=indices,
         lanes=(c,),
-        signals=("adat", "avld", "ardy"),
     )
-    rhs = AxiStreamPort(
-        name="rhs",
+    rhs = StreamPort(
+        transport=Native(prefix="b"),
         endpoint=Endpoint.TARGET,
         tensor=rhs_tensor,
         schedule=schedule,
         index=rhs_indices,
         lanes=(c,),
-        signals=("bdat", "bvld", "brdy"),
     )
-    result = AxiStreamPort(
-        name="result",
+    result = StreamPort(
+        transport=NATIVE,
         endpoint=Endpoint.INITIATOR,
         tensor=result_tensor,
         schedule=schedule,
         index=indices,
         lanes=(c,),
-        signals=("odat", "ovld", "ordy"),
     )
-    if TYPE_CHECKING:  # members its ports lower to, which it reads
-        lhs_element: ClassVar[ScalarEncoding]
-        rhs_element: ClassVar[ScalarEncoding]
+
+    @derived
+    def intake(self) -> Intake:
+        """Its issue credit, from its RTL (CONTRACT.md § 5): it issues an operation while
+        fewer than ``CREDIT = LATENCY + 3`` results are undelivered, each taking a beat of
+        each operand, and parks one more beat of each in its sidestep register, so each
+        operand takes ``CREDIT + 1`` beats before it stops, exact, with both offered, and
+        holds at most as many. ``LATENCY`` is its datapath's: integer, 3 multiplying else
+        1; float, 4 scaled else 2, 3 multiplying, and one more converting an integer."""
+        a, b = (dtype.name == "FLOAT32" for dtype in (self.lhs_dtype, self.rhs_dtype))
+        multiply = self.operation == "MUL"
+        if not (a or b):
+            latency = 3 if multiply else 1
+        else:
+            latency = (4 if self.native_scale != 1.0 else 2 + multiply) + (a != b)
+        beats = latency + 3 + 1
+        rule = (
+            f"issues an operation while fewer than {latency + 3} results are undelivered, "
+            "one beat of each operand an operation, and parks one more of each; resumes as "
+            "the output takes each result"
+        )
+        source = (
+            "rtl/arith/eltwise.sv:52-61 (LATENCY, CREDIT), :94-111 (sidestep A, B), "
+            ":113-120 (take, Credit)"
+        )
+        return Intake(
+            tuple(
+                PortIntake(port, beats, beats, rule, Standing.STRUCTURAL, source)
+                for port in ("lhs", "rhs")
+            )
+        )
 
     @view
     def resource_use(self) -> Resources | Rejected:
@@ -242,10 +279,9 @@ class EltwiseKernel(KernelSpace):
             "FORCE_BEHAVIORAL": 0,
         }
 
-    module = LibraryModule(
+    module_spec: ClassVar[ModuleSpec] = ModuleSpec(
         "eltwise",
-        parameters=parameters,
-        sources=tuple(
+        tuple(
             CopiedSource("finnlib", path, provides=(f"module:{name}",), requires=requires)
             for path, name, requires in (
                 ("rtl/arith/binopi.sv", "binopi", ()),

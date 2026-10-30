@@ -31,10 +31,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
-from .._configuration import Space
+from .._configuration import _Namespace
 from .._nodes import NodeDecl
 from ..declarations import declared_path
 from ..errors import EvaluationError, RequestError
+from ..groups import Group
 from ..inspection import EvidenceNode, QueryEvidence, _node_info
 from ..references import ValueHandle, descend
 from ..results import (
@@ -79,7 +80,7 @@ def _evaluation(at: At, session: Session) -> Evaluation:
 def _node_scope(at: At, reference: object) -> ScopeRecord | None:
     """For a node reference (a child or a candidate), the node's scope; ``None`` for
     anything else."""
-    if not isinstance(reference, Space):
+    if not isinstance(reference, _Namespace):
         return None
     path = declared_path(reference)
     if path is None:
@@ -108,6 +109,8 @@ def query(at: At, reference: object, session: Session) -> QueryResult[object]:
     """A member's answer (``Space.query``): what reading it would give, as a result. A node
     (a child or a candidate) answers its configuration where it is present: inapplicable
     where it is absent, its guard's answer while its presence waits or is refused."""
+    if isinstance(reference, Group):
+        raise RequestError("a Group is a namespace; query one of its members")
     ev = _evaluation(at, session)
     target = _node_scope(at, reference)
     if target is not None:
@@ -134,6 +137,8 @@ def present(at: At, node: object, session: Session) -> bool:
     """Whether a node (a child or a candidate) is present, read like a value: undecided
     presence raises ``ValueUnavailableError`` (``Space.present``). A value input is known,
     never absent: it is no node (``not_a_node``)."""
+    if isinstance(node, Group):
+        raise not_a_node(node)
     ev = _evaluation(at, session)
     target = _node_scope(at, node)
     if target is None:

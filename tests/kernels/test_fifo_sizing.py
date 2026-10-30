@@ -998,10 +998,10 @@ def test_the_presentation_by_its_events_is_the_model_beat_by_beat_on_random_side
         if rng.random() < 0.6:
             buffer = _random_buffer(rng, frame_words)
             accept = Buffered(buffer, _random_pattern(rng, len(buffer.reads) * frames_a_stream, 10))
-            span = max(supply.beats, accept.reads.beats)
+            span = max(supply.span, accept.reads.span)
         else:
             accept = _random_pattern(rng, frame_words, 30)
-            span = max(supply.beats, accept.beats)
+            span = max(supply.span, accept.span)
         period = span + rng.randint(0, span)
         depth = rng.choice((0, 0, 1, 2, 3, 5, 8, rng.randint(0, 3 * frame_words)))
         frames = rng.choice((2, 4, 16))
@@ -1050,7 +1050,7 @@ def test_the_presentation_by_its_events_is_the_model_beat_by_beat_on_the_sizing_
                 for frames in (4, 16):
                     expected = simulate_by_beat(supply, accept, period, depth, frames)
                     assert simulate(supply, accept, period, depth, frames) == expected
-            if supply.beats <= period:
+            if supply.span <= period:
                 least = least_depth(supply, accept, period)
                 with monkeypatch.context() as patched:
                     patched.setattr(fifo_sizing, "simulate", simulate_by_beat)

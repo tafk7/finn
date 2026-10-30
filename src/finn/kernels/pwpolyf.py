@@ -28,6 +28,8 @@ KernelOp reaches it: ``tests/support/kernel_specs/pwpolyf.py``.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from finn.core.space import (
     Decision,
     Param,
@@ -39,13 +41,14 @@ from finn.core.space import (
     view,
 )
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
-from finn.dataflow.schedule import Index, Schedule
+from finn.dataflow.schedule import Access, Index, Schedule
 from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.base import NATIVE_CLOCKING, KernelSpace, extent_of
-from finn.kernels.library import LibraryModule
-from finn.kernels.port import AxiStreamPort
+from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
+from finn.kernels.laws import NATIVE_CLOCKING, Intake, Native, PortIntake, Standing
+from finn.kernels.library import ModuleSpec
+from finn.kernels.port_model import StreamPort
 from finn.kernels.values.domains import admit_element
 from finn.platform.capabilities import DspBlock, Platform, Resources
 
@@ -67,7 +70,12 @@ SOURCES = (
 )
 
 
-class PwPolyKernel(KernelSpace):
+#: FinnLib's polynomial degree (``rtl/nonlin/pwpolyf_pkg.sv:25``), which its latency, and so
+#: its intake, follows.
+_DEGREE = 2
+
+
+class PwPolyKernel(Kernel):
     """``function`` of each element of its input, PE elements a beat; see the module
     docstring."""
 
@@ -86,6 +94,14 @@ class PwPolyKernel(KernelSpace):
         rank = len(self.input_tensor.shape)
         return (*(Index(f"a{axis}") for axis in range(rank - 1)), c)
 
+    @derived
+    def extents(self) -> dict[Index, int] | Rejected:
+        """Each index's extent, bound from the tensor its input reads."""
+        found: list[Access] = []
+        if self.input.binds:
+            found.append(self.input.access)
+        return bound_extents(found)
+
     channels = extent_of(c)  # the innermost axis
     # PE elements of the innermost axis a beat.
     pe: int = Decision(domain=divisors_of(channels))
@@ -93,12 +109,12 @@ class PwPolyKernel(KernelSpace):
     @derived
     def schedule(self) -> Schedule | Rejected:
         """Row-major over the input's axes, ``c`` split by PE innermost."""
-        return self.bound_schedule(self.indices, {c: self.pe})
+        return bound_schedule(self.extents, self.indices, {c: self.pe})
 
     @derived
     def output_tensor(self) -> Tensor | Rejected:
         """Its results: the input's shape, in FLOAT32 over its whole range."""
-        shape = self.spanned(self.indices)
+        shape = spanned(self.indices, self.extents)
         if isinstance(shape, Rejected):
             return shape
         element = admit_element(FLOAT32, None)
@@ -106,23 +122,21 @@ class PwPolyKernel(KernelSpace):
             return element
         return Tensor(shape, element)
 
-    input = AxiStreamPort(
-        name="x",
+    input = StreamPort(
+        transport=Native(prefix="x"),
         endpoint=Endpoint.TARGET,
         tensor=input_tensor,
         schedule=schedule,
         index=indices,
         lanes=(c,),
-        signals=("xdat", "xvld", "xrdy"),
     )
-    output = AxiStreamPort(
-        name="y",
+    output = StreamPort(
+        transport=Native(prefix="y"),
         endpoint=Endpoint.INITIATOR,
         tensor=output_tensor,
         schedule=schedule,
         index=indices,
         lanes=(c,),
-        signals=("ydat", "yvld", "yrdy"),
     )
 
     @constraint
@@ -155,6 +169,25 @@ class PwPolyKernel(KernelSpace):
             return reject("pwpolyf-target", "the polynomial's DSPFP32 chain requires DSP58")
         return True
 
+    @derived
+    def intake(self) -> Intake:
+        """Its issue credit, from its RTL (CONTRACT.md § 5): it issues an evaluation while
+        fewer than ``CREDIT = LATENCY + 3`` results are undelivered, ``LATENCY = DEGREE *
+        4`` (FinnLib's ``DEGREE``, 2), and parks one more beat in its sidestep register:
+        ``CREDIT + 1`` beats before it stops, exact, and at most."""
+        credit = _DEGREE * 4 + 3
+        rule = (
+            f"issues an evaluation while fewer than {credit} results are undelivered, and "
+            "parks one more beat; resumes as the output takes each result"
+        )
+        source = (
+            "rtl/nonlin/pwpolyf.sv:147-149 (LATENCY), :172-191 (sidestep), :194-201 "
+            "(CREDIT, take); rtl/nonlin/pwpolyf_pkg.sv:25 (DEGREE)"
+        )
+        return Intake(
+            (PortIntake("input", credit + 1, credit + 1, rule, Standing.STRUCTURAL, source),)
+        )
+
     @view
     def resource_use(self) -> Resources | Rejected:
         return reject("kernel-resources", "the pwpolyf module's resources are not characterised")
@@ -163,7 +196,7 @@ class PwPolyKernel(KernelSpace):
     def parameters(self) -> dict[str, int | str]:
         return {"PE": self.pe, "FUNC": f'"{self.function}"'}
 
-    module = LibraryModule("pwpolyf", parameters=parameters, sources=SOURCES)
+    module_spec: ClassVar[ModuleSpec] = ModuleSpec("pwpolyf", SOURCES)
 
 
 __all__ = ["FLOAT32", "FUNCTIONS", "SOURCES", "PwPolyKernel"]

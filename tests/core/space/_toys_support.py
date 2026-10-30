@@ -36,7 +36,7 @@ class Costed(Space):
 
 class Room(Costed):
     area: int = Param()
-    finish: int = Decision(values=(1, 2, 3))
+    finish: int = Decision(domain=(1, 2, 3))
 
     @derived
     def cost(self) -> int:
@@ -53,7 +53,7 @@ class Boiler(Costed):
 
 class HeatPump(Costed):
     kw: int = Param()
-    cop: int = Decision(values=(3, 4))
+    cop: int = Decision(domain=(3, 4))
 
     @derived
     def cost(self) -> int:
@@ -70,7 +70,7 @@ class Thermostat(Costed):
 
 class House(Space):
     budget: int = Param()
-    want_garage: bool = Decision(values=(False, True))
+    want_garage: bool = Decision(domain=(False, True))
     hall = Room()  # its area is supplied by the assignment below
     kitchen = Room(area=12)
     dining = Room(area=16)

@@ -34,7 +34,7 @@ from finn.core.space import (
 
 class Room(Space):
     area: int = Param(default=12)
-    finish: int = Decision(values=(1, 2, 3))
+    finish: int = Decision(domain=(1, 2, 3))
 
     @constraint
     def fits(self) -> bool | Rejected:
@@ -94,7 +94,7 @@ def test_a_node_below_a_declaration_is_not_assigned_through_a_path() -> None:
     ("what", "supply"),
     [
         ("Decision", lambda: Room(finish=2)),
-        ("Decision", lambda: Room(finish=Decision(values=(1, 2)))),
+        ("Decision", lambda: Room(finish=Decision(domain=(1, 2)))),
         ("child node", lambda: Wing(kitchen=Room(area=9))),  # type: ignore[call-arg]
     ],
 )
@@ -146,7 +146,7 @@ def test_behaviour_is_not_assignable(member: str) -> None:
 
 def test_a_subclass_changes_what_belongs_to_the_space_class() -> None:
     class Plain(Room):
-        finish: int = Decision(values=(1,))
+        finish: int = Decision(domain=(1,))
 
     class Large(Wing):
         kitchen = Plain(area=19)
@@ -168,7 +168,7 @@ def test_a_root_that_supplies_structure_is_refused_with_a_pointer() -> None:
         error=DefinitionError,
         message="write a subclass, or build one with composite",
     ):
-        design_space(Sized(size=Decision(values=(1, 2))))
+        design_space(Sized(size=Decision(domain=(1, 2))))
     with refused("root-structural-formal", error=DefinitionError, message=r"\bsize\b"):
         design_space(Sized(size=Room.area))
     # The pointer's way: the structure in a Space class built from data.

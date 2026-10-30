@@ -466,16 +466,16 @@ def test_a_when_read_past_its_guard_reads_its_scopes_formal_at_its_source() -> N
 
 class Boiler(Space):
     kw: int = Param()
-    stages: int = Decision(values=(1, 2, 3))
+    stages: int = Decision(domain=(1, 2, 3))
 
 
 class HeatPump(Space):
     kw: int = Param()
-    cop: int = Decision(values=(2, 3, 4))
+    cop: int = Decision(domain=(2, 3, 4))
 
 
 class Guarded(Space):
-    gate: int = Decision(values=(0, 1))
+    gate: int = Decision(domain=(0, 1))
 
     @derived
     def heated(self) -> bool | Rejected:
@@ -803,7 +803,7 @@ def test_an_answer_refused_through_its_scope_turns_inapplicable_and_the_change_i
 
 class Leaf(Space):
     w: int = Param()
-    lanes: int = Decision(values=(1, 2))
+    lanes: int = Decision(domain=(1, 2))
 
     @view
     def bits(self) -> int:
@@ -812,7 +812,7 @@ class Leaf(Space):
 
 class Side(Space):
     v: int = Param()
-    k: int = Decision(values=(1, 2, 3))
+    k: int = Decision(domain=(1, 2, 3))
 
     @constraint
     def within(self) -> bool | Rejected:
@@ -820,7 +820,7 @@ class Side(Space):
 
 
 class Part(Space):
-    y: int = Decision(values=(1, 2, 3))
+    y: int = Decision(domain=(1, 2, 3))
     leaf = Leaf(w=y)
     side = Side(v=leaf.w)
 
@@ -830,7 +830,7 @@ class Part(Space):
 
 
 class Sibling(Space):
-    gate: int = Decision(values=(0, 1, 2))
+    gate: int = Decision(domain=(0, 1, 2))
 
     @derived
     def on(self) -> bool | Rejected:
@@ -896,7 +896,7 @@ def _shape(number: int) -> type[Space]:
 
     class Inner(Space):
         w: int = Param()
-        pe: int = Decision(values=(1, 2, 4))
+        pe: int = Decision(domain=(1, 2, 4))
 
         @constraint
         def fits(self) -> bool | Rejected:
@@ -905,15 +905,15 @@ def _shape(number: int) -> type[Space]:
     if number % 2:
 
         class Odd(Space):
-            a: int = Decision(values=(1, 2, 4))
-            b: int = Decision(values=(1, 2, 4))
+            a: int = Decision(domain=(1, 2, 4))
+            b: int = Decision(domain=(1, 2, 4))
             inner = Inner(w=a)
 
         return Odd
 
     class Even(Space):
-        b: int = Decision(values=(1, 2, 4))
-        a: int = Decision(values=(1, 2, 4))
+        b: int = Decision(domain=(1, 2, 4))
+        a: int = Decision(domain=(1, 2, 4))
         inner = Inner(w=b)
 
     return Even
@@ -1109,8 +1109,8 @@ def test_a_membership_reading_that_reads_a_decision_is_an_error_naming_both(
         pe: int = Decision(domain=divisors_of(width))
 
     class Reads(Space):
-        on: bool = Decision(values=(False, True))
-        w: int = Decision(values=(4, 6))
+        on: bool = Decision(domain=(False, True))
+        w: int = Decision(domain=(4, 6))
         g = Inside(width=w, when=on)
 
     model = cast(Any, inspection.model(design_space(Reads())))
@@ -1132,7 +1132,7 @@ def test_a_membership_reading_of_a_choice_with_no_guard_that_reads_a_decision_is
     monkeypatch.setattr(_compose, "check_domains", lambda template: None)
 
     class Unguarded(Space):
-        w: int = Decision(values=(4, 6))
+        w: int = Decision(domain=(4, 6))
         pe: int = Decision(domain=divisors_of(w))
 
     model = cast(Any, inspection.model(design_space(Unguarded())))
@@ -1190,7 +1190,7 @@ def test_a_choice_outside_the_case_reading_its_value_reads_the_picker_and_is_an_
     def outside() -> type[Space]:
         class Outside(Space):
             f: int = Param()
-            x: int = Decision(values=(0, 1))
+            x: int = Decision(domain=(0, 1))
 
             @derived
             def pick(self) -> str:
@@ -1298,8 +1298,8 @@ def test_the_toys_walk_as_the_public_api_with_a_cache_keeping_no_wide_answer(
 
 
 class Summed(Space):
-    a: int = Decision(values=(1, 2, 3))
-    b: int = Decision(values=(1, 2, 3))
+    a: int = Decision(domain=(1, 2, 3))
+    b: int = Decision(domain=(1, 2, 3))
 
     @derived
     def total(self) -> int:
@@ -1348,8 +1348,8 @@ def test_a_width_is_a_number_of_reads() -> None:
 
 
 class Ordered(Space):
-    a: int = Decision(values=(1, 2, 3))
-    b: int = Decision(values=(1, 2, 3))
+    a: int = Decision(domain=(1, 2, 3))
+    b: int = Decision(domain=(1, 2, 3))
 
     @constraint
     def ordered(self) -> bool | Rejected:

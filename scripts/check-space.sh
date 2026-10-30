@@ -14,7 +14,8 @@ gate_pytest tests/core/search
 # Documentation examples are checked separately in scratchpad/space/.
 # The layer table (tests/support/layering.py) and the refusals' helper
 # (tests/support/refusals.py), which every layer's tests use, the two cores the engine's tests
-# share (tests/support/space_cores.py), the chain two engine tests walk
+# share (tests/support/space_cores.py), the shared Group declarations
+# (tests/support/space_groups.py), the chain two engine tests walk
 # (tests/support/space_pipeline.py), the walk an engine test and a kernel test share
 # (tests/support/space_walk.py), the class-based oracle's engine-only modules
 # (tests/support/space_oracle, but for its targets and tool), and the pre-commit check every
@@ -22,7 +23,8 @@ gate_pytest tests/core/search
 gate_ruff src/finn/core/reporting tests/core/reporting src/finn/core/space tests/core/space \
     src/finn/core/search tests/core/search \
     tests/support/layering.py tests/support/refusals.py tests/support/value_classes.py \
-    tests/support/space_cores.py tests/support/space_pipeline.py tests/support/space_walk.py \
+    tests/support/space_cores.py tests/support/space_groups.py \
+    tests/support/space_pipeline.py tests/support/space_walk.py \
     scripts/_gate_precommit.py \
     tests/support/space_oracle/__init__.py tests/support/space_oracle/forms.py \
     tests/support/space_oracle/public.py tests/support/space_oracle/compare.py \
@@ -30,6 +32,7 @@ gate_ruff src/finn/core/reporting tests/core/reporting src/finn/core/space tests
 gate_mypy -p finn.core.reporting -p finn.core.space -p finn.core.search
 gate_mypy tests/core/reporting tests/core/space tests/core/search tests/support/layering.py \
     tests/support/refusals.py tests/support/value_classes.py tests/support/space_cores.py \
+    tests/support/space_groups.py \
     tests/support/space_pipeline.py tests/support/space_walk.py \
     tests/support/space_oracle/__init__.py tests/support/space_oracle/forms.py \
     tests/support/space_oracle/public.py tests/support/space_oracle/compare.py \

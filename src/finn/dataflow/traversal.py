@@ -7,7 +7,7 @@ A ``Traversal`` walks an operand of ``shape`` with two loop nests, both listed
 outer to inner. Each iteration of ``beat_loops`` is one beat; each iteration of
 ``lane_loops`` is one lane of that beat, lane zero first (least significant).
 A loop advances the operand's flat row-major index by ``stride`` elements per
-step; a stride of zero repeats (replays) positions. Tiles, chunked tiles,
+index value; a stride of zero repeats (replays) positions. Tiles, chunked tiles,
 transposes, sliding windows and replay are all ordinary loop nests.
 
 Construction canonicalizes the nests, so two traversals are equal exactly when
@@ -19,9 +19,23 @@ included), a width conversion, a lane regroup, or none at all.
 
 A ``BeatSequence`` is what one side of a channel presents of the tensor it
 carries: its traversal per pass, whether the pass repeats (``Repetition``), and
-the marker rules it offers or requires. ``unreplayed`` is the boundary rule: the
-receiver of a channel realizes its own replay and window, while whole-pass
-repetition stays part of the stream; ``period`` strips the whole-pass repetition.
+the marker rules it offers or requires: a level closing (``LevelEnd``, on its last
+beat) or a level on its last index value (``LevelDone``, held across the levels inside it;
+``level_done`` gives the one form of either). A side presenting one of several sets a
+pass, chosen at run time by a selector stream, is ``Selected``.
+
+``unreplayed`` is the boundary rule: the receiver of a channel realizes its own replay
+and window, while whole-pass
+repetition stays part of the stream; ``one_pass`` strips the whole-pass repetition.
+``stored`` is what a cyclic source holds for its consumer, one pass of the
+consumer's order without its replay (and the frame for a window that reads a position
+twice), and ``stored_depth`` its size.
+
+A port whose lanes cut its element order where no loop ends (four lanes against
+rows of six) is no ``Traversal``: its form is a lane group (``Grouped``), an order
+and a lane count. ``grouped`` gives the one form of an order at a lane count, the
+``Traversal`` ``regrouped`` gives where the lanes close whole loops, a ``Grouped``
+otherwise; a beat sequence's form is either.
 
 Words and tensors: ``pack`` presents an integer operand as one raw word per beat,
 and ``unpack``, its inverse, reads the operand back from the words; both at the
@@ -88,8 +102,8 @@ def axis_strides(shape: Sequence[int]) -> tuple[int, ...]:
     return tuple(prod(shape[axis + 1 :]) for axis in range(len(shape)))
 
 
-AxisStep = tuple[int | None, int, int]
-"""(operand axis or None for a replay loop, extent, step along that axis)."""
+AxisLoop = tuple[int | None, int, int]
+"""(operand axis or None for a replay loop, extent, stride along that axis)."""
 
 
 @dataclass(frozen=True, init=False)
@@ -123,15 +137,15 @@ class Traversal:
 
     @classmethod
     def over(
-        cls, shape: Sequence[int], beats: Sequence[AxisStep], lanes: Sequence[AxisStep]
+        cls, shape: Sequence[int], beats: Sequence[AxisLoop], lanes: Sequence[AxisLoop]
     ) -> Traversal:
-        """Build from (axis, extent, step) loops; axis None is a replay loop."""
+        """Build from (axis, extent, stride) loops; axis None is a replay loop."""
         strides = axis_strides(tuple(shape))
 
-        def loops(steps: Sequence[AxisStep]) -> tuple[Loop, ...]:
+        def loops(axes: Sequence[AxisLoop]) -> tuple[Loop, ...]:
             return tuple(
-                Loop(extent, 0 if axis is None else step * strides[axis])
-                for axis, extent, step in steps
+                Loop(extent, 0 if axis is None else stride * strides[axis])
+                for axis, extent, stride in axes
             )
 
         return cls(shape, loops(beats), loops(lanes))
@@ -243,11 +257,113 @@ def _common_refinement(
     return None if a is None or b is None else (a, b)
 
 
-def regrouped(form: Traversal, lanes: int) -> Traversal:
-    """The same element sequence, ``lanes`` elements a beat: a width conversion."""
-    flat = _canonical((*form.beat_loops, *form.lane_loops))
-    beats, lane_loops = _split_at(flat, lanes)
+def regrouped(form: Traversal | Grouped, lanes: int) -> Traversal:
+    """The same element sequence, ``lanes`` elements a beat: a width conversion. The
+    lanes must close whole loops of the order (``ValueError`` otherwise: ``grouped``
+    gives a lane group where they divide a pass)."""
+    beats, lane_loops = _split_at(_order(form), lanes)
     return Traversal(form.shape, beats, lane_loops)
+
+
+def _leading_replay(loops: Sequence[Loop]) -> int:
+    """How many of ``loops``, outermost first, have stride zero: a whole-pass repetition."""
+    return next((index for index, loop in enumerate(loops) if loop.stride), len(loops))
+
+
+def _elements(loops: Sequence[Loop]) -> int:
+    return prod(loop.extent for loop in loops)
+
+
+@dataclass(frozen=True, init=False)
+class Grouped:
+    """A stream whose lanes group its element order across its loops: ``lanes`` elements
+    a beat of ``order``, a loop nest over a row-major tensor of ``shape`` (outer to inner,
+    canonical as a ``Traversal``'s). Beat ``b``, lane ``l`` is element ``b * lanes + l``
+    of the order.
+
+    It is the form of a port whose beats cut its order where no loop ends: four lanes
+    against rows of six. Where ``lanes`` elements close whole innermost loops the group is
+    aligned, and the form is that ``Traversal`` (``regrouped``), never a ``Grouped``: the
+    constructor refuses an aligned group, so ``==`` stays the equality of positions.
+
+    The lane count divides the elements of one pass, the order without its outermost
+    stride-0 loops (``one_pass``): a beat never holds elements of two passes of a
+    repetition. It may hold elements of two presentations of a replay inside the pass.
+    """
+
+    shape: tuple[int, ...]
+    order: tuple[Loop, ...]
+    lanes: int
+
+    def __init__(self, shape: Sequence[int], order: Sequence[Loop], lanes: int) -> None:
+        walk = Traversal(shape, order, ())
+        require_positive(lanes, "lanes")
+        loops = walk.beat_loops
+        each = _elements(loops[_leading_replay(loops) :])
+        if each % lanes:
+            raise ValueError(f"{lanes} lanes do not divide the {each} elements of a pass")
+        try:
+            _split_at(loops, lanes)
+        except ValueError:
+            pass
+        else:
+            raise ValueError(f"{lanes} lanes close whole loops: an aligned group is a Traversal")
+        object.__setattr__(self, "shape", walk.shape)
+        object.__setattr__(self, "order", loops)
+        object.__setattr__(self, "lanes", lanes)
+
+    @property
+    def beats(self) -> int:
+        return _elements(self.order) // self.lanes
+
+    @property
+    def row_major(self) -> bool:
+        """Never: a row-major order is one loop, which any dividing lane count splits."""
+        return False
+
+    def position(self, beat: int, lane: int) -> Position:
+        index, flat = beat * self.lanes + lane, 0
+        for loop in reversed(self.order):
+            index, digit = divmod(index, loop.extent)
+            flat += digit * loop.stride
+        position = []
+        for extent in reversed(self.shape):
+            flat, digit = divmod(flat, extent)
+            position.append(digit)
+        return tuple(reversed(position))
+
+    def positions(self) -> Iterator[tuple[Position, ...]]:
+        for beat in range(self.beats):
+            yield tuple(self.position(beat, lane) for lane in range(self.lanes))
+
+    def repeated(self, count: int) -> Grouped:
+        """The whole pass presented ``count`` times."""
+        require_positive(count, "count")
+        return Grouped(self.shape, (Loop(count, 0), *self.order), self.lanes)
+
+
+def _order(form: Traversal | Grouped) -> tuple[Loop, ...]:
+    """``form``'s element order, beat after beat, lane zero first: its loops, flattened."""
+    if isinstance(form, Grouped):
+        return form.order
+    return _canonical((*form.beat_loops, *form.lane_loops))
+
+
+def grouped(form: Traversal | Grouped, lanes: int) -> Traversal | Grouped:
+    """The same element order, ``lanes`` elements a beat: ``regrouped``'s ``Traversal``
+    where the lanes close whole loops of the order, else a ``Grouped`` where they divide
+    the elements of a pass. Every other count is ``regrouped``'s refusal, by the same
+    class and message: not positive, more than the pass, or no divisor of a pass's
+    elements ("does not align")."""
+    try:
+        return regrouped(form, lanes)
+    except ValueError:
+        loops = _order(form)
+        if type(lanes) is not int or lanes < 1:
+            raise
+        if _elements(loops[_leading_replay(loops) :]) % lanes:
+            raise
+        return Grouped(form.shape, loops, lanes)
 
 
 def _split_at(loops: Sequence[Loop], inner_beats: int) -> tuple[tuple[Loop, ...], tuple[Loop, ...]]:
@@ -306,7 +422,11 @@ class Classification:
 
 
 def classify(source: Traversal, sink: Traversal) -> Classification:
-    """Name the adapter that turns ``source``'s sequence into ``sink``'s."""
+    """Name the adapter that turns ``source``'s sequence into ``sink``'s. Both are
+    traversals: a lane group (``Grouped``) is refused (``TypeError``), since it joins
+    another form by a width step only (``steps``)."""
+    if not isinstance(source, Traversal) or not isinstance(sink, Traversal):
+        raise TypeError("classify compares two traversals: a lane group joins by a width step")
     if source.shape != sink.shape:
         return Classification(Adaptation.INCOMPATIBLE, "different operand shapes")
     if source == sink:
@@ -355,8 +475,12 @@ def _matched(source: Sequence[Loop], sink: Sequence[Loop]) -> Reorder | None:
     if refined is None:
         return None
     produced, consumed = refined
-    replays = [loop for loop in consumed if loop.stride == 0 and loop not in produced]
-    if Counter(consumed) - Counter(replays) != Counter(produced):
+    # Equal stride-zero loops can be both a shared repetition and an inner
+    # replay. Match their multiplicities, not just membership by value.
+    replays = Counter(consumed) - Counter(produced)
+    if any(loop.stride != 0 for loop in replays) or Counter(consumed) - replays != Counter(
+        produced
+    ):
         return None
     produced, consumed = _unshared(produced, consumed)
     beat_stride: dict[Loop, list[int]] = {}
@@ -481,15 +605,112 @@ class LevelEnd:
         carries."""
         return self.beats == 1
 
-    def aligned(self, form: Traversal) -> bool:
-        """Whether the level closes whole innermost loops of ``form``."""
+    def aligned(self, form: Traversal | Grouped) -> bool:
+        """Whether the level closes whole innermost loops of ``form``: of its beat loops,
+        or, for a lane group, of its order (every ``beats * lanes`` elements). A constant
+        (``constant``) is aligned on every sequence."""
+        if self.constant:
+            return True
         if form.beats % self.beats:
             return False
         try:
-            _split_at(form.beat_loops, self.beats)
+            if isinstance(form, Grouped):
+                _split_at(form.order, self.beats * form.lanes)
+            else:
+                _split_at(form.beat_loops, self.beats)
         except ValueError:
             return False
         return True
+
+
+@dataclass(frozen=True)
+class LevelDone:
+    """A marker holding while a loop level is on its last index value: asserted on the last
+    ``inner`` beats of every ``beats`` beats.
+
+    ``beats`` is the beats of the level and every level inside it, ``inner`` the beats of
+    the levels inside it, so the level has ``beats // inner`` index values and its last one holds
+    across ``inner`` beats. Like ``LevelEnd``, the levels are named by beats, not by loop
+    names. On a beat sequence ``inner`` must close whole innermost loops, and ``beats``
+    whole loops around them (``aligned``).
+
+    It is ``input_gen``'s ``done[d]`` (level ``d`` on its last index value, held across the
+    levels inside it), where ``LevelEnd`` is its ``olst[d]`` (``term[d]``: level ``d``
+    and every level inside it completing on one beat). FINN's ``mvu_tiled`` ``input_gen``
+    carries it on its ``odone[d]`` pin.
+
+    Its canonical form has two edges, both ``LevelEnd`` and never this kind (the
+    constructor refuses them; ``level_done`` gives the one form):
+
+    - an inner level of one beat is the level closing on its last beat, ``LevelEnd(beats)``;
+    - inner levels of the whole level hold on every beat, ``LevelEnd(1)``, the constant.
+    """
+
+    beats: int
+    inner: int
+
+    def __post_init__(self) -> None:
+        require_positive(self.beats, "a marker's level")
+        require_positive(self.inner, "a marker's inner levels")
+        if self.beats % self.inner:
+            raise ValueError(f"{self.inner} inner beats divide no level of {self.beats}")
+        if self.inner == 1:
+            raise ValueError(f"an inner level of one beat is LevelEnd({self.beats})")
+        if self.inner == self.beats:
+            raise ValueError("inner levels of the whole level hold on every beat: LevelEnd(1)")
+
+    def asserted(self, beat: int) -> bool:
+        return beat % self.beats >= self.beats - self.inner
+
+    @property
+    def constant(self) -> bool:
+        """Never: a marker holding on every beat is ``LevelEnd(1)``."""
+        return False
+
+    def aligned(self, form: Traversal | Grouped) -> bool:
+        """Whether ``inner`` closes whole innermost loops of ``form`` and ``beats`` whole
+        loops around them: of its beat loops, or, for a lane group, of its order (every
+        ``inner * lanes`` and ``beats * lanes`` elements)."""
+        if form.beats % self.beats:
+            return False
+        try:
+            for beats in (self.inner, self.beats):
+                if isinstance(form, Grouped):
+                    _split_at(form.order, beats * form.lanes)
+                else:
+                    _split_at(form.beat_loops, beats)
+        except ValueError:
+            return False
+        return True
+
+
+Marker = LevelEnd | LevelDone
+"""A marker rule: a level closing (``LevelEnd``) or a level on its last index value
+(``LevelDone``)."""
+
+
+def level_done(beats: int, inner: int) -> LevelEnd | LevelDone:
+    """The marker asserted on the last ``inner`` beats of every ``beats`` beats, in its one
+    form: ``LevelEnd(beats)`` for an inner level of one beat, ``LevelEnd(1)`` when the inner
+    levels span the
+    whole level, a ``LevelDone`` otherwise. ``LevelDone``'s refusals (``ValueError``)
+    otherwise: a count that is not positive, or inner beats dividing no level."""
+    require_positive(beats, "a marker's level")
+    require_positive(inner, "a marker's inner levels")
+    if beats % inner == 0:
+        if inner == 1:
+            return LevelEnd(beats)
+        if inner == beats:
+            return LevelEnd(1)
+    return LevelDone(beats, inner)
+
+
+def _misaligned(rule: Marker) -> str:
+    """Why ``rule`` is refused on a sequence whose loops it does not close."""
+    if isinstance(rule, LevelDone):
+        inner, beats = rule.inner, rule.beats
+        return f"a marker on the last {inner} beats of every {beats} beats closes no loop level"
+    return f"a marker every {rule.beats} beats closes no loop level"
 
 
 class Repetition(Enum):
@@ -501,34 +722,114 @@ class Repetition(Enum):
 
 @dataclass(frozen=True)
 class BeatSequence:
-    """One channel side's view of its tensor: traversal, pass repetition and marker rules.
+    """What one channel side presents of its tensor: traversal, pass repetition and marker rules.
 
-    For a producer the markers are guarantees; for a consumer, requirements.
+    For a producer the markers are guarantees; for a consumer, requirements. A marker is a
+    level closing (``LevelEnd``) or a level on its last index value (``LevelDone``).
     """
 
-    form: Traversal
+    form: Traversal | Grouped
     repetition: Repetition = Repetition.ONCE
-    markers: tuple[LevelEnd, ...] = ()
+    markers: tuple[LevelEnd | LevelDone, ...] = ()
 
     def __post_init__(self) -> None:
-        if not isinstance(self.form, Traversal) or not isinstance(self.repetition, Repetition):
-            raise TypeError("a beat sequence has a Traversal and a Repetition")
+        if not isinstance(self.form, (Traversal, Grouped)) or not isinstance(
+            self.repetition, Repetition
+        ):
+            raise TypeError("a beat sequence has a Traversal or a Grouped, and a Repetition")
         object.__setattr__(self, "markers", tuple(self.markers))
-        if not all(isinstance(rule, LevelEnd) for rule in self.markers):
-            raise TypeError("marker rules are LevelEnd values")
+        if not all(isinstance(rule, (LevelEnd, LevelDone)) for rule in self.markers):
+            raise TypeError("marker rules are LevelEnd or LevelDone values")
         for rule in self.markers:
             if not rule.aligned(self.form):
-                raise ValueError(f"a marker every {rule.beats} beats closes no loop level")
+                raise ValueError(_misaligned(rule))
 
 
-def each_once(form: Traversal) -> bool:
+@dataclass(frozen=True)
+class Selected:
+    """A selected pass: one side presenting one of ``sets`` sets a pass, the set chosen by
+    a selector stream. ``sequence`` is what it presents of one set (shape
+    ``sequence.form.shape``), a pass; over the stacked tensor ``(sets, *that shape)``,
+    pass ``j`` presents set ``selection[j]``, an outer loop whose offset is the set's size
+    times the selector index.
+
+    - **Its positions are given a selection** (``offsets``, ``positions``): before run
+      time they are a set of possible orders, not one, so it is no ``Traversal`` and is
+      never equal to one. A constant selection presents exactly what
+      ``sequence.form.repeated(passes)`` presents over that set: repetition is its
+      constant case.
+    - **The selector stream is named** (``selector``): the tensor whose indices, one a
+      pass, select the sets. A tensor has one producer, so two sides naming the same
+      tensor are selected by the same indices in the same order, and "the same selector
+      stream" is equality of names. Two sides of the same sets under different names
+      are not shared, whatever the indices turn out to be.
+    - **The selector stream is a separate channel**, one index a pass, from the
+      selector tensor's producer to the selected side's selector port. Its steps are any
+      channel's: its port is projected from the kernel's schedule through the indices
+      the selector tensor varies with, and from a once-presented selector stream the steps replay
+      it.
+
+    ``steps.steps`` joins two selected sides of the same sets through the same selector
+    stream (``shares``) by the steps between their ``sequence``s, inside one set: the
+    selection loop is outermost and shared. Any other pairing with a selected side is
+    refused (``steps.Unshared``, ``selection-not-shared``).
+    """
+
+    sequence: BeatSequence
+    sets: int
+    selector: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.sequence, BeatSequence):
+            raise TypeError("a selected pass presents a BeatSequence of one set")
+        require_positive(self.sets, "sets")
+        if not isinstance(self.selector, str) or not self.selector:
+            raise ValueError("a selector stream has a nonempty name")
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        """The stacked tensor's shape: the sets, then one set's."""
+        return (self.sets, *self.sequence.form.shape)
+
+    @property
+    def set_size(self) -> int:
+        """The elements of one set: the offset between two sets of the stacked tensor."""
+        return prod(self.sequence.form.shape)
+
+    def shares(self, other: Selected) -> bool:
+        """Whether ``other`` selects from the same sets (the same stacked shape) through the
+        same selector stream (the same name)."""
+        return self.selector == other.selector and self.shape == other.shape
+
+    def offsets(self, selection: Sequence[int]) -> npt.NDArray[np.int64]:
+        """The flat offset in the stacked tensor of every element presented over
+        ``selection``, one pass a selector index, beat by beat, lane zero first."""
+        chosen = tuple(selection)
+        for index in chosen:
+            if type(index) is not int or not 0 <= index < self.sets:
+                raise ValueError(f"a selector index is one of {self.sets} sets, not {index!r}")
+        inner = offsets(self.sequence.form)
+        if not chosen:
+            return np.zeros(0, dtype=np.int64)
+        return (np.asarray(chosen, dtype=np.int64)[:, None] * self.set_size + inner).ravel()
+
+    def positions(self, selection: Sequence[int]) -> Iterator[tuple[Position, ...]]:
+        """Each beat's positions in the stacked tensor over ``selection``, lane zero first."""
+        lanes = self.sequence.form.lanes
+        flat = self.offsets(selection).reshape(-1, lanes)
+        for beat in flat.tolist():
+            yield tuple(
+                tuple(int(digit) for digit in np.unravel_index(offset, self.shape))
+                for offset in beat
+            )
+
+
+def each_once(form: Traversal | Grouped) -> bool:
     """Whether ``form`` presents each position of its tensor once a pass, its stride-0
     loops (repetition, replay) aside: its moving loops are a mixed radix over the tensor,
     each stride the product of the extents of those finer than it."""
-    moving = sorted(
-        (loop for loop in (*form.beat_loops, *form.lane_loops) if loop.stride),
-        key=lambda loop: loop.stride,
-    )
+    loops = form.order if isinstance(form, Grouped) else (*form.beat_loops, *form.lane_loops)
+    moving = sorted((loop for loop in loops if loop.stride), key=lambda loop: loop.stride)
     reach = 1
     for loop in moving:
         if loop.stride != reach:
@@ -537,7 +838,7 @@ def each_once(form: Traversal) -> bool:
     return reach == prod(form.shape)
 
 
-def unreplayed(form: Traversal) -> Traversal:
+def unreplayed(form: Traversal | Grouped) -> Traversal | Grouped:
     """``form`` without what its receiver realizes: its replay (its stride-0 beat loops
     inside a moving loop), and its window, where it reads a position twice or not at all.
 
@@ -545,14 +846,23 @@ def unreplayed(form: Traversal) -> Traversal:
     part of a stream, while replay is realized by the receiver. A window (a
     sliding window's overlap, or a stride that passes positions) is the receiver's
     too (its channel's reorder): without its replay, a ``form`` that does not
-    present each position once (``each_once``) is the tensor's frame, each position
+    present each position once (``each_once``) is the window's reorder frame, each position
     once in row-major order at ``form``'s lanes, where those are the tensor's
     innermost elements (``vector_major``); otherwise it stays as it is.
+
+    A lane group (``Grouped``) is its order's, one element a beat, grouped again at its
+    lanes (``grouped``): every stride-0 loop of its order inside a moving loop is its
+    replay, and its window is the window's reorder frame, each position once, row-major. Where its
+    lanes divide no pass of
+    what is left, it is refused (``ValueError``).
     """
+    if isinstance(form, Grouped):
+        found = unreplayed(Traversal(form.shape, form.order, ()))
+        assert isinstance(found, Traversal)  # a traversal's is a traversal
+        return _grouped_again(found, form.lanes)
     loops = form.beat_loops
-    moving = next((index for index, loop in enumerate(loops) if loop.stride), len(loops))
-    kept = (*loops[:moving], *(loop for loop in loops[moving:] if loop.stride))
-    once = Traversal(form.shape, kept, form.lane_loops)
+    moving = _leading_replay(loops)
+    once = _replay_dropped(form)
     lanes = form.lane_loops
     contiguous = not lanes or (len(lanes) == 1 and lanes[0].stride == 1)
     if each_once(once) or not contiguous or form.shape[-1] % form.lanes:
@@ -561,20 +871,77 @@ def unreplayed(form: Traversal) -> Traversal:
     return Traversal(form.shape, (*loops[:moving], *frame.beat_loops), frame.lane_loops)
 
 
-def period(form: Traversal) -> Traversal:
-    """The traversal without its outermost stride-0 loops: one period of a repetition."""
+def _replay_dropped(form: Traversal | Grouped) -> Traversal | Grouped:
+    """``form`` without its replay, its window kept: its stride-0 beat loops inside a
+    moving loop dropped (a lane group's, every stride-0 loop of its order inside one)."""
+    loops = form.order if isinstance(form, Grouped) else form.beat_loops
+    moving = _leading_replay(loops)
+    kept = (*loops[:moving], *(loop for loop in loops[moving:] if loop.stride))
+    if isinstance(form, Grouped):
+        return _grouped_again(Traversal(form.shape, kept, ()), form.lanes)
+    return Traversal(form.shape, kept, form.lane_loops)
+
+
+def _grouped_again(found: Traversal, lanes: int) -> Traversal | Grouped:
+    """``found``, one element a beat, at a lane group's ``lanes`` (``grouped``); refused
+    where they divide no pass of it."""
+    try:
+        return grouped(found, lanes)
+    except ValueError as error:
+        raise ValueError(
+            f"{lanes} lanes group no pass of the order without its replay and window, "
+            f"{found.beats} elements: {error}"
+        ) from error
+
+
+def one_pass(form: Traversal | Grouped) -> Traversal | Grouped:
+    """The traversal without its outermost stride-0 loops: one pass of a repetition.
+    A lane group's pass is its order's, at the same lanes (they divide a pass)."""
+    if isinstance(form, Grouped):
+        return Grouped(form.shape, form.order[_leading_replay(form.order) :], form.lanes)
     loops = form.beat_loops
-    moving = next((index for index, loop in enumerate(loops) if loop.stride), len(loops))
-    return Traversal(form.shape, loops[moving:], form.lane_loops)
+    return Traversal(form.shape, loops[_leading_replay(loops) :], form.lane_loops)
 
 
-def passes(form: Traversal) -> int:
-    """How many times ``form`` presents its whole pass (its ``period``) a frame."""
-    return form.beats // period(form).beats
+def passes(form: Traversal | Grouped) -> int:
+    """How many times ``form`` presents its whole pass (its ``one_pass``) a frame."""
+    return form.beats // one_pass(form).beats
+
+
+def stored(form: Traversal | Grouped) -> Traversal | Grouped:
+    """What a cyclic source stores for a consumer reading ``form``: one pass of the
+    consumer's order without what the consumer's side realizes, at ``form``'s lanes.
+
+    - Its replay is never stored.
+    - A window that reads no position twice (one that only passes positions, or none)
+      stores what it reads, each once: ``one_pass`` of ``form`` without its replay.
+    - A window that reads a position twice stores the window's reorder frame, as the boundary rule
+    reads
+      it: ``one_pass`` of ``unreplayed``.
+
+    The steps from it to ``form`` derive the rest: a reorder with replay or the window's
+    reads, from a source presenting it cyclically, once for each of the consumer's
+    passes (``steps``, ``steps.presented``). Where the window also passes positions, the
+    frame holds positions the consumer never reads, and the reorder drops them. Its size
+    is ``stored_depth``.
+    """
+    once = one_pass(_replay_dropped(form))
+    taken = offsets(once)
+    if len(np.unique(taken)) == len(taken):
+        return once
+    return one_pass(unreplayed(form))
+
+
+def stored_depth(form: Traversal | Grouped) -> int:
+    """The memory a cyclic source holds for a consumer reading ``form``, in **elements**:
+    the beats times the lanes of ``stored(form)``. A memory, not a live window, so it is
+    no field of a chain's ``steps.Cost``."""
+    found = stored(form)
+    return found.beats * found.lanes
 
 
 def pack(
-    form: Traversal, integers: Sequence[int] | npt.NDArray[np.int64], bits: int
+    form: Traversal | Grouped, integers: Sequence[int] | npt.NDArray[np.int64], bits: int
 ) -> tuple[int, ...]:
     """Pack an integer operand of ``form.shape``, given as its row-major ``integers``, into
     one raw word per beat, lane zero lowest: each lane the low ``bits`` bits of its
@@ -614,14 +981,17 @@ def pack(
     )
 
 
-def offsets(form: Traversal) -> npt.NDArray[np.int64]:
+def offsets(form: Traversal | Grouped) -> npt.NDArray[np.int64]:
     """The flat row-major offset of every element ``form`` presents, beat by beat, lane
-    zero first: where ``pack`` reads the operand, and ``unpack`` writes it."""
+    zero first: where ``pack`` reads the operand, and ``unpack`` writes it. A lane group's
+    are its order's."""
+    if isinstance(form, Grouped):
+        return _offset_array(form.order)
     return (_offset_array(form.beat_loops)[:, None] + _offset_array(form.lane_loops)).ravel()
 
 
 def unpack(
-    form: Traversal, words: Sequence[int], bits: int, *, signed: bool
+    form: Traversal | Grouped, words: Sequence[int], bits: int, *, signed: bool
 ) -> npt.NDArray[np.int64]:
     """The integer operand of ``form.shape`` that ``words`` present, one raw word per beat
     as ``pack`` makes them: each lane the low ``bits`` bits of its word, lane zero lowest,
@@ -686,40 +1056,47 @@ def _offset_array(loops: Sequence[Loop]) -> npt.NDArray[np.int64]:
 
 
 def _pack_exact(
-    form: Traversal, integers: Sequence[int] | npt.NDArray[np.int64], bits: int
+    form: Traversal | Grouped, integers: Sequence[int] | npt.NDArray[np.int64], bits: int
 ) -> tuple[int, ...]:
     """``pack`` one Python integer at a time, for integers beyond 64 bits."""
     mask = (1 << bits) - 1
-    lanes = tuple(zip(_offsets(form.lane_loops), range(0, form.lanes * bits, bits)))
     words = []
-    for beat in _offsets(form.beat_loops):
+    for beat in offsets(form).reshape(form.beats, form.lanes).tolist():
         word = 0
-        for lane, shift in lanes:
-            word |= (integers[beat + lane] & mask) << shift
+        for lane, offset in enumerate(beat):
+            word |= (integers[offset] & mask) << (lane * bits)
         words.append(word)
     return tuple(words)
 
 
 __all__ = [
     "Adaptation",
-    "AxisStep",
+    "AxisLoop",
     "BeatSequence",
     "Classification",
+    "Grouped",
+    "LevelDone",
     "LevelEnd",
     "Loop",
+    "Marker",
     "Position",
     "Reorder",
     "Repetition",
+    "Selected",
     "Traversal",
     "axis_strides",
     "classify",
     "each_once",
+    "grouped",
+    "level_done",
     "offsets",
     "pack",
     "passes",
-    "period",
+    "one_pass",
     "regrouped",
     "require_positive",
+    "stored",
+    "stored_depth",
     "tile",
     "unpack",
     "unreplayed",

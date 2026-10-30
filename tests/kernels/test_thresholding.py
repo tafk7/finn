@@ -30,8 +30,9 @@ from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.composer import Facts, Port, channel
+from finn.kernels.laws import Axis
 from finn.kernels.library import library_module
-from finn.kernels.port import AxiStreamPort
+from finn.kernels.port_model import StreamPort
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel, c
 from finn.kernels.values.domains import Integer
@@ -107,9 +108,8 @@ def test_threshold_states_its_result_type_initial_table_and_configuration() -> N
     assert threshold(bias=-4).result_dtype.name == "INT3"
     narrow_negative = threshold(bias=-5)
     assert narrow_negative.result_dtype.name == "INT33"
-    assert isinstance(
-        narrow_negative.inspect(ThresholdingAxiKernel.netlist).accepted_result, Rejected
-    )
+    assert isinstance(narrow_negative.inspect(ThresholdingAxiKernel.netlist).result, Rejected)
+    assert inspection.validity(narrow_negative).status == "refused"
     enabled = library_module(threshold(axilite=True, deep=True))
     assert dict(enabled.parameters)["USE_AXILITE"] == 1
     assert dict(enabled.parameters)["DEEP_PIPELINE"] == 1
@@ -189,7 +189,7 @@ def test_threshold_partial_dtype_query_does_not_adopt_implementation_decisions()
     base = threshold_base()
     assert base.result_dtype.name == "INT3"
     assert isinstance(base.query(ThresholdingAxiKernel.deep_pipeline), Unresolved)
-    assert isinstance(base.inspect(ThresholdingAxiKernel.netlist).accepted_result, Unresolved)
+    assert isinstance(base.inspect(ThresholdingAxiKernel.netlist).result, Unresolved)
 
 
 def test_threshold_rejects_unsupported_profiles_and_malformed_tables() -> None:
@@ -200,9 +200,10 @@ def test_threshold_rejects_unsupported_profiles_and_malformed_tables() -> None:
         threshold(bias=-10),
     )
     assert all(
-        isinstance(point.inspect(ThresholdingAxiKernel.netlist).accepted_result, Rejected)
+        isinstance(point.inspect(ThresholdingAxiKernel.netlist).result, Rejected)
         for point in profiles
     )
+    assert all(inspection.validity(point).status == "refused" for point in profiles)
     # A table with no sets axis is refused on its facts, before any choice is set.
     flat = threshold_base(table=((-2, 0, 3),), channels=1)
     assert inspection.validity(flat).status == "refused"
@@ -239,8 +240,9 @@ def test_threshold_rejects_unsupported_profiles_and_malformed_tables() -> None:
 class NarrowInput(ThresholdingAxiKernel):
     """A thresholding whose input port takes only elements of up to 4 bits."""
 
-    input = AxiStreamPort(
-        name="s_axis",
+    input = StreamPort(
+        label="input",
+        transport=Axis(bus="s_axis"),
         endpoint=Endpoint.TARGET,
         tensor=ThresholdingAxiKernel.input_tensor,
         schedule=ThresholdingAxiKernel.schedule,
@@ -272,15 +274,15 @@ def test_a_refused_input_port_leaves_its_kernels_domains_and_refuses_its_product
     assert point.field(ThresholdingAxiKernel.pe).candidates() == Available((1, 2))
     validity = inspection.validity(point)
     assert validity.status == "refused"
-    assert [piece.owner for piece in validity.pieces] == ["input_element_taken"]
+    assert [piece.owner for piece in validity.pieces] == ["input.element_taken"]
     # A commit is accepted all the same (a refusal elsewhere never refuses a commit).
     committed = point.try_with_choices(pe=1)
     assert committed.accepted
     assert [piece.owner for piece in inspection.validity(committed.instance).pieces] == [
-        "input_element_taken"
+        "input.element_taken"
     ]
-    for product in (ThresholdingAxiKernel.netlist, ThresholdingAxiKernel.cycles):
-        assert isinstance(committed.instance.query(product), Rejected)
+    assert isinstance(committed.instance.query(ThresholdingAxiKernel.netlist), Rejected)
+    assert isinstance(committed.instance.query(ThresholdingAxiKernel.cycles), Rejected)
 
 
 def placed_on(channels: int, table: IntegerTensor) -> ThresholdingAxiKernel:
@@ -350,10 +352,10 @@ def test_runtime_writable_thresholds_declare_the_writes_of_their_table() -> None
         for index, value in enumerate(row):
             expected.append((((row_index << 2) | index) << 2, value & 0x1FF))
     assert point.register_map.writes == tuple(expected)
-    assert point.config_control.registers == point.register_map
+    assert point.bus_control.registers == point.register_map
     shared = threshold(table=(((-2, 0, 3),),), pe=2, axilite=True)  # C = 1: one row, lane 0
     assert shared.register_map.writes == ((0, 0x1FE), (4, 0), (8, 3))
-    assert threshold(pe=1).config_control.bus is None  # held, not presented: nothing to write
+    assert threshold(pe=1).bus_control.bus is None  # held, not presented: nothing to write
 
 
 def test_a_writable_table_is_sized_from_the_input_never_its_initial_values() -> None:

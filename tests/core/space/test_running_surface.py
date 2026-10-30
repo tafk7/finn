@@ -34,7 +34,6 @@ from core.space._running_type import Running
 from core.space._toys_support import Boiler, House
 from finn.core.space import (
     Available,
-    Const,
     Decision,
     EvaluationError,
     Inapplicable,
@@ -44,7 +43,6 @@ from finn.core.space import (
     Space,
     Unresolved,
     ValueUnavailableError,
-    View,
     _failure,
     bind,
     constraint,
@@ -115,7 +113,7 @@ class Bad(Space):
 class Alternatives(Space):
     size: int = Param()
     implementation = Select(good=Good(size=size), bad=Bad())
-    physical = View(implementation.physical)
+    physical = view(implementation.physical)
 
 
 class OptionalChild(Space):
@@ -138,18 +136,28 @@ class Inner(Space):
 
 class Forwarded(Space):
     value: int = Param()
-    enabled = Const(False)
+
+    @derived
+    def enabled(self) -> bool:
+        return False
+
     child = Inner(value=value, when=enabled)
 
 
 class Literal(Space):
-    enabled = Const(False)
+    @derived
+    def enabled(self) -> bool:
+        return False
+
     child = Inner(value=12345, when=enabled)
 
 
 class Refusing(Space):
-    chosen: int = Decision(values=(1, 2))
-    value = Const(3)
+    chosen: int = Decision(domain=(1, 2))
+
+    @derived
+    def value(self) -> int:
+        return 3
 
     @constraint
     def supported() -> bool:
@@ -159,7 +167,7 @@ class Refusing(Space):
     def selected(self) -> int:
         return self.value + self.chosen
 
-    physical = View(selected)
+    physical = view(selected)
 
 
 # A selector whose cases' choices list values read from the facts (``Kernel``): with the
@@ -257,7 +265,7 @@ def test_evidence_reads_through_a_formal_at_its_source_and_copies_a_container() 
         def source(self) -> list[int]:
             return [1, self.n]
 
-        physical = View(source)
+        physical = view(source)
 
     listed = design_space(Listed(n=2))
     opened = Running()
@@ -620,8 +628,8 @@ def test_nonvalue_cleanup_preserves_primary_and_outer_cleanup(
     class Example(Space):
         fact: int = Param()
         enabled: bool = Param()
-        unavailable: int = Decision(values=(1, 2))
-        inapplicable: int = Decision(values=(1,), when=enabled)
+        unavailable: int = Decision(domain=(1, 2))
+        inapplicable: int = Decision(domain=(1,), when=enabled)
 
         @derived
         def rejected(self) -> int | Rejected:
@@ -1079,7 +1087,7 @@ def test_interruption_before_failure_delivery_keeps_pending_primary(way: str) ->
 @pytest.mark.parametrize("field", ("caught", "finally_return", "blocked"))
 def test_caught_failure_and_nonvalue_cannot_publish_fallback(field: str, way: str) -> None:
     class Example(Space):
-        choice: int = Decision(values=(1, 2))
+        choice: int = Decision(domain=(1, 2))
 
         @derived
         def broken(self) -> int:
@@ -1218,7 +1226,7 @@ def test_value_transformations_cannot_read_a_design_space_even_when_caught(way: 
 
 def test_a_blocked_self_constraint_keeps_its_inspectable_assessment() -> None:
     class Example(Space):
-        choice: int = Decision(values=(1, 2))
+        choice: int = Decision(domain=(1, 2))
 
         @constraint
         def positive(self) -> bool:
@@ -1255,7 +1263,7 @@ def test_self_cycles_are_reached_through_scopes_and_guards(way: str) -> None:
         def enabled(self) -> bool:
             return self.choice > 0
 
-        choice: int = Decision(values=(1,), when=enabled)
+        choice: int = Decision(domain=(1,), when=enabled)
 
     with pytest.raises(EvaluationError, match="dependency cycle") as scoped:
         opened(way, Parent()).read("output")
@@ -1269,7 +1277,7 @@ def test_a_failure_in_another_design_space_runs_its_readers_cleanup(way: str) ->
     events: list[int] = []
 
     class Example(Space):
-        count: int = Decision(values=(1, 2, 3))
+        count: int = Decision(domain=(1, 2, 3))
 
         @derived
         def inner(self) -> int:
@@ -1297,7 +1305,7 @@ def test_a_failure_is_kept_for_its_run_only_and_raised_by_every_question() -> No
     starts: list[int] = []
 
     class Example(Space):
-        choice: int = Decision(values=(1, 2))
+        choice: int = Decision(domain=(1, 2))
 
         @derived
         def broken(self) -> int:

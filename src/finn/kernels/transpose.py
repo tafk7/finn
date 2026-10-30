@@ -12,6 +12,8 @@ through the common lane count instead.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from finn.core.space import (
     Decision,
     Param,
@@ -26,10 +28,11 @@ from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.base import NATIVE_CLOCKING, KernelSpace, extent_of
-from finn.kernels.fifo import fifo_resources
-from finn.kernels.library import LibraryModule
-from finn.kernels.port import AxiStreamPort
+from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
+from finn.kernels.fifo import fifo_resources, fifo_storage
+from finn.kernels.laws import NATIVE, NATIVE_CLOCKING, Intake, PortIntake, Standing
+from finn.kernels.library import ModuleSpec
+from finn.kernels.port_model import StreamPort
 from finn.kernels.utilization import (
     auto_unstated,
     memory,
@@ -40,6 +43,11 @@ from finn.kernels.utilization import (
 from finn.platform.capabilities import Fabric, Platform, Resources
 
 i, j = Index("i"), Index("j")
+_SKID = fifo_storage(2, 1, "auto")
+assert _SKID is not None  # a shift register, no memory to overflow
+#: The words each of its skid FIFOs holds (``inner_shuffle.sv:394``, ``:413``): FinnLib
+#: ``fifo`` at DEPTH 2, a shift register at any width.
+_SKID_WORDS = _SKID.capacity
 
 
 def inner_shuffle_resources(
@@ -59,7 +67,7 @@ def inner_shuffle_resources(
     return banks + rotators + skids
 
 
-class TransposeKernel(KernelSpace):
+class TransposeKernel(Kernel):
     """FinnLib ``inner_shuffle``: an (I, J) matrix's rows in, its columns out.
 
     The input is the last two axes of its tensor in row-major order, SIMD
@@ -105,8 +113,10 @@ class TransposeKernel(KernelSpace):
     @derived
     def extents(self) -> dict[Index, int] | Rejected:
         """Each index's extent: the input reads its tensor through a view, which binds
-        none, so the kernel gives its axes' extents."""
-        return self._bound(dict(zip(self.indices, self.input_tensor.shape)))
+        none, so the kernel gives its axes' extents. (The output's tensor is spanned from
+        them; it never binds them back.)"""
+        given = dict(zip(self.indices, self.input_tensor.shape))
+        return bound_extents([self.input.access] if self.input.binds else [], given)
 
     rows = extent_of(i)  # I
     cols = extent_of(j)  # J
@@ -149,38 +159,60 @@ class TransposeKernel(KernelSpace):
         return (*outer, j, i)
 
     @derived
-    def columns_out(self) -> Schedule | Rejected:
+    def schedule(self) -> Schedule | Rejected:
         """Each matrix's columns in turn, SIMD elements of a column a beat. The input,
         read as each matrix's ``(J, I)`` view, walks it too: its rows, flat."""
-        return self.bound_schedule(self.columns, {i: self.simd})
+        return bound_schedule(self.extents, self.columns, {i: self.simd})
 
     @derived
     def output_tensor(self) -> Tensor | Rejected:
         """Its output: the input's shape and element, unchanged."""
-        shape = self.spanned(self.indices)
+        shape = spanned(self.indices, self.extents)
         if isinstance(shape, Rejected):
             return shape
         return Tensor(shape, self.input_tensor.element)
 
-    input = AxiStreamPort(
-        name="input",
+    input = StreamPort(
+        transport=NATIVE,
         endpoint=Endpoint.TARGET,
         tensor=input_tensor,
-        schedule=columns_out,
+        schedule=schedule,
         index=columns,
         lanes=(i,),
         reshaped=True,
-        signals=("idat", "ivld", "irdy"),
     )
-    output = AxiStreamPort(
-        name="output",
+    output = StreamPort(
+        transport=NATIVE,
         endpoint=Endpoint.INITIATOR,
         tensor=output_tensor,
-        schedule=columns_out,
+        schedule=schedule,
         index=indices,
         lanes=(i,),
-        signals=("odat", "ovld", "ordy"),
     )
+
+    @derived
+    def intake(self) -> Intake:
+        """Its two pages, from its RTL (CONTRACT.md § 5): it takes a beat while either page
+        is not wholly written, a page ``PAGE_OFFSET = I * J / SIMD`` beats, and frees a page
+        once every read of it has been issued. With its output stalled it takes at least
+        both pages before it may stop. A read is issued while its read-pattern skid
+        (``fifo`` at depth two, a shift FIFO of five words) has room, and its pattern leaves
+        as its data enters its output skid (five words more): so at most ten output beats
+        are read and not yet given, each of ``SIMD`` elements, one input beat's worth. It
+        holds at most both pages' unread beats and those ten, whatever the page: a short
+        page is freed and written again while its reads wait in the skids."""
+        page = self.rows * self.cols // self.simd
+        before, most = 2 * page, 2 * page + 2 * _SKID_WORDS
+        rule = (
+            f"takes a beat while either page ({page} beats) is not wholly written; resumes "
+            "as each page's last read is issued"
+        )
+        source = (
+            "rtl/shape/inner_shuffle.sv:96-97 (PAGE_OFFSET), :335-353 (WrJobsDone, irdy), "
+            ":332 (rd_req_en), :394-424 (the skid FIFOs); rtl/infra/fifo.sv:102-144 (a "
+            "shift FIFO's words)"
+        )
+        return Intake((PortIntake("input", before, most, rule, Standing.STRUCTURAL, source),))
 
     @view
     def resource_use(self) -> Resources | Rejected:
@@ -205,10 +237,9 @@ class TransposeKernel(KernelSpace):
             "SIMD": self.simd,
         }
 
-    module = LibraryModule(
+    module_spec: ClassVar[ModuleSpec] = ModuleSpec(
         "inner_shuffle",
-        parameters=parameters,
-        sources=(
+        (
             CopiedSource("finnlib", "rtl/infra/fifo.sv", provides=("module:fifo",)),
             CopiedSource(
                 "finnlib",

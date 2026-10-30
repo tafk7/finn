@@ -51,7 +51,7 @@ from dataclasses import dataclass
 from functools import cache
 from math import prod
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar
+from typing import ClassVar
 
 from finn import resources
 from finn.core.reporting.findings import Finding, FindingKind, Refusal
@@ -64,15 +64,16 @@ from finn.core.space import (
     view,
 )
 from finn.dataflow.steps import Unrealizable
-from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import Tensor
-from finn.dataflow.traversal import Adaptation, BeatSequence, LevelEnd, classify
+from finn.dataflow.traversal import Adaptation, BeatSequence, LevelEnd, Traversal, classify
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.rtl import Declined, evaluate
-from finn.kernels.base import NATIVE_CLOCKING, KernelSpace
-from finn.kernels.library import LibraryModule
-from finn.kernels.port import LoopEnds, native_stream
+from finn.kernels.base import Kernel
+from finn.kernels.laws import NATIVE, NATIVE_CLOCKING, Intake, PortIntake, Standing
+from finn.kernels.library import ModuleSpec
+from finn.kernels.port import LoopEnds
+from finn.kernels.port_model import StreamPort
 from finn.kernels.utilization import (
     Fit,
     auto_unstated,
@@ -161,6 +162,10 @@ def generated(arriving: BeatSequence, leaving: BeatSequence) -> Generate:
     ``leaving`` requires; split or grouped until it closes each of ``leaving``'s markers.
     ``Unrealizable`` where no nest does."""
     source, sink = arriving.form, leaving.form
+    if not isinstance(source, Traversal) or not isinstance(sink, Traversal):
+        raise Unrealizable("no existing input_gen recipe carries Grouped forms")
+    if any(not isinstance(rule, LevelEnd) for rule in leaving.markers):
+        raise Unrealizable("no existing input_gen recipe produces held LevelDone markers")
     if source != sink:
         verdict = classify(source, sink)
         reorder = verdict.reorder
@@ -172,7 +177,11 @@ def generated(arriving: BeatSequence, leaving: BeatSequence) -> Generate:
             raise Unrealizable("the same order and no marker: nothing for an input_gen to do")
         widest = max(rule.beats for rule in leaving.markers)
         generate = Generate(widest, (widest,), (1,))
-    return _closing(generate, leaving.markers, source.beats)
+    return _closing(
+        generate,
+        tuple(rule for rule in leaving.markers if isinstance(rule, LevelEnd)),
+        source.beats,
+    )
 
 
 def presented(generate: Generate, leaving: BeatSequence) -> BeatSequence:
@@ -184,7 +193,7 @@ def presented(generate: Generate, leaving: BeatSequence) -> BeatSequence:
     )
 
 
-class InputGeneratorKernel(KernelSpace):
+class InputGeneratorKernel(Kernel):
     """FinnLib ``input_gen``: its tensor's words in another order, with its loop ends; see
     the module docstring."""
 
@@ -223,13 +232,21 @@ class InputGeneratorKernel(KernelSpace):
     @derived
     def loop_ends(self) -> LoopEnds:
         """``olst``: one bit per loop, closing that loop and every inner one."""
-        return LoopEnds("olst", self.nest.levels)
+        return LoopEnds(self.nest.levels)
 
-    input = native_stream("input", Endpoint.TARGET, input_tensor, arriving)
-    output = native_stream("output", Endpoint.INITIATOR, output_tensor, presenting, loop_ends)
-    if TYPE_CHECKING:  # members its ports lower to, which it reads
-        input_stream: ClassVar[Stream]
-        input_data_width: ClassVar[int]
+    input = StreamPort(
+        endpoint=Endpoint.TARGET,
+        transport=NATIVE,
+        tensor=input_tensor,
+        sequence=arriving,
+    )
+    output = StreamPort(
+        endpoint=Endpoint.INITIATOR,
+        transport=NATIVE,
+        tensor=output_tensor,
+        sequence=presenting,
+        loop_ends=loop_ends,
+    )
 
     @derived
     def frame_words(self) -> int:
@@ -251,7 +268,7 @@ class InputGeneratorKernel(KernelSpace):
         """The nest's arithmetic fits the RTL's native widths (a nest from two sequences
         is otherwise one it walks: positive extents and strides within its frame)."""
         values = (self.frame_words, *self.dims, *self.strides)
-        if self.input_data_width > 0xFFFFFFFF or any(value > 0x7FFFFFFF for value in values):
+        if self.input.width > 0xFFFFFFFF or any(value > 0x7FFFFFFF for value in values):
             return reject(
                 "input-generator-range", "loop arithmetic must fit native signed 32-bit increments"
             )
@@ -262,7 +279,7 @@ class InputGeneratorKernel(KernelSpace):
         """The most the buffer can hold: a frame's words. A ranking of its style reads it
         (its channel's), not ``BUF_SIZE``, which the RTL elaborates and which may be
         declined (its statement only)."""
-        return self.frame_words * self.input_data_width
+        return self.frame_words * self.input.width
 
     @view
     def buffer_words(self) -> int | Rejected:
@@ -272,11 +289,31 @@ class InputGeneratorKernel(KernelSpace):
         except GeometryError as error:
             return reject("input-generator-geometry", str(error))
 
+    @derived
+    def intake(self) -> Intake | Rejected:
+        """From its buffer as the RTL derives it (``nest_buffer``), exact (CONTRACT.md § 5):
+        it accepts a word while fewer than ``BUF_SIZE - 1`` accepted words are unfreed, and
+        moves its first output beat into its output register as soon as that beat's word
+        is in, freeing what that advance frees; with its output stalled it advances no
+        further. So it takes ``BUF_SIZE - 1`` words and those freed before it stops. It
+        holds at most its unfreed words and the word in its output register."""
+        try:
+            buffer = nest_buffer(self.frame_words, self.dims, self.strides)
+        except GeometryError as error:
+            return reject("input-generator-geometry", str(error))
+        before, most = buffer.capacity + buffer.freed[0], buffer.capacity + 1
+        rule = (
+            f"takes a word while fewer than {buffer.capacity} accepted words are unfreed; "
+            "resumes as each output beat frees the words no later beat reads"
+        )
+        source = "rtl/shape/input_gen.sv:220-249 (Cap, irdy :224), :254-269 (OBuf, advance)"
+        return Intake((PortIntake("input", before, most, rule, Standing.STRUCTURAL, source),))
+
     @view
     def held_bits(self) -> int:
         """What it holds: its buffer, ``BUF_SIZE`` input words, not one frame."""
         words: int = self.buffer_words
-        return words * self.input_data_width
+        return words * self.input.width
 
     @view
     def resource_use(self) -> Resources | Rejected:
@@ -284,7 +321,7 @@ class InputGeneratorKernel(KernelSpace):
             return auto_unstated("the input_gen buffer")
         return input_gen_resources(
             buf_size=self.buffer_words,
-            data_width=self.input_data_width,
+            data_width=self.input.width,
             d=len(self.dims),
             ram_style=self.ram_style,
             fabric=self.platform.fabric,
@@ -295,13 +332,13 @@ class InputGeneratorKernel(KernelSpace):
         return {
             "COEFS": _vector(self.strides),
             "D": len(self.dims),
-            "DATA_WIDTH": self.input_data_width,
+            "DATA_WIDTH": self.input.width,
             "DIMS": _vector(self.dims),
             "FM_SIZE": self.frame_words,
             "RAM_STYLE": f'"{self.ram_style}"',
         }
 
-    module = LibraryModule("input_gen", parameters=parameters, sources=(SOURCE,))
+    module_spec: ClassVar[ModuleSpec] = ModuleSpec("input_gen", (SOURCE,))
 
 
 # -- the buffer, as the RTL derives it -------------------------------------------------------

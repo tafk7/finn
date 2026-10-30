@@ -51,13 +51,13 @@ constraint of the kernel, refusing the case by name (``uram-absent``, ``uram-ini
 All native pins remain present when AXI-Lite or set selection is disabled;
 disabled outputs may be unspecified. Bound by a network (or placed in a kernel with
 children), it reads an input tensor and (with several sets) a tensor of set indices,
-facts it is given, and writes its output tensor; it states the contract of each of its
-ports (``input_contract``, ``output_contract``, ``set_contract``), which the channels on
-them take; its AXI-Lite bus (``config``, a ``ControlBus``) is presented, at the port its
-placement names (``control``), when thresholds are runtime-writable (``use_axilite``), and
-otherwise held idle by its module, as is the set selector of a single set. Presented, the
-bus carries the writes that put the kernel's table into the memories (``register_map``),
-at the addresses thresholding_axi decodes. Multi-set AXI-Lite access is refused: the
+facts it is given, and writes its output tensor; each of its ports gives the channel on it
+its stream pins (``input.stream_pins``, ``output.stream_pins``, ``set.stream_pins``); its
+AXI-Lite bus (``config``, a ``ControlModel``) is presented, at the port its placement names
+(``control``), when thresholds are runtime-writable (``use_axilite``), and otherwise held
+idle by its module, as is the set selector of a single set. Presented, the bus carries the
+writes that put the kernel's table into the memories (``register_map``), at the addresses
+thresholding_axi decodes. Multi-set AXI-Lite access is refused: the
 pinned wrapper's configuration address width omits set bits. Static multi-set
 selection is supported. Floating-point threshold comparison is outside this
 profile.
@@ -68,7 +68,7 @@ Biases below -N-1 are refused: the native unsigned width expression creates a
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, ClassVar
+from typing import ClassVar
 
 from qonnx.core.ranges import TensorRange
 
@@ -91,16 +91,21 @@ from finn.dataflow.datatypes import (
     resolve_qonnx_datatype_name,
 )
 from finn.dataflow.schedule import Index, Schedule
-from finn.dataflow.streams import Stream
-from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
-from finn.kernels.artifacts.abi import CLOCK, RESET, Bus, Endpoint, Member, StandardProtocol
+from finn.kernels.artifacts.abi import (
+    Bus,
+    Endpoint,
+    Member,
+    StandardProtocol,
+)
 from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData, hex_image
 from finn.kernels.artifacts.module import RegisterMap
-from finn.kernels.base import KernelSpace, extent_of
-from finn.kernels.control import ControlBus
-from finn.kernels.library import LibraryModule
-from finn.kernels.port import AxiStreamPort
+from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
+from finn.kernels.control import ControlModel
+from finn.kernels.laws import AXIS, Axis, Intake, PortIntake, Standing
+from finn.kernels.library import ModuleSpec
+from finn.kernels.port_model import StreamPort
 from finn.kernels.utilization import (
     Fit,
     auto_unstated,
@@ -200,7 +205,7 @@ _THRESHOLD_LUT = Fit(81.7, (0.271,))
 _THRESHOLD_FF = Fit(31.3, (0.948,))
 
 
-class ThresholdingAxiKernel(KernelSpace):
+class ThresholdingAxiKernel(Kernel):
     """Integer ``thresholding_axi``: the input's channels counted against a table of
     thresholds, plus a bias; see the module docstring."""
 
@@ -237,6 +242,11 @@ class ThresholdingAxiKernel(KernelSpace):
         """C, the table's rows: one a channel, or one shared by every channel."""
         return self.shape[1]
 
+    @derived
+    def extents(self) -> dict[Index, int] | Rejected:
+        """Each index's extent, bound from the tensor its input reads."""
+        return bound_extents([self.input.access] if self.input.binds else [])
+
     channels = extent_of(c)  # the input's channels, bound by its tensor
     pe: int = Decision(domain=divisors_of(channels))  # channels a beat
     # Given by whoever binds it: the tensor its input port reads; with several sets, the
@@ -253,7 +263,7 @@ class ThresholdingAxiKernel(KernelSpace):
         reach it by."""
         return self.control is not None
 
-    use_axilite: bool = Decision(values=(False, True))
+    use_axilite: bool = Decision(domain=(False, True))
 
     # Runtime-writable thresholds need a control bus to export their AXI-Lite
     # interface through; how many buses a shell takes is the shell's to count, not theirs.
@@ -280,7 +290,7 @@ class ThresholdingAxiKernel(KernelSpace):
             return reject("threshold-set-channel", "several threshold sets take a set channel")
         return True
 
-    deep_pipeline: bool = Decision(values=(False, True))
+    deep_pipeline: bool = Decision(domain=(False, True))
 
     @derived
     def stages(self) -> int:
@@ -302,7 +312,7 @@ class ThresholdingAxiKernel(KernelSpace):
         return self.ultra_stages < self.stages
 
     # ``distributed`` first; ``auto`` (Vivado's placement) states no resources.
-    ram_style: str = Decision(values=("distributed", "auto"), when=left)
+    ram_style: str = Decision(domain=("distributed", "auto"), when=left)
 
     @derived
     def distributed(self) -> bool:
@@ -336,7 +346,7 @@ class ThresholdingAxiKernel(KernelSpace):
     @derived
     def input_dtype(self) -> QONNXDataType:
         """The input's element type: its tensor's."""
-        return self.input_element.dtype
+        return self.input.element.dtype
 
     @derived
     def table_dtype(self) -> QONNXDataType:
@@ -469,8 +479,8 @@ class ThresholdingAxiKernel(KernelSpace):
                     ("RRESP", 2),
                 )
             ),
-            associated_clock=CLOCK,
-            associated_reset=RESET,
+            associated_clock=type(self).clock_domain.clock,
+            associated_reset=type(self).clock_domain.reset,
         )
 
     @derived
@@ -493,7 +503,7 @@ class ThresholdingAxiKernel(KernelSpace):
                 "threshold-rows",
                 f"{rows} threshold rows are neither one nor the {channels} channels",
             )
-        return self.bound_schedule(self.indices, {c: self.pe})
+        return bound_schedule(self.extents, self.indices, {c: self.pe})
 
     @view
     def resource_use(self) -> Resources | Rejected:
@@ -528,7 +538,7 @@ class ThresholdingAxiKernel(KernelSpace):
         if self.set_tensor is None:
             return reject("threshold-set-channel", "several threshold sets take a set channel")
         shape = self.set_tensor.shape
-        if shape != (self.input_stream.sequence.form.beats,):
+        if shape != (self.input.stream.sequence.form.beats,):
             return reject("threshold-set-channel", "each input beat needs one set index")
         return BeatSequence(vector_major(shape, 1))
 
@@ -536,7 +546,7 @@ class ThresholdingAxiKernel(KernelSpace):
     def output_tensor(self) -> Tensor | Rejected:
         """Its output: the input's shape, in the counts plus bias (``result_dtype``), over
         their range, ``[bias, bias + N]``."""
-        shape = self.spanned(self.indices)
+        shape = spanned(self.indices, self.extents)
         if isinstance(shape, Rejected):
             return shape
         _, _, count = self.shape
@@ -545,33 +555,56 @@ class ThresholdingAxiKernel(KernelSpace):
             return element
         return Tensor(shape, element)
 
-    input = AxiStreamPort(
-        name="s_axis",
+    input = StreamPort(
+        transport=Axis(bus="s_axis"),
         endpoint=Endpoint.TARGET,
         tensor=input_tensor,
         schedule=schedule,
         index=indices,
         lanes=(c,),
     )
-    output = AxiStreamPort(
-        name="m_axis",
+    output = StreamPort(
+        transport=Axis(bus="m_axis"),
         endpoint=Endpoint.INITIATOR,
         tensor=output_tensor,
         schedule=schedule,
         index=indices,
         lanes=(c,),
     )
-    # The set port indexes beats (``c``'s folds), which no index of a tensor expresses.
-    set = AxiStreamPort(
-        name="s_axis_set",
+    # The set port indexes beats (``c``'s folds), which no index of a tensor expresses: a
+    # selector, its beat accepted with each input beat (L4).
+    set = StreamPort(
+        transport=AXIS,
         endpoint=Endpoint.TARGET,
         tensor=set_tensor,
         sequence=set_sequence,
+        governs="input",
         dtype=selector_dtype,
     )
-    if TYPE_CHECKING:  # members its ports lower to, which it reads
-        input_element: ClassVar[ScalarEncoding]
-        input_stream: ClassVar[Stream]
+
+    @derived
+    def intake(self) -> Intake:
+        """Its input guard, from its RTL (CONTRACT.md § 5): it takes an input beat while
+        fewer than ``MAX_PENDING = (DEEP_PIPELINE + 1) * M + 3`` thresholdings are pending
+        across its pipeline and output queue, exact both before it stops and at most; a
+        configuration access takes precedence. With several sets its set port's beats join
+        its input's, one each (L4), so it states the same."""
+        pending = (int(self.deep_pipeline) + 1) * self.stages + 3
+        rule = (
+            f"takes a beat while fewer than {pending} results are pending and no "
+            "configuration access is in progress; resumes as the output takes each result"
+        )
+        source = "rtl/nonlin/thresholding.sv:106-130 (MAX_PENDING, GuardSem), :190 (irdy)"
+        ports = ["input"]
+        if self.set.placed:
+            ports.append("set")
+            source += "; rtl/nonlin/thresholding_axi.sv:131-144 (the set join)"
+        return Intake(
+            tuple(
+                PortIntake(port, pending, pending, rule, Standing.STRUCTURAL, source)
+                for port in ports
+            )
+        )
 
     @view
     def thresholds_file(self) -> GeneratedData:
@@ -655,12 +688,11 @@ class ThresholdingAxiKernel(KernelSpace):
         return RegisterMap(tuple(writes))
 
     # AXI-Lite: presented with runtime writes (``control_for_writes``), held without.
-    config = ControlBus(config_bus, presented=use_axilite, port=control, registers=register_map)
+    config = ControlModel(bus=config_bus, presented=use_axilite)
 
-    module = LibraryModule(
+    module_spec: ClassVar[ModuleSpec] = ModuleSpec(
         "thresholding_axi",
-        parameters=parameters,
-        sources=(
+        constant_sources=(
             CopiedSource("finnlib", "rtl/infra/axilite.sv", provides=("module:axilite",)),
             CopiedSource(
                 "finnlib", "rtl/nonlin/thresholding.sv", provides=("module:thresholding",)
@@ -672,8 +704,12 @@ class ThresholdingAxiKernel(KernelSpace):
                 requires=("module:axilite", "module:thresholding"),
             ),
         ),
-        data=thresholds_file,
     )
+
+    @view
+    def module_data(self) -> tuple[GeneratedData, ...]:
+        """Its module reads its table from ``thresholds_file``."""
+        return (self.thresholds_file,)
 
 
 __all__ = [

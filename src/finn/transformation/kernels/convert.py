@@ -61,7 +61,7 @@ from finn.core.graph.walk import between, upstream
 from finn.core.reporting.findings import Finding, FindingKind, by_code
 from finn.custom_op.kernels.base import KernelOp, Match, kernel_op, unstated
 from finn.custom_op.kernels.network import persist_kernel
-from finn.kernels.base import KernelSpace
+from finn.kernels.base import Kernel
 from finn.kernels.channels import open_boundary_refusal
 from finn.kernels.policies import Defaulted
 from finn.platform.target import Target
@@ -304,7 +304,7 @@ def _move_upstream(model: ModelWrapper, subgraph: _Subgraph) -> bool:
 
 def _trial(
     model: ModelWrapper, op: type[KernelOp], match: Match, subgraph: _Subgraph
-) -> tuple[ModelWrapper, Defaulted[KernelSpace] | tuple[Finding, ...]]:
+) -> tuple[ModelWrapper, Defaulted[Kernel] | tuple[Finding, ...]]:
     """Try ``match`` on a copy of the model: replace the covered nodes with one
     KernelOp, named as the anchor, on their outside tensors, and apply the op's policies
     to its kernel (``KernelOp.defaulted``), then check its streams (``_streams``). Returns
@@ -353,7 +353,7 @@ def _flat(findings: tuple[Finding, ...]) -> tuple[Finding, ...]:
     return tuple(dict.fromkeys(flat))
 
 
-def _streams(model: ModelWrapper, node: NodeProto, point: KernelSpace) -> tuple[Finding, ...]:
+def _streams(model: ModelWrapper, node: NodeProto, point: Kernel) -> tuple[Finding, ...]:
     """Conversion's stream check: why a stream of ``node``'s kernel at ``point`` (its
     defaults) meets no open AXIS boundary (``finn.kernels.channels.open_boundary_refusal``),
     each streamed port's (``KernelOp.streamed``) on its tensor, as ``model`` states it;

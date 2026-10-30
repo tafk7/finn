@@ -4,13 +4,14 @@
 """Streams as values: what a port presents of a tensor, and the rule that a channel's
 two streams traverse its tensor.
 
-A ``Stream`` is what one port presents of the tensor it reads or writes: its element
+A ``Stream`` is what one port presents of the tensor it reads or writes: the encoding of every
+element
 and its ``BeatSequence``. It holds no owner: where a stream sits (the kernel whose port
 presents it, or a network's boundary) is the channel's to say. A channel
 (``finn.kernels.channels``) carries one tensor from one producer to one consumer;
 ``Streams`` holds its two, and ``misfit`` is the logical rule between them and the
 tensor: each traverses the tensor's shape, the producer's values fit the tensor's
-element, and the tensor's fit the consumer's. What joins the two sequences is
+encoding, and the tensor's fit the consumer's. What joins the two sequences is
 ``finn.dataflow.steps``. How a channel finds its streams (the kernels' ports, the
 network's boundary) is the channel's, not this layer's.
 """
@@ -25,7 +26,7 @@ from finn.dataflow.traversal import BeatSequence
 
 @dataclass(frozen=True)
 class Stream:
-    """What a port presents of a tensor: its element and its beat sequence."""
+    """What a port presents of a tensor: the encoding of every element and its beat sequence."""
 
     element: ScalarEncoding
     sequence: BeatSequence

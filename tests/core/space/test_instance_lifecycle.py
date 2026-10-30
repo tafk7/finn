@@ -17,7 +17,7 @@ def test_freeze_explore_and_rebind() -> None:
     class Example(Space):
         extent: int = Param()
         factor: int = Decision(domain=divisors_of(extent))
-        buffers: int = Decision(values=(1, 2))
+        buffers: int = Decision(domain=(1, 2))
 
     facts = {"extent": 12}
     base = design_space(Example(extent=facts["extent"]))

@@ -23,7 +23,7 @@ policy names (FINN's ``FirstValid(order=...)``); ``domain(order=...)`` is refuse
 A domain is **ordered** when its cases have an order by construction, which its
 enumeration follows: the divisors of an extent ascending, an integer range. A
 domain over listed values is unordered unless declared ordered
-(``Decision(values=..., ordered=True)``). That too is information for a policy (the DSE
+(``Decision(domain=..., ordered=True)``). That too is information for a policy (the DSE
 seam steps an ordered choice); validity never depends on it.
 """
 

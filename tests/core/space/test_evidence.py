@@ -11,14 +11,12 @@ from typing import cast
 
 from finn.core.space import (
     Available,
-    Const,
     Decision,
     Inapplicable,
     Param,
     Rejected,
     Select,
     Space,
-    View,
     constraint,
     derived,
     design_space,
@@ -49,7 +47,7 @@ def test_static_alternatives_and_demanded_evidence_are_separate() -> None:
     class Root(Space):
         size: int = Param()
         implementation: Good | Bad = Select(good=Good(size=size), bad=Bad())
-        physical = View(implementation.physical)
+        physical = view(implementation.physical)
 
     output = Root.physical
     # Static dependencies (transitively, through the generated selection) name
@@ -75,13 +73,12 @@ def test_static_alternatives_and_demanded_evidence_are_separate() -> None:
     assert first == second
     assert first.result == Available(12)
     assert calls == ["good"]
-    # The unselected candidate is read only as absent: the root's validity, which the view
-    # reads, reads the guard it is placed under, false, and so neither its validity nor
-    # anything of it is read.
+    # Owning validity observes the unselected case's guard, but not its body.
     bad = {
         node.declaration.key: node.result for node in first.nodes if ".bad." in node.declaration.key
     }
     assert bad == {"implementation.bad.$selected": Available(False)}
+    assert any(node.declaration.kind == "validity" for node in first.nodes)
     assert any(node.selector and node.result == Available("good") for node in first.nodes)
     assert any(node.is_guard for node in first.nodes)
     assert any(
@@ -102,11 +99,18 @@ def test_inactive_parameter_evidence_does_not_expose_unused_bound_value() -> Non
     # alongside it.
     class Forwarded(Space):
         value: int = Param()
-        enabled = Const(False)
+
+        @derived
+        def enabled(self) -> bool:
+            return False
+
         child = Child(value=value, when=enabled)
 
     class Literal(Space):
-        enabled = Const(False)
+        @derived
+        def enabled(self) -> bool:
+            return False
+
         child = Child(value=12345, when=enabled)
 
     for point in (design_space(Forwarded(value=12345)), design_space(Literal())):
@@ -119,10 +123,13 @@ def test_inactive_parameter_evidence_does_not_expose_unused_bound_value() -> Non
         assert isinstance(formal.result, Inapplicable)
 
 
-def test_refusal_causes_stay_visible_while_the_output_is_unresolved() -> None:
+def test_owning_refusal_stops_before_unresolved_output_input() -> None:
     class Example(Space):
-        chosen: int = Decision(values=(1, 2))
-        value = Const(3)
+        chosen: int = Decision(domain=(1, 2))
+
+        @derived
+        def value(self) -> int:
+            return 3
 
         @constraint
         def supported() -> bool:
@@ -132,18 +139,16 @@ def test_refusal_causes_stay_visible_while_the_output_is_unresolved() -> None:
         def selected(self) -> int:
             return self.value + self.chosen
 
-        physical = View(selected)  # refused with its Space, which ``supported`` refuses
+        physical = view(selected)  # owning refusal precedes the unassigned output choice
 
     point = design_space(Example())
     evidence = inspection.explain(point, Example.physical)
     assert isinstance(evidence.result, Rejected)
     assert evidence.assessment is not None
-    refused = next(node for node in evidence.nodes if node.declaration.key == "supported")
-    assert isinstance(refused.result, Rejected)
-    assert refused.result.findings[0].owner == "supported"
-    choice = next(node for node in evidence.nodes if node.declaration.key == "chosen")
-    assert isinstance(choice.decision_state, Available)
-    assert choice.decision_state.value.status == "unassigned"
+    assert any(node.declaration.key == "supported" for node in evidence.nodes)
+    assert all(node.declaration.key != "selected" for node in evidence.nodes)
+    assert inspection.validity(point).status == "refused"
+    assert all(node.declaration.key != "chosen" for node in evidence.nodes)
     assert inspection.explain(point, Example.physical) == evidence
 
 
@@ -158,7 +163,7 @@ def test_evidence_hands_out_a_container_a_derived_value_answers_as_a_copy() -> N
         def source(self) -> list[int]:
             return [1, self.n]
 
-        physical = View(source)
+        physical = view(source)
 
     point = design_space(Example(n=2))
     first = inspection.explain(point, Example.physical)
@@ -174,7 +179,9 @@ def test_evidence_hands_out_a_container_a_derived_value_answers_as_a_copy() -> N
 
 def test_evidence_retains_no_occurrence_or_snapshot_lifetime() -> None:
     class Example(Space):
-        value = Const(2)
+        @derived
+        def value(self) -> int:
+            return 2
 
     point = design_space(Example())
     reference = weakref.ref(point)

@@ -10,7 +10,14 @@ class (``finn.core.space._whole``, inspection's lists) are compared with.
 ``line_scope_set`` and ``line_statistics`` are the line's ``inspection`` lists over those
 addresses and that flow order. ``differences`` compares them, by key, with what a fresh
 model's scope records answer from its compiled forms, and checks that answering ran no
-question."""
+question.
+
+The traversal/inference algorithms retain their line origin; their input is the current
+compiled graph, not an independent compiler or evaluator. The old metadata projection
+assumed every addressing namespace was a real Space. The explicit Group extension below
+classifies authored Space/Group types and walks parents to find semantic owners, without
+using production owning_space or its metadata functions. Namespace subtrees still include
+Groups; statistics compare real scopes and Group frames separately."""
 
 from __future__ import annotations
 
@@ -20,7 +27,7 @@ from heapq import heapify, heappop, heappush
 from typing import cast
 
 from core.space._line_reads import line_existence, line_infer, line_scopes
-from finn.core.space import Space
+from finn.core.space import Group, Space
 from finn.core.space._reads import ModelReads
 from finn.core.space._scopes import Address, Argument, ScopeRecord, Scopes, model_modes
 from finn.core.space._template import compiled
@@ -261,6 +268,18 @@ def line_scope_set(scopes: Scopes, root: ScopeRecord) -> set[ScopeRecord]:
     return included
 
 
+def line_owner(scope: ScopeRecord) -> ScopeRecord:
+    """Group's semantic owner from declaration kinds, independently of owning_space.
+
+    A real Space stops the walk, even when it is nested inside an inclusion. A Group
+    contributes to its nearest real parent; it cannot itself be a root.
+    """
+    while not issubclass(scope.space_type, Space):
+        assert issubclass(scope.space_type, Group) and scope.parent is not None
+        scope = scope.parent
+    return scope
+
+
 def line_decisions(scopes: Scopes, flow: tuple[Address, ...], scope: ScopeRecord) -> list[object]:
     """``inspection.decisions`` below ``scope``, each by its fields (handles by key)."""
     included = line_scope_set(scopes, scope)
@@ -270,15 +289,16 @@ def line_decisions(scopes: Scopes, flow: tuple[Address, ...], scope: ScopeRecord
         if at not in included:
             continue
         choice = scopes.selector_choice(index)
+        owner = line_owner(at)
         found.append(
             (
                 index.key,
                 index.key,
-                at.name,
+                owner.name,
                 index.owner,
                 choice is not None,
                 () if choice is None else tuple(name for name, _ in choice.cases),
-                at.space_type,
+                owner.space_type,
                 choice is None and index.domain is not None and index.domain.ordered,
                 index.domain is not None and index.domain.candidates is not None,
             )
@@ -292,7 +312,7 @@ def line_choices(scopes: Scopes, scope: ScopeRecord) -> list[object]:
     return [
         (
             choice.key,
-            choice.scope.name,
+            line_owner(choice.scope).name,
             tuple(
                 (name, None, None) if case is None else (name, case.name, case.space_type)
                 for name, case in choice.cases
@@ -321,7 +341,7 @@ def line_members(scopes: Scopes, scope: ScopeRecord) -> list[object]:
                 index.key,
                 index.key,
                 index.kind,
-                index.scope.name,
+                line_owner(index.scope).name,
                 index.owner,
                 index.source_owner is not None,
                 None if index.guard is None else index.guard.key,
@@ -338,11 +358,12 @@ def line_statistics(scopes: Scopes) -> tuple[int, ...]:
     authored = sum(len(scope.named_members) for scope in held)
     return (
         authored + placements,
-        len(held),
+        sum(issubclass(scope.space_type, Space) for scope in held),
         len(every),
         sum(len(index.dependencies) for index in every),
         len(scopes.choices()),
         len(scopes.decisions),
+        sum(issubclass(scope.space_type, Group) for scope in held),
     )
 
 
@@ -401,7 +422,13 @@ class Compared:
     gained: dict[str, list[str]]
 
 
-def differences(space_type: type[Space], *, scopes: bool = True) -> Compared:
+def differences(
+    space_type: type[Space],
+    *,
+    scopes: bool = True,
+    permuted: bool | None = None,
+    eager: bool = False,
+) -> Compared:
     """Where a fresh model's scope records, answering from its compiled forms, differ from
     the line's answers over every address of a model whose every scope is made
     (``line_scopes``): the flow order, its loops, the presence readers, ``inspection``'s
@@ -415,8 +442,9 @@ def differences(space_type: type[Space], *, scopes: bool = True) -> Compared:
     line_flow = line_flow_order(line, reads)
     line_readers = line_presence_readers(line, reads.methods)
 
-    permuted, _ = model_modes()
-    model = model_of(compiled(space_type), permuted=permuted, eager=False)
+    if permuted is None:
+        permuted, _ = model_modes()
+    model = model_of(compiled(space_type), permuted=permuted, eager=eager)
     held = model.scopes
     whole = held.whole
     found: list[str] = []
@@ -490,6 +518,7 @@ def differences(space_type: type[Space], *, scopes: bool = True) -> Compared:
             stats.potential_edges,
             stats.choices,
             stats.owning_decisions,
+            stats.namespaces,
         ),
     )
     # Answering from the compiled forms ran no question: no session, nothing evaluated.

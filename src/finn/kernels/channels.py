@@ -39,7 +39,7 @@ exploration sizes it, ``Channel.policies``) and its ``ram_style``, and carries d
 only (``fifo-markers``). Its keys are the channel's, by its name (``("x", "transport")``).
 
 A channel with a boundary side presents the module's AXIS port its label names, whose
-contract the channel builds from its facts (``boundary``). Unstated (the side's ``outside``
+pins the channel builds from its facts (``boundary``). Unstated (the side's ``outside``
 None), the boundary presents what its other side presents, by one rule: an input without
 the replay or window its receiver realizes (``unreplayed``), an output as produced, neither
 with markers. Stated (``finn.kernels.sides.Outside``), it presents the stated order, passes
@@ -55,24 +55,28 @@ budget check and resources.
 
 A channel whose tensor has a known value (``contents``) places its ``source`` (a
 memory, ``MemStreamKernel``) as its producer (its producer side the source's,
-``channel-users``), storing one period in the order its consumer reads it; with several
-sets, the source's set port is the channel's port (``set``, served by its source:
-``set_stream``), which the index tensor's channel consumes.
+``channel-users``), storing one one_pass in the order its consumer reads it; with several
+sets, the source's set port is the channel's port (``set``, served from its source,
+``finn.kernels.port_model.served``), which the index tensor's channel consumes.
 
 The source and the output adapter are placed where their condition holds, not chosen,
 and each keeps the label it is placed at (``SOURCE_LABEL``, ``OUTPUT_ADAPTER_LABEL``),
 so the names emitted from them do not depend on its node.
 
-As a kernel with children (a ``KernelSpace`` binding no module), its members are its
+As a kernel with children (a ``Kernel`` binding no module), its members are its
 source, its adapters' stages, its FIFO (``ChannelFifo``) and its mover, in the order the
 stream runs through them. It checks its stages by their streams (``staged``, each stage's
-own derived values) and wires them by their contracts (``stages``, a view). Its answers
+own derived values) and wires them by their ports' stream pins (``stages``, a view). Its answers
 are the base's views over theirs, but for two it states itself, calling the base's: its
 netlist places its source and its output adapter at their labels and adds the hops between
 its own ends (its source, its stages, its boundary; ``netlist``), and a channel of wires
 takes no cycles of its own (0); a boundary whose outside states a pace takes no fewer than
-that pace's span a frame (``cycles``). Its hops to the ports beside it need those ports'
-contracts, which its network holds: the network wires them (``outer_hops``, from the ports
+that pace's span a frame (``cycles``). Its cycles count its source's, its adapters' and
+its mover's, by kind (``source_cycles``, ``stage_cycles``, ``mover_cycles``), not through
+the base's ``member_cycles``: its mover is no kernel (it binds no RTL in the module), and
+its transport, whose cycles are inapplicable, is a choice still open when FIFO sizing reads
+them. Its hops to the ports beside it need those ports'
+stream pins, which its network holds: the network wires them (``outer_hops``, from the ports
 it read, ``Neighbours``) and places them around the channel's netlist. It states its
 boundary's AXIS bus (``boundary_bus``) and its mover's contract (``mover_contracts``, one or none:
 ``placed_mover``, from the mover's own derived ``contract``). It is no module of its own.
@@ -89,10 +93,11 @@ from typing import ClassVar, cast
 from finn.core.reporting.findings import Finding
 from finn.core.space import (
     Decision,
+    Inapplicable,
+    Members,
     Param,
     Rejected,
     Select,
-    View,
     constraint,
     derived,
     design_space,
@@ -102,16 +107,18 @@ from finn.core.space import (
     view,
 )
 from finn.dataflow.datatypes import QONNXDataType
+from finn.dataflow.schedule import Pace
 from finn.dataflow.steps import Steps, Unrealizable
 from finn.dataflow.steps import steps as between
 from finn.dataflow.streams import Stream, Streams, misfit
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import (
     BeatSequence,
+    LevelEnd,
     Loop,
     Traversal,
+    one_pass,
     passes,
-    period,
     regrouped,
     unreplayed,
 )
@@ -122,33 +129,36 @@ from finn.kernels.adapters import (
     RealizedStage,
     Stage,
     StageStreams,
+    StreamAdapter,
     realize,
 )
 from finn.kernels.artifacts import ArtifactError
-from finn.kernels.artifacts.abi import CLOCK, RESET, Bus, Endpoint
+from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.artifacts.module import Fragment, Link, LinkEnd, Marker
 from finn.kernels.base import (
-    KernelSpace,
-    PortContract,
+    Kernel,
+    PortPins,
+    merged,
 )
-from finn.kernels.declaration import declared_reads
+from finn.kernels.control import presented
 from finn.kernels.fifo import FifoKernel
-from finn.kernels.library import library_module
+from finn.kernels.laws import AXIS_CLOCKING
+from finn.kernels.library import leaf_at_root
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.movers import IodmaMover, MoverContract, MoverOffer
 from finn.kernels.policies import Alone, FirstValid, Policy, Required, defaulted, stated
-from finn.kernels.port import served
+from finn.kernels.port_model import served
 from finn.kernels.sides import BUILD, ROW_MAJOR, Outside, Side, SideKind, beat_times
 from finn.kernels.transport import (
     AxisBeat,
     Mismatch,
-    StreamContract,
+    StreamPins,
     compatibility,
     lane_permutation,
     marker_bit,
     marker_pairs,
 )
-from finn.kernels.utilization import memory_preference, memory_styles, uram_constraint
+from finn.kernels.utilization import memory_preference, memory_styles, uram_available
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import Platform
 
@@ -170,27 +180,34 @@ _PLACED = {"source": SOURCE_LABEL, "output_adapter": OUTPUT_ADAPTER_LABEL}
 """Each placement's node, and the label the channel's netlist places it at."""
 
 
-def boundary_contract(
+def boundary_pins(
     name: str, element: ScalarEncoding, sequence: BeatSequence, endpoint: Endpoint
-) -> StreamContract:
-    """The AXIS port a composed module presents for one of its own channels."""
+) -> StreamPins:
+    """The AXIS port a composed module presents for one of its own channels: the stream
+    ``sequence`` of ``element`` on an AXIS bus named ``name``."""
     if len(sequence.markers) > 1:
         raise ValueError("an AXIS boundary carries at most one marker")
     form = sequence.form
+    if not isinstance(form, Traversal):
+        raise ValueError("the physical boundary schema does not yet support Grouped")
+    if any(not isinstance(rule, LevelEnd) for rule in sequence.markers):
+        raise ValueError("the physical boundary does not yet support held LevelDone markers")
     beat = AxisBeat(name, element.dtype, form.lanes, endpoint=endpoint, last=bool(sequence.markers))
-    transport = beat.native(clock=CLOCK, reset=RESET)
-    markers = ((transport.markers[0].signal, sequence.markers[0]),) if sequence.markers else ()
-    return StreamContract(transport, element, form, sequence.repetition, markers)
+    transport = beat.native(clock=AXIS_CLOCKING.clock, reset=AXIS_CLOCKING.reset)
+    markers = (
+        ((transport.markers[0].signal, cast(LevelEnd, sequence.markers[0])),)
+        if sequence.markers
+        else ()
+    )
+    return StreamPins(transport, Stream(element, sequence), markers)
 
 
-def _link_end(instance: str | None, contract: StreamContract) -> LinkEnd:
-    transport = contract.transport
+def _link_end(instance: str | None, pins: StreamPins) -> LinkEnd:
+    transport = pins.transport
     return LinkEnd(instance, transport.data, transport.data_width, transport.valid, transport.ready)
 
 
-def wired(
-    source: str | None, produced: StreamContract, sink: str | None, consumed: StreamContract
-) -> Link:
+def wired(source: str | None, produced: StreamPins, sink: str | None, consumed: StreamPins) -> Link:
     """One hop that connects directly, as wires: each sink lane from its source lane
     (``lane_permutation``), and each marker the sink requires from the source bit that
     guarantees it, or tied high when it closes every beat (``marker_pairs``)."""
@@ -211,13 +228,18 @@ def wired(
 @dataclass(frozen=True)
 class Neighbours:
     """The ports beside a channel, as its partition reads them (each kernel's port's
-    contract view, labelled below its member's node: ``matmul.compute.packed.x``; a frozen
+    stream pins view, labelled below its member's node: ``matmul.compute.packed.x``; a frozen
     neighbour's, outside a slice, read at its stored choices): the producing kernel's and
     the consuming kernel's, each None where that side is the channel's own, its source (a
-    known value) or its boundary."""
+    known value) or its boundary; and each port's pace (its ``pace``, read where it is
+    read), None where that port is no scheduled port's or the side is the channel's own.
+    Its network wires the hops to them (``outer_hops``); FIFO sizing reads the paces
+    (``finn.kernels.fifo_sizing``)."""
 
-    producer: PortContract | None = None
-    consumer: PortContract | None = None
+    producer: PortPins | None = None
+    consumer: PortPins | None = None
+    producer_pace: Pace | None = None
+    consumer_pace: Pace | None = None
 
 
 @dataclass(frozen=True)
@@ -239,12 +261,12 @@ class OuterHops:
         return Fragment(fragment.instances, (*before, *fragment.links, *after), fragment.exports)
 
 
-_End = tuple[str | None, StreamContract]
+_End = tuple[str | None, StreamPins]
 """One end of a hop: its owner, relative to the channel (``None``: the module's own pins),
-and the contract it presents."""
+and the stream pins it presents."""
 
 
-def _kernel_of(port: PortContract, owner: str) -> str | Rejected:
+def _kernel_of(port: PortPins, owner: str) -> str | Rejected:
     """The node of the kernel whose port ``port`` is, beside the channel: the node above
     its label (``matmul.compute.packed.x``, at any depth below the network:
     ``^matmul.compute.packed``). Refused as ``channel-port``, owned by ``owner``."""
@@ -252,7 +274,7 @@ def _kernel_of(port: PortContract, owner: str) -> str | Rejected:
     if not kernel:
         return reject(
             "channel-port",
-            f"{port.label} presents a contract, but is no kernel's port",
+            f"{port.label} presents stream pins, but is no kernel's port",
             owner=owner,
         )
     return "^" + kernel
@@ -262,15 +284,15 @@ def _own_source(channel: Channel) -> _End:
     """The producing end a channel holds itself: its source, below it at its label, or
     its boundary, the module's own pins."""
     if channel.valued:
-        offered: PortContract = channel.source.output_contract
-        return (channel.source_label, offered.contract)
+        offered: PortPins = channel.source.output.stream_pins
+        return (channel.source_label, offered.pins)
     return _own_boundary(channel)
 
 
 def _own_boundary(channel: Channel) -> _End:
     """A channel's boundary, the module's own pins, as one end of a hop; a ``ValueError``
     where it has a port on each side, and so none."""
-    found: StreamContract | None = channel.boundary
+    found: StreamPins | None = channel.boundary
     if found is None:
         raise ValueError("a channel with a port on each side has no boundary")
     return (None, found)
@@ -294,10 +316,10 @@ def outer_hops(channel: Channel, neighbours: Neighbours, *, owner: str) -> Outer
         owners.append(node)
     producing: _End | None = None
     if neighbours.producer is not None:
-        producing = (owners[0], neighbours.producer.contract)
+        producing = (owners[0], neighbours.producer.pins)
     consuming: _End | None = None
     if neighbours.consumer is not None:
-        consuming = (owners[1], neighbours.consumer.contract)
+        consuming = (owners[1], neighbours.consumer.pins)
     stages: tuple[Stage, ...] = channel.stages
     # What each port meets of the channel: its first stage or its last, or, with none,
     # the other side: the other port, or the channel's own source or boundary.
@@ -328,16 +350,16 @@ def _below_stages(holder: str, stages: tuple[Stage, ...]) -> tuple[Stage, ...]:
     return tuple(replace(stage, label=f"{holder}.{stage.label}") for stage in stages)
 
 
-class ChannelFifo(KernelSpace):
+class ChannelFifo(Kernel):
     """An identity stage: what arrives at it, presented on both sides of a native FIFO.
 
-    Its netlist, buffering and resources are its FIFO's, by the base. Its ``cycles``
-    answers inapplicable (``counts_cycles``, False), which a channel's ``member_cycles``
-    leaves out: a FIFO presents what arrives, whose beats are counted where they are made
-    (the channel's producer, its source, its output adapter), so its channel's cycles
-    are its other members'. It presents no port: its channel checks it by its FIFO's
-    streams (``stage_streams``) and wires it hop by hop (``stages``: its FIFO's module,
-    read from the FIFO's netlist, and its ports' contracts).
+    Its netlist, buffering and resources are its FIFO's, by the base. Its cycles are
+    inapplicable, which a kernel's ``member_cycles`` leaves out: a FIFO presents what
+    arrives, whose beats are counted where they are made (the channel's producer, its
+    source, its output adapter), so its channel's cycles are its other members'. It
+    presents no port: its channel checks it by its FIFO's streams (``stage_streams``) and
+    wires it hop by hop (``stages``: its FIFO's module, read from the FIFO's netlist, and
+    its ports' stream pins).
     """
 
     id = "finn.channel.fifo"
@@ -365,6 +387,11 @@ class ChannelFifo(KernelSpace):
         platform=platform,
     )
 
+    @view
+    def cycles(self) -> int | Inapplicable:
+        """Inapplicable: it counts no cycles of its own (the class docstring)."""
+        return Inapplicable()
+
     @constraint
     def carries_data(self) -> bool | Rejected:
         """What arrives carries no marker a FIFO would have to carry (one closing every
@@ -377,36 +404,23 @@ class ChannelFifo(KernelSpace):
         return True
 
     @derived
-    def counts_cycles(self) -> bool:
-        """Whether its cycles count in its channel's: no, the beats it carries are counted
-        where they are made."""
-        return False
-
-    @view(when=counts_cycles)
-    def cycles(self) -> int | Rejected:
-        """The clock cycles a frame takes through it: none it states, so it answers
-        inapplicable, and its channel's ``member_cycles`` leaves it out."""
-        return reject("fifo-cycles", "a FIFO's beats are counted where they are made")
-
-    @derived
     def stage_streams(self) -> tuple[StageStreams, ...]:
         """Its FIFO's streams and output word width, its derived values, labelled as its
         ``Stage`` is."""
         buffer = self.buffer
         stage = StageStreams(
-            "fifo.buffer", buffer.input_stream, buffer.output_stream, buffer.output_data_width
+            "fifo.buffer", buffer.input.stream, buffer.output.stream, buffer.output.width
         )
         return (stage,)
 
     @view
-    @declared_reads("buffer.netlist", "buffer.input_contract", "buffer.output_contract")
     def stages(self) -> tuple[Stage, ...]:
         buffer = self.buffer
         return (
             Stage(
-                library_module(buffer),
-                buffer.input_contract.contract,
-                buffer.output_contract.contract,
+                leaf_at_root(buffer.netlist, type(buffer).__qualname__),
+                buffer.input.stream_pins.pins,
+                buffer.output.stream_pins.pins,
                 "fifo.buffer",
             ),
         )
@@ -448,7 +462,7 @@ class ChannelSides:
         return (source, sink)
 
 
-class Channel(KernelSpace):
+class Channel(Kernel):
     """One tensor between the two sides it takes: one producer, one consumer.
 
     ``producer`` and ``consumer`` are its sides, each one value (``Side``): a kernel's
@@ -457,8 +471,8 @@ class Channel(KernelSpace):
     label names, presented as ``boundary``, where the ``mover`` sits where the shell
     offers one: ``offered``), or its source's. A channel with a known value places its
     ``source`` as its producer; with several sets, the source reads the set indices
-    (``index_tensor``) from the channel whose consumer is ``set_stream``, the one port it
-    presents (``set``, its source's). ``platform`` is the target's: its source, its
+    (``index_tensor``) from the channel whose consumer is its ``set`` port, the one port it
+    serves (its source's). ``platform`` is the target's: its source, its
     adapters' stages and its FIFO read it. Its members are declared in the order the stream
     runs through them, so its netlist places them in that order.
     """
@@ -494,9 +508,11 @@ class Channel(KernelSpace):
             for side in (self.producer, self.consumer)
         )
 
-    @derived(when=offered)
-    def offers(self) -> tuple[MoverOffer, ...]:
+    @derived
+    def offers(self) -> tuple[MoverOffer, ...] | Inapplicable:
         """The movers a shell offers on its boundary side."""
+        if not self.offered:
+            return Inapplicable()
         return next(
             side.offers
             for side in (self.producer, self.consumer)
@@ -522,9 +538,12 @@ class Channel(KernelSpace):
         return consumer.stream
 
     @derived
-    def source_form(self) -> Traversal:
-        """One period of the value in the order its consumer reads it."""
-        return period(self.consumed.sequence.form)
+    def source_form(self) -> Traversal | Rejected:
+        """One pass of the value, retaining the existing source loop-nest schema."""
+        form = one_pass(self.consumed.sequence.form)
+        if not isinstance(form, Traversal):
+            return reject("channel-source-unsupported", "memory sources do not yet support Grouped")
+        return form
 
     @derived
     def source_dtype(self) -> QONNXDataType:
@@ -541,15 +560,17 @@ class Channel(KernelSpace):
         platform=platform,
     )
 
-    @derived(when=valued)
-    def source_label(self) -> str:
+    @derived
+    def source_label(self) -> str | Inapplicable:
         """Its source's label (``SOURCE_LABEL``): its producer's owner."""
+        if not self.valued:
+            return Inapplicable()
         return SOURCE_LABEL
 
-    # With several sets, its source's set port, a port of the channel labelled below the
-    # source's label (``source.memstream.set``): the index tensor's channel's consumer. A
-    # channel without a known value has no source, so no set port: nothing reads the
-    # indices.
+    # With several sets, its source's set port, served as a port of the channel labelled
+    # below the source's label (``source.memstream.set``): the index tensor's channel's
+    # consumer. A channel without a known value has no source, so its set port does not
+    # apply: nothing reads the indices.
     set = served(source, "set", label=SOURCE_LABEL)
 
     @derived
@@ -575,7 +596,7 @@ class Channel(KernelSpace):
             return reject("channel-users", misplaced)
         source: Stream | None = producer.stream
         if self.valued:
-            source = self.source.output_stream
+            source = self.source.output.stream
         sink: Stream | None = consumer.stream
         # A boundary side presents what the other side presents. Seen from inside, the
         # module's input is the AXIS target and its output the initiator.
@@ -590,7 +611,7 @@ class Channel(KernelSpace):
             return reject("channel-unused", "no present port is on this channel")
         return ChannelSides(producer, source, consumer, sink)
 
-    def _boundary(self, side: Side, inside: Stream, endpoint: Endpoint) -> StreamContract:
+    def _boundary(self, side: Side, inside: Stream, endpoint: Endpoint) -> StreamPins:
         """The AXIS port the module presents for a boundary ``side`` (its label names it),
         from what the other side presents (``inside``): an input without the replay or
         window its receiver realizes (``unreplayed``), an output as produced, neither with
@@ -598,13 +619,15 @@ class Channel(KernelSpace):
         form = inside.sequence.form
         if endpoint is Endpoint.TARGET:
             form = unreplayed(form)
+        if not isinstance(form, Traversal):
+            raise ValueError("the physical boundary schema does not yet support Grouped")
         if side.outside is not None:
             form = stated_form(side.label, side.outside, form)
-        return boundary_contract(side.label, self.tensor.element, BeatSequence(form), endpoint)
+        return boundary_pins(side.label, self.tensor.element, BeatSequence(form), endpoint)
 
     @derived
-    def boundary(self) -> StreamContract | None:
-        """The AXIS port the module presents for its boundary side (``boundary_contract``:
+    def boundary(self) -> StreamPins | None:
+        """The AXIS port the module presents for its boundary side (``boundary_pins``:
         the side's label, the tensor's element, and what the other side presents); None
         where neither side is the boundary."""
         found = self.sides
@@ -615,10 +638,10 @@ class Channel(KernelSpace):
         return None
 
     @derived
-    def free_side(self) -> StreamContract | Rejected:
+    def free_side(self) -> StreamPins | Rejected:
         """The boundary side, as the module presents it (``boundary``): where a shell's
         mover sits."""
-        found: StreamContract | None = self.boundary
+        found: StreamPins | None = self.boundary
         if found is None:
             return reject(
                 "channel-mover",
@@ -627,7 +650,7 @@ class Channel(KernelSpace):
         return found
 
     mover = IodmaMover(when=offered, offers=offers, side=free_side)
-    mover_contract = View(mover.contract)
+    mover_contract = view(mover.contract)
 
     @derived
     def placed_mover(self) -> tuple[MoverContract, ...]:
@@ -701,17 +724,17 @@ class Channel(KernelSpace):
     output_adapter = OUTPUT_ADAPTER(
         when=output_adapting, tensor=tensor, steps=output_steps, platform=platform
     )
-    output_adapter_stages = View(output_adapter.stages)
+    output_adapter_stages = view(output_adapter.stages)
 
     @derived
     def arriving(self) -> BeatSequence:
         """What arrives at the transport: what the output adapter's last stage presents
-        (the last ``sink`` of its realization), or without one what the producer
+        (the last ``sink`` of its ``chain``), or without one what the producer
         presents."""
         if not self.output_adapting:
             return self.sides.source.sequence
-        realization: tuple[RealizedStage, ...] = self.output_adapter.realization
-        return realization[-1].sink
+        chain: tuple[RealizedStage, ...] = self.output_adapter.chain
+        return chain[-1].sink
 
     # ``direct`` places nothing: the hop across the transport connects directly.
     transport: ChannelFifo | None = Select(
@@ -728,10 +751,10 @@ class Channel(KernelSpace):
         if not self.adapting:
             return "none"
         try:
-            realization = realize(self.input_steps)
+            chain = realize(self.input_steps)
         except Unrealizable as error:
             return reject("adapter-steps", f"no FinnLib chain carries out the steps: {error}")
-        return "_".join(stage.kind for stage in realization)
+        return "_".join(stage.kind for stage in chain)
 
     @derived
     def adapter_placed(self) -> bool:
@@ -741,9 +764,14 @@ class Channel(KernelSpace):
     # The one memory style of its input adapter's generators, present where it places a
     # chain; given to every chain, which gives it to each of its input generators.
     adapter_ram_style: str = Decision(domain=memory_styles(), when=adapter_placed)
-    adapter_uram_present = uram_constraint(
-        platform, adapter_ram_style, ("ultra",), when=adapter_placed
-    )
+
+    @constraint
+    def adapter_uram_present(self) -> bool | Rejected:
+        """Where the adapter's memory style is UltraRAM, the platform has it
+        (``uram_available``). The style is read first: absent where no adapter is placed, so
+        the rule does not apply there, whatever the platform answers; refused with it."""
+        style = self.adapter_ram_style
+        return uram_available(style, self.platform, ("ultra",))
 
     adapter: InputAdapter | None = Select(
         by=input_chain,
@@ -754,13 +782,15 @@ class Channel(KernelSpace):
         platform=platform,
         ram_style=adapter_ram_style,
     )
-    adapter_stages = View(adapter.stages)  # type: ignore[union-attr]
+    adapter_stages = view(adapter.stages)  # type: ignore[union-attr]
 
-    @view(when=adapter_placed)
-    def adapter_ram_preference(self) -> tuple[str, ...]:
+    @view
+    def adapter_ram_preference(self) -> tuple[str, ...] | Inapplicable:
         """Its adapter's memory styles in its preference for the most bits one of its
         input generators holds a frame (the picked chain's ``frame_bits``,
         ``memory_preference``): the ranking a first valid policy may follow."""
+        if not self.adapter_placed:
+            return Inapplicable()
         adapter = self.adapter
         bits: int = 0 if adapter is None else adapter.frame_bits
         return memory_preference(bits)
@@ -784,7 +814,7 @@ class Channel(KernelSpace):
 
     @view
     def stages(self) -> tuple[Stage, ...]:
-        """Its stages' modules and ports' contracts (each holder's ``stages``), in the order
+        """Its stages' modules and ports' stream pins (each holder's ``stages``), in the order
         the stream runs through them, labelled below the channel: the product its netlist
         and its network's ``outer_hops`` read to wire them."""
         found: list[Stage] = []
@@ -816,10 +846,10 @@ class Channel(KernelSpace):
             found += compatibility(current, stage.input)
             current, width = stage.output, stage.width
         found += compatibility(current, sides.sink)
-        boundary: StreamContract | None = self.boundary
+        boundary: StreamPins | None = self.boundary
         if sides.consumer.kind is SideKind.BOUNDARY and boundary is not None:
             if width is None and sides.producer.kind is not SideKind.BOUNDARY:
-                width = self.source.output_data_width if self.valued else sides.producer.width
+                width = self.source.output.width if self.valued else sides.producer.width
             if width is not None and width > boundary.transport.data_width:
                 found.append(
                     Mismatch(
@@ -832,31 +862,21 @@ class Channel(KernelSpace):
     # -- its answers: the base's, with its own hops, and none of a channel of wires' cycles --
 
     @view
-    @declared_reads(
-        "netlists",
-        "controls",
-        "sides",
-        "boundary",
-        "valued",
-        "source_label",
-        "source.output_contract",
-        "stages",
-    )
     def netlist(self) -> Fragment | Rejected:
         """Its members' netlists under their nodes, in the order the stream runs through
         them (its source, its output adapter's stages, its FIFO, its input adapter's
         stages), its source and its output adapter at their labels (``SOURCE_LABEL``,
         ``OUTPUT_ADAPTER_LABEL``), and its own hops, as wires (``wired``): each hop both of
         whose ends are its own (its source, below it at its label; its stages, at theirs;
-        its boundary, the module's own pins), from its children's contracts (its
+        its boundary, the module's own pins), from its children's stream pins (its
         ``stages`` and its source's). Its hops to the ports beside it are its network's
         (``outer_hops``); a channel of wires between two kernels places nothing."""
         sides = self.sides
-        boundary: StreamContract | None = self.boundary
+        boundary: StreamPins | None = self.boundary
         current: _End | None = None
         if self.valued:
-            offered: PortContract = self.source.output_contract
-            current = (self.source_label, offered.contract)
+            offered: PortPins = self.source.output.stream_pins
+            current = (self.source_label, offered.pins)
         elif sides.producer.kind is SideKind.BOUNDARY and boundary is not None:
             current = (None, boundary)
         stages: tuple[Stage, ...] = self.stages
@@ -876,19 +896,27 @@ class Channel(KernelSpace):
             # A hop that does not connect (another element, say) is refused by the
             # channel's constraints; its wires do not exist.
             return reject("channel-link", str(error))
-        return KernelSpace._netlist(self, tuple(links), _PLACED)
+        parts = [
+            (_PLACED.get(str(item.node), str(item.node)), item.value) for item in self.netlists
+        ]
+        buses = presented(
+            (_PLACED.get(str(item.node), str(item.node)), item.value) for item in self.controls
+        )
+        if isinstance(buses, Rejected):
+            return buses
+        return merged(parts, buses, tuple(links))
 
     @view
-    @declared_reads("member_cycles", "producer", "consumer", "boundary")
     def cycles(self) -> int | Rejected:
         """The clock cycles a frame takes through its own members: the slowest's (its
-        source's, its adapters' stages', its mover's), one beat a cycle at best; a FIFO
-        states none, and a channel of wires takes none of its own. On a boundary whose
+        source's, its adapters' stages', its mover's), one beat a cycle at best; a FIFO's
+        are inapplicable, and a channel of wires takes none of its own. On a boundary whose
         outside states a pace, no fewer than that pace's span at the edge's beats
         (``finn.kernels.sides.beat_times``): the partition runs no faster than its outside
         supplies an input or takes an output. A side the outside leaves unstated, or
         states without a pace (a mover's, its contract's), bounds nothing more."""
-        found = KernelSpace._cycles(self, default=0)
+        counted = (*self.source_cycles, *self.stage_cycles, *self.mover_cycles)
+        found = max((item.value for item in counted), default=0)
         paces = [
             side.outside.pace
             for side in (self.producer, self.consumer)
@@ -896,21 +924,31 @@ class Channel(KernelSpace):
         ]
         if isinstance(found, Rejected) or not paces:
             return found
-        edge: StreamContract | None = self.boundary
+        edge: StreamPins | None = self.boundary
         assert edge is not None  # a side the outside states is a boundary's
         return max(found, *(beat_times(pace, edge.form.beats).span for pace in paces))
+
+    # What its cycles count, by kind: its source's, its adapters' and its mover's. Not the
+    # base's ``member_cycles``, which ranges over its transport too: a FIFO's cycles are
+    # inapplicable, but whether it places one is a choice FIFO sizing reads cycles before,
+    # so the base's would wait on it. Its mover is no kernel; its cycles count here. Each
+    # kind declares ``cycles`` itself (``Members`` reads the declaring class), and must
+    # keep doing so while the channel counts by kind.
+    source_cycles = Members(MemStreamKernel.cycles)
+    stage_cycles = Members(StreamAdapter.cycles)
+    mover_cycles = Members(IodmaMover.cycles)
 
     @view
     def boundary_bus(self) -> tuple[Bus, ...]:
         """The AXIS bus the module presents for it (``boundary``), when one side is the
         boundary."""
-        found: StreamContract | None = self.boundary
+        found: StreamPins | None = self.boundary
         return () if found is None else (found.transport.axis_bus(),)
 
     # The boundary channel's mover, as its contract (``MoverContract``): one, or none
     # without a mover. The shell's budget check counts their AXI-Lite buses, and it sums
     # their resources and counts their memory ports.
-    mover_contracts = View(placed_mover)
+    mover_contracts = view(placed_mover)
 
 
 # The channel's policies (``finn.kernels.policies``), as a KernelOp states its kernel's:
@@ -976,7 +1014,7 @@ def open_boundary_refusal(
 
 def stated_form(port: str, outside: Outside, presented: Traversal) -> Traversal:
     """What a boundary ``port`` stated by ``outside`` presents, where unstated it presents
-    ``presented`` (the boundary rule's form: ``Channel._boundary``). Each pass (``period``)
+    ``presented`` (the boundary rule's form: ``Channel._boundary``). Each pass (``one_pass``)
     in the stated order, row-major (``Traversal.row_major``) where ``outside.order`` is
     ``ROW_MAJOR``, else as presented; at the stated lanes a beat, else at the presented
     pass's (with the order as presented: the same elements in the same order, regrouped,
@@ -985,7 +1023,10 @@ def stated_form(port: str, outside: Outside, presented: Traversal) -> Traversal:
     ``ValueError`` where the stated lanes do not divide a pass's elements, or where they
     do but the presented order cannot be regrouped to them (a nest whose loops do not
     split at that many lanes: a tiled pass)."""
-    once = period(presented)
+    if not isinstance(presented, Traversal):
+        raise ValueError(f"{port}: the physical boundary schema does not yet support Grouped")
+    once = one_pass(presented)
+    assert isinstance(once, Traversal)
     lanes = once.lanes if outside.lanes is None else outside.lanes
     count = passes(presented) if outside.passes is None else outside.passes
     size = prod(once.shape)
@@ -999,7 +1040,10 @@ def stated_form(port: str, outside: Outside, presented: Traversal) -> Traversal:
         one = Traversal(once.shape, (Loop(size // lanes, lanes),), (Loop(lanes, 1),))
     elif outside.lanes is not None:
         try:
-            one = regrouped(once, lanes)
+            regroup = regrouped(once, lanes)
+            if not isinstance(regroup, Traversal):
+                raise ValueError("the physical boundary schema does not yet support Grouped")
+            one = regroup
         except ValueError:
             raise ValueError(
                 f"{port}: the presented order of a pass of {list(once.shape)} cannot be "
@@ -1050,9 +1094,9 @@ def _misplaced(producer: Side, consumer: Side, valued: bool) -> str | None:
     return None
 
 
-def _stream(contract: StreamContract) -> Stream:
-    """The stream a contract states: its element and its beat sequence."""
-    return Stream(contract.element, contract.sequence)
+def _stream(pins: StreamPins) -> Stream:
+    """The stream on ``pins``: its element and its beat sequence."""
+    return pins.stream
 
 
 def _refusal(found: Sequence[Mismatch]) -> bool | Rejected:
@@ -1069,7 +1113,7 @@ __all__ = [
     "ChannelSides",
     "Neighbours",
     "OuterHops",
-    "boundary_contract",
+    "boundary_pins",
     "open_boundary_refusal",
     "outer_hops",
     "stated_by",

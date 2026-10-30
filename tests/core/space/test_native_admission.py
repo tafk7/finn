@@ -50,9 +50,9 @@ def _chain_space(reverse: bool) -> type[Space]:
         return value == previous
 
     after_a, after_b = derived(plus_a), derived(plus_b)
-    b, c = Decision(values=(1, 2, 3)), Decision(values=(1, 2, 3))
+    b, c = Decision(domain=(1, 2, 3)), Decision(domain=(1, 2, 3))
     declarations = [
-        ("a", Decision(values=(1,))),
+        ("a", Decision(domain=(1,))),
         ("after_a", after_a),
         ("b", b),
         ("b_follows", constraint(value=b, previous=after_a)(same)),

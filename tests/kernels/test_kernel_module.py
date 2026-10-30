@@ -3,31 +3,35 @@
 
 """The kernel contract: its bases, and what a kernel binding a module states.
 
-A kernel binding a module (``KernelSpace`` with a ``LibraryModule``) states its
+A kernel binding a module (``Kernel`` with a plain ``ModuleSpec``) states its
 parameters, sources and resources, and its ports; it places no kernel (checked when the
-class is made: ``tests/kernels/test_kernel_space.py``). Its control bus is a declaration
-(``ControlBus``): held idle while it is not presented, presented (read as
-``KernelSpace.bus_control``) while it is, so a bus is accounted for by construction; its
+class is made: ``tests/kernels/test_kernel_space.py``). Its control bus is an included
+``ControlModel``: held idle while it is not presented, presented (read as
+``Kernel.bus_control``) while it is, so a bus is accounted for by construction; its
 pins come before every port's, its hold after theirs. Every port runs on its kernel's clock domain
 (``clock_domain``). Its module is the ``Leaf`` at the empty label of its netlist
 (``library_module``). A kernel with children presents a child's port as its own
-(``served``: ``<name>_contract``, labelled below it), and its netlist merges its members'.
-Every kernel is a ``KernelSpace``.
+through typed model forwards and an outward contract View, labelled below the
+child; its netlist merges its members'.
+Every kernel is a ``Kernel``; a channel's FIFO answers its cycles inapplicable.
 """
 
 from __future__ import annotations
 
 from dataclasses import replace
 
+import pytest
 from qonnx.core.datatype import DataType
-from support.helpers import FULL_DSP48E2, OtherPins, by_hand, codes
+from support.helpers import FULL_DSP48E2, by_hand, codes
 from support.refusals import refused
 
 from finn.core.space import (
     Available,
     DefinitionError,
+    Group,
     Param,
     Rejected,
+    Space,
     derived,
     design_space,
     reject,
@@ -46,13 +50,15 @@ from finn.kernels.artifacts.abi import (
 )
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Held, Leaf, RegisterMap
-from finn.kernels.base import NATIVE_CLOCKING, KernelSpace
+from finn.kernels.base import Kernel
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.configure import commit
-from finn.kernels.control import Control, ControlBus, held_bus
-from finn.kernels.library import LibraryModule, library_module
+from finn.kernels.control import Control, ControlModel, held_bus
+from finn.kernels.laws import NATIVE_CLOCKING, Axis
+from finn.kernels.library import ModuleSpec, library_module
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.port import AxiStreamPort, served
+from finn.kernels.port import port_side
+from finn.kernels.port_model import OtherPins, StreamPort, served
 from finn.kernels.sides import Side
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import Resources
@@ -64,22 +70,24 @@ TENSOR = Tensor((4,), ScalarEncoding(INT4))
 PROBE = CopiedSource("finnlib", "rtl/probe.sv", provides=("module:probe",))
 
 
-class Probe(KernelSpace):
+class Probe(Kernel):
     """A model-only kernel: one input port, a mode pin held, and a doubled clock."""
 
     id = "test.probe"
 
     tensor: Tensor | None = Param(default=None)
 
-    x = AxiStreamPort(
-        name="s_axis",
+    x = StreamPort(
+        label="x",
+        transport=Axis(bus="s_axis"),
         endpoint=Endpoint.TARGET,
         tensor=tensor,
         sequence=BeatSequence(vector_major((4,), 1)),
     )
     # The output is no one's to drive: left open.
     mode = OtherPins(
-        (Signal("mode", Direction.IN, 2), Signal("busy", Direction.OUT, 1)), Held((("mode", 1),))
+        signals=(Signal("mode", Direction.IN, 2), Signal("busy", Direction.OUT, 1)),
+        holding=Held((("mode", 1),)),
     )
 
     @derived
@@ -94,7 +102,11 @@ class Probe(KernelSpace):
     def resource_use(self) -> Resources | Rejected:
         return reject("kernel-resources", "a model only")
 
-    module = LibraryModule("probe", parameters=parameters, sources=(PROBE,))
+    module_spec = ModuleSpec("probe", (PROBE,))
+
+    @view
+    def cycles(self) -> int:
+        return self.x.stream.sequence.form.beats
 
 
 def probe(**facts: object) -> Probe:
@@ -126,7 +138,7 @@ def test_a_port_runs_on_its_kernels_clock_domain() -> None:
         clock_domain = NATIVE_CLOCKING
 
     point = design_space(Native(tensor=TENSOR))
-    assert isinstance(point.query(KernelSpace.netlist), Available)
+    assert isinstance(point.query(Kernel.netlist), Available)
     pins = library_module(point).abi.pins
     assert [pin.name for pin in pins[:3]] == ["clk", "ap_clk2x", "rst"]
     bus = pins[-1]
@@ -140,7 +152,7 @@ BUS = Bus(
 )
 
 
-class Controlled(Probe):
+class Controlled(Kernel):
     """The probe with a control bus it presents where ``writable``, at the port ``control``."""
 
     id = "test.probe.controlled"
@@ -156,7 +168,32 @@ class Controlled(Probe):
     def register_map(self) -> RegisterMap:
         return RegisterMap(((0, 7),))
 
-    config = ControlBus(config_bus, presented=writable, port=control, registers=register_map)
+    # Its other pins: their pins and their holds go before its bus's.
+    mode = OtherPins(
+        signals=(Signal("mode", Direction.IN, 2), Signal("busy", Direction.OUT, 1)),
+        holding=Held((("mode", 1),)),
+    )
+    config = ControlModel(bus=config_bus, presented=writable)
+    tensor: Tensor = Param()
+    x = StreamPort(
+        label="x",
+        tensor=tensor,
+        sequence=BeatSequence(vector_major((4,), 1)),
+        transport=Axis(bus="s_axis"),
+    )
+    module_spec = ModuleSpec("probe", (PROBE,))
+
+    @derived
+    def clocking(self) -> Clocking:
+        return replace(type(self).clock_domain, doubled="ap_clk2x", doubling=True)
+
+    @view
+    def resource_use(self) -> Resources | Rejected:
+        return reject("kernel-resources", "a model only")
+
+    @view
+    def parameters(self) -> dict[str, int | str]:
+        return {}
 
 
 def controlled(**facts: object) -> Controlled:
@@ -165,8 +202,8 @@ def controlled(**facts: object) -> Controlled:
 
 def test_a_control_bus_held_holds_its_inputs_after_every_port_s_hold() -> None:
     point = controlled()
-    assert point.config_presented is False
-    assert point.config_control == Control(None)
+    assert point.config.presented is False
+    assert point.bus_control == Control(None)
     assert point.query(Controlled.bus_control) == Available(Control(None))
     module = library_module(point)
     names = [pin.name for pin in module.abi.pins]
@@ -179,7 +216,7 @@ def test_a_control_bus_held_holds_its_inputs_after_every_port_s_hold() -> None:
 
 def test_a_control_bus_presented_is_read_with_its_port_and_registers() -> None:
     point = controlled(writable=True, control="first_s_axilite")
-    assert point.config_presented is True
+    assert point.config.presented is True
     control = Control(BUS, "first_s_axilite", RegisterMap(((0, 7),)))
     assert point.query(Controlled.bus_control) == Available(control)
     assert library_module(point).held.inputs == (("mode", 1),)
@@ -190,8 +227,8 @@ def test_a_control_bus_presented_without_its_port_is_refused() -> None:
     # optional ``control`` left out, None), its control view refuses rather than present a
     # bus at port None.
     point = controlled(writable=True)
-    assert point.config_presented is True
-    answer = point.query(Controlled.config_control)
+    assert point.config.presented is True
+    answer = point.query(Controlled.bus_control)
     assert isinstance(answer, Rejected)
     assert codes(answer) == {"control-bus-unaddressed"}
 
@@ -206,7 +243,7 @@ def test_a_memstream_s_bus_is_held_by_construction() -> None:
         )
     )
     memory = commit(point, {"ram_style": "auto", "pumped_memory": False})
-    assert memory.config_presented is False and memory.config_control == Control(None)
+    assert memory.config.presented is False and memory.bus_control == Control(None)
     assert set(dict(held_bus(memory.config_bus).inputs)) <= set(
         dict(library_module(memory).held.inputs)
     )
@@ -217,13 +254,13 @@ def test_a_kernel_presents_one_control_bus_at_most() -> None:
 
         class Twice(Controlled):
             id = "test.probe.twice"
-            other = ControlBus(Controlled.config_bus)
+            other = ControlModel(bus=Controlled.config_bus)
 
 
 def test_two_control_buses_in_one_body_are_refused_as_repeated_before_lowering() -> None:
-    """Counted before any declaration is lowered: each bus lowers to ``declares_bus`` and
-    ``bus_control``, so lowering first would answer ``declaration-member-taken`` for the
-    second and hide the refusal. (A second bus from a subclass is the case above.)"""
+    """Count included control models before checking parent addressing declarations,
+    so the second bus reports ``control-bus-repeated``. A second bus inherited by
+    a subclass is covered above; this case declares both in one body."""
     with refused("control-bus-repeated", error=DefinitionError, message="Both declares"):
 
         class Both(Probe):
@@ -239,14 +276,12 @@ def test_two_control_buses_in_one_body_are_refused_as_repeated_before_lowering()
             def register_map(self) -> RegisterMap:
                 return RegisterMap(((0, 7),))
 
-            first = ControlBus(config_bus, presented=writable, port=control, registers=register_map)
-            second = ControlBus(
-                config_bus, presented=writable, port=control, registers=register_map
-            )
+            first = ControlModel(bus=config_bus, presented=writable)
+            second = ControlModel(bus=config_bus, presented=writable)
 
 
 def test_a_control_bus_it_may_present_names_its_port_and_registers() -> None:
-    with refused("control-bus-unaddressed", error=DefinitionError):
+    with refused("control-bus-unaddressed", error=DefinitionError, message="register_map"):
 
         class Unaddressed(Probe):
             id = "test.probe.unaddressed"
@@ -256,28 +291,111 @@ def test_a_control_bus_it_may_present_names_its_port_and_registers() -> None:
             def config_bus(self) -> Bus:
                 return BUS
 
-            config = ControlBus(config_bus, presented=writable)
+            config = ControlModel(bus=config_bus, presented=writable)
+
+
+def test_a_control_bus_is_declared_once_and_the_base_derives_what_is_read_of_it() -> None:
+    """A kernel declares its bus, a ``ControlModel`` in its own body, and the base derives
+    ``declares_bus`` and ``bus_control``: one it never presents is held with no port or
+    writes stated; a subclass inherits them. One stating either answer itself, even over an
+    inherited bus, or declared in a Group or in a class that is not a kernel, is refused."""
+
+    class Kept(Probe):
+        id = "test.probe.kept"
+        config = ControlModel(bus=BUS)
+
+    point = design_space(Kept(tensor=TENSOR))
+    assert point.declares_bus is True and point.bus_control == Control(None)
+    assert library_module(point).held.inputs == (("mode", 1), *held_bus(BUS).inputs)
+
+    class Inherited(Controlled):
+        id = "test.probe.inherited"
+
+    below = design_space(Inherited(tensor=TENSOR, writable=True, control="s_axilite"))
+    assert below.declares_bus is True
+    assert below.bus_control == Control(BUS, "s_axilite", RegisterMap(((0, 7),)))
+
+    with refused("control-bus-restated", error=DefinitionError, message="states bus_control"):
+
+        class RestatedBelow(Controlled):
+            id = "test.probe.restated_below"
+
+            @view
+            def bus_control(self) -> Control:
+                return Control(None)
+
+    with refused("control-bus-restated", error=DefinitionError, message="states bus_control"):
+
+        class Restated(Probe):
+            id = "test.probe.restated"
+            config = ControlModel(bus=BUS)
+
+            @view
+            def bus_control(self) -> Control:
+                return Control(None)
+
+    class Included(Group):
+        config = ControlModel(bus=BUS)
+
+    with refused("control-bus-nested", error=DefinitionError, message="included.config"):
+
+        class Nested(Kernel):
+            id = "test.probe.nested"
+            included = Included()
+
+    with refused("module-part-nested", error=DefinitionError, message="included.config"):
+
+        class NestedPart(Probe):
+            id = "test.probe.nested_part"
+            included = Included()
+
+    # A class below the kernel that is not one derives nothing, so its bus is refused, held or
+    # presented.
+    class Plain:
+        config = ControlModel(bus=BUS)
+
+    with refused("control-bus-nested", error=DefinitionError, message="Plain, not a kernel"):
+
+        class FromPlain(Plain, Probe):
+            id = "test.probe.from_plain"
+
+    class PresentingMixin(Space):
+        on: bool = Param(default=True)
+        config = ControlModel(bus=BUS, presented=on)
+
+    with refused(
+        "control-bus-nested", error=DefinitionError, message="PresentingMixin, not a kernel"
+    ):
+
+        class FromSpace(PresentingMixin, Probe):  # type: ignore[misc]
+            id = "test.probe.from_space"
+            control: str | None = Param(default="s_axilite")
+
+            @view
+            def register_map(self) -> RegisterMap:
+                return RegisterMap()
 
 
 def test_a_kernel_s_cycles_are_the_most_beats_a_port_carries() -> None:
     assert probe().cycles == 4
-    assert codes(probe().query(KernelSpace.resources)) == {"kernel-resources"}
+    assert codes(probe().query(Kernel.resources)) == {"kernel-resources"}
 
 
 def test_a_kernel_with_children_presents_a_childs_port_as_its_own() -> None:
-    class Presenting(KernelSpace):
+    class Presenting(Kernel):
         id = "test.presenting"
         kernel = Probe(tensor=TENSOR)
         x = served(kernel, "x")
 
     point = design_space(Presenting())
-    assert point.x_contract.label == "kernel.x"
-    assert point.x_contract.contract == point.kernel.x_contract.contract
-    assert point.x_stream == point.kernel.x_stream
+    assert point.x_stream_pins.label == "kernel.x"
+    assert point.x_stream_pins.pins == point.kernel.x.stream_pins.pins
+    assert point.x_side.stream == point.kernel.x.stream
 
-    with refused("served-child-unknown", error=DefinitionError, message="serves y of no child"):
+    class Unserved(Kernel):
+        id = "test.unserved"
+        kernel = Probe(tensor=TENSOR)
 
-        class Unserved(KernelSpace):
-            id = "test.unserved"
-            kernel = Probe(tensor=TENSOR)
-            y = served(kernel, "y")
+    # A child's port is its parent's only where the parent serves it.
+    with pytest.raises(KeyError):
+        port_side(Unserved, "y")

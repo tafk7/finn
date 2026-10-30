@@ -105,12 +105,12 @@ from finn.core.rtlsim_pacing import FREE, STALLED
 from finn.core.search import Key, dotted
 from finn.core.space import (
     Available,
-    Derived,
     Param,
     QueryResult,
     RequestError,
     inspection,
 )
+from finn.core.space.declarations import Derived, MemberRef
 from finn.dataflow.datatypes import DatatypeError, ordinary_integer_bounds
 from finn.dataflow.steps import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
@@ -130,7 +130,7 @@ from finn.kernels.artifacts.contributions import HlsSource
 from finn.kernels.artifacts.hls import stage_hls
 from finn.kernels.artifacts.module import Composed, Leaf
 from finn.kernels.artifacts.rtl import Declined, extract
-from finn.kernels.base import KernelSpace
+from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.configure import chosen, describe
@@ -138,7 +138,7 @@ from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.partition import Partition
 from finn.kernels.policies import Alone, FirstValid, Policy, defaulted
 from finn.kernels.sides import Side
-from finn.kernels.transport import StreamContract
+from finn.kernels.transport import StreamPins
 from finn.kernels.transpose import TransposeKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.toolchain.launcher import host_toolchain
@@ -187,7 +187,7 @@ class NonConformance(AssertionError):
 
 
 def conformance(
-    space_type: type[KernelSpace],
+    space_type: type[Kernel],
     *,
     inputs: Mapping[str, Tensor],
     outputs: Outputs,
@@ -228,7 +228,7 @@ def conformance(
 
 
 def samples(
-    space_type: type[KernelSpace],
+    space_type: type[Kernel],
     *,
     inputs: Mapping[str, Tensor],
     outputs: Outputs,
@@ -361,13 +361,13 @@ def _port_name(name: str) -> str:
     return name.removesuffix("_channel")
 
 
-def _stem(space_type: type[KernelSpace]) -> str:
+def _stem(space_type: type[Kernel]) -> str:
     """A sample's module's stem: ``<kernel>conformance``, lower case."""
     return f"{space_type.__name__}Conformance".lower()
 
 
 def _design(
-    space_type: type[KernelSpace],
+    space_type: type[Kernel],
     inputs: Mapping[str, Tensor],
     outputs: Mapping[str, Tensor],
     facts: Mapping[str, object],
@@ -422,7 +422,7 @@ def design_member(design: Partition, name: str) -> Any:
     return design.member(name)
 
 
-def design_module(design: Any, space_type: type[KernelSpace]) -> QueryResult[Any]:
+def design_module(design: Any, space_type: type[Kernel]) -> QueryResult[Any]:
     """A design's module, ``finn_<kernel>conformance``."""
     return module_of(design, _stem(space_type))
 
@@ -476,11 +476,19 @@ def _port(kernel: Any, path: str) -> Any:
             except RequestError:
                 pass
         node = getattr(node, part)
-    return getattr(type(node), name).read(node, "schedule", "reduces", "holds", "index")
+    from finn.kernels.port_model import StreamPort  # noqa: PLC0415
+
+    declaration = getattr(type(node), name)
+    if not isinstance(declaration, StreamPort):
+        raise TypeError(f"{path} is not an actual stream port")
+    port = getattr(node, name)
+    # A scheduled port's resolved model metadata keeps its index axes; a given sequence has
+    # no schedule or tensor-index binding metadata.
+    return port if port.schedule is not None else None
 
 
 def _stated(
-    space_type: type[KernelSpace],
+    space_type: type[Kernel],
     name: str,
     inputs: Mapping[str, Tensor],
     facts: Mapping[str, object],
@@ -497,7 +505,7 @@ def _stated(
 
 
 def _tensors(
-    space_type: type[KernelSpace],
+    space_type: type[Kernel],
     inputs: Mapping[str, Tensor],
     outputs: Outputs,
     facts: Mapping[str, object],
@@ -511,8 +519,21 @@ def _tensors(
     return found
 
 
+def _path_member(node: Any, path: str) -> Any:
+    """An actual external authored reference or resolved value, including child members."""
+    for part in path.split("."):
+        node = getattr(node, part)
+    return node
+
+
+def _path_declaration(space_type: type[Kernel], path: str) -> object:
+    """Terminal authored declaration, rather than the rebased child value reference."""
+    reference = _path_member(space_type, path)
+    return reference.member if isinstance(reference, MemberRef) else reference
+
+
 def _committed(
-    space_type: type[KernelSpace],
+    space_type: type[Kernel],
     config: Mapping[str, object],
     inputs: Mapping[str, Tensor],
     outputs: Outputs,
@@ -527,12 +548,12 @@ def _committed(
     given = {
         key: value
         for key, value in config.items()
-        if isinstance(getattr(space_type, key, None), Param)
+        if isinstance(_path_declaration(space_type, key), Param)
     }
     stated = {
         key: value
         for key, value in config.items()
-        if isinstance(getattr(space_type, key, None), Derived)
+        if isinstance(_path_declaration(space_type, key), Derived)
     }
     known = {**facts, **given}
     tensors = _tensors(space_type, inputs, outputs, known)
@@ -548,7 +569,7 @@ def _committed(
     point = with_direct_transports(_chosen(point, keys))
     kernel = design_member(point, KERNEL)
     for key, value in stated.items():
-        found = getattr(kernel, key)
+        found = _path_member(kernel, key)
         if found != value:
             raise AssertionError(
                 f"{space_type.__name__} derives {key}={found!r}; the configuration states {value!r}"
@@ -557,7 +578,7 @@ def _committed(
 
 
 def unchosen(
-    space_type: type[KernelSpace],
+    space_type: type[Kernel],
     *,
     inputs: Mapping[str, Tensor],
     outputs: Outputs,
@@ -573,7 +594,7 @@ def unchosen(
     given = {
         key: value
         for key, value in first.items()
-        if isinstance(getattr(space_type, key, None), Param)
+        if isinstance(_path_declaration(space_type, key), Param)
     }
     return _committed(space_type, given, inputs, outputs, EMPTY, facts)
 
@@ -583,7 +604,7 @@ def _nested(values: object) -> object:
 
 
 def place(
-    space_type: type[KernelSpace],
+    space_type: type[Kernel],
     sample: Sample,
     inputs: Mapping[str, Tensor],
     outputs: Outputs,
@@ -633,11 +654,11 @@ def place(
 # -- checks --------------------------------------------------------------------------------
 
 
-def _where(space_type: type[KernelSpace], sample: Sample) -> str:
+def _where(space_type: type[Kernel], sample: Sample) -> str:
     return f"{space_type.__name__} [{sample.label}]"
 
 
-def _value(found: QueryResult[Any], space_type: type[KernelSpace], sample: Sample) -> Any:
+def _value(found: QueryResult[Any], space_type: type[Kernel], sample: Sample) -> Any:
     assert isinstance(found, Available), f"{_where(space_type, sample)}: {describe((found,))}"
     return found.value
 
@@ -653,7 +674,7 @@ def _kernel_leaves(module: Composed) -> tuple[tuple[str, Leaf], ...]:
 
 
 def _check_rtl(
-    space_type: type[KernelSpace],
+    space_type: type[Kernel],
     sample: Sample,
     label: str,
     leaf: Leaf,
@@ -695,18 +716,18 @@ def _check_rtl(
 
 
 def _contracts(
-    point: Any, space_type: type[KernelSpace], sample: Sample, names: Sequence[str]
-) -> dict[str, StreamContract]:
+    point: Any, space_type: type[Kernel], sample: Sample, names: Sequence[str]
+) -> dict[str, StreamPins]:
     """The contract the kernel presents on each channel: its port beside the channel, as
     the partition reads it (``Partition.neighbours``)."""
-    found: dict[str, StreamContract] = {}
+    found: dict[str, StreamPins] = {}
     for name in names:
         owner = f"{KERNEL}.{_user(point, name)}"
         beside = point.neighbours(name)
         ports = [each for each in (beside.producer, beside.consumer) if each is not None]
         (port,) = [each for each in ports if each.label == owner] or [None]
         assert port is not None, f"{name} is not {owner}'s: {beside}"
-        found[name] = port.contract
+        found[name] = port.pins
     return found
 
 
@@ -716,7 +737,7 @@ def _covers(form: Traversal) -> bool:
 
 def _check_model(
     point: Any,
-    space_type: type[KernelSpace],
+    space_type: type[Kernel],
     sample: Sample,
     inputs: Mapping[str, Tensor],
     outputs: Outputs,
@@ -728,12 +749,12 @@ def _check_model(
         path = _user(point, name)
         form, port = contract.form, _port(kernel, path)
         assert _covers(form), f"{where}: {path} does not cover its {form.shape} tensor"
-        if port.schedule is not None:
+        if port is not None and port.schedule is not None:
             schedule = port.schedule
-            dropped = prod(schedule.steps(index) for index in (*port.reduces, *port.holds))
-            assert form.beats == schedule.beat_count // dropped, (
+            dropped = prod(schedule.fold(index) for index in (*port.reduces, *port.holds))
+            assert form.beats == schedule.iterations // dropped, (
                 f"{where}: {path} presents {form.beats} beats; its schedule walks "
-                f"{schedule.beat_count} less {dropped} dropped"
+                f"{schedule.iterations} less {dropped} dropped"
             )
         if name != fed:
             boundary = _value(
@@ -751,7 +772,7 @@ def _floating(element: ScalarEncoding) -> bool:
 
 
 def _values(
-    space_type: type[KernelSpace], sample: Sample, inputs: Mapping[str, Tensor]
+    space_type: type[Kernel], sample: Sample, inputs: Mapping[str, Tensor]
 ) -> dict[str, np.ndarray]:
     """Random values of each input, seeded by the kernel and the sample: integers in its
     range, or binary32 values in [-FLOAT_BOUND, FLOAT_BOUND]."""
@@ -819,7 +840,7 @@ def _brief(message: str) -> str:
 
 def _simulate(
     point: Any,
-    space_type: type[KernelSpace],
+    space_type: type[Kernel],
     sample: Sample,
     values: Mapping[str, np.ndarray],
     reference: Reference,
@@ -858,7 +879,7 @@ def _simulate(
     module = _value(design_module(point, space_type), space_type, sample)
     # A cyclic source (the adapter sample's memory, or the kernel itself) never stops.
     repeating = sample.adapter or any(
-        contracts[name].repetition is Repetition.CYCLIC for name in produced
+        contracts[name].sequence.repetition is Repetition.CYCLIC for name in produced
     )
     cycles = design_cycles(point)
     failures = []
@@ -918,10 +939,11 @@ def _simulate(
     return failures
 
 
-def _stream(point: Any, name: str, form: Traversal, contract: StreamContract) -> Stream:
+def _stream(point: Any, name: str, form: Traversal, contract: StreamPins) -> Stream:
     """Channel ``name``'s stream as the kernel's port declares it, its tensor's axes named
     by the port's index expressions where it reads one per axis."""
-    index = _port(design_member(point, KERNEL), _user(point, name)).index
+    port = _port(design_member(point, KERNEL), _user(point, name))
+    index = () if port is None else port.index
     axes = tuple(map(repr, index)) if len(index) == len(form.shape) else ()
     return Stream(form, contract.element.bits, axes)
 

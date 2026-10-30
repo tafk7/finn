@@ -219,16 +219,24 @@ def test_two_editable_environments_observe_only_selected_code_and_resources(tmp_
         run([python, "-I", smoke, tmp_path / f"output{number}"], other, clean_env())
 
 
-def test_imports_do_not_create_scratch_or_change_environment(tmp_path):
+@pytest.mark.parametrize("initial_exact_integers", [None, "0", "1"], ids=["absent", "zero", "one"])
+def test_imports_only_set_exact_integers_and_do_not_create_scratch(
+    tmp_path, initial_exact_integers
+):
+    """Imports initialize exact integers and preserve every other environment entry."""
     env = clean_env()
     env["FINN_BUILD_DIR"] = str(tmp_path / "must-not-exist")
+    if initial_exact_integers is None:
+        env.pop("QONNX_EXACT_INTEGERS", None)
+    else:
+        env["QONNX_EXACT_INTEGERS"] = initial_exact_integers
     run(
         [
             sys.executable,
             "-I",
             "-c",
-            "import os; before=dict(os.environ); import finn.util.basic, finn.xsi.paths; "
-            "assert dict(os.environ)==before",
+            "import os; expected=dict(os.environ); expected['QONNX_EXACT_INTEGERS']='1'; "
+            "import finn.util.basic, finn.xsi.paths; assert dict(os.environ)==expected",
         ],
         tmp_path,
         env,

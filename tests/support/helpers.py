@@ -64,9 +64,8 @@ from finn.dataflow.datatypes import (
 from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, Loop, Traversal, vector_major
-from finn.kernels.artifacts.abi import Pin
-from finn.kernels.artifacts.module import Composed, Held, Leaf, ProducerIdentity
-from finn.kernels.base import KernelSpace, Timed
+from finn.kernels.artifacts.module import Composed, Leaf, ProducerIdentity
+from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.composer import (
     ChannelDeclaration,
@@ -77,7 +76,6 @@ from finn.kernels.composer import (
     channel,
 )
 from finn.kernels.configure import chosen, commit, describe
-from finn.kernels.declaration import KernelDeclaration, ModuleOrder, Product
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.explore import Defaults, Seam
 from finn.kernels.fifo import FifoKernel
@@ -85,7 +83,7 @@ from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.matmul import KnownWeights, MatMulKernel, datatype_range
 from finn.kernels.partition import Partition, partition
 from finn.kernels.policies import Alone, Unstated, defaulted, ranked
-from finn.kernels.port import AxiStreamPort, axis, transport
+from finn.kernels.port import axis, transport
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.transport import AxisBeat, ReadyValidTransport
@@ -216,7 +214,7 @@ def built(network: Partition, stem: str) -> Composed:
 
 def cycles_of(network: Partition) -> QueryResult[int]:
     """The most cycles a frame any member of ``network`` takes, once each states its own."""
-    found = [network.query(name, Timed.cycles) for name in network.members]
+    found = [network.query(name, Kernel.cycles) for name in network.members]
     waiting = [answer for answer in found if not isinstance(answer, Available)]
     if waiting:
         return waiting[0]
@@ -575,50 +573,26 @@ def eltwise(
     return point if pe is None else commit(point, {"pe": pe})
 
 
-def port_axis(point: KernelSpace, name: str) -> AxisBeat:
+def port_axis(point: Kernel, name: str) -> AxisBeat:
     """Port ``name``'s AXIS beat on the kernel's configuration ``point``
     (``finn.kernels.port.axis``)."""
-    port: AxiStreamPort = getattr(type(point), name)
-    found = axis(*port.viewed(point, name))
+    port = getattr(point, name)
+    found = axis(port.physical_spec(idle=False), port.stream)
     assert isinstance(found, AxisBeat), found
     return found
 
 
-def port_transport(point: KernelSpace, name: str) -> ReadyValidTransport:
+def port_transport(point: Kernel, name: str) -> ReadyValidTransport:
     """Port ``name``'s transport on the kernel's configuration ``point``, on its clock domain
     (``finn.kernels.port.transport``)."""
-    port: AxiStreamPort = getattr(type(point), name)
-    found = transport(*port.viewed(point, name), type(point).clock_domain)
+    from finn.kernels.port_model import StreamPort  # noqa: PLC0415
+
+    declaration = getattr(type(point), name)
+    assert isinstance(declaration, StreamPort), declaration
+    port = getattr(point, name)
+    found = transport(port.physical_spec(idle=False), port.stream, port.clocking)
     assert isinstance(found, ReadyValidTransport), found
     return found
-
-
-@dataclass(frozen=True, eq=False)
-class OtherPins(KernelDeclaration):
-    """A test kernel's module pins that are no port's and no control bus's (``signals``,
-    a constant or the kernel's member), and what of them it holds (``holding``): its pins
-    before every port's, its hold after theirs, as a control bus's
-    (``ModuleOrder.ENCLOSING``)."""
-
-    signals: Any
-    holding: Any = Held()
-
-    module_order = ModuleOrder.ENCLOSING
-
-    def lower(self, owner: type[KernelSpace], name: str) -> Mapping[str, object]:
-        self.references()
-        return {}
-
-    def reads(self, name: str, product: Product) -> tuple[str, ...]:
-        return {"pins": self.paths("signals"), "held": self.paths("holding")}.get(product, ())
-
-    def pins(self, kernel: KernelSpace, name: str) -> tuple[Pin, ...]:
-        found: tuple[Pin, ...] = self.value(kernel, "signals")
-        return found
-
-    def held(self, kernel: KernelSpace, name: str) -> Held:
-        found: Held = self.value(kernel, "holding")
-        return found
 
 
 def codes(result: object) -> set[str]:
@@ -896,8 +870,8 @@ def matmul_assembly(
     w = network.member("w")
     return MatMulAssembly(
         network.member("x").streams.source.sequence.form.beats,
-        matmul.compute.w_stream.sequence.form.beats,
-        matmul.compute.y_stream.sequence.form.beats,
+        matmul.compute.w.stream.sequence.form.beats,
+        matmul.compute.y.stream.sequence.form.beats,
         matmul.result_type,
         weight_delivery,
         module.value,

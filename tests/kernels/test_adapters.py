@@ -81,7 +81,7 @@ def test_a_vpc_converts_whole_vectors_that_span_rows():
     """Both sides of a width conversion carry the same elements in whole beats, so the
     stream is whole lcm vectors, wherever rows end: 4 lanes into a transpose taking 3
     of its (6, 4) matrices' flat order converts vectors of 12, three rows each."""
-    consumer = transposed(6, 4, 3).member("shuffle").input_stream.sequence
+    consumer = transposed(6, 4, 3).member("shuffle").input.stream.sequence
     found = steps(BeatSequence(vector_major((2, 6, 4), 4)), consumer)
     assert found.kinds == (Step.WIDTH,)
     (stage,) = realize(found)
@@ -175,8 +175,9 @@ def test_steps_no_finnlib_chain_carries_out_refuse_the_input_adapter_once():
     """Steps that exist, which no FinnLib chain carries out (a frame closed every 6 beats
     and every 4: no input_gen level closes every 4 beats of a nest of 6): the picker
     refuses with ``adapter-steps`` and the text its chains gave, one piece keyed
-    ``adapter``. The style and its UltraRAM rule, guarded by the picker's answer, are not
-    in play: each one guard piece beside it."""
+    ``adapter``. The style, guarded by the picker's answer, is not in play: one guard
+    piece beside it. Its UltraRAM rule reads the style first, so it is refused through
+    that read, in the picker's finding alone: the refusal is counted where it is made."""
     form = vector_major((12,), 1)
     x = _channel(BeatSequence(form), BeatSequence(form, markers=(LevelEnd(4), LevelEnd(6))), (12,))
     assert x.steps.input.kinds == (Step.MARKERS,)
@@ -195,8 +196,12 @@ def test_steps_no_finnlib_chain_carries_out_refuse_the_input_adapter_once():
     (adapter,) = [owner for owner in pieces if owner.split(".")[0] == "adapter"]
     assert adapter == "adapter"
     assert pieces == {
-        owner: {why, ("guard-refused", owner, "its guard reads a refused input")}
-        for owner in ("adapter", "adapter_ram_style", "adapter_uram_present")
+        **{
+            owner: {why, ("guard-refused", owner, "its guard reads a refused input")}
+            for owner in ("adapter", "adapter_ram_style")
+        },
+        # A constraint reading a refused input has no guard piece of its own.
+        "adapter_uram_present": {why},
     }
     assert dict(inspection.states(x))["adapter_ram_style"] == inspection.Absent()
 
@@ -362,7 +367,7 @@ def test_a_channel_s_rules_and_its_fifo_read_the_values_its_views_present(
     values, through its holder's ``stage_streams``), not the channel's ``stages`` view,
     which its netlist and its network's hops to the ports beside it read; and the FIFO
     candidate reads what arrives through its formal, after the output adapter's
-    realization: valid, refused and open each answer, with no dependency cycle."""
+    chain: valid, refused and open each answer, with no dependency cycle."""
     network = channel()
     point = network.member("x")
     assert validity_of(point) == (status, pieces)

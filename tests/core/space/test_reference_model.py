@@ -629,10 +629,8 @@ def staged() -> Space:
     return Space((), Scope("", children=(stage,)))
 
 
-def test_reading_1_a_view_refused_with_its_space_is_refused_through_and_never_an_origin() -> None:
-    """No piece reads a view. ``half`` refusing an odd depth refuses the view
-    with its own reason, and no change: nothing rules on it. Refused with its Space, the
-    view is refused through: the child's rule is the origin."""
+def test_reading_1_a_views_local_refusal_never_governs_choice_admission() -> None:
+    """No model piece reads a view. Only its local body can refuse its readout."""
 
     base = Configuration(staged(), {}, {"stage.depth": 2})
     assert base.solve().validity().verdict is T
@@ -1795,7 +1793,7 @@ def viewed() -> Space:
     )
 
 
-def test_a_view_refuses_when_its_space_is_refused() -> None:
+def test_refused_owning_space_blocks_view_before_output() -> None:
     solution = solve(viewed(), {"limit": 1, "name": "u"}, x=2)
     assert solution.validity().verdict is F
     assert solution.view("doubled") == Refused((Reason(ReasonKind.SPACE_REFUSED, "doubled", ""),))
@@ -1836,12 +1834,7 @@ def test_a_derived_value_may_refuse_and_its_readers_receive_a_refused_input() ->
         F,
         (Reason(ReasonKind.INPUT_REFUSED, "fits", "", "too-wide", ("width",)),),
     )
-    assert odd.view("shown") == Refused(
-        (
-            Reason(ReasonKind.INPUT_REFUSED, "shown", "", related=("width",)),
-            Reason(ReasonKind.SPACE_REFUSED, "shown", ""),
-        )
-    )
+    assert odd.view("shown") == Refused((Reason(ReasonKind.SPACE_REFUSED, "shown", ""),))
     even = solve(width_read(), {"w": 4})
     assert even.read("width") == Known(4)
     assert even.validity().verdict is T
@@ -1861,7 +1854,7 @@ def stage(name: str) -> Scope:
 def test_a_parent_rules_on_its_childrens_derived_values_and_composes_their_views() -> None:
     """The parent's rule reads what its children state (derived values); its
     view ``total`` composes their views. The child is valid on its own, and its view
-    answers while the parent is refused; the parent's view refuses with its Space."""
+    answers while the parent is refused; the parent's own view is blocked."""
 
     space = Space(
         (),

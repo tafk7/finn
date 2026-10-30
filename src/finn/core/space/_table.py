@@ -30,12 +30,11 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, cast
 
 from ._bindings import PlacementBinding, Slot
-from ._configuration import Space
+from ._configuration import _Namespace
 from ._nodes import NodeDecl, SlotKind, slot_kind
 from ._signatures import BoundArgument
 from .collection import EffectiveSpace, collect_space
 from .declarations import Declaration, ValueRef
-from .expressions import IntOperator
 from .ir import Node, NodeKind, NodeRef, Placed, Placing, Selected
 from .semantics import BOOL, ValueSemantics
 
@@ -88,6 +87,7 @@ class ScopeDraft:
     choices: dict[object, int] = field(default_factory=dict)
     # The node answering the own scope's validity, reserved with the scope.
     validity: int | None = None
+    pieces: tuple[NodeRef, ...] = ()
     # A Space the class places: its slot (the own scope has none).
     placed: SlotDraft | None = None
     # A candidate of a Decision over nodes of the own scope (choice, case).
@@ -136,15 +136,6 @@ class GuardTask:
     condition: ValueRef[bool]
 
 
-@dataclass(frozen=True)
-class ExpressionTask:
-    index: int
-    scope: int
-    owner: str
-    operator: IntOperator
-    operands: tuple[int | ValueRef[int], ...]
-
-
 # An edge out of the class a reference may name: a placed Space's member or selection.
 Edge = Placed | Selected
 
@@ -154,17 +145,17 @@ class Table:
     """The records and scopes of one Space class being compiled, and what each phase passes
     on."""
 
-    space_type: type[Space]
+    space_type: type[_Namespace]
     # Each placed class's compiled form, compiled first.
-    compiled_of: Callable[[type[Space]], Compiled]
+    compiled_of: Callable[[type[_Namespace]], Compiled]
     nodes: list[Node] = field(default_factory=list)
     drafts: list[ScopeDraft] = field(default_factory=list)
     choice_drafts: list[ChoiceDraft] = field(default_factory=list)
     # Each Space class collected once: the declarations each member name stands for, and
     # each member's slot kind.
-    effective: dict[type[Space], EffectiveSpace] = field(default_factory=dict)
-    aliases: dict[type[Space], dict[str, list[Declaration]]] = field(default_factory=dict)
-    kinds: dict[type[Space], dict[str, SlotKind]] = field(default_factory=dict)
+    effective: dict[type[_Namespace], EffectiveSpace] = field(default_factory=dict)
+    aliases: dict[type[_Namespace], dict[str, list[Declaration]]] = field(default_factory=dict)
+    kinds: dict[type[_Namespace], dict[str, SlotKind]] = field(default_factory=dict)
     # Allocation -> lowering: every member to lower, every guard to link.
     members: list[MemberTask] = field(default_factory=list)
     guards: list[GuardTask] = field(default_factory=list)
@@ -172,8 +163,7 @@ class Table:
     slot_drafts: list[int] = field(default_factory=list)
     # Allocation -> checks: selections linked for a member name several candidates share.
     shared: dict[int, tuple[int, str]] = field(default_factory=dict)
-    # Lowering -> checks: integer expressions, and each callback argument's target.
-    expression_tasks: list[ExpressionTask] = field(default_factory=list)
+    # Lowering -> checks: each callback argument's target.
     argument_checks: list[tuple[BoundArgument, NodeRef, str]] = field(default_factory=list)
     # Each edge out of the class, and the records and edges in the order they were made
     # (``vertices``: the dependency order's).
@@ -185,7 +175,7 @@ class Table:
     # class those slots reach, member).
     chooses: dict[int, tuple[tuple[int, ...], int, str]] = field(default_factory=dict)
 
-    def collected(self, space_type: type[Space]) -> EffectiveSpace:
+    def collected(self, space_type: type[_Namespace]) -> EffectiveSpace:
         effective = self.effective.get(space_type)
         if effective is None:
             effective = collect_space(space_type)

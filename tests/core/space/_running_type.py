@@ -99,7 +99,14 @@ class RunningAnswers:
         return tuple(sorted((i.key, i.kind) for i in indices))
 
     def scopes(self) -> Sequence[str]:
-        return tuple(sorted(self._scope_indices()))
+        """Every real Space scope; a Group's validity belongs to its owning Space."""
+        return tuple(
+            sorted(
+                name
+                for name, record in self._scope_indices().items()
+                if record.compiled.validity is not None
+            )
+        )
 
     # -- the questions ---------------------------------------------------------------
 

@@ -16,7 +16,7 @@ from __future__ import annotations
 import enum
 import random
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from support.space_oracle import IMPLEMENTATIONS, Answers, compare, forms, toys
@@ -25,14 +25,20 @@ from support.space_walk import fresh
 
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import (
+    Available,
     Decision,
+    Group,
+    Param,
     QueryResult,
+    RequestError,
     Select,
     Space,
     Unresolved,
     design_space,
+    inspection,
 )
 
+from ._running_type import Running
 from ._toys_support import House
 
 TOYS = toys.TOYS
@@ -83,7 +89,7 @@ BOUNDARY: list[tuple[compare.Request, forms.Form]] = [
                     "kind": "blocker",
                     "code": "decision-unassigned",
                     "owner": "enabled",
-                    "message": "decision requires a commitment",
+                    "message": "no choice has set this decision",
                     "details": [],
                     "causes": [],
                 }
@@ -429,11 +435,11 @@ def test_differences_name_their_keys() -> None:
 
 
 class Leaf(Space):
-    x: int = Decision(values=(1, 2))
+    x: int = Decision(domain=(1, 2))
 
 
 class Inner(Space):
-    on: bool = Decision(values=(False, True))
+    on: bool = Decision(domain=(False, True))
     leaf = Leaf(when=on)
     pick: Leaf = Select(a=Leaf(), b=Leaf())
 
@@ -461,3 +467,23 @@ def test_every_scope_is_reached_under_open_selectors_and_guards() -> None:
     )
     found = forms.space(answers)
     assert all("status" in validity for validity in found["validity"].values()), found
+
+
+def test_group_members_are_compared_without_independent_validity_scopes() -> None:
+    class Included(Group):
+        number: int = Param(default=7)
+
+    class Host(Space):
+        group = Included()
+
+    point = design_space(Host())
+    public = PUBLIC.open(point)
+    uncached = Running().open(point)
+    assert public.scopes() == uncached.scopes() == ("",)
+    assert public.members() == uncached.members() == (("group.number", "const"),)
+    assert public.query("group.number") == uncached.query("group.number") == Available(7)
+    assert forms.space(public) == forms.space(uncached)
+    with pytest.raises(RequestError, match="a Group has no independent validity"):
+        inspection.validity(cast(Any, point.group))  # intentionally invalid public request
+    with pytest.raises(RequestError, match="a Group has no independent validity"):
+        uncached.validity("group")

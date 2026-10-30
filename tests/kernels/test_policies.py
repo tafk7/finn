@@ -54,7 +54,7 @@ from finn.kernels.utilization import BLOCK_FIRST_BITS, memory_preference, memory
 
 class Narrow(Space):
     width: int = Param()
-    lanes: int = Decision(values=(4, 2, 1))
+    lanes: int = Decision(domain=(4, 2, 1))
 
     @constraint
     def fits(self) -> bool | Rejected:
@@ -65,14 +65,14 @@ class Narrow(Space):
 
 class Wide(Space):
     width: int = Param()
-    lanes: int = Decision(values=(8, 16))
+    lanes: int = Decision(domain=(8, 16))
 
 
 class Toy(Space):
     width: int = Param()
     core: Narrow | Wide = Select(narrow=Narrow, wide=Wide, width=width)
     depth: int = Decision(domain=domain(accepts=lambda *, candidate: candidate > 0))
-    style: str = Decision(values=("small", "large"))
+    style: str = Decision(domain=("small", "large"))
 
     @constraint
     def style_fits(self) -> bool | Rejected:
@@ -155,27 +155,27 @@ def test_first_valid_is_in_listed_order_unless_its_policy_names_a_ranking() -> N
 
 
 class Refusing(Space):
-    """A memory whose ranking view refuses while the memory is refused."""
+    """Independent rule and local ranking refusals, with distinct triggers."""
 
     bits: int = Param()
     ram_style: str = Decision(domain=memory_styles())
 
     @constraint
     def holds(self) -> bool | Rejected:
-        return reject("toy-memory", "refused") if self.bits < 0 else True
+        return reject("toy-memory", "refused") if self.bits == -1 else True
 
     @view
-    def ram_preference(self) -> tuple[str, ...]:
+    def ram_preference(self) -> tuple[str, ...] | Rejected:
         found: int = self.bits
+        if found < -1:
+            return reject("ranking-unavailable", "ranking cannot characterize this input")
         return memory_preference(found)
 
 
 def test_a_ranking_that_cannot_be_read_falls_back_to_listed_order_named() -> None:
-    """A ranking view refuses while its Space is refused: first valid takes the listed
-    order, and the fallback is named (``choice-order-unknown``): the choice, the view and
-    why, the view's findings its causes."""
+    """An own-refused ranking uses the named fallback, keeping only its local cause."""
     ranking = owner(Refusing, {Refusing.ram_style: FirstValid(order=Refusing.ram_preference)})
-    point = design_space(Refusing(bits=-1))
+    point = design_space(Refusing(bits=-2))
     (item,) = (each for each in inspection.decisions(point) if each.key == "ram_style")
     (listed,) = inspection.viable(point, [item.reference])
     values, fallback = ranked(point, ranking, item, listed.values or ())
@@ -190,7 +190,7 @@ def test_a_ranking_that_cannot_be_read_falls_back_to_listed_order_named() -> Non
         "policy": "first valid",
         "order": "Refusing.ram_preference",
     }
-    assert {cause.code for cause in fallback.causes} == {"toy-memory"}
+    assert {cause.code for cause in fallback.causes} == {"ranking-unavailable"}
     readable = design_space(Refusing(bits=BLOCK_FIRST_BITS))
     values, fallback = ranked(readable, ranking, item, listed.values or ())
     assert fallback is None and values[0].value == "block"
@@ -234,13 +234,13 @@ def test_a_choice_no_value_can_be_set_for_is_left_open_named_and_the_rest_are_se
 
 
 class Source(Space):
-    lanes: int = Decision(values=(4, 2, 1))
+    lanes: int = Decision(domain=(4, 2, 1))
 
 
 class Sink(Space):
     width: int = Param()
-    style: str = Decision(values=("a", "b"))
-    pad: int = Decision(values=(1, 2))
+    style: str = Decision(domain=("a", "b"))
+    pad: int = Decision(domain=(1, 2))
 
     @constraint
     def holds(self) -> bool | Rejected:
@@ -382,6 +382,20 @@ def test_each_choice_takes_the_policy_of_its_member_s_owner() -> None:
     }
 
 
+def test_owning_refusal_blocks_an_otherwise_computable_ranking() -> None:
+    ranking = owner(Refusing, {Refusing.ram_style: FirstValid(order=Refusing.ram_preference)})
+    point = design_space(Refusing(bits=-1))
+    assert inspection.validity(point).status == "refused"
+    assert isinstance(point.query(Refusing.ram_preference), Rejected)
+    assert point.inspect(Refusing.ram_preference).output_result is None
+    (item,) = (each for each in inspection.decisions(point) if each.key == "ram_style")
+    (listed,) = inspection.viable(point, [item.reference])
+    values, fallback = ranked(point, ranking, item, listed.values or ())
+    assert values == listed.values
+    assert fallback is not None
+    assert {cause.code for cause in fallback.causes} == {"toy-memory"}
+
+
 class Keeper(Space):
     """A memory member whose ranking view refuses while the memory is refused: a channel's
     view reading its kernel's table, where the kernel is refused."""
@@ -402,7 +416,7 @@ def test_a_ranking_the_pass_cannot_read_is_named_beside_the_point() -> None:
     (``choice-order-unknown``, owned by the choice, naming the view): as a channel's view
     reads the table of a kernel the pass skipped as refused, and the channel is not."""
     ranking = owner(Keeper, {Refusing.ram_style: FirstValid(order=Refusing.ram_preference)})
-    done = defaulted(design_space(Keeper(bits=-1)), Unchecked({"memory": ranking}))
+    done = defaulted(design_space(Keeper(bits=-2)), Unchecked({"memory": ranking}))
     assert states(done.point)["memory.ram_style"] == inspection.Set("distributed")
     (fallback,) = done.fallbacks
     assert (fallback.code, fallback.owner) == ("choice-order-unknown", "memory.ram_style")
@@ -452,9 +466,9 @@ class Stuck(Space):
     """Two choices none of whose values fits the limit, and a third that is free."""
 
     limit: int = Param()
-    first: int = Decision(values=(1, 2))
-    second: int = Decision(values=(1, 2))
-    free: int = Decision(values=(1, 2))
+    first: int = Decision(domain=(1, 2))
+    second: int = Decision(domain=(1, 2))
+    free: int = Decision(domain=(1, 2))
 
     @constraint
     def first_fits(self) -> bool | Rejected:
@@ -526,7 +540,7 @@ def test_one_reader_gives_each_decision_its_owner_s_policy_or_first_valid() -> N
 
 
 class Other(Space):
-    lanes: int = Decision(values=(1, 2))
+    lanes: int = Decision(domain=(1, 2))
 
     @view
     def ranking(self) -> tuple[int, ...]:

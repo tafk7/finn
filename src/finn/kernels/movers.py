@@ -59,7 +59,8 @@ stream side, the free side's contract:
 A boundary channel states its mover's contract as its member ``mover_contracts`` (one, or
 none without a mover), which the shell sums with its static region
 (``finn.custom_op.kernels.shell``). The mover states its cycles a frame as its member
-``cycles``, the channel's member that it is: the channel's are at least its mover's.
+``cycles``, the channel's member that it is: the channel's are at least its mover's
+(``Channel.mover_cycles``).
 A mover is not a channel's stream (``finn.dataflow.streams``: the two beat sequences a
 channel's producer and consumer present, ``Stream``, ``Streams``).
 """
@@ -74,15 +75,14 @@ from finn.core.space import (
     Param,
     Rejected,
     Space,
-    View,
     constraint,
     derived,
     reject,
+    view,
 )
 from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.base import Timed
-from finn.kernels.transport import StreamContract
+from finn.kernels.transport import StreamPins
 from finn.kernels.utilization import Fit
 from finn.platform.capabilities import Resources
 
@@ -252,21 +252,29 @@ class MoverContract:
         return self.cycles_at(self.frames_per_call)
 
     @property
+    def span(self) -> int:
+        """The cycles its frame spans: its ``cycles``, the span its ``times`` lie within,
+        as FIFO sizing reads them (``finn.kernels.fifo_sizing.pattern``)."""
+        return self.cycles
+
+    @property
     def times(self) -> tuple[int, ...]:
         """Each stream beat's cycle from the frame's first: one a cycle, or once the
-        memory word that completes it arrived (a word a cycle)."""
+        memory word that completes it arrived (a word a cycle). Its own: FIFO sizing reads
+        them with its ``span`` (``finn.kernels.fifo_sizing.pattern``)."""
         beats, words = self.beats, self.words
         return tuple(max(beat, ceil((beat + 1) * words / beats) - 1) for beat in range(beats))
 
 
-class IodmaMover(Timed):
+class IodmaMover(Space):
     """The ``IODMA_hls`` mover on a free side (``side``), where ``offers`` offer it. It is
-    ``Timed``: its ``cycles`` count in its channel's. The side is the one it states
+    no kernel (it binds no RTL in the partition's module), but its ``cycles`` count in its
+    channel's (``Channel.mover_cycles``). The side is the one it states
     (``MoverOffer.states``: row-major, one pass a frame), so it states no rule of its own
     on it."""
 
     offers: tuple[MoverOffer, ...] = Param()
-    side: StreamContract = Param()
+    side: StreamPins = Param()
 
     @constraint
     def offered(self) -> bool | Rejected:
@@ -312,7 +320,7 @@ class IodmaMover(Timed):
         return contract.cycles
 
     # Cost, not validity: read apart from its constraints.
-    cycles = View(frame_cycles)
+    cycles = view(frame_cycles)
 
 
 MOVERS: dict[str, type[Space] | Space] = {IODMA_HLS: IodmaMover}

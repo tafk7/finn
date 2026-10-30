@@ -3,19 +3,19 @@
 """Each port's members read only their own kernel: its element, its stream and its read of
 its tensor, each with the guards that decide whether it exists.
 
-A port lowers into members of its kernel (``finn.kernels.port``): ``<p>_element``,
-``<p>_stream`` and ``<p>_access`` (a kernel with children serves its child's,
-``<p>_stream``). For every kernel of a partition, one Space as the graph layer binds it in
-its shell (``in_shell``: stage 7's chain of eight kernels, and TFC's partition from its cut
-body), every such member at any depth below it, and each of its existence guards
-(``_scopes.existence``): the reads the engine infers (``_reads.infer``: a method's, the
-model's reads, not its source) and each member's own edges (its arguments, guard, binding,
-selector and cases), followed through every address reached and through each formal to its
-binding in the placing Space (every scope of a model of the partition made,
-``_line_reads.line_scopes``), all lie inside the kernel's own subtree (its members, its
-children at any depth and the selectors that choose them), the partition's facts (the root's
-formals) or literals. A neighbour's value of any kind, or a channel's, fails, naming the
-member and the path read.
+A port is a child of its kernel (``finn.kernels.port_model.StreamPort``), its members its
+``element``, ``stream`` and ``access``; a kernel with children serves its child's port,
+lowered into members of its own (``<p>_side``). For every kernel of a partition, one Space
+as the graph layer binds it in its shell (``in_shell``: stage 7's chain of eight kernels,
+and TFC's partition from its cut body), every such member at any depth below it, and each
+of its existence guards (``_scopes.existence``): the reads the engine infers
+(``_reads.infer``: a method's, the model's reads, not its source) and each member's own
+edges (its arguments, guard, binding, selector and cases), followed through every address
+reached and through each formal to its binding in the placing Space (every scope of a model
+of the partition made, ``_line_reads.line_scopes``), all lie inside the kernel's own
+subtree (its members, its children at any depth and the selectors that choose them), the
+partition's facts (the root's formals) or literals. A neighbour's value of any kind, or a
+channel's, fails, naming the member and the path read.
 
 Two negative controls, small composites, fail the same check: a stream reading a sibling
 directly, and a stream reading a formal bound to a sibling's value. The engine refuses the
@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Iterator, Mapping
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import Any
 
 import pytest
 from core.space._line_reads import line_scopes
@@ -37,6 +37,7 @@ from support.models import chain_model
 
 from finn.core.space import (
     DefinitionError,
+    Group,
     Param,
     Rejected,
     Space,
@@ -54,26 +55,29 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.base import KernelSpace
+from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
-from finn.kernels.declaration import declarations
-from finn.kernels.library import LibraryModule
-from finn.kernels.port import AxiStreamPort, Served
+from finn.kernels.laws import Axis
+from finn.kernels.library import ModuleSpec
+from finn.kernels.port_model import ServedPort, StreamPort
 from finn.platform.capabilities import Resources
 
-LOWERED = ("element", "stream", "access")
-"""What a port lowers to that the condition reads: a served port lowers to a stream alone."""
+MODEL_FIELDS = ("element", "stream", "access")
+"""Actual port model computations checked independently of production read inference."""
 
 
-def lowered(space_type: type[Space]) -> Iterator[str]:
-    """The members ``space_type``'s ports lower to that the condition reads, by name."""
-    if not issubclass(space_type, KernelSpace):
-        return
-    for name, declaration in declarations(space_type, KernelSpace).items():
-        if isinstance(declaration, AxiStreamPort):
-            yield from (f"{name}_{what}" for what in LOWERED)
-        elif isinstance(declaration, Served):
-            yield f"{name}_stream"
+def model_port_members(space_type: type[Space]) -> Iterator[str]:
+    if issubclass(space_type, StreamPort):
+        for name in MODEL_FIELDS:
+            if hasattr(space_type, name):
+                yield name
+    elif issubclass(space_type, Kernel):
+        effective: dict[str, object] = {}
+        for base in reversed(space_type.__mro__):
+            effective.update(vars(base))
+        for name, declaration in effective.items():
+            if isinstance(declaration, ServedPort):
+                yield f"{name}_side"  # a served port's side, lowered by the base
 
 
 def kernels(scopes: Scopes) -> list[str]:
@@ -81,7 +85,7 @@ def kernels(scopes: Scopes) -> list[str]:
     return sorted(
         name
         for name, scope in scopes.root.named_children.items()
-        if issubclass(scope.space_type, KernelSpace) and not issubclass(scope.space_type, Channel)
+        if issubclass(scope.space_type, Kernel) and not issubclass(scope.space_type, Channel)
     )
 
 
@@ -136,7 +140,10 @@ def check(scopes: Scopes, reads: ModelReads) -> tuple[dict[str, int], list[str]]
         for scope in scopes.ordered():
             if scope.name != kernel and not scope.name.startswith(f"{kernel}."):
                 continue
-            for member in lowered(scope.space_type):
+            space_type = scope.space_type
+            if not issubclass(space_type, Space):
+                continue
+            for member in model_port_members(space_type):
                 node = scope.named_members.get(member)
                 if node is None:
                     continue
@@ -178,15 +185,19 @@ TENSOR = Tensor((4,), INT4)
 SEQUENCE = BeatSequence(vector_major((4,), 1))
 
 
-class Given(KernelSpace):
+class Given(Kernel):
     """A model-only kernel presenting a given sequence of a given tensor."""
 
     id = "test.reads.given"
     tensor: Tensor = Param()
     sequence: BeatSequence = Param()
-    x = AxiStreamPort(name="s_axis", endpoint=Endpoint.TARGET, tensor=tensor, sequence=sequence)
-    if TYPE_CHECKING:  # the member its port lowers to, which a sibling reads
-        x_stream: ClassVar[Stream]
+    x = StreamPort(
+        label="x",
+        endpoint=Endpoint.TARGET,
+        tensor=tensor,
+        sequence=sequence,
+        transport=Axis(bus="s_axis"),
+    )
 
     @view
     def parameters(self) -> dict[str, int | str]:
@@ -196,11 +207,13 @@ class Given(KernelSpace):
     def resource_use(self) -> Resources | Rejected:
         return reject("kernel-resources", "a model only")
 
-    module = LibraryModule(
-        "given",
-        parameters=parameters,
-        sources=(CopiedSource("finnlib", "rtl/given.sv", provides=("module:given",)),),
+    module_spec = ModuleSpec(
+        "given", (CopiedSource("finnlib", "rtl/given.sv", provides=("module:given",)),)
     )
+
+    @view
+    def cycles(self) -> int:
+        return self.x.stream.sequence.form.beats
 
 
 def _with_read(reads: ModelReads, method: Address, read: Address) -> ModelReads:
@@ -225,7 +238,7 @@ def test_a_stream_reading_its_sibling_directly_fails() -> None:
     # The engine refuses a member that reads a sibling when it is written.
     with pytest.raises(DefinitionError, match="is not placed in"):
         neighbour = Given(tensor=TENSOR, sequence=SEQUENCE)
-        design_space(composite("direct", {"b": neighbour, "a": _reader(neighbour.x_stream)()})())
+        design_space(composite("direct", {"b": neighbour, "a": _reader(neighbour.x.stream)()})())
     # The check fails on such a read: ``a``'s stream reading ``b``'s stream directly.
     whole = composite(
         "siblings",
@@ -237,19 +250,89 @@ def test_a_stream_reading_its_sibling_directly_fails() -> None:
     scopes = line_scopes(whole)
     reads = infer(scopes)
     assert check(scopes, reads)[1] == []
-    read = _with_read(reads, scopes.find("a.x_stream"), scopes.find("b.x_stream"))
+    read = _with_read(reads, scopes.find("a.x.stream"), scopes.find("b.x.stream"))
     _, failures = check(scopes, read)
-    assert failures == ["a.x_stream: a.x_stream -> b.x_stream"]
+    assert failures == ["a.x.stream: a.x.stream -> b.x.stream"]
 
 
 def test_a_stream_reading_a_formal_bound_to_its_sibling_s_value_fails() -> None:
     neighbour = Given(tensor=TENSOR, sequence=SEQUENCE)
+
+    def sequence_of(stream: Stream) -> BeatSequence:
+        return stream.sequence
+
+    # A derived value of the sibling's stream carries the sequence a's formal is bound to.
+    sibling_sequence = derived(stream=neighbour.x.stream)(sequence_of)
     whole = composite(
         "bound",
-        {"b": neighbour, "a": Given(tensor=TENSOR, sequence=neighbour.x_stream.sequence)},
+        {
+            "b": neighbour,
+            "sibling_sequence": sibling_sequence,
+            "a": Given(tensor=TENSOR, sequence=sibling_sequence),
+        },
     )
     scopes = line_scopes(whole)
+    # The root of the walk below is the derived value, which reads the sibling's stream.
+    assert scopes.find("b.x.stream") in scopes.find("sibling_sequence").dependencies
     _, failures = check(scopes, infer(scopes))
     assert failures, "a's stream reads its sibling through its formal"
-    assert all(failure.startswith("a.x_stream: a.x_stream -> a.sequence") for failure in failures)
-    assert any("b.x_stream" in failure for failure in failures), failures
+    assert all(failure.startswith("a.x.stream: a.x.stream -> a.x.sequence") for failure in failures)
+    assert any(failure.endswith("a.sequence -> sibling_sequence") for failure in failures), failures
+
+
+@pytest.mark.parametrize("is_present", (False, True))
+def test_group_frames_preserve_kernel_descendant_reads_and_guards(is_present: bool) -> None:
+    class Components(Group):
+        active: bool = Param()
+
+        @derived
+        def enabled(self) -> bool:
+            return self.active
+
+        child = Given(tensor=TENSOR, sequence=SEQUENCE, when=enabled)
+
+    class Parent(Given):
+        components = Components(active=is_present)
+
+    whole = composite(
+        "grouped",
+        {
+            "a": Parent(tensor=TENSOR, sequence=SEQUENCE),
+            "b": Given(tensor=TENSOR, sequence=SEQUENCE),
+        },
+    )
+    scopes = line_scopes(whole)
+    records = {scope.name: scope for scope in scopes.ordered()}
+    namespaces = {name: scope.space_type for name, scope in records.items()}
+    assert namespaces["a.components"] is Components
+    assert not issubclass(namespaces["a.components"], Space)
+    assert namespaces["a.components.child"] is Given
+    # Given has no tensor index: its port's access answers inapplicable.
+    for name in ("a", "a.components.child", "b"):
+        assert {
+            member
+            for member in model_port_members(StreamPort)
+            if member in records[name + ".x"].named_members
+        } == {"access", "element", "stream"}
+    reads = infer(scopes)
+    checked, failures = check(scopes, reads)
+    assert checked == {"a": 6, "b": 3}  # each port's element, stream and access
+    assert failures == []
+
+    stream = scopes.find("a.components.child.x.stream")
+    sibling = scopes.find("b.x.stream")
+    enabled = scopes.find("a.components.enabled")
+    (guard,) = existence(stream)
+    assert enabled in guard.dependencies
+    assert existence(scopes.find("a.components.child.x.element")) == (guard,)
+    count, failures = check(scopes, _with_read(reads, stream, sibling))
+    assert count == checked
+    assert "a.components.child.x.stream: a.components.child.x.stream -> b.x.stream" in failures
+
+    count, failures = check(scopes, _with_read(reads, enabled, sibling))
+    assert count == checked
+    for member in ("element", "stream"):
+        assert (
+            f"a.components.child.x.{member}: {guard.key} -> a.components.enabled -> b.x.stream"
+            in failures
+        )

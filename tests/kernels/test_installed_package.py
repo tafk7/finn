@@ -75,7 +75,7 @@ class Tiles(Space):
 tile = design_space(Tiles(extent=12)).with_choices(lanes=3)
 assert tile.shape == (3, 4)
 assert tile.field(Tiles.shape).get() == (3, 4)
-assert tile.inspect(Tiles.shape).accepted_result == Available((3, 4))
+assert tile.inspect(Tiles.shape).result == Available((3, 4))
 assert tile.field(Tiles.cycles).get() == 4
 from finn.kernels.artifacts import build, module as artifact_module
 from qonnx.core.datatype import DataType
@@ -112,8 +112,8 @@ dotp = design_space(PackedDotpKernel(
 answer = library_module(dotp)
 assert isinstance(answer, artifact_module.Leaf), answer
 assert dict(answer.parameters)["ACCU_WIDTH"] == 8
-assert dotp.x_element.dtype.name == "INT3"
-assert axis(*PackedDotpKernel.x.viewed(dotp, "x")).payload_bits == 6
+assert dotp.x.element.dtype.name == "INT3"
+assert axis(dotp.x.physical_spec(idle=False), dotp.x.stream).payload_bits == 6
 
 dotp_sources = {
     "rtl/arith/add_multi_pkg.sv", "rtl/arith/compressor_pkg.sv",
@@ -218,8 +218,8 @@ for memory in ("none", "memstream"):
     matmul = root.member("matmul")
     beats = (
         root.member("x").streams.source.sequence.form.beats,
-        matmul.compute.w_stream.sequence.form.beats,
-        matmul.compute.y_stream.sequence.form.beats,
+        matmul.compute.w.stream.sequence.form.beats,
+        matmul.compute.y.stream.sequence.form.beats,
     )
     assert beats == (6, 12, 6), beats
     composed = root.module(TEST, "finn_placed").value

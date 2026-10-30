@@ -9,7 +9,7 @@ from dataclasses import dataclass, field, replace
 from types import MappingProxyType, UnionType
 from typing import Union, cast, get_args, get_origin
 
-from ._configuration import Space
+from ._configuration import _Namespace
 from ._nodes import NodeDecision, NodeDecl, slot_declaration
 from ._signatures import (
     BoundFunction,
@@ -34,6 +34,7 @@ from .declarations import (
     local_name,
 )
 from .errors import DefinitionError
+from .groups import Group
 from .semantics import OptionalSemantics, ValueSemantics
 
 _OWNER = "space.collection"
@@ -59,7 +60,7 @@ RESERVED_NAMES = frozenset(
 
 @dataclass(frozen=True, slots=True)
 class EffectiveSpace:
-    space_type: type[Space]
+    space_type: type[_Namespace]
     members: Mapping[str, Declaration]
     functions: Mapping[str, BoundFunction]
     semantics: Mapping[Declaration, ValueSemantics[object]]
@@ -69,7 +70,7 @@ class EffectiveSpace:
     )
 
 
-def _annotation_namespace(space_type: type[Space]) -> dict[str, object]:
+def _annotation_namespace(space_type: type[_Namespace]) -> dict[str, object]:
     """Resolve local class and base annotations without adding structural members."""
     namespace: dict[str, object] = {base.__name__: base for base in reversed(space_type.__mro__)}
     namespace.update(class_namespace(space_type))
@@ -88,7 +89,7 @@ def _member_declaration(value: object) -> Declaration | None:
 
 
 def _check_choice_annotation(decision: NodeDecision) -> None:
-    """``heating: Boiler | HeatPump = Decision(values=...)``: the union names the candidates."""
+    """``heating: Boiler | HeatPump = Decision(domain=...)``: the union names the candidates."""
     annotation = declared_annotation(decision, "Decision")
     if annotation is MISSING:
         return  # a Decision over nodes persists its key; its annotation only types it
@@ -117,7 +118,7 @@ def _check_choice_annotation(decision: NodeDecision) -> None:
 
 
 def _collect_members(
-    space_type: type[Space],
+    space_type: type[_Namespace],
 ) -> tuple[
     dict[str, Declaration],
     dict[Declaration, str],
@@ -169,7 +170,7 @@ def _collect_members(
 
 
 def _collect_semantics(
-    space_type: type[Space],
+    space_type: type[_Namespace],
     members: Mapping[str, Declaration],
     inherited: Mapping[str, list[Declaration]],
     hints_for: Callable[[Callable[..., object], str], Mapping[str, object]],
@@ -209,7 +210,23 @@ def _collect_semantics(
             if isinstance(prior, (NodeDecl, NodeDecision)) and isinstance(
                 declaration, (NodeDecl, NodeDecision)
             ):
-                continue  # a node or choice may be replaced by another structural member
+                has_group = (
+                    isinstance(prior, NodeDecl) and issubclass(prior.space_type, Group)
+                ) or (
+                    isinstance(declaration, NodeDecl) and issubclass(declaration.space_type, Group)
+                )
+                if has_group and not (
+                    isinstance(prior, NodeDecl)
+                    and isinstance(declaration, NodeDecl)
+                    and issubclass(declaration.space_type, prior.space_type)
+                ):
+                    raise DefinitionError.broken(
+                        "override-changes-kind",
+                        _OWNER,
+                        f"{owner}: an included Group can only be replaced by its own subtype",
+                        declaration=owner,
+                    )
+                continue  # ordinary child and selector replacements keep their existing rules
             if type(prior) is not type(declaration):
                 raise DefinitionError.broken(
                     "override-changes-kind",
@@ -275,9 +292,9 @@ def _collect_guards(effective: EffectiveSpace) -> Mapping[Declaration, ValueRef[
     return MappingProxyType(guards)
 
 
-def collect_space(space_type: type[Space]) -> EffectiveSpace:
+def collect_space(space_type: type[_Namespace]) -> EffectiveSpace:
     """Collect one scope and snapshot its signatures; child linking is separate."""
-    if not isinstance(space_type, type) or not issubclass(space_type, Space):
+    if not isinstance(space_type, type) or not issubclass(space_type, _Namespace):
         raise DefinitionError.broken(
             "not-a-space", _OWNER, "collect_space expects a Space subclass"
         )

@@ -25,7 +25,7 @@ from finn.core.space import (
 
 class Leaf(Space):
     width: int = Param()
-    lanes: int = Decision(values=(1, 2))
+    lanes: int = Decision(domain=(1, 2))
 
     @view
     def bits(self) -> int:
@@ -39,7 +39,7 @@ class Middle(Space):
 
 class Outer(Space):
     width: int = Param()
-    enabled: bool = Decision(values=(False, True))
+    enabled: bool = Decision(domain=(False, True))
     middle = Middle(width=width)  # a chain: middle.leaf.width -> middle.width -> width
     guarded = Middle(width=width, when=enabled)
     # Read from outside the guarded node: its alias must still answer "inapplicable".

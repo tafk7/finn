@@ -31,7 +31,7 @@ from finn.core.space.ir import PLACING, Formal, Local, Placed, Selected
 
 class Leaf(Space):
     width: int = Param()
-    lanes: int = Decision(values=(1, 2))
+    lanes: int = Decision(domain=(1, 2))
 
     @derived
     def bits(*, width: int, lanes: int) -> int:
@@ -54,7 +54,7 @@ class Narrow(Space):
 
 class Top(Space):
     w: int = Param()
-    enabled: bool = Decision(values=(False, True))
+    enabled: bool = Decision(domain=(False, True))
     middle = Middle(depth=w)  # bound by reference
     fixed = Leaf(width=4)  # bound to a literal
     guarded = Leaf(width=w, when=enabled)
@@ -138,9 +138,14 @@ def test_references_into_placed_classes_are_slot_edges() -> None:
     deep = form.records[_member(form, "deep")]
     assert deep.output == Placed((middle, compiled(Middle).slot_names["leaf"]), leaf.keys["bits"])
     # Each placed Space's validity is a piece of the class's own.
+    assert form.validity is not None
     validity = form.records[form.validity]
     placed = [piece for piece in validity.constraints if isinstance(piece, Placed)]
-    assert placed == [Placed((slot.index,), slot.compiled.validity) for slot in form.slots]
+    assert placed == [
+        Placed((slot.index,), slot.compiled.validity)
+        for slot in form.slots
+        if slot.compiled.validity is not None
+    ]
     # A member of the class reads its own formal as a formal, and is placed under the guard
     # the class is placed under.
     enabled = form.records[_member(form, "enabled")]

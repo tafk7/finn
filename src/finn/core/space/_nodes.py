@@ -24,7 +24,6 @@ from .declarations import (
     MISSING,
     CaseRef,
     ChoiceMemberRef,
-    Const,
     Decision,
     Declaration,
     Param,
@@ -45,19 +44,19 @@ from .errors import DefinitionError
 from .semantics import STRING, ValueSemantics
 
 if TYPE_CHECKING:
-    from ._configuration import Space
+    from ._configuration import _Namespace
 
 _OWNER = "space.nodes"
 
-_SPACE: list[type[Space]] = []
+_SPACE: list[type[_Namespace]] = []
 
 
-def _space() -> type[Space]:
+def _space() -> type[_Namespace]:
     """The Space base, imported once (the configuration module imports this one)."""
     if not _SPACE:
-        from ._configuration import Space
+        from ._configuration import _Namespace
 
-        _SPACE.append(Space)
+        _SPACE.append(_Namespace)
     return _SPACE[0]
 
 
@@ -70,23 +69,22 @@ class NodeDecl(Declaration):
     """One declared node of ``space_type``: its formals' suppliers, guard and placement.
 
     ``settings`` maps each formal the declaring body supplied (at the call, or by
-    assignment) to its supplier and the line that wrote it. A declaration is
-    mutable until it is frozen: when a model containing it is prepared, or when
-    ``design_space`` takes it as a root.
+    assignment) to its supplier and the line that wrote it. It is assigned until it is
+    frozen: when the Space class placing it is created (an assignment in that class body
+    runs before), or when ``design_space`` takes it as a root.
     """
 
     _record_origin = False
 
-    def _init(self, space_type: type[Space], origin: str | None) -> None:
+    def _init(self, space_type: type[_Namespace], origin: str | None) -> None:
         # Instance attributes: a class-level annotation of a descriptor type
         # (a Space node, a Decision) would read through its __get__ in mypy.
-        self.space_type: type[Space] = space_type
+        self.space_type: type[_Namespace] = space_type
         self.origin = origin
         self.settings: dict[str, tuple[object, str | None]] = {}
         self.instance: object = None
         self.placement: str | None = None
         self.candidate_of: NodeDecision | None = None
-        self.frozen: str | None = None
 
     @property
     def bindings(self) -> dict[str, object]:
@@ -96,10 +94,6 @@ class NodeDecl(Declaration):
     def describe(self) -> str:
         where = f" placed at {self.placement}" if self.placement else ""
         return f"{self.space_type.__qualname__} node{where}{at(self.origin)}"
-
-    def freeze(self, reason: str) -> None:
-        if self.frozen is None:
-            self.frozen = reason
 
     def __repr__(self) -> str:
         return f"<{self.describe()}>"
@@ -147,14 +141,18 @@ def place_in_class(record: NodeDecl, owner: type[object], name: str) -> None:
         )
     if record.placement is not None:
         _refuse_placement(record, where)
-    record.owner, record.name, record.placement = owner, name, where
+    record._settle(owner=owner, name=name, placement=where)
 
 
 def place_as_candidate(record: NodeDecl, decision: NodeDecision, key: str) -> None:
+    from .groups import Group
+
+    if issubclass(record.space_type, Group):
+        raise DefinitionError.broken("group-not-space", _OWNER, "a Group cannot be a selector case")
     where = f"case {key!r} of a selector{at(decision.origin)}"
     if record.placement is not None or record.candidate_of is not None:
         _refuse_placement(record, where)
-    record.name, record.placement, record.candidate_of = key, where, decision
+    record._settle(name=key, placement=where, candidate_of=decision)
 
 
 def node_record(value: object) -> NodeDecl | None:
@@ -167,13 +165,13 @@ def node_record(value: object) -> NodeDecl | None:
     return path[0]
 
 
-def _declaration_object(space_type: type[Space], path: tuple[Declaration, ...]) -> Space:
+def _declaration_object(space_type: type[_Namespace], path: tuple[Declaration, ...]) -> _Namespace:
     node = object.__new__(space_type)
     object.__setattr__(node, "_space_path", path)
     return node
 
 
-def path_proxy(space_type: type[Space], path: tuple[Declaration, ...]) -> Space:
+def path_proxy(space_type: type[_Namespace], path: tuple[Declaration, ...]) -> _Namespace:
     """A child reached through a node declaration: ``house.kitchen``."""
     return _declaration_object(space_type, path)
 
@@ -203,7 +201,7 @@ def slot_kind(declaration: Declaration) -> SlotKind:
     return "behaviour"
 
 
-def space_members(space_type: type[Space]) -> dict[str, Declaration]:
+def space_members(space_type: type[_Namespace]) -> dict[str, Declaration]:
     """Every named member of ``space_type`` (most-derived last)."""
     members: dict[str, Declaration] = {}
     for base in reversed(space_type.__mro__):
@@ -217,7 +215,7 @@ def space_members(space_type: type[Space]) -> dict[str, Declaration]:
     return members
 
 
-def space_formals(space_type: type[Space]) -> dict[str, Param[object]]:
+def space_formals(space_type: type[_Namespace]) -> dict[str, Param[object]]:
     """Every formal of ``space_type`` by name."""
     members = space_members(space_type)
     return {
@@ -269,9 +267,9 @@ def _freeze_literal(
 def _value_supplier(
     semantics: ValueSemantics[object] | None, name: str, value: object, label: str
 ) -> object:
-    from ._configuration import Space
+    from ._configuration import _Namespace
 
-    if isinstance(value, (NodeChoice, Space)):
+    if isinstance(value, (NodeChoice, _Namespace)):
         raise DefinitionError.broken(
             "node-not-value",
             _OWNER,
@@ -324,7 +322,7 @@ _KINDS: Mapping[str, str] = {
 
 
 def check_supplier(
-    space_type: type[Space], name: str, member: Declaration, value: object, label: str
+    space_type: type[_Namespace], name: str, member: Declaration, value: object, label: str
 ) -> object:
     """Validate one supplier of a formal, as far as it can be checked before linking.
 
@@ -354,9 +352,9 @@ def _pending_supplier(member: Param[object], value: object, label: str) -> objec
     """A supplier of a formal whose annotation does not resolve yet (its Space class is being
     defined, across an import cycle): checked when linking, where every annotation
     resolves. A forward or a reference waits; a literal needs its value type now."""
-    from ._configuration import Space
+    from ._configuration import _Namespace
 
-    if isinstance(value, (NodeChoice, Space)):
+    if isinstance(value, (NodeChoice, _Namespace)):
         raise DefinitionError.broken(
             "node-not-value",
             _OWNER,
@@ -364,7 +362,7 @@ def _pending_supplier(member: Param[object], value: object, label: str) -> objec
             declaration=label,
         )
     if isinstance(value, (ValueRef, View)):
-        return value  # a forward (a Param), a member reference or an expression
+        return value  # a forward (a Param) or a member reference
     raise DefinitionError.broken(
         "literal-annotation-unresolved",
         _OWNER,
@@ -397,11 +395,11 @@ def _record(record: NodeDecl, name: str, supplier: object, origin: str | None, l
     record.settings[name] = (supplier, origin)
 
 
-def declare_node(space_type: type[Space], keywords: Mapping[str, object]) -> Space:
+def declare_node(space_type: type[_Namespace], keywords: Mapping[str, object]) -> _Namespace:
     """``space_type(**keywords)``: validate the bindings eagerly and return the node.
 
     A keyword is exactly an assignment by the calling body. Members left out
-    may be supplied later by assignment; a required formal that nothing
+    may be supplied by assignment in the same body; a required formal that nothing
     supplies is reported when a Space class containing the node is prepared.
     """
 
@@ -409,6 +407,10 @@ def declare_node(space_type: type[Space], keywords: Mapping[str, object]) -> Spa
     error = unfinished(space_type, at(origin))
     if error is not None:
         raise error
+    from .groups import Group
+
+    if issubclass(space_type, Group) and "when" in keywords:
+        raise DefinitionError.broken("group-no-guard", _OWNER, "a Group has no presence condition")
     keywords = dict(keywords)
     when = guard(keywords.pop("when", None))
     members = space_members(space_type)
@@ -468,8 +470,9 @@ def assign(instance: object, name: str, value: object) -> None:
         raise DefinitionError.broken(
             "declaration-frozen",
             _OWNER,
-            f"{label}: {record.describe()} is frozen ({record.frozen}); a declaration can be "
-            "assigned only until its Space class is prepared or design_space() takes it",
+            f"{label}: {record.describe()} is frozen ({record.frozen}); a node's formals are "
+            "assigned in the body that declares it, before the class placing it is created or "
+            "design_space() takes it as a root",
             declaration=label,
         )
     supplier = check_supplier(record.space_type, name, members[name], value, label)
@@ -494,7 +497,7 @@ def structural_settings(record: NodeDecl) -> list[str]:
         formal = formals.get(key)
         if formal is None:
             found.append(key)
-        elif isinstance(value, (ValueRef, View, NodeDecl)) and not isinstance(value, Const):
+        elif isinstance(value, (ValueRef, View, NodeDecl)):
             found.append(key)
     return found
 
@@ -548,7 +551,7 @@ class NodeChoice:
         decision.__set_name__(owner, name)
         for key, record in decision.candidates.items():
             if record is not None:
-                record.placement = f"{owner.__qualname__}.{name}.{key}"
+                record._settle(placement=f"{owner.__qualname__}.{name}.{key}")
 
     def __get__(self, instance: object, owner: type[object] | None = None) -> Any:
         if instance is None:
@@ -558,7 +561,7 @@ class NodeChoice:
             return NodeChoice((*path, self._space_decision()))
         from .occurrence import selected_candidate
 
-        return selected_candidate(cast("Space", instance), self._space_decision())
+        return selected_candidate(cast("_Namespace", instance), self._space_decision())
 
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):
@@ -675,8 +678,8 @@ def select_choice(
                 _OWNER,
                 f"Select{where}: shared binding {key}={value.__qualname__} is a class object; "
                 "a Space class given as a keyword is a case, and no other class is a value. "
-                "To bind a class as a value, wrap it: declare it as a member of the holding "
-                f"class (a Const) and bind that member, {key}=<member>",
+                "To bind a class as a value, declare a derived value of nothing returning it "
+                f"in the holding class, and bind that member, {key}=<member>",
             )
         else:
             shared[key] = value
@@ -686,7 +689,7 @@ def select_choice(
             _OWNER,
             f"Select{where}: by= takes a value reference (a derived value, a formal)",
         )
-    space_types: dict[str, type[Space]] = {}
+    space_types: dict[str, type[_Namespace]] = {}
     records: dict[str, NodeDecl] = {}
     for key, entry in cases.items():
         local_name(key, "case name")
@@ -731,7 +734,7 @@ def select_choice(
 
 
 def _check_case_named_like_a_formal(
-    space_types: Mapping[str, type[Space]], cases: Mapping[str, object], where: str
+    space_types: Mapping[str, type[_Namespace]], cases: Mapping[str, object], where: str
 ) -> None:
     """A Space class given as a keyword is a case. Where every other case placing something
     declares a formal of that name, it reads as a class meant as their shared binding:
@@ -748,13 +751,14 @@ def _check_case_named_like_a_formal(
                 _OWNER,
                 f"Select{where}: {key}={entry.__qualname__} is a case (a Space class given as a "
                 f"keyword), and every other case declares a formal {key!r}. A formal takes a "
-                "value, never a Space class: rename the case, or wrap the value as a member "
-                f"of the holding class (a Const) and bind that member, {key}=<member>",
+                "value, never a Space class: rename the case, or declare a derived value of "
+                "nothing returning the value in the holding class, and bind that member, "
+                f"{key}=<member>",
             )
 
 
 def _check_shared(
-    space_types: Mapping[str, type[Space]],
+    space_types: Mapping[str, type[_Namespace]],
     records: Mapping[str, NodeDecl],
     shared: Mapping[str, object],
     where: str,

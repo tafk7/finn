@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Physical dotp on the Kernel protocol: three ports, its own folding factors, one validity.
+"""Physical dotp on the Kernel base: three ports, its own folding factors, one validity.
 
 Each compute core is its own kernel over the shared ``DotpAxiKernel``
 declaration; most cases exercise the packed core, which every DSP target has.
@@ -36,19 +36,21 @@ from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.abi import Clock, Data
 from finn.kernels.artifacts.abi import Derived as DerivedClock
 from finn.kernels.artifacts.build import emit_module
-from finn.kernels.base import KernelSpace
+from finn.kernels.base import Kernel
 from finn.kernels.configure import commit
 from finn.kernels.dotp import REDUCERS, DotpAxiKernel, Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.library import library_module
 from finn.kernels.matmul import MatMulKernel
-from finn.kernels.port import AxiStreamPort, axis
+from finn.kernels.port import axis
+from finn.kernels.port_model import StreamPort
 from finn.kernels.transport import AxisBeat
 from finn.platform.capabilities import DspBlock
 
 
 def _axis(point, name: str) -> AxisBeat:
     """Port ``name``'s AXIS beat on ``point``."""
-    found = axis(*getattr(DotpAxiKernel, name).viewed(point, name))
+    port = getattr(point, name)
+    found = axis(port.physical_spec(idle=False), port.stream)
     assert isinstance(found, AxisBeat), found
     return found
 
@@ -72,7 +74,7 @@ def kernel(space_type=PackedDotpKernel, **updates):
 
 
 def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_the_module():
-    assert DotpAxiKernel.__bases__ == (KernelSpace,)
+    assert DotpAxiKernel.__bases__ == (Kernel,)
     assert PackedDotpKernel.__bases__ == Int8Dsp58DotpKernel.__bases__ == (DotpAxiKernel,)
     point = kernel()
     assert [
@@ -84,21 +86,24 @@ def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_th
         # What its module and its resources read, and nothing in its space.
         "dsp_simd",
         "held_bits",
+        "module_data",
+        "module_sources",
         "netlist",
         "parameters",
         "resource_use",
         "resources",
         "segment_length",
-        # The contract each port states, which the channel on it takes.
-        "w_contract",
-        "x_contract",
-        "y_contract",
     ]
     for port in (point.x, point.w, point.y):
-        assert isinstance(port, AxiStreamPort)
+        assert isinstance(port, StreamPort)
+    assert {
+        item.key
+        for item in inspection.members(point)
+        if item.kind == "view" and item.key.endswith(".stream_pins")
+    } == {"x.stream_pins", "w.stream_pins", "y.stream_pins"}
     found = {item.key: item.kind for item in inspection.members(point)}
     # Facts, bound from the network's (a window only where a convolution reads one).
-    facts = {key for key, kind in found.items() if kind == "param"}
+    facts = {key for key, kind in found.items() if kind == "param" and "." not in key}
     assert facts == {
         "form",
         "reshape_activations",
@@ -138,10 +143,14 @@ def test_assessed_view_preserves_geometry_and_clocks(target, pumping):
     assert ports["ap_rst_n"].role.synchronous_to == (
         ("ap_clk", "ap_clk2x") if pumping else ("ap_clk",)
     )
-    for name, width in (("x", 16), ("w", 24), ("y", 24)):
-        port = getattr(DotpAxiKernel, name)
-        assert port.pins(point, name) == (ports[port.name],)
-        tdata = next(signal for signal in ports[port.name].signals if signal.logical == "tdata")
+    for name, bus, width in (
+        ("x", "s_axis_input", 16),
+        ("w", "s_axis_weights", 24),
+        ("y", "m_axis_output", 24),
+    ):
+        port = getattr(point, name)
+        assert port.physical_pins == (ports[bus],)
+        tdata = next(signal for signal in ports[bus].signals if signal.logical == "tdata")
         assert tdata.width == width
     assert library_module(point).held.inputs == (() if pumping else (("ap_clk2x", 0),))
 
@@ -160,14 +169,14 @@ def test_the_schedule_splits_n_by_pe_and_k_by_simd():
     point = kernel(pe=2, simd=2, outputs=4, reduction=6, rows=3)
     assert (point.rows, point.outputs, point.reduction) == (3, 4, 6)
     x, w, y = (
-        point.x_stream.sequence.form,
-        point.w_stream.sequence.form,
-        point.y_stream.sequence.form,
+        point.x.stream.sequence.form,
+        point.w.stream.sequence.form,
+        point.y.stream.sequence.form,
     )
     assert (x.beats, x.lanes) == (3 * 2 * 3, 2)  # each row replayed per output fold
     assert (w.beats, w.lanes) == (3 * 2 * 3, 4)
     assert (y.beats, y.lanes) == (3 * 2, 2)
-    assert [rule.beats for rule in point.x_stream.sequence.markers] == [3]
+    assert [rule.beats for rule in point.x.stream.sequence.markers] == [3]
 
 
 @pytest.mark.parametrize(
@@ -220,11 +229,19 @@ def test_dsp48_carries_the_segment_length_the_rtl_ignores():
         ),
     ],
 )
-def test_physical_view_reports_each_refusal_once(updates, code):
+def test_validity_reports_each_rule_and_readout_keeps_only_local_refusals(updates, code):
     # An encoding a port refuses is that port's finding; the core's own rules add
     # only the DSP's own bounds, so no node reports a cause twice.
-    physical = kernel(**updates).inspect(DotpAxiKernel.netlist)
-    refused = physical.accepted_result
+    point = kernel(**updates)
+    physical = point.inspect(DotpAxiKernel.netlist)
+    assert isinstance(physical.result, Rejected)
+    assert (physical.output_result is None) == (code != "dotp-clock-period")
+    validity = inspection.validity(point).result
+    if code == "dotp-clock-period":
+        assert validity == Available(True)  # only the local module calculation refuses
+        refused = physical.result
+    else:
+        refused = validity
     assert isinstance(refused, Rejected), refused
     found = [(finding.owner, finding.code) for finding in refused.findings]
     assert code in {code for _, code in found}
@@ -266,8 +283,9 @@ def test_a_folding_factor_given_that_does_not_divide_its_extent_refuses_the_core
 def test_constraints_gate_acceptance_and_the_module_does_not_revalidate_them():
     point = kernel(Int8Dsp58DotpKernel, result_dtype=DataType["INT59"], compute_pumping=True)
     physical = point.inspect(DotpAxiKernel.netlist)
-    # Refused with its Space, by the rule's one finding: the module states none of its own.
-    refused = physical.accepted_result
+    assert isinstance(physical.result, Rejected)
+    assert physical.output_result is None
+    refused = inspection.validity(point).result
     assert isinstance(refused, Rejected)
     assert [finding.code for finding in refused.findings] == ["dotp-accumulator-width"]
 
@@ -377,7 +395,7 @@ def test_the_reducer_left_open_is_a_choice_no_platform_refuses(dsp):
     point = kernel(reducer=None, platform=full_platform(dsp))
     (choice,) = inspection.viable(point, [type(point).reducer])
     assert choice.cases == REDUCERS
-    assert not isinstance(point.inspect(DotpAxiKernel.netlist).accepted_result, Available)
+    assert not isinstance(point.inspect(DotpAxiKernel.netlist).result, Available)
 
 
 def test_the_core_refuses_before_its_folding_factors_are_chosen():
@@ -392,7 +410,7 @@ def test_the_core_refuses_before_its_folding_factors_are_chosen():
     open_factors = commit(role(), {"compute": "packed"})
     assert isinstance(open_factors.query(MatMulKernel.pe), Unresolved)
     assert isinstance(open_factors.query(MatMulKernel.netlist), Unresolved)
-    assert open_factors.compute.x_element.bits == 3
+    assert open_factors.compute.x.element.bits == 3
 
 
 @pytest.mark.parametrize(
@@ -437,7 +455,7 @@ def test_the_platform_is_a_required_fact():
 @pytest.mark.parametrize("bits", (5, 9, 12, 58))
 def test_the_results_stream_selects_accumulator_capacity(bits):
     point = kernel(result_dtype=DataType[f"INT{bits}"])
-    assert point.y_element.dtype == DataType[f"INT{bits}"]
+    assert point.y.element.dtype == DataType[f"INT{bits}"]
     assert dict(library_module(point).parameters)["ACCU_WIDTH"] == bits
 
 
@@ -473,8 +491,9 @@ def test_only_the_packed_core_needs_two_bit_activations():
     """``dotp.sv`` refuses ACTIVATION_WIDTH below 2; ``dotp_8sx9_dsp58`` pads any width to
     its 9-bit lanes, so the INT8 core takes BINARY activations."""
     binary = {"activation_dtype": DataType["BINARY"], "result_dtype": DataType["INT6"]}
-    packed = kernel(**binary).inspect(DotpAxiKernel.netlist).accepted_result
-    assert codes(packed) == {"dtype-minimum-bits"}
+    packed = kernel(**binary)
+    assert isinstance(packed.query(DotpAxiKernel.netlist), Rejected)
+    assert codes(inspection.validity(packed).result) == {"dtype-minimum-bits"}
     int8 = kernel(Int8Dsp58DotpKernel, **binary)
     assert dict(library_module(int8).parameters)["ACTIVATION_WIDTH"] == 1
     assert dict(library_module(int8).parameters)["SIGNED_ACTIVATIONS"] == 0
@@ -503,7 +522,7 @@ def test_each_core_accumulates_in_the_ranges_own_encoding(space_type, result_ran
         space_type, **facts, result_dtype=DataType[accumulator], result_range=result_range
     )
     assert point.accumulator == DataType[accumulator]
-    assert point.y_element == ScalarEncoding(DataType[accumulator], TensorRange(*result_range))
+    assert point.y.element == ScalarEncoding(DataType[accumulator], TensorRange(*result_range))
     assert dict(library_module(point).parameters)["ACCU_WIDTH"] == DataType[accumulator].bitwidth()
 
 
@@ -601,8 +620,9 @@ def test_each_core_kernel_names_its_core_and_the_shared_base_places_none():
     ],
 )
 def test_the_int8_core_takes_signed_nine_by_eight_products_on_dsp58_only(updates, code):
-    refused = kernel(Int8Dsp58DotpKernel, **updates).query(DotpAxiKernel.netlist)
-    assert code in codes(refused)
+    point = kernel(Int8Dsp58DotpKernel, **updates)
+    assert isinstance(point.query(DotpAxiKernel.netlist), Rejected)
+    assert code in codes(inspection.validity(point).result)
     for activation in ("INT9", "UINT8"):
         accepted = kernel(
             Int8Dsp58DotpKernel,
@@ -619,8 +639,9 @@ def test_depthwise_activations_carry_pe_channels_of_simd_and_only_int8_reads_the
     assert rtl["ACTIVATION_BROADCASTING"] == 0
     lanes = [_axis(point, name).elements_per_beat for name in ("x", "w", "y")]
     assert lanes == [6, 6, 3]
-    refused = kernel(form=Form.DEPTHWISE).query(DotpAxiKernel.netlist)
-    assert codes(refused) == {"dotp-form"}
+    unsupported = kernel(form=Form.DEPTHWISE)
+    assert isinstance(unsupported.query(DotpAxiKernel.netlist), Rejected)
+    assert codes(inspection.validity(unsupported).result) == {"dotp-form"}
 
 
 @pytest.mark.parametrize(

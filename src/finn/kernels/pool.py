@@ -34,7 +34,7 @@ reaches it: ``tests/support/kernel_specs/pool.py``.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar
+from typing import ClassVar
 
 from finn.core.space import (
     Decision,
@@ -49,15 +49,15 @@ from finn.core.space import (
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.gemm import ZERO
 from finn.dataflow.schedule import Affine, Index, Schedule
-from finn.dataflow.streams import Stream
-from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource, HlsSource
 from finn.kernels.artifacts.hls import axis_type
-from finn.kernels.base import KernelSpace, extent_of
-from finn.kernels.library import LibraryModule
-from finn.kernels.port import AxiStreamPort, axis
-from finn.kernels.transport import AxisSpelling
+from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
+from finn.kernels.laws import Axis, AxisSpelling, Intake, PortIntake, Standing
+from finn.kernels.library import ModuleSpec
+from finn.kernels.port import axis
+from finn.kernels.port_model import StreamPort
 from finn.kernels.values.domains import Integer
 from finn.platform.capabilities import Platform, Resources
 
@@ -154,11 +154,22 @@ void {name}(hls::stream<InBeat> &s_axis, hls::stream<OutBeat> &m_axis) {{
 """
 
 
+#: Where its intake is measured, under what conditions, and where it is stated beyond them.
+_INTAKE_MEASURED = (
+    "a form in K, the window's beats, fitted to Vivado 2025.2 simulation traces of pool_top "
+    "as Vitis HLS 2025.2 synthesizes it for an xczu3eg: "
+    "windows 2x2, 2x3, 3x3 (strides equal and 1), PE 1, 3, 6, "
+    "INT4 and INT8, at 5 ns; 2x2 at 2.5 and 10 ns, 3x3 at 2.5 ns; the output stalled from "
+    "reset, and paced one beat in 64 cycles, two in 48, five in 96; stated beyond them, "
+    "unmeasured: at other windows, on other parts (Versal's included) and at other periods"
+)
+
+
 #: The stem of its HLS top: the module is ``finn_pool_<key16>``.
 STEM = "finn_pool"
 
 
-class PoolKernel(KernelSpace):
+class PoolKernel(Kernel):
     """Max pooling of each ``window`` at ``stride`` (rows, columns) of an HWC tensor;
     see the module docstring."""
 
@@ -197,7 +208,8 @@ class PoolKernel(KernelSpace):
             oh: (shape[-3] - rows) // row_step + 1,
             ow: (shape[-2] - columns) // column_step + 1,
         }
-        return self._bound({kh: rows, kw: columns, **windows})
+        accesses = [self.input.access] if self.input.binds else []
+        return bound_extents(accesses, {kh: rows, kw: columns, **windows})
 
     channels = extent_of(c)
     pe: int = Decision(domain=divisors_of(channels))
@@ -219,10 +231,10 @@ class PoolKernel(KernelSpace):
     @derived
     def schedule(self) -> Schedule | Rejected:
         """Window by window, PE channels a beat, the window's positions innermost."""
-        return self.bound_schedule(order=(oh, ow, c, kh, kw), factors={c: self.pe})
+        return bound_schedule(self.extents, order=(oh, ow, c, kh, kw), factors={c: self.pe})
 
-    input = AxiStreamPort(
-        name="s_axis",
+    input = StreamPort(
+        transport=Axis(bus="s_axis", spelling=AxisSpelling.UPPER),
         endpoint=Endpoint.TARGET,
         tensor=input_tensor,
         admits=ELEMENTS,
@@ -230,24 +242,23 @@ class PoolKernel(KernelSpace):
         index=input_index,
         lanes=(c,),
         closes=(kh, kw),
-        spelling=AxisSpelling.UPPER,
     )
 
     @view
     def element_dtype(self) -> QONNXDataType:
         """The input's element: a window's maximum is one of its values."""
-        return self.input_element.dtype
+        return self.input.element.dtype
 
     @derived
     def output_tensor(self) -> Tensor | Rejected:
         """Its output: ``(OH, OW, C)`` at the input's rank, in the input's element."""
-        shape = self.spanned(self.output_index)
+        shape = spanned(self.output_index, self.extents)
         if isinstance(shape, Rejected):
             return shape
-        return Tensor(shape, self.input_element)
+        return Tensor(shape, self.input.element)
 
-    output = AxiStreamPort(
-        name="m_axis",
+    output = StreamPort(
+        transport=Axis(bus="m_axis", spelling=AxisSpelling.UPPER),
         endpoint=Endpoint.INITIATOR,
         tensor=output_tensor,
         admits=ELEMENTS,
@@ -255,17 +266,41 @@ class PoolKernel(KernelSpace):
         index=output_index,
         lanes=(c,),
         reduces=(kh, kw),
-        spelling=AxisSpelling.UPPER,
     )
-    if TYPE_CHECKING:  # members its ports lower to, which it reads
-        input_element: ClassVar[ScalarEncoding]
-        input_stream: ClassVar[Stream]
-        output_stream: ClassVar[Stream]
 
     @constraint
     def element_supported(self) -> bool | Rejected:
         """An ordinary integer: ``std::max`` over ``ap_int`` or ``ap_uint`` lanes."""
         return ELEMENTS.check(self.input_tensor.element.dtype)
+
+    @derived
+    def intake(self) -> Intake:
+        """Measured (CONTRACT.md § 5): an HLS top's registers and FIFOs are its synthesis's,
+        not text it states, so they are read from a trace of its RTL. ``pooling_stream``
+        reduces each window's ``K = KH * KW`` beats into one result, and its top's FIFOs and
+        AXIS registers hold whole results; with its output stalled from reset it took
+        ``4K + 5`` beats and stopped, and under stalls between output beats it held at most
+        ``5K + 5``, at every window, stride, PE and element measured (``_INTAKE_MEASURED``),
+        at 5 and 10 ns. At 2.5 ns its synthesis adds a register, one beat more on each. So
+        below 5 ns it holds at most one more, and at 2.5 ns or less takes one more before it
+        stops: between, the register's period is not measured, and each bound keeps its
+        side. The form in ``K`` is fitted to three windows (``K`` 4, 6 and 9) on one part at
+        2.5 to 10 ns and stated beyond them, at every window, part and period, as its source
+        says: its FIFOs and registers holding whole results make the form in ``K`` likely,
+        but no other part, and no period below 2.5 ns, is measured."""
+        rows, columns = self.window
+        window = rows * columns
+        period = self.platform.period_ns
+        before = 4 * window + 5 + int(period <= 2.5)
+        most = 5 * window + 5 + int(period < 5.0)
+        rule = (
+            f"takes a beat while its pipeline and FIFOs have room: four windows of results and "
+            f"five beats or more with its output stalled ({window} beats a window); resumes "
+            "as the output takes each window's result"
+        )
+        return Intake(
+            (PortIntake("input", before, most, rule, Standing.MEASURED, _INTAKE_MEASURED),)
+        )
 
     @view
     def resource_use(self) -> Resources | Rejected:
@@ -277,14 +312,14 @@ class PoolKernel(KernelSpace):
         return {}
 
     @view
-    def sources(self) -> tuple[Contribution, ...] | Rejected:
+    def module_sources(self) -> tuple[Contribution, ...] | Rejected:
         """Its HLS request, written from the point's values: checked to provide the
         module when it is built."""
         element, pe = self.element_dtype, self.pe
-        input_axis = axis(PoolKernel.input, self.input_stream)
+        input_axis = axis(self.input.physical_spec(idle=False), self.input.stream)
         if isinstance(input_axis, Rejected):
             return input_axis
-        output_axis = axis(PoolKernel.output, self.output_stream)
+        output_axis = axis(self.output.physical_spec(idle=False), self.output.stream)
         if isinstance(output_axis, Rejected):
             return output_axis
         input_bits, output_bits = input_axis.carrier_bits, output_axis.carrier_bits
@@ -298,7 +333,7 @@ class PoolKernel(KernelSpace):
             ),
         )
 
-    module = LibraryModule(STEM, parameters=parameters, sources=sources)
+    module_spec: ClassVar[ModuleSpec] = ModuleSpec(STEM)
 
 
 __all__ = ["DIRECTIVES", "HEADERS", "PoolKernel", "STEM", "element_type"]

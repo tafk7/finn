@@ -21,6 +21,7 @@ from finn.core.space import (
     Decision,
     Inapplicable,
     Located,
+    Rejected,
     Select,
     Unresolved,
     design_space,
@@ -105,14 +106,15 @@ def test_the_relation_and_the_budget_own_their_refusals() -> None:
     # Built directly (as a saved graph), the same choices read refused, naming both.
     point = built(house, choices)
     refused = point.inspect(House.total)
-    assert isinstance(refused.output_result, Available)
+    assert refused.output_result is None
+    assert isinstance(refused.result, Rejected)
     validity = inspection.validity(point)
     assert validity.status == "refused"
     results = {piece.owner: piece.result for piece in validity.pieces}
     assert set(results) == {"matched", "within_budget"}
     assert codes(results["matched"]) == {"mismatch"}
     assert "kitchen.finish=1, dining.finish=3" in {
-        finding.message for finding in refused.accepted_result.findings
+        finding.message for finding in results["matched"].findings
     }
     assert codes(results["within_budget"]) == {"over-budget"}
     assert isinstance(point.query(House.garage.cost), Available)
@@ -152,7 +154,7 @@ def test_keys_commitments_and_inspection_use_declaration_paths() -> None:
 
 
 class FixedRoom(Room):
-    finish: int = Decision(values=(2,))
+    finish: int = Decision(domain=(2,))
 
 
 class Estate(House):

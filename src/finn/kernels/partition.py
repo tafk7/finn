@@ -31,8 +31,8 @@ a strategy sets it (the channel's policies at the cut, the seam's fold rule afte
 edge: a channel one of whose sides is a kernel's outside it, given as a fact
 (``Side.neighbour``, its stream at the neighbour's stored choices). The edge channel is the
 slice's (its adapters and their memory style are its choices), and its hops to the
-neighbour, its sizing (the neighbour's pace, from its port's contract view at its stored
-choices, given beside the declaration: ``frozen``) and its resources derive. Its netlist and
+neighbour, its sizing (the neighbour's port's pace at its stored choices, given beside the
+declaration with its contract view: ``frozen``) and its resources derive. Its netlist and
 module do not: a frozen edge is a kernel's port outside the module, no AXIS port of it, and
 a slice is not emitted (``slice-not-emitted``).
 
@@ -66,23 +66,25 @@ from finn.core.space import (
     RequestError,
     Space,
     Unresolved,
-    View,
     bind,
     inspection,
     reject,
 )
+from finn.core.space.declarations import View
+from finn.dataflow.schedule import Pace
 from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.artifacts.module import Composed as Module
 from finn.kernels.artifacts.module import Fragment, ProducerIdentity
 from finn.kernels.artifacts.top import compose as top
-from finn.kernels.base import KernelSpace, PortContract, merged
+from finn.kernels.base import Kernel, PortPins, merged
 from finn.kernels.channels import Channel, Neighbours, OuterHops, outer_hops
 from finn.kernels.composer import Composed, Names, PartitionDeclaration, Port, compose
 from finn.kernels.control import Control
 from finn.kernels.control import presented as presented_buses
 from finn.kernels.movers import MoverOffer
 from finn.kernels.policies import Defaulted, Owner, Unstated, defaulted
+from finn.kernels.port import port_pace, port_side, port_stream_pins
 from finn.kernels.sides import Side, SideKind
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
@@ -349,9 +351,9 @@ class Partition:
 
     def query(self, name: str, member: object) -> QueryResult[Any]:
         """Member ``name``'s ``member``, a view or a derived value declared on a Space class
-        ``Base`` (``KernelSpace.netlist``, ``Timed.cycles``): the member of that name of the
+        ``Base`` (``Kernel.netlist``, ``Kernel.cycles``): the member of that name of the
         member's own class. ``Inapplicable`` where the member's class does not derive from
-        ``Base`` (``Channel`` is no class with ``KernelSpace.bus_control``'s bus), or where
+        ``Base`` (``Channel`` is no class with ``Kernel.bus_control``'s bus), or where
         the member's own answer is inapplicable (a kernel declaring no control bus)."""
         point = self.member(name)
         base, declared = getattr(member, "owner", None), getattr(member, "name", None)
@@ -597,26 +599,39 @@ class Partition:
     # -- what it is -------------------------------------------------------------------------
 
     def neighbours(self, name: str) -> Neighbours:
-        """The ports beside channel ``name`` (each kernel's ``<p>_contract`` view, labelled
+        """The ports beside channel ``name`` (each kernel's ``<p>_stream_pins`` view, labelled
         below its member's node): the producing kernel's and the consuming kernel's, by the
         side each is declared on; a frozen neighbour's, outside a slice, as given at its
-        stored choices (``frozen``). FIFO sizing reads their paces
-        (``finn.kernels.fifo_sizing``), and the netlist its hops to them (``hops``)."""
-        found: dict[str, PortContract] = {}
+        stored choices (``frozen``); and each one's pace (``<p>_pace``, a scheduled port's).
+        FIFO sizing reads their paces (``finn.kernels.fifo_sizing``), and the netlist its
+        hops to them (``hops``)."""
+        found: dict[str, PortPins] = {}
+        paces: dict[str, Pace] = {}
         frozen = self._frozen.get(name, Neighbours())
         for side, declared in zip(("producer", "consumer"), self._sides[name], strict=True):
             if isinstance(declared, Side) and declared.kind is SideKind.NEIGHBOUR:
-                given: PortContract | None = getattr(frozen, side)
+                given: PortPins | None = getattr(frozen, side)
                 if given is not None:
                     found[side] = given
+                pace: Pace | None = getattr(frozen, f"{side}_pace")
+                if pace is not None:
+                    paces[side] = pace
                 continue
             if not isinstance(declared, Port):
                 continue
             point = self.member(declared.member)
-            answer = point.query(getattr(type(point), f"{declared.port}_contract"))
-            if isinstance(answer, Available) and isinstance(answer.value, PortContract):
+            answer = point.query(port_stream_pins(type(point), declared.port))
+            if isinstance(answer, Available) and isinstance(answer.value, PortPins):
                 found[side] = answer.value.under(self.node(declared.member))
-        return Neighbours(found.get("producer"), found.get("consumer"))
+            paced = point.query(port_pace(type(point), declared.port))
+            if isinstance(paced, Available) and isinstance(paced.value, Pace):
+                paces[side] = paced.value
+        return Neighbours(
+            found.get("producer"),
+            found.get("consumer"),
+            paces.get("producer"),
+            paces.get("consumer"),
+        )
 
     def hops(self, name: str) -> OuterHops | Rejected:
         """Channel ``name``'s hops to the ports beside it (``outer_hops``, from
@@ -628,7 +643,7 @@ class Partition:
         """What its top is made of, read once: each member's netlist under its node, in its
         module's order, a channel's with its hops to the ports beside it around its own
         links (``hops``: the producer's first, the consumer's last), merged with each
-        control bus its kernels present (``KernelSpace.bus_control``, at the port each was
+        control bus its kernels present (``Kernel.bus_control``, at the port each was
         given), and each boundary channel's AXIS bus; or why not, every member's refusal
         (or, where none refuses, what they wait on; a channel's hops' own, ``channel-port``
         or ``channel-link``), each finding naming its member (``located``), or the merge's own
@@ -670,7 +685,7 @@ class Partition:
         controls: list[tuple[str, Control]] = []
         failed: list[tuple[str, QueryResult[object]]] = []
         for name in self._order:
-            netlist = self.query(name, KernelSpace.netlist)
+            netlist = self.query(name, Kernel.netlist)
             if name in self._sides and isinstance(netlist, Available):
                 hops = self.hops(name)
                 netlist = (
@@ -681,7 +696,7 @@ class Partition:
             else:
                 failed.append((name, netlist))
             if name not in self._sides:
-                control = self.query(name, KernelSpace.bus_control)
+                control = self.query(name, Kernel.bus_control)
                 if isinstance(control, Available):
                     controls.append((self.node(name), control.value))
                 elif not isinstance(control, Inapplicable):
@@ -731,7 +746,7 @@ class Partition:
         for declared in self._sides.get(name, ()):
             if isinstance(declared, Port):
                 point = self.member(declared.member)
-                answer = point.query(getattr(type(point), f"{declared.port}_side"))
+                answer = point.query(port_side(type(point), declared.port))
                 label = f"{declared.member}.{declared.port}"
                 (absent if isinstance(answer, Inapplicable) else present).append(label)
         if not absent:
@@ -778,7 +793,7 @@ class Partition:
         (``finn.custom_op.kernels.shell``)."""
 
         def read() -> QueryResult[Resources]:
-            used = [self.query(name, KernelSpace.resources) for name in self.members]
+            used = [self.query(name, Kernel.resources) for name in self.members]
             missing = [each for each in used if not isinstance(each, Available)]
             if missing:
                 return _together(missing)

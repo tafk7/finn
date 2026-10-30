@@ -219,7 +219,7 @@ def test_a_channel_s_placements_keep_the_labels_it_states_in_the_emitted_netlist
         "m_axis_0_tdata"
     ]
     # Its set port: labelled below it, and the index channel's hop ends at it.
-    assert w.set_contract.label == f"{SOURCE_LABEL}.set"
+    assert w.set_stream_pins.label == f"{SOURCE_LABEL}.set"
     assert [link.sink.data for link in links if link.sink.instance == instance] == [
         "s_axis_0_tdata"
     ]

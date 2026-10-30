@@ -40,7 +40,7 @@ class Packed(Space):
 
 class Stub(Space):
     width: int = Param()
-    rows: int = Decision(values=(1, 2, 4))
+    rows: int = Decision(domain=(1, 2, 4))
 
     @constraint
     def even(self) -> bool | Rejected:
@@ -78,7 +78,7 @@ def built(point: Any, choices: Mapping[str, object]) -> Any:
 class Stage(Space):
     """A stage of a chain, one or two wide."""
 
-    size: int = Decision(values=(1, 2))
+    size: int = Decision(domain=(1, 2))
 
 
 class Hop(Space):
@@ -88,7 +88,7 @@ class Hop(Space):
 
     up: int = Param()
     down: int = Param()
-    depth: int = Decision(values=(1, 2))
+    depth: int = Decision(domain=(1, 2))
 
     @constraint
     def narrow(self) -> bool | Rejected:

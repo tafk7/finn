@@ -1,14 +1,15 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""The ``Kernel`` Protocol: a design point of every kernel satisfies it, its four answers
-read out as their values, and a class missing one answer does not."""
+"""The ``Kernel`` base, as a reader types a design point: its four answers read out as their
+values, for a kernel binding a module, a kernel with children and a channel alike; a Space
+that is no kernel is no ``Kernel``, whatever answers it states."""
 
 from typing import assert_type
 
 from finn.core.space import Space, view
 from finn.kernels.artifacts.module import Fragment
 from finn.kernels.base import Kernel
-from finn.kernels.channels import Channel
+from finn.kernels.channels import Channel, ChannelFifo
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.matmul import MatMulKernel
 from finn.platform.capabilities import Resources
@@ -22,17 +23,19 @@ def answers(kernel: Kernel) -> tuple[Fragment, int, int, Resources]:
     return kernel.netlist, kernel.cycles, kernel.buffering, kernel.resources
 
 
-def check(fifo: FifoKernel, matmul: MatMulKernel, channel: Channel) -> None:
-    # A kernel binding a module, a kernel with children, and a channel, each a Kernel.
+def check(fifo: FifoKernel, matmul: MatMulKernel, channel: Channel, stage: ChannelFifo) -> None:
+    # A kernel binding a module, a kernel with children, a channel and a channel's FIFO
+    # (whose cycles are inapplicable), each a Kernel.
     answers(fifo)
     answers(matmul)
     answers(channel)
-    each: list[Kernel] = [fifo, matmul, channel]
+    answers(stage)
+    each: list[Kernel] = [fifo, matmul, channel, stage]
     assert_type(each[0].netlist, Fragment)
 
 
 class Unbuffered(Space):
-    """Three of the four answers: no ``buffering``."""
+    """Three of the four answers, and no kernel."""
 
     @view
     def netlist(self) -> Fragment:

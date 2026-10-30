@@ -20,14 +20,15 @@ from finn.dataflow.gemm import Form, k, m, n
 from finn.dataflow.schedule import Affine, Index, Pace, Refused, Schedule
 from finn.dataflow.traversal import (
     Adaptation,
+    LevelDone,
     LevelEnd,
     Loop,
     Position,
     Reorder,
     Traversal,
     classify,
+    one_pass,
     passes,
-    period,
     tile,
     unreplayed,
     vector_major,
@@ -77,8 +78,8 @@ def test_a_schedule_folds_each_index_into_beats_and_lanes() -> None:
     schedule = gemm(3, 6, 8, pe=3, simd=2)
     assert schedule.order == (m, n, k)
     assert (schedule.factor(n), schedule.factor(k), schedule.factor(m)) == (3, 2, 1)
-    assert (schedule.steps(m), schedule.steps(n), schedule.steps(k)) == (3, 2, 4)
-    assert schedule.beat_count == 24
+    assert (schedule.fold(m), schedule.fold(n), schedule.fold(k)) == (3, 2, 4)
+    assert schedule.iterations == 24
     # The beats default to the extents' order.
     assert Schedule({k: 4, m: 2}).order == (k, m)
     with pytest.raises(ValueError, match="divide"):
@@ -120,8 +121,8 @@ def test_dense_forms_are_mvau_s_hand_written_ones(
     assert schedule.closing((k,)) == LevelEnd(SF)
     # The boundary presents each row once; the replay is the receiver's.
     assert unreplayed(activation) == vector_major((M, K), SIMD)
-    # A stored delivery repeats one period of the weights, once per row.
-    assert period(weights).beats == NF * SF
+    # A stored delivery repeats one pass of the weights, once per row.
+    assert one_pass(weights).beats == NF * SF
     assert passes(weights) == M and passes(vector_major((M, K), SIMD)) == 1
 
 
@@ -170,10 +171,10 @@ def test_depthwise_fields_are_finnlib_s_s_times_pe_plus_p(
     )
 
 
-def test_a_dense_realization_reads_the_depthwise_operand_as_a_view() -> None:
+def test_a_dense_realization_reads_the_depthwise_operand_as_a_reshape() -> None:
     M, K, N, PE, SIMD = 2, 3, 4, 2, 4
     schedule = gemm(M, N, K * N, PE, SIMD)
-    activation = schedule.present((M, K, N), Form.DENSE.x, lanes=(k,), view=(M, K * N))
+    activation = schedule.present((M, K, N), Form.DENSE.x, lanes=(k,), reshape=(M, K * N))
     assert activation.shape == (M, K, N)
     want = enumerate_positions(
         (("m", M), ("n", N // PE), ("k", K * N // SIMD)),
@@ -182,11 +183,11 @@ def test_a_dense_realization_reads_the_depthwise_operand_as_a_view() -> None:
     )
     assert list(activation.positions()) == want
     with refused(
-        "view-size-mismatch",
+        "reshape-size-mismatch",
         error=Refused,
-        message=r"a \(2, 3, 5\) tensor cannot be viewed as \(2, 12\)",
+        message=r"a \(2, 3, 5\) tensor cannot be reshaped to \(2, 12\)",
     ):
-        schedule.present((M, K, N + 1), Form.DENSE.x, lanes=(k,), view=(M, K * N))
+        schedule.present((M, K, N + 1), Form.DENSE.x, lanes=(k,), reshape=(M, K * N))
 
 
 # -- tiled MVU, SWG, thresholding, eltwise, transpose ------------------------------------
@@ -209,11 +210,9 @@ def test_tiled_mvu_forms_and_finn_s_input_gen_parameters() -> None:
         SF * T, (NF, SF, T), (0, 1, SF)
     )
     assert classify(core_out, vector_major((M, N), PE)).reorder == Reorder(NF * T, (T, NF), (1, T))
-    # t sits inside the reduction: not a dotp_axi frame.
-    with refused(
-        "reduction-not-innermost", error=Refused, message="the reduced .* are not the innermost"
-    ):
-        schedule.closing((k,))
+    # t sits inside the reduction: k's last index value holds across the T beats of t, the last
+    # T of every SF * T beats (mvu_tiled_axi.sv's activation input_gen, its odone[1]).
+    assert schedule.closing((k,)) == LevelDone(SF * T, T) == LevelDone(12, 3)
 
 
 def test_sliding_windows_are_one_affine_expression() -> None:
@@ -289,9 +288,13 @@ def test_a_reduction_presented_before_it_closes_is_refused() -> None:
     schedule = gemm(2, 2, 4, 1, 2)
     with refused("dropped-index-moves", error=Refused, message="cannot be reduced away"):
         schedule.present((2, 2), Form.DENSE.y, lanes=(n,), reduces=(m,))
+    # m inside the reduced k: k's last index value holds across m's 2 beats of every 4.
     reordered = Schedule({m: 2, n: 2, k: 4}, factors={n: 1, k: 2}, order=(n, k, m))
-    with refused("reduction-not-innermost", error=Refused):
-        reordered.closing((k,))
+    assert reordered.closing((k,)) == LevelDone(4, 2)
+    # n between the reduced k and m: no one block of the order.
+    split = Schedule({m: 2, n: 2, k: 4}, factors={n: 1, k: 2}, order=(k, n, m))
+    with refused("reduction-not-innermost", error=Refused, message="not one block"):
+        split.closing((k, m))
     with refused("index-unknown", error=Refused, message="^q is not an index of the schedule$"):
         schedule.present((2, 2), (m, Index("q")))
 
@@ -309,22 +312,24 @@ def test_an_index_outside_the_schedule_has_no_extent_or_factor() -> None:
 
 
 def _beats_where(schedule: Schedule, keep: Callable[[dict[Index, int]], bool]) -> tuple[int, ...]:
-    """The schedule beats, numbered in order, at which ``keep`` holds: an enumeration."""
+    """The iterations, numbered in order, at which ``keep`` holds: an enumeration."""
     order = schedule.order
-    steps = [range(schedule.steps(index)) for index in order]
+    values_by_index = [range(schedule.fold(index)) for index in order]
     return tuple(
-        beat for beat, values in enumerate(product(*steps)) if keep(dict(zip(order, values)))
+        beat
+        for beat, values in enumerate(product(*values_by_index))
+        if keep(dict(zip(order, values)))
     )
 
 
 def test_a_port_reading_every_beat_is_presented_each_beat() -> None:
     schedule = gemm(2, 8, 12, pe=2, simd=3)
-    assert schedule.beat_times() == tuple(range(schedule.beat_count))
+    assert schedule.beat_times() == tuple(range(schedule.iterations))
 
 
 def test_an_output_closing_a_reduction_is_presented_on_its_last_step() -> None:
     schedule = gemm(2, 8, 12, pe=2, simd=3)
-    last = schedule.steps(k) - 1
+    last = schedule.fold(k) - 1
     assert schedule.beat_times(reduces=(k,)) == _beats_where(schedule, lambda at: at[k] == last)
     assert schedule.beat_times(reduces=(k,))[:3] == (3, 7, 11)
 
@@ -352,4 +357,4 @@ def test_a_pace_is_a_ports_beat_times_and_its_kernels_span() -> None:
     schedule = gemm(2, 8, 12, pe=2, simd=3)
     pace = Pace(schedule, reduces=(k,))
     assert pace.times == schedule.beat_times(reduces=(k,))
-    assert pace.span == schedule.beat_count == 32
+    assert pace.span == schedule.iterations == 32

@@ -222,7 +222,7 @@ def measure_partition(
                 name=node.name,
                 op=node.op_type,
                 folding=folding(node, schedule),
-                beats=schedule.beat_count,
+                beats=schedule.iterations,
                 finn=finn_cycles(node, schedule),
                 stitched_span=stitched.span(into[index], hops[index])[-1],
                 stitched_busy=stitched.busy(hops[index])[-1],

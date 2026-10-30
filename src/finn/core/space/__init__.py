@@ -12,14 +12,10 @@ from .collection import RESERVED_NAMES
 from .compiler import Model, design_space
 from .declarations import (
     MISSING,
-    Const,
-    Constraint,
     Decision,
-    Derived,
     Members,
     Param,
     Select,
-    View,
     constraint,
     declared_annotation,
     derived,
@@ -38,6 +34,7 @@ from .errors import (
 )
 from .extensions import composite
 from .graph import Located
+from .groups import Group
 from .occurrence import bind
 from .references import DecisionHandle, ValueHandle
 from .results import (
@@ -56,18 +53,15 @@ from .results import (
 __all__ = [
     # Space classes, node declarations and the compile step
     "Space",
+    "Group",
     "design_space",
     "bind",
     "Model",
     "composite",
     "Param",
-    "Const",
     "Decision",
     "Select",
     "required",
-    "Derived",
-    "Constraint",
-    "View",
     # A class's formals and names, as a composer declares Params for them
     "space_formals",
     "declared_annotation",

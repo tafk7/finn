@@ -161,6 +161,7 @@ name = "finn"
 source = { editable = "." }
 dependencies = [
     { name = "clize", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "islpy", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "numpy", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "onnx", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "onnxruntime", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -207,6 +208,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "clize", specifier = ">=5.0.1,<6" },
+    { name = "islpy", specifier = "==2026.2.2" },
     { name = "numpy", specifier = ">=1.26.4,<2" },
     { name = "onnx", specifier = ">=1.22.0,<1.23" },
     { name = "onnxruntime", specifier = ">=1.28.0,<1.29" },
@@ -304,6 +306,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/72/34/14ca021ce8e5dfedc35312d08ba8bf51fdd999c576889fc2c24cb97f4f10/iniconfig-2.3.0.tar.gz", hash = "sha256:c76315c77db068650d49c5b56314774a7804df16fee4402c1f19d6d15d8c4730", size = 20503, upload-time = "2025-10-18T21:55:43.219Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/cb/b1/3846dd7f199d53cb17f49cba7e651e9ce294d8497c8c150530ed11865bb8/iniconfig-2.3.0-py3-none-any.whl", hash = "sha256:f631c04d2c48c52b84d0d0549c99ff3859c98df65b3101406327ecc7d53fbf12", size = 7484, upload-time = "2025-10-18T21:55:41.639Z" },
+]
+
+[[package]]
+name = "islpy"
+version = "2026.2.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/3a/45/ba1605c2e6797b5c6423561cf1d87e8d73724c85dc2fb0cd0ed52c77c68e/islpy-2026.2.2.tar.gz", hash = "sha256:c94383d6ffe725774b4839eb5b259565b828f972e9413a8dad677459a5dc5b5f", size = 1377326, upload-time = "2026-09-10T14:50:26.713Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9a/96/571bae62d7b61252658daa161fed320821c83bfaef28f6e63e405ec095a0/islpy-2026.2.2-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:52830fd2e9e500f790080fc9303dfe21b1481f02eace74e86b4a714e9f0b2fd1", size = 2558006, upload-time = "2026-09-10T14:49:37.448Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/21/a95fae2d11f8807aeb50a72ced96d68938ec4f8ffb60948f8ba2cc2dc1e3/islpy-2026.2.2-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:6d882da4da18abe60e56cd419bba2395c88c020f7b19d521bac156d42f4833d4", size = 3033325, upload-time = "2026-09-10T14:49:41.531Z" },
+    { url = "https://files.pythonhosted.org/packages/08/bd/e074d6af937c92d32b20de14ee7211975e39875896555af302295f91134d/islpy-2026.2.2-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:9c9ba278c1ae2dc4976195630a51303b434f6eccfe86bf94d49a42a43d678751", size = 2557242, upload-time = "2026-09-10T14:49:48.549Z" },
+    { url = "https://files.pythonhosted.org/packages/0a/ac/aaaf1544ba47935a21388c69c591644781cbee6328b77ee2084185adbe38/islpy-2026.2.2-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:501b3746206d251d9ace632a825dd9131dd02a65cac68f36d81592b04ea8e803", size = 3033693, upload-time = "2026-09-10T14:49:52.115Z" },
 ]
 
 [[package]]

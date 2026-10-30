@@ -16,14 +16,12 @@ from finn.core.reporting.manifest import FINDING
 from finn.core.space import (
     Available,
     BoundDecision,
-    Const,
     Decision,
     Inapplicable,
     Param,
     Select,
     Space,
     Unresolved,
-    View,
     composite,
     derived,
     design_space,
@@ -55,7 +53,7 @@ def test_inspection_does_not_run_domains_or_evaluators() -> None:
             calls.append("cost")
             return 12 // lanes
 
-        physical = View(cost)
+        physical = view(cost)
 
     point = design_space(Example())
     model = inspection.model(point)
@@ -74,7 +72,7 @@ def test_inspection_does_not_run_domains_or_evaluators() -> None:
     scores: list[tuple[int, object]] = []
     for value in options.value:
         trial = point.with_choices({handle: value})
-        result = trial.inspect(Example.physical).accepted_result
+        result = trial.inspect(Example.physical).result
         assert isinstance(result, Available)
         scores.append((result.value, value))
     assert min(scores, key=lambda item: item[0]) == (3, 4)
@@ -89,10 +87,10 @@ def test_inspection_does_not_run_domains_or_evaluators() -> None:
 def test_discovery_reports_owning_decisions_and_author_names_for_selectors() -> None:
     class Child(Space):
         supplied: int = Param()
-        local: int = Decision(values=(1, 2))
+        local: int = Decision(domain=(1, 2))
 
     class Root(Space):
-        source: int = Decision(values=(2, 4))
+        source: int = Decision(domain=(2, 4))
         child = Child(supplied=source)
         implementation: Child = Select(a=Child(supplied=1), b=Child(supplied=2))
 
@@ -128,7 +126,7 @@ def test_discovery_reports_owning_decisions_and_author_names_for_selectors() -> 
 
 def test_typed_handles_preserve_types_and_match_repeated_discovery() -> None:
     class Example(Space):
-        lanes: int = Decision(values=(1, 2))
+        lanes: int = Decision(domain=(1, 2))
 
         @view
         def physical(*, lanes: int) -> int:
@@ -187,7 +185,7 @@ def test_foreign_handles_fail_before_callbacks_and_aliases_cannot_be_upgraded() 
 def test_handles_follow_model_identity_across_starts_without_retaining_point_state() -> None:
     class Example(Space):
         source: int = Param()
-        lanes: int = Decision(values=(1, 2))
+        lanes: int = Decision(domain=(1, 2))
 
     model = inspection.model(Example)
     first, second = design_space(Example(source=4)), design_space(Example(source=8))
@@ -203,7 +201,9 @@ def test_singleton_choice_metadata_exposes_an_ordinary_editable_selector() -> No
     # A Decision over nodes is an ordinary Decision, so even one candidate is an
     # owned, editable selector. A None candidate places nothing and has no scope or Space class.
     class Child(Space):
-        value = Const(1)
+        @derived
+        def value(self) -> int:
+            return 1
 
     class Root(Space):
         implementation: Child = Select(only=Child())
@@ -231,8 +231,8 @@ def test_singleton_choice_metadata_exposes_an_ordinary_editable_selector() -> No
 
 def test_statistics_counts_instantiated_members_and_direct_structure() -> None:
     class Leaf(Space):
-        value: int = Decision(values=(1, 2))
-        physical = View(value)
+        value: int = Decision(domain=(1, 2))
+        physical = view(value)
 
     def repeated(count: int) -> inspection.ModelStatistics:
         space_type = composite("Repeated", {f"child{index}": Leaf() for index in range(count)})
@@ -241,8 +241,8 @@ def test_statistics_counts_instantiated_members_and_direct_structure() -> None:
     small, large = repeated(2), repeated(4)
     # Each placement contributes its two effective members and the placement
     # itself, while the root scope is shared. Every scope has a validity node: a leaf's
-    # reads its Decision, the root's each leaf's. A view reads its output and its Space's
-    # validity.
+    # reads its Decision, the root's each leaf's. A view reads its local output and
+    # real owning validity.
     assert small.authored_declarations == 6
     assert small.scopes == 3
     assert small.nodes == 2 * 3 + 1
@@ -264,16 +264,16 @@ class Bare(Space):
 
 
 class Wide(Space):
-    lanes: int = Decision(values=(1, 2))
+    lanes: int = Decision(domain=(1, 2))
 
 
 class Deep(Space):
-    depth: int = Decision(values=(1, 2))
+    depth: int = Decision(domain=(1, 2))
     mode: Wide | Bare = Select(wide=Wide(), bare=Bare())
 
 
 class Top(Space):
-    first: int = Decision(values=(1, 2))
+    first: int = Decision(domain=(1, 2))
     outer: Deep | Bare = Select(deep=Deep(), bare=Bare())
 
 
@@ -292,7 +292,7 @@ def test_an_enclosing_selector_comes_before_the_choices_in_its_cases() -> None:
 
 
 class Source(Space):
-    b: int = Decision(values=(1, 2))
+    b: int = Decision(domain=(1, 2))
 
 
 class Listed(Space):
@@ -302,7 +302,7 @@ class Listed(Space):
     def wide(self) -> bool:
         return self.source.b > 1
 
-    a: int = Decision(values=(1, 2), when=wide)
+    a: int = Decision(domain=(1, 2), when=wide)
 
 
 def test_a_choice_whose_presence_reads_another_choice_comes_after_it() -> None:
@@ -314,7 +314,7 @@ def test_a_choice_whose_presence_reads_another_choice_comes_after_it() -> None:
 
 class Fed(Space):
     u: int = Param()
-    b: int = Decision(values=(1, 2))
+    b: int = Decision(domain=(1, 2))
 
 
 class Looped(Space):
@@ -328,7 +328,7 @@ class Looped(Space):
     def wide(self) -> bool:
         return self.fed.b > 1
 
-    a: int = Decision(values=(1, 2), when=wide)
+    a: int = Decision(domain=(1, 2), when=wide)
 
 
 def test_choices_reading_one_another_are_taken_in_declaration_order_and_noted(
@@ -343,11 +343,11 @@ def test_choices_reading_one_another_are_taken_in_declaration_order_and_noted(
 
 
 class Gated(Space):
-    lanes: int = Decision(values=(1, 2))
+    lanes: int = Decision(domain=(1, 2))
 
 
 class Knob(Space):
-    level: int = Decision(values=(1, 2))
+    level: int = Decision(domain=(1, 2))
 
 
 #: The name a dynamic method reads by: a module global, so its source does not fix it.

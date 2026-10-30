@@ -8,9 +8,9 @@ arithmetic builds the affine expressions a port reads its tensor by
 (``oh * S + kh * D``); a plain index is the expression of coefficient one.
 
 A ``Schedule`` is a kernel's iteration: each index's extent, its folding
-factor (the lanes it spreads over each beat; one when it has none) and the
-order of the beats, outer to inner. An index ``i`` of extent ``E`` and folding
-factor ``F`` walks ``E / F`` beats (its fold, ``steps``), each carrying ``F``
+factor (the lanes it spreads over each iteration; one when it has none) and the
+iteration order, outer to inner. An index ``i`` of extent ``E`` and folding
+factor ``F`` takes ``E / F`` iterations (its fold, ``fold``), each carrying ``F``
 lanes, at the position ``i_beat * F + i_lane``. An index split into several
 temporal parts (a tile) is several indices, joined in the expression a port
 reads by (``mt * T + t``).
@@ -29,17 +29,19 @@ share a schedule agree by construction.
   operand held while they run). Either way the port does not step through
   them, so they must not move its position.
 
-A port may read a *view* of its tensor: another row-major shape of the same
+A port may read a *reshape* of its tensor: another row-major shape of the same
 size, whose flat positions are the tensor's. That is how a dense datapath
 reads a depthwise operand ``(M, K, N)`` as ``(M, K * N)``.
 
-``closing`` is the marker a reduction ends with: the reduced indices must be
-the innermost beats.
+``closing`` is the marker of a reduction's last index value: the reduced indices must be
+one contiguous block of the iteration order. With nothing inside the block it closes on
+the reduction's last beat (``LevelEnd``); with indices inside, it holds across their
+beats (``LevelDone``).
 
-``beat_times`` is the same projection told as times: the schedule beat at which
-each of a port's beats is presented, a reduced index's on its last step and a
+``beat_times`` is the same projection told as times: the iteration at which
+each of a port's beats is presented, a reduced index's on its last index value and a
 held one's on its first. A ``Pace`` is a port's schedule with its ``reduces`` and
-``holds``: its beat times and its kernel's beats a frame, which the ports on a
+``holds``: its beat times and its kernel's iterations a frame, which the ports on a
 channel state with their contracts so that a FIFO between them can be sized.
 
 ``bind_extents`` gives the indices their extents from the tensors the ports
@@ -52,14 +54,19 @@ axis and never writes an extent getter:
   ``oh * S + kh``) binds nothing: its indices take their extents from another
   axis or from the author (``extents``), and it is checked to stay inside the
   axis.
-- A reshaped access binds nothing (its view's extents are its indices'), and
-  is checked: its indices bound elsewhere, its view the tensor's size.
+- A reshaped access binds nothing (its reshape's extents are its indices'), and
+  is checked: its indices bound elsewhere, its reshape the tensor's size.
 - An index nothing binds and the author does not give is refused.
 
 An index bound from an axis walks exactly that axis, so a port whose axes are
-all bound (or read through a checked view) presents every position of its
+all bound (or read through a checked reshape) presents every position of its
 tensor: a tensor wider than its kernel's other ports disagrees on an index and
 is refused, not silently left partly unread.
+
+Over the bound extents, ``schedule_over`` builds a kernel's schedule (its order and
+folding factors) and ``span`` the shape an output's expressions span: a kernel
+states its extents, its schedule and its outputs' shapes by these three, from its
+ports' accesses, and holds none of their computation itself.
 """
 
 from __future__ import annotations
@@ -69,7 +76,15 @@ from dataclasses import dataclass
 from math import prod
 
 from finn.core.reporting.findings import Finding, FindingKind, Refusal
-from finn.dataflow.traversal import LevelEnd, Loop, Traversal, axis_strides, require_positive
+from finn.dataflow.traversal import (
+    LevelDone,
+    LevelEnd,
+    Loop,
+    Traversal,
+    axis_strides,
+    level_done,
+    require_positive,
+)
 
 
 class Refused(Refusal):
@@ -154,7 +169,7 @@ class Affine:
 
 @dataclass(frozen=True, init=False)
 class Schedule:
-    """Each index's extent and folding factor, and the beat order, outer to inner."""
+    """Each index's extent and folding factor, and the iteration order, outer to inner."""
 
     extents: tuple[tuple[Index, int], ...]
     factors: tuple[tuple[Index, int], ...]
@@ -167,7 +182,9 @@ class Schedule:
     ) -> None:
         order = tuple(extents) if order is None else tuple(order)
         if sorted(order) != sorted(extents) or len(set(order)) != len(order):
-            raise ValueError(f"the beat order {list(order)} names each index {list(extents)} once")
+            raise ValueError(
+                f"the iteration order {list(order)} names each index {list(extents)} once"
+            )
         given = dict(factors or {})
         for index in given:
             if index not in extents:
@@ -187,7 +204,7 @@ class Schedule:
 
     @property
     def order(self) -> tuple[Index, ...]:
-        """The beat order: the indices, outer to inner."""
+        """The iteration order: the indices, outer to inner."""
         return tuple(index for index, _ in self.extents)
 
     def _known(self, *indices: Index) -> None:
@@ -205,19 +222,20 @@ class Schedule:
         return dict(self.extents)[index]
 
     def factor(self, index: Index) -> int:
-        """The lanes ``index`` spreads over each beat, its folding factor; one when it has none.
+        """The lanes ``index`` spreads over each iteration, its folding factor; one when it has
+        none.
 
         ``Refused`` when ``index`` is not an index of the schedule."""
         self._known(index)
         return dict(self.factors).get(index, 1)
 
-    def steps(self, index: Index) -> int:
-        """The beats ``index`` walks, its fold: its extent over its folding factor."""
+    def fold(self, index: Index) -> int:
+        """The iterations ``index`` takes, its fold: its extent over its folding factor."""
         return self.extent(index) // self.factor(index)
 
     @property
-    def beat_count(self) -> int:
-        return prod(self.steps(index) for index in self.order)
+    def iterations(self) -> int:
+        return prod(self.fold(index) for index in self.order)
 
     def present(
         self,
@@ -227,32 +245,32 @@ class Schedule:
         lanes: Sequence[Index] = (),
         reduces: Sequence[Index] = (),
         holds: Sequence[Index] = (),
-        view: Sequence[int] | None = None,
+        reshape: Sequence[int] | None = None,
     ) -> Traversal:
         """The traversal a port reading ``shape`` at ``index`` presents.
 
-        ``index`` gives each axis of ``view`` (``shape`` itself by default) as
+        ``index`` gives each axis of ``reshape`` (``shape`` itself by default) as
         an expression over this schedule's indices.
         """
         shape = tuple(shape)
-        viewed = shape if view is None else tuple(view)
-        for extent in (*shape, *viewed):
+        reshaped = shape if reshape is None else tuple(reshape)
+        for extent in (*shape, *reshaped):
             require_positive(extent, "tensor extent")
-        if prod(viewed) != prod(shape):
+        if prod(reshaped) != prod(shape):
             raise Refused(
-                "view-size-mismatch",
+                "reshape-size-mismatch",
                 "Schedule.present",
-                f"a {shape} tensor cannot be viewed as {viewed}",
+                f"a {shape} tensor cannot be reshaped to {reshaped}",
             )
         axes = tuple(Affine.of(axis) for axis in index)
-        if len(axes) != len(viewed):
+        if len(axes) != len(reshaped):
             raise Refused(
                 "rank-mismatch",
                 "Schedule.present",
-                f"{len(axes)} expressions for a rank-{len(viewed)} tensor",
+                f"{len(axes)} expressions for a rank-{len(reshaped)} tensor",
             )
         self._known(*(used for axis in axes for used in axis.indices), *lanes, *reduces, *holds)
-        strides = axis_strides(viewed)
+        strides = axis_strides(reshaped)
 
         def stride(i: Index) -> int:
             return sum(axis.coefficient(i) * strides[j] for j, axis in enumerate(axes))
@@ -274,7 +292,7 @@ class Schedule:
                     f"{i!r} moves the position, so it cannot be {word} away",
                 )
         beats = [
-            Loop(self.steps(i), self.factor(i) * stride(i)) for i in self.order if i not in dropped
+            Loop(self.fold(i), self.factor(i) * stride(i)) for i in self.order if i not in dropped
         ]
         lane_loops = [Loop(self.factor(i), stride(i)) for i in lanes]
         try:
@@ -285,14 +303,14 @@ class Schedule:
     def beat_times(
         self, *, reduces: Sequence[Index] = (), holds: Sequence[Index] = ()
     ) -> tuple[int, ...]:
-        """The schedule beat at which each beat of a port is presented, in its order.
+        """The iteration at which each beat of a port is presented, in its order.
 
         The port is ``present``'s with the same ``reduces`` and ``holds``: it steps
-        through every other index, one beat each schedule beat that reads it. A
-        reduced index's beat is presented on its last step (when the reduction
+        through every other index, one beat each iteration that reads it. A
+        reduced index's beat is presented on its last index value (when the reduction
         closes), a held one's on its first (before the run). A port reading every
-        beat is ``0, 1, …, beat_count - 1``; an output closing a reduction of ``s``
-        steps innermost is ``s - 1, 2s - 1, …``. Times count schedule beats from the
+        beat is ``0, 1, …, iterations - 1``; an output closing a reduction of ``s``
+        index values innermost is ``s - 1, 2s - 1, …``. Times count iterations from the
         frame's first: one a clock cycle when the kernel runs at its rate,
         before its pipeline's constant latency.
         """
@@ -301,30 +319,57 @@ class Schedule:
             raise Refused(
                 "reduced-and-held", "Schedule.beat_times", "an index is reduced or held, not both"
             )
-        # Each index's weight in the beat count: the beats of every index inside it.
+        # Each index's weight in the iteration count: the folds of every index inside it.
         weight: dict[Index, int] = {}
         inner = 1
         for index in reversed(self.order):
-            weight[index], inner = inner, inner * self.steps(index)
-        times = [sum((self.steps(index) - 1) * weight[index] for index in reduces)]
+            weight[index], inner = inner, inner * self.fold(index)
+        times = [sum((self.fold(index) - 1) * weight[index] for index in reduces)]
         for index in self.order:
             if index in reduces or index in holds:
                 continue
-            step = weight[index]
-            times = [time + beat * step for time in times for beat in range(self.steps(index))]
+            stride = weight[index]
+            times = [time + value * stride for time in times for value in range(self.fold(index))]
         return tuple(times)
 
-    def closing(self, reduces: Sequence[Index]) -> LevelEnd:
-        """The marker ending each reduction: the reduced indices must be the innermost beats."""
+    def closing(self, reduces: Sequence[Index]) -> LevelEnd | LevelDone:
+        """The marker of each reduction's last index value, in iterations: asserted exactly on
+        the iterations where every reduced index is at its last index value.
+
+        The reduced indices must be one contiguous block of the iteration order, each named
+        once. The indices inside the block (after it in the order) are spanned: the
+        marker holds across their beats, the ``inner``, the product of their folds; its
+        ``beats`` is the inner times the block's folds (``level_done``). With nothing
+        inside the block inner is one beat and the marker is ``LevelEnd(beats)``, the
+        reduction closing on its last beat.
+
+        ``Refused`` (``reduction-not-innermost``) where nothing is reduced, an index is
+        named twice or is not the schedule's, or an index that is not reduced lies between
+        two reduced ones.
+
+        The positions inside the block are one partial result each: the reduction holds
+        that many accumulators. That is the kernel's fact, not the marker's.
+        """
         order = self.order
-        suffix = order[len(order) - len(reduces) :] if reduces else ()
-        if not reduces or sorted(suffix) != sorted(reduces):
+        reduced = tuple(reduces)
+        if not reduced or len(set(reduced)) != len(reduced) or not set(reduced) <= set(order):
             raise Refused(
                 "reduction-not-innermost",
                 "Schedule.closing",
                 f"the reduced {list(reduces)} are not the innermost of {list(order)}",
             )
-        return LevelEnd(prod(self.steps(index) for index in reduces))
+        places = sorted(order.index(index) for index in reduced)
+        first, last = places[0], places[-1]
+        between = [index for index in order[first : last + 1] if index not in reduced]
+        if between:
+            raise Refused(
+                "reduction-not-innermost",
+                "Schedule.closing",
+                f"the reduced {list(reduces)} are not one block of {list(order)}: "
+                f"{between} lie between them",
+            )
+        inner = prod(self.fold(index) for index in order[last + 1 :])
+        return level_done(inner * prod(self.fold(index) for index in reduced), inner)
 
 
 @dataclass(frozen=True)
@@ -332,8 +377,8 @@ class Pace:
     """When a port presents its beats: its kernel's ``schedule`` and the indices the
     port is presented after (``reduces``) or before (``holds``), as it presents them.
 
-    ``times`` is each beat's schedule beat (``Schedule.beat_times``), ``span`` the
-    beats its kernel takes a frame: a port's beats lie within its span, and the rest
+    ``times`` is each beat's iteration (``Schedule.beat_times``), ``span`` the
+    iterations its kernel takes a frame: a port's beats lie within its span, and the rest
     of a period is its kernel's idle time.
     """
 
@@ -347,7 +392,7 @@ class Pace:
 
     @property
     def span(self) -> int:
-        return self.schedule.beat_count
+        return self.schedule.iterations
 
 
 @dataclass(frozen=True)
@@ -355,8 +400,8 @@ class Access:
     """One port's read of a tensor: its ``shape`` and the expression of each axis.
 
     ``name`` names the port in refusals. A ``reshaped`` access reads a
-    row-major view of ``shape`` whose axes are ``index``, each as long as its
-    index's extent (``Schedule.present``'s ``view``).
+    row-major reshape of ``shape`` whose axes are ``index``, each as long as its
+    index's extent (``Schedule.present``'s ``reshape``).
     """
 
     name: str
@@ -393,7 +438,7 @@ def bind_extents(
 
     Raises ``Refused`` naming the access and axis: a rank mismatch, an index
     given two extents, an index without one, a windowed axis reaching past its
-    extent, or a view of another size.
+    extent, or a reshape of another size.
     """
     bound: dict[Index, int] = {}
     origin: dict[Index, str] = {}
@@ -421,7 +466,7 @@ def bind_extents(
                 "bind_extents",
                 f"{access.name}: {len(access.index)} indices for a rank-{len(access.shape)} tensor",
             )
-    # Binding: every plain axis of every access that is not a view.
+    # Binding: every plain axis of every access that is not a reshape.
     for access in accesses:
         if access.reshaped:
             continue
@@ -450,12 +495,12 @@ def bind_extents(
                         "(no axis addresses it alone and none is given)",
                     )
         if access.reshaped:
-            view = tuple(bound[Affine.of(axis).indices[0]] for axis in access.index)
-            if prod(view) != prod(access.shape):
+            reshape = tuple(bound[Affine.of(axis).indices[0]] for axis in access.index)
+            if prod(reshape) != prod(access.shape):
                 raise Refused(
-                    "view-size-mismatch",
+                    "reshape-size-mismatch",
                     "bind_extents",
-                    f"{access.name}: a {access.shape} tensor cannot be viewed as {view}",
+                    f"{access.name}: a {access.shape} tensor cannot be reshaped to {reshape}",
                 )
             continue
         for axis, (extent, expression) in enumerate(zip(access.shape, access.index)):
@@ -472,6 +517,45 @@ def bind_extents(
     return bound
 
 
+def schedule_over(
+    extents: Mapping[Index, int],
+    order: Sequence[Index],
+    factors: Mapping[Index, int] | None = None,
+) -> Schedule:
+    """The schedule in ``order`` (outer to inner) over the bound ``extents``
+    (``bind_extents``), with folding ``factors``.
+
+    Raises ``Refused``: ``extent-unbound`` where an index of ``order`` has no extent,
+    ``schedule-invalid`` where ``Schedule`` refuses the order or a factor (an index named
+    twice, a factor that does not divide its extent), with its message.
+    """
+    missing = [index for index in order if index not in extents]
+    if missing:
+        raise Refused("extent-unbound", "schedule_over", f"{missing} are bound by no placed port")
+    try:
+        return Schedule({index: extents[index] for index in order}, factors, order)
+    except ValueError as error:
+        raise Refused("schedule-invalid", "schedule_over", str(error)) from error
+
+
+def span(index: Sequence[Index | Affine], extents: Mapping[Index, int]) -> tuple[int, ...]:
+    """The shape ``index`` spans over the bound ``extents``: an axis read at ``i`` spans
+    ``i``'s extent, one at ``oh * OW + ow`` the reach of its terms, plus one. How a kernel
+    states an output's shape, from the extents its inputs bind.
+
+    Raises ``Refused`` (``extent-unbound``) at the first axis with an index that has no
+    extent.
+    """
+    shape: list[int] = []
+    for axis in index:
+        terms = Affine.of(axis).terms
+        missing = [i for i, _ in terms if i not in extents]
+        if missing:
+            raise Refused("extent-unbound", "span", f"{missing} are bound by no placed port")
+        shape.append(1 + sum(c * (extents[i] - 1) for i, c in terms))
+    return tuple(shape)
+
+
 __all__ = [
     "Access",
     "Affine",
@@ -481,4 +565,6 @@ __all__ = [
     "Schedule",
     "bind_extents",
     "plain_index",
+    "schedule_over",
+    "span",
 ]

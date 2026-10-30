@@ -17,10 +17,19 @@ import pytest
 from support.conformance import KERNEL, unchosen
 from support.kernel_specs.stages import STAGED, vpc
 
-from finn.core.space import design_space
+from finn.core.space import Rejected, design_space
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.dataflow.traversal import BeatSequence, vector_major
+from finn.dataflow.traversal import (
+    BeatSequence,
+    Grouped,
+    LevelEnd,
+    Loop,
+    Repetition,
+    Traversal,
+    regrouped,
+    vector_major,
+)
 from finn.harness.points import rejected
 from finn.kernels.artifacts.abi import Signal
 from finn.kernels.artifacts.contributions import CopiedSource
@@ -90,7 +99,7 @@ def test_it_presents_the_same_elements_in_the_same_order_at_another_lane_count(
     realizes: the tensor row-major, ``lanes_in`` elements a beat in and ``lanes_out`` out."""
     kernel = _staged(conversion)
     lanes_in, lanes_out = conversion["lanes_in"], conversion["lanes_out"]
-    arriving, leaving = kernel.input_stream.sequence.form, kernel.output_stream.sequence.form
+    arriving, leaving = kernel.input.stream.sequence.form, kernel.output.stream.sequence.form
     assert arriving == vector_major(STAGED, lanes_in)
     assert leaving == vector_major(STAGED, lanes_out)
 
@@ -100,3 +109,83 @@ def test_it_presents_the_same_elements_in_the_same_order_at_another_lane_count(
     assert elements(arriving) == elements(leaving)
     parameters = dict(library_module(kernel).parameters)
     assert (parameters["PI"], parameters["PO"]) == (lanes_in, lanes_out)
+
+
+ROWS = (4, 6)
+"""The tensor of most pairs below, row-major at 2, 3 and 6 lanes."""
+COLUMNS = Grouped((6, 2), (Loop(2, 1), Loop(6, 2)), 4)
+"""A 6 x 2 tensor column-major, 4 lanes cutting its columns of 6: a lane group."""
+
+
+def _pair(arriving: BeatSequence, leaving: BeatSequence, shape: tuple[int, ...] = ROWS) -> Any:
+    tensor = Tensor(shape, ScalarEncoding(resolve_qonnx_datatype_name("INT4")))
+    return design_space(VpcKernel(input_tensor=tensor, arriving=arriving, leaving=leaving))
+
+
+@pytest.mark.parametrize(
+    ("arriving", "leaving", "shape"),
+    [
+        # Codex's ``vpc_reorder``: one lane each side, a 2 x 2 tensor transposed.
+        (
+            BeatSequence(vector_major((2, 2), 1)),
+            BeatSequence(Traversal((2, 2), (Loop(2, 1), Loop(2, 2)), ())),
+            (2, 2),
+        ),
+        # The same positions in each beat, in another lane order.
+        (
+            BeatSequence(vector_major(ROWS, 6)),
+            BeatSequence(Traversal(ROWS, (Loop(4, 6),), (Loop(2, 1), Loop(3, 2)))),
+            ROWS,
+        ),
+        # A lane group of another order (its port refuses a lane group too).
+        (
+            BeatSequence(COLUMNS),
+            BeatSequence(vector_major((6, 2), 2)),
+            (6, 2),
+        ),
+        (
+            BeatSequence(vector_major(ROWS, 2), Repetition.CYCLIC),
+            BeatSequence(vector_major(ROWS, 3)),
+            ROWS,
+        ),
+        (
+            BeatSequence(vector_major(ROWS, 2)),
+            BeatSequence(vector_major(ROWS, 2), markers=(LevelEnd(3),)),
+            ROWS,
+        ),
+    ],
+    ids=["reorder", "lane_permutation", "lane_group_reordered", "repetition", "marker"],
+)
+def test_it_refuses_two_sides_that_differ_by_more_than_their_width(
+    arriving: BeatSequence, leaving: BeatSequence, shape: tuple[int, ...]
+) -> None:
+    """Its association (``width_only``): what leaves is what arrives at another lane count,
+    the same element order, repetition and markers. Its RTL regroups lanes and does nothing
+    else (the wire branch, at one lane count, passes each beat through), so any other pair
+    is refused, and with it its parameters and netlist."""
+    kernel = _pair(arriving, leaving, shape)
+    assert rejected(kernel) == {"vpc-width-only"}
+    netlist = kernel.query(VpcKernel.netlist)
+    assert isinstance(netlist, Rejected)
+    assert [f.code for f in netlist.findings] == ["vpc-width-only"]
+
+
+@pytest.mark.parametrize(
+    ("arriving", "leaving", "shape"),
+    [
+        (BeatSequence(vector_major(ROWS, 2)), BeatSequence(vector_major(ROWS, 2)), ROWS),
+        (
+            BeatSequence(vector_major(ROWS, 2), Repetition.CYCLIC),
+            BeatSequence(vector_major(ROWS, 3), Repetition.CYCLIC),
+            ROWS,
+        ),
+        (BeatSequence(COLUMNS), BeatSequence(regrouped(COLUMNS, 2)), (6, 2)),
+    ],
+    ids=["same_sequence", "cyclic", "lane_group_in_order"],
+)
+def test_it_admits_one_sequence_at_two_lane_counts(
+    arriving: BeatSequence, leaving: BeatSequence, shape: tuple[int, ...]
+) -> None:
+    """The same sequence, a cyclic one at another lane count, and a lane group's order at
+    lanes that close its loops: each one sequence at two lane counts."""
+    assert not rejected(_pair(arriving, leaving, shape))

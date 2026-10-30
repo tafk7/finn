@@ -30,7 +30,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, TypeVar, cast, overload
 
-from ._configuration import BoundDecision, BoundValue, Space
+from ._configuration import BoundDecision, BoundValue, Space, _Namespace
 from ._failure import check_transformation, current, driver_only, fault
 from ._running.receiver import MethodReader
 from .compiler import Model
@@ -65,13 +65,13 @@ A = TypeVar("A")
 # -- what a Space object holds ------------------------------------------------------------
 
 
-def _reader(point: Space) -> MethodReader | None:
+def _reader(point: _Namespace) -> MethodReader | None:
     """The method reader ``point`` reads through, where it is a method's receiver."""
     found = vars(point).get("_held")
     return found if isinstance(found, MethodReader) else None
 
 
-def held(point: Space) -> At:
+def held(point: _Namespace) -> At:
     """The design space value ``point`` holds, read at its scope."""
     from ._running.surface import At
 
@@ -86,7 +86,7 @@ def held(point: Space) -> At:
     return found
 
 
-def _driver(point: Space) -> At:
+def _driver(point: _Namespace) -> At:
     """The design space ``point`` holds, for a read: refused in a value transformation,
     and inside an authored call (it reads through its receiver), sticky there."""
     found = held(point)
@@ -99,7 +99,7 @@ def _driver(point: Space) -> At:
     return found
 
 
-def model_of(point: Space) -> Model[Space]:
+def model_of(point: _Namespace) -> Model[Space]:
     """The compiled model a design space or a receiver reads."""
     reader = _reader(point)
     if reader is not None:
@@ -107,7 +107,7 @@ def model_of(point: Space) -> Model[Space]:
     return held(point).ds.model
 
 
-def place(at: At) -> Space:
+def place(at: At) -> _Namespace:
     """The Space object of ``at``: its scope's Space class, holding the design space read
     at that scope."""
     space_type = at.scope.space_type
@@ -148,7 +148,7 @@ def opened(model: Model[S], parameters: Mapping[Address, object]) -> S:
 # -- reading a design space -----------------------------------------------------------------
 
 
-def query(point: Space, reference: object) -> QueryResult[object]:
+def query(point: _Namespace, reference: object) -> QueryResult[object]:
     """A member's answer, or a node's Space object where the node is present."""
     from ._running import surface
 
@@ -157,7 +157,7 @@ def query(point: Space, reference: object) -> QueryResult[object]:
     return _placed(ask(at.ds.model, lambda session: surface.query(at, reference, session)))
 
 
-def present(point: Space, node: object) -> bool:
+def present(point: _Namespace, node: object) -> bool:
     """Whether a node is present, read like a value (undecided presence raises); a value
     input is no node (it is known: test it with ``is not None``)."""
     from ._running import surface
@@ -169,7 +169,7 @@ def present(point: Space, node: object) -> bool:
     return ask(at.ds.model, lambda session: surface.present(at, node, session))
 
 
-def read_value(point: Space, reference: ValueRef[T] | View[T]) -> T:
+def read_value(point: _Namespace, reference: ValueRef[T] | View[T]) -> T:
     """A member read as a value: the design space's, or, on a receiver, the method's read
     (recorded and checked)."""
     from ._running import surface
@@ -182,15 +182,15 @@ def read_value(point: Space, reference: ValueRef[T] | View[T]) -> T:
 
 
 @overload
-def inspect(point: Space, reference: View[T]) -> ViewAssessment[T]: ...
+def inspect(point: _Namespace, reference: View[T]) -> ViewAssessment[T]: ...
 
 
 @overload
-def inspect(point: Space, reference: Constraint) -> ConstraintAssessment: ...
+def inspect(point: _Namespace, reference: Constraint) -> ConstraintAssessment: ...
 
 
 def inspect(
-    point: Space,
+    point: _Namespace,
     reference: View[T] | Constraint,
 ) -> ViewAssessment[T] | ConstraintAssessment:
     from ._running import surface
@@ -201,7 +201,7 @@ def inspect(
     return cast(ViewAssessment[T] | ConstraintAssessment, found)
 
 
-def decision_state(point: Space, reference: object) -> QueryResult[DecisionState[object]]:
+def decision_state(point: _Namespace, reference: object) -> QueryResult[DecisionState[object]]:
     from ._running import surface
 
     driver_only("decision state")
@@ -209,11 +209,11 @@ def decision_state(point: Space, reference: object) -> QueryResult[DecisionState
     return ask(at.ds.model, lambda session: surface.decision_state(at, reference, session))
 
 
-def decision_index(point: Space, reference: object) -> Address:
+def decision_index(point: _Namespace, reference: object) -> Address:
     return held(point).ds.model.decision(point._scope, reference)
 
 
-def candidates(point: Space, reference: object) -> QueryResult[tuple[object, ...]] | None:
+def candidates(point: _Namespace, reference: object) -> QueryResult[tuple[object, ...]] | None:
     """A choice's listed values (its domain's enumeration, each value its membership
     accepts), in their listed order (None: known by membership only), under its guard."""
     from ._running import surface
@@ -223,7 +223,9 @@ def candidates(point: Space, reference: object) -> QueryResult[tuple[object, ...
     return ask(at.ds.model, lambda session: surface.candidates(at, reference, session))
 
 
-def bind_field(point: Space, reference: ValueRef[T] | View[T]) -> BoundValue[T] | BoundDecision[T]:
+def bind_field(
+    point: _Namespace, reference: ValueRef[T] | View[T]
+) -> BoundValue[T] | BoundDecision[T]:
     """A decision accessor for a Decision, a value accessor for anything else read as a value.
 
     A view binds as a value accessor: ``get()`` is its accepted value and
@@ -244,17 +246,17 @@ def bind_field(point: Space, reference: ValueRef[T] | View[T]) -> BoundValue[T] 
     return BoundDecision(point, reference)
 
 
-def root(point: Space) -> Space:
+def root(point: _Namespace) -> Space:
     from ._running import surface
 
     reader = _reader(point)
     if reader is not None:  # a method reads through the evaluation it runs in
-        return reader.root(point)
+        return cast(Space, reader.root(point))
     at = _driver(point)
-    return point if point._scope.parent is None else place(surface.root(at))
+    return cast(Space, point if point._scope.parent is None else place(surface.root(at)))
 
 
-def child(point: Space, record: Declaration) -> Space:
+def child(point: _Namespace, record: Declaration) -> _Namespace:
     """A child node's Space object (on a receiver, the child's receiver)."""
     from ._running import surface
 
@@ -265,34 +267,34 @@ def child(point: Space, record: Declaration) -> Space:
     return place(surface.child(at, getattr(record, "instance", record)))
 
 
-def selected_candidate(point: Space, decision: Declaration) -> Space | None:
+def selected_candidate(point: _Namespace, decision: Declaration) -> Space | None:
     """The Space object of the candidate a Decision over nodes selects, or None."""
     from ._running import surface
 
     reader = _reader(point)
     if reader is not None:  # a method reads through the evaluation it runs in
-        return reader.selected_candidate(point, decision)
+        return cast(Space | None, reader.selected_candidate(point, decision))
     at = _driver(point)
     found = ask(at.ds.model, lambda session: surface.selected_candidate(at, decision, session))
-    return None if found is None else place(found)
+    return None if found is None else cast(Space, place(found))
 
 
-def candidate(point: Space, decision: object, case: str) -> Space | None:
+def candidate(point: _Namespace, decision: object, case: str) -> Space | None:
     """A candidate's Space object whether or not it is selected (None for a None case)."""
     from ._running import surface
 
     reader = _reader(point)
     if reader is not None:  # a method reads through the evaluation it runs in
-        return reader.candidate(point, decision, case)
+        return cast(Space | None, reader.candidate(point, decision, case))
     at = _driver(point)
     found = surface.candidate(at, decision, case)
-    return None if found is None else place(found)
+    return None if found is None else cast(Space, place(found))
 
 
 # -- changes ----------------------------------------------------------------------------------
 
 
-def change(point: Space, reference: object, value: T) -> Change[T]:
+def change(point: _Namespace, reference: object, value: T) -> Change[T]:
     """A bound accessor's change: ``reference``'s Decision set to ``value``, on the design
     space ``point`` holds (``Change.base``)."""
     from ._running import requests
@@ -301,7 +303,7 @@ def change(point: Space, reference: object, value: T) -> Change[T]:
     return requests.change(held(point), reference, value)
 
 
-def clear(point: Space, reference: object) -> Change[object]:
+def clear(point: _Namespace, reference: object) -> Change[object]:
     """A bound accessor's clear of ``reference``'s Decision, on the design space ``point``
     holds."""
     from ._running import requests

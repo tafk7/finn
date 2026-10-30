@@ -37,13 +37,15 @@ from finn.core.space import (
     inspection,
     reject,
 )
+from finn.core.space.declarations import MemberRef
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.thresholding import Thresholding
 from finn.dataflow.traversal import LevelEnd
-from finn.kernels.base import KernelSpace
+from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel, ChannelFifo, open_boundary_refusal
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.policies import FirstValid, Fixed, Required, stated
+from finn.kernels.port import port_side
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.transformation.kernels import (
@@ -123,7 +125,7 @@ def test_an_integer_matmul_and_multithreshold_convert() -> None:
 
 #: Each core's ports' rules on float operands: the element their hardware takes.
 FLOAT_PORTS = [
-    (f"compute.{core}.{port}_element_taken", "dtype-family")
+    (f"compute.{core}.{port}.element_taken", "dtype-family")
     for core in ("int8_dsp58", "packed")
     for port in ("w", "x")
 ]
@@ -271,9 +273,7 @@ class MarkedThresholding(Thresholding):
 
     op_type = "MarkedThresholding"
 
-    def streamed(
-        self, point: KernelSpace
-    ) -> tuple[tuple[str, Side | tuple[Finding, ...], bool], ...]:
+    def streamed(self, point: Kernel) -> tuple[tuple[str, Side | tuple[Finding, ...], bool], ...]:
         found = []
         for tensor, side, output in super().streamed(point):
             if not output and isinstance(side, Side) and side.stream is not None:
@@ -387,46 +387,52 @@ def test_a_stream_whose_side_waits_keeps_the_node_on_the_host_with_the_side_s_fi
     }
 
 
-class Answers:
-    """A stand-in for a kernel's point: each ``<p>_side`` answers as given."""
-
-    input_side = "input_side"
-    output_side = "output_side"
-
-    def __init__(self, answers: dict[str, QueryResult[Side]]) -> None:
-        self.answers = answers
-
-    def query(self, key: str) -> QueryResult[Side]:
-        return self.answers[key]
-
-
-def test_only_a_port_that_is_not_placed_is_skipped_by_the_stream_check() -> None:
+def test_only_a_port_that_is_not_placed_is_skipped_by_the_stream_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """``KernelOp.streamed`` skips a port whose side is ``Inapplicable`` (the point does not
     place it); a side that is ``Unresolved`` or ``Rejected`` is given as its findings, which
     refuse the check; an ``Available`` one as the side, labelled below the node's name."""
     converted, _ = convert(multithreshold())
     op = kernel_op(converted, converted.graph.node[0])
     point = op.point()
-    known = point.query(cast(Any, type(point)).input_side)
-    assert isinstance(known, Available)
+    known = point.query(cast(Any, port_side(type(point), "input")))
+    assert isinstance(known, Available) and isinstance(known.value, Side)
     waits = Unresolved(reject("decision-unassigned", "pe is open", owner="pe").findings)
     refused = reject("channel-form", "no form", owner="x")
+    original_query = type(point).query
 
     def streamed(**answers: QueryResult[Side]) -> Any:
-        return op.streamed(cast(KernelSpace, Answers(answers)))
+        # Keep the actual kernel and native Port references; intercept only the two
+        # sides under test, delegating every other query to the real implementation.
+        observed: list[str] = []
 
-    assert streamed(input_side=Inapplicable(), output_side=known) == (
-        ("y", known.value.under("mt"), True),
-    )
-    assert streamed(input_side=known, output_side=Inapplicable()) == (
-        ("x", known.value.under("mt"), False),
-    )
-    assert streamed(input_side=Inapplicable(), output_side=Inapplicable()) == ()
-    assert streamed(input_side=waits, output_side=known) == (
+        def answer(receiver: Kernel, request: Any) -> QueryResult[Any]:
+            if (
+                receiver is point
+                and isinstance(request, MemberRef)
+                and request.member.name == "side"
+            ):
+                for port, value in answers.items():
+                    if [node.name for node in request.path] == [port]:
+                        observed.append(port)
+                        return value
+            return original_query(receiver, request)
+
+        with monkeypatch.context() as control:
+            control.setattr(type(point), "query", answer)
+            result = op.streamed(point)
+        assert observed == ["input", "output"]
+        return result
+
+    assert streamed(input=Inapplicable(), output=known) == (("y", known.value.under("mt"), True),)
+    assert streamed(input=known, output=Inapplicable()) == (("x", known.value.under("mt"), False),)
+    assert streamed(input=Inapplicable(), output=Inapplicable()) == ()
+    assert streamed(input=waits, output=known) == (
         ("x", waits.findings, False),
         ("y", known.value.under("mt"), True),
     )
-    assert streamed(input_side=known, output_side=refused) == (
+    assert streamed(input=known, output=refused) == (
         ("x", known.value.under("mt"), False),
         ("y", refused.findings, True),
     )

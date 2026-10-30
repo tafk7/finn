@@ -89,16 +89,20 @@ from finn.core.space.occurrence import held
 from finn.core.space.semantics import OptionalSemantics, ValueSemantics, default_semantics
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.gemm import Form, Window
+from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.steps import Hop, Step, Steps
 from finn.dataflow.streams import Stream
-from finn.dataflow.traversal import Repetition
+from finn.dataflow.traversal import LevelEnd, Repetition
 from finn.kernels import composer
-from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.channels import boundary_contract
+from finn.kernels.artifacts.abi import Clocking, Endpoint
+from finn.kernels.channels import boundary_pins
+from finn.kernels.laws import NATIVE, Axis, AxisSpelling, Native
 from finn.kernels.matmul import KnownWeights
 from finn.kernels.movers import MoverOffer, iodma_hls
+from finn.kernels.port import LoopEnds
 from finn.kernels.sides import Side, SideKind
 from finn.kernels.transport import MarkerKind
+from finn.kernels.values.domains import Integer
 from finn.kernels.values.semantics import (
     IntegerTensorValue,
     integer_bytes,
@@ -119,6 +123,16 @@ class Verdict:
 
 
 VERDICTS: dict[str, Verdict] = {
+    "Schedule": Verdict("always", "a frozen value class of index names, extents and factors"),
+    "Axis | Native": Verdict(
+        "always",
+        "a port's transport kind: a value class of an optional string and an enum member, "
+        "keyed by type and name (Axis), or of optional strings (Native)",
+    ),
+    "Endpoint": Verdict("always", "an enum member, keyed by type and name"),
+    "Clocking": Verdict("always", "a value class of strings, bools and optional strings"),
+    "Integer": Verdict("always", "a frozen admission policy of ints, bools and None"),
+    "LoopEnds": Verdict("always", "a value class of level-end integer records"),
     "bool": Verdict("always", "a plain type"),
     "int": Verdict("always", "a plain type"),
     "str": Verdict("always", "a plain type"),
@@ -147,7 +161,7 @@ VERDICTS: dict[str, Verdict] = {
     "Tensor": Verdict(
         "always", "a value class whose element's datatype is a QONNX datatype, a value type"
     ),
-    "StreamContract": Verdict(
+    "StreamPins": Verdict(
         "always",
         "a value class holding its element's QONNX datatype, a value type, and enums (the "
         "transport's endpoint and marker kinds and its repetition)",
@@ -231,6 +245,28 @@ def made() -> dict[str, tuple[object, ...]]:
     """Values of the types the Chain holds none of, or one value of: made here."""
     eight, four = stage_tensor(8), stage_tensor(8, words=4)
     return {
+        "Schedule": (
+            Schedule({Index("r"): 2, Index("c"): 4}, {Index("c"): 2}),
+            Schedule({Index("r"): 2, Index("c"): 4}, {Index("c"): 4}),
+            Schedule({Index("r"): 2, Index("c"): 4}, {Index("c"): 2}),
+        ),
+        "Axis | Native": (
+            Axis(bus="s_axis"),
+            Axis(bus="s_axis", spelling=AxisSpelling.UPPER),
+            Native(prefix="a"),
+            NATIVE,
+            Native(names=("s_axis_0_tdata", "s_axis_0_tvalid", "s_axis_0_tready")),
+            Axis(bus="s_axis"),
+            Native(),
+        ),
+        "Endpoint": (Endpoint.TARGET, Endpoint.INITIATOR, Endpoint.TARGET),
+        "Clocking": (Clocking(), Clocking(clock="clk", reset="rst", active_low=False), Clocking()),
+        "Integer": (Integer(), Integer(min_bits=2, signed=True), Integer()),
+        "LoopEnds": (
+            LoopEnds((LevelEnd(1), LevelEnd(8))),
+            LoopEnds((LevelEnd(4),)),
+            LoopEnds((LevelEnd(1), LevelEnd(8))),
+        ),
         "float": (0.0, -0.0, 0.5, 1.0),
         "tuple": (
             (-3, 4),
@@ -299,8 +335,8 @@ def samples() -> dict[str, list[object]]:
     sides = cast(list[Side], found.get("Side", []))
     sides.append(dataclasses.replace(sides[0]))  # an equal one, another object
     streams = [side.stream for side in sides if side.stream is not None]
-    found["StreamContract"] = [
-        boundary_contract("stream", stream.element, stream.sequence, endpoint)
+    found["StreamPins"] = [
+        boundary_pins("stream", stream.element, stream.sequence, endpoint)
         for stream in streams
         for endpoint in Endpoint
     ]
@@ -380,6 +416,7 @@ def test_a_key_hit_is_a_value_the_semantics_hold_equal(name: str) -> None:
 
 
 ENUMS: tuple[type[Enum], ...] = (
+    AxisSpelling,
     Form,
     Repetition,
     Step,

@@ -29,22 +29,22 @@ operation runs natively (one channel per PE lane, INT8 DSP58 only) or, by the
 ``realization`` Decision, on the dense datapath with block-diagonal weights
 (``block_diagonal``), reading its (M, K, N) activations as (M, K * N).
 
-``MatMulKernel`` is a kernel with children: the compute cores, which read the
-activations' tensor it is given (``x_tensor``) and the weights' tensor it carries
+``MatMulKernel`` is a kernel with children: the compute cores, which read the activations'
+tensor it is given (``x_tensor``) and the weights' tensor it carries
 (``carried_weights``), its folding factors (``pe``, ``simd``), and N and the widest K
-(``widest_reduction``),
-stated from its facts alone, and present its ports (``x``, ``w``, ``y``) as the selected
-core's (``finn.kernels.port.served``): ``x_stream`` is the selected core's stream, and
-``x_contract`` its contract, labelled ``compute.<core>.x``
-(``finn.kernels.base.PortContract``). Each channel, its adapter, its FIFO and its source
-are its network's: the network (a test harness's, or the graph's, a KernelOp's alone or
-a partition's) declares each channel, gives it the tensor MatMul's port reads or
-writes, and gives it MatMul's ports' streams, labels and widths. MatMul's own view of each tensor
-(``activation_tensor``, ``weight_tensor``, and its results, ``y_tensor``) reads only its
-facts and ``realization``, never a port; ``carried`` refuses a given input tensor that is
-not what MatMul requires of it (the activations' element count and last axis, the
-weights' shape), or whose values do not fit what MatMul reads (``matmul-tensor``). A
-boundary channel there presents its ``port`` name (``in0_V``).
+(``widest_reduction``), stated from its facts alone; it serves their ports (``x``, ``w``,
+``y``) as its own: each the selected core's (``finn.kernels.port_model.served``), its side
+and stream pins labelled ``compute.<core>.x`` (``x_side``, ``x_stream_pins``,
+``finn.kernels.base.PortPins``), and its pace the core's port's (``x_pace``). Each
+channel, its adapter, its FIFO and its source are its network's: the network (a test
+harness's, or the graph's, a KernelOp's alone or a partition's) declares each channel,
+gives it the tensor MatMul's port reads or writes, and gives it MatMul's ports' streams,
+labels and widths. MatMul's own view of each tensor (``activation_tensor``,
+``weight_tensor``, and its results, ``y_tensor``) reads only its facts and
+``realization``, never a port; ``carried`` refuses a given input tensor that is not what
+MatMul requires of it (the activations' element count and last axis, the weights' shape),
+or whose values do not fit what MatMul reads (``matmul-tensor``). A boundary channel there
+presents its ``port`` name (``in0_V``).
 
 MatMul consumes its weights; it never holds them. Its weights are one fact,
 ``weights``: known at build (``KnownWeights``, given by the value's owner: their values
@@ -91,7 +91,7 @@ which its ``y`` port writes.
 - The steps between the activation channel's two streams replay each dense row and
   frame each reduction; the channel's adapter carries that out.
 
-It binds no module of its own: its netlist (``finn.kernels.base.KernelSpace``) merges its
+It binds no module of its own: its netlist (``finn.kernels.base.Kernel``) merges its
 children's.
 """
 
@@ -105,14 +105,15 @@ from qonnx.core.ranges import TensorRange
 
 from finn.core.space import (
     Decision,
+    Inapplicable,
     Param,
     Rejected,
     Select,
-    View,
     constraint,
     derived,
     divisors_of,
     reject,
+    view,
 )
 from finn.dataflow.datatypes import (
     QONNXDataType,
@@ -122,9 +123,9 @@ from finn.dataflow.datatypes import (
 from finn.dataflow.gemm import Form, Window
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import require_positive
-from finn.kernels.base import KernelSpace
+from finn.kernels.base import Kernel
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
-from finn.kernels.port import served
+from finn.kernels.port_model import served
 from finn.kernels.values.domains import (
     admit_element,
     integer_bounds,
@@ -226,7 +227,7 @@ class KnownWeights:
                 )
 
 
-class MatMulKernel(KernelSpace):
+class MatMulKernel(Kernel):
     """Operation facts, and the kernels and selectors over kernels on its tensors."""
 
     id = "finn.matmul"
@@ -319,10 +320,12 @@ class MatMulKernel(KernelSpace):
 
     # A depthwise operation runs natively (one channel per PE lane, a core that reads
     # it) or on the dense datapath with block-diagonal weights, on any core.
-    realization: str = Decision(values=("native", "dense"), when=depthwise)
+    realization: str = Decision(domain=("native", "dense"), when=depthwise)
 
-    @constraint(when=depthwise)
-    def native_readable(self) -> bool | Rejected:
+    @constraint
+    def native_readable(self) -> bool | Rejected | Inapplicable:
+        if not self.depthwise:
+            return Inapplicable()
         if self.realization == "native" and not self.reads_depthwise:
             return reject(
                 "matmul-native",
@@ -446,8 +449,8 @@ class MatMulKernel(KernelSpace):
         return self._tensor((self.datapath_k, self.n), self.weights_type)
 
     # The products its holder reads; ``carried`` reads the values they present.
-    activation_tensor = View(required_activations)
-    weight_tensor = View(required_weights)
+    activation_tensor = view(required_activations)
+    weight_tensor = view(required_weights)
 
     @derived
     def leading(self) -> tuple[int, ...]:
@@ -471,12 +474,14 @@ class MatMulKernel(KernelSpace):
         return self._tensor((*self.leading, self.n), self.result_type, TensorRange(least, greatest))
 
     # The product its holder reads; inference reads the value it presents.
-    y_tensor = View(result_tensor)
+    y_tensor = view(result_tensor)
 
-    @derived(when=stored)
-    def stored_weights(self) -> IntegerTensorValue:
+    @derived
+    def stored_weights(self) -> IntegerTensorValue | Inapplicable:
         """The known weights as the datapath reads them, which the weight channel's source
         stores: block-diagonal when a depthwise operation is realized densely."""
+        if not self.stored:
+            return Inapplicable()
         weights = cast(KnownWeights, self.weights).contents  # stored: known
         return block_diagonal(weights) if self.dense_view else weights
 
@@ -504,8 +509,8 @@ class MatMulKernel(KernelSpace):
     # What the weight channel's source stores and what it carries, the products its
     # holder reads; its network (``Fact(member, "carried_weights")``) and the cores read
     # the values.
-    w_stored = View(stored_weights, when=stored)
-    w_carried = View(carried_weights)
+    w_stored = view(stored_weights)
+    w_carried = view(carried_weights)
 
     @constraint
     def carried(self) -> bool | Rejected:
@@ -563,7 +568,7 @@ class MatMulKernel(KernelSpace):
         simd=simd,
     )
 
-    # Its ports: the selected core's activations, weights and results.
+    # Its ports, the selected core's, labelled below its case (``compute.<case>.x``).
     x = served(compute, "x")
     w = served(compute, "w")
     y = served(compute, "y")

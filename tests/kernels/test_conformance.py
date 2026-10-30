@@ -76,10 +76,11 @@ from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.traversal import offsets, pack, vector_major
 from finn.harness.orders import decode
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.base import KernelSpace
+from finn.kernels.base import Kernel, bound_extents, bound_schedule
 from finn.kernels.eltwise import EltwiseKernel
+from finn.kernels.laws import Axis
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.port import AxiStreamPort
+from finn.kernels.port_model import StreamPort
 from finn.kernels.thresholding import ThresholdingAxiKernel
 
 # -- the loop-order proof: thresholding on a schedule ---------------------------------------
@@ -97,7 +98,7 @@ class RowsFirst(ThresholdingAxiKernel):
     def schedule(self) -> Schedule | Rejected:
         *outer, last = self.indices
         order = (last, *outer) if type(self).channels_outer else (*outer, last)
-        return self.bound_schedule(tuple(order), {c: self.pe})
+        return bound_schedule(self.extents, tuple(order), {c: self.pe})
 
 
 class ChannelsFirst(RowsFirst):
@@ -122,18 +123,20 @@ def scheduled(space_type: type[RowsFirst]) -> dict[str, Any]:
 co, ci = Index("co"), Index("ci")
 
 
-def split_ports(schedule: Any, lanes: tuple[Index, ...]) -> tuple[AxiStreamPort, AxiStreamPort]:
+def split_ports(schedule: Any, lanes: tuple[Index, ...]) -> tuple[StreamPort, StreamPort]:
     """Input and output reading channel ``c = 3 co + ci``, lanes in ``lanes`` order."""
-    input = AxiStreamPort(
-        name="s_axis",
+    input = StreamPort(
+        label="input",
+        transport=Axis(bus="s_axis"),
         endpoint=Endpoint.TARGET,
         tensor=ThresholdingAxiKernel.input_tensor,
         schedule=schedule,
         index=(r, co * 3 + ci),
         lanes=lanes,
     )
-    output = AxiStreamPort(
-        name="m_axis",
+    output = StreamPort(
+        label="output",
+        transport=Axis(bus="m_axis"),
         endpoint=Endpoint.INITIATOR,
         tensor=ThresholdingAxiKernel.output_tensor,
         schedule=schedule,
@@ -152,7 +155,8 @@ class LanesInOrder(ThresholdingAxiKernel):
     def extents(self) -> dict[Index, int] | Rejected:
         # The window axis binds nothing: the split's extents are the author's, a row a
         # channel, and the channels' its rows.
-        return self._bound({co: self.rows // 3, ci: 3, c: self.rows})
+        accesses = [self.input.access] if self.input.binds else []
+        return bound_extents(accesses, {co: self.rows // 3, ci: 3, c: self.rows})
 
     @derived
     def indices(self) -> tuple[Index, ...]:
@@ -161,7 +165,7 @@ class LanesInOrder(ThresholdingAxiKernel):
 
     @derived
     def schedule(self) -> Schedule | Rejected:
-        return self.bound_schedule((r, co, ci), factors={co: self.rows // 3, ci: 3})
+        return bound_schedule(self.extents, (r, co, ci), factors={co: self.rows // 3, ci: 3})
 
     input, output = split_ports(schedule, (co, ci))
 
@@ -336,19 +340,20 @@ class Misnamed(MemStreamKernel):
     """memstream_axi with its output bus misnamed: the source has no such pins."""
 
     id = "test.memstream_axi.misnamed"
-    output = AxiStreamPort(
-        name="m_axis_1",
+    output = StreamPort(
+        label="output",
+        transport=Axis(bus="m_axis_1"),
         endpoint=Endpoint.INITIATOR,
         tensor=MemStreamKernel.output_tensor,
         sequence=MemStreamKernel.output_sequence,
     )
 
 
-def without(kernel: type[KernelSpace], omitted: str) -> Any:
+def without(kernel: type[Kernel], omitted: str) -> Any:
     """A ``parameters`` view: ``kernel``'s, less ``omitted``."""
     stated = cast(Any, vars(kernel)["parameters"]).function
 
-    def parameters(self: KernelSpace) -> dict[str, int | str]:
+    def parameters(self: Kernel) -> dict[str, int | str]:
         return {key: value for key, value in stated(self).items() if key != omitted}
 
     return view(parameters)
@@ -374,11 +379,11 @@ class Unpipelined(ThresholdingAxiKernel):
     parameters = without(ThresholdingAxiKernel, "DEEP_PIPELINE")
 
 
-def misspelled(kernel: type[KernelSpace], name: str, misspelling: str) -> Any:
+def misspelled(kernel: type[Kernel], name: str, misspelling: str) -> Any:
     """A ``parameters`` view: ``kernel``'s, with ``name`` spelled ``misspelling``."""
     stated = cast(Any, vars(kernel)["parameters"]).function
 
-    def parameters(self: KernelSpace) -> dict[str, int | str]:
+    def parameters(self: Kernel) -> dict[str, int | str]:
         return {(misspelling if key == name else key): value for key, value in stated(self).items()}
 
     return view(parameters)

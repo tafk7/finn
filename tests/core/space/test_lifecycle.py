@@ -55,7 +55,7 @@ def test_concurrent_successors_keep_independent_commitments_and_caches() -> None
     produced: list[ReferenceType[Payload]] = []
 
     class Example(Space):
-        factor: int = Decision(values=range(16))
+        factor: int = Decision(domain=range(16))
 
         @derived
         def output(*, factor: int) -> Payload:

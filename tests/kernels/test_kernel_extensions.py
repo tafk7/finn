@@ -12,20 +12,30 @@ from support.refusals import refused
 from finn.core.space import (
     Available,
     Decision,
+    Group,
+    Inapplicable,
     Param,
     Rejected,
-    View,
+    Select,
+    Space,
     composite,
     constraint,
     derived,
     design_space,
     inspection,
+    view,
 )
 from finn.core.space.errors import DefinitionError, RequestError
 from finn.core.space.semantics import annotation_type, canonical
 from finn.dataflow.datatypes import QONNXDataType, resolve_qonnx_datatype_name
-from finn.kernels.base import KernelSpace
+from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.dataflow.traversal import BeatSequence, vector_major
+from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.base import Kernel
 from finn.kernels.configure import chosen, commit
+from finn.kernels.laws import AXIS
+from finn.kernels.port import port_endpoint, port_side
+from finn.kernels.port_model import StreamPort, stream_ports
 from finn.kernels.values.domains import Integer
 
 
@@ -46,9 +56,9 @@ def test_kernel_identity_is_validated_at_class_creation() -> None:
         message="nonempty string id",
         declaration="Unnamed",
     ):
-        type("Unnamed", (KernelSpace,), {})
+        type("Unnamed", (Kernel,), {})
 
-    class Empty(KernelSpace):
+    class Empty(Kernel):
         id = "test.empty"
 
     # The base's views; a kernel that binds no module and places none has no netlist.
@@ -58,10 +68,14 @@ def test_kernel_identity_is_validated_at_class_creation() -> None:
         "bus_control",
         "cycles",
         "held_bits",
+        "module_data",
+        "module_sources",
         "netlist",
+        "parameters",
         "resource_use",
         "resources",
     ]
+    assert isinstance(empty.query(Empty.parameters), Inapplicable)
     rejection = empty.query(Empty.netlist)
     assert isinstance(rejection, Rejected)
     assert {finding.code for finding in rejection.findings} == {"kernel-module"}
@@ -97,10 +111,10 @@ def test_the_datatype_annotation_takes_each_qonnx_datatype_as_it_is(name: str) -
 
 
 def test_a_dtype_choice_replays_the_exact_datatype() -> None:
-    class DtypeKernel(KernelSpace):
+    class DtypeKernel(Kernel):
         id = "test.dtype"
         dtype: QONNXDataType = Decision(
-            values=(resolve_qonnx_datatype_name("TERNARY"), resolve_qonnx_datatype_name("INT2"))
+            domain=(resolve_qonnx_datatype_name("TERNARY"), resolve_qonnx_datatype_name("INT2"))
         )
 
     base = design_space(DtypeKernel())
@@ -113,7 +127,7 @@ def test_a_dtype_choice_replays_the_exact_datatype() -> None:
 
 
 def test_a_datatype_fact_and_derived_value_are_the_datatype_itself() -> None:
-    class Typed(KernelSpace):
+    class Typed(Kernel):
         id = "test.typed"
         dtype: QONNXDataType = Param()
 
@@ -121,7 +135,7 @@ def test_a_datatype_fact_and_derived_value_are_the_datatype_itself() -> None:
         def result(self) -> QONNXDataType:
             return self.dtype
 
-        physical = View(result)
+        physical = view(result)
 
     original = resolve_qonnx_datatype_name("INT8")
     point = design_space(Typed(dtype=original))
@@ -136,7 +150,7 @@ def test_composite_extends_kernel_with_typed_optional_views_and_independent_node
     # The declarations are built in plain Python and ``composite`` names them as a
     # Space class on the kernel base. ``dtype`` is a formal each placing node binds
     # by name; each node call is an independent scope.
-    class InterfaceKernel(KernelSpace):
+    class InterfaceKernel(Kernel):
         id = "test.interface"
 
     def bits(*, dtype: QONNXDataType, lanes: int) -> int:
@@ -150,7 +164,7 @@ def test_composite_extends_kernel_with_typed_optional_views_and_independent_node
 
     pins = derived(plain_pins)
     admitted = constraint(narrow)
-    ports = View(pins)
+    ports = view(pins)
     word = composite(
         "IntegerWord",
         {
@@ -166,7 +180,7 @@ def test_composite_extends_kernel_with_typed_optional_views_and_independent_node
     )
     assert issubclass(word, InterfaceKernel) and word.id == InterfaceKernel.id
 
-    class Pair(KernelSpace):
+    class Pair(Kernel):
         id = "test.interface_pair"
         activation_dtype: QONNXDataType = Param()
         weights_dtype: QONNXDataType = Param()
@@ -183,6 +197,39 @@ def test_composite_extends_kernel_with_typed_optional_views_and_independent_node
     weights_ports = getattr(Pair.weights, "ports")
     assert point.query(activation_ports) == Available(Pins((("word", 8),), ()))
     assert isinstance(point.query(weights_ports), Rejected)
+    assert inspection.validity(point.weights).status == "refused"
     assert point.query(getattr(Pair.weights, "payload_bits")) == Available(32)
     authored = [key for key in views(point) if key.endswith("ports")]
     assert authored == ["activation.ports", "weights.ports"]
+
+
+def test_port_discovery_reads_lexical_groups_without_implicit_child_lowering() -> None:
+    tensor = Tensor((2, 4), ScalarEncoding(resolve_qonnx_datatype_name("INT3")))
+    sequence = BeatSequence(vector_major((2, 4), 4))
+
+    class Child(Space):
+        inner = StreamPort(transport=AXIS, label="inner", tensor=tensor, sequence=sequence)
+
+    class Included(Group):
+        nested = StreamPort(
+            transport=AXIS,
+            label="nested",
+            endpoint=Endpoint.INITIATOR,
+            tensor=tensor,
+            sequence=sequence,
+        )
+
+    class Host(Kernel):
+        id = "test.discovery"
+        group = Included()
+        child = Child()
+        choice = Select(child=Child(), absent=None)
+
+    # Groups are the parent's lexical frame, not children. Real child scopes and
+    # selector candidates publish no implicit parent port: a parent serves one explicitly.
+    assert list(stream_ports(Host)) == ["group.nested"]
+    assert port_endpoint(Host, "group.nested") is Endpoint.INITIATOR
+    for hidden in ("child.inner", "choice.child.inner"):
+        assert port_endpoint(Host, hidden) is None
+        with pytest.raises(KeyError):
+            port_side(Host, hidden)

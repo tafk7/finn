@@ -12,17 +12,14 @@ from support.refusals import refused
 
 from finn.core.reporting.findings import by_code
 from finn.core.space import (
-    Const,
     Decision,
     DefinitionError,
-    Derived,
     Inapplicable,
     Param,
     QueryResult,
     RequestError,
     Select,
     Space,
-    View,
     constraint,
     derived,
     design_space,
@@ -66,6 +63,10 @@ def decision_record(choice: object) -> NodeDecision:
     record = unwrap(choice)
     assert isinstance(record, NodeDecision)
     return record
+
+
+def _two() -> int:
+    return 2
 
 
 class Base(Space):
@@ -112,7 +113,9 @@ def test_forward_members_and_postponed_class_annotations() -> None:
 
 def test_value_and_function_views_are_distinct_declarations_with_same_type() -> None:
     class Example(Space):
-        value = Const(5)
+        @derived
+        def value(self) -> int:
+            return 5
 
         @constraint
         def supported(*, value: int) -> bool:
@@ -122,7 +125,7 @@ def test_value_and_function_views_are_distinct_declarations_with_same_type() -> 
         def function(*, value: int) -> int:
             raise AssertionError("must not run")
 
-        detached = View(value)
+        detached = view(value)
 
     collected = collect_space(Example)
     assert collected.functions["function"].semantics.type_token is int
@@ -139,7 +142,7 @@ def test_node_member_alias_and_typed_views() -> None:
         def result(*, extent: int) -> int:
             return extent
 
-        width_view = View(extent)
+        width_view = view(extent)
 
     # The parent declares the formal and binds it to the child.
     class Parent(Space):
@@ -308,7 +311,7 @@ def test_incompatible_override_collision_and_reserved_names() -> None:
         "override-changes-semantics", error=DefinitionError, message="Different.extent.*semantics"
     ):
         collect_space(different)
-    changed_kind = type("ChangedKind", (Base,), {"extent": Const(2)})
+    changed_kind = type("ChangedKind", (Base,), {"extent": derived(_two)})
     with refused("override-changes-kind", error=DefinitionError, message="declaration kind"):
         collect_space(changed_kind)
     hidden = type("Hidden", (Base,), {"extent": 3})
@@ -333,7 +336,7 @@ def test_each_broken_rule_is_its_own_code_owned_by_the_module_that_checks_it() -
     """Three overrides a Space class collects and refuses: each its own code, owned by
     collection, the declaration in its details, so ``by_code`` tells them apart."""
     found = []
-    for name, value in (("Different", Param()), ("ChangedKind", Const(2)), ("Hidden", 3)):
+    for name, value in (("Different", Param()), ("ChangedKind", derived(_two)), ("Hidden", 3)):
         annotations = {"extent": str} if name == "Different" else {}
         space_type = type(name, (Base,), {"__annotations__": annotations, "extent": value})
         with pytest.raises(DefinitionError) as refused:
@@ -377,21 +380,34 @@ def test_duplicate_declaration_reuse_is_attributable() -> None:
 
 
 def test_unbound_late_declarations_are_rejected() -> None:
-    class Example(Space):
+    # Added while the class is made (by its __init_subclass__, as a lowering adds members),
+    # but never named: after the class is made it can no longer be added at all.
+    class Adding(Space):
+        def __init_subclass__(cls, **kwargs: object) -> None:
+            super().__init_subclass__(**kwargs)
+            setattr(cls, "late", Param())
+
+    class Example(Adding):
         pass
 
-    setattr(Example, "late", Param())
     with refused(
         "declaration-unbound", error=DefinitionError, message="not bound at class creation"
     ):
         collect_space(Example)
 
 
-def test_definition_constants_are_values_and_decision_domain_contract() -> None:
-    assert Const((1, -0.0)).value == (1, 0.0)
+def test_param_defaults_are_values_and_decision_domain_contract() -> None:
+    class Held(Space):
+        pair: tuple[int, float] = Param(default=(1, -0.0))
+
+    held = cast(Param[tuple[int, float]], Held.pair).default
+    assert held == (1, 0.0) and str(held[1]) == "0.0"
     with refused("literal-not-value", error=DefinitionError, message="list is mutable"):
-        Const([1, 2])
-    with refused("decision-domain-ambiguous", error=DefinitionError, message="exactly one"):
+
+        class Mutable(Space):
+            pair: list[int] = Param(default=[1, 2])
+
+    with refused("decision-domain-required", error=DefinitionError, message="needs domain="):
         Decision()  # type: ignore[call-overload]
     with pytest.raises(TypeError, match="truth value"):
         bool(Param(default=1))
@@ -411,10 +427,10 @@ def test_binding_forms_and_local_edit_ownership() -> None:
     # A root keeps its values as runtime parameters.
     class Child(Space):
         size: int = Param()
-        internal: str = Decision(values=("auto", "block"))
+        internal: str = Decision(domain=("auto", "block"))
 
     class Parent(Space):
-        supplied: int = Decision(values=(1, 2))
+        supplied: int = Decision(domain=(1, 2))
         literal = Child(size=4)
         alias = Child(size=supplied)
 
@@ -435,7 +451,7 @@ def test_binding_forms_and_local_edit_ownership() -> None:
         point.with_choices({Parent.alias.size: 1})
 
     class Reader(Space):
-        supplier: int = Decision(values=(1, 2))
+        supplier: int = Decision(domain=(1, 2))
         child = Child(size=supplier)
 
         @derived(value=child.size)
@@ -488,21 +504,12 @@ def test_guards_are_collected_separately_and_respect_inherited_overrides() -> No
 
     class Guarded(Space):
         enabled: bool = Param()
-        selected: int = Decision(values=(1, 2), when=enabled)
+        selected: int = Decision(domain=(1, 2), when=enabled)
 
-        @derived(when=enabled)
+        @derived
         def result(*, selected: int) -> int:
             raise AssertionError("must not execute")
 
-        @constraint(when=enabled)
-        def support(*, selected: int) -> bool:
-            raise AssertionError("must not execute")
-
-        @view(when=enabled)
-        def authored(*, selected: int) -> int:
-            raise AssertionError("must not execute")
-
-        physical = View(result, when=enabled)
         child = Child(value=1, when=enabled)
         # A singleton structural choice is an ordinary Decision over nodes.
         implementation: Child = Select(only=Child(value=1), when=enabled)
@@ -513,10 +520,6 @@ def test_guards_are_collected_separately_and_respect_inherited_overrides() -> No
     effective = collect_space(OverrideGuard)
     guarded: tuple[Declaration, ...] = (
         decl(Guarded.selected),
-        decl(Guarded.result),
-        decl(Guarded.support),
-        decl(Guarded.authored),
-        decl(Guarded.physical),
         record_of(Guarded.child),
         decision_record(Guarded.implementation),
     )
@@ -524,7 +527,6 @@ def test_guards_are_collected_separately_and_respect_inherited_overrides() -> No
         effective.guards[declaration] is decl(OverrideGuard.enabled) for declaration in guarded
     )
     assert [arg.name for arg in effective.functions["result"].dependencies] == ["selected"]
-    assert "when" not in cast("Derived[object]", Guarded.result).aliases
     assert "when" not in record_of(Guarded.child).bindings
 
 
@@ -545,7 +547,7 @@ def test_guards_on_cases_use_the_placement_scope() -> None:
 def test_nonboolean_and_foreign_guards_fail_during_collection() -> None:
     class Wrong(Space):
         count: int = Param()
-        choice: int = Decision(values=(1,), when=cast(ValueRef[bool], count))
+        choice: int = Decision(domain=(1,), when=cast(ValueRef[bool], count))
 
     with refused("guard-not-boolean", error=DefinitionError, message="Wrong.choice guard.*Boolean"):
         collect_space(Wrong)
@@ -554,7 +556,7 @@ def test_nonboolean_and_foreign_guards_fail_during_collection() -> None:
         enabled: bool = Param()
 
     class Unrelated(Space):
-        choice: int = Decision(values=(1,), when=Foreign.enabled)
+        choice: int = Decision(domain=(1,), when=Foreign.enabled)
 
     with refused(
         "dependency-undeclared",
@@ -569,7 +571,7 @@ def test_a_guard_whose_value_admits_none_is_refused_and_a_derived_test_is_taken(
     (the lists would prune, validity fail), so ``when=`` takes a ``bool`` only."""
 
     class Shelf(Space):
-        style: str = Decision(values=("a", "b"))
+        style: str = Decision(domain=("a", "b"))
 
     class Cellar(Space):
         deep: bool | None = Param(default=None)
@@ -620,9 +622,7 @@ def test_a_guard_whose_value_admits_none_is_refused_and_a_derived_test_is_taken(
 
 def test_when_is_an_authoring_control_argument() -> None:
     class Wrong(Space):
-        active: bool = Param()
-
-        @derived(when=active)
+        @derived
         def value(*, when: bool) -> int:
             return 1
 
@@ -640,21 +640,16 @@ def test_linked_child_types_are_inferred_without_mutating_declarations() -> None
         def enabled(*, size: int) -> bool:
             raise AssertionError("must not execute")
 
-        admitted = View(enabled)
+        admitted = view(enabled)
 
     class Parent(Space):
         child = Child(size=1)
 
-        @derived(when=child.enabled)
-        def value() -> int:
-            raise AssertionError("must not execute")
-
-        copied = View(child.admitted)
+        copied = view(child.admitted)
 
     model = compile_model(Parent)
     semantics = model.resolve(model.root, Parent.copied).semantics
     assert semantics is not None and semantics.type_token is bool
-    assert model.resolve(model.root, Parent.value).guard is not None
     assert ref(Child.enabled).semantics is None
     assert Child.admitted.semantics is None
     assert Parent.copied.semantics is None

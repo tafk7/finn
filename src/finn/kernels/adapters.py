@@ -34,13 +34,13 @@ step: the connection ties it high. A width conversion is a ``vpc`` over vectors 
 the two lane counts' least common multiple: its two sides carry the same elements in
 whole beats, a common multiple of both lane counts, so the vectors are whole.
 
-Each chain is a kernel with children (a ``KernelSpace`` binding no module): it
+Each chain is a kernel with children (a ``Kernel`` binding no module): it
 places its modules as kernel children (``InputGeneratorKernel``, ``VpcKernel``) named by
 stage, each given its tensor and the two sides of its step, the beat sequences its ports
 present, from which it derives its generics. Each child's streams and output word width
 are a ``StageStreams`` (``stage_streams``, from the child's derived values), which the
 channel checks like any other port's streams; and a ``Stage``: the child's module (read
-from its netlist, ``finn.kernels.library.library_module``) and its ports' contracts
+from its netlist, ``finn.kernels.library.library_module``) and its ports' stream pins
 (``stages``, a view), which the channel wires hop by hop, so an adapter presents no port
 of its own. Its netlist, cycles (the most
 beats any of its stages' ports carries), buffering (the buffers its ``input_gen`` stages
@@ -59,12 +59,11 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import ClassVar, TypeVar
+from typing import ClassVar
 
 from finn.core.space import (
     Param,
     Rejected,
-    composite,
     derived,
     reject,
     view,
@@ -72,20 +71,19 @@ from finn.core.space import (
 from finn.dataflow.steps import Hop, Step, Steps, Unrealizable
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import Tensor
-from finn.dataflow.traversal import BeatSequence
-from finn.kernels.artifacts.module import Leaf
-from finn.kernels.base import KernelSpace, PortContract
-from finn.kernels.declaration import declared_reads
+from finn.dataflow.traversal import BeatSequence, LevelEnd, Traversal
+from finn.kernels.artifacts.module import Fragment, Leaf
+from finn.kernels.base import Kernel, PortPins
 from finn.kernels.input_generator import Generate, InputGeneratorKernel, generated
-from finn.kernels.library import library_module
-from finn.kernels.transport import StreamContract
+from finn.kernels.library import leaf_at_root
+from finn.kernels.transport import StreamPins
 from finn.kernels.vpc import VpcKernel
 from finn.platform.capabilities import Platform
 
 
 @dataclass(frozen=True)
 class Stage:
-    """A module inside a channel, with the contracts of its two ports.
+    """A module inside a channel, with the stream pins of its two ports.
 
     ``module`` is its leaf, placed at ``label``: the node path of its kernel
     below whatever places it (``input_gen.input_gen`` below an adapter
@@ -93,8 +91,8 @@ class Stage:
     """
 
     module: Leaf
-    input: StreamContract
-    output: StreamContract
+    input: StreamPins
+    output: StreamPins
     label: str
 
 
@@ -148,6 +146,14 @@ def realize(steps: Steps) -> tuple[RealizedStage, ...]:
     """The FinnLib modules that carry out ``steps``, in order."""
     stages: list[RealizedStage] = []
     hops = list(steps.hops)
+    for hop in hops:
+        for sequence in (hop.source, hop.sink):
+            if not isinstance(sequence.form, Traversal):
+                raise Unrealizable("no existing hardware adapter recipe carries Grouped forms")
+            if any(not isinstance(rule, LevelEnd) for rule in sequence.markers):
+                raise Unrealizable(
+                    "no existing hardware adapter recipe carries held LevelDone markers"
+                )
     index = 0
     while index < len(hops):
         hop = hops[index]
@@ -189,16 +195,18 @@ def _side(name: str, side: str) -> BeatSequence:
     return derived(read)
 
 
-class StreamAdapter(KernelSpace):
+class StreamAdapter(Kernel):
     """A fixed chain of FinnLib modules carrying out the steps between a channel's two
     streams: the chain they take (``realize``), which its channel places for them.
 
     Each chain places its modules as kernel children named by stage
     (``input_gen``, ``vpc``, then ``input_gen_1``), each given the channel's tensor and
-    the two sides of its step of the realization, which its ports present, on the
+    the two sides of its step of the chain, which its ports present, on the
     channel's ``platform``. Its netlist, cycles, buffering and resources are its stages',
-    by the base. It presents no port: its channel checks its stages' streams
-    (``stage_streams``) and wires its stages hop by hop (``stages``).
+    by the base; it restates ``cycles`` as the base's, so that a channel counts its
+    adapters' by their kind (``Channel.stage_cycles``). It presents no port: its channel
+    checks its stages' streams (``stage_streams``) and wires its stages hop by hop
+    (``stages``).
     """
 
     id = "finn.channel.adapter"
@@ -209,16 +217,19 @@ class StreamAdapter(KernelSpace):
     platform: Platform = Param()
 
     @derived
-    def realization(self) -> tuple[RealizedStage, ...] | Rejected:
+    def chain(self) -> tuple[RealizedStage, ...] | Rejected:
+        """The stages that carry out its steps (``realize``), each its module and the two
+        sides of its step: what its children are given and what its channel's rules read,
+        not the HDL they bind."""
         try:
             return realize(self.steps)
         except Unrealizable as error:
             return reject("adapter-steps", f"no FinnLib chain carries out the steps: {error}")
 
     def _named(self, name: str) -> RealizedStage | Rejected:
-        realization: tuple[RealizedStage, ...] = self.realization
-        kinds = [stage.kind for stage in realization]
-        for index, stage in enumerate(realization):
+        chain: tuple[RealizedStage, ...] = self.chain
+        kinds = [stage.kind for stage in chain]
+        for index, stage in enumerate(chain):
             if _stage_name(kinds, index) == name:
                 return stage
         return reject("adapter-steps", f"the steps' chain has no {name} stage")
@@ -232,49 +243,29 @@ class StreamAdapter(KernelSpace):
     vpc_leaving = _side("vpc", "sink")
 
     @derived
-    @declared_reads()
     def stage_streams(self) -> tuple[StageStreams, ...]:
         """Each child's streams and output word width, its derived values, labelled as its
-        ``Stage`` is. Each chain declares what its own stages read (``_chain``); this base
+        ``Stage`` is. Each finite chain's native helper states its actual reads; this base
         places no stage."""
         return self._stage_streams()
 
     @view
-    @declared_reads("realization")
     def stages(self) -> tuple[Stage, ...]:
-        """Each child's module and its ports' contracts, labelled below what holds the
-        chain: the chain, then the stage (``vpc.vpc``). Each chain declares what its own
-        stages read (``_chain``); this base places no stage."""
+        """Each child's module and its ports' stream pins, labelled below what holds the
+        chain: the chain, then the stage (``vpc.vpc``). Each finite chain's native helper
+        states its actual reads; this base places no stage."""
         return self._stages()
 
-    def _named_stages(self) -> tuple[tuple[str, str], ...]:
-        """Each stage's child's name, and its label below what holds the chain."""
-        modules = type(self).modules
-        chain = "_".join(modules)
-        names = [_stage_name(modules, index) for index in range(len(modules))]
-        return tuple((name, f"{chain}.{name}") for name in names)
-
     def _stage_streams(self) -> tuple[StageStreams, ...]:
-        """``stage_streams``: each stage's child read by the name its chain gives it."""
-        found: list[StageStreams] = []
-        for name, label in self._named_stages():
-            kernel = getattr(self, name)
-            found.append(
-                StageStreams(
-                    label, kernel.input_stream, kernel.output_stream, kernel.output_data_width
-                )
-            )
-        return tuple(found)
+        return ()
 
     def _stages(self) -> tuple[Stage, ...]:
-        """``stages``: each stage's child read by the name its chain gives it."""
-        found: list[Stage] = []
-        for name, label in self._named_stages():
-            kernel = getattr(self, name)
-            given: PortContract = kernel.input_contract
-            presented: PortContract = kernel.output_contract
-            found.append(Stage(library_module(kernel), given.contract, presented.contract, label))
-        return tuple(found)
+        return ()
+
+    @view
+    def cycles(self) -> int | Rejected:
+        """The most cycles any of its stages takes: the base's (the class docstring)."""
+        return self._cycles()
 
 
 class InputAdapter(StreamAdapter):
@@ -286,41 +277,209 @@ class InputAdapter(StreamAdapter):
     ram_style: str = Param()
 
     @derived
-    @declared_reads()
     def frame_bits(self) -> int:
         """The most bits any of its input generators holds a frame (each one's
-        ``frame_bits``). Each chain declares what its own generators read (``_chain``);
+        ``frame_bits``). Each finite chain reads its actual generators;
         this base places none."""
         return self._frame_bits()
 
     def _frame_bits(self) -> int:
-        """``frame_bits``: each input generator read by the name its chain gives it."""
-        modules = type(self).modules
-        names = [_stage_name(modules, index) for index in range(len(modules))]
-        held = [
-            getattr(self, name).frame_bits
-            for name, kind in zip(names, modules)
-            if kind == "input_gen"
-        ]
-        return max(held, default=0)
+        return 0
 
 
-def _input_gen(name: str) -> InputGeneratorKernel:
-    return InputGeneratorKernel(
+def _stage(
+    label: str, given: PortPins, presented: PortPins, netlist: Fragment, owner: str
+) -> Stage:
+    """Pure stage assembly; callers read stream pins then the netlist in original order."""
+    return Stage(leaf_at_root(netlist, owner), given.pins, presented.pins, label)
+
+
+class vpc(StreamAdapter):
+    modules = ("vpc",)
+    vpc = VpcKernel(
+        input_tensor=StreamAdapter.tensor,
+        arriving=StreamAdapter.vpc_arriving,
+        leaving=StreamAdapter.vpc_leaving,
+    )
+
+    def _stage_streams(self) -> tuple[StageStreams, ...]:
+        return (
+            StageStreams(
+                "vpc.vpc", self.vpc.input.stream, self.vpc.output.stream, self.vpc.output.width
+            ),
+        )
+
+    def _stages(self) -> tuple[Stage, ...]:
+        return (
+            _stage(
+                "vpc.vpc",
+                self.vpc.input.stream_pins,
+                self.vpc.output.stream_pins,
+                self.vpc.netlist,
+                type(self.vpc).__qualname__,
+            ),
+        )
+
+
+class input_gen(InputAdapter):
+    modules = ("input_gen",)
+    input_gen = InputGeneratorKernel(
         input_tensor=InputAdapter.tensor,
-        arriving=getattr(InputAdapter, f"{name}_arriving"),
-        leaving=getattr(InputAdapter, f"{name}_leaving"),
+        arriving=InputAdapter.input_gen_arriving,
+        leaving=InputAdapter.input_gen_leaving,
         platform=InputAdapter.platform,
         ram_style=InputAdapter.ram_style,
     )
 
+    def _stage_streams(self) -> tuple[StageStreams, ...]:
+        return (
+            StageStreams(
+                "input_gen.input_gen",
+                self.input_gen.input.stream,
+                self.input_gen.output.stream,
+                self.input_gen.output.width,
+            ),
+        )
 
-def _vpc(name: str) -> VpcKernel:
-    return VpcKernel(
-        input_tensor=StreamAdapter.tensor,
-        arriving=getattr(StreamAdapter, f"{name}_arriving"),
-        leaving=getattr(StreamAdapter, f"{name}_leaving"),
+    def _stages(self) -> tuple[Stage, ...]:
+        return (
+            _stage(
+                "input_gen.input_gen",
+                self.input_gen.input.stream_pins,
+                self.input_gen.output.stream_pins,
+                self.input_gen.netlist,
+                type(self.input_gen).__qualname__,
+            ),
+        )
+
+    def _frame_bits(self) -> int:
+        return self.input_gen.frame_bits
+
+
+class input_gen_vpc(InputAdapter):
+    modules = ("input_gen", "vpc")
+    input_gen = InputGeneratorKernel(
+        input_tensor=InputAdapter.tensor,
+        arriving=InputAdapter.input_gen_arriving,
+        leaving=InputAdapter.input_gen_leaving,
+        platform=InputAdapter.platform,
+        ram_style=InputAdapter.ram_style,
     )
+    vpc = VpcKernel(
+        input_tensor=StreamAdapter.tensor,
+        arriving=StreamAdapter.vpc_arriving,
+        leaving=StreamAdapter.vpc_leaving,
+    )
+
+    def _stage_streams(self) -> tuple[StageStreams, ...]:
+        return (
+            StageStreams(
+                "input_gen_vpc.input_gen",
+                self.input_gen.input.stream,
+                self.input_gen.output.stream,
+                self.input_gen.output.width,
+            ),
+            StageStreams(
+                "input_gen_vpc.vpc",
+                self.vpc.input.stream,
+                self.vpc.output.stream,
+                self.vpc.output.width,
+            ),
+        )
+
+    def _stages(self) -> tuple[Stage, ...]:
+        return (
+            _stage(
+                "input_gen_vpc.input_gen",
+                self.input_gen.input.stream_pins,
+                self.input_gen.output.stream_pins,
+                self.input_gen.netlist,
+                type(self.input_gen).__qualname__,
+            ),
+            _stage(
+                "input_gen_vpc.vpc",
+                self.vpc.input.stream_pins,
+                self.vpc.output.stream_pins,
+                self.vpc.netlist,
+                type(self.vpc).__qualname__,
+            ),
+        )
+
+    def _frame_bits(self) -> int:
+        return self.input_gen.frame_bits
+
+
+class input_gen_vpc_input_gen(InputAdapter):
+    modules = ("input_gen", "vpc", "input_gen")
+    input_gen = InputGeneratorKernel(
+        input_tensor=InputAdapter.tensor,
+        arriving=InputAdapter.input_gen_arriving,
+        leaving=InputAdapter.input_gen_leaving,
+        platform=InputAdapter.platform,
+        ram_style=InputAdapter.ram_style,
+    )
+    vpc = VpcKernel(
+        input_tensor=StreamAdapter.tensor,
+        arriving=StreamAdapter.vpc_arriving,
+        leaving=StreamAdapter.vpc_leaving,
+    )
+    input_gen_1 = InputGeneratorKernel(
+        input_tensor=InputAdapter.tensor,
+        arriving=InputAdapter.input_gen_1_arriving,
+        leaving=InputAdapter.input_gen_1_leaving,
+        platform=InputAdapter.platform,
+        ram_style=InputAdapter.ram_style,
+    )
+
+    def _stage_streams(self) -> tuple[StageStreams, ...]:
+        return (
+            StageStreams(
+                "input_gen_vpc_input_gen.input_gen",
+                self.input_gen.input.stream,
+                self.input_gen.output.stream,
+                self.input_gen.output.width,
+            ),
+            StageStreams(
+                "input_gen_vpc_input_gen.vpc",
+                self.vpc.input.stream,
+                self.vpc.output.stream,
+                self.vpc.output.width,
+            ),
+            StageStreams(
+                "input_gen_vpc_input_gen.input_gen_1",
+                self.input_gen_1.input.stream,
+                self.input_gen_1.output.stream,
+                self.input_gen_1.output.width,
+            ),
+        )
+
+    def _stages(self) -> tuple[Stage, ...]:
+        return (
+            _stage(
+                "input_gen_vpc_input_gen.input_gen",
+                self.input_gen.input.stream_pins,
+                self.input_gen.output.stream_pins,
+                self.input_gen.netlist,
+                type(self.input_gen).__qualname__,
+            ),
+            _stage(
+                "input_gen_vpc_input_gen.vpc",
+                self.vpc.input.stream_pins,
+                self.vpc.output.stream_pins,
+                self.vpc.netlist,
+                type(self.vpc).__qualname__,
+            ),
+            _stage(
+                "input_gen_vpc_input_gen.input_gen_1",
+                self.input_gen_1.input.stream_pins,
+                self.input_gen_1.output.stream_pins,
+                self.input_gen_1.netlist,
+                type(self.input_gen_1).__qualname__,
+            ),
+        )
+
+    def _frame_bits(self) -> int:
+        return max(self.input_gen.frame_bits, self.input_gen_1.frame_bits)
 
 
 INPUT_CHAINS: tuple[tuple[str, ...], ...] = (
@@ -328,56 +487,14 @@ INPUT_CHAINS: tuple[tuple[str, ...], ...] = (
     ("input_gen", "vpc"),
     ("input_gen", "vpc", "input_gen"),
 )
-"""Every chain the input side's steps can take: a reorder or markers first."""
+"""Every current input chain; stage and selection keys remain their module names."""
 
-
-_Chain = TypeVar("_Chain", bound=StreamAdapter)
-
-
-def _chain(modules: tuple[str, ...], base: type[_Chain]) -> type[_Chain]:
-    """The chain placing ``modules`` in order, each child named by its stage, on ``base``.
-    Its ``stage_streams`` and ``stages`` (and an input chain's ``frame_bits``) read its
-    children by the names its chain fixes, which each declares (``__reads__``: each
-    stage's streams and output word width, or its module and ports' contracts, or each
-    input generator's frame bits)."""
-    members: dict[str, object] = {"modules": modules}
-    names = [_stage_name(modules, index) for index in range(len(modules))]
-    for name, kind in zip(names, modules):
-        members[name] = _input_gen(name) if kind == "input_gen" else _vpc(name)
-
-    values = ("input_stream", "output_stream", "output_data_width")
-    parts = ("netlist", "input_contract", "output_contract")
-
-    @declared_reads(*(f"{name}.{part}" for name in names for part in values))
-    def stage_streams(self: StreamAdapter) -> tuple[StageStreams, ...]:
-        return StreamAdapter._stage_streams(self)
-
-    @declared_reads("realization", *(f"{name}.{part}" for name in names for part in parts))
-    def stages(self: StreamAdapter) -> tuple[Stage, ...]:
-        return StreamAdapter._stages(self)
-
-    members["stage_streams"] = derived(stage_streams)
-    members["stages"] = view(stages)
-    if issubclass(base, InputAdapter):
-        generators = [name for name, kind in zip(names, modules) if kind == "input_gen"]
-
-        @declared_reads(*(f"{name}.frame_bits" for name in generators))
-        def frame_bits(self: InputAdapter) -> int:
-            return InputAdapter._frame_bits(self)
-
-        members["frame_bits"] = derived(frame_bits)
-    return composite("_".join(modules), members, base=base)
-
-
-OUTPUT_ADAPTER: type[StreamAdapter] = _chain(("vpc",), StreamAdapter)
-"""A channel's output adapter: the one chain the output side's steps can take, its width
-conversion, placed where they convert a width."""
-
+OUTPUT_ADAPTER: type[StreamAdapter] = vpc
 ADAPTERS: dict[str, type[InputAdapter]] = {
-    "_".join(chain): _chain(chain, InputAdapter) for chain in INPUT_CHAINS
+    "input_gen": input_gen,
+    "input_gen_vpc": input_gen_vpc,
+    "input_gen_vpc_input_gen": input_gen_vpc_input_gen,
 }
-"""The cases of a channel's ``adapter`` selector (the input side), by key: the kinds of the
-stages each places, joined, as the channel's ``input_chain`` names them."""
 
 
 __all__ = [

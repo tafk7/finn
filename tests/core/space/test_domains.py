@@ -173,7 +173,7 @@ def test_a_declared_input_no_callable_reads_is_a_definition_error() -> None:
 
 def test_a_domain_reading_a_choice_is_a_definition_error_naming_the_way() -> None:
     class Direct(Space):
-        extent: int = Decision(values=(8, 12))
+        extent: int = Decision(domain=(8, 12))
         lanes: int = Decision(domain=divisors_of(extent))
 
     with refused(
@@ -185,7 +185,7 @@ def test_a_domain_reading_a_choice_is_a_definition_error_naming_the_way() -> Non
 
     class Through(Space):
         width: int = Param()
-        wide: bool = Decision(values=(False, True))
+        wide: bool = Decision(domain=(False, True))
 
         @derived
         def extent(self) -> int:
@@ -207,8 +207,50 @@ def test_a_domain_reading_what_a_dynamic_method_reads_is_a_definition_error() ->
 
         lanes: int = Decision(domain=divisors_of(extent))
 
-    with refused("domain-reads-choice", message="__reads__"):
+    with refused("domain-reads-choice", owner="lanes", message="source does not fix"):
         design_space(Dynamic(width=4))
+
+
+def test_metadata_cannot_admit_dynamic_domain_dependencies() -> None:
+    name = "width"
+
+    def extent(self: Space) -> int:
+        # The locally computed name is not a closure-fixed path.
+        field = name[:]
+        return cast(int, getattr(self, field))
+
+    setattr(extent, "__reads__", ("width",))
+    members = {
+        "__annotations__": {"width": int, "lanes": int},
+        "width": Param(),
+        "extent": derived(extent),
+    }
+    members["lanes"] = Decision(domain=divisors_of(members["extent"]))
+    kind = cast(type[Space], type("MetadataDomain", (Space,), members))
+    with refused("domain-reads-choice", owner="lanes", message="source does not fix"):
+        design_space(kind(width=4))  # type: ignore[call-arg]
+
+
+def test_closure_fixed_fact_domain_ignores_misleading_metadata() -> None:
+    name = "width"
+
+    def extent(self: Space) -> int:
+        return 2 * cast(int, getattr(self, name))
+
+    setattr(extent, "__reads__", ("choice",))
+    members = {
+        "__annotations__": {"width": int, "choice": int, "lanes": int},
+        "width": Param(),
+        "choice": Decision(domain=(1, 2)),
+        "extent": derived(extent),
+    }
+    members["lanes"] = Decision(domain=divisors_of(members["extent"]))
+    kind = cast(type[Space], type("FixedDomain", (Space,), members))
+    point = design_space(kind(width=4))  # type: ignore[call-arg]
+    assert point.extent == 8  # type: ignore[attr-defined]
+    (viable,) = inspection.viable(point, [getattr(kind, "lanes")])
+    assert viable.cases == (1, 2, 4, 8)
+    assert viable.key == "lanes"
 
 
 class Window(Space):
@@ -226,7 +268,7 @@ class Core(Space):
     exists holds wherever it is read."""
 
     channels: int = Param()
-    enabled: bool = Decision(values=(False, True))
+    enabled: bool = Decision(domain=(False, True))
     form: Window | Whole = Select(window=Window(channels=channels), whole=Whole, when=enabled)
 
 

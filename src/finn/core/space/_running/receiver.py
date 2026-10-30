@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .._configuration import Space
+from .._configuration import Space, _Namespace
 from .._failure import (
     Call,
     check_transformation,
@@ -33,6 +33,7 @@ from .._failure import (
 from .._nodes import NodeDecl, unwrap
 from ..declarations import Param, declared_path
 from ..errors import EvaluationError, RequestError
+from ..groups import Group
 from ..references import descend
 from ..results import Available, Inapplicable, QueryResult
 from .depth import Deeper
@@ -104,14 +105,14 @@ class MethodReader:
             self.node.owner,
             "read-undeclared",
             f"read {member}, which its source does not name: read it through a path from "
-            "its receiver, or declare it in __reads__",
+            "its receiver",
         )
         fault(self.call, error)
         raise error
 
     # -- how a read is answered: the evaluator's ------------------------------------------
 
-    def _read_value(self, point: Space, reference: object) -> object:
+    def _read_value(self, point: _Namespace, reference: object) -> object:
         """A member read as a value (``self.x``): resolved, checked, recorded, detached; a
         non-value halts the method."""
         raise NotImplementedError
@@ -128,7 +129,7 @@ class MethodReader:
 
     # -- what a receiver reads ---------------------------------------------------------
 
-    def read_value(self, point: Space, reference: object) -> object:
+    def read_value(self, point: _Namespace, reference: object) -> object:
         """A member read as a value (``self.x``). Whatever it raises is the call's."""
         try:
             return self._read_value(point, reference)
@@ -137,7 +138,7 @@ class MethodReader:
                 remember_exception(self.call, cause)
             raise
 
-    def present(self, point: Space, node: object) -> bool:
+    def present(self, point: _Namespace, node: object) -> bool:
         """Whether a node is present (``occurrence.present``)."""
         self._enter()
         target = self._node_scope(point, node)
@@ -153,9 +154,9 @@ class MethodReader:
             return False
         return bool(self._value(presence))  # undecided: halts like any value read
 
-    def _node_scope(self, point: Space, reference: object) -> ScopeRecord | None:
+    def _node_scope(self, point: _Namespace, reference: object) -> ScopeRecord | None:
         """For a node reference, the node's scope; ``None`` for anything else."""
-        if not isinstance(reference, Space):
+        if not isinstance(reference, _Namespace) or isinstance(reference, Group):
             return None
         path = declared_path(reference)
         if path is None:
@@ -171,7 +172,7 @@ class MethodReader:
             raise RequestError("node is not part of this compiled scope")
         return target
 
-    def child(self, point: Space, record: object) -> Space:
+    def child(self, point: _Namespace, record: object) -> _Namespace:
         """A child node's receiver."""
         self._enter()
         child_scope = point._scope.children.get(record)
@@ -182,7 +183,7 @@ class MethodReader:
     def _choice(self, scope: ScopeRecord, decision: object) -> ChoiceRecord:
         return scope_choice(scope, decision)
 
-    def selected_candidate(self, point: Space, decision: object) -> Space | None:
+    def selected_candidate(self, point: _Namespace, decision: object) -> _Namespace | None:
         """The receiver of the candidate a Decision over nodes selects, or ``None``."""
         self._enter()
         choice = self._choice(point._scope, decision)
@@ -194,7 +195,7 @@ class MethodReader:
                 return None if candidate is None else receiver(self, candidate)
         raise EvaluationError(choice.key, "selection", "selector is not a declared case")
 
-    def candidate(self, point: Space, decision: object, case: str) -> Space | None:
+    def candidate(self, point: _Namespace, decision: object, case: str) -> _Namespace | None:
         """A candidate's receiver, selected or not (``None`` for a case placing nothing)."""
         self._enter()
         if type(case) is not str:
@@ -205,13 +206,13 @@ class MethodReader:
                 return None if index is None else receiver(self, index)
         raise RequestError(f"{choice.key}: unknown case {case!r}")
 
-    def root(self, point: Space) -> Space:
+    def root(self, point: _Namespace) -> _Namespace:
         """The root's receiver."""
         self._enter()
         return point if point._scope.parent is None else receiver(self, self.model.scopes.root)
 
 
-def receiver(reader: MethodReader, scope: ScopeRecord) -> Space:
+def receiver(reader: MethodReader, scope: ScopeRecord) -> _Namespace:
     """A Space of ``scope``'s class reading through ``reader``: a method's ``self``."""
     space_type = scope.space_type
     made = object.__new__(space_type)

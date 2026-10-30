@@ -40,9 +40,9 @@ def _codes(result: object) -> list[tuple[str, str]]:
 
 class Choices(Space):
     extent: int = Param()
-    enabled: bool = Decision(values=(False, True))
+    enabled: bool = Decision(domain=(False, True))
     lanes: int = Decision(domain=divisors_of(extent), when=enabled)
-    width: int = Decision(values=(8, 16))
+    width: int = Decision(domain=(8, 16))
 
 
 def test_a_choice_reads_its_stored_value_unassigned_waiting_or_dormant() -> None:
@@ -86,9 +86,9 @@ def test_a_stored_value_reads_through_its_type_check_over_facts() -> None:
 
 class Holder(Space):
     extent: int = Param()
-    on: bool = Decision(values=(False, True))
+    on: bool = Decision(domain=(False, True))
     lanes: int = Decision(domain=divisors_of(extent), when=on)
-    other: int = Decision(values=(1, 2))
+    other: int = Decision(domain=(1, 2))
 
 
 @pytest.mark.parametrize(
@@ -119,7 +119,7 @@ def test_validity_counts_a_present_domain_that_lists_no_value(
 
 class Leaf(Space):
     width: int = Param()
-    lanes: int = Decision(values=(1, 2))
+    lanes: int = Decision(domain=(1, 2))
 
 
 class Guarded(Space):
@@ -131,11 +131,13 @@ class Guarded(Space):
             return reject("size-negative", "a size is never negative")
         return size > 4
 
-    @constraint(when=big)
-    def limit(*, size: int) -> bool:
-        return size < 100
+    @constraint
+    def limit(self) -> bool | Inapplicable:
+        if not self.big:
+            return Inapplicable()
+        return self.size < 100
 
-    banks: int = Decision(values=(1, 2), when=big)
+    banks: int = Decision(domain=(1, 2), when=big)
     leaf = Leaf(width=size, when=big)
 
 
@@ -146,11 +148,12 @@ def test_a_guard_refused_through_its_input_is_one_piece_per_guard() -> None:
     assert {key: sorted(_codes(result)) for key, result in assessment.results.items()} == {
         "banks": [("guard-refused", "banks"), ("size-negative", "big")],
         "leaf.$validity": [("guard-refused", "leaf"), ("size-negative", "big")],
-        "limit": [("guard-refused", "limit"), ("size-negative", "big")],
+        "limit": [("size-negative", "big")],
     }
-    # The scope is not in play (§ 16.8): its constraint does not apply, the guard's piece
-    # standing for it; a value under it reads refused through the guard, no origin.
-    assert isinstance(answer(world, "limit"), Inapplicable)
+    # The scope is not in play (§ 16.8): a value under it reads refused through the guard,
+    # no origin. A constraint reading the guard is refused through that read: its piece is
+    # the guard's refusal, with no guard piece of its own.
+    assert _codes(answer(world, "limit")) == [("size-negative", "big")]
     assert _codes(answer(world, "banks")) == [("size-negative", "big")]
     assert not entry(world, "banks").own_refusal
     assert entry(world, "big").own_refusal
@@ -159,8 +162,8 @@ def test_a_guard_refused_through_its_input_is_one_piece_per_guard() -> None:
 
 
 class Parity(Space):
-    count: int = Decision(values=(1, 2, 3, 4))
-    other: int = Decision(values=(1, 2))
+    count: int = Decision(domain=(1, 2, 3, 4))
+    other: int = Decision(domain=(1, 2))
 
     @derived
     def odd(*, count: int) -> bool:

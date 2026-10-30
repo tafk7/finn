@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import gc
 from concurrent.futures import ThreadPoolExecutor
-from typing import cast
 from weakref import ReferenceType, ref
 
 import pytest
@@ -19,12 +18,12 @@ from finn.core.space import (
     Select,
     Space,
     Unresolved,
-    View,
     constraint,
     derived,
     design_space,
     domain,
     inspection,
+    view,
 )
 from finn.core.space._running.evaluate import evaluation
 from finn.core.space.compiler import compile_model
@@ -52,6 +51,12 @@ def test_concurrent_configures_share_one_preparation() -> None:
 
 
 def test_failed_preparation_does_not_poison_cache_and_subclasses_do_not_borrow_it() -> None:
+    """A failed preparation is not cached. The assertion on the class's ``__dict__`` is
+    what proves it: a class is closed when it is created and can no longer be repaired, so
+    a second compile of the same class cannot show that nothing was kept. A subclass
+    declaring what the class lacks compiles, and its own subclass compiles a model of its
+    own."""
+
     class Broken(Space):
         @derived
         def doubled(*, value: int) -> int:
@@ -59,31 +64,35 @@ def test_failed_preparation_does_not_poison_cache_and_subclasses_do_not_borrow_i
 
     with refused("declaration-unknown", error=DefinitionError):
         compile_model(Broken)
-    value = cast(Param[int], Param())
-    setattr(Broken, "__annotations__", {"value": int})
-    value.__set_name__(Broken, "value")
-    setattr(Broken, "value", value)
-    # The formal is added after class creation, so it is not part of the static signature.
-    assert design_space(Broken(value=3)).doubled == 6  # type: ignore[call-arg]
+    # The refusal is not cached: compiling again refuses again.
+    with refused("declaration-unknown", error=DefinitionError):
+        compile_model(Broken)
+    assert "_space_prepared_model" not in Broken.__dict__
 
-    class Child(Broken):
+    # A subclass declares the formal the class lacks (a class is closed when it is made).
+    class Fixed(Broken):
+        value: int = Param()
+
+    assert design_space(Fixed(value=3)).doubled == 6
+
+    class Child(Fixed):
         extra: int = Param()
 
-    parent_model = compile_model(Broken)
+    parent_model = compile_model(Fixed)
     child_model = compile_model(Child)
     assert child_model is not parent_model
-    assert design_space(Child(value=3, extra=4)).extra == 4  # type: ignore[call-arg]
+    assert design_space(Child(value=3, extra=4)).extra == 4
 
 
 def test_prepared_structure_and_configuration_fields_are_immutable() -> None:
     class Example(Space):
         value: int = Param()
-        choice: int = Decision(values=(1, 2))
+        choice: int = Decision(domain=(1, 2))
 
     node = Example(value=3)
     instance = design_space(node)
     with refused("structure-finalized", error=DefinitionError, message="finalized"):
-        Example.choice = Decision(values=(3, 4))
+        Example.choice = Decision(domain=(3, 4))
     with refused("structure-finalized", error=DefinitionError):
         del Example.value
     with pytest.raises(AttributeError, match="immutable configuration field"):
@@ -170,8 +179,8 @@ def test_structural_choices_cannot_be_shadowed_on_instances() -> None:
 @pytest.mark.parametrize("name", ["self", "point"])
 def test_choice_keywords_do_not_collide_with_receiver_arguments(method: str, name: str) -> None:
     class Example(Space):
-        self: int = Decision(values=(1, 2))
-        point: int = Decision(values=(1, 2))
+        self: int = Decision(domain=(1, 2))
+        point: int = Decision(domain=(1, 2))
 
     instance = design_space(Example())
     result = getattr(instance, method)(**{name: 1})
@@ -182,7 +191,7 @@ def test_choice_keywords_do_not_collide_with_receiver_arguments(method: str, nam
 def test_call_keywords_do_not_steal_formal_names_and_request_errors_refuse_the_call() -> None:
     class Example(Space):
         parameters: int = Param()
-        choice: int = Decision(values=(1, 2))
+        choice: int = Decision(domain=(1, 2))
 
     point = design_space(Example(parameters=3))
     assert point.parameters == 3
@@ -214,8 +223,8 @@ def test_dynamic_prepared_space_class_and_bound_metadata_are_collectable() -> No
 
 def test_replacement_revalidates_retained_choices_and_supports_atomic_clear() -> None:
     class Example(Space):
-        extent: int = Decision(values=(8, 12))
-        lanes: int = Decision(values=(1, 2, 3, 4))
+        extent: int = Decision(domain=(8, 12))
+        lanes: int = Decision(domain=(1, 2, 3, 4))
 
         @constraint
         def divides(self) -> bool:
@@ -241,8 +250,8 @@ def test_replacement_revalidates_retained_choices_and_supports_atomic_clear() ->
 
 def test_value_reads_preserve_result_and_view_context() -> None:
     class Example(Space):
-        choice: int = Decision(values=(0, 1))
-        result = View(choice)
+        choice: int = Decision(domain=(0, 1))
+        result = view(choice)
 
     base = design_space(Example())
     unresolved = base.query(Example.choice)
@@ -268,11 +277,11 @@ def test_value_reads_preserve_result_and_view_context() -> None:
 
 def test_child_replacement_returns_child_and_revalidates_the_whole_root() -> None:
     class Child(Space):
-        local: int = Decision(values=(1, 2))
+        local: int = Decision(domain=(1, 2))
 
     class Root(Space):
-        extent: int = Decision(values=(2, 4))
-        sibling: int = Decision(values=(1, 2, 4))
+        extent: int = Decision(domain=(2, 4))
+        sibling: int = Decision(domain=(1, 2, 4))
         child = Child()
 
         @constraint
@@ -299,14 +308,14 @@ def test_replacement_reuses_frozen_facts_keeps_views_lazy_and_drops_what_it_reac
 
     class Example(Space):
         source: tuple[object, ...] = Param()
-        choice: int = Decision(values=(1, 2))
+        choice: int = Decision(domain=(1, 2))
 
         @derived
         def output(*, source: tuple[object, ...], choice: int) -> int:
             calls.append(choice)
             return len(source) + choice
 
-        result = View(output)
+        result = view(output)
 
     first = design_space(Example(source=(1,))).with_choices(choice=1)
     assert calls == []
@@ -331,7 +340,7 @@ def test_all_replacement_request_errors_precede_domain_callbacks() -> None:
         return True
 
     class Example(Space):
-        first: int = Decision(values=(1, 2))
+        first: int = Decision(domain=(1, 2))
         second: int = Decision(domain=domain(accepts=accepts))
 
     base = design_space(Example())

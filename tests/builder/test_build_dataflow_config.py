@@ -274,7 +274,10 @@ def test_the_boundary_is_stated_by_port_and_holds_through_json_its_pace_as_given
             "",
             "the outside states one lane a beat or more, not 0",
         ),
-        ({"lanes": 4}, "", "no pace, which PortStatement requires"),
+        ({"order": "column_major"}, "", "the outside states a row_major order, not 'column_major'"),
+        ({"passes": 2}, "", "the outside states one pass a frame, not 2"),
+        ({"lanes": 0}, "", "the outside states one lane a beat or more, not 0"),
+        ({"pace": {}}, ".pace", "Steady | BeatTimes | None, not {}"),
         ({"pace": {"every": 0}}, ".pace", "a steady beat comes every cycle or more, not every 0"),
         (
             {"lanes": 1, "passes": 1, "pace": {"times": [0, 2, 1], "span": 4}},
@@ -296,14 +299,17 @@ def test_the_boundary_is_stated_by_port_and_holds_through_json_its_pace_as_given
             "",
             "a pace of beat times states the lanes a beat and the passes a frame it times",
         ),
-        ({"pace": {"often": 2}}, ".pace", "Steady | BeatTimes, not {'often': 2}"),
+        ({"pace": {"often": 2}}, ".pace", "Steady | BeatTimes | None, not {'often': 2}"),
         ({"width": 8, "pace": {"every": 2}}, "", "keys PortStatement does not declare: ['width']"),
     ],
     ids=[
         "an order other than row-major",
         "two passes",
         "no lane",
-        "no pace",
+        "untimed invalid order",
+        "untimed invalid passes",
+        "untimed invalid lanes",
+        "empty config pace is malformed",
         "a steady beat every 0 cycles",
         "beat times out of order",
         "a beat beyond the span",
@@ -1073,3 +1079,25 @@ def test_tfc_builds_on_ip_through_the_directory_entry(tmp_path: Path, tfc_export
     assert logged == kernel_choices_config(body)
     report = json.loads((output / "report" / "step_explore.json").read_text())
     assert report["bottleneck"]["cycles"] == 196
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {},
+        {"order": ROW_MAJOR},
+        {"passes": 1},
+        {"lanes": 4},
+        {"order": ROW_MAJOR, "passes": 1, "lanes": 4},
+    ],
+)
+def test_untimed_port_statement_roundtrips_independent_logical_fields(
+    fields: dict[str, Any],
+) -> None:
+    """An omitted pace retains a present port statement through configuration JSON."""
+    cfg = DataflowBuildConfig.from_dict({**STATED, "boundary": {"s_axis_0": fields}})
+    expected = PortStatement(**fields)
+    assert cfg.boundary == {"s_axis_0": expected}
+    assert expected.pace is None and expected.outside() == Outside(BUILD, **fields)
+    assert DataflowBuildConfig.from_json(cfg.to_json()) == cfg
+    assert cfg.boundary != DataflowBuildConfig.from_dict(STATED).boundary

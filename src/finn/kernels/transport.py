@@ -1,17 +1,17 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Transport: native ready/valid pins, AXIS, and the contract of one side of a channel.
+"""Transport: native ready/valid pins, AXIS, and a port's stream on its pins.
 
 **Ready/valid.** A transfer occurs on the associated rising clock edge with
 valid and ready, outside reset. Valid data and sidebands are held while
 stalled. ``ReadyValidTransport`` describes the native pins; ``AxisBeat`` a
 homogeneous AXIS beat, lane zero lowest, with only the complete beat padded to a
 byte boundary. Scalar encodings keep their QONNX widths. A kernel's
-``AxiStreamPort`` (``finn.kernels.port``) builds one from its lanes (``transport``).
+Pure resolved port functions (``finn.kernels.port``) build one from its lanes (``transport``).
 
-**Contracts.** A ``StreamContract`` joins three levels, each owned elsewhere
-and checked here together:
+**Stream pins.** A ``StreamPins`` is a port's stream on its pins, what a channel wires
+to; it joins three levels, each owned elsewhere and checked here together:
 
 - logical: element encoding, lanes, beat form, repetition and marker rules;
 - physical: packing of the lanes into the transport word, lane zero lowest;
@@ -42,7 +42,6 @@ from finn.dataflow.datatypes import (
     canonical_qonnx_datatype,
     qonnx_datatype_width,
 )
-from finn.dataflow.schedule import Pace
 from finn.dataflow.steps import Hop, Step, Unrealizable, Unrepeatable, presented, steps
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding
@@ -50,11 +49,11 @@ from finn.dataflow.traversal import (
     Adaptation,
     BeatSequence,
     LevelEnd,
-    Repetition,
     Traversal,
     classify,
 )
 from finn.kernels.artifacts.abi import Bus, Direction, Endpoint, Member, Signal, StandardProtocol
+from finn.kernels.laws import AXIS_MARKERS, AXIS_MEMBERS, AxisSpelling, axis_carrier, axis_pin
 
 # -- native ready/valid ------------------------------------------------------------------
 
@@ -122,20 +121,21 @@ class ReadyValidTransport:
 
     def axis_bus(self) -> Bus:
         """Map compatible native signals onto AXI; adapters must supply any padding."""
-        if self.data_width % 8:
+        if axis_carrier(self.data_width) != self.data_width:
             raise ValueError("AXI stream data width must be byte aligned")
-        if len(self.markers) > 1 or any(
+        if len(self.markers) > AXIS_MARKERS or any(
             marker.kind is not MarkerKind.LAST for marker in self.markers
         ):
             raise ValueError("AXI lowering supports only a single LAST marker")
+        tdata, tvalid, tready, tlast = AXIS_MEMBERS
         return Bus(
             self.name,
             StandardProtocol.AXIS,
             (
-                Member("tdata", self.data, self.data_width),
-                Member("tvalid", self.valid),
-                Member("tready", self.ready),
-                *(Member("tlast", marker.signal) for marker in self.markers),
+                Member(tdata, self.data, self.data_width),
+                Member(tvalid, self.valid),
+                Member(tready, self.ready),
+                *(Member(tlast, marker.signal) for marker in self.markers),
             ),
             endpoint=self.endpoint,
             associated_clock=self.clock,
@@ -146,14 +146,6 @@ class ReadyValidTransport:
 # -- AXIS ----------------------------------------------------------------------------------
 
 
-class AxisSpelling(Enum):
-    """How a module spells its AXIS member pins after the bus's name: FinnLib's RTL in
-    lower case (``s_axis_tdata``), HLS's exported RTL in upper case (``s_axis_TDATA``)."""
-
-    LOWER = "lower"
-    UPPER = "upper"
-
-
 @dataclass(frozen=True, init=False)
 class AxisBeat:
     """A homogeneous beat with lane zero in the least-significant bits.
@@ -161,7 +153,7 @@ class AxisBeat:
     ``last`` declares the pin. Its workload-dependent meaning is supplied when
     binding to a logical port. ``dtype`` is the datatype value itself (qonnx's
     are interned and frozen), not reduced to a bit width. ``spelling`` is how its
-    module spells the member pins.
+    module spells the member pins (``finn.kernels.laws.axis_pin``).
     """
 
     name: str
@@ -213,7 +205,7 @@ class AxisBeat:
 
     @property
     def carrier_bits(self) -> int:
-        return (self.payload_bits + 7) // 8 * 8
+        return axis_carrier(self.payload_bits)
 
     def bus(self, *, clock: str | None = None, reset: str | None = None) -> Bus:
         """Lower to the existing, purely physical ABI representation."""
@@ -221,25 +213,23 @@ class AxisBeat:
 
     def native(self, *, clock: str | None = None, reset: str | None = None) -> ReadyValidTransport:
         """The native transport underlying this typed, padded AXI profile."""
-
-        def pin(member: str) -> str:
-            spelled = member.upper() if self.spelling is AxisSpelling.UPPER else member
-            return f"{self.name}_{spelled}"
-
+        tdata, tvalid, tready, tlast = (
+            axis_pin(self.name, member, self.spelling) for member in AXIS_MEMBERS
+        )
         return ReadyValidTransport(
             self.name,
             self.data_width,
             self.endpoint,
-            pin("tdata"),
-            pin("tvalid"),
-            pin("tready"),
+            tdata,
+            tvalid,
+            tready,
             clock,
             reset,
-            (StreamMarker(pin("tlast"), MarkerKind.LAST),) if self.last else (),
+            (StreamMarker(tlast, MarkerKind.LAST),) if self.last else (),
         )
 
 
-# -- the contract of one side of a channel -------------------------------------------------
+# -- a port's stream on its pins, one side of a channel ------------------------------------
 
 
 @dataclass(frozen=True)
@@ -249,37 +239,31 @@ class Mismatch:
 
 
 @dataclass(frozen=True)
-class StreamContract:
-    """One side of a channel: its transport plus the logical sequence it carries.
+class StreamPins:
+    """A port's stream on its pins: what a channel wires to, the realization of one side.
 
-    ``markers`` pairs a transport marker with the rule it follows, in key
-    order: a one-bit marker by its signal (``olast``), or one bit of a wider
-    loop-completion marker as ``signal[bit]`` (``olst[1]``). For a producer these are
-    guarantees; for a consumer, requirements. Transport markers without a rule
-    can be neither required nor matched.
+    ``stream`` is the port's stream (its element and its beat sequence: form, repetition,
+    markers), the contract item, a ``finn.dataflow`` value; ``transport`` its ready/valid
+    pins on its carrier (its transport kind's names, its data word's width, its clock and
+    reset); ``markers`` which pin carries each marker of the stream, in key order: a one-bit
+    marker by its signal (``olast``), or one bit of a wider loop-completion marker as
+    ``signal[bit]`` (``olst[1]``). For a producer these are guarantees; for a consumer,
+    requirements. Transport markers without a rule can be neither required nor matched.
 
-    ``pace`` is when the side presents its beats (``finn.dataflow.schedule.Pace``):
-    a kernel's port states its schedule's; ``None`` for a side no schedule paces (a
-    given sequence, a memory, a boundary, a channel's stage). Sizing a FIFO reads
-    it; whether two sides connect does not.
+    It carries no label (the port's name, ``finn.kernels.base.PortPins``) and no pace (a
+    scheduled port's own, ``finn.kernels.port_model.StreamPort.pace``): whether two sides
+    connect reads neither.
     """
 
     transport: ReadyValidTransport
-    element: ScalarEncoding
-    form: Traversal
-    repetition: Repetition = Repetition.ONCE
+    stream: Stream
     markers: tuple[tuple[str, LevelEnd], ...] = ()
-    pace: Pace | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.transport, ReadyValidTransport):
-            raise TypeError("a stream contract has a ReadyValidTransport transport")
-        if not isinstance(self.element, ScalarEncoding) or not isinstance(self.form, Traversal):
-            raise TypeError("a stream contract has a ScalarEncoding element and a Traversal")
-        if not isinstance(self.repetition, Repetition):
-            raise TypeError("a stream contract has a Repetition")
-        if self.pace is not None and not isinstance(self.pace, Pace):
-            raise TypeError("a stream contract's pace is a Pace")
+            raise TypeError("stream pins are a ReadyValidTransport's")
+        if not isinstance(self.stream, Stream) or not isinstance(self.form, Traversal):
+            raise TypeError("stream pins carry a Stream over a Traversal")
         if self.payload_bits > self.transport.data_width:
             raise ValueError(
                 f"{self.transport.name}: {self.form.lanes} x {self.element.bits}-bit lanes "
@@ -294,9 +278,24 @@ class StreamContract:
             width = widths.get(signal, 0)
             if (width != 1 if bit is None else bit >= width) or not isinstance(rule, LevelEnd):
                 raise ValueError(f"{key}: a rule needs a one-bit transport marker or marker bit")
-            if not rule.aligned(self.form):
-                raise ValueError(f"{key}: a marker every {rule.beats} beats closes no loop level")
+            if rule not in self.stream.sequence.markers:
+                raise ValueError(f"{key}: a marker every {rule.beats} beats is no stream's marker")
         object.__setattr__(self, "markers", tuple(sorted(markers.items())))
+
+    @property
+    def element(self) -> ScalarEncoding:
+        return self.stream.element
+
+    @property
+    def sequence(self) -> BeatSequence:
+        """The beat sequence its stream presents."""
+        return self.stream.sequence
+
+    @property
+    def form(self) -> Traversal:
+        form = self.stream.sequence.form
+        assert isinstance(form, Traversal)
+        return form
 
     @property
     def lanes(self) -> int:
@@ -309,11 +308,6 @@ class StreamContract:
     @property
     def rules(self) -> dict[str, LevelEnd]:
         return dict(self.markers)
-
-    @property
-    def sequence(self) -> BeatSequence:
-        """The logical sequence this side presents, without its transport."""
-        return BeatSequence(self.form, self.repetition, tuple(self.rules.values()))
 
 
 def marker_bit(key: str) -> tuple[str, int | None]:
@@ -366,21 +360,21 @@ def compatibility(source: Stream, sink: Stream) -> tuple[Mismatch, ...]:
     return tuple(found)
 
 
-def lane_permutation(source: StreamContract, sink: StreamContract) -> tuple[int, ...]:
+def lane_permutation(source: StreamPins, sink: StreamPins) -> tuple[int, ...]:
     """Sink lane -> source lane; the identity unless the lanes are only reordered."""
     try:
         produced = presented(source.sequence, sink.sequence)
     except Unrealizable:
         return tuple(range(sink.lanes))
+    if not isinstance(produced, Traversal):
+        raise Unrealizable("the physical wiring schema does not yet support Grouped")
     verdict = classify(produced, sink.form)
     if verdict.adaptation is Adaptation.LANE_PERMUTATION:
         return verdict.lane_permutation
     return tuple(range(sink.lanes))
 
 
-def marker_pairs(
-    source: StreamContract, sink: StreamContract
-) -> tuple[tuple[str | None, str], ...]:
+def marker_pairs(source: StreamPins, sink: StreamPins) -> tuple[tuple[str | None, str], ...]:
     """(source signal, sink signal) for each required sink marker; a source of None ties
     a constant marker (one closing every beat) the source does not offer high."""
     offered = source.rules
@@ -399,13 +393,12 @@ def marker_pairs(
 
 
 __all__ = [
-    "AxisSpelling",
     "AxisBeat",
     "MarkerKind",
     "Mismatch",
     "ReadyValidTransport",
-    "StreamContract",
     "StreamMarker",
+    "StreamPins",
     "compatibility",
     "lane_permutation",
     "marker_bit",

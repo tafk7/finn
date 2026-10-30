@@ -138,6 +138,8 @@ class XSim:
         run = running()
         reached = {tensor for inner in window(body, None, run.end_node) for tensor in inner.output}
         point, streams = boundary(body, node)
+        # Preserve the held watchdog boundary before any run-directory or input work.
+        cycles = point.cycles
         tapped = links(body, point, reached) if run.full_context else ()
         inputs: dict[str, Words] = {}
         outputs: dict[str, Receive] = {}
@@ -153,7 +155,7 @@ class XSim:
             inputs=inputs,
             outputs=outputs,
             pacing=self.pacing,
-            cycles=point.cycles,
+            cycles=cycles,
             toolchain=self.toolchain,
             cache=self.cache,
             taps={link.name: link.tap for link in tapped},

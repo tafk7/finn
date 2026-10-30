@@ -21,7 +21,6 @@ from support.refusals import refused
 from support.space_cores import built
 
 from core.space._choices_support import committed, replay
-from core.space._results_support import codes
 from finn.core.space import (
     Available,
     Decision,
@@ -35,7 +34,6 @@ from finn.core.space import (
     Select,
     Space,
     Unresolved,
-    View,
     composite,
     constraint,
     derived,
@@ -105,8 +103,9 @@ def test_a_relation_of_siblings_is_their_parents_and_owns_its_refusal() -> None:
     assert [(rule.rule, rule.standing) for rule in report.broken] == [("aligned", ())]
     apart = built(point, {"first.factor": 3, "second.factor": 4})
     refused = apart.inspect(Aligned.factor)
-    assert isinstance(refused.accepted_result, Rejected)
-    assert [(f.owner, f.message) for f in refused.accepted_result.findings] == [
+    assert isinstance(refused.result, Rejected)
+    assert refused.output_result is None
+    assert [(f.owner, f.message) for f in apart.query(Aligned.aligned).findings] == [
         ("aligned", "first.factor=3, second.factor=4")
     ]
     validity = inspection.validity(apart)
@@ -118,7 +117,7 @@ def test_a_relation_of_siblings_is_their_parents_and_owns_its_refusal() -> None:
 
 class Budgeted(Space):
     limit: int = Param()
-    use_third: bool = Decision(values=(False, True))
+    use_third: bool = Decision(domain=(False, True))
     a = Tiles(extent=12)
     b = Tiles(extent=8)
     c = Tiles(extent=6, when=use_third)
@@ -160,7 +159,8 @@ def test_members_range_over_present_nodes_and_the_budget_counts_them() -> None:
     ]
     over = built(third, {"use_third": True, "a.factor": 4, "b.factor": 2, "c.factor": 1})
     refused = over.query(Budgeted.total)
-    assert codes(refused) == {"over-budget"} and owners(refused) == {"within"}
+    assert isinstance(refused, Rejected)
+    assert inspection.validity(over).status == "refused"
 
 
 # -- 3. a graph built as data, with edges assigned after their nodes -------------------
@@ -177,7 +177,7 @@ class Wide(Space):
 
 class Stage(Wide):
     width_in: int = Param()
-    growth: int = Decision(values=(0, 1, 2))
+    growth: int = Decision(domain=(0, 1, 2))
 
     @derived
     def width_out(self) -> int:
@@ -340,12 +340,12 @@ def test_a_composite_node_has_the_surface_of_a_leaf_node() -> None:
 
 class Fixed(Space):
     width: int = Param()
-    physical = View(width)
+    physical = view(width)
 
 
 class Tuned(Space):
     base: int = Param()
-    extra: int = Decision(values=(1, 2))
+    extra: int = Decision(domain=(1, 2))
 
     @view
     def physical(self) -> int:
@@ -357,14 +357,14 @@ class WithChoice(Space):
 
     base: int = Param()
     choice: Fixed | Tuned = Select(fixed=Fixed(width=8), tuned=Tuned(base=base))
-    physical = View(choice.physical)
+    physical = view(choice.physical)
 
 
 class WithPrimitives(Space):
     """The same choice spelled with the primitives it lowers onto."""
 
     base: int = Param()
-    choice: str = Decision(values=("fixed", "tuned"))
+    choice: str = Decision(domain=("fixed", "tuned"))
 
     @derived
     def is_fixed(self) -> bool:

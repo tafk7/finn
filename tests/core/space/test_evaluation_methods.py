@@ -47,7 +47,7 @@ def value(world: Evaluation, key: str) -> object:
 
 class Leaf(Space):
     width: int = Param()
-    lanes: int = Decision(values=(1, 2))
+    lanes: int = Decision(domain=(1, 2))
 
     @derived
     def bits(self) -> int:
@@ -56,12 +56,12 @@ class Leaf(Space):
 
 class Wide(Space):
     width: int = Param()
-    span: int = Decision(values=(2, 4))
+    span: int = Decision(domain=(2, 4))
 
 
 class Outer(Space):
     width: int = Param()
-    enabled: bool = Decision(values=(False, True))
+    enabled: bool = Decision(domain=(False, True))
     leaf = Leaf(width=width)
     guarded = Leaf(width=width, when=enabled)
     mode: Leaf | Wide = Select(leaf=Leaf(width=width), wide=Wide(width=width))
@@ -136,31 +136,45 @@ def test_an_undeclared_read_is_the_methods_failure_even_when_caught() -> None:
     assert "leaf.width" in caught.value.primary.detail
 
 
-def test_dynamic_and_declared_reads() -> None:
+def test_metadata_does_not_change_dynamic_or_fixed_outward_reads() -> None:
     def computed(self: Space) -> int:
         return sum(cast(int, getattr(self, name)) for name in ("a", "b"))
 
-    def declared(self: Space) -> int:
-        return sum(cast(int, getattr(self, name)) for name in ("a", "b"))
+    def fixed(self: Space) -> int:
+        return cast(int, self.a) + cast(int, self.b)  # type: ignore[attr-defined]
 
-    declared.__reads__ = ("a", "b")  # type: ignore[attr-defined]
-
-    def short(self: Space) -> int:
-        return sum(cast(int, getattr(self, name)) for name in ("a", "b"))
-
-    short.__reads__ = ("a",)  # type: ignore[attr-defined]
-
+    setattr(computed, "__reads__", ("a",))
+    setattr(fixed, "__reads__", ("a",))
     members: dict[str, object] = {
         "__annotations__": {"a": int, "b": int},
         "a": Param(),
         "b": Param(),
         "computed": derived(computed),
-        "declared": derived(declared),
-        "short": derived(short),
+        "fixed": derived(fixed),
     }
     space_type = cast(type[Space], type("Reads", (Space,), members))
     world = open_evaluation(space_type(a=1, b=2))  # type: ignore[call-arg]
-    assert value(world, "computed") == 3  # dynamic: not checked
-    assert value(world, "declared") == 3
-    with pytest.raises(NativeEvaluationError, match="read-undeclared"):
-        entry(world, "short")
+    for name in ("computed", "fixed"):
+        found = entry(world, name)
+        assert found.result == Available(3)
+        assert [index.key for index, _ in found.trace] == ["a", "b"]
+
+
+def test_metadata_cannot_admit_a_read_hidden_from_fixed_source() -> None:
+    def hidden(self: Outer) -> int:
+        for child in (self.leaf,):
+            try:
+                return child.width
+            except EvaluationError:
+                return 0
+        return 0
+
+    setattr(hidden, "__reads__", ("leaf.width",))
+    subclass = cast(type[Outer], type("Hidden", (Outer,), {"metadata": derived(hidden)}))
+    world = open_evaluation(subclass(width=4))
+    with pytest.raises(NativeEvaluationError) as caught:
+        entry(world, "metadata")
+    assert caught.value.primary.owner == "metadata"
+    assert caught.value.primary.role == "read-undeclared"
+    assert "leaf.width" in caught.value.primary.detail
+    assert "__reads__" not in caught.value.primary.detail

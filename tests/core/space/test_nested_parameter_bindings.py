@@ -23,12 +23,12 @@ from finn.core.space import (
     Param,
     Space,
     Unresolved,
-    View,
     composite,
     derived,
     design_space,
     divisors_of,
     inspection,
+    view,
 )
 from finn.core.space.errors import ConfigurationError, DefinitionError, RequestError
 
@@ -41,7 +41,7 @@ class Port(Space):
     def description(*, dtype: str, lanes: int) -> tuple[str, int]:
         return dtype, lanes
 
-    physical = View(description)
+    physical = view(description)
 
 
 class Reusable(Space):
@@ -56,7 +56,7 @@ class Reusable(Space):
 def test_outer_params_and_decisions_supply_interface_slots_without_new_choices() -> None:
     class Parent(Space):
         dtype: str = Param()
-        lanes: int = Decision(values=(1, 2, 4))
+        lanes: int = Decision(domain=(1, 2, 4))
         kernel = Reusable(count=1, dtype=dtype, lanes=lanes)
 
     base = design_space(Parent(dtype="INT8"))
@@ -111,8 +111,8 @@ def test_a_decision_bound_into_a_child_reads_the_enclosing_class_for_its_domain_
 
 def test_a_decision_bound_into_two_nodes_is_one_decision_of_its_class() -> None:
     class Shared(Space):
-        use_first: bool = Decision(values=(False, True))
-        lanes: int = Decision(values=(1, 2, 4))
+        use_first: bool = Decision(domain=(False, True))
+        lanes: int = Decision(domain=(1, 2, 4))
         first = Port(dtype="INT4", lanes=lanes, when=use_first)
         second = Port(dtype="INT8", lanes=lanes)
 
@@ -204,9 +204,9 @@ def test_assignment_after_freezing_is_refused() -> None:
 
     reference = Parent.kernel.port.dtype
     old = design_space(Parent(first="INT3", second="INT7"))
-    # Preparing Parent froze its node declarations: the model cannot drift.
+    # Making Parent froze its node declarations: the model cannot drift.
     with refused(
-        "declaration-frozen", error=DefinitionError, message="is frozen .Parent was prepared"
+        "declaration-frozen", error=DefinitionError, message="is frozen .Parent was created"
     ) as caught:
         Parent.kernel.lanes = 2
     assert "assigned at test_nested_parameter_bindings.py:" in str(caught.error)
@@ -240,7 +240,7 @@ def test_a_graph_built_as_data_binds_formals_and_keeps_their_types() -> None:
 
 def test_nested_decision_reference_can_traverse_concrete_reference_layers() -> None:
     class Leaf(Space):
-        value: int = Decision(values=(1, 2))
+        value: int = Decision(domain=(1, 2))
 
     class Middle(Space):
         leaf = Leaf()

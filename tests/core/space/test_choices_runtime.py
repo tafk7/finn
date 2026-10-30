@@ -14,7 +14,6 @@ from core.space._results_support import dependency_nodes
 from finn.core.space import (
     Available,
     BoundDecision,
-    Const,
     Decision,
     Inapplicable,
     Param,
@@ -22,7 +21,6 @@ from finn.core.space import (
     Select,
     Space,
     Unresolved,
-    View,
     derived,
     design_space,
     divisors_of,
@@ -46,7 +44,7 @@ class Tile(Space):
     def cycles(*, extent: int, lanes: int) -> int:
         return extent // lanes
 
-    physical = View(cycles)
+    physical = view(cycles)
 
 
 def test_two_child_placements_have_independent_choices_and_immutable_roots() -> None:
@@ -75,25 +73,28 @@ def test_false_outer_scope_suppresses_inner_commitments_and_callbacks() -> None:
     calls: list[str] = []
 
     class Guarded(Space):
-        inner: bool = Decision(values=(True, False))
-        lanes: int = Decision(values=(1, 2), when=inner)
+        inner: bool = Decision(domain=(True, False))
+        lanes: int = Decision(domain=(1, 2), when=inner)
 
-        @derived(when=inner)
+        @derived
         def raw() -> int:
             calls.append("inactive body")
             raise AssertionError("inactive body was evaluated")
 
-        physical = View(raw, when=inner)
+        physical = view(raw)
 
     class Outer(Space):
-        enabled = Const(False)
+        @derived
+        def enabled(self) -> bool:
+            return False
+
         child = Guarded(when=enabled)
 
     point = design_space(Outer())
     assert isinstance(point.child.query(Guarded.lanes), Inapplicable)
     assert isinstance(point.child.field(Guarded.lanes).state, Inapplicable)
     assert isinstance(point.child.query(Guarded.raw), Inapplicable)
-    assert isinstance(point.child.inspect(Guarded.physical).accepted_result, Inapplicable)
+    assert isinstance(point.child.inspect(Guarded.physical).result, Inapplicable)
     assert calls == []
     # A choice under a guard that never holds is kept, dormant: never read.
     dormant = point.child.with_choices(lanes=1)
@@ -121,23 +122,23 @@ def test_selected_view_preserves_direct_refusal_and_skips_other_alternatives() -
         # A Decision over nodes; ``implementation.physical`` reads the selected
         # candidate's member by name.
         implementation: Refused | Explodes = Select(refused=Refused(), explodes=Explodes())
-        accepted = View(implementation.physical)
-        physical = View(accepted)
+        accepted = view(implementation.physical)
+        physical = view(accepted)
 
     base = design_space(Root())
     assert isinstance(base.query(Root.accepted), Unresolved)
     point = base.with_choices(implementation="refused")
     child = point.implementation
     assert isinstance(child, Refused)
-    direct = child.inspect(Refused.physical).accepted_result
+    direct = child.inspect(Refused.physical).result
     assert isinstance(direct, Rejected)
     assert point.query(Root.accepted) == direct
-    assert point.inspect(Root.physical).accepted_result == direct
+    assert point.inspect(Root.physical).result == direct
     assert point.with_choices(implementation="refused") is point
     point.with_choices(implementation="explodes")
     unselected = inspection.candidate(point, Root.implementation, "explodes")
     assert isinstance(unselected, Explodes)
-    assert isinstance(unselected.inspect(Explodes.physical).accepted_result, Inapplicable)
+    assert isinstance(unselected.inspect(Explodes.physical).result, Inapplicable)
     assert isinstance(base.query(Root.accepted), Unresolved)
     assert calls == []
 
@@ -146,13 +147,16 @@ def test_singleton_choice_is_open_and_respects_its_outer_guard() -> None:
     # A singleton choice is an ordinary Decision: open until a change sets it, though it
     # has one case. Setting it is a choice like any other.
     class Only(Space):
-        output = Const(7)
-        physical = View(output)
+        @derived
+        def output(self) -> int:
+            return 7
+
+        physical = view(output)
 
     class Root(Space):
         enabled: bool = Param()
         implementation: Only = Select(only=Only(), when=enabled)
-        accepted = View(implementation.physical)
+        accepted = view(implementation.physical)
 
     active = design_space(Root(enabled=True))
     assert isinstance(active.query(Root.accepted), Unresolved)
@@ -172,10 +176,14 @@ def test_singleton_choice_is_open_and_respects_its_outer_guard() -> None:
 
 def test_nested_choice_selection_retains_its_owning_scope() -> None:
     class A(Space):
-        value = Const(1)
+        @derived
+        def value(self) -> int:
+            return 1
 
     class B(Space):
-        value = Const(2)
+        @derived
+        def value(self) -> int:
+            return 2
 
     class Example(Space):
         implementation: A | B = Select(a=A(), b=B())
@@ -201,10 +209,14 @@ def test_nested_choice_selection_retains_its_owning_scope() -> None:
 
 def test_choice_metadata_and_handles_retain_the_compiled_definition() -> None:
     class A(Space):
-        value = Const(1)
+        @derived
+        def value(self) -> int:
+            return 1
 
     class B(Space):
-        value = Const(2)
+        @derived
+        def value(self) -> int:
+            return 2
 
     class Root(Space):
         implementation: A | B = Select(a=A(), b=B())
@@ -241,10 +253,10 @@ def test_function_view_failure_names_its_authored_owner() -> None:
 def test_exposed_inputs_and_supplier_aliases_keep_distinct_rights() -> None:
     class Child(Space):
         width: int = Param()
-        physical = View(width)
+        physical = view(width)
 
     class Root(Space):
-        supplier: int = Decision(values=(2, 4))
+        supplier: int = Decision(domain=(2, 4))
         # The formal is declared here and bound to the child by name.
         exposed_width: int = Param()
         aliased = Child(width=supplier)
@@ -274,7 +286,7 @@ def test_wide_selected_outputs_keep_frozen_case_order_and_exact_targets() -> Non
 
     class Root(Space):
         implementation: Leaf = Select(**{f"case{index}": Leaf(value=index) for index in range(128)})
-        physical = View(implementation.physical)
+        physical = view(implementation.physical)
 
     model = inspection.model(Root)
     output = Root.physical

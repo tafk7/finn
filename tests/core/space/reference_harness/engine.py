@@ -70,11 +70,12 @@ guard is a derived member ``when-<name>``. Facts
 are the root's formals: a required fact is ``Param()``, an optional one
 ``T | None = Param(default=None)``, left out where the model reads ``None`` (the engine
 reads it ``None`` too). A ``Members`` is the
-engine's ``Members(Base.member)`` over a member of its own, ``members-<path>``, declared on one
-base every scope's class derives from (``MembersBase``): there it answers inapplicable (guarded
-by ``members-none``), and a child holding an entry overrides it with a derived value reading
-the entry; each entry is in a child or a case placed by the ``Members``'s scope, one per
-child. Its value, the engine's ``Located`` entries, is read as
+engine's ``Members(Base.member)`` over a member of its own, ``members-<path>``, declared on a
+base of its own (``MembersBase_<path>``) that only the classes holding an entry of it derive
+(a class holding entries of several derives each base): each overrides the member with a
+derived value reading the entry, and a class holding none is no candidate, so the base's own
+member is never read. Each entry is in a child or a case placed by the ``Members``'s scope,
+one per child. Its value, the engine's ``Located`` entries, is read as
 the model's sorted (entry, value) pairs, ``Located.node`` mapped to the entry's path, in
 its answer and wherever a function reads it.
 """
@@ -320,8 +321,8 @@ class _Builder:
                 raise NotTranslatable(f"{path}: a selector's guard holds one selector alone")
             self.guards[f"{path}.{held.selectors[0].name}"] = path
         self.externals = {scope: self._externals(scope) for scope in index.scopes}
-        #: per ``Members``: the member of ``MembersBase`` it reads, and its entries by the
-        #: child's local name
+        #: per ``Members``: the member of its base it reads, and its entries by the child's
+        #: local name
         self.keys: dict[str, str] = {}
         self.located: dict[str, dict[str, str]] = {}
         #: per scope: the entry each ``Members`` of it reads there
@@ -346,7 +347,8 @@ class _Builder:
         self.nodes: dict[str, dict[str, Any]] = {scope: {} for scope in index.scopes}
         self.selectors: dict[str, Any] = {}
         self.classes: dict[str, type[Space]] = {}
-        self.members_base: type[Space] = Space
+        #: per ``Members``: its base, derived by the classes holding an entry of it
+        self.bases: dict[str, type[Space]] = {}
         self.pending: set[tuple[str, str]] = set()
         #: an engine alias key (a scope's formal) -> the model path it takes
         self.aliases: dict[str, str] = {}
@@ -473,7 +475,7 @@ class _Builder:
         if name in index.views:
             return self._view(scope, name)
         if name in index.members:
-            return Members(getattr(self.members_base, self.keys[name]))
+            return Members(getattr(self.members_base(name), self.keys[name]))
         if name in index.constraints:
             return self._constraint(scope, name)
         raise NotTranslatable(f"{name}: nothing to declare in {scope or 'the root'}")
@@ -527,7 +529,7 @@ class _Builder:
         domain_ = info.domain
         simple = domain_.values is not None and domain_.member is None and not domain_.reads
         if simple and domain_.values:
-            return Decision(values=domain_.values)
+            return Decision(domain=domain_.values)
         reads = domain_.reads
         names = [f"a{position}" for position in range(len(reads))]
 
@@ -663,28 +665,33 @@ class _Builder:
             _explicit(when.reads, lambda read: bool(when.test(self.model_reads(read))), bool)
         )
 
-    def _members_base(self) -> type[Space]:
-        """The base of every scope's class: each ``Members``'s member, answering inapplicable
-        (guarded by ``members-none``, False) where a class holds no entry of it."""
+    def members_base(self, path: str) -> type[Space]:
+        """The base of the classes holding an entry of the ``Members`` ``path``: its member
+        ``members-<path>``, which each class deriving it overrides with its entry, so the
+        base's own is never read."""
+        if path not in self.bases:
 
-        def never() -> bool:
-            return False
+            def unread() -> int | Rejected:
+                raise AssertionError("a Members base's own member was read")
 
-        guard = derived(never)
-        members: dict[str, object] = {"members-none": guard}
-        for member in self.keys.values():
+            self.bases[path] = composite(
+                "MembersBase_" + self.keys[path].removeprefix("members-").replace("-", "_"),
+                {self.keys[path]: derived(unread)},
+            )
+        return self.bases[path]
 
-            def nothing() -> int | Rejected:
-                raise AssertionError("a member guarded off was read")
-
-            members[member] = derived(when=guard)(nothing)
-        return composite("MembersBase", members)
+    def scope_base(self, scope: str) -> type[Space]:
+        """A scope's base: the base of each ``Members`` it holds an entry of, several by
+        inheritance, or ``Space`` where it holds none."""
+        bases = tuple(self.members_base(path) for path in sorted(self.entered[scope]))
+        if len(bases) <= 1:
+            return bases[0] if bases else Space
+        name = "MembersBases_" + (scope.replace(".", "_") or "root")
+        return cast(type[Space], type(name, bases, {"__module__": __name__}))
 
     def space_class(self, scope: str) -> type[Space]:
         if scope in self.classes:
             return self.classes[scope]
-        if self.keys and self.members_base is Space:
-            self.members_base = self._members_base()
         index = self.index
         members: dict[str, object] = {}
         annotations: dict[str, object] = {}
@@ -744,7 +751,7 @@ class _Builder:
         for path, entry in sorted(self.entered[scope].items()):
             members[self.keys[path]] = derived(**self._aliases(scope, (entry,)))(_copied(entry))
         self.classes[scope] = composite(
-            name, members, base=self.members_base, annotations=annotations
+            name, members, base=self.scope_base(scope), annotations=annotations
         )
         return self.classes[scope]
 

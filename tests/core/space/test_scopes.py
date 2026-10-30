@@ -14,7 +14,6 @@ from support.space_cores import built
 from finn.core.space import (
     Available,
     BoundDecision,
-    Const,
     Decision,
     Inapplicable,
     Param,
@@ -22,21 +21,25 @@ from finn.core.space import (
     Select,
     Space,
     Unresolved,
-    View,
     composite,
     constraint,
     derived,
     design_space,
     divisors_of,
     inspection,
+    view,
 )
 from finn.core.space.errors import ConfigurationError, DefinitionError
+
+
+def _always() -> bool:
+    return True
 
 
 def test_composite_keeps_narrow_fields_available_and_reuses_accepted_children() -> None:
     class Interface(Space):
         width: int = Param()
-        lanes: int = Decision(values=(1, 2))
+        lanes: int = Decision(domain=(1, 2))
 
         @derived
         def complete(*, width: int, lanes: int) -> int:
@@ -46,19 +49,24 @@ def test_composite_keeps_narrow_fields_available_and_reuses_accepted_children() 
         def supported(*, width: int) -> bool:
             return width > 0
 
-        physical = View(complete)
+        physical = view(complete)
 
     class Refused(Space):
-        width = Const(-1)
+        @derived
+        def width(self) -> int:
+            return -1
 
         @constraint
         def supported() -> bool:
             return False
 
-        physical = View(width)
+        physical = view(width)
 
     class Composite(Space):
-        enabled = Const(False)
+        @derived
+        def enabled(self) -> bool:
+            return False
+
         activation = Interface(width=8)
         weights = Interface(width=4)
         optional = Interface(width=16, when=enabled)
@@ -69,7 +77,7 @@ def test_composite_keeps_narrow_fields_available_and_reuses_accepted_children() 
         def narrow(*, activation: int, weights: int) -> int:
             return activation + weights
 
-        physical = View(implementation.physical)
+        physical = view(implementation.physical)
 
         # Reading the member by name links one selection of it.
         @derived(width=implementation.width)
@@ -78,8 +86,8 @@ def test_composite_keeps_narrow_fields_available_and_reuses_accepted_children() 
 
     base = design_space(Composite())
     assert base.narrow == 12
-    assert isinstance(base.activation.inspect(Interface.physical).accepted_result, Unresolved)
-    assert isinstance(base.weights.inspect(Interface.physical).accepted_result, Unresolved)
+    assert isinstance(base.activation.inspect(Interface.physical).result, Unresolved)
+    assert isinstance(base.weights.inspect(Interface.physical).result, Unresolved)
     assert isinstance(base.optional.query(Interface.lanes), Inapplicable)
     field = base.optional.field(Interface.lanes)
     assert isinstance(field, BoundDecision)
@@ -93,18 +101,18 @@ def test_composite_keeps_narrow_fields_available_and_reuses_accepted_children() 
     successor = built(base, {"implementation": "refused"})
     selected = successor.implementation
     assert isinstance(selected, Refused)
-    direct = selected.inspect(Refused.physical).accepted_result
+    direct = selected.inspect(Refused.physical).result
     assert isinstance(direct, Rejected)
-    assert successor.inspect(Composite.physical).accepted_result == direct
+    assert successor.inspect(Composite.physical).result == direct
     assert successor.query(Composite.implementation.width) == Available(-1)
     assert successor.selected_width == -1
-    assert isinstance(base.inspect(Composite.physical).accepted_result, Unresolved)
+    assert isinstance(base.inspect(Composite.physical).result, Unresolved)
 
 
 def test_a_decision_of_the_class_reads_its_suppliers_and_exposure_is_explicit() -> None:
     class Child(Space):
         value: int = Param()
-        physical = View(value)
+        physical = view(value)
 
     class Root(Space):
         extent: int = Param()
@@ -132,16 +140,22 @@ def test_a_decision_of_the_class_reads_its_suppliers_and_exposure_is_explicit() 
 
 def test_nested_handles_and_named_aliases_keep_frozen_interpretations() -> None:
     class Leaf(Space):
-        value = Const(5)
-        other = Const(7)
-        physical = View(value)
+        @derived
+        def value(self) -> int:
+            return 5
+
+        @derived
+        def other(self) -> int:
+            return 7
+
+        physical = view(value)
 
     class Middle(Space):
         inner = Leaf()
 
     class Root(Space):
         outer = Middle()
-        accepted = View(outer.inner.physical)
+        accepted = view(outer.inner.physical)
 
     original_placement = Middle.inner
     original_accepted = Root.accepted
@@ -156,20 +170,23 @@ def test_nested_handles_and_named_aliases_keep_frozen_interpretations() -> None:
     assert Middle.inner is original_placement
     assert base.query(Root.outer.inner.value) == Available(5)
 
-    # A declared alias is interpreted by its frozen compiled entry. Mutating
-    # the source declaration later cannot retarget that old compiled reference.
-    original_accepted.source = Root.outer.inner.other
+    # A declared alias is interpreted by its compiled entry, and the source declaration
+    # cannot be retargeted later: it was frozen when Root was made.
+    with refused("declaration-frozen", error=DefinitionError, message="Root was created"):
+        original_accepted.source = Root.outer.inner.other
     assert base.query(original_accepted) == Available(5)
     assert design_space(Root()).accepted == 5
 
 
 def test_two_thousand_guarded_scopes_compile_and_query_iteratively() -> None:
     class Leaf(Space):
-        value = Const(9)
+        @derived
+        def value(self) -> int:
+            return 9
 
     space_type: type[Space] = Leaf
     for depth in range(2_000):
-        enabled = Const(True)
+        enabled = derived(_always)
         space_type = composite(
             f"Layer{depth}", {"enabled": enabled, "inner": space_type(when=enabled)}
         )
@@ -182,12 +199,20 @@ def test_two_thousand_guarded_scopes_compile_and_query_iteratively() -> None:
 
 
 def test_recursive_structure_is_rejected_before_occurrence_allocation() -> None:
-    class Recursive(Space):
-        value = Const(1)
+    # A class placing itself: only its __init_subclass__ can, while the class is made (a
+    # class is closed when it is made, and its body cannot name it).
+    class Placing(Space):
+        def __init_subclass__(cls, **kwargs: object) -> None:
+            super().__init_subclass__(**kwargs)
+            repeated = cls()
+            setattr(cls, "again", repeated)
+            repeated.__set_name__(cls, "again")
 
-    repeated = Recursive()
-    repeated.__set_name__(Recursive, "again")
-    setattr(Recursive, "again", repeated)
+    class Recursive(Placing):
+        @derived
+        def value(self) -> int:
+            return 1
+
     with refused("cyclic-dependency", error=DefinitionError) as caught:
         design_space(Recursive())
     # The error's own detail, over the finding it rewraps.
@@ -200,27 +225,32 @@ def test_choice_members_are_validated_over_all_cases_before_selection() -> None:
     # member every candidate declares; a qualified read names one candidate and is
     # inapplicable while another is selected.
     class Complete(Space):
-        value = Const(1)
-        physical = View(value)
+        @derived
+        def value(self) -> int:
+            return 1
+
+        physical = view(value)
 
     class Missing(Space):
-        value = Const(2)
+        @derived
+        def value(self) -> int:
+            return 2
 
     with pytest.raises(AttributeError, match="absent"):
 
         class Nowhere(Space):
             implementation: Complete | Missing = Select(complete=Complete(), missing=Missing())
-            absent = View(implementation.absent)  # type: ignore[union-attr]
+            absent = view(implementation.absent)  # type: ignore[union-attr]
 
     with refused("direct-read-undeclared", error=DefinitionError, message=r"cases \['missing'\]"):
 
         class Unqualified(Space):
             implementation: Complete | Missing = Select(complete=Complete(), missing=Missing())
-            physical = View(cast(Complete, implementation).physical)
+            physical = view(cast(Complete, implementation).physical)
 
     class Partial(Space):
         implementation: Complete | Missing = Select(complete=Complete(), missing=Missing())
-        physical = View(implementation["complete"].physical)  # type: ignore[index]
+        physical = view(implementation["complete"].physical)  # type: ignore[index]
 
     base = design_space(Partial())
     assert isinstance(base.query(Partial.physical), Unresolved)
@@ -236,7 +266,7 @@ def test_inferred_nested_output_must_match_consumer_annotation() -> None:
         def value() -> int:
             return 1
 
-        physical = View(value)
+        physical = view(value)
 
     class Middle(Space):
         inner = Leaf()
@@ -254,11 +284,16 @@ def test_inferred_nested_output_must_match_consumer_annotation() -> None:
 
 def test_false_choice_guard_does_not_demand_selector_or_case_condition() -> None:
     class Leaf(Space):
-        value = Const(1)
+        @derived
+        def value(self) -> int:
+            return 1
 
     class Root(Space):
-        disabled = Const(False)
-        unknown: bool = Decision(values=(False, True))
+        @derived
+        def disabled(self) -> bool:
+            return False
+
+        unknown: bool = Decision(domain=(False, True))
         choice: Leaf = Select(a=Leaf(when=unknown), b=Leaf(), when=disabled)
 
     point = design_space(Root())

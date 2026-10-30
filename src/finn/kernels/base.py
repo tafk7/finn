@@ -1,93 +1,45 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The kernel base, ``KernelSpace``, and what every kernel shares.
+"""Hardware design Spaces with actual model children and native outward source.
 
-A kernel is a Space whose choices configure hardware. **``KernelSpace``** is the one base
-of kernels: a kernel binds a module of the library or places kernels and channels (its
-members), never both (``module-places-kernels``). A kernel states its ``id`` (a nonempty
-string), its facts and choices, the constraints by which it refuses what it cannot build,
-and its declarations (below). It may state its ``clock_domain``, on which its ports and its
-module run (``clocking``). It states no policy for its choices: those are the compiler's
-(``finn.kernels.policies``); a ranking it knows is a view a policy may name.
+Kernel, the one base, states netlist/cycles/buffering/resources; a channel's FIFO
+answers its cycles inapplicable. Real StreamPort children own intrinsic rules,
+included ControlModel Groups share their real parent, and plain ModuleSpec values
+describe sources.
+A kernel binding a module states its binding (ModuleSpec, parameters, sources,
+data) and its ports; the base assembles its netlist from them, serially, in the
+order the module's pins and holds take (``Kernel.netlist``). The base derives its
+cycles by the rate law (``Kernel.cycles``) and answers its intake unstated unless it
+states its own (``Kernel.intake``). Parents compose resolved child Members in ordinary
+source. Importing it registers FINN's value types (``finn.kernels.values.semantics``),
+which a kernel's facts hold and the engine admits only registered. No setter, read-list
+or flat callback table is installed on a kernel. Three things are installed when its class
+is made, each a function reading by names its closure fixes, so that its source states its
+reads: on a kernel with a module, one helper a part of its module; on a kernel with
+children, each port it serves (``served``) lowered into the members a channel and its
+sizing read of a port, ``<port>_side``, ``<port>_stream_pins``, ``<port>_pace`` and
+``<port>_advance``, and, for a selector, ``<child>_case``; on a kernel declaring a control
+bus (``ControlModel``), what is read of it, ``declares_bus`` and ``bus_control``.
 
-**Its four answers**, each a view written once in the base (``_netlist``, ``_cycles``,
-``_buffering``, ``_resources``) and made for each class when it is made, reading its
-declarations by the names their lowering fixes:
-
-- ``netlist``: its library module at the empty label (``finn.kernels.library``), its
-  members' netlists under their nodes, and the control buses its members present
-  (``merged``). A kernel with neither a module nor a member is refused (``kernel-module``).
-  A channel states its own, adding the hops between its own ends; its network adds its
-  hops to the ports beside it (``finn.kernels.channels``).
-- ``cycles``: the most beats any of its declarations carries a frame, or any of its
-  members takes, one beat a cycle at best; refused where there is none (``kernel-cycles``).
-  A channel of wires takes none of its own (0).
-- ``buffering``: the bits it holds itself (``held_bits``, a view: none, but for a stage
-  that buffers) and its members'.
-- ``resources``: what it uses of the device itself (``resource_use``, a view: nothing, but
-  for a kernel with a module, which states its own) and its members'.
-
-Nothing in its design space reads them, and each refuses while the kernel is refused.
-A class may state one itself, calling the base's body. Its library module is read back
-from its netlist (``finn.kernels.library.library_module``). **``Kernel``** is what a
-reader of any kernel's design point asks: a ``typing.Protocol`` of the four answers, read
-out, and nothing else (its docstring).
-
-**What it reaches of its members**: their answers, through ``Members`` over the member each
-states (``netlists``, ``controls`` over ``bus_control``, ``member_cycles`` over
-``Timed.cycles``, ``member_buffering``, ``member_resources``), read by its views alone. A
-parent reaches only its present members, one refused member refusing the answer; a member
-answering inapplicable (a kernel declaring no control bus, a FIFO's cycles) is left out.
-
-**Its declarations** (``finn.kernels.declaration``): its stream ports
-(``finn.kernels.port``), the ports it presents for its members
-(``finn.kernels.port.served``), the library module it binds
-(``finn.kernels.library.LibraryModule``) and its control bus
-(``finn.kernels.control.ControlBus``), each a plain frozen value in its class body. When
-the class is made, the base lowers each into ordinary members of the kernel
-(``KernelDeclaration.lower``), and makes its answers read what each states of its module,
-pins, holds, reads and beats by name.
-
-A kernel binding a module states its parameters, its sources (an HLS kernel's one source
-is its build request) and its data in its ``LibraryModule``, its ``resource_use`` (a
-refusal where it has no model of it, never nothing) and its ports, each stream port taking
-the tensor it reads as a fact (absent: an idle port), and may declare a control bus, held
-idle or presented. Each input of its module is a port's, a presented control bus's, or
-held (``kernel-pins``). The base binds its indices' extents from its ports' reads of their
-tensors (``extents``), from which it states schedules (``bound_schedule``) and shapes
-(``spanned``).
-
-**The definition checks**, when a class is made: at most one control bus
-(``control-bus-repeated``, before any declaration is lowered); a declaration lowering to a
-member the class declares itself (``declaration-member-taken``); its ``id``
-(``kernel-id-invalid``); at most one library module (``library-module-repeated``); constant
-sources provide the module (``library-module-unprovided``). A class leaving a ``required()``
-member unmet is a base of kernels (the dot-product cores'), not placed, and the checks below
-pass it by. A kernel with a module states a stream port (``module-ports-unplaced``) and its
-``resource_use`` (``module-resources-unstated``), and places no kernel
-(``module-places-kernels``). A kernel stating a stream port binds a module
-(``port-unbound``): a port's pins are its module's, and a kernel with children presents its
-children's ports (``served``).
-
-Every constraint of a kernel and of its present members counts toward its validity
-(``inspection.validity``). A kernel states one contract per stream port: a view
-``<name>_contract`` of a ``PortContract`` (a module's port's, labelled ``x``; a member's,
-labelled below it: MatMul's ``compute.packed.x``). Every kernel states
-its netlist (``netlist``), its control bus's ``Control`` (``bus_control``) where it declares
-one, and what an exploration ranks by: ``cycles``, ``buffering`` and ``resources``; a reader
-asks a kernel for each by name (``KernelSpace.netlist``, ``Timed.cycles``).
+Hardware configuration facts/Choices/rules remain inward model computations.
+Outward Views keep selected owning non-refusal and actual unresolved inputs.
+A reader types against Kernel and reads its answers; no timing/native/container
+facility or computational verification is added. Physical source provision,
+module ownership, required declarations and resource statements are checked.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import MappingProxyType
-from typing import Any, ClassVar, Protocol, cast
+from typing import Any, ClassVar
 
 from finn.core.space import (
     DefinitionError,
+    Group,
+    Inapplicable,
     Members,
     Rejected,
     Space,
@@ -95,75 +47,48 @@ from finn.core.space import (
     reject,
     view,
 )
-from finn.core.space.declarations import unmet_required
-from finn.dataflow.schedule import Access, Affine, Index, Refused, Schedule, bind_extents
+from finn.core.space._nodes import assign, node_record
+from finn.core.space.declarations import Declaration, Derived, unmet_required
+from finn.dataflow.schedule import (
+    Access,
+    Affine,
+    Index,
+    Pace,
+    Refused,
+    Schedule,
+    bind_extents,
+    schedule_over,
+    span,
+)
 from finn.kernels.artifacts import ArtifactError
-from finn.kernels.artifacts.abi import Clocking
-from finn.kernels.artifacts.module import BusExport, Fragment, Link, merge
-from finn.kernels.control import Control, ControlBus, presented
-from finn.kernels.declaration import KernelDeclaration, Product, declarations, declared_reads
-from finn.kernels.library import LibraryModule
-from finn.kernels.transport import StreamContract
+from finn.kernels.artifacts.abi import Clocking, Pin
+from finn.kernels.artifacts.contributions import Contribution, GeneratedData
+from finn.kernels.artifacts.module import BusExport, Fragment, Held, Link, merge
+from finn.kernels.control import Control, ControlModel, control_models, presented
+from finn.kernels.laws import AXIS_CLOCKING, INTAKE_UNSTATED, Advance, Intake
+from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
+from finn.kernels.transport import StreamPins
 from finn.kernels.utilization import total
+from finn.kernels.values import semantics as _value_types  # noqa: F401 (registers value types)
 from finn.platform.capabilities import Resources
 
 
-class Kernel(Protocol):
-    """What a reader asks of a kernel's design point: its four hardware answers, read out
-    (its netlist, the cycles a frame takes through it, the bits it holds and what it uses
-    of the device). A design point of every ``KernelSpace`` satisfies it, each answer an
-    accepted view's value; a reader typed ``Kernel`` reads them and nothing else.
-
-    These read-out answers are the whole Protocol. A kernel's streams are members of its
-    design space, one per port and named by it (``x_stream``), so each class types its own
-    and the Protocol holds none of them; a generic reader finds them through the class's
-    declarations (``finn.kernels.declaration.declarations``). What a kernel admits, its
-    choices and a trial of them are the engine's, asked of any Space.
-
-    Reading an answer here gives its accepted value, and raises where the kernel refuses
-    it. A reader wanting the result rather than the accepted value asks
-    ``point.query(type(point).netlist)``: ``Available`` with the value, or the refusal."""
-
-    @property
-    def netlist(self) -> Fragment:
-        """Its netlist, labelled relative to itself."""
-        ...
-
-    @property
-    def cycles(self) -> int:
-        """The clock cycles a frame takes through it."""
-        ...
-
-    @property
-    def buffering(self) -> int:
-        """The bits it holds between a channel's sides."""
-        ...
-
-    @property
-    def resources(self) -> Resources:
-        """What it uses of the device."""
-        ...
-
-
 @dataclass(frozen=True)
-class PortContract:
-    """The contract a port presents to a channel: its ``contract`` and its ``label``, the
-    port's path relative to the member that states it (``x`` for a module's port,
-    ``compute.packed.x`` for MatMul's, ``source.memstream.set`` for a channel's source's
-    set port, below the label its channel states for it; empty for a contract the member
-    presents itself, which is no port's). ``under`` labels it from the network (or kernel
-    with children) that holds the member."""
+class PortPins:
+    """The stream pins a port gives a channel to wire to (``pins``,
+    ``finn.kernels.transport.StreamPins``: its stream on its transport's pins) under its
+    ``label``, the port's path relative to the member that states it (``x`` for a module's
+    port, ``compute.packed.x`` for MatMul's, ``source.memstream.set`` for a channel's source's
+    set port, below the label its channel states for it; empty for pins the member presents
+    itself, which are no port's). ``under`` labels it from the network (or kernel with
+    children) that holds the member."""
 
     label: str
-    contract: StreamContract
+    pins: StreamPins
 
-    def under(self, member: str) -> PortContract:
-        """The contract as seen from where ``member`` is held."""
-        return PortContract(f"{member}.{self.label}" if self.label else member, self.contract)
-
-
-NATIVE_CLOCKING = Clocking(clock="clk", reset="rst", active_low=False)
-"""FinnLib's native ``clk`` and synchronous active-high ``rst``."""
+    def under(self, member: str) -> PortPins:
+        """The pins as seen from where ``member`` is held."""
+        return PortPins(f"{member}.{self.label}" if self.label else member, self.pins)
 
 
 def merged(
@@ -184,237 +109,608 @@ def merged(
         return reject("kernel-netlist", str(error))
 
 
-def _lower(cls: type[KernelSpace]) -> None:
-    """Each declaration of ``cls``'s own body, lowered into its members."""
-    for name, value in list(vars(cls).items()):
-        if not isinstance(value, KernelDeclaration):
-            continue
-        for member, declaration in value.lower(cls, name).items():
-            if member in vars(cls):
-                raise DefinitionError.broken(
-                    "declaration-member-taken",
-                    "KernelSpace",
-                    f"{cls.__qualname__}.{name} lowers to {member}, which the class "
-                    "declares itself",
-                    declaration=f"{cls.__qualname__}.{name}",
-                )
-            setattr(cls, member, declaration)
-            set_name = getattr(declaration, "__set_name__", None)
-            if set_name is not None:
-                set_name(cls, member)
+def _declared(cls: type[Kernel], name: str) -> bool:
+    """Whether a class from ``cls`` down to, not including, ``Kernel`` declares ``name``."""
+    return any(name in vars(base) for base in cls.__mro__[: cls.__mro__.index(Kernel)])
 
 
-def _declared(cls: type[KernelSpace], name: str, below: type[KernelSpace]) -> bool:
-    """Whether a class from ``cls`` down to, not including, ``below`` declares ``name``."""
-    return any(name in vars(base) for base in cls.__mro__[: cls.__mro__.index(below)])
-
-
-def _members(cls: type[KernelSpace], below: type[KernelSpace]) -> dict[str, object]:
-    """The class attributes ``cls`` and its bases down to ``below`` declare, by name."""
+def _members(cls: type[Kernel]) -> dict[str, object]:
+    """The class attributes ``cls`` and its bases down to ``Kernel`` declare, by name."""
     found: dict[str, object] = {}
-    for base in reversed(cls.__mro__[: cls.__mro__.index(below)]):
+    for base in reversed(cls.__mro__[: cls.__mro__.index(Kernel)]):
         found.update(vars(base))
     return found
 
 
-@dataclass(frozen=True)
-class _Span:
-    """A product of a kernel that spans its declarations: the member ``name``, made by
-    ``member`` (a ``view``) from a fresh method calling ``body``, which reads
-    the kernel's own members ``own`` and, of each declaration, what ``products`` read of it
-    (``KernelDeclaration.reads``)."""
+# -- the module's parts, read serially ------------------------------------------------------
+#
+# A module's pins are its other pins' (``OtherPins``), its control bus's, then its ports',
+# each in declaration order; its holds its ports', its other pins', then its control bus's.
+# The base reads each part's ``pin_values``, ``held_values`` and ``pins_presented`` in that
+# order, one after another: a part's refusal is collected with the later parts' (``_each``),
+# and a part not yet known stops the reading there. A Space method's reads are found from its
+# source (``finn.core.space._reads``), so each read names its part: ``__init_subclass__``
+# installs, for a kernel with a module, one helper a part, each reading its part by the name
+# its closure holds and then the next helper by name, the last reading none.
 
-    name: str
-    body: Callable[[Any], object]
-    own: tuple[str, ...]
-    products: tuple[Product, ...]
-    member: Callable[[Callable[..., Any]], object]
+_PINS, _HELD, _PRESENTED = "_module_pins", "_module_held", "_module_presented"
+_BEATS = "_module_beats"
 
 
-def _spanning(cls: type[KernelSpace], below: type[KernelSpace], spans: Iterable[_Span]) -> None:
-    """The products of ``cls`` that span its declarations, made for it when it is made (a
-    ``KernelSpace``'s answers; ``_Span``), and its reads
-    of its tensors (``_accesses``, which its extents bind from). Each reads each
-    declaration by the names its lowering fixes, its reads declared from ``cls``'s
-    declarations below ``below``. A product a class states itself is kept."""
-    found = declarations(cls, below)
-    cast(Any, cls)._declarations = MappingProxyType(found)
+def _pins_from(part: str, following: str) -> Callable[[Kernel], tuple[Any, ...]]:
+    def pins_from(self: Kernel) -> tuple[Any, ...]:
+        return (getattr(self, part).pin_values(), *getattr(self, following)())
 
-    def paths(products: tuple[Product, ...], own: tuple[str, ...]) -> tuple[str, ...]:
-        each = (
-            path
-            for product in products
-            for name, item in found.items()
-            for path in item.reads(name, product)
+    return pins_from
+
+
+def _held_from(part: str, following: str) -> Callable[[Kernel], tuple[Any, ...]]:
+    def held_from(self: Kernel) -> tuple[Any, ...]:
+        return (getattr(self, part).held_values(), *getattr(self, following)())
+
+    return held_from
+
+
+def _presented_from(part: str, following: str) -> Callable[[Kernel], tuple[Any, ...]]:
+    def presented_from(self: Kernel) -> tuple[Any, ...]:
+        return (getattr(self, part).pins_presented(), *getattr(self, following)())
+
+    return presented_from
+
+
+def _beats_from(part: str, following: str) -> Callable[[Kernel], tuple[Any, ...]]:
+    def beats_from(self: Kernel) -> tuple[Any, ...]:
+        return (getattr(self, part).frame_beats(), *getattr(self, following)())
+
+    return beats_from
+
+
+def _module_parts(cls: type[Kernel]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """The names of its module's parts in pin order and in hold order (above)."""
+    from finn.kernels.port_model import OtherPins, StreamPort, stream_ports  # noqa: PLC0415
+
+    nested = [
+        name for names in (control_models(cls), stream_ports(cls)) for name in names if "." in name
+    ]
+    if nested:
+        raise DefinitionError.broken(
+            "module-part-nested",
+            "Kernel",
+            f"{cls.__qualname__} declares {nested} in a Group: "
+            "a kernel with a module declares its ports and control bus in its own body",
+            declaration=cls.__qualname__,
         )
-        return tuple(dict.fromkeys((*own, *each)))
-
-    def made(span: _Span) -> Callable[..., object]:
-        body = span.body
-
-        def function(self: Any) -> Any:
-            return body(self)
-
-        function.__name__ = function.__qualname__ = span.name
-        function.__annotations__ = {"return": body.__annotations__["return"]}
-        return declared_reads(*paths(span.products, span.own))(function)
-
-    for span in spans:
-        if any(
-            span.name in vars(base) and not _made(vars(base)[span.name])
-            for base in cls.__mro__[: cls.__mro__.index(below)]
-        ):
-            continue  # stated by the class, or a base of it below ``below``
-        function = made(span)
-        member = span.member(function)
-        cast(Any, function)._spanning = True
-        setattr(cls, span.name, member)
-        cast(Any, member).__set_name__(cls, span.name)
-
-    @declared_reads(*paths(("access",), ()))
-    def _accesses(self: KernelSpace) -> list[Access]:
-        return [
-            access
-            for name, item in found.items()
-            if (access := item.access(self, name)) is not None
-        ]
-
-    cast(Any, cls)._accesses = _accesses
+    members = _members(cls)
+    others = tuple(name for name, item in members.items() if isinstance(item, OtherPins))
+    controls = tuple(name for name, item in members.items() if isinstance(item, ControlModel))
+    ports = tuple(name for name, item in members.items() if isinstance(item, StreamPort))
+    return (*others, *controls, *ports), (*ports, *others, *controls)
 
 
-def _made(member: object) -> bool:
-    """Whether ``member`` is a product ``_spanning`` made."""
-    return bool(getattr(getattr(member, "function", None), "_spanning", False))
+def _is_stream_port(item: object) -> bool:
+    from finn.kernels.port_model import StreamPort  # noqa: PLC0415
+
+    return isinstance(item, StreamPort)
 
 
-class Timed(Space):
-    """A Space stating the clock cycles a frame takes through it: its view ``cycles``.
+def _supply_ports(cls: type[Kernel]) -> None:
+    """Supply each stream port declared in ``cls``'s own body with what is the kernel's,
+    where the port does not state it: its ``label``, its name in the kernel, and its
+    ``clocking``, the kernel's clock domain (``Kernel.port_clocking``; L8: a port's clock is
+    its kernel's). A port declared in a Group states both."""
+    from finn.kernels.port_model import StreamPort  # noqa: PLC0415
 
-    The base of what a channel's ``cycles`` counts: ``KernelSpace`` and the movers derive
-    from it, and ``member_cycles`` collects ``Timed.cycles`` of the members of a kernel.
-    A member that takes none a channel counts (``ChannelFifo``) states ``cycles`` guarded
-    to answer inapplicable, which ``Members`` leaves out.
-
-    Its own ``cycles`` is the one a class stating none would answer: a refusal, so that a
-    ``Timed`` class that is placed without stating its cycles is never taken to take none.
-    Every class placed states its own.
-    """
-
-    @view
-    def cycles(self) -> int | Rejected:
-        """The clock cycles a frame takes through it: what a class stating none refuses."""
-        return reject("timed-cycles", f"{type(self).__qualname__} states no cycles")
+    for name, value in vars(cls).items():
+        record = node_record(value)
+        if record is None or not issubclass(record.space_type, StreamPort):
+            continue
+        if "label" not in record.settings:
+            assign(value, "label", name)
+        if "clocking" not in record.settings:
+            assign(value, "clocking", Kernel.port_clocking)
 
 
-class KernelSpace(Timed):
+def _check_advance(cls: type[Kernel]) -> None:
+    """Refuse a stream port of ``cls``'s own body stating more than one of what an advance
+    rule follows from, its kernel's schedule, the port it governs or stored values
+    (``port-advance-ambiguous``), or governing a port its kernel does not have
+    (``port-governs-unknown``). CONTRACT.md § 3: a port states what it is, one thing.
+
+    And refuse one presenting a schedule other than its kernel's one ``schedule``
+    (``port-schedule-foreign``): its kernel's scheduled ports are projections of one
+    schedule, so they present one index point at each iteration (their association) and
+    their paces count the same iterations (§ 4). A port presents its kernel's schedule by
+    binding it by name (``schedule=schedule``), which a subclass overriding ``schedule``
+    then gives it."""
+    from finn.kernels.port_model import StreamPort  # noqa: PLC0415
+
+    ports = {name for name, item in _members(cls).items() if isinstance(item, StreamPort)}
+    for name, value in vars(cls).items():
+        record = node_record(value)
+        if record is None or not issubclass(record.space_type, StreamPort):
+            continue
+        where = f"{cls.__qualname__}.{name}"
+        bound = record.bindings
+        stated = [key for key in ("schedule", "governs") if bound.get(key) is not None]
+        stated += ["stored"] if bound.get("stored") is True else []
+        if len(stated) > 1:
+            raise DefinitionError.broken(
+                "port-advance-ambiguous",
+                "Kernel",
+                f"{where} states {' and '.join(stated)}: a port's advance rule follows from "
+                "one of its kernel's schedule, the port it governs or stored values",
+                declaration=where,
+            )
+        governs = bound.get("governs")
+        if isinstance(governs, str) and (governs == name or governs not in ports):
+            raise DefinitionError.broken(
+                "port-governs-unknown",
+                "Kernel",
+                f"{where} governs {governs!r}, which is no other stream port of {cls.__qualname__}",
+                declaration=where,
+            )
+        schedule = bound.get("schedule")
+        if schedule is not None and not _kernel_schedule(cls, schedule):
+            named = schedule.name if isinstance(schedule, Declaration) else None
+            raise DefinitionError.broken(
+                "port-schedule-foreign",
+                "Kernel",
+                f"{where} presents "
+                + (f"{named!r}" if named else f"a {type(schedule).__name__} of its own")
+                + f", not {cls.__qualname__}'s schedule: a scheduled port is a projection of "
+                "its kernel's one schedule (schedule=schedule)",
+                declaration=where,
+            )
+
+
+def _kernel_schedule(cls: type[Kernel], bound: object) -> bool:
+    """Whether ``bound``, what a port of ``cls``'s body binds as its schedule, is its
+    kernel's ``schedule``: the declaration of that name of ``cls`` or a kernel class it
+    derives (the engine reads a binding by its name, so a subclass's override is read)."""
+    return (
+        isinstance(bound, Declaration)
+        and bound.name == "schedule"
+        and isinstance(bound.owner, type)
+        and issubclass(cls, bound.owner)
+        and issubclass(bound.owner, Kernel)
+    )
+
+
+def _nested_served(group: type[Group], prefix: str) -> list[str]:
+    """The served ports declared in ``group`` and its Groups, by dotted path."""
+    from finn.kernels.port_model import ServedPort  # noqa: PLC0415
+
+    effective: dict[str, object] = {}
+    for base in reversed(group.__mro__):
+        effective.update(vars(base))
+    found: list[str] = []
+    for name, item in effective.items():
+        if isinstance(item, ServedPort):
+            found.append(prefix + name)
+        elif isinstance(item, Group):
+            found += _nested_served(type(item), f"{prefix}{name}.")
+    return found
+
+
+# -- the ports a kernel with children serves ------------------------------------------------
+#
+# A served port (``finn.kernels.port_model.served``) is lowered, when its kernel's class is
+# made, into the members a channel and its sizing read of a port: its side and its stream
+# pins, each the child's port's labelled below it, and its pace and its advance rule, the
+# child's port's. They are derived members of the kernel, not of a child: the engine reads
+# a member through a selector one level deep (``compute.x``), never two
+# (``compute.x.side``), and a Group reads nothing of its kernel. Each reads its child, its
+# port and its case by the names its closure fixes, so that its source states its reads.
+
+
+def _served_side(child: str, port: str, case: str | None, label: str) -> Callable[[Any], Any]:
+    if case is None:
+
+        def side(self: Any) -> Any:
+            return getattr(getattr(self, child), port).side.under(label)
+
+        return side
+
+    def side_of_case(self: Any) -> Any:
+        return getattr(getattr(self, child), port).side.under(f"{child}.{getattr(self, case)}")
+
+    return side_of_case
+
+
+def _served_pins(child: str, port: str, case: str | None, label: str) -> Callable[[Any], Any]:
+    if case is None:
+
+        def stream_pins(self: Any) -> Any:
+            return getattr(getattr(self, child), port).stream_pins.under(label)
+
+        return stream_pins
+
+    def stream_pins_of_case(self: Any) -> Any:
+        found = getattr(getattr(self, child), port).stream_pins
+        return found.under(f"{child}.{getattr(self, case)}")
+
+    return stream_pins_of_case
+
+
+def _served_pace(child: str, port: str) -> Callable[[Any], Any]:
+    def pace(self: Any) -> Any:
+        return getattr(getattr(self, child), port).pace
+
+    return pace
+
+
+def _served_advance(child: str, port: str) -> Callable[[Any], Any]:
+    def advance(self: Any) -> Any:
+        return getattr(getattr(self, child), port).advance
+
+    return advance
+
+
+def _serve_ports(cls: type[Kernel]) -> None:
+    """Lower each port ``cls``'s own body serves (above): ``<name>_side``,
+    ``<name>_stream_pins``, ``<name>_pace`` and ``<name>_advance``, and, for a selector,
+    ``<child>_case``, its case, where the body does not declare it; and record it, by its
+    child and the child's port, in ``Kernel.served_names`` (what its intake names it,
+    ``Kernel.intake``).
+    Refused where the child is not the kernel's (``served-child-unknown``), has no stream
+    port so named (``served-port-unknown``), the body declares a member the port is lowered
+    into (``served-port-repeated``), or a port is served in a Group, which reads nothing of
+    its kernel (``served-port-nested``)."""
+    from finn.core.space._nodes import NodeChoice, selected  # noqa: PLC0415
+    from finn.kernels.port import served_ports  # noqa: PLC0415
+    from finn.kernels.port_model import ServedPort  # noqa: PLC0415
+    from finn.kernels.sides import Side  # noqa: PLC0415
+
+    own = dict(vars(cls))
+    nested = [
+        path
+        for name, value in own.items()
+        if isinstance(value, Group)
+        for path in _nested_served(type(value), f"{name}.")
+    ]
+    if nested:
+        raise DefinitionError.broken(
+            "served-port-nested",
+            "Kernel",
+            f"{cls.__qualname__} serves {nested} in a Group: a kernel serves a child's port "
+            "in its own body",
+            declaration=cls.__qualname__,
+        )
+    served = dict(cls.served_names)
+    for name, value in own.items():
+        if not isinstance(value, ServedPort):
+            continue
+        where = f"{cls.__qualname__}.{name}"
+        child = next((key for key, item in own.items() if item is value.child), None)
+        if child is None:
+            raise DefinitionError.broken(
+                "served-child-unknown",
+                "Kernel",
+                f"{where} serves a port of no child declared in {cls.__qualname__}'s body",
+                declaration=where,
+            )
+        declared = served_ports(value)
+        if not declared or None in declared:
+            raise DefinitionError.broken(
+                "served-port-unknown",
+                "Kernel",
+                f"{where} serves {child}.{value.port}, which is no stream port of "
+                f"{'each case of ' if isinstance(value.child, NodeChoice) else ''}{child}",
+                declaration=where,
+            )
+        case: str | None = None
+        members: dict[str, object] = {}
+        if isinstance(value.child, NodeChoice):
+            case = f"{child}_case"
+            # Lowered once for every port served of the selector; one the body declares is
+            # refused below (served-port-repeated).
+            if case in own or case not in vars(cls):
+                members[case] = selected(value.child)
+        label = value.label or child
+        side = _served_side(child, value.port, case, label)
+        side.__annotations__ = {"return": Side}
+        side.__doc__ = f"The side its port {name} gives a channel: {child}'s {value.port}'s."
+        pins = _served_pins(child, value.port, case, label)
+        pins.__annotations__ = {"return": PortPins}
+        pins.__doc__ = f"The stream pins its port {name} gives a channel: {child}'s {value.port}'s."
+        pace = _served_pace(child, value.port)
+        pace.__annotations__ = {"return": Pace | Inapplicable}
+        pace.__doc__ = f"Its port {name}'s pace: {child}'s {value.port}'s (CONTRACT.md § 4)."
+        advance = _served_advance(child, value.port)
+        advance.__annotations__ = {"return": Advance}
+        advance.__doc__ = (
+            f"Its port {name}'s advance rule: {child}'s {value.port}'s (CONTRACT.md § 3)."
+        )
+        members[f"{name}_side"] = derived(side)
+        members[f"{name}_stream_pins"] = view(pins)
+        members[f"{name}_pace"] = derived(pace)
+        members[f"{name}_advance"] = derived(advance)
+        served[(child, value.port)] = name
+        for key, member in members.items():
+            if key in own:
+                raise DefinitionError.broken(
+                    "served-port-repeated",
+                    "Kernel",
+                    f"{where}: {cls.__qualname__} declares {key}, which its served port {name} "
+                    "is lowered into",
+                    declaration=where,
+                )
+            setattr(cls, key, member)
+            getattr(member, "__set_name__")(cls, key)
+    cls.served_names = MappingProxyType(served)
+
+
+# -- its control bus ------------------------------------------------------------------------
+#
+# A kernel declares its control bus once, a ``ControlModel`` in its own body, and the base
+# derives what is read of it, ``declares_bus`` and ``bus_control``, when its class is made. A
+# bus its model may present (its ``presented`` bound) is presented at the port the kernel's
+# ``control`` names, with the writes its ``register_map`` states; a bus never presented is
+# held, ``Control(None)``. As for the module's parts, it reads its model by the name its
+# closure fixes, and its port and writes only once it is presented.
+
+
+def _declares_bus() -> Callable[[Any], Any]:
+    def declares_bus(self: Any) -> bool:
+        return True
+
+    return declares_bus
+
+
+def _bus_held() -> Callable[[Any], Any]:
+    def bus_control(self: Any) -> Any:
+        return Control(None)
+
+    return bus_control
+
+
+def _bus_presented(model: str) -> Callable[[Any], Any]:
+    def bus_control(self: Any) -> Any:
+        if not getattr(self, model).presented:
+            return Control(None)
+        port = self.control
+        if port is None:
+            return reject(
+                "control-bus-unaddressed", "a bus it presents names the port it is presented at"
+            )
+        return Control(getattr(self, model).bus, port, self.register_map)
+
+    return bus_control
+
+
+def _derive_control(cls: type[Kernel]) -> None:
+    """Derive ``cls``'s ``declares_bus`` and ``bus_control`` from the control bus its own body
+    declares (above); one a kernel it derives from declares, it inherits with that kernel's
+    answers. Refused where it declares more than one (``control-bus-repeated``), one in a
+    Group (``control-bus-nested``; a kernel with a module, ``module-part-nested`` with its
+    module's other parts) or in a class it derives from that is not a kernel
+    (``control-bus-nested``), states either answer itself
+    (``control-bus-restated``), or may present its bus without stating ``control`` and
+    ``register_map`` (``control-bus-unaddressed``)."""
+    buses = list(control_models(cls))
+    if len(buses) > 1:
+        raise DefinitionError.broken(
+            "control-bus-repeated",
+            "Kernel",
+            f"{cls.__qualname__} declares the control buses {buses}: a kernel presents one at most",
+            declaration=cls.__qualname__,
+        )
+    if not buses:
+        return
+    (name,) = buses
+    if "." in name:
+        if any(isinstance(item, ModuleSpec) for item in _members(cls).values()):
+            return  # a module's part, refused with its others (``module-part-nested``)
+        raise DefinitionError.broken(
+            "control-bus-nested",
+            "Kernel",
+            f"{cls.__qualname__} declares its control bus {name} in a Group: a kernel declares "
+            "it in its own body, where the base derives what is read of it",
+            declaration=cls.__qualname__,
+        )
+    stated = [key for key in ("declares_bus", "bus_control") if key in vars(cls)]
+    if stated:
+        raise DefinitionError.broken(
+            "control-bus-restated",
+            "Kernel",
+            f"{cls.__qualname__} states {' and '.join(stated)}: the base derives them from "
+            f"its control bus {name}",
+            declaration=cls.__qualname__,
+        )
+    owner = next(base for base in cls.__mro__ if name in vars(base))
+    if owner is not cls:
+        if issubclass(owner, Kernel):
+            return  # inherited, with what its class derived
+        raise DefinitionError.broken(
+            "control-bus-nested",
+            "Kernel",
+            f"{cls.__qualname__} declares its control bus {name} in {owner.__qualname__}, "
+            "not a kernel: a kernel declares it in its own body, where the base derives what "
+            "is read of it",
+            declaration=cls.__qualname__,
+        )
+    record = node_record(vars(cls)[name])
+    assert record is not None
+    may_present = record.bindings.get("presented", False) is not False
+    members = _members(cls)
+    if may_present and not ("control" in members and "register_map" in members):
+        raise DefinitionError.broken(
+            "control-bus-unaddressed",
+            "Kernel",
+            f"{cls.__qualname__} may present its control bus {name}: it states the port it "
+            "is presented at (control) and the writes its configuration takes (register_map)",
+            declaration=cls.__qualname__,
+        )
+    declares = _declares_bus()
+    declares.__annotations__ = {"return": bool}
+    declares.__doc__ = f"Whether it declares a control bus: it does, {name}."
+    control = _bus_presented(name) if may_present else _bus_held()
+    control.__annotations__ = {"return": Control | Rejected}
+    control.__doc__ = (
+        f"Its control bus, {name}: presented at the port ``control`` names, with the writes "
+        "``register_map`` states, where its model presents it; else held, ``Control(None)``."
+        if may_present
+        else f"Its control bus, {name}, which it never presents: held, ``Control(None)``."
+    )
+    for key, member in (("declares_bus", derived(declares)), ("bus_control", view(control))):
+        setattr(cls, key, member)
+        getattr(member, "__set_name__")(cls, key)
+
+
+def _install(
+    cls: type[Kernel],
+    prefix: str,
+    reading: Callable[[str, str], Callable[[Kernel], tuple[Any, ...]]],
+    parts: tuple[str, ...],
+) -> None:
+    """The helpers ``<prefix>_<i>`` reading ``parts`` from the ``i``-th on (above)."""
+    for index, part in enumerate(parts):
+        following = f"{prefix}_{index + 1}" if index + 1 < len(parts) else "_module_end"
+        setattr(cls, f"{prefix}_{index}", reading(part, following))
+    if not parts:
+        setattr(cls, f"{prefix}_0", Kernel._module_end)
+
+
+class Kernel(Space):
     """A kernel: the design space of its hardware, binding a library module or placing
     kernels, never both (the module docstring). ``id`` names it, a nonempty string.
 
-    Its four answers are views, each written once here (``_netlist``, ``_cycles``,
-    ``_buffering``, ``_resources``) and made for each class when it is made, reading the
-    class's declarations by the names their lowering fixes (``_spanning``). A class may
-    state one itself, calling these. Its members' answers it reaches through ``Members``
-    over the member each states, which only these views read."""
+    The one base every kernel derives, and the class a check or a type admitting any
+    kernel names. Its answers are Views: its netlist, the cycles a frame takes through it,
+    the bits it holds and what it uses of the device. A native kernel states its netlist
+    in ordinary serial source over typed model inputs and pure physical helpers; the base
+    derives its cycles by the rate law, and a kernel restates them only to be counted by
+    its kind (MemStream; a composite, StreamAdapter). Its contract's intake (``intake``)
+    it states from its RTL, else the base answers it unstated, by name. Buffering and
+    resources read its own statements and its members' answers. A composed kernel
+    reaches those answers through ``Members`` over the member each states. A kernel that
+    counts no cycles of its own, a channel's FIFO (``finn.kernels.channels.ChannelFifo``),
+    whose beats are counted where they are made, answers its ``cycles`` inapplicable, and
+    its parent's ``member_cycles`` leaves it out.
+
+    A reader of a kernel's design point types it ``Kernel``: its four answers (``netlist``,
+    ``cycles``, ``buffering``, ``resources``) read as their accepted values, and raise where
+    the kernel refuses them; ``point.query(type(point).netlist)`` gives the result,
+    ``Available`` with the value or the refusal."""
 
     id: ClassVar[str] = ""
 
-    # Its declarations (``declarations``), by name, in the order they are declared, and its
-    # library module among them, by name (None: it binds none).
-    _declarations: ClassVar[Mapping[str, KernelDeclaration]] = {}
-    _module: ClassVar[tuple[str, LibraryModule] | None] = None
+    module_spec: ClassVar[ModuleSpec | None] = None
+
+    # The ports it serves, each by its child and the child's port: what its intake names
+    # the child's (``intake``). Recorded when its class is made (``_serve_ports``).
+    served_names: ClassVar[Mapping[tuple[str, str], str]] = MappingProxyType({})
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
+        _supply_ports(cls)
+        _check_advance(cls)
+        _serve_ports(cls)
+        _derive_control(cls)
         super().__init_subclass__(**kwargs)
-        # Counted before lowering: each bus lowers to the same members, which would collide
-        # first and hide the refusal.
-        buses = [
-            name
-            for name, declaration in declarations(cls, KernelSpace).items()
-            if isinstance(declaration, ControlBus)
-        ]
-        if len(buses) > 1:
-            raise DefinitionError.broken(
-                "control-bus-repeated",
-                "KernelSpace",
-                f"{cls.__qualname__} declares the control buses {buses}: a kernel presents "
-                "one at most",
-                declaration=cls.__qualname__,
-            )
-        _lower(cls)
         if type(cls.id) is not str or not cls.id:
             raise DefinitionError.broken(
                 "kernel-id-invalid",
-                "KernelSpace",
+                "Kernel",
                 f"{cls.__qualname__} must declare a nonempty string id",
                 declaration=cls.__qualname__,
             )
-        found = declarations(cls, KernelSpace)
-        modules = [
-            (name, declaration)
-            for name, declaration in found.items()
-            if isinstance(declaration, LibraryModule)
+        members = _members(cls)
+        readers = [
+            name
+            for name, item in members.items()
+            if isinstance(item, Derived) and getattr(item.function, _READS_EXTENTS, False)
         ]
-        if len(modules) > 1:
+        if readers and not _declared(cls, "extents"):
+            raise DefinitionError.broken(
+                "kernel-extents-unstated",
+                "Kernel",
+                f"{cls.__qualname__} reads its extents ({', '.join(readers)}, extent_of) "
+                "and states none: a kernel reading an extent states its extents",
+                declaration=cls.__qualname__,
+            )
+        specs = [(name, item) for name, item in members.items() if isinstance(item, ModuleSpec)]
+        for name, spec in specs:
+            spec.validate(cls.__qualname__, f"{cls.__qualname__}.{name}")
+        if any(spec.constant_sources is None for _, spec in specs) and not _declared(
+            cls, "module_sources"
+        ):
+            raise DefinitionError.broken(
+                "library-module-sources-unstated",
+                "Kernel",
+                f"{cls.__qualname__}: a dynamic ModuleSpec states its module_sources View",
+                declaration=cls.__qualname__,
+            )
+        if len(specs) > 1:
             raise DefinitionError.broken(
                 "library-module-repeated",
-                "KernelSpace",
-                f"{cls.__qualname__} binds the library modules {[name for name, _ in modules]}: "
+                "Kernel",
+                f"{cls.__qualname__} binds the library modules {[name for name, _ in specs]}: "
                 "a kernel binds one at most",
                 declaration=cls.__qualname__,
             )
-        cls._module = modules[0] if modules else None
-        _spanning(cls, KernelSpace, _KERNEL_SPANS)
-        if unmet_required(cls):
-            return  # a base of kernels (the dot-product cores'), which cannot be placed
-        ports = [name for name, declaration in found.items() if declaration.module_port]
-        if not modules:
-            if ports:
-                raise DefinitionError.broken(
-                    "port-unbound",
-                    "KernelSpace",
-                    f"{cls.__qualname__} declares the stream ports {ports} and binds no "
-                    "library module: a stream port's pins are a module's; a kernel with "
-                    "children presents its children's ports (served)",
-                    declaration=cls.__qualname__,
-                )
+        if specs:
+            pins, holds = _module_parts(cls)
+            _install(cls, _PINS, _pins_from, pins)
+            _install(cls, _HELD, _held_from, holds)
+            _install(cls, _PRESENTED, _presented_from, pins)
+            beating = tuple(name for name, item in members.items() if _is_stream_port(item))
+            _install(cls, _BEATS, _beats_from, beating)
+        if unmet_required(cls) or not specs:
             return
+        from finn.kernels.port_model import stream_ports  # noqa: PLC0415
+
+        ports = list(stream_ports(cls))
+        if not _declared(cls, "parameters"):
+            raise DefinitionError.broken(
+                "module-parameters-unstated",
+                "Kernel",
+                f"{cls.__qualname__} states no parameters: "
+                "a kernel with a module states its module's parameters",
+                declaration=cls.__qualname__,
+            )
         if not ports:
             raise DefinitionError.broken(
                 "module-ports-unplaced",
-                "KernelSpace",
+                "Kernel",
                 f"{cls.__qualname__} declares no port: a kernel with a module states its ports",
                 declaration=cls.__qualname__,
             )
-        members = _members(cls, KernelSpace)
-        children = sorted(name for name, value in members.items() if isinstance(value, KernelSpace))
+        children = sorted(name for name, value in members.items() if isinstance(value, Kernel))
         if children:
             raise DefinitionError.broken(
                 "module-places-kernels",
-                "KernelSpace",
-                f"{cls.__qualname__} places the kernels {children}: a kernel with a module "
-                "places none",
+                "Kernel",
+                f"{cls.__qualname__} places the kernels {children}: "
+                "a kernel with a module places none",
                 declaration=cls.__qualname__,
             )
-        if not _declared(cls, "resource_use", KernelSpace):
+        if not _declared(cls, "resource_use"):
             raise DefinitionError.broken(
                 "module-resources-unstated",
-                "KernelSpace",
-                f"{cls.__qualname__} states no resource_use: a kernel with a module states "
-                "what it uses of the device",
+                "Kernel",
+                f"{cls.__qualname__} states no resource_use: "
+                "a kernel with a module states what it uses of the device",
                 declaration=cls.__qualname__,
             )
 
-    # -- its clock, extents --------------------------------------------------------------
+    # -- its clock ------------------------------------------------------------------------
 
-    # The clock and reset (and its polarity) its ports and its module run on: a class
-    # constant, since no kernel computes their names. A kernel on FinnLib's native pins
-    # states ``NATIVE_CLOCKING``.
-    clock_domain: ClassVar[Clocking] = Clocking()
+    # The clock and reset (and its polarity) its ports and its module run on (L8): a class
+    # constant, one of the library's two domains (``finn.kernels.laws``), chosen by its
+    # module's family, never by its ports' transports. The AXIS family's by default; a
+    # FinnLib native module states ``NATIVE_CLOCKING``.
+    clock_domain: ClassVar[Clocking] = AXIS_CLOCKING
 
     @derived
     def clocking(self) -> Clocking:
         """Its module's clocking: its ``clock_domain``; a kernel with a doubled clock builds
-        on it (``replace(type(self).clock_domain, doubled=..., doubling=...)``)."""
+        on it (``finn.kernels.laws.doubled(type(self).clock_domain, doubling)``)."""
+        return type(self).clock_domain
+
+    @derived
+    def port_clocking(self) -> Clocking:
+        """Its ports' clock and reset: its ``clock_domain`` (L8), never a doubled clock's
+        choice. The base gives it to every port its body declares (``StreamPort``)."""
         return type(self).clock_domain
 
     @derived
@@ -433,55 +729,42 @@ class KernelSpace(Timed):
         own; a shell's memory rule counts them (``finn.kernels.budgets``)."""
         return 0
 
-    @declared_reads()
-    def _accesses(self) -> list[Access]:
-        """Each declaration's read of a tensor, in declaration order (each class's own:
-        ``_spanning``)."""
-        return []
-
-    def _bound(self, extents: Mapping[Index, int] | None = None) -> dict[Index, int] | Rejected:
-        try:
-            return bind_extents(self._accesses(), extents)
-        except Refused as error:
-            return reject("kernel-extents", str(error))
+    # -- its schedule ----------------------------------------------------------------------
 
     @derived
-    def extents(self) -> dict[Index, int] | Rejected:
-        """Each index's extent, bound from the tensors its input ports read."""
-        return self._bound()
+    def schedule(self) -> Schedule | Inapplicable:
+        """Its schedule: the iteration its scheduled ports are projections of
+        (``StreamPort(schedule=schedule, ...)``), so that every one presents, at each
+        iteration, the positions of one index point (their association, CONTRACT.md § 3)
+        and moves its beats at its pace (§ 4). A kernel with scheduled ports states it, over
+        its ``extents`` (``bound_schedule``); one with none has none."""
+        return Inapplicable()
 
-    def bound_schedule(
-        self,
-        order: tuple[Index, ...],
-        factors: Mapping[Index, int] | None = None,
-        extents: Mapping[Index, int] | None = None,
-    ) -> Schedule | Rejected:
-        """The schedule in beat ``order`` (outer to inner), each index's extent bound from the
-        ports' tensors (and any ``extents`` the kernel gives), with folding ``factors``."""
-        bound = self.extents if extents is None else self._bound(extents)
-        if isinstance(bound, Rejected):
-            return bound
-        missing = [index for index in order if index not in bound]
-        if missing:
-            return reject("kernel-extents", f"{missing} are bound by no placed port")
-        try:
-            return Schedule({index: bound[index] for index in order}, factors, order)
-        except ValueError as error:
-            return reject("kernel-schedule", str(error))
+    # -- its intake ------------------------------------------------------------------------
 
-    def spanned(self, index: tuple[Index | Affine, ...]) -> tuple[int, ...] | Rejected:
-        """The shape ``index`` spans over the bound extents: an axis read at ``i`` spans
-        ``i``'s extent, one at ``oh * OW + ow`` the reach of its terms, plus one. A kernel
-        states its output tensor's shape by it, from the extents its inputs bind."""
-        extents = self.extents
-        shape: list[int] = []
-        for axis in index:
-            terms = Affine.of(axis).terms
-            missing = [i for i, _ in terms if i not in extents]
-            if missing:
-                return reject("kernel-extents", f"{missing} are bound by no placed port")
-            shape.append(1 + sum(c * (extents[i] - 1) for i, c in terms))
-        return tuple(shape)
+    @derived
+    def intake(self) -> Intake | Rejected:
+        """How far it takes input ahead of delivering output (CONTRACT.md § 5): one
+        ``finn.kernels.laws.PortIntake`` an input port it places.
+
+        A kernel with a module states its own, read from its RTL (an HLS kernel's
+        measured); one that does not answers ``intake-unstated``, by name, never zero, and
+        no refusal of its design point: no rule reads it. A kernel with children derives
+        its own from its members' (``member_intake``), never states it beside them: a port
+        it serves takes the name it serves it under (``served_names``), any other member's
+        port its path below the member (``adapter.input_gen.input_gen.input``). A member
+        that states none leaves its parent's unstated too."""
+        if type(self).module_spec is not None:
+            return reject(INTAKE_UNSTATED, f"{type(self).__qualname__} states no intake")
+        served = type(self).served_names
+        found = []
+        for item in self.member_intake:
+            node = str(item.node)
+            child = node.split(".", 1)[0]
+            for each in item.value.ports:
+                name = served.get((child, each.port))
+                found.append(each.under(node) if name is None else replace(each, port=name))
+        return Intake(tuple(found))
 
     # -- its own parts of its answers ----------------------------------------------------
 
@@ -497,162 +780,260 @@ class KernelSpace(Timed):
         own (a refusal where it has no model of it, never nothing)."""
         return Resources()
 
-    # -- its answers, written once ---------------------------------------------------------
-
-    def _netlist(
-        self, links: tuple[Link, ...] | None = None, labels: Mapping[str, str] | None = None
-    ) -> Fragment | Rejected:
-        """``netlist``: its library module at the empty label, its members' netlists under
-        their nodes, and the control buses its members present with the writes their
-        configuration takes (``merged``). A kernel with neither is refused; one that states
-        the ``links`` between them (a channel's hops) is not. A kernel that states the
-        ``labels`` some members keep (by node: a channel's placements) places those there,
-        in place of their nodes."""
-        space_type = type(self)
-        placed = labels or {}
-        parts: list[tuple[str, Fragment]] = []
-        if space_type._module is not None:
-            name, module = space_type._module
-            leaf = module.build(self, name)
-            if isinstance(leaf, Rejected):
-                return leaf
-            parts.append(("", Fragment((("", leaf),))))
-        parts.extend(
-            (placed.get(str(item.node), str(item.node)), item.value) for item in self.netlists
-        )
-        if not parts and links is None:
-            return reject(
-                "kernel-module",
-                f"{space_type.__qualname__} declares no module and places no kernel",
-            )
-        buses = presented(
-            (placed.get(str(item.node), str(item.node)), item.value) for item in self.controls
-        )
-        if isinstance(buses, Rejected):
-            return buses
-        return merged(parts, buses, links or ())
-
-    def _cycles(self, default: int | None = None) -> int | Rejected:
-        """``cycles``: the most beats any declaration carries a frame, or any member takes,
-        one beat a cycle at best; ``default`` where there is none (a channel of wires
-        takes none of its own), else refused."""
-        space_type = type(self)
-        found = [
-            beats
-            for name, declaration in space_type._declarations.items()
-            if (beats := declaration.beats(self, name)) is not None
-        ]
-        found.extend(item.value for item in self.member_cycles)
-        if found:
-            return max(found)
-        if default is not None:
-            return default
-        if space_type._module is not None:
-            return reject(
-                "kernel-cycles", f"no port of {space_type.__qualname__} carries a stream's beats"
-            )
-        return reject("kernel-cycles", f"no member of {space_type.__qualname__} states cycles")
-
-    def _buffering(self) -> int:
-        """``buffering``: its own ``held_bits`` and its members'."""
-        return self.held_bits + sum(item.value for item in self.member_buffering)
-
-    def _resources(self) -> Resources:
-        """``resources``: its own ``resource_use`` and its members'."""
-        return total((self.resource_use, *(item.value for item in self.member_resources)))
+    # -- its module's binding: the module (``module_spec``), its parameters, sources, data --
 
     @view
-    @declared_reads("netlists", "controls")
+    def parameters(self) -> dict[str, int | str] | Inapplicable:
+        """Its module's parameters, by name: a kernel with a module states them (the class
+        definition check requires it); one binding no module has none."""
+        return Inapplicable()
+
+    @view
+    def module_sources(self) -> tuple[Contribution, ...] | Rejected:
+        """Explicit dynamic source product for a ModuleSpec with constant_sources=None.
+
+        Constant-source modules do not read this View. A dynamic module declares
+        its own implementation; the class definition check requires it.
+        """
+        return reject("library-module-sources-unstated", "a dynamic module states its sources")
+
+    @view
+    def module_data(self) -> tuple[GeneratedData, ...]:
+        """The data files its module reads (a memory's initial contents): none; a kernel
+        whose module reads them states them."""
+        return ()
+
+    # -- its answers, written once ---------------------------------------------------------
+
+    @view
     def netlist(self) -> Fragment | Rejected:
         """Its netlist, labelled relative to itself: its module at the empty label (``under``
-        names it by its node where it is held), its members' under theirs."""
-        return KernelSpace._netlist(self)
+        names it by its node where it is held), or its members' under theirs.
+
+        A kernel with a module is its one leaf, assembled from its binding and its parts
+        (``finn.kernels.library.assemble_module``): its clocking, its parameters, its parts'
+        pins, its sources (refused where they do not provide the module), its data, its
+        parts' holds (L10) and which parts are presented."""
+        if type(self).module_spec is not None:
+            return self._module()
+        parts = [(str(item.node), item.value) for item in self.netlists]
+        if not parts:
+            return reject(
+                "kernel-module",
+                f"{type(self).__qualname__} declares no module and places no kernel",
+            )
+        buses = presented((str(item.node), item.value) for item in self.controls)
+        if isinstance(buses, Rejected):
+            return buses
+        return merged(parts, buses)
+
+    def _module(self) -> Fragment | Rejected:
+        """``netlist`` of a kernel with a module (above), its parts read in order."""
+        spec = type(self).module_spec
+        assert spec is not None
+        owner = type(self).__qualname__
+        clocking = self.clocking
+        parameters = tuple(sorted(self.parameters.items()))
+        pin_parts = _each(self._module_pins_0())
+        if isinstance(pin_parts, Rejected):
+            return pin_parts
+        sources = spec.constant_sources
+        if sources is None:
+            sources = self.module_sources
+        refused = module_unprovided(spec, owner, sources)
+        if isinstance(refused, Rejected):
+            return refused
+        data = self.module_data
+        held_parts = _each(self._module_held_0())
+        if isinstance(held_parts, Rejected):
+            return held_parts
+        leaf = assemble_module(
+            spec,
+            type(self).id,
+            owner,
+            clocking,
+            parameters,
+            tuple(pin_parts),
+            sources,
+            data,
+            tuple(held_parts),
+            self._module_presented_0(),
+        )
+        return leaf if isinstance(leaf, Rejected) else Fragment((("", leaf),))
+
+    # The heads of its module's readings, which a kernel with a module has installed for
+    # it; the end of each.
+
+    def _module_pins_0(self) -> tuple[tuple[Pin, ...] | Rejected, ...]:
+        return ()
+
+    def _module_held_0(self) -> tuple[Held | Rejected, ...]:
+        return ()
+
+    def _module_presented_0(self) -> tuple[bool, ...]:
+        return ()
+
+    def _module_beats_0(self) -> tuple[int | None, ...]:
+        return ()
+
+    def _module_end(self) -> tuple[Any, ...]:
+        return ()
 
     @derived
     def declares_bus(self) -> bool:
-        """Whether it declares a control bus (presented or not): False here, True in a
-        class declaring one (``ControlBus.lower``)."""
+        """Whether it declares a control bus (presented or not): False here; the base derives
+        True for a kernel declaring one (``ControlModel``) when its class is made."""
         return False
 
-    @view(when=declares_bus)
-    def bus_control(self) -> Control | Rejected:
+    @view
+    def bus_control(self) -> Control | Rejected | Inapplicable:
         """The control bus it declares: a ``Control``, presenting nothing while the bus is
-        not presented. A kernel declaring none answers inapplicable; one declaring a bus
-        reads that bus's own view here (``ControlBus.lower``)."""
+        not presented. A kernel declaring none answers inapplicable; for one declaring a
+        bus the base derives it when its class is made, from the bus's model, the kernel's
+        ``control`` and its ``register_map``."""
+        if not self.declares_bus:
+            return Inapplicable()
         return reject("kernel-control", f"{type(self).__qualname__} declares no control bus")
 
     @view
-    @declared_reads("member_cycles")
-    def cycles(self) -> int | Rejected:
-        """The clock cycles a frame takes through it: the most beats any of its ports carries
-        a frame, or any of its members takes."""
-        return KernelSpace._cycles(self)
-
-    @view
-    @declared_reads("held_bits", "member_buffering")
     def buffering(self) -> int:
         """The bits it and its members hold between a channel's sides."""
-        return KernelSpace._buffering(self)
+        return self.held_bits + sum(item.value for item in self.member_buffering)
 
     @view
-    @declared_reads("resource_use", "member_resources")
     def resources(self) -> Resources:
         """What it and its members use of the device."""
-        return KernelSpace._resources(self)
+        return total((self.resource_use, *(item.value for item in self.member_resources)))
 
-    # -- what it reaches of its members: their answers, read by its views only ------------
-    # Each ``Members`` names the member it reads, so it follows the views it names.
+    @view
+    def cycles(self) -> int | Rejected:
+        """The clock cycles a frame takes through it, at full rate: characterization,
+        derived by the rate law (CONTRACT.md L6). A kernel with a module advances one
+        iteration a cycle when nothing blocks it: its cycles a frame are its schedule's
+        iterations (each of its scheduled ports' pace's span), or, a kernel with no
+        schedule (a stage, a memory), advancing one beat a side a cycle, the most beats a
+        frame any of its placed ports carries. A kernel with children takes the most any
+        member takes, a member counting none (inapplicable) left out. A kernel states
+        none of its own; one whose hardware stalls internally would state its exception."""
+        return self._cycles()
+
+    def _cycles(self) -> int | Rejected:
+        """``cycles`` (above). A class restating ``cycles`` as the base's, to be counted by
+        its own kind (a channel's members, ``finn.kernels.channels.Channel``), calls it."""
+        if type(self).module_spec is not None:
+            return self._rate_cycles()
+        found = [item.value for item in self.member_cycles]
+        if found:
+            return max(found)
+        return reject("kernel-cycles", f"no member of {type(self).__qualname__} states cycles")
+
+    def _rate_cycles(self) -> int | Rejected:
+        """A kernel with a module's cycles a frame by the rate law (``cycles``): its
+        schedule's iterations where it states a schedule, else its placed ports' most beats
+        a frame, each port read in its declaration order (``StreamPort.frame_beats``);
+        refused where it places no port."""
+        if _declared(type(self), "schedule"):
+            schedule: Schedule = self.schedule
+            return schedule.iterations
+        beats = [each for each in self._module_beats_0() if each is not None]
+        if not beats:
+            return reject(
+                "kernel-cycles", f"no port of {type(self).__qualname__} carries a stream's beats"
+            )
+        return max(beats)
+
+    # -- what it reaches of its members: their answers, read by its views, and their intake,
+    # read by its own (a derived value, contract) ------------------------------------------
+    # Each ``Members`` names the member it reads, so it follows the members it names.
 
     netlists = Members(netlist)
     controls = Members(bus_control)
-    member_cycles = Members(Timed.cycles)
     member_buffering = Members(buffering)
     member_resources = Members(resources)
+    member_cycles = Members(cycles)
+    member_intake = Members(intake)
 
 
-_KERNEL_SPANS = (
-    _Span(
-        "netlist",
-        KernelSpace._netlist,
-        ("netlists", "controls"),
-        ("module", "pins", "held"),
-        view,
-    ),
-    _Span("cycles", KernelSpace._cycles, ("member_cycles",), ("beats",), view),
-    _Span("buffering", KernelSpace._buffering, ("held_bits", "member_buffering"), (), view),
-    _Span(
-        "resources",
-        KernelSpace._resources,
-        ("resource_use", "member_resources"),
-        (),
-        view,
-    ),
-)
-"""A kernel's answers: each spans its declarations."""
+# -- a kernel's extents and schedule, by finn.dataflow's rules ------------------------------
+#
+# The computations are ``finn.dataflow.schedule``'s, over the tensors a kernel's ports read
+# (each target with an index reads one, ``StreamPort.access``): ``bind_extents``,
+# ``schedule_over`` and ``span``. A kernel with scheduled ports states two derived values by
+# them, its ``extents`` (its facts: the indices' extents, bound from the accesses and any it
+# gives itself, which its folding's domains read through ``extent_of``) and its
+# ``schedule`` (over the extents, with its folding). These give dataflow's refusal as the
+# kernel's own: ``kernel-schedule`` for a schedule its order or folding cannot build,
+# ``kernel-extents`` for anything else, each with dataflow's message.
+
+
+def bound_extents(
+    accesses: Iterable[Access], given: Mapping[Index, int] | None = None
+) -> dict[Index, int] | Rejected:
+    """Each index's extent, bound from ``accesses``, its ports' reads in their order, and
+    the extents the kernel ``given`` (``bind_extents``)."""
+    try:
+        return bind_extents(tuple(accesses), given)
+    except Refused as error:
+        return reject("kernel-extents", str(error))
+
+
+def bound_schedule(
+    extents: Mapping[Index, int],
+    order: tuple[Index, ...],
+    factors: Mapping[Index, int] | None = None,
+) -> Schedule | Rejected:
+    """The schedule in beat ``order`` (outer to inner) over the kernel's ``extents``, with
+    folding ``factors`` (``schedule_over``)."""
+    try:
+        return schedule_over(extents, order, factors)
+    except Refused as error:
+        invalid = any(finding.code == "schedule-invalid" for finding in error.findings)
+        return reject("kernel-schedule" if invalid else "kernel-extents", str(error))
+
+
+def spanned(
+    index: tuple[Index | Affine, ...], extents: Mapping[Index, int]
+) -> tuple[int, ...] | Rejected:
+    """The shape ``index`` spans over the kernel's ``extents`` (``span``): how a kernel
+    states an output tensor's shape, from the extents its inputs bind."""
+    try:
+        return span(index, extents)
+    except Refused as error:
+        return reject("kernel-extents", str(error))
 
 
 def extent_of(index: Index) -> int:
-    """A derived member of a kernel: ``index``'s extent, bound from its placed ports.
+    """A derived member of a kernel: ``index``'s extent, read from its ``extents``, which
+    the kernel states.
 
     Name it in the class body (``channels = extent_of(c)``) and read that name,
     in a folding factor's ``divisors_of`` domain for instance; used inline inside another
     declaration it is not a member of the class, and linking refuses it.
     """
 
-    def extent(self: KernelSpace) -> int | Rejected:
-        extents = self.extents
+    stated = "extents"  # the kernel's member, which the base does not declare
+
+    def extent(self: Kernel) -> int | Rejected:
+        extents: dict[Index, int] = getattr(self, stated)
         if index not in extents:
             return reject("kernel-extents", f"{index!r} is bound by no placed port")
         return extents[index]
 
+    # Marked, so that a kernel reading it and stating no extents is refused when its class
+    # is made (``kernel-extents-unstated``), not when it is evaluated.
+    setattr(extent, _READS_EXTENTS, True)
     return derived(extent)
+
+
+_READS_EXTENTS = "_finn_reads_extents"
 
 
 __all__ = [
     "Kernel",
-    "KernelSpace",
-    "NATIVE_CLOCKING",
-    "PortContract",
+    "PortPins",
+    "bound_extents",
+    "bound_schedule",
     "extent_of",
     "merged",
+    "spanned",
 ]

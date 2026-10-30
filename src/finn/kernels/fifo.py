@@ -27,26 +27,25 @@ is stated by a model of Vivado's placement (``_hi_style``).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar
+from typing import ClassVar
 
 from finn.core.space import (
     Decision,
     Param,
     Rejected,
-    View,
     constraint,
     derived,
     reject,
     view,
 )
-from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.base import NATIVE_CLOCKING, KernelSpace, PortContract
-from finn.kernels.library import LibraryModule
-from finn.kernels.port import native_stream
+from finn.kernels.base import Kernel
+from finn.kernels.laws import NATIVE, NATIVE_CLOCKING, Intake, PortIntake, Standing
+from finn.kernels.library import ModuleSpec
+from finn.kernels.port_model import StreamPort
 from finn.kernels.utilization import lutram, memory, uram_constraint
 from finn.platform.capabilities import Fabric, Platform, Resources
 
@@ -192,6 +191,15 @@ def _geometry_supported(bits: int, depth: int) -> bool:
 _GEOMETRY = ("fifo-geometry", "input_data_width must be positive and depth at least two")
 
 
+#: Where each storage of ``rtl/infra/fifo.sv`` refuses a word: its ready, from its fill.
+_INTAKE_SOURCES = {
+    "shift": "rtl/infra/fifo.sv:108, :124-137 (Rdy)",
+    "distributed": "rtl/infra/fifo.sv:158-162 (Credit)",
+    "block": "rtl/infra/fifo.sv:268-271 (Credit)",
+    "ultra": "rtl/infra/fifo.sv:268-271 (Credit), :280-292 (QCredit)",
+}
+
+
 def _given(depth: int, bits: int, style: str, uram: bool) -> str:
     """The RAM_STYLE the RTL is given for ``style``: block RAM where ``auto`` would
     resolve to UltraRAM a platform without it lacks."""
@@ -211,7 +219,7 @@ def least_depth_holding(words: int, bits: int, style: str, uram: bool) -> int:
         depth += 1
 
 
-class FifoKernel(KernelSpace):
+class FifoKernel(Kernel):
     """FinnLib ``fifo``: what arrives of its tensor, presented again on its output; see the
     module docstring."""
 
@@ -236,24 +244,27 @@ class FifoKernel(KernelSpace):
         sequence: BeatSequence = self.arriving
         return sequence
 
-    input = native_stream("input", Endpoint.TARGET, input_tensor, arriving)
-    output = native_stream("output", Endpoint.INITIATOR, output_tensor, leaving)
-    if TYPE_CHECKING:  # members its ports lower to, which it and its channel read
-        input_stream: ClassVar[Stream]
-        input_data_width: ClassVar[int]
-        input_contract: ClassVar[PortContract]
-        output_stream: ClassVar[Stream]
-        output_data_width: ClassVar[int]
-        output_contract: ClassVar[PortContract]
+    input = StreamPort(
+        endpoint=Endpoint.TARGET,
+        transport=NATIVE,
+        tensor=input_tensor,
+        sequence=arriving,
+    )
+    output = StreamPort(
+        endpoint=Endpoint.INITIATOR,
+        transport=NATIVE,
+        tensor=output_tensor,
+        sequence=leaving,
+    )
 
     @constraint
     def geometry_supported(self) -> bool | Rejected:
-        if not _geometry_supported(self.input_data_width, self.depth):
+        if not _geometry_supported(self.input.width, self.depth):
             return reject(*_GEOMETRY)
         return True
 
     ram_style: str = Decision(
-        values=("auto", "shift", "distributed", "block", "ultra"),
+        domain=("auto", "shift", "distributed", "block", "ultra"),
     )
     uram_present = uram_constraint(platform, ram_style, ("ultra",))
 
@@ -261,21 +272,32 @@ class FifoKernel(KernelSpace):
     def rtl_ram_style(self) -> str:
         """The RAM_STYLE the RTL is given: ``ram_style``, except an ``auto`` the RTL would
         resolve to UltraRAM the platform lacks, which is block RAM."""
-        return _given(self.depth, self.input_data_width, self.ram_style, self.platform.uram)
+        return _given(self.depth, self.input.width, self.ram_style, self.platform.uram)
 
     @derived
     def planned_storage(self) -> FifoStorage | Rejected:
         """The storage the native RTL selects (``fifo_storage``), of a geometry it takes:
         refused, as ``geometry_supported`` is, for one it does not."""
-        if not _geometry_supported(self.input_data_width, self.depth):
+        if not _geometry_supported(self.input.width, self.depth):
             return reject(*_GEOMETRY)
-        found = fifo_storage(self.depth, self.input_data_width, self.rtl_ram_style)
+        found = fifo_storage(self.depth, self.input.width, self.rtl_ram_style)
         if found is None:
             return reject("fifo-capacity", "native memory size overflows unsigned int")
         return found
 
     # The storage, the product its holder reads; its rule reads the value.
-    storage = View(planned_storage)
+    storage = view(planned_storage)
+
+    @derived
+    def intake(self) -> Intake:
+        """Its storage's capacity (``planned_storage``), exact, both before it stops and at
+        most: it takes a word while it holds fewer, whatever its output does, and the next
+        once a word leaves (CONTRACT.md § 5)."""
+        storage: FifoStorage = self.planned_storage
+        words = storage.capacity
+        rule = "takes a word while it holds fewer than its capacity; resumes as one leaves"
+        source = _INTAKE_SOURCES[storage.effective_style]
+        return Intake((PortIntake("input", words, words, rule, Standing.STRUCTURAL, source),))
 
     @constraint
     def capacity_supported(self) -> bool | Rejected:
@@ -287,26 +309,24 @@ class FifoKernel(KernelSpace):
     @view
     def resource_use(self) -> Resources:
         return fifo_resources(
-            self.depth, self.input_data_width, self.rtl_ram_style, fabric=self.platform.fabric
+            self.depth, self.input.width, self.rtl_ram_style, fabric=self.platform.fabric
         )
 
     @view
     def held_bits(self) -> int:
         """What it holds: its depth of words."""
-        return self.depth * self.input_data_width
+        return self.depth * self.input.width
 
     @view
     def parameters(self) -> dict[str, int | str]:
         return {
-            "DATA_WIDTH": self.input_data_width,
+            "DATA_WIDTH": self.input.width,
             "DEPTH": self.depth,
             "RAM_STYLE": f'"{self.rtl_ram_style}"',
         }
 
-    module = LibraryModule(
-        "fifo",
-        parameters=parameters,
-        sources=(CopiedSource("finnlib", "rtl/infra/fifo.sv", provides=("module:fifo",)),),
+    module_spec: ClassVar[ModuleSpec] = ModuleSpec(
+        "fifo", (CopiedSource("finnlib", "rtl/infra/fifo.sv", provides=("module:fifo",)),)
     )
 
 

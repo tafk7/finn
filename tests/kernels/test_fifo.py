@@ -37,12 +37,12 @@ def decided(answer: QueryResult[T]) -> T:
 
 def test_fifo_states_its_word_geometry_once_its_ram_style_is_chosen() -> None:
     base = design_space(fifo_node(word_bits=13, depth=8))
-    assert isinstance(base.inspect(FifoKernel.netlist).accepted_result, Unresolved)
+    assert isinstance(base.inspect(FifoKernel.netlist).result, Unresolved)
     with pytest.raises(ValueUnavailableError):
         _ = library_module(base)
     # Its word is its input port's: one lane of the tensor's INT13 a beat.
-    assert base.field(FifoKernel.input_data_width).get() == 13
-    assert base.field(FifoKernel.input_data_width).query() == Available(13)
+    assert base.field(FifoKernel.input.width).get() == 13
+    assert base.field(FifoKernel.input.width).query() == Available(13)
     assert decided(base.field(FifoKernel.ram_style).state).status == "unassigned"
     chosen = base.with_choices(ram_style="auto")
     requirements = library_module(chosen)
@@ -62,7 +62,7 @@ def test_fifo_states_its_word_geometry_once_its_ram_style_is_chosen() -> None:
         ("ordy", Direction.IN, 1),
     ]
     netlist = Fragment((("", requirements),))
-    assert chosen.inspect(FifoKernel.netlist).accepted_result == Available(netlist)
+    assert chosen.inspect(FifoKernel.netlist).result == Available(netlist)
     assert chosen.field(FifoKernel.netlist).get() == netlist
     assert chosen.field(FifoKernel.netlist).query() == Available(netlist)
     assert chosen.query(FifoKernel.netlist) == Available(netlist)
@@ -94,12 +94,12 @@ def test_fifo_refuses_an_unsupported_geometry_before_and_after_its_ram_style(dep
             ("capacity_supported", {"fifo-geometry"}),
             ("geometry_supported", {"fifo-geometry"}),
         ]
-    assert isinstance(base.inspect(FifoKernel.netlist).accepted_result, Rejected)
+    assert isinstance(base.inspect(FifoKernel.netlist).result, Rejected)
     chosen = base.with_choices(ram_style="auto")
-    assert isinstance(chosen.inspect(FifoKernel.netlist).accepted_result, Rejected)
-    with pytest.raises(ValueUnavailableError) as error:
-        _ = library_module(chosen)
-    assert isinstance(error.value.result, Rejected)
+    assert isinstance(chosen.inspect(FifoKernel.netlist).result, Rejected)
+    assert chosen.inspect(FifoKernel.netlist).output_result is None
+    with pytest.raises(ValueUnavailableError):
+        library_module(chosen)
 
 
 @pytest.mark.parametrize(

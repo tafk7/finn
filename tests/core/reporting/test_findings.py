@@ -15,7 +15,9 @@ from finn.core.reporting.findings import Finding, FindingKind, Refusal, by_code,
 
 
 def unassigned(owner: str) -> Finding:
-    return Finding(FindingKind.BLOCKER, "decision-unassigned", owner, "requires a commitment")
+    return Finding(
+        FindingKind.BLOCKER, "decision-unassigned", owner, "no choice has set this decision"
+    )
 
 
 def test_a_record_keeps_the_causes_each_a_record_of_its_own() -> None:
@@ -40,7 +42,7 @@ def test_a_record_keeps_the_causes_each_a_record_of_its_own() -> None:
                 "kind": "blocker",
                 "code": "decision-unassigned",
                 "owner": "x.transport",
-                "message": "requires a commitment",
+                "message": "no choice has set this decision",
                 "details": {},
                 "causes": [],
             }
@@ -52,7 +54,7 @@ def test_a_record_keeps_the_causes_each_a_record_of_its_own() -> None:
 
 def test_a_finding_s_text_is_its_owner_code_and_message() -> None:
     assert str(unassigned("x.transport")) == (
-        "x.transport: decision-unassigned: requires a commitment"
+        "x.transport: decision-unassigned: no choice has set this decision"
     )
 
 
@@ -121,7 +123,7 @@ def test_by_code_gives_one_line_per_code_and_kind_in_the_order_first_found() -> 
     found = [first, unassigned("a"), other, unassigned("b"), unassigned("c")]
     assert by_code(found) == [
         "float-remains (limitation) 2: 2 nodes have a float output; and 1 more",
-        "decision-unassigned (blocker) 3: requires a commitment; and 2 more",
+        "decision-unassigned (blocker) 3: no choice has set this decision; and 2 more",
     ]
     assert by_code([first]) == ["float-remains (limitation) 1: 2 nodes have a float output"]
     assert by_code([]) == []

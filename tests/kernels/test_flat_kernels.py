@@ -241,10 +241,12 @@ def test_native_rtl_pin_names_directions_and_widths(factory, tmp_path):
         lambda: threshold(bias=-10),
     ],
 )
-def test_unsupported_cases_are_refused_without_constructing_invalid_interfaces(factory):
+def test_refused_model_prevents_attempting_a_netlist(factory):
     point = factory()
     assessment = point.inspect(type(point).netlist)
-    assert isinstance(assessment.accepted_result, Rejected)
+    assert isinstance(assessment.result, Rejected)
+    assert assessment.output_result is None
+    assert inspection.validity(point).status == "refused"
 
 
 @pytest.mark.parametrize(

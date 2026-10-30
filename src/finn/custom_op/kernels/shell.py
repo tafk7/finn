@@ -58,7 +58,7 @@ from finn.core.search import Key, dotted
 from finn.core.space import Available, Inapplicable, QueryResult, Rejected, inspection
 from finn.custom_op.kernels.network import PARTITION, PRODUCER, _network, persist, stale_text
 from finn.kernels.artifacts.module import Composed
-from finn.kernels.base import Timed
+from finn.kernels.base import Kernel
 from finn.kernels.budgets import SHELL, counts
 from finn.kernels.channels import Channel
 from finn.kernels.configure import refusal
@@ -228,13 +228,38 @@ def _resources(network: InShell) -> QueryResult[ShellResources]:
 
 @dataclass(frozen=True)
 class Configured:
-    """A partition's network as emission builds it (``configured_network``): every choice
-    in play stored, none open, within its shell's budgets (its shell member's rules); its
-    ``module`` and its ``cycles`` a frame, its slowest member's."""
+    """A logically configured partition and its physical module, without a timing query.
+
+    Every choice in play is stored and validity/presence and shell budgets are complete.
+    Emission does not prove a rate or timed FIFO sufficiency. The existing ``cycles``
+    readout remains an explicit, separate request until timing consumers migrate.
+    """
 
     network: InShell
     module: Composed
-    cycles: int
+
+    @property
+    def cycles(self) -> int:
+        """Request the existing cycle readout; never infer it from logical configuration.
+
+        A missing or refused member estimate fails this request, not configuration or
+        emission. This preserves the held timing consumers' contract without making
+        them a prerequisite of the untimed build bridge.
+        """
+        cycles = {name: self.network.query(name, Kernel.cycles) for name in self.network.members}
+        found = tuple(
+            self.network.located(name, finding)
+            for name, each in cycles.items()
+            if not isinstance(each, Available)
+            for finding in each.findings
+        )
+        if found or not cycles or not all(isinstance(each, Available) for each in cycles.values()):
+            raise KernelOpError(
+                "cycle characterization unavailable: "
+                + "; ".join(map(Finding.subject_line, found)),
+                findings=found,
+            )
+        return max(each.value for each in cycles.values() if isinstance(each, Available))
 
     @property
     def row(self) -> ShellRow:
@@ -272,7 +297,7 @@ def configured_network(
     debug_placeholder to step_explore's strategies"), any other one never set ("not set: the cut,
     MakeCutChoices, or a strategy sets it"; one finding, ``choices-open``); a partition
     over the shell's budgets (its shell member's validity: "refused by the <shell> shell",
-    each broken budget a finding), or whose module or cycles its members refuse, or a
+    each broken budget a finding), or whose module its members refuse, or a
     member's validity refuses (a rule its stored choices break, which the bind binds:
     "refused by its members", each finding naming its member); or graph inputs and outputs
     out of port order refuse, named. Its netlist's count (``bus_counts`` and its movers')
@@ -346,14 +371,10 @@ def configured_network(
             findings=over_budget,
         )
     module = bound.module_of(PRODUCER)
-    cycles = {name: bound.query(name, Timed.cycles) for name in bound.members}
     found = [] if isinstance(module, Available) else list(module.findings)
-    for name, each in cycles.items():
-        if not isinstance(each, Available):
-            found.extend(bound.located(name, finding) for finding in each.findings)
     if not found and isinstance(module, Available):
         _counts_agree(bound, label)
-        # A rule a member's stored choices break that its module and cycles do not read.
+        # A rule a member's stored choices break that its module does not read.
         found = [
             bound.located(name, finding)
             for name in bound.members
@@ -364,6 +385,53 @@ def configured_network(
         raise KernelOpError(
             f"{label}: refused by its members: " + "; ".join(map(Finding.subject_line, refused)),
             findings=refused,
+        )
+    # Computable readouts do not prove that arbitrary rules or presence resolved.
+    # Refused rules retain their detailed diagnostics above; now require completeness.
+    validity = inspection.validity(bound.point)
+    waiting = [
+        key
+        for key, state in inspection.states(bound.point)
+        if isinstance(state, (inspection.Open, inspection.Waiting))
+    ]
+    unsettled = [
+        (name, result)
+        for name, result in inspection.presence(bound.point)
+        if not isinstance(result, (Available, Inapplicable))
+    ]
+    if validity.result != Available(True) or waiting or unsettled:
+        names = (
+            tuple(piece.owner for piece in validity.pieces)
+            + tuple(waiting)
+            + tuple(name for name, _ in unsettled)
+        )
+        text = f"{label}: validity or presence not complete at emission: " + ", ".join(names)
+        validity_findings = (
+            () if isinstance(validity.result, Available) else validity.result.findings
+        )
+        raise KernelOpError(
+            text,
+            findings=(
+                Finding(
+                    FindingKind.REJECTION,
+                    "design-incomplete",
+                    "configured_network",
+                    text,
+                    (("node", label),),
+                    tuple(
+                        dict.fromkeys(
+                            (
+                                *validity_findings,
+                                *(
+                                    finding
+                                    for _, result in unsettled
+                                    for finding in result.findings
+                                ),
+                            )
+                        )
+                    ),
+                ),
+            ),
         )
     ports = dict(bound.boundary)
     initializers = {tensor.name for tensor in model.graph.initializer}
@@ -378,8 +446,7 @@ def configured_network(
             f" outputs in order {expected}",
             node=label,
         )
-    slowest = max(each.value for each in cycles.values() if isinstance(each, Available))
-    return Configured(bound, module.value, slowest), bound.boundary
+    return Configured(bound, module.value), bound.boundary
 
 
 def _impossible(
@@ -471,9 +538,14 @@ def verify_partition(model: ModelWrapper, label: str) -> tuple[Configured, FifoC
     ``held-owner-unknown``). A FIFO not held that no longer keeps its producer within its
     idle time is refused, named (``fifo-stale``: add size_fifos to step_explore's strategies), and
     nothing is recorded; a held one (``fifo-held-stale``) and a ``direct`` that throttles
-    its producer (``direct-throttles``) are limitations, the check's ``findings``. The model
-    is changed only by the record; its caller saves it."""
+    its producer (``direct-throttles``) are limitations, the check's ``findings``. This
+    held timed path explicitly requests cycles first; unavailable/refused estimates
+    leave the verification marker unchanged. The model is changed only by the record;
+    its caller saves it."""
     point, _ = configured_network(model, label)
+    # This held consumer performs a timed FIFO check. Retain its former eager
+    # cycle-refusal precondition explicitly: FifoCheck(None) is not verification.
+    _ = point.cycles
     seam = Seam(read_target(model).platform)
     _, record = search_record(model)
     seam.held.update(_held_values(point.network, {} if record is None else record["held"]))

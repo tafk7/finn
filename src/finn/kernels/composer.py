@@ -36,7 +36,7 @@ facts (``Composed``; ``Composed.design_space()`` opens it):
   the root, ``<channel>-producer`` or ``<channel>-consumer``, the port's ``<p>_side``
   ``under`` the member, so a channel's findings name the node as today's network's do.
 
-**The side is structural.** A producer side is an output port (its ``AxiStreamPort``'s
+**The side is structural.** A producer side is an output port (its actual port model's
 endpoint the initiator, or its served child's), a consumer side an input port, and a
 source is never a consumer: a declaration that breaks one is refused when the class is
 made (``channel-users``, the channel's text, owned by the channel's name). The channel's
@@ -109,7 +109,7 @@ from finn.core.space import (
 )
 from finn.core.space.compiler import compile_model
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.base import KernelSpace
+from finn.kernels.base import Kernel
 from finn.kernels.budgets import (
     DOUBLED,
     INITIATORS,
@@ -121,9 +121,8 @@ from finn.kernels.budgets import (
     shell_members,
 )
 from finn.kernels.channels import Channel
-from finn.kernels.control import ControlBus
-from finn.kernels.declaration import declarations
-from finn.kernels.port import port_endpoint
+from finn.kernels.control import control_models
+from finn.kernels.port import port_endpoint, port_side
 from finn.kernels.sides import Side, SideKind
 
 SEPARATOR = "-"
@@ -427,6 +426,15 @@ def _checked(declared: PartitionDeclaration) -> list[Finding]:
                 findings.append(
                     _refused("channel-read", name, f"reads {read.member}, which is no member")
                 )
+            elif isinstance(read, Port):
+                try:
+                    port_side(_class_of(declared, read.member), read.port)
+                except KeyError:
+                    findings.append(
+                        _refused(
+                            "channel-read", name, f"reads {read.member}, which states no {stated}"
+                        )
+                    )
             elif not _states(_class_of(declared, read.member), stated):
                 findings.append(
                     _refused("channel-read", name, f"reads {read.member}, which states no {stated}")
@@ -620,7 +628,9 @@ def _made(
             root = root_name(member, role)
             roots[root] = (owner, role)
             if isinstance(side, Port):
-                read = getattr(nodes[names[side.member]], f"{side.port}_side")
+                node = nodes[names[side.member]]
+                assert isinstance(node, Space)
+                read = port_side(node, side.port)  # _checked found it before construction
                 channels[root] = given[role] = derived(side=read)(_under(names[side.member]))
             else:
                 params[root] = given[role] = _param(Channel, role, owner, annotations, root)
@@ -649,10 +659,9 @@ def _made(
 def _control_bus(space_type: type[Space]) -> str | None:
     """The control bus a kernel class declares, by name (``finn.kernels.control``); None
     where it declares none."""
-    if not issubclass(space_type, KernelSpace):
+    if not issubclass(space_type, Kernel):
         return None
-    found = declarations(space_type, KernelSpace)
-    return next((name for name, each in found.items() if isinstance(each, ControlBus)), None)
+    return next(iter(control_models(space_type)), None)
 
 
 def _shell(
@@ -682,7 +691,11 @@ def _shell(
         bus = _control_bus(facts.space_type)
         if bus is not None:
             presented.append(member)
-            given[contributor(member, PRESENTED)] = getattr(nodes[member], f"{bus}_presented")
+            # Bind the actual placed occurrence, not a borrowed class reference.
+            control = nodes[member]
+            for segment in bus.split("."):
+                control = getattr(control, segment)
+            given[contributor(member, PRESENTED)] = control.presented
         for kind, name, found in (
             (INITIATORS, "memory_initiators", initiators),
             (DOUBLED, "takes_doubled_clock", doubled),

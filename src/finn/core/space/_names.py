@@ -5,11 +5,10 @@
 an edge out of the class (``ir.NodeRef``).
 
 A member, a path of records (``kitchen.area``), a Decision over nodes' case or
-member (``heating.kw``), a projection (``spec.payload_bits``) and an integer
-expression each resolve to one node; those that need one get it reserved here, once per scope
-and source. ``members_candidates`` lists the members ``Members`` reads (views and derived
-values: each child's member of the named base), named as the reading scope sees
-them.
+member (``heating.kw``) each resolve to one node; those that need one get it reserved
+here, once per scope and source. ``members_candidates`` lists the members ``Members``
+reads (views and derived values: each child's member of the named base), named as the
+reading scope sees them.
 
 A reference into a placed Space resolves in that class's compiled form, at a place
 (``_table.Place``: a slot, and the slots of the placed classes below it) and is an edge out
@@ -23,35 +22,25 @@ classes make for one scope is one address where they are placed, in the choice's
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import replace
-from typing import cast
 
-from ._configuration import Space
+from ._configuration import _Namespace
 from ._nodes import NodeChoice, NodeDecision, NodeDecl, unwrap
-from ._table import ExpressionTask, Place, ScopeDraft, Table, member_key
+from ._table import Place, ScopeDraft, Table, member_key
 from .declarations import (
     CaseRef,
     ChoiceMemberRef,
     Declaration,
     MemberRef,
     Members,
-    Projection,
     at,
 )
 from .errors import DefinitionError, RequestError
-from .expressions import INTEGER_SEMANTICS, Expr
-from .ir import Argument, NodeRef
-from .semantics import ValueSemantics
+from .groups import Group
+from .ir import NodeRef
 
 _OWNER = "space.names"
-
-
-def _attribute(name: str) -> Callable[..., object]:
-    def attribute(*, value: object) -> object:
-        return getattr(value, name)
-
-    return attribute
 
 
 def _in_table(drafts: Sequence[ScopeDraft], scope: int, reference: object) -> int:
@@ -100,12 +89,8 @@ class Names:
 
     def __init__(self, table: Table) -> None:
         self.table = table
-        # Each expression and projection once per scope.
-        self.expression_nodes: dict[tuple[int, Expr], int] = {}
-        self.expression_counts: dict[str, int] = {}
-        self.projections: dict[tuple[int, Projection[object]], int] = {}
         self.choice_member_nodes: dict[tuple[int, str], int] = {}
-        self.placed_scopes: dict[int, tuple[int, ...]] = {}
+        self.placed_scopes: dict[int, tuple[Place, ...]] = {}
         # Selections made in a placed Space's choice, by (where, choice, member).
         self.placed_choice_members: dict[tuple[Place, int, str], int] = {}
 
@@ -120,23 +105,28 @@ class Names:
         result: list[tuple[str, str, NodeRef]] = []
         prefix = self.table.drafts[scope].name
         for child in self.placed(scope):
-            name = self.table.drafts[child].name
+            name = self.table.name(child)
             name = name[len(prefix) + 1 :] if prefix else name
-            compiled = self.table.placing(child).compiled
+            compiled = self.table.compiled_at(child)
             if not issubclass(compiled.space_type, base):
                 continue
             member = compiled.named_members.get(member_name)
             if member is not None:
-                result.append((name, member_name, self.table.lift(Place(child), member)))
+                result.append((name, member_name, self.table.lift(child, member)))
         return result
 
-    def members_member(self, declaration: Members[object]) -> tuple[type[Space], str]:
+    def members_member(self, declaration: Members[object]) -> tuple[type[_Namespace], str]:
         """The class a ``Members`` of a member ranges over, and the member's name there: the
         class that declares it, read now, when the class holding the ``Members`` is
         compiled (the member's class does not exist while a body spells it)."""
         member = declaration.member
         owner, name = getattr(member, "owner", None), getattr(member, "name", None)
-        if not (isinstance(owner, type) and issubclass(owner, Space) and name is not None):
+        if not (
+            isinstance(owner, type)
+            and issubclass(owner, _Namespace)
+            and not issubclass(owner, Group)
+            and name is not None
+        ):
             raise DefinitionError.broken(
                 "members-member-invalid",
                 _OWNER,
@@ -145,26 +135,35 @@ class Names:
             )
         return owner, name
 
-    def placed(self, scope: int) -> tuple[int, ...]:
-        """The scopes placed by a scope's members, in member order (candidates in case order)."""
+    def placed(self, scope: int) -> tuple[Place, ...]:
+        """Real children, traversing included namespaces in declaration/case order.
+
+        A real Space is a structural boundary; a Group is not counted as a child.
+        """
         placed = self.placed_scopes.get(scope)
         if placed is not None:
             return placed
         draft = self.table.drafts[scope]
-        children: list[int] = []
+        direct: list[Place] = []
         for name, declaration in draft.effective.members.items():
             if isinstance(declaration, NodeDecl):
-                children.append(draft.named_children[name])
+                direct.append(Place(draft.named_children[name]))
             elif isinstance(declaration, NodeDecision):
                 cases = self.table.choice_drafts[draft.choices[declaration]].cases
-                children.extend(child for _, child in cases if child is not None)
+                direct.extend(Place(child) for _, child in cases if child is not None)
+        children: list[Place] = []
+        pending = list(reversed(direct))
+        while pending:
+            child = pending.pop()
+            compiled = self.table.compiled_at(child)
+            if compiled.validity is None:
+                pending.extend(
+                    self.table.below(child, slot.index) for slot in reversed(compiled.slots)
+                )
+            else:
+                children.append(child)
         placed = self.placed_scopes[scope] = tuple(children)
         return placed
-
-    def fresh_number(self, owner: str) -> int:
-        number = self.expression_counts.get(owner, 0)
-        self.expression_counts[owner] = number + 1
-        return number
 
     def _in_slot(self, place: Place) -> bool:
         """Whether ``place`` is a placed Space's scope (else the class's own)."""
@@ -317,10 +316,6 @@ class Names:
 
     def reference(self, scope: int, source: object, *, owner: str) -> NodeRef:
         source = unwrap(source)
-        if isinstance(source, Expr) and source.owner is None:
-            return self.expression(scope, source, owner=owner)
-        if isinstance(source, Projection):
-            return self.projection(scope, source, owner=owner)
         if isinstance(source, ChoiceMemberRef) and source.owner is None:
             return self.choice_member(scope, source, owner=owner)
         if isinstance(source, CaseRef) and source.owner is None:
@@ -384,69 +379,3 @@ class Names:
                 f"{owner}: reference is not a member of this scope",
                 declaration=owner,
             ) from cause
-
-    def projection(self, scope: int, source: Projection[object], *, owner: str) -> int:
-        """``spec.payload_bits``: a derived node reading one attribute of a value."""
-        identity = (scope, source)
-        cached = self.projections.get(identity)
-        if cached is not None:
-            return cached
-        if source.semantics is None:
-            raise DefinitionError.broken(
-                "projection-unannotated",
-                _OWNER,
-                f"{owner}: {source._describe()} is not annotated with a class; read it in a "
-                "@derived method instead",
-                declaration=owner,
-            )
-        index = self.table.reserve(
-            scope,
-            f"{owner}.$project.{self.fresh_number(owner)}",
-            "derived",
-            source.semantics,
-            guard=self.table.drafts[scope].guard,
-            source_owner=owner,
-        )
-        self.projections[identity] = index
-        target = self.reference(scope, source.source, owner=owner)
-        self.table.nodes[index] = replace(
-            self.table.nodes[index],
-            function=_attribute(source.attribute),
-            arguments=(Argument("value", target),),
-        )
-        return index
-
-    def expression(
-        self,
-        scope: int,
-        source: Expr,
-        *,
-        owner: str,
-        index: int | None = None,
-    ) -> int:
-        """Register each source expression once per scope.
-
-        A named expression owns its authored node. Anonymous shared expressions
-        use their first consumer's source owner; every later consumer retains
-        its own dependency edge and therefore its demanded evidence path.
-        Their applicability comes from the scope, never the first consumer.
-        """
-
-        identity = (scope, source)
-        previous = self.expression_nodes.get(identity)
-        if previous is not None:
-            return previous
-        if index is None:
-            index = self.table.reserve(
-                scope,
-                f"{owner}.$expr.{self.fresh_number(owner)}",
-                "derived",
-                cast(ValueSemantics[object], INTEGER_SEMANTICS),
-                guard=self.table.drafts[scope].guard,
-                source_owner=owner,
-            )
-        self.expression_nodes[identity] = index
-        self.table.expression_tasks.append(
-            ExpressionTask(index, scope, owner, source.operator, tuple(source.operands))
-        )
-        return index

@@ -6,10 +6,11 @@
 A ``Channel`` (``finn.kernels.channels``) takes two sides, its ``producer`` and its
 ``consumer``, each a ``Side`` of one of four kinds (``SideKind``):
 
-- a **kernel**'s port (``Side.kernel``): the stream it presents (``x_stream``), its label
-  (``compute.packed.x``, the label its contract carries) and, on an output port, its word
-  width (``x_data_width``). A kernel states it for each of its ports (``x_side``,
-  ``finn.kernels.port``);
+- a **kernel**'s port (``Side.kernel``): the stream it presents (``x.stream``), its label
+  (``compute.packed.x``, the label its stream pins carry) and, on an output port, its word
+  width (``x.width``), read from its stream. Each port states it (``x.side``; a served
+  port's, ``x_side``, is its child's port's, labelled below the child: ``port_side`` in
+  ``finn.kernels.port`` finds either);
 - a **frozen neighbour**'s (``Side.neighbour``): the same three, given as a fact read from a
   kernel outside the selection at its accepted point;
 - the **boundary**'s (``Side.boundary``): the module's AXIS port, its name as its label
@@ -37,8 +38,8 @@ outside states (``Outside``) and its pace (``BeatTimes``, or the steady shorthan
 on the boundary (a ``MOVERS`` kind, ``iodma_hls``), or the build (``BUILD``). It states
 the order of each pass (``ROW_MAJOR``, or None: as the inside presents it), the passes a
 frame (1, or None: as presented), the lanes a beat (the edge's word, or None: the inside's),
-the pace (the outside's beat times over a frame, or None where a mover states it, whose
-pace is its contract's) and the host's buffer layout (``ROW_MAJOR_HOST``). The pace is
+the pace (the outside's beat times over a frame, or None when timing is not stated; a
+mover's pace comes from its contract) and the host's buffer layout (``ROW_MAJOR_HOST``). The pace is
 kept as given: ``Steady`` is expanded where the edge's beats are known, in one place
 (``beat_times``), which FIFO sizing (``finn.kernels.fifo_sizing.stated_pattern``) and a
 boundary channel's cycles (``finn.kernels.channels.Channel.cycles``: no fewer than its
@@ -144,7 +145,7 @@ class Outside:
     ``passes`` a frame (1), the ``lanes`` a beat (at least 1), the ``pace``
     (``BeatTimes`` or ``Steady``) and the host buffer's ``layout`` (``ROW_MAJOR_HOST``).
     ``order``, ``passes`` and ``lanes`` left None are as the inside presents them; the
-    ``pace`` left None is a mover's (its contract's), so the build states one."""
+    ``pace`` left None leaves timing unstated; a mover's pace comes from its contract."""
 
     source: str
     order: str | None = None
@@ -167,8 +168,6 @@ class Outside:
             raise ValueError(f"the outside states one lane a beat or more, not {self.lanes!r}")
         if self.pace is not None and not isinstance(self.pace, (BeatTimes, Steady)):
             raise ValueError("the outside's pace is its beat times or a steady beat")
-        if self.source == BUILD and self.pace is None:
-            raise ValueError("the build's statement states its pace")
         if self.layout != ROW_MAJOR_HOST:
             raise ValueError(f"the host's buffer is laid out {ROW_MAJOR_HOST}, not {self.layout!r}")
 
@@ -259,7 +258,7 @@ class Side:
 
     def under(self, member: str) -> Self:
         """A stated side as seen from where ``member``, which states it, is held: its label
-        below ``member`` (``first.compute.packed.x``), as ``PortContract.under``."""
+        below ``member`` (``first.compute.packed.x``), as ``PortPins.under``."""
         if not self.stated:
             raise ValueError(f"a {self.kind.value}'s side is labelled by no member")
         return replace(self, label=f"{member}.{self.label}")

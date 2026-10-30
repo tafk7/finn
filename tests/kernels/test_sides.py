@@ -32,7 +32,7 @@ import pytest
 from qonnx.core.datatype import DataType
 from support.helpers import FULL_DSP48E2, choose, matmul_point
 
-from finn.core.space import Rejected, design_space, inspection
+from finn.core.space import Available, Rejected, design_space, inspection
 from finn.core.space._running.cache import key, value_class
 from finn.core.space.compiler import compile_model
 from finn.dataflow.streams import Stream
@@ -218,7 +218,6 @@ def test_a_steady_beat_is_expanded_at_the_edge_s_beats_and_beat_times_are_as_sta
         (lambda: Outside(BUILD, passes=0, pace=Steady(1)), "one pass a frame, not 0"),
         (lambda: Outside(BUILD, lanes=0, pace=Steady(1)), "one lane a beat or more, not 0"),
         (lambda: Outside(BUILD, lanes=True, pace=Steady(1)), "one lane a beat or more"),
-        (lambda: Outside(BUILD), "the build's statement states its pace"),
         (
             lambda: Outside(BUILD, pace=(0, 1)),  # type: ignore[arg-type]
             "its beat times or a steady beat",
@@ -240,7 +239,6 @@ def test_a_steady_beat_is_expanded_at_the_edge_s_beats_and_beat_times_are_as_sta
         "no pass",
         "no lane",
         "a bool for lanes",
-        "the build's without a pace",
         "a pace of another type",
         "a layout other than the host's",
         "a steady beat every 0 cycles",
@@ -275,9 +273,15 @@ def test_only_the_boundary_carries_a_statement_and_a_mover_s_where_it_is_offered
     [
         (None, "left unstated"),
         (STATED, "stated by the build"),
+        (Outside(BUILD), "stated by the build"),
         (Outside(IODMA_HLS, ROW_MAJOR, 1, 2), "stated otherwise than its iodma_hls mover states"),
     ],
-    ids=["unstated", "the build's statement", "another statement of the mover's kind"],
+    ids=[
+        "unstated",
+        "the build's statement",
+        "untimed build",
+        "another statement of the mover's kind",
+    ],
 )
 def test_a_side_offered_a_mover_carries_that_mover_s_statement(
     outside: Outside | None, said: str
@@ -410,6 +414,59 @@ def test_a_channel_s_set_port_states_its_source_s_label_and_side() -> None:
         },
     )
     w = folded.member("w")
-    assert w.set_label == w.set_contract.label == "source.memstream.set"
-    assert w.set_side == Side.kernel(w.set_stream, "source.memstream.set")
+    assert w.set_stream_pins.label == "source.memstream.set"
+    assert w.set_side == Side.kernel(w.source.set.stream, "source.memstream.set")
     assert folded.member("set").consumer == w.set_side.under("w")
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {},
+        {"order": ROW_MAJOR},
+        {"passes": 1},
+        {"lanes": 2},
+        {"order": ROW_MAJOR, "passes": 1, "lanes": 2, "layout": ROW_MAJOR_HOST},
+    ],
+)
+def test_untimed_build_statements_keep_independent_logical_fields(fields: dict[str, Any]) -> None:
+    """A present statement carries logical facts without inventing a pace."""
+    stated = Outside(BUILD, **fields)
+    side = Side.boundary("s_axis_0", outside=stated)
+    assert side.outside is stated and stated.pace is None and stated.source == BUILD
+    assert side != Side.boundary("s_axis_0")
+    for name, value in fields.items():
+        assert getattr(stated, name) == value
+    assert stated.layout == ROW_MAJOR_HOST
+    assert key(stated) != key(Outside(BUILD, **fields, pace=Steady(1)))
+
+
+def test_untimed_boundary_presents_logical_fields_without_a_timing_query() -> None:
+    """Logical presentation is available independently of timing-specific consumers."""
+    stated = Outside(BUILD, ROW_MAJOR, 1, 4)
+    point = channel(OUTPUT, Side.boundary("m_axis_0", outside=stated))
+    answer = point.query(Channel.boundary)
+    assert isinstance(answer, Available)
+    presented = answer.value
+    assert presented is not None
+    assert presented.form.lanes == 4 and presented.form.beats == 3
+    assert presented.form.row_major
+    assert stated.pace is None
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"source": "dma"},
+        {"order": "column_major"},
+        {"passes": 2},
+        {"passes": True},
+        {"lanes": 0},
+        {"lanes": True},
+        {"layout": "tiled"},
+    ],
+)
+def test_untimed_outside_preserves_logical_and_source_refusals(fields: dict[str, Any]) -> None:
+    """Removing the timing requirement does not relax another statement field."""
+    with pytest.raises(ValueError):
+        Outside(**{"source": BUILD, **fields})

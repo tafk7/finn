@@ -207,20 +207,23 @@ def assess_constraints(answers: Mapping[str, QueryResult[bool]]) -> ConstraintAs
 
 @dataclass(frozen=True, slots=True)
 class ViewAssessment(Generic[T]):
-    """A view's answer and what it was made of: its raw output, its Space's validity
-    (``Inapplicable`` where the view is inactive and its validity was never read),
-    readiness (a diagnostic: whether the output or the validity is still unresolved)
-    and the accepted result (``assess_view``)."""
+    """One view result with its presence, owning validity and attempted output.
 
-    output_result: QueryResult[T]
-    readiness: ReadinessAssessment
-    validity: QueryResult[bool]
-    accepted_result: QueryResult[T]
+    ``validity`` is None when presence prevented the gate. ``output_result`` is None
+    when presence or owning refusal prevented output entry. Open validity permits a
+    local result; its unrelated waits are not merged into that result. Completeness
+    remains a separate operation-level question.
+    """
+
+    result: QueryResult[T]
+    applicability: QueryResult[bool]
+    validity: QueryResult[bool] | None
+    output_result: QueryResult[T] | None
 
     def require_value(self) -> T:
         """Return the accepted value or raise with this assessment as context."""
 
-        return require_value(self.accepted_result, context=self)
+        return require_value(self.result, context=self)
 
 
 def require_value(result: QueryResult[T], *, context: object | None = None) -> T:
@@ -234,47 +237,31 @@ def require_value(result: QueryResult[T], *, context: object | None = None) -> T
 
 
 def assess_view(
-    output_result: QueryResult[T],
+    output_result: QueryResult[T] | None,
     *,
-    owner: str,
-    validity: QueryResult[bool] = Available(True),
-    validity_owner: str = "$validity",
-    waiting: Mapping[str, QueryResult[object]] | None = None,
+    validity: QueryResult[bool] | None,
     applicability: QueryResult[bool] = Available(True),
 ) -> ViewAssessment[T]:
-    """Reduce a view's raw output and its Space's validity identically for every view form.
+    """Presence first, then normalized owning validity, then the local output.
 
-    In order: inapplicable while the view is inactive (``applicability``; the
-    evaluator then reads neither its output nor its Space's validity); refused when its
-    output or its Space is refused, whatever else waits; unresolved when its output is
-    (an undecided Space leaves the view answering); else its output. Readiness is a
-    diagnostic: whether the output, or anything the Space counts, is still unresolved
-    (the Space's validity, keyed ``validity_owner``, and the pieces still unresolved in
-    a refused Space, ``waiting``, by key), which does not decide refusal.
+    The evaluator observes this order before entering a body. This reducer records
+    what was attempted; open validity alone does not withhold an output.
     """
 
     if not isinstance(applicability, Available) or applicability.value is False:
         inactive: QueryResult[T] = (
             applicability if not isinstance(applicability, Available) else Inapplicable()
         )
-        readiness = ReadinessAssessment(
-            {owner: cast(QueryResult[object], inactive)}, Available(True)
-        )
-        return ViewAssessment(output_result, readiness, Inapplicable(), inactive)
-    required = {
-        owner: cast(QueryResult[object], output_result),
-        validity_owner: cast(QueryResult[object], validity),
-        **(waiting or {}),
-    }
-    unresolved = _unresolved(required.values())
-    readiness = ReadinessAssessment(
-        required, unresolved if unresolved is not None else Available(True)
-    )
-    refusal = _rejected(
-        (cast(QueryResult[object], output_result), cast(QueryResult[object], validity))
-    )
-    accepted: QueryResult[T] = refusal if refusal is not None else output_result
-    return ViewAssessment(output_result, readiness, validity, accepted)
+        return ViewAssessment(inactive, applicability, None, None)
+    if validity is None:
+        raise ValueError("an applicable view requires its owning validity")
+    if isinstance(validity, (Rejected, Inapplicable)):
+        return ViewAssessment(validity, applicability, validity, None)
+    if isinstance(validity, Available) and validity.value is not True:
+        raise ValueError("owning validity must be normalized before assessing a view")
+    if output_result is None:
+        raise ValueError("an applicable view requires its local output")
+    return ViewAssessment(output_result, applicability, validity, output_result)
 
 
 __all__ = [

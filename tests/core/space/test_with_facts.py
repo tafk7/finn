@@ -102,7 +102,7 @@ class Gauge(Space):
     def valued(self) -> bool:
         return self.reading is not None
 
-    scale: int = Decision(values=(1, 2), when=valued)
+    scale: int = Decision(domain=(1, 2), when=valued)
 
     @derived
     def seen(self) -> int:
@@ -115,7 +115,7 @@ class Office(Space):
     width: int = Param()
     rate: int | None = Param(default=None)
     gauge = Gauge(reading=rate)
-    mode: int = Decision(values=(1, 2, 4))
+    mode: int = Decision(domain=(1, 2, 4))
 
     @derived
     def charged(self) -> int:
@@ -163,7 +163,7 @@ def test_an_evaluation_records_the_formals_it_read_beside_its_decisions() -> Non
     class Plate(Space):
         wide: int = Param()
         tall: int = Param()
-        lanes: int = Decision(values=(1, 2))
+        lanes: int = Decision(domain=(1, 2))
 
         @derived
         def across(self) -> int:
@@ -228,7 +228,7 @@ def test_other_facts_evaluate_what_read_a_changed_formal_and_only_that() -> None
     class Plate(Space):
         wide: int = Param()
         tall: int = Param()
-        lanes: int = Decision(values=(1, 2))
+        lanes: int = Decision(domain=(1, 2))
 
         @derived
         def across(self) -> int:
@@ -503,7 +503,7 @@ class Closed(Space):
     """A core that refuses every width past 8, whatever its choice is."""
 
     width: int = Param()
-    n: int = Decision(values=(1, 2, 3))
+    n: int = Decision(domain=(1, 2, 3))
 
     @derived
     def doubled(self) -> int:
@@ -522,7 +522,7 @@ class Gate(Space):
 
     width: int = Param()
     compute: Closed = Select(closed=Closed, width=width)
-    other: int = Decision(values=(1, 2))
+    other: int = Decision(domain=(1, 2))
 
 
 def test_a_choice_under_a_selector_whose_case_the_facts_refuse_answers_as_from_nothing() -> None:
@@ -594,9 +594,9 @@ class Rated(Space):
 
     cap: int = Param()
     extent: int = Param()
-    c: int = Decision(values=(1, 2, 3, 4))
+    c: int = Decision(domain=(1, 2, 3, 4))
     lanes: int = Decision(domain=divisors_of(extent))
-    other: int = Decision(values=(1, 2))
+    other: int = Decision(domain=(1, 2))
 
     @constraint
     def fits(self) -> bool | Rejected:
@@ -607,7 +607,7 @@ class Rated(Space):
 
 class Gated(Space):
     extent: int = Param()
-    enabled: bool = Decision(values=(False, True))
+    enabled: bool = Decision(domain=(False, True))
     lanes: int = Decision(domain=divisors_of(extent), when=enabled)
 
 

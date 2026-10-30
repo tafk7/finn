@@ -1,10 +1,11 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Value inputs: an optional one left out, and the attributes of a value read in a class body.
+"""Value inputs: an optional one left out, and the attributes of a value read by a derived value.
 
 A formal takes a value, always known: an optional one left out is ``None``, which its
-readers test. An attribute of a formal's value, or of a derived value of the same body, is
-read in the class body as a typed projection. Nothing here is about hardware.
+readers test. An attribute of a formal's value, or of a derived value, is read by a derived
+value, bound by name to the formal that wants it; a class body does not read it. Nothing
+here is about hardware.
 """
 
 from __future__ import annotations
@@ -40,7 +41,7 @@ def test_an_optional_value_input_left_out_is_none() -> None:
         forwarded = Rated(rate=rate)  # bound to the enclosing formal
         literal = Rated(rate=3)
         unbound = Rated()  # an optional formal nobody binds: its default
-        level: int = Decision(values=(1, 2))
+        level: int = Decision(domain=(1, 2))
         chosen = Rated(rate=level)
 
     omitted = design_space(Office())
@@ -61,22 +62,28 @@ def test_an_optional_value_input_left_out_is_none() -> None:
         omitted.literal.present(Rated.charged)
 
 
-def test_an_attribute_of_a_value_input_is_read_in_the_class_body() -> None:
-    @dataclass(frozen=True)
-    class Rate:
-        per_head: int
-        heads: int
+@dataclass(frozen=True)
+class Rate:
+    per_head: int
+    heads: int
 
-        @property
-        def total(self) -> int:
-            return self.per_head * self.heads
+    @property
+    def total(self) -> int:
+        return self.per_head * self.heads
 
+
+def test_an_attribute_of_a_value_input_is_read_by_a_derived_value() -> None:
     class Ledger(Space):
         amount: int = Param()
 
     class Office(Space):
         rate: Rate = Param()
-        ledger = Ledger(amount=rate.total)  # an attribute of the formal's value
+
+        @derived(rate=rate)
+        def amount(*, rate: Rate) -> int:
+            return rate.total  # an attribute of the formal's value
+
+        ledger = Ledger(amount=amount)
 
     assert design_space(Office(rate=Rate(10, 3))).ledger.amount == 30
     with pytest.raises(AttributeError):
@@ -100,7 +107,7 @@ class Split:
     both: tuple[int, int]
 
 
-def test_an_attribute_of_a_derived_value_is_read_in_the_class_body() -> None:
+def test_an_attribute_of_a_derived_value_is_read_by_another_derived_value() -> None:
     class Ledger(Space):
         amount: int = Param()
 
@@ -112,14 +119,26 @@ def test_an_attribute_of_a_derived_value_is_read_in_the_class_body() -> None:
             head = self.total // 3
             return Split(head, self.total - head, (head, self.total - head))
 
-        ledger = Ledger(amount=split.tail)  # an attribute of this body's own derived value
+        @derived(split=split)
+        def amount(*, split: Split) -> int:
+            return split.tail  # an attribute of this body's own derived value
+
+        ledger = Ledger(amount=amount)
 
     class Paired(Space):
         pair: tuple[int, int] = Param()
 
     class Branch(Office):
-        second = Ledger(amount=Office.split.head)  # inherited, read the same way
-        paired = Paired(pair=Office.split.both)  # typed by the field's annotation
+        @derived(split=Office.split)
+        def head(*, split: Split) -> int:
+            return split.head  # the inherited derived value, read the same way
+
+        @derived(split=Office.split)
+        def both(*, split: Split) -> tuple[int, int]:
+            return split.both
+
+        second = Ledger(amount=head)
+        paired = Paired(pair=both)
 
     point = design_space(Branch(total=30))
     assert point.ledger.amount == 20 and point.second.amount == 10

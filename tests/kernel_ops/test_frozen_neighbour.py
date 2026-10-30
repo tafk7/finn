@@ -17,6 +17,7 @@ from __future__ import annotations
 import copy
 import re
 from dataclasses import replace
+from typing import Any, cast
 
 from qonnx.core.modelwrapper import ModelWrapper
 from support.configure import write_raw
@@ -28,10 +29,11 @@ from finn.core.space import Available, Rejected, inspection
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import PRODUCER, declaration, network
 from finn.kernels import fifo_sizing
-from finn.kernels.base import KernelSpace
+from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel, OuterHops
 from finn.kernels.composer import ChannelDeclaration, PartitionDeclaration
 from finn.kernels.partition import Partition, partition
+from finn.kernels.port import port_side
 from finn.kernels.sides import Side, SideKind
 from finn.transformation.kernels import ToKernelOps
 
@@ -41,15 +43,15 @@ def _slice(model: ModelWrapper, *names: str) -> Partition:
     return network(model, [node for node in model.graph.node if node.name in names])
 
 
-def _side(point: object, port: str) -> Side:
-    """A KernelOp's point's ``<port>_side``."""
-    found = point.query(getattr(type(point), f"{port}_side"))  # type: ignore[attr-defined]
+def _side(point: Kernel, port: str) -> Side:
+    """A KernelOp's port's side, its own or served."""
+    found = point.query(cast(Any, port_side(type(point), port)))
     assert isinstance(found, Available) and isinstance(found.value, Side)
     return found.value
 
 
-def _frozen(point: object, port: str, label: str) -> Side:
-    """A KernelOp's point's ``<port>_side`` as a frozen neighbour's, labelled ``label``."""
+def _frozen(point: Kernel, port: str, label: str) -> Side:
+    """The actual port side as a frozen neighbour's, labelled ``label``."""
     found = _side(point, port)
     assert found.stream is not None
     return Side.neighbour(found.stream, label, found.width)
@@ -213,7 +215,7 @@ def test_a_downstream_neighbour_brings_the_input_chain_it_needs_into_the_slice()
         assert part.member(name).query(Channel.input_chain) == Available("input_gen")
         assert part.neighbours(name) == whole.neighbours(name)
         assert part.hops(name) == whole.hops(name)
-        assert part.query(name, KernelSpace.resources) == whole.query(name, KernelSpace.resources)
+        assert part.query(name, Kernel.resources) == whole.query(name, Kernel.resources)
         assert fifo_sizing.size(part.member(name), part.neighbours(name), 1024) == (
             fifo_sizing.size(whole.member(name), whole.neighbours(name), 1024)
         )

@@ -192,6 +192,16 @@ def test_known_weights_give_the_weight_channel_its_source():
     assert [item.node for item in matmul.netlists] == ["compute.packed"]
 
 
+def test_the_weight_channel_counts_its_source_s_cycles_by_kind():
+    """A channel counts its members' cycles by kind (``Channel.source_cycles``,
+    ``stage_cycles``, ``mover_cycles``), not through the base's ``member_cycles``: the kinds
+    name every member the base's does, here its source."""
+    w = configured(base(weights=WEIGHTS), style="block").member("w")
+    assert [item.node for item in w.source_cycles] == ["source"]
+    assert [item.node for item in w.member_cycles] == ["source"]
+    assert w.cycles == w.source.cycles
+
+
 def test_an_unvalued_channel_never_demands_its_source():
     w = configured(base()).member("w")
     evidence = inspection.explain(w, Channel.netlist)
@@ -298,7 +308,7 @@ def test_the_result_range_follows_what_the_weight_channel_carries():
     assert external.result_range == (-48, 64)
     assert external.result_type == DataType["INT8"]
     core = configured(base(weights=WEIGHTS), style="block").member("matmul").compute
-    assert core.y_element == ScalarEncoding(DataType["INT7"], TensorRange(-30, 40))
+    assert core.y.element == ScalarEncoding(DataType["INT7"], TensorRange(-30, 40))
     assert core.parameters["ACCU_WIDTH"] == 7
 
 
@@ -317,7 +327,7 @@ def test_a_narrow_result_range_is_the_result_and_the_accumulator(weights, value_
     matmul = point.member("matmul")
     assert matmul.result_range == value_range
     assert matmul.result_type == DataType[result]
-    assert matmul.compute.y_element == ScalarEncoding(DataType[result], TensorRange(*value_range))
+    assert matmul.compute.y.element == ScalarEncoding(DataType[result], TensorRange(*value_range))
     assert matmul.compute.parameters["ACCU_WIDTH"] == DataType[result].bitwidth()
     assert isinstance(module_of(point, "matmul"), Available)
 
@@ -340,7 +350,7 @@ def test_the_cores_do_not_wait_on_the_source():
     # The packed core does not wait for the memory: its weights' range is the one their
     # owner states on the channel.
     compute = point.member("matmul").compute
-    assert isinstance(compute.inspect(DotpAxiKernel.netlist).accepted_result, Available)
+    assert isinstance(compute.inspect(DotpAxiKernel.netlist).result, Available)
     assert compute.parameters["NARROW_WEIGHTS"] == 0  # the weights hold -4
     assert inspection.validity(compute).status == "valid"
     folding = choose(base(weights=WEIGHTS), {"matmul.compute": "packed"})

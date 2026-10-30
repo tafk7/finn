@@ -38,8 +38,8 @@ from finn.core.rtlsim_pacing import FREE, STALLED
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.steps import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.dataflow.traversal import Traversal, period
-from finn.kernels.base import KernelSpace
+from finn.dataflow.traversal import Traversal, one_pass
+from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.configure import commit
@@ -85,7 +85,7 @@ def _layer(
 def _period(layer: Facts) -> Traversal:
     """One pass of a layer's weights, in the order it reads them at its folding."""
     folded = commit(layer.bind(), {"compute_pumping": False, "reducer": "tree"})
-    return period(folded.w_stream.sequence.form)
+    return one_pass(folded.w.stream.sequence.form)
 
 
 def layered(*, adaptable: bool = True) -> Partition:
@@ -218,7 +218,7 @@ def test_the_network_s_cycles_are_its_slowest_member_s_and_its_buffering_their_s
     assert cycles_of(point).value == max(cycles.values()) == 12
     # Only channels hold bits between their sides.
     held = sum(point.member(name).query(Channel.buffering).value for name in CHANNELS)
-    assert sum(point.query(name, KernelSpace.buffering).value for name in KERNELS) == 0 and held > 0
+    assert sum(point.query(name, Kernel.buffering).value for name in KERNELS) == 0 and held > 0
 
 
 def test_a_hidden_stream_admitting_no_adapter_refuses_the_pair():

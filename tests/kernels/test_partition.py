@@ -36,7 +36,7 @@ from support.helpers import (
 from finn.core.space import Available, Decision, Rejected, Space, derived, inspection
 from finn.kernels.artifacts.abi import Bus, Endpoint, Member, StandardProtocol
 from finn.kernels.artifacts.module import Fragment, Link, LinkEnd
-from finn.kernels.base import Timed
+from finn.kernels.base import Kernel
 from finn.kernels.composer import (
     ChannelDeclaration,
     Facts,
@@ -90,7 +90,7 @@ def test_a_channel_s_sides_wait_on_its_kernels_folding() -> None:
     assert network.validity("x").status == "open"
     # Its cycles wait on what its consumer's side waits on: the kernel's core, open (its
     # folding's presence waits on it).
-    assert network.waits("x", network.query("x", Timed.cycles)) == (("first", "compute"),)
+    assert network.waits("x", network.query("x", Kernel.cycles)) == (("first", "compute"),)
     folded = choose(network, FOLDING)
     assert folded.member("x").consumer.label == "first.compute.packed.x"
 
@@ -198,7 +198,7 @@ class Board(Space):
     """A member that states the platform of the Chain's hidden channel: with UltraRAM or
     without, by its own choice."""
 
-    uram: bool = Decision(values=(True, False))
+    uram: bool = Decision(domain=(True, False))
 
     @derived
     def platform(self) -> Platform:

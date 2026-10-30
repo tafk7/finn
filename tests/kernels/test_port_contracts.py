@@ -154,7 +154,7 @@ def placed(
 def test_every_port_presents_what_the_schedule_derives():
     point = placed()
     compute = point.member("compute")
-    x, w, y = (compute.x_stream.sequence, compute.w_stream.sequence, compute.y_stream.sequence)
+    x, w, y = (compute.x.stream.sequence, compute.w.stream.sequence, compute.y.stream.sequence)
     assert x.form == vector_major((ROWS, REDUCTION), SIMD).replayed(
         OUTPUTS // PE, inner_beats=REDUCTION // SIMD
     )
@@ -174,7 +174,7 @@ def test_every_port_presents_what_the_schedule_derives():
 
 def test_depthwise_activations_carry_pe_channels_of_simd_window_positions():
     point = placed(Form.DEPTHWISE)
-    form = point.member("compute").x_stream.sequence.form
+    form = point.member("compute").x.stream.sequence.form
     assert form.lanes == PE * SIMD and form.shape == (ROWS, REDUCTION, OUTPUTS)
     # Lane s * PE + p is window position s of channel p (FinnLib's order).
     assert next(form.positions()) == ((0, 0, 0), (0, 0, 1), (0, 1, 0), (0, 1, 1))
@@ -207,7 +207,7 @@ def test_a_producer_presenting_another_order_is_steps_its_stream_adapts():
     assert rows.member("w_s").steps.kinds == (Step.REORDER, Step.WIDTH)
     # dotp's own port is untouched by the producer's order.
     compute = narrow.member("compute")
-    assert isinstance(compute.query(type(compute).w_contract), Available)
+    assert isinstance(compute.query(type(compute).w.stream_pins), Available)
     # A channel that admits no adapter refuses the folding that needs one, naming the
     # adapter it would need (a change that breaks a rule is refused).
     with pytest.raises(ValueError, match="channel-form: needs a reorder adapter"):
@@ -226,7 +226,7 @@ def test_a_producer_s_lane_order_is_wires():
     )
     # hlslib's per-channel order (window positions fastest) is likewise a
     # lane permutation of FinnLib's.
-    finnlib = placed(Form.DEPTHWISE).member("compute").x_stream.sequence.form
+    finnlib = placed(Form.DEPTHWISE).member("compute").x.stream.sequence.form
     window_fastest = Traversal(
         finnlib.shape, finnlib.beat_loops, tuple(reversed(finnlib.lane_loops))
     )
@@ -261,7 +261,7 @@ def test_one_kernel_refusal_reaches_the_change_that_selects_it():
     )
     assert not trial.accepted
     assert {(f.code, f.owner) for why in trial.refused.values() for f in why} == {
-        ("dtype-family", "compute.packed.w_element_taken")
+        ("dtype-family", "compute.packed.w.element_taken")
     }
 
 
@@ -308,7 +308,7 @@ def test_eltwise_broadcasts_a_channel_vector_once_per_pixel():
     # The rhs port presents the channel vector once per pixel it meets: a whole
     # pass repeated, which a boundary presents as it is.
     repeated = vector_major((4,), 2).repeated(3)
-    assert point.member("add").rhs_stream.sequence.form == repeated
+    assert point.member("add").rhs.stream.sequence.form == repeated
     assert point.member("rhs").sides.source.sequence.form == repeated
     assert all(
         stream.steps.kinds == ()
@@ -329,7 +329,7 @@ def test_eltwise_refuses_an_operand_it_cannot_broadcast_or_does_not_carry():
     # refuses the pair on its facts, its PE still open; setting PE breaks no rule that
     # was not broken before, so it is accepted, and the kernel stays refused.
     other = eltwise_between((4,), rhs_dtype="INT3", pe=None)
-    assert other.member("add").rhs_element == ScalarEncoding(DataType["INT3"])
+    assert other.member("add").rhs.element == ScalarEncoding(DataType["INT3"])
     pair = {("eltwise-integer-pair", "implementation_supported")}
     assert {(f.code, f.owner) for f in refusal(other.validity("add"))} == pair
     trial = other.trial(keyed({"add.pe": 2}))

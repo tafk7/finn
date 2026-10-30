@@ -10,7 +10,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Self, Union, cast, get_args, get_origin, get_type_hints
 
-from ._configuration import Space
+from ._configuration import _Namespace
 from ._nodes import selector_value
 from .declarations import (
     CaseRef,
@@ -18,12 +18,10 @@ from .declarations import (
     Constraint,
     Derived,
     MemberRef,
-    Projection,
     ValueRef,
     View,
 )
 from .errors import DefinitionError
-from .expressions import Expr
 from .results import Available, Inapplicable, Rejected, Unresolved
 from .semantics import ValueSemantics, annotation_type
 
@@ -155,7 +153,7 @@ def resolve_source(source: object, effective: EffectiveSpace, owner: str) -> Val
         return cast(ValueRef[object], replacement)
     if isinstance(source, (MemberRef, ChoiceMemberRef)):
         return source
-    if isinstance(source, (Expr, CaseRef, Projection)) and source.owner is None:
+    if isinstance(source, CaseRef) and source.owner is None:
         return cast(ValueRef[object], source)
     raise DefinitionError.broken(
         "dependency-undeclared",
@@ -268,7 +266,7 @@ def bind_function(
         receiver = hints.get("self", Self)
         if receiver is not Self and not (
             isinstance(receiver, type)
-            and issubclass(receiver, Space)
+            and issubclass(receiver, _Namespace)
             and issubclass(effective.space_type, receiver)
         ):
             raise DefinitionError.broken(

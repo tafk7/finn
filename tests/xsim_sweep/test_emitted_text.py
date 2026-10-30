@@ -357,7 +357,11 @@ def test_a_key_does_not_depend_on_where_the_checkout_is(
 
 def test_only_the_files_a_checkout_tracks_under_its_import_roots_are_its_files(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Evidence runs may keep temporary files inside a repository. The loose directory
+    # must not discover that ambient checkout; the fixture's own .git still takes priority.
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.resolve()))
     root = tmp_path / "checkout"
     files = ("src/pkg/a.py", "tests/t.py", "scripts/s.py", ".venv/lib/pkg/a.py")
     for name in files:

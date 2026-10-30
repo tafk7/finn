@@ -26,6 +26,7 @@ from finn.core.space import (
     Available,
     Decision,
     DecisionState,
+    Group,
     Inapplicable,
     Param,
     Select,
@@ -76,13 +77,13 @@ def test_a_house_whose_budget_refuses() -> None:
 
 
 class Option(Space):
-    size: int = Decision(values=(1, 2, 3))
+    size: int = Decision(domain=(1, 2, 3))
 
 
 class Host(Space):
     """A Decision under a guard that reads a Decision, read from outside the guard."""
 
-    want: bool = Decision(values=(False, True))
+    want: bool = Decision(domain=(False, True))
     extra = Option(when=want)
 
     @derived
@@ -220,3 +221,56 @@ def test_a_choice_whose_selector_settles_to_another_case_goes_dormant_and_comes_
     assert cleared.accepted
     assert cleared.instance.query(owned["mode"]) == Available("plain")
     assert isinstance(cleared.instance.field(size).state, Inapplicable)  # open and absent
+
+
+@pytest.mark.parametrize("stored", (False, True))
+def test_fresh_preserves_real_scope_through_group_namespaces(stored: bool) -> None:
+    class Child(Space):
+        choice: int = Decision(domain=(1, 2))
+
+    class Declarations(Group):
+        local: int = Decision(domain=(1, 2))
+        child = Child()
+
+    class Root(Space):
+        group = Declarations()
+        sibling = Child()
+
+    point = design_space(Root())
+    if stored:
+        point = point.with_choices(
+            {
+                Root.group.local: 2,
+                Root.group.child.choice: 2,
+                Root.sibling.choice: 1,
+            }
+        )
+    root_copy = fresh(point)
+    assert isinstance(root_copy, Root)
+    assert root_copy is not point
+    assert isinstance(root_copy.group, Declarations) and not isinstance(root_copy.group, Space)
+    before, after = occurrence.held(point), occurrence.held(root_copy)
+    assert after.scope is before.scope and after.ds == before.ds
+    assert inspection.states(root_copy) == inspection.states(point)
+
+    child = point.group.child
+    child_copy = fresh(child)
+    assert isinstance(child_copy, Child)
+    assert child_copy is not child
+    child_before, child_after = occurrence.held(child), occurrence.held(child_copy)
+    assert child_after.scope is child_before.scope
+    assert child_after.scope.name == "group.child"
+    assert child_after.ds == child_before.ds
+    assert child_copy.query(Child.choice) == child.query(Child.choice)
+    assert inspection.states(child_copy.root) == inspection.states(point)
+    if stored:
+        changed = child_copy.with_choices(choice=1)
+        assert changed.choice == 1 and child_copy.choice == child.choice == 2
+        changed_root = changed.root
+        assert isinstance(changed_root, Root)
+        assert changed_root.group.local == 2 and changed_root.sibling.choice == 1
+    else:
+        assert isinstance(child_copy.query(Child.choice), Unresolved)
+
+    with pytest.raises(TypeError, match="real Space, not a Group namespace"):
+        fresh(point.group)  # type: ignore[arg-type]

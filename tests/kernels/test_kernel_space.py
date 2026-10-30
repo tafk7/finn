@@ -1,57 +1,64 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The kernel base, ``KernelSpace``: its four answers, its library module, its checks.
+"""The kernel base, ``Kernel``: its four answers, its library module, its checks.
 
-A kernel answers four questions of its hardware, each a view written once in the base:
+A kernel answers four questions of its hardware through Views:
 its netlist (its library module at the empty label, its members' netlists under their
-nodes), its cycles, its buffering and its resources, its own part and its members'. Each
-class's views read its declarations by the names their lowering fixes, so none reads
-dynamically. A kernel binds at most one library module (``LibraryModule``), whose
-sources must provide it: constant sources when the class is made, a member's when the
-module is built. A kernel with a module states its ports and its resources and places
-no kernel, and a kernel stating a stream port binds a module; one leaving a member
-``required()`` is a base of kernels, which these checks pass by. A declaration's
-argument is a member of its kernel (a declaration of the engine, or one ``required()``),
-or a constant, of whatever type.
+nodes), its cycles, its buffering and its resources, its own part and its members'. The
+base assembles a module's netlist from its binding and its parts (other pins, control
+bus, ports), read serially. A kernel binds at most one library module (``ModuleSpec``),
+whose sources must provide it: constant sources when the class is made, a member's when
+the module is built. A kernel with a module states its parameters, ports and resources
+and places no kernel, and a kernel owning a physical stream port binds a module; one
+leaving a member ``required()`` is a base of kernels, which these checks pass by. A child model
+binding is a fact, derived member or constant; outward Views do not bind
+model Params. Generic primitive inclusion without a module remains usable.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any, cast
 
 import pytest
 from qonnx.core.datatype import DataType
-from support.helpers import FULL_DSP48E2, OtherPins, codes, fifo_node
+from support.helpers import FULL_DSP48E2, codes, fifo_node
 from support.refusals import refused
 
 from finn.core.space import (
     Available,
     DefinitionError,
+    Group,
+    Inapplicable,
     Param,
     Rejected,
     Unresolved,
-    View,
+    derived,
     design_space,
     divisors_of,
+    inspection,
     required,
     view,
 )
 from finn.core.space._reads import summary
 from finn.core.space.compiler import compile_model
+from finn.core.space.declarations import Declaration, Required, View
 from finn.core.space.semantics import default_semantics
+from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Direction, Endpoint, Signal
-from finn.kernels.artifacts.contributions import Contribution, CopiedSource
+from finn.kernels.artifacts.contributions import Contribution, CopiedSource, GeneratedData
 from finn.kernels.artifacts.module import Fragment, Held
-from finn.kernels.base import NATIVE_CLOCKING, KernelSpace
+from finn.kernels.base import Kernel, PortPins
 from finn.kernels.channels import ChannelFifo
-from finn.kernels.declaration import KernelDeclaration, is_member
 from finn.kernels.fifo import FifoKernel, fifo_resources
-from finn.kernels.library import LibraryModule, library_module
-from finn.kernels.port import native_stream, served
+from finn.kernels.laws import NATIVE, NATIVE_CLOCKING
+from finn.kernels.library import (
+    ModuleSpec,
+    library_module,
+)
+from finn.kernels.port_model import OtherPins, StreamPort
 from finn.platform.capabilities import Resources
 
 TENSOR = Tensor((4, 1), ScalarEncoding(DataType["INT4"]))
@@ -90,12 +97,15 @@ def test_a_fifo_s_answers_wait_on_its_choices_and_refuse_with_it() -> None:
         assert "fifo-geometry" in codes(refused_point.query(answer))
 
 
-def test_a_fifo_s_own_statements_and_answers_are_views_read_by_fixed_names() -> None:
+def test_a_fifo_s_own_statements_and_answers_use_inferred_fixed_reads() -> None:
     for member in ("parameters", "held_bits", "resource_use", "netlist", "cycles"):
         assert isinstance(getattr(FifoKernel, member), View)
-    # Its netlist reads its library module's members and its ports' by name.
-    reads = cast(Any, FifoKernel.netlist).function.__reads__
-    assert {"parameters", "clocking", "input_stream", "output_stream"} <= set(reads)
+    # Native assembly infers its actual child/model dependencies from source.
+    point = design_space(fifo_node(word_bits=13, depth=8)).with_choices(ram_style="auto")
+    evidence = inspection.explain(point, FifoKernel.netlist)
+    assert isinstance(evidence.result, Available)
+    reads = {node.declaration.key for node in evidence.nodes}
+    assert {"parameters", "clocking", "input.stream", "output.stream"} <= reads
     for space_type in (FifoKernel, ChannelFifo):
         model = compile_model(space_type)
         assert summary(model.scopes, model.per_class.reads)["dynamic"] == 0
@@ -104,7 +114,7 @@ def test_a_fifo_s_own_statements_and_answers_are_views_read_by_fixed_names() -> 
 # -- a kernel with members --------------------------------------------------------------------
 
 
-class Stage(KernelSpace):
+class Stage(Kernel):
     """A model-only stage on a library module: one input port, three LUTs."""
 
     id = "test.kernel_space.stage"
@@ -112,7 +122,14 @@ class Stage(KernelSpace):
 
     input_tensor: Tensor = Param()
     arriving: BeatSequence = Param()
-    input = native_stream("input", Endpoint.TARGET, input_tensor, arriving)
+    input = StreamPort(
+        label="input",
+        endpoint=Endpoint.TARGET,
+        transport=NATIVE,
+        tensor=input_tensor,
+        sequence=arriving,
+        clocking=NATIVE_CLOCKING,
+    )
 
     @view
     def parameters(self) -> dict[str, int | str]:
@@ -126,10 +143,14 @@ class Stage(KernelSpace):
     def held_bits(self) -> int:
         return 5
 
-    module = LibraryModule("probe", parameters=parameters, sources=(PROBE,))
+    module_spec = ModuleSpec("probe", (PROBE,))
+
+    @view
+    def cycles(self) -> int:
+        return self.input.stream.sequence.form.beats
 
 
-class Pair(KernelSpace):
+class Pair(Kernel):
     """Two stages, no module of its own."""
 
     id = "test.kernel_space.pair"
@@ -137,7 +158,7 @@ class Pair(KernelSpace):
     second = Stage(input_tensor=TENSOR, arriving=ARRIVING)
 
 
-class Empty(KernelSpace):
+class Empty(Kernel):
     """Neither a module nor a member."""
 
     id = "test.kernel_space.empty"
@@ -163,6 +184,51 @@ def test_a_kernel_with_neither_a_module_nor_a_member_is_refused_its_answers() ->
     assert point.buffering == 0 and point.resources == Resources()
 
 
+class Uncounted(Kernel):
+    """A kernel that counts no cycles of its own, placing one stage: its cycles are
+    inapplicable, as a channel's FIFO's are."""
+
+    id = "test.kernel_space.uncounted"
+    stage = Stage(input_tensor=TENSOR, arriving=ARRIVING)
+
+    @view
+    def cycles(self) -> int | Inapplicable:
+        return Inapplicable()
+
+
+class Beside(Kernel):
+    """A stage, and beside it a kernel that counts no cycles."""
+
+    id = "test.kernel_space.beside"
+    first = Stage(input_tensor=TENSOR, arriving=ARRIVING)
+    held = Uncounted()
+
+
+def test_a_kernel_counting_no_cycles_is_left_out_of_its_parent_s_cycles() -> None:
+    """Its cycles are inapplicable, so its parent's ``member_cycles`` leaves it out and the
+    parent's cycles are its other members'; its netlist, buffering and resources count as
+    any kernel's."""
+    alone = design_space(Uncounted())
+    assert isinstance(alone.query(Uncounted.cycles), Inapplicable)
+    assert alone.buffering == 5
+    point = design_space(Beside())
+    assert [str(item.node) for item in point.member_cycles] == ["first"]
+    assert point.cycles == 4
+    assert point.buffering == 10
+    assert point.resources == Resources(lut=6)
+
+
+def test_a_channel_s_fifo_is_a_kernel_whose_cycles_are_inapplicable() -> None:
+    """A channel's FIFO presents what arrives, whose beats are counted where they are made:
+    a kernel like any other, its netlist, buffering and resources its FIFO's, its cycles
+    inapplicable."""
+    point = design_space(ChannelFifo(tensor=TENSOR, arriving=ARRIVING, platform=FULL_DSP48E2))
+    point = point.with_choices({ChannelFifo.depth: 4, ChannelFifo.buffer.ram_style: "auto"})
+    assert isinstance(point, Kernel)
+    assert isinstance(point.query(ChannelFifo.cycles), Inapplicable)
+    assert point.buffering == point.buffer.buffering > 0
+
+
 # -- the library module's sources -------------------------------------------------------------
 
 
@@ -176,10 +242,11 @@ def test_constant_sources_must_provide_the_module_when_the_class_is_made() -> No
 
         class Unprovided(Stage):
             id = "test.kernel_space.unprovided"
-            module = LibraryModule(
+            module_spec = ModuleSpec(
                 "probe",
-                parameters=Stage.parameters,
-                sources=(CopiedSource("finnlib", "rtl/other.sv", provides=("module:other",)),),
+                constant_sources=(
+                    CopiedSource("finnlib", "rtl/other.sv", provides=("module:other",)),
+                ),
             )
 
 
@@ -189,10 +256,10 @@ class Referenced(Stage):
     id = "test.kernel_space.referenced"
 
     @view
-    def sources(self) -> tuple[Contribution, ...]:
+    def module_sources(self) -> tuple[Contribution, ...]:
         return (CopiedSource("finnlib", "rtl/other.sv", provides=("module:other",)),)
 
-    module = LibraryModule("probe", parameters=Stage.parameters, sources=sources)
+    module_spec = ModuleSpec("probe")
 
 
 def test_a_member_s_sources_must_provide_the_module_when_it_is_built() -> None:
@@ -208,27 +275,85 @@ def test_a_kernel_binds_one_library_module_at_most() -> None:
 
         class Twice(Stage):
             id = "test.kernel_space.twice"
-            other = LibraryModule("probe", parameters=Stage.parameters, sources=(PROBE,))
+            other = ModuleSpec("probe", (PROBE,))
+
+
+def test_a_kernel_with_a_module_declares_its_module_s_parts_in_its_own_body() -> None:
+    # The base reads each part by its name in the kernel's body; one in a Group is refused.
+    class Ports(Group):
+        input = StreamPort(
+            label="input",
+            endpoint=Endpoint.TARGET,
+            transport=NATIVE,
+            tensor=TENSOR,
+            sequence=ARRIVING,
+            clocking=NATIVE_CLOCKING,
+        )
+
+    with refused("module-part-nested", error=DefinitionError, message=r"\['ports.input'\]"):
+
+        class Grouped(Kernel):
+            id = "test.kernel_space.grouped"
+            clock_domain = NATIVE_CLOCKING
+            ports = Ports()
+            module_spec = ModuleSpec("probe", (PROBE,))
+
+            @view
+            def parameters(self) -> dict[str, int | str]:
+                return {}
+
+
+DATA = GeneratedData("probe.dat", b"00\n")
+
+
+class Stored(Stage):
+    """A stage whose module reads a data file."""
+
+    id = "test.kernel_space.stored"
+
+    @view
+    def module_data(self) -> tuple[GeneratedData, ...]:
+        return (DATA,)
+
+
+def test_a_kernel_s_module_takes_the_data_it_states() -> None:
+    assert library_module(design_space(Stage(input_tensor=TENSOR, arriving=ARRIVING))).data == ()
+    point = design_space(Stored(input_tensor=TENSOR, arriving=ARRIVING))
+    assert library_module(point).data == (DATA,)
 
 
 def test_a_kernel_with_a_module_states_its_ports_and_resources_and_places_no_kernel() -> None:
-    def parameters(self: KernelSpace) -> dict[str, int | str]:
+    def parameters(self: Kernel) -> dict[str, int | str]:
         return {}
 
-    def resource_use(self: KernelSpace) -> Resources:
+    def resource_use(self: Kernel) -> Resources:
         return Resources()
 
-    def kernel(name: str, **members: object) -> type[KernelSpace]:
-        stated = view(parameters)
+    def netlist(self: Kernel) -> Fragment:
+        return Fragment()
+
+    def cycles(self: Kernel) -> int:
+        return 1
+
+    def kernel(name: str, **members: object) -> type[Kernel]:
         body = {
             "id": f"test.{name}",
-            "parameters": stated,
-            "module": LibraryModule("probe", parameters=stated, sources=(PROBE,)),
+            "parameters": view(parameters),
+            "netlist": view(netlist),
+            "cycles": view(cycles),
+            "module_spec": ModuleSpec("probe", (PROBE,)),
             **members,
         }
-        return type(name, (KernelSpace,), body)
+        return type(name, (Kernel,), body)
 
-    port = native_stream("input", Endpoint.TARGET, TENSOR, ARRIVING)
+    port = StreamPort(
+        label="input",
+        endpoint=Endpoint.TARGET,
+        transport=NATIVE,
+        tensor=TENSOR,
+        sequence=ARRIVING,
+        clocking=NATIVE_CLOCKING,
+    )
     kernel("Complete", input=port, resource_use=view(resource_use))
     with refused("module-ports-unplaced", error=DefinitionError, message="Portless declares no"):
         kernel("Portless", resource_use=view(resource_use))
@@ -239,52 +364,87 @@ def test_a_kernel_with_a_module_states_its_ports_and_resources_and_places_no_ker
     ):
         kernel(
             "Nesting",
-            input=native_stream("input", Endpoint.TARGET, TENSOR, ARRIVING),
+            input=StreamPort(
+                label="input",
+                endpoint=Endpoint.TARGET,
+                transport=NATIVE,
+                tensor=TENSOR,
+                sequence=ARRIVING,
+                clocking=NATIVE_CLOCKING,
+            ),
             resource_use=view(resource_use),
             inner=Stage(input_tensor=TENSOR, arriving=ARRIVING),
         )
     with refused("module-resources-unstated", error=DefinitionError, message="states no"):
-        kernel("Unstated", input=native_stream("input", Endpoint.TARGET, TENSOR, ARRIVING))
+        kernel(
+            "Unstated",
+            input=StreamPort(
+                label="input",
+                endpoint=Endpoint.TARGET,
+                transport=NATIVE,
+                tensor=TENSOR,
+                sequence=ARRIVING,
+                clocking=NATIVE_CLOCKING,
+            ),
+        )
     with refused("kernel-id-invalid", error=DefinitionError):
 
-        class Unnamed(KernelSpace):
+        class Unnamed(Kernel):
             pass
 
 
 def test_a_kernel_stating_a_stream_port_binds_a_module() -> None:
     # A stream port's pins are a module's: on a kernel with children and no module of its
     # own, it is refused, naming the class and the port.
-    with refused(
-        "port-unbound",
-        error=DefinitionError,
-        message=r"Unbound declares the stream ports \['input'\] and binds no library module",
-    ):
+    class Unbound(Kernel):
+        id = "test.kernel_space.unbound"
+        input = StreamPort(
+            label="input",
+            endpoint=Endpoint.TARGET,
+            transport=NATIVE,
+            tensor=TENSOR,
+            sequence=ARRIVING,
+            clocking=NATIVE_CLOCKING,
+        )
 
-        class Unbound(KernelSpace):
-            id = "test.kernel_space.unbound"
-            inner = Stage(input_tensor=TENSOR, arriving=ARRIVING)
-            input = native_stream("input", Endpoint.TARGET, TENSOR, ARRIVING)
+    point = design_space(Unbound())
+    assert point.input.stream == Stream(TENSOR.element, ARRIVING)
+    assert codes(point.query(Unbound.netlist)) == {"kernel-module"}
 
     # A kernel with children presents its children's ports.
-    class Serving(KernelSpace):
+    class Serving(Kernel):
         id = "test.kernel_space.serving"
         inner = Stage(input_tensor=TENSOR, arriving=ARRIVING)
-        input = served(inner, "input")
+
+        @view
+        def input_stream_pins(self) -> PortPins:
+            return self.inner.input.stream_pins.under("inner")
 
     serving: Any = design_space(Serving())  # its lowered members are untyped
-    assert serving.input_contract.label == "inner.input"
+    assert serving.input_stream_pins.label == "inner.input"
 
     # A base of kernels, leaving a required() member unmet, states its ports for the
     # kernels on it, which bind the module.
-    class Ported(KernelSpace):
+    class Ported(Kernel):
         id = "test.kernel_space.ported"
         clock_domain = NATIVE_CLOCKING
         input_tensor: Tensor = Param()
-        input = native_stream("input", Endpoint.TARGET, input_tensor, ARRIVING)
-        parameters = cast("dict[str, int | str]", required(dict))
+        input = StreamPort(
+            label="input",
+            endpoint=Endpoint.TARGET,
+            transport=NATIVE,
+            tensor=input_tensor,
+            sequence=ARRIVING,
+            clocking=NATIVE_CLOCKING,
+        )
+        width = required(int)
 
     class Bound(Ported):
         id = "test.kernel_space.bound"
+
+        @derived
+        def width(self) -> int:
+            return 4
 
         @view
         def parameters(self) -> dict[str, int | str]:
@@ -294,23 +454,31 @@ def test_a_kernel_stating_a_stream_port_binds_a_module() -> None:
         def resource_use(self) -> Resources:
             return Resources()
 
-        module = LibraryModule("probe", parameters=parameters, sources=(PROBE,))
+        module_spec = ModuleSpec("probe", (PROBE,))
+
+        @view
+        def cycles(self) -> int:
+            return self.input.stream.sequence.form.beats
 
     assert library_module(design_space(Bound(input_tensor=TENSOR))).name == "probe"
 
 
-class Based(KernelSpace):
+class Based(Stage):
     """A base of kernels: its module names its sources, which it leaves required."""
 
     id = "test.kernel_space.based"
     clock_domain = NATIVE_CLOCKING
-    sources = cast("tuple[Contribution, ...]", required(tuple))
+    source_values = cast("tuple[Contribution, ...]", required(tuple))
+
+    @view
+    def module_sources(self) -> tuple[Contribution, ...]:
+        return self.source_values
 
     @view
     def parameters(self) -> dict[str, int | str]:
         return {}
 
-    module = LibraryModule("probe", parameters=parameters, sources=sources)
+    module_spec = ModuleSpec("probe")
 
 
 class Sourced(Based):
@@ -318,10 +486,18 @@ class Sourced(Based):
 
     id = "test.kernel_space.sourced"
     input_tensor: Tensor = Param()
-    input = native_stream("input", Endpoint.TARGET, input_tensor, ARRIVING)
+    arriving: BeatSequence = Param(default=ARRIVING)
+    input = StreamPort(
+        label="input",
+        endpoint=Endpoint.TARGET,
+        transport=NATIVE,
+        tensor=input_tensor,
+        sequence=ARRIVING,
+        clocking=NATIVE_CLOCKING,
+    )
 
-    @view
-    def sources(self) -> tuple[Contribution, ...]:
+    @derived
+    def source_values(self) -> tuple[Contribution, ...]:
         return (PROBE,)
 
     @view
@@ -337,7 +513,7 @@ def test_a_module_naming_a_required_member_makes_a_base_of_kernels() -> None:
     assert library_module(point).sources == (PROBE,)
 
 
-class Deep(KernelSpace):
+class Deep(Kernel):
     """A stand-in base of kernels: every kernel on it states its ``depth``."""
 
     id = "test.kernel_space.deep"
@@ -350,7 +526,15 @@ class Forgetful(Deep):
 
     id = "test.kernel_space.forgetful"
     input_tensor: Tensor = Param()
-    input = native_stream("input", Endpoint.TARGET, input_tensor, ARRIVING)
+    arriving: BeatSequence = Param(default=ARRIVING)
+    input = StreamPort(
+        label="input",
+        endpoint=Endpoint.TARGET,
+        transport=NATIVE,
+        tensor=input_tensor,
+        sequence=ARRIVING,
+        clocking=NATIVE_CLOCKING,
+    )
 
     @view
     def parameters(self) -> dict[str, int | str]:
@@ -360,7 +544,7 @@ class Forgetful(Deep):
     def resource_use(self) -> Resources:
         return Resources()
 
-    module = LibraryModule("probe", parameters=parameters, sources=(PROBE,))
+    module_spec = ModuleSpec("probe", (PROBE,))
 
 
 def test_a_kernel_forgetting_a_required_member_is_refused_where_placed() -> None:
@@ -374,7 +558,7 @@ def test_a_kernel_forgetting_a_required_member_is_refused_where_placed() -> None
         design_space(Forgetful(input_tensor=TENSOR))
     with refused("required-unmet", error=DefinitionError, message=r"Deep\.depth"):
 
-        class Holder(KernelSpace):
+        class Holder(Kernel):
             id = "test.kernel_space.holder"
             inner = Forgetful(input_tensor=TENSOR)
 
@@ -390,11 +574,11 @@ class Loose(Stage):
     id = "test.kernel_space.loose"
     holding: bool = Param(default=False)
 
-    @view
+    @derived
     def held_pins(self) -> Held:
         return Held(((LOOSE.name, 0),)) if self.holding else Held()
 
-    other = OtherPins((LOOSE, Signal("busy", Direction.OUT, 1)), held_pins)
+    other = OtherPins(signals=(LOOSE, Signal("busy", Direction.OUT, 1)), holding=held_pins)
 
 
 def test_an_input_neither_held_nor_presented_refuses_the_module() -> None:
@@ -410,21 +594,8 @@ def test_an_input_neither_held_nor_presented_refuses_the_module() -> None:
 # -- a declaration's arguments ----------------------------------------------------------------
 
 
-@dataclass(frozen=True, eq=False)
-class Given(KernelDeclaration):
-    """A declaration of one argument, read as its constant or its member."""
-
-    given: Any
-
-
 def test_a_constant_of_an_engine_type_is_a_constant_not_a_member() -> None:
     for constant in (default_semantics(int), divisors_of(4), 3, "x"):
-        assert not is_member(constant)
-        declaration = Given(constant)
-        assert declaration.references() == {}
-        point = design_space(Stage(input_tensor=TENSOR, arriving=ARRIVING))
-        assert declaration.value(point, "given") is constant
-    assert is_member(Stage.parameters) and Given(Stage.parameters).references() == {
-        "given": "parameters"
-    }
-    assert is_member(Based.sources)  # required(): a member a subclass states
+        assert not isinstance(constant, (Declaration, Required))
+    assert isinstance(Stage.parameters, View)
+    assert isinstance(Based.source_values, Required)

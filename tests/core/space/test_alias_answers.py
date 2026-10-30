@@ -26,7 +26,7 @@ from finn.core.space import (
 
 
 class Chosen(Space):
-    d: int = Decision(values=(1, 2))
+    d: int = Decision(domain=(1, 2))
 
 
 class ChosenThroughAlias(Space):
@@ -67,7 +67,7 @@ def test_a_decision_reached_through_a_class_body_alias_is_the_decision() -> None
 
 class Bits(Space):
     width: int = Param()
-    lanes: int = Decision(values=(1, 2))
+    lanes: int = Decision(domain=(1, 2))
 
     @derived
     def bits(*, width: int, lanes: int) -> int:

@@ -6,7 +6,7 @@ An explicit function names its inputs (``Node.arguments``); a ``self`` method re
 Space through its receiver, and what it may read is **declared by use**: found once
 from its source. A method reads through attribute paths (``self.extents``,
 ``self.x.contract``, ``self.compute.x_end``), through its helper methods and properties
-(``self.bound_schedule(...)``, read in turn, in the scope they are reached through),
+(``self.physical_spec(...)``, read in turn, in the scope they are reached through),
 through ``getattr(self, name)`` with a name its source or its closure fixes, through
 ``self.present(...)`` (the guards and selectors presence reads), and through a local
 name bound once to such a path (``core = self.compute``, then ``core.width``). Each path
@@ -15,9 +15,9 @@ member of each candidate a selector may place, with the selector.
 
 A method whose source does not fix what it reads (``getattr(self, name)`` over a
 computed name, ``self`` handed to another function, source that cannot be read) is
-**dynamic**: it may read anything of its Space. A method that reads by computed names
-declares its reads (``__reads__``: dotted paths from ``self``), which stand in for its
-source.
+**dynamic**: it may read anything of its Space. Function metadata does not replace
+source inference. A domain cannot depend on such a method: its reads must be fixed
+and must reach facts only. Dynamic outward reads remain checked as they run.
 
 The evaluator checks every read a method makes against its inferred reads, so the
 inference is held to what methods actually do. Each node's **existence guards** are
@@ -307,11 +307,7 @@ def _aliases(
 
 
 def _uses(function: Callable[..., object]) -> _Uses:
-    """What ``function`` reads through its first parameter, from its source, or from the
-    paths it declares (``__reads__``)."""
-    declared = getattr(function, "__reads__", None)
-    if declared is not None:
-        return _Uses(paths={tuple(str(path).split(".")) for path in declared})
+    """What ``function`` reads through its first parameter, from its source and closure."""
     tree = _parsed(function)
     if tree is None or not tree.args.args:
         return _Uses(dynamic=True)

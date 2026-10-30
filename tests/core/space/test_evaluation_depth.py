@@ -20,8 +20,6 @@ import pytest
 from core.space._evaluation_support import entry, node, open_evaluation
 from finn.core.space import (
     Available,
-    Const,
-    Derived,
     EvaluationError,
     Param,
     Space,
@@ -100,6 +98,10 @@ def test_a_chain_of_twenty_thousand_methods_completes_each_once() -> None:
     assert sys.getrecursionlimit() == limit
 
 
+def _zero() -> int:
+    return 0
+
+
 @pytest.mark.usefixtures("purity_unchecked")
 def test_a_chain_of_twenty_thousand_explicit_functions() -> None:
     """``test_compiler``'s twenty-thousand explicit chain, on the running type: each
@@ -110,14 +112,12 @@ def test_a_chain_of_twenty_thousand_explicit_functions() -> None:
     def step(*, previous: int) -> int:
         return previous + 1
 
-    members: dict[str, object] = {"value0": Const(0)}
+    members: dict[str, object] = {"value0": derived(_zero)}
     for number in range(1, 20_001):
-        members[f"value{number}"] = Derived(
-            step, aliases={"previous": members[f"value{number - 1}"]}
-        )
+        members[f"value{number}"] = derived(previous=members[f"value{number - 1}"])(step)
     world = open_evaluation(cast(type[Space], type("Deep", (Space,), members))())
     assert world.result(node(world, "value20000")) == Available(20_000)
-    assert world.counters.calls["derived"] == 20_000  # explicit: never abandoned
+    assert world.counters.calls["derived"] == 20_001  # explicit: never abandoned
 
 
 def test_a_failure_at_the_bottom_of_a_deep_chain_is_the_primary() -> None:
@@ -147,20 +147,33 @@ def test_a_cycle_longer_than_the_guard_is_found() -> None:
         entry(world, "value_0")
 
 
+def _sum_inputs(names: tuple[str, ...]) -> Callable[..., int]:
+    """Generate ordinary fixed formals for a finite fixture, bound by the existing
+    explicit-function compiler. No receiver or function read metadata participates."""
+    parameters = ", ".join(f"{name}: int" for name in names)
+    values = ", ".join(names)
+    namespace: dict[str, object] = {}
+    exec(f"def total(*, {parameters}) -> int:\n    return sum(({values},))\n", namespace)
+    return cast(Callable[..., int], namespace["total"])
+
+
 @pytest.mark.usefixtures("purity_unchecked")
 def test_wide_fan_in_and_a_deep_dependency_behind_a_cached_prefix() -> None:
     """Mirrors ``test_native_admission``'s
     ``test_native_wide_fan_in_and_cached_prefix_deep_dependency``: one method reading 400
-    held values and a chain 800 deeper; one reading a thousand formals."""
+    held values and a chain 800 deeper; one reading a thousand formals. Both bind
+    finite native inputs, without computed receiver names or function metadata."""
+    limit = sys.getrecursionlimit()
     completed: list[int] = []
     chain = _chain(1_200, completed)
 
-    def output(self: Space) -> int:
-        prefix = sum(cast(int, getattr(self, f"value_{index}")) for index in range(1, 401))
-        return prefix + cast(int, getattr(self, "value_1200"))
-
-    output.__reads__ = (*(f"value_{index}" for index in range(1, 401)), "value_1200")  # type: ignore[attr-defined]
-    mixed = cast(type[Space], type("Mixed", (chain,), {"output": derived(output)}))
+    sources = {
+        f"value_{index}": getattr(chain, f"value_{index}") for index in (*range(1, 401), 1_200)
+    }
+    mixed = cast(
+        type[Space],
+        type("Mixed", (chain,), {"output": derived(**sources)(_sum_inputs(tuple(sources)))}),
+    )
     world = open_evaluation(mixed(value_0=0))  # type: ignore[call-arg]
     assert world.result(node(world, "value_400")) == Available(400)
     completed.clear()
@@ -168,16 +181,24 @@ def test_wide_fan_in_and_a_deep_dependency_behind_a_cached_prefix() -> None:
     assert output_entry.result == Available(sum(range(1, 401)) + 1_200)
     assert sorted(completed) == list(range(401, 1_201))  # each of the 800 completes once
     assert len({index for index, _ in output_entry.trace}) == 401
+    assert [index.key for index, _ in output_entry.trace] == [
+        *(f"value_{index}" for index in range(1, 401)),
+        "value_1200",
+    ]
+    assert [index.key for index in node(world, "output").dependencies] == list(sources)
+    starts = world.counters.calls["derived"]
+    assert world.result(node(world, "output")) == output_entry.result
+    assert world.counters.calls["derived"] == starts
+    assert sys.getrecursionlimit() == limit
 
     leaves: dict[str, object] = {"__annotations__": {}}
     for index in range(1_000):
         leaves["__annotations__"][f"leaf_{index}"] = int  # type: ignore[index]
         leaves[f"leaf_{index}"] = Param()
 
-    def total(self: Space) -> int:
-        return sum(cast(int, getattr(self, f"leaf_{index}")) for index in range(1_000))
-
-    leaves["total"] = derived(total)
+    leaves["total"] = derived(
+        **{f"leaf_{index}": leaves[f"leaf_{index}"] for index in range(1_000)}
+    )(_sum_inputs(tuple(f"leaf_{index}" for index in range(1_000))))
     wide = cast(type[Space], type("WideSelf", (Space,), leaves))
     build: Callable[..., Space] = wide
     fan = open_evaluation(build(**{f"leaf_{index}": index for index in range(1_000)}))

@@ -79,6 +79,18 @@ def increment(*, value: int) -> int:
     return value + 1
 
 
+def one() -> int:
+    return 1
+
+
+def always() -> bool:
+    return True
+
+
+def multiply(*, extent: int, lanes: int) -> int:
+    return extent * lanes
+
+
 @dataclass(frozen=True)
 class CachedPayload:
     value: int
@@ -116,16 +128,16 @@ def flat_space(api, count: int):
     source = api.Param()
     members = {"source": source}
     for index in range(count):
-        members[f"item{index}"] = api.Derived(increment, aliases={"value": source})
+        members[f"item{index}"] = api.derived(value=source)(increment)
     return api.composite("FlatSpace", members, annotations={"source": int})
 
 
 def repeated_space(api, count: int):
     class Child(api.Space):
         extent: int = api.Param()
-        lanes: int = api.Decision(values=(1, 2, 4))
-        width = extent * lanes
-        physical = api.View(width)
+        lanes: int = api.Decision(domain=(1, 2, 4))
+        width = api.derived(extent=extent, lanes=lanes)(multiply)
+        physical = api.view(width)
 
     # Each child is a node declaration: calling the Space class places it once.
     return api.composite(
@@ -135,11 +147,11 @@ def repeated_space(api, count: int):
 
 def deep_space(api, count: int):
     class Leaf(api.Space):
-        value = api.Const(1)
+        value = api.derived(one)
 
     space_type = Leaf
     for index in range(count):
-        enabled = api.Const(True)
+        enabled = api.derived(always)
         space_type = api.composite(
             f"Level{index}", {"enabled": enabled, "child": space_type(when=enabled)}
         )
@@ -190,19 +202,29 @@ def compilation(api, label: str, count: int, factory) -> dict[str, object]:
 
 
 def constant_expressions(api, terms: int, trials: int) -> dict[str, object]:
-    """Measure the deliberate tradeoff of runtime evaluation of constant expressions."""
-    base = api.Const(7)
+    """Measure the runtime evaluation of many derived values over one constant derived value."""
     names = tuple(f"term{index}" for index in range(terms))
+
+    def seven() -> int:
+        return 7
+
+    def term(offset: int):
+        def add(*, base: int) -> int:
+            return base + offset
+
+        return add
 
     def total(self) -> int:
         return sum(getattr(self, name) for name in names)
+
+    base = api.derived(seven)
 
     space_type = api.composite(
         "ConstantExpressions",
         {
             "base": base,
             "total": api.derived(total),
-            **{name: base + index for index, name in enumerate(names)},
+            **{name: api.derived(base=base)(term(index)) for index, name in enumerate(names)},
         },
     )
     started = time.perf_counter()
@@ -222,8 +244,8 @@ def constant_expressions(api, terms: int, trials: int) -> dict[str, object]:
     evidence = api.inspection.explain(points[0], space_type.total)
     assert evidence.result == api.Available(expected)
     # The design spaces share the model's node cache: each term and the total is called
-    # once, by the first one read; every later one finds them.
-    assert PURITY_CHECKED or work["calls"]["derived"] == terms + 1, work
+    # once, by the first one read, with the one value they read; every later one finds them.
+    assert PURITY_CHECKED or work["calls"]["derived"] == terms + 2, work
     return {
         "terms": terms,
         "trials": trials,
@@ -240,6 +262,10 @@ def constant_expressions(api, terms: int, trials: int) -> dict[str, object]:
 def batch_updates(api, count: int, *, dependent: bool) -> dict[str, object]:
     work = Counter()
 
+    def root() -> int:
+        work["root"] += 1
+        return 0
+
     def prerequisite(*, previous: int) -> int:
         work["prerequisite"] += 1
         return previous
@@ -254,18 +280,16 @@ def batch_updates(api, count: int, *, dependent: bool) -> dict[str, object]:
 
     # A domain's membership reads facts only: how a choice follows the one before it
     # is a rule of the Space holding both.
-    source = api.Const(0)
+    source = api.derived(root)
     members = {"source": source}
     previous = source
     requests = []
     for index in range(count):
-        limit = api.Derived(prerequisite, aliases={"previous": previous})
+        limit = api.derived(previous=previous)(prerequisite)
         decision = api.Decision(domain=api.domain(accepts=membership))
         members[f"limit{index}"] = limit
         members[f"choice{index}"] = decision
-        members[f"follows{index}"] = api.Constraint(
-            follows, aliases={"choice": decision, "limit": limit}
-        )
+        members[f"follows{index}"] = api.constraint(choice=decision, limit=limit)(follows)
         requests.append((decision, index + 1 if dependent else 1))
         if dependent:
             previous = decision
@@ -286,15 +310,19 @@ def batch_updates(api, count: int, *, dependent: bool) -> dict[str, object]:
     assert len(report.outcomes) == count
     counted = cache_work(model, since, "domain membership", "derived", "constraint")
     # Each choice's membership, each limit and each rule is called once, on the one value
-    # it reads once the batch is in. What else reads them finds them kept.
+    # it reads once the batch is in, and the root they start from once. What else reads
+    # them finds them kept.
     assert PURITY_CHECKED or counted["calls"] == {
         "domain membership": count,
-        "derived": count,
+        "derived": count + 1,
         "constraint": count,
     }, counted
-    assert work == ran(
+    expected_work = ran(
         counted, membership="domain membership", prerequisite="derived", rule="constraint"
     )
+    expected_work["prerequisite"] -= work["root"]
+    expected_work["root"] = work["root"]
+    assert work == expected_work
     return {
         "fixture": "dependent" if dependent else "independent",
         "changes": count,
@@ -372,7 +400,7 @@ def narrow_query(api, branches: int) -> dict[str, object]:
         # case's member by name (replaces the accepted export).
         choice = api.Select(selected=Selected(value=source), inactive=Inactive())
         members[f"branch{index}"] = choice
-        members[f"output{index}"] = api.View(choice.physical)
+        members[f"output{index}"] = api.view(choice.physical)
     space_type = api.composite("NarrowQuery", members, annotations={"source": int})
     model = compile_model(api, space_type)
     assert work == Counter()
@@ -413,7 +441,7 @@ def wide_choice(api, alternatives: int, trials: int = 30) -> dict[str, object]:
 
     choice = api.Select(**{f"case{index}": Leaf() for index in range(alternatives)})
     space_type = api.composite(
-        "WideChoice", {"implementation": choice, "physical": api.View(choice.physical)}
+        "WideChoice", {"implementation": choice, "physical": api.view(choice.physical)}
     )
     model = compile_model(api, space_type)
     # A selector always has its node, even with one case.
@@ -533,7 +561,7 @@ def self_workload(api, shape: str, depth: int, width: int) -> dict[str, object]:
     A callback counts its completions: past the engine's depth guard a method is
     abandoned and run again on an explicit stack, so it may start more than once."""
     work = Counter()
-    members = {"source": api.Const(1)}
+    members = {"source": api.derived(one)}
 
     def computation(name: str, dependency: str):
         def evaluate(self) -> int:

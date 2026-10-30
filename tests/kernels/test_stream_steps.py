@@ -208,7 +208,7 @@ def test_random_windows_move_every_element_to_its_place(seed):
             (h, w, ch), (oh * stride + kh * dilation, ow * stride + kw * dilation, c), lanes=(c,)
         )
         # A marker per window, when the window spans whole beats.
-        per_window = schedule.steps(kh) * schedule.steps(kw) * schedule.steps(c)
+        per_window = schedule.fold(kh) * schedule.fold(kw) * schedule.fold(c)
         markers = (LevelEnd(per_window),) if rng.random() < 0.5 else ()
         kinds = check(
             BeatSequence(vector_major((h, w, ch), rng.choice(lanes))),

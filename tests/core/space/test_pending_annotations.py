@@ -126,4 +126,4 @@ def test_only_an_unresolved_annotation_is_deferred() -> None:
     ):
 
         class Bare(Space):
-            choice = Decision(values=(1, 2))
+            choice = Decision(domain=(1, 2))

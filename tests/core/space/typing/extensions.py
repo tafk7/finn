@@ -14,16 +14,17 @@ from finn.core.space import (
     Param,
     QueryResult,
     Space,
-    View,
     composite,
     derived,
     design_space,
+    view,
 )
+from finn.core.space.declarations import View
 
 
 class Shape(Space):
     lanes: int = Param()
-    physical = View(lanes)
+    physical = view(lanes)
 
 
 def doubled(*, lanes: int) -> int:
@@ -36,7 +37,7 @@ def answer(*, lanes: int) -> QueryResult[int]:
 
 computed = derived(doubled)
 answered = derived(answer)
-complete = View(computed)
+complete = view(computed)
 # A derived member is typed as its value, like every reference, so it may supply a formal.
 assert_type(computed, int)
 assert_type(answered, int)

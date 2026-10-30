@@ -48,7 +48,7 @@ from finn.custom_op.kernels.network import network, partition_ports
 from finn.custom_op.kernels.shell import InShell, in_shell
 from finn.kernels.fifo_sizing import Pattern, sides
 from finn.kernels.movers import iodma_hls
-from finn.kernels.sides import BUILD, ROW_MAJOR, BeatTimes, Outside, Steady
+from finn.kernels.sides import BUILD, ROW_MAJOR, ROW_MAJOR_HOST, BeatTimes, Outside, Steady
 from finn.toolchain.launcher import Toolchain
 from finn.transformation.kernels import PackagePartition
 from finn.transformation.kernels.cut import CutKernelPartition
@@ -207,7 +207,7 @@ def test_stated_lanes_place_a_width_step_and_the_port_takes_the_stated_word(
         cut(tmp_path, {"m_axis_0": Y_STATED}), build(tmp_path, {"m_axis_0": Y_STATED})
     )
     y = body_of(parent).member("y")
-    assert y.output_adapting and [stage.kind for stage in y.output_adapter.realization] == ["vpc"]
+    assert y.output_adapting and [stage.kind for stage in y.output_adapter.chain] == ["vpc"]
     assert (y.boundary.form.lanes, y.boundary.form.beats) == (4, 3)
     assert y.boundary.transport.data_width == 24
     unstated = body_of(cut(tmp_path / "unstated", {})).member("y")
@@ -266,3 +266,78 @@ def test_a_build_statement_on_a_boundary_offered_a_mover_is_refused_where_the_gr
         r"a build statement would be a second source$",
     ):
         in_shell(model, model.graph.node, name="chain")
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {},
+        {"order": ROW_MAJOR},
+        {"passes": 1},
+        {"lanes": 4},
+        {"order": ROW_MAJOR, "passes": 1, "lanes": 4},
+    ],
+)
+def test_untimed_metadata_roundtrips_by_tensor_and_inherits(fields: dict[str, Any]) -> None:
+    """Version one stores an explicit empty pace, distinct from no statement."""
+    parent = kernel_model()
+    body = parent.make_subgraph_modelwrapper(kernel_model().graph)
+    stated = Outside(BUILD, **fields)
+    write_boundary(parent, {"y": stated})
+    assert read_boundary(parent) == read_boundary(body) == {"y": stated}
+    assert parent.get(STATEMENTS) == {
+        "y": {"order": stated.order, "passes": stated.passes, "lanes": stated.lanes, "pace": {}}
+    }
+    assert parent.get_metadata_prop("finn.boundary/@version") == "1"
+    assert read_boundary(body)["y"].layout == ROW_MAJOR_HOST
+    body.inherit_metadata(BOUNDARY)
+    write_boundary(parent, {"x": Outside(BUILD, lanes=2)})
+    assert read_boundary(parent) == {"x": Outside(BUILD, lanes=2)}
+    assert read_boundary(body) == {"y": stated}
+    write_boundary(parent, {})
+    assert read_boundary(parent) == {} and parent.namespace(BOUNDARY) == {}
+    assert read_boundary(body) == {"y": stated}
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        {},
+        {"pace": None},
+        {"pace": []},
+        {"pace": {"often": 2}},
+        {"pace": {"every": 2, "extra": 1}},
+        {"pace": {"times": [0], "span": 2, "extra": 1}},
+        {"pace": {}, "order": "column_major"},
+        {"pace": {}, "passes": 0},
+        {"pace": {}, "passes": True},
+        {"pace": {}, "lanes": 0},
+        {"pace": {}, "lanes": True},
+        {"pace": {}, "layout": "tiled"},
+        {"pace": {}, "source": "build"},
+    ],
+)
+def test_untimed_metadata_does_not_admit_alternate_or_malformed_shapes(
+    stored: dict[str, Any],
+) -> None:
+    """Only explicit pace={} encodes absence; original logical/schema rules still apply."""
+    model = kernel_model()
+    model.set_metadata_prop("finn.boundary/@version", "1")
+    model.set_metadata_prop("finn.boundary/statements", json.dumps({"x": stored}))
+    with refused("boundary-unreadable", error=KernelOpError):
+        read_boundary(model)
+
+
+def test_untimed_cut_keeps_tensor_association_and_logical_presentation(tmp_path: Path) -> None:
+    """The port-to-tensor cut carries an untimed statement without invoking FIFO sizing."""
+    cfg = build(tmp_path, {"m_axis_0": {"order": ROW_MAJOR, "passes": 1, "lanes": 4}})
+    parent = step_create_dataflow_partition(kernel_model(), cfg)
+    _, body, _ = partition_body(parent)
+    assert read_boundary(parent) == {}
+    stated = Outside(BUILD, ROW_MAJOR, 1, 4)
+    assert read_boundary(body) == {"y": stated}
+    y = in_shell(body, body.graph.node).member("y")
+    assert y.consumer.outside == stated and y.consumer.label == "m_axis_0"
+    assert (y.boundary.form.lanes, y.boundary.form.beats) == (4, 3)
+    # The boundary port carries no pace: what the outside states of it owns one, here none.
+    assert y.boundary.form.row_major and y.consumer.outside.pace is None

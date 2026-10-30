@@ -19,20 +19,18 @@ reaches out of that Space lifted back through the slot (``lift``).
   by keys relative to it: its own records, the members its edges name, and the members of
   the Spaces it places on the way, as the one table of every placement named them (a
   cycle at two levels sharing members: the inner class's is found first, as that class is
-  compiled first). A view's edge to its Space's validity is not in the order: views are
-  read out (below), so it closes no cycle, and a read in is ``view-read-in``, not a cycle
-  through the validity. Edges among views stay: views reading each other in a ring are a
-  cycle.
+  compiled first). Views have only their local dependencies; edges among views stay:
+  views reading each other in a ring are a cycle.
 - **Views read out** (``check_views``): only a view reads a view. A constraint, a derived
-  value, a guard (a member's or a placed Space's ``when``), a domain (its inputs) and a
+  value, a guard (a Decision's or a placed Space's ``when``), a domain (its inputs) and a
   binding of a placed Space's formal read facts, choices and derived values; one reading a
   view is ``view-read-in``, named with the view. What passes a value on (an alias, a
   selection, a ``Members``, a computation written for a member) reads what it passes, so a
   ``Members`` whose entries are views is read by views alone. A view reads anything, and
-  so do the computations written for it and its own guard. Per class, its own records'
-  reads (references, and a method's inferred reads) and each placed Space's, once; for a
-  root, the first found, named relative to it. It is checked before the domain rule: a
-  domain reading a view refuses as ``view-read-in`` whatever the view reads.
+  so do the computations written for it. Per class, its own records' reads (references,
+  and a method's inferred reads) and each placed Space's, once; for a root, the first
+  found, named relative to it. It is checked before the domain rule: a domain reading a
+  view refuses as ``view-read-in`` whatever the view reads.
 - **The domain rule** (``check_domains``): a domain's membership reads facts only. Per
   class, each domain's walk follows what its membership inputs may read (arguments,
   alternatives, outputs, selectors, guards and a method's inferred reads), skipping the
@@ -133,7 +131,7 @@ def pieces(compiled: Compiled) -> list[Ref]:
     own)."""
     own: list[Ref] = []
     placed: list[Ref] = []
-    for edge in compiled.records[compiled.validity].constraints:
+    for edge in compiled.pieces:
         piece = compiled.ref(edge)
         if isinstance(piece, Placed):
             placed.append(piece)
@@ -166,8 +164,8 @@ class _Fields:
 
     def following(self) -> list[Ref]:
         """In the domain rule's order: arguments, alternatives, output, selector, guard. A
-        view's validity and a validity's pieces are not followed: the walk reaches no view
-        (``check_views``), the one record that lists its Space's validity."""
+        validity's pieces are not followed; model-domain checking cannot reach a view
+        (``check_views``)."""
         found: list[Ref] = [*self.arguments, *self.alternatives]
         found.extend(
             single for single in (self.output, self.selector, self.guard) if single is not None
@@ -256,26 +254,15 @@ def exits(compiled: Compiled, ref: int | Placed) -> frozenset[Exit]:
 
 
 def _successors(compiled: Compiled, ref: int | Placed) -> list[Ref]:
-    """A record's dependencies in the static order (a view's without its Space's validity:
-    ``_ordered``); a placed Space's member's, what it reaches there, lifted into this
-    class."""
+    """Static dependencies; lift a placed member's references into this class."""
     if isinstance(ref, Placed):
         return list(_through(compiled, ref.path, ref.member))
-    held = fields(compiled, ref)
-    if compiled.records[ref].kind == "view":
-        return [each for each in held.dependencies() if each not in held.constraints]
-    return held.dependencies()
+    return fields(compiled, ref).dependencies()
 
 
 def _ordered(node: Node) -> tuple[NodeRef, ...]:
-    """A node's dependencies in the static order. A view's edge to its Space's validity is
-    left out: a view is read out, so nothing its validity reads may read it (``view-read-in``,
-    checked per root) and the edge closes no cycle the order must find; a read in reaches
-    that check rather than a cycle through the validity. Evaluation keeps the edge (a view
-    is refused with its Space)."""
-    if node.kind != "view":
-        return node.dependencies
-    return tuple(ref for ref in node.dependencies if ref not in node.constraints)
+    """A node's explicit dependencies, including local view composition."""
+    return node.dependencies
 
 
 def _reaching(compiled: Compiled, ref: Ref) -> frozenset[Exit]:
@@ -447,7 +434,7 @@ class _Refusal:
         if self.dynamic is not None:
             detail = (
                 f"{owner}: its domain's membership reads {self.dynamic}, whose reads its "
-                "source does not fix: declare them with __reads__ (a domain reads facts only)"
+                "source does not fix (a domain reads facts only)"
             )
         else:
             steps = list(reversed(dict.fromkeys(reversed(self.route))))
@@ -946,9 +933,9 @@ class _Views:
 
     @staticmethod
     def _generated(spec: Member) -> bool:
-        """A computation the engine writes for a member (an expression, a projection, a
-        view's output), named by that member."""
-        return spec.kind in ("derived", "const") and spec.source_owner is not None
+        """A computation the engine writes for a member (a view's output, a case's guard),
+        named by that member."""
+        return spec.kind == "derived" and spec.source_owner is not None
 
     def passes(self, compiled: Compiled, record: int) -> Iterator[Ref]:
         """What ``record`` passes on, if it passes a value on: an alias's, a selection's or a
@@ -976,7 +963,7 @@ class _Views:
 
     def _way(self, compiled: Compiled, record: int) -> tuple[str, ...] | None:
         """``view`` of a record of ``compiled``'s class, found once per record. What passes a
-        value on may be a long chain (an expression's), so it is walked with a stack of its
+        value on may be a long chain (derived values'), so it is walked with a stack of its
         own: each frame a record whose way is being found, what it passes on, and the
         record it waits on (its class, number, and the slots' names to it)."""
         memo = _ways(compiled)
@@ -1024,15 +1011,14 @@ class _Views:
 
     def own(self, compiled: Compiled) -> _ReadIn | None:
         """The first of ``compiled``'s own records reading a view. A view reads anything:
-        a view, the computations written for it and its own guard are not readers here; nor
-        is what passes a value on (its reader is)."""
-        views = {spec.key for spec in compiled.records if spec.kind == "view"}
+        a view and the computations written for it are not readers here; nor is what passes
+        a value on (its reader is)."""
         for record, spec in enumerate(compiled.records):
             if spec.kind in ("view", "validity", "param", "const"):
                 continue
             if spec.kind in _PASSING and record not in compiled.binds:
                 continue
-            if self._generated(spec) or (spec.kind == "guard" and spec.owner in views):
+            if self._generated(spec):
                 continue
             for ref in self.reads(compiled, record):
                 found = self.view(compiled, ref)

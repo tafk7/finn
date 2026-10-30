@@ -52,8 +52,7 @@ from .semantics import (
 )
 
 if TYPE_CHECKING:
-    from ._configuration import Space
-    from .expressions import Expr
+    from ._configuration import _Namespace
 
 _OWNER = "space.declarations"
 
@@ -70,7 +69,7 @@ def local_name(value: str, role: str) -> str:
     return value
 
 
-def class_namespace(space_type: type[Space]) -> dict[str, object]:
+def class_namespace(space_type: type[_Namespace]) -> dict[str, object]:
     namespace: dict[str, object] = {}
     for base in reversed(space_type.__mro__):
         namespace.update(vars(base))
@@ -113,12 +112,21 @@ MISSING = _Missing()
 
 
 class Declaration:
-    """Identity-bearing source declaration; names are diagnostic hints only."""
+    """Identity-bearing source declaration; names are diagnostic hints only.
+
+    A declaration is written while it is open: in the class body that declares it, or,
+    for a node, at its call and by assignment there. It is frozen when the Space class
+    holding it is created, or when ``design_space`` takes it as a root (``frozen``, the
+    reason); from then on writing a field of it is refused (``declaration-frozen``). What
+    the engine works out or records about it (its annotation resolved, its placement) it
+    writes with ``_settle``.
+    """
 
     name: str | None = None
     owner: type[object] | None = None
     when: ValueRef[bool] | None = None
     origin: str | None = None
+    frozen: str | None = None
     _record_origin = True
 
     def __new__(cls, *args: object, **kwargs: object) -> Self:
@@ -136,14 +144,51 @@ class Declaration:
                 f"{self.owner.__qualname__}.{self.name}; create a fresh declaration",
                 declaration=f"{owner.__qualname__}.{name}",
             )
-        self.owner, self.name = owner, name
+        self._settle(owner=owner, name=name)
+
+    def freeze(self, reason: str) -> None:
+        """Close the declaration (the first reason is kept)."""
+        if self.frozen is None:
+            self._settle(frozen=reason)
+
+    def _settle(self, **fields: object) -> None:
+        """The engine's own writes, which a frozen declaration takes: what it works out or
+        records about the declaration, never what its author wrote."""
+        for field, value in fields.items():
+            object.__setattr__(self, field, value)
+
+    if not TYPE_CHECKING:
+        # Hidden from type checkers: a declared __setattr__ would make mypy accept
+        # assignment to any attribute.
+
+        def __setattr__(self, field: str, value: object) -> None:
+            if self.frozen is not None:
+                _refuse_frozen(self, field)
+            object.__setattr__(self, field, value)
 
     def __bool__(self) -> bool:
         raise TypeError("a declaration has no truth value")
 
 
+def _refuse_frozen(declaration: Declaration, field: str) -> NoReturn:
+    owner, name = declaration.owner, declaration.name
+    what = (
+        f"{owner.__qualname__}.{name}"
+        if owner is not None and name is not None
+        else type(declaration).__name__
+    )
+    label = f"{what}.{field}{at(declaration.origin)}"
+    raise DefinitionError.broken(
+        "declaration-frozen",
+        _OWNER,
+        f"{label}: the declaration is frozen ({declaration.frozen}); a declaration is written "
+        "in the class body that declares it, and a subclass redeclares it",
+        declaration=label,
+    )
+
+
 class ValueRef(Declaration, Generic[T_co]):
-    """A typed value handle: a member, a symbolic reference, or an expression."""
+    """A typed value handle: a member or a symbolic reference."""
 
     semantics: ValueSemantics[T_co] | None
 
@@ -151,60 +196,57 @@ class ValueRef(Declaration, Generic[T_co]):
     def value_semantics(self) -> ValueSemantics[T_co] | None:
         return self.semantics
 
-    def __add__(self: ValueRef[int], other: int | ValueRef[int]) -> Expr:
-        from .expressions import Expr
+    if not TYPE_CHECKING:
+        # A reference is not an integer to compute with: arithmetic on one is refused,
+        # for a derived value to state.
 
-        return Expr("add", self, other)
+        def __add__(self, other: object) -> NoReturn:
+            _expression_refused(self, "+")
 
-    def __radd__(self: ValueRef[int], other: int | ValueRef[int]) -> Expr:
-        from .expressions import Expr
+        def __sub__(self, other: object) -> NoReturn:
+            _expression_refused(self, "-")
 
-        return Expr("add", other, self)
+        def __mul__(self, other: object) -> NoReturn:
+            _expression_refused(self, "*")
 
-    def __sub__(self: ValueRef[int], other: int | ValueRef[int]) -> Expr:
-        from .expressions import Expr
+        def __floordiv__(self, other: object) -> NoReturn:
+            _expression_refused(self, "//")
 
-        return Expr("sub", self, other)
+        def __mod__(self, other: object) -> NoReturn:
+            _expression_refused(self, "%")
 
-    def __rsub__(self: ValueRef[int], other: int | ValueRef[int]) -> Expr:
-        from .expressions import Expr
+        __radd__, __rsub__, __rmul__ = __add__, __sub__, __mul__
+        __rfloordiv__, __rmod__ = __floordiv__, __mod__
 
-        return Expr("sub", other, self)
+        def __neg__(self) -> NoReturn:
+            _expression_refused(self, "unary -")
 
-    def __mul__(self: ValueRef[int], other: int | ValueRef[int]) -> Expr:
-        from .expressions import Expr
 
-        return Expr("mul", self, other)
+def reference_label(reference: ValueRef[Any]) -> str:
+    """How a refusal names a reference: ``Class.name`` once its class exists, the name it
+    has in the class body being written (found in the nearest frame outside the engine),
+    else its kind, each with where it was declared."""
+    if isinstance(reference, _Symbolic):
+        return reference._describe()
+    if reference.name is not None and reference.owner is not None:
+        return describe_formal(reference, type(reference).__name__)
+    frame = _outside_frame(0)
+    if frame is not None:
+        for name, value in frame.f_locals.items():
+            if value is reference:
+                return f"{name}{at(reference.origin)}"
+    return describe_formal(reference, type(reference).__name__)
 
-    def __rmul__(self: ValueRef[int], other: int | ValueRef[int]) -> Expr:
-        from .expressions import Expr
 
-        return Expr("mul", other, self)
-
-    def __floordiv__(self: ValueRef[int], other: int | ValueRef[int]) -> Expr:
-        from .expressions import Expr
-
-        return Expr("floordiv", self, other)
-
-    def __rfloordiv__(self: ValueRef[int], other: int | ValueRef[int]) -> Expr:
-        from .expressions import Expr
-
-        return Expr("floordiv", other, self)
-
-    def __mod__(self: ValueRef[int], other: int | ValueRef[int]) -> Expr:
-        from .expressions import Expr
-
-        return Expr("mod", self, other)
-
-    def __rmod__(self: ValueRef[int], other: int | ValueRef[int]) -> Expr:
-        from .expressions import Expr
-
-        return Expr("mod", other, self)
-
-    def __neg__(self: ValueRef[int]) -> Expr:
-        from .expressions import Expr
-
-        return Expr("neg", self)
+def _expression_refused(reference: ValueRef[Any], operator: str) -> NoReturn:
+    label = reference_label(reference)
+    raise DefinitionError.broken(
+        "reference-expression",
+        _OWNER,
+        f"{label}: arithmetic ({operator}) on a reference is not available in a class body; "
+        "declare a derived value that computes it, and bind that member",
+        declaration=label,
+    )
 
 
 def declared_path(instance: object) -> tuple[Declaration, ...] | None:
@@ -224,9 +266,11 @@ class ValueDecl(ValueRef[T_co], Generic[T_co]):
     def __get__(self, instance: None, owner: type[object] | None = None) -> Self: ...
 
     @overload
-    def __get__(self, instance: Space, owner: type[object] | None = None) -> T_co: ...
+    def __get__(self, instance: _Namespace, owner: type[object] | None = None) -> T_co: ...
 
-    def __get__(self, instance: Space | None, owner: type[object] | None = None) -> Self | T_co:
+    def __get__(
+        self, instance: _Namespace | None, owner: type[object] | None = None
+    ) -> Self | T_co:
         if instance is None:
             return self
         path = declared_path(instance)
@@ -284,7 +328,7 @@ def declared_annotation(declaration: Declaration, kind: str) -> object:
         globals_ = vars(module) if module is not None else {}
         locals_: Mapping[str, object] = {
             **enclosing,
-            **class_namespace(cast("type[Space]", owner)),
+            **class_namespace(cast("type[_Namespace]", owner)),
         }
     elif body is not None:
         globals_, namespace, _ = body
@@ -358,10 +402,10 @@ def literal(
         ) from None
 
 
-def _annotated_space_type(annotation: object) -> type[Space] | None:
-    from ._configuration import Space
+def _annotated_space_type(annotation: object) -> type[_Namespace] | None:
+    from ._configuration import _Namespace
 
-    if isinstance(annotation, type) and issubclass(annotation, Space):
+    if isinstance(annotation, type) and issubclass(annotation, _Namespace):
         return annotation
     return None
 
@@ -429,50 +473,43 @@ class Param(ValueDecl[T], Generic[T]):
             )
         semantics = _annotation_semantics(annotation, label)
         if self.default is not MISSING:
-            self.default = literal(
-                semantics,
-                self.default,
-                label,
-                role="default",
-                owner=label,
-                what="invalid formal default: ",
+            # Its canonical form, the engine's: a frozen formal takes it too.
+            self._settle(
+                default=literal(
+                    semantics,
+                    self.default,
+                    label,
+                    role="default",
+                    owner=label,
+                    what="invalid formal default: ",
+                )
             )
-        self.semantics = semantics
-        self.resolved = True
+        self._settle(semantics=semantics, resolved=True)
         return self
 
     @overload
     def __get__(self, instance: None, owner: type[object] | None = None) -> Self: ...
 
     @overload
-    def __get__(self, instance: Space, owner: type[object] | None = None) -> T: ...
+    def __get__(self, instance: _Namespace, owner: type[object] | None = None) -> T: ...
 
-    def __get__(self, instance: Space | None, owner: type[object] | None = None) -> Any:
+    def __get__(self, instance: _Namespace | None, owner: type[object] | None = None) -> Any:
         if instance is None:
             return self
         return ValueDecl.__get__(self, instance, owner)
 
     if not TYPE_CHECKING:
 
-        def __getattr__(self, name: str) -> Any:
-            # A formal projects an attribute of its value (``platform.uram``), as a
-            # derived value does.
+        def __getattr__(self, name: str) -> NoReturn:
+            # An attribute of a formal's value (``platform.uram``) is refused, for a
+            # derived value to read.
             if name.startswith("_"):
                 raise AttributeError(name)
             try:
                 self.resolve()
             except DefinitionError:
                 raise AttributeError(name) from None
-            return project(self, name)
-
-
-class Const(ValueDecl[T], Generic[T]):
-    """A definition-owned value, of its own type, in its canonical form."""
-
-    def __init__(self, value: T) -> None:
-        label = f"Const{at(self.origin)}"
-        self.semantics = _annotation_semantics(type(value), label)
-        self.value = cast(T, literal(self.semantics, value, label, role="constant", owner=label))
+            _projection_refused(self, name)
 
 
 Guard: TypeAlias = "ValueRef[bool] | bool | None"
@@ -512,7 +549,7 @@ def _refuse_retired(entries: tuple[object, ...], retired: Mapping[str, object]) 
         raise DefinitionError.broken(
             "decision-over-nodes",
             _OWNER,
-            f"Decision{where}: a Decision keeps value domains (values= or domain=); a choice "
+            f"Decision{where}: a Decision keeps value domains (domain=); a choice "
             "among Space classes is a selector: write Select(name=Class, other=Class(...), "
             "shared=...), a case that places nothing as None, Select(none=None, ...)",
         )
@@ -522,23 +559,24 @@ def _refuse_retired(entries: tuple[object, ...], retired: Mapping[str, object]) 
             raise DefinitionError.broken(code, _OWNER, f"Decision{where}: {replacement}")
     if retired:
         raise TypeError(
-            f"Decision() got unexpected keyword arguments {sorted(retired)}; it takes values= "
-            "or domain=, when= and ordered="
+            f"Decision() got unexpected keyword arguments {sorted(retired)}; it takes "
+            "domain=, when= and ordered="
         )
 
 
 class Decision(ValueDecl[T], Generic[T]):
     """An independently editable choice, annotated with its value type.
 
-    ``finish: int = Decision(values=(1, 2, 3))`` chooses a value; the
+    ``finish: int = Decision(domain=(1, 2, 3))`` chooses a value; the
     annotation is its value type and its check, and a value is compared by ``==``.
     A Decision keeps value domains only: a choice among Space classes is a selector,
     ``Select`` (``heating = Select(boiler=Boiler, pump=HeatPump(cop=4), area=area)``).
     A Decision's values are its domain, whose membership reads facts only:
     a rule linking a value to anything else (``ultra`` needs UltraRAM) is a
     ``@constraint`` of the Space that owns the choice, and a change that breaks it
-    is refused, naming it. ``ordered=True`` states that listed values
-    are in an order (a domain states its own, ``divisors_of``); otherwise they
+    is refused, naming it. ``domain=`` accepts a finite iterable or a ``Domain``.
+    ``ordered=True`` states that a finite iterable's listed values
+    are in an order (a Domain states its own, ``divisors_of``); otherwise they
     are unordered. The engine sets no choice itself, by default or otherwise, and holds
     no policy: whether a policy may set a choice, and how, is the compiler's.
 
@@ -562,7 +600,7 @@ class Decision(ValueDecl[T], Generic[T]):
         cls,
         /,
         *,
-        values: Iterable[T],
+        domain: Iterable[T],
         when: Guard = None,
         ordered: bool = False,
     ) -> T: ...
@@ -580,34 +618,33 @@ class Decision(ValueDecl[T], Generic[T]):
         cls,
         *entries: object,
         domain: object = None,
-        values: object = None,
         when: object = None,
         ordered: object = None,
         **retired: object,
     ) -> Any:
         _refuse_retired(entries, retired)
-        if domain is None and isinstance(values, Mapping):
+        if isinstance(domain, Mapping):
             raise DefinitionError.broken(
                 "node-decision-not-entries",
                 _OWNER,
                 f"Decision{at(source_origin())}: a choice among Space classes is a selector: "
                 "write Select(key=Room, other=Room(...)); a case that places nothing is None",
             )
-        if (domain is None) == (values is None):
+        if domain is None:
             raise DefinitionError.broken(
-                "decision-domain-ambiguous",
+                "decision-domain-required",
                 _OWNER,
-                "a Decision needs exactly one of domain= or values=",
+                "a Decision needs domain= (a finite iterable or a Domain)",
             )
-        if domain is not None and not isinstance(domain, Domain):
+        if not isinstance(domain, (Domain, Iterable)):
             raise DefinitionError.broken(
-                "domain-argument-invalid", _OWNER, "domain= must be a Domain"
+                "domain-argument-invalid", _OWNER, "domain= must be a finite iterable or a Domain"
             )
-        if ordered is not None and (domain is not None or type(ordered) is not bool):
+        if ordered is not None and (isinstance(domain, Domain) or type(ordered) is not bool):
             raise DefinitionError.broken(
                 "ordered-invalid",
                 _OWNER,
-                "ordered= is a bool, for listed values= (a domain= states its own order)",
+                "ordered= is a bool for finite iterables (a Domain states its own order)",
             )
         instance = cast(Decision[object], super().__new__(cls))
         object.__setattr__(instance, "_body", class_body())
@@ -617,8 +654,8 @@ class Decision(ValueDecl[T], Generic[T]):
         # The domain is bound to the value's type check when the model is linked.
         instance.domain = (
             cast(Domain[object], domain)
-            if domain is not None
-            else finite(cast(Iterable[object], values), ordered=ordered is True)
+            if isinstance(domain, Domain)
+            else finite(cast(Iterable[object], domain), ordered=ordered is True)
         )
         return instance
 
@@ -639,8 +676,10 @@ class Decision(ValueDecl[T], Generic[T]):
             return self  # still in its class body: resolved when the class is made
         if annotation is MISSING:
             raise _unannotated(self, "Decision")
-        self.semantics = _annotation_semantics(annotation, describe_formal(self, "Decision"))
-        self.resolved = True
+        self._settle(
+            semantics=_annotation_semantics(annotation, describe_formal(self, "Decision")),
+            resolved=True,
+        )
         return self
 
 
@@ -755,6 +794,19 @@ def guard(when: object) -> ValueRef[bool] | None:
     return cast(ValueRef[bool], when)
 
 
+def _refuse_computation_when(kind: str, aliases: Mapping[str, object]) -> None:
+    """``when=`` on a derived value, constraint or view: a computation says it does not
+    apply by returning ``Inapplicable()``, its guard read first (``when=`` is a placement's
+    and a Decision's presence)."""
+    if "when" in aliases:
+        raise DefinitionError.broken(
+            "computation-when",
+            _OWNER,
+            f"{kind}{at(source_origin())}: {kind} takes no when=: return Inapplicable() from "
+            "its body, reading the guard first (when= is for a placement or a Decision)",
+        )
+
+
 class Derived(ValueDecl[T], Generic[T]):
     """A function whose dependencies are bound after effective collection."""
 
@@ -763,7 +815,6 @@ class Derived(ValueDecl[T], Generic[T]):
         function: Callable[..., T | QueryResult[T]],
         *,
         aliases: Mapping[str, object] | None = None,
-        when: Guard = None,
     ) -> None:
         if aliases is not None and "semantics" in aliases:
             raise DefinitionError.broken(
@@ -774,18 +825,17 @@ class Derived(ValueDecl[T], Generic[T]):
         self.function = function
         self.semantics: ValueSemantics[T] | None = None
         self.aliases = MappingProxyType(dict(aliases or {}))
-        self.when = guard(when)
 
     if not TYPE_CHECKING:
 
-        def __getattr__(self, name: str) -> Projection[Any]:
+        def __getattr__(self, name: str) -> NoReturn:
             # ``facts.word_bits`` in a class body: an attribute of this derived value.
-            return project(self, name)
+            _projection_refused(self, name)
 
 
 class _DerivedDecorator:
-    def __init__(self, aliases: Mapping[str, object], when: Guard) -> None:
-        self.aliases, self.when = aliases, when
+    def __init__(self, aliases: Mapping[str, object]) -> None:
+        self.aliases = aliases
 
     @overload
     def __call__(self, function: Callable[..., QueryResult[T]]) -> T: ...
@@ -796,7 +846,7 @@ class _DerivedDecorator:
     def __call__(self, function: Callable[..., object]) -> object:
         # Typed as its value, like a formal: it may supply a formal in the class body.
         # ``T | Rejected`` and ``QueryResult[T]`` are typed ``T``: its value's type.
-        return Derived(function, aliases=self.aliases, when=self.when)
+        return Derived(function, aliases=self.aliases)
 
 
 @overload
@@ -808,29 +858,23 @@ def derived(function: Callable[..., T | NonValue], /) -> T: ...
 
 
 @overload
-def derived(
-    *, when: ValueRef[bool] | bool | None = None, **aliases: object
-) -> _DerivedDecorator: ...
+def derived(**aliases: object) -> _DerivedDecorator: ...
 
 
-def derived(
-    function: Callable[..., object] | None = None,
-    /,
-    *,
-    when: Guard = None,
-    **aliases: object,
-) -> object:
-    """A derived value: ``@derived`` on a method, or ``@derived(when=..., **aliases)``. Its
-    return annotation is its value's type and check (``T``, or ``T | Rejected``)."""
+def derived(function: Callable[..., object] | None = None, /, **aliases: object) -> object:
+    """A derived value: ``@derived`` on a method, or ``@derived(**aliases)``. Its return
+    annotation is its value's type and check (``T``, or ``T | Rejected``). It does not
+    apply by returning ``Inapplicable()``, its guard read first."""
+    _refuse_computation_when("derived", aliases)
     if function is not None:
-        return Derived(function, aliases=aliases, when=when)
+        return Derived(function, aliases=aliases)
     if "semantics" in aliases:
         raise DefinitionError.broken(
             "derived-semantics",
             _OWNER,
             f"derived{at(source_origin())}: {SEMANTICS_GONE} (the return annotation)",
         )
-    return _DerivedDecorator(aliases, when)
+    return _DerivedDecorator(aliases)
 
 
 class _MemberOfNode:
@@ -847,7 +891,7 @@ class _MemberOfNode:
 class Constraint(_MemberOfNode, Declaration):
     """A rule of its Space: true, false (refused, with its findings) or unknown. Every
     constraint of a present Space counts toward the Space's validity
-    (``inspection.validity``); a constraint whose ``when=`` does not hold counts as
+    (``inspection.validity``); a constraint that returns ``Inapplicable()`` counts as
     true. A constraint reads values (formals, choices, derived values, a child's
     derived value), never a view of its own Space or of an ancestor: that view's
     answer reads this constraint, a dependency cycle."""
@@ -857,20 +901,18 @@ class Constraint(_MemberOfNode, Declaration):
         function: Callable[..., bool | QueryResult[bool]],
         *,
         aliases: Mapping[str, object] | None = None,
-        when: Guard = None,
     ) -> None:
         self.function = function
         self.aliases = MappingProxyType(dict(aliases or {}))
         self.semantics = cast("ValueSemantics[bool]", BOOL)
-        self.when = guard(when)
 
 
 class _ConstraintDecorator:
-    def __init__(self, aliases: Mapping[str, object], when: Guard) -> None:
-        self.aliases, self.when = aliases, when
+    def __init__(self, aliases: Mapping[str, object]) -> None:
+        self.aliases = aliases
 
     def __call__(self, function: Callable[..., bool | QueryResult[bool]]) -> Constraint:
-        return Constraint(function, aliases=self.aliases, when=self.when)
+        return Constraint(function, aliases=self.aliases)
 
 
 @overload
@@ -878,58 +920,45 @@ def constraint(function: Callable[..., bool | QueryResult[bool]], /) -> Constrai
 
 
 @overload
-def constraint(
-    *, when: ValueRef[bool] | bool | None = None, **aliases: object
-) -> _ConstraintDecorator: ...
+def constraint(**aliases: object) -> _ConstraintDecorator: ...
 
 
 def constraint(
     function: Callable[..., bool | QueryResult[bool]] | None = None,
     /,
-    *,
-    when: Guard = None,
     **aliases: object,
 ) -> Constraint | _ConstraintDecorator:
+    _refuse_computation_when("constraint", aliases)
     if function is not None:
-        return Constraint(function, aliases=aliases, when=when)
-    return _ConstraintDecorator(aliases, when)
+        return Constraint(function, aliases=aliases)
+    return _ConstraintDecorator(aliases)
 
 
 class View(Declaration, Generic[T]):
-    """A product of its Space, from either a value or an authored function.
+    """A local readout of its Space, from a value or authored function.
 
-    A view reads as its **accepted** value, like every member typed as its
-    value: on a configuration ``point.total`` is the accepted value (a view
-    that is not accepted raises ``ValueUnavailableError`` carrying its result,
-    and inside a method the read blocks like any other); on a node declaration
-    ``kitchen.cost`` is a reference to that accepted value, typed ``T``, which
-    supplies a formal. Class access, ``House.total``, is the declaration itself:
-    pass it to ``point.inspect`` for the assessment and to ``point.query`` for
-    the accepted result.
-
-    A view's accepted result is, in order: inapplicable while its guard
-    (``when=``) does not hold, and then its Space's validity is never read; refused
-    when its output is refused or its Space is refused (``inspection.validity``),
-    whatever else waits; unresolved when its output is; else its output. A view
-    answers while its Space is undecided. A rule that matters for one product
-    only refuses in the view's body. A constraint of the view's Space (or of an
-    ancestor) reading the view closes a dependency cycle: rules read values.
+    On a configuration it reads its value; unavailable inputs, local refusal and
+    ordinary presence determine its answer after its real owning Space is checked.
+    Owning refusal blocks output entry; open validity permits local computation.
+    On the class it is a declaration, and on a placement a typed symbolic reference.
+    Views compose views but cannot feed model bindings, domains or rules.
+    ``point.inspect`` records applicability, the owning gate and attempted output.
+    An operation needing a valid, complete design still checks that at its boundary.
     """
 
     @overload
-    def __init__(self, source: ValueRef[T] | View[T], *, when: Guard = None) -> None: ...
+    def __init__(self, source: ValueRef[T] | View[T]) -> None: ...
 
     @overload
-    def __init__(self, source: T, *, when: Guard = None) -> None: ...
+    def __init__(self, source: T) -> None: ...
 
-    def __init__(self, source: object, *, when: Guard = None) -> None:
+    def __init__(self, source: object) -> None:
         self.source: object | None = source
         self.function: Callable[..., T | QueryResult[T]] | None = None
         self.aliases: Mapping[str, object] = MappingProxyType({})
         self.semantics: ValueSemantics[T] | None = cast(
             "ValueSemantics[T] | None", getattr(source, "semantics", None)
         )
-        self.when = guard(when)
 
     @classmethod
     def from_function(
@@ -937,23 +966,21 @@ class View(Declaration, Generic[T]):
         function: Callable[..., T | QueryResult[T]],
         *,
         aliases: Mapping[str, object],
-        when: Guard = None,
     ) -> View[T]:
         result = cls.__new__(cls)
         result.source = None
         result.function = function
         result.aliases = MappingProxyType(dict(aliases))
         result.semantics = None
-        result.when = guard(when)
         return result
 
     @overload
     def __get__(self, instance: None, owner: type[object] | None = None) -> Self: ...
 
     @overload
-    def __get__(self, instance: Space, owner: type[object] | None = None) -> T: ...
+    def __get__(self, instance: _Namespace, owner: type[object] | None = None) -> T: ...
 
-    def __get__(self, instance: Space | None, owner: type[object] | None = None) -> Self | T:
+    def __get__(self, instance: _Namespace | None, owner: type[object] | None = None) -> Self | T:
         if instance is None:
             return self
         path = declared_path(instance)
@@ -965,8 +992,8 @@ class View(Declaration, Generic[T]):
 
 
 class _ViewDecorator:
-    def __init__(self, aliases: Mapping[str, object], when: Guard) -> None:
-        self.aliases, self.when = aliases, when
+    def __init__(self, aliases: Mapping[str, object]) -> None:
+        self.aliases = aliases
 
     @overload
     def __call__(self, function: Callable[..., QueryResult[T]]) -> View[T]: ...
@@ -975,7 +1002,11 @@ class _ViewDecorator:
     def __call__(self, function: Callable[..., T | NonValue]) -> View[T]: ...
 
     def __call__(self, function: Callable[..., object]) -> View[Any]:
-        return View.from_function(function, aliases=self.aliases, when=self.when)
+        return View.from_function(function, aliases=self.aliases)
+
+
+@overload
+def view(source: ValueRef[T] | View[T], /) -> View[T]: ...
 
 
 @overload
@@ -987,29 +1018,54 @@ def view(function: Callable[..., T | NonValue], /) -> View[T]: ...
 
 
 @overload
-def view(*, when: ValueRef[bool] | bool | None = None, **aliases: object) -> _ViewDecorator: ...
+def view(source: T, /) -> View[T]: ...
 
 
-def view(
-    function: Callable[..., object] | None = None,
-    /,
-    *,
-    when: Guard = None,
-    **aliases: object,
-) -> object:
-    """A view: ``@view`` on a method, or ``@view(when=..., **aliases)``. Its return
-    annotation is its value's type and check (``T``, or ``T | Rejected``)."""
+@overload
+def view(**aliases: object) -> _ViewDecorator: ...
+
+
+def view(function: object | None = None, /, **aliases: object) -> object:
+    """A view: ``view(reference)``, the product of a value (``view(width)``,
+    ``view(adapter.stages)``); anything else that is not a function is refused
+    (``view-source-invalid``). Or ``@view`` on a method, or ``@view(**aliases)``.
+    A function's return annotation is its value's type and check (``T``, or ``T |
+    Rejected``); a reference's is its source's. A function view does not apply by
+    returning ``Inapplicable()``, its guard read first."""
+    _refuse_computation_when("view", aliases)
     if "semantics" in aliases:
         raise DefinitionError.broken(
             "view-semantics",
             _OWNER,
             f"view{at(source_origin())}: {SEMANTICS_GONE} (the return annotation, or the "
-            "source of a View)",
+            "source of a view)",
         )
-    decorator = _ViewDecorator(aliases, when)
-    if function is not None:
-        return decorator(function)
-    return decorator
+    if function is None:
+        return _ViewDecorator(aliases)
+    if isinstance(function, (ValueRef, View)):
+        # A reference: a symbolic reference answers every call by refusing it, so it is
+        # told apart from a function before it is called.
+        if aliases:
+            raise DefinitionError.broken(
+                "view-source-aliases",
+                _OWNER,
+                f"view{at(source_origin())}: a view of a reference takes no aliases "
+                f"({', '.join(sorted(aliases))}): they name the reads of a function",
+            )
+        return View(function)
+    if not callable(function) or isinstance(function, type):
+        what = (
+            f"the class {function.__qualname__}"
+            if isinstance(function, type)
+            else f"{function!r} ({type(function).__name__})"
+        )
+        raise DefinitionError.broken(
+            "view-source-invalid",
+            _OWNER,
+            f"view{at(source_origin())}: a view's source is a reference (view(width)) or a "
+            f"function (@view), not {what}",
+        )
+    return _ViewDecorator(aliases)(function)
 
 
 # -- Symbolic references ---------------------------------------------------------------
@@ -1051,10 +1107,10 @@ class _Symbolic:
     def __eq__(self, other: object) -> bool:
         if isinstance(other, _Symbolic):
             return type(self) is type(other) and self._key() == other._key()
-        from ._configuration import Space
+        from ._configuration import _Namespace
         from ._nodes import NodeChoice
 
-        if isinstance(other, (Declaration, Space, NodeChoice)):
+        if isinstance(other, (Declaration, _Namespace, NodeChoice)):
             return False
         self._misuse("equality comparison with a value")
 
@@ -1127,13 +1183,13 @@ class _Symbolic:
     def __abs__(self) -> NoReturn:
         self._misuse("abs()")
 
-    # Integer +, -, *, //, % and unary - build expressions (see ValueRef);
-    # every other operator is value-like use.
+    # Integer +, -, *, //, % and unary - are refused by name (see ValueRef); every other
+    # operator is value-like use.
     def __truediv__(self, other: object) -> NoReturn:
-        self._misuse("true division (integer references support //)")
+        self._misuse("true division")
 
     def __rtruediv__(self, other: object) -> NoReturn:
-        self._misuse("true division (integer references support //)")
+        self._misuse("true division")
 
     def __pow__(self, other: object) -> NoReturn:
         self._misuse("exponentiation")
@@ -1183,8 +1239,8 @@ class MemberRef(_Symbolic, ValueRef[T], Generic[T]):
 
     if not TYPE_CHECKING:
 
-        def __getattr__(self, name: str) -> Projection[Any]:
-            return project(self, name)
+        def __getattr__(self, name: str) -> NoReturn:
+            _projection_refused(self, name)
 
 
 def _attribute_type(owner: object, name: str) -> object:
@@ -1222,11 +1278,11 @@ def _hints(annotated: object, name: str, *, include_extras: bool) -> dict[str, o
         ) from cause
 
 
-def project(source: ValueRef[Any], name: str) -> Projection[Any]:
-    """``output.spec.payload_bits``: an attribute of a referenced value, typed by its class.
+def _projection_refused(source: ValueRef[Any], name: str) -> NoReturn:
+    """``output.spec.payload_bits`` in a class body: an attribute of a referenced value.
 
-    Only an attribute the value's type annotates projects; anything else is
-    the ordinary ``AttributeError``, so introspection stays unaffected.
+    Only an attribute the value's type annotates is refused, ``reference-projection``;
+    anything else is the ordinary ``AttributeError``, so introspection stays unaffected.
     """
     if name.startswith("_"):
         raise AttributeError(name)
@@ -1240,40 +1296,16 @@ def project(source: ValueRef[Any], name: str) -> Projection[Any]:
     token = get_origin(token) or token
     if not isinstance(token, type):
         raise AttributeError(name)
-    annotation = _attribute_type(token, name)
-    if annotation is MISSING:
+    if _attribute_type(token, name) is MISSING:
         raise AttributeError(name)
-    return Projection(source, name, annotation)
-
-
-class Projection(_Symbolic, ValueRef[T], Generic[T]):
-    """An attribute of a referenced value, read in the class body (``spec.payload_bits``).
-
-    Its type check is the one its attribute's annotation states
-    (``semantics.annotation_type``); none where that states no value type.
-    """
-
-    def __init__(self, source: ValueRef[Any], attribute: str, annotation: object) -> None:
-        self.source, self.attribute = source, attribute
-        try:
-            self.semantics = cast(
-                "ValueSemantics[T]", annotation_type(annotation, attribute, owner=_OWNER)
-            )
-        except DefinitionError:
-            self.semantics = None
-
-    def _describe(self) -> str:
-        inner = self.source._describe() if isinstance(self.source, _Symbolic) else "value"
-        return f"{inner}.{self.attribute}"
-
-    def _key(self) -> tuple[object, ...]:
-        inner = self.source._key() if isinstance(self.source, _Symbolic) else (id(self.source),)
-        return (*inner, self.attribute)
-
-    if not TYPE_CHECKING:
-
-        def __getattr__(self, name: str) -> Projection[Any]:
-            return project(self, name)
+    label = reference_label(source)
+    raise DefinitionError.broken(
+        "reference-projection",
+        _OWNER,
+        f"{label}: reading .{name} of a referenced value is not available in a class body; "
+        "declare a derived value that returns it, and bind that member",
+        declaration=label,
+    )
 
 
 class ChoiceMemberRef(_Symbolic, ValueRef[Any]):
@@ -1327,9 +1359,7 @@ class Members(ValueDecl[tuple[Located[T], ...]], Generic[T]):
     def __init__(self, member: T) -> None: ...  # a derived value: a class reads it as its value
 
     def __init__(self, member: object) -> None:
-        from .expressions import Expr
-
-        if not isinstance(member, (View, Derived, Expr)):
+        if not isinstance(member, (View, Derived)):
             raise DefinitionError.broken(
                 "members-member-invalid",
                 _OWNER,
@@ -1343,7 +1373,6 @@ class Members(ValueDecl[tuple[Located[T], ...]], Generic[T]):
 __all__ = [
     "CaseRef",
     "ChoiceMemberRef",
-    "Const",
     "Constraint",
     "Decision",
     "Declaration",
@@ -1351,7 +1380,6 @@ __all__ = [
     "Members",
     "MemberRef",
     "Param",
-    "Projection",
     "Required",
     "ValueDecl",
     "ValueRef",

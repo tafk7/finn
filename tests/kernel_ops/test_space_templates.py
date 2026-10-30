@@ -12,7 +12,9 @@ about the whole design space, from compiled forms, equal to the line's
 from __future__ import annotations
 
 import pkgutil
+from collections.abc import Iterable
 from pathlib import Path
+from typing import cast
 
 import pytest
 from core.space._domains_support import domain_differences
@@ -24,18 +26,30 @@ from support.models import chain_model
 import finn.custom_op
 import finn.kernels
 from finn.core.graph.annotations.platform import read_target
-from finn.core.space import Space, inspection
+from finn.core.space import Group, Space, inspection
 from finn.core.space._running.evaluate import evaluation
-from finn.core.space._scopes import EAGER, Address, ScopeRecord
+from finn.core.space._scopes import EAGER, Address, ScopeRecord, Scopes
 from finn.core.space._template import link_template
 from finn.core.space.compiler import compile_model
 from finn.core.space.occurrence import ask, held
 from finn.core.space.results import Available, QueryResult, Unresolved
 from finn.custom_op.kernels.network import declaration
 from finn.custom_op.kernels.shell import in_shell
+from finn.kernels.budgets import _ClockRequirement, _DoubledAny, _MoverSum, _PresentedSum, _Sum
 from finn.kernels.composer import Composed, clear_classes, compose
 from finn.kernels.configure import commit
+from finn.kernels.control import ControlModel
+from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
+from finn.kernels.fifo import FifoKernel
+from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.matmul import MatMulKernel
+from finn.kernels.memstream import MemStreamKernel
+from finn.kernels.port_model import (
+    StreamPort,
+    stream_ports,
+)
+from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.vpc import VpcKernel
 from finn.platform.shells import shell_row
 
 SUPPORT = Path(__file__).resolve().parents[1] / "support"
@@ -80,19 +94,91 @@ def test_the_chains_members_read_alike_in_any_order_their_scopes_are_made_in() -
     assert assert_reads_alike(classes) == 3  # the MatMul, the thresholding, the channel
 
 
+def _port_scopes(records: Iterable[ScopeRecord]) -> set[ScopeRecord]:
+    return {record for record in records if issubclass(record.space_type, StreamPort)}
+
+
+PORT_TYPES: dict[type[Space], dict[str, type[StreamPort]]] = {
+    FifoKernel: {"input": StreamPort, "output": StreamPort},
+    InputGeneratorKernel: {"input": StreamPort, "output": StreamPort},
+    VpcKernel: {"input": StreamPort, "output": StreamPort},
+    ThresholdingAxiKernel: {"input": StreamPort, "output": StreamPort, "set": StreamPort},
+    PackedDotpKernel: {"x": StreamPort, "w": StreamPort, "y": StreamPort},
+    Int8Dsp58DotpKernel: {"x": StreamPort, "w": StreamPort, "y": StreamPort},
+    MemStreamKernel: {"set": StreamPort, "output": StreamPort},
+}
+GROUP_TYPES = {_Sum, _PresentedSum, _MoverSum, _DoubledAny, _ClockRequirement, ControlModel}
+
+
+def _group_scopes(records: Iterable[ScopeRecord]) -> set[ScopeRecord]:
+    groups = {record for record in records if record.compiled.validity is None}
+    for record in groups:
+        assert record.space_type in GROUP_TYPES
+        assert record.owning_space is not record
+        assert record.owning_space.compiled.validity is not None
+    return groups
+
+
+def _real_nonport_scopes(records: Iterable[ScopeRecord]) -> set[ScopeRecord]:
+    return {
+        record
+        for record in records
+        if record.compiled.validity is not None and not issubclass(record.space_type, StreamPort)
+    }
+
+
+def _assert_native_scope_ownership(records: Iterable[ScopeRecord]) -> set[ScopeRecord]:
+    """Every native Port subtype owns its scope, below the exact declared parent ports."""
+    ports = _port_scopes(records)
+    parents: set[ScopeRecord] = set()
+    for record in ports:
+        assert record.owning_space is record and not record.compiled.choices
+        parent = record.parent
+        assert parent is not None and parent.owning_space is parent
+        assert parent.space_type in PORT_TYPES
+        expected = PORT_TYPES[parent.space_type]
+        assert record.space_type is expected[record.name.rsplit(".", 1)[-1]]
+        assert set(stream_ports(parent.space_type)) == set(expected)
+        parents.add(parent)
+    assert {record.name for record in ports} == {
+        f"{parent.name}.{port}"
+        for parent in parents
+        for port in PORT_TYPES[cast(type[Space], parent.space_type)]
+    }
+    assert len(ports) == sum(
+        len(PORT_TYPES[cast(type[Space], parent.space_type)]) for parent in parents
+    )
+    return ports
+
+
 def test_stage_7s_chain_of_eight_kernels_reads_alike_in_any_order_its_scopes_are_made_in() -> None:
     whole = chain_class()
     assert_reads_alike([whole])
     templates = reached(link_template(whole))
-    # Fifteen classes, the shell member's (its budgets, in its shell) and the composite (a
-    # port is a declaration of its kernel, no class).
-    assert len(templates) == 17
-    # A channel's source and mover are placements: compiled where their guard's formal is
-    # not supplied too (their members inapplicable there), so each of the 9 channels
-    # without a value has its source's scope, and each of the 13 its mover's, where the
-    # one-case selectors compiled none; a direct transport places none. The shell member
-    # is one scope more.
-    assert len(compile_model(whole).scopes.ordered()) == 226
+    # Real Space classes, native Port classes and lexical Group classes are distinct.
+    assert (
+        len(
+            [
+                kind
+                for kind in templates
+                if issubclass(kind, Space) and not issubclass(kind, StreamPort)
+            ]
+        )
+        == 17
+    )
+    assert {kind for kind in templates if issubclass(kind, Group)} == GROUP_TYPES
+    assert {kind for kind in templates if issubclass(kind, StreamPort)} == {
+        StreamPort,
+        StreamPort,
+        StreamPort,
+    }
+    records = compile_model(whole).scopes.ordered()
+    ports = _assert_native_scope_ownership(records)
+    # All original226 real non-port scopes remain; the assembled native Ports and
+    # Control/budget Group namespaces are accounted separately, with ownership checked.
+    assert len(_real_nonport_scopes(records)) == 226
+    assert len(ports) == 270
+    assert len(_group_scopes(records)) == 55
 
 
 def _answers_as_the_line(classes: list[type[Space]]) -> int:
@@ -158,7 +244,17 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
     scopes = inspection.model(point).scopes
     assert isinstance(point.mm0.query(MatMulKernel.cycles), Unresolved)  # type: ignore[attr-defined]
     read = scopes.counts()
-    assert read["scopes made"] < 225 // 8
+    # Keep the original real-owner ratio, and bound unevaluated Port/Group allocation
+    # separately before any whole-model address walk can make additional records.
+    made = tuple(scopes.registry.records.values())
+    assert len(_real_nonport_scopes(made)) < 225 // 8
+    ports = _assert_native_scope_ownership(made)
+    assert {record.name for record in ports} == {
+        f"mm0.compute.{core}.{port}"
+        for core in ("int8_dsp58", "packed")
+        for port in ("x", "w", "y")
+    }
+    assert not _group_scopes(made)
     assert read["scopes in play"] < read["scopes made"]
     assert read["members evaluated"] < len(list(scopes.all_addresses())) // 100
 
@@ -180,8 +276,59 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
 # weights one fact: per MatMul, its root Params ``w_contents`` and ``weights_dtype`` one
 # (``weights``), and ``weighted``, ``carried_weights``' guard and its packed core's
 # ``w_placed`` and its ``w_side`` and ``w_stream`` guards gone (-24; -27 after ``viable``,
-# the trial's int8 core's three as well).
-EVALUATED = ((1205, 42), (1281, 42))
+# the trial's int8 core's three as well). Then 1205 (42) and 1281 (42) became these, with a
+# computation's guard its body's early return: the guard nodes of guarded computations are
+# gone (-33): each channel's ``adapter_uram_present`` guard (13), and per MatMul (4 each) its
+# ``native_readable`` and ``stored_weights`` guards, its packed core's ``w_access`` and
+# ``x_access`` guards and its thresholding's ``input_access`` guard; and
+# ``adapter_uram_present``, reading the style it judges first, now evaluates
+# ``adapter_ram_style`` where no adapter is placed (+9: the 4 ``h`` and 4 ``w`` channels and
+# ``y``; the style answers inapplicable, and the rule with it). After ``viable``, -35 + 9:
+# the trial's int8 core's ``w_access`` and ``x_access`` guards as well.
+# Historical early-Port totals were ((1157,42),(1221,42)) for non-port reads,
+# ((100,52),(140,70)) for Ports. The assembled native Dotp/Thresholding/MemStream
+# models move reads to their actual owners; Group primitives use the owning Space.
+# Exact counts observed on assembled edb7cbd7d, not a readiness or timing budget.
+# Ports' ((540, 304), (637, 356)) and the totals ((1557, 346), (1698, 398)) became these
+# when a port's pins were named by its transport kind, one Param, in place of its pin name,
+# signals and spelling: two constants fewer each port's physical inputs read (-44, -52).
+# Then ((496, 260), (585, 304)) and ((1513, 302), (1646, 346)) became these when the four
+# port classes became one (``StreamPort``): a port of a given sequence reads, to present it,
+# that it states no schedule as well (+12, +16 constants, the ``schedule`` of each such port
+# whose stream is evaluated).
+# Then (1061, 42) and (1662, 362) after ``viable`` became these when a vpc stated its
+# association (``VpcKernel.width_only``): the constraint of each output adapter's vpc the
+# trials evaluate, ``a1``'s and ``h2``'s (+2).
+NONPORT_EVALUATED = ((1017, 42), (1063, 42))
+PORT_EVALUATED = ((508, 272), (601, 320))
+EVALUATED = ((1525, 314), (1664, 362))
+
+
+def _assert_evaluated(scopes: Scopes, stage: int) -> None:
+    """Exact functional demand accounting by real owner, without a readiness walk."""
+    with scopes.lock:
+        evaluated = tuple(scopes.registry.evaluated)
+    port_reads = [
+        address for address in evaluated if issubclass(address.scope.space_type, StreamPort)
+    ]
+    nonport_reads = [
+        address
+        for address in evaluated
+        if address.scope.compiled.validity is not None
+        and not issubclass(address.scope.space_type, StreamPort)
+    ]
+    # Group primitives are addresses of the owning Space, never independent reads.
+    assert not [address for address in evaluated if address.scope.compiled.validity is None]
+    assert (
+        len(port_reads),
+        sum(address.kind == "const" for address in port_reads),
+    ) == PORT_EVALUATED[stage]
+    assert (
+        len(nonport_reads),
+        sum(address.kind == "const" for address in nonport_reads),
+    ) == NONPORT_EVALUATED[stage]
+    counted = scopes.counts()
+    assert (counted["members evaluated"], counted["constants evaluated"]) == EVALUATED[stage]
 
 
 def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
@@ -194,8 +341,9 @@ def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
     its scope reads it. An absent scope's validity is read from its guard and its choices'
     presence from their guards, so no scope absent at the baseline has a member evaluated
     for either, and none of unknown presence in the design space before the change
-    either: the scopes with a member evaluated (in play) are exactly the 38 present at the
-    baseline (the line's present scopes). Each MatMul's ``compute.int8_dsp58`` case, of
+    either: in-play scopes are the38 original non-port owners plus40 native Port children,
+    all present at the baseline; Group namespaces have no independent validity. Each
+    MatMul's ``compute.int8_dsp58`` case, of
     unknown presence before the change, has none evaluated.
     Then ``viable`` of the middle MatMul's choices and one change of its ``pe``: what trials
     evaluate more (the middle MatMul's ``int8_dsp58`` case, which a trial selects, and the
@@ -207,12 +355,15 @@ def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
     scopes = inspection.model(point).scopes
     committed = commit(point, stored)
     counted = scopes.counts()
-    assert {key: counted[key] for key in ("scopes made", "scopes in play")} == {
-        "scopes made": 225,
-        "scopes in play": 38,
-    }
-    assert (counted["members evaluated"], counted["constants evaluated"]) == EVALUATED[0]
+    made_ports = _assert_native_scope_ownership(scopes.registry.records.values())
     in_play = set(scopes.in_play())
+    active_ports = _port_scopes(in_play)
+    assert len(_real_nonport_scopes(scopes.registry.records.values())) == 225
+    assert len(_group_scopes(scopes.registry.records.values())) == 17
+    assert counted["scopes made"] == 225 + 270 + 17
+    assert counted["scopes in play"] - len(active_ports) == 38
+    assert len(made_ports) == 270 and len(active_ports) == 40
+    _assert_evaluated(scopes, 0)
 
     def answer(of: Space, index: Address) -> QueryResult[object]:
         """``index``'s answer in the design space ``of`` holds, in its model's session."""
@@ -230,8 +381,11 @@ def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
         return True
 
     records = scopes.ordered()
-    present_scopes = {record for record in records if present(record)}
-    assert len(present_scopes) == 38
+    present_scopes = {
+        record for record in records if record.compiled.validity is not None and present(record)
+    }
+    assert len(_real_nonport_scopes(present_scopes)) == 38
+    assert len(_port_scopes(present_scopes)) == 40
     assert in_play == present_scopes
     unknown = {record for record in records if record.name.endswith(".compute.int8_dsp58")}
     assert {record.name for record in unknown} == {
@@ -248,17 +402,35 @@ def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
     assert len(middle) == 6 and "mm2.realization" not in middle
     inspection.viable(committed, [handles[key] for key in middle])
     counted = scopes.counts()
-    assert (counted["scopes made"], counted["scopes in play"]) == (225, 43)
-    assert (counted["members evaluated"], counted["constants evaluated"]) == EVALUATED[1]
-    assert {record.name for record in set(scopes.in_play()) - in_play} == {
+    assert len(_real_nonport_scopes(scopes.registry.records.values())) == 225
+    assert len(_group_scopes(scopes.registry.records.values())) == 17
+    assert counted["scopes made"] == 225 + 270 + 17
+    assert counted["scopes in play"] - len(_port_scopes(scopes.in_play())) == 43
+    assert len(_port_scopes(scopes.in_play())) == 47
+    _assert_evaluated(scopes, 1)
+    additional = set(scopes.in_play()) - in_play
+    assert {record.name for record in additional - _port_scopes(additional)} == {
         "mm2.compute.int8_dsp58",
         "a1.output_adapter",
         "a1.output_adapter.vpc",
         "h2.output_adapter",
         "h2.output_adapter.vpc",
     }
+    assert {record.name for record in _port_scopes(additional)} == {
+        *(f"mm2.compute.int8_dsp58.{port}" for port in ("x", "w", "y")),
+        *(
+            f"{parent}.{port}"
+            for parent in ("a1.output_adapter.vpc", "h2.output_adapter.vpc")
+            for port in ("input", "output")
+        ),
+    }
+    assert not _group_scopes(additional)
     report = committed.try_with_choices({handles["mm2.pe"]: 2})
     assert report.accepted
     counted = scopes.counts()
-    assert (counted["scopes made"], counted["scopes in play"]) == (225, 43)
-    assert (counted["members evaluated"], counted["constants evaluated"]) == EVALUATED[1]
+    assert len(_real_nonport_scopes(scopes.registry.records.values())) == 225
+    assert len(_group_scopes(scopes.registry.records.values())) == 17
+    assert counted["scopes made"] == 225 + 270 + 17
+    assert counted["scopes in play"] - len(_port_scopes(scopes.in_play())) == 43
+    assert len(_port_scopes(scopes.in_play())) == 47
+    _assert_evaluated(scopes, 1)

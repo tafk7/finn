@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any, Generic, Literal, TypeAlias, TypeVar, cas
 
 from ._configuration import Space
 from ._failure import driver_only
+from ._nodes import space_members
 from ._running.per_class import flow_below, scopes_below
 from .compiler import Model, compile_model
 from .declarations import (
@@ -39,11 +40,13 @@ from .declarations import (
 )
 from .edits import BrokenRule
 from .errors import RequestError
+from .groups import Group
 from .ir import NodeKind
 from .occurrence import ask, held, model_of
 from .occurrence import candidate as _candidate
 from .references import DecisionHandle, ValueHandle, decision_key
 from .results import (
+    Available,
     ConstraintAssessment,
     DecisionState,
     QueryResult,
@@ -156,6 +159,8 @@ class ModelStatistics:
     potential_edges: int
     choices: int
     owning_decisions: int
+    # Included namespace frames, counted separately from real validity scopes.
+    namespaces: int = 0
 
 
 def statistics(subject: Space | Model[S] | type[Space]) -> ModelStatistics:
@@ -197,7 +202,7 @@ def _node_info(model: Model[Space], index: Address) -> NodeInfo:
         reference,
         node.key,
         node.kind,
-        node.scope.name,
+        node.scope.owning_space.name,
         node.owner,
         node.source_owner is not None,
         None if node.guard is None else ValueHandle[bool](model, node.guard),
@@ -213,11 +218,11 @@ def _decision_info(model: Model[Space], index: Address) -> DecisionInfo[object]:
     return DecisionInfo(
         DecisionHandle[object](model, index),
         decision_key(index),
-        node.scope.name,
+        node.scope.owning_space.name,
         node.owner,
         choice is not None,
         () if choice is None else tuple(name for name, _ in choice.cases),
-        node.scope.space_type,
+        cast(type[Space], node.scope.owning_space.space_type),
         choice is None and node.domain is not None and node.domain.ordered,
         node.domain is not None and node.domain.candidates is not None,
     )
@@ -324,11 +329,11 @@ def choices(subject: Space | Model[S] | type[Space]) -> tuple[ChoiceInfo, ...]:
     return tuple(
         ChoiceInfo(
             choice.key,
-            choice.scope.name,
+            choice.scope.owning_space.name,
             tuple(
                 CaseInfo(name, None, None)
                 if child is None
-                else CaseInfo(name, child.name, child.space_type)
+                else CaseInfo(name, child.name, cast(type[Space], child.space_type))
                 for name, child in choice.cases
             ),
             DecisionHandle[str](compiled, choice.selector)
@@ -338,6 +343,35 @@ def choices(subject: Space | Model[S] | type[Space]) -> tuple[ChoiceInfo, ...]:
         )
         for choice in sorted(compiled.scopes.choices(), key=lambda item: item.key)
         if choice.scope in included
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class GroupInfo:
+    """One included namespace: its path, real owner and declared member order."""
+
+    path: str
+    scope: str
+    group_type: type[Group]
+    members: tuple[str, ...]
+
+
+def groups(subject: Space | Model[S] | type[Space]) -> tuple[GroupInfo, ...]:
+    """Included Groups in depth/declaration order, without evaluating any members.
+
+    Group primitives also appear in ``members`` under namespaced paths. ``Members``
+    remains a quantifier over real Space children, not included Group namespaces.
+    """
+    model, scope = _context(subject)
+    return tuple(
+        GroupInfo(
+            each.name,
+            each.owning_space.name,
+            cast(type[Group], each.space_type),
+            tuple(space_members(each.space_type)),
+        )
+        for each in sorted(scopes_below(model.scopes, scope), key=lambda item: item.position)
+        if each.compiled.validity is None
     )
 
 
@@ -381,6 +415,36 @@ class Validity:
     status: Literal["valid", "refused", "open"]
     pieces: tuple[Piece, ...]
     result: QueryResult[bool]
+
+
+def presence(point: Space) -> tuple[tuple[str, QueryResult[bool]], ...]:
+    """Every real Space's presence, in depth then declaration-position order.
+
+    Available(True/False) means present/absent; Inapplicable means an ancestor is
+    absent. Unresolved or Rejected presence is not complete. This asks only the
+    ordinary guards, never member values or validity, and preserves dormant cases.
+    """
+    from ._running.evaluate import evaluation
+
+    driver_only("scope presence")
+    at = held(point)
+
+    def answer(session: Session) -> tuple[tuple[str, QueryResult[bool]], ...]:
+        ev = evaluation(at.ds, session)
+        return tuple(
+            (
+                scope.name,
+                Available(True)
+                if scope.guard is None
+                else cast(QueryResult[bool], ev.result(scope.guard)),
+            )
+            for scope in sorted(
+                scopes_below(at.ds.model.scopes, at.scope), key=lambda each: each.position
+            )
+            if scope.compiled.validity is not None
+        )
+
+    return ask(at.ds.model, answer)
 
 
 def validity(point: Space) -> Validity:
@@ -567,6 +631,7 @@ __all__ = [
     "DecisionInfo",
     "Dormant",
     "EvidenceNode",
+    "GroupInfo",
     "NodeInfo",
     "ModelStatistics",
     "Open",
@@ -584,7 +649,9 @@ __all__ = [
     "decisions",
     "explain",
     "members",
+    "groups",
     "model",
+    "presence",
     "states",
     "statistics",
     "validity",

@@ -37,7 +37,7 @@ from support.xsim import requires_hls
 from finn.core.rtlsim_bench import measure
 from finn.core.space import Available, Rejected, design_space
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.dataflow.traversal import pack, unreplayed
+from finn.dataflow.traversal import Traversal, pack, unreplayed
 from finn.harness.hls import c_simulate
 from finn.kernels.artifacts.contributions import HlsSource
 from finn.kernels.artifacts.module import Leaf
@@ -204,16 +204,18 @@ def test_it_takes_a_beat_a_cycle_as_its_schedule_states(tmp_path: Path) -> None:
     window = contracts["input_channel"]
     x = values["input_channel"]
     expected = case["reference"](input_channel=x)["output_channel"]
-    beats = design_member(point, KERNEL).schedule.beat_count
+    beats = design_member(point, KERNEL).schedule.iterations
     module = design_module(point, PoolKernel)
     assert isinstance(module, Available)
     found = design_cycles(point)
     assert isinstance(found, Available)
     cycles = found.value
+    input_form = unreplayed(window.form)
+    assert isinstance(input_form, Traversal)
     measured = measure(
         module.value,
         tmp_path,
-        inputs={"input_channel": _words(unreplayed(window.form), x, window.element)},
+        inputs={"input_channel": _words(input_form, x, window.element)},
         outputs={
             "output_channel": _words(
                 contracts["output_channel"].form,

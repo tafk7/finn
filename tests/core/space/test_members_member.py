@@ -17,20 +17,19 @@ from typing import Any
 from support.refusals import refused
 
 from finn.core.space import (
-    Const,
-    Constraint,
     DefinitionError,
+    Inapplicable,
     Located,
     Members,
     Param,
     Select,
     Space,
-    View,
     constraint,
     derived,
     design_space,
     view,
 )
+from finn.core.space.declarations import Constraint
 
 
 class Priced(Space):
@@ -131,8 +130,10 @@ def test_an_inapplicable_entry_is_skipped() -> None:
 
         loud: bool = Param(default=False)
 
-        @view(when=loud)
-        def price(self) -> int:
+        @view
+        def price(self) -> int | Inapplicable:
+            if not self.loud:
+                return Inapplicable()
             return 1
 
     class Shelf(Space):
@@ -148,8 +149,6 @@ def test_an_inapplicable_entry_is_skipped() -> None:
 def test_a_member_of_the_wrong_kind_is_refused() -> None:
     with refused("members-member-invalid", error=DefinitionError):
         Members(Param())
-    with refused("members-member-invalid", error=DefinitionError):
-        Members(Const(3))
     with refused("members-member-invalid", error=DefinitionError):
         Members(Priced.size)
 
@@ -167,7 +166,7 @@ def test_a_member_of_the_wrong_kind_is_refused() -> None:
 def test_a_member_no_class_declares_is_refused_when_the_class_is_compiled() -> None:
     class Shelf(Space):
         first = Priced()
-        prices = Members(View(Priced.price))
+        prices = Members(view(Priced.price))
 
     with refused("members-member-invalid", error=DefinitionError):
         design_space(Shelf())

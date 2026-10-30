@@ -36,7 +36,7 @@ from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
 from finn.kernels.artifacts.build import netlist
-from finn.kernels.base import KernelSpace
+from finn.kernels.base import Kernel
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.partition import Partition
@@ -294,9 +294,9 @@ def test_several_threshold_sets_take_a_set_selector_stream():
         return with_direct_transports(chosen)
 
     point = selected(selectors)
-    assert isinstance(point.query("sets", KernelSpace.netlist), Available)
+    assert isinstance(point.query("sets", Kernel.netlist), Available)
     # Its consumer, the set selector port beside it, as the partition reads it.
-    assert point.neighbours("sets").consumer.contract.transport.name == "s_axis_set"
+    assert point.neighbours("sets").consumer.pins.transport.name == "s_axis_set"
     # One set index for every input beat: with a shorter selector channel, the folding
     # that places the set port is refused by it, its set sequence's rule.
     short = Tensor((HEIGHT,), ScalarEncoding(DataType["UINT1"]))
