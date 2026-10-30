@@ -5,9 +5,12 @@
 
 It regroups ``lanes_in`` elements a beat into ``lanes_out``, through vectors of
 their least common multiple. It presents the sequences it is given on its two ports
-(``arriving``, ``leaving``: the same elements of its tensor, ``input_tensor``, in the
-same order), and derives its generics from
-them: ``lanes_in`` and ``lanes_out`` their lanes, ``W`` the tensor's element. Words
+(``arriving``, ``leaving``), and derives its generics from
+them: ``lanes_in`` and ``lanes_out`` their lanes, ``W`` the tensor's element. The two
+are one sequence at two lane counts, its association: the same elements of its tensor,
+``input_tensor``, in the same order, repeated alike, with the same markers. It refuses
+any other pair (``width_only``, ``vpc-width-only``): its RTL only regroups lanes, and
+where the two lane counts are the same, its wire branch passes each beat through. Words
 are opaque on FinnLib's native pins. On a channel, ``vpc`` is a stage of the
 channel's adapter (``finn.kernels.adapters``), which gives it the two sides of its
 width conversion.
@@ -26,9 +29,9 @@ from __future__ import annotations
 from math import gcd, lcm
 from typing import ClassVar
 
-from finn.core.space import Param, derived, view
+from finn.core.space import Param, Rejected, constraint, derived, reject, view
 from finn.dataflow.tensor import Tensor
-from finn.dataflow.traversal import BeatSequence
+from finn.dataflow.traversal import BeatSequence, regrouped
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel
@@ -101,7 +104,37 @@ class VpcKernel(Kernel):
         return lanes
 
     # Its lanes and element come from its ports, positive by construction: the RTL
-    # refuses nothing they present, so it states no constraint of its own.
+    # refuses nothing they present. The kernel refuses a pair of sequences the RTL does
+    # not associate.
+
+    @constraint
+    def width_only(self) -> bool | Rejected:
+        """Its association: ``leaving`` is ``arriving`` at another lane count, or the same.
+        The two present one element sequence (``regrouped`` at one lane: the order whose
+        equality ``classify`` names a width conversion, which a lane group has too), repeat
+        their pass alike and carry the same markers. Any other pair is a step its RTL does
+        not take: a reorder or a lane permutation (its wire branch passes each beat through
+        as it arrives), or a repetition or a marker it would make or drop."""
+        arriving: BeatSequence = self.arriving
+        leaving: BeatSequence = self.leaving
+        if regrouped(arriving.form, 1) != regrouped(leaving.form, 1):
+            return reject(
+                "vpc-width-only",
+                "leaving presents its elements in another order than arriving: "
+                "a vpc only regroups lanes",
+            )
+        if arriving.repetition is not leaving.repetition:
+            return reject(
+                "vpc-width-only",
+                f"arriving repeats {arriving.repetition.value} and leaving "
+                f"{leaving.repetition.value}: a vpc repeats no pass",
+            )
+        if arriving.markers != leaving.markers:
+            return reject(
+                "vpc-width-only",
+                "arriving and leaving carry different markers: a vpc makes and drops none",
+            )
+        return True
 
     @derived
     def intake(self) -> Intake:
