@@ -50,8 +50,6 @@ from qonnx.core.ranges import TensorRange
 from finn.core.search import Choice, Key, dotted
 from finn.core.space import (
     Decision,
-    Group,
-    Param,
     Rejected,
     Space,
     design_space,
@@ -66,8 +64,7 @@ from finn.dataflow.datatypes import (
 from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, Loop, Traversal, vector_major
-from finn.kernels.artifacts.abi import Pin
-from finn.kernels.artifacts.module import Composed, Held, Leaf, ProducerIdentity
+from finn.kernels.artifacts.module import Composed, Leaf, ProducerIdentity
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.composer import (
@@ -596,19 +593,6 @@ def port_transport(point: Kernel, name: str) -> ReadyValidTransport:
     found = transport(port.physical_spec(idle=False), port.stream, port.clocking)
     assert isinstance(found, ReadyValidTransport), found
     return found
-
-
-class OtherPins(Group):
-    """Test-only literal physical inputs; a parent reads any holding View itself."""
-
-    signals: tuple[Pin, ...] = Param()
-    holding: Held = Param(default=Held())
-
-    def pin_values(self) -> tuple[Pin, ...]:
-        return self.signals
-
-    def held_values(self) -> Held:
-        return self.holding
 
 
 def codes(result: object) -> set[str]:

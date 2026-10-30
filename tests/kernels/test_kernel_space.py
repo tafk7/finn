@@ -5,13 +5,13 @@
 
 A kernel answers four questions of its hardware through Views:
 its netlist (its library module at the empty label, its members' netlists under their
-nodes), its cycles, its buffering and its resources, its own part and its members'. Each
-class's native netlist reads typed model inputs serially and calls pure physical
-helpers. A kernel binds at most one library module (``ModuleSpec``), whose
-sources must provide it: constant sources when the class is made, a member's when the
-module is built. A kernel with a module states its ports and its resources and places
-no kernel, and a kernel owning a physical stream port binds a module; one leaving a member
-``required()`` is a base of kernels, which these checks pass by. A child model
+nodes), its cycles, its buffering and its resources, its own part and its members'. The
+base assembles a module's netlist from its binding and its parts (other pins, control
+bus, ports), read serially. A kernel binds at most one library module (``ModuleSpec``),
+whose sources must provide it: constant sources when the class is made, a member's when
+the module is built. A kernel with a module states its parameters, ports and resources
+and places no kernel, and a kernel owning a physical stream port binds a module; one
+leaving a member ``required()`` is a base of kernels, which these checks pass by. A child model
 binding is a fact, derived member or constant; outward Views do not bind
 model Params. Generic primitive inclusion without a module remains usable.
 """
@@ -22,12 +22,13 @@ from typing import Any, cast
 
 import pytest
 from qonnx.core.datatype import DataType
-from support.helpers import FULL_DSP48E2, OtherPins, codes, fifo_node
+from support.helpers import FULL_DSP48E2, codes, fifo_node
 from support.refusals import refused
 
 from finn.core.space import (
     Available,
     DefinitionError,
+    Group,
     Inapplicable,
     Param,
     Rejected,
@@ -46,8 +47,8 @@ from finn.core.space.semantics import default_semantics
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
-from finn.kernels.artifacts.abi import Direction, Endpoint, Pin, Signal
-from finn.kernels.artifacts.contributions import Contribution, CopiedSource
+from finn.kernels.artifacts.abi import Direction, Endpoint, Signal
+from finn.kernels.artifacts.contributions import Contribution, CopiedSource, GeneratedData
 from finn.kernels.artifacts.module import Fragment, Held
 from finn.kernels.base import Kernel, PortContract
 from finn.kernels.channels import ChannelFifo
@@ -55,13 +56,9 @@ from finn.kernels.fifo import FifoKernel, fifo_resources
 from finn.kernels.laws import NATIVE, NATIVE_CLOCKING
 from finn.kernels.library import (
     ModuleSpec,
-    _each,
-    assemble_module,
     library_module,
-    module_unprovided,
 )
-from finn.kernels.port import pins
-from finn.kernels.port_model import SequencePort
+from finn.kernels.port_model import OtherPins, SequencePort
 from finn.platform.capabilities import Resources
 
 TENSOR = Tensor((4, 1), ScalarEncoding(DataType["INT4"]))
@@ -147,49 +144,6 @@ class Stage(Kernel):
         return 5
 
     module_spec = ModuleSpec("probe", (PROBE,))
-
-    def _extra_pins(self) -> tuple[Pin, ...]:
-        return ()
-
-    def _extra_held(self) -> Held:
-        return Held()
-
-    @view
-    def netlist(self) -> Fragment | Rejected:
-        clocking = self.clocking
-        parameters = tuple(sorted(self.parameters.items()))
-        presenting = self.input.presenting()
-        parts = _each(
-            (
-                self._extra_pins(),
-                pins(self.input.physical_spec(idle=False), presenting, self.input.clocking),
-            )
-        )
-        if isinstance(parts, Rejected):
-            return parts
-        spec = type(self).module_spec
-        sources = spec.constant_sources
-        if sources is None:
-            sources = self.module_sources
-        refused = module_unprovided(spec, type(self).__qualname__, sources)
-        if isinstance(refused, Rejected):
-            return refused
-        holding = _each((Held(), self._extra_held()))
-        if isinstance(holding, Rejected):
-            return holding
-        leaf = assemble_module(
-            spec,
-            type(self).id,
-            type(self).__qualname__,
-            clocking,
-            parameters,
-            tuple(parts),
-            sources,
-            (),
-            tuple(holding),
-            (False, self.input.placed),
-        )
-        return leaf if isinstance(leaf, Rejected) else Fragment((("", leaf),))
 
     @view
     def cycles(self) -> int:
@@ -324,6 +278,50 @@ def test_a_kernel_binds_one_library_module_at_most() -> None:
             other = ModuleSpec("probe", (PROBE,))
 
 
+def test_a_kernel_with_a_module_declares_its_module_s_parts_in_its_own_body() -> None:
+    # The base reads each part by its name in the kernel's body; one in a Group is refused.
+    class Ports(Group):
+        input = SequencePort(
+            label="input",
+            endpoint=Endpoint.TARGET,
+            transport=NATIVE,
+            tensor=TENSOR,
+            sequence=ARRIVING,
+            clocking=NATIVE_CLOCKING,
+        )
+
+    with refused("module-part-nested", error=DefinitionError, message=r"\['ports.input'\]"):
+
+        class Grouped(Kernel):
+            id = "test.kernel_space.grouped"
+            clock_domain = NATIVE_CLOCKING
+            ports = Ports()
+            module_spec = ModuleSpec("probe", (PROBE,))
+
+            @view
+            def parameters(self) -> dict[str, int | str]:
+                return {}
+
+
+DATA = GeneratedData("probe.dat", b"00\n")
+
+
+class Stored(Stage):
+    """A stage whose module reads a data file."""
+
+    id = "test.kernel_space.stored"
+
+    @view
+    def module_data(self) -> tuple[GeneratedData, ...]:
+        return (DATA,)
+
+
+def test_a_kernel_s_module_takes_the_data_it_states() -> None:
+    assert library_module(design_space(Stage(input_tensor=TENSOR, arriving=ARRIVING))).data == ()
+    point = design_space(Stored(input_tensor=TENSOR, arriving=ARRIVING))
+    assert library_module(point).data == (DATA,)
+
+
 def test_a_kernel_with_a_module_states_its_ports_and_resources_and_places_no_kernel() -> None:
     def parameters(self: Kernel) -> dict[str, int | str]:
         return {}
@@ -439,10 +437,14 @@ def test_a_kernel_stating_a_stream_port_binds_a_module() -> None:
             sequence=ARRIVING,
             clocking=NATIVE_CLOCKING,
         )
-        parameters = cast("dict[str, int | str]", required(dict))
+        width = required(int)
 
     class Bound(Ported):
         id = "test.kernel_space.bound"
+
+        @derived
+        def width(self) -> int:
+            return 4
 
         @view
         def parameters(self) -> dict[str, int | str]:
@@ -453,49 +455,6 @@ def test_a_kernel_stating_a_stream_port_binds_a_module() -> None:
             return Resources()
 
         module_spec = ModuleSpec("probe", (PROBE,))
-
-        def _extra_pins(self) -> tuple[Pin, ...]:
-            return ()
-
-        def _extra_held(self) -> Held:
-            return Held()
-
-        @view
-        def netlist(self) -> Fragment | Rejected:
-            clocking = self.clocking
-            parameters = tuple(sorted(self.parameters.items()))
-            presenting = self.input.presenting()
-            parts = _each(
-                (
-                    self._extra_pins(),
-                    pins(self.input.physical_spec(idle=False), presenting, self.input.clocking),
-                )
-            )
-            if isinstance(parts, Rejected):
-                return parts
-            spec = type(self).module_spec
-            sources = spec.constant_sources
-            if sources is None:
-                sources = self.module_sources
-            refused = module_unprovided(spec, type(self).__qualname__, sources)
-            if isinstance(refused, Rejected):
-                return refused
-            holding = _each((Held(), self._extra_held()))
-            if isinstance(holding, Rejected):
-                return holding
-            leaf = assemble_module(
-                spec,
-                type(self).id,
-                type(self).__qualname__,
-                clocking,
-                parameters,
-                tuple(parts),
-                sources,
-                (),
-                tuple(holding),
-                (False, self.input.placed),
-            )
-            return leaf if isinstance(leaf, Rejected) else Fragment((("", leaf),))
 
         @view
         def cycles(self) -> int:
@@ -615,17 +574,11 @@ class Loose(Stage):
     id = "test.kernel_space.loose"
     holding: bool = Param(default=False)
 
-    @view
+    @derived
     def held_pins(self) -> Held:
         return Held(((LOOSE.name, 0),)) if self.holding else Held()
 
-    other = OtherPins(signals=(LOOSE, Signal("busy", Direction.OUT, 1)))
-
-    def _extra_pins(self) -> tuple[Pin, ...]:
-        return self.other.pin_values()
-
-    def _extra_held(self) -> Held:
-        return self.held_pins
+    other = OtherPins(signals=(LOOSE, Signal("busy", Direction.OUT, 1)), holding=held_pins)
 
 
 def test_an_input_neither_held_nor_presented_refuses_the_module() -> None:

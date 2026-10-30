@@ -40,14 +40,13 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.artifacts.module import Fragment, Held
 from finn.kernels.base import Kernel, extent_of
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.laws import Axis
-from finn.kernels.library import ModuleSpec, _each, assemble_module, library_module
+from finn.kernels.library import ModuleSpec, library_module
 from finn.kernels.partition import Partition
-from finn.kernels.port import lane_count, pins
+from finn.kernels.port import lane_count
 from finn.kernels.port_model import IndexedPort, ScheduledPort
 from finn.kernels.sides import Side
 from finn.kernels.values.domains import Integer
@@ -113,35 +112,6 @@ class Pool(Kernel):
 
     def _accesses(self) -> list[Access]:
         return [self.x.access] if self.x.binds else []
-
-    @view
-    def netlist(self) -> Fragment | Rejected:
-        clocking = self.clocking
-        parameters = tuple(sorted(self.parameters.items()))
-        parts = _each(
-            (
-                pins(self.x.physical_spec(idle=False), self.x.stream, self.x.clocking),
-                pins(self.y.physical_spec(idle=False), self.y.stream, self.y.clocking),
-            )
-        )
-        if isinstance(parts, Rejected):
-            return parts
-        spec = type(self).module_spec
-        sources = spec.constant_sources
-        assert sources is not None
-        leaf = assemble_module(
-            spec,
-            type(self).id,
-            type(self).__qualname__,
-            clocking,
-            parameters,
-            tuple(parts),
-            sources,
-            (),
-            (Held(), Held()),
-            (True, True),
-        )
-        return leaf if isinstance(leaf, Rejected) else Fragment((("", leaf),))
 
     @view
     def cycles(self) -> int:
@@ -334,30 +304,6 @@ class Holding(Kernel):
 
     def _accesses(self) -> list[Access]:
         return [self.x.access] if self.x.binds else []
-
-    @view
-    def netlist(self) -> Fragment | Rejected:
-        clocking = self.clocking
-        parameters = tuple(sorted(self.parameters.items()))
-        found = pins(self.x.physical_spec(idle=False), self.x.stream, self.x.clocking)
-        if isinstance(found, Rejected):
-            return found
-        spec = type(self).module_spec
-        sources = spec.constant_sources
-        assert sources is not None
-        leaf = assemble_module(
-            spec,
-            type(self).id,
-            type(self).__qualname__,
-            clocking,
-            parameters,
-            (found,),
-            sources,
-            (),
-            (Held(),),
-            (True,),
-        )
-        return leaf if isinstance(leaf, Rejected) else Fragment((("", leaf),))
 
     @view
     def cycles(self) -> int:

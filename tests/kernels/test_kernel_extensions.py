@@ -13,6 +13,7 @@ from finn.core.space import (
     Available,
     Decision,
     Group,
+    Inapplicable,
     Param,
     Rejected,
     Select,
@@ -66,11 +67,14 @@ def test_kernel_identity_is_validated_at_class_creation() -> None:
         "bus_control",
         "cycles",
         "held_bits",
+        "module_data",
         "module_sources",
         "netlist",
+        "parameters",
         "resource_use",
         "resources",
     ]
+    assert isinstance(empty.query(Empty.parameters), Inapplicable)
     rejection = empty.query(Empty.netlist)
     assert isinstance(rejection, Rejected)
     assert {finding.code for finding in rejection.findings} == {"kernel-module"}

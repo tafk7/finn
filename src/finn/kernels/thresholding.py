@@ -91,7 +91,6 @@ from finn.dataflow.datatypes import (
     resolve_qonnx_datatype_name,
 )
 from finn.dataflow.schedule import Access, Index, Schedule
-from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import (
@@ -101,16 +100,14 @@ from finn.kernels.artifacts.abi import (
     Clocking,
     Endpoint,
     Member,
-    Pin,
     StandardProtocol,
 )
 from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData, hex_image
-from finn.kernels.artifacts.module import Fragment, Held, RegisterMap
+from finn.kernels.artifacts.module import RegisterMap
 from finn.kernels.base import Kernel, extent_of
 from finn.kernels.control import Control, ControlModel
 from finn.kernels.laws import AXIS, Axis
-from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
-from finn.kernels.port import held, pins
+from finn.kernels.library import ModuleSpec
 from finn.kernels.port_model import IndexedPort, ScheduledPort, SequencePort
 from finn.kernels.utilization import (
     Fit,
@@ -694,6 +691,11 @@ class ThresholdingAxiKernel(Kernel):
         ),
     )
 
+    @view
+    def module_data(self) -> tuple[GeneratedData, ...]:
+        """Its module reads its table from ``thresholds_file``."""
+        return (self.thresholds_file,)
+
     @derived
     def declares_bus(self) -> bool:
         return True
@@ -708,81 +710,6 @@ class ThresholdingAxiKernel(Kernel):
                 "control-bus-unaddressed", "a bus it presents names the port it is presented at"
             )
         return Control(self.config.bus, port, self.register_map)
-
-    def _input_pins(self) -> tuple[Pin, ...] | Rejected:
-        presenting = self.input.presenting()
-        return pins(
-            self.input.physical_spec(idle=not isinstance(presenting, Stream)),
-            presenting,
-            self.input.clocking,
-        )
-
-    def _input_held(self) -> Held | Rejected:
-        if self.input.placed:
-            return Held()
-        return held(self.input.physical_spec(idle=True), self.input.element, self.input.clocking)
-
-    def _output_pins(self) -> tuple[Pin, ...] | Rejected:
-        presenting = self.output.presenting()
-        return pins(
-            self.output.physical_spec(idle=not isinstance(presenting, Stream)),
-            presenting,
-            self.output.clocking,
-        )
-
-    def _output_held(self) -> Held | Rejected:
-        if self.output.placed:
-            return Held()
-        return held(self.output.physical_spec(idle=True), self.output.element, self.output.clocking)
-
-    def _set_pins(self) -> tuple[Pin, ...] | Rejected:
-        presenting = self.set.presenting()
-        return pins(
-            self.set.physical_spec(idle=not isinstance(presenting, Stream)),
-            presenting,
-            self.set.clocking,
-        )
-
-    def _set_held(self) -> Held | Rejected:
-        if self.set.placed:
-            return Held()
-        return held(self.set.physical_spec(idle=True), self.set.element, self.set.clocking)
-
-    @view
-    def netlist(self) -> Fragment | Rejected:
-        clocking = self.clocking
-        parameters = tuple(sorted(self.parameters.items()))
-        pin_parts = _each(
-            (self.config.pin_values(), self._input_pins(), self._output_pins(), self._set_pins())
-        )
-        if isinstance(pin_parts, Rejected):
-            return pin_parts
-        spec = type(self).module_spec
-        sources = spec.constant_sources
-        if sources is None:
-            sources = self.module_sources
-        refused = module_unprovided(spec, type(self).__qualname__, sources)
-        if isinstance(refused, Rejected):
-            return refused
-        data = self.thresholds_file
-        held_parts = _each(
-            (self._input_held(), self._output_held(), self._set_held(), self.config.held_values())
-        )
-        if isinstance(held_parts, Rejected):
-            return held_parts
-        leaf = assemble_module(
-            spec,
-            type(self).id,
-            type(self).__qualname__,
-            clocking,
-            parameters,
-            tuple(pin_parts),
-            sources,
-            data,
-            tuple(held_parts),
-            (self.config.presented, self.input.placed, self.output.placed, self.set.placed),
-        )
-        return leaf if isinstance(leaf, Rejected) else Fragment((("", leaf),))
 
     @view
     def cycles(self) -> int | Rejected:

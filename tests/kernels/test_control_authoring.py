@@ -4,6 +4,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import Any
+
 import pytest
 from qonnx.core.datatype import DataType
 from support.helpers import FULL_DSP48E2
@@ -14,6 +17,7 @@ from finn.core.space import (
     DefinitionError,
     Group,
     Inapplicable,
+    Param,
     Rejected,
     Space,
     Unresolved,
@@ -24,6 +28,7 @@ from finn.core.space import (
     reject,
     view,
 )
+from finn.dataflow.schedule import Index
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
@@ -37,8 +42,10 @@ from finn.kernels.artifacts.contributions import (
 from finn.kernels.artifacts.module import Held, RegisterMap
 from finn.kernels.channels import Channel
 from finn.kernels.control import Control, ControlModel, control_models
+from finn.kernels.laws import AXIS, Axis
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port import port_endpoint, port_surface
+from finn.kernels.port_model import IndexedPort, ScheduledPort, SequencePort
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import IntegerTensorValue
@@ -52,8 +59,49 @@ TENSOR = Tensor((1, 2), ScalarEncoding(DataType["INT8"]))
 TABLE = IntegerTensorValue.of((((-1, 0, 1), (-1, 0, 1)),))
 
 
+def _gated(
+    pins: Callable[[Any], tuple[Pin, ...] | Rejected],
+    holds: Callable[[Any], Held | Rejected],
+) -> tuple[Callable[..., tuple[Pin, ...] | Rejected], Callable[..., Held | Rejected]]:
+    """A port's module parts behind the gates its kernel binds: ``bad`` refuses each by the
+    port's label, ``same`` its hold with the refusal every port gives."""
+
+    def pin_values(self: Any) -> tuple[Pin, ...] | Rejected:
+        if self.pins_gate == "bad":
+            return reject(f"{self.label}-pins", f"direct physical {self.label} refusal")
+        return pins(self)
+
+    def held_values(self: Any) -> Held | Rejected:
+        if self.held_gate == "same":
+            return reject("duplicate-held", "the same physical refusal")
+        if self.held_gate == "bad":
+            return reject(f"{self.label}-held", f"direct physical {self.label} hold refusal")
+        return holds(self)
+
+    return pin_values, held_values
+
+
+class GatedSet(SequencePort):
+    pins_gate: str = Param(default="ready")
+    held_gate: str = Param(default="ready")
+    pin_values, held_values = _gated(SequencePort.pin_values, SequencePort.held_values)
+
+
+class GatedIndexed(IndexedPort):
+    pins_gate: str = Param(default="ready")
+    held_gate: str = Param(default="ready")
+    pin_values, held_values = _gated(IndexedPort.pin_values, IndexedPort.held_values)
+
+
+class GatedScheduled(ScheduledPort):
+    pins_gate: str = Param(default="ready")
+    held_gate: str = Param(default="ready")
+    pin_values, held_values = _gated(ScheduledPort.pin_values, ScheduledPort.held_values)
+
+
 class SerialThreshold(ThresholdingAxiKernel):
-    """Gates isolate each actual production netlist step without side effects."""
+    """Gates isolate each step of the base's module assembly without side effects: each
+    port's pins and holds behind its own gates."""
 
     bus_state: str = Decision(domain=("ready",))
     pin_input: str = Decision(domain=("ready", "bad"))
@@ -74,10 +122,46 @@ class SerialThreshold(ThresholdingAxiKernel):
     config = ControlModel(bus=matrix_bus, presented=shown)
     module_spec = ModuleSpec("thresholding_axi")
 
+    input = GatedIndexed(
+        label="input",
+        transport=Axis(bus="s_axis"),
+        clocking=ThresholdingAxiKernel.port_clocking,
+        endpoint=Endpoint.TARGET,
+        tensor=ThresholdingAxiKernel.input_tensor,
+        schedule=ThresholdingAxiKernel.schedule,
+        index=ThresholdingAxiKernel.indices,
+        lanes=(Index("c"),),
+        pins_gate=pin_input,
+        held_gate=hold_input,
+    )
+    output = GatedScheduled(
+        label="output",
+        transport=Axis(bus="m_axis"),
+        clocking=ThresholdingAxiKernel.port_clocking,
+        endpoint=Endpoint.INITIATOR,
+        tensor=ThresholdingAxiKernel.output_tensor,
+        schedule=ThresholdingAxiKernel.schedule,
+        index=ThresholdingAxiKernel.indices,
+        lanes=(Index("c"),),
+        pins_gate=pin_output,
+        held_gate=hold_output,
+    )
+    set = GatedSet(
+        label="set",
+        transport=AXIS,
+        clocking=ThresholdingAxiKernel.port_clocking,
+        endpoint=Endpoint.TARGET,
+        tensor=ThresholdingAxiKernel.set_tensor,
+        sequence=ThresholdingAxiKernel.set_sequence,
+        dtype=ThresholdingAxiKernel.selector_dtype,
+        pins_gate=pin_set,
+        held_gate=hold_set,
+    )
+
     @view
     def parameters(self) -> dict[str, int | str]:
         # The real production parameters demand the image earlier; this fixture
-        # isolates the later data step in the unchanged production netlist body.
+        # isolates the later data step in the base's assembly.
         return {}
 
     @view
@@ -95,38 +179,6 @@ class SerialThreshold(ThresholdingAxiKernel):
     def thresholds_file(self) -> GeneratedData:
         _ = self.data_state
         return hex_image("matrix", (0,), 8)
-
-    def _input_pins(self) -> tuple[Pin, ...] | Rejected:
-        if self.pin_input == "bad":
-            return reject("input-pins", "direct physical input refusal")
-        return ThresholdingAxiKernel._input_pins(self)
-
-    def _output_pins(self) -> tuple[Pin, ...] | Rejected:
-        if self.pin_output == "bad":
-            return reject("output-pins", "direct physical output refusal")
-        return ThresholdingAxiKernel._output_pins(self)
-
-    def _set_pins(self) -> tuple[Pin, ...] | Rejected:
-        _ = self.pin_set
-        return ThresholdingAxiKernel._set_pins(self)
-
-    def _input_held(self) -> Held | Rejected:
-        if self.hold_input == "same":
-            return reject("duplicate-held", "the same physical refusal")
-        if self.hold_input == "bad":
-            return reject("input-held", "direct physical input hold refusal")
-        return ThresholdingAxiKernel._input_held(self)
-
-    def _output_held(self) -> Held | Rejected:
-        if self.hold_output == "same":
-            return reject("duplicate-held", "the same physical refusal")
-        if self.hold_output == "bad":
-            return reject("output-held", "direct physical output hold refusal")
-        return ThresholdingAxiKernel._output_held(self)
-
-    def _set_held(self) -> Held | Rejected:
-        _ = self.hold_set
-        return ThresholdingAxiKernel._set_held(self)
 
 
 @pytest.mark.parametrize("permuted,eager", ((False, False), (True, False), (False, True)))

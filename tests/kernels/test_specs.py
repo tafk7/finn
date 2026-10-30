@@ -186,6 +186,14 @@ def test_every_kernel_binding_a_module_is_a_spec_s_so_its_module_is_built() -> N
     assert kernels <= {spec.kernel for spec in SPECS}, kernels - {spec.kernel for spec in SPECS}
 
 
+def test_the_base_assembles_every_library_module_s_netlist() -> None:
+    # Each kernel binding a module states the binding and its ports; the base's netlist,
+    # read through the module's parts, is the one assembly (no kernel restates it).
+    for kernel in _binding_a_module():
+        declaring = next(each for each in kernel.__mro__ if "netlist" in vars(each))
+        assert declaring is Kernel, kernel
+
+
 def _ports(member: Space) -> tuple[str, ...]:
     """The stream ports ``member``'s class declares, by name: its module's, and those it
     presents for a child; none for a member that is no kernel."""

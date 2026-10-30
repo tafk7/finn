@@ -7,9 +7,13 @@ Kernel, the one base, states netlist/cycles/buffering/resources; a channel's FIF
 answers its cycles inapplicable. Real PortModel children own intrinsic rules,
 included ControlModel Groups share their real parent, and plain ModuleSpec values
 describe sources.
-Each module kernel authors its serial native netlist and frame count. Parents
-compose resolved child Members in ordinary source. No lowering/setter/read-list
-or generated flat callback table is installed on a kernel.
+A kernel binding a module states its binding (ModuleSpec, parameters, sources,
+data) and its ports; the base assembles its netlist from them, serially, in the
+order the module's pins and holds take (``Kernel.netlist``). Each states its own
+frame count. Parents compose resolved child Members in ordinary source. No
+lowering/setter/read-list or flat callback table is installed on a kernel: what is
+installed on a kernel with a module is one helper a part of its module, each reading
+its part by a name its closure fixes, so that its source states its reads.
 
 Hardware configuration facts/Choices/rules remain inward model computations.
 Outward Views keep selected owning non-refusal and actual unresolved inputs.
@@ -20,7 +24,7 @@ module ownership, required declarations and resource statements are checked.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
@@ -37,12 +41,12 @@ from finn.core.space import (
 from finn.core.space.declarations import unmet_required
 from finn.dataflow.schedule import Access, Affine, Index, Refused, Schedule, bind_extents
 from finn.kernels.artifacts import ArtifactError
-from finn.kernels.artifacts.abi import Clocking
-from finn.kernels.artifacts.contributions import Contribution
-from finn.kernels.artifacts.module import BusExport, Fragment, Link, merge
-from finn.kernels.control import Control, control_models, presented
+from finn.kernels.artifacts.abi import Clocking, Pin
+from finn.kernels.artifacts.contributions import Contribution, GeneratedData
+from finn.kernels.artifacts.module import BusExport, Fragment, Held, Link, merge
+from finn.kernels.control import Control, ControlModel, control_models, presented
 from finn.kernels.laws import AXIS_CLOCKING
-from finn.kernels.library import ModuleSpec
+from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
 from finn.kernels.transport import StreamContract
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
@@ -94,6 +98,87 @@ def _members(cls: type[Kernel]) -> dict[str, object]:
     for base in reversed(cls.__mro__[: cls.__mro__.index(Kernel)]):
         found.update(vars(base))
     return found
+
+
+# -- the module's parts, read serially ------------------------------------------------------
+#
+# A module's pins are its other pins' (``OtherPins``), its control bus's, then its ports',
+# each in declaration order; its holds its ports', its other pins', then its control bus's.
+# The base reads each part's ``pin_values``, ``held_values`` and ``pins_presented`` in that
+# order, one after another: a part's refusal is collected with the later parts' (``_each``),
+# and a part not yet known stops the reading there. A Space method's reads are found from its
+# source (``finn.core.space._reads``), so each read names its part: ``__init_subclass__``
+# installs, for a kernel with a module, one helper a part, each reading its part by the name
+# its closure holds and then the next helper by name, the last reading none.
+
+_PINS, _HELD, _PRESENTED = "_module_pins", "_module_held", "_module_presented"
+
+
+def _pins_from(part: str, following: str) -> Callable[[Kernel], tuple[Any, ...]]:
+    def pins_from(self: Kernel) -> tuple[Any, ...]:
+        return (getattr(self, part).pin_values(), *getattr(self, following)())
+
+    return pins_from
+
+
+def _held_from(part: str, following: str) -> Callable[[Kernel], tuple[Any, ...]]:
+    def held_from(self: Kernel) -> tuple[Any, ...]:
+        return (getattr(self, part).held_values(), *getattr(self, following)())
+
+    return held_from
+
+
+def _presented_from(part: str, following: str) -> Callable[[Kernel], tuple[Any, ...]]:
+    def presented_from(self: Kernel) -> tuple[Any, ...]:
+        return (getattr(self, part).pins_presented(), *getattr(self, following)())
+
+    return presented_from
+
+
+def _module_parts(cls: type[Kernel]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """The names of its module's parts in pin order and in hold order (above)."""
+    from finn.kernels.port_model import OtherPins, PortModel, port_surfaces  # noqa: PLC0415
+
+    nested = [
+        name
+        for names in (
+            control_models(cls),
+            (
+                name
+                for name, surface in port_surfaces(cls).items()
+                if surface.physical_pins is not None
+            ),
+        )
+        for name in names
+        if "." in name
+    ]
+    if nested:
+        raise DefinitionError.broken(
+            "module-part-nested",
+            "Kernel",
+            f"{cls.__qualname__} declares {nested} in a Group: "
+            "a kernel with a module declares its ports and control bus in its own body",
+            declaration=cls.__qualname__,
+        )
+    members = _members(cls)
+    others = tuple(name for name, item in members.items() if isinstance(item, OtherPins))
+    controls = tuple(name for name, item in members.items() if isinstance(item, ControlModel))
+    ports = tuple(name for name, item in members.items() if isinstance(item, PortModel))
+    return (*others, *controls, *ports), (*ports, *others, *controls)
+
+
+def _install(
+    cls: type[Kernel],
+    prefix: str,
+    reading: Callable[[str, str], Callable[[Kernel], tuple[Any, ...]]],
+    parts: tuple[str, ...],
+) -> None:
+    """The helpers ``<prefix>_<i>`` reading ``parts`` from the ``i``-th on (above)."""
+    for index, part in enumerate(parts):
+        following = f"{prefix}_{index + 1}" if index + 1 < len(parts) else "_module_end"
+        setattr(cls, f"{prefix}_{index}", reading(part, following))
+    if not parts:
+        setattr(cls, f"{prefix}_0", Kernel._module_end)
 
 
 class Kernel(Space):
@@ -167,6 +252,11 @@ class Kernel(Space):
                 "a kernel binds one at most",
                 declaration=cls.__qualname__,
             )
+        if specs:
+            pins, holds = _module_parts(cls)
+            _install(cls, _PINS, _pins_from, pins)
+            _install(cls, _HELD, _held_from, holds)
+            _install(cls, _PRESENTED, _presented_from, pins)
         if unmet_required(cls) or not specs:
             return
         from finn.kernels.port_model import port_surfaces  # noqa: PLC0415
@@ -176,11 +266,12 @@ class Kernel(Space):
             for name, surface in port_surfaces(cls).items()
             if surface.physical_pins is not None
         ]
-        if not _declared(cls, "netlist"):
+        if not _declared(cls, "parameters"):
             raise DefinitionError.broken(
-                "module-netlist-unstated",
+                "module-parameters-unstated",
                 "Kernel",
-                f"{cls.__qualname__}: a ModuleSpec kernel states its native netlist assembly",
+                f"{cls.__qualname__} states no parameters: "
+                "a kernel with a module states its module's parameters",
                 declaration=cls.__qualname__,
             )
         if not ports:
@@ -300,6 +391,14 @@ class Kernel(Space):
         own (a refusal where it has no model of it, never nothing)."""
         return Resources()
 
+    # -- its module's binding: the module (``module_spec``), its parameters, sources, data --
+
+    @view
+    def parameters(self) -> dict[str, int | str] | Inapplicable:
+        """Its module's parameters, by name: a kernel with a module states them (the class
+        definition check requires it); one binding no module has none."""
+        return Inapplicable()
+
     @view
     def module_sources(self) -> tuple[Contribution, ...] | Rejected:
         """Explicit dynamic source product for a ModuleSpec with constant_sources=None.
@@ -309,47 +408,25 @@ class Kernel(Space):
         """
         return reject("library-module-sources-unstated", "a dynamic module states its sources")
 
+    @view
+    def module_data(self) -> tuple[GeneratedData, ...]:
+        """The data files its module reads (a memory's initial contents): none; a kernel
+        whose module reads them states them."""
+        return ()
+
     # -- its answers, written once ---------------------------------------------------------
-
-    def _netlist(
-        self, links: tuple[Link, ...] | None = None, labels: Mapping[str, str] | None = None
-    ) -> Fragment | Rejected:
-        """``netlist``: its library module at the empty label, its members' netlists under
-        their nodes, and the control buses its members present with the writes their
-        configuration takes (``merged``). A kernel with neither is refused; one that states
-        the ``links`` between them (a channel's hops) is not. A kernel that states the
-        ``labels`` some members keep (by node: a channel's placements) places those there,
-        in place of their nodes."""
-        space_type = type(self)
-        placed = labels or {}
-        parts: list[tuple[str, Fragment]] = []
-        parts.extend(
-            (placed.get(str(item.node), str(item.node)), item.value) for item in self.netlists
-        )
-        if not parts and links is None:
-            return reject(
-                "kernel-module",
-                f"{space_type.__qualname__} declares no module and places no kernel",
-            )
-        buses = presented(
-            (placed.get(str(item.node), str(item.node)), item.value) for item in self.controls
-        )
-        if isinstance(buses, Rejected):
-            return buses
-        return merged(parts, buses, links or ())
-
-    def _buffering(self) -> int:
-        """``buffering``: its own ``held_bits`` and its members'."""
-        return self.held_bits + sum(item.value for item in self.member_buffering)
-
-    def _resources(self) -> Resources:
-        """``resources``: its own ``resource_use`` and its members'."""
-        return total((self.resource_use, *(item.value for item in self.member_resources)))
 
     @view
     def netlist(self) -> Fragment | Rejected:
         """Its netlist, labelled relative to itself: its module at the empty label (``under``
-        names it by its node where it is held), its members' under theirs."""
+        names it by its node where it is held), or its members' under theirs.
+
+        A kernel with a module is its one leaf, assembled from its binding and its parts
+        (``finn.kernels.library.assemble_module``): its clocking, its parameters, its parts'
+        pins, its sources (refused where they do not provide the module), its data, its
+        parts' holds (L10) and which parts are presented."""
+        if type(self).module_spec is not None:
+            return self._module()
         parts = [(str(item.node), item.value) for item in self.netlists]
         if not parts:
             return reject(
@@ -360,6 +437,55 @@ class Kernel(Space):
         if isinstance(buses, Rejected):
             return buses
         return merged(parts, buses)
+
+    def _module(self) -> Fragment | Rejected:
+        """``netlist`` of a kernel with a module (above), its parts read in order."""
+        spec = type(self).module_spec
+        assert spec is not None
+        owner = type(self).__qualname__
+        clocking = self.clocking
+        parameters = tuple(sorted(self.parameters.items()))
+        pin_parts = _each(self._module_pins_0())
+        if isinstance(pin_parts, Rejected):
+            return pin_parts
+        sources = spec.constant_sources
+        if sources is None:
+            sources = self.module_sources
+        refused = module_unprovided(spec, owner, sources)
+        if isinstance(refused, Rejected):
+            return refused
+        data = self.module_data
+        held_parts = _each(self._module_held_0())
+        if isinstance(held_parts, Rejected):
+            return held_parts
+        leaf = assemble_module(
+            spec,
+            type(self).id,
+            owner,
+            clocking,
+            parameters,
+            tuple(pin_parts),
+            sources,
+            data,
+            tuple(held_parts),
+            self._module_presented_0(),
+        )
+        return leaf if isinstance(leaf, Rejected) else Fragment((("", leaf),))
+
+    # The heads of its module's readings, which a kernel with a module has installed for
+    # it; the end of each.
+
+    def _module_pins_0(self) -> tuple[tuple[Pin, ...] | Rejected, ...]:
+        return ()
+
+    def _module_held_0(self) -> tuple[Held | Rejected, ...]:
+        return ()
+
+    def _module_presented_0(self) -> tuple[bool, ...]:
+        return ()
+
+    def _module_end(self) -> tuple[Any, ...]:
+        return ()
 
     @derived
     def declares_bus(self) -> bool:

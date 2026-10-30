@@ -73,15 +73,13 @@ from finn.dataflow.datatypes import (
 )
 from finn.dataflow.gemm import Form, Window, c, k, kh, kw, m, n, oh, ow
 from finn.dataflow.schedule import Access, Affine, Index, Schedule
-from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import Tensor
-from finn.kernels.artifacts.abi import Clocking, Endpoint, Pin
+from finn.kernels.artifacts.abi import Clocking, Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.artifacts.module import Fragment, Held
 from finn.kernels.base import Kernel, extent_of
 from finn.kernels.laws import Axis, doubled
-from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
-from finn.kernels.port import axis, held, pins
+from finn.kernels.library import ModuleSpec
+from finn.kernels.port import axis
 from finn.kernels.port_model import IndexedPort, ScheduledPort
 from finn.kernels.utilization import Fit
 from finn.kernels.values.domains import Integer, admit_element, integer_bounds, range_dtype
@@ -489,77 +487,6 @@ class DotpAxiKernel(Kernel):
             "CORE": f'"{type(self).core}"',
             "REDUCER": f'"{self.reducer}"',
         }
-
-    def _x_pins(self) -> tuple[Pin, ...] | Rejected:
-        presenting = self.x.presenting()
-        return pins(
-            self.x.physical_spec(idle=not isinstance(presenting, Stream)),
-            presenting,
-            self.x.clocking,
-        )
-
-    def _x_held(self) -> Held | Rejected:
-        if self.x.placed:
-            return Held()
-        return held(self.x.physical_spec(idle=True), self.x.element, self.x.clocking)
-
-    def _w_pins(self) -> tuple[Pin, ...] | Rejected:
-        presenting = self.w.presenting()
-        return pins(
-            self.w.physical_spec(idle=not isinstance(presenting, Stream)),
-            presenting,
-            self.w.clocking,
-        )
-
-    def _w_held(self) -> Held | Rejected:
-        if self.w.placed:
-            return Held()
-        return held(self.w.physical_spec(idle=True), self.w.element, self.w.clocking)
-
-    def _y_pins(self) -> tuple[Pin, ...] | Rejected:
-        presenting = self.y.presenting()
-        return pins(
-            self.y.physical_spec(idle=not isinstance(presenting, Stream)),
-            presenting,
-            self.y.clocking,
-        )
-
-    def _y_held(self) -> Held | Rejected:
-        if self.y.placed:
-            return Held()
-        return held(self.y.physical_spec(idle=True), self.y.element, self.y.clocking)
-
-    @view
-    def netlist(self) -> Fragment | Rejected:
-        clocking = self.clocking
-        parameters = tuple(sorted(self.parameters.items()))
-        pin_parts = _each((self._x_pins(), self._w_pins(), self._y_pins()))
-        if isinstance(pin_parts, Rejected):
-            return pin_parts
-        spec = type(self).module_spec
-        sources = spec.constant_sources
-        if sources is None:
-            sources = self.module_sources
-        refused = module_unprovided(spec, type(self).__qualname__, sources)
-        if isinstance(refused, Rejected):
-            return refused
-        data = ()
-        held_parts = _each((self._x_held(), self._w_held(), self._y_held()))
-        if isinstance(held_parts, Rejected):
-            return held_parts
-        leaf = assemble_module(
-            spec,
-            type(self).id,
-            type(self).__qualname__,
-            clocking,
-            parameters,
-            tuple(pin_parts),
-            sources,
-            data,
-            tuple(held_parts),
-            (self.x.placed, self.w.placed, self.y.placed),
-        )
-        return leaf if isinstance(leaf, Rejected) else Fragment((("", leaf),))
 
     @view
     def cycles(self) -> int | Rejected:

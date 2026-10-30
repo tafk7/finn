@@ -184,29 +184,9 @@ def test_fifo_native_assembly_halts_on_raised_inputs_and_accumulates_direct_refu
         assert not keys & {"second", "second_state", "output.stream", "output.transport"}
 
 
-def test_staged_unused_marker_has_real_pin_and_hold_category_order(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    events: list[str] = []
-    methods = (
-        "_enclosing_pins",
-        "_input_pins",
-        "_output_pins",
-        "_input_held",
-        "_output_held",
-        "_enclosing_held",
-    )
-    for name in methods:
-        original = getattr(StagedInputGenerator, name)
-
-        def recorded(
-            self: StagedInputGenerator, _name: str = name, _original: object = original
-        ) -> object:
-            events.append(_name)
-            assert callable(_original)
-            return _original(self)
-
-        monkeypatch.setattr(StagedInputGenerator, name, recorded)
+def test_staged_unused_marker_has_real_pin_and_hold_category_order() -> None:
+    # Its unused marker is other pins (``OtherPins``): its pins before the ports', its
+    # holds after theirs (``finn.kernels.base``: the module's parts).
     point = design_space(
         StagedInputGenerator(
             input_tensor=TENSOR,
@@ -217,7 +197,6 @@ def test_staged_unused_marker_has_real_pin_and_hold_category_order(
         )
     )
     fragment = point.netlist
-    assert events == list(methods)
     leaf = dict(fragment.instances)[""]
     assert [pin.name for pin in leaf.abi.pins] == [
         "clk",

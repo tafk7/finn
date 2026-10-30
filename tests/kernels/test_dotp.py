@@ -86,6 +86,7 @@ def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_th
         # What its module and its resources read, and nothing in its space.
         "dsp_simd",
         "held_bits",
+        "module_data",
         "module_sources",
         "netlist",
         "parameters",

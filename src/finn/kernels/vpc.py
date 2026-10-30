@@ -26,17 +26,14 @@ from __future__ import annotations
 from math import lcm
 from typing import ClassVar
 
-from finn.core.space import Param, Rejected, derived, view
-from finn.dataflow.streams import Stream
+from finn.core.space import Param, derived, view
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence
-from finn.kernels.artifacts.abi import Clocking, Endpoint, Pin
+from finn.kernels.artifacts.abi import Clocking, Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.artifacts.module import Fragment, Held
 from finn.kernels.base import Kernel
 from finn.kernels.laws import NATIVE, NATIVE_CLOCKING
-from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
-from finn.kernels.port import held, pins
+from finn.kernels.library import ModuleSpec
 from finn.kernels.port_model import SequencePort
 from finn.kernels.utilization import Fit
 from finn.platform.capabilities import Resources
@@ -133,65 +130,6 @@ class VpcKernel(Kernel):
     module_spec: ClassVar[ModuleSpec] = ModuleSpec(
         "vpc", (CopiedSource("finnlib", "rtl/shape/vpc.sv", provides=("module:vpc",)),)
     )
-
-    def _input_pins(self) -> tuple[Pin, ...] | Rejected:
-        presenting = self.input.presenting()
-        return pins(
-            self.input.physical_spec(idle=not isinstance(presenting, Stream)),
-            presenting,
-            self.input.clocking,
-        )
-
-    def _output_pins(self) -> tuple[Pin, ...] | Rejected:
-        presenting = self.output.presenting()
-        return pins(
-            self.output.physical_spec(idle=not isinstance(presenting, Stream)),
-            presenting,
-            self.output.clocking,
-        )
-
-    def _input_held(self) -> Held | Rejected:
-        if self.input.placed:
-            return Held()
-        element = self.input.element
-        return held(self.input.physical_spec(idle=True), element, self.input.clocking)
-
-    def _output_held(self) -> Held | Rejected:
-        if self.output.placed:
-            return Held()
-        element = self.output.element
-        return held(self.output.physical_spec(idle=True), element, self.output.clocking)
-
-    @view
-    def netlist(self) -> Fragment | Rejected:
-        clocking = self.clocking
-        parameters = tuple(sorted(self.parameters.items()))
-        pin_parts = _each((self._input_pins(), self._output_pins()))
-        if isinstance(pin_parts, Rejected):
-            return pin_parts
-        spec = type(self).module_spec
-        sources = spec.constant_sources
-        assert sources is not None  # Vpc has constant sources; no dynamic source View.
-        refused = module_unprovided(spec, type(self).__qualname__, sources)
-        if isinstance(refused, Rejected):
-            return refused
-        data = ()
-        held_parts = _each((self._input_held(), self._output_held()))
-        if isinstance(held_parts, Rejected):
-            return held_parts
-        leaf = assemble_module(
-            spec,
-            type(self).id,
-            type(self).__qualname__,
-            clocking,
-            parameters,
-            tuple(pin_parts),
-            sources,
-            data,
-            tuple(held_parts),
-            (True, True),
-        )
-        return leaf if isinstance(leaf, Rejected) else Fragment((("", leaf),))
 
     @view
     def cycles(self) -> int:

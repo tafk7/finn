@@ -56,12 +56,10 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.artifacts.module import Fragment, Held
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.laws import Axis
-from finn.kernels.library import ModuleSpec, assemble_module
-from finn.kernels.port import pins
+from finn.kernels.library import ModuleSpec
 from finn.kernels.port_model import PortModel, PortSurface, SequencePort
 from finn.platform.capabilities import Resources
 
@@ -215,28 +213,6 @@ class Given(Kernel):
     module_spec = ModuleSpec(
         "given", (CopiedSource("finnlib", "rtl/given.sv", provides=("module:given",)),)
     )
-
-    @view
-    def netlist(self) -> Fragment | Rejected:
-        found = pins(self.x.physical_spec(idle=False), self.x.stream, self.x.clocking)
-        if isinstance(found, Rejected):
-            return found
-        spec = type(self).module_spec
-        sources = spec.constant_sources
-        assert sources is not None
-        leaf = assemble_module(
-            spec,
-            type(self).id,
-            type(self).__qualname__,
-            self.clocking,
-            (),
-            (found,),
-            sources,
-            (),
-            (Held(),),
-            (True,),
-        )
-        return leaf if isinstance(leaf, Rejected) else Fragment((("", leaf),))
 
     @view
     def cycles(self) -> int:

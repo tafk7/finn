@@ -160,13 +160,14 @@ def test_actual_parent_refusal_blocks_module_body_but_not_valid_child_characteri
     assert isinstance(point.query(Refused.input.physical_pins), Available)
 
 
-def test_plain_module_definition_still_requires_provision_and_native_assembly() -> None:
+def test_plain_module_definition_still_requires_one_module_and_its_parameters() -> None:
     with pytest.raises(DefinitionError, match="library modules"):
 
         class Repeated(VpcKernel):
             another = ModuleSpec("vpc", VpcKernel.module_spec.constant_sources)
 
-    with pytest.raises(DefinitionError, match="native netlist"):
+    # The base assembles the netlist (no kernel states it); the parameters are the kernel's.
+    with pytest.raises(DefinitionError, match="states no parameters"):
 
         class Unstated(Kernel):
             id = "fixture.unstated"
@@ -196,8 +197,8 @@ def test_a_module_requires_owned_physical_ports_not_parent_forwarding_metadata()
             input = PortSurface(None, Endpoint.TARGET, None, None)
 
             @view
-            def netlist(self) -> Fragment:
-                return Fragment()
+            def parameters(self) -> dict[str, int | str]:
+                return {}
 
             @view
             def resource_use(self) -> Resources:

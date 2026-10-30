@@ -22,7 +22,7 @@ from dataclasses import replace
 
 import pytest
 from qonnx.core.datatype import DataType
-from support.helpers import FULL_DSP48E2, OtherPins, by_hand, codes
+from support.helpers import FULL_DSP48E2, by_hand, codes
 from support.refusals import refused
 
 from finn.core.space import (
@@ -49,16 +49,16 @@ from finn.kernels.artifacts.abi import (
     StandardProtocol,
 )
 from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.artifacts.module import Fragment, Held, Leaf, RegisterMap
+from finn.kernels.artifacts.module import Held, Leaf, RegisterMap
 from finn.kernels.base import Kernel, PortContract
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.configure import commit
 from finn.kernels.control import Control, ControlModel, held_bus
 from finn.kernels.laws import NATIVE_CLOCKING, Axis
-from finn.kernels.library import ModuleSpec, _each, assemble_module, library_module
+from finn.kernels.library import ModuleSpec, library_module
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.port import held, pins, port_surface
-from finn.kernels.port_model import SequencePort
+from finn.kernels.port import port_surface
+from finn.kernels.port_model import OtherPins, SequencePort
 from finn.kernels.sides import Side
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import Resources
@@ -108,48 +108,6 @@ class Probe(Kernel):
         return reject("kernel-resources", "a model only")
 
     module_spec = ModuleSpec("probe", (PROBE,))
-
-    @view
-    def netlist(self) -> Fragment | Rejected:
-        clocking = self.clocking
-        parameters = tuple(sorted(self.parameters.items()))
-        presenting = self.x.presenting()
-        parts = _each(
-            (
-                self.mode.pin_values(),
-                pins(
-                    self.x.physical_spec(idle=not isinstance(presenting, Stream)),
-                    presenting,
-                    self.x.clocking,
-                ),
-            )
-        )
-        if isinstance(parts, Rejected):
-            return parts
-        hold = (
-            Held()
-            if self.x.placed
-            else held(self.x.physical_spec(idle=True), presenting, self.x.clocking)
-        )
-        holding = _each((hold, self.mode.held_values()))
-        if isinstance(holding, Rejected):
-            return holding
-        spec = type(self).module_spec
-        sources = spec.constant_sources
-        assert sources is not None
-        leaf = assemble_module(
-            spec,
-            type(self).id,
-            type(self).__qualname__,
-            clocking,
-            parameters,
-            tuple(parts),
-            sources,
-            (),
-            tuple(holding),
-            (False, self.x.placed),
-        )
-        return leaf if isinstance(leaf, Rejected) else Fragment((("", leaf),))
 
     @view
     def cycles(self) -> int:
@@ -215,6 +173,11 @@ class Controlled(Kernel):
     def register_map(self) -> RegisterMap:
         return RegisterMap(((0, 7),))
 
+    # Its other pins: their pins and their holds go before its bus's.
+    mode = OtherPins(
+        signals=(Signal("mode", Direction.IN, 2), Signal("busy", Direction.OUT, 1)),
+        holding=Held((("mode", 1),)),
+    )
     config = ControlModel(bus=config_bus, presented=writable)
     tensor: Tensor = Param()
     x = SequencePort(
@@ -247,33 +210,8 @@ class Controlled(Kernel):
         return reject("kernel-resources", "a model only")
 
     @view
-    def netlist(self) -> Fragment | Rejected:
-        clocking = self.clocking
-        pin_parts = _each(
-            (
-                (Signal("mode", Direction.IN, 2), Signal("busy", Direction.OUT, 1)),
-                self.config.pin_values(),
-                pins(self.x.physical_spec(idle=False), self.x.stream, self.x.clocking),
-            )
-        )
-        if isinstance(pin_parts, Rejected):
-            return pin_parts
-        held_parts = (Held((("mode", 1),)), Held(), self.config.held_values())
-        sources = type(self).module_spec.constant_sources
-        assert sources is not None
-        leaf = assemble_module(
-            type(self).module_spec,
-            type(self).id,
-            type(self).__qualname__,
-            clocking,
-            (),
-            tuple(pin_parts),
-            sources,
-            (),
-            held_parts,
-            (False, self.config.presented, True),
-        )
-        return leaf if isinstance(leaf, Rejected) else Fragment((("", leaf),))
+    def parameters(self) -> dict[str, int | str]:
+        return {}
 
 
 def controlled(**facts: object) -> Controlled:

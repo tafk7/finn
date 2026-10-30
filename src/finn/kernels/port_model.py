@@ -8,9 +8,12 @@ side, contract or tensor access. SequencePort adds an optional logical stream.
 Both use ordinary core declarations, with zero Decisions and intrinsic element
 admission at the port's real scope. Folding and composition remain on the parent.
 
-Public physical Views characterize the child's contract. Module assembly uses
-ordinary native methods over literal model inputs followed by the pure physical
-functions; it must not read these Views to collect directly returned refusals.
+Public physical Views characterize the child's contract. Module assembly (the
+base's, ``Kernel.netlist``) calls each port's ordinary methods, ``pin_values``,
+``held_values`` and ``pins_presented``, over literal model inputs and the pure
+physical functions; it must not read these Views, so that it collects directly
+returned refusals. ``OtherPins`` is the one raw pin declaration: a module's pins
+outside its ports and its control bus.
 """
 
 from __future__ import annotations
@@ -104,19 +107,34 @@ class PortModel(Space):
         """Model input to pure pin assembly; a subtype supplies its placed stream."""
         return self.element
 
-    @view
-    def physical_pins(self) -> tuple[Pin, ...] | Rejected:
+    # -- what its kernel's module takes of it (``Kernel.netlist``) -------------------------
+
+    def pin_values(self) -> tuple[Pin, ...] | Rejected:
+        """Its pins of the module, from its transport (``finn.kernels.port.pins``): idle,
+        one lane of its element."""
         presenting = self.presenting()
         return pins(
-            self.physical_spec(idle=isinstance(presenting, ScalarEncoding)),
+            self.physical_spec(idle=not isinstance(presenting, Stream)),
             presenting,
             self.clocking,
         )
 
+    def held_values(self) -> Held | Rejected:
+        """Its inputs held while idle (L10): every one, for a port that is never placed."""
+        return held(self.physical_spec(idle=True), self.element, self.clocking)
+
+    def pins_presented(self) -> bool:
+        """Whether its pins are presented, so that its module's inputs need no hold: never,
+        for a port that is never placed."""
+        return False
+
+    @view
+    def physical_pins(self) -> tuple[Pin, ...] | Rejected:
+        return self.pin_values()
+
     @view
     def idle_pins(self) -> Held | Rejected:
-        element = self.element
-        return held(self.physical_spec(idle=True), element, self.clocking)
+        return self.held_values()
 
 
 class SequencePort(PortModel):
@@ -174,12 +192,16 @@ class SequencePort(PortModel):
     def presenting(self) -> Presenting:
         return self.stream if self.placed else self.element
 
-    @view
-    def idle_pins(self) -> Held | Rejected:
+    def held_values(self) -> Held | Rejected:
+        """Placed, none; idle, its inputs held (L10)."""
         if self.placed:
             return Held()
-        element = self.element
-        return held(self.physical_spec(idle=True), element, self.clocking)
+        return held(self.physical_spec(idle=True), self.element, self.clocking)
+
+    def pins_presented(self) -> bool:
+        """Placed, its pins are presented (a channel connects them)."""
+        placed: bool = self.placed
+        return placed
 
     @view
     def contract(self) -> PortContract | Rejected | Inapplicable:
@@ -275,6 +297,25 @@ class IndexedPort(ScheduledPort):
         tensor = self.tensor
         assert tensor is not None
         return Access(self.label, tensor.shape, self.index, self.reshaped)
+
+
+class OtherPins(Group):
+    """Pins of a module that are no stream port's and no control bus's (a mode pin), and
+    what holds its inputs: the one raw pin declaration a kernel keeps (CONTRACT.md § 7).
+    Its pins go before its kernel's control bus and ports, its holds after its ports'."""
+
+    signals: tuple[Pin, ...] = Param()
+    holding: Held = Param(default=Held())
+
+    def pin_values(self) -> tuple[Pin, ...]:
+        return self.signals
+
+    def held_values(self) -> Held:
+        return self.holding
+
+    def pins_presented(self) -> bool:
+        """Never presented: its inputs are held, or the module is refused (``kernel-pins``)."""
+        return False
 
 
 _SurfaceValue = TypeVar("_SurfaceValue")
@@ -403,6 +444,7 @@ def port_surfaces(space_type: type[Space]) -> dict[str, PortSurface]:
 
 
 __all__ = [
+    "OtherPins",
     "PortModel",
     "PortSurface",
     "SequencePort",

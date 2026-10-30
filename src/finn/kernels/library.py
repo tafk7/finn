@@ -3,11 +3,11 @@
 
 """Plain library-module values and resolved source/ABI assembly.
 
-A native kernel states ModuleSpec, its parameter/source/data Views and literal
-serial physical helper calls. These functions take resolved values only;
-no declaration lowering, callback tables, symbolic field naming or manual
-read lists are installed on the kernel. library_module reads its actual Leaf
-back from the accepted outward netlist.
+A native kernel states ModuleSpec and its parameter/source/data Views; the base
+(``Kernel.netlist``) reads its parts serially and assembles them here. These
+functions take resolved values only; no declaration lowering, callback tables,
+symbolic field naming or manual read lists are installed on the kernel.
+library_module reads its actual Leaf back from the accepted outward netlist.
 """
 
 from __future__ import annotations
@@ -145,9 +145,9 @@ def assemble_module(
 ) -> Leaf | Rejected:
     """Assemble resolved products into a Leaf, without a receiver or evaluation.
 
-    The parent sorts parameters at their original read step, evaluates pin and
-    held contributors serially, and checks source provision before reading data
-    and held products. Direct physical refusals are combined by _each there.
+    The base (``Kernel.netlist``) sorts parameters at their original read step,
+    evaluates pin and held contributors serially, and checks source provision
+    before reading data and held products. Direct physical refusals are combined by _each there.
     Pin parts retain control-before-ports; held parts retain ports-before-control.
     Presented flags correspond to pin parts, exactly as input accounting requires.
     """
