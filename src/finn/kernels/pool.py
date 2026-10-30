@@ -157,8 +157,8 @@ void {name}(hls::stream<InBeat> &s_axis, hls::stream<OutBeat> &m_axis) {{
 #: Where its intake is measured, under what conditions, and where it is stated beyond them.
 _INTAKE_MEASURED = (
     "a form in K, the window's beats, fitted to Vivado 2025.2 simulation traces of pool_top "
-    "as Vitis HLS 2025.2 synthesizes it for an xczu3eg (kernels-vdwi, shelf pool-intake/: "
-    "measure.py, results.json): windows 2x2, 2x3, 3x3 (strides equal and 1), PE 1, 3, 6, "
+    "as Vitis HLS 2025.2 synthesizes it for an xczu3eg: "
+    "windows 2x2, 2x3, 3x3 (strides equal and 1), PE 1, 3, 6, "
     "INT4 and INT8, at 5 ns; 2x2 at 2.5 and 10 ns, 3x3 at 2.5 ns; the output stalled from "
     "reset, and paced one beat in 64 cycles, two in 48, five in 96; stated beyond them, "
     "unmeasured: at other windows, on other parts (Versal's included) and at other periods"

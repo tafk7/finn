@@ -335,7 +335,7 @@ def test_view_bindings_remain_model_read_in_errors() -> None:
         design_space(Bad())
 
 
-# -- the one construct: its advance rule, and what its kernel supplies (W4) ----------------
+# -- the one construct: its advance rule, and what its kernel supplies ---------------------
 
 
 @pytest.mark.parametrize(
@@ -365,7 +365,7 @@ def test_a_port_follows_the_advance_rule_its_declaration_gives(
         rule.law.id
         == {"scheduled": "L2", "buffered": "L3", "selected": "L4", "sourced": "L5"}[rule.value]
     )
-    # A scheduled port has a pace, its schedule's; a port of another rule has none (W6).
+    # A scheduled port has a pace, its schedule's; a port of another rule has none.
     pace = point.query(StreamPort.pace)
     if rule is Advance.SCHEDULED:
         assert isinstance(pace, Available)
@@ -394,7 +394,7 @@ LIBRARY_RULES = {
 @pytest.mark.parametrize("name", sorted(LIBRARY_RULES))
 def test_library_ports_follow_their_rtl_s_advance_rules(name: str) -> None:
     """Every port of each module kernel, at its spec's first sampled design point, answers
-    the advance rule CONTRACT.md § 9 states (R2 F4: evaluated, not re-derived)."""
+    the advance rule CONTRACT.md § 9 states: evaluated, not re-derived."""
     (spec,) = [spec for spec in SPECS if spec.name == name]
     case = {key: value for key, value in spec.cases[spec.space]().items() if key != "reference"}
     given = {key: value for key, value in case.items() if key != "tolerance"}
@@ -439,7 +439,7 @@ def test_a_kernel_gives_each_port_of_its_body_its_name_and_its_clock_domain() ->
 
 
 def test_a_port_states_its_transport() -> None:
-    """R1 F4: no default transport, so a native port is never taken for an AXIS bus."""
+    """No default transport, so a native port is never taken for an AXIS bus."""
 
     with pytest.raises(DefinitionError, match="transport is not supplied"):
 
@@ -501,7 +501,7 @@ def test_a_kernel_serves_its_child_s_port_labelled_below_the_child() -> None:
     assert port_endpoint(Serving, "x") is Endpoint.TARGET
     assert port_endpoint(Serving, "y") is Endpoint.INITIATOR
     assert port_endpoint(Serving, "z") is Endpoint.INITIATOR
-    # Its advance rule is its child's port's (W6a), found by the port's name too.
+    # Its advance rule is its child's port's, found by the port's name too.
     assert port_advance(Serving, "x") is getattr(Serving, "x_advance")
     assert point.query(port_advance(Serving, "x")) == Available(Advance.BUFFERED)
     assert point.query(port_advance(Serving, "y")) == Available(point.core.output.advance)
@@ -545,7 +545,7 @@ def test_a_served_port_names_a_child_and_a_stream_port_of_it() -> None:
 
 
 def test_a_served_port_is_served_in_its_kernel_s_own_body() -> None:
-    """R2 F2, F6: a port served in a Group (which reads nothing of its kernel) is refused,
+    """A port served in a Group (which reads nothing of its kernel) is refused,
     and so is a body declaring the case a selector's served ports are lowered with."""
 
     class InGroup(Group):
@@ -571,7 +571,7 @@ def test_a_served_port_is_served_in_its_kernel_s_own_body() -> None:
 
 
 def test_a_port_states_one_thing_its_advance_rule_follows_from() -> None:
-    """R2 F3: one of a schedule, the port it governs, or stored values; and a port governs
+    """One of a schedule, the port it governs, or stored values; and a port governs
     another stream port of its kernel."""
     with refused(
         "port-advance-ambiguous", error=DefinitionError, message="schedule and governs and stored"
@@ -607,7 +607,7 @@ def test_a_port_states_one_thing_its_advance_rule_follows_from() -> None:
 
 
 def test_a_scheduled_port_presents_its_kernel_s_one_schedule() -> None:
-    """W5's open decision 6, taken in W6: a port of a kernel's body presents its kernel's
+    """A port of a kernel's body presents its kernel's
     ``schedule`` or no schedule (``port-schedule-foreign``), so its kernel's scheduled
     ports present one index point at each iteration and their paces count the same
     iterations; a subclass's override of ``schedule`` is the one its inherited ports read."""

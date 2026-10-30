@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """A stream port declared in a Group keeps its actual lexical Group occurrence: discovery
 (``stream_ports``), lookup (``port_side``, ``port_stream_pins``, ``port_endpoint``) and the
-composer find it there, and nothing forwards it by hand (W4: ``PortSurface`` is gone)."""
+composer find it there, and nothing forwards it by hand."""
 
 from __future__ import annotations
 

@@ -168,8 +168,9 @@ _ADVANCE_LAWS = {
 
 class Standing(Enum):
     """What an intake stands on: ``STRUCTURAL``, read from the RTL (exact or bounded, cited
-    by file and line); ``MEASURED``, from a recorded trace of an HLS kernel's RTL, with its
-    conditions. Never fitted or guessed."""
+    by file and line); ``MEASURED``, for an HLS kernel, from recorded traces, with their
+    conditions: a form fitted to them is stated, and where it is used beyond them, the
+    source says so (CONTRACT.md § 5)."""
 
     STRUCTURAL = "structural"
     MEASURED = "measured"

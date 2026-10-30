@@ -73,7 +73,7 @@ class StreamPort(Space):
     ``label`` is the port's name in its kernel and ``clocking`` its kernel's clock domain
     (L8: the kernel's, never the port's): a kernel supplies both for a port declared in its
     own body that does not state them (``finn.kernels.base.Kernel``). Its ``transport`` has
-    no default (R1 F4): a native port taken for AXIS would be a bus the RTL does not have.
+    no default: a native port taken for AXIS would be a bus the RTL does not have.
     """
 
     label: str = Param()

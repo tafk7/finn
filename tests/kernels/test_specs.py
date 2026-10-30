@@ -238,7 +238,7 @@ def _ports_checked(point: Partition) -> int:
             output = transport.endpoint is Endpoint.INITIATOR
             width = transport.data_width if output else None
             assert side == Side.kernel(stream, label, width), where
-            # Its pace (W6): a scheduled port's, over its kernel's one schedule; a port of
+            # Its pace: a scheduled port's, over its kernel's one schedule; a port of
             # another rule has none; a served port's is its child's port's.
             paced = member.query(port_pace(type(member), port))
             if isinstance(frame, StreamPort):
@@ -256,7 +256,7 @@ def _ports_checked(point: Partition) -> int:
 
 def _rate_checked(point: Partition) -> int:
     """Each member of ``point`` binding a module, its cycles checked against the rate law
-    (CONTRACT.md L6, W6): its schedule's iterations where it states one, else the most
+    (CONTRACT.md L6): its schedule's iterations where it states one, else the most
     beats a frame a placed port of it carries. How many it checked."""
     checked = 0
     for name in point.members:
@@ -290,7 +290,7 @@ def test_every_module_kernel_s_cycles_follow_the_rate_law(case: str) -> None:
 
 
 def test_no_library_kernel_states_its_own_cycles() -> None:
-    """The base derives every module kernel's cycles by the rate law (W6); a kernel states
+    """The base derives every module kernel's cycles by the rate law; a kernel states
     none of its own. MemStream restates the base's so that its channel counts it by kind."""
     found: set[type] = set()
     for module in pkgutil.iter_modules(finn.kernels.__path__, "finn.kernels."):

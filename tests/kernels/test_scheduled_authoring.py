@@ -223,7 +223,7 @@ def test_a_kernel_with_no_scheduled_port_has_no_schedule_and_no_extents() -> Non
 
 def test_a_kernel_reading_an_extent_states_its_extents_or_is_refused_when_made() -> None:
     """``extent_of`` reads the kernel's ``extents``, which the base does not declare: a
-    kernel naming one and stating none is refused when its class is made (R3 F1), not
+    kernel naming one and stating none is refused when its class is made, not
     when its value is evaluated."""
     with refused(
         "kernel-extents-unstated",

@@ -339,5 +339,5 @@ def test_untimed_cut_keeps_tensor_association_and_logical_presentation(tmp_path:
     y = in_shell(body, body.graph.node).member("y")
     assert y.consumer.outside == stated and y.consumer.label == "m_axis_0"
     assert (y.boundary.form.lanes, y.boundary.form.beats) == (4, 3)
-    # The boundary port carries no pace (W6): what the outside states of it owns one, here none.
+    # The boundary port carries no pace: what the outside states of it owns one, here none.
     assert y.boundary.form.row_major and y.consumer.outside.pace is None

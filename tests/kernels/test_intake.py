@@ -382,7 +382,7 @@ def test_an_input_generator_states_its_buffer_and_the_words_its_first_beat_frees
 
 def test_transpose_states_both_its_rtl_s_pages_and_its_skids() -> None:
     """Both pages before it stops; at most both and the ten output beats its two skids hold
-    (an XSim trace at a page of four beats held eighteen, rtl-intake on the shelf)."""
+    (an XSim trace at a page of four beats held eighteen)."""
     for where, member, intake in _kernel("transpose"):
         page = _rtl(member, "inner_shuffle", ("PAGE_OFFSET",))["PAGE_OFFSET"]
         entry = intake.of("input")
@@ -455,7 +455,7 @@ def test_memstream_states_its_set_port_s_intake_by_its_credit() -> None:
 
 def test_pool_states_its_measured_intake_by_its_window_and_period() -> None:
     """Measured, in windows of ``K = KH * KW`` beats: ``4K + 5`` before it stops, ``5K + 5``
-    at most at 5 and 10 ns, one more each at 2.5 ns (the shelf's pool-intake traces)."""
+    at most at 5 and 10 ns, one more each at 2.5 ns (its source names the traces)."""
     for where, member, intake in _kernel("pool"):
         window = member.query(PoolKernel.window)
         assert isinstance(window, Available), where
