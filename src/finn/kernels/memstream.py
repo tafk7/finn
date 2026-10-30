@@ -22,8 +22,8 @@ It is a channel's ``source`` candidate (``finn.kernels.channels``): placed by th
 channel it drives, its output presents its given sequence, and its set port reads
 the channel's ``index_tensor``. Placed by a parent, it states its ports' contracts
 (``output_contract``, ``set_contract``), which the channels on them take. Its cycles are
-the beats its output carries a frame, as every leaf's: one pass with one set, one pass
-an index with several.
+the beats its output carries a frame, by the rate law, as every leaf's without a schedule:
+one pass with one set, one pass an index with several.
 
 ``ram_style`` and ``pumped_memory`` are its choices. A pumped memory runs at
 ``ap_clk2x`` on half-width words and doubles the depth; its 2x clock pin is
@@ -384,18 +384,10 @@ class MemStreamKernel(Kernel):
 
     @view
     def cycles(self) -> int | Rejected:
-        beats: list[int] = []
-        if self.set.placed:
-            beats.append(self.set.stream.sequence.form.beats)
-        if self.output.placed:
-            beats.append(self.output.stream.sequence.form.beats)
-        return (
-            max(beats)
-            if beats
-            else reject(
-                "kernel-cycles", f"no port of {type(self).__qualname__} carries a stream's beats"
-            )
-        )
+        """The base's, by the rate law (``Kernel.cycles``: the most beats a frame its placed
+        ports carry), declared here so that its channel counts it by its kind
+        (``finn.kernels.channels.Channel.source_cycles``)."""
+        return self._cycles()
 
 
 __all__ = ["MemStreamKernel", "memstream_resources"]

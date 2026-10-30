@@ -127,6 +127,7 @@ def _members(cls: type[Kernel]) -> dict[str, object]:
 # its closure holds and then the next helper by name, the last reading none.
 
 _PINS, _HELD, _PRESENTED = "_module_pins", "_module_held", "_module_presented"
+_BEATS = "_module_beats"
 
 
 def _pins_from(part: str, following: str) -> Callable[[Kernel], tuple[Any, ...]]:
@@ -150,6 +151,13 @@ def _presented_from(part: str, following: str) -> Callable[[Kernel], tuple[Any, 
     return presented_from
 
 
+def _beats_from(part: str, following: str) -> Callable[[Kernel], tuple[Any, ...]]:
+    def beats_from(self: Kernel) -> tuple[Any, ...]:
+        return (getattr(self, part).frame_beats(), *getattr(self, following)())
+
+    return beats_from
+
+
 def _module_parts(cls: type[Kernel]) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """The names of its module's parts in pin order and in hold order (above)."""
     from finn.kernels.port_model import OtherPins, StreamPort, stream_ports  # noqa: PLC0415
@@ -170,6 +178,12 @@ def _module_parts(cls: type[Kernel]) -> tuple[tuple[str, ...], tuple[str, ...]]:
     controls = tuple(name for name, item in members.items() if isinstance(item, ControlModel))
     ports = tuple(name for name, item in members.items() if isinstance(item, StreamPort))
     return (*others, *controls, *ports), (*ports, *others, *controls)
+
+
+def _is_stream_port(item: object) -> bool:
+    from finn.kernels.port_model import StreamPort  # noqa: PLC0415
+
+    return isinstance(item, StreamPort)
 
 
 def _supply_ports(cls: type[Kernel]) -> None:
@@ -492,6 +506,8 @@ class Kernel(Space):
             _install(cls, _PINS, _pins_from, pins)
             _install(cls, _HELD, _held_from, holds)
             _install(cls, _PRESENTED, _presented_from, pins)
+            beating = tuple(name for name, item in members.items() if _is_stream_port(item))
+            _install(cls, _BEATS, _beats_from, beating)
         if unmet_required(cls) or not specs:
             return
         from finn.kernels.port_model import stream_ports  # noqa: PLC0415
@@ -684,6 +700,9 @@ class Kernel(Space):
     def _module_presented_0(self) -> tuple[bool, ...]:
         return ()
 
+    def _module_beats_0(self) -> tuple[int | None, ...]:
+        return ()
+
     def _module_end(self) -> tuple[Any, ...]:
         return ()
 
@@ -714,21 +733,40 @@ class Kernel(Space):
 
     @view
     def cycles(self) -> int | Rejected:
-        """The clock cycles a frame takes through it: the most any member takes, a member
-        counting none (inapplicable) left out; a native kernel states its own."""
+        """The clock cycles a frame takes through it, at full rate: characterization,
+        derived by the rate law (CONTRACT.md L6). A kernel with a module advances one
+        iteration a cycle when nothing blocks it: its cycles a frame are its schedule's
+        iterations (each of its scheduled ports' pace's span), or, a kernel with no
+        schedule (a stage, a memory), advancing one beat a side a cycle, the most beats a
+        frame any of its placed ports carries. A kernel with children takes the most any
+        member takes, a member counting none (inapplicable) left out. A kernel states
+        none of its own; one whose hardware stalls internally would state its exception."""
         return self._cycles()
 
     def _cycles(self) -> int | Rejected:
-        """``cycles``: the most any member takes (``member_cycles``), else refused. A class
-        restating ``cycles`` as the base's, to be counted by its own kind, calls it."""
+        """``cycles`` (above). A class restating ``cycles`` as the base's, to be counted by
+        its own kind (a channel's members, ``finn.kernels.channels.Channel``), calls it."""
+        if type(self).module_spec is not None:
+            return self._rate_cycles()
         found = [item.value for item in self.member_cycles]
         if found:
             return max(found)
-        if type(self).module_spec is not None:
+        return reject("kernel-cycles", f"no member of {type(self).__qualname__} states cycles")
+
+    def _rate_cycles(self) -> int | Rejected:
+        """A kernel with a module's cycles a frame by the rate law (``cycles``): its
+        schedule's iterations where it states a schedule, else its placed ports' most beats
+        a frame, each port read in its declaration order (``StreamPort.frame_beats``);
+        refused where it places no port."""
+        if _declared(type(self), "schedule"):
+            schedule: Schedule = self.schedule
+            return schedule.iterations
+        beats = [each for each in self._module_beats_0() if each is not None]
+        if not beats:
             return reject(
                 "kernel-cycles", f"no port of {type(self).__qualname__} carries a stream's beats"
             )
-        return reject("kernel-cycles", f"no member of {type(self).__qualname__} states cycles")
+        return max(beats)
 
     # -- what it reaches of its members: their answers, read by its views only ------------
     # Each ``Members`` names the member it reads, so it follows the views it names.

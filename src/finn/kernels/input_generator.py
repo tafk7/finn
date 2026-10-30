@@ -320,10 +320,6 @@ class InputGeneratorKernel(Kernel):
 
     module_spec: ClassVar[ModuleSpec] = ModuleSpec("input_gen", (SOURCE,))
 
-    @view
-    def cycles(self) -> int:
-        return max(self.input.stream.sequence.form.beats, self.output.stream.sequence.form.beats)
-
 
 # -- the buffer, as the RTL derives it -------------------------------------------------------
 

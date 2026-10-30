@@ -122,9 +122,5 @@ class VpcKernel(Kernel):
         "vpc", (CopiedSource("finnlib", "rtl/shape/vpc.sv", provides=("module:vpc",)),)
     )
 
-    @view
-    def cycles(self) -> int:
-        return max(self.input.stream.sequence.form.beats, self.output.stream.sequence.form.beats)
-
 
 __all__ = ["VpcKernel", "vpc_resources"]

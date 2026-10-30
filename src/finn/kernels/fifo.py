@@ -309,10 +309,6 @@ class FifoKernel(Kernel):
         "fifo", (CopiedSource("finnlib", "rtl/infra/fifo.sv", provides=("module:fifo",)),)
     )
 
-    @view
-    def cycles(self) -> int:
-        return max(self.input.stream.sequence.form.beats, self.output.stream.sequence.form.beats)
-
 
 __all__ = [
     "FifoKernel",

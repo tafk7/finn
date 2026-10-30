@@ -53,6 +53,7 @@ from finn.kernels.base import Kernel, PortContract
 from finn.kernels.configure import undecided
 from finn.kernels.laws import Advance
 from finn.kernels.library import ModuleSpec
+from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.partition import Partition
 from finn.kernels.port import port_contract, port_pace, port_side
 from finn.kernels.port_model import ServedPort, StreamPort, stream_ports
@@ -251,6 +252,56 @@ def _ports_checked(point: Partition) -> int:
                 assert isinstance(paced, (Available, Inapplicable)), where
             checked += 1
     return checked
+
+
+def _rate_checked(point: Partition) -> int:
+    """Each member of ``point`` binding a module, its cycles checked against the rate law
+    (CONTRACT.md L6, W6): its schedule's iterations where it states one, else the most
+    beats a frame a placed port of it carries. How many it checked."""
+    checked = 0
+    for name in point.members:
+        member = point.member(name)
+        if not isinstance(member, Kernel) or type(member).module_spec is None:
+            continue
+        cycles = member.query(Kernel.cycles)
+        assert isinstance(cycles, Available), name
+        schedule = member.query(Kernel.schedule)
+        if isinstance(schedule, Available):
+            assert cycles.value == schedule.value.iterations, name
+        else:
+            assert isinstance(schedule, Inapplicable), name
+            beats = [
+                member.field(port.stream).get().sequence.form.beats
+                for port in stream_ports(type(member)).values()
+                if member.field(port.placed).get()
+            ]
+            assert cycles.value == max(beats), name
+        checked += 1
+    return checked
+
+
+@pytest.mark.parametrize("case", sorted(conformance_cases()))
+def test_every_module_kernel_s_cycles_follow_the_rate_law(case: str) -> None:
+    base = unchosen(**conformance_cases()[case]())
+    for chosen in _covering(base).points or ({},):
+        checked = _rate_checked(configured(base, chosen))
+        # MatMul binds no module: its cycles are its core's, a dotp, checked in dotp's cases.
+        assert checked or case == "matmul", f"{case} at {chosen}"
+
+
+def test_no_library_kernel_states_its_own_cycles() -> None:
+    """The base derives every module kernel's cycles by the rate law (W6); a kernel states
+    none of its own. MemStream restates the base's so that its channel counts it by kind."""
+    found: set[type] = set()
+    for module in pkgutil.iter_modules(finn.kernels.__path__, "finn.kernels."):
+        for value in vars(importlib.import_module(module.name)).values():
+            if isinstance(value, type) and issubclass(value, Kernel) and value.module_spec:
+                found.add(value)
+    assert len(found) >= 11, found
+    for kind in found:
+        for cls in kind.__mro__[: kind.__mro__.index(Kernel)]:
+            if "cycles" in vars(cls):
+                assert cls is MemStreamKernel, cls
 
 
 @pytest.mark.parametrize("case", sorted(conformance_cases()))

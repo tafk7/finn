@@ -266,13 +266,5 @@ class EltwiseKernel(Kernel):
         ),
     )
 
-    @view
-    def cycles(self) -> int:
-        return max(
-            self.lhs.stream.sequence.form.beats,
-            self.rhs.stream.sequence.form.beats,
-            self.result.stream.sequence.form.beats,
-        )
-
 
 __all__ = ["EltwiseKernel"]

@@ -702,23 +702,6 @@ class ThresholdingAxiKernel(Kernel):
             )
         return Control(self.config.bus, port, self.register_map)
 
-    @view
-    def cycles(self) -> int | Rejected:
-        beats: list[int] = []
-        if self.input.placed:
-            beats.append(self.input.stream.sequence.form.beats)
-        if self.output.placed:
-            beats.append(self.output.stream.sequence.form.beats)
-        if self.set.placed:
-            beats.append(self.set.stream.sequence.form.beats)
-        return (
-            max(beats)
-            if beats
-            else reject(
-                "kernel-cycles", f"no port of {type(self).__qualname__} carries a stream's beats"
-            )
-        )
-
 
 __all__ = [
     "ThresholdingAxiKernel",

@@ -477,23 +477,6 @@ class DotpAxiKernel(Kernel):
             "REDUCER": f'"{self.reducer}"',
         }
 
-    @view
-    def cycles(self) -> int | Rejected:
-        beats: list[int] = []
-        if self.x.placed:
-            beats.append(self.x.stream.sequence.form.beats)
-        if self.w.placed:
-            beats.append(self.w.stream.sequence.form.beats)
-        if self.y.placed:
-            beats.append(self.y.stream.sequence.form.beats)
-        return (
-            max(beats)
-            if beats
-            else reject(
-                "kernel-cycles", f"no port of {type(self).__qualname__} carries a stream's beats"
-            )
-        )
-
 
 _COUNTERS = tuple(
     f"module:{name}"

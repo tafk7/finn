@@ -227,9 +227,5 @@ class TransposeKernel(Kernel):
         ),
     )
 
-    @view
-    def cycles(self) -> int:
-        return max(self.input.stream.sequence.form.beats, self.output.stream.sequence.form.beats)
-
 
 __all__ = ["TransposeKernel", "inner_shuffle_resources"]
