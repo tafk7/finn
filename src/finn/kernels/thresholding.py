@@ -94,8 +94,6 @@ from finn.dataflow.schedule import Access, Index, Schedule
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import (
-    CLOCK,
-    RESET,
     Bus,
     Clocking,
     Endpoint,
@@ -477,8 +475,8 @@ class ThresholdingAxiKernel(Kernel):
                     ("RRESP", 2),
                 )
             ),
-            associated_clock=CLOCK,
-            associated_reset=RESET,
+            associated_clock=type(self).clock_domain.clock,
+            associated_reset=type(self).clock_domain.reset,
         )
 
     @derived

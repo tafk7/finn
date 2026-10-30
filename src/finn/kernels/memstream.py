@@ -281,8 +281,8 @@ class MemStreamKernel(Kernel):
                     ("rdata", 32),
                 )
             ),
-            associated_clock=NATIVE_CLOCKING.clock,
-            associated_reset=NATIVE_CLOCKING.reset,
+            associated_clock=type(self).clock_domain.clock,
+            associated_reset=type(self).clock_domain.reset,
         )
 
     @derived

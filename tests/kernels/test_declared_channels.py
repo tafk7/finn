@@ -34,6 +34,7 @@ from finn.core.space import (
     design_space,
     inspection,
 )
+from finn.core.space._nodes import NodeDecision, NodeDecl, slot_declaration
 from finn.dataflow.steps import Hop
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
@@ -48,6 +49,7 @@ from finn.dataflow.traversal import (
     tile,
     vector_major,
 )
+from finn.kernels.adapters import StreamAdapter
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel, ChannelFifo, boundary_contract, stated_by, stated_form
@@ -55,7 +57,7 @@ from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.configure import commit
 from finn.kernels.laws import Axis
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.movers import IODMA_HLS, iodma_hls
+from finn.kernels.movers import IODMA_HLS, IodmaMover, iodma_hls
 from finn.kernels.partition import Partition
 from finn.kernels.port_model import SequencePort
 from finn.kernels.sides import BUILD, ROW_MAJOR, Outside, Side, Steady
@@ -543,3 +545,27 @@ def test_a_statement_of_nothing_the_inside_does_not_present_answers_as_unstated(
             point = edge(producer or side, consumer or side)
             answers.append((point.boundary, point.steps, point.input_chain, point.output_adapting))
         assert answers[0] == answers[1]
+
+
+def test_every_member_of_a_channel_but_its_transport_counts_by_exactly_one_kind():
+    """The by-kind count holds while each kind declares ``cycles`` itself (``Members``
+    reads the class declaring the member; a kind relying on the base's would range over
+    the transport again) and every placed class but the FIFO is one kind's: a new member,
+    or a kind losing its own ``cycles``, fails here by name."""
+    kinds = (MemStreamKernel, StreamAdapter, IodmaMover)
+    for kind in kinds:
+        assert "cycles" in vars(kind), kind
+    placed: dict[str, list[type]] = {}
+    for name, value in vars(Channel).items():
+        declaration = slot_declaration(value)
+        if isinstance(declaration, NodeDecision):
+            placed[name] = [
+                case.space_type for case in declaration.candidates.values() if case is not None
+            ]
+        elif isinstance(declaration, NodeDecl):
+            placed[name] = [declaration.space_type]
+    assert set(placed) == {"source", "mover", "output_adapter", "transport", "adapter"}
+    assert placed.pop("transport") == [ChannelFifo]
+    for name, classes in placed.items():
+        for each in classes:
+            assert sum(issubclass(each, kind) for kind in kinds) == 1, (name, each)

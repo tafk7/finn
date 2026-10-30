@@ -85,19 +85,20 @@ RATE = Law(
     "a kernel that stalls internally; an HLS kernel whose initiation interval exceeds one "
     "states it, measured",
 )
-RESET = Law(
+RESET_LAW = Law(
     "L7",
     "reset",
     "one synchronous reset; the contract holds within a reset epoch; reset cancels all "
     "work in flight, including results completed but not yet delivered",
     "none known",
 )
-CLOCK = Law(
+CLOCK_LAW = Law(
     "L8",
     "clock",
     "one clock, the kernel's clock domain (AXIS_CLOCKING or NATIVE_CLOCKING); clock and "
     "reset pins are the kernel's, never a port's",
-    "a doubled clock at twice the kernel's clock, where the kernel takes one, declared (doubled)",
+    "a doubled clock at twice the kernel's clock, where the kernel takes one, declared "
+    "(doubled): named <clock>2x (ap_clk2x, clk2x), held low while the kernel does not double",
 )
 MARKERS = Law(
     "L9",
@@ -112,7 +113,9 @@ IDLE = Law(
     "an idle port holds its inputs low (a target's data and valid, an initiator's ready) "
     "and leaves its outputs unconnected, as does an unexposed control bus; lanes pack lane "
     "0 lowest; an AXIS beat is padded to a whole byte, a producer's padding bits left "
-    "unconnected and a consumer's driven with zeros",
+    "unconnected and a consumer's driven with zeros; a pure lane permutation, padding and "
+    "reset polarity leave the stream unchanged: they are the connection's wires, not "
+    "adaptation",
     "none known",
 )
 
@@ -123,8 +126,8 @@ LAWS: tuple[Law, ...] = (
     ADVANCE_SELECTED,
     ADVANCE_SOURCED,
     RATE,
-    RESET,
-    CLOCK,
+    RESET_LAW,
+    CLOCK_LAW,
     MARKERS,
     IDLE,
 )
@@ -268,7 +271,7 @@ __all__ = [
     "AXIS_MEMBERS",
     "Axis",
     "AxisSpelling",
-    "CLOCK",
+    "CLOCK_LAW",
     "HANDSHAKE",
     "IDLE",
     "IDLE_LEVEL",
@@ -279,7 +282,7 @@ __all__ = [
     "NATIVE_CLOCKING",
     "Native",
     "RATE",
-    "RESET",
+    "RESET_LAW",
     "TransportKind",
     "axis_carrier",
     "axis_pin",

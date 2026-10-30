@@ -11,7 +11,9 @@ from qonnx.core.datatype import DataType
 from support.helpers import FULL_DSP48E2
 
 from finn.core.space import Available, Rejected, design_space
+from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
 from finn.kernels.artifacts.abi import Clocking, Endpoint
 from finn.kernels.base import Kernel
 from finn.kernels.eltwise import EltwiseKernel, c
@@ -28,6 +30,7 @@ from finn.kernels.laws import (
     axis_pin,
     doubled,
 )
+from finn.kernels.port import LoopEnds, PhysicalPort, contract, pins
 from finn.kernels.port_model import IndexedPort
 
 TARGET, INITIATOR = Endpoint.TARGET, Endpoint.INITIATOR
@@ -130,3 +133,21 @@ def test_ports_whose_defaults_give_the_same_pins_are_refused_by_name() -> None:
     ((finding,),) = [found.findings]
     assert finding.code == "port-pins-collide"
     assert "['idat', 'irdy', 'ivld']" in finding.message
+
+
+def test_an_axis_port_stating_a_loop_completion_vector_is_refused() -> None:
+    # L9: one TLAST on AXIS; a loop-completion vector is the native transport's exception.
+    element = ScalarEncoding(DataType["INT3"])
+    marked = BeatSequence(vector_major((2, 4), 4), markers=(LevelEnd(2),))
+    port = PhysicalPort(
+        name="y", endpoint=INITIATOR, transport=AXIS, loop_ends=LoopEnds((LevelEnd(2),))
+    )
+    for sequence in (BeatSequence(marked.form), marked):
+        stream = Stream(element, sequence)
+        for found in (pins(port, stream, AXIS_CLOCKING), contract(port, stream, AXIS_CLOCKING)):
+            assert isinstance(found, Rejected)
+            ((finding,),) = [found.findings]
+            assert finding.code == "port-markers"
+            assert finding.message == (
+                "y: an AXIS port carries one TLAST, no loop-completion vector (L9)"
+            )

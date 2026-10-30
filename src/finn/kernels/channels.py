@@ -958,7 +958,9 @@ class Channel(Kernel):
     # What its cycles count, by kind: its source's, its adapters' and its mover's. Not the
     # base's ``member_cycles``, which ranges over its transport too: a FIFO's cycles are
     # inapplicable, but whether it places one is a choice FIFO sizing reads cycles before,
-    # so the base's would wait on it. Its mover is no kernel; its cycles count here.
+    # so the base's would wait on it. Its mover is no kernel; its cycles count here. Each
+    # kind declares ``cycles`` itself (``Members`` reads the declaring class), and must
+    # keep doing so while the channel counts by kind.
     source_cycles = Members(MemStreamKernel.cycles)
     stage_cycles = Members(StreamAdapter.cycles)
     mover_cycles = Members(IodmaMover.cycles)

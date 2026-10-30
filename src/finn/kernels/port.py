@@ -137,6 +137,11 @@ def axis(port: PhysicalPort, presenting: Presenting) -> AxisBeat | Rejected:
     kind = _given(port, "transport")
     if not isinstance(kind, Axis):
         return reject("port-transport", f"{label}: a native port has no AXIS beat")
+    if _given(port, "loop_ends") is not None:
+        return reject(
+            "port-markers",
+            f"{label}: an AXIS port carries one TLAST, no loop-completion vector (L9)",
+        )
     unsupported = stream_refusal(presenting) if isinstance(presenting, Stream) else None
     if unsupported is not None:
         return unsupported
