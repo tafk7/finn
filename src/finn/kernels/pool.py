@@ -154,13 +154,14 @@ void {name}(hls::stream<InBeat> &s_axis, hls::stream<OutBeat> &m_axis) {{
 """
 
 
-#: Where its intake is measured, and under what conditions.
+#: Where its intake is measured, under what conditions, and where it is stated beyond them.
 _INTAKE_MEASURED = (
-    "Vivado 2025.2 simulation traces of pool_top as Vitis HLS 2025.2 synthesizes it for "
-    "an xczu3eg (kernels-vdwi, shelf pool-intake/: measure.py, results.json): windows 2x2, "
-    "2x3, 3x3 (strides equal and 1), PE 1, 3, 6, INT4 and INT8, at 5 ns; 2x2 at 2.5 and "
-    "10 ns, 3x3 at 2.5 ns; the output stalled from reset, and paced one beat in 64 cycles, "
-    "two in 48, five in 96"
+    "a form in K, the window's beats, fitted to Vivado 2025.2 simulation traces of pool_top "
+    "as Vitis HLS 2025.2 synthesizes it for an xczu3eg (kernels-vdwi, shelf pool-intake/: "
+    "measure.py, results.json): windows 2x2, 2x3, 3x3 (strides equal and 1), PE 1, 3, 6, "
+    "INT4 and INT8, at 5 ns; 2x2 at 2.5 and 10 ns, 3x3 at 2.5 ns; the output stalled from "
+    "reset, and paced one beat in 64 cycles, two in 48, five in 96; stated beyond them, "
+    "unmeasured: at other windows, on other parts (Versal's included) and at other periods"
 )
 
 
@@ -283,7 +284,10 @@ class PoolKernel(Kernel):
         at 5 and 10 ns. At 2.5 ns its synthesis adds a register, one beat more on each. So
         below 5 ns it holds at most one more, and at 2.5 ns or less takes one more before it
         stops: between, the register's period is not measured, and each bound keeps its
-        side."""
+        side. The form in ``K`` is fitted to three windows (``K`` 4, 6 and 9) on one part at
+        2.5 to 10 ns and stated beyond them, at every window, part and period, as its source
+        says: its FIFOs and registers holding whole results make the form in ``K`` likely,
+        but no other part, and no period below 2.5 ns, is measured."""
         rows, columns = self.window
         window = rows * columns
         period = self.platform.period_ns

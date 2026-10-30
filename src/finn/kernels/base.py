@@ -650,8 +650,8 @@ class Kernel(Space):
         no refusal of its design point: no rule reads it. A kernel with children derives
         its own from its members' (``member_intake``), never states it beside them: a port
         it serves takes the name it serves it under (``served_names``), any other member's
-        port its path below the member (``adapter.input_gen.input``). A member that states
-        none leaves its parent's unstated too."""
+        port its path below the member (``adapter.input_gen.input_gen.input``). A member
+        that states none leaves its parent's unstated too."""
         if type(self).module_spec is not None:
             return reject(INTAKE_UNSTATED, f"{type(self).__qualname__} states no intake")
         served = type(self).served_names

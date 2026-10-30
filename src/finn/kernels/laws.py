@@ -182,9 +182,10 @@ class PortIntake:
 
     ``before_stop``: the beats it takes, from reset with its output stalled, before it
     **may** stop accepting, a lower bound (what a FIFO sizing must assume it takes);
-    ``most``: the most beats it can hold, delivered or not, an upper bound (a kernel that
-    drops input it never presents may take more than it holds). Where the RTL counts
-    something else than the port's beats, ``before_stop`` rounds down and ``most`` up.
+    ``most``: the most beats of this port it holds at once, an upper bound (a kernel that
+    drops input it never presents may take more before it stops than it holds). Where the
+    RTL counts something else than the port's beats, ``before_stop`` rounds down and
+    ``most`` up.
     ``rule``: when it stops and when it resumes; ``source``: where both are read, the RTL's
     file and lines at the library's pin, or the trace and its conditions."""
 
