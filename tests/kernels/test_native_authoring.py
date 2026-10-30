@@ -35,9 +35,9 @@ from finn.kernels.base import Kernel, PortContract
 from finn.kernels.channels import ChannelFifo
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import InputGeneratorKernel
-from finn.kernels.laws import Native
+from finn.kernels.laws import NATIVE, Native
 from finn.kernels.port import LoopEnds
-from finn.kernels.port_model import SequencePort
+from finn.kernels.port_model import StreamPort
 
 UNNAMED_ENDS = LoopEnds((LevelEnd(1),))
 """A loop-completion vector, which a native port named in full has no pin for: each port
@@ -59,7 +59,7 @@ def generator_node() -> InputGeneratorKernel:
 
 def test_native_model_width_is_early_and_child_characterization_is_local() -> None:
     fifo_point = design_space(fifo_node(word_bits=13, depth=1))
-    assert_type(FifoKernel.input, SequencePort)
+    assert_type(FifoKernel.input, StreamPort)
     assert_type(fifo_point.input.width, int)
     assert fifo_point.input.width == 13
     assert inspection.validity(fifo_point).status == "refused"
@@ -113,22 +113,20 @@ class SerialFifo(FifoKernel):
         _ = self.second_state
         return ARRIVING
 
-    input = SequencePort(
+    input = StreamPort(
         label="input",
         tensor=FifoKernel.input_tensor,
         sequence=first,
         transport=Native(names=("idat", "ivld", "irdy")),
         loop_ends=UNNAMED_ENDS,
-        clocking=FifoKernel.port_clocking,
     )
-    output = SequencePort(
+    output = StreamPort(
         label="output",
         endpoint=Endpoint.INITIATOR,
         tensor=FifoKernel.output_tensor,
         sequence=second,
         transport=Native(names=("odat", "ovld", "ordy")),
         loop_ends=UNNAMED_ENDS,
-        clocking=FifoKernel.port_clocking,
     )
 
     # Keep geometry/model checks independent of intentionally bad physical signals.
@@ -265,7 +263,7 @@ def test_channel_fifo_counts_no_cycles_and_reads_netlist_before_contracts() -> N
 def test_adapter_reads_contracts_before_netlist(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
 
-    class RefusedContract(SequencePort):
+    class RefusedContract(StreamPort):
         @view
         def contract(self) -> PortContract | Rejected | Inapplicable:
             calls.append("contract")
@@ -273,6 +271,7 @@ def test_adapter_reads_contracts_before_netlist(monkeypatch: pytest.MonkeyPatch)
 
     class Child(InputGeneratorKernel):
         input = RefusedContract(
+            transport=NATIVE,
             label="input",
             tensor=InputGeneratorKernel.input_tensor,
             sequence=InputGeneratorKernel.arriving,
@@ -349,22 +348,20 @@ class SerialGenerator(InputGeneratorKernel):
         _ = self.second_state
         return ARRIVING
 
-    input = SequencePort(
+    input = StreamPort(
         label="input",
         tensor=InputGeneratorKernel.input_tensor,
         sequence=first,
         transport=Native(names=("idat", "ivld", "irdy")),
         loop_ends=UNNAMED_ENDS,
-        clocking=InputGeneratorKernel.port_clocking,
     )
-    output = SequencePort(
+    output = StreamPort(
         label="output",
         endpoint=Endpoint.INITIATOR,
         tensor=InputGeneratorKernel.output_tensor,
         sequence=second,
         transport=Native(names=("odat", "ovld", "ordy")),
         loop_ends=UNNAMED_ENDS,
-        clocking=InputGeneratorKernel.port_clocking,
     )
 
     @constraint

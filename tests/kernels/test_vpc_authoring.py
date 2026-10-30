@@ -32,10 +32,10 @@ from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource
 from finn.kernels.artifacts.module import Fragment
 from finn.kernels.base import Kernel
-from finn.kernels.laws import Native
+from finn.kernels.laws import AXIS, AXIS_CLOCKING, Native
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port import LoopEnds, port_endpoint, port_surface
-from finn.kernels.port_model import PortSurface, SequencePort
+from finn.kernels.port_model import PortSurface, StreamPort
 from finn.kernels.vpc import VpcKernel
 from finn.platform.capabilities import Resources
 
@@ -62,22 +62,20 @@ class SerialVpc(VpcKernel):
         _ = self.second_state
         return SEQUENCE
 
-    input = SequencePort(
+    input = StreamPort(
         label="input",
         tensor=VpcKernel.input_tensor,
         sequence=first,
         transport=Native(names=("idat", "ivld", "irdy")),
         loop_ends=UNNAMED_ENDS,
-        clocking=VpcKernel.port_clocking,
     )
-    output = SequencePort(
+    output = StreamPort(
         label="output",
         endpoint=Endpoint.INITIATOR,
         tensor=VpcKernel.output_tensor,
         sequence=second,
         transport=Native(names=("odat", "ovld", "ordy")),
         loop_ends=UNNAMED_ENDS,
-        clocking=VpcKernel.port_clocking,
     )
 
     @view
@@ -129,7 +127,7 @@ def test_actual_vpc_netlist_keeps_serial_body_demand_and_direct_refusal_order(
 
 def test_actual_vpc_surfaces_are_typed_real_children_and_not_kernel_instances() -> None:
     point = design_space(VpcKernel(input_tensor=TENSOR, arriving=SEQUENCE, leaving=SEQUENCE))
-    assert_type(VpcKernel.input, SequencePort)
+    assert_type(VpcKernel.input, StreamPort)
     assert isinstance(point.input, Space) and not isinstance(point.input, Kernel)
     assert point.netlists == ()
     assert isinstance(point.netlist, Fragment)
@@ -207,7 +205,9 @@ def test_a_module_requires_owned_physical_ports_not_parent_forwarding_metadata()
 
 def test_surface_lookup_supports_discovered_group_paths_at_the_actual_node() -> None:
     class Included(Group):
-        port = SequencePort(label="p", tensor=TENSOR, sequence=SEQUENCE)
+        port = StreamPort(
+            clocking=AXIS_CLOCKING, transport=AXIS, label="p", tensor=TENSOR, sequence=SEQUENCE
+        )
 
     class Host(Space):
         group = Included()

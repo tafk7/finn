@@ -26,9 +26,9 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.base import Kernel
-from finn.kernels.laws import Axis, Native
+from finn.kernels.laws import AXIS, AXIS_CLOCKING, Axis, Native
 from finn.kernels.port import LoopEnds
-from finn.kernels.port_model import IndexedPort, ScheduledPort
+from finn.kernels.port_model import StreamPort
 from finn.kernels.transpose import TransposeKernel, i
 
 UNNAMED_ENDS = LoopEnds((LevelEnd(1),))
@@ -47,7 +47,8 @@ class Projection(Space):
     def scheduled(self) -> Schedule:
         return Schedule({R: 2, C: 4}, {C: self.fold})
 
-    input = IndexedPort(
+    input = StreamPort(
+        clocking=AXIS_CLOCKING,
         label="input",
         tensor=TENSOR,
         schedule=scheduled,
@@ -55,7 +56,8 @@ class Projection(Space):
         lanes=(C,),
         transport=Axis(bus="in"),
     )
-    output = ScheduledPort(
+    output = StreamPort(
+        clocking=AXIS_CLOCKING,
         label="output",
         transport=Axis(bus="out"),
         endpoint=Endpoint.INITIATOR,
@@ -70,10 +72,10 @@ def test_access_and_element_are_early_and_output_never_binds_parent_extents() ->
     point = design_space(Projection())
     assert point.input.element == TENSOR.element
     assert point.input.access == Access("input", TENSOR.shape, (R, C), False)
-    assert not hasattr(type(point.output), "binds")
-    assert not hasattr(type(point.output), "access")
+    assert point.output.binds is False  # an output never binds its kernel's extents
+    assert isinstance(point.query(type(point).output.access), Inapplicable)
     assert isinstance(point.query(Projection.input.stream), Unresolved)
-    assert not inspection.decisions(ScheduledPort) and not inspection.decisions(IndexedPort)
+    assert not inspection.decisions(StreamPort)
 
 
 @pytest.mark.parametrize("fold", (1, 2, 4))
@@ -90,7 +92,9 @@ def test_projection_reduction_and_pace_are_the_current_schedule_values(fold: int
 
 
 def test_schedule_and_sequence_conflict_remains_a_local_nonvalue() -> None:
-    port = ScheduledPort(
+    port = StreamPort(
+        clocking=AXIS_CLOCKING,
+        transport=AXIS,
         label="p",
         tensor=TENSOR,
         schedule=SCHEDULE,
@@ -98,7 +102,7 @@ def test_schedule_and_sequence_conflict_remains_a_local_nonvalue() -> None:
         index=(R, C),
     )
     point = design_space(port)
-    answer = point.query(ScheduledPort.stream)
+    answer = point.query(StreamPort.stream)
     assert isinstance(answer, Rejected)
     assert [finding.code for finding in answer.findings] == ["port-presentation"]
     assert inspection.validity(point).status == "valid"
@@ -107,7 +111,9 @@ def test_schedule_and_sequence_conflict_remains_a_local_nonvalue() -> None:
 @pytest.mark.parametrize("suppressed", ("reduces", "holds"))
 def test_closing_markers_and_suppressed_axes_keep_their_actual_pace(suppressed: str) -> None:
     source = design_space(
-        ScheduledPort(
+        StreamPort(
+            clocking=AXIS_CLOCKING,
+            transport=AXIS,
             label="source",
             tensor=TENSOR,
             schedule=SCHEDULE,
@@ -121,7 +127,9 @@ def test_closing_markers_and_suppressed_axes_keep_their_actual_pace(suppressed: 
     reduces = (C,) if suppressed == "reduces" else ()
     holds = (C,) if suppressed == "holds" else ()
     output = design_space(
-        ScheduledPort(
+        StreamPort(
+            clocking=AXIS_CLOCKING,
+            transport=AXIS,
             label="output",
             endpoint=Endpoint.INITIATOR,
             tensor=Tensor((2,), TENSOR.element),
@@ -137,7 +145,9 @@ def test_closing_markers_and_suppressed_axes_keep_their_actual_pace(suppressed: 
 
 def test_a_reshaped_affine_axis_preserves_the_local_schedule_refusal() -> None:
     point = design_space(
-        ScheduledPort(
+        StreamPort(
+            clocking=AXIS_CLOCKING,
+            transport=AXIS,
             label="p",
             tensor=TENSOR,
             schedule=SCHEDULE,
@@ -146,7 +156,7 @@ def test_a_reshaped_affine_axis_preserves_the_local_schedule_refusal() -> None:
             reshaped=True,
         )
     )
-    result = point.query(ScheduledPort.stream)
+    result = point.query(StreamPort.stream)
     assert isinstance(result, Rejected)
     assert [finding.code for finding in result.findings] == ["port-schedule"]
     assert "reshaped port reads plain indices" in result.findings[0].message
@@ -156,7 +166,9 @@ def test_a_reshaped_affine_axis_preserves_the_local_schedule_refusal() -> None:
 def test_scheduled_child_presence_is_checked_before_local_work(enabled: bool | None) -> None:
     class Guarded(Space):
         enabled: bool = Decision(domain=(False, True))
-        port = ScheduledPort(
+        port = StreamPort(
+            clocking=AXIS_CLOCKING,
+            transport=AXIS,
             when=enabled,
             label="p",
             tensor=TENSOR,
@@ -216,7 +228,7 @@ class SerialTranspose(TransposeKernel):
         _ = self.second_state
         return self.columns_out
 
-    input = IndexedPort(
+    input = StreamPort(
         label="input",
         tensor=TransposeKernel.input_tensor,
         schedule=first,
@@ -225,9 +237,8 @@ class SerialTranspose(TransposeKernel):
         reshaped=True,
         transport=Native(names=("idat", "ivld", "irdy")),
         loop_ends=UNNAMED_ENDS,
-        clocking=TransposeKernel.port_clocking,
     )
-    output = ScheduledPort(
+    output = StreamPort(
         label="output",
         endpoint=Endpoint.INITIATOR,
         tensor=TransposeKernel.output_tensor,
@@ -236,7 +247,6 @@ class SerialTranspose(TransposeKernel):
         lanes=(i,),
         transport=Native(names=("odat", "ovld", "ordy")),
         loop_ends=UNNAMED_ENDS,
-        clocking=TransposeKernel.port_clocking,
     )
 
 

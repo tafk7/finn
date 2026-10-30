@@ -66,14 +66,14 @@ from finn.core.space import (
 from finn.dataflow.steps import Unrealizable
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import Adaptation, BeatSequence, LevelEnd, Traversal, classify
-from finn.kernels.artifacts.abi import Clocking, Endpoint
+from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.rtl import Declined, evaluate
 from finn.kernels.base import Kernel
 from finn.kernels.laws import NATIVE, NATIVE_CLOCKING
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port import LoopEnds
-from finn.kernels.port_model import SequencePort
+from finn.kernels.port_model import StreamPort
 from finn.kernels.utilization import (
     Fit,
     auto_unstated,
@@ -234,26 +234,17 @@ class InputGeneratorKernel(Kernel):
         """``olst``: one bit per loop, closing that loop and every inner one."""
         return LoopEnds(self.nest.levels)
 
-    @derived
-    def port_clocking(self) -> Clocking:
-        """Native physical names follow the class clock_domain, including overrides."""
-        return type(self).clock_domain
-
-    input = SequencePort(
-        label="input",
+    input = StreamPort(
         endpoint=Endpoint.TARGET,
         transport=NATIVE,
         tensor=input_tensor,
         sequence=arriving,
-        clocking=port_clocking,
     )
-    output = SequencePort(
-        label="output",
+    output = StreamPort(
         endpoint=Endpoint.INITIATOR,
         transport=NATIVE,
         tensor=output_tensor,
         sequence=presenting,
-        clocking=port_clocking,
         loop_ends=loop_ends,
     )
 

@@ -55,11 +55,11 @@ from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel, ChannelFifo, boundary_contract, stated_by, stated_form
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.configure import commit
-from finn.kernels.laws import Axis
+from finn.kernels.laws import AXIS_CLOCKING, Axis
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.movers import IODMA_HLS, IodmaMover, iodma_hls
 from finn.kernels.partition import Partition
-from finn.kernels.port_model import SequencePort
+from finn.kernels.port_model import StreamPort
 from finn.kernels.sides import BUILD, ROW_MAJOR, Outside, Side, Steady
 from finn.kernels.transport import AxisBeat, StreamContract
 from finn.kernels.values.semantics import IntegerTensorValue
@@ -204,7 +204,8 @@ class Replaying(Space):
     def sequence(self) -> BeatSequence:
         return replaying().sequence
 
-    port = SequencePort(
+    port = StreamPort(
+        clocking=AXIS_CLOCKING,
         label="port",
         transport=Axis(bus="s_axis"),
         endpoint=Endpoint.TARGET,

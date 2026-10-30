@@ -73,7 +73,7 @@ from finn.kernels.base import Kernel
 from finn.kernels.control import Control, ControlModel
 from finn.kernels.laws import NATIVE_CLOCKING, Axis, Native, doubled
 from finn.kernels.library import ModuleSpec
-from finn.kernels.port_model import SequencePort
+from finn.kernels.port_model import StreamPort
 from finn.kernels.utilization import (
     Fit,
     auto_unstated,
@@ -319,26 +319,20 @@ class MemStreamKernel(Kernel):
             fabric=self.platform.fabric,
         )
 
-    @derived
-    def port_clocking(self) -> Clocking:
-        return type(self).clock_domain
-
-    set = SequencePort(
-        label="set",
+    set = StreamPort(
         transport=Native(names=("s_axis_0_tdata", "s_axis_0_tvalid", "s_axis_0_tready")),
-        clocking=port_clocking,
         endpoint=Endpoint.TARGET,
         tensor=set_tensor,
         sequence=set_sequence,
         dtype=set_dtype,
+        governs="output",
     )
-    output = SequencePort(
-        label="output",
+    output = StreamPort(
         transport=Axis(bus="m_axis_0"),
-        clocking=port_clocking,
         endpoint=Endpoint.INITIATOR,
         tensor=output_tensor,
         sequence=output_sequence,
+        stored=True,
     )
 
     @derived

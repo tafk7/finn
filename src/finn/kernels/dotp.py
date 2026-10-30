@@ -80,7 +80,7 @@ from finn.kernels.base import Kernel, extent_of
 from finn.kernels.laws import Axis, doubled
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port import axis
-from finn.kernels.port_model import IndexedPort, ScheduledPort
+from finn.kernels.port_model import StreamPort
 from finn.kernels.utilization import Fit
 from finn.kernels.values.domains import Integer, admit_element, integer_bounds, range_dtype
 from finn.platform.capabilities import DspBlock, Platform, Resources, dsp_widths
@@ -369,14 +369,8 @@ class DotpAxiKernel(Kernel):
             found.append(self.w.access)
         return found
 
-    @derived
-    def port_clocking(self) -> Clocking:
-        return type(self).clock_domain
-
-    x = IndexedPort(
-        label="x",
+    x = StreamPort(
         transport=Axis(bus="s_axis_input"),
-        clocking=port_clocking,
         endpoint=Endpoint.TARGET,
         tensor=x_tensor,
         admits=activation_policy,
@@ -386,10 +380,8 @@ class DotpAxiKernel(Kernel):
         closes=reduced,
         reshaped=x_viewed,
     )
-    w = IndexedPort(
-        label="w",
+    w = StreamPort(
         transport=Axis(bus="s_axis_weights"),
-        clocking=port_clocking,
         endpoint=Endpoint.TARGET,
         tensor=w_tensor,
         admits=Integer(min_bits=2, signed=True),
@@ -398,10 +390,8 @@ class DotpAxiKernel(Kernel):
         lanes=w_lanes,
         reshaped=windowed,
     )
-    y = ScheduledPort(
-        label="y",
+    y = StreamPort(
         transport=Axis(bus="m_axis_output"),
-        clocking=port_clocking,
         endpoint=Endpoint.INITIATOR,
         tensor=y_tensor,
         admits=Integer(),

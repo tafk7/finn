@@ -58,7 +58,7 @@ from finn.kernels.laws import NATIVE_CLOCKING, Axis
 from finn.kernels.library import ModuleSpec, library_module
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port import port_surface
-from finn.kernels.port_model import OtherPins, SequencePort
+from finn.kernels.port_model import OtherPins, StreamPort
 from finn.kernels.sides import Side
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import Resources
@@ -77,14 +77,9 @@ class Probe(Kernel):
 
     tensor: Tensor | None = Param(default=None)
 
-    @derived
-    def port_clocking(self) -> Clocking:
-        return type(self).clock_domain
-
-    x = SequencePort(
+    x = StreamPort(
         label="x",
         transport=Axis(bus="s_axis"),
-        clocking=port_clocking,
         endpoint=Endpoint.TARGET,
         tensor=tensor,
         sequence=BeatSequence(vector_major((4,), 1)),
@@ -180,7 +175,7 @@ class Controlled(Kernel):
     )
     config = ControlModel(bus=config_bus, presented=writable)
     tensor: Tensor = Param()
-    x = SequencePort(
+    x = StreamPort(
         label="x",
         tensor=tensor,
         sequence=BeatSequence(vector_major((4,), 1)),

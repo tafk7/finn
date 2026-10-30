@@ -29,12 +29,12 @@ from typing import ClassVar
 from finn.core.space import Param, derived, view
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence
-from finn.kernels.artifacts.abi import Clocking, Endpoint
+from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel
 from finn.kernels.laws import NATIVE, NATIVE_CLOCKING
 from finn.kernels.library import ModuleSpec
-from finn.kernels.port_model import SequencePort
+from finn.kernels.port_model import StreamPort
 from finn.kernels.utilization import Fit
 from finn.platform.capabilities import Resources
 
@@ -69,26 +69,17 @@ class VpcKernel(Kernel):
         tensor: Tensor = self.input_tensor
         return tensor
 
-    @derived
-    def port_clocking(self) -> Clocking:
-        """Physical port clock names remain the class's clock_domain, including overrides."""
-        return type(self).clock_domain
-
-    input = SequencePort(
-        label="input",
+    input = StreamPort(
         endpoint=Endpoint.TARGET,
         transport=NATIVE,
         tensor=input_tensor,
         sequence=arriving,
-        clocking=port_clocking,
     )
-    output = SequencePort(
-        label="output",
+    output = StreamPort(
         endpoint=Endpoint.INITIATOR,
         transport=NATIVE,
         tensor=output_tensor,
         sequence=leaving,
-        clocking=port_clocking,
     )
 
     @derived

@@ -10,6 +10,7 @@ from support.helpers import FULL_DSP48E2, FULL_DSP58
 
 from finn.core.space import (
     Decision,
+    Inapplicable,
     Rejected,
     Unresolved,
     derived,
@@ -25,7 +26,7 @@ from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.laws import Native
 from finn.kernels.pool import PoolKernel, c, kh, kw
 from finn.kernels.port import LoopEnds
-from finn.kernels.port_model import IndexedPort, ScheduledPort
+from finn.kernels.port_model import StreamPort
 from finn.kernels.pwpolyf import PwPolyKernel
 
 UNNAMED_ENDS = LoopEnds((LevelEnd(1),))
@@ -43,8 +44,8 @@ def test_actual_pool_model_remains_usable_before_pe_and_has_no_output_binding() 
     assert point.channels == 4
     assert point.output_tensor.shape == (1, 2, 2, 4)
     assert isinstance(point.query(PoolKernel.input.stream), Unresolved)
-    assert not hasattr(type(point.output), "access")
-    assert not hasattr(type(point.output), "binds")
+    assert point.output.binds is False  # an output never binds its kernel's extents
+    assert isinstance(point.query(type(point).output.access), Inapplicable)
     assert not hasattr(PoolKernel, "input_stream")
 
 
@@ -72,7 +73,7 @@ class SerialPool(PoolKernel):
         _ = self.second_state
         return self.schedule
 
-    input = IndexedPort(
+    input = StreamPort(
         label="input",
         tensor=PoolKernel.input_tensor,
         schedule=first,
@@ -81,9 +82,8 @@ class SerialPool(PoolKernel):
         closes=(kh, kw),
         transport=Native(names=("data", "valid", "ready")),
         loop_ends=UNNAMED_ENDS,
-        clocking=PoolKernel.port_clocking,
     )
-    output = ScheduledPort(
+    output = StreamPort(
         label="output",
         endpoint=Endpoint.INITIATOR,
         tensor=PoolKernel.output_tensor,
@@ -93,7 +93,6 @@ class SerialPool(PoolKernel):
         reduces=(kh, kw),
         transport=Native(names=("result", "valid", "ready")),
         loop_ends=UNNAMED_ENDS,
-        clocking=PoolKernel.port_clocking,
     )
 
     @view

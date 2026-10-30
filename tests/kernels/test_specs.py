@@ -54,7 +54,7 @@ from finn.kernels.configure import undecided
 from finn.kernels.library import ModuleSpec
 from finn.kernels.partition import Partition
 from finn.kernels.port import port_surface
-from finn.kernels.port_model import PortModel, port_surfaces
+from finn.kernels.port_model import StreamPort, port_surfaces
 from finn.kernels.sides import Side
 
 BY_NAME = {spec.name: spec for spec in SPECS}
@@ -222,7 +222,7 @@ def _ports_checked(point: Partition) -> int:
                 frame = getattr(frame, part)
             label: str = (
                 member.field(frame.label).get()
-                if isinstance(frame, PortModel)
+                if isinstance(frame, StreamPort)
                 else getattr(member, f"{port}_label")
             )
             assert surface.side is not None and surface.stream is not None

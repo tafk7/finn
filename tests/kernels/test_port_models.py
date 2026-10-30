@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 from qonnx.core.datatype import DataType
 
@@ -24,17 +26,23 @@ from finn.core.space import (
     reject,
     view,
 )
+from finn.core.space._nodes import node_record
+from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.module import Held
 from finn.kernels.base import Kernel, PortContract
-from finn.kernels.laws import NATIVE, NATIVE_CLOCKING, Axis, Native
+from finn.kernels.dotp import PackedDotpKernel
+from finn.kernels.laws import AXIS, AXIS_CLOCKING, NATIVE, NATIVE_CLOCKING, Advance, Axis, Native
+from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port import LoopEnds, PhysicalPort, contract, data_width, held, pins, transport
-from finn.kernels.port_model import PortModel, PortSurface, SequencePort, port_surfaces
+from finn.kernels.port_model import PortSurface, StreamPort, port_surfaces
 from finn.kernels.sides import Side
+from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.domains import Integer
+from finn.kernels.vpc import VpcKernel
 
 ELEMENT = ScalarEncoding(DataType["INT3"])
 TENSOR = Tensor((2, 4), ELEMENT)
@@ -51,7 +59,7 @@ class Ports(Space):
     def sequence(self) -> BeatSequence:
         return BeatSequence(vector_major((2, 4), self.fold))
 
-    input = SequencePort(
+    input = StreamPort(
         label="input",
         endpoint=Endpoint.TARGET,
         transport=NATIVE,
@@ -59,7 +67,7 @@ class Ports(Space):
         sequence=sequence,
         clocking=NATIVE_CLOCKING,
     )
-    output = SequencePort(
+    output = StreamPort(
         label="output",
         endpoint=Endpoint.INITIATOR,
         transport=NATIVE,
@@ -67,7 +75,7 @@ class Ports(Space):
         sequence=input.sequence,
         clocking=NATIVE_CLOCKING,
     )
-    checked = SequencePort(
+    checked = StreamPort(
         label="checked",
         transport=Axis(bus="s_axis_x"),
         tensor=tensor,
@@ -145,7 +153,8 @@ def test_optional_idle_skips_refused_sequence_and_keeps_physical_metadata() -> N
         def bad(self) -> BeatSequence | Rejected:
             return reject("unused-sequence", "must not be demanded")
 
-        port = SequencePort(
+        port = StreamPort(
+            transport=AXIS,
             label="set",
             dtype=DataType["INT3"],
             sequence=bad,
@@ -164,28 +173,24 @@ def test_optional_idle_skips_refused_sequence_and_keeps_physical_metadata() -> N
     assert not any(n.declaration.key == "bad" for n in visited.nodes)
 
 
-def test_static_idle_and_nonbinding_ports_omit_members() -> None:
+def test_an_idle_port_answers_its_stream_inapplicable_and_an_unindexed_one_binds_nothing() -> None:
     class Shape(Space):
-        idle = PortModel(label="idle", dtype=DataType["INT3"])
-        live = SequencePort(label="live", tensor=TENSOR, sequence=SEQUENCE)
+        idle = StreamPort(
+            clocking=AXIS_CLOCKING, transport=AXIS, label="idle", dtype=DataType["INT3"]
+        )
+        live = StreamPort(
+            clocking=AXIS_CLOCKING, transport=AXIS, label="live", tensor=TENSOR, sequence=SEQUENCE
+        )
 
     point = design_space(Shape())
-    keys = {n.key for n in inspection.members(point)}
-    assert not keys & {
-        "idle.stream",
-        "idle.width",
-        "idle.side",
-        "idle.contract",
-        "idle.access",
-        "idle.placed",
-        "live.access",
-        "live.binds",
-    }
+    assert not point.idle.placed
+    for member in ("stream", "width", "side", "contract", "access"):
+        assert isinstance(point.query(getattr(Shape.idle, member)), Inapplicable), member
+    assert point.live.binds is False
+    assert isinstance(point.query(Shape.live.access), Inapplicable)
     assert inspection.statistics(point).owning_decisions == 0
     assert point.idle.element == ELEMENT
     surfaces = port_surfaces(Shape)
-    assert surfaces["idle"].stream is None
-    assert surfaces["live"].stream is not None
     assert point.query(surfaces["live"].stream) == Available(Stream(ELEMENT, SEQUENCE))
 
 
@@ -193,7 +198,14 @@ def test_static_idle_and_nonbinding_ports_omit_members() -> None:
 def test_real_child_presence_is_distinct_from_idle(state: bool | None) -> None:
     class Guarded(Space):
         enabled: bool = Decision(domain=(False, True))
-        port = SequencePort(label="x", tensor=TENSOR, sequence=SEQUENCE, when=enabled)
+        port = StreamPort(
+            clocking=AXIS_CLOCKING,
+            transport=AXIS,
+            label="x",
+            tensor=TENSOR,
+            sequence=SEQUENCE,
+            when=enabled,
+        )
 
     point = design_space(Guarded())
     if state is not None:
@@ -206,7 +218,7 @@ def test_native_loop_markers_and_physical_refusals_use_actual_values() -> None:
     sequence = BeatSequence(SEQUENCE.form, markers=(LevelEnd(2),))
 
     class Marked(Space):
-        port = SequencePort(
+        port = StreamPort(
             label="output",
             endpoint=Endpoint.INITIATOR,
             transport=NATIVE,
@@ -230,7 +242,8 @@ def test_native_loop_markers_and_physical_refusals_use_actual_values() -> None:
     assert point.port.contract == PortContract("output", found)
 
     class Bad(Space):
-        port = SequencePort(
+        port = StreamPort(
+            clocking=AXIS_CLOCKING,
             label="bad",
             tensor=TENSOR,
             sequence=sequence,
@@ -244,23 +257,33 @@ def test_native_loop_markers_and_physical_refusals_use_actual_values() -> None:
 
 def test_surface_discovery_rebases_overrides_groups_and_stops_at_real_children() -> None:
     class Included(Group):
-        nested = SequencePort(label="nested", tensor=TENSOR, sequence=SEQUENCE)
+        nested = StreamPort(
+            clocking=AXIS_CLOCKING, transport=AXIS, label="nested", tensor=TENSOR, sequence=SEQUENCE
+        )
 
     class Base(Space):
-        first: PortModel = SequencePort(
+        first: StreamPort = StreamPort(
+            clocking=AXIS_CLOCKING,
+            transport=AXIS,
             label="first",
             tensor=TENSOR,
             sequence=SEQUENCE,
         )
-        second: object = SequencePort(
+        second: object = StreamPort(
+            clocking=AXIS_CLOCKING,
+            transport=AXIS,
             label="second",
             tensor=TENSOR,
             sequence=SEQUENCE,
         )
 
     class Child(Base):
-        first = SequencePort(
-            label="first", tensor=TENSOR, sequence=SEQUENCE, transport=Axis(bus="replaced")
+        first = StreamPort(
+            clocking=AXIS_CLOCKING,
+            label="first",
+            tensor=TENSOR,
+            sequence=SEQUENCE,
+            transport=Axis(bus="replaced"),
         )
         group = Included()
         real = Base()
@@ -277,7 +300,7 @@ def test_surface_discovery_rebases_overrides_groups_and_stops_at_real_children()
 def test_port_children_are_not_hardware_kernels_or_member_netlists() -> None:
     class Host(Kernel):
         id = "test.port-host"
-        p = SequencePort(label="p", tensor=TENSOR, sequence=SEQUENCE)
+        p = StreamPort(transport=AXIS, label="p", tensor=TENSOR, sequence=SEQUENCE)
 
     point = design_space(Host())
     assert isinstance(point.p, Space)
@@ -295,7 +318,103 @@ def test_view_bindings_remain_model_read_in_errors() -> None:
         def inward(self) -> BeatSequence:
             return self.outward
 
-        port = SequencePort(label="bad", tensor=TENSOR, sequence=inward)
+        port = StreamPort(transport=AXIS, label="bad", tensor=TENSOR, sequence=inward)
 
     with pytest.raises(DefinitionError, match="view"):
         design_space(Bad())
+
+
+# -- the one construct: its advance rule, and what its kernel supplies (W4) ----------------
+
+
+@pytest.mark.parametrize(
+    ("declared", "rule"),
+    [
+        (
+            {
+                "schedule": Schedule({Index("r"): 2, Index("c"): 4}),
+                "index": (Index("r"), Index("c")),
+            },
+            Advance.SCHEDULED,
+        ),
+        ({"sequence": SEQUENCE}, Advance.BUFFERED),
+        ({"sequence": SEQUENCE, "governs": "input"}, Advance.SELECTED),
+        ({"sequence": SEQUENCE, "stored": True}, Advance.SOURCED),
+    ],
+)
+def test_a_port_follows_the_advance_rule_its_declaration_gives(
+    declared: dict[str, object], rule: Advance
+) -> None:
+    port = cast(Any, StreamPort)(
+        label="p", transport=AXIS, clocking=AXIS_CLOCKING, tensor=TENSOR, **declared
+    )
+    point = design_space(port)
+    assert point.advance is rule
+    assert (
+        rule.law.id
+        == {"scheduled": "L2", "buffered": "L3", "selected": "L4", "sourced": "L5"}[rule.value]
+    )
+
+
+def test_library_ports_follow_their_rtl_s_advance_rules() -> None:
+    def rules(space_type: type[Kernel]) -> dict[str, Advance]:
+        found: dict[str, Advance] = {}
+        declared: dict[str, object] = {}
+        for base in reversed(space_type.__mro__):
+            declared.update(vars(base))
+        for name, port in declared.items():
+            if isinstance(port, StreamPort):
+                record = node_record(port)
+                assert record is not None
+                bound = record.bindings
+                found[name] = (
+                    Advance.SCHEDULED
+                    if "schedule" in bound
+                    else Advance.SELECTED
+                    if "governs" in bound
+                    else Advance.SOURCED
+                    if bound.get("stored") is True
+                    else Advance.BUFFERED
+                )
+        return found
+
+    assert rules(PackedDotpKernel) == {
+        "x": Advance.SCHEDULED,
+        "w": Advance.SCHEDULED,
+        "y": Advance.SCHEDULED,
+    }
+    assert rules(ThresholdingAxiKernel) == {
+        "input": Advance.SCHEDULED,
+        "output": Advance.SCHEDULED,
+        "set": Advance.SELECTED,
+    }
+    assert rules(MemStreamKernel) == {"set": Advance.SELECTED, "output": Advance.SOURCED}
+    assert rules(VpcKernel) == {"input": Advance.BUFFERED, "output": Advance.BUFFERED}
+
+
+def test_a_kernel_gives_each_port_of_its_body_its_name_and_its_clock_domain() -> None:
+    class Native_(Kernel):
+        id = "test.native_port_clock"
+        clock_domain = NATIVE_CLOCKING
+        input = StreamPort(transport=NATIVE, tensor=TENSOR, sequence=SEQUENCE)
+        named = StreamPort(label="other", transport=NATIVE, tensor=TENSOR, sequence=SEQUENCE)
+
+    point = design_space(Native_())
+    assert point.input.label == "input" and point.input.clocking == NATIVE_CLOCKING
+    assert point.named.label == "other"
+    assert point.input.contract.contract.transport.clock == "clk"
+    # A port declared outside a kernel's body states both.
+    with pytest.raises(DefinitionError, match="clocking is not supplied"):
+        design_space(StreamPort(label="p", transport=AXIS, tensor=TENSOR, sequence=SEQUENCE))
+
+
+def test_a_port_states_its_transport() -> None:
+    """R1 F4: no default transport, so a native port is never taken for an AXIS bus."""
+
+    with pytest.raises(DefinitionError, match="transport is not supplied"):
+
+        class Untransported(Kernel):
+            id = "test.untransported"
+            input = StreamPort(tensor=TENSOR, sequence=SEQUENCE)
+
+        design_space(Untransported())

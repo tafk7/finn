@@ -25,8 +25,9 @@ from finn.dataflow.steps import Step, Steps, Unrealizable, steps
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, Grouped, LevelDone, Loop, vector_major
 from finn.kernels.adapters import realize
+from finn.kernels.laws import AXIS, AXIS_CLOCKING
 from finn.kernels.port import stream_refusal
-from finn.kernels.port_model import ScheduledPort
+from finn.kernels.port_model import StreamPort
 from finn.kernels.vpc import VpcKernel
 
 ELEMENT = ScalarEncoding(resolve_qonnx_datatype_name("INT8"))
@@ -99,7 +100,9 @@ def test_non_suffix_closing_uses_existing_tlast_only_when_it_normalizes_to_level
     m, k, t = Index("m"), Index("k"), Index("t")
     schedule = Schedule({m: 2, k: 4, t: inner_fold}, {k: 2}, (m, k, t))
     point = design_space(
-        ScheduledPort(
+        StreamPort(
+            clocking=AXIS_CLOCKING,
+            transport=AXIS,
             label="x",
             tensor=Tensor((2, 4), ELEMENT),
             schedule=schedule,
@@ -108,14 +111,14 @@ def test_non_suffix_closing_uses_existing_tlast_only_when_it_normalizes_to_level
             closes=(k,),
         )
     )
-    stream = point.query(ScheduledPort.stream)
+    stream = point.query(StreamPort.stream)
     if inner_fold == 1:
         from finn.core.space import Available as SpaceAvailable  # noqa: PLC0415
         from finn.dataflow.traversal import LevelEnd  # noqa: PLC0415
 
         assert isinstance(stream, SpaceAvailable)
         assert stream.value.sequence.markers == (LevelEnd(2),)
-        contract = point.query(ScheduledPort.contract)
+        contract = point.query(StreamPort.contract)
         assert isinstance(contract, SpaceAvailable)
         assert contract.value.contract.transport.markers[0].signal == "s_axis_x_tlast"
     else:

@@ -50,14 +50,14 @@ from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.gemm import ZERO
 from finn.dataflow.schedule import Access, Affine, Index, Schedule
 from finn.dataflow.tensor import Tensor
-from finn.kernels.artifacts.abi import Clocking, Endpoint
+from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource, HlsSource
 from finn.kernels.artifacts.hls import axis_type
 from finn.kernels.base import Kernel, extent_of
 from finn.kernels.laws import Axis, AxisSpelling
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port import axis
-from finn.kernels.port_model import IndexedPort, ScheduledPort
+from finn.kernels.port_model import StreamPort
 from finn.kernels.values.domains import Integer
 from finn.platform.capabilities import Platform, Resources
 
@@ -227,14 +227,8 @@ class PoolKernel(Kernel):
             found.append(self.input.access)
         return found
 
-    @derived
-    def port_clocking(self) -> Clocking:
-        return type(self).clock_domain
-
-    input = IndexedPort(
-        label="input",
+    input = StreamPort(
         transport=Axis(bus="s_axis", spelling=AxisSpelling.UPPER),
-        clocking=port_clocking,
         endpoint=Endpoint.TARGET,
         tensor=input_tensor,
         admits=ELEMENTS,
@@ -257,10 +251,8 @@ class PoolKernel(Kernel):
             return shape
         return Tensor(shape, self.input.element)
 
-    output = ScheduledPort(
-        label="output",
+    output = StreamPort(
         transport=Axis(bus="m_axis", spelling=AxisSpelling.UPPER),
-        clocking=port_clocking,
         endpoint=Endpoint.INITIATOR,
         tensor=output_tensor,
         admits=ELEMENTS,

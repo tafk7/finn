@@ -476,16 +476,15 @@ def _port(kernel: Any, path: str) -> Any:
             except RequestError:
                 pass
         node = getattr(node, part)
-    from finn.kernels.port_model import ScheduledPort, SequencePort  # noqa: PLC0415
+    from finn.kernels.port_model import StreamPort  # noqa: PLC0415
 
     declaration = getattr(type(node), name)
-    if isinstance(declaration, ScheduledPort):
-        # Actual resolved model metadata; scheduled tensor binding keeps its index axes.
-        return getattr(node, name)
-    if isinstance(declaration, SequencePort):
-        # Given native sequences have no schedule or tensor-index binding metadata.
-        return None
-    raise TypeError(f"{path} is not an actual scheduled/native port")
+    if not isinstance(declaration, StreamPort):
+        raise TypeError(f"{path} is not an actual stream port")
+    port = getattr(node, name)
+    # A scheduled port's resolved model metadata keeps its index axes; a given sequence has
+    # no schedule or tensor-index binding metadata.
+    return port if port.schedule is not None else None
 
 
 def _stated(

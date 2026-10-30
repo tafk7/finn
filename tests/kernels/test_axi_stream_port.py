@@ -3,9 +3,9 @@
 
 """Real child ports and extents bound from the tensors a kernel's inputs read.
 
-``IndexedPort`` states an input's tensor access (``x.access``); its parent reads
+``StreamPort`` states an input's tensor access (``x.access``); its parent reads
 the binding inputs in ``_accesses`` to derive ``Kernel.extents``. Folding
-domains read ``extent_of`` members. ``ScheduledPort`` presents an output tensor
+domains read ``extent_of`` members. ``StreamPort`` presents an output tensor
 derived from those extents without binding them back into its parent. A child
 states its intrinsic element rule; parent composition constraints remain on the
 kernel. Model element/access members remain usable before presentation resolves,
@@ -47,7 +47,7 @@ from finn.kernels.laws import Axis
 from finn.kernels.library import ModuleSpec, library_module
 from finn.kernels.partition import Partition
 from finn.kernels.port import lane_count
-from finn.kernels.port_model import IndexedPort, ScheduledPort
+from finn.kernels.port_model import StreamPort
 from finn.kernels.sides import Side
 from finn.kernels.values.domains import Integer
 from finn.platform.capabilities import Resources
@@ -75,7 +75,7 @@ class Pool(Kernel):
             return shape
         return Tensor(shape, ScalarEncoding(DataType["INT8"]))
 
-    x = IndexedPort(
+    x = StreamPort(
         label="x",
         transport=Axis(bus="s_axis_input"),
         endpoint=Endpoint.TARGET,
@@ -84,7 +84,7 @@ class Pool(Kernel):
         index=(b, s, c),
         lanes=(c,),
     )
-    y = ScheduledPort(
+    y = StreamPort(
         label="y",
         transport=Axis(bus="m_axis_output"),
         endpoint=Endpoint.INITIATOR,
@@ -199,7 +199,7 @@ def test_extent_of_is_a_named_member() -> None:
 def test_a_port_presents_a_schedule_or_a_sequence_not_both() -> None:
     class Both(Pool):
         id = "test.accpool.both"
-        x = IndexedPort(
+        x = StreamPort(
             label="x",
             transport=Axis(bus="s_axis_input"),
             endpoint=Endpoint.TARGET,
@@ -220,7 +220,7 @@ def test_a_port_presents_a_schedule_or_a_sequence_not_both() -> None:
 def test_a_producers_element_is_its_tensors() -> None:
     class Stated(Pool):
         id = "test.accpool.stated"
-        y = ScheduledPort(
+        y = StreamPort(
             label="y",
             transport=Axis(bus="m_axis_output"),
             endpoint=Endpoint.INITIATOR,
@@ -278,7 +278,7 @@ class Holding(Kernel):
 
     id = "test.holding"
     admits: Integer | None = Param(default=None)
-    x = IndexedPort(
+    x = StreamPort(
         label="x",
         transport=Axis(bus="s_axis_input"),
         endpoint=Endpoint.TARGET,

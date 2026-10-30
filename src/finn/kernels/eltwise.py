@@ -36,12 +36,12 @@ from finn.core.space import (
 from finn.dataflow.datatypes import QONNXDataType, resolve_qonnx_datatype_name
 from finn.dataflow.schedule import Access, Index, Schedule
 from finn.dataflow.tensor import Tensor
-from finn.kernels.artifacts.abi import Clocking, Endpoint
+from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel, extent_of
 from finn.kernels.laws import NATIVE, NATIVE_CLOCKING, Native
 from finn.kernels.library import ModuleSpec
-from finn.kernels.port_model import IndexedPort, ScheduledPort
+from finn.kernels.port_model import StreamPort
 from finn.kernels.values.domains import Integer, admit_element
 from finn.platform.capabilities import DspBlock, Platform, Resources
 
@@ -192,39 +192,29 @@ class EltwiseKernel(Kernel):
             return element
         return Tensor(shape, element)
 
-    @derived
-    def port_clocking(self) -> Clocking:
-        return type(self).clock_domain
-
-    lhs = IndexedPort(
-        label="lhs",
+    lhs = StreamPort(
         transport=Native(prefix="a"),
         endpoint=Endpoint.TARGET,
         tensor=lhs_tensor,
         schedule=schedule,
         index=indices,
         lanes=(c,),
-        clocking=port_clocking,
     )
-    rhs = IndexedPort(
-        label="rhs",
+    rhs = StreamPort(
         transport=Native(prefix="b"),
         endpoint=Endpoint.TARGET,
         tensor=rhs_tensor,
         schedule=schedule,
         index=rhs_indices,
         lanes=(c,),
-        clocking=port_clocking,
     )
-    result = ScheduledPort(
-        label="result",
+    result = StreamPort(
         transport=NATIVE,
         endpoint=Endpoint.INITIATOR,
         tensor=result_tensor,
         schedule=schedule,
         index=indices,
         lanes=(c,),
-        clocking=port_clocking,
     )
 
     def _accesses(self) -> list[Access]:

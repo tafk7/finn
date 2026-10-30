@@ -33,8 +33,9 @@ from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.base import Kernel
 from finn.kernels.configure import chosen, commit
+from finn.kernels.laws import AXIS
 from finn.kernels.port import port_endpoint, port_surface
-from finn.kernels.port_model import SequencePort, port_surfaces
+from finn.kernels.port_model import StreamPort, port_surfaces
 from finn.kernels.values.domains import Integer
 
 
@@ -207,10 +208,11 @@ def test_port_discovery_reads_lexical_groups_without_implicit_child_lowering() -
     sequence = BeatSequence(vector_major((2, 4), 4))
 
     class Child(Space):
-        inner = SequencePort(label="inner", tensor=tensor, sequence=sequence)
+        inner = StreamPort(transport=AXIS, label="inner", tensor=tensor, sequence=sequence)
 
     class Included(Group):
-        nested = SequencePort(
+        nested = StreamPort(
+            transport=AXIS,
             label="nested",
             endpoint=Endpoint.INITIATOR,
             tensor=tensor,

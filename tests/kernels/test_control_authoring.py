@@ -45,7 +45,7 @@ from finn.kernels.control import Control, ControlModel, control_models
 from finn.kernels.laws import AXIS, Axis
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port import port_endpoint, port_surface
-from finn.kernels.port_model import IndexedPort, ScheduledPort, SequencePort
+from finn.kernels.port_model import StreamPort
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import IntegerTensorValue
@@ -81,22 +81,22 @@ def _gated(
     return pin_values, held_values
 
 
-class GatedSet(SequencePort):
+class GatedSet(StreamPort):
     pins_gate: str = Param(default="ready")
     held_gate: str = Param(default="ready")
-    pin_values, held_values = _gated(SequencePort.pin_values, SequencePort.held_values)
+    pin_values, held_values = _gated(StreamPort.pin_values, StreamPort.held_values)
 
 
-class GatedIndexed(IndexedPort):
+class GatedIndexed(StreamPort):
     pins_gate: str = Param(default="ready")
     held_gate: str = Param(default="ready")
-    pin_values, held_values = _gated(IndexedPort.pin_values, IndexedPort.held_values)
+    pin_values, held_values = _gated(StreamPort.pin_values, StreamPort.held_values)
 
 
-class GatedScheduled(ScheduledPort):
+class GatedScheduled(StreamPort):
     pins_gate: str = Param(default="ready")
     held_gate: str = Param(default="ready")
-    pin_values, held_values = _gated(ScheduledPort.pin_values, ScheduledPort.held_values)
+    pin_values, held_values = _gated(StreamPort.pin_values, StreamPort.held_values)
 
 
 class SerialThreshold(ThresholdingAxiKernel):
@@ -125,7 +125,6 @@ class SerialThreshold(ThresholdingAxiKernel):
     input = GatedIndexed(
         label="input",
         transport=Axis(bus="s_axis"),
-        clocking=ThresholdingAxiKernel.port_clocking,
         endpoint=Endpoint.TARGET,
         tensor=ThresholdingAxiKernel.input_tensor,
         schedule=ThresholdingAxiKernel.schedule,
@@ -137,7 +136,6 @@ class SerialThreshold(ThresholdingAxiKernel):
     output = GatedScheduled(
         label="output",
         transport=Axis(bus="m_axis"),
-        clocking=ThresholdingAxiKernel.port_clocking,
         endpoint=Endpoint.INITIATOR,
         tensor=ThresholdingAxiKernel.output_tensor,
         schedule=ThresholdingAxiKernel.schedule,
@@ -149,7 +147,6 @@ class SerialThreshold(ThresholdingAxiKernel):
     set = GatedSet(
         label="set",
         transport=AXIS,
-        clocking=ThresholdingAxiKernel.port_clocking,
         endpoint=Endpoint.TARGET,
         tensor=ThresholdingAxiKernel.set_tensor,
         sequence=ThresholdingAxiKernel.set_sequence,

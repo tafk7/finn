@@ -80,7 +80,7 @@ from finn.kernels.base import Kernel
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.laws import Axis
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.port_model import IndexedPort, ScheduledPort, SequencePort
+from finn.kernels.port_model import StreamPort
 from finn.kernels.thresholding import ThresholdingAxiKernel
 
 # -- the loop-order proof: thresholding on a schedule ---------------------------------------
@@ -123,22 +123,20 @@ def scheduled(space_type: type[RowsFirst]) -> dict[str, Any]:
 co, ci = Index("co"), Index("ci")
 
 
-def split_ports(schedule: Any, lanes: tuple[Index, ...]) -> tuple[IndexedPort, ScheduledPort]:
+def split_ports(schedule: Any, lanes: tuple[Index, ...]) -> tuple[StreamPort, StreamPort]:
     """Input and output reading channel ``c = 3 co + ci``, lanes in ``lanes`` order."""
-    input = IndexedPort(
+    input = StreamPort(
         label="input",
         transport=Axis(bus="s_axis"),
-        clocking=ThresholdingAxiKernel.port_clocking,
         endpoint=Endpoint.TARGET,
         tensor=ThresholdingAxiKernel.input_tensor,
         schedule=schedule,
         index=(r, co * 3 + ci),
         lanes=lanes,
     )
-    output = ScheduledPort(
+    output = StreamPort(
         label="output",
         transport=Axis(bus="m_axis"),
-        clocking=ThresholdingAxiKernel.port_clocking,
         endpoint=Endpoint.INITIATOR,
         tensor=ThresholdingAxiKernel.output_tensor,
         schedule=schedule,
@@ -341,10 +339,9 @@ class Misnamed(MemStreamKernel):
     """memstream_axi with its output bus misnamed: the source has no such pins."""
 
     id = "test.memstream_axi.misnamed"
-    output = SequencePort(
+    output = StreamPort(
         label="output",
         transport=Axis(bus="m_axis_1"),
-        clocking=MemStreamKernel.port_clocking,
         endpoint=Endpoint.INITIATOR,
         tensor=MemStreamKernel.output_tensor,
         sequence=MemStreamKernel.output_sequence,

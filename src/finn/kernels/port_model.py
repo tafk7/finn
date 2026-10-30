@@ -1,12 +1,11 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Lean real port children and typed authoring surfaces.
+"""A kernel's ports: real child Spaces, and typed authoring surfaces.
 
-PortModel is a constant-idle physical port: it declares no logical stream, width,
-side, contract or tensor access. SequencePort adds an optional logical stream.
-Both use ordinary core declarations, with zero Decisions and intrinsic element
-admission at the port's real scope. Folding and composition remain on the parent.
+``StreamPort`` is the one stream-port construct: a child Space with zero Decisions and
+intrinsic element admission at the port's real scope, presenting a given sequence or its
+kernel's schedule's projection, or idle. Folding and composition remain on the parent.
 
 Public physical Views characterize the child's contract. Module assembly (the
 base's, ``Kernel.netlist``) calls each port's ordinary methods, ``pin_values``,
@@ -41,7 +40,7 @@ from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.abi import Clocking, Endpoint, Pin
 from finn.kernels.artifacts.module import Held
 from finn.kernels.base import PortContract
-from finn.kernels.laws import AXIS, AXIS_CLOCKING, TransportKind
+from finn.kernels.laws import Advance, TransportKind
 from finn.kernels.port import (
     LoopEnds,
     PhysicalPort,
@@ -56,92 +55,46 @@ from finn.kernels.sides import Side
 from finn.kernels.values.domains import Integer, admit_element
 
 
-class PortModel(Space):
-    """A real physical port, constant idle unless a logical subtype adds presentation.
+class StreamPort(Space):
+    """A stream port: where one tensor leaves or enters its kernel as one stream, the one
+    construct every port of a kernel with a module is declared by (CONTRACT.md § 7).
 
-    ``label`` names the port in its kernel's ABI, not inferred from its model path.
-    It declares its ``transport`` kind, not its pins: they follow from the library's
-    defaults (``finn.kernels.laws``: ``AXIS``, ``NATIVE``) and the names its kernel states
-    where its RTL differs (``Axis(bus=...)``, ``Native(prefix=...)``). A genuinely guarded
-    absent child retains ordinary Space presence; an idle logical port remains present.
+    It declares its role (``endpoint``), its tensor, how the tensor is presented and its
+    ``transport`` kind (``finn.kernels.laws``: ``AXIS``, ``NATIVE``, or the names its RTL
+    states, ``Axis(bus=...)``, ``Native(prefix=...)``), never its pins: they, its idle holds
+    and its packing follow from the library. Its presentation is a given ``sequence`` (a
+    stage's side) or its kernel's ``schedule`` projected through its ``index`` (``lanes``,
+    ``reduces``, ``holds``, ``closes``, ``reshaped``); a port with no tensor is idle, and
+    states its element (``dtype``). Its advance rule follows from how it is declared
+    (``advance``). A target with an index reads its tensor to bind its kernel's extents
+    (``access``).
+
+    ``label`` is the port's name in its kernel and ``clocking`` its kernel's clock domain
+    (L8: the kernel's, never the port's): a kernel supplies both for a port declared in its
+    own body that does not state them (``finn.kernels.base.Kernel``). Its ``transport`` has
+    no default (R1 F4): a native port taken for AXIS would be a bus the RTL does not have.
     """
 
     label: str = Param()
     endpoint: Endpoint = Param(default=Endpoint.TARGET)
+    transport: TransportKind = Param()
+    clocking: Clocking = Param()
+    tensor: Tensor | None = Param(default=None)
     dtype: QONNXDataType | None = Param(default=None)
     admits: Integer | None = Param(default=None)
-    transport: TransportKind = Param(default=AXIS)
     loop_ends: LoopEnds | None = Param(default=None)
-    lanes: tuple[Index, ...] = Param(default=())
-    clocking: Clocking = Param(default=AXIS_CLOCKING)
-
-    @derived
-    def element(self) -> ScalarEncoding | Rejected:
-        dtype = self.dtype
-        if dtype is not None:
-            if self.endpoint is Endpoint.INITIATOR:
-                return reject("port-element", f"{self.label}: a producer's element is its tensor's")
-            return admit_element(dtype, None)
-        return reject("port-element", f"{self.label}: an idle port states its dtype")
-
-    @constraint
-    def element_taken(self) -> bool | Rejected:
-        policy = self.admits
-        return True if policy is None else policy.check(self.element.dtype)
-
-    def physical_spec(self, *, idle: bool) -> PhysicalPort:
-        """Resolved physical fields in existing read order; placed ports skip idle lanes.
-
-        An undecorated native method: no receiver escapes as a model value and
-        no generated names or manually declared reads participate.
-        """
-        return PhysicalPort(
-            name=self.label,
-            endpoint=self.endpoint,
-            transport=self.transport,
-            loop_ends=self.loop_ends,
-            lanes=self.lanes if idle else (),
-        )
-
-    def presenting(self) -> Presenting:
-        """Model input to pure pin assembly; a subtype supplies its placed stream."""
-        return self.element
-
-    # -- what its kernel's module takes of it (``Kernel.netlist``) -------------------------
-
-    def pin_values(self) -> tuple[Pin, ...] | Rejected:
-        """Its pins of the module, from its transport (``finn.kernels.port.pins``): idle,
-        one lane of its element."""
-        presenting = self.presenting()
-        return pins(
-            self.physical_spec(idle=not isinstance(presenting, Stream)),
-            presenting,
-            self.clocking,
-        )
-
-    def held_values(self) -> Held | Rejected:
-        """Its inputs held while idle (L10): every one, for a port that is never placed."""
-        return held(self.physical_spec(idle=True), self.element, self.clocking)
-
-    def pins_presented(self) -> bool:
-        """Whether its pins are presented, so that its module's inputs need no hold: never,
-        for a port that is never placed."""
-        return False
-
-    @view
-    def physical_pins(self) -> tuple[Pin, ...] | Rejected:
-        return self.pin_values()
-
-    @view
-    def idle_pins(self) -> Held | Rejected:
-        return self.held_values()
-
-
-class SequencePort(PortModel):
-    """A given sequence over an optional tensor; absence skips the sequence entirely."""
-
-    tensor: Tensor | None = Param(default=None)
+    # A given sequence, or the schedule's projection.
     sequence: BeatSequence | None = Param(default=None)
+    schedule: Schedule | None = Param(default=None)
+    index: tuple[Index | Affine, ...] = Param(default=())
+    lanes: tuple[Index, ...] = Param(default=())
+    reduces: tuple[Index, ...] = Param(default=())
+    holds: tuple[Index, ...] = Param(default=())
+    closes: tuple[Index, ...] = Param(default=())
+    reshaped: bool = Param(default=False)
+    # What makes a port of a given sequence selected or sourced (``advance``).
+    governs: str | None = Param(default=None)
+    stored: bool = Param(default=False)
 
     @derived
     def placed(self) -> bool:
@@ -159,81 +112,33 @@ class SequencePort(PortModel):
             return reject("port-element", f"{self.label}: an idle port states its dtype")
         return tensor.element
 
+    @constraint
+    def element_taken(self) -> bool | Rejected:
+        policy = self.admits
+        return True if policy is None else policy.check(self.element.dtype)
+
+    @derived
+    def advance(self) -> Advance:
+        """Its advance rule, by how it is declared: scheduled, a projection of its kernel's
+        schedule; selected, a selector port, which ``governs`` the port whose beats it goes
+        with; sourced, a memory's output, ``stored``; else buffered, a stage's side."""
+        if self.schedule is not None:
+            return Advance.SCHEDULED
+        if self.governs is not None:
+            return Advance.SELECTED
+        if self.stored:
+            return Advance.SOURCED
+        return Advance.BUFFERED
+
     @derived
     def stream(self) -> Stream | Rejected | Inapplicable:
         if not self.placed:
             return Inapplicable()
-        sequence = self.sequence
-        if sequence is None:
+        schedule, given = self.schedule, self.sequence
+        if (schedule is None) == (given is None):
             return reject(
                 "port-presentation", f"{self.label}: exactly one of a schedule or a sequence"
             )
-        stream = Stream(self.element, sequence)
-        unsupported = stream_refusal(stream)
-        return unsupported if unsupported is not None else stream
-
-    @derived
-    def width(self) -> int | Rejected | Inapplicable:
-        if not self.placed:
-            return Inapplicable()
-        stream = self.stream
-        return data_width(self.physical_spec(idle=False), stream)
-
-    @derived
-    def side(self) -> Side | Inapplicable:
-        if not self.placed:
-            return Inapplicable()
-        stream = self.stream
-        label = self.label
-        if self.endpoint is Endpoint.INITIATOR:
-            return Side.kernel(stream, label, self.width)
-        return Side.kernel(stream, label)
-
-    def presenting(self) -> Presenting:
-        return self.stream if self.placed else self.element
-
-    def held_values(self) -> Held | Rejected:
-        """Placed, none; idle, its inputs held (L10)."""
-        if self.placed:
-            return Held()
-        return held(self.physical_spec(idle=True), self.element, self.clocking)
-
-    def pins_presented(self) -> bool:
-        """Placed, its pins are presented (a channel connects them)."""
-        placed: bool = self.placed
-        return placed
-
-    @view
-    def contract(self) -> PortContract | Rejected | Inapplicable:
-        if not self.placed:
-            return Inapplicable()
-        stream = self.stream
-        found = port_contract(self.physical_spec(idle=False), stream, self.clocking)
-        return found if isinstance(found, Rejected) else PortContract(self.label, found)
-
-
-class ScheduledPort(SequencePort):
-    """A scheduled tensor projection, with inward target-only index access.
-
-    Schedule/index/folding inputs are model values. Public physical contracts retain
-    pace; serial module assembly still uses undecorated model/native methods.
-    """
-
-    schedule: Schedule | None = Param(default=None)
-    index: tuple[Index | Affine, ...] = Param(default=())
-    reduces: tuple[Index, ...] = Param(default=())
-    holds: tuple[Index, ...] = Param(default=())
-    closes: tuple[Index, ...] = Param(default=())
-    reshaped: bool = Param(default=False)
-
-    @derived
-    def stream(self) -> Stream | Rejected | Inapplicable:
-        if not self.placed:
-            return Inapplicable()
-        label = self.label
-        schedule, given = self.schedule, self.sequence
-        if (schedule is None) == (given is None):
-            return reject("port-presentation", f"{label}: exactly one of a schedule or a sequence")
         if given is not None:
             sequence = given
         else:
@@ -264,27 +169,33 @@ class ScheduledPort(SequencePort):
                 markers = (schedule.closing(closes),) if closes else ()
                 sequence = BeatSequence(form, markers=markers)
             except Refused as error:
-                return reject("port-schedule", f"{label}: {error}")
+                return reject("port-schedule", f"{self.label}: {error}")
         stream = Stream(self.element, sequence)
         unsupported = stream_refusal(stream)
         return unsupported if unsupported is not None else stream
 
-    @view
-    def contract(self) -> PortContract | Rejected | Inapplicable:
+    @derived
+    def width(self) -> int | Rejected | Inapplicable:
         if not self.placed:
             return Inapplicable()
         stream = self.stream
-        physical = self.physical_spec(idle=False)
-        paced = replace(physical, schedule=self.schedule, reduces=self.reduces, holds=self.holds)
-        found = port_contract(paced, stream, self.clocking)
-        return found if isinstance(found, Rejected) else PortContract(self.label, found)
+        return data_width(self.physical_spec(idle=False), stream)
 
-
-class IndexedPort(ScheduledPort):
-    """A potentially binding scheduled target; constant nonbinding uses ScheduledPort."""
+    @derived
+    def side(self) -> Side | Inapplicable:
+        """The side it gives a channel: its stream, its label and, an output, its width."""
+        if not self.placed:
+            return Inapplicable()
+        stream = self.stream
+        label = self.label
+        if self.endpoint is Endpoint.INITIATOR:
+            return Side.kernel(stream, label, self.width)
+        return Side.kernel(stream, label)
 
     @derived
     def binds(self) -> bool:
+        """Whether it reads its tensor to bind its kernel's extents: a placed target with
+        an index."""
         if not self.placed:
             return False
         return self.endpoint is Endpoint.TARGET and bool(self.index)
@@ -297,6 +208,67 @@ class IndexedPort(ScheduledPort):
         tensor = self.tensor
         assert tensor is not None
         return Access(self.label, tensor.shape, self.index, self.reshaped)
+
+    def physical_spec(self, *, idle: bool) -> PhysicalPort:
+        """Resolved physical fields in existing read order; placed ports skip idle lanes.
+
+        An undecorated native method: no receiver escapes as a model value and
+        no generated names or manually declared reads participate.
+        """
+        return PhysicalPort(
+            name=self.label,
+            endpoint=self.endpoint,
+            transport=self.transport,
+            loop_ends=self.loop_ends,
+            lanes=self.lanes if idle else (),
+        )
+
+    def presenting(self) -> Presenting:
+        """Model input to pure pin assembly: its stream, placed; idle, its element."""
+        return self.stream if self.placed else self.element
+
+    # -- what its kernel's module takes of it (``Kernel.netlist``) -------------------------
+
+    def pin_values(self) -> tuple[Pin, ...] | Rejected:
+        """Its pins of the module, from its transport (``finn.kernels.port.pins``): placed,
+        its stream's; idle, one lane of its element."""
+        presenting = self.presenting()
+        return pins(
+            self.physical_spec(idle=not isinstance(presenting, Stream)),
+            presenting,
+            self.clocking,
+        )
+
+    def held_values(self) -> Held | Rejected:
+        """Placed, none; idle, its inputs held (L10)."""
+        if self.placed:
+            return Held()
+        return held(self.physical_spec(idle=True), self.element, self.clocking)
+
+    def pins_presented(self) -> bool:
+        """Placed, its pins are presented (a channel connects them)."""
+        placed: bool = self.placed
+        return placed
+
+    @view
+    def physical_pins(self) -> tuple[Pin, ...] | Rejected:
+        return self.pin_values()
+
+    @view
+    def idle_pins(self) -> Held | Rejected:
+        return self.held_values()
+
+    @view
+    def contract(self) -> PortContract | Rejected | Inapplicable:
+        """What it states to a channel: its stream on its transport, and, scheduled, its
+        pace (``finn.kernels.port.contract``)."""
+        if not self.placed:
+            return Inapplicable()
+        stream = self.stream
+        physical = self.physical_spec(idle=False)
+        paced = replace(physical, schedule=self.schedule, reduces=self.reduces, holds=self.holds)
+        found = port_contract(paced, stream, self.clocking)
+        return found if isinstance(found, Rejected) else PortContract(self.label, found)
 
 
 class OtherPins(Group):
@@ -395,21 +367,19 @@ class PortSurface:
         )
 
     @classmethod
-    def of(cls, port: PortModel) -> PortSurface:
-        if not isinstance(port, PortModel) or declared_path(port) is None:
-            raise TypeError("PortSurface requires a PortModel node declaration")
-        if isinstance(port, SequencePort):
-            return cls(
-                port.element,
-                port.endpoint,
-                port.physical_pins,
-                port.idle_pins,
-                port.stream,
-                port.width,
-                port.side,
-                port.contract,
-            )
-        return cls(port.element, port.endpoint, port.physical_pins, port.idle_pins)
+    def of(cls, port: StreamPort) -> PortSurface:
+        if not isinstance(port, StreamPort) or declared_path(port) is None:
+            raise TypeError("PortSurface requires a StreamPort node declaration")
+        return cls(
+            port.element,
+            port.endpoint,
+            port.physical_pins,
+            port.idle_pins,
+            port.stream,
+            port.width,
+            port.side,
+            port.contract,
+        )
 
 
 def port_surfaces(space_type: type[Space]) -> dict[str, PortSurface]:
@@ -428,7 +398,7 @@ def port_surfaces(space_type: type[Space]) -> dict[str, PortSurface]:
             effective.update(vars(base))
         result: dict[str, PortSurface] = {}
         for name, declaration in effective.items():
-            if isinstance(declaration, PortModel):
+            if isinstance(declaration, StreamPort):
                 port = declaration if placed is None else getattr(placed, name)
                 result[prefix + name] = PortSurface.of(port)
             elif isinstance(declaration, PortSurface):
@@ -445,10 +415,7 @@ def port_surfaces(space_type: type[Space]) -> dict[str, PortSurface]:
 
 __all__ = [
     "OtherPins",
-    "PortModel",
     "PortSurface",
-    "SequencePort",
-    "ScheduledPort",
-    "IndexedPort",
+    "StreamPort",
     "port_surfaces",
 ]

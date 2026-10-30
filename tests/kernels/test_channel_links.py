@@ -31,9 +31,9 @@ from finn.kernels.base import Kernel, PortContract
 from finn.kernels.channels import Channel
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.dotp import PackedDotpKernel
-from finn.kernels.laws import Axis
+from finn.kernels.laws import AXIS_CLOCKING, Axis
 from finn.kernels.partition import Partition
-from finn.kernels.port_model import SequencePort
+from finn.kernels.port_model import StreamPort
 from finn.kernels.sides import Side
 from finn.kernels.transport import AxisBeat, StreamContract
 
@@ -148,7 +148,7 @@ def reading() -> StreamContract:
     return StreamContract(transport, ScalarEncoding(INT3), vector_major((3, 4), 4))
 
 
-class UnexportedPort(SequencePort):
+class UnexportedPort(StreamPort):
     """The original deliberately unlabelled contract, on a real model port."""
 
     @view
@@ -160,6 +160,7 @@ class Reader(Space):
     """A model reader, not a hardware kernel with an exported module port."""
 
     port = UnexportedPort(
+        clocking=AXIS_CLOCKING,
         label="port",
         transport=Axis(bus="s_axis"),
         endpoint=Endpoint.TARGET,

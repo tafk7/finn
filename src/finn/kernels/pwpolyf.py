@@ -43,12 +43,12 @@ from finn.core.space import (
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.dataflow.schedule import Access, Index, Schedule
 from finn.dataflow.tensor import Tensor
-from finn.kernels.artifacts.abi import Clocking, Endpoint
+from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel, extent_of
 from finn.kernels.laws import NATIVE_CLOCKING, Native
 from finn.kernels.library import ModuleSpec
-from finn.kernels.port_model import IndexedPort, ScheduledPort
+from finn.kernels.port_model import StreamPort
 from finn.kernels.values.domains import admit_element
 from finn.platform.capabilities import DspBlock, Platform, Resources
 
@@ -115,24 +115,16 @@ class PwPolyKernel(Kernel):
             found.append(self.input.access)
         return found
 
-    @derived
-    def port_clocking(self) -> Clocking:
-        return type(self).clock_domain
-
-    input = IndexedPort(
-        label="input",
+    input = StreamPort(
         transport=Native(prefix="x"),
-        clocking=port_clocking,
         endpoint=Endpoint.TARGET,
         tensor=input_tensor,
         schedule=schedule,
         index=indices,
         lanes=(c,),
     )
-    output = ScheduledPort(
-        label="output",
+    output = StreamPort(
         transport=Native(prefix="y"),
-        clocking=port_clocking,
         endpoint=Endpoint.INITIATOR,
         tensor=output_tensor,
         schedule=schedule,

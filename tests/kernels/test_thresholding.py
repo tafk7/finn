@@ -32,7 +32,7 @@ from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.laws import Axis
 from finn.kernels.library import library_module
-from finn.kernels.port_model import IndexedPort
+from finn.kernels.port_model import StreamPort
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel, c
 from finn.kernels.values.domains import Integer
@@ -240,10 +240,9 @@ def test_threshold_rejects_unsupported_profiles_and_malformed_tables() -> None:
 class NarrowInput(ThresholdingAxiKernel):
     """A thresholding whose input port takes only elements of up to 4 bits."""
 
-    input = IndexedPort(
+    input = StreamPort(
         label="input",
         transport=Axis(bus="s_axis"),
-        clocking=ThresholdingAxiKernel.port_clocking,
         endpoint=Endpoint.TARGET,
         tensor=ThresholdingAxiKernel.input_tensor,
         schedule=ThresholdingAxiKernel.schedule,

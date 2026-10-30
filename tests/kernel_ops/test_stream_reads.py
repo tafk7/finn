@@ -60,7 +60,7 @@ from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.laws import Axis
 from finn.kernels.library import ModuleSpec
-from finn.kernels.port_model import PortModel, PortSurface, SequencePort
+from finn.kernels.port_model import PortSurface, StreamPort
 from finn.platform.capabilities import Resources
 
 MODEL_FIELDS = ("element", "stream", "access")
@@ -68,7 +68,7 @@ MODEL_FIELDS = ("element", "stream", "access")
 
 
 def model_port_members(space_type: type[Space]) -> Iterator[str]:
-    if issubclass(space_type, PortModel):
+    if issubclass(space_type, StreamPort):
         for name in MODEL_FIELDS:
             if hasattr(space_type, name):
                 yield name
@@ -194,7 +194,7 @@ class Given(Kernel):
     id = "test.reads.given"
     tensor: Tensor = Param()
     sequence: BeatSequence = Param()
-    x = SequencePort(
+    x = StreamPort(
         label="x",
         endpoint=Endpoint.TARGET,
         tensor=tensor,
@@ -310,16 +310,16 @@ def test_group_frames_preserve_kernel_descendant_reads_and_guards(is_present: bo
     assert namespaces["a.components"] is Components
     assert not issubclass(namespaces["a.components"], Space)
     assert namespaces["a.components.child"] is Given
-    # Given has no tensor index: its nonbinding port emits no access member.
+    # Given has no tensor index: its port's access answers inapplicable.
     for name in ("a", "a.components.child", "b"):
         assert {
             member
-            for member in model_port_members(SequencePort)
+            for member in model_port_members(StreamPort)
             if member in records[name + ".x"].named_members
-        } == {"element", "stream"}
+        } == {"access", "element", "stream"}
     reads = infer(scopes)
     checked, failures = check(scopes, reads)
-    assert checked == {"a": 4, "b": 2}
+    assert checked == {"a": 6, "b": 3}  # each port's element, stream and access
     assert failures == []
 
     stream = scopes.find("a.components.child.x.stream")

@@ -134,6 +134,30 @@ LAWS: tuple[Law, ...] = (
 """The laws, in the order of their IDs."""
 
 
+class Advance(Enum):
+    """A port's advance rule: when it moves its next beat, relative to its kernel's other
+    ports (L2-L5). A port follows one by how it is declared and never names it
+    (``finn.kernels.port_model.StreamPort.advance``)."""
+
+    SCHEDULED = "scheduled"
+    BUFFERED = "buffered"
+    SELECTED = "selected"
+    SOURCED = "sourced"
+
+    @property
+    def law(self) -> Law:
+        """The law it follows."""
+        return _ADVANCE_LAWS[self]
+
+
+_ADVANCE_LAWS = {
+    Advance.SCHEDULED: ADVANCE_SCHEDULED,
+    Advance.BUFFERED: ADVANCE_BUFFERED,
+    Advance.SELECTED: ADVANCE_SELECTED,
+    Advance.SOURCED: ADVANCE_SOURCED,
+}
+
+
 # -- the transports' pin defaults ---------------------------------------------------------
 
 
@@ -266,6 +290,7 @@ __all__ = [
     "ADVANCE_SELECTED",
     "ADVANCE_SOURCED",
     "AXIS",
+    "Advance",
     "AXIS_CLOCKING",
     "AXIS_MARKERS",
     "AXIS_MEMBERS",

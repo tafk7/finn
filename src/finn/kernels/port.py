@@ -3,7 +3,7 @@
 
 """Resolved physical port values and pure protocol calculations.
 
-Actual authoring uses PortModel/SequencePort/IndexedPort/ScheduledPort real
+Actual authoring uses StreamPort real
 children and explicitly authored parent PortSurface references. Native module
 source reads model inputs serially, then calls these pure helpers. No flat
 lowering, named callback tables, read lists or compatibility aliases remain.
@@ -42,7 +42,7 @@ from finn.kernels.transport import (
 )
 
 if TYPE_CHECKING:
-    from finn.kernels.port_model import PortModel, PortSurface
+    from finn.kernels.port_model import PortSurface, StreamPort
 
 
 def _applies(space: Space, guard: str | None) -> bool:
@@ -64,7 +64,7 @@ class LoopEnds:
 class PhysicalPort:
     """Resolved port inputs for pure physical calculations, without authoring callbacks.
 
-    A PortModel reads these literal fields in an ordinary method. This record is
+    A StreamPort reads these literal fields in an ordinary method. This record is
     neither a Space nor a symbolic binding/allowed-read table. ``name`` is the port's
     name; its pins follow from its ``transport`` (``finn.kernels.laws``).
     """
@@ -299,11 +299,11 @@ def contract(
 # -- a port a kernel with children presents for a child -------------------------------------
 
 
-def _lexical_port(namespace: type[Space] | Space, port: str) -> PortModel | PortSurface | None:
+def _lexical_port(namespace: type[Space] | Space, port: str) -> StreamPort | PortSurface | None:
     """Find an actual child or authored surface, rebased through its lexical Groups."""
     from finn.kernels.port_model import (  # noqa: PLC0415 - breaks base/port cycle
-        PortModel,
         PortSurface,
+        StreamPort,
     )
 
     frame: type[Space] | Space | Group = namespace
@@ -316,7 +316,7 @@ def _lexical_port(namespace: type[Space] | Space, port: str) -> PortModel | Port
     child = getattr(frame, segments[-1], None)
     if isinstance(child, PortSurface):
         return child.at(frame)
-    return child if isinstance(child, PortModel) else None
+    return child if isinstance(child, StreamPort) else None
 
 
 def port_endpoint(space_type: type[Space], port: str) -> Endpoint | None:

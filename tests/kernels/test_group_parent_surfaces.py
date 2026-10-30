@@ -19,8 +19,9 @@ from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.base import Kernel, PortContract
 from finn.kernels.composer import Facts, PartitionDeclaration, Port, channel
 from finn.kernels.composer import _checked as checked
+from finn.kernels.laws import AXIS, AXIS_CLOCKING
 from finn.kernels.port import port_endpoint, port_surface
-from finn.kernels.port_model import PortSurface, SequencePort, port_surfaces
+from finn.kernels.port_model import PortSurface, StreamPort, port_surfaces
 from finn.kernels.sides import Side
 
 SMALL = Tensor((2, 4), ScalarEncoding(DataType["INT3"]))
@@ -33,7 +34,9 @@ class Receiving(Group):
     tensor: Tensor = Param()
     sequence: BeatSequence = Param()
     role: Endpoint = Param(default=Endpoint.TARGET)
-    native = SequencePort(
+    native = StreamPort(
+        clocking=AXIS_CLOCKING,
+        transport=AXIS,
         label="source",
         tensor=tensor,
         sequence=sequence,

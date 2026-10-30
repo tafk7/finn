@@ -15,28 +15,42 @@ from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.base import Kernel
 from finn.kernels.composer import Facts, PartitionDeclaration, Port, channel
 from finn.kernels.composer import _checked as checked
+from finn.kernels.laws import AXIS, AXIS_CLOCKING
 from finn.kernels.port import port_endpoint, port_surface
-from finn.kernels.port_model import SequencePort
+from finn.kernels.port_model import StreamPort
 from finn.kernels.sides import Side
 
 TENSOR = Tensor((2, 4), ScalarEncoding(DataType["INT3"]))
 SEQUENCE = BeatSequence(vector_major(TENSOR.shape, 4))
 
 
-class DefaultOutput(SequencePort):
+class DefaultOutput(StreamPort):
     endpoint: Endpoint = Param(default=Endpoint.INITIATOR)
 
 
 class Ports(Group):
-    target = SequencePort(label="t", tensor=TENSOR, sequence=SEQUENCE)
-    explicit = SequencePort(
+    target = StreamPort(
+        clocking=AXIS_CLOCKING, transport=AXIS, label="t", tensor=TENSOR, sequence=SEQUENCE
+    )
+    explicit = StreamPort(
+        clocking=AXIS_CLOCKING,
+        transport=AXIS,
         label="o",
         tensor=TENSOR,
         sequence=SEQUENCE,
         endpoint=Endpoint.INITIATOR,
     )
-    default_output = DefaultOutput(label="d", tensor=TENSOR, sequence=SEQUENCE)
-    rebound = DefaultOutput(label="b", tensor=TENSOR, sequence=SEQUENCE, endpoint=Endpoint.TARGET)
+    default_output = DefaultOutput(
+        clocking=AXIS_CLOCKING, transport=AXIS, label="d", tensor=TENSOR, sequence=SEQUENCE
+    )
+    rebound = DefaultOutput(
+        clocking=AXIS_CLOCKING,
+        transport=AXIS,
+        label="b",
+        tensor=TENSOR,
+        sequence=SEQUENCE,
+        endpoint=Endpoint.TARGET,
+    )
 
 
 class Nested(Group):
@@ -67,7 +81,14 @@ def test_constant_default_and_explicit_bound_group_endpoints(port: str, expected
 def test_open_model_endpoint_remains_unknown_without_reading_or_repairing_configuration() -> None:
     class OpenPorts(Group):
         role: Endpoint = Decision(domain=(Endpoint.TARGET, Endpoint.INITIATOR))
-        port = SequencePort(label="p", tensor=TENSOR, sequence=SEQUENCE, endpoint=role)
+        port = StreamPort(
+            clocking=AXIS_CLOCKING,
+            transport=AXIS,
+            label="p",
+            tensor=TENSOR,
+            sequence=SEQUENCE,
+            endpoint=role,
+        )
 
     class OpenHost(Kernel):
         id = "test.open-group-port-role"
@@ -84,7 +105,14 @@ def test_open_model_endpoint_remains_unknown_without_reading_or_repairing_config
 def test_fact_bound_endpoint_is_not_mistaken_for_a_literal_static_binding() -> None:
     class BoundPorts(Group):
         role: Endpoint = Param()
-        port = SequencePort(label="p", tensor=TENSOR, sequence=SEQUENCE, endpoint=role)
+        port = StreamPort(
+            clocking=AXIS_CLOCKING,
+            transport=AXIS,
+            label="p",
+            tensor=TENSOR,
+            sequence=SEQUENCE,
+            endpoint=role,
+        )
 
     class BoundHost(Kernel):
         id = "test.bound-group-port-role"

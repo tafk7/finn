@@ -11,6 +11,7 @@ from support.helpers import FULL_DSP48E2
 from finn.core.space import (
     Available,
     Decision,
+    Inapplicable,
     Rejected,
     Unresolved,
     derived,
@@ -25,7 +26,7 @@ from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.eltwise import EltwiseKernel, c
 from finn.kernels.laws import Native
 from finn.kernels.port import LoopEnds
-from finn.kernels.port_model import IndexedPort, ScheduledPort
+from finn.kernels.port_model import StreamPort
 
 UNNAMED_ENDS = LoopEnds((LevelEnd(1),))
 """A loop-completion vector, which a native port named in full has no pin for: each port
@@ -46,9 +47,9 @@ def test_actual_eltwise_inputs_bind_early_and_result_is_structurally_nonbinding(
     assert point.rhs.access.shape == (4,)
     assert point.result_tensor.shape == LHS.shape
     assert isinstance(point.query(EltwiseKernel.lhs.stream), Unresolved)
-    assert not hasattr(type(point.result), "access")
-    assert not hasattr(type(point.result), "binds")
-    assert not inspection.decisions(IndexedPort) and not inspection.decisions(ScheduledPort)
+    assert point.result.binds is False  # an output never binds its kernel's extents
+    assert isinstance(point.query(type(point).result.access), Inapplicable)
+    assert not inspection.decisions(StreamPort)
 
 
 def test_parent_arithmetic_refusal_keeps_intrinsic_child_input_characterization() -> None:
@@ -77,7 +78,7 @@ class SerialEltwise(EltwiseKernel):
         _ = self.second_state
         return self.schedule
 
-    lhs = IndexedPort(
+    lhs = StreamPort(
         label="lhs",
         tensor=EltwiseKernel.lhs_tensor,
         schedule=first,
@@ -85,9 +86,8 @@ class SerialEltwise(EltwiseKernel):
         lanes=(c,),
         transport=Native(names=("adat", "avld", "ardy")),
         loop_ends=UNNAMED_ENDS,
-        clocking=EltwiseKernel.port_clocking,
     )
-    rhs = IndexedPort(
+    rhs = StreamPort(
         label="rhs",
         tensor=EltwiseKernel.rhs_tensor,
         schedule=second,
@@ -95,9 +95,8 @@ class SerialEltwise(EltwiseKernel):
         lanes=(c,),
         transport=Native(names=("bdat", "bvld", "brdy")),
         loop_ends=UNNAMED_ENDS,
-        clocking=EltwiseKernel.port_clocking,
     )
-    result = ScheduledPort(
+    result = StreamPort(
         label="result",
         endpoint=Endpoint.INITIATOR,
         tensor=EltwiseKernel.result_tensor,
@@ -106,7 +105,6 @@ class SerialEltwise(EltwiseKernel):
         lanes=(c,),
         transport=Native(names=("odat", "ovld", "ordy")),
         loop_ends=UNNAMED_ENDS,
-        clocking=EltwiseKernel.port_clocking,
     )
 
 

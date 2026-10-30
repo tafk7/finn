@@ -28,7 +28,7 @@ from finn.kernels.artifacts.module import Held
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import Generate, InputGeneratorKernel
 from finn.kernels.laws import NATIVE
-from finn.kernels.port_model import OtherPins, SequencePort
+from finn.kernels.port_model import OtherPins, StreamPort
 from finn.kernels.vpc import VpcKernel
 from support.adapted import columns_first
 from support.helpers import FULL_DSP48E2
@@ -57,13 +57,12 @@ class StagedInputGenerator(InputGeneratorKernel):
 
     id = "test.staged.input_generator"
 
-    output = SequencePort(
+    output = StreamPort(
         label="output",
         endpoint=Endpoint.INITIATOR,
         transport=NATIVE,
         tensor=InputGeneratorKernel.output_tensor,
         sequence=InputGeneratorKernel.leaving,
-        clocking=InputGeneratorKernel.port_clocking,
     )
 
     @derived

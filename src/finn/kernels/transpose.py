@@ -26,13 +26,13 @@ from finn.core.space import (
 )
 from finn.dataflow.schedule import Access, Index, Schedule
 from finn.dataflow.tensor import Tensor
-from finn.kernels.artifacts.abi import Clocking, Endpoint
+from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel, extent_of
 from finn.kernels.fifo import fifo_resources
 from finn.kernels.laws import NATIVE, NATIVE_CLOCKING
 from finn.kernels.library import ModuleSpec
-from finn.kernels.port_model import IndexedPort, ScheduledPort
+from finn.kernels.port_model import StreamPort
 from finn.kernels.utilization import (
     auto_unstated,
     memory,
@@ -165,12 +165,7 @@ class TransposeKernel(Kernel):
             return shape
         return Tensor(shape, self.input_tensor.element)
 
-    @derived
-    def port_clocking(self) -> Clocking:
-        return type(self).clock_domain
-
-    input = IndexedPort(
-        label="input",
+    input = StreamPort(
         transport=NATIVE,
         endpoint=Endpoint.TARGET,
         tensor=input_tensor,
@@ -178,17 +173,14 @@ class TransposeKernel(Kernel):
         index=columns,
         lanes=(i,),
         reshaped=True,
-        clocking=port_clocking,
     )
-    output = ScheduledPort(
-        label="output",
+    output = StreamPort(
         transport=NATIVE,
         endpoint=Endpoint.INITIATOR,
         tensor=output_tensor,
         schedule=columns_out,
         index=indices,
         lanes=(i,),
-        clocking=port_clocking,
     )
 
     def _accesses(self) -> list[Access]:

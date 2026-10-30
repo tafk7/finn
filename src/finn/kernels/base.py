@@ -4,7 +4,7 @@
 """Hardware design Spaces with actual model children and native outward source.
 
 Kernel, the one base, states netlist/cycles/buffering/resources; a channel's FIFO
-answers its cycles inapplicable. Real PortModel children own intrinsic rules,
+answers its cycles inapplicable. Real StreamPort children own intrinsic rules,
 included ControlModel Groups share their real parent, and plain ModuleSpec values
 describe sources.
 A kernel binding a module states its binding (ModuleSpec, parameters, sources,
@@ -38,6 +38,7 @@ from finn.core.space import (
     reject,
     view,
 )
+from finn.core.space._nodes import assign, node_record
 from finn.core.space.declarations import unmet_required
 from finn.dataflow.schedule import Access, Affine, Index, Refused, Schedule, bind_extents
 from finn.kernels.artifacts import ArtifactError
@@ -137,7 +138,7 @@ def _presented_from(part: str, following: str) -> Callable[[Kernel], tuple[Any, 
 
 def _module_parts(cls: type[Kernel]) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """The names of its module's parts in pin order and in hold order (above)."""
-    from finn.kernels.port_model import OtherPins, PortModel, port_surfaces  # noqa: PLC0415
+    from finn.kernels.port_model import OtherPins, StreamPort, port_surfaces  # noqa: PLC0415
 
     nested = [
         name
@@ -163,8 +164,25 @@ def _module_parts(cls: type[Kernel]) -> tuple[tuple[str, ...], tuple[str, ...]]:
     members = _members(cls)
     others = tuple(name for name, item in members.items() if isinstance(item, OtherPins))
     controls = tuple(name for name, item in members.items() if isinstance(item, ControlModel))
-    ports = tuple(name for name, item in members.items() if isinstance(item, PortModel))
+    ports = tuple(name for name, item in members.items() if isinstance(item, StreamPort))
     return (*others, *controls, *ports), (*ports, *others, *controls)
+
+
+def _supply_ports(cls: type[Kernel]) -> None:
+    """Supply each stream port declared in ``cls``'s own body with what is the kernel's,
+    where the port does not state it: its ``label``, its name in the kernel, and its
+    ``clocking``, the kernel's clock domain (``Kernel.port_clocking``; L8: a port's clock is
+    its kernel's). A port declared in a Group states both."""
+    from finn.kernels.port_model import StreamPort  # noqa: PLC0415
+
+    for name, value in vars(cls).items():
+        record = node_record(value)
+        if record is None or not issubclass(record.space_type, StreamPort):
+            continue
+        if "label" not in record.settings:
+            assign(value, "label", name)
+        if "clocking" not in record.settings:
+            assign(value, "clocking", Kernel.port_clocking)
 
 
 def _install(
@@ -206,6 +224,7 @@ class Kernel(Space):
     module_spec: ClassVar[ModuleSpec | None] = None
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
+        _supply_ports(cls)
         super().__init_subclass__(**kwargs)
         buses = list(control_models(cls))
         if len(buses) > 1:
@@ -311,6 +330,12 @@ class Kernel(Space):
     def clocking(self) -> Clocking:
         """Its module's clocking: its ``clock_domain``; a kernel with a doubled clock builds
         on it (``finn.kernels.laws.doubled(type(self).clock_domain, doubling)``)."""
+        return type(self).clock_domain
+
+    @derived
+    def port_clocking(self) -> Clocking:
+        """Its ports' clock and reset: its ``clock_domain`` (L8), never a doubled clock's
+        choice. The base gives it to every port its body declares (``StreamPort``)."""
         return type(self).clock_domain
 
     @derived

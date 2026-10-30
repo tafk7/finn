@@ -58,7 +58,7 @@ from finn.kernels.library import (
     ModuleSpec,
     library_module,
 )
-from finn.kernels.port_model import OtherPins, SequencePort
+from finn.kernels.port_model import OtherPins, StreamPort
 from finn.platform.capabilities import Resources
 
 TENSOR = Tensor((4, 1), ScalarEncoding(DataType["INT4"]))
@@ -122,7 +122,7 @@ class Stage(Kernel):
 
     input_tensor: Tensor = Param()
     arriving: BeatSequence = Param()
-    input = SequencePort(
+    input = StreamPort(
         label="input",
         endpoint=Endpoint.TARGET,
         transport=NATIVE,
@@ -281,7 +281,7 @@ def test_a_kernel_binds_one_library_module_at_most() -> None:
 def test_a_kernel_with_a_module_declares_its_module_s_parts_in_its_own_body() -> None:
     # The base reads each part by its name in the kernel's body; one in a Group is refused.
     class Ports(Group):
-        input = SequencePort(
+        input = StreamPort(
             label="input",
             endpoint=Endpoint.TARGET,
             transport=NATIVE,
@@ -346,7 +346,7 @@ def test_a_kernel_with_a_module_states_its_ports_and_resources_and_places_no_ker
         }
         return type(name, (Kernel,), body)
 
-    port = SequencePort(
+    port = StreamPort(
         label="input",
         endpoint=Endpoint.TARGET,
         transport=NATIVE,
@@ -364,7 +364,7 @@ def test_a_kernel_with_a_module_states_its_ports_and_resources_and_places_no_ker
     ):
         kernel(
             "Nesting",
-            input=SequencePort(
+            input=StreamPort(
                 label="input",
                 endpoint=Endpoint.TARGET,
                 transport=NATIVE,
@@ -378,7 +378,7 @@ def test_a_kernel_with_a_module_states_its_ports_and_resources_and_places_no_ker
     with refused("module-resources-unstated", error=DefinitionError, message="states no"):
         kernel(
             "Unstated",
-            input=SequencePort(
+            input=StreamPort(
                 label="input",
                 endpoint=Endpoint.TARGET,
                 transport=NATIVE,
@@ -398,7 +398,7 @@ def test_a_kernel_stating_a_stream_port_binds_a_module() -> None:
     # own, it is refused, naming the class and the port.
     class Unbound(Kernel):
         id = "test.kernel_space.unbound"
-        input = SequencePort(
+        input = StreamPort(
             label="input",
             endpoint=Endpoint.TARGET,
             transport=NATIVE,
@@ -429,7 +429,7 @@ def test_a_kernel_stating_a_stream_port_binds_a_module() -> None:
         id = "test.kernel_space.ported"
         clock_domain = NATIVE_CLOCKING
         input_tensor: Tensor = Param()
-        input = SequencePort(
+        input = StreamPort(
             label="input",
             endpoint=Endpoint.TARGET,
             transport=NATIVE,
@@ -487,7 +487,7 @@ class Sourced(Based):
     id = "test.kernel_space.sourced"
     input_tensor: Tensor = Param()
     arriving: BeatSequence = Param(default=ARRIVING)
-    input = SequencePort(
+    input = StreamPort(
         label="input",
         endpoint=Endpoint.TARGET,
         transport=NATIVE,
@@ -527,7 +527,7 @@ class Forgetful(Deep):
     id = "test.kernel_space.forgetful"
     input_tensor: Tensor = Param()
     arriving: BeatSequence = Param(default=ARRIVING)
-    input = SequencePort(
+    input = StreamPort(
         label="input",
         endpoint=Endpoint.TARGET,
         transport=NATIVE,

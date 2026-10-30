@@ -42,7 +42,7 @@ from finn.kernels.dotp import REDUCERS, DotpAxiKernel, Int8Dsp58DotpKernel, Pack
 from finn.kernels.library import library_module
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.port import axis
-from finn.kernels.port_model import PortModel
+from finn.kernels.port_model import StreamPort
 from finn.kernels.transport import AxisBeat
 from finn.platform.capabilities import DspBlock
 
@@ -95,7 +95,7 @@ def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_th
         "segment_length",
     ]
     for port in (point.x, point.w, point.y):
-        assert isinstance(port, PortModel)
+        assert isinstance(port, StreamPort)
     assert {
         item.key
         for item in inspection.members(point)

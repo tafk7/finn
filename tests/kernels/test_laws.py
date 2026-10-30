@@ -31,7 +31,7 @@ from finn.kernels.laws import (
     doubled,
 )
 from finn.kernels.port import LoopEnds, PhysicalPort, contract, pins
-from finn.kernels.port_model import IndexedPort
+from finn.kernels.port_model import StreamPort
 
 TARGET, INITIATOR = Endpoint.TARGET, Endpoint.INITIATOR
 
@@ -95,7 +95,7 @@ class Undistinguished(EltwiseKernel):
     ``irdy``."""
 
     id = "test.laws.undistinguished"
-    lhs = IndexedPort(
+    lhs = StreamPort(
         label="lhs",
         transport=NATIVE,
         endpoint=TARGET,
@@ -103,9 +103,8 @@ class Undistinguished(EltwiseKernel):
         schedule=EltwiseKernel.schedule,
         index=EltwiseKernel.indices,
         lanes=(c,),
-        clocking=EltwiseKernel.port_clocking,
     )
-    rhs = IndexedPort(
+    rhs = StreamPort(
         label="rhs",
         transport=NATIVE,
         endpoint=TARGET,
@@ -113,7 +112,6 @@ class Undistinguished(EltwiseKernel):
         schedule=EltwiseKernel.schedule,
         index=EltwiseKernel.rhs_indices,
         lanes=(c,),
-        clocking=EltwiseKernel.port_clocking,
     )
 
 

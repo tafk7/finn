@@ -95,7 +95,6 @@ from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import (
     Bus,
-    Clocking,
     Endpoint,
     Member,
     StandardProtocol,
@@ -106,7 +105,7 @@ from finn.kernels.base import Kernel, extent_of
 from finn.kernels.control import Control, ControlModel
 from finn.kernels.laws import AXIS, Axis
 from finn.kernels.library import ModuleSpec
-from finn.kernels.port_model import IndexedPort, ScheduledPort, SequencePort
+from finn.kernels.port_model import StreamPort
 from finn.kernels.utilization import (
     Fit,
     auto_unstated,
@@ -551,38 +550,30 @@ class ThresholdingAxiKernel(Kernel):
             return element
         return Tensor(shape, element)
 
-    @derived
-    def port_clocking(self) -> Clocking:
-        return type(self).clock_domain
-
-    input = IndexedPort(
-        label="input",
+    input = StreamPort(
         transport=Axis(bus="s_axis"),
-        clocking=port_clocking,
         endpoint=Endpoint.TARGET,
         tensor=input_tensor,
         schedule=schedule,
         index=indices,
         lanes=(c,),
     )
-    output = ScheduledPort(
-        label="output",
+    output = StreamPort(
         transport=Axis(bus="m_axis"),
-        clocking=port_clocking,
         endpoint=Endpoint.INITIATOR,
         tensor=output_tensor,
         schedule=schedule,
         index=indices,
         lanes=(c,),
     )
-    # The set port indexes beats (``c``'s folds), which no index of a tensor expresses.
-    set = SequencePort(
-        label="set",
+    # The set port indexes beats (``c``'s folds), which no index of a tensor expresses: a
+    # selector, its beat accepted with each input beat (L4).
+    set = StreamPort(
         transport=AXIS,
-        clocking=port_clocking,
         endpoint=Endpoint.TARGET,
         tensor=set_tensor,
         sequence=set_sequence,
+        governs="input",
         dtype=selector_dtype,
     )
 

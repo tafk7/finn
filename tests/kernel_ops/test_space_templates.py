@@ -45,10 +45,7 @@ from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port_model import (
-    IndexedPort,
-    PortModel,
-    ScheduledPort,
-    SequencePort,
+    StreamPort,
     port_surfaces,
 )
 from finn.kernels.thresholding import ThresholdingAxiKernel
@@ -98,17 +95,17 @@ def test_the_chains_members_read_alike_in_any_order_their_scopes_are_made_in() -
 
 
 def _port_scopes(records: Iterable[ScopeRecord]) -> set[ScopeRecord]:
-    return {record for record in records if issubclass(record.space_type, PortModel)}
+    return {record for record in records if issubclass(record.space_type, StreamPort)}
 
 
-PORT_TYPES: dict[type[Space], dict[str, type[PortModel]]] = {
-    FifoKernel: {"input": SequencePort, "output": SequencePort},
-    InputGeneratorKernel: {"input": SequencePort, "output": SequencePort},
-    VpcKernel: {"input": SequencePort, "output": SequencePort},
-    ThresholdingAxiKernel: {"input": IndexedPort, "output": ScheduledPort, "set": SequencePort},
-    PackedDotpKernel: {"x": IndexedPort, "w": IndexedPort, "y": ScheduledPort},
-    Int8Dsp58DotpKernel: {"x": IndexedPort, "w": IndexedPort, "y": ScheduledPort},
-    MemStreamKernel: {"set": SequencePort, "output": SequencePort},
+PORT_TYPES: dict[type[Space], dict[str, type[StreamPort]]] = {
+    FifoKernel: {"input": StreamPort, "output": StreamPort},
+    InputGeneratorKernel: {"input": StreamPort, "output": StreamPort},
+    VpcKernel: {"input": StreamPort, "output": StreamPort},
+    ThresholdingAxiKernel: {"input": StreamPort, "output": StreamPort, "set": StreamPort},
+    PackedDotpKernel: {"x": StreamPort, "w": StreamPort, "y": StreamPort},
+    Int8Dsp58DotpKernel: {"x": StreamPort, "w": StreamPort, "y": StreamPort},
+    MemStreamKernel: {"set": StreamPort, "output": StreamPort},
 }
 GROUP_TYPES = {_Sum, _PresentedSum, _MoverSum, _DoubledAny, _ClockRequirement, ControlModel}
 
@@ -126,7 +123,7 @@ def _real_nonport_scopes(records: Iterable[ScopeRecord]) -> set[ScopeRecord]:
     return {
         record
         for record in records
-        if record.compiled.validity is not None and not issubclass(record.space_type, PortModel)
+        if record.compiled.validity is not None and not issubclass(record.space_type, StreamPort)
     }
 
 
@@ -164,16 +161,16 @@ def test_stage_7s_chain_of_eight_kernels_reads_alike_in_any_order_its_scopes_are
             [
                 kind
                 for kind in templates
-                if issubclass(kind, Space) and not issubclass(kind, PortModel)
+                if issubclass(kind, Space) and not issubclass(kind, StreamPort)
             ]
         )
         == 17
     )
     assert {kind for kind in templates if issubclass(kind, Group)} == GROUP_TYPES
-    assert {kind for kind in templates if issubclass(kind, PortModel)} == {
-        SequencePort,
-        ScheduledPort,
-        IndexedPort,
+    assert {kind for kind in templates if issubclass(kind, StreamPort)} == {
+        StreamPort,
+        StreamPort,
+        StreamPort,
     }
     records = compile_model(whole).scopes.ordered()
     ports = _assert_native_scope_ownership(records)
@@ -295,9 +292,13 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
 # Ports' ((540, 304), (637, 356)) and the totals ((1557, 346), (1698, 398)) became these
 # when a port's pins were named by its transport kind, one Param, in place of its pin name,
 # signals and spelling: two constants fewer each port's physical inputs read (-44, -52).
+# Then ((496, 260), (585, 304)) and ((1513, 302), (1646, 346)) became these when the four
+# port classes became one (``StreamPort``): a port of a given sequence reads, to present it,
+# that it states no schedule as well (+12, +16 constants, the ``schedule`` of each such port
+# whose stream is evaluated).
 NONPORT_EVALUATED = ((1017, 42), (1061, 42))
-PORT_EVALUATED = ((496, 260), (585, 304))
-EVALUATED = ((1513, 302), (1646, 346))
+PORT_EVALUATED = ((508, 272), (601, 320))
+EVALUATED = ((1525, 314), (1662, 362))
 
 
 def _assert_evaluated(scopes: Scopes, stage: int) -> None:
@@ -305,13 +306,13 @@ def _assert_evaluated(scopes: Scopes, stage: int) -> None:
     with scopes.lock:
         evaluated = tuple(scopes.registry.evaluated)
     port_reads = [
-        address for address in evaluated if issubclass(address.scope.space_type, PortModel)
+        address for address in evaluated if issubclass(address.scope.space_type, StreamPort)
     ]
     nonport_reads = [
         address
         for address in evaluated
         if address.scope.compiled.validity is not None
-        and not issubclass(address.scope.space_type, PortModel)
+        and not issubclass(address.scope.space_type, StreamPort)
     ]
     # Group primitives are addresses of the owning Space, never independent reads.
     assert not [address for address in evaluated if address.scope.compiled.validity is None]
