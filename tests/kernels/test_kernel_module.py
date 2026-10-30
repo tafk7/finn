@@ -31,6 +31,7 @@ from finn.core.space import (
     Group,
     Param,
     Rejected,
+    Space,
     derived,
     design_space,
     reject,
@@ -296,7 +297,8 @@ def test_a_control_bus_it_may_present_names_its_port_and_registers() -> None:
 def test_a_control_bus_is_declared_once_and_the_base_derives_what_is_read_of_it() -> None:
     """A kernel declares its bus, a ``ControlModel`` in its own body, and the base derives
     ``declares_bus`` and ``bus_control``: one it never presents is held with no port or
-    writes stated; one stating either answer itself, or declared in a Group, is refused."""
+    writes stated; a subclass inherits them. One stating either answer itself, even over an
+    inherited bus, or declared in a Group or in a class that is not a kernel, is refused."""
 
     class Kept(Probe):
         id = "test.probe.kept"
@@ -305,6 +307,22 @@ def test_a_control_bus_is_declared_once_and_the_base_derives_what_is_read_of_it(
     point = design_space(Kept(tensor=TENSOR))
     assert point.declares_bus is True and point.bus_control == Control(None)
     assert library_module(point).held.inputs == (("mode", 1), *held_bus(BUS).inputs)
+
+    class Inherited(Controlled):
+        id = "test.probe.inherited"
+
+    below = design_space(Inherited(tensor=TENSOR, writable=True, control="s_axilite"))
+    assert below.declares_bus is True
+    assert below.bus_control == Control(BUS, "s_axilite", RegisterMap(((0, 7),)))
+
+    with refused("control-bus-restated", error=DefinitionError, message="states bus_control"):
+
+        class RestatedBelow(Controlled):
+            id = "test.probe.restated_below"
+
+            @view
+            def bus_control(self) -> Control:
+                return Control(None)
 
     with refused("control-bus-restated", error=DefinitionError, message="states bus_control"):
 
@@ -330,6 +348,32 @@ def test_a_control_bus_is_declared_once_and_the_base_derives_what_is_read_of_it(
         class NestedPart(Probe):
             id = "test.probe.nested_part"
             included = Included()
+
+    # A class below the kernel that is not one derives nothing, so its bus is refused, held or
+    # presented.
+    class Plain:
+        config = ControlModel(bus=BUS)
+
+    with refused("control-bus-nested", error=DefinitionError, message="Plain, not a kernel"):
+
+        class FromPlain(Plain, Probe):
+            id = "test.probe.from_plain"
+
+    class PresentingMixin(Space):
+        on: bool = Param(default=True)
+        config = ControlModel(bus=BUS, presented=on)
+
+    with refused(
+        "control-bus-nested", error=DefinitionError, message="PresentingMixin, not a kernel"
+    ):
+
+        class FromSpace(PresentingMixin, Probe):  # type: ignore[misc]
+            id = "test.probe.from_space"
+            control: str | None = Param(default="s_axilite")
+
+            @view
+            def register_map(self) -> RegisterMap:
+                return RegisterMap()
 
 
 def test_a_kernel_s_cycles_are_the_most_beats_a_port_carries() -> None:

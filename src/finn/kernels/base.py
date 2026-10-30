@@ -480,9 +480,11 @@ def _bus_presented(model: str) -> Callable[[Any], Any]:
 
 def _derive_control(cls: type[Kernel]) -> None:
     """Derive ``cls``'s ``declares_bus`` and ``bus_control`` from the control bus its own body
-    declares (above). Refused where it declares more than one (``control-bus-repeated``),
-    one in a Group (``control-bus-nested``; a kernel with a module, ``module-part-nested``
-    with its module's other parts), states either answer itself
+    declares (above); one a kernel it derives from declares, it inherits with that kernel's
+    answers. Refused where it declares more than one (``control-bus-repeated``), one in a
+    Group (``control-bus-nested``; a kernel with a module, ``module-part-nested`` with its
+    module's other parts) or in a class it derives from that is not a kernel
+    (``control-bus-nested``), states either answer itself
     (``control-bus-restated``), or may present its bus without stating ``control`` and
     ``register_map`` (``control-bus-unaddressed``)."""
     buses = list(control_models(cls))
@@ -515,9 +517,20 @@ def _derive_control(cls: type[Kernel]) -> None:
             f"its control bus {name}",
             declaration=cls.__qualname__,
         )
-    record = node_record(vars(cls).get(name))
-    if record is None:
-        return  # inherited, with what its class derived
+    owner = next(base for base in cls.__mro__ if name in vars(base))
+    if owner is not cls:
+        if issubclass(owner, Kernel):
+            return  # inherited, with what its class derived
+        raise DefinitionError.broken(
+            "control-bus-nested",
+            "Kernel",
+            f"{cls.__qualname__} declares its control bus {name} in {owner.__qualname__}, "
+            "not a kernel: a kernel declares it in its own body, where the base derives what "
+            "is read of it",
+            declaration=cls.__qualname__,
+        )
+    record = node_record(vars(cls)[name])
+    assert record is not None
     may_present = record.bindings.get("presented", False) is not False
     members = _members(cls)
     if may_present and not ("control" in members and "register_map" in members):
