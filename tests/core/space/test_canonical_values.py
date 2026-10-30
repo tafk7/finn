@@ -133,6 +133,46 @@ def test_the_canonical_form_at_the_boundary() -> None:
     assert held(signed).ds == held(signed.with_facts({Meter.rate: -0.0})).ds
 
 
+class Handle:
+    """A service's handle: hashable, its own ``==``, and it changes."""
+
+    def __init__(self) -> None:
+        self.uses = 0
+
+    def __eq__(self, other: object) -> bool:
+        return other is self
+
+    def __hash__(self) -> int:
+        return id(self)
+
+
+class Offset(int):
+    """An ``int`` holding nothing beside its value."""
+
+    __slots__ = ()
+
+
+class Labelled(int):
+    """An ``int`` with a ``__dict__``, which may change."""
+
+
+def test_an_object_the_engine_cannot_see_is_immutable_is_no_value() -> None:
+    """Whatever its hash: a service's handle is refused where it enters, alone and inside a
+    value, as a literal and as a change; an ``int`` deriving class holding nothing beside its
+    value, and a function, are taken as they are."""
+    why = "a Handle is no value the engine can see is immutable"
+    for box in (Box(Handle()), Box((1, Handle())), Box(frozenset({Handle()}))):
+        with refused("literal-not-value", error=DefinitionError, message=why):
+            Meter(rate=1.0, box=box)
+        with pytest.raises(RequestError, match=f"^box: Box.inner: .*{why}"):
+            design_space(Meter(rate=1.0)).with_facts({Meter.box: box})
+    with pytest.raises(RequestError, match="^box: Box.inner: a Labelled is no value"):
+        design_space(Meter(rate=1.0)).with_facts({Meter.box: Box(Labelled(3))})
+    for inner in (Offset(3), negative, len):
+        point = design_space(Meter(rate=1.0, box=Box(inner)))
+        assert point.box is not None and point.box.inner is inner
+
+
 # -- What the review found: the output copy, a tuple subclass, an init=False field -----------
 
 

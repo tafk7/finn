@@ -30,6 +30,12 @@ registered value type (``value_type``) and an enum member are taken as they are:
 owners state them immutable. A tuple subclass is rebuilt by its ``_make`` (a named tuple's);
 one without is refused where an item changes. A frozen dataclass is rebuilt where a field
 changes, a field its ``__init__`` does not take (``init=False``) set on the rebuilt value.
+
+Anything else is refused: an object of a class the engine cannot see is immutable (a
+service, a native library's handle, a class with an ``==`` of its own its owner has not
+registered) is no value, whatever its hash. Two kinds are taken as they are: an instance
+of a class derived from ``int``, ``str`` or ``bytes`` that holds nothing beside its value
+(no ``__dict__``), and a function, whose identity is its ``==`` and hash.
 """
 
 from __future__ import annotations
@@ -271,6 +277,11 @@ class NotAValue(ValueError):
 
 _ATOMS: frozenset[type] = frozenset((bool, int, str, bytes, type(None), type(Ellipsis), range))
 _MUTABLE = (list, dict, set, bytearray, MutableSequence, MutableMapping, MutableSet)
+_SUBCLASSED = (int, str, bytes)
+"""The plain values a class may derive from: an instance holding nothing beside its value (no
+``__dict__``) is as immutable as the plain value."""
+_FUNCTIONS = (types.FunctionType, types.BuiltinFunctionType)
+"""A function is taken as itself: its identity is its ``==`` and hash."""
 
 _CLASSES: weakref.WeakKeyDictionary[type, str | None] = weakref.WeakKeyDictionary()
 """``_refused_class``'s answer by dataclass, made once."""
@@ -278,7 +289,8 @@ _CLASSES: weakref.WeakKeyDictionary[type, str | None] = weakref.WeakKeyDictionar
 
 def canonical(value: T) -> T:
     """``value`` in its canonical form (see the module docstring): the value itself where
-    nothing in it changes; ``NotAValue`` where it is no value."""
+    nothing in it changes; ``NotAValue`` where it is no value, an object of a class the
+    engine cannot see is immutable included."""
     kind = type(value)
     if kind in _ATOMS:
         return value
@@ -310,7 +322,15 @@ def canonical(value: T) -> T:
         raise NotAValue(
             f"a {kind.__qualname__} has no hash: a value's == and hash are its semantics"
         )
-    return value
+    if isinstance(value, _FUNCTIONS) or (
+        isinstance(value, _SUBCLASSED) and not hasattr(value, "__dict__")
+    ):
+        return value
+    raise NotAValue(
+        f"a {kind.__qualname__} is no value the engine can see is immutable: a value is a "
+        "plain value, an enum member, a registered value type (value_type), or a tuple, a "
+        "frozen set or a frozen dataclass of values"
+    )
 
 
 def _items(value: tuple[object, ...]) -> tuple[object, ...]:

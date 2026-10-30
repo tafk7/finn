@@ -4,8 +4,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import replace
-from typing import Any, cast
+from dataclasses import dataclass, replace
+from typing import Any, ClassVar, cast
 
 import pytest
 
@@ -111,13 +111,13 @@ def test_foreign_model_handles_are_rejected_before_evaluators() -> None:
     assert calls == []
 
 
+@dataclass(frozen=True, eq=False)
 class Flaky:
     """A value whose ``==`` raises while ``failing`` is set."""
 
-    failing = False
+    failing: ClassVar[bool] = False
 
-    def __init__(self, n: int) -> None:
-        self.n = n
+    n: int
 
     def __eq__(self, other: object) -> bool:
         if Flaky.failing:

@@ -23,12 +23,12 @@ is one. The inventory stays exact: every frozen dataclass is in exactly one of t
 
 The canonical form walks a value item by item and field by field, refusing what it
 finds mutable (a list, a dict, a set, a bytearray, NumPy arrays, a dataclass that is not
-frozen), so for the samples it covers everything a walker of this file's own would. It
-is no proof of immutability: it admits any other hashable object as it is, opaque, so it
-takes an isl handle, its ``_Service`` and its native ``isl.Map`` without complaint. The
-handles are kept out of values by the exact inventory, the exact annotation flags, their
-thread and context confinement, and the descriptor codec, which refuses them; the queries'
-answers are checked to hold none of them.
+frozen) and any object it cannot see is immutable, so for the samples it covers everything
+a walker of this file's own would. It refuses the isl handles too, where they would enter
+a design space: their ``_Service`` and their native ``isl.Map`` are such objects. The
+handles are also kept out of values by the exact inventory, the exact annotation flags,
+their thread and context confinement, and the descriptor codec, which refuses them; the
+queries' answers are checked to hold none of them.
 """
 
 from __future__ import annotations
@@ -163,6 +163,10 @@ from finn.dataflow.traversal import (
     classify,
     vector_major,
 )
+
+# The engine admits a QONNX datatype as FINN registers it, wherever a kernel is imported:
+# the samples are checked against the canonical form a run applies.
+from finn.kernels.values import semantics as _value_types  # noqa: F401
 
 INT4 = ScalarEncoding(resolve_qonnx_datatype_name("INT4"))
 SCHEDULE = Schedule({m: 2, n: 4, k: 4}, {n: 2, k: 2}, (m, n, k))
@@ -413,7 +417,7 @@ profile and execution records from the shared fixtures and the queries over them
 #: The private isl handles: frozen dataclasses that are no values, and why. Each holds its
 #: owning ``_Service`` (thread- and context-confined) and a native ``isl.Map``; neither is
 #: an immutable value type, and no handle crosses the package's interface. ``canonical``
-#: admits them as opaque hashables; the descriptor codec refuses them.
+#: and the descriptor codec refuse them.
 NATIVE_HANDLES: dict[type, str] = {
     _Map: "a context-owned isl relation handle, compared by native equality (eq=False)",
     _WordRoute: "a context-owned isl word-route handle; queries return BeatRoute instead",
@@ -574,6 +578,36 @@ def test_the_descriptor_codec_refuses_a_native_handle_and_its_contents(index: in
     )[index]
     with pytest.raises(TypeError, match="not a durable logical descriptor"):
         dump(held)
+
+
+@pytest.mark.parametrize(
+    "index",
+    [0, 1, 2, 3, 4, 5, 6],
+    ids=[
+        "_Map",
+        "_WordRoute",
+        "_Service",
+        "_Map._relation",
+        "_WordRoute._relation",
+        "in-a-tuple",
+        "beside-a-descriptor",
+    ],
+)
+def test_the_engine_s_canonical_form_refuses_a_native_handle_and_its_contents(index: int) -> None:
+    """Where a handle would enter a design space, the engine refuses it: its service and its
+    native relation are objects it cannot see are immutable."""
+    service, handle, word = _handles()
+    held = (
+        handle,
+        word,
+        service,
+        handle._relation,
+        word._relation,
+        (handle,),
+        (identity((2,)), word),
+    )[index]
+    with pytest.raises(NotAValue, match=r"(_Service|Map) is no value the engine can see"):
+        canonical(held)
 
 
 def _natives(value: object) -> list[str]:

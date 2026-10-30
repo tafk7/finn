@@ -12,13 +12,14 @@ data) and its ports; the base assembles its netlist from them, serially, in the
 order the module's pins and holds take (``Kernel.netlist``). The base derives its
 cycles by the rate law (``Kernel.cycles``) and answers its intake unstated unless it
 states its own (``Kernel.intake``). Parents compose resolved child Members in ordinary
-source. No setter, read-list or flat callback table is installed on a kernel. Two
-things are installed when its class is made, each a function reading by names its
-closure fixes, so that its source states its reads: on a kernel with a module, one
-helper a part of its module; on a kernel with children, each port it serves
-(``served``) lowered into the members a channel and its sizing read of a port,
-``<port>_side``, ``<port>_stream_pins``, ``<port>_pace`` and ``<port>_advance``, and,
-for a selector, ``<child>_case``.
+source. Importing it registers FINN's value types (``finn.kernels.values.semantics``),
+which a kernel's facts hold and the engine admits only registered. No setter, read-list
+or flat callback table is installed on a kernel. Two things are installed when its class
+is made, each a function reading by names its closure fixes, so that its source states its
+reads: on a kernel with a module, one helper a part of its module; on a kernel with
+children, each port it serves (``served``) lowered into the members a channel and its
+sizing read of a port, ``<port>_side``, ``<port>_stream_pins``, ``<port>_pace`` and
+``<port>_advance``, and, for a selector, ``<child>_case``.
 
 Hardware configuration facts/Choices/rules remain inward model computations.
 Outward Views keep selected owning non-refusal and actual unresolved inputs.
@@ -67,6 +68,7 @@ from finn.kernels.laws import AXIS_CLOCKING, INTAKE_UNSTATED, Advance, Intake
 from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
 from finn.kernels.transport import StreamPins
 from finn.kernels.utilization import total
+from finn.kernels.values import semantics as _value_types  # noqa: F401 - registers FINN's value types
 from finn.platform.capabilities import Resources
 
 

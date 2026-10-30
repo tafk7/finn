@@ -496,7 +496,10 @@ LAYERS: tuple[Layer, ...] = (
         also=("qonnx.custom_op.general.im2col.im2col_indices_nchw",),
     ),
     # Native query probes and the engine's value audit are test-only, not additional
-    # dependencies of the canonical logical production layer.
+    # dependencies of the canonical logical production layer. The audit checks the values
+    # against the canonical form a run applies, so it imports the kernels' registration of
+    # FINN's value types (``finn.kernels.values.semantics``; a QONNX datatype is admitted
+    # registered only).
     Layer(
         "tests.dataflow.native",
         ("dataflow.test_native_maps",),
@@ -507,7 +510,7 @@ LAYERS: tuple[Layer, ...] = (
     Layer(
         "tests.dataflow.values",
         ("dataflow.test_value_classes",),
-        ("dataflow", "space", "tests.dataflow", "tests.value_classes"),
+        ("dataflow", "space", "kernels", "tests.dataflow", "tests.value_classes"),
         ("pytest", "numpy", "islpy", "qonnx.core.datatype"),
         "tests/dataflow",
     ),
