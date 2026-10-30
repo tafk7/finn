@@ -26,6 +26,8 @@ from finn.dataflow.schedule import (
     Schedule,
     bind_extents,
     plain_index,
+    schedule_over,
+    span,
 )
 from finn.dataflow.traversal import Traversal
 
@@ -158,6 +160,46 @@ def test_each_rule_refuses_by_its_own_code_owned_by_bind_extents(
         bind_extents(accesses, given)
     ((found, owner),) = [(each.code, each.owner) for each in refused.value.findings]
     assert (found, owner) == (code, "bind_extents")
+
+
+def test_a_schedule_is_built_over_the_bound_extents_in_its_order() -> None:
+    bound = bind_extents(dense(3, 8, 6))
+    schedule = schedule_over(bound, (m, n, k), {n: 3, k: 2})
+    assert schedule == Schedule({m: 3, n: 6, k: 8}, {n: 3, k: 2}, (m, n, k))
+    # Only the indices of its order: an extent bound and not iterated is left out.
+    assert schedule_over({**bound, t: 2}, (m, n, k)).order == (m, n, k)
+    with refused(
+        "extent-unbound",
+        owner="schedule_over",
+        error=Refused,
+        message=r"^\[t\] are bound by no placed port$",
+    ):
+        schedule_over(bound, (m, n, k, t))
+    with refused(
+        "schedule-invalid",
+        owner="schedule_over",
+        error=Refused,
+        message="^a folding factor of 5 does not divide n's extent 6$",
+    ):
+        schedule_over(bound, (m, n, k), {n: 5})
+    with refused("schedule-invalid", error=Refused, message="names each index"):
+        schedule_over(bound, (m, n, k, k))
+
+
+def test_an_output_spans_the_reach_of_each_axis_over_the_bound_extents() -> None:
+    bound = {oh: 3, ow: 4, kh: 2, c: 5}
+    assert span((oh, ow, c), bound) == (3, 4, 5)
+    # An axis read at an expression spans the reach of its terms, plus one.
+    assert span((oh * 4 + ow, oh * 2 + kh, ZERO), bound) == (12, 6, 1)
+    assert span((), bound) == ()
+    # The first axis with an unbound index is refused, naming its unbound indices.
+    with refused(
+        "extent-unbound",
+        owner="span",
+        error=Refused,
+        message=r"^\[kw, t\] are bound by no placed port$",
+    ):
+        span((oh, kw + t, mt), bound)
 
 
 def test_a_plain_index_is_one_index_of_coefficient_one() -> None:

@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from qonnx.core.datatype import DataType
 from support.helpers import FULL_DSP48E2
@@ -25,7 +27,7 @@ from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.base import Kernel
+from finn.kernels.base import Kernel, bound_extents, bound_schedule, spanned
 from finn.kernels.laws import AXIS, AXIS_CLOCKING, Axis, Native
 from finn.kernels.port import LoopEnds
 from finn.kernels.port_model import StreamPort
@@ -185,32 +187,68 @@ def test_scheduled_child_presence_is_checked_before_local_work(enabled: bool | N
     assert isinstance(result, expected)
 
 
-def test_authored_access_method_is_preserved_through_inheritance() -> None:
+def test_a_kernel_states_its_extents_and_schedule_by_dataflow_s_rules() -> None:
     class Explicit(Kernel):
         id = "test.scheduled.explicit_access"
+        fold: int = Decision(domain=(1, 2, 4))
 
-        def _accesses(self) -> list[Access]:
-            return [Access("actual", TENSOR.shape, (R, C), False)]
+        @derived
+        def extents(self) -> dict[Index, int] | Rejected:
+            return bound_extents([Access("actual", TENSOR.shape, (R, C), False)])
+
+        @derived
+        def schedule(self) -> Schedule | Rejected:
+            return bound_schedule(self.extents, (R, C), {C: self.fold})
 
     class Inherited(Explicit):
         pass
 
     for kind in (Explicit, Inherited):
-        assert design_space(kind()).extents == {R: 2, C: 4}
-        assert kind._accesses is Explicit._accesses
+        point = design_space(kind()).with_choices(fold=2)
+        assert point.extents == {R: 2, C: 4}
+        assert point.schedule == Schedule({R: 2, C: 4}, {C: 2}, (R, C))
 
 
-def test_empty_accesses_are_inherited_without_a_generated_method() -> None:
+def test_a_kernel_with_no_scheduled_port_has_no_schedule_and_no_extents() -> None:
     class Empty(Kernel):
         id = "test.scheduled.empty"
 
-    class Subclass(Empty):
-        pass
+    # The base holds no schedule mechanics: no extents, accesses, or schedule builders.
+    assert isinstance(design_space(Empty()).query(Empty.schedule), Inapplicable)
+    for gone in ("extents", "_accesses", "_bound", "bound_schedule", "spanned"):
+        assert not hasattr(Kernel, gone), gone
 
-    # Indexed kernels author access reads over actual Ports; no lowering hook generates
-    # per-class methods. The empty base method is inherited here unchanged.
-    assert Subclass._accesses is Empty._accesses
-    assert design_space(Empty()).extents == design_space(Subclass()).extents == {}
+
+@pytest.mark.parametrize(
+    ("order", "factors", "code", "message"),
+    (
+        ((R, C, Index("t")), {}, "kernel-extents", r"^\[t\] are bound by no placed port$"),
+        ((R, C), {C: 3}, "kernel-schedule", "^a folding factor of 3 does not divide c's extent 4$"),
+        ((R, C, C), {}, "kernel-schedule", "names each index"),
+    ),
+)
+def test_a_schedule_dataflow_refuses_is_the_kernel_s_refusal(
+    order: tuple[Index, ...], factors: dict[Index, int], code: str, message: str
+) -> None:
+    found = bound_schedule({R: 2, C: 4}, order, factors)
+    assert isinstance(found, Rejected)
+    ((finding),) = found.findings
+    assert finding.code == code and re.search(message, finding.message)
+
+
+def test_extents_and_spans_dataflow_refuses_are_the_kernel_s_refusals() -> None:
+    conflict = bound_extents([Access("x", (2, 3), (R, R))])
+    assert isinstance(conflict, Rejected)
+    assert [(f.code, f.message) for f in conflict.findings] == [
+        ("kernel-extents", "r is 2 (x axis 0) and 3 (x axis 1)")
+    ]
+    assert bound_extents([], {R: 2}) == {R: 2}
+    unbound = spanned((R, C + Index("t")), {R: 2, C: 4})
+    assert isinstance(unbound, Rejected)
+    assert [(f.code, f.message) for f in unbound.findings] == [
+        ("kernel-extents", "[t] are bound by no placed port")
+    ]
+    assert spanned((R, C * 2 + R), {R: 2, C: 4}) == (2, 8)
 
 
 class SerialTranspose(TransposeKernel):
@@ -221,12 +259,12 @@ class SerialTranspose(TransposeKernel):
     def first(self) -> Schedule | Rejected:
         if self.first_state == "refused":
             return reject("first-schedule", "first input blocks")
-        return self.columns_out
+        return self.schedule
 
     @derived
     def second(self) -> Schedule:
         _ = self.second_state
-        return self.columns_out
+        return self.schedule
 
     input = StreamPort(
         label="input",

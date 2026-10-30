@@ -38,7 +38,7 @@ from finn.dataflow.schedule import Access, Index, Schedule
 from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.base import Kernel, extent_of
+from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
 from finn.kernels.laws import NATIVE, NATIVE_CLOCKING, Native
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port_model import StreamPort
@@ -88,6 +88,17 @@ class EltwiseKernel(Kernel):
     # The tensors its operand ports read: facts it is given.
     lhs_tensor: Tensor = Param()
     rhs_tensor: Tensor = Param()
+
+    @derived
+    def extents(self) -> dict[Index, int] | Rejected:
+        """Each index's extent, bound from the tensors ``lhs`` and ``rhs`` read."""
+        found: list[Access] = []
+        if self.lhs.binds:
+            found.append(self.lhs.access)
+        if self.rhs.binds:
+            found.append(self.rhs.access)
+        return bound_extents(found)
+
     channels = extent_of(c)  # the innermost axis
     # PE elements of the innermost axis a beat: a divisor of the channels the RTL's PE
     # parameter, a 32-bit integer, holds.
@@ -179,12 +190,12 @@ class EltwiseKernel(Kernel):
     @derived
     def schedule(self) -> Schedule | Rejected:
         """Row-major over lhs's axes, ``c`` split by PE innermost."""
-        return self.bound_schedule(self.indices, {c: self.pe})
+        return bound_schedule(self.extents, self.indices, {c: self.pe})
 
     @derived
     def result_tensor(self) -> Tensor | Rejected:
         """Its results: ``lhs``'s shape, in ``result_dtype``."""
-        shape = self.spanned(self.indices)
+        shape = spanned(self.indices, self.extents)
         if isinstance(shape, Rejected):
             return shape
         element = admit_element(self.result_dtype, None)
@@ -216,14 +227,6 @@ class EltwiseKernel(Kernel):
         index=indices,
         lanes=(c,),
     )
-
-    def _accesses(self) -> list[Access]:
-        found: list[Access] = []
-        if self.lhs.binds:
-            found.append(self.lhs.access)
-        if self.rhs.binds:
-            found.append(self.rhs.access)
-        return found
 
     @view
     def resource_use(self) -> Resources | Rejected:

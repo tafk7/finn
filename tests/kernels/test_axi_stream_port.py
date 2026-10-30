@@ -3,8 +3,8 @@
 
 """Real child ports and extents bound from the tensors a kernel's inputs read.
 
-``StreamPort`` states an input's tensor access (``x.access``); its parent reads
-the binding inputs in ``_accesses`` to derive ``Kernel.extents``. Folding
+``StreamPort`` states an input's tensor access (``x.access``); its kernel reads
+the binding inputs' to state its ``extents`` (``bound_extents``). Folding
 domains read ``extent_of`` members. ``StreamPort`` presents an output tensor
 derived from those extents without binding them back into its parent. A child
 states its intrinsic element rule; parent composition constraints remain on the
@@ -35,12 +35,12 @@ from finn.core.space import (
 )
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.gemm import Form
-from finn.dataflow.schedule import Access, Index, Schedule
+from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.base import Kernel, extent_of
+from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.laws import Axis
@@ -61,16 +61,20 @@ class Pool(Kernel):
     id = "test.accpool"
     x_tensor: Tensor | None = Param(default=None)
 
+    @derived
+    def extents(self) -> dict[Index, int] | Rejected:
+        return bound_extents([self.x.access] if self.x.binds else [])
+
     channels = extent_of(c)
     pe: int = Decision(domain=divisors_of(channels))
 
     @derived
     def schedule(self) -> Schedule | Rejected:
-        return self.bound_schedule(order=(b, s, c), factors={c: self.pe})
+        return bound_schedule(self.extents, order=(b, s, c), factors={c: self.pe})
 
     @derived
     def y_tensor(self) -> Tensor | Rejected:
-        shape = self.spanned((b, c))
+        shape = spanned((b, c), self.extents)
         if isinstance(shape, Rejected):
             return shape
         return Tensor(shape, ScalarEncoding(DataType["INT8"]))
@@ -109,9 +113,6 @@ class Pool(Kernel):
             CopiedSource("finnlib", "rtl/accpool.sv", provides=("module:accpool_axi",)),
         ),
     )
-
-    def _accesses(self) -> list[Access]:
-        return [self.x.access] if self.x.binds else []
 
     @view
     def cycles(self) -> int:
@@ -302,8 +303,9 @@ class Holding(Kernel):
         constant_sources=(CopiedSource("finnlib", "rtl/holding.sv", provides=("module:holding",)),),
     )
 
-    def _accesses(self) -> list[Access]:
-        return [self.x.access] if self.x.binds else []
+    @derived
+    def extents(self) -> dict[Index, int] | Rejected:
+        return bound_extents([self.x.access] if self.x.binds else [])
 
     @view
     def cycles(self) -> int:

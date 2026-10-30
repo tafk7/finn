@@ -24,11 +24,11 @@ from finn.core.space import (
     reject,
     view,
 )
-from finn.dataflow.schedule import Access, Index, Schedule
+from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.base import Kernel, extent_of
+from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
 from finn.kernels.fifo import fifo_resources
 from finn.kernels.laws import NATIVE, NATIVE_CLOCKING
 from finn.kernels.library import ModuleSpec
@@ -108,8 +108,10 @@ class TransposeKernel(Kernel):
     @derived
     def extents(self) -> dict[Index, int] | Rejected:
         """Each index's extent: the input reads its tensor through a view, which binds
-        none, so the kernel gives its axes' extents."""
-        return self._bound(dict(zip(self.indices, self.input_tensor.shape)))
+        none, so the kernel gives its axes' extents. (The output's tensor is spanned from
+        them; it never binds them back.)"""
+        given = dict(zip(self.indices, self.input_tensor.shape))
+        return bound_extents([self.input.access] if self.input.binds else [], given)
 
     rows = extent_of(i)  # I
     cols = extent_of(j)  # J
@@ -152,15 +154,15 @@ class TransposeKernel(Kernel):
         return (*outer, j, i)
 
     @derived
-    def columns_out(self) -> Schedule | Rejected:
+    def schedule(self) -> Schedule | Rejected:
         """Each matrix's columns in turn, SIMD elements of a column a beat. The input,
         read as each matrix's ``(J, I)`` view, walks it too: its rows, flat."""
-        return self.bound_schedule(self.columns, {i: self.simd})
+        return bound_schedule(self.extents, self.columns, {i: self.simd})
 
     @derived
     def output_tensor(self) -> Tensor | Rejected:
         """Its output: the input's shape and element, unchanged."""
-        shape = self.spanned(self.indices)
+        shape = spanned(self.indices, self.extents)
         if isinstance(shape, Rejected):
             return shape
         return Tensor(shape, self.input_tensor.element)
@@ -169,7 +171,7 @@ class TransposeKernel(Kernel):
         transport=NATIVE,
         endpoint=Endpoint.TARGET,
         tensor=input_tensor,
-        schedule=columns_out,
+        schedule=schedule,
         index=columns,
         lanes=(i,),
         reshaped=True,
@@ -178,14 +180,10 @@ class TransposeKernel(Kernel):
         transport=NATIVE,
         endpoint=Endpoint.INITIATOR,
         tensor=output_tensor,
-        schedule=columns_out,
+        schedule=schedule,
         index=indices,
         lanes=(i,),
     )
-
-    def _accesses(self) -> list[Access]:
-        # The output's tensor comes from parent extents; it never binds them back.
-        return [self.input.access] if self.input.binds else []
 
     @view
     def resource_use(self) -> Resources | Rejected:

@@ -76,7 +76,7 @@ from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.traversal import offsets, pack, vector_major
 from finn.harness.orders import decode
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.base import Kernel
+from finn.kernels.base import Kernel, bound_extents, bound_schedule
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.laws import Axis
 from finn.kernels.memstream import MemStreamKernel
@@ -98,7 +98,7 @@ class RowsFirst(ThresholdingAxiKernel):
     def schedule(self) -> Schedule | Rejected:
         *outer, last = self.indices
         order = (last, *outer) if type(self).channels_outer else (*outer, last)
-        return self.bound_schedule(tuple(order), {c: self.pe})
+        return bound_schedule(self.extents, tuple(order), {c: self.pe})
 
 
 class ChannelsFirst(RowsFirst):
@@ -155,7 +155,8 @@ class LanesInOrder(ThresholdingAxiKernel):
     def extents(self) -> dict[Index, int] | Rejected:
         # The window axis binds nothing: the split's extents are the author's, a row a
         # channel, and the channels' its rows.
-        return self._bound({co: self.rows // 3, ci: 3, c: self.rows})
+        accesses = [self.input.access] if self.input.binds else []
+        return bound_extents(accesses, {co: self.rows // 3, ci: 3, c: self.rows})
 
     @derived
     def indices(self) -> tuple[Index, ...]:
@@ -164,7 +165,7 @@ class LanesInOrder(ThresholdingAxiKernel):
 
     @derived
     def schedule(self) -> Schedule | Rejected:
-        return self.bound_schedule((r, co, ci), factors={co: self.rows // 3, ci: 3})
+        return bound_schedule(self.extents, (r, co, ci), factors={co: self.rows // 3, ci: 3})
 
     input, output = split_ports(schedule, (co, ci))
 

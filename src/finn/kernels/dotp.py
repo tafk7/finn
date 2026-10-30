@@ -76,7 +76,7 @@ from finn.dataflow.schedule import Access, Affine, Index, Schedule
 from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import Clocking, Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.base import Kernel, extent_of
+from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
 from finn.kernels.laws import Axis, doubled
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port import axis
@@ -241,7 +241,12 @@ class DotpAxiKernel(Kernel):
             given[m] = self.x_tensor.shape[0]
         if self.rows_viewed:
             given[m] = prod(self.x_tensor.shape[:-1])
-        return self._bound(given or None)
+        found: list[Access] = []
+        if self.x.binds:
+            found.append(self.x.access)
+        if self.w.binds:
+            found.append(self.w.access)
+        return bound_extents(found, given or None)
 
     rows = extent_of(m)  # M: the results' rows
     outputs = extent_of(n)  # N: the results' columns
@@ -309,8 +314,10 @@ class DotpAxiKernel(Kernel):
         """``n`` split by PE and the reduction by SIMD; the rows (a window's pixels), then
         ``n``, then the reduction (a window's taps, then its channels)."""
         rows = (oh, ow) if self.windowed else (m,)
-        return self.bound_schedule(
-            order=(*rows, n, *self.reduced), factors={n: self.pe, self.lanes_of: self.simd}
+        return bound_schedule(
+            self.extents,
+            order=(*rows, n, *self.reduced),
+            factors={n: self.pe, self.lanes_of: self.simd},
         )
 
     @derived
@@ -339,7 +346,7 @@ class DotpAxiKernel(Kernel):
         element = admit_element(self.accumulator, TensorRange(*self.result_range))
         if isinstance(element, Rejected):
             return element
-        shape = self.spanned(self.y_index)
+        shape = spanned(self.y_index, self.extents)
         if isinstance(shape, Rejected):
             return shape
         if self.rows_viewed:
@@ -360,14 +367,6 @@ class DotpAxiKernel(Kernel):
     def activation_policy(self) -> Integer:
         """The activation encodings the core takes (``activations``)."""
         return self.activations
-
-    def _accesses(self) -> list[Access]:
-        found: list[Access] = []
-        if self.x.binds:
-            found.append(self.x.access)
-        if self.w.binds:
-            found.append(self.w.access)
-        return found
 
     x = StreamPort(
         transport=Axis(bus="s_axis_input"),

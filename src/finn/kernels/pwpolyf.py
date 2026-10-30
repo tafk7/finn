@@ -45,7 +45,7 @@ from finn.dataflow.schedule import Access, Index, Schedule
 from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.base import Kernel, extent_of
+from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
 from finn.kernels.laws import NATIVE_CLOCKING, Native
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port_model import StreamPort
@@ -89,6 +89,14 @@ class PwPolyKernel(Kernel):
         rank = len(self.input_tensor.shape)
         return (*(Index(f"a{axis}") for axis in range(rank - 1)), c)
 
+    @derived
+    def extents(self) -> dict[Index, int] | Rejected:
+        """Each index's extent, bound from the tensor its input reads."""
+        found: list[Access] = []
+        if self.input.binds:
+            found.append(self.input.access)
+        return bound_extents(found)
+
     channels = extent_of(c)  # the innermost axis
     # PE elements of the innermost axis a beat.
     pe: int = Decision(domain=divisors_of(channels))
@@ -96,24 +104,18 @@ class PwPolyKernel(Kernel):
     @derived
     def schedule(self) -> Schedule | Rejected:
         """Row-major over the input's axes, ``c`` split by PE innermost."""
-        return self.bound_schedule(self.indices, {c: self.pe})
+        return bound_schedule(self.extents, self.indices, {c: self.pe})
 
     @derived
     def output_tensor(self) -> Tensor | Rejected:
         """Its results: the input's shape, in FLOAT32 over its whole range."""
-        shape = self.spanned(self.indices)
+        shape = spanned(self.indices, self.extents)
         if isinstance(shape, Rejected):
             return shape
         element = admit_element(FLOAT32, None)
         if isinstance(element, Rejected):
             return element
         return Tensor(shape, element)
-
-    def _accesses(self) -> list[Access]:
-        found: list[Access] = []
-        if self.input.binds:
-            found.append(self.input.access)
-        return found
 
     input = StreamPort(
         transport=Native(prefix="x"),

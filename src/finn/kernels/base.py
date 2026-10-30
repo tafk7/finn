@@ -40,7 +40,16 @@ from finn.core.space import (
 )
 from finn.core.space._nodes import assign, node_record
 from finn.core.space.declarations import unmet_required
-from finn.dataflow.schedule import Access, Affine, Index, Refused, Schedule, bind_extents
+from finn.dataflow.schedule import (
+    Access,
+    Affine,
+    Index,
+    Refused,
+    Schedule,
+    bind_extents,
+    schedule_over,
+    span,
+)
 from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import Clocking, Pin
 from finn.kernels.artifacts.contributions import Contribution, GeneratedData
@@ -403,7 +412,7 @@ class Kernel(Space):
                 declaration=cls.__qualname__,
             )
 
-    # -- its clock, extents --------------------------------------------------------------
+    # -- its clock ------------------------------------------------------------------------
 
     # The clock and reset (and its polarity) its ports and its module run on (L8): a class
     # constant, one of the library's two domains (``finn.kernels.laws``), chosen by its
@@ -439,53 +448,16 @@ class Kernel(Space):
         own; a shell's memory rule counts them (``finn.kernels.budgets``)."""
         return 0
 
-    def _accesses(self) -> list[Access]:
-        """Actual input access computations; an indexed module authors its own source."""
-        return []
-
-    def _bound(self, extents: Mapping[Index, int] | None = None) -> dict[Index, int] | Rejected:
-        try:
-            return bind_extents(self._accesses(), extents)
-        except Refused as error:
-            return reject("kernel-extents", str(error))
+    # -- its schedule ----------------------------------------------------------------------
 
     @derived
-    def extents(self) -> dict[Index, int] | Rejected:
-        """Each index's extent, bound from the tensors its input ports read."""
-        return self._bound()
-
-    def bound_schedule(
-        self,
-        order: tuple[Index, ...],
-        factors: Mapping[Index, int] | None = None,
-        extents: Mapping[Index, int] | None = None,
-    ) -> Schedule | Rejected:
-        """The schedule in beat ``order`` (outer to inner), each index's extent bound from the
-        ports' tensors (and any ``extents`` the kernel gives), with folding ``factors``."""
-        bound = self.extents if extents is None else self._bound(extents)
-        if isinstance(bound, Rejected):
-            return bound
-        missing = [index for index in order if index not in bound]
-        if missing:
-            return reject("kernel-extents", f"{missing} are bound by no placed port")
-        try:
-            return Schedule({index: bound[index] for index in order}, factors, order)
-        except ValueError as error:
-            return reject("kernel-schedule", str(error))
-
-    def spanned(self, index: tuple[Index | Affine, ...]) -> tuple[int, ...] | Rejected:
-        """The shape ``index`` spans over the bound extents: an axis read at ``i`` spans
-        ``i``'s extent, one at ``oh * OW + ow`` the reach of its terms, plus one. A kernel
-        states its output tensor's shape by it, from the extents its inputs bind."""
-        extents = self.extents
-        shape: list[int] = []
-        for axis in index:
-            terms = Affine.of(axis).terms
-            missing = [i for i, _ in terms if i not in extents]
-            if missing:
-                return reject("kernel-extents", f"{missing} are bound by no placed port")
-            shape.append(1 + sum(c * (extents[i] - 1) for i, c in terms))
-        return tuple(shape)
+    def schedule(self) -> Schedule | Inapplicable:
+        """Its schedule: the iteration its scheduled ports are projections of
+        (``StreamPort(schedule=schedule, ...)``), so that every one presents, at each
+        iteration, the positions of one index point (their association, CONTRACT.md § 3)
+        and moves its beats at its pace (§ 4). A kernel with scheduled ports states it, over
+        its ``extents`` (``bound_schedule``); one with none has none."""
+        return Inapplicable()
 
     # -- its own parts of its answers ----------------------------------------------------
 
@@ -650,16 +622,67 @@ class Kernel(Space):
     member_cycles = Members(cycles)
 
 
+# -- a kernel's extents and schedule, by finn.dataflow's rules ------------------------------
+#
+# The computations are ``finn.dataflow.schedule``'s, over the tensors a kernel's ports read
+# (each target with an index reads one, ``StreamPort.access``): ``bind_extents``,
+# ``schedule_over`` and ``span``. A kernel with scheduled ports states two derived values by
+# them, its ``extents`` (its facts: the indices' extents, bound from the accesses and any it
+# gives itself, which its folding's domains read through ``extent_of``) and its
+# ``schedule`` (over the extents, with its folding). These give dataflow's refusal as the
+# kernel's own: ``kernel-schedule`` for a schedule its order or folding cannot build,
+# ``kernel-extents`` for anything else, each with dataflow's message.
+
+
+def bound_extents(
+    accesses: Iterable[Access], given: Mapping[Index, int] | None = None
+) -> dict[Index, int] | Rejected:
+    """Each index's extent, bound from ``accesses``, its ports' reads in their order, and
+    the extents the kernel ``given`` (``bind_extents``)."""
+    try:
+        return bind_extents(tuple(accesses), given)
+    except Refused as error:
+        return reject("kernel-extents", str(error))
+
+
+def bound_schedule(
+    extents: Mapping[Index, int],
+    order: tuple[Index, ...],
+    factors: Mapping[Index, int] | None = None,
+) -> Schedule | Rejected:
+    """The schedule in beat ``order`` (outer to inner) over the kernel's ``extents``, with
+    folding ``factors`` (``schedule_over``)."""
+    try:
+        return schedule_over(extents, order, factors)
+    except Refused as error:
+        invalid = any(finding.code == "schedule-invalid" for finding in error.findings)
+        return reject("kernel-schedule" if invalid else "kernel-extents", str(error))
+
+
+def spanned(
+    index: tuple[Index | Affine, ...], extents: Mapping[Index, int]
+) -> tuple[int, ...] | Rejected:
+    """The shape ``index`` spans over the kernel's ``extents`` (``span``): how a kernel
+    states an output tensor's shape, from the extents its inputs bind."""
+    try:
+        return span(index, extents)
+    except Refused as error:
+        return reject("kernel-extents", str(error))
+
+
 def extent_of(index: Index) -> int:
-    """A derived member of a kernel: ``index``'s extent, bound from its placed ports.
+    """A derived member of a kernel: ``index``'s extent, read from its ``extents``, which
+    the kernel states.
 
     Name it in the class body (``channels = extent_of(c)``) and read that name,
     in a folding factor's ``divisors_of`` domain for instance; used inline inside another
     declaration it is not a member of the class, and linking refuses it.
     """
 
+    stated = "extents"  # the kernel's member, which the base does not declare
+
     def extent(self: Kernel) -> int | Rejected:
-        extents = self.extents
+        extents: dict[Index, int] = getattr(self, stated)
         if index not in extents:
             return reject("kernel-extents", f"{index!r} is bound by no placed port")
         return extents[index]
@@ -670,6 +693,9 @@ def extent_of(index: Index) -> int:
 __all__ = [
     "Kernel",
     "PortContract",
+    "bound_extents",
+    "bound_schedule",
     "extent_of",
     "merged",
+    "spanned",
 ]

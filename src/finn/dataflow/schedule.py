@@ -62,6 +62,11 @@ An index bound from an axis walks exactly that axis, so a port whose axes are
 all bound (or read through a checked reshape) presents every position of its
 tensor: a tensor wider than its kernel's other ports disagrees on an index and
 is refused, not silently left partly unread.
+
+Over the bound extents, ``schedule_over`` builds a kernel's schedule (its order and
+folding factors) and ``span`` the shape an output's expressions span: a kernel
+states its extents, its schedule and its outputs' shapes by these three, from its
+ports' accesses, and holds none of their computation itself.
 """
 
 from __future__ import annotations
@@ -512,6 +517,45 @@ def bind_extents(
     return bound
 
 
+def schedule_over(
+    extents: Mapping[Index, int],
+    order: Sequence[Index],
+    factors: Mapping[Index, int] | None = None,
+) -> Schedule:
+    """The schedule in ``order`` (outer to inner) over the bound ``extents``
+    (``bind_extents``), with folding ``factors``.
+
+    Raises ``Refused``: ``extent-unbound`` where an index of ``order`` has no extent,
+    ``schedule-invalid`` where ``Schedule`` refuses the order or a factor (an index named
+    twice, a factor that does not divide its extent), with its message.
+    """
+    missing = [index for index in order if index not in extents]
+    if missing:
+        raise Refused("extent-unbound", "schedule_over", f"{missing} are bound by no placed port")
+    try:
+        return Schedule({index: extents[index] for index in order}, factors, order)
+    except ValueError as error:
+        raise Refused("schedule-invalid", "schedule_over", str(error)) from error
+
+
+def span(index: Sequence[Index | Affine], extents: Mapping[Index, int]) -> tuple[int, ...]:
+    """The shape ``index`` spans over the bound ``extents``: an axis read at ``i`` spans
+    ``i``'s extent, one at ``oh * OW + ow`` the reach of its terms, plus one. How a kernel
+    states an output's shape, from the extents its inputs bind.
+
+    Raises ``Refused`` (``extent-unbound``) at the first axis with an index that has no
+    extent.
+    """
+    shape: list[int] = []
+    for axis in index:
+        terms = Affine.of(axis).terms
+        missing = [i for i, _ in terms if i not in extents]
+        if missing:
+            raise Refused("extent-unbound", "span", f"{missing} are bound by no placed port")
+        shape.append(1 + sum(c * (extents[i] - 1) for i, c in terms))
+    return tuple(shape)
+
+
 __all__ = [
     "Access",
     "Affine",
@@ -521,4 +565,6 @@ __all__ = [
     "Schedule",
     "bind_extents",
     "plain_index",
+    "schedule_over",
+    "span",
 ]

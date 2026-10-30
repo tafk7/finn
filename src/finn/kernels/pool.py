@@ -48,12 +48,12 @@ from finn.core.space import (
 )
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.gemm import ZERO
-from finn.dataflow.schedule import Access, Affine, Index, Schedule
+from finn.dataflow.schedule import Affine, Index, Schedule
 from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource, HlsSource
 from finn.kernels.artifacts.hls import axis_type
-from finn.kernels.base import Kernel, extent_of
+from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
 from finn.kernels.laws import Axis, AxisSpelling
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port import axis
@@ -197,7 +197,8 @@ class PoolKernel(Kernel):
             oh: (shape[-3] - rows) // row_step + 1,
             ow: (shape[-2] - columns) // column_step + 1,
         }
-        return self._bound({kh: rows, kw: columns, **windows})
+        accesses = [self.input.access] if self.input.binds else []
+        return bound_extents(accesses, {kh: rows, kw: columns, **windows})
 
     channels = extent_of(c)
     pe: int = Decision(domain=divisors_of(channels))
@@ -219,13 +220,7 @@ class PoolKernel(Kernel):
     @derived
     def schedule(self) -> Schedule | Rejected:
         """Window by window, PE channels a beat, the window's positions innermost."""
-        return self.bound_schedule(order=(oh, ow, c, kh, kw), factors={c: self.pe})
-
-    def _accesses(self) -> list[Access]:
-        found: list[Access] = []
-        if self.input.binds:
-            found.append(self.input.access)
-        return found
+        return bound_schedule(self.extents, order=(oh, ow, c, kh, kw), factors={c: self.pe})
 
     input = StreamPort(
         transport=Axis(bus="s_axis", spelling=AxisSpelling.UPPER),
@@ -246,7 +241,7 @@ class PoolKernel(Kernel):
     @derived
     def output_tensor(self) -> Tensor | Rejected:
         """Its output: ``(OH, OW, C)`` at the input's rank, in the input's element."""
-        shape = self.spanned(self.output_index)
+        shape = spanned(self.output_index, self.extents)
         if isinstance(shape, Rejected):
             return shape
         return Tensor(shape, self.input.element)

@@ -90,7 +90,7 @@ from finn.dataflow.datatypes import (
     ordinary_integer_bounds,
     resolve_qonnx_datatype_name,
 )
-from finn.dataflow.schedule import Access, Index, Schedule
+from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import (
@@ -101,7 +101,7 @@ from finn.kernels.artifacts.abi import (
 )
 from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData, hex_image
 from finn.kernels.artifacts.module import RegisterMap
-from finn.kernels.base import Kernel, extent_of
+from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
 from finn.kernels.control import Control, ControlModel
 from finn.kernels.laws import AXIS, Axis
 from finn.kernels.library import ModuleSpec
@@ -241,6 +241,11 @@ class ThresholdingAxiKernel(Kernel):
     def rows(self) -> int:
         """C, the table's rows: one a channel, or one shared by every channel."""
         return self.shape[1]
+
+    @derived
+    def extents(self) -> dict[Index, int] | Rejected:
+        """Each index's extent, bound from the tensor its input reads."""
+        return bound_extents([self.input.access] if self.input.binds else [])
 
     channels = extent_of(c)  # the input's channels, bound by its tensor
     pe: int = Decision(domain=divisors_of(channels))  # channels a beat
@@ -498,7 +503,7 @@ class ThresholdingAxiKernel(Kernel):
                 "threshold-rows",
                 f"{rows} threshold rows are neither one nor the {channels} channels",
             )
-        return self.bound_schedule(self.indices, {c: self.pe})
+        return bound_schedule(self.extents, self.indices, {c: self.pe})
 
     @view
     def resource_use(self) -> Resources | Rejected:
@@ -541,7 +546,7 @@ class ThresholdingAxiKernel(Kernel):
     def output_tensor(self) -> Tensor | Rejected:
         """Its output: the input's shape, in the counts plus bias (``result_dtype``), over
         their range, ``[bias, bias + N]``."""
-        shape = self.spanned(self.indices)
+        shape = spanned(self.indices, self.extents)
         if isinstance(shape, Rejected):
             return shape
         _, _, count = self.shape
@@ -576,9 +581,6 @@ class ThresholdingAxiKernel(Kernel):
         governs="input",
         dtype=selector_dtype,
     )
-
-    def _accesses(self) -> list[Access]:
-        return [self.input.access] if self.input.binds else []
 
     @view
     def thresholds_file(self) -> GeneratedData:

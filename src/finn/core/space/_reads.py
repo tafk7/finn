@@ -6,7 +6,7 @@ An explicit function names its inputs (``Node.arguments``); a ``self`` method re
 Space through its receiver, and what it may read is **declared by use**: found once
 from its source. A method reads through attribute paths (``self.extents``,
 ``self.x.contract``, ``self.compute.x_end``), through its helper methods and properties
-(``self.bound_schedule(...)``, read in turn, in the scope they are reached through),
+(``self.physical_spec(...)``, read in turn, in the scope they are reached through),
 through ``getattr(self, name)`` with a name its source or its closure fixes, through
 ``self.present(...)`` (the guards and selectors presence reads), and through a local
 name bound once to such a path (``core = self.compute``, then ``core.width``). Each path
