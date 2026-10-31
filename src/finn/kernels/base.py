@@ -712,25 +712,24 @@ def _expose_ports(cls: type[Kernel]) -> None:
 # ports it exposes itself, as its module's own pins (``finn.kernels.port.exposed_pins``).
 # Where a stream leaves a module the boundary rule applies, which a channel's outer port
 # presents (``finn.kernels.channels.Channel.outer_in``, ``outer_out``): so each port a sealed
-# kernel exposes is a member channel's own port, never a kernel's port or a channel's
+# kernel exposes is a member channel's outer port, never a kernel's port or a channel's
 # member's, and a transparent kernel may expose any member's port.
 
 
 def _check_sealed(cls: type[Kernel]) -> None:
     """Refuse, for a sealed kernel, a node alias of its own whose nodes are not each a member
-    channel's own port, ``<channel>.<port>`` (``core-edge-unchanneled``, above)."""
+    channel's outer port, ``<channel>.outer_in`` or ``<channel>.outer_out``
+    (``core-edge-unchanneled``, above)."""
     if not cls.sealed:
         return
-    from finn.kernels.port_model import StreamPort  # noqa: PLC0415
-
     members = _members(cls)
     for name, entry in alias_table(cls).items():
         unchanneled = [
             end.path
             for end in entry.ends
             if not (
-                issubclass(end.space_type, StreamPort)
-                and len(end.path.split(".")) == 2
+                len(end.path.split(".")) == 2
+                and end.path.split(".")[1] in _OUTER
                 and _connects(members.get(end.path.split(".")[0]))
             )
         ]
