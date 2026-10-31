@@ -106,8 +106,10 @@ def test_real_netlist_does_not_certify_unrelated_rule_or_presence(
         configured, _ = shell.configured_network(model, "independent")
         assert configured.network is bound
     elif condition == "refused-rule":
-        with refused("unrelated-rule", error=KernelOpError, owner="unrelated"):
+        with refused("unrelated-rule", error=KernelOpError, owner="unrelated") as caught:
             shell.configured_network(model, "independent")
+        # A rule of the partition's own, no member's.
+        assert str(caught.error).startswith("independent: refused: ")
     else:
         with refused("design-incomplete", error=KernelOpError, node="independent"):
             shell.configured_network(model, "independent")

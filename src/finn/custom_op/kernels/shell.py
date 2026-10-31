@@ -292,9 +292,10 @@ def configured_network(
     debug_placeholder to step_explore's strategies"), any other one never set ("not set: the cut,
     MakeCutChoices, or a strategy sets it"; one finding, ``choices-open``); a partition
     over the shell's budgets (its shell member's validity: "refused by the <shell> shell",
-    each broken budget a finding), or whose module its members refuse, or a
-    member's validity refuses (a rule its stored choices break, which the bind binds:
-    "refused by its members", each finding naming its member); or graph inputs and outputs
+    each broken budget a finding), or whose module is refused (by a member, or by a rule of
+    the partition's own), or a member's validity refuses (a rule its stored choices break,
+    which the bind binds: "refused", each finding naming its member, where it is one's); or
+    graph inputs and outputs
     out of port order refuse, named. Its netlist's count (``bus_counts`` and its movers')
     must be its shell's rules' (``shell-counts-differ``, naming both, otherwise). A dormant
     choice (stored under a case not selected) is not open, and refuses nothing. It only
@@ -378,7 +379,7 @@ def configured_network(
     if found or not isinstance(module, Available):
         refused = tuple(dict.fromkeys(found))
         raise KernelOpError(
-            f"{label}: refused by its members: " + "; ".join(map(Finding.subject_line, refused)),
+            f"{label}: refused: " + "; ".join(map(Finding.subject_line, refused)),
             findings=refused,
         )
     # Computable readouts do not prove that arbitrary rules or presence resolved.

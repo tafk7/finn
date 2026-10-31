@@ -200,7 +200,7 @@ def test_a_channel_choice_a_rule_a_changed_fact_makes_false_binds_and_reads_refu
         message="the platform has no UltraRAM",
     ) as caught:
         configured_network(model, "matmul")
-    assert str(caught.error).startswith("matmul: refused by its members: ")
+    assert str(caught.error).startswith("matmul: refused: ")
     assert {(f.code, f.owner, dict(f.details)["tensor"]) for f in caught.error.findings} >= {
         ("uram-absent", "source.uram_present", "w"),
         ("uram-init", "source.uram_init_taken", "w"),
