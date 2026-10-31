@@ -823,6 +823,50 @@ def test_a_stream_port_is_an_input_or_an_output() -> None:
     assert [bus.name for bus in point.output.physical_pins] == ["m_axis_output"]
 
 
+def test_a_port_class_states_neither_its_direction_nor_its_advance() -> None:
+    """Both are its kind's (RF3 M2): a port class overriding ``direction`` (an ``InPort``
+    answering ``OUT``, so that its ABI's endpoint and its kernel's checks would disagree)
+    is refused when it is made (``port-direction``), as is one overriding ``advance``
+    (``port-advance``), or inheriting either from a class of its own; a kind derived from a
+    kind keeps both."""
+    with refused("port-direction", error=DefinitionError, message=r"Turned\.direction: "):
+
+        class Turned(InPort):
+            @derived
+            def direction(self) -> Direction:
+                return Direction.OUT
+
+    with refused("port-advance", error=DefinitionError, message=r"Sourcing\.advance: "):
+
+        class Sourcing(InPort):
+            @derived
+            def advance(self) -> Advance:
+                return Advance.SOURCED
+
+    with refused("port-advance", error=DefinitionError, message=r"Selecting\.advance: "):
+
+        class Selecting(OutPort):
+            @derived
+            def advance(self) -> Advance:
+                return Advance.SELECTED
+
+    class Facing:
+        direction = Direction.OUT
+
+    with refused("port-direction", error=DefinitionError, message=r"Facing\.direction: "):
+
+        class Faced(Facing, InPort):
+            pass
+
+    class Kept(OutPort):
+        pass
+
+    port = design_space(
+        Kept(label="k", clocking=AXIS_CLOCKING, transport=AXIS, tensor=TENSOR, sequence=SEQUENCE)
+    )
+    assert (port.direction, port.advance) == (Direction.OUT, Advance.STEPPED)
+
+
 def test_a_port_binds_exactly_one_presentation() -> None:
     """Its kernel's schedule's projection or a given sequence, never neither or both, and a
     projection's parameters only with a schedule (``port-presentation``)."""

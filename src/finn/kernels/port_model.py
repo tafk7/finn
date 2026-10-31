@@ -24,6 +24,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 from finn.core.space import (
+    DefinitionError,
     Group,
     Inapplicable,
     Param,
@@ -57,6 +58,29 @@ from finn.kernels.port import stream_pins as pins_of
 from finn.kernels.sides import Side
 from finn.kernels.values.domains import Integer, admit_element
 
+_KIND_MEMBERS = {"direction": "port-direction", "advance": "port-advance"}
+
+
+def _refuse_kind_overridden(cls: type[StreamPort]) -> None:
+    """Refuse a port class that declares ``direction`` or ``advance`` (``port-direction``,
+    ``port-advance``), but for this module's ``StreamPort``, ``InPort`` and ``OutPort``:
+    each is its kind's, so the ABI, which reads ``direction``, and every check of a
+    kernel's class, which reads the kind (``finn.kernels.port.port_direction``), agree by
+    construction, and a port's advance rule follows from its declaration (R3)."""
+    for base in cls.__mro__:
+        if base.__module__ == __name__ or base in StreamPort.__mro__:
+            continue
+        for name, code in _KIND_MEMBERS.items():
+            if name in vars(base):
+                where = f"{base.__qualname__}.{name}"
+                raise DefinitionError.broken(
+                    code,
+                    "StreamPort",
+                    f"{where}: a port's {name} is its kind's (InPort, OutPort), never "
+                    "a port class's own: declare the port as the kind it is",
+                    declaration=where,
+                )
+
 
 class StreamPort(Space):
     """A stream port: where one tensor leaves or enters its kernel as one stream, the one
@@ -66,7 +90,8 @@ class StreamPort(Space):
     **relation**; it is read by its readouts.
 
     Its header: its kind, the class it is declared by, from which its ``direction``
-    (``finn.kernels.artifacts.abi.Direction``, ``IN`` or ``OUT``, a read-only derived value)
+    (``finn.kernels.artifacts.abi.Direction``, ``IN`` or ``OUT``, a read-only derived value
+    no port class overrides, ``port-direction``, nor its ``advance``, ``port-advance``)
     and its bus role follow (``finn.kernels.port.stream_endpoint``); a ``StreamPort`` itself
     is neither, ``INOUT``, and refused (``port-direction``). Its tensor and the elements it
     admits (``admits``); its ``transport`` kind (``finn.kernels.laws``: ``AXIS``, ``NATIVE``,
@@ -74,7 +99,8 @@ class StreamPort(Space):
     they, its idle holds and its packing follow from the library. ``label`` is the port's
     name in its kernel, ``clocking`` its kernel's clock and reset (L8: the kernel's, never
     the port's) and ``interval`` its kernel's initiation interval (L6,
-    ``finn.kernels.laws.Interval``), which it carries with its pace; its ``transport``, where
+    ``finn.kernels.laws.Interval``), which it carries with its pace and a port of a kernel's
+    body never states (``port-interval``); its ``transport``, where
     it states none, is its kernel's interface protocol's
     (``finn.kernels.laws.InterfaceProtocol``): a kernel supplies all four for a port declared
     in its own body that does not state them (``finn.kernels.base.Kernel``). A port with its
@@ -97,6 +123,10 @@ class StreamPort(Space):
     ``stream_pins``, a view. A placed port's presentation is accepted and carried, or its
     design point is refused (``presented``).
     """
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        _refuse_kind_overridden(cls)
+        super().__init_subclass__(**kwargs)
 
     # -- its header: what a module header states of the port ----------------------------
     # (its kind, InPort or OutPort, is its class)

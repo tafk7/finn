@@ -171,8 +171,11 @@ class Advance(Enum):
       consumer's order, issued whenever its consumer takes one (L5).
 
     When a beat is **accepted**, and whether only with another port's, is not its advance
-    but its kernel's intake (``Intake``). A port follows one rule by how it is declared and
-    never names it (``finn.kernels.port_model.StreamPort.advance``)."""
+    but its kernel's intake (``Intake``). A port declares its relation and its rule follows
+    (``finn.kernels.port_model.StreamPort.advance``): a projection of its kernel's schedule,
+    an input that ``governs`` another port, an output that is ``sourced`` (a memory's
+    output, that declaration), else a stage's side; it never names *scheduled* or
+    *stepped*, and no port class states its own (``port-advance``)."""
 
     SCHEDULED = "scheduled"
     STEPPED = "stepped"

@@ -45,6 +45,7 @@ from finn.core.space import (
     Members,
     Rejected,
     Space,
+    constraint,
     derived,
     reject,
     view,
@@ -144,25 +145,47 @@ def _declared(cls: type[Kernel], name: str) -> bool:
 
 
 def _refuse_restated_cycles(cls: type[Kernel]) -> None:
-    """Refuse a kernel with a module that restates ``frame_cycles`` (``kernel-cycles-
+    """Refuse a kernel with a module that restates ``frame_cycles``, or the base's private
+    rate law behind it (``_frame_cycles``, ``_rate_frame_cycles``) (``kernel-cycles-
     restated``): the base derives them by the rate law from its ports and its
     ``interval``, which it states where its hardware differs. A restatement as the base's
     own (``frame_cycles = view(Kernel._frame_cycles)``) changes nothing and stays, so that
     a channel counts its kind (MemStream's, ``finn.kernels.channels.Channel``), until the
     channel counts its members' cycles otherwise."""
     for base in cls.__mro__[: cls.__mro__.index(Kernel)]:
-        item = vars(base).get("frame_cycles")
-        if item is None or (isinstance(item, View) and item.function is Kernel._frame_cycles):
-            continue
-        where = f"{cls.__qualname__}.frame_cycles"
-        raise DefinitionError.broken(
-            "kernel-cycles-restated",
-            "Kernel",
-            f"{where}: a kernel with a module states no cycles of its own: the base derives "
-            "them by the rate law (L6) from its ports and its interval; state its interval "
-            "where its hardware differs",
-            declaration=where,
-        )
+        for name in ("frame_cycles", "_frame_cycles", "_rate_frame_cycles"):
+            item = vars(base).get(name)
+            if item is None or (
+                name == "frame_cycles"
+                and isinstance(item, View)
+                and item.function is Kernel._frame_cycles
+            ):
+                continue
+            where = f"{cls.__qualname__}.{name}"
+            raise DefinitionError.broken(
+                "kernel-cycles-restated",
+                "Kernel",
+                f"{where}: a kernel with a module states no cycles of its own: the base "
+                "derives them by the rate law (L6) from its ports and its interval; state its "
+                "interval where its hardware differs",
+                declaration=where,
+            )
+
+
+def _refuse_composite_interval(cls: type[Kernel]) -> None:
+    """Refuse a kernel with no module that states an ``interval`` (``kernel-interval-
+    composite``): it has no schedule and no pace of its own; each of its members' ports
+    carries its own kernel's, and its cycles a frame are its members'."""
+    if not _declared(cls, "interval"):
+        return
+    where = f"{cls.__qualname__}.interval"
+    raise DefinitionError.broken(
+        "kernel-interval-composite",
+        "Kernel",
+        f"{where}: a kernel with no module has no interval: its members' ports carry their "
+        "own kernels', and its cycles a frame are its members'",
+        declaration=where,
+    )
 
 
 def _members(cls: type[Kernel]) -> dict[str, object]:
@@ -256,7 +279,8 @@ def _supply_ports(cls: type[Kernel]) -> None:
     ``clocking``, its kernel's interface protocol's clock and reset (``Kernel.port_clocking``; L8: a
     port's clock is its kernel's), its ``transport``, its kernel's interface protocol's
     (``Kernel.port_transport``), and its ``interval``, the kernel's (``Kernel.interval``,
-    L6), which it carries with its pace. A port declared in a Group states its label,
+    L6; a port states none of its own, ``port-interval``), which it carries with its pace.
+    A port declared in a Group states its label,
     clocking and transport; only a kernel with no module declares one
     (``module-part-nested``), and such a kernel has no interval, so the port keeps L6's.
 
@@ -315,9 +339,12 @@ def _exposed_as(exposed: Mapping[tuple[str, str], str], node: str, port: str) ->
 # -- what a kernel with a module states of its intake ---------------------------------------
 #
 # A kernel with a module states its intake (a derived ``intake`` of its own body); the base
-# reads it, as ``_stated_intake``, and installs its ``intake``: the stated one, refused where it
-# names a port that is no placed input of the kernel (``intake-port-unknown``). Its placed
-# inputs are read as its module's parts are, one helper each (``_placed_inputs_<i>``).
+# reads it and installs its ``intake``: the stated one, its own refusal owned by ``intake``
+# (``intake-unstated``, Pool's outside its profile), refused where it names a port that is
+# no placed input of the kernel (``intake-port-unknown``); and the constraint
+# ``intake_placed``, which refuses such a design point (R3: an intake names its kernel's
+# placed inputs). Its placed inputs are read as its module's parts are, one helper each
+# (``_placed_inputs_<i>``).
 
 _INPUTS = "_placed_inputs"
 
@@ -330,34 +357,58 @@ def _inputs_from(part: str, following: str) -> Callable[[Kernel], tuple[Any, ...
     return inputs_from
 
 
-def _checked_intake(owner: str) -> Callable[[Kernel], Intake | Rejected]:
+def _unplaced(self: Kernel, owner: str, stated: Intake) -> Rejected | None:
+    """``intake-port-unknown`` where ``stated``, ``self``'s intake, names a port that is no
+    placed input of it, else None."""
+    placed = self._placed_inputs_0()
+    unknown = [name for name in stated.names if name not in placed]
+    if not unknown:
+        return None
+    return reject(
+        "intake-port-unknown",
+        f"{owner} states the intake of {unknown}, no input it places: an intake names its "
+        "kernel's placed inputs",
+    )
+
+
+def _checked_intake(
+    owner: str, stating: Callable[..., Any]
+) -> Callable[[Kernel], Intake | Rejected]:
     def intake(self: Kernel) -> Intake | Rejected:
-        stated: Intake = getattr(self, "_stated_intake")
-        placed = self._placed_inputs_0()
-        unknown = [name for name in stated.names if name not in placed]
-        if unknown:
-            return reject(
-                "intake-port-unknown",
-                f"{owner} states the intake of {unknown}, no input it places: an intake "
-                "names its kernel's placed inputs",
-            )
-        return stated
+        stated: Intake | Rejected = stating(self)
+        if isinstance(stated, Rejected):
+            return stated
+        refused = _unplaced(self, owner, stated)
+        return stated if refused is None else refused
 
     return intake
 
 
+def _intake_placed(owner: str, stating: Callable[..., Any]) -> Callable[[Kernel], bool | Rejected]:
+    def intake_placed(self: Kernel) -> bool | Rejected:
+        stated: Intake | Rejected = stating(self)
+        if isinstance(stated, Rejected):
+            return True
+        refused = _unplaced(self, owner, stated)
+        return True if refused is None else refused
+
+    intake_placed.__annotations__ = {"return": bool | Rejected}
+    return intake_placed
+
+
 def _read_intake(cls: type[Kernel]) -> None:
     """Install, for a kernel with a module whose own body states ``intake``, the base's
-    reading of it (above)."""
+    reading of it (above). Each calls the stated function itself, so that a refusal it
+    returns is owned by the member that answers it."""
     item = vars(cls).get("intake")
     if getattr(cls, "module_spec", None) is None or not isinstance(item, Derived):
         return
-    stated = derived(item.function)
-    setattr(cls, "_stated_intake", stated)
-    getattr(stated, "__set_name__")(cls, "_stated_intake")
-    checked = _checked_intake(cls.__qualname__)
+    checked = _checked_intake(cls.__qualname__, item.function)
     checked.__doc__ = item.function.__doc__
     _set_aggregated(cls, "intake", checked, Intake | Rejected)
+    placed = constraint(_intake_placed(cls.__qualname__, item.function))
+    setattr(cls, "intake_placed", placed)
+    getattr(placed, "__set_name__")(cls, "intake_placed")
 
 
 # -- its stream ports' declarations ---------------------------------------------------------
@@ -415,7 +466,9 @@ def _check_ports(cls: type[Kernel]) -> None:
       schedule, so they present one index point at each iteration (their association) and
       their paces count the same iterations (§ 4). A port presents its kernel's schedule
       by binding it by name (``schedule=schedule``), which a subclass overriding
-      ``schedule`` then gives it.
+      ``schedule`` then gives it; or states an ``interval`` other than its kernel's
+      (``port-interval``): a port carries its kernel's (L6, ``Kernel.interval``), which the
+      base supplies, so its pace in cycles and its kernel's cycles read one interval.
 
     And refuse ``cls`` where a port it places presents its schedule and it states none
     (``port-schedule-unstated``) or states one whose declared answer admits
@@ -473,6 +526,12 @@ def _check_ports(cls: type[Kernel]) -> None:
             raise refused(
                 "port-governs-unknown",
                 f"governs {governs!r}, which is no other stream port of {cls.__qualname__}",
+            )
+        if "interval" in bound and not _kernel_member(cls, bound["interval"], "interval"):
+            raise refused(
+                "port-interval",
+                f"states its own interval, {bound['interval']}: a port carries its "
+                f"kernel's (L6), which {cls.__qualname__} states where its hardware differs",
             )
         schedule = bound.get("schedule")
         if schedule is not None and not _kernel_schedule(cls, schedule):
@@ -532,9 +591,15 @@ def _kernel_schedule(cls: type[Kernel], bound: object) -> bool:
     """Whether ``bound``, what a port of ``cls``'s body binds as its schedule, is its
     kernel's ``schedule``: the declaration of that name of ``cls`` or a kernel class it
     derives (the engine reads a binding by its name, so a subclass's override is read)."""
+    return _kernel_member(cls, bound, "schedule")
+
+
+def _kernel_member(cls: type[Kernel], bound: object, name: str) -> bool:
+    """Whether ``bound`` is the declaration ``name`` of ``cls`` or a kernel class it derives
+    (``_kernel_schedule``)."""
     return (
         isinstance(bound, Declaration)
-        and bound.name == "schedule"
+        and bound.name == name
         and isinstance(bound.owner, type)
         and issubclass(cls, bound.owner)
         and issubclass(bound.owner, Kernel)
@@ -1002,6 +1067,8 @@ class Kernel(Space):
                 "a kernel binds one at most",
                 declaration=cls.__qualname__,
             )
+        if not specs:
+            _refuse_composite_interval(cls)
         if specs:
             _refuse_restated_cycles(cls)
             pins, holds = _module_parts(cls)
@@ -1129,14 +1196,14 @@ class Kernel(Space):
         measured), with its inputs' coupling (``Intake.joined``, ``PortIntake.ahead``); one
         that does not answers ``intake-unstated``, by name, never zero, and no refusal of
         its design point: no rule reads it. The base reads what it states, and refuses an
-        intake naming a port that is no placed input of it (``intake-port-unknown``, its
-        own answer's refusal, not its design point's). A kernel with children derives its
-        own from its members' (``member_intake``), never states it beside them, each
-        member's renamed, its ports, its groups and its partners alike: a member's port it
-        exposes takes the name it exposes it under (``x = compute.x``: ``x``; one port, one
-        name, however many aliases name it), any other member's port its path below the
-        member (``adapter.input_gen.input_gen.input``). A member that states none leaves
-        its parent's unstated too."""
+        intake naming a port that is no placed input of it (``intake-port-unknown``), and
+        its design point with it (R3; its constraint ``intake_placed``). A kernel with
+        children derives its own from its members' (``member_intake``), never states it
+        beside them, each member's renamed, its ports, its groups and its partners alike: a
+        member's port it exposes takes the name it exposes it under (``x = compute.x``:
+        ``x``; one port, one name, however many aliases name it), any other member's port
+        its path below the member (``adapter.input_gen.input_gen.input``). A member that
+        states none leaves its parent's unstated too."""
         if type(self).module_spec is not None:
             return reject(INTAKE_UNSTATED, f"{type(self).__qualname__} states no intake")
         exposed = type(self)._exposed_names

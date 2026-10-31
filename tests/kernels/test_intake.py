@@ -211,6 +211,17 @@ class Misnamed(StatedStage):
         return Intake((_intake("input"), _intake("other")))
 
 
+class Idling(StatedStage):
+    """The stage with a second input, idle, which its intake names."""
+
+    id = "test.intake.idling"
+    side = InPort(tensor=None, sequence=StatedStage.arriving, dtype=DataType["INT4"])
+
+    @derived
+    def intake(self) -> Intake:
+        return Intake((_intake("input"), _intake("side")))
+
+
 class Chain(Kernel):
     """Two stated stages, the first's input exposed as its own ``x``."""
 
@@ -248,15 +259,30 @@ def test_a_kernel_with_children_derives_its_intake_from_its_members() -> None:
 
 def test_a_kernel_s_intake_names_its_placed_inputs() -> None:
     """The base reads what a kernel with a module states, and refuses an intake naming a
-    port that is no placed input of it (``intake-port-unknown``): the intake's refusal, its
-    design point still valid."""
+    port that is no placed input of it (``intake-port-unknown``), a port it lacks or an idle
+    one, and its design point with it (R3; its constraint ``intake_placed``)."""
     point = design_space(Misnamed(input_tensor=TENSOR, arriving=ARRIVING))
     found = point.query(Kernel.intake)
     assert isinstance(found, Rejected) and codes(found) == {"intake-port-unknown"}
     assert "['other']" in found.findings[0].message
-    assert inspection.validity(point).status == "valid"
+    validity = inspection.validity(point)
+    assert isinstance(validity.result, Rejected)
+    assert codes(validity.result) == {"intake-port-unknown"}
+    assert [finding.owner for finding in validity.result.findings] == ["intake_placed"]
+    idle = design_space(Idling(input_tensor=TENSOR, arriving=ARRIVING))
+    assert codes(idle.query(Kernel.intake)) == {"intake-port-unknown"}
+    assert codes(inspection.validity(idle).result) == {"intake-port-unknown"}
     coupled = design_space(Coupled(input_tensor=TENSOR, arriving=ARRIVING))
     assert coupled.intake.joined == (("input", "side"),)
+    assert inspection.validity(coupled).status == "valid"
+
+
+def test_a_stated_intake_s_refusal_is_owned_by_intake() -> None:
+    """A kernel's stated intake that refuses is its ``intake``'s refusal, by that name
+    (RF3 L2): Pool's outside its profile."""
+    found = _pool((1, 1), 5.0).query(Kernel.intake)
+    assert isinstance(found, Rejected) and codes(found) == {INTAKE_UNSTATED}
+    assert [finding.owner for finding in found.findings] == ["intake"]
 
 
 def test_a_kernel_with_children_renames_its_members_coupling() -> None:

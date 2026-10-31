@@ -7,7 +7,9 @@ standing and source, where its hardware differs (Pool's 1, assumed). A composite
 Each port carries its own kernel's, through any alias, with its pace (``timed_pace``). One
 conversion (``finn.kernels.laws.in_cycles``) gives a kernel's cycles a frame and FIFO
 sizing's beat times. A kernel with a module never restates its cycles
-(``kernel-cycles-restated``), MemStream's restatement as the base's own aside.
+(``kernel-cycles-restated``), MemStream's restatement as the base's own aside; a port of
+its body states no interval of its own (``port-interval``), and a composite none
+(``kernel-interval-composite``).
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ from finn.core.space import (
     design_space,
     view,
 )
+from finn.dataflow.gemm import c, kh, kw
 from finn.dataflow.schedule import Pace
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
@@ -37,6 +40,8 @@ from finn.kernels.fifo_sizing import assumed, pattern
 from finn.kernels.laws import (
     NATIVE_PROTOCOL,
     RATE_INTERVAL,
+    Axis,
+    AxisSpelling,
     Interval,
     Standing,
     TimedPace,
@@ -44,8 +49,8 @@ from finn.kernels.laws import (
 )
 from finn.kernels.library import ModuleSpec
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.pool import PoolKernel
-from finn.kernels.port_model import InPort
+from finn.kernels.pool import ELEMENTS, PoolKernel
+from finn.kernels.port_model import InPort, OutPort
 from finn.platform.capabilities import Platform, Resources
 
 IMAGE = Tensor((4, 4, 2), ScalarEncoding(DataType["INT4"]))
@@ -144,6 +149,47 @@ def test_the_interval_travels_with_the_pace_through_a_wrapper() -> None:
     assert point.frame_cycles == point.inner.frame_cycles == 64
 
 
+def test_a_port_of_a_kernel_s_body_states_no_interval_of_its_own() -> None:
+    """The interval is its kernel's (RF3 M1): a port of its body stating its own is refused
+    when the class is made (``port-interval``), so that its pace in cycles and its kernel's
+    cycles never read two intervals (Pool's output at 3, its cycles at 1)."""
+    with refused("port-interval", error=DefinitionError, message=r"Odd\.output states its own"):
+
+        class Odd(PoolKernel):
+            id = "test.interval.odd_pool"
+            output = OutPort(
+                transport=Axis(bus="m_axis", spelling=AxisSpelling.UPPER),
+                tensor=PoolKernel.output_tensor,
+                admits=ELEMENTS,
+                schedule=PoolKernel.schedule,
+                index=PoolKernel.output_index,
+                lanes=(c,),
+                reduces=(kh, kw),
+                interval=TWO,
+            )
+
+    with refused("port-interval", error=DefinitionError, message=r"Own\.input states its own"):
+
+        class Own(_Stage):
+            id = "test.interval.own"
+            input = InPort(tensor=_Stage.input_tensor, sequence=_Stage.arriving, interval=TWO)
+
+
+def test_a_kernel_with_no_module_states_no_interval() -> None:
+    """A composite has none (RF3 L3): its members' ports carry their own kernels', and its
+    cycles a frame are its members'; one it stated would be read and ignored."""
+    with refused(
+        "kernel-interval-composite", error=DefinitionError, message=r"Stating\.interval: "
+    ):
+
+        class Stating(Wrapped):
+            id = "test.interval.stating"
+
+            @derived
+            def interval(self) -> Interval:
+                return TWO
+
+
 def test_fifo_sizing_says_where_it_rests_on_an_assumed_interval() -> None:
     point = pool(PoolKernel)
     timed = point.output.timed_pace
@@ -195,6 +241,25 @@ def test_a_kernel_with_a_module_does_not_restate_its_cycles() -> None:
 
             @view
             def frame_cycles(self) -> int:
+                return 1
+
+    # Nor the base's private rate law behind them (RF3 L4).
+    with refused("kernel-cycles-restated", error=DefinitionError, message=r"\._frame_cycles: "):
+
+        class Behind(_Stage):
+            id = "test.interval.behind"
+
+            def _frame_cycles(self) -> int:
+                return 1
+
+    with refused(
+        "kernel-cycles-restated", error=DefinitionError, message=r"\._rate_frame_cycles: "
+    ):
+
+        class Rated(_Stage):
+            id = "test.interval.rated"
+
+            def _rate_frame_cycles(self) -> int:
                 return 1
 
     # MemStream's restatement is the base's own, so that its channel counts it by kind.
