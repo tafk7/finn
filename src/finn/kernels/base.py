@@ -344,10 +344,9 @@ def _exposed_as(exposed: Mapping[tuple[str, str], str], node: str, port: str) ->
 # (``intake-port-unknown``). Its placed inputs are read as its module's parts are, one
 # helper each (``_placed_inputs_<i>``).
 #
-# Open: R3 makes such a design point invalid, which this does not meet; the refusal is the
-# intake's alone. A rule reading the stated intake is refused wherever the intake is (an
-# unstated one, Pool's outside its profile, one reading a refused fact), and it reads the
-# kernel's choices. How R3 is met is Thomas's to decide.
+# The refusal is the intake's alone, and its design point stays valid: a rule reading the
+# stated intake would be refused wherever the intake is (an unstated one, Pool's outside
+# its profile, one reading a refused fact), and would read the kernel's choices.
 
 _INPUTS = "_placed_inputs"
 

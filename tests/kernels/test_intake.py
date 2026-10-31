@@ -260,8 +260,8 @@ def test_a_kernel_with_children_derives_its_intake_from_its_members() -> None:
 def test_a_kernel_s_intake_names_its_placed_inputs() -> None:
     """The base reads what a kernel with a module states, and refuses an intake naming a
     port that is no placed input of it (``intake-port-unknown``), a port it lacks or an idle
-    one: the intake's refusal, its design point still valid. (R3 makes the point invalid;
-    that is open, ``finn.kernels.base``.)"""
+    one: the intake's refusal, its design point still valid (``finn.kernels.base``: a rule
+    reading the intake would be refused wherever the intake is)."""
     point = design_space(Misnamed(input_tensor=TENSOR, arriving=ARRIVING))
     found = point.query(Kernel.intake)
     assert isinstance(found, Rejected) and codes(found) == {"intake-port-unknown"}
