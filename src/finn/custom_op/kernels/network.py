@@ -56,8 +56,9 @@ annotated by hand reaches this.
 - **its order**: the channels are declared input boundary channels, the other channels,
   output boundary channels, which the composer ranks (each after the members it reads); its
   module places them input boundary channels, the other channels, the kernels, output
-  boundary channels (``Reshape_0_out0``, ..., ``MatMul_0``, ...), its instance order; each
-  member's node in the module is its member name (``member_name``: ``\\W`` as ``_``).
+  boundary channels (``Reshape_0_out0``, ..., ``MatMul_0``, ...), its instance order, which
+  the declaration states with its module's name (``PartitionDeclaration.order``, ``name``);
+  each member's node in the module is its member name (``member_name``: ``\\W`` as ``_``).
 
 **Its stored choices** (bind is assignment): every node's attributes and every channel's
 ``finn.channel`` on its tensor (in a partition's body only, ``refuse_outside_body``), bound
@@ -78,7 +79,7 @@ what its producer states, the graph is stale, refused by name (``tensor-stale``:
 InferKernelTensors"), before any channel's own ``channel-tensor`` is read.
 
 **Its module** is the partition's IP, the cut's (``PARTITION``; a slice with a frozen
-neighbour has none, ``slice-not-emitted``, ``finn.kernels.partition``): its members'
+neighbour has none, ``slice-not-emitted``, ``finn.kernels.dataflow_core``): its members'
 netlists, named as the graph's nodes and tensors, with the boundary's pins, named after
 the partition (its stem ``finn_<name>``) and identified as the partition's IP
 (``PRODUCER``, which ``Partition.module_of`` is given), since a mover is integrated beside
@@ -88,7 +89,8 @@ sizing's paces, resources), never bound into it; a frozen neighbour's port's str
 its hop is wired to, and its port's pace, which sizing reads, are read at its stored
 choices and given beside the declaration.
 
-A partition's resources (``Partition.own_resources``) are its members'. A partition in its
+A partition's resources (``Partition.own_resources``) are its members', as its class answers
+them (``Kernel.resources``). A partition in its
 shell (``finn.custom_op.kernels.shell.in_shell``) holds the shell's budgets as rules of its
 own (its shell member, ``finn.kernels.budgets``); the shell's resources over a partition
 (its members', its movers' and its static region's), and the cut's choices
@@ -465,17 +467,17 @@ def _stale(
 
 
 class _Read:
-    """What the graph states of a selection: its declaration, its module's order, its
-    boundary's ports, its KernelOps, the choices it stores and those stray, whether it
-    holds every KernelOp of the model, and the ports' stream pins and paces of the frozen neighbours
-    beside its edge channels. A record read once, never a value a Space holds."""
+    """What the graph states of a selection: its declaration (its module's name and order
+    among it), its boundary's ports, its KernelOps, the choices it stores and those stray,
+    whether it holds every KernelOp of the model, and the ports' stream pins and paces of
+    the frozen neighbours beside its edge channels. A record read once, never a value a
+    Space holds."""
 
-    __slots__ = ("declared", "frozen", "ops", "order", "ports", "stored", "stray", "whole")
+    __slots__ = ("declared", "frozen", "ops", "ports", "stored", "stray", "whole")
 
     def __init__(
         self,
         declared: PartitionDeclaration,
-        order: tuple[str, ...],
         ports: dict[str, str],
         ops: list[KernelOp],
         stored: dict[Key, object],
@@ -483,7 +485,7 @@ class _Read:
         whole: bool,
         frozen: dict[str, Neighbours],
     ) -> None:
-        self.declared, self.order, self.ports, self.ops = declared, order, ports, ops
+        self.declared, self.ports, self.ops = declared, ports, ops
         self.stored, self.stray, self.whole, self.frozen = stored, stray, whole, frozen
 
 
@@ -593,10 +595,13 @@ def _graph(
     kernels = {node.name: op.facts() for node, op in zip(nodes, ops)}
     declared_order = [*on("s_axis_"), *on(""), *on("m_axis_")]
     declared = PartitionDeclaration(
-        kernels, {tensor: channels[tensor] for tensor in declared_order}, shell
+        kernels,
+        {tensor: channels[tensor] for tensor in declared_order},
+        shell,
+        name=name,
+        order=(*on("s_axis_"), *on(""), *kernels, *on("m_axis_")),
     )
-    order = (*on("s_axis_"), *on(""), *kernels, *on("m_axis_"))
-    return _Read(declared, order, ports, ops, stored, stray, whole, frozen)
+    return _Read(declared, ports, ops, stored, stray, whole, frozen)
 
 
 def declaration(
@@ -649,8 +654,6 @@ def _network(
             made = partition(
                 read.declared,
                 read.stored,
-                name=name,
-                order=read.order,
                 owners={node.name: type(op) for node, op in zip(nodes, read.ops)},
                 ports=tuple(read.ports.items()),
                 movers=movers,

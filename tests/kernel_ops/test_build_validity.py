@@ -71,7 +71,9 @@ def test_real_netlist_does_not_certify_unrelated_rule_or_presence(
             "optional": Optional(when=enabled),
         },
     )
-    composed = Composed(expanded, original.composed.names, original.composed.facts)
+    composed = Composed(
+        expanded, original.composed.names, original.composed.facts, name=original.name
+    )
     choices = {
         key: state.value
         for key, state in inspection.states(original.point)

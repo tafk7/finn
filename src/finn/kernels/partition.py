@@ -32,18 +32,19 @@ edge: a channel one of whose sides is a kernel's outside it, given as a fact
 (``Side.neighbour``, its stream at the neighbour's stored choices). The edge channel is the
 slice's (its adapters and their memory style are its choices), and its hops to the
 neighbour, its sizing (the neighbour's port's pace at its stored choices, given beside the
-declaration with its contract view: ``frozen``) and its resources derive. Its netlist and
-module do not: a frozen edge is a kernel's port outside the module, no AXIS port of it, and
-a slice is not emitted (``slice-not-emitted``).
+declaration with its contract view: ``frozen``) and its resources derive. Its module does
+not: a frozen edge is a kernel's port outside the module, no AXIS port of it, and a slice
+is not emitted (``slice-not-emitted``, ``DataflowCoreKernel.edge_buses``).
 
-**Its module** (``module``): its members' netlists, each under its node (its member name),
-in its module's instance order (``order``, the declaration's by default), a channel's with
-its hops to the ports beside it, as the base wires them (``hops``,
-``finn.kernels.base.hops``), with every boundary channel's AXIS bus
-(``finn.kernels.artifacts.top.compose``), made of its ``netlist``, which a shell counts
-without building the top (``finn.platform.shells.bus_counts``). Its views are read out of
-the design space, never bound into it: the netlist, FIFO sizing's paces (``neighbours``)
-and its members' resources (``own_resources``).
+**What its class answers** (``finn.kernels.dataflow_core.DataflowCoreKernel``), it reads
+(``answer``): its netlist (``Kernel.netlist``: its members' netlists, each under its node,
+its member name, in its module's instance order, ``order``, a channel's with its hops to
+the ports beside it, as the base wires them, ``hops``) with its module's edge
+(``DataflowCoreKernel.edge_buses``: each edge port's AXIS bus), which a shell counts without
+building the top (``finn.platform.shells.bus_counts``); its module of them
+(``finn.kernels.dataflow_core.core_module``); its members' resources (``Kernel.resources``)
+and their cycles (``Kernel.frame_cycles``). Its views are read out of the design space,
+never bound into it.
 """
 
 from __future__ import annotations
@@ -68,24 +69,18 @@ from finn.core.space import (
     Unresolved,
     bind,
     inspection,
-    reject,
 )
 from finn.core.space.declarations import View
-from finn.kernels.artifacts import ArtifactError
-from finn.kernels.artifacts.abi import Bus, Endpoint
+from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.module import Composed as Module
 from finn.kernels.artifacts.module import Fragment, ProducerIdentity
-from finn.kernels.artifacts.top import compose as top
-from finn.kernels.base import Kernel, hops, merged, neighbours, own_ends
+from finn.kernels.base import Kernel, hops, neighbours, own_ends
 from finn.kernels.channels import Channel, Neighbours, OuterHops, outer_hops
 from finn.kernels.composer import Composed, Names, PartitionDeclaration, Port, compose
-from finn.kernels.control import Control
-from finn.kernels.control import presented as presented_buses
+from finn.kernels.dataflow_core import DataflowCoreKernel, core_module
 from finn.kernels.movers import MoverOffer
 from finn.kernels.policies import Defaulted, Owner, Unstated, defaulted
-from finn.kernels.port import stream_port
 from finn.kernels.sides import Side, SideKind
-from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
 
 T = TypeVar("T")
@@ -135,10 +130,11 @@ class Partition:
     it, each choice keyed by its owner's name and its key there, ``(owner, key)`` (``Names``
     maps a key to its path in the class).
 
-    Its ``name`` (its module's), its ``boundary`` (each boundary tensor and its port, inputs
-    then outputs), the boundary channels offered movers (``movers``), the port contracts of
-    the frozen neighbours beside a slice's edge channels (``frozen``, by channel, each side's
-    read at the neighbour's stored choices: ``neighbours`` gives them), the stored choices
+    Its ``name`` (its module's, its class's fact), its ``order`` (its class's instance
+    order), its ``boundary`` (each boundary tensor and its port, inputs then outputs), the
+    boundary channels offered movers (``movers``), the port contracts of the frozen
+    neighbours beside a slice's edge channels (``frozen``, by channel, each side's read at
+    the neighbour's stored choices: ``neighbours`` gives them), the stored choices
     dropped as stale where it was bound, by key, with the kernel's findings (``stale``: each
     a value outside its domain, keeping its code, its owner and its details, which add the
     value stored, ``value``, and the values the choice could take, ``candidates``), and,
@@ -159,19 +155,16 @@ class Partition:
         "_frozen",
         "_locator",
         "_memo",
-        "_order",
         "_owners",
         "_point",
         "_sides",
         "boundary",
         "dropped",
         "movers",
-        "name",
         "stale",
         "whole",
     )
 
-    name: str
     boundary: tuple[tuple[str, str], ...]
     movers: tuple[str, ...]
     stale: Mapping[str, tuple[Finding, ...]]
@@ -179,7 +172,6 @@ class Partition:
     whole: bool
     _composed: Composed
     _point: Space
-    _order: tuple[str, ...]
     _sides: Mapping[str, tuple[Port | Side, Port | Side]]
     _frozen: Mapping[str, Neighbours]
     _owners: Mapping[str, Owner]
@@ -192,8 +184,6 @@ class Partition:
         composed: Composed,
         point: Space,
         *,
-        name: str,
-        order: tuple[str, ...],
         sides: Mapping[str, tuple[Port | Side, Port | Side]],
         boundary: tuple[tuple[str, str], ...] = (),
         movers: tuple[MoverOffer, ...] = (),
@@ -205,14 +195,13 @@ class Partition:
         frozen: Mapping[str, Neighbours] | None = None,
     ) -> None:
         self._composed, self._point = composed, point
-        self._order = order
         self._sides = MappingProxyType(dict(sides))
         self._frozen = MappingProxyType(dict(frozen or {}))
         self._owners = MappingProxyType(dict(owners or {}))
         self._locator = _Locator(composed.names, frozenset(sides))
         self._decisions = MappingProxyType(_decisions(composed, point))
         self._memo = {}
-        self.name, self.boundary, self.whole = name, boundary, whole
+        self.boundary, self.whole = boundary, whole
         self.movers = tuple(tensor for tensor, _ in boundary) if movers else ()
         self.dropped = MappingProxyType(
             {
@@ -270,9 +259,17 @@ class Partition:
         return self._composed.names.shell
 
     @property
+    def name(self) -> str:
+        """Its module's name (``DataflowCoreKernel.name``, a fact of its class)."""
+        found: str = getattr(self._point, "name")
+        return found
+
+    @property
     def order(self) -> tuple[str, ...]:
-        """Every member in its module's instance order."""
-        return self._order
+        """Every member in its module's instance order (``Kernel.instance_order``, a fact
+        of its class)."""
+        owners = self._composed.names.owners
+        return tuple(owners[member] for member in self._core.instance_order)
 
     @property
     def kernels(self) -> tuple[str, ...]:
@@ -664,160 +661,65 @@ class Partition:
         )
         return Rejected(owned) if isinstance(found, Rejected) else Unresolved(owned)
 
+    def answer(self, member: View[T]) -> QueryResult[T]:
+        """Its class's answer ``member``, a view of the partition's own (``Kernel.netlist``,
+        ``Kernel.frame_cycles``, ``DataflowCoreKernel.edge_buses``), read once: each finding below
+        a member as that member's (``local``), naming it (``located``). Refused, as a whole,
+        where a rule of it refuses it (``refused``): the engine answers a view only where
+        every rule below it accepts it."""
+
+        name = member.name
+        assert name is not None  # a view declared in a Space class is named there
+
+        def read() -> QueryResult[T]:
+            found: QueryResult[T] = self._point.query(getattr(type(self._point), name))
+            if isinstance(found, (Rejected, Unresolved)):
+                return type(found)(tuple(map(self._rooted, found.findings)))
+            return found
+
+        answered: QueryResult[T] = self._read(f"answer {name}", read)
+        return answered
+
+    def _rooted(self, finding: Finding) -> Finding:
+        """A finding of its class's answer, as the member it is below gives it, naming the
+        member (``answer``); one of no member's as it is."""
+        below = self._locator.below(finding.owner)
+        if below is None:
+            return finding
+        name, key = below
+        return self.located(
+            name, self.local(name, finding) if key else replace(finding, owner=name)
+        )
+
     def netlist(self) -> QueryResult[tuple[Fragment, tuple[Bus, ...]]]:
-        """What its top is made of, read once: each member's netlist under its node, in its
-        module's order, a channel's with its hops to the ports beside it around its own
-        links (``hops``: the producer's first, the consumer's last), merged with each
-        control bus its kernels present (``Kernel.bus_control``, at the port each was
-        given), and each boundary channel's AXIS bus; or why not, every member's refusal
-        (or, where none refuses, what they wait on; a channel's hops' own, ``channel-port``
-        or ``channel-link``), each finding naming its member (``located``), or the merge's own
-        (``kernel-netlist``); a channel none of whose netlist applies because a port of a
-        kernel it is on does not is refused as ``channel-unused`` (``_unused``, or its hops').
-        A partition a rule refuses has no channel's hops: where no member refuses, it is
-        refused once, by that rule (``refused``). A slice with a frozen neighbour at an edge
-        is refused first, each such edge by name (``slice-not-emitted``): a slice is not
-        emitted. The shell's counts and its module read the same."""
-        found: QueryResult[tuple[Fragment, tuple[Bus, ...]]] = self._read("netlist", self._netlist)
-        return found
-
-    def _frozen_edges(self) -> tuple[Finding, ...]:
-        """Each channel with a frozen neighbour's side (a slice's edge), as a
-        ``slice-not-emitted`` finding owned by the channel: the neighbour's port is outside
-        the module and no AXIS port of it."""
-        return tuple(
-            self.located(
-                name,
-                Finding(
-                    FindingKind.REJECTION,
-                    "slice-not-emitted",
-                    name,
-                    f"a slice is not emitted: its edge meets {side.label}, a frozen "
-                    "neighbour's port outside its module, and no AXIS port of it",
-                ),
-            )
-            for name in self._order
-            if name in self._sides
-            for side in self._sides[name]
-            if isinstance(side, Side) and side.kind is SideKind.NEIGHBOUR
-        )
-
-    def _netlist(self) -> QueryResult[tuple[Fragment, tuple[Bus, ...]]]:
-        frozen = self._frozen_edges()
-        if frozen:
-            return Rejected(frozen)
-        netlists: list[tuple[str, Fragment]] = []
-        boundary: list[Bus] = []
-        controls: list[tuple[str, Control]] = []
-        failed: list[tuple[str, QueryResult[object]]] = []
-        # A partition a rule refuses has no channel's hops (``refused``): refused once, as a
-        # whole, not once a channel.
-        unhopped = False
-        for name in self._order:
-            netlist = self.query(name, Kernel.netlist)
-            if name in self._sides and isinstance(netlist, Available):
-                hopped = self.hops(name)
-                if isinstance(hopped, OuterHops):
-                    netlist = Available(hopped.around(netlist.value))
-                elif self.refused() is not None:
-                    unhopped = True
-                    continue
-                else:
-                    netlist = hopped
-            if isinstance(netlist, Available):
-                netlists.append((self.node(name), netlist.value))
-            else:
-                failed.append((name, netlist))
-            if name not in self._sides:
-                control = self.query(name, Kernel.bus_control)
-                if isinstance(control, Available):
-                    controls.append((self.node(name), control.value))
-                elif not isinstance(control, Inapplicable):
-                    failed.append((name, control))
-            else:
-                # Its outer port's pins, where it places one: the module's AXIS bus.
-                channel = self.member(name)
-                for outer in (Channel.outer_in, Channel.outer_out):
-                    pins = self._result(name, channel.query(outer.physical_pins))
-                    if isinstance(pins, Available):
-                        buses = [pin for pin in pins.value if isinstance(pin, Bus)]
-                        assert len(buses) == len(pins.value)  # an AXIS port's pins: its bus
-                        boundary.extend(buses)
-                    elif not isinstance(pins, Inapplicable):
-                        failed.append((name, pins))
-        refused = self.refused() if unhopped else None
-        if refused is not None and not any(isinstance(each, Rejected) for _, each in failed):
-            return refused
-        if failed:
-            rejected = [(name, each) for name, each in failed if isinstance(each, Rejected)]
-            findings = tuple(
-                dict.fromkeys(
-                    self.located(name, finding)
-                    for name, each in (rejected or failed)
-                    for finding in getattr(each, "findings", ())
-                )
-            )
-            if rejected:
-                return Rejected(findings)
-            if findings:
-                return Unresolved(findings)
-            unused = tuple(
-                dict.fromkeys(
-                    found
-                    for name, each in failed
-                    if isinstance(each, Inapplicable) and (found := self._unused(name)) is not None
-                )
-            )
-            return Rejected(unused) if unused else Inapplicable()
-        exported = presented_buses(controls)
-        if isinstance(exported, Rejected):
-            return exported
-        fragment = merged(netlists, exported)
-        if isinstance(fragment, Rejected):
-            return fragment
-        return Available((fragment, tuple(boundary)))
-
-    def _unused(self, name: str) -> Finding | None:
-        """Why channel ``name``'s netlist does not apply, where a port of a kernel it is on
-        does not (a weight-set channel's consumer, the source's set port, where the weights
-        are not known: no source places it): ``channel-unused``, naming the ports that do
-        not apply, owned by the channel; None where no port of its does not apply."""
-        absent: list[str] = []
-        present: list[str] = []
-        for declared in self._sides.get(name, ()):
-            if isinstance(declared, Port):
-                point = self.member(declared.member)
-                answer = point.query(stream_port(type(point), declared.port).side)
-                label = f"{declared.member}.{declared.port}"
-                (absent if isinstance(answer, Inapplicable) else present).append(label)
-        if not absent:
-            return None
-        ports = ", ".join(absent)
-        text = (
-            f"a port of this channel does not apply, so it is not formed: {ports} "
-            "(its member places no such port)"
-            if present
-            else f"no present port is on this channel: {ports} does not apply "
-            "(its member places no such port)"
-        )
-        return self.located(name, Finding(FindingKind.REJECTION, "channel-unused", name, text))
+        """What its top is made of, as its class answers it (``answer``): its netlist
+        (``Kernel.netlist``: each member's netlist under its node, in its module's order, a
+        channel's with its hops to the ports beside it around its own links, merged with
+        each control bus its kernels present) and its module's edge
+        (``DataflowCoreKernel.edge_buses``: each edge port's AXIS bus); or why not, each finding
+        naming its member (``located``): a slice's edge first (``slice-not-emitted``), then
+        what refuses its netlist, then what either waits on. The shell's counts and its
+        module read the same."""
+        edge = self.answer(DataflowCoreKernel.edge_buses)
+        if isinstance(edge, Rejected):
+            return edge
+        found = self.answer(Kernel.netlist)
+        if not isinstance(found, Available):
+            return found
+        if not isinstance(edge, Available):
+            return edge
+        return Available((found.value, edge.value))
 
     def module(self, producer: ProducerIdentity, stem: str) -> QueryResult[Module]:
-        """Its composed module (``finn.kernels.artifacts.top.compose``) of its ``netlist``;
-        or why not, the netlist's refusal or wait, the marker pins its boundary leaves
-        unconsumed or unruled (``channel-top-marker``, ``top_markers``), or the top's own
+        """Its composed module (``finn.kernels.dataflow_core.core_module``) of its
+        ``netlist``; or why not, the netlist's refusal or wait, the marker pins its edge
+        leaves unconsumed or unruled (``channel-top-marker``), or the top's own
         (``kernel-netlist``)."""
         found = self.netlist()
         if not isinstance(found, Available):
             return found
-        fragment, boundary = found.value
-        unruled = top_markers(fragment, boundary)
-        if unruled:
-            return Rejected(unruled)
-        try:
-            return Available(top(producer, stem, fragment, boundary))
-        except ArtifactError as error:
-            return reject("kernel-netlist", str(error))
+        made = core_module(producer, stem, *found.value)
+        return made if isinstance(made, Rejected) else Available(made)
 
     def module_of(self, producer: ProducerIdentity) -> QueryResult[Module]:
         """Its module, the partition's IP (``finn_<name>``), derived by ``producer`` (the
@@ -829,19 +731,15 @@ class Partition:
         return found
 
     def own_resources(self) -> QueryResult[Resources]:
-        """What its members use, their own statements' sum; or what they wait on, or why
-        one is refused. A shell adds its movers' and its static region's
-        (``finn.custom_op.kernels.shell``)."""
+        """What its members use, their own statements' sum, as its class answers it
+        (``Kernel.resources``, ``answer``); or what they wait on, or why it is refused. A
+        shell adds its movers' and its static region's (``finn.custom_op.kernels.shell``)."""
+        return self.answer(Kernel.resources)
 
-        def read() -> QueryResult[Resources]:
-            used = [self.query(name, Kernel.resources) for name in self.members]
-            missing = [each for each in used if not isinstance(each, Available)]
-            if missing:
-                return _together(missing)
-            return Available(total(each.value for each in used if isinstance(each, Available)))
-
-        found: QueryResult[Resources] = self._read("members' resources", read)
-        return found
+    def cycles(self) -> QueryResult[int]:
+        """The clock cycles a frame takes through it, the most any member takes, as its
+        class answers it (``Kernel.frame_cycles``, ``answer``)."""
+        return self.answer(Kernel.frame_cycles)
 
     # -- what its bind dropped ----------------------------------------------------------------
 
@@ -872,7 +770,7 @@ class Partition:
         }
 
     def __repr__(self) -> str:
-        return f"{type(self).__name__}({', '.join(self._order)})"
+        return f"{type(self).__name__}({', '.join(self.order)})"
 
 
 class _Locator:
@@ -948,52 +846,6 @@ def _not_a_decision(key: Key) -> tuple[Finding, ...]:
 # -- binding a declaration -------------------------------------------------------------------
 
 
-def top_markers(fragment: Fragment, boundary: Iterable[Bus]) -> tuple[Finding, ...]:
-    """What the module's boundary leaves of its marker pins (an AXIS bus's ``tlast``)
-    unruled, as ``channel-top-marker`` findings: an input marker no link takes as its
-    source (it would be left unconsumed), and an output marker no link drives (it lacks a
-    rule). A boundary of a bus without marker pins leaves none."""
-    taken = {
-        pin for link in fragment.links if link.source.instance is None for pin, *_ in link.markers
-    }
-    driven = {
-        pin
-        for link in fragment.links
-        if link.sink.instance is None
-        for _, _, pin, _ in link.markers
-    }
-    unconsumed: list[str] = []
-    unruled: list[str] = []
-    for bus in boundary:
-        for member in bus.signals:
-            if member.logical != "tlast":
-                continue
-            if bus.endpoint is Endpoint.TARGET and member.physical not in taken:
-                unconsumed.append(member.physical)
-            elif bus.endpoint is not Endpoint.TARGET and member.physical not in driven:
-                unruled.append(member.physical)
-    found: list[Finding] = []
-    if unconsumed:
-        found.append(
-            Finding(
-                FindingKind.REJECTION,
-                "channel-top-marker",
-                "",
-                f"top input markers {unconsumed} would be left unconsumed",
-            )
-        )
-    if unruled:
-        found.append(
-            Finding(
-                FindingKind.REJECTION,
-                "channel-top-marker",
-                "",
-                f"top output markers {unruled} lack rules",
-            )
-        )
-    return tuple(found)
-
-
 def boundary(declared: PartitionDeclaration) -> tuple[tuple[str, str], ...]:
     """Each boundary channel of ``declared`` and its AXIS port (``Side.boundary``'s label),
     inputs then outputs, in the order declared."""
@@ -1018,8 +870,6 @@ def partition(
     declared: PartitionDeclaration,
     stored: Mapping[Key, object] | None = None,
     *,
-    name: str = ...,
-    order: Sequence[str] | None = ...,
     owners: Mapping[str, Owner] | None = ...,
     ports: Sequence[tuple[str, str]] | None = ...,
     movers: tuple[MoverOffer, ...] = ...,
@@ -1034,8 +884,6 @@ def partition(
     declared: PartitionDeclaration,
     stored: Mapping[Key, object] | None = None,
     *,
-    name: str = ...,
-    order: Sequence[str] | None = ...,
     owners: Mapping[str, Owner] | None = ...,
     ports: Sequence[tuple[str, str]] | None = ...,
     movers: tuple[MoverOffer, ...] = ...,
@@ -1050,8 +898,6 @@ def partition(
     declared: PartitionDeclaration,
     stored: Mapping[Key, object] | None = None,
     *,
-    name: str = "partition",
-    order: Sequence[str] | None = None,
     owners: Mapping[str, Owner] | None = None,
     ports: Sequence[tuple[str, str]] | None = None,
     movers: tuple[MoverOffer, ...] = (),
@@ -1064,8 +910,8 @@ def partition(
     naming each reason it cannot be) and its ``stored`` choices, by key, bound on one design
     space of its class (the module docstring: a value outside its domain, or a key that is
     no choice or no member's, dropped as stale; a rule they break binds, read refused), made
-    by ``kind`` (``Partition``, or a shell's partition over it). ``order``: its module's
-    instance order (the kernels, then the channels, as declared, by default); ``owners``:
+    by ``kind`` (``Partition``, or a shell's partition over it), its module's name and
+    instance order the declaration's (``PartitionDeclaration.name``, ``order``); ``owners``:
     each kernel's policies' owner (``Unstated`` where none is given); ``ports``: each
     boundary channel and its AXIS port, inputs then outputs (``boundary``'s by default),
     ``movers`` the offers on them; ``stray`` and ``whole``, a graph's; ``frozen``, the port
@@ -1101,8 +947,6 @@ def partition(
     return kind(
         composed,
         report.instance,
-        name=name,
-        order=tuple(order) if order is not None else (*declared.kernels, *declared.channels),
         sides={
             tensor: (each.producer, each.consumer) for tensor, each in declared.channels.items()
         },
@@ -1117,4 +961,4 @@ def partition(
     )
 
 
-__all__ = ["Partition", "boundary", "partition", "top_markers"]
+__all__ = ["Partition", "boundary", "partition"]

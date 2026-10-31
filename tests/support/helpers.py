@@ -177,8 +177,8 @@ def by_hand(
     channels = {
         name: each for name, each in members.items() if isinstance(each, ChannelDeclaration)
     }
-    declared = PartitionDeclaration(kernels, channels, shell)
-    return partition(declared, stored, order=tuple(members))
+    declared = PartitionDeclaration(kernels, channels, shell, order=tuple(members))
+    return partition(declared, stored)
 
 
 N = TypeVar("N", bound=Partition)

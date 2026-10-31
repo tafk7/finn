@@ -688,6 +688,56 @@ def test_the_class_is_a_sealed_dataflow_core_whose_edge_ports_are_its_channels_o
         assert exposed.pins.transport.name == edge
 
 
+def test_the_declaration_s_name_and_order_are_facts_of_the_class(cache: None) -> None:
+    """A declaration's module name is a fact of its class (``DataflowCoreKernel.name``, given
+    where its design space is opened: another name is the same class), and its instance
+    order a class fact (``Kernel.instance_order``, by member name: another order is another
+    class); the kernels, then the channels, as declared, by default. An order that does not
+    name each member once is refused."""
+    composed = compose(PartitionDeclaration(kernels(), channels(), name="DataflowCore_0"))
+    point = composed.design_space()
+    assert isinstance(point, DataflowCoreKernel) and point.name == "DataflowCore_0"
+    space_type = type(point)
+    assert space_type.instance_order == (*kernels(), *channels())
+    renamed = compose(PartitionDeclaration(kernels(), channels(), name="other"))
+    assert renamed.space_type is space_type
+    assert getattr(renamed.design_space(), "name") == "other"
+    order = ("x", *kernels(), "w1", "hidden", "levels", "w2", "y")
+    reordered = compose(PartitionDeclaration(kernels(), channels(), order=order))
+    assert reordered.space_type is not space_type
+    assert getattr(reordered.space_type, "instance_order") == order
+    with pytest.raises(ValueError, match="names each of its members once"):
+        PartitionDeclaration(kernels(), channels(), order=order[1:])
+    with pytest.raises(ValueError, match="names each of its members once"):
+        PartitionDeclaration(kernels(), channels(), order=(*order, "x"))
+
+
+def test_the_class_answers_its_netlist_edge_cycles_and_resources(cache: None) -> None:
+    """The class answers what its module is made of: its netlist (``Kernel.netlist``), its
+    members in its instance order, and its module's edge (``DataflowCoreKernel.edge_buses``:
+    each edge port's bus, in its instance order); its cycles (the most any member takes) and
+    its resources (its members' sum). The partition reads each of them."""
+    network = chain.chain()
+    point = network.point
+    order = getattr(type(point), "instance_order")
+    assert network.order == order  # the Chain's graph names are its member names
+    wired = point.query(Kernel.netlist)
+    edge = point.query(DataflowCoreKernel.edge_buses)
+    assert isinstance(wired, Available) and isinstance(edge, Available)
+    assert [bus.name for bus in edge.value] == ["s_axis_0", "m_axis_0"]
+    placed = list(dict.fromkeys(label.split(".")[0] for label, _ in wired.value.instances))
+    assert placed == [name for name in order if name in placed]
+    assert network.netlist() == Available((wired.value, edge.value))
+    cycles = point.query(Kernel.frame_cycles)
+    assert isinstance(cycles, Available) and network.cycles() == cycles
+    assert cycles.value == max(
+        each.value
+        for name in network.members
+        if isinstance(each := network.query(name, Kernel.frame_cycles), Available)
+    )
+    assert network.own_resources() == point.query(Kernel.resources)
+
+
 def _unchanneled(body: str) -> list[tuple[str, str]]:
     """The findings a sealed core declared by hand with ``body`` is refused with."""
     namespace: dict[str, object] = {

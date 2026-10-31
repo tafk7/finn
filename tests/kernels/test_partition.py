@@ -46,7 +46,8 @@ from finn.kernels.composer import (
     Stated,
     channel,
 )
-from finn.kernels.partition import Partition, partition, top_markers
+from finn.kernels.dataflow_core import top_markers
+from finn.kernels.partition import Partition, partition
 from finn.kernels.sides import Side
 from finn.platform.capabilities import Platform
 

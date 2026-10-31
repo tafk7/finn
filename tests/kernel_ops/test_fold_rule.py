@@ -108,6 +108,7 @@ def declared(*, adaptable: bool) -> PartitionDeclaration:
                 platform=platform,
             ),
         },
+        name="board",
     )
 
 
@@ -117,7 +118,7 @@ def boarded(
     """The partition with UltraRAM, the thresholding at the Chain's PE and ``folding``,
     every other choice by its policy, as conversion and the cut leave it; then the hidden
     channel's ``hidden`` choices."""
-    empty = partition(declared(adaptable=adaptable), name="board")
+    empty = partition(declared(adaptable=adaptable))
     chosen = empty.with_choices(keyed({"board.uram": True, "activate.pe": chain.PE, **folding}))
     return with_defaults(chosen).with_choices(keyed({f"hidden.{k}": v for k, v in hidden.items()}))
 

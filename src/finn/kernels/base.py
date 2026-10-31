@@ -1565,6 +1565,12 @@ class Kernel(Space):
     # member is on (``finn.kernels.port.exposed_pins``).
     placed_at: ClassVar[Mapping[str, str]] = MappingProxyType({})
 
+    # The order its netlist places its members in, by name, where not their declaration
+    # order: its module's instance order (a DataflowCore's, ``finn.kernels.dataflow_core``),
+    # which its control buses follow too. A member it does not name follows, in declaration
+    # order.
+    instance_order: ClassVar[tuple[str, ...]] = ()
+
     # Whether it is a channel: a member joining two of its holder's members' ports, which its
     # sides (``producer``, ``consumer``) name (``finn.kernels.channels.Channel``).
     connects: ClassVar[bool] = False
@@ -1827,7 +1833,7 @@ class Kernel(Space):
     def netlist(self) -> Fragment | Rejected:
         """Its netlist, labelled relative to itself: its module at the empty label (``under``
         names it by its node where it is held), or its members' under theirs (or where it
-        places them, ``placed_at``).
+        places them, ``placed_at``), in its instance order (``instance_order``).
 
         A kernel with a module is its one leaf, assembled from its binding and its parts
         (``finn.kernels.library.assemble_module``): its clocking, its parameters, its parts'
@@ -1836,6 +1842,12 @@ class Kernel(Space):
         if type(self).module_spec is not None:
             return self._module()
         placed = type(self).placed_at
+        order = type(self).instance_order
+        rank = {name: index for index, name in enumerate(order)}
+
+        def ranked(item: Any) -> int:
+            return rank.get(str(item.node), len(order))
+
         # Each member channel's, with its hops to the ports beside it around its own links.
         hopped: dict[str, Any] = dict(self._member_hops_0())
         parts = [
@@ -1845,7 +1857,7 @@ class Kernel(Space):
                 if str(item.node) in hopped
                 else item.value,
             )
-            for item in self.netlists
+            for item in sorted(self.netlists, key=ranked)
         ]
         if not parts:
             return reject(
@@ -1853,7 +1865,8 @@ class Kernel(Space):
                 f"{type(self).__qualname__} declares no module and places no kernel",
             )
         buses = presented(
-            (placed.get(str(item.node), str(item.node)), item.value) for item in self.controls
+            (placed.get(str(item.node), str(item.node)), item.value)
+            for item in sorted(self.controls, key=ranked)
         )
         if isinstance(buses, Rejected):
             return buses

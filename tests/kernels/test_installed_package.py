@@ -204,8 +204,8 @@ for memory in ("none", "memstream"):
                     Port("matmul", "y"), Side.boundary("out0_V"), tensor=y_tensor, platform=PLATFORM
                 ),
             },
+            order=("x", "w", "y", "matmul"),
         ),
-        order=("x", "w", "y", "matmul"),
     )
     root = root.with_choices({
         ("matmul", "compute"): "packed",

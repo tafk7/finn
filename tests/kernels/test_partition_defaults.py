@@ -65,9 +65,9 @@ def chained(
         PartitionDeclaration(
             {name: each for name, each in members.items() if isinstance(each, Facts)},
             {name: each for name, each in members.items() if isinstance(each, ChannelDeclaration)},
+            order=tuple(members),
         ),
         keyed({"activate.pe": chain.PE, **(stored or {})}),
-        order=tuple(members),
         owners=owners,
     )
 

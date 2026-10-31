@@ -10,8 +10,10 @@ the name of the tensor each carries, each with its two sides and its own facts
 "y")``), or a ``Side`` given as a value: the boundary's (``Side.boundary``), a frozen
 neighbour's (``Side.neighbour``) or a valued channel's source (``Side.source``). A channel's
 fact is a value, or a value a member states (``Stated("mm0", "carried_weights")``: a
-parameter channel's tensor and contents). The composer never reads a graph: FINN's graph
-layer reads one into a declaration, and a test declares one by hand.
+parameter channel's tensor and contents). It names its module (``PartitionDeclaration.name``)
+and the order its module places its members in (``PartitionDeclaration.order``). The
+composer never reads a graph: FINN's graph layer reads one into a declaration, and a test
+declares one by hand.
 
 ``compose(declared)`` makes the partition's class with ``composite()``, a
 ``DataflowCoreKernel_<digest>`` on ``finn.kernels.dataflow_core.DataflowCoreKernel`` (a sealed
@@ -44,7 +46,10 @@ member whose port it names). Its facts:
   ``under`` the member, so a channel's findings name the node as today's network's do;
 - **its edge ports**, one per boundary side, each a node alias of its channel's outer port
   named as the side's label, its bus (``s_axis_0 = x.outer_in``, ``m_axis_0 =
-  y.outer_out``), after its members.
+  y.outer_out``), after its members, in its instance order;
+- **its module's name**, the class's own fact (``DataflowCoreKernel.name``), given beside
+  the members' (``Composed.name``), and **its instance order**, a class fact
+  (``Kernel.instance_order``: each member's name in the declaration's order).
 
 **The side is structural.** A producer side is an output port (its actual port model's
 direction ``OUT``), a consumer side an input port, and a
@@ -81,9 +86,10 @@ other, and ``Names.roots`` maps each root member (a Param, a side) to (owner, fa
 model made in the modes asked when it was first compiled, so another mode is another
 class), each member's name and its class's identity, each channel's sides as
 (member, port) or the side's kind (a boundary's with its port), each member's facts by name
-with how each is given (a value, or stated by a member), in order, and whether it is in a
-shell. A declaration of the same structure with other facts (another shell's row among them)
-is a new design space of the same class, and compiles nothing.
+with how each is given (a value, or stated by a member), in order, whether it is in a
+shell, and its instance order. A declaration of the same structure with other facts
+(another shell's row, another module name among them) is a new design space of the same
+class, and compiles nothing.
 The cache is **bounded**: it holds at most ``CLASS_CACHE_BOUND`` classes (16), the least
 recently composed dropped past it (a dropped class lives on while a design space of it
 does, and a later composition of its structure makes it again). Each class holds its
@@ -102,7 +108,7 @@ import hashlib
 import re
 import threading
 from collections import Counter, OrderedDict
-from collections.abc import Callable, Hashable, Mapping
+from collections.abc import Callable, Hashable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from functools import cached_property
 from types import MappingProxyType
@@ -243,25 +249,40 @@ def channel(producer: Port | Side, consumer: Port | Side, **facts: object) -> Ch
 
 class PartitionDeclaration:
     """A partition as declared: its ``kernels`` by graph name, each its ``Facts``, in their
-    order (the graph's), its ``channels`` by the name of the tensor each carries, and, in a
+    order (the graph's), its ``channels`` by the name of the tensor each carries, in a
     shell, the shell's row (``shell``: its facts by name, ``finn.kernels.budgets.ShellBudgets``'s
-    formals; None outside one)."""
+    formals; None outside one), its module's name (``name``, ``DataflowCoreKernel.name``) and
+    the order its module places its members in, by graph name (``order``: the kernels, then
+    the channels, as declared, by default; ``Kernel.instance_order``). An order that does
+    not name each member once is a ``ValueError``."""
 
-    __slots__ = ("channels", "kernels", "shell")
+    __slots__ = ("channels", "kernels", "name", "order", "shell")
 
     kernels: Mapping[str, Facts]
     channels: Mapping[str, ChannelDeclaration]
     shell: Mapping[str, object] | None
+    name: str
+    order: tuple[str, ...]
 
     def __init__(
         self,
         kernels: Mapping[str, Facts],
         channels: Mapping[str, ChannelDeclaration],
         shell: Mapping[str, object] | None = None,
+        *,
+        name: str = "partition",
+        order: Sequence[str] | None = None,
     ) -> None:
         self.kernels = MappingProxyType(dict(kernels))
         self.channels = MappingProxyType(dict(channels))
         self.shell = None if shell is None else MappingProxyType(dict(shell))
+        self.name = name
+        members = (*self.kernels, *self.channels)
+        self.order = members if order is None else tuple(order)
+        if sorted(self.order) != sorted(members):
+            raise ValueError(
+                f"{name}: its order {list(self.order)} names each of its members once, {members}"
+            )
 
     def __repr__(self) -> str:
         return f"PartitionDeclaration({list(self.kernels)}, {list(self.channels)})"
@@ -471,17 +492,21 @@ class Names:
 
 class Composed:
     """A partition composed: its class (``space_type``, kept by its structure), its
-    ``names``, and the facts its root Params are given (``facts``, by name). The class with
-    the facts given is a design space (``design_space``)."""
+    ``names``, the facts its members' root Params are given (``facts``, by name), and its
+    module's name (``name``, the class's own fact, ``DataflowCoreKernel.name``). The class
+    with the facts given is a design space (``design_space``)."""
 
-    __slots__ = ("facts", "names", "space_type")
+    __slots__ = ("facts", "name", "names", "space_type")
 
     space_type: type[Space]
     names: Names
     facts: Mapping[str, object]
+    name: str
 
-    def __init__(self, space_type: type[Space], names: Names, facts: Mapping[str, object]) -> None:
-        self.space_type, self.names = space_type, names
+    def __init__(
+        self, space_type: type[Space], names: Names, facts: Mapping[str, object], *, name: str
+    ) -> None:
+        self.space_type, self.names, self.name = space_type, names, name
         self.facts = MappingProxyType(dict(facts))
 
     def __repr__(self) -> str:
@@ -489,7 +514,7 @@ class Composed:
 
     def design_space(self) -> Space:
         """The design space: the class with its facts given, nothing chosen."""
-        point: Space = design_space(cast(Any, self.space_type)(**self.facts))
+        point: Space = design_space(cast(Any, self.space_type)(**self.facts, name=self.name))
         return point
 
 
@@ -620,8 +645,9 @@ def _fact_key(value: object) -> Hashable:
 
 def structure(declared: PartitionDeclaration, ranked: list[str]) -> Hashable:
     """The class's key (the module docstring): the engine's test modes, each kernel's name,
-    class and facts given, then each channel's name, sides and facts given, ranked, and
-    whether it is in a shell (never its row: the row's values are facts)."""
+    class and facts given, then each channel's name, sides and facts given, ranked, whether
+    it is in a shell (never its row: the row's values are facts), and its instance order
+    (never its module's name: a fact)."""
     return (
         model_modes(),
         tuple(
@@ -641,6 +667,7 @@ def structure(declared: PartitionDeclaration, ranked: list[str]) -> Hashable:
             for name in ranked
         ),
         declared.shell is not None,
+        declared.order,
     )
 
 
@@ -744,14 +771,17 @@ def _made(
             params[root] = given[fact] = _param(Channel, fact, owner, annotations, root)
             roots[root] = (owner, fact)
         channels[member] = nodes[member] = cast(Any, Channel)(**given)
-    # Its edge ports, each its channel's outer port by alias, named as its side's label.
+    # Its edge ports, each its channel's outer port by alias, named as its side's label, in
+    # its instance order.
     edges: dict[str, object] = {}
-    for owner, each in declared.channels.items():
-        held = nodes[names[owner]]
-        if isinstance(each.producer, Side) and each.producer.kind is SideKind.BOUNDARY:
-            edges[each.producer.label] = getattr(held, "outer_in")
-        if isinstance(each.consumer, Side) and each.consumer.kind is SideKind.BOUNDARY:
-            edges[each.consumer.label] = getattr(held, "outer_out")
+    for owner in declared.order:
+        if owner not in declared.channels:
+            continue
+        sides, held = declared.channels[owner], nodes[names[owner]]
+        if isinstance(sides.producer, Side) and sides.producer.kind is SideKind.BOUNDARY:
+            edges[sides.producer.label] = getattr(held, "outer_in")
+        if isinstance(sides.consumer, Side) and sides.consumer.kind is SideKind.BOUNDARY:
+            edges[sides.consumer.label] = getattr(held, "outer_out")
     # Named by its key's digest (its classes and enums by their module and name): the same
     # structure is the same name in every process.
     digest = hashlib.sha256(repr(key).encode()).hexdigest()[:12]
@@ -765,6 +795,7 @@ def _made(
                 **{names[owner]: nodes[names[owner]] for owner in declared.kernels},
                 **channels,
                 **edges,
+                "instance_order": tuple(names[owner] for owner in declared.order),
             },
             base=DataflowCoreKernel,
             annotations=annotations,
@@ -893,7 +924,7 @@ def compose(declared: PartitionDeclaration) -> Composed:
                 facts[table.root(owner, fact)] = value
     for fact, value in (declared.shell or {}).items():
         facts[table.root(SHELL, fact)] = value
-    return Composed(space_type, table, facts)
+    return Composed(space_type, table, facts, name=declared.name)
 
 
 __all__ = [

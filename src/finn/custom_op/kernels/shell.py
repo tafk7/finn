@@ -58,7 +58,6 @@ from finn.core.search import Key, dotted
 from finn.core.space import Available, Inapplicable, QueryResult, Rejected, inspection
 from finn.custom_op.kernels.network import PARTITION, PRODUCER, _network, persist, stale_text
 from finn.kernels.artifacts.module import Composed
-from finn.kernels.base import Kernel
 from finn.kernels.budgets import SHELL, counts
 from finn.kernels.channels import Channel
 from finn.kernels.configure import refusal
@@ -242,26 +241,20 @@ class Configured:
     def cycles(self) -> int:
         """Request the existing cycle readout; never infer it from logical configuration.
 
-        A missing or refused member estimate fails this request, not configuration or
-        emission. This preserves the held timing consumers' contract without making
-        them a prerequisite of the untimed build bridge.
+        Its partition's class answers it (``Partition.cycles``: the most any member takes,
+        ``Kernel.frame_cycles``). A missing or refused member estimate fails this request,
+        not configuration or emission. This preserves the held timing consumers' contract
+        without making them a prerequisite of the untimed build bridge.
         """
-        cycles = {
-            name: self.network.query(name, Kernel.frame_cycles) for name in self.network.members
-        }
-        found = tuple(
-            self.network.located(name, finding)
-            for name, each in cycles.items()
-            if not isinstance(each, Available)
-            for finding in each.findings
-        )
-        if found or not cycles or not all(isinstance(each, Available) for each in cycles.values()):
+        cycles = self.network.cycles()
+        if not isinstance(cycles, Available):
+            found = getattr(cycles, "findings", ())
             raise KernelOpError(
                 "cycle characterization unavailable: "
                 + "; ".join(map(Finding.subject_line, found)),
                 findings=found,
             )
-        return max(each.value for each in cycles.values() if isinstance(each, Available))
+        return cycles.value
 
     @property
     def row(self) -> ShellRow:
