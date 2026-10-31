@@ -71,10 +71,12 @@ _KIND_MEMBERS = {"direction": "port-direction", "pacing": "port-pacing", "follow
 def _refuse_kind_overridden(cls: type[StreamPort]) -> None:
     """Refuse a port class that declares ``direction``, ``pacing`` or ``follows``
     (``port-direction``, ``port-pacing``), but for this module's ``StreamPort``, ``InPort``
-    and ``OutPort``: each is its kind's, so the ABI, which reads ``direction``, and every
-    check of a kernel's class, which reads the kind (``finn.kernels.port.port_direction``),
-    agree by construction, and a port's pacing follows from its declaration, checked when
-    its kernel's class is made."""
+    and ``OutPort``: each is its kind's, so the ABI, which reads ``direction``, and what
+    reads the kind agree by construction: the side a port gives a channel (``side``, an
+    input side or an output side), whose role the channel checks, an exposed port's kind,
+    checked when its kernel's class is made, and a reader of a class's port
+    (``finn.kernels.port.port_direction``). A port's pacing follows from its declaration,
+    checked when its kernel's class is made."""
     for base in cls.__mro__:
         if base.__module__ == __name__ or base in StreamPort.__mro__:
             continue
