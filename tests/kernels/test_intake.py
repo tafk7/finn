@@ -290,6 +290,36 @@ def test_a_kernel_with_children_renames_its_members_coupling() -> None:
     assert design_space(Holder()).intake.joined == (("x", "inner.side"),)
 
 
+def test_a_kernel_with_children_names_a_port_it_exposes_by_its_node() -> None:
+    """However its alias spells the port: through its member's own alias (``x = mid.x``)
+    or through the member's members, across a selector (``y = chain.core.input``), it is
+    one node, which its intake names by the name it exposes it under."""
+
+    class Middle(Kernel):
+        id = "test.intake.middle"
+        inner = Coupled(input_tensor=TENSOR, arriving=ARRIVING)
+        x = inner.input
+
+    class ByAlias(Kernel):
+        id = "test.intake.by_alias"
+        mid = Middle()
+        chain = Chain()
+        x = mid.x
+        y = chain.x
+
+    class ByPath(Kernel):
+        id = "test.intake.by_path"
+        mid = Middle()
+        chain = Chain()
+        x = mid.inner.input
+        y = chain.core.input
+
+    for holder in (ByAlias, ByPath):
+        point = design_space(holder()).with_choices({holder.chain.core: "other"})
+        assert point.intake.names == ("x", "mid.inner.side", "y", "chain.kept.input"), holder
+        assert point.intake.joined == (("x", "mid.inner.side"),), holder
+
+
 def test_a_kernel_with_no_module_and_no_member_takes_nothing_ahead() -> None:
     class Wires(Kernel):
         id = "test.intake.wires"

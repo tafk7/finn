@@ -32,7 +32,7 @@ module ownership, required declarations and resource statements are checked.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from functools import partial
 from types import MappingProxyType
@@ -51,12 +51,14 @@ from finn.core.space import (
 )
 from finn.core.space._aliases import alias_table
 from finn.core.space._nodes import (
+    NodeAlias,
     NodeChoice,
     NodeDecision,
     NodeDecl,
     assign,
     node_record,
     selected,
+    space_members,
     unwrap,
 )
 from finn.core.space.declarations import Declaration, Derived, View, unmet_required
@@ -330,10 +332,38 @@ def _governed_beats(governed: str) -> Callable[[Kernel], int | None]:
     return governed_beats
 
 
-def _exposed_as(exposed: Mapping[tuple[str, str], str], node: str, port: str) -> str:
-    """The name a kernel with children gives its member ``node``'s port ``port`` in its
-    intake: the name it exposes it under, else its path below the member."""
-    return exposed.get((node.split(".", 1)[0], port), f"{node}.{port}")
+def _exposed_as(cls: type[Kernel], node: str, port: str) -> str:
+    """The name ``cls``, a kernel with children, gives its member ``node``'s port ``port``
+    (the member's name for it) in its intake: the name it exposes the port's node under,
+    else its path below the member."""
+    exposed = cls._exposed_names
+    for path in _node_paths(cls, (*node.split("."), *port.split(".")), ()):
+        if path in exposed:
+            return exposed[path]
+    return f"{node}.{port}"
+
+
+def _node_paths(
+    space_type: type[Any], names: tuple[str, ...], path: tuple[str, ...]
+) -> Iterator[str]:
+    """The paths of the nodes ``names`` (a selector's followed by its case, as a member's
+    node is named, ``compute.packed``) reach from ``space_type`` (at ``path``), by node, as
+    an alias's ends are (``AliasEnd.path``): through children, cases and an alias's ends (one
+    a selection, where it is read through a selector); none where they reach nothing."""
+    if not names:
+        yield ".".join(path)
+        return
+    name, rest = names[0], names[1:]
+    member = space_members(space_type).get(name)
+    if isinstance(member, NodeDecl):
+        yield from _node_paths(member.space_type, rest, (*path, name))
+    elif isinstance(member, NodeAlias):
+        for end in alias_table(space_type)[name].ends:
+            yield from _node_paths(end.space_type, rest, (*path, *end.path.split(".")))
+    elif isinstance(member, NodeDecision) and rest:
+        record = member.candidates.get(rest[0])
+        if record is not None:
+            yield from _node_paths(record.space_type, rest[1:], (*path, name, rest[0]))
 
 
 # -- what a kernel with a module states of its intake ---------------------------------------
@@ -590,9 +620,10 @@ def _kernel_member(cls: type[Kernel], bound: object, name: str) -> bool:
 # A kernel with children exposes a member's stream port as its own by a node alias in its
 # body (``x = compute.x``, ``finn.core.space``): the port stays its member's, and nothing is
 # lowered for it. What its class records is the name each member's port is exposed under,
-# by the member and the name the member presents it under, as the alias is written
-# (``("compute", "x")``, ``("mm", "x")`` through MatMul's own: what its intake names the
-# member's port, ``Kernel.intake``); a port is exposed under one name.
+# by the port's node, its path as the owner's (each selection's, ``AliasEnd.path``:
+# ``compute.packed.x``), however the alias spells it (``x = mm.x`` through MatMul's own,
+# ``x = mm.compute.x``): its intake names a member's port by the node the member's name for
+# it reaches (``Kernel.intake``); a port is exposed under one name.
 
 
 def _expose_ports(cls: type[Kernel]) -> None:
@@ -606,11 +637,11 @@ def _expose_ports(cls: type[Kernel]) -> None:
       name, so no two channels connect it under two."""
     from finn.kernels.port_model import InPort, OutPort, StreamPort  # noqa: PLC0415
 
-    exposed: dict[tuple[str, str], str] = {}
+    exposed: dict[str, str] = {}
     seen: dict[frozenset[object], str] = {}
     for name, entry in alias_table(cls).items():
-        written = entry.declaration.written
-        exposed.setdefault((written[0], ".".join(written[1:])), name)
+        for end in entry.ends:
+            exposed.setdefault(end.path, name)
         if not entry.ends or not all(issubclass(end.space_type, StreamPort) for end in entry.ends):
             continue
         where = f"{cls.__qualname__}.{name}"
@@ -988,9 +1019,9 @@ class Kernel(Space):
 
     module_spec: ClassVar[ModuleSpec | None] = None
 
-    # The ports it exposes, each by its child and the child's port: what its intake names
-    # the child's (``intake``). Recorded when its class is made (``_expose_ports``).
-    _exposed_names: ClassVar[Mapping[tuple[str, str], str]] = MappingProxyType({})
+    # The ports it exposes, each by its node's path: what its intake names a member's port
+    # whose node it is (``intake``). Recorded when its class is made (``_expose_ports``).
+    _exposed_names: ClassVar[Mapping[str, str]] = MappingProxyType({})
 
     # Where its netlist places a member, by the member's name, where not at its name (a
     # channel's source, ``finn.kernels.channels``): the instance a port it exposes of that
@@ -1181,17 +1212,16 @@ class Kernel(Space):
         members' (``member_intake``), never states it beside them, each member's renamed,
         its ports, its groups and its partners alike: a member's port it exposes takes the
         name it exposes it under (``x = compute.x``: ``x``; one port, one name, however many
-        aliases name it), any other member's port its path below the member
-        (``adapter.input_gen.input_gen.input``). A member that states none leaves its
-        parent's unstated too."""
+        aliases name it and however they spell it), any other member's port its path below
+        the member (``adapter.input_gen.input_gen.input``). A member that states none leaves
+        its parent's unstated too."""
         if type(self).module_spec is not None:
             return reject(INTAKE_UNSTATED, f"{type(self).__qualname__} states no intake")
-        exposed = type(self)._exposed_names
         ports: list[PortIntake] = []
         joined: list[tuple[str, ...]] = []
         for item in self.member_intake:
             node = str(item.node)
-            renamed = item.value.renamed(partial(_exposed_as, exposed, node))
+            renamed = item.value.renamed(partial(_exposed_as, type(self), node))
             ports += renamed.ports
             joined += renamed.joined
         return Intake(tuple(ports), tuple(joined))
