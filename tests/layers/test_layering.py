@@ -101,7 +101,8 @@ def test_a_name_outside_every_prefix_is_third_party(name: str) -> None:
         ("util", "finn.core.onnx_exec.execute_onnx"),
         # What is read of a partition reads qonnx and the findings only, below the kernel
         # stack, the executors and the flow; the partition node runs its body with the
-        # executors, which never import the node.
+        # executors, which never import the node, and reads its core as the KernelOps'
+        # layer binds it, below their transformations.
         ("graph.partition", "finn.core.onnx_exec.execute_onnx"),
         ("graph.partition", "finn.custom_op.kernels.network.network"),
         ("graph.partition", "finn.core.graph.annotations.channel.CHANNEL"),

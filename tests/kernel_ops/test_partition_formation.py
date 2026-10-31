@@ -17,11 +17,12 @@ import warnings
 from pathlib import Path
 
 import numpy as np
+import pytest
 from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from support import chain
-from support.configure import composition, configured
+from support.configure import composition, configured, core_in_shell
 from support.models import configure_partition, kernel_model
 from support.refusals import refused
 
@@ -32,6 +33,7 @@ from finn.core.onnx_exec import execute_onnx
 from finn.core.space import Available
 from finn.custom_op.kernels.shell import configured_network
 from finn.kernels.dataflow_core import DataflowCoreKernel
+from finn.kernels.explore import CoreComposition
 from finn.transformation.kernels.cut import CutKernelPartition
 
 
@@ -125,6 +127,33 @@ def test_the_parent_graph_imports_its_partition_nodes_domain(tmp_path: Path) -> 
         warnings.simplefilter("error")
         (node,) = parent.get_nodes_by_op_type("DataflowCore")
         getCustomOp(node).get_nodeattr("model")
+
+
+def test_the_node_reads_binds_changes_and_writes_its_core(tmp_path: Path) -> None:
+    """The DataflowCore reads its core as a KernelOp reads its kernel, each reading a
+    function of its body, its module named by the node: its design space, nothing chosen
+    (``bound``), its body's stored choices bound (``point``) and a change of them
+    (``point(extra)``, a refused one a ``ValueError``); ``persist`` writes a design space's
+    choices onto its body, and ``configured`` is what emission reads."""
+    _, parent, _ = partitioned(tmp_path)
+    node = parent.graph.node[1]
+    core = getCustomOp(node)
+    body = core.body()
+    assert [each.name for each in body.graph.node] == ["first", "activate", "second"]
+    empty, held = core.bound(), core.point()
+    assert type(empty) is type(held.point) and empty.name == held.point.name == node.name
+    assert not held.stale and CoreComposition(empty).chosen() == {}
+    stored = core_in_shell(body, name=node.name).chosen()
+    assert CoreComposition(held.point).chosen() == stored and stored[("first", "simd")] == 2
+    changed = core.point({("first", "simd"): 4})
+    assert CoreComposition(changed.point).chosen() == {**stored, ("first", "simd"): 4}
+    with pytest.raises(ValueError, match="simd"):
+        core.point({("first", "simd"): 3})
+    assert CoreComposition(core.point().point).chosen() == stored  # nothing written
+    core.persist(changed.point)
+    assert CoreComposition(core.point().point).chosen()[("first", "simd")] == 4
+    expected, _ = configured_network(core.body(), node.name)
+    assert core.configured().module == expected.module
 
 
 def test_the_body_is_the_partition_packaging_takes(tmp_path: Path) -> None:

@@ -328,11 +328,12 @@ LAYERS: tuple[Layer, ...] = (
     ),
     # The build's partition node, its ONNX domain (finn.custom_op.partition): it
     # runs its body with the executors of the run that reached it
-    # (finn.core.onnx_exec.running), imported when it runs.
+    # (finn.core.onnx_exec.running), and reads its body's core as the KernelOps' layer
+    # binds it (finn.custom_op.kernels), each imported when it runs.
     Layer(
         "custom_op.partition",
         ("finn.custom_op.partition",),
-        ("graph.partition", "executors"),
+        (*_KERNEL_STACK, "graph.partition", "custom_op.kernels", "executors"),
         ("qonnx",),
         "tests/kernel_ops",
     ),
