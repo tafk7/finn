@@ -611,6 +611,37 @@ def test_an_exposed_port_is_a_stream_port_of_each_case_of_its_kernel_s_member() 
 
     assert port_direction(Carried, "x") is Direction.IN
 
+    # A direction bound otherwise than by a literal cannot be shown to agree with the other
+    # cases' when the class is made: refused where the port has more than one node (RF2 M1).
+    class Bound(Kernel):
+        id = "test.exposed.bound"
+        role: Direction = Param(default=Direction.OUT)
+        port = StreamPort(direction=role, transport=AXIS, tensor=TENSOR, sequence=SEQUENCE)
+
+    with refused("port-direction", error=DefinitionError, message="not stated as literals"):
+
+        class Roled(Kernel):
+            id = "test.exposed.roled"
+            core = Select(i=In_, b=Bound)
+            x = core.port
+
+    # One node, it is the port's own: checked at its design point (``presented``).
+    class Alone(Kernel):
+        id = "test.exposed.alone"
+        inner = Bound()
+        x = inner.port
+
+    assert port_direction(Alone, "x") is None
+
+    # One port, one name: a second alias of it is refused (RF2 L2).
+    with refused("port-exposed-twice", error=DefinitionError, message="exposes the port w"):
+
+        class Twice(Kernel):
+            id = "test.exposed.twice"
+            kept = Leaf()
+            w = kept.input
+            w2 = kept.input
+
     # A node alias of no stream port is no port of its kernel.
     class Holder(Kernel):
         id = "test.exposed.holder"

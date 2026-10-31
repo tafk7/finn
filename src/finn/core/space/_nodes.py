@@ -1124,7 +1124,8 @@ def selector_value(source: object) -> object:
 
 def selected(selector: object) -> str:
     """A selector's value, the case's name, as a reference: internal, for a member built
-    over a child that may be a selector or not (a port's ``served``), which a binding to the
+    over a child that may be a selector or not (the case a kernel reads its members'
+    doubled clock and control buses through, ``finn.kernels.base``), which a binding to the
     selector cannot tell apart. Every other reader binds the selector itself."""
     if not isinstance(selector, NodeChoice):
         raise DefinitionError.broken(

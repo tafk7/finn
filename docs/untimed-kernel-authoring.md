@@ -42,7 +42,7 @@ or certify that the chosen FIFO capacity is temporally sufficient.
 | [VPC definition](../src/finn/kernels/vpc.py) | Tensor and arriving/leaving `Param`s; native input/output `StreamPort` children; module parameters and sources, from which the base assembles its pins. |
 | [FIFO definition](../src/finn/kernels/fifo.py) | Explicit depth, memory-style `Decision`, geometry and platform validity, and realized storage capacity. |
 | [Compute example](../examples/untimed/compute.py) | A real known-weight `MatMulKernel`, selected packed implementation/folding, owned result/weight facts, source memory and a fixed-capacity channel FIFO. |
-| [MatMul definition](../src/finn/kernels/matmul.py) | Model facts, range/type ownership, implementation selectors and the selected core's ports, served (`served`). |
+| [MatMul definition](../src/finn/kernels/matmul.py) | Model facts, range/type ownership, implementation selectors and the selected core's ports, exposed by node aliases (`x = compute.x`). |
 | [Packed compute definition](../src/finn/kernels/dotp.py) | Real scheduled/indexed Ports on the selected compute implementation; no included `ControlModel` on MatMul/Dotp. |
 | [Source memory definition](../src/finn/kernels/memstream.py) | `MemStream.config` is the included AXI-Lite `ControlModel`; the weight source owns its physical pins and held/tied-off values for build-time known contents. |
 | [Port models](../src/finn/kernels/port_model.py) | Ordinary child Spaces; placed/idle direction and datatype rules; native, scheduled and indexed projections. |

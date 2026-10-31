@@ -34,8 +34,10 @@ from finn.core.space import (
     constraint,
     derived,
     design_space,
+    divisors_of,
     inspection,
     reject,
+    view,
 )
 from finn.core.space._aliases import alias_table
 
@@ -217,6 +219,10 @@ def test_a_class_alias_is_neither_replaced_nor_deleted() -> None:
     with refused("structure-finalized", error=DefinitionError):
         del Root.x
     assert Root.x.answer == Root.inner.leaf.answer
+    # A selector alias's face, set on the closed class, as a plain one (RF2 L1).
+    with refused("structure-finalized", error=DefinitionError):
+        Pick.z = Pick.x  # type: ignore[attr-defined]
+    assert not any(alias.name == "z" for alias in inspection.aliases(Pick))
 
 
 def test_a_configurations_alias_is_immutable() -> None:
@@ -453,6 +459,76 @@ def test_a_case_placing_nothing_makes_the_alias_absent() -> None:
     real = chosen(design_space(Optional()), compute="real")
     assert real.seen == 3
     assert real.here
+
+
+def test_an_alias_of_a_guarded_member_is_absent_while_its_guard_is() -> None:
+    class Guarded(Space):
+        flag: bool = Param(default=False)
+        inner = Holder(when=flag)
+        x = inner.leaf
+
+        @derived
+        def seen(self) -> int:
+            answer: int = self.x.answer
+            return answer
+
+    off = design_space(Guarded(flag=False))
+    assert not off.present(Guarded.x)
+    assert isinstance(off.query(Guarded.seen), Inapplicable)
+    assert isinstance(off.query(Guarded.x.answer), Inapplicable)
+    on = chosen(design_space(Guarded(flag=True)))
+    assert on.present(Guarded.x) and on.seen == 3
+
+
+def test_a_binding_down_through_a_plain_alias() -> None:
+    class Fifo(Space):
+        s: int = Param()
+
+    class Bound(Space):
+        inner = Holder()
+        x = inner.leaf
+        f = Fifo(s=x.answer)
+
+    assert chosen(design_space(Bound())).f.s == 3
+
+
+def test_the_read_rules_hold_through_an_alias() -> None:
+    """A view read in, and a domain reading a choice, are refused through an alias as they
+    are by the owner's path."""
+
+    class Cost(Space):
+        @view
+        def amount(self) -> int:
+            return 3
+
+    class Box(Space):
+        leaf = Cost()
+
+    class Viewing(Space):
+        inner = Box()
+        x = inner.leaf
+
+        @constraint
+        def supported(self) -> bool:
+            amount: int = self.x.amount
+            return amount < 4
+
+    with refused("view-read-in", error=DefinitionError):
+        design_space(Viewing())
+
+    class Folding(Space):
+        inner = Holder()
+        x = inner.leaf
+
+        @derived
+        def domain_extent(self) -> int:
+            knob: int = self.x.knob
+            return knob
+
+        fold: int = Decision(domain=divisors_of(domain_extent))
+
+    with refused("domain-reads-choice", error=DefinitionError):
+        design_space(Folding())
 
 
 def test_a_case_lacking_the_node_is_refused() -> None:

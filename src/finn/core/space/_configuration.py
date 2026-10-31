@@ -205,9 +205,9 @@ def _refuse_structure(cls: SpaceMeta, name: str) -> NoReturn:
 
 
 def _structural(value: object) -> bool:
-    from ._nodes import NodeChoice
+    from ._nodes import ChoicePath, NodeChoice
 
-    return isinstance(value, (Declaration, NodeChoice)) or (
+    return isinstance(value, (Declaration, NodeChoice, ChoicePath)) or (
         isinstance(value, _Namespace) and declared_path(value) is not None
     )
 

@@ -518,7 +518,7 @@ def test_a_side_is_given_as_a_side_not_as_a_fact() -> None:
 
 
 def test_a_port_s_endpoint_is_read_off_its_class() -> None:
-    # A served port's is its child's: each case's of a selector, or a placed child's.
+    # An exposed port's is its member's: each case's of a selector, or a placed child's.
     assert port_direction(MatMulKernel, "y") is Direction.OUT
     assert port_direction(MatMulKernel, "x") is Direction.IN
     assert port_direction(Channel, "set") is Direction.IN

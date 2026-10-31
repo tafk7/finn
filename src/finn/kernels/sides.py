@@ -9,7 +9,7 @@ A ``Channel`` (``finn.kernels.channels``) takes two sides, its ``producer`` and 
 - a **kernel**'s port (``Side.kernel``): the stream it presents (``x.stream``), its label
   (``x``, the label its stream pins carry, below its kernel's node in a network:
   ``matmul.x``) and, on an output port, its word width (``x.width``), read from its stream.
-  Each port states it (``x.side``, a module's port's and a wired port's alike:
+  Each port states it (``x.side``, a module's port's and an exposed port's alike:
   ``finn.kernels.port.stream_port`` finds the port by its name);
 - a **frozen neighbour**'s (``Side.neighbour``): the same three, given as a fact read from a
   kernel outside the selection at its accepted point;

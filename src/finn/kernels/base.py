@@ -478,29 +478,45 @@ def _end_declaration(space_type: type[Any], path: str) -> NodeDecl:
 
 def _expose_ports(cls: type[Kernel]) -> None:
     """Record the name each member's port ``cls`` exposes is exposed under, in
-    ``Kernel._exposed_names`` (above); and refuse a port it exposes whose nodes, one each
-    selection, state different directions (``port-direction``): a port is an input or an
-    output in each of its kernel's points. Their transports may differ, each case's
-    carrier its own."""
+    ``Kernel._exposed_names`` (above); and refuse a port it exposes:
+
+    - whose nodes, one each selection, state different directions, or, more than one,
+      state any but a literal one (``port-direction``): a port is an input or an output in
+      each of its kernel's points, which only literals show when its class is made. Their
+      transports may differ, each case's carrier its own;
+    - that another of its aliases exposes already (``port-exposed-twice``): one port, one
+      name, so no two channels connect it under two."""
     from finn.kernels.port_model import StreamPort  # noqa: PLC0415
 
     exposed: dict[tuple[str, str], str] = {}
+    seen: dict[frozenset[object], str] = {}
     for name, entry in alias_table(cls).items():
         written = entry.declaration.written
         exposed.setdefault((written[0], ".".join(written[1:])), name)
         if not entry.ends or not all(issubclass(end.space_type, StreamPort) for end in entry.ends):
             continue
+        where = f"{cls.__qualname__}.{name}"
+        ends = frozenset(end.path for end in entry.ends)
+        if ends in seen:
+            raise DefinitionError.broken(
+                "port-exposed-twice",
+                "Kernel",
+                f"{where} exposes the port {seen[ends]} exposes: a port is exposed under one name",
+                declaration=where,
+            )
+        seen[ends] = name
         stated = {
             end.path: _end_declaration(cls, end.path).bindings.get("direction")
             for end in entry.ends
         }
         literal = {value for value in stated.values() if isinstance(value, Direction)}
-        if len(literal) > 1:
-            where = f"{cls.__qualname__}.{name}"
+        bound = len(stated) > 1 and not all(isinstance(v, Direction) for v in stated.values())
+        if len(literal) > 1 or bound:
             raise DefinitionError.broken(
                 "port-direction",
                 "Kernel",
-                f"{where} exposes nodes of different directions ("
+                f"{where} exposes nodes of different directions, or of directions not stated "
+                "as literals ("
                 + ", ".join(f"{path}: {value}" for path, value in stated.items())
                 + "): an exposed port is an input or an output in every selection",
                 declaration=where,

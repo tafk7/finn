@@ -18,7 +18,7 @@ model Params. Generic primitive inclusion without a module remains usable.
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import cast
 
 import pytest
 from qonnx.core.datatype import DataType
@@ -50,7 +50,8 @@ from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Direction, Signal
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource, GeneratedData
 from finn.kernels.artifacts.module import Fragment, Held
-from finn.kernels.base import Kernel, PortPins
+from finn.kernels.base import Kernel
+from finn.kernels.port import exposed_pins
 from finn.kernels.channels import ChannelFifo
 from finn.kernels.fifo import FifoKernel, fifo_resources
 from finn.kernels.laws import NATIVE, NATIVE_CLOCKING
@@ -403,17 +404,15 @@ def test_a_kernel_stating_a_stream_port_binds_a_module() -> None:
     assert point.input.stream == Stream(TENSOR.element, ARRIVING)
     assert codes(point.query(Unbound.netlist)) == {"kernel-module"}
 
-    # A kernel with children presents its children's ports.
-    class Serving(Kernel):
-        id = "test.kernel_space.serving"
+    # A kernel with children exposes its children's ports (a node alias).
+    class Exposing(Kernel):
+        id = "test.kernel_space.exposing"
         inner = Stage(input_tensor=TENSOR, arriving=ARRIVING)
+        input = inner.input
 
-        @view
-        def input_stream_pins(self) -> PortPins:
-            return self.inner.input.stream_pins.under("inner")
-
-    serving: Any = design_space(Serving())  # its lowered members are untyped
-    assert serving.input_stream_pins.label == "inner.input"
+    exposing = design_space(Exposing())
+    found = exposed_pins(exposing, "input", exposing.input.stream_pins)
+    assert (found.label, found.instance) == ("input", "inner")
 
     # A base of kernels, leaving a required() member unmet, states its ports for the
     # kernels on it, which bind the module.
