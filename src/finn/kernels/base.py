@@ -284,12 +284,13 @@ def _supply_ports(cls: type[Kernel]) -> None:
     (``module-part-nested``), and such a kernel has no interval, so the port keeps L6's.
 
     And a selector of its body (``InPort.governs``, a literal naming another port of its
-    body) with the beats a frame of the port it governs (``InPort.governed_beats``, from
-    which its ``group`` follows), by a private derived member, ``_<selector>_governed``."""
+    kernel, declared in its body or inherited) with the beats a frame of the port it governs
+    (``InPort.governed_beats``, from which its ``group`` follows), by a private derived
+    member of its body, ``_<selector>_governed``."""
     from finn.kernels.port_model import InPort, StreamPort  # noqa: PLC0415
 
     body = dict(vars(cls))
-    ports = {name for name, value in body.items() if isinstance(value, StreamPort)}
+    ports = {name for name, value in _members(cls).items() if isinstance(value, StreamPort)}
     for name, value in body.items():
         record = node_record(value)
         if record is None or not issubclass(record.space_type, StreamPort):
