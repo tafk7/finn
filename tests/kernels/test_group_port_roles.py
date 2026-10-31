@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 from qonnx.core.datatype import DataType
-from support.helpers import FULL_DSP48E2
+from support.helpers import FULL_DSP48E2, TEST_CORE
 from support.refusals import refused
 
 from finn.core.space import Available, DefinitionError, Group, design_space
@@ -14,7 +14,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Direction
 from finn.kernels.base import Kernel
-from finn.kernels.composer import Facts, PartitionDeclaration, Port, channel
+from finn.kernels.composer import DataflowCoreDeclaration, Facts, Port, channel
 from finn.kernels.composer import _checked as checked
 from finn.kernels.laws import AXIS, AXIS_CLOCKING
 from finn.kernels.port import port_direction, stream_port
@@ -113,9 +113,10 @@ def test_composer_refuses_known_wrong_roles_under_group_keys(port: str, role: st
     endpoint = Port("kernel", port)
     outside = Side.boundary("out0" if role == "producer" else "in0")
     producer, consumer = (endpoint, outside) if role == "producer" else (outside, endpoint)
-    declared = PartitionDeclaration(
+    declared = DataflowCoreDeclaration(
         {"kernel": Facts(Host, {})},
         {"link": channel(producer, consumer, tensor=TENSOR, platform=FULL_DSP48E2)},
+        name=TEST_CORE,
     )
     findings = checked(declared)
     assert [finding.code for finding in findings] == ["channel-users"]
@@ -150,9 +151,10 @@ def test_composer_accepts_known_valid_group_producer_and_consumer_roles(
     endpoint = Port("kernel", port)
     outside = Side.boundary("out0" if role == "producer" else "in0")
     producer, consumer = (endpoint, outside) if role == "producer" else (outside, endpoint)
-    declared = PartitionDeclaration(
+    declared = DataflowCoreDeclaration(
         {"kernel": Facts(Host, {})},
         {"link": channel(producer, consumer, tensor=TENSOR, platform=FULL_DSP48E2)},
+        name=TEST_CORE,
     )
     assert checked(declared) == []
 

@@ -152,8 +152,9 @@ def partition(source: ModelWrapper, directory: Path) -> tuple[ModelWrapper, Mode
     partition's body, cut first, then every choice committed at 16 lanes (``LANES``), the
     body verified (``support.packaging.verified``) and saved again in its file."""
     parent, body, body_file = cut(source, directory)
-    explore_kernel_choices(body, [Ranked(LANES)])
-    verified(body, parent.graph.node[1].name)
+    name = parent.graph.node[1].name
+    explore_kernel_choices(body, [Ranked(LANES)], name=name)
+    verified(body, name)
     body.save(body_file)
     return parent, body
 

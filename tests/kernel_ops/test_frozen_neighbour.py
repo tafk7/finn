@@ -16,32 +16,35 @@ from __future__ import annotations
 
 import copy
 import re
+from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any, cast
 
 from qonnx.core.modelwrapper import ModelWrapper
-from support.configure import write_raw
+from support.configure import composition, write_raw
 from support.helpers import beside
 from support.models import TARGET, chain_model, fan_out_source, kernel_model
 from support.refusals import refused
 
 from finn.core.graph.errors import KernelOpError
+from finn.core.graph.partition import CUT_NAME
 from finn.core.space import Available, Rejected, inspection
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.network import declaration, network
+from finn.custom_op.kernels.network import declaration
 from finn.kernels import fifo_sizing
 from finn.kernels.base import Kernel
-from finn.kernels.channels import Channel, OuterHops
-from finn.kernels.composer import ChannelDeclaration, PartitionDeclaration
-from finn.kernels.partition import Partition, partition
+from finn.kernels.channels import Channel, Neighbours, OuterHops
+from finn.kernels.composer import ChannelDeclaration, DataflowCoreDeclaration, compose
+from finn.kernels.dataflow_core import DataflowCoreKernel, bound
+from finn.kernels.explore import CoreComposition
 from finn.kernels.port import stream_port
 from finn.kernels.sides import Side, SideKind
 from finn.transformation.kernels import ToKernelOps
 
 
-def _slice(model: ModelWrapper, *names: str) -> Partition:
+def _slice(model: ModelWrapper, *names: str) -> CoreComposition:
     """The partition of the nodes ``names`` of ``model``, in graph order."""
-    return network(model, [node for node in model.graph.node if node.name in names])
+    return composition(model, [node for node in model.graph.node if node.name in names])
 
 
 def _side(point: Kernel, port: str) -> Side:
@@ -78,12 +81,14 @@ def test_an_upstream_neighbour_gives_its_width_and_a_downstream_one_none() -> No
     assert inspection.validity(hidden).status == inspection.validity(levels).status == "valid"
 
 
-def _flipped(model: ModelWrapper, tensor: str, side: str) -> Partition:
+def _flipped(model: ModelWrapper, tensor: str, side: str) -> CoreComposition:
     """``activate`` alone, declared with ``tensor``'s ``side`` (a neighbour's) given the
     other direction: a width dropped from an output port's, one added to an input's; its
     stored choices bound."""
     stored = _slice(model, "activate").chosen()
-    declared = declaration(model, [node for node in model.graph.node if node.name == "activate"])
+    declared = declaration(
+        model, [node for node in model.graph.node if node.name == "activate"], name=CUT_NAME
+    )
     each = declared.channels[tensor]
     given = getattr(each, side)
     assert isinstance(given, Side) and given.kind is SideKind.NEIGHBOUR
@@ -91,7 +96,27 @@ def _flipped(model: ModelWrapper, tensor: str, side: str) -> Partition:
     sides = {"producer": each.producer, "consumer": each.consumer, side: turned}
     channels = dict(declared.channels)
     channels[tensor] = ChannelDeclaration(sides["producer"], sides["consumer"], each.facts)
-    return partition(PartitionDeclaration(declared.kernels, channels, declared.shell), stored)
+    return _redeclared(declared, channels, declared.frozen, stored)
+
+
+def _redeclared(
+    declared: DataflowCoreDeclaration,
+    channels: dict[str, ChannelDeclaration],
+    frozen: Mapping[str, Neighbours],
+    stored: Mapping[tuple[str, str], object],
+) -> CoreComposition:
+    """``declared`` with ``channels`` and ``frozen`` in place of its own, composed and its
+    ``stored`` choices bound."""
+    changed = DataflowCoreDeclaration(
+        declared.kernels,
+        channels,
+        declared.shell,
+        name=declared.name,
+        order=declared.order,
+        owners=declared.owners,
+        frozen=frozen,
+    )
+    return CoreComposition(bound(compose(changed), stored).point)
 
 
 def test_a_neighbour_s_side_in_the_other_direction_is_refused_each_way() -> None:
@@ -189,15 +214,18 @@ def test_a_tensor_read_inside_and_by_a_kernel_op_outside_is_refused_as_the_whole
             _slice(model, *names)
 
 
-def _open(model: ModelWrapper, names: tuple[str, ...], tensor: str) -> Partition:
+def _open(model: ModelWrapper, names: tuple[str, ...], tensor: str) -> CoreComposition:
     """The slice of ``names``, its edge ``tensor``'s consumer the boundary, unstated (as an
     edge was before a frozen neighbour), its stored choices bound."""
     stored = _slice(model, *names).chosen()
-    declared = declaration(model, [node for node in model.graph.node if node.name in names])
+    declared = declaration(
+        model, [node for node in model.graph.node if node.name in names], name=CUT_NAME
+    )
     each = declared.channels[tensor]
     channels = dict(declared.channels)
     channels[tensor] = ChannelDeclaration(each.producer, Side.boundary("m_axis_0"), each.facts)
-    return partition(PartitionDeclaration(declared.kernels, channels, declared.shell), stored)
+    frozen = {name: each for name, each in declared.frozen.items() if name != tensor}
+    return _redeclared(declared, channels, frozen, stored)
 
 
 def test_a_downstream_neighbour_brings_the_input_chain_it_needs_into_the_slice() -> None:
@@ -206,7 +234,7 @@ def test_a_downstream_neighbour_brings_the_input_chain_it_needs_into_the_slice()
     ``mt1`` sends (no chain). The edge channel's hops reach ``mm2`` from that chain's
     stage; they, its sizing and its resources are the whole partition's."""
     model = chain_model(4)
-    whole = network(model, model.graph.node)
+    whole = composition(model, model.graph.node)
     part = _slice(model, "mm1", "mt1")
     assert part.boundary == ()
     assert _open(model, ("mm1", "mt1"), "a1").member("a1").query(Channel.input_chain) == (
@@ -235,7 +263,7 @@ def test_a_slice_s_netlist_and_module_are_refused_by_their_code() -> None:
     bare error."""
     model = chain_model(4)
     part = _slice(model, "mm1", "mt1")
-    netlist, module = part.netlist(), part.module_of()
+    netlist, module = part.netlist(), part.answer(DataflowCoreKernel.module)
     assert isinstance(netlist, Rejected) and isinstance(module, Rejected)
     for found in (netlist, module):
         assert [(f.code, f.owner, dict(f.details)["tensor"]) for f in found.findings] == [

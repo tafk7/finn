@@ -216,7 +216,7 @@ def links(body: ModelWrapper, point: Configured, tensors: Collection[str]) -> tu
     """The links of ``body`` among ``tensors``, in the body's node order: each tensor a
     node of the body produces and another consumes, tapped at its producer's side of its
     channel in ``point``, the body's configured network (``boundary``): the source of the
-    hop from its producer's port (the partition's, ``Partition.hops``), before any
+    hop from its producer's port (the partition's, ``CoreComposition.hops``), before any
     adapter."""
     consumed = {tensor for inner in body.graph.node for tensor in inner.input}
     found: list[Tapped] = []

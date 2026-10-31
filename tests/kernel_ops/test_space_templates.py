@@ -21,11 +21,13 @@ from core.space._domains_support import domain_differences
 from core.space._templates_support import assert_reads_alike, defined, links, reached
 from core.space._whole_support import differences
 from support.chain import MEMBERS, chain
+from support.configure import core_in_shell
 from support.models import chain_model
 
 import finn.custom_op
 import finn.kernels
 from finn.core.graph.annotations.platform import read_target
+from finn.core.graph.partition import CUT_NAME
 from finn.core.space import Group, Space, inspection
 from finn.core.space._running.evaluate import evaluation
 from finn.core.space._scopes import EAGER, Address, ScopeRecord, Scopes
@@ -34,12 +36,12 @@ from finn.core.space.compiler import compile_model
 from finn.core.space.occurrence import ask, held
 from finn.core.space.results import Available, QueryResult, Unresolved
 from finn.custom_op.kernels.network import declaration
-from finn.custom_op.kernels.shell import in_shell
 from finn.kernels.budgets import _ClockRequirement, _DoubledAny, _MoverSum, _PresentedSum, _Sum
 from finn.kernels.channels import Channel
-from finn.kernels.composer import Composed, clear_classes, compose
+from finn.kernels.composer import clear_classes, compose
 from finn.kernels.configure import commit
 from finn.kernels.control import ControlModel
+from finn.kernels.dataflow_core import DataflowCoreKernel
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import InputGeneratorKernel
@@ -228,26 +230,29 @@ def test_stage_7s_chain_of_eight_kernels_answers_as_the_line() -> None:
     assert _answers_as_the_line([whole]) == 130
 
 
-def fresh_chain() -> tuple[Composed, dict[str, object]]:
+def fresh_chain() -> tuple[DataflowCoreKernel, dict[str, object]]:
     """Stage 7's chain at 8 kernels composed as one Space with a model of its own (the
     graph layer's declaration, in its shell, composed), and its stored values by path:
     the graph layer binds a partition of the same class as it reads the stored values
-    (``in_shell``), so the composer's classes are dropped before it is composed."""
+    (``finn.custom_op.kernels.shell.core_point``), so the composer's classes are dropped
+    before it is composed."""
     model = chain_model(4)
     nodes = list(model.graph.node)
     target = read_target(model)
-    declared = declaration(model, nodes, movers=shell_row(target.shell, target.board).movers)
-    stored = in_shell(model, nodes).chosen()
+    row = shell_row(target.shell, target.board)
+    declared = declaration(model, nodes, name=CUT_NAME, movers=row.movers)
+    stored = core_in_shell(model, nodes).chosen()
     clear_classes()
     composed = compose(declared)
-    return composed, {composed.names.path(key): value for key, value in stored.items()}
+    names = type(composed).names
+    return composed, {names.path(key): value for key, value in stored.items()}
 
 
 def chain_class() -> type[Space]:
     """Stage 7's chain at 8 kernels: its partition's class, as the graph layer binds it in
     its shell."""
     model = chain_model(4)
-    return in_shell(model, model.graph.node).composed.space_type
+    return type(core_in_shell(model, model.graph.node).point)
 
 
 def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
@@ -255,7 +260,7 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
 ) -> None:
     monkeypatch.delenv(EAGER, raising=False)  # the eager test mode makes everything at once
     composed, _ = fresh_chain()
-    point = composed.design_space()
+    point = composed
     scopes = inspection.model(point).scopes
     assert isinstance(point.mm0.query(MatMulKernel.frame_cycles), Unresolved)  # type: ignore[attr-defined]
     read = scopes.counts()
@@ -395,7 +400,7 @@ def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
     streams)."""
     monkeypatch.delenv(EAGER, raising=False)
     composed, stored = fresh_chain()
-    point = composed.design_space()
+    point = composed
     scopes = inspection.model(point).scopes
     committed = commit(point, stored)
     counted = scopes.counts()

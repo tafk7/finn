@@ -32,7 +32,7 @@ from support.chain import (
     Y_TENSOR,
     W,
 )
-from support.helpers import FULL_DSP48E2, set_indices
+from support.helpers import FULL_DSP48E2, TEST_CORE, root_facts, set_indices
 from support.refusals import refused
 
 from finn.core.space import (
@@ -58,12 +58,10 @@ from finn.kernels.base import Kernel, extent_of, hops, neighbours, own_ends
 from finn.kernels.channels import Channel, OuterHops
 from finn.kernels.composer import (
     CLASS_CACHE_BOUND,
-    SEPARATOR,
     ChannelDeclaration,
-    Composed,
+    DataflowCoreDeclaration,
+    DataflowCoreRefused,
     Facts,
-    PartitionDeclaration,
-    PartitionRefused,
     Port,
     Stated,
     cached_classes,
@@ -71,9 +69,9 @@ from finn.kernels.composer import (
     compose,
 )
 from finn.kernels.configure import commit
-from finn.kernels.dataflow_core import PRODUCER, DataflowCoreKernel, core_module
+from finn.kernels.dataflow_core import PRODUCER, SEPARATOR, DataflowCoreKernel, core_module
+from finn.kernels.explore import CoreComposition
 from finn.kernels.matmul import KnownWeights, MatMulKernel
-from finn.kernels.partition import partition
 from finn.kernels.port import exposed_pins, port_direction
 from finn.kernels.sides import BUILD, Outside, Side, SideKind, Steady
 from finn.kernels.thresholding import ThresholdingAxiKernel
@@ -151,8 +149,10 @@ def channels(names: Mapping[str, str] | None = None) -> dict[str, ChannelDeclara
 def declared(
     names: Mapping[str, str] | None = None,
     channels_: Mapping[str, ChannelDeclaration] | None = None,
-) -> PartitionDeclaration:
-    return PartitionDeclaration(kernels(names), channels(names) if channels_ is None else channels_)
+) -> DataflowCoreDeclaration:
+    return DataflowCoreDeclaration(
+        kernels(names), channels(names) if channels_ is None else channels_, name=TEST_CORE
+    )
 
 
 @pytest.fixture
@@ -172,12 +172,12 @@ def test_the_chain_composed_answers_by_key_as_its_partition(cache: None) -> None
     names = composed.names
     assert tuple(names.members) == chain.MEMBERS  # ranked: kernels, then channels
     stored = {names.path(key): value for key, value in network.chosen().items()}
-    point = commit(composed.design_space(), stored)
+    point = commit(composed, stored)
     assert inspection.validity(point).status == "valid"
     states = {names.pair(path): state for path, state in inspection.states(point)}
     assert states == dict(network.states())
     # The partition's decisions are its class's, listed or not (the model's). Nearly a
-    # tautology: ``Partition.decisions`` is built from the same call, so this pins the
+    # tautology: ``CoreComposition.decisions`` is built from the same call, so this pins the
     # keys' mapping (``Names.pair``) and the member set, not the choice of the call. That
     # the model's decisions are more than the design space lists is shown by
     # ``test_channel_source.test_a_channel_without_contents_lists_none_of_its_sources_choices``.
@@ -194,10 +194,10 @@ def test_a_param_per_fact_at_the_root_named_member_and_fact(cache: None) -> None
     assert roots["x-producer"] == ("x", "producer")
     assert roots["w1-producer"] == ("w1", "producer")
     assert "w1-tensor" not in roots  # stated by its MatMul, bound inside
-    params = {name for name in composed.facts}
+    params = {name for name in root_facts(composed)}
     assert params <= set(roots)
-    assert composed.facts["x-producer"] == Side.boundary("s_axis_0")
-    assert composed.facts["first-weights"] == KnownWeights(IntegerTensorValue.of(W1), W)
+    assert root_facts(composed)["x-producer"] == Side.boundary("s_axis_0")
+    assert root_facts(composed)["first-weights"] == KnownWeights(IntegerTensorValue.of(W1), W)
     for name in roots:
         member, separator, fact = name.partition(SEPARATOR)
         assert separator and member in composed.names.owners and fact.isidentifier()
@@ -206,7 +206,7 @@ def test_a_param_per_fact_at_the_root_named_member_and_fact(cache: None) -> None
 
 def test_each_kernel_formal_is_bound_to_a_root_param_only(cache: None) -> None:
     composed = compose(declared())
-    root = line_scopes(composed.space_type).root
+    root = line_scopes(type(composed)).root
     for owner in ("first", "activate", "second"):
         scope = root.named_children[composed.names.members[owner]]
         formals = [
@@ -234,7 +234,7 @@ def test_a_kernel_side_is_labelled_below_its_member_s_node(cache: None) -> None:
     network = chain.chain()
     composed = compose(declared())
     stored = {composed.names.path(key): value for key, value in network.chosen().items()}
-    point = commit(composed.design_space(), stored)
+    point = commit(composed, stored)
     for name, labels in LABELS.items():
         found = tuple(
             getattr(point, name).query(getattr(Channel, role)) for role in ("producer", "consumer")
@@ -248,10 +248,10 @@ def test_a_kernel_side_is_labelled_below_its_member_s_node(cache: None) -> None:
 
 def test_the_same_structure_is_one_class_and_new_facts_a_new_design_space(cache: None) -> None:
     composed = compose(declared())
-    model = compile_model(composed.space_type)
+    model = compile_model(type(composed))
     again = compose(declared())
-    assert again.space_type is composed.space_type and again.names == composed.names
-    assert compile_model(again.space_type) is model  # compiled once
+    assert type(again) is type(composed) and again.names == composed.names
+    assert compile_model(type(again)) is model  # compiled once
     assert cached_classes() == 1
     # Other thresholds: a new design space of the same class.
     other = kernels()
@@ -262,18 +262,20 @@ def test_the_same_structure_is_one_class_and_new_facts_a_new_design_space(cache:
             "thresholds": IntegerTensorValue.of((tuple((-8, 0, 9) for _ in range(4)),)),
         },
     )
-    changed = compose(PartitionDeclaration(other, channels()))
-    assert changed.space_type is composed.space_type and cached_classes() == 1
-    assert changed.facts["activate-thresholds"] != composed.facts["activate-thresholds"]
+    changed = compose(DataflowCoreDeclaration(other, channels(), name=TEST_CORE))
+    assert type(changed) is type(composed) and cached_classes() == 1
+    assert root_facts(changed)["activate-thresholds"] != root_facts(composed)["activate-thresholds"]
     # Another fact given, or another member name, or a side of another kind: another class.
     # A fact given counts, whatever its value: ``form=Form.DENSE`` is MatMul's default, and
     # given explicitly is another class (a cache miss, harmless). Only None is no fact (the
     # next test: given None is left out).
     more = kernels()
     more["first"] = Facts(MatMulKernel, {**more["first"].arguments, "form": Form.DENSE})
-    assert compose(PartitionDeclaration(more, channels())).space_type is not composed.space_type
+    assert type(compose(DataflowCoreDeclaration(more, channels(), name=TEST_CORE))) is not type(
+        composed
+    )
     renamed = compose(declared({"first": "first_"}))
-    assert renamed.space_type is not composed.space_type
+    assert type(renamed) is not type(composed)
     assert cached_classes() == 3
 
 
@@ -287,11 +289,11 @@ def test_a_boundary_stated_or_not_is_one_class_its_side_a_root_fact(cache: None)
     others = channels()
     others["x"] = channel(side, Port("first", "x"), tensor=X_TENSOR, platform=FULL_DSP48E2)
     stated = compose(declared(channels_=others))
-    assert stated.space_type is plain.space_type and stated.names == plain.names
+    assert type(stated) is type(plain) and stated.names == plain.names
     assert cached_classes() == 1
-    assert stated.facts["x-producer"] == side != plain.facts["x-producer"]
-    assert {name: fact for name, fact in stated.facts.items() if name != "x-producer"} == {
-        name: fact for name, fact in plain.facts.items() if name != "x-producer"
+    assert root_facts(stated)["x-producer"] == side != root_facts(plain)["x-producer"]
+    assert {name: fact for name, fact in root_facts(stated).items() if name != "x-producer"} == {
+        name: fact for name, fact in root_facts(plain).items() if name != "x-producer"
     }
 
 
@@ -305,17 +307,17 @@ def test_a_fact_left_out_and_a_fact_given_none_are_one_class(cache: None) -> Non
     given_none = kernels()
     given_none["first"] = Facts(MatMulKernel, {**given_none["first"].arguments, "window": None})
     assert "window" not in kernels()["first"].arguments
-    none = compose(PartitionDeclaration(given_none, channels()))
-    assert none.space_type is left_out.space_type and none.names == left_out.names
-    assert none.facts == left_out.facts and "first-window" not in none.names.roots
+    none = compose(DataflowCoreDeclaration(given_none, channels(), name=TEST_CORE))
+    assert type(none) is type(left_out) and none.names == left_out.names
+    assert root_facts(none) == root_facts(left_out) and "first-window" not in none.names.roots
     assert cached_classes() == 1
     # Given a value, it is another class: only None is the fact left out.
     window = Window(image=(8, 8), size=(3, 3))
     given_value = kernels()
     given_value["first"] = Facts(MatMulKernel, {**given_value["first"].arguments, "window": window})
-    valued = compose(PartitionDeclaration(given_value, channels()))
-    assert valued.space_type is not left_out.space_type
-    assert valued.facts["first-window"] == window and cached_classes() == 2
+    valued = compose(DataflowCoreDeclaration(given_value, channels(), name=TEST_CORE))
+    assert type(valued) is not type(left_out)
+    assert root_facts(valued)["first-window"] == window and cached_classes() == 2
 
 
 @pytest.mark.parametrize("mode", [PERMUTE, EAGER])
@@ -327,16 +329,16 @@ def test_the_same_structure_in_another_test_mode_is_another_class(
     plain = compose(declared())
     monkeypatch.setenv(mode, "1")
     other = compose(declared())
-    assert other.space_type is not plain.space_type and other.names == plain.names
-    assert compose(declared()).space_type is other.space_type
+    assert type(other) is not type(plain) and other.names == plain.names
+    assert type(compose(declared())) is type(other)
     assert cached_classes() == 2
     # Each class's model is made in the mode its class was composed in.
-    assert compile_model(other.space_type).scopes.permuted == (mode == PERMUTE)
+    assert compile_model(type(other)).scopes.permuted == (mode == PERMUTE)
     monkeypatch.delenv(mode)
-    assert compile_model(plain.space_type).scopes.permuted is False
+    assert compile_model(type(plain)).scopes.permuted is False
     monkeypatch.setenv(mode, "1")
     monkeypatch.delenv(mode)
-    assert compose(declared()).space_type is plain.space_type
+    assert type(compose(declared())) is type(plain)
 
 
 def test_one_structure_composed_from_several_threads_is_one_class(cache: None) -> None:
@@ -344,7 +346,7 @@ def test_one_structure_composed_from_several_threads_is_one_class(cache: None) -
 
     def composed(_: int) -> type[object]:
         barrier.wait()
-        return compose(declared()).space_type
+        return type(compose(declared()))
 
     with ThreadPoolExecutor(8) as pool:
         made = set(pool.map(composed, range(8)))
@@ -352,12 +354,12 @@ def test_one_structure_composed_from_several_threads_is_one_class(cache: None) -
 
 
 def test_the_class_cache_holds_at_most_its_bound(cache: None) -> None:
-    first = compose(declared({"first": "m0"})).space_type
+    first = type(compose(declared({"first": "m0"})))
     for index in range(1, CLASS_CACHE_BOUND + 1):
         compose(declared({"first": f"m{index}"}))
     assert cached_classes() == CLASS_CACHE_BOUND
     # The least recently composed was dropped: composed again, it is made again.
-    assert compose(declared({"first": "m0"})).space_type is not first
+    assert type(compose(declared({"first": "m0"}))) is not first
     assert cached_classes() == CLASS_CACHE_BOUND
 
 
@@ -379,18 +381,18 @@ def test_a_structure_whose_class_does_not_compile_is_not_cached_and_is_compiled_
     members = kernels()
     members["first"] = Facts(Misplaced, members["first"].arguments)
     broken = declared(channels_=channels())
-    broken = PartitionDeclaration(members, broken.channels)
+    broken = DataflowCoreDeclaration(members, broken.channels, name=TEST_CORE)
     good = compose(declared())
     assert cached_classes() == 1
     for _ in range(2):
         with refused("reference-not-in-scope", error=DefinitionError):
             compose(broken)
         assert cached_classes() == 1
-    assert compose(declared()).space_type is good.space_type and cached_classes() == 1
+    assert type(compose(declared())) is type(good) and cached_classes() == 1
 
 
-def _refused(declaration: PartitionDeclaration) -> list[tuple[str, str, str]]:
-    with pytest.raises(PartitionRefused) as raised:
+def _refused(declaration: DataflowCoreDeclaration) -> list[tuple[str, str, str]]:
+    with pytest.raises(DataflowCoreRefused) as raised:
         compose(declaration)
     return [(each.code, each.owner, each.message) for each in raised.value.findings]
 
@@ -456,7 +458,7 @@ def test_a_channel_named_as_the_shell_member_is_refused_in_a_shell_or_not(cache:
     named = {("shell" if name == "hidden" else name): each for name, each in channels().items()}
     row = {"shell": "ip", "control_budget": None, "memory_ports": None, "clk2x": True}
     for shell in (None, row):
-        found = _refused(PartitionDeclaration(kernels(), named, shell))
+        found = _refused(DataflowCoreDeclaration(kernels(), named, shell, name=TEST_CORE))
         assert found == [
             ("name-reserved", "shell", "shell: shell is the name of a partition's shell member")
         ]
@@ -470,20 +472,20 @@ def test_a_graph_name_s_member_name_is_its_node_and_its_keys_map_both_ways(cache
     assert names.pair("Mat_Mul_0.compute.packed.pe") == ("Mat.Mul:0", "compute.packed.pe")
     assert names.path(("hidden", "")) == "hidden"
     assert names.roots["Mat_Mul_0-x_tensor"] == ("Mat.Mul:0", "x_tensor")
-    point = composed.design_space()
+    point = composed
     pairs = [names.pair(item.key) for item in inspection.decisions(point)]
     assert ("Mat.Mul:0", "pe") in pairs
     assert all(names.pair(names.path(pair)) == pair for pair in pairs)
 
 
-def _as_chain(composed: Composed, graph: Mapping[str, str]) -> Kernel:
+def _as_chain(composed: DataflowCoreKernel, graph: Mapping[str, str]) -> Kernel:
     """``composed``, the Chain with members renamed (``graph``: each renamed graph name by
     its Chain name), configured with the Chain's stored choices."""
     stored = {
         composed.names.path((graph.get(owner, owner), path)): value
         for (owner, path), value in chain.chain().chosen().items()
     }
-    point = commit(composed.design_space(), stored)
+    point = commit(composed, stored)
     assert isinstance(point, Kernel)
     return point
 
@@ -526,7 +528,7 @@ def test_a_member_named_as_a_helper_of_the_base_is_its_member(cache: None, name:
     channel x's own ends and hops are answered."""
     composed = compose(declared({"first": name}))
     member = composed.names.members[name]
-    space_type = composed.space_type
+    space_type = type(composed)
     assert issubclass(space_type, Kernel)
     assert member.startswith("_") and member not in vars(Kernel)
     assert isinstance(getattr(space_type, member), MatMulKernel)
@@ -580,12 +582,12 @@ def test_a_read_no_member_states_is_refused(cache: None) -> None:
     assert _refused(declared(channels_=_wired(y=no_port))) == [
         ("channel-read", "y", "reads second, which states no port z")
     ]
-    with pytest.raises(PartitionRefused, match="ThresholdingAxiKernel takes no fact depth"):
+    with pytest.raises(DataflowCoreRefused, match="ThresholdingAxiKernel takes no fact depth"):
         given = kernels()
         given["activate"] = Facts(
             ThresholdingAxiKernel, {**given["activate"].arguments, "depth": 2}
         )
-        compose(PartitionDeclaration(given, channels()))
+        compose(DataflowCoreDeclaration(given, channels(), name=TEST_CORE))
 
 
 def test_a_channel_reading_a_channel_is_ranked_after_it_and_a_loop_is_refused(
@@ -635,8 +637,8 @@ def test_a_port_s_endpoint_is_read_off_its_class() -> None:
 # -- its member channels' connections ------------------------------------------------------
 
 
-def _connection_refused(declaration: PartitionDeclaration) -> list[tuple[object, ...]]:
-    with pytest.raises(PartitionRefused) as raised:
+def _connection_refused(declaration: DataflowCoreDeclaration) -> list[tuple[object, ...]]:
+    with pytest.raises(DataflowCoreRefused) as raised:
         compose(declaration)
     return [
         (each.code, each.owner, each.message, dict(each.details)) for each in raised.value.findings
@@ -684,7 +686,7 @@ def test_a_one_set_thresholding_needs_no_channel_on_its_set_port(cache: None) ->
     and needs no channel: the Chain's Thresholding holds one set of thresholds, so its set
     index port (``set``) is on none, and the class is made. Every other port is on its one
     channel. (Which ports the rule reaches is pending a decision.)"""
-    space_type = compose(declared()).space_type
+    space_type = type(compose(declared()))
     assert issubclass(space_type, Kernel)
     connections = space_type.connections
     named = {str(port) for sides in connections.values() for port in sides if port is not None}
@@ -720,7 +722,7 @@ def test_a_thresholding_given_its_set_tensor_needs_a_channel_on_its_set_port(
     given["activate"] = Facts(
         activate.space_type, {**activate.arguments, "set_tensor": set_indices(2, 1)}
     )
-    assert _connection_refused(PartitionDeclaration(given, channels())) == [
+    assert _connection_refused(DataflowCoreDeclaration(given, channels(), name=TEST_CORE)) == [
         (
             "port-unconnected",
             "activate",
@@ -836,7 +838,7 @@ def test_a_two_set_weight_channel_s_set_port_on_no_channel_is_refused(cache: Non
             {"port": "w1.set"},
         )
     ]
-    space_type = compose(declared()).space_type
+    space_type = type(compose(declared()))
     assert issubclass(space_type, Kernel)
     named = space_type.connections
     assert not any(str(port) == "w1.set" for sides in named.values() for port in sides)
@@ -901,10 +903,10 @@ def test_the_class_answers_each_channel_s_neighbours_and_hops(cache: None) -> No
 def test_a_channel_s_neighbours_its_class_does_not_answer_are_what_they_wait_on(
     cache: None,
 ) -> None:
-    """Where its class does not answer a channel's neighbours, the partition reads what they
+    """Where its class does not answer a channel's neighbours, its composition reads what they
     wait on, each finding naming its member, never neighbours without the ports it could not
     read: the Chain with no choice stored waits on its first MatMul's core."""
-    network = partition(declared(), {})
+    network = CoreComposition(compose(declared()))
     assert network.refused() is None
     found = network.neighbours("hidden")
     assert isinstance(found, Unresolved)
@@ -944,22 +946,22 @@ def test_the_declaration_s_name_and_order_are_facts_of_the_class(cache: None) ->
     order a class fact (``Kernel.instance_order``, by member name: another order is another
     class); the kernels, then the channels, as declared, by default. An order that does not
     name each member once is refused."""
-    composed = compose(PartitionDeclaration(kernels(), channels(), name="DataflowCore_0"))
-    point = composed.design_space()
+    composed = compose(DataflowCoreDeclaration(kernels(), channels(), name="DataflowCore_0"))
+    point = composed
     assert isinstance(point, DataflowCoreKernel) and point.name == "DataflowCore_0"
     space_type = type(point)
     assert space_type.instance_order == (*kernels(), *channels())
-    renamed = compose(PartitionDeclaration(kernels(), channels(), name="other"))
-    assert renamed.space_type is space_type
-    assert getattr(renamed.design_space(), "name") == "other"
+    renamed = compose(DataflowCoreDeclaration(kernels(), channels(), name="other"))
+    assert type(renamed) is space_type
+    assert getattr(renamed, "name") == "other"
     order = ("x", *kernels(), "w1", "hidden", "levels", "w2", "y")
-    reordered = compose(PartitionDeclaration(kernels(), channels(), order=order))
-    assert reordered.space_type is not space_type
-    assert getattr(reordered.space_type, "instance_order") == order
+    reordered = compose(DataflowCoreDeclaration(kernels(), channels(), order=order, name=TEST_CORE))
+    assert type(reordered) is not space_type
+    assert getattr(type(reordered), "instance_order") == order
     with pytest.raises(ValueError, match="names each of its members once"):
-        PartitionDeclaration(kernels(), channels(), order=order[1:])
+        DataflowCoreDeclaration(kernels(), channels(), order=order[1:], name=TEST_CORE)
     with pytest.raises(ValueError, match="names each of its members once"):
-        PartitionDeclaration(kernels(), channels(), order=(*order, "x"))
+        DataflowCoreDeclaration(kernels(), channels(), order=(*order, "x"), name=TEST_CORE)
 
 
 def test_the_class_answers_its_netlist_edge_cycles_and_resources(cache: None) -> None:
@@ -967,7 +969,7 @@ def test_the_class_answers_its_netlist_edge_cycles_and_resources(cache: None) ->
     members in its instance order, and its module's edge (``DataflowCoreKernel.edge_buses``:
     each edge port's bus, in its instance order); its module, its IP, of them, named after
     its name and derived by its class (``DataflowCoreKernel.module``); its cycles (the most
-    any member takes) and its resources (its members' sum). The partition reads each of
+    any member takes) and its resources (its members' sum). Its composition reads each of
     them."""
     network = chain.chain()
     point = network.point
@@ -981,13 +983,13 @@ def test_the_class_answers_its_netlist_edge_cycles_and_resources(cache: None) ->
     assert placed == [name for name in order if name in placed]
     assert network.netlist() == Available((wired.value, edge.value))
     module = point.query(DataflowCoreKernel.module)
-    assert isinstance(module, Available) and network.module_of() == module
+    assert isinstance(module, Available) and network.answer(DataflowCoreKernel.module) == module
     made = module.value
     assert (made.implementation_id, made.implementation_version) == ("finn.dataflow_core", "1")
     assert made.stem == "finn_partition" and made.fragment == wired.value
     assert made == core_module(PRODUCER, "finn_partition", wired.value, edge.value)
     cycles = point.query(Kernel.frame_cycles)
-    assert isinstance(cycles, Available) and network.cycles() == cycles
+    assert isinstance(cycles, Available) and network.answer(Kernel.frame_cycles) == cycles
     assert cycles.value == max(
         each.value
         for name in network.members

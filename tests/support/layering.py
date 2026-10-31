@@ -579,7 +579,7 @@ LAYERS: tuple[Layer, ...] = (
         ("space", "kernels", "tests.core.space"),
         ("support.models",),
         "tests/kernel_ops",
-        ("finn.custom_op.kernels.shell.in_shell",),
+        ("finn.custom_op.kernels.shell.core_point", "finn.core.graph.partition.CUT_NAME"),
     ),
 )
 

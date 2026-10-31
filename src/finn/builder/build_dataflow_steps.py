@@ -60,10 +60,10 @@ from finn.builder.build_dataflow_resources import (
 from finn.builder.build_dataflow_strategies import Named, StrategyEntry
 from finn.builder.build_dataflow_testbench import TESTBENCH_DIR, generated_frame, write_testbench
 from finn.core.graph.annotations.platform import read_target
-from finn.core.graph.partition import partition_body, search_record
+from finn.core.graph.partition import CUT_NAME, partition_body, search_record
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.reporting.manifest import note, reported, write_report
-from finn.custom_op.kernels.network import PARTITION, partition_ports, stale_text
+from finn.custom_op.kernels.network import partition_ports, stale_text
 from finn.custom_op.kernels.shell import verify_partition
 from finn.kernels.explore import FIFOS_BY_MODEL
 from finn.kernels.sides import BeatTimes, Outside
@@ -278,8 +278,8 @@ def step_explore(
     one entry for each strategy, then what the whole point has, and the search's record in the
     body."""
     made = [entry.strategy() for entry in strategies]
-    _, body, body_file = partition_body(model)
-    explored = explore_kernel_choices(body, made)
+    node, body, body_file = partition_body(model)
+    explored = explore_kernel_choices(body, made, name=node.name)
     body.save(body_file)
     write_report(Path(cfg.output_dir) / "report" / "step_explore.json", explored.report)
     for line in exploration_summary(explored):
@@ -377,7 +377,7 @@ def step_create_dataflow_partition(model: ModelWrapper, cfg: DataflowBuildConfig
     do not divide the port's tensor (``boundary-lanes``) and beat times that do not time
     the beats the statement's lanes and passes make of it (``boundary-pace-beats``), each
     at its port."""
-    cut = CutKernelPartition(Path(cfg.output_dir) / PARTITION, _boundary(model, cfg))
+    cut = CutKernelPartition(Path(cfg.output_dir) / CUT_NAME, _boundary(model, cfg))
     model = model.transform(cut)
     for key, found in cut.dropped.items():
         message = (
@@ -480,7 +480,7 @@ def step_package_partition(
     if ooc_synth:
         reported(partition_utilization_report(directory))
     testbench = directory / TESTBENCH_DIR
-    write_testbench(body, testbench, generated_frame(body), toolchain=toolchain, label=node.name)
+    write_testbench(body, testbench, generated_frame(body), toolchain=toolchain, name=node.name)
     _LOG.info(f"XSim testbench on a generated frame written into {testbench} (run.sh runs it)")
     return model
 

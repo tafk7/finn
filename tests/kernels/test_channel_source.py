@@ -51,9 +51,9 @@ from finn.kernels.artifacts.module import Composed
 from finn.kernels.channels import Channel
 from finn.kernels.composer import Facts, Port, Stated, channel
 from finn.kernels.dotp import DotpAxiKernel
+from finn.kernels.explore import CoreComposition
 from finn.kernels.matmul import KnownWeights, MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.partition import Partition
 from finn.kernels.sides import Side
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import Platform
@@ -116,7 +116,7 @@ def configured(point, *, style=None, pe=2, simd=2):
     return with_channel_defaults(choose(folded(point, pe=pe, simd=simd), choices))
 
 
-def stored(platform: Platform) -> Partition:
+def stored(platform: Platform) -> CoreComposition:
     """MatMul with known weights, its channels on ``platform``: the weight channel
     carries what MatMul states for it."""
     return by_hand(

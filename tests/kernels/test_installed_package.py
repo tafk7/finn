@@ -52,8 +52,9 @@ from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import DspBlock, Fabric, Platform
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels.composer import Facts, PartitionDeclaration, Port, Stated, channel
-from finn.kernels.partition import partition
+from finn.kernels.composer import Facts, DataflowCoreDeclaration, Port, Stated, channel, compose
+from finn.kernels.dataflow_core import core_module
+from finn.kernels.explore import CoreComposition
 from finn.kernels.sides import Side
 from finn.kernels.artifacts.module import ProducerIdentity
 from finn.core.space import (
@@ -188,8 +189,8 @@ for memory in ("none", "memstream"):
     stored = memory == "memstream"
     if stored:
         weight["contents"] = Stated("matmul", "stored_weights")
-    root = partition(
-        PartitionDeclaration(
+    root = CoreComposition(compose(
+        DataflowCoreDeclaration(
             {"matmul": Facts(MatMulKernel, {**facts, "x_tensor": x_tensor, **weights})},
             {
                 "x": channel(
@@ -204,9 +205,8 @@ for memory in ("none", "memstream"):
                     Port("matmul", "y"), Side.boundary("out0_V"), tensor=y_tensor, platform=PLATFORM
                 ),
             },
-            order=("x", "w", "y", "matmul"),
-        ),
-    )
+            order=("x", "w", "y", "matmul"), name="partition"),
+    ))
     root = root.with_choices({
         ("matmul", "compute"): "packed",
         ("matmul", "pe"): 2,
@@ -222,7 +222,7 @@ for memory in ("none", "memstream"):
         matmul.compute.y.stream.sequence.form.beats,
     )
     assert beats == (6, 12, 6), beats
-    composed = root.module(TEST, "finn_placed").value
+    composed = core_module(TEST, "finn_placed", *root.netlist().value)
     # A memory image ships as generated data, named by its contents.
     expected |= {item.path for _, leaf in composed.fragment.instances for item in leaf.data}
     wrapper = materialize(composed, expected).read_text()

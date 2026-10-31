@@ -7,8 +7,8 @@ stations: a design space, opened by the public API, and the change made on it.
   stages, the boundary of a formal read from outside its scope, and the three shapes of
   an optional fact left out), each opened and changed once;
 - ``chain-4``, ``chain-8``, ``chain-64``: stage 7's chain of 4, 8 or 64 kernels
-  (``support.models.chain_model``), its partition bound in its shell by the graph layer
-  (``in_shell``: the class the composer makes of the graph's declaration, with its facts),
+  (``support.models.chain_model``), its core bound in its shell by the graph layer
+  (``core_point``: the class the composer makes of the graph's declaration, with its facts),
   configured with what conversion and the cut stored (``commit``), then the middle
   MatMul's ``pe`` set to 2;
 - ``tfc``: TFC's partition after the cut and after each of seven strategy sequences, in
@@ -25,11 +25,13 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import Any, cast
 
-from finn.core.space import Space, inspection
-from finn.custom_op.kernels.shell import in_shell
+from finn.core.graph.partition import CUT_NAME
+from finn.core.space import Space, design_space, inspection, space_formals
+from finn.custom_op.kernels.shell import core_point
 from finn.kernels.configure import commit
-from finn.kernels.partition import Partition
+from finn.kernels.explore import CoreComposition
 from support.models import chain_model
 from support.space_oracle import Implementation, forms
 from support.space_oracle.toys import TOYS
@@ -73,21 +75,24 @@ def chain(kernels: int) -> list[Station]:
     structure and by the test modes a model is made in (``FINN_SPACE_PERMUTE``,
     ``FINN_SPACE_EAGER``), so each mode reads a model made in it."""
     model = chain_model(kernels // 2)
-    bound = in_shell(model, model.graph.node)
+    bound = CoreComposition(core_point(model, CUT_NAME).point)
     middle = _middle([f"mm{layer}" for layer in range(kernels // 2)])
     return [_partition(f"chain-{kernels}", bound, kernels, middle, change=True)]
 
 
 def _partition(
-    label: str, bound: Partition, kernels: int, middle: str, *, change: bool = False
+    label: str, bound: CoreComposition, kernels: int, middle: str, *, change: bool = False
 ) -> Station:
-    """A partition the graph layer bound (``bound``): its class's design space configured
-    with its stored choices, by path (``commit``)."""
-    composed = bound.composed
+    """A core the graph layer bound (``bound``): its class's design space configured with
+    its stored choices, by path (``commit``)."""
+    point, made = bound.point, cast(Any, type(bound.point))
+    formals = space_formals(made)
+    facts = {root: getattr(point, root) for root in made.names.roots if root in formals}
     stored = {bound.path(key): value for key, value in bound.chosen().items()}
 
     def make() -> Space:
-        return commit(composed.design_space(), stored)
+        opened: Space = design_space(made(**facts, name=point.name))
+        return commit(opened, stored)
 
     viable: Sequence[str] | None = forms.ALL
     if kernels > WIDEST:

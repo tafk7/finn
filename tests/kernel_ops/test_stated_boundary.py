@@ -24,6 +24,7 @@ from typing import Any, cast
 
 import pytest
 from qonnx.core.modelwrapper import ModelWrapper
+from support.configure import composition, core_in_shell
 from support.helpers import beside
 from support.models import kernel_model
 from support.packaging import PackagedByStub
@@ -46,8 +47,8 @@ from finn.core.graph.annotations.boundary import (
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import partition_body
-from finn.custom_op.kernels.network import network, partition_ports
-from finn.custom_op.kernels.shell import InShell, in_shell
+from finn.custom_op.kernels.network import partition_ports
+from finn.kernels.explore import CoreComposition
 from finn.kernels.fifo_sizing import Pattern, sides
 from finn.kernels.movers import iodma_hls
 from finn.kernels.sides import BUILD, ROW_MAJOR, ROW_MAJOR_HOST, BeatTimes, Outside, Steady
@@ -77,10 +78,10 @@ def cut(tmp_path: Path, boundary: dict[str, Any], **options: Any) -> ModelWrappe
     return step_explore(parent, cfg)
 
 
-def body_of(parent: ModelWrapper) -> InShell:
+def body_of(parent: ModelWrapper) -> CoreComposition:
     """The partition of the parent's body, in its shell."""
     _, body, _ = partition_body(parent)
-    return in_shell(body, body.graph.node)
+    return core_in_shell(body, body.graph.node)
 
 
 def sized(tmp_path: Path) -> dict[str, tuple[int, int | None, str]]:
@@ -143,7 +144,7 @@ def test_the_cut_writes_the_statements_on_the_body_and_refuses_a_tensor_no_port_
     parent = model.transform(CutKernelPartition(tmp_path, stated))
     _, body, _ = partition_body(parent)
     assert read_boundary(body) == stated and read_boundary(parent) == {}
-    assert partition_ports(body) == dict(in_shell(body, body.graph.node).boundary)
+    assert partition_ports(body) == dict(core_in_shell(body, body.graph.node).boundary)
     with refused(
         "boundary-port-unknown",
         error=KernelOpError,
@@ -243,7 +244,7 @@ def test_a_slice_reads_the_statement_of_an_edge_that_is_a_partition_port(
     _, body, _ = partition_body(parent)
     assert partition_ports(body) == {"x": "s_axis_0", "w2": "s_axis_1", "y": "m_axis_0"}
     (second,) = [node for node in body.graph.node if node.name == "second"]
-    sliced = network(body, [second], name="second")
+    sliced = composition(body, [second], name="second")
     assert dict(sliced.boundary) == {"w2": "s_axis_0", "y": "m_axis_0"}
     w2 = sliced.member("w2")
     assert w2.producer.label == "s_axis_0"
@@ -267,7 +268,7 @@ def test_a_build_statement_on_a_boundary_offered_a_mover_is_refused_where_the_gr
         r"boundary is offered an iodma_hls mover, which states each side it is offered on: "
         r"a build statement would be a second source$",
     ):
-        in_shell(model, model.graph.node, name="chain")
+        core_in_shell(model, model.graph.node, name="chain")
 
 
 @pytest.mark.parametrize(
@@ -338,7 +339,7 @@ def test_untimed_cut_keeps_tensor_association_and_logical_presentation(tmp_path:
     assert read_boundary(parent) == {}
     stated = Outside(BUILD, ROW_MAJOR, 1, 4)
     assert read_boundary(body) == {"y": stated}
-    y = in_shell(body, body.graph.node).member("y")
+    y = core_in_shell(body, body.graph.node).member("y")
     assert y.consumer.outside == stated and y.consumer.label == "m_axis_0"
     assert (outer(y).form.lanes, outer(y).form.beats) == (4, 3)
     # The boundary port carries no pace: what the outside states of it owns one, here none.

@@ -44,8 +44,8 @@ from finn.kernels.channels import Channel
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.configure import commit
 from finn.kernels.dotp import PackedDotpKernel
+from finn.kernels.explore import CoreComposition
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.partition import Partition
 from finn.kernels.sides import Side
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.toolchain.launcher import host_toolchain
@@ -88,7 +88,7 @@ def _period(layer: Facts) -> Traversal:
     return one_pass(folded.w.stream.sequence.form)
 
 
-def layered(*, adaptable: bool = True) -> Partition:
+def layered(*, adaptable: bool = True) -> CoreComposition:
     x_tensor = Tensor((ROWS, INPUTS), ScalarEncoding(A))
     w1_tensor = Tensor((INPUTS, HIDDEN), ScalarEncoding(W))
     h_tensor = Tensor((ROWS, HIDDEN), ScalarEncoding(H))

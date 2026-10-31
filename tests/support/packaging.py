@@ -45,12 +45,13 @@ from finn.transformation.kernels import PackagePartition
 NO_VIVADO = {"XILINX_VIVADO": str(Path(__file__).parent)}
 
 
-def verified(model: ModelWrapper, label: str = "the partition") -> ModelWrapper:
-    """``model``, a partition's body, verified as the build verifies it before emission
+def verified(model: ModelWrapper, name: str) -> ModelWrapper:
+    """``model``, a partition's body, its module named ``name`` (its node's), verified as
+    the build verifies it before emission
     (``verify_partition``, not the build's step: its FIFOs checked, the design it verified
     recorded on it), so that packaging, the shell's integration and the testbench take it;
     the model itself. A test that changes the body after it verifies it again."""
-    verify_partition(model, label)
+    verify_partition(model, name)
     return model
 
 

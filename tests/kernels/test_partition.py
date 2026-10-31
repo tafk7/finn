@@ -16,7 +16,6 @@ change that keeps a partition's class.
 from __future__ import annotations
 
 from dataclasses import replace
-from functools import partial
 from typing import Any
 
 import pytest
@@ -24,6 +23,7 @@ from qonnx.core.datatype import DataType
 from support import chain
 from support.helpers import (
     FULL_DSP48E2,
+    bound_by_hand,
     built,
     by_hand,
     choose,
@@ -39,15 +39,14 @@ from finn.kernels.artifacts.module import Fragment, Link, LinkEnd
 from finn.kernels.base import Kernel
 from finn.kernels.composer import (
     ChannelDeclaration,
+    DataflowCoreRefused,
     Facts,
-    PartitionDeclaration,
-    PartitionRefused,
     Port,
     Stated,
     channel,
 )
 from finn.kernels.dataflow_core import top_markers
-from finn.kernels.partition import Partition, partition
+from finn.kernels.explore import CoreComposition
 from finn.kernels.sides import Side
 from finn.platform.capabilities import Platform
 
@@ -97,7 +96,7 @@ def test_a_channel_s_sides_wait_on_its_kernels_folding() -> None:
     assert folded.member("x").consumer.label == "first.x"
 
 
-def with_transports(network: Partition) -> Partition:
+def with_transports(network: CoreComposition) -> CoreComposition:
     return choose(network, {f"{name}.transport": "direct" for name in network.channels})
 
 
@@ -161,18 +160,19 @@ def test_stored_choices_are_bound_as_assignment() -> None:
     owns, is dropped, with why, and left open; a channel's whose sides wait on an open
     kernel choice is held, stored; nothing is filled in."""
     stored = chain.chain().chosen()
-    replayed = by_hand(chain.members(), stored)
-    assert replayed.chosen() == stored and not replayed.dropped
-    stale = by_hand(chain.members(), {**stored, ("first", "pe"): 3})
+    replayed = bound_by_hand(chain.members(), stored)
+    assert CoreComposition(replayed.point).chosen() == stored and not replayed.dropped
+    stale = bound_by_hand(chain.members(), {**stored, ("first", "pe"): 3})
     assert list(stale.dropped) == [("first", "pe")]
     # Its own domain refuses 3: no other piece stands beside it.
     assert {(f.code, f.owner) for f in stale.dropped[("first", "pe")]} == {
         ("domain-membership", "pe"),
     }
-    assert ("first", "pe") in stale.undecided()
-    waiting = by_hand(chain.members(), {("x", "transport"): "direct"})
-    assert waiting.chosen()[("x", "transport")] == "direct" and not waiting.dropped
-    nobody = by_hand(chain.members(), {("nobody", "pe"): 1})
+    assert ("first", "pe") in CoreComposition(stale.point).undecided()
+    waiting = bound_by_hand(chain.members(), {("x", "transport"): "direct"})
+    assert CoreComposition(waiting.point).chosen()[("x", "transport")] == "direct"
+    assert not waiting.dropped
+    nobody = bound_by_hand(chain.members(), {("nobody", "pe"): 1})
     assert [(f.code, f.owner) for f in nobody.dropped[("nobody", "pe")]] == [
         ("not-a-decision", "nobody.pe")
     ]
@@ -183,8 +183,8 @@ def test_a_stored_key_no_member_declares_binds_and_is_named_stale_as_not_a_decis
     partition. It is dropped as stale, named by its dotted key with ``not-a-decision``,
     owned by the key; every other stored choice binds as it was."""
     stored = chain.chain().chosen()
-    bound = by_hand(chain.members(), {**stored, ("nobody", "pe"): 1})
-    assert bound.chosen() == stored
+    bound = bound_by_hand(chain.members(), {**stored, ("nobody", "pe"): 1})
+    assert CoreComposition(bound.point).chosen() == stored
     assert list(bound.dropped) == [("nobody", "pe")]
     assert list(bound.stale) == ["nobody.pe"]
     ((found,),) = bound.stale.values()
@@ -193,7 +193,7 @@ def test_a_stored_key_no_member_declares_binds_and_is_named_stale_as_not_a_decis
         "nobody.pe",
         "no choice of the partition",
     )
-    assert not by_hand(chain.members(), stored).stale
+    assert not bound_by_hand(chain.members(), stored).stale
 
 
 class Board(Space):
@@ -236,9 +236,9 @@ def test_a_stored_set_that_breaks_a_rule_binds_and_reads_refused_by_name() -> No
     refused, its validity naming the rule (a FIFO in UltraRAM on a platform without it);
     nothing is dropped."""
     stored = keyed({**ULTRA_FIFO, "board.uram": False})
-    bound = by_hand(boarded(), {**chain.chain().chosen(), **stored})
+    bound = bound_by_hand(boarded(), {**chain.chain().chosen(), **stored})
     assert not bound.dropped
-    validity = bound.validity("hidden")
+    validity = CoreComposition(bound.point).validity("hidden")
     assert validity.status == "refused" and isinstance(validity.result, Rejected)
     rule = "transport.fifo.buffer.uram_present"
     assert [(f.code, f.owner) for f in validity.result.findings] == [("uram-absent", rule)]
@@ -313,7 +313,7 @@ def test_two_boundary_channels_at_one_port_are_refused_when_composed() -> None:
         tensor=chain.Y_TENSOR,
         platform=FULL_DSP48E2,
     )
-    with pytest.raises(PartitionRefused) as raised:
+    with pytest.raises(DataflowCoreRefused) as raised:
         by_hand(members, chain.chain().chosen())
     assert [(f.code, f.owner) for f in raised.value.findings] == [("name-shared", "y")]
     assert "s_axis_0 is x's edge port too" in str(raised.value)
@@ -340,9 +340,9 @@ def test_marker_pins_the_boundary_leaves_unruled_refuse_the_module(
     none), so a hand-built partition's is given them: an input's marker no link consumes
     and an output's no link rules are the module's own refusals, ``channel-top-marker``,
     each naming its pins. The netlist is answered as it was (the check is the module's)."""
-    read = Partition.netlist
+    read = CoreComposition.netlist
 
-    def netlist(network: Partition) -> object:
+    def netlist(network: CoreComposition) -> object:
         answer = read(network)
         assert isinstance(answer, Available)
         fragment, buses = answer.value
@@ -350,7 +350,7 @@ def test_marker_pins_the_boundary_leaves_unruled_refuse_the_module(
 
     network = by_hand(chain.members(), chain.chain().chosen())
     assert isinstance(network.netlist(), Available)
-    monkeypatch.setattr(Partition, "netlist", netlist)
+    monkeypatch.setattr(CoreComposition, "netlist", netlist)
     found = module_of(network, chain.STEM)
     assert isinstance(found, Rejected)
     assert [(f.code, f.message) for f in found.findings] == [
@@ -404,23 +404,10 @@ def test_a_marker_pin_a_link_takes_or_drives_is_not_left_unruled() -> None:
     ]
 
 
-class Labelled(Partition):
-    """A partition that keeps a label beside its design space."""
-
-    __slots__ = ("label",)
-
-    def __init__(self, *args: Any, label: str, **given: Any) -> None:
-        super().__init__(*args, **given)
-        self.label = label
-
-
-def test_a_change_keeps_the_partitions_class_and_what_it_holds() -> None:
-    members = chain.members()
-    declared = PartitionDeclaration(
-        {name: each for name, each in members.items() if isinstance(each, Facts)},
-        {name: each for name, each in members.items() if isinstance(each, ChannelDeclaration)},
-    )
-    labelled = partition(declared, kind=partial(Labelled, label="the chain"))
-    changed = labelled.trial(keyed(FOLDING)).network
-    assert isinstance(changed, Labelled) and changed is not labelled
-    assert changed.label == "the chain"
+def test_a_change_keeps_the_core_s_class() -> None:
+    """A change is made on the core's design space: its composition reads another design
+    space of the same class, the one it was made from unchanged."""
+    network = by_hand(chain.members())
+    changed = network.trial(keyed(FOLDING)).network
+    assert changed is not network and type(changed.point) is type(network.point)
+    assert network.chosen() == {}

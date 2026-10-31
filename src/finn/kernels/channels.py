@@ -4,8 +4,8 @@
 """Channels: one tensor from one producer to one consumer, a kernel with children between
 two ports.
 
-A ``Channel`` is one producer-to-consumer edge, a member of a partition
-(``finn.kernels.partition``) or of a kernel with children, carrying one ``tensor`` given
+A ``Channel`` is one producer-to-consumer edge, a member of a core
+(``finn.kernels.dataflow_core``) or of a kernel with children, carrying one ``tensor`` given
 as a fact. Its two sides are facts too, ``producer`` and ``consumer``, each one value
 (``finn.kernels.sides.Side``) of its kind: a kernel's port (the ``Stream`` it presents,
 its label, ``matmul.x``, and on an output port its word width: a kernel's port's

@@ -6,15 +6,17 @@
 Facts are the root node's typed formals; a missing required one is refused at
 the node call. Choices use the stable decision keys ``inspection`` reports.
 
-A kernel reads tensors and presents its ports on channels, so a test places it in a
-partition declared by hand (``by_hand``: ``finn.kernels.partition``, one design space of
-the composer's class): its kernels by name, each its class and facts
+A kernel reads tensors and presents its ports on channels, so a test places it in a core
+declared by hand (``by_hand``: ``finn.kernels.composer.DataflowCoreDeclaration``, the
+composer's class's design space, its stored choices bound,
+``finn.kernels.dataflow_core.bound``, read by key,
+``finn.kernels.explore.CoreComposition``): its kernels by name, each its class and facts
 (``finn.kernels.composer.Facts``), and its channels by the tensor each carries
-(``finn.kernels.composer.channel``), each side a kernel's port (``Port("matmul", "x")``)
-or a ``Side`` given as a value (the boundary's AXIS port, ``Side.boundary("in0_V")``, or a
+(``finn.kernels.composer.channel``), each side a kernel's port (``Port("matmul", "x")``) or
+a ``Side`` given as a value (the boundary's AXIS port, ``Side.boundary("in0_V")``, or a
 valued channel's source, ``Side.source()``), each fact a value or what a kernel states for
-it (``Stated``). Nothing sets a channel's choice a change brings into play: a test sets
-them as the cut does, by the channel's policies (``with_channel_defaults``), or names them. A
+it (``Stated``). Nothing sets a channel's choice a change brings into play: a test sets them
+as the cut does, by the channel's policies (``with_channel_defaults``), or names them. A
 test names a choice as ``member.key`` (``matmul.pe``, ``w.transport``): ``keyed`` makes it
 the partition's pair, ``choose`` commits a batch. ``placed_dotp`` places a dot-product core
 between three boundary channels. ``matmul_network`` places a MatMul (``matmul``) on ``x``
@@ -54,6 +56,7 @@ from finn.core.space import (
     Space,
     design_space,
     inspection,
+    space_formals,
 )
 from finn.core.space.results import Available, QueryResult
 from finn.dataflow.datatypes import (
@@ -69,19 +72,20 @@ from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel, Neighbours
 from finn.kernels.composer import (
     ChannelDeclaration,
+    DataflowCoreDeclaration,
     Facts,
-    PartitionDeclaration,
     Port,
     Stated,
     channel,
+    compose,
 )
 from finn.kernels.configure import chosen, commit, describe
+from finn.kernels.dataflow_core import Bound, bound, core_module
 from finn.kernels.eltwise import EltwiseKernel
-from finn.kernels.explore import Defaults, Seam
+from finn.kernels.explore import CoreComposition, Defaults, Seam
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.matmul import KnownWeights, MatMulKernel, datatype_range
-from finn.kernels.partition import Partition, partition
 from finn.kernels.policies import Alone, Unstated, defaulted, ranked
 from finn.kernels.port import axis, transport
 from finn.kernels.sides import Side
@@ -163,36 +167,60 @@ def keyed(choices: Mapping[str, object]) -> dict[Key, object]:
     return found
 
 
+TEST_CORE = "partition"
+"""The name of a core a test declares by hand (``by_hand``) unless it names one: its IP's
+module is ``finn_partition`` (``DataflowCoreKernel.module``)."""
+
+
+def declared_by_hand(
+    members: Mapping[str, Facts | ChannelDeclaration],
+    *,
+    shell: Mapping[str, object] | None = None,
+    name: str = TEST_CORE,
+) -> DataflowCoreDeclaration:
+    """A core declared by hand: ``members`` in its module's order, each kernel by name (its
+    ``Facts``) and each channel by the tensor it carries (``channel``), its module named
+    ``name``; in a shell where ``shell`` states its row's facts
+    (``DataflowCoreDeclaration.shell``)."""
+    kernels = {each: item for each, item in members.items() if isinstance(item, Facts)}
+    channels = {
+        each: item for each, item in members.items() if isinstance(item, ChannelDeclaration)
+    }
+    return DataflowCoreDeclaration(kernels, channels, shell, name=name, order=tuple(members))
+
+
+def bound_by_hand(
+    members: Mapping[str, Facts | ChannelDeclaration],
+    stored: Mapping[Key, object] | None = None,
+    *,
+    shell: Mapping[str, object] | None = None,
+    name: str = TEST_CORE,
+) -> Bound:
+    """A core declared by hand (``declared_by_hand``), composed, its ``stored`` choices
+    bound, by key (``finn.kernels.dataflow_core.bound``: what it dropped as stale kept)."""
+    return bound(compose(declared_by_hand(members, shell=shell, name=name)), stored)
+
+
 def by_hand(
     members: Mapping[str, Facts | ChannelDeclaration],
     stored: Mapping[Key, object] | None = None,
     *,
     shell: Mapping[str, object] | None = None,
-) -> Partition:
-    """A partition declared by hand (``finn.kernels.partition.partition``): ``members`` in
-    its module's order, each kernel by name (its ``Facts``) and each channel by the tensor
-    it carries (``channel``), its ``stored`` choices bound, by key; in a shell where
-    ``shell`` states its row's facts (``PartitionDeclaration.shell``)."""
-    kernels = {name: each for name, each in members.items() if isinstance(each, Facts)}
-    channels = {
-        name: each for name, each in members.items() if isinstance(each, ChannelDeclaration)
-    }
-    declared = PartitionDeclaration(kernels, channels, shell, order=tuple(members))
-    return partition(declared, stored)
+    name: str = TEST_CORE,
+) -> CoreComposition:
+    """A core declared by hand (``bound_by_hand``), read by key: its composition."""
+    return CoreComposition(bound_by_hand(members, stored, shell=shell, name=name).point)
 
 
-N = TypeVar("N", bound=Partition)
-
-
-def choose(network: N, choices: Mapping[str, object]) -> N:
+def choose(network: CoreComposition, choices: Mapping[str, object]) -> CoreComposition:
     """``network`` with ``choices`` (``member.key``) committed, atomically; a refusal is a
     ``ValueError`` naming each refused value or rule."""
     return network.with_choices(keyed(choices)) if choices else network
 
 
-def refused_codes(network: N, choices: Mapping[str, object]) -> set[str]:
+def refused_codes(network: CoreComposition, choices: Mapping[str, object]) -> set[str]:
     """The codes a change of ``choices`` (``member.key``) is refused with, checked as the
-    seam checks it (``Partition.trial``): its findings' and their causes'. The change must
+    seam checks it (``CoreComposition.trial``): its findings' and their causes'. The change must
     be refused: committed, a choice a member's rule refuses leaves the member refused."""
     trial = network.trial(keyed(choices))
     assert not trial.accepted, choices
@@ -200,19 +228,25 @@ def refused_codes(network: N, choices: Mapping[str, object]) -> set[str]:
     return {finding.code for finding in found} | {c.code for f in found for c in f.causes}
 
 
-def module_of(network: Partition, stem: str) -> QueryResult[Composed]:
-    """``network``'s module, named ``finn_<stem>``."""
-    return network.module(PRODUCER, f"finn_{stem}")
+def module_of(network: CoreComposition, stem: str) -> QueryResult[Composed]:
+    """``network``'s module of its netlist (``CoreComposition.netlist``), named ``finn_<stem>`` and
+    derived by the tests' harness (``PRODUCER``; its own IP is its class's,
+    ``DataflowCoreKernel.module``)."""
+    found = network.netlist()
+    if not isinstance(found, Available):
+        return found
+    made = core_module(PRODUCER, f"finn_{stem}", *found.value)
+    return made if isinstance(made, Rejected) else Available(made)
 
 
-def built(network: Partition, stem: str) -> Composed:
+def built(network: CoreComposition, stem: str) -> Composed:
     """``network``'s module, named ``finn_<stem>``, which must be accepted."""
     module = module_of(network, stem)
     assert isinstance(module, Available), describe([module])
     return module.value
 
 
-def cycles_of(network: Partition) -> QueryResult[int]:
+def cycles_of(network: CoreComposition) -> QueryResult[int]:
     """The most cycles a frame any member of ``network`` takes, once each states its own."""
     found = [network.query(name, Kernel.frame_cycles) for name in network.members]
     waiting = [answer for answer in found if not isinstance(answer, Available)]
@@ -236,7 +270,7 @@ class DotpExtents(TypedDict):
 
 def dotp_extents(w_tensor: Tensor) -> DotpExtents:
     """What a dot-product core's parent states from the operation's facts (``columns``,
-    ``widest_reduction``), for a core without one, on weights ``w_tensor`` ``(K, N)``:
+    ``widest_reduction``), for a core without one, on weights ``w_tensor`` ``(K, CoreComposition)``:
     with no parent, no choice changes its datapath, so the widest K is its weights'."""
     k, n = w_tensor.shape[-2:]
     return DotpExtents(columns=n, widest_reduction=k)
@@ -263,7 +297,7 @@ def placed_dotp(
     choices committed: its own design space, as the boundary channels it is placed between
     see it (a kernel reads its facts only, so nothing on a channel reaches it).
 
-    The core takes its extents from its tensors: ``outputs`` (N) defaults to PE
+    The core takes its extents from its tensors: ``outputs`` (CoreComposition) defaults to PE
     and ``reduction`` (K) to SIMD, one fold each. PE and SIMD are facts a core is
     given (its role's choices, MatMul's): one left ``None`` is not given. Pumping and
     ``reducer``, which only a core that declares it commits, are its choices; one left
@@ -344,7 +378,7 @@ def matmul_network(
     weights: IntegerTensor | None = None,
     weight_sets: int = 1,
     depthwise_datapath: str | None = None,
-) -> Partition:
+) -> CoreComposition:
     """A MatMul of ``space_type`` (``matmul``; a ``MatMulKernel`` by default) on the
     channels of a partition: its activations ``(m, k)`` (``(m, k, n)`` depthwise) of
     ``activation_dtype``, its weights known (``weights``, declared ``weights_dtype``) or
@@ -366,7 +400,7 @@ def matmul_network(
     }
     if weights is None:
         # Unknown weights are MatMul's statement of them at the ``depthwise_datapath`` committed;
-        # with none, as stored, (K, N) in their datatype.
+        # with none, as stored, (K, CoreComposition) in their datatype.
         stated = views.query(type(views).required_weights)
         given = facts.pop("weights")
         tensors["weights"] = stated.value if isinstance(stated, Available) else given
@@ -412,27 +446,37 @@ def matmul_network(
     )
 
 
-def matmul_point(*, depthwise_datapath: str | None = None, **facts: Any) -> Partition:
+def matmul_point(*, depthwise_datapath: str | None = None, **facts: Any) -> CoreComposition:
     """``matmul_network`` of a ``MatMulKernel``, its ``depthwise_datapath`` committed when given."""
     return matmul_network(depthwise_datapath=depthwise_datapath, **facts)
 
 
-def beside(network: Partition, name: str) -> Neighbours:
-    """The ports beside channel ``name`` of ``network``, a partition no rule refuses
-    (``Partition.neighbours``: a refused one has none)."""
+def beside(network: CoreComposition, name: str) -> Neighbours:
+    """The ports beside channel ``name`` of ``network``, a core no rule refuses
+    (``CoreComposition.neighbours``: a refused one has none)."""
     found = network.neighbours(name)
     assert isinstance(found, Neighbours), found
     return found
 
 
-def kernel_alone(network: Partition, name: str) -> Any:
-    """Kernel ``name`` of ``network`` alone: its class bound to the facts the partition
-    gives it, with the choices it stores there committed (its own design space, keyed by
-    its own keys), as conversion's policies read a kernel."""
-    names = network.composed.names
+def root_facts(point: Space) -> dict[str, object]:
+    """The facts a core's design space ``point`` is given at its root, by name
+    (``<member>-<fact>``: each of ``DataflowCoreKernel.names``' roots that is a formal of
+    its class, not a side derived from a kernel's port)."""
+    formals = space_formals(type(point))
+    return {
+        root: getattr(point, root) for root in cast(Any, type(point)).names.roots if root in formals
+    }
+
+
+def kernel_alone(network: CoreComposition, name: str) -> Any:
+    """Kernel ``name`` of ``network`` alone: its class bound to the facts the core gives
+    it, with the choices it stores there committed (its own design space, keyed by its own
+    keys), as conversion's policies read a kernel."""
+    names = network.names
     facts = {
-        names.roots[root][1]: value
-        for root, value in network.composed.facts.items()
+        names.roots[root][1]: found
+        for root, found in root_facts(network.point).items()
         if names.roots[root][0] == name
     }
     point = Facts(type(network.member(name)), facts).bind()
@@ -631,16 +675,16 @@ ADAPTER_RAM_STYLES = "*adapter_ram_style"
 """The keys (``fnmatch``) of every channel's one memory choice for its input adapter's
 ``input_gen`` stages."""
 
-P = TypeVar("P", bound=Space | Partition)
+P = TypeVar("P", bound=Space | CoreComposition)
 
 
-def open_choices(network: Partition, pattern: str) -> list[str]:
+def open_choices(network: CoreComposition, pattern: str) -> list[str]:
     """The open choices of ``network`` matching ``pattern`` (``fnmatch``), as
     ``member.key``."""
     return _undecided(network, pattern)
 
 
-def _undecided(subject: Space | Partition, pattern: str) -> list[str]:
+def _undecided(subject: Space | CoreComposition, pattern: str) -> list[str]:
     """The open choices in play of a point or a partition matching ``pattern``, by key (a
     partition's as ``member.key``): unset in a scope that is present (``inspection.Open``,
     waiting on nothing)."""
@@ -696,7 +740,7 @@ def with_adapter_memories(subject: P, ram_style: str | None = None) -> P:
     return _committed(subject, dict.fromkeys(styles, ram_style))
 
 
-def with_defaults(network: N) -> N:
+def with_defaults(network: CoreComposition) -> CoreComposition:
     """``network`` with every open choice in play that is not required set as conversion
     and the cut set them (``Defaults``, through a seam of its own holding every stored
     choice, so that only the open ones are set): each by its policy, a kernel's (none
@@ -708,17 +752,17 @@ def with_defaults(network: N) -> N:
     return Defaults().explore(seam, network)
 
 
-def with_channel_defaults(network: N) -> N:
+def with_channel_defaults(network: CoreComposition) -> CoreComposition:
     """``network`` with each channel's open choices in play that are not required set as
     the cut sets them, by the channel's policies, on the partition's design space, in the one
-    pass over its root in the root's flow order (``Partition.defaulted``, restricted to the
+    pass over its root in the root's flow order (``CoreComposition.defaulted``, restricted to the
     channels: first valid, where setting it is accepted; a FIFO's depth stays open), as
     ``make_cut_choices`` sets a graph's: for a partition built by hand, which no cut made. A
     channel refused on its own is left as it is."""
     done = network.defaulted(members=network.channels)
     assert not done.unset, "; ".join(map(str, done.unset))
     assert done.fallbacks == (), f"{done.fallbacks}"
-    return network.at(done.point)
+    return network.made(done.point)
 
 
 TRANSPORTS = "*.transport"
@@ -766,7 +810,7 @@ class MatMulAssembly:
     weight_delivery: WeightDelivery
     module: Composed
     initializer: tuple[int, ...]
-    network: Partition
+    network: CoreComposition
 
 
 def _frozen(values: object) -> object:
@@ -801,7 +845,7 @@ def matmul_assembly(
     """Bind operation facts, commit the caller's choices and the flow's, then assemble.
 
     ``m`` rows, ``n`` outputs and the reduction ``k``; for a depthwise ``form``,
-    ``k`` is the window and ``n`` the channels. ``weights`` is stored (K, N),
+    ``k`` is the window and ``n`` the channels. ``weights`` is stored (K, CoreComposition),
     and is required by, and only accepted with, a memory: the weight channel's
     source, forced when its one candidate is viable. The ``auto``
     ``ram_style`` default leaves memory inference to synthesis.

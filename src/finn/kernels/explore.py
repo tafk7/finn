@@ -1,13 +1,14 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""FINN's half of the DSE seam: kernel compositions, the seam's hook, costs, and strategies.
+"""FINN's half of the DSE seam: a core's composition, the seam's hook, costs, and strategies.
 
 The seam (``finn.core.search``) answers what an exploration asks of a composition, each
-choice keyed by a pair ``(owner, key)``. FINN's composition (a ``KernelComposition``: a
-partition's one design space, ``finn.kernels.partition.Partition``, a graph's or one
-declared by hand) names its members by graph name (a kernel's node, a channel's tensor),
-the decision key in each member's space (``("first", "pe")``, ``("y", "transport")``). FINN
+choice keyed by a pair ``(owner, key)``. FINN's composition (``CoreComposition``: one design
+space of a DataflowCore's class, ``finn.kernels.dataflow_core.DataflowCoreKernel``, a node's,
+a slice's or a test core's, read by key) names its members by graph name (a kernel's node, a
+channel's tensor), the decision key in each member's space (``("first", "pe")``, ``("y",
+"transport")``). FINN
 makes the seam (``Seam``) with its hook (``KERNEL_HOOK``) and the ``platform`` its kernels
 are built for; on it ``cost`` gives each member's cycles a frame, buffering and resources,
 and the bottleneck, and ``resources`` what the network uses as far as it is stated. The
@@ -16,7 +17,7 @@ engine decides validity; an explorer only proposes and prefers.
 **The hook** (``KernelHook``): a choice's policy is FINN's (``finn.kernels.policies``: a
 kernel's its KernelOp's, at conversion; a channel's its own, ``Channel.policies``, at the
 cut), read through one reader (``finn.kernels.policies.policy`` under its member's owner,
-``KernelComposition.owner``), never the engine; a choice's values ranked by its policy
+``CoreComposition.owner``), never the engine; a choice's values ranked by its policy
 (``finn.kernels.policies.ranked``). Nothing fills a value in after conversion but a
 strategy: from then on a choice is set only by what a strategy sets. **The fold rule**'s
 members are the channels: a change that reaches a channel (a fold changes its kernel's
@@ -65,10 +66,11 @@ before emission (``finn.custom_op.kernels.shell.verify_partition``).
 
 from __future__ import annotations
 
-from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable, Collection, Hashable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from itertools import product
 from math import floor
+from types import MappingProxyType
 from typing import Any, Protocol, TypeVar, cast, overload
 
 from finn.core import search
@@ -82,6 +84,7 @@ from finn.core.search import (
     Key,
     Refused,
     Restored,
+    Trial,
     Values,
     all_findings,
     dotted,
@@ -95,19 +98,36 @@ from finn.core.search import (
 )
 from finn.core.space import (
     Available,
+    ChangeRequest,
+    ConfigurationError,
     Inapplicable,
     QueryResult,
     Rejected,
+    RequestError,
     Space,
     Unresolved,
     inspection,
 )
+from finn.core.space._aliases import alias_table
 from finn.core.space.declarations import View
-from finn.kernels.base import Kernel
-from finn.kernels.channels import ChannelFifo, Neighbours
+from finn.kernels.artifacts.abi import Bus
+from finn.kernels.artifacts.module import Fragment
+from finn.kernels.base import Kernel, hops, neighbours
+from finn.kernels.channels import Channel, ChannelFifo, Neighbours, OuterHops
+from finn.kernels.dataflow_core import DataflowCoreKernel, Names, _not_a_decision
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.fifo_sizing import FRAMES, NotModelled, Sized, holds, size
-from finn.kernels.policies import Fixed, Owner, Policy, Required, policy_name, ranked
+from finn.kernels.policies import (
+    Defaulted,
+    Fixed,
+    Owner,
+    Policy,
+    Required,
+    Unstated,
+    defaulted,
+    policy_name,
+    ranked,
+)
 from finn.kernels.policies import policy as policy_of
 from finn.kernels.utilization import binding, over, ratio, total
 from finn.platform.capabilities import RESOURCE_NAMES, Platform, Resources
@@ -115,32 +135,223 @@ from finn.platform.capabilities import RESOURCE_NAMES, Platform, Resources
 T = TypeVar("T")
 
 
-class KernelComposition(Composition, Protocol):
-    """What FINN's seam explores (``finn.core.search.Composition``, and FINN's own): a
-    partition's one design space (``finn.kernels.partition.Partition``; the graph binds one
-    in its shell, ``finn.custom_op.kernels.shell.in_shell``, and a test declares one by
-    hand). Its channels among its members; per member its Space (``member``) and the
-    answers it gives (``query``, and the open Decisions an answer waits on, ``waits``); per
-    channel the ports beside it (``neighbours``, whose paces FIFO sizing reads; refused where
-    a rule refuses the partition); its own
-    statement of what it uses, where it makes one (``own_resources``); the owner of each
-    member's policies (``owner``); and in a shell, its shell member's name (``shell``: no
-    member, but its validity is read by its name, the shell's budgets' rules).
+class _Placed:
+    """A core's members as ``finn.kernels.policies.Placed``: each choice's member is the one
+    its path is below, its owner the class's (``CoreComposition.owner``), and a member's own
+    refusal is its validity's, read at the design space the pass has reached."""
 
-    A partition's own flow order interleaves its members, each channel after the kernels it
-    joins; the cut's pass reads that one. The seam's order (``states``) is by member."""
+    def __init__(self, composition: CoreComposition, members: tuple[str, ...]) -> None:
+        self._composition, self.members = composition, members
+
+    def member(self, key: str) -> str:
+        return self._composition.names.pair(key)[0]
+
+    def owner(self, member: str) -> Owner:
+        return self._composition.owner(member)
+
+    def refusal(self, point: Space, member: str) -> tuple[Finding, ...]:
+        result = self._composition.made(point).validity(member).result
+        return result.findings if isinstance(result, Rejected) else ()
+
+
+ShellUse = Callable[["CoreComposition"], QueryResult[Resources]]
+"""What a shell uses over a core's composition: its members', its movers' and its static
+region's resources (``finn.custom_op.kernels.shell``, given its row)."""
+
+
+class CoreComposition:
+    """What FINN's seam explores (``finn.core.search.Composition``, and FINN's own): one
+    design space of a core's class (``point``, a ``DataflowCoreKernel``: a node's, the graph
+    binds one in its shell, ``finn.custom_op.kernels.shell``; a slice's; or a test core's,
+    declared by hand), read by ``(member, key)``. Every name it reads is its class's
+    (``DataflowCoreKernel.names``: its members by graph name, its keys, its instance order,
+    each kernel's policies' owner), and every answer its design space's; in a shell, until
+    the shell's own design pass places the movers, it is given what the shell uses over it
+    (``shell_use``: its members', its movers' and its static region's resources), which it
+    states as its own (``own_resources``). Its channels among its members; per member its
+    Space (``member``) and the answers it gives (``query``, and the open Decisions an answer
+    waits on, ``waits``); per channel the ports beside it (``neighbours``, whose paces FIFO
+    sizing reads) and its hops to them (``hops``); its class's answers (``answer``); the
+    owner of each member's policies (``owner``); and in a shell, its shell member's name
+    (``shell``: no member, but its validity is read by its name, the shell's budgets'
+    rules).
+
+    A member's answers are read as its own space's were: its keys, and the owners of its
+    findings, relative to it (``pe``, ``transport.fifo.depth``); a finding of another member
+    a member's answer carries (a channel waiting on its kernel's open choice) is owned by its
+    key in that member and names the member (``node`` or ``tensor``, as ``located`` does).
+
+    A core's own flow order interleaves its members, each channel after the kernels it
+    joins; the cut's pass reads that one (``defaulted``). The seam's order (``states``) is
+    by member. Immutable, as a design space: a change (``trial``) is another composition, of
+    the design space the change makes, given the same ``shell_use``."""
+
+    __slots__ = ("_decisions", "_memo", "_point", "_shell_use")
+
+    _point: DataflowCoreKernel
+    _shell_use: ShellUse | None
+    _decisions: Mapping[Key, inspection.DecisionInfo[object]]
+    _memo: dict[str, object]
+
+    def __init__(self, point: DataflowCoreKernel, *, shell_use: ShellUse | None = None) -> None:
+        self._point, self._shell_use = point, shell_use
+        self._decisions = MappingProxyType(_decisions(point))
+        self._memo = {}
+
+    def made(self, point: Space) -> CoreComposition:
+        """The composition of ``point``, another design space of its class (a change's, or
+        one its members' policies made, ``defaulted``), given the same ``shell_use``."""
+        if type(point) is not type(self._point):
+            raise ValueError(f"{point!r} is no design space of {self!r}")
+        assert isinstance(point, DataflowCoreKernel)  # its class is one
+        return CoreComposition(point, shell_use=self._shell_use)
+
+    def _read(self, question: str, answer: Callable[[], Any]) -> Any:
+        """``answer()``, read once of this composition (it is immutable)."""
+        if question not in self._memo:
+            self._memo[question] = answer()
+        return self._memo[question]
+
+    # -- its members ------------------------------------------------------------------------
 
     @property
-    def channels(self) -> tuple[str, ...]: ...
+    def point(self) -> DataflowCoreKernel:
+        """Its design space."""
+        return self._point
 
     @property
-    def shell(self) -> str | None: ...
+    def names(self) -> Names:
+        """Its class's names (``DataflowCoreKernel.names``)."""
+        return type(self._point).names
 
-    def member(self, name: str) -> Any: ...
+    @property
+    def members(self) -> tuple[str, ...]:
+        """Every member, ranked: the kernels in the order declared (a graph's: its order),
+        then each channel after the members it reads."""
+        return tuple(self.names.members)
 
-    def neighbours(self, name: str) -> Neighbours | Rejected | Unresolved: ...
+    @property
+    def shell(self) -> str | None:
+        """Its shell member's name (``finn.kernels.budgets.SHELL``), in a shell; None
+        outside one. Not among its ``members``: its validity is read by its name
+        (``validity``)."""
+        return self.names.shell
 
-    def owner(self, name: str) -> Owner: ...
+    @property
+    def name(self) -> str:
+        """Its module's name (``DataflowCoreKernel.name``, a fact of its class)."""
+        return self._point.name
+
+    @property
+    def order(self) -> tuple[str, ...]:
+        """Every member in its module's instance order (``Kernel.instance_order``, a fact
+        of its class)."""
+        owners = self.names.owners
+        return tuple(owners[member] for member in type(self._point).instance_order)
+
+    @property
+    def kernels(self) -> tuple[str, ...]:
+        """Its kernels, ranked."""
+        channels = self.names.channels
+        return tuple(name for name in self.members if name not in channels)
+
+    @property
+    def channels(self) -> tuple[str, ...]:
+        """Its channels, ranked."""
+        channels = self.names.channels
+        return tuple(name for name in self.members if name in channels)
+
+    @property
+    def boundary(self) -> tuple[tuple[str, str], ...]:
+        """Each boundary channel and its edge port (an alias of its outer port, named as its
+        side's label, its AXIS bus), inputs then outputs, each in its instance order."""
+
+        def read() -> tuple[tuple[str, str], ...]:
+            owners = self.names.owners
+            found: dict[str, list[tuple[str, str]]] = {"outer_in": [], "outer_out": []}
+            for label, entry in alias_table(type(self._point)).items():
+                for end in entry.ends:
+                    member, _, port = end.path.partition(".")
+                    if port in found and member in owners:
+                        found[port].append((owners[member], label))
+            return (*found["outer_in"], *found["outer_out"])
+
+        edges: tuple[tuple[str, str], ...] = self._read("boundary", read)
+        return edges
+
+    @property
+    def movers(self) -> tuple[str, ...]:
+        """Its boundary channels offered movers (each boundary side's offers,
+        ``Side.boundary``), in ``boundary``'s order: a shell's row offers them, until the
+        shell's own design pass places them."""
+        return tuple(
+            tensor
+            for tensor, _ in self.boundary
+            if any(
+                getattr(side, "offers", ())
+                for side in (self.member(tensor).producer, self.member(tensor).consumer)
+            )
+        )
+
+    def node(self, name: str) -> str:
+        """Member ``name``'s node in the module, its member name: the prefix of its
+        instances and of the ports it presents."""
+        return self.names.members[name]
+
+    def path(self, key: Key) -> str:
+        """``key``'s path in the design space (``first.compute.packed.pe``)."""
+        return self.names.path(key)
+
+    def pair(self, name: str, key: str) -> Key:
+        """The key, by owner, of ``key``, a path in the design space a rule or a stored
+        choice of an answer about member ``name`` is named by (another member's, where the
+        rule or the choice is: a fold reaching its channel's rule)."""
+        return self.names.pair(key)
+
+    def member(self, name: str) -> Any:
+        """Member ``name``'s Space inside the design space; the shell member's by its name
+        (``shell``)."""
+        names = self.names
+        member = name if name == names.shell else names.members.get(name)
+        if member is None:
+            raise ValueError(f"{name} is no member of the partition")
+        return getattr(self._point, member)
+
+    def owner(self, name: str) -> Owner:
+        """The owner of member ``name``'s policies (``finn.kernels.policies.policy``): a
+        channel's its channel class (``Channel``), a kernel's its class's
+        (``DataflowCoreKernel.policy_owners``: its KernelOp class, or ``Unstated`` where it
+        was given none)."""
+        if name in self.names.channels:
+            return Channel
+        if name not in self.names.members:
+            raise ValueError(f"{name} is no member of the partition")
+        return type(self._point).policy_owners.get(name, Unstated)
+
+    def located(self, name: str, finding: Finding) -> Finding:
+        """A finding of member ``name``'s, its owner kept, with the member named in its
+        details (a finding of another member's names that one already): a channel as its
+        ``tensor``, a kernel as its ``node``. The shell member's is no node or tensor of the
+        graph: its finding is kept as it is (its message names the shell)."""
+        if name == self.names.shell:
+            return finding
+        return finding.about(**{"tensor" if name in self.names.channels else "node": name})
+
+    # -- a member's answers, relative to it --------------------------------------------------
+
+    def local(self, name: str, finding: Finding) -> Finding:
+        """``finding``, of an answer about member ``name`` read on its Space (a policy's
+        ``choice-no-valid-value``), as the member's own space gives it: owned by its key in
+        the member it is below, naming that member where it is another (this class's
+        docstring)."""
+        return self.names.local(name, finding)
+
+    def _result(self, name: str, result: QueryResult[T]) -> QueryResult[T]:
+        if isinstance(result, Rejected):
+            return Rejected(tuple(self.local(name, each) for each in result.findings))
+        if isinstance(result, Unresolved):
+            return Unresolved(tuple(self.local(name, each) for each in result.findings))
+        return result
 
     @overload
     def query(self, name: str, member: View[T]) -> QueryResult[T]: ...
@@ -148,18 +359,387 @@ class KernelComposition(Composition, Protocol):
     @overload
     def query(self, name: str, member: T) -> QueryResult[T]: ...
 
-    def waits(self, name: str, answer: object) -> tuple[Key, ...]: ...
+    def query(self, name: str, member: object) -> QueryResult[Any]:
+        """Member ``name``'s ``member``, a view or a derived value declared on a Space class
+        ``Base`` (``Kernel.netlist``, ``Kernel.frame_cycles``): the member of that name of the
+        member's own class. ``Inapplicable`` where the member's class does not derive from
+        ``Base`` (``Channel`` is no class with ``Kernel.bus_control``'s bus), or where
+        the member's own answer is inapplicable (a kernel declaring no control bus)."""
+        point = self.member(name)
+        base, declared = getattr(member, "owner", None), getattr(member, "name", None)
+        if not (isinstance(base, type) and issubclass(base, Space) and declared is not None):
+            raise TypeError(f"query reads a member declared in a Space class, not {member!r}")
+        if not isinstance(point, base):
+            return Inapplicable()
+        found: QueryResult[Any] = point.query(getattr(type(point), declared))
+        return self._result(name, found)
 
-    def own_resources(self) -> QueryResult[Resources] | None: ...
+    def waits(self, name: str, answer: object) -> tuple[Key, ...]:
+        """The open Decisions an answer of member ``name`` (``query``'s) waits on, by key:
+        its own, or another member's (a channel's on its kernel's choice), which the
+        finding names (``node`` or ``tensor``)."""
+        if not isinstance(answer, Unresolved):
+            return ()
+        members = self.names.members
+        found: dict[Key, None] = {}
+        for item in answer.findings:
+            if item.code != "decision-unassigned":
+                continue
+            details = dict(item.details)
+            other = details.get("tensor" if "tensor" in details else "node")
+            owner = other if isinstance(other, str) and other in members else name
+            found[(owner, item.owner)] = None
+        return tuple(found)
+
+    def validity(self, name: str) -> inspection.Validity:
+        """Member ``name``'s own validity inside the design space (``inspection.validity``):
+        its pieces and findings relative to it. The shell member's by its name (``shell``):
+        its budgets, each a rule of its own."""
+        found = inspection.validity(self.member(name))
+        pieces = tuple(
+            inspection.Piece(
+                self.names.relative(name, piece.owner),
+                Rejected(tuple(self.local(name, each) for each in piece.result.findings))
+                if isinstance(piece.result, Rejected)
+                else Unresolved(tuple(self.local(name, each) for each in piece.result.findings)),
+            )
+            for piece in found.pieces
+        )
+        return inspection.Validity(found.status, pieces, self._result(name, found.result))
+
+    # -- its choices ------------------------------------------------------------------------
+
+    def _states(self) -> dict[str, list[tuple[str, inspection.ChoiceState]]]:
+        """Every choice's state, read once, by member, each member's in the flow order."""
+
+        def read() -> dict[str, list[tuple[str, inspection.ChoiceState]]]:
+            found: dict[str, list[tuple[str, inspection.ChoiceState]]] = {}
+            for path, state in inspection.states(self._point):
+                owner, key = self.names.pair(path)
+                found.setdefault(owner, []).append((key, state))
+            return found
+
+        states: dict[str, list[tuple[str, inspection.ChoiceState]]] = self._read("states", read)
+        return states
+
+    def _wanted(self, names: Iterable[str] | None) -> list[str]:
+        """``names`` (every member where None) ranked, those of the core only."""
+        if names is None:
+            return list(self.members)
+        wanted = set(names)
+        return [name for name in self.members if name in wanted]
+
+    def _state(self, name: str, state: inspection.ChoiceState) -> inspection.ChoiceState:
+        """A state of member ``name``'s choice, what it waits on relative to it."""
+        if isinstance(state, inspection.Waiting):
+            return inspection.Waiting(
+                state.value, tuple(self.names.relative(name, each) for each in state.waits)
+            )
+        if isinstance(state, inspection.Open) and state.waits:
+            return inspection.Open(tuple(self.names.relative(name, each) for each in state.waits))
+        return state
+
+    def states(
+        self, names: Iterable[str] | None = None
+    ) -> tuple[tuple[Key, inspection.ChoiceState], ...]:
+        """Every choice of each member (of ``names`` only, where named), by key, with its
+        state (``inspection.states``: set, waiting, dormant, open or absent): by member in
+        rank order, each member's choices in its flow order (the seam's order,
+        ``finn.core.search.Composition``)."""
+        states = self._states()
+        return tuple(
+            ((name, key), self._state(name, state))
+            for name in self._wanted(names)
+            for key, state in states.get(name, ())
+        )
+
+    def decisions(self) -> Mapping[Key, inspection.DecisionInfo[object]]:
+        """Every Decision of every member, by key, applicable or not, by member in rank
+        order, each member's in its flow order. Each is the engine's, keyed by its path."""
+        return self._decisions
+
+    def decision(self, key: Key) -> inspection.DecisionInfo[object] | None:
+        """The Decision ``key`` names, or None."""
+        return self._decisions.get(key)
+
+    def undecided(self) -> tuple[Key, ...]:
+        """Every open choice in play, by key, in the seam's order (``states``): unset in a
+        scope that is present (``inspection.Open``, waiting on nothing). A choice whose
+        presence waits on another open choice is not in play yet, and a stored one is not
+        open, whatever its state."""
+        return tuple(
+            key
+            for key, state in self.states()
+            if isinstance(state, inspection.Open) and not state.waits
+        )
+
+    def chosen(self, names: Iterable[str] | None = None) -> dict[Key, object]:
+        """Every choice stored (of ``names`` only, where named), by key, in the seam's
+        order, whatever its state (set, waiting or dormant): what saving writes
+        (``finn.custom_op.kernels.network.persist``)."""
+        return {
+            key: state.value
+            for key, state in self.states(names)
+            if isinstance(state, (inspection.Set, inspection.Waiting, inspection.Dormant))
+        }
+
+    def defaulted(
+        self, *, kept: Iterable[Key] = (), members: Iterable[str] | None = None
+    ) -> Defaulted[Space]:
+        """Its design space with the policies of its members applied once
+        (``finn.kernels.policies.defaulted``): one pass over its root in the root's flow
+        order, each choice in play and open that is not required set by the policy its
+        member's owner states (``owner``), each first valid where the change is accepted; a
+        member refused on its own skipped, a choice no value can be set for left open, both
+        reported. Choices it holds are kept, and so are the open choices ``kept`` names, by
+        key. Only the choices of ``members`` (every member where None)."""
+        wanted = self._wanted(members)
+        return defaulted(
+            self._point, _Placed(self, tuple(wanted)), kept={self.path(key) for key in kept}
+        )
+
+    def viable(self, keys: Iterable[Key]) -> tuple[tuple[Key, inspection.Viable], ...]:
+        """Each choice ``keys`` names, by key, in the order given, with its listed values,
+        each possible or refused as setting it alone would be (``inspection.viable``, on
+        the design space): each refused value with the rules it would break and the stored
+        choices standing in their way, each by its path (``pair`` gives its key), the
+        rules' findings relative to the member each is below. A key that is no choice is a
+        ``ValueError``."""
+        wanted = list(keys)
+        references = []
+        for key in wanted:
+            info = self._decisions.get(key)
+            if info is None:
+                raise ValueError(f"{dotted(key)}: not a choice of the partition")
+            references.append(info.reference)
+        found = inspection.viable(self._point, references) if references else ()
+        return tuple(
+            (key, self._viable(key, item)) for key, item in zip(wanted, found, strict=True)
+        )
+
+    def _viable(self, key: Key, item: inspection.Viable) -> inspection.Viable:
+        if item.values is None:
+            return replace(item, key=key[1])
+        values = tuple(
+            inspection.Refused(each.value, tuple(map(self.names.rule, each.broken)))
+            if isinstance(each, inspection.Refused)
+            else each
+            for each in item.values
+        )
+        return inspection.Viable(key[1], values, item.waits)
+
+    # -- a change ---------------------------------------------------------------------------
+
+    def trial(
+        self, changes: Mapping[Key, object], clear: Collection[Key] = ()
+    ) -> Trial[CoreComposition]:
+        """``changes`` set and ``clear`` cleared, as one change of the design space
+        (``try_with_choices``), each key mapped to its path, another composition where it
+        is accepted: refused where a value is outside its domain (by the choice's key) or a
+        rule the change makes newly false (by the rule's key, another member's where the
+        change reaches it), with the stored choices standing in its way (a channel's, where
+        a fold reaches its rules, or a kernel's: the seam's fold rule, ``Seam.set``, reads
+        them); or a key that names no choice (``not-a-decision``). A request the engine
+        refuses as malformed (a value of another type) is refused, each key named
+        (``request-refused``)."""
+        refused: dict[Key, tuple[Finding, ...]] = {}
+        values: dict[object, object] = {}
+        for key, value in changes.items():
+            info = self._decisions.get(key)
+            if info is None:
+                refused[key] = _not_a_decision(key)
+            else:
+                values[info.reference] = value
+        clears: list[ChangeRequest] = []
+        for key in clear:
+            info = self._decisions.get(key)
+            if info is None:
+                refused[key] = _not_a_decision(key)
+            else:
+                clears.append(self._point.field(info.reference).clear())
+        if refused:
+            return Trial(self, refused)
+        try:
+            report = self._point.try_with_choices(values, *clears)
+        except (RequestError, ConfigurationError) as error:
+            # A request the engine refuses as malformed (a value of another type).
+            return Trial(
+                self,
+                {
+                    key: (Finding(FindingKind.REJECTION, "request-refused", key[1], str(error)),)
+                    for key in (*changes, *clear)
+                },
+            )
+        if report.accepted:
+            return Trial(self.made(report.instance), {})
+        standing: dict[Key, tuple[Key, ...]] = {}
+        for outcome in report.outcomes:
+            if outcome.status == "refused" and isinstance(outcome.result, (Rejected, Unresolved)):
+                owner, below = self.names.pair(outcome.owner)
+                refused[(owner, below)] = tuple(
+                    self.local(owner, each) for each in outcome.result.findings
+                )
+        if not refused:
+            for rule in report.broken:
+                key = self.names.pair(rule.rule)
+                refused[key] = self.names.rule(rule).result.findings
+                standing[key] = tuple(self.names.pair(each) for each in rule.standing)
+        return Trial(self, refused, standing)
+
+    def with_choices(self, changes: Mapping[Key, object]) -> CoreComposition:
+        """``changes`` set as one change (``trial``); a refusal is a ``ValueError`` naming
+        each refused value or rule, with the stored choices standing in its way (the node's
+        change, ``finn.custom_op.partition.DataflowCore.point``)."""
+        trial = self.trial(changes)
+        if not trial.accepted:
+            raise ValueError(
+                "choices are not accepted: "
+                + "; ".join(
+                    f"{dotted(key)}: "
+                    + "; ".join(map(str, found))
+                    + (
+                        f" (standing: {', '.join(map(dotted, trial.standing[key]))})"
+                        if trial.standing.get(key)
+                        else ""
+                    )
+                    for key, found in trial.refused.items()
+                )
+            )
+        return trial.network
+
+    # -- its class's answers ----------------------------------------------------------------
+
+    def refused(self) -> Rejected | None:
+        """Its refusal as a whole, where a rule of it refuses it (``inspection.validity``);
+        None where none does. Its class answers its channels' neighbours and hops only where
+        every rule of it accepts it: the engine answers a view of a Space only so, and they
+        are views of the core's own, across its members. So a refused core has neither, and
+        no netlist: whether it should keep them is pending a decision (today it does not)."""
+
+        def read() -> Rejected | None:
+            found = inspection.validity(self._point).result
+            return found if isinstance(found, Rejected) else None
+
+        found: Rejected | None = self._read("refused", read)
+        return found
+
+    def answer(self, member: View[T]) -> QueryResult[T]:
+        """Its class's answer ``member``, a view of the core's own (``Kernel.netlist``,
+        ``Kernel.frame_cycles``, ``DataflowCoreKernel.module``), read once: each finding
+        below a member as that member's (``local``), naming it (``located``). Refused, as a
+        whole, where a rule of it refuses it (``refused``): the engine answers a view only
+        where every rule below it accepts it."""
+
+        name = member.name
+        assert name is not None  # a view declared in a Space class is named there
+
+        def read() -> QueryResult[T]:
+            found: QueryResult[T] = self._point.query(getattr(type(self._point), name))
+            if isinstance(found, (Rejected, Unresolved)):
+                return type(found)(tuple(map(self._rooted, found.findings)))
+            return found
+
+        answered: QueryResult[T] = self._read(f"answer {name}", read)
+        return answered
+
+    def netlist(self) -> QueryResult[tuple[Fragment, tuple[Bus, ...]]]:
+        """What its top is made of, as its class answers it (``answer``): its netlist
+        (``Kernel.netlist``) and its module's edge (``DataflowCoreKernel.edge_buses``: each
+        edge port's AXIS bus); or why not: a slice's edge first (``slice-not-emitted``),
+        then what refuses its netlist, then what either waits on. The shell's counts read it
+        (``finn.custom_op.kernels.shell``), its top's pins counted without building it."""
+        edge = self.answer(DataflowCoreKernel.edge_buses)
+        if isinstance(edge, Rejected):
+            return edge
+        found = self.answer(Kernel.netlist)
+        if not isinstance(found, Available):
+            return found
+        if not isinstance(edge, Available):
+            return edge
+        return Available((found.value, edge.value))
+
+    def _rooted(self, finding: Finding) -> Finding:
+        """A finding of its class's answer, as the member it is below gives it, naming the
+        member (``answer``); one of no member's as it is."""
+        below = self.names.below(finding.owner)
+        if below is None:
+            return finding
+        name, key = below
+        return self.located(
+            name, self.local(name, finding) if key else replace(finding, owner=name)
+        )
+
+    def neighbours(self, name: str) -> Neighbours | Rejected | Unresolved:
+        """The ports beside channel ``name``, as its class answers them
+        (``finn.kernels.base.neighbours``: each kernel's port's stream pins, labelled below
+        its member's node, and its pace at its kernel's interval, a scheduled port's; a
+        frozen neighbour's, outside a slice, as its class's fact gives it at the neighbour's
+        stored choices). FIFO sizing reads their paces (``finn.kernels.fifo_sizing``), and
+        the netlist its hops to them (``hops``). Refused where a rule refuses the core
+        (``refused``): its class answers them only where every rule accepts it; and where
+        its class does not answer them, what refuses them or what they wait on, each finding
+        naming its member (``answer``)."""
+        refused = self.refused()
+        if refused is not None:
+            return refused
+        found = self.answer(neighbours(type(self._point), self.node(name)))
+        if isinstance(found, (Rejected, Unresolved)):
+            return found
+        assert isinstance(found, Available)  # a view of each member channel, never inapplicable
+        beside: Neighbours = found.value
+        return beside
+
+    def hops(self, name: str) -> OuterHops | Rejected | Unresolved:
+        """Channel ``name``'s hops to the ports beside it, as its class answers them
+        (``finn.kernels.base.hops``); or why not, its refusals owned by ``name``, or what
+        they wait on."""
+        node = self.node(name)
+        found = self._result(name, self._point.query(hops(type(self._point), node)))
+        if isinstance(found, Available):
+            wired: OuterHops = found.value
+            return wired
+        owned = tuple(
+            replace(each, owner=name) if each.owner == node else each
+            for each in getattr(found, "findings", ())
+        )
+        return Rejected(owned) if isinstance(found, Rejected) else Unresolved(owned)
+
+    def own_resources(self) -> QueryResult[Resources]:
+        """What it uses: its members' own statements' sum, as its class answers it
+        (``Kernel.resources``, ``answer``), or, in a shell, what the shell uses over it
+        (``shell_use``: its members', its movers' and its static region's); or what they
+        wait on, or why it is refused."""
+        shell_use = self._shell_use
+        if shell_use is not None:
+            used: QueryResult[Resources] = self._read("shell use", lambda: shell_use(self))
+            return used
+        return self.answer(Kernel.resources)
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}({', '.join(self.order)})"
 
 
-S = TypeVar("S", bound=KernelComposition)
+def _decisions(point: DataflowCoreKernel) -> dict[Key, inspection.DecisionInfo[object]]:
+    """Every Decision of ``point``, by key, by member in rank order, each member's in the
+    flow order: its class's, listed or not (a choice its facts alone rule out is in no list
+    of a design space, and is still a choice by name)."""
+    names = type(point).names
+    found: dict[str, dict[Key, inspection.DecisionInfo[object]]] = {
+        name: {} for name in names.members
+    }
+    for item in inspection.decisions(inspection.model(point)):
+        owner, key = names.pair(item.key)
+        found[owner][(owner, key)] = item
+    return {key: item for each in found.values() for key, item in each.items()}
 
 
-def _kernel(composition: Composition) -> KernelComposition:
-    """``composition``, as FINN's seam makes it: a kernel composition. The hook is given the
+S = TypeVar("S", bound=CoreComposition)
+
+
+def _kernel(composition: Composition) -> CoreComposition:
+    """``composition``, as FINN's seam makes it: a core's composition. The hook is given the
     seam's (``finn.core.search.Hook``), which cannot name FINN's."""
-    return cast(KernelComposition, composition)
+    return cast(CoreComposition, composition)
 
 
 def _decision(network: Composition, key: Key) -> inspection.DecisionInfo[object]:
@@ -346,20 +926,20 @@ class Seam(search.Seam):
         self.checks: list[FifoCheck] = []
         self.dropped: dict[Key, tuple[Finding, ...]] = {}
 
-    def transports(self, network: KernelComposition) -> Mapping[Key, str]:
+    def transports(self, network: CoreComposition) -> Mapping[Key, str]:
         """Every transport the network declares, by key, with its FIFO case: a Decision
         of a ``Channel`` member one of whose cases places a ``ChannelFifo``, found by its
         class, whatever its state."""
         return _declared_transports(self, network)
 
-    def fifos(self, network: KernelComposition) -> Mapping[Key, Key]:
+    def fifos(self, network: CoreComposition) -> Mapping[Key, Key]:
         """Every FIFO the network's channels declare (a ``ChannelFifo``, found by its
         class, open or not, in play or not), by its depth's key (the ``ChannelFifo``'s
         own ``depth``), with its memory's (its ``buffer.ram_style``, the FIFO kernel's
         own choice)."""
         return _channel_fifos(self.declared(network))
 
-    def check_fifos(self, network: KernelComposition) -> FifoCheck:
+    def check_fifos(self, network: CoreComposition) -> FifoCheck:
         """Each stored transport of ``network`` checked against its stream at the network's
         bottleneck period (``Cost.bottleneck``, as ``SizeFifos`` reads it): one simulation
         of its channel's sides with the words it holds (``finn.kernels.fifo_sizing.holds``:
@@ -375,7 +955,7 @@ class Seam(search.Seam):
         self.checks.append(found)
         return found
 
-    def _check_fifos(self, network: KernelComposition) -> FifoCheck:
+    def _check_fifos(self, network: CoreComposition) -> FifoCheck:
         """``check_fifos``, not recorded."""
         bottleneck = self.cost(network).bottleneck
         if bottleneck is None:
@@ -469,7 +1049,7 @@ class Seam(search.Seam):
         self.dropped.update(found.stale)
         return self.reopen(network, found.stale)[0], found
 
-    def cost(self, network: KernelComposition, members: Iterable[str] | None = None) -> Cost:
+    def cost(self, network: CoreComposition, members: Iterable[str] | None = None) -> Cost:
         """Each member's cycles a frame, buffering and resources (``Kernel.frame_cycles``,
         ``Kernel.buffering``, ``Kernel.resources``; only ``members``' when named), and what
         its cycles assume (``Kernel.assumed``, where known and not empty),
@@ -503,7 +1083,7 @@ class Seam(search.Seam):
                 refused[name] = _findings_of(answer)
         return Cost(cycles, buffering, waiting, refused, resources, unstated, assumed)
 
-    def resources(self, network: KernelComposition) -> Stated | tuple[Finding, ...]:
+    def resources(self, network: CoreComposition) -> Stated | tuple[Finding, ...]:
         """What the network uses of the device as far as it is stated (``Stated``): its
         own statement where it makes one (a shell's: its partition's, its movers' and its
         static region's sum), else its members' sum, exact; or, where members state none,
@@ -528,7 +1108,7 @@ class Seam(search.Seam):
 
 
 def _unread(found: Rejected | Unresolved) -> str:
-    """Why the ports beside a channel are not read (``KernelComposition.neighbours``): what
+    """Why the ports beside a channel are not read (``CoreComposition.neighbours``): what
     refuses them (the partition's rule, where a rule refuses the partition) or what they
     wait on, each finding by its owner."""
     why = "refused" if isinstance(found, Rejected) else "waiting"
@@ -536,7 +1116,7 @@ def _unread(found: Rejected | Unresolved) -> str:
     return f"the ports beside its channel are not read, {why}: {findings}"
 
 
-def _fifo_words(network: KernelComposition, ram_style: Key) -> int | None:
+def _fifo_words(network: CoreComposition, ram_style: Key) -> int | None:
     """The words the FIFO whose memory is ``ram_style`` accepts (its storage's capacity),
     or None where it states none (its style open, or its storage refused)."""
     owner, key = ram_style
@@ -559,7 +1139,7 @@ def _transport_of(transports: Mapping[Key, str], key: Key) -> Key | None:
     return None
 
 
-def _folding(seam: Seam, network: KernelComposition) -> list[Key]:
+def _folding(seam: Seam, network: CoreComposition) -> list[Key]:
     """The scope of a strategy that folds: every stored kernel choice not held. A
     channel's choices are not a fold's: a transport, or a FIFO's choice under it, is
     ``SizeFifos``'; the others (its memories' styles, its source's pumping) stay as stored,
@@ -1374,7 +1954,7 @@ class MaxThroughput:
         return tried
 
     def _cost(
-        self, seam: Seam, folded: KernelComposition, prior: Mapping[Key, object]
+        self, seam: Seam, folded: CoreComposition, prior: Mapping[Key, object]
     ) -> tuple[Bottleneck, Stated]:
         """The bottleneck and the network's resources, as far as they are stated, of
         ``folded`` with ``prior``'s values given back (``Seam.restore``); where a member's
@@ -1537,7 +2117,7 @@ class SizeFifos:
             self.strategy,
         )
 
-    def scope(self, seam: Seam, network: KernelComposition) -> list[Key]:
+    def scope(self, seam: Seam, network: CoreComposition) -> list[Key]:
         """What it reopens: every stored transport not held, and the FIFO choices under
         it."""
         transports = seam.transports(network)
@@ -1654,7 +2234,7 @@ class SizeFifos:
         the word's and the FIFO's bits, and why."""
         return {name: each.row() for name, each in self.proposals.items()}
 
-    def transports(self, seam: Seam, network: KernelComposition) -> list[_Transport]:
+    def transports(self, seam: Seam, network: CoreComposition) -> list[_Transport]:
         """The open transports it sizes on ``network``."""
         declared = seam.declared(network)
         offered = seam.choices(network, keys=set(seam.transports(network)))
@@ -1669,7 +2249,7 @@ _FIFO_STYLE = "auto"
 
 def _transport(
     seam: Seam,
-    network: KernelComposition,
+    network: CoreComposition,
     choice: Choice,
     declared: Mapping[Key, type[Space] | None],
 ) -> _Transport | None:
@@ -1730,7 +2310,7 @@ def _channel_fifos(declared: Mapping[Key, type[Space] | None]) -> dict[Key, Key]
     return found
 
 
-def _declared_transports(seam: Seam, network: KernelComposition) -> dict[Key, str]:
+def _declared_transports(seam: Seam, network: CoreComposition) -> dict[Key, str]:
     """Every Decision of a ``Channel`` member (on the channel itself) one of whose cases,
     and one only, places a ``ChannelFifo``, with that case: the transports, by the FIFO's
     class (``_transport`` checks an open one further)."""
@@ -1760,7 +2340,7 @@ __all__ = [
     "DebugPlaceholder",
     "Defaults",
     "FifoCheck",
-    "KernelComposition",
+    "CoreComposition",
     "KernelExplorer",
     "KernelHook",
     "MaxThroughput",

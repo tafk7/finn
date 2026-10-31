@@ -20,10 +20,12 @@ from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
+from support.configure import core_in_shell
 from support.space_walk import check, walk
 
+from finn.core.graph.partition import CUT_NAME
 from finn.core.space import Space
-from finn.custom_op.kernels.shell import in_shell, make_cut_choices
+from finn.custom_op.kernels.shell import core_space, make_cut_choices
 from finn.kernels.configure import commit
 from finn.platform.resolve import resolve_target
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
@@ -77,16 +79,16 @@ def mlp(layers: int) -> ModelWrapper:
 
 def whole_space(layers: int) -> Space:
     """The chain's kernels and channels composed as one Space, kernels first (the class of
-    its partition as the graph layer binds it in its shell, ``in_shell``), with the
+    its partition as the graph layer binds it in its shell, ``core_space``), with the
     choices conversion and the cut store committed (``make_cut_choices``: what the cut does
     to a body)."""
     target = resolve_target(part="xczu3eg-sbva484-1-e", period_ns=5.0)
     model = mlp(layers).transform(ToKernelOps(target)).transform(InferKernelTensors())
-    made = make_cut_choices(model)
+    made = make_cut_choices(model, CUT_NAME)
     assert not (made.stale or made.late or made.unset), made
-    bound = in_shell(model, model.graph.node)
+    bound = core_in_shell(model, model.graph.node)
     stored = {bound.path(key): value for key, value in bound.chosen().items()}
-    return commit(bound.composed.design_space(), stored)
+    return commit(core_space(model, CUT_NAME), stored)
 
 
 def test_eight_kernels_answer_as_a_recomputation() -> None:

@@ -37,6 +37,7 @@ from support.models import TARGET, kernel_model
 from support.tfc import ULTRA96
 
 from finn.core.graph.annotations.platform import write_target
+from finn.core.graph.partition import CUT_NAME
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.search import Hold
 from finn.custom_op.kernels.shell import verify_partition
@@ -68,7 +69,7 @@ def explore_each(
     """``model`` explored by ``strategies``, in order, on one seam, as the build's step runs
     them: the report, with each strategy's entry in order (``strategies``), and every
     finding."""
-    explored = explore_kernel_choices(model, strategies)
+    explored = explore_kernel_choices(model, strategies, name=CUT_NAME)
     return dict(explored.report), explored.findings
 
 
@@ -207,7 +208,7 @@ def test_where_nothing_fits_the_search_states_it_and_keeps_the_least_parallelism
     assert [finding.code for finding in findings] == ["resource-budget"]
     unsized = kernel_model()
     write_target(unsized, ULTRA96)
-    explore_kernel_choices(unsized, [Defaults()])
+    explore_kernel_choices(unsized, [Defaults()], name=CUT_NAME)
     _, check = verify_partition(unsized, "the chain")
     assert [(f.kind, f.code) for f in check.findings] == [
         (FindingKind.LIMITATION, "direct-throttles")

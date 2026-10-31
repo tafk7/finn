@@ -100,6 +100,7 @@ from finn.core.graph.annotations.outputs import (
 from finn.core.graph.annotations.platform import read_target, write_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import (
+    CUT_NAME,
     KERNEL_OPS_DOMAIN,
     design_digest,
     partition_body,
@@ -183,7 +184,7 @@ def explore_body(model: ModelWrapper, strategies: Sequence[KernelExplorer]) -> E
     """What a user's own step does: the partition's body of the parent graph ``model``
     explored by ``strategies`` (one search) and saved in its file."""
     _, body, body_file = partition_body(model)
-    explored = explore_kernel_choices(body, strategies)
+    explored = explore_kernel_choices(body, strategies, name=CUT_NAME)
     body.save(body_file)
     return explored
 
@@ -914,7 +915,7 @@ def test_an_output_is_listed_after_the_outputs_it_is_made_from(tmp_path: Path) -
         assert failed_checks(config(tmp_path, steps=steps)) == {}
     model = kernel_model()
     write_target(model, ULTRA96)
-    model = model.transform(MakeCutChoices())  # its movers, as the cut makes them
+    model = model.transform(MakeCutChoices(CUT_NAME))  # its movers, as the cut makes them
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)
@@ -940,7 +941,7 @@ def test_a_deployment_ships_only_the_bitfile_and_driver_its_build_made(tmp_path:
     code."""
     model = kernel_model()
     write_target(model, ULTRA96)
-    model = model.transform(MakeCutChoices())  # its movers, as the cut makes them
+    model = model.transform(MakeCutChoices(CUT_NAME))  # its movers, as the cut makes them
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)
@@ -1026,7 +1027,7 @@ def cut_parent(directory: Path) -> ModelWrapper:
     """The Chain's parent graph in the Zynq shell, cut into a partition, its choices saved."""
     model = kernel_model()
     write_target(model, ULTRA96)
-    model = model.transform(MakeCutChoices())  # its movers, as the cut makes them
+    model = model.transform(MakeCutChoices(CUT_NAME))  # its movers, as the cut makes them
     configure_partition(model)
     return model.transform(CutKernelPartition(directory))
 
@@ -1100,7 +1101,7 @@ def test_the_bitfiles_clock_findings_are_noted(
     monkeypatch.setattr(ObjectiveSeen, "seen", [])
     model = kernel_model()
     write_target(model, ULTRA96)
-    model = model.transform(MakeCutChoices())  # its movers, as the cut makes them
+    model = model.transform(MakeCutChoices(CUT_NAME))  # its movers, as the cut makes them
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)
@@ -1401,14 +1402,14 @@ def test_the_delivered_clock_is_reported_beside_the_one_asked(tmp_path: Path) ->
 
 def test_a_partitions_bottleneck_is_read_from_its_saved_choices() -> None:
     model = kernel_model()
-    explored = explore_kernel_choices(model, [Ranked(Lanes(2))])
-    assert shell_bottleneck(model) == explored.cost.bottleneck
-    assert shell_bottleneck(model) is not None
+    explored = explore_kernel_choices(model, [Ranked(Lanes(2))], name=CUT_NAME)
+    assert shell_bottleneck(model, CUT_NAME) == explored.cost.bottleneck
+    assert shell_bottleneck(model, CUT_NAME) is not None
     # On a body made by hand, once its choices are created, it is the bottleneck of the
     # point as it is built.
     made = kernel_model()
-    expected = explore_kernel_choices(kernel_model()).cost.bottleneck
-    assert shell_bottleneck(made.transform(MakeCutChoices())) == expected
+    expected = explore_kernel_choices(kernel_model(), name=CUT_NAME).cost.bottleneck
+    assert shell_bottleneck(made.transform(MakeCutChoices(CUT_NAME)), CUT_NAME) == expected
 
 
 #: Z0's strategies: the Zynq landing's baseline build explored TFC so.
@@ -1771,7 +1772,7 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
     # The delivered clock against the one asked, the bottleneck the partition's network's,
     # its movers included: the input mover.
     clock = json.loads((report / "delivered_clock.json").read_text())
-    bottleneck = shell_bottleneck(body)
+    bottleneck = shell_bottleneck(body, CUT_NAME)
     assert bottleneck is not None
     assert (clock["delivered_mhz"], clock["bottleneck_cycles"]) == (187.512, bottleneck.cycles)
     assert (bottleneck.members, bottleneck.cycles) == (("Reshape_0_out0",), TFC_BOTTLENECK)
@@ -1906,7 +1907,7 @@ def test_a_driver_without_its_bitfile_or_its_clock_is_refused(tmp_path: Path) ->
     so is a parent graph that states no bitfile."""
     model = kernel_model()
     write_target(model, ULTRA96)
-    model = model.transform(MakeCutChoices())  # its movers, as the cut makes them
+    model = model.transform(MakeCutChoices(CUT_NAME))  # its movers, as the cut makes them
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)
@@ -1956,7 +1957,7 @@ def test_a_bitfile_built_from_another_design_or_ip_is_refused_by_name(
     bitfile, the partition and both designs or keys, before anything is written."""
     model = kernel_model()
     write_target(model, ULTRA96)
-    model = model.transform(MakeCutChoices())  # its movers, as the cut makes them
+    model = model.transform(MakeCutChoices(CUT_NAME))  # its movers, as the cut makes them
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)

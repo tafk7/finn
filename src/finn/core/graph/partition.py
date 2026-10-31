@@ -38,6 +38,11 @@ registers it."""
 PARTITION_OP = "DataflowCore"
 """The op type of the parent graph's node whose body is a partition."""
 
+CUT_NAME = f"{PARTITION_OP}_0"
+"""The name the cut gives the partition node it makes (``finn.transformation.kernels.cut``):
+its op type and the first index. The node's name names its core's module; nothing reads
+it as a body's name where no node gives one."""
+
 
 def _sort(field: MutableSequence[Any], key: Callable[[Any], Any]) -> None:
     """Order a repeated field of messages by ``key``, in place."""
@@ -141,6 +146,7 @@ def partition_body(model: ModelWrapper) -> tuple[NodeProto, ModelWrapper, str]:
 
 __all__ = [
     "KERNEL_OPS_DOMAIN",
+    "CUT_NAME",
     "PARTITION_DOMAIN",
     "PARTITION_OP",
     "body_file",

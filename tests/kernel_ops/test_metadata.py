@@ -44,7 +44,7 @@ from finn.core.graph.annotations.platform import (
     write_target,
 )
 from finn.core.graph.errors import KernelOpError
-from finn.core.graph.partition import design_digest, search_record
+from finn.core.graph.partition import CUT_NAME, design_digest, search_record
 from finn.core.reporting.findings import by_code
 from finn.core.search import Hold, Ranked
 from finn.kernels.explore import KernelExplorer, SizeFifos, TargetThroughput
@@ -275,7 +275,7 @@ def test_what_a_build_made_is_typed_in_finn_outputs() -> None:
 
 def cut_model() -> ModelWrapper:
     """The Chain as the cut leaves it (``MakeCutChoices``), for Ultra96."""
-    return open_model().transform(MakeCutChoices())
+    return open_model().transform(MakeCutChoices(CUT_NAME))
 
 
 def chain() -> ModelWrapper:
@@ -368,7 +368,7 @@ def test_the_objective_stays_until_an_entry_changes_a_kernel() -> None:
 
     def objective(*strategies: KernelExplorer) -> object:
         model = cut_model()
-        explore_kernel_choices(model, list(strategies))
+        explore_kernel_choices(model, list(strategies), name=CUT_NAME)
         state, record = search_record(model)
         assert state == "current" and record is not None
         return record["objective_fps"]
@@ -377,7 +377,7 @@ def test_the_objective_stays_until_an_entry_changes_a_kernel() -> None:
     assert objective(TargetThroughput(fps), SizeFifos()) == fps
     # A hold of the folding the target throughput found changes no kernel's choice.
     folded = cut_model()
-    explore_kernel_choices(folded, [TargetThroughput(fps)])
+    explore_kernel_choices(folded, [TargetThroughput(fps)], name=CUT_NAME)
     kept = {"first": {"pe": choices(folded)["first"]["pe"]}}
     assert objective(TargetThroughput(fps), Hold(kept)) == fps
     # A later entry that changes a kernel's choice removes it.

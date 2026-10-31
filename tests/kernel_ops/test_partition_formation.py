@@ -21,7 +21,7 @@ from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from support import chain
-from support.configure import configured
+from support.configure import composition, configured
 from support.models import configure_partition, kernel_model
 from support.refusals import refused
 
@@ -30,8 +30,8 @@ from finn.core.graph.annotations.channel import CHANNEL, channel_choices
 from finn.core.graph.errors import KernelOpError
 from finn.core.onnx_exec import execute_onnx
 from finn.core.space import Available
-from finn.custom_op.kernels.network import network
 from finn.custom_op.kernels.shell import configured_network
+from finn.kernels.dataflow_core import DataflowCoreKernel
 from finn.transformation.kernels.cut import CutKernelPartition
 
 
@@ -137,8 +137,8 @@ def test_the_body_is_the_partition_packaging_takes(tmp_path: Path) -> None:
     stated = {
         (tensor, key): value for tensor, held in channels.items() for key, value in held.items()
     }
-    bound = network(source, kernel_ops, name=parent.graph.node[1].name)
-    built = bound.with_choices(stated).module_of()
+    bound = composition(source, kernel_ops, name=parent.graph.node[1].name)
+    built = bound.with_choices(stated).answer(DataflowCoreKernel.module)
     assert isinstance(built, Available)
     reference = built.value
     assert (module.fragment, module.abi) == (reference.fragment, reference.abi)

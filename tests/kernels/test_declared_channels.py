@@ -56,10 +56,10 @@ from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel, ChannelFifo, stated_by, stated_form
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.configure import commit
+from finn.kernels.explore import CoreComposition
 from finn.kernels.laws import AXIS_CLOCKING, Axis
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.movers import IODMA_HLS, IodmaMover, iodma_hls
-from finn.kernels.partition import Partition
 from finn.kernels.port_model import InPort, StreamPort
 from finn.kernels.sides import BUILD, ROW_MAJOR, Outside, Side, Steady
 from finn.kernels.transport import AxisBeat, StreamPins
@@ -82,7 +82,7 @@ def source(contents: tuple[int, ...], tensor: Tensor) -> Facts:
     )
 
 
-def unconfigured(first: Tensor = VECTOR, second: Tensor = VECTOR) -> Partition:
+def unconfigured(first: Tensor = VECTOR, second: Tensor = VECTOR) -> CoreComposition:
     """Two constant vectors streamed to two outputs; each channel's tensor is given. Each
     channel has only its producer: it is a boundary, named by its port."""
     network = by_hand(
@@ -106,7 +106,7 @@ def unconfigured(first: Tensor = VECTOR, second: Tensor = VECTOR) -> Partition:
     return with_direct_transports(network)
 
 
-def constants(first: Tensor = VECTOR, second: Tensor = VECTOR) -> Partition:
+def constants(first: Tensor = VECTOR, second: Tensor = VECTOR) -> CoreComposition:
     return choose(
         unconfigured(first, second),
         {

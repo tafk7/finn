@@ -11,9 +11,9 @@ from common import PLATFORM, configured, emit
 
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels.composer import Facts, PartitionDeclaration, Port, Stated, channel
+from finn.kernels.composer import DataflowCoreDeclaration, Facts, Port, Stated, channel
+from finn.kernels.explore import CoreComposition
 from finn.kernels.matmul import KnownWeights, MatMulKernel
-from finn.kernels.partition import Partition
 from finn.kernels.sides import BUILD, ROW_MAJOR, Outside, Side
 from finn.kernels.values.semantics import IntegerTensorValue
 
@@ -28,7 +28,7 @@ WEIGHTS = KnownWeights(
 # Indexed/Scheduled Ports; the source MemStream includes the ControlModel,
 # not PackedDotpKernel. Result/weight facts stay owned by MatMul; the composer
 # reads Stated values rather than recreating them.
-DECLARATION = PartitionDeclaration(
+DECLARATION = DataflowCoreDeclaration(
     {"matmul": Facts(MatMulKernel, {"x_tensor": INPUT, "weights": WEIGHTS, "platform": PLATFORM})},
     {
         "x": channel(
@@ -51,10 +51,11 @@ DECLARATION = PartitionDeclaration(
             platform=PLATFORM,
         ),
     },
+    name="compute",
 )
 
 
-def network() -> Partition:
+def network() -> CoreComposition:
     # An explicit build policy: existing packed hardware, fixed folding and FIFO
     # capacity. Channels' existing FirstValid policies select registered recipes.
     return configured(

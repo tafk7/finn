@@ -25,20 +25,19 @@ from dataclasses import replace
 
 from support import chain
 from support.chain import LEVELS, THRESHOLD_DTYPE, THRESHOLDS, W1, X_TENSOR, W
-from support.configure import configured
+from support.configure import configured, core_in_shell
 from support.helpers import FULL_DSP48E2, keyed, with_defaults
 from support.models import kernel_model
 from support.refusals import refused
 
 from finn.core.graph.annotations.platform import read_target
+from finn.core.graph.partition import CUT_NAME
 from finn.core.search import Accepted, ExploreError, Hold, Refused
 from finn.core.space import Decision, Space, derived, inspection
 from finn.custom_op.kernels.network import persist
-from finn.custom_op.kernels.shell import in_shell
-from finn.kernels.composer import Facts, PartitionDeclaration, Port, Stated, channel
-from finn.kernels.explore import Seam, TargetCycles
+from finn.kernels.composer import DataflowCoreDeclaration, Facts, Port, Stated, channel, compose
+from finn.kernels.explore import CoreComposition, Seam, TargetCycles
 from finn.kernels.matmul import KnownWeights, MatMulKernel
-from finn.kernels.partition import Partition, partition
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import IntegerTensorValue
@@ -57,11 +56,11 @@ class Board(Space):
         return replace(FULL_DSP48E2, uram=self.uram, uram_init=self.uram)
 
 
-def declared(*, adaptable: bool) -> PartitionDeclaration:
+def declared(*, adaptable: bool) -> DataflowCoreDeclaration:
     """The Board, the Chain's first MatMul and its thresholding; the hidden channel on
     the Board's platform (admitting no adapter unless ``adaptable``)."""
     platform = FULL_DSP48E2
-    return PartitionDeclaration(
+    return DataflowCoreDeclaration(
         {
             "board": Facts(Board, {}),
             "first": Facts(
@@ -114,11 +113,11 @@ def declared(*, adaptable: bool) -> PartitionDeclaration:
 
 def boarded(
     hidden: Mapping[str, object] = {}, *, folding: Mapping[str, object] = {}, adaptable: bool = True
-) -> Partition:
+) -> CoreComposition:
     """The partition with UltraRAM, the thresholding at the Chain's PE and ``folding``,
     every other choice by its policy, as conversion and the cut leave it; then the hidden
     channel's ``hidden`` choices."""
-    empty = partition(declared(adaptable=adaptable))
+    empty = CoreComposition(compose(declared(adaptable=adaptable)))
     chosen = empty.with_choices(keyed({"board.uram": True, "activate.pe": chain.PE, **folding}))
     return with_defaults(chosen).with_choices(keyed({f"hidden.{k}": v for k, v in hidden.items()}))
 
@@ -249,7 +248,7 @@ def test_a_choice_cleared_twice_in_a_run_is_reported_by_its_first_clearing() -> 
     seam = Seam(FULL_DSP48E2)
     changes = (NO_URAM, keyed({"board.uram": True}), {DEPTH: DEEP}, NO_URAM)
 
-    def search(opened: Partition, _: Mapping[tuple[str, str], object]) -> Partition:
+    def search(opened: CoreComposition, _: Mapping[tuple[str, str], object]) -> CoreComposition:
         for change in changes:
             done = seam.set(opened, change)
             assert isinstance(done, Accepted), done
@@ -286,11 +285,11 @@ def test_a_cleared_choice_the_running_strategy_sets_as_it_finds_it_is_left_to_it
     network = boarded(ULTRA)
     seam = Seam(FULL_DSP48E2)
 
-    def accepted(done: Accepted[Partition] | Refused) -> Accepted[Partition]:
+    def accepted(done: Accepted[CoreComposition] | Refused) -> Accepted[CoreComposition]:
         assert isinstance(done, Accepted), done
         return done
 
-    def search(opened: Partition, _: Mapping[tuple[str, str], object]) -> Partition:
+    def search(opened: CoreComposition, _: Mapping[tuple[str, str], object]) -> CoreComposition:
         network = accepted(seam.set(opened, {STYLE: "ultra"})).network
         done = accepted(seam.set(network, NO_URAM))
         assert list(done.cleared) == [STYLE] and done.settled == {}
@@ -325,7 +324,7 @@ def test_a_choice_the_restore_brings_into_play_is_set_by_the_fold_rule_not_left_
     seam = Seam(FULL_DSP48E2)
     simd = ("first", "simd")
 
-    def search(opened: Partition, prior: Mapping[tuple[str, str], object]) -> Partition:
+    def search(opened: CoreComposition, prior: Mapping[tuple[str, str], object]) -> CoreComposition:
         assert prior == {simd: 1}
         assert style not in opened.undecided()
         return opened
@@ -360,9 +359,9 @@ def test_a_channel_choice_a_fold_brings_into_play_is_set_by_the_fold_rule_the_st
     model = kernel_model()
     configured(model, {"first": {"pe": 4, "simd": 4}})
     style = ("x", "adapter_ram_style")
-    stored = in_shell(model, model.graph.node)
-    persist(model, stored.trial({}, [style]).network)
-    bound = in_shell(model, model.graph.node)
+    stored = core_in_shell(model, model.graph.node)
+    persist(model, stored.trial({}, [style]).network.point)
+    bound = core_in_shell(model, model.graph.node)
     assert dict(bound.states(["x"]))[style] == inspection.Absent()
     seam = Seam(read_target(model).platform)
     seam.held[("activate", "pe")] = chain.PE
@@ -371,7 +370,7 @@ def test_a_channel_choice_a_fold_brings_into_play_is_set_by_the_fold_rule_the_st
     assert dict(folded.states(["x"]))[style] == inspection.Set("distributed")
     (run,) = seam.runs
     assert (run.cleared, run.settled, run.by_policy) == ({}, {style: "distributed"}, {})
-    report = explore_kernel_choices(model, [TargetCycles(48)]).report
+    report = explore_kernel_choices(model, [TargetCycles(48)], name=CUT_NAME).report
     assert (report["strategies"][0]["cleared"], report["strategies"][0]["settled"]) == (
         {},
         {"x.adapter_ram_style": "distributed"},

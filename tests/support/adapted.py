@@ -13,8 +13,8 @@ from qonnx.core.datatype import DataType
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import Traversal
 from finn.kernels.composer import Facts, Port, channel
+from finn.kernels.explore import CoreComposition
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.partition import Partition
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.transpose import TransposeKernel
@@ -43,7 +43,7 @@ def values(rows: int = ROWS, channels: int = CHANNELS) -> tuple[tuple[int, ...],
     )
 
 
-def adapted(source: Traversal, pe: int, *, adaptable: bool = True) -> Partition:
+def adapted(source: Traversal, pe: int, *, adaptable: bool = True) -> CoreComposition:
     """A cyclic producer presenting ``source``, thresholding ``pe`` channels a beat, the
     kernels' choices stored as the partition is bound (a stored set breaking a channel's
     rule binds, the channel reading refused); each channel's open choices then by their
@@ -121,7 +121,7 @@ def transposed(
     *,
     ram_style: str = "auto",
     platform: Platform = FULL_DSP48E2,
-) -> Partition:
+) -> CoreComposition:
     """``inner_shuffle`` placed between two boundary channels: rows in, columns out."""
     shape = (batches, rows, cols)
 

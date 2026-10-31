@@ -35,7 +35,14 @@ from finn.kernels import input_generator
 from finn.kernels.artifacts.rtl import evaluate
 from finn.kernels.channels import Channel, Neighbours
 from finn.kernels.composer import Port, channel
-from finn.kernels.explore import Bottleneck, FifoCheck, Seam, SizeFifos, TargetCycles
+from finn.kernels.explore import (
+    Bottleneck,
+    CoreComposition,
+    FifoCheck,
+    Seam,
+    SizeFifos,
+    TargetCycles,
+)
 from finn.kernels.fifo import least_depth_holding
 from finn.kernels.fifo_sizing import (
     FIFO_LATENCY,
@@ -53,7 +60,6 @@ from finn.kernels.fifo_sizing import (
     stated_pattern,
 )
 from finn.kernels.input_generator import NestBuffer, nest_buffer, nest_geometry
-from finn.kernels.partition import Partition
 from finn.kernels.policies import Required
 from finn.kernels.sides import BUILD, BeatTimes, Outside, Side, Steady
 from finn.toolchain.launcher import host_toolchain
@@ -207,7 +213,7 @@ def test_a_fifo_s_depth_is_the_least_whose_storage_holds_the_words() -> None:
 # -- a channel's sides, from the paces its ports state ----------------------------------------
 
 
-def _folded() -> tuple[Seam, Partition]:
+def _folded() -> tuple[Seam, CoreComposition]:
     """The Chain as conversion and the cut leave it (``with_defaults``), folded to 12
     cycles a frame."""
     explorer = Seam(FULL_DSP48E2)
@@ -215,7 +221,7 @@ def _folded() -> tuple[Seam, Partition]:
     return explorer, TargetCycles(12).explore(explorer, with_defaults(chain.network()))
 
 
-def chosen(explorer: Seam, network: Partition) -> dict[str, object]:
+def chosen(explorer: Seam, network: CoreComposition) -> dict[str, object]:
     """``network``'s stored choices, each by ``member.key``."""
     return {dotted(key): value for key, value in explorer.chosen(network).items()}
 
@@ -259,7 +265,7 @@ def test_a_stated_pace_is_its_pattern_and_a_steady_beat_is_expanded_at_the_edge_
         stated_pattern(BeatTimes((0, 2, 5), 8), 4)
 
 
-def _stated(x: Outside | None, y: Outside | None) -> Partition:
+def _stated(x: Outside | None, y: Outside | None) -> CoreComposition:
     """The Chain with its input stated ``x`` and its output ``y`` (None: unstated), as
     conversion and the cut leave it, folded to 12 cycles a frame (``_folded``)."""
     members = chain.members()
@@ -604,7 +610,7 @@ def test_the_check_is_sizing_s_own_test_at_the_words_a_transport_holds() -> None
     assert keeps(_burst(32), _every(1, 32), 32, sized)
 
 
-def _with_fifo(depth: int = 8) -> tuple[Seam, Partition]:
+def _with_fifo(depth: int = 8) -> tuple[Seam, CoreComposition]:
     """The folded Chain with a FIFO of ``depth`` on ``levels`` (a shift register of
     ``max(5, depth)`` words)."""
     explorer, point = _folded()

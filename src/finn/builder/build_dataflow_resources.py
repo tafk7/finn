@@ -175,7 +175,7 @@ def shell_resources_report(parent: ModelWrapper, reports: Mapping[str, Path]) ->
     node, body, _ = partition_body(parent)
     target = read_target(body)
     point, _ = configured_network(body, node.name)
-    modelled = shell_resources(point)
+    modelled = shell_resources(point.network.point, point.row)
     instances = _member_instances(parent)
     columns: dict[str, dict[str, Resources | None]] = {key: {} for key in instances}
     totals: dict[str, Resources | None] = {}
@@ -275,7 +275,7 @@ def shell_resources_report(parent: ModelWrapper, reports: Mapping[str, Path]) ->
         "absent": absent,
     }
     if packaged is not None:
-        report["partition_members"] = ooc_member_resources(body, Path(packaged).parent)
+        report["partition_members"] = ooc_member_resources(body, node.name, Path(packaged).parent)
     return report
 
 

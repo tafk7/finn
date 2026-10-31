@@ -5,7 +5,7 @@
 
 ``CutKernelPartition`` puts every KernelOp in one ``DataflowCore`` and
 returns the parent graph, which the build keeps as its model. The partition is named
-``DataflowCore_0`` (``PARTITION``) for its node, its body's file
+``DataflowCore_0`` (``finn.core.graph.partition.CUT_NAME``) for its node, its body's file
 (``<directory>/DataflowCore_0.onnx``), its IP and its block-design instance. The body carries
 the parent's target. Everything after the cut opens the body through the node
 (``finn.core.graph.partition.partition_body``).
@@ -46,9 +46,14 @@ from qonnx.transformation.create_generic_partitions import PartitionFromLambda
 from finn.core.graph.annotations.boundary import write_boundary
 from finn.core.graph.annotations.channel import CHANNEL, clear_channel_choices, refuse_outside_body
 from finn.core.graph.errors import KernelOpError
-from finn.core.graph.partition import KERNEL_OPS_DOMAIN, PARTITION_DOMAIN, PARTITION_OP
+from finn.core.graph.partition import (
+    CUT_NAME,
+    KERNEL_OPS_DOMAIN,
+    PARTITION_DOMAIN,
+    PARTITION_OP,
+)
 from finn.core.reporting.findings import Finding
-from finn.custom_op.kernels.network import PARTITION, partition_ports
+from finn.custom_op.kernels.network import partition_ports
 from finn.custom_op.kernels.shell import make_cut_choices
 from finn.kernels.sides import Outside
 from finn.transformation.kernels.convert import between_kernel_ops
@@ -65,32 +70,34 @@ def _kernel_ops_together(node: NodeProto) -> str | int:
 class MakeCutChoices(Transformation):
     """What the cut does to the body it makes, for a body made by hand: the channels'
     choices made, the nodes' stored choices bound in context, and a node choice the body
-    leaves open set by its KernelOp's policies (``shell.make_cut_choices``). ``dropped``
+    leaves open set by its KernelOp's policies (``shell.make_cut_choices``), its core's
+    module named ``name`` (its node's, ``DataflowCore_0`` as the cut names it). ``dropped``
     lists the stored choices dropped as stale, ``late`` the node choices set late,
     ``unset`` the choices no value could be set for and ``fallbacks`` those set in listed
     order where a ranking could not be read, by owner and key
     (``MatMul_0.pe``), each with its findings."""
 
-    def __init__(self) -> None:
+    def __init__(self, name: str) -> None:
         super().__init__()
+        self.name = name
         self.dropped: dict[str, tuple[Finding, ...]] = {}
         self.late: dict[str, tuple[Finding, ...]] = {}
         self.unset: dict[str, tuple[Finding, ...]] = {}
         self.fallbacks: dict[str, tuple[Finding, ...]] = {}
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
-        made = make_cut_choices(model)
+        made = make_cut_choices(model, self.name)
         self.dropped, self.late, self.unset = dict(made.stale), dict(made.late), dict(made.unset)
         self.fallbacks = dict(made.fallbacks)
         return model, False
 
 
 class CutKernelPartition(Transformation):
-    """Cut the model's KernelOps into the partition ``PARTITION``, its body saved in
+    """Cut the model's KernelOps into the partition ``CUT_NAME``, its body saved in
     ``directory`` with what the build states of its boundary (``boundary``, by tensor;
     none by default) and its channels' choices made (see the module docstring). Refuses a
     model that holds a partition already or no KernelOps, one with host nodes between
-    KernelOps or storing channel choices, one with a host node named ``PARTITION``, and a
+    KernelOps or storing channel choices, one with a host node named ``CUT_NAME``, and a
     statement on a tensor no port of the partition carries. ``dropped``, ``late``,
     ``unset`` and ``fallbacks``: as ``MakeCutChoices``'."""
 
@@ -126,12 +133,12 @@ class CutKernelPartition(Transformation):
                 f"KernelOps would depend on itself: {', '.join(between)}",
             )
         refuse_outside_body(model, model.tensors_stating(CHANNEL))
-        if PARTITION in host:
+        if CUT_NAME in host:
             raise KernelOpError.refused(
                 "partition-name-taken",
                 CutKernelPartition.__name__,
-                f"a host node is named {PARTITION!r}, the partition's name",
-                node=PARTITION,
+                f"a host node is named {CUT_NAME!r}, the partition's name",
+                node=CUT_NAME,
             )
         ports = partition_ports(model)
         unknown = [tensor for tensor in self.boundary if tensor not in ports]
@@ -158,17 +165,17 @@ class CutKernelPartition(Transformation):
             for each in parent.get_nodes_by_op_type("GenericPartition")
             if each.name == f"GenericPartition_{_KERNEL_OPS}"
         ]
-        node.op_type, node.domain, node.name = PARTITION_OP, PARTITION_DOMAIN, PARTITION
+        node.op_type, node.domain, node.name = PARTITION_OP, PARTITION_DOMAIN, CUT_NAME
         if PARTITION_DOMAIN not in {opset.domain for opset in parent.model.opset_import}:
             parent.model.opset_import.append(helper.make_opsetid(PARTITION_DOMAIN, 1))
         op = getCustomOp(node)
         cut_file = Path(str(op.get_nodeattr("model")))
         body = ModelWrapper(str(cut_file))
         write_boundary(body, self.boundary)
-        made = make_cut_choices(body)
+        made = make_cut_choices(body, CUT_NAME)
         self.dropped, self.late, self.unset = dict(made.stale), dict(made.late), dict(made.unset)
         self.fallbacks = dict(made.fallbacks)
-        body_file = self.directory / f"{PARTITION}.onnx"
+        body_file = self.directory / f"{CUT_NAME}.onnx"
         body.save(str(body_file))
         cut_file.unlink()
         cut.rmdir()

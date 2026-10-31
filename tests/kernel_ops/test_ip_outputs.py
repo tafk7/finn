@@ -65,7 +65,6 @@ from finn.core.graph.partition import design_digest, partition_body
 from finn.core.reporting.findings import FindingKind
 from finn.core.reporting.manifest import STORED
 from finn.core.rtlsim_bench import SimulationFailed
-from finn.custom_op.kernels.network import network
 from finn.custom_op.kernels.shell import configured_network, verify_partition
 from finn.kernels.artifacts.build import instance_name
 from finn.kernels.artifacts.interface import STREAM_FACTS
@@ -108,7 +107,7 @@ def test_the_description_beside_the_ip_reads_back_against_the_modules_pins(
         "vlnv": "xilinx_finn:finn:sdp_1:1.0",
         "top": described["ip"]["top"],
     }
-    assert described["ip"]["top"].startswith("finn_dataflowcore_0__")
+    assert described["ip"]["top"].startswith("finn_sdp_1__")
     assert (described["part"], described["period_ns"]) == ("xczu3eg-sbva484-1-e", 5.0)
     # Each stream states its port's boundary facts, as the configured network's channels
     # state them, and the order its free side presents the tensor in: the Chain's,
@@ -220,9 +219,7 @@ def test_out_of_context_resources_are_stated_per_member_of_the_network(
     labels = [label for label, _ in point.module.fragment.instances]
     # Each instance 10 LUTs and its index in FFs; synthesis flattened the last into the
     # top, which so has no row for it.
-    rows = [
-        f"| finn_dataflowcore_0 | (top) | {len(labels) * 10} | 0 | 0 | 0 | 21 | 0 | 0 | 0 | 0 |"
-    ]
+    rows = [f"| finn_chain | (top) | {len(labels) * 10} | 0 | 0 | 0 | 21 | 0 | 0 | 0 | 0 |"]
     rows += [
         f"|   {instance_name(label)} | m | 10 | 0 | 0 | 0 | {index} | 0 | 0 | 0 | 0 |"
         for index, label in enumerate(labels[:-1])
@@ -231,8 +228,8 @@ def test_out_of_context_resources_are_stated_per_member_of_the_network(
         "| Instance | Module | Total LUTs | Logic LUTs | LUTRAMs | SRLs | FFs | RAMB36 | RAMB18 "
         "| URAM | DSP Blocks |"
     )
-    (tmp_path / "finn_dataflowcore_0_partition_util.rpt").write_text("\n".join([header, *rows]))
-    found = ooc_member_resources(model, tmp_path)
+    (tmp_path / "finn_chain_partition_util.rpt").write_text("\n".join([header, *rows]))
+    found = ooc_member_resources(model, "chain", tmp_path)
     assert found["total"] == {"lut": 70, "ff": 21, "bram18": 0, "uram": 0, "dsp": 0}
     # Each instance is its member's: a boundary channel's adapter the channel's (x), a
     # weight's memory its channel's, a kernel's compute the kernel's.
@@ -244,7 +241,7 @@ def test_out_of_context_resources_are_stated_per_member_of_the_network(
         "first": 4,
         "activate": 5,
     }
-    assert set(found["members"]) <= set(network(model, model.graph.node).members)
+    assert set(found["members"]) <= set(point.network.members)
     # The flattened instance's resources are the top's, attributed to no member.
     assert found["unattributed"] == {"lut": 10, "ff": 6, "bram18": 0, "uram": 0, "dsp": 0}
     assert found["unreported_instances"] == ["second.compute.packed"]
@@ -468,7 +465,7 @@ def test_the_testbench_refuses_a_design_not_verified_as_it_is(tmp_path: Path) ->
     stub = cast(Toolchain, PackagedByStub())
 
     def write() -> None:
-        write_testbench(body, testbench, generated_frame(body), toolchain=stub, label=node.name)
+        write_testbench(body, testbench, generated_frame(body), toolchain=stub, name=node.name)
 
     def refused(code: str) -> None:
         with pytest.raises(KernelOpError) as found:

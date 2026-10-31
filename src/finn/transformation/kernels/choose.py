@@ -4,14 +4,15 @@
 """Exploring a partition body's kernel choices through the DSE seam, a list of strategies
 on one seam, and saving them.
 
-``explore_kernel_choices(model, strategies)`` explores a partition's body, the model of
-KernelOps the build's cut made (``CutKernelPartition``; the build's ``step_explore`` opens
-it through the parent graph's node, ``partition_body``, and saves it in its file), so which
-KernelOps go together is the cut's alone: a model holding any other node is refused. It
-binds the body's network in its shell (``finn.custom_op.kernels.shell.in_shell``: their
-kernels, the channels between them and the channels on its boundary, members named as the
-graph, ``MatMul_0``; the nodes' and the channels' saved choices set as it binds, a stale one
-dropped with why), which its ``Seam`` (``finn.kernels.explore``) explores, each choice keyed
+``explore_kernel_choices(model, strategies, name=...)`` explores a partition's body, the
+model of KernelOps the build's cut made (``CutKernelPartition``; the build's
+``step_explore`` opens it through the parent graph's node, ``partition_body``, and saves it
+in its file), so which KernelOps go together is the cut's alone: a model holding any other
+node is refused. It binds the body's core in its shell, its module named by the partition
+node's name (``finn.custom_op.kernels.shell.core_point``: their kernels, the channels
+between them and the channels on its boundary, members named as the graph, ``MatMul_0``;
+the nodes' and the channels' saved choices set as it binds, a stale one dropped with why),
+which its ``Seam`` (``finn.kernels.explore``) explores, each choice keyed
 by its owner, a node or a tensor, and the key there; runs each strategy of the list in
 order on that one seam (the keys a ``Hold`` fixes stay held for the strategies after it),
 each reopening the choices it decides, searching, and giving back the prior values of those
@@ -115,15 +116,18 @@ from finn.core.space import Available
 from finn.custom_op.kernels.base import why
 from finn.custom_op.kernels.network import persist, stale_text
 from finn.custom_op.kernels.shell import (
-    InShell,
     ShellResources,
-    in_shell,
+    body_row,
+    core_point,
+    shell_composition,
     shell_resources,
 )
+from finn.kernels.dataflow_core import Bound
 from finn.kernels.explore import (
     FIFOS_BY_MODEL,
     FIFOS_NOT_CHECKED,
     Bottleneck,
+    CoreComposition,
     Cost,
     FifoCheck,
     KernelExplorer,
@@ -133,7 +137,6 @@ from finn.kernels.explore import (
 )
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.movers import MEMORY_LATENCY, MoverContract
-from finn.kernels.partition import Partition
 from finn.kernels.policies import Required
 from finn.kernels.utilization import SHELL_CHARACTERISED, binding, over, total
 from finn.platform.capabilities import Platform
@@ -153,7 +156,7 @@ class Explored:
     (``findings``: the strategy's, its last check's of the transports where it checked,
     then the resources'), never a refusal."""
 
-    network: InShell
+    network: CoreComposition
     cost: Cost
     report: Mapping[str, Any]
     findings: tuple[Finding, ...] = ()
@@ -276,7 +279,9 @@ def _over_part(most: str | None, exceeded: Mapping[str, Mapping[str, int]]) -> t
     )
 
 
-def _cost_report(network: Partition, cost: Cost, resources: dict[str, object]) -> dict[str, object]:
+def _cost_report(
+    network: CoreComposition, cost: Cost, resources: dict[str, object]
+) -> dict[str, object]:
     bottleneck = cost.bottleneck
     return {
         "members": {
@@ -296,7 +301,7 @@ def _cost_report(network: Partition, cost: Cost, resources: dict[str, object]) -
     }
 
 
-def _fifo_storage(seam: Seam, network: Partition) -> dict[str, dict[str, object]]:
+def _fifo_storage(seam: Seam, network: CoreComposition) -> dict[str, dict[str, object]]:
     """Each FIFO's memory style, by the graph name (a node or a tensor) and key that
     persist it, beside the storage the RTL selects for it (FinnLib's ``auto``: shift,
     distributed, block or ultra) and what it uses: each ``ChannelFifo``'s, found by its
@@ -356,7 +361,7 @@ def _judged(entry: Mapping[str, Any] | None, check: FifoCheck | None) -> str:
     return FIFOS_NOT_CHECKED if check is None else FIFOS_BY_MODEL
 
 
-def _placed(seam: Seam, network: Partition) -> dict[Key, object]:
+def _placed(seam: Seam, network: CoreComposition) -> dict[Key, object]:
     """Every FIFO placed on ``network``: each transport at its FIFO case, with its depth
     (None where it is open): its ``ChannelFifo``'s own, found by its class."""
     chosen = seam.chosen(network)
@@ -378,7 +383,7 @@ def _placed(seam: Seam, network: Partition) -> dict[Key, object]:
     return found
 
 
-def _mover_rows(network: Partition, movers: Sequence[str]) -> dict[str, dict[str, object]]:
+def _mover_rows(network: CoreComposition, movers: Sequence[str]) -> dict[str, dict[str, object]]:
     """Each mover's facts and cycles a frame, by its boundary channel."""
     rows: dict[str, dict[str, object]] = {}
     for name in movers:
@@ -406,7 +411,7 @@ def _mover_rows(network: Partition, movers: Sequence[str]) -> dict[str, dict[str
 
 
 def _hold_refused(
-    error: ExploreError, strategy: KernelExplorer, bound: Partition
+    error: ExploreError, strategy: KernelExplorer, bound: Bound
 ) -> ExploreError | None:
     """``error``, a hold's ``pin-refused``, as the entry that states a held key the bind
     dropped as stale refuses it: the bind's findings for those keys (``domain-membership``,
@@ -481,11 +486,12 @@ def _entry_report(
 
 
 def explore_kernel_choices(
-    model: ModelWrapper, strategies: Sequence[KernelExplorer] = ()
+    model: ModelWrapper, strategies: Sequence[KernelExplorer] = (), *, name: str
 ) -> Explored:
     """The KernelOps of a partition's body, ``model``, explored by ``strategies``, in
     order, on one seam (the holds of one lasting through the rest), and every value
-    persisted, on its network in the shell of the model's target, the search's record kept;
+    persisted, on its core in the shell of the model's target, its module named ``name``
+    (the partition node's), the search's record kept;
     no strategy: only checked and reported. See the module docstring. The body is changed
     only at the end, by the persisted values and the record; a refusal or an exception
     before leaves it as it was."""
@@ -501,11 +507,11 @@ def explore_kernel_choices(
             f"{', '.join(others)}: not KernelOps; exploration reads a partition's body, the "
             "KernelOps the cut put together (CutKernelPartition, partition_body)",
         )
-    nodes = list(model.graph.node)
     started = time.perf_counter()
-    bound = in_shell(model, nodes)
+    row = body_row(model)
+    bound = core_point(model, name)
     seam = Seam(read_target(model).platform)
-    network = bound
+    network = shell_composition(bound.point, row)
     # Who set each value: the body (what it stated), or the entry that changed it.
     set_by = dict.fromkeys(network.chosen(), "saved")
     entries: list[dict[str, Any]] = []
@@ -577,10 +583,10 @@ def explore_kernel_choices(
     cost = seam.cost(network)
     resources, over_part = _resources_report(
         cost,
-        shell_resources(network),
+        shell_resources(network.point, row),
         seam.platform,
         part_report(read_target(model).part),
-        network.row.caveat,
+        row.caveat,
     )
     movers: dict[str, object] = {}
     if network.movers and not cost.waiting and not cost.refused:
@@ -614,7 +620,7 @@ def explore_kernel_choices(
     # is refused here, before anything is written.
     model.namespace(OUTPUTS)
     # The last two writes: the values, then the record that says whose they are.
-    persist(model, network)
+    persist(model, network.point)
     model.set(OUTPUT_SEARCH, {**record, "design": design_digest(model)})
     return Explored(network, cost, explored, (*found, *over_part))
 
@@ -648,12 +654,12 @@ def exploration_summary(explored: Explored) -> list[str]:
     return lines
 
 
-def shell_bottleneck(model: ModelWrapper) -> Bottleneck | None:
-    """The slowest members of a partition model of KernelOps' network, movers included,
-    and their cycles a frame, its saved choices replayed (None where a member's cycles
-    wait on a choice left open)."""
-    bound = in_shell(model, model.graph.node)
-    return Seam(read_target(model).platform).cost(bound).bottleneck
+def shell_bottleneck(model: ModelWrapper, name: str) -> Bottleneck | None:
+    """The slowest members of a partition model of KernelOps' core in its shell, its
+    module named ``name`` (the partition node's), movers included, and their cycles a frame,
+    its saved choices replayed (None where a member's cycles wait on a choice left open)."""
+    core = shell_composition(core_point(model, name).point, body_row(model))
+    return Seam(read_target(model).platform).cost(core).bottleneck
 
 
 __all__ = [

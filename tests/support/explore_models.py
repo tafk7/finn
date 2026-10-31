@@ -12,6 +12,7 @@ from qonnx.transformation.infer_shapes import InferShapes
 
 from finn.core.graph.annotations.channel import CHANNEL, channel_choices
 from finn.core.graph.annotations.platform import write_target
+from finn.core.graph.partition import CUT_NAME
 from finn.custom_op.kernels.base import kernel_op
 from finn.kernels.explore import KernelExplorer
 from finn.platform.target import Target
@@ -40,7 +41,8 @@ def choices(model: ModelWrapper) -> dict[str, dict[str, object]]:
 
 def explored(model: ModelWrapper, *strategies: KernelExplorer) -> ModelWrapper:
     """A copy of ``model`` explored by ``strategies``, in order, on one seam
-    (``explore_kernel_choices``): the model itself is not changed."""
+    (``explore_kernel_choices``, its core named as the cut names its node): the model
+    itself is not changed."""
     found = ModelWrapper(copy.deepcopy(model.model))
-    explore_kernel_choices(found, strategies)
+    explore_kernel_choices(found, strategies, name=CUT_NAME)
     return found

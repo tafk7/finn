@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 from qonnx.core.modelwrapper import ModelWrapper
-from support.configure import configured
+from support.configure import bound_in_shell, configured, core_in_shell
 from support.ipxact_ports import AXILITE
 from support.models import (
     ROW_MAJOR_W2,
@@ -44,9 +44,9 @@ from finn.core.graph.annotations.outputs import (
 )
 from finn.core.graph.annotations.platform import PLATFORM_KEYS, read_target, write_target
 from finn.core.graph.errors import KernelOpError
-from finn.core.graph.partition import KERNEL_OPS_DOMAIN, design_digest, partition_body
+from finn.core.graph.partition import CUT_NAME, KERNEL_OPS_DOMAIN, design_digest, partition_body
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import configured_network, in_shell
+from finn.custom_op.kernels.shell import body_row, configured_network, shell_composition
 from finn.dataflow.traversal import Loop, Reorder, Traversal, offsets
 from finn.platform.resolve import resolve_target
 from finn.transformation.kernels import (
@@ -78,7 +78,7 @@ def chain(shell: str = "ip") -> ModelWrapper:
     if shell == "pynq":
         model = streamed_w2_model()
         write_target(model, ZYNQ)
-        model = model.transform(MakeCutChoices())
+        model = model.transform(MakeCutChoices(CUT_NAME))
     else:
         model = kernel_model(second_weights=False)
     choose_memories(model)
@@ -312,7 +312,7 @@ def streamed_on_pynq(rows: int, choices: dict[str, Any]) -> ModelWrapper:
     model = kernel_model(second_weights=False, rows=rows)
     configured(model, choices)
     write_target(model, ZYNQ)
-    cut = MakeCutChoices()
+    cut = MakeCutChoices(CUT_NAME)
     model = model.transform(cut)
     assert cut.unset == {}
     return model
@@ -352,7 +352,7 @@ def test_a_tiled_w2_is_regrouped_after_its_mover_by_a_vpc_and_an_input_gen(case:
     boundary to the MatMul's weights."""
     rows, choices = TILED_W2[case]
     model = streamed_on_pynq(rows, choices)
-    bound = in_shell(model, model.graph.node)
+    bound = core_in_shell(model, model.graph.node)
     assert bound.validity("w2").status == "valid"
     assert {key: value for key, value in bound.chosen().items() if key[0] == "w2"} == {
         ("w2", "transport"): "direct",
@@ -414,7 +414,7 @@ def test_a_tiled_w2_is_regrouped_after_its_mover_by_a_vpc_and_an_input_gen(case:
         ("w2.adapter.input_gen_vpc.input_gen", "odat", "w2.adapter.input_gen_vpc.vpc", "idat"),
         ("w2.adapter.input_gen_vpc.vpc", "odat", "second.compute.packed", "s_axis_weights_tdata"),
     ]
-    assert in_shell(model, model.graph.node).validity("x").status == "valid"
+    assert core_in_shell(model, model.graph.node).validity("x").status == "valid"
 
 
 def test_a_row_major_w2_on_three_rows_is_replayed_by_an_input_gen_after_its_mover() -> None:
@@ -425,7 +425,7 @@ def test_a_row_major_w2_on_three_rows_is_replayed_by_an_input_gen_after_its_move
     the channel's choice (``adapter_ram_style``), which the cut makes. The network is
     configured; unstated (on ip) the edge presents the three passes and places nothing."""
     model = streamed_on_pynq(3, {"second": ROW_MAJOR_W2})
-    bound = in_shell(model, model.graph.node)
+    bound = core_in_shell(model, model.graph.node)
     w2 = bound.member("w2")
     assert bound.validity("w2").status == "valid"
     assert (outer(w2).form.lanes, outer(w2).form.beats) == (4, 4)
@@ -437,7 +437,7 @@ def test_a_row_major_w2_on_three_rows_is_replayed_by_an_input_gen_after_its_move
     configured_network(model, "DataflowCore_0")
     ip = kernel_model(second_weights=False)
     configured(ip, {"second": ROW_MAJOR_W2})
-    unstated = in_shell(ip, ip.graph.node).member("w2")
+    unstated = core_in_shell(ip, ip.graph.node).member("w2")
     assert outer(unstated).form.beats == 12 and unstated.input_chain == "none"
 
 
@@ -447,7 +447,7 @@ def test_x_read_twice_on_one_row_is_replayed_by_an_input_gen_after_its_mover() -
     ``input_gen`` replays it (and marks it), its buffer the pass (4 INT3), its memory the
     cut's choice. Unstated, the edge presents the two passes."""
     model = streamed_on_pynq(1, {})
-    bound = in_shell(model, model.graph.node)
+    bound = core_in_shell(model, model.graph.node)
     x = bound.member("x")
     assert bound.validity("x").status == "valid"
     assert (outer(x).form.beats, x.mover_contract.beats) == (2, 2)
@@ -455,7 +455,7 @@ def test_x_read_twice_on_one_row_is_replayed_by_an_input_gen_after_its_mover() -
     assert x.input_steps.describe() == "reorder -> markers"
     assert ("x", "adapter_ram_style") in bound.chosen()
     ip = kernel_model(second_weights=False, rows=1)
-    assert outer(in_shell(ip, ip.graph.node).member("x")).form.beats == 4
+    assert outer(core_in_shell(ip, ip.graph.node).member("x")).form.beats == 4
 
 
 def test_a_mover_or_bus_the_block_design_cannot_wire_is_refused_by_name(tmp_path: Path) -> None:
@@ -593,6 +593,7 @@ def test_tfc_s_choices_are_created_at_conversion_and_at_the_cut(
     ]
     assert not [name for name, held in channels.items() if "adapter" in held]
     assert not [name for name, held in channels.items() if "mover" in held]
-    bound = in_shell(body, body.graph.node)
-    assert bound.stale == {}
+    found = bound_in_shell(body, body.graph.node)
+    bound = shell_composition(found.point, body_row(body))
+    assert found.stale == {}
     assert bound.undecided() == ()

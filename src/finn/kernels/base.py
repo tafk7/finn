@@ -1100,7 +1100,9 @@ def _install(
 #
 # And it installs, for each channel, three private views of its own: the ports beside it
 # (``finn.kernels.channels.Neighbours``: each port's stream pins as its member presents them,
-# labelled below the member, and its pace in cycles where it is a scheduled port's), which
+# labelled below the member, and its pace in cycles where it is a scheduled port's; a side
+# given as a value has none, but where its holder states that side's reading, ``-<channel>-
+# <role>``: a slice's frozen neighbour's port, given as a fact), which
 # ``neighbours`` names and FIFO sizing reads; the channel's own ends its hops meet (its
 # stages, its source, its outer ports), which ``own_ends`` names; and its hops to the ports
 # beside it (``finn.kernels.channels.outer_hops``), which ``hops`` names, refused as
@@ -1454,7 +1456,8 @@ def _beside_case(
 
 def _neighbours_of(producer: str, consumer: str, made: Callable[..., Any]) -> Callable[..., Any]:
     """A channel's neighbours (above), from the readings of its producer's side and its
-    consumer's, each a helper's name (``-no-port`` for a side naming no port)."""
+    consumer's, each a helper's name (``-no-port`` for a side naming no port whose reading
+    its holder does not state)."""
 
     def neighbours(self: Kernel) -> Any:
         before = getattr(self, producer)()
@@ -1554,10 +1557,13 @@ def _connect(cls: type[Kernel]) -> None:
     for name, sides in connections.items():
         helpers: list[str] = []
         for role, port in zip(("producer", "consumer"), sides, strict=True):
-            if port is None:
-                helpers.append("-no-port")
-                continue
             helper = _installed(name, role)
+            if port is None:
+                # A side given as a value names no member port: the ports beside it are its
+                # holder's to read where it states that side's reading (a slice's frozen
+                # neighbour's, finn.kernels.dataflow_core), else it has none.
+                helpers.append(helper if helper in vars(cls) else "-no-port")
+                continue
             selector, guard, leaves = _leaves(cls, port.member, port.port)
             present = "-placed"
             if guard is not None:

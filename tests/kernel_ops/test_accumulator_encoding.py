@@ -35,9 +35,11 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.ranges import TensorRange
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
+from support.configure import composition
 from support.helpers import Lanes, port_axis
 from support.xsim import requires_xsim
 
+from finn.core.graph.partition import CUT_NAME
 from finn.core.onnx_exec import execute_onnx
 from finn.core.rtlsim_bench import pack_lanes, stream_through
 from finn.core.search import Hold, Ranked
@@ -45,6 +47,7 @@ from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import network
 from finn.custom_op.kernels.shell import configured_network
 from finn.dataflow.tensor import ScalarEncoding
+from finn.kernels.explore import CoreComposition
 from finn.kernels.matmul import column_range
 from finn.kernels.values.domains import range_dtype
 from finn.platform.resolve import resolve_target
@@ -180,12 +183,12 @@ def kernel_ops(case: Case, target: Any = ULTRA96, compute: str | None = None) ->
     model = source(case).transform(ToKernelOps(target)).transform(InferKernelTensors())
     ranked = Ranked(Lanes(2))
     if compute is None:
-        explore_kernel_choices(model, [ranked])
+        explore_kernel_choices(model, [ranked], name=CUT_NAME)
         return model
     pins = {
         node.name: {"compute": compute} for node in model.graph.node if node.op_type == "MatMul"
     }
-    explore_kernel_choices(model, [Hold(pins), ranked])
+    explore_kernel_choices(model, [Hold(pins), ranked], name=CUT_NAME)
     return model
 
 
@@ -239,7 +242,7 @@ def test_narrowed_weights_shrink_the_memory_image() -> None:
     (op,) = _matmuls(model)
     point: Any = op.point()
     assert point.w_carried.element.bits == 2
-    weights = network(model, model.graph.node).member(op.onnx_node.input[1])
+    weights = composition(model, model.graph.node).member(op.onnx_node.input[1])
     assert port_axis(weights.source, "output").payload_bits == 2 * 2 * 2
     assert port_axis(point.compute, "w").payload_bits == 2 * 2 * 2
 
@@ -262,8 +265,9 @@ def _frames(model: ModelWrapper, x: Any, y: Any) -> dict[str, Any]:
 
 def _computes(case: Case, directory: Path, **options: Any) -> None:
     model = kernel_ops(case, **options)
-    bound = network(model, model.graph.node)
-    assert bound.undecided() == () and not bound.stale
+    found = network(model, model.graph.node, name=CUT_NAME)
+    bound = CoreComposition(found.point)
+    assert bound.undecided() == () and not found.stale
     point, _ = configured_network(model, "DataflowCore_0")
     low, high = int(DataType[case.activations].min()), int(DataType[case.activations].max())
     k = len(case.layers[0].weights)

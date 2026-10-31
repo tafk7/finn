@@ -65,7 +65,7 @@ member of a leaf kernel (``input``) or a child's (``compute.packed.x``).
 
 Factors: ``SAMPLED`` takes the smallest, an interior and the largest
 configuration of the kernel's open choices that ``choices`` leaves open, each from
-its possible values (``Partition.viable``: never a value a rule refuses) with the
+its possible values (``CoreComposition.viable``: never a value a rule refuses) with the
 choices before it in the flow order set, and deduplicates them; a selector, or a
 choice with one possible value, takes its default policy and is no factor. Explicit
 configurations name the kernel's own members: a Decision is committed, a Param is
@@ -135,8 +135,8 @@ from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.configure import chosen, describe
+from finn.kernels.explore import CoreComposition
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.partition import Partition
 from finn.kernels.policies import Alone, FirstValid, Policy, defaulted
 from finn.kernels.sides import Side
 from finn.kernels.transport import StreamPins
@@ -269,7 +269,7 @@ def _label(config: Mapping[str, object]) -> str:
 
 def _possible(point: Any, key: Key) -> tuple[object, ...]:
     """The possible values of the kernel's open choice ``key`` on a design, in its list's
-    order: those setting it alone accepts (``Partition.viable``), never a value its domain
+    order: those setting it alone accepts (``CoreComposition.viable``), never a value its domain
     lists that a rule refuses."""
     ((_, found),) = point.viable((key,))
     assert found.cases, f"{dotted(key)} has no possible value: {found}"
@@ -319,7 +319,7 @@ def _defaulted(point: Any) -> Any:
 def _enumerated(base: Any, choices: Mapping[str, object]) -> list[tuple[str, dict[str, object]]]:
     """Configurations of the kernel's open choices, each set in turn.
 
-    The kernel's open choices in play are taken in its flow order (``Partition.undecided``),
+    The kernel's open choices in play are taken in its flow order (``CoreComposition.undecided``),
     one at a time, so a choice another brings into play, or whose possible values another
     narrows (pumping by SIMD), is taken after it. A pinned choice takes its value; a
     selector, or a choice with one possible value, its default policy (nothing to sample);
@@ -428,7 +428,7 @@ def _source(tensor: Tensor, form: Traversal, contents: object) -> Facts:
     )
 
 
-def design_member(design: Partition, name: str) -> Any:
+def design_member(design: CoreComposition, name: str) -> Any:
     """Member ``name`` of a design, a partition: a kernel alone, its own design space with
     its choices (``kernel_alone``), as its Decisions and validity are read; a channel's
     Space in the partition's design space."""
@@ -742,7 +742,7 @@ def _contracts(
     point: Any, space_type: type[Kernel], sample: Sample, names: Sequence[str]
 ) -> dict[str, StreamPins]:
     """The contract the kernel presents on each channel: its port beside the channel, as
-    the partition reads it (``Partition.neighbours``)."""
+    the partition reads it (``CoreComposition.neighbours``)."""
     found: dict[str, StreamPins] = {}
     for name in names:
         owner = f"{KERNEL}.{_user(point, name)}"

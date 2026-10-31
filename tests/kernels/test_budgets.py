@@ -5,11 +5,11 @@
 kernels declared here, each with one choice listed breaking value first, and on the Chain
 (``support.chain``).
 
-A partition declared with its shell's row (``PartitionDeclaration.shell``) holds the shell
+A partition declared with its shell's row (``DataflowCoreDeclaration.shell``) holds the shell
 member (``shell``), whose rules read its members' derived values: a kernel's presented
 control bus, the memory ports it initiates, whether it takes the doubled clock. A value
 that breaks a budget is refused in the partition: ``viable`` lists it refused, naming the
-shell's rule, a change setting it is refused (``Partition.trial``, the seam), and the
+shell's rule, a change setting it is refused (``CoreComposition.trial``, the seam), and the
 policies' first valid passes over it. The control buses are a sum, which waits while a
 contributor is open. The shell member is no kernel or channel, and its validity is read by
 its name. Its parents' doubled clock reads their child's: a MatMul its selected core's, a
@@ -23,7 +23,7 @@ from typing import Any
 
 import pytest
 from support import chain
-from support.helpers import by_hand, choose, keyed
+from support.helpers import by_hand, choose, keyed, root_facts
 
 from finn.core.search import Refused
 from finn.core.space import (
@@ -41,9 +41,8 @@ from finn.kernels.base import Kernel
 from finn.kernels.budgets import SHELL, ShellBudgets, counts
 from finn.kernels.composer import Facts
 from finn.kernels.control import ControlModel
-from finn.kernels.explore import Seam
+from finn.kernels.explore import CoreComposition, Seam
 from finn.kernels.matmul import MatMulKernel
-from finn.kernels.partition import Partition
 
 LITE = Bus(
     "cfg",
@@ -109,7 +108,7 @@ def kernels(
     *kinds: type[Kernel],
     shell: Mapping[str, object] | None,
     stored: Mapping[str, object] | None = None,
-) -> Partition:
+) -> CoreComposition:
     """A partition of one kernel of each of ``kinds`` (``k0``, ``k1``, ...), no channel, in
     a shell of ``shell``'s row (none where None), ``stored`` (``member.key``) bound."""
     members = {
@@ -119,7 +118,7 @@ def kernels(
     return by_hand(members, keyed(stored or {}), shell=shell)
 
 
-def viable(network: Partition, key: str) -> dict[object, tuple[str, ...]]:
+def viable(network: CoreComposition, key: str) -> dict[object, tuple[str, ...]]:
     """Each value of choice ``key`` (``member.key``), with the rules setting it alone would
     break, by their dotted key: none where it is possible."""
     ((_, item),) = network.viable(keyed({key: None}))
@@ -156,9 +155,9 @@ def test_a_value_that_breaks_a_budget_is_refused_at_the_partition(
     assert isinstance(seam, Refused) and list(seam.why) == [(SHELL, rule)]
     # The policies' first valid passes over the value the shell refuses, which is listed
     # first, and takes it where the shell bounds nothing.
-    assert network.at(network.defaulted().point).chosen() == {("k0", "on"): False}
+    assert network.made(network.defaulted().point).chosen() == {("k0", "on"): False}
     ip = kernels(kind, shell=IP)
-    assert ip.at(ip.defaulted().point).chosen() == {("k0", "on"): True}
+    assert ip.made(ip.defaulted().point).chosen() == {("k0", "on"): True}
 
 
 def test_the_control_buses_are_a_sum_which_waits_on_an_open_contributor() -> None:
@@ -169,7 +168,7 @@ def test_the_control_buses_are_a_sum_which_waits_on_an_open_contributor() -> Non
     assert viable(network, "k0.on") == {True: (), False: ()}
     second = choose(network, {"k1.on": True})
     assert viable(second, "k0.on") == {True: ("shell.within_control_budget",), False: ()}
-    assert network.at(network.defaulted().point).chosen() == {
+    assert network.made(network.defaulted().point).chosen() == {
         ("k0", "on"): True,
         ("k1", "on"): False,
     }
@@ -209,7 +208,7 @@ def test_the_shell_member_is_no_kernel_or_channel() -> None:
     assert isinstance(network.member(SHELL), ShellBudgets)
     assert network.validity(SHELL).status == "open"  # the bus waits on its choice
     assert {owner for owner, _ in network.decisions()} == {"k0", "k1"}
-    names = network.composed.names
+    names = network.names
     assert names.owners[SHELL] == SHELL and SHELL not in names.members
     assert names.pair("shell.k1-clock") == (SHELL, "k1-clock")
     assert {root for root, (owner, _) in names.roots.items() if owner == SHELL} == {
@@ -219,7 +218,7 @@ def test_the_shell_member_is_no_kernel_or_channel() -> None:
         "shell-clk2x",
     }
     bare = kernels(Presenting, Pumping, shell=None)
-    assert bare.shell is None and names.shell == SHELL and bare.composed.names.shell is None
+    assert bare.shell is None and names.shell == SHELL and bare.names.shell is None
     with pytest.raises(ValueError, match="no member"):
         bare.member(SHELL)
     assert type(bare.point) is not type(network.point)  # in a shell, another class
@@ -228,7 +227,7 @@ def test_the_shell_member_is_no_kernel_or_channel() -> None:
 def test_the_rows_values_are_facts_one_class_serves_every_row() -> None:
     zynq, ip = kernels(Pumping, shell=row()), kernels(Pumping, shell=IP)
     assert type(zynq.point) is type(ip.point)
-    assert zynq.composed.facts["shell-clk2x"] is False and ip.composed.facts["shell-clk2x"]
+    assert root_facts(zynq.point)["shell-clk2x"] is False and root_facts(ip.point)["shell-clk2x"]
 
 
 def _value(point: Any, member: Any) -> object:

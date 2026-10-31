@@ -50,7 +50,7 @@ from finn.custom_op.kernels.network import network
 from finn.custom_op.kernels.shell import configured_network
 from finn.harness.toolchain import print_identity
 from finn.kernels.composer import member_name
-from finn.kernels.partition import Partition
+from finn.kernels.explore import CoreComposition
 from finn.toolchain.launcher import host_toolchain
 from support.configure import configured
 
@@ -79,7 +79,7 @@ class Layer:
     """Alone, the first frame's latency."""
 
 
-def schedule_of(bound: Partition, node: NodeProto) -> Any:
+def schedule_of(bound: CoreComposition, node: NodeProto) -> Any:
     kernel = bound.member(node.name)
     return kernel.compute.schedule if node.op_type == "MatMul" else kernel.schedule
 
@@ -170,7 +170,7 @@ def measure_partition(
     context = execute_onnx(model, feed, return_full_exec_context=True)
     nodes = list(model.graph.node)
     point, boundary = configured_network(model, label)
-    bound = network(model, nodes, name=label)
+    bound = CoreComposition(network(model, nodes, name=label).point)
     inputs, outputs = boundary_words(model, point, boundary, context, label)
     print(f"== {label}: stitched", flush=True)
     stitched = measure(

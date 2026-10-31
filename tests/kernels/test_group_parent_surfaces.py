@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 from qonnx.core.datatype import DataType
-from support.helpers import FULL_DSP48E2
+from support.helpers import FULL_DSP48E2, TEST_CORE
 
 from finn.core.space import Available, Group, Param, Space, design_space
 from finn.core.space.declarations import Declaration, MemberRef, declared_path
@@ -17,7 +17,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Direction
 from finn.kernels.base import Kernel
-from finn.kernels.composer import Facts, PartitionDeclaration, Port, channel
+from finn.kernels.composer import DataflowCoreDeclaration, Facts, Port, channel
 from finn.kernels.composer import _checked as checked
 from finn.kernels.laws import AXIS, AXIS_CLOCKING
 from finn.kernels.port import port_direction, stream_port
@@ -154,9 +154,10 @@ def test_actual_composer_accepts_valid_and_refuses_wrong_group_port_roles(
     endpoint = Port("kernel", key)
     outside = Side.boundary("out0" if role == "producer" else "in0")
     producer, consumer = (endpoint, outside) if role == "producer" else (outside, endpoint)
-    declaration = PartitionDeclaration(
+    declaration = DataflowCoreDeclaration(
         {"kernel": Facts(InheritedHost, {})},
         {"group-link": channel(producer, consumer, tensor=SMALL, platform=FULL_DSP48E2)},
+        name=TEST_CORE,
     )
     findings = checked(declaration)
     valid = (key == "group.send.native") == (role == "producer")

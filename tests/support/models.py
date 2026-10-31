@@ -6,8 +6,9 @@
 Also the Chain (``support.chain``) as KernelOps with its choices configured (each kernel's
 on its node, each channel's on its tensor, as ``support.configure`` sets them), its
 partition bound again, and a KernelOp's schema digest; and stage 7's synthetic chain
-(``mlp``), converted and cut for the ZU3EG (``chain_model``), whose partition
-(``in_shell``) the Space oracle and the templates' tests read."""
+(``mlp``), converted and cut for the ZU3EG (``chain_model``), whose core in
+its shell (``support.configure.core_in_shell``) the Space oracle and the templates' tests
+read."""
 
 from __future__ import annotations
 
@@ -23,15 +24,16 @@ from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
 from finn.core.graph.annotations.platform import write_target
+from finn.core.graph.partition import CUT_NAME
 from finn.custom_op.kernels.base import KernelOp
 from finn.custom_op.kernels.network import persist
-from finn.custom_op.kernels.shell import InShell, in_shell, make_cut_choices
-from finn.kernels.partition import Partition
+from finn.custom_op.kernels.shell import make_cut_choices
+from finn.kernels.explore import CoreComposition
 from finn.platform.resolve import resolve_target
 from finn.platform.target import Target
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
 from support import chain
-from support.configure import configured
+from support.configure import bound_in_shell, configured, core_in_shell
 from support.helpers import ADAPTER_RAM_STYLES, open_choices, with_adapter_memories
 from support.op_specs.base import GENERAL
 from support.packaging import verified
@@ -344,30 +346,29 @@ def streamed_w2_model() -> ModelWrapper:
     return configured(model, {"first": {"pe": 4}, "second": ROW_MAJOR_W2})
 
 
-def open_memories(bound: Partition) -> tuple[Partition, list[str]]:
+def open_memories(bound: CoreComposition) -> tuple[CoreComposition, list[str]]:
     """The network and its open adapter memories, by ``member.key``."""
     return bound, open_choices(bound, ADAPTER_RAM_STYLES)
 
 
-def choose_memories(model: ModelWrapper) -> InShell:
-    """The partition's network in its shell, its open adapter memories chosen (each its
+def choose_memories(model: ModelWrapper) -> CoreComposition:
+    """The partition's core in its shell, its open adapter memories chosen (each its
     baseline) and saved on their owners, bound again; not verified (a model to cut first,
     or one its shell refuses)."""
-    bound = in_shell(model, model.graph.node, name="chain")
-    persist(model, with_adapter_memories(bound))
-    bound = in_shell(model, model.graph.node, name="chain")
-    _, open_styles = open_memories(bound)
-    assert open_styles == [] and not bound.stale
-    return bound
+    persist(model, with_adapter_memories(core_in_shell(model, name="chain")).point)
+    found = bound_in_shell(model, name="chain")
+    _, open_styles = open_memories(CoreComposition(found.point))
+    assert open_styles == [] and not found.stale
+    return core_in_shell(model, name="chain")
 
 
-def configure_partition(model: ModelWrapper) -> InShell:
+def configure_partition(model: ModelWrapper) -> CoreComposition:
     """The partition's network in its shell, the choices it leaves open set as the cut sets
     them (``make_cut_choices``: the channel's policies; the movers a shell it was retargeted
     to offers are placed, no choice), its open adapter memories chosen
     (``choose_memories``), and the partition verified as the build verifies it before
     emission (``support.packaging.verified``), so that it packages."""
-    made = make_cut_choices(model)
+    made = make_cut_choices(model, "chain")
     assert not (made.stale or made.unset), made
     bound = choose_memories(model)
     verified(model, "chain")
@@ -428,7 +429,7 @@ def chain_model(layers: int) -> ModelWrapper:
     and its channel choices made."""
     target = resolve_target(part="xczu3eg-sbva484-1-e", period_ns=5.0)
     model = mlp(layers).transform(ToKernelOps(target)).transform(InferKernelTensors())
-    make_cut_choices(model)
+    make_cut_choices(model, CUT_NAME)
     return model
 
 

@@ -39,7 +39,7 @@ from finn.kernels.artifacts.build import netlist
 from finn.kernels.base import Kernel
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.dotp import PackedDotpKernel
-from finn.kernels.partition import Partition
+from finn.kernels.explore import CoreComposition
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import IntegerTensorValue
@@ -55,7 +55,7 @@ RESULT_TENSOR = Tensor((REPETITIONS, HEIGHT), ScalarEncoding(R))
 LEVEL_TENSOR = Tensor((REPETITIONS, HEIGHT), ScalarEncoding(DataType["UINT2"]))
 
 
-def activated(*, writable: bool) -> Partition:
+def activated(*, writable: bool) -> CoreComposition:
     """dotp, then thresholding, its control bus given the port ``s_axilite``: a padded
     child result feeding a child."""
     network = by_hand(
@@ -121,7 +121,7 @@ def activated(*, writable: bool) -> Partition:
     return with_channel_defaults(with_direct_transports(chosen))
 
 
-def activated_module(design: Partition) -> Any:
+def activated_module(design: CoreComposition) -> Any:
     """The network's module, ``finn_activated``."""
     return built(design, "activated")
 
@@ -245,7 +245,7 @@ def test_several_threshold_sets_take_a_set_selector_stream():
     selectors = Tensor((REPETITIONS * HEIGHT,), ScalarEncoding(DataType["UINT1"]))
     two_sets = (THRESHOLDS[0], ((-4, 1, 8), (-3, 2, 9)))
 
-    def selected(sets: Tensor) -> Partition:
+    def selected(sets: Tensor) -> CoreComposition:
         """A thresholding of two sets, its values, its set indices ``sets`` and its levels
         each a channel, every choice set: the kernel's by hand, the transports direct."""
         network = by_hand(

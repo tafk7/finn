@@ -44,6 +44,7 @@ from finn.kernels import composer
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.explore import (
     Bottleneck,
+    CoreComposition,
     DebugPlaceholder,
     Defaults,
     MaxThroughput,
@@ -54,7 +55,6 @@ from finn.kernels.explore import (
     TargetThroughput,
 )
 from finn.kernels.matmul import KnownWeights, MatMulKernel
-from finn.kernels.partition import Partition
 from finn.kernels.policies import Required
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
@@ -69,18 +69,18 @@ def held(explorer: Seam) -> Seam:
     return explorer
 
 
-def seam() -> tuple[Seam, Partition]:
+def seam() -> tuple[Seam, CoreComposition]:
     """A seam holding the Chain's fixed PE, and the Chain as conversion and the cut leave
     it."""
     return held(Seam(FULL_DSP48E2)), with_defaults(chain.network())
 
 
-def chosen(explorer: Seam, network: Partition) -> dict[str, object]:
+def chosen(explorer: Seam, network: CoreComposition) -> dict[str, object]:
     """``network``'s stored choices, each by ``member.key``."""
     return {dotted(key): value for key, value in explorer.chosen(network).items()}
 
 
-def folding(explorer: Seam, network: Partition) -> dict[str, object]:
+def folding(explorer: Seam, network: CoreComposition) -> dict[str, object]:
     """``network``'s stored folding: each MatMul's PE and SIMD (the thresholding's PE is
     the Chain's, held)."""
     return {
@@ -90,12 +90,12 @@ def folding(explorer: Seam, network: Partition) -> dict[str, object]:
     }
 
 
-def offered(explorer: Seam, network: Partition) -> dict[str, Any]:
+def offered(explorer: Seam, network: CoreComposition) -> dict[str, Any]:
     """``network``'s open choices, each by ``member.key``."""
     return {dotted(choice.key): choice for choice in explorer.choices(network)}
 
 
-def state(network: Partition, name: str) -> inspection.ChoiceState:
+def state(network: CoreComposition, name: str) -> inspection.ChoiceState:
     """The state of choice ``name`` (``member.key``) in ``network``."""
     ((owner, key),) = keyed({name: None})
     return dict(network.states((owner,)))[(owner, key)]
@@ -414,7 +414,7 @@ def test_target_cycles_states_the_bottleneck_of_the_restored_point_where_it_leav
     assert (report["bottleneck_of"], report["met"]) == ("restored", False)
 
 
-def dsp58_matmul() -> tuple[Seam, Partition]:
+def dsp58_matmul() -> tuple[Seam, CoreComposition]:
     """The Chain's first MatMul alone, on a DSP58 platform, as conversion and the cut leave
     it: its core ``packed``, the first valid, and ``int8_dsp58`` possible too."""
 
@@ -787,7 +787,7 @@ def test_the_debug_placeholder_takes_a_required_choice_s_first_case_or_refuses_i
 PART = replace(FULL_DSP48E2, resources=Resources(lut=1000, ff=2000, bram18=10, uram=0, dsp=10))
 
 
-def within_part() -> tuple[Seam, Partition]:
+def within_part() -> tuple[Seam, CoreComposition]:
     return held(Seam(PART)), with_defaults(chain.network())
 
 

@@ -21,10 +21,11 @@ from support.helpers import FULL_DSP48E2, Lanes
 from support.refusals import refused
 
 from finn.core.graph.errors import KernelOpError
+from finn.core.graph.partition import CUT_NAME
 from finn.core.search import Choice, ExploreError, Ranked, RankPolicy, dotted
 from finn.custom_op.kernels.network import network
 from finn.custom_op.kernels.shell import configured_network
-from finn.kernels.explore import DebugPlaceholder
+from finn.kernels.explore import CoreComposition, DebugPlaceholder
 from finn.platform.target import Target
 from finn.transformation.kernels import explore_kernel_choices
 
@@ -99,8 +100,9 @@ def test_every_open_choice_is_committed_and_the_model_replays_it(tmp_path: Path)
     assert saved["activate"]["pe"] == 2
     model.save(tmp_path / "chosen.onnx")
     again = ModelWrapper(str(tmp_path / "chosen.onnx"))
-    bound = network(again, again.graph.node)
-    assert bound.undecided() == () and not bound.stale
+    found = network(again, again.graph.node, name=CUT_NAME)
+    bound = CoreComposition(found.point)
+    assert bound.undecided() == () and not found.stale
     # A second pass reopens every choice and ranks it again: the same policy makes the
     # same choices, another replaces them.
     assert choices(explored(again, ranked(Lanes(2)))) == saved
@@ -141,7 +143,7 @@ def test_a_required_choice_left_open_is_refused_by_name_where_it_is_built() -> N
     # and required: no baseline takes a case of it. The exploration leaves it open
     # and reports it; emission completes nothing and refuses it, named, with what sets it.
     model = kernel_model()
-    left = explore_kernel_choices(model, [Ranked(Last())]).report["open"]
+    left = explore_kernel_choices(model, [Ranked(Last())], name=CUT_NAME).report["open"]
     assert left and all(name.endswith("transport.fifo.depth (required)") for name in left)
     with refused("choices-open", error=KernelOpError, node="the chain") as open_choices:
         configured_network(model, "the chain")
@@ -152,7 +154,7 @@ def test_a_required_choice_left_open_is_refused_by_name_where_it_is_built() -> N
     # The debug placeholder strategy takes the first case of a required choice, and
     # refuses one known by membership only, named.
     with refused("placeholder-no-case", error=ExploreError, message=r"transport\.fifo\.depth"):
-        explore_kernel_choices(model, [DebugPlaceholder()])
+        explore_kernel_choices(model, [DebugPlaceholder()], name=CUT_NAME)
 
 
 def test_a_policy_ranking_a_case_that_is_not_viable_is_refused() -> None:

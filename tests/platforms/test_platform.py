@@ -15,7 +15,7 @@ from dataclasses import fields, replace
 from typing import Any
 
 from qonnx.core.modelwrapper import ModelWrapper
-from support.configure import configured
+from support.configure import configured, core_in_shell
 from support.helpers import FULL_DSP58, choose, refused_codes
 from support.models import MATMUL, TARGET, matmul_model, thresholding_model
 from support.refusals import refused
@@ -23,8 +23,8 @@ from support.refusals import refused
 from finn.core.graph.annotations.platform import write_target
 from finn.core.space import DefinitionError, design_space, inspection
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import InShell, in_shell
 from finn.kernels.configure import commit
+from finn.kernels.explore import CoreComposition
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.thresholding import ThresholdingAxiKernel
@@ -46,11 +46,11 @@ def op(model: ModelWrapper) -> Any:
     return kernel_op(model, model.graph.node[0])
 
 
-def folded(model: ModelWrapper) -> InShell:
+def folded(model: ModelWrapper) -> CoreComposition:
     """The MatMul folded as the Chain's first, its network bound in its shell: its
     channels' contracts known."""
     configured(model, {"first": MATMUL})
-    return in_shell(model, model.graph.node)
+    return core_in_shell(model, model.graph.node)
 
 
 def test_a_node_binds_the_models_platform_and_its_dsp_block() -> None:

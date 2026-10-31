@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from qonnx.core.modelwrapper import ModelWrapper
-from support.configure import write_raw
+from support.configure import bound_in_shell, core_in_shell, write_raw
 from support.explore_models import explored
 from support.helpers import refused_codes
 from support.models import DOMAIN
@@ -34,6 +34,7 @@ import finn.core.onnx_exec as onnx_exec
 from finn.core.graph.annotations.channel import CHANNEL, channel_choices
 from finn.core.graph.annotations.outputs import OUTPUT_INTERFACES, OUTPUT_VLNV
 from finn.core.graph.errors import KernelOpError
+from finn.core.graph.partition import CUT_NAME
 from finn.core.onnx_exec import RanBy, execute_onnx
 from finn.core.rtlsim_bench import pack_lanes, stream_through
 from finn.core.rtlsim_exec import XSim
@@ -41,8 +42,9 @@ from finn.core.rtlsim_pacing import FREE, STALLED
 from finn.core.search import Ranked, Refused
 from finn.core.space import Available, inspection
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import configured_network, in_shell
+from finn.custom_op.kernels.shell import body_row, configured_network, shell_composition
 from finn.kernels.budgets import SHELL, counts
+from finn.kernels.dataflow_core import DataflowCoreKernel
 from finn.kernels.explore import Seam
 from finn.toolchain.launcher import host_toolchain
 from finn.transformation.kernels import PackagePartition
@@ -141,8 +143,9 @@ def test_tfc_w2a2_computes_its_logits_in_xsim(tfc_streamlined: Path, tmp_path: P
     # A second frame that repeated the first's logits would not show the first one left
     # nothing behind.
     assert not np.array_equal(*expected)
-    bound = in_shell(body, body.graph.node)
-    assert bound.undecided() == () and not bound.stale
+    bound_found = bound_in_shell(body, body.graph.node)
+    bound = shell_composition(bound_found.point, body_row(body))
+    assert bound.undecided() == () and not bound_found.stale
     assert bound.boundary == ((body.graph.input[0].name, "s_axis_0"), (LOGITS, "m_axis_0"))
     point, boundary = configured_network(body, "partition")
     # The input's one threshold row, shared by its 784 pixels, is bound as it is
@@ -234,7 +237,7 @@ def test_tfc_w2a2s_partition_compiles_and_elaborates_in_xsim(
     check is as strict as the module's simulation."""
     _, body = partition(ModelWrapper(str(tfc_streamlined)), tmp_path / "build")
     directory = tmp_path / "elaborate"
-    body.transform(ElaboratePartition(directory=directory))
+    body.transform(ElaboratePartition(CUT_NAME, directory=directory))
     assert "Built simulation snapshot partition" in (directory / "xelab.log").read_text()
 
 
@@ -254,7 +257,7 @@ def test_tfc_w2a2_binds_the_ultra96_platform(tfc_streamlined: Path, tmp_path: Pa
     model: its weight and adapter memories cannot be UltraRAM, and none is pumped (the
     shell drives no 2x clock)."""
     _, body = partition(ModelWrapper(str(tfc_streamlined)), tmp_path)
-    bound = in_shell(body, body.graph.node)
+    bound = core_in_shell(body, body.graph.node)
     weights = [
         node.input[1]
         for node in body.graph.node
@@ -291,9 +294,9 @@ def test_tfc_w2a2s_partition_holds_the_zynq_shells_budgets_as_its_rules(
     selected never read; stored, a pumped core leaves the partition refused, by the shell
     member (``Seam.refusals``, emission). The netlist's count is the rules'."""
     _, body = partition(ModelWrapper(str(tfc_streamlined)), tmp_path)
-    bound = in_shell(body, body.graph.node)
+    bound = core_in_shell(body, body.graph.node)
     assert bound.shell == SHELL and SHELL not in {*bound.members, *bound.order}
-    module = bound.module_of()
+    module = bound.answer(DataflowCoreKernel.module)
     assert isinstance(module, Available)
     assert not any(label.startswith(SHELL) for label, _ in module.value.fragment.instances)
     assert {owner for owner, _ in bound.chosen()} <= set(bound.members)
@@ -330,7 +333,7 @@ def test_tfc_w2a2s_partition_holds_the_zynq_shells_budgets_as_its_rules(
     changed = Seam(ULTRA96.platform).set(bound, {first: True})
     assert isinstance(changed, Refused) and list(changed.why) == [(SHELL, "MatMul_0-clock")]
     write_raw(body, "MatMul_0", first[1], 1)
-    pumped = in_shell(body, body.graph.node)
+    pumped = core_in_shell(body, body.graph.node)
     found = Seam(ULTRA96.platform).refusals(pumped)
     assert {name: [f.code for f in why] for name, why in found.items()} == {
         SHELL: ["clock-unavailable"]

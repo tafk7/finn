@@ -56,6 +56,7 @@ import numpy as np
 import pytest
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
+from support.configure import composition
 from support.helpers import choose
 from support.models import TARGET, matmul_model, thresholding_model
 from support.op_specs.matmul import SPREAD
@@ -63,10 +64,11 @@ from support.xsim import requires_xsim
 
 import finn.custom_op.kernels as domain
 from finn.core.graph.annotations.platform import write_target
+from finn.core.graph.partition import CUT_NAME
 from finn.core.onnx_exec import execute_onnx
 from finn.core.rtlsim_pacing import FREE
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.network import network, persist
+from finn.custom_op.kernels.network import persist
 from finn.custom_op.kernels.shell import configured_network
 from finn.harness.ops import Disagreement, check_parity
 from finn.harness.points import Covering, covering
@@ -165,7 +167,7 @@ def chosen(name: str, index: int) -> ModelWrapper:
 
 def persisted(model: ModelWrapper, choices: Mapping[str, object]) -> ModelWrapper:
     """``model`` with ``choices`` (``member.key``) committed in its network, persisted."""
-    persist(model, choose(network(model, model.graph.node), choices))
+    persist(model, choose(composition(model, model.graph.node), choices).point)
     return model
 
 
@@ -331,7 +333,7 @@ def test_the_versal_points_take_its_dsp58_core_and_ultraram() -> None:
     UltraRAM takes initial contents (``uram_init``)."""
     assert VERSAL.platform.dsp is DspBlock.DSP58 and VERSAL.platform.uram
     assert VERSAL.platform.uram_init
-    model = persisted(matmul(VERSAL), ON_VERSAL["matmul"]).transform(MakeCutChoices())
+    model = persisted(matmul(VERSAL), ON_VERSAL["matmul"]).transform(MakeCutChoices(CUT_NAME))
     point, _ = configured_network(model, "versal")
     assert type(point.network.member("first").compute).__name__ == "Int8Dsp58DotpKernel"
     styles = {
@@ -342,7 +344,7 @@ def test_the_versal_points_take_its_dsp58_core_and_ultraram() -> None:
         "x.adapter.input_gen.input_gen"
     ], styles
     model = thresholding(target=VERSAL)
-    chosen = choose(network(model, model.graph.node), {"activate.ultra_stages": 1})
+    chosen = choose(composition(model, model.graph.node), {"activate.ultra_stages": 1})
     assert chosen.member("activate").ultra_stages == 1
 
 

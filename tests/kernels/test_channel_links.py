@@ -4,7 +4,7 @@
 """A channel's netlist: its stages below it, and each checked hop resolved into wires.
 
 A channel wires the hops between its own ends; its partition wires the hops to the ports
-beside it (``Partition.hops``) and places them around the channel's links, in the
+beside it (``CoreComposition.hops``) and places them around the channel's links, in the
 partition's netlist. A link's end belongs to the kernel whose port it is, beside the
 channel (``^compute``, ``compute`` in the partition); a stage sits at its label below the channel
 (``adapter.input_gen.input_gen``, ``transport.fifo.buffer``); a link's end on the
@@ -32,8 +32,8 @@ from finn.kernels.base import Kernel, PortPins
 from finn.kernels.channels import Channel, OuterHops
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.dotp import PackedDotpKernel
+from finn.kernels.explore import CoreComposition
 from finn.kernels.laws import AXIS_CLOCKING, Axis
-from finn.kernels.partition import Partition
 from finn.kernels.port_model import InPort
 from finn.kernels.sides import Side
 from finn.kernels.transport import AxisBeat, StreamPins
@@ -44,7 +44,7 @@ W = Tensor((4, 4), ScalarEncoding(INT3))
 Y = Tensor((3, 4), ScalarEncoding(INT8))
 
 
-def placing() -> Partition:
+def placing() -> CoreComposition:
     """dotp between boundary channels: three rows of four, four outputs, PE = SIMD = 2."""
     return by_hand(
         {
@@ -79,12 +79,12 @@ FOLDING = {
 }
 
 
-def placed(**transport: object) -> Partition:
+def placed(**transport: object) -> CoreComposition:
     folded = choose(placing(), FOLDING)
     return with_channel_defaults(with_direct_transports(choose(folded, transport)))
 
 
-def links(point: Partition) -> list[tuple[str | None, str | None]]:
+def links(point: CoreComposition) -> list[tuple[str | None, str | None]]:
     """The ends of each link of ``point``'s netlist, in order."""
     found = point.netlist()
     assert isinstance(found, Available)

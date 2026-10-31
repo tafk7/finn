@@ -7,8 +7,9 @@ A shell counts a partition's AXI-Lite buses, memory initiators and doubled clock
 netlist and boundary buses (``finn.platform.shells.bus_counts``), without building its top.
 The oracle counts the same from the top's pins (``bus_counts_of_abi``, of
 ``finn.kernels.artifacts.top.module_abi``). The autouse ``_top_pins`` checks the two equal
-on every netlist a partition reads (``Partition.netlist``, which ``Partition.module`` and
-the shell's counts read: a graph's and one built by hand) while a test runs, and fails the
+on every netlist a core's composition reads (``CoreComposition.netlist``, which a test's
+module, ``support.helpers.module_of``, and the shell's counts read: a graph's and one built
+by hand) while a test runs, and fails the
 test at its end where one differs. A netlist whose top's pins cannot be formed has no
 oracle, and is passed by. A conftest imports the fixture; every conftest that a gate's
 ``--confcutdir`` stops at does so itself."""
@@ -24,7 +25,7 @@ from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
 from finn.kernels.artifacts.module import Abi, Fragment
 from finn.kernels.artifacts.top import module_abi
-from finn.kernels.partition import Partition
+from finn.kernels.explore import CoreComposition
 from finn.platform.shells import bus_counts
 
 
@@ -60,10 +61,10 @@ def mismatch(fragment: Fragment, boundary: Iterable[Bus]) -> str | None:
 def _top_pins(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Each netlist this test's partitions read checked (``mismatch``); the test fails at
     its end, naming each difference, where one differs."""
-    read = Partition.netlist
+    read = CoreComposition.netlist
     found: list[str] = []
 
-    def netlist(network: Partition) -> object:
+    def netlist(network: CoreComposition) -> object:
         answer = read(network)
         if isinstance(answer, Available):
             differs = mismatch(*answer.value)
@@ -71,6 +72,6 @@ def _top_pins(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
                 found.append(f"{network!r}: {differs}")
         return answer
 
-    monkeypatch.setattr(Partition, "netlist", netlist)
+    monkeypatch.setattr(CoreComposition, "netlist", netlist)
     yield
     assert not found, "; ".join(found)

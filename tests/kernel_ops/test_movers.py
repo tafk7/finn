@@ -3,7 +3,7 @@
 
 """The movers a shell offers on its boundary channels (``finn.kernels.movers``).
 
-A partition's network in its shell (``in_shell``) reads its target's shell row
+A partition's network in its shell (``core_in_shell``) reads its target's shell row
 (``finn.platform.shells``), whose offer places an ``IODMA_hls`` mover on each free side that
 meets the host, and states that side (row-major, one pass a frame), which the edge channel
 joins to its reader: placed by the channel where the shell offers one, no choice, so nothing
@@ -26,7 +26,7 @@ from typing import Any
 import pytest
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
-from support.configure import configured
+from support.configure import bound_in_shell, configured, core_in_shell
 from support.helpers import FULL_DSP48E2, beside, with_adapter_memories
 from support.helpers import built as module_built
 from support.models import (
@@ -42,14 +42,13 @@ from support.xsim import requires_xsim
 
 import finn.custom_op.kernels.shell as shell
 from finn.core.graph.annotations.platform import read_target, write_target
-from finn.core.graph.partition import partition_body
+from finn.core.graph.partition import CUT_NAME, partition_body
 from finn.core.space import Available, Rejected, design_space, inspection
 from finn.custom_op.kernels.network import network, persist
 from finn.custom_op.kernels.shell import (
-    InShell,
     ShellResources,
+    body_row,
     configured_network,
-    in_shell,
     shell_resources,
 )
 from finn.dataflow.steps import Hop
@@ -70,7 +69,7 @@ from finn.kernels.artifacts.module import module_name
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
-from finn.kernels.explore import KernelExplorer, SizeFifos, TargetThroughput
+from finn.kernels.explore import CoreComposition, KernelExplorer, SizeFifos, TargetThroughput
 from finn.kernels.fifo_sizing import NotModelled, Pattern, sides
 from finn.kernels.input_generator import Generate
 from finn.kernels.movers import (
@@ -333,27 +332,32 @@ def test_an_iodma_s_side_nothing_joins_is_refused_by_channel_steps_naming_the_mo
 # -- on the Chain --------------------------------------------------------------------------
 
 
-def chain_network(target: Target = ULTRA96, *, model: ModelWrapper | None = None) -> InShell:
+def chain_network(
+    target: Target = ULTRA96, *, model: ModelWrapper | None = None
+) -> CoreComposition:
     """The Chain's network in the shell of ``target`` (its model's target, restated)."""
     model = kernel_model() if model is None else model
     write_target(model, target)
-    return in_shell(model, model.graph.node, name="chain")
+    return core_in_shell(model, model.graph.node, name="chain")
 
 
-def cut_network(target: Target = ULTRA96, *, model: ModelWrapper | None = None) -> InShell:
+def cut_network(target: Target = ULTRA96, *, model: ModelWrapper | None = None) -> CoreComposition:
     """The Chain's network in the shell of ``target``, its channels' choices made there as
     the cut makes them (``MakeCutChoices``: the channel's policies; the movers the shell
     offers are placed, no choice)."""
     model = kernel_model() if model is None else model
     write_target(model, target)
-    model = model.transform(MakeCutChoices())
-    return in_shell(model, model.graph.node, name="chain")
+    model = model.transform(MakeCutChoices(CUT_NAME))
+    return core_in_shell(model, model.graph.node, name="chain")
 
 
 def test_the_network_in_its_shell_reads_its_targets_shell_row() -> None:
-    bound = chain_network()
-    assert bound.row == shell_row("pynq", "Ultra96") and bound.row.movers == (iodma_hls(128),)
-    assert chain_network(TARGET).row == IP_ROW
+    model = kernel_model()
+    chain_network(model=model)
+    row = body_row(model)
+    assert row == shell_row("pynq", "Ultra96") and row.movers == (iodma_hls(128),)
+    chain_network(TARGET, model=model)
+    assert body_row(model) == IP_ROW
 
 
 def test_the_network_takes_the_movers_it_is_offered_and_states_its_members_resources() -> None:
@@ -362,14 +366,16 @@ def test_the_network_takes_the_movers_it_is_offered_and_states_its_members_resou
     model = kernel_model()
     configure_partition(model)
     write_target(model, ULTRA96)
-    model = model.transform(MakeCutChoices())
-    plain = network(model, model.graph.node, name="chain")
+    model = model.transform(MakeCutChoices(CUT_NAME))
+    plain = CoreComposition(network(model, model.graph.node, name="chain").point)
     assert plain.movers == () and not plain.member("x").offered
-    offered = network(model, model.graph.node, name="chain", movers=(iodma_hls(128),))
-    shelled = in_shell(model, model.graph.node, name="chain")
+    offered = CoreComposition(
+        network(model, model.graph.node, name="chain", movers=(iodma_hls(128),)).point
+    )
+    shelled = core_in_shell(model, model.graph.node, name="chain")
     assert offered.movers == shelled.movers == ("x", "y")
     assert offered.chosen() == shelled.chosen()
-    split = shell_resources(shelled)
+    split = shell_resources(shelled.point, body_row(model))
     assert isinstance(split, ShellResources) and split.movers and split.static_region
     assert offered.own_resources() == Available(split.partition)
     assert shelled.own_resources() == Available(split.total)
@@ -412,7 +418,7 @@ def test_the_shell_s_resources_are_its_partition_s_its_movers_and_its_static_reg
     model = kernel_model()
     configure_partition(model)
     bound = cut_network(model=model)
-    split = shell_resources(bound)
+    split = shell_resources(bound.point, body_row(model))
     assert isinstance(split, ShellResources)
     x, y = bound.member("x").mover_contract, bound.member("y").mover_contract
     assert split.movers == (
@@ -431,19 +437,21 @@ def test_the_shell_s_resources_are_its_partition_s_its_movers_and_its_static_reg
         )
     )
     ip = chain_network(TARGET, model=model)
-    assert shell_resources(ip) == ShellResources(split.partition, (), ())
+    assert shell_resources(ip.point, body_row(model)) == ShellResources(split.partition, (), ())
     assert ip.own_resources() == Available(split.partition)
 
 
 def test_a_network_waits_for_its_members_resources() -> None:
     # Its movers are placed, no choice: before the cut nothing is open, and its resources
     # answer.
-    bound = chain_network()
+    model = kernel_model()
+    bound = chain_network(model=model)
+    row = body_row(model)
     assert bound.undecided() == ()
-    assert isinstance(shell_resources(bound), ShellResources)
+    assert isinstance(shell_resources(bound.point, row), ShellResources)
     # A weight's memory style cleared: it waits on that open choice, owned by its member.
     opened = bound.trial({}, clear=[("w1", "source.ram_style")]).network
-    waiting = shell_resources(opened)
+    waiting = shell_resources(opened.point, row)
     assert isinstance(waiting, tuple)
     assert {(finding.code, finding.owner) for finding in waiting} == {
         ("decision-unassigned", "source.ram_style")
@@ -468,13 +476,13 @@ def test_a_mover_binds_no_rtl() -> None:
 def test_a_network_with_movers_persists_and_replays_as_itself() -> None:
     model = kernel_model()
     write_target(model, ULTRA96)
-    model = model.transform(MakeCutChoices())
+    model = model.transform(MakeCutChoices(CUT_NAME))
     bound = chain_network(ULTRA96, model=model)
-    held = persist(model, bound)
+    held = persist(model, bound.point)
     # Its movers are placed, not stored.
     assert not [name for name, values in held.items() if "mover" in values]
-    again = chain_network(ULTRA96, model=model)
-    assert again.chosen() == bound.chosen() and not again.stale
+    again = bound_in_shell(model, model.graph.node, name="chain")
+    assert CoreComposition(again.point).chosen() == bound.chosen() and not again.stale
 
 
 def test_a_row_offering_an_unknown_or_repeated_kind_is_refused() -> None:
@@ -510,7 +518,7 @@ def test_a_pass_its_mover_moves_once_replayed_at_the_edge_computes_what_onnx_com
     model = kernel_model(second_weights=False)
     configured(model, {"second": ROW_MAJOR_W2})
     write_target(model, ULTRA96)
-    model = model.transform(MakeCutChoices())
+    model = model.transform(MakeCutChoices(CUT_NAME))
     w2 = choose_memories(model).member("w2")
     assert (w2.input_chain, outer(w2).form.beats) == ("input_gen", 4)
     check_parity(model, tmp_path, inputs=boundary_inputs(model, 4), label="replayed")
@@ -531,7 +539,7 @@ def explored(
     model = ModelWrapper(tfc.model.__deepcopy__())
     write_target(model, target)
     strategies: list[KernelExplorer] = [TargetThroughput(fps), *([SizeFifos()] if sizing else [])]
-    return model, dict(explore_kernel_choices(model, strategies).report)
+    return model, dict(explore_kernel_choices(model, strategies, name=CUT_NAME).report)
 
 
 def pumping(name: str) -> dict[str, object]:

@@ -14,40 +14,45 @@ to its member's fact (``Names.roots``), the shell's row's facts to the shell mem
 from __future__ import annotations
 
 from qonnx.core.modelwrapper import ModelWrapper
+from support.configure import core_in_shell
 from support.models import mlp
 
 from finn.core.graph.annotations.platform import read_target
+from finn.core.graph.partition import CUT_NAME
 from finn.core.space import inspection
 from finn.custom_op.kernels.network import declaration
-from finn.custom_op.kernels.shell import in_shell, make_cut_choices, row_facts
+from finn.custom_op.kernels.shell import make_cut_choices, row_facts
 from finn.kernels.budgets import SHELL
-from finn.kernels.composer import Composed, compose
+from finn.kernels.composer import compose
+from finn.kernels.dataflow_core import DataflowCoreKernel
 from finn.platform.resolve import resolve_target
 from finn.platform.shells import shell_row
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
 
 
-def _round_trip(model: ModelWrapper) -> tuple[Composed, int]:
+def _round_trip(model: ModelWrapper) -> tuple[DataflowCoreKernel, int]:
     """``model`` composed, every pair of its shell's network checked through the names; the
     composed partition and the number of pairs."""
     nodes = list(model.graph.node)
     target = read_target(model)
     row = shell_row(target.shell, target.board)
-    composed = compose(declaration(model, nodes, movers=row.movers, shell=row_facts(row)))
+    composed = compose(
+        declaration(model, nodes, name=CUT_NAME, movers=row.movers, shell=row_facts(row))
+    )
     names = composed.names
-    network = in_shell(model, nodes)
+    network = core_in_shell(model, nodes)
     stored = network.chosen()
     pairs = [*network.decisions(), *stored]
     assert set(stored) <= set(network.decisions())
     for pair in pairs:
         assert names.pair(names.path(pair)) == pair
-    paths = {item.key for item in inspection.decisions(composed.space_type)}
+    paths = {item.key for item in inspection.decisions(type(composed))}
     assert paths == {names.path(pair) for pair in network.decisions()}
     for path in paths:
         assert names.path(names.pair(path)) == path
     for root, (owner, fact) in names.roots.items():
         assert names.root(owner, fact) == root
-    assert names == network.composed.names and names.shell == SHELL
+    assert names == network.names and names.shell == SHELL
     assert {fact for owner, fact in names.roots.values() if owner == SHELL} == set(row_facts(row))
     return composed, len(set(pairs))
 
@@ -55,7 +60,7 @@ def _round_trip(model: ModelWrapper) -> tuple[Composed, int]:
 def test_stage_7s_chain_of_eight_kernels_round_trips_every_key() -> None:
     target = resolve_target(part="xczu3eg-sbva484-1-e", period_ns=5.0)
     model = mlp(4).transform(ToKernelOps(target)).transform(InferKernelTensors())
-    make_cut_choices(model)
+    make_cut_choices(model, CUT_NAME)
     composed, pairs = _round_trip(model)
     assert len(composed.names.members) == 8 + 13  # its kernels, then its channels
     assert pairs > 100
