@@ -97,9 +97,10 @@ ADVANCE_SOURCED = Law(
 RATE = Law(
     "L6",
     "rate",
-    "a kernel advances one iteration a cycle (a stage one beat a side a cycle) when nothing "
-    "blocks it; its cycles a frame at full rate follow from its pace, or a stage's from its "
-    "larger beat count",
+    "a kernel advances one iteration an interval (a stage, one beat a side an interval) when "
+    "nothing blocks it, and the law's interval is one cycle; so its cycles a frame at full "
+    "rate follow from its pace (its iterations a frame) or, for a stage, its larger beat "
+    "count, at its interval, by one conversion",
     "a kernel whose iterations take more than one cycle, or whose one rests on what its RTL "
     "does not show (an HLS kernel's requested pipeline), states its initiation interval, with "
     "its standing and source",
