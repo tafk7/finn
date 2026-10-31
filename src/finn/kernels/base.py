@@ -45,7 +45,6 @@ from finn.core.space import (
     Members,
     Rejected,
     Space,
-    constraint,
     derived,
     reject,
     view,
@@ -339,12 +338,16 @@ def _exposed_as(exposed: Mapping[tuple[str, str], str], node: str, port: str) ->
 # -- what a kernel with a module states of its intake ---------------------------------------
 #
 # A kernel with a module states its intake (a derived ``intake`` of its own body); the base
-# reads it and installs its ``intake``: the stated one, its own refusal owned by ``intake``
-# (``intake-unstated``, Pool's outside its profile), refused where it names a port that is
-# no placed input of the kernel (``intake-port-unknown``); and the constraint
-# ``intake_placed``, which refuses such a design point (R3: an intake names its kernel's
-# placed inputs). Its placed inputs are read as its module's parts are, one helper each
-# (``_placed_inputs_<i>``).
+# reads it, as ``stated_intake`` (public: its own refusal, ``intake-unstated`` for Pool
+# outside its profile, is reported under that name), and installs its ``intake``: the
+# stated one, refused where it names a port that is no placed input of the kernel
+# (``intake-port-unknown``). Its placed inputs are read as its module's parts are, one
+# helper each (``_placed_inputs_<i>``).
+#
+# Open: R3 makes such a design point invalid, which this does not meet; the refusal is the
+# intake's alone. A rule reading the stated intake is refused wherever the intake is (an
+# unstated one, Pool's outside its profile, one reading a refused fact), and it reads the
+# kernel's choices. How R3 is met is Thomas's to decide.
 
 _INPUTS = "_placed_inputs"
 
@@ -357,58 +360,34 @@ def _inputs_from(part: str, following: str) -> Callable[[Kernel], tuple[Any, ...
     return inputs_from
 
 
-def _unplaced(self: Kernel, owner: str, stated: Intake) -> Rejected | None:
-    """``intake-port-unknown`` where ``stated``, ``self``'s intake, names a port that is no
-    placed input of it, else None."""
-    placed = self._placed_inputs_0()
-    unknown = [name for name in stated.names if name not in placed]
-    if not unknown:
-        return None
-    return reject(
-        "intake-port-unknown",
-        f"{owner} states the intake of {unknown}, no input it places: an intake names its "
-        "kernel's placed inputs",
-    )
-
-
-def _checked_intake(
-    owner: str, stating: Callable[..., Any]
-) -> Callable[[Kernel], Intake | Rejected]:
+def _checked_intake(owner: str) -> Callable[[Kernel], Intake | Rejected]:
     def intake(self: Kernel) -> Intake | Rejected:
-        stated: Intake | Rejected = stating(self)
-        if isinstance(stated, Rejected):
-            return stated
-        refused = _unplaced(self, owner, stated)
-        return stated if refused is None else refused
+        stated: Intake = getattr(self, "stated_intake")
+        placed = self._placed_inputs_0()
+        unknown = [name for name in stated.names if name not in placed]
+        if unknown:
+            return reject(
+                "intake-port-unknown",
+                f"{owner} states the intake of {unknown}, no input it places: an intake "
+                "names its kernel's placed inputs",
+            )
+        return stated
 
     return intake
 
 
-def _intake_placed(owner: str, stating: Callable[..., Any]) -> Callable[[Kernel], bool | Rejected]:
-    def intake_placed(self: Kernel) -> bool | Rejected:
-        stated: Intake | Rejected = stating(self)
-        if isinstance(stated, Rejected):
-            return True
-        refused = _unplaced(self, owner, stated)
-        return True if refused is None else refused
-
-    intake_placed.__annotations__ = {"return": bool | Rejected}
-    return intake_placed
-
-
 def _read_intake(cls: type[Kernel]) -> None:
     """Install, for a kernel with a module whose own body states ``intake``, the base's
-    reading of it (above). Each calls the stated function itself, so that a refusal it
-    returns is owned by the member that answers it."""
+    reading of it (above)."""
     item = vars(cls).get("intake")
     if getattr(cls, "module_spec", None) is None or not isinstance(item, Derived):
         return
-    checked = _checked_intake(cls.__qualname__, item.function)
+    stated = derived(item.function)
+    setattr(cls, "stated_intake", stated)
+    getattr(stated, "__set_name__")(cls, "stated_intake")
+    checked = _checked_intake(cls.__qualname__)
     checked.__doc__ = item.function.__doc__
     _set_aggregated(cls, "intake", checked, Intake | Rejected)
-    placed = constraint(_intake_placed(cls.__qualname__, item.function))
-    setattr(cls, "intake_placed", placed)
-    getattr(placed, "__set_name__")(cls, "intake_placed")
 
 
 # -- its stream ports' declarations ---------------------------------------------------------
@@ -1196,14 +1175,15 @@ class Kernel(Space):
         measured), with its inputs' coupling (``Intake.joined``, ``PortIntake.ahead``); one
         that does not answers ``intake-unstated``, by name, never zero, and no refusal of
         its design point: no rule reads it. The base reads what it states, and refuses an
-        intake naming a port that is no placed input of it (``intake-port-unknown``), and
-        its design point with it (R3; its constraint ``intake_placed``). A kernel with
-        children derives its own from its members' (``member_intake``), never states it
-        beside them, each member's renamed, its ports, its groups and its partners alike: a
-        member's port it exposes takes the name it exposes it under (``x = compute.x``:
-        ``x``; one port, one name, however many aliases name it), any other member's port
-        its path below the member (``adapter.input_gen.input_gen.input``). A member that
-        states none leaves its parent's unstated too."""
+        intake naming a port that is no placed input of it (``intake-port-unknown``, its
+        own answer's refusal, not its design point's); a refusal of the stated one is
+        reported under ``stated_intake``. A kernel with children derives its own from its
+        members' (``member_intake``), never states it beside them, each member's renamed,
+        its ports, its groups and its partners alike: a member's port it exposes takes the
+        name it exposes it under (``x = compute.x``: ``x``; one port, one name, however many
+        aliases name it), any other member's port its path below the member
+        (``adapter.input_gen.input_gen.input``). A member that states none leaves its
+        parent's unstated too."""
         if type(self).module_spec is not None:
             return reject(INTAKE_UNSTATED, f"{type(self).__qualname__} states no intake")
         exposed = type(self)._exposed_names
