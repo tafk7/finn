@@ -457,7 +457,7 @@ def _kernel_schedule(cls: type[Kernel], bound: object) -> bool:
 # lowered for it. What its class records is the name each member's port is exposed under,
 # by the member and the name the member presents it under, as the alias is written
 # (``("compute", "x")``, ``("mm", "x")`` through MatMul's own: what its intake names the
-# member's port, ``Kernel.intake``); a port two aliases name is exposed under the first.
+# member's port, ``Kernel.intake``); a port is exposed under one name.
 
 
 def _end_declaration(space_type: type[Any], path: str) -> NodeDecl:

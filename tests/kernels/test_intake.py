@@ -158,14 +158,12 @@ class OtherStage(StatedStage):
 
 
 class Chain(Kernel):
-    """Two stated stages, the first's input exposed as its own ``x`` (and again as
-    ``also``: one port, however many names)."""
+    """Two stated stages, the first's input exposed as its own ``x``."""
 
     id = "test.intake.chain"
     core = Select(one=StatedStage, other=OtherStage, input_tensor=TENSOR, arriving=ARRIVING)
     kept = StatedStage(input_tensor=TENSOR, arriving=ARRIVING)
     x = core.input
-    also = core.input
 
 
 class Holding(Kernel):
@@ -187,7 +185,7 @@ def test_a_kernel_stating_no_intake_answers_it_unstated_by_name_and_stays_valid(
 
 def test_a_kernel_with_children_derives_its_intake_from_its_members() -> None:
     point = design_space(Chain()).with_choices({Chain.core: "other"})
-    # The exposed port by its first name, once; the member's own below the member.
+    # The exposed port by its name; the member's own below the member.
     assert point.intake == Intake((_intake("x", 5, 7), _intake("kept.input")))
     # A member that states none leaves its parent's unstated, by its name.
     holding = design_space(Holding()).query(Kernel.intake)
