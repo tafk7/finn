@@ -437,7 +437,7 @@ def test_a_name_no_member_can_take_is_refused(cache: None, name: str, code: str)
 @pytest.mark.parametrize(
     ("label", "code", "message"),
     [
-        ("hidden", "name-shared", "y: its edge port and a member are both named hidden"),
+        ("hidden", "name-shared", "y: its edge port and member hidden are both named hidden"),
         ("s_axis_0", "name-shared", "y: its edge port s_axis_0 is x's edge port too"),
         ("m-axis", "name-invalid", "y: its edge port 'm-axis' is no ASCII name segment"),
         (
@@ -458,6 +458,15 @@ def test_an_edge_port_is_named_as_its_label_which_no_other_name_takes(
         y=channel(Port("second", "y"), Side.boundary(label), tensor=Y_TENSOR, platform=FULL_DSP48E2)
     )
     assert _refused(declared(channels_=relabelled)) == [(code, "y", message)]
+
+
+def test_an_edge_port_s_name_meets_a_member_by_its_member_name(cache: None) -> None:
+    """A graph name meets an edge port's name as its member name (``\\W`` as ``_``): the
+    Chain's ``activate`` named ``m-axis.0`` is member ``m_axis_0``, ``y``'s edge port's name.
+    It is refused, owned by the channel, the member named by its graph name."""
+    assert _refused(declared({"activate": "m-axis.0"})) == [
+        ("name-shared", "y", "y: its edge port and member m-axis.0 are both named m_axis_0")
+    ]
 
 
 def test_a_channel_named_as_the_shell_member_is_refused_in_a_shell_or_not(cache: None) -> None:

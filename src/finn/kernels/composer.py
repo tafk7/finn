@@ -389,8 +389,9 @@ def _named(graph: list[str]) -> dict[str, str]:
 def _edges(declared: DataflowCoreDeclaration, names: Mapping[str, str]) -> list[Finding]:
     """Each edge port's label that cannot name it (the module docstring), by the graph name
     of its channel: no name segment (``name-invalid``), a name the engine reserves or the
-    core's class declares, or the shell member's (``name-reserved``), or a member's or
-    another edge port's (``name-shared``)."""
+    core's class declares, or the shell member's (``name-reserved``), or a member's (its
+    graph name named, as ``\\W`` as ``_`` makes ``m-axis.0`` ``m_axis_0``) or another edge
+    port's (``name-shared``)."""
     members = set(names.values())
     taken: dict[str, str] = {}
     findings: list[Finding] = []
@@ -421,11 +422,12 @@ def _edges(declared: DataflowCoreDeclaration, names: Mapping[str, str]) -> list[
                     )
                 )
             elif label in members:
+                member = next(graph for graph, name in names.items() if name == label)
                 findings.append(
                     _refused(
                         "name-shared",
                         owner,
-                        f"{owner}: its edge port and a member are both named {label}",
+                        f"{owner}: its edge port and member {member} are both named {label}",
                     )
                 )
             elif label in taken:
