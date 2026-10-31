@@ -29,6 +29,7 @@ from support.conformance import (
     design_cycles,
     design_member,
     design_module,
+    edges,
     place,
     samples,
     unchosen,
@@ -258,23 +259,24 @@ def test_it_takes_a_beat_a_cycle_as_it_states(tmp_path: Path) -> None:
     assert isinstance(module, Available) and isinstance(cycles, Available)
     input_form = unreplayed(source.form)
     assert isinstance(input_form, Traversal)
-    driven = {"input_channel": _words(input_form, x, source.element)}
+    ports = edges(["input_channel"], ["output_channel"], None)  # the module's edge ports
+    driven = {ports["input_channel"]: _words(input_form, x, source.element)}
     bits = result.form.lanes * 32
     words = stream_out(
         module.value,
         tmp_path / "once",
         inputs=driven,
-        outputs={"output_channel": Receive(result.form.beats, bits)},
+        outputs={ports["output_channel"]: Receive(result.form.beats, bits)},
         cycles=cycles.value,
         toolchain=host_toolchain(),
-    )["output_channel"]
+    )[ports["output_channel"]]
     found = pwpolyf_numeric.received(result.form, tuple(words))
     assert np.allclose(found, activation("gelu", x), rtol=0, atol=TOLERANCE["gelu"])
     measured = measure(
         module.value,
         tmp_path / "measured",
         inputs=driven,
-        outputs={"output_channel": (list(words), bits)},
+        outputs={ports["output_channel"]: (list(words), bits)},
         frames=4,
         cycles=cycles.value,
         toolchain=host_toolchain(),
