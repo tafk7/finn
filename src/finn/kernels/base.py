@@ -83,9 +83,9 @@ from finn.dataflow.schedule import (
     span,
 )
 from finn.kernels.artifacts import ArtifactError
-from finn.kernels.artifacts.abi import Clocking, Pin
+from finn.kernels.artifacts.abi import Clocking
 from finn.kernels.artifacts.contributions import Contribution, GeneratedData
-from finn.kernels.artifacts.module import BusExport, Fragment, Held, Link, merge
+from finn.kernels.artifacts.module import BusExport, Fragment, Link, merge
 from finn.kernels.control import Control, ControlModel, control_models, presented
 from finn.kernels.laws import (
     AXIS_PROTOCOL,
@@ -207,6 +207,29 @@ def _members(cls: type[Kernel]) -> dict[str, object]:
     return found
 
 
+# -- the names the base installs ------------------------------------------------------------
+#
+# Each member the base installs on a kernel's class, and each helper it reads them through,
+# is named beginning with ``-``: ``-<member>-...-<what>`` for one of a member's (``-h-hops``,
+# member channel ``h``'s hops; ``<what>`` one of ``neighbours``, ``ends``, ``hops``,
+# ``producer``, ``consumer``, ``placed``, ``case`` and ``governed``), ``-<what>-<i>`` for the
+# ``i``-th helper of a reading (``-hops-0``), and the base's own ``-end`` (ending each
+# reading), ``-placed``, ``-no-port`` and ``-own-buses``. No member's name holds a ``-`` (a
+# Python name, or a graph name as ``finn.kernels.composer`` names its member, ``\W`` as
+# ``_``), and a composed class's root members begin with their member's name
+# (``mm0-x_tensor``), so no member meets one, whatever its name; their last segments, a word
+# or a number, keep them apart.
+
+
+def _installed(*parts: str) -> str:
+    """The name of a member or helper the base installs (above): ``-`` and its ``parts``,
+    joined by ``-``."""
+    return "-" + "-".join(parts)
+
+
+_END = _installed("end")
+
+
 # -- the module's parts, read serially ------------------------------------------------------
 #
 # A module's pins are its other pins' (``OtherPins``), its control bus's, then its ports',
@@ -218,8 +241,8 @@ def _members(cls: type[Kernel]) -> dict[str, object]:
 # installs, for a kernel with a module, one helper a part, each reading its part by the name
 # its closure holds and then the next helper by name, the last reading none.
 
-_PINS, _HELD, _PRESENTED = "_module_pins", "_module_held", "_module_presented"
-_BEATS = "_module_beats"
+_PINS, _HELD, _PRESENTED = "pins", "held", "presented"
+_BEATS = "beats"
 
 
 def _pins_from(part: str, following: str) -> Callable[[Kernel], tuple[Any, ...]]:
@@ -298,7 +321,7 @@ def _supply_ports(cls: type[Kernel]) -> None:
     And a selector of its body (``InPort.governs``, a literal naming another port of its
     kernel, declared in its body or inherited) with the beats a frame of the port it governs
     (``InPort.governed_beats``, from which its ``group`` follows), by a private derived
-    member of its body, ``_<selector>_governed``."""
+    member of its body, ``-<selector>-governed``."""
     from finn.kernels.port_model import InPort, StreamPort  # noqa: PLC0415
 
     body = dict(vars(cls))
@@ -315,8 +338,9 @@ def _supply_ports(cls: type[Kernel]) -> None:
             and "governed_beats" not in record.settings
         ):
             beats = derived(_governed_beats(governs))
-            setattr(cls, f"_{name}_governed", beats)
-            getattr(beats, "__set_name__")(cls, f"_{name}_governed")
+            governed = _installed(name, "governed")
+            setattr(cls, governed, beats)
+            getattr(beats, "__set_name__")(cls, governed)
             assign(value, "governed_beats", beats)
         if "label" not in record.settings:
             assign(value, "label", name)
@@ -383,13 +407,13 @@ def _node_paths(
 # outside its profile, is reported under that name), and installs its ``intake``: the
 # stated one, refused where it names a port that is no placed input of the kernel
 # (``intake-port-unknown``). Its placed inputs are read as its module's parts are, one
-# helper each (``_placed_inputs_<i>``).
+# helper each (``-inputs-<i>``).
 #
 # The refusal is the intake's alone, and its design point stays valid: a rule reading the
 # stated intake would be refused wherever the intake is (an unstated one, Pool's outside
 # its profile, one reading a refused fact), and would read the kernel's choices.
 
-_INPUTS = "_placed_inputs"
+_INPUTS = "inputs"
 
 
 def _inputs_from(part: str, following: str) -> Callable[[Kernel], tuple[Any, ...]]:
@@ -403,7 +427,7 @@ def _inputs_from(part: str, following: str) -> Callable[[Kernel], tuple[Any, ...
 def _checked_intake(owner: str) -> Callable[[Kernel], Intake | Rejected]:
     def intake(self: Kernel) -> Intake | Rejected:
         stated: Intake = getattr(self, "stated_intake")
-        placed = self._placed_inputs_0()
+        placed = getattr(self, "-inputs-0")()
         unknown = [name for name in stated.names if name not in placed]
         if unknown:
             return reject(
@@ -832,7 +856,7 @@ def _derive_control(cls: type[Kernel]) -> None:
         )
     if may_present:
         cls._presents_buses = True
-        setattr(cls, "_own_buses", _own_buses(name))
+        setattr(cls, "-own-buses", _own_buses(name))
     declares = _declares_bus()
     declares.__annotations__ = {"return": bool}
     declares.__doc__ = f"Whether it declares a control bus: it does, {name}."
@@ -858,9 +882,9 @@ def _derive_control(cls: type[Kernel]) -> None:
 # may present a bus. It reads those members only, one after another, each where it is
 # present (its guard read by the name its closure fixes) and, a selector, its selected case
 # only: a dormant case is never read. As for the module's parts, each member is read by its
-# own helper, ``<prefix>_<i>``, so that each read names its member.
+# own helper, ``-<prefix>-<i>``, so that each read names its member.
 
-_DOUBLED, _BUSES = "_doubled", "_buses"
+_DOUBLED, _BUSES = "doubled", "buses"
 _AGGREGATED = "_finn_aggregated"
 
 
@@ -948,10 +972,10 @@ def _buses_from(
 
 def _case_member(cls: type[Kernel], member: str, item: object) -> str | None:
     """The name of ``cls``'s private member answering a selector member's case
-    (``_<member>_case``), installed where it is not yet; None for a child."""
+    (``-<member>-case``), installed where it is not yet; None for a child."""
     if not isinstance(item, NodeChoice):
         return None
-    case = f"_{member}_case"
+    case = _installed(member, "case")
     if case not in vars(cls):
         found = selected(item)
         setattr(cls, case, found)
@@ -980,7 +1004,7 @@ def _derive_doubled(cls: type[Kernel]) -> None:
         def takes_doubled_clock(self: Kernel) -> bool:
             if self.clocking.doubling:
                 return True
-            return bool(self._doubled_0())
+            return bool(getattr(self, "-doubled-0")())
 
         takes_doubled_clock.__doc__ = vars(Kernel)["takes_doubled_clock"].function.__doc__
         _set_aggregated(cls, "takes_doubled_clock", takes_doubled_clock, bool)
@@ -1001,7 +1025,7 @@ def _derive_doubled(cls: type[Kernel]) -> None:
         )
 
         def control_buses(self: Kernel) -> tuple[str, ...]:
-            found: tuple[str, ...] = (*self._own_buses(), *self._buses_0())
+            found: tuple[str, ...] = (*getattr(self, "-own-buses")(), *getattr(self, "-buses-0")())
             return found
 
         control_buses.__doc__ = vars(Kernel)["control_buses"].function.__doc__
@@ -1013,12 +1037,12 @@ def _install_reading(
     prefix: str,
     readers: list[tuple[Callable[[str, str], Callable[[Kernel], Any]], str]],
 ) -> None:
-    """The helpers ``<prefix>_<i>``, each reading its member, by the reading made for it
+    """The helpers ``-<prefix>-<i>``, each reading its member, by the reading made for it
     from its member's name and the next helper's, and then the next helper; the last
-    reads none (``_module_end``)."""
+    reads none (``-end``)."""
     for index, (reading, member) in enumerate(readers):
-        following = f"{prefix}_{index + 1}" if index + 1 < len(readers) else "_module_end"
-        setattr(cls, f"{prefix}_{index}", reading(member, following))
+        following = _installed(prefix, str(index + 1)) if index + 1 < len(readers) else _END
+        setattr(cls, _installed(prefix, str(index)), reading(member, following))
 
 
 def _set_aggregated(
@@ -1037,12 +1061,12 @@ def _install(
     reading: Callable[[str, str], Callable[[Kernel], tuple[Any, ...]]],
     parts: tuple[str, ...],
 ) -> None:
-    """The helpers ``<prefix>_<i>`` reading ``parts`` from the ``i``-th on (above)."""
+    """The helpers ``-<prefix>-<i>`` reading ``parts`` from the ``i``-th on (above)."""
     for index, part in enumerate(parts):
-        following = f"{prefix}_{index + 1}" if index + 1 < len(parts) else "_module_end"
-        setattr(cls, f"{prefix}_{index}", reading(part, following))
+        following = _installed(prefix, str(index + 1)) if index + 1 < len(parts) else _END
+        setattr(cls, _installed(prefix, str(index)), reading(part, following))
     if not parts:
-        setattr(cls, f"{prefix}_0", Kernel._module_end)
+        setattr(cls, _installed(prefix, "0"), _read_none)
 
 
 # -- its member channels: the ports each connects, the ports beside it, its hops to them -----
@@ -1077,7 +1101,7 @@ def _install(
 # of the holder accepts it (the engine answers a view so): a refused holder has neither its
 # channels' neighbours nor their hops. Whether it should keep them is pending a decision.
 # Each reads its ports by the names its closure fixes, an exposed port's leaf by the case its
-# member's selector holds (``_<member>_<selector>_case``).
+# member's selector holds (``-<member>-<selector>-case``).
 
 
 @dataclass(frozen=True)
@@ -1307,9 +1331,9 @@ def _leaves(
 
 def _selector_case(cls: type[Kernel], member: str, selector: str) -> str:
     """The name of ``cls``'s private member answering the case of member ``member``'s
-    selector at ``selector``, its path below the member (``_<member>_<selector>_case``),
-    installed where it is not yet."""
-    case = f"_{member}_{selector.replace('.', '_')}_case"
+    selector at ``selector``, its path below the member (``-<member>-<selector>-case``, each
+    segment of the path its own), installed where it is not yet."""
+    case = _installed(member, *selector.split("."), "case")
     if case not in vars(cls):
         node: Any = getattr(cls, member)
         for segment in selector.split("."):
@@ -1373,7 +1397,7 @@ def _beside_case(
 
 def _neighbours_of(producer: str, consumer: str, made: Callable[..., Any]) -> Callable[..., Any]:
     """A channel's neighbours (above), from the readings of its producer's side and its
-    consumer's, each a helper's name (``_no_port`` for a side naming no port)."""
+    consumer's, each a helper's name (``-no-port`` for a side naming no port)."""
 
     def neighbours(self: Kernel) -> Any:
         before = getattr(self, producer)()
@@ -1456,7 +1480,7 @@ def _install_view(cls: type[Kernel], name: str, function: Callable[..., Any], an
     getattr(member, "__set_name__")(cls, name)
 
 
-_HOPS = "_member_hops"
+_HOPS = "hops"
 
 
 def _connect(cls: type[Kernel]) -> None:
@@ -1474,13 +1498,13 @@ def _connect(cls: type[Kernel]) -> None:
         helpers: list[str] = []
         for role, port in zip(("producer", "consumer"), sides, strict=True):
             if port is None:
-                helpers.append("_no_port")
+                helpers.append("-no-port")
                 continue
-            helper = f"_{name}_{role}_port"
+            helper = _installed(name, role)
             selector, guard, leaves = _leaves(cls, port.member, port.port)
-            present = "_placed_member"
+            present = "-placed"
             if guard is not None:
-                present = f"{helper}_placed"
+                present = _installed(name, role, "placed")
                 setattr(cls, present, _guard_reading(port.member, guard))
             if selector is None:
                 leaf, scheduled = leaves[""]
@@ -1491,7 +1515,7 @@ def _connect(cls: type[Kernel]) -> None:
                 beside = _beside_case(port.member, port.port, case, leaves, present)
             setattr(cls, helper, beside)
             helpers.append(helper)
-        around, own, hopped = f"_{name}_neighbours", f"_{name}_ends", f"_{name}_hops"
+        around, own, hopped = (_installed(name, what) for what in ("neighbours", "ends", "hops"))
         _install_view(cls, around, _neighbours_of(helpers[0], helpers[1], Neighbours), Neighbours)
         _install_view(cls, own, _ends_of(name), tuple)
         hopping = _hops_of(name, around, own, sides, outer_hops)
@@ -1508,7 +1532,7 @@ def neighbours(space_type: type[Kernel], channel: str) -> Any:
     member channel of it."""
     if channel not in space_type.connections:
         raise KeyError(channel)
-    return getattr(space_type, f"_{channel}_neighbours")
+    return getattr(space_type, _installed(channel, "neighbours"))
 
 
 def own_ends(space_type: type[Kernel], channel: str) -> Any:
@@ -1518,7 +1542,7 @@ def own_ends(space_type: type[Kernel], channel: str) -> Any:
     it."""
     if channel not in space_type.connections:
         raise KeyError(channel)
-    return getattr(space_type, f"_{channel}_ends")
+    return getattr(space_type, _installed(channel, "ends"))
 
 
 def hops(space_type: type[Kernel], channel: str) -> Any:
@@ -1527,7 +1551,7 @@ def hops(space_type: type[Kernel], channel: str) -> Any:
     space. A ``KeyError`` where ``channel`` is no member channel of it."""
     if channel not in space_type.connections:
         raise KeyError(channel)
-    return getattr(space_type, f"_{channel}_hops")
+    return getattr(space_type, _installed(channel, "hops"))
 
 
 class Kernel(Space):
@@ -1849,7 +1873,7 @@ class Kernel(Space):
             return rank.get(str(item.node), len(order))
 
         # Each member channel's, with its hops to the ports beside it around its own links.
-        hopped: dict[str, Any] = dict(self._member_hops_0())
+        hopped: dict[str, Any] = dict(getattr(self, "-hops-0")())
         parts = [
             (
                 placed.get(str(item.node), str(item.node)),
@@ -1879,7 +1903,7 @@ class Kernel(Space):
         owner = type(self).__qualname__
         clocking = self.clocking
         parameters = tuple(sorted(self.parameters.items()))
-        pin_parts = _each(self._module_pins_0())
+        pin_parts = _each(getattr(self, "-pins-0")())
         if isinstance(pin_parts, Rejected):
             return pin_parts
         sources = spec.constant_sources
@@ -1889,7 +1913,7 @@ class Kernel(Space):
         if isinstance(refused, Rejected):
             return refused
         data = self.module_data
-        held_parts = _each(self._module_held_0())
+        held_parts = _each(getattr(self, "-held-0")())
         if isinstance(held_parts, Rejected):
             return held_parts
         leaf = assemble_module(
@@ -1902,54 +1926,9 @@ class Kernel(Space):
             sources,
             data,
             tuple(held_parts),
-            self._module_presented_0(),
+            getattr(self, "-presented-0")(),
         )
         return leaf if isinstance(leaf, Rejected) else Fragment((("", leaf),))
-
-    # The heads of its module's readings, which a kernel with a module has installed for
-    # it; the end of each.
-
-    def _module_pins_0(self) -> tuple[tuple[Pin, ...] | Rejected, ...]:
-        return ()
-
-    def _module_held_0(self) -> tuple[Held | Rejected, ...]:
-        return ()
-
-    def _module_presented_0(self) -> tuple[bool, ...]:
-        return ()
-
-    def _module_beats_0(self) -> tuple[int | None, ...]:
-        return ()
-
-    def _placed_inputs_0(self) -> tuple[str, ...]:
-        return ()
-
-    def _module_end(self) -> tuple[Any, ...]:
-        return ()
-
-    # The reading of its member channels' hops (``_connect``): none where it has none; and
-    # the reading of a channel side that names no port.
-
-    def _member_hops_0(self) -> tuple[Any, ...]:
-        return ()
-
-    def _no_port(self) -> tuple[Any, Any]:
-        return None, None
-
-    def _placed_member(self) -> bool:
-        return True
-
-    # What its members require of its holder (``_derive_doubled``): the head of each reading,
-    # which the base installs for a kernel with such members, and its own control bus's part.
-
-    def _doubled_0(self) -> bool:
-        return False
-
-    def _buses_0(self) -> tuple[str, ...]:
-        return ()
-
-    def _own_buses(self) -> tuple[str, ...]:
-        return ()
 
     # Whether it or a member may present a control bus (``may_present_bus``).
     _presents_buses: ClassVar[bool] = False
@@ -1961,7 +1940,8 @@ class Kernel(Space):
         (``compute.packed``, a selector's case). What a shell's budget counts
         (``finn.kernels.budgets``); the base derives it for a kernel with members that may
         present one when its class is made (``_derive_doubled``)."""
-        return self._own_buses()
+        found: tuple[str, ...] = getattr(self, "-own-buses")()
+        return found
 
     @derived
     def declares_bus(self) -> bool:
@@ -2037,7 +2017,7 @@ class Kernel(Space):
         if _declared(type(self), "schedule"):
             schedule: Schedule = self.schedule
             return in_cycles(schedule.iterations, interval)
-        beats = [each for each in self._module_beats_0() if each is not None]
+        beats = [each for each in getattr(self, "-beats-0")() if each is not None]
         if not beats:
             return reject(
                 "kernel-cycles", f"no port of {type(self).__qualname__} carries a stream's beats"
@@ -2055,6 +2035,39 @@ class Kernel(Space):
     member_frame_cycles = Members(frame_cycles)
     member_assumed = Members(assumed)
     member_intake = Members(intake)
+
+
+# The heads of the base's readings (above), which it installs for a kernel that has what each
+# reads, read on every kernel: none on ``Kernel`` (its module's parts and placed inputs, its
+# members' doubled clock and control buses, its own control bus, its member channels' hops);
+# and the end of each, the reading of a channel side that names no port, and of a member's
+# port read through no child its member guards.
+
+
+def _read_none(self: Kernel) -> tuple[()]:
+    return ()
+
+
+def _no_port(self: Kernel) -> tuple[None, None]:
+    return None, None
+
+
+def _placed(self: Kernel) -> bool:
+    return True
+
+
+def _doubled_none(self: Kernel) -> bool:
+    return False
+
+
+for _head in (_PINS, _HELD, _PRESENTED, _BEATS, _INPUTS, _BUSES, _HOPS):
+    setattr(Kernel, _installed(_head, "0"), _read_none)
+setattr(Kernel, _installed(_DOUBLED, "0"), _doubled_none)
+setattr(Kernel, "-own-buses", _read_none)
+setattr(Kernel, _END, _read_none)
+setattr(Kernel, "-no-port", _no_port)
+setattr(Kernel, "-placed", _placed)
+del _head
 
 
 # -- a kernel's extents and schedule, by finn.dataflow's rules ------------------------------

@@ -42,12 +42,13 @@ from finn.dataflow.gemm import Form, Window
 from finn.dataflow.schedule import Index
 from finn.kernels import composer
 from finn.kernels.artifacts.abi import Direction
-from finn.kernels.base import Kernel, extent_of, hops, neighbours
+from finn.kernels.base import Kernel, extent_of, hops, neighbours, own_ends
 from finn.kernels.channels import Channel
 from finn.kernels.composer import (
     CLASS_CACHE_BOUND,
     SEPARATOR,
     ChannelDeclaration,
+    Composed,
     Facts,
     PartitionDeclaration,
     PartitionRefused,
@@ -400,6 +401,7 @@ def test_two_graph_names_of_one_member_name_are_refused(cache: None) -> None:
         ("query", "name-reserved"),
         ("netlist", "name-reserved"),
         ("connections", "name-reserved"),
+        ("_frame_cycles", "name-reserved"),
         ("shell", "name-reserved"),
         ("__init__", "name-reserved"),
     ],
@@ -459,6 +461,67 @@ def test_a_graph_name_s_member_name_is_its_node_and_its_keys_map_both_ways(cache
     pairs = [names.pair(item.key) for item in inspection.decisions(point)]
     assert ("Mat.Mul:0", "pe") in pairs
     assert all(names.pair(names.path(pair)) == pair for pair in pairs)
+
+
+def _as_chain(composed: Composed, graph: Mapping[str, str]) -> Kernel:
+    """``composed``, the Chain with members renamed (``graph``: each renamed graph name by
+    its Chain name), configured with the Chain's stored choices."""
+    stored = {
+        composed.names.path((graph.get(owner, owner), path)): value
+        for (owner, path), value in chain.chain().chosen().items()
+    }
+    point = commit(composed.design_space(), stored)
+    assert isinstance(point, Kernel)
+    return point
+
+
+def test_a_graph_name_that_begins_with_an_underscore_is_a_member_s_name_like_any(
+    cache: None,
+) -> None:
+    """A graph name that begins with ``_`` (an exported ``/fc1/MatMul``'s member is
+    ``_fc1_MatMul``) is a member's name like any: what the base installs for a member is
+    named so that no member's name meets it. The Chain with its first MatMul ``/first`` and
+    its hidden tensor ``_hidden``, configured as the Chain, is valid and wired as the
+    Chain."""
+    renamed = {"first": "/first"}
+    graph = {"first": "/first", "hidden": "_hidden"}
+    wired = {graph.get(name, name): each for name, each in channels(renamed).items()}
+    composed = compose(declared(renamed, wired))
+    assert composed.names.members["/first"] == "_first"
+    point = _as_chain(composed, graph)
+    assert inspection.validity(point).status == "valid"
+    beside = point.query(neighbours(type(point), "_hidden"))
+    assert isinstance(beside, Available)
+    assert beside.value.producer is not None and beside.value.consumer is not None
+    assert (beside.value.producer.label, beside.value.consumer.label) == (
+        "_first.y",
+        "activate.input",
+    )
+    found = point.query(Kernel.netlist)
+    built = chain.chain().netlist()
+    assert isinstance(found, Available) and isinstance(built, Available)
+    assert {str(link).replace("'_first.", "'first.") for link in found.value.links} == {
+        str(link) for link in built.value[0].links
+    }
+
+
+@pytest.mark.parametrize("name", ["_x_ends", "-x-hops", "_member_hops_1", "_doubled_1"])
+def test_a_member_named_as_a_helper_of_the_base_is_its_member(cache: None, name: str) -> None:
+    """A graph name that the base's helpers were once named as (``_x_ends``, channel x's own
+    ends; ``_member_hops_1``), or that spells one it installs now (``-x-hops``, whose
+    member is ``_x_hops``), is a member's name like any: the member is the kernel, and
+    channel x's own ends and hops are answered."""
+    composed = compose(declared({"first": name}))
+    member = composed.names.members[name]
+    space_type = composed.space_type
+    assert issubclass(space_type, Kernel)
+    assert member.startswith("_") and member not in vars(Kernel)
+    assert isinstance(getattr(space_type, member), MatMulKernel)
+    point = _as_chain(composed, {"first": name})
+    assert isinstance(point.query(own_ends(space_type, "x")), Available)
+    assert isinstance(point.query(hops(space_type, "x")), Available)
+    installed = {each for each in vars(space_type) if each.startswith("-")}
+    assert installed and not installed & set(composed.names.members.values())
 
 
 def _wired(**changes: ChannelDeclaration) -> dict[str, ChannelDeclaration]:

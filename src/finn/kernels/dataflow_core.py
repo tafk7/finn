@@ -36,10 +36,10 @@ kernel's port outside its module and no AXIS port of it: a slice is not emitted
 buses (``core_module``), every marker pin of its edge ruled (``top_markers``), named after
 its name (``finn_<name>``, lower case) and derived by its class (``PRODUCER``: its ``id``).
 
-``edge_buses`` reads each member channel through a helper of its own, ``__core_edge_<i>`` in its
+``edge_buses`` reads each member channel through a helper of its own, ``-edge-<i>`` in its
 instance order, each reading its channel's sides and its edge ports by the names its
-closure fixes (``finn.core.space``'s read inference), then the next: a name no member takes
-(a graph name never starts ``__``, ``finn.kernels.composer``).
+closure fixes (``finn.core.space``'s read inference), then the next: named as the base names
+what it installs, so that no member meets it (``finn.kernels.base``).
 """
 
 from __future__ import annotations
@@ -55,14 +55,14 @@ from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.artifacts.module import Composed as Module
 from finn.kernels.artifacts.module import Fragment, ProducerIdentity
 from finn.kernels.artifacts.top import compose as top
-from finn.kernels.base import Kernel, _connects, _members
+from finn.kernels.base import _END, Kernel, _connects, _installed, _members, _read_none
 from finn.kernels.sides import SideKind
 
 PRODUCER = ProducerIdentity("finn.dataflow_core", "1")
 """What derives a core's module, its IP (``DataflowCoreKernel.module``): its class, by its
 ``id``."""
 
-_EDGE = "__core_edge"
+_EDGE = "edge"
 
 
 def _edge_from(
@@ -89,7 +89,7 @@ def _edge_from(
 
 
 def _install_edge(cls: type[Kernel]) -> None:
-    """The helpers ``__core_edge_<i>``, one a member channel in its instance order
+    """The helpers ``-edge-<i>``, one a member channel in its instance order
     (``Kernel.instance_order``, then the others as declared), each with its edge ports by
     the alias naming its outer port (the module docstring)."""
     channels = [name for name, item in _members(cls).items() if _connects(item)]
@@ -101,10 +101,10 @@ def _install_edge(cls: type[Kernel]) -> None:
             channel, _, port = end.path.partition(".")
             edges.setdefault((channel, port), label)
     for index, channel in enumerate(channels):
-        following = f"{_EDGE}_{index + 1}" if index + 1 < len(channels) else "_module_end"
+        following = _installed(_EDGE, str(index + 1)) if index + 1 < len(channels) else _END
         setattr(
             cls,
-            f"{_EDGE}_{index}",
+            _installed(_EDGE, str(index)),
             _edge_from(
                 channel,
                 edges.get((channel, "outer_in")),
@@ -113,7 +113,7 @@ def _install_edge(cls: type[Kernel]) -> None:
             ),
         )
     if not channels:
-        setattr(cls, f"{_EDGE}_0", Kernel._module_end)
+        setattr(cls, _installed(_EDGE, "0"), _read_none)
 
 
 class DataflowCoreKernel(Kernel):
@@ -135,7 +135,7 @@ class DataflowCoreKernel(Kernel):
         """Its module's edge: each edge port's AXIS bus, its module's own pins, in its
         instance order; refused for a slice, each member channel at a frozen neighbour's
         port named (``slice-not-emitted``, the module docstring)."""
-        read = getattr(self, "__core_edge_0")()
+        read = getattr(self, "-edge-0")()
         frozen = tuple(
             Finding(
                 FindingKind.REJECTION,
@@ -165,7 +165,7 @@ class DataflowCoreKernel(Kernel):
         return core_module(PRODUCER, f"finn_{name.lower()}", fragment, edge)
 
 
-setattr(DataflowCoreKernel, f"{_EDGE}_0", Kernel._module_end)
+setattr(DataflowCoreKernel, _installed(_EDGE, "0"), _read_none)
 
 
 def top_markers(fragment: Fragment, boundary: Iterable[Bus]) -> tuple[Finding, ...]:

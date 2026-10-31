@@ -227,7 +227,7 @@ def test_a_subclass_redeclaring_a_selector_groups_it_by_the_inherited_port_it_go
         assert inspection.validity(report.instance).status == "valid"
         points.append(report.instance)
     library, redeclared = points
-    assert "_set_governed" in vars(Reselected)
+    assert "-set-governed" in vars(Reselected)
     assert redeclared.set.group == library.set.group == 1
     assert redeclared.intake.joined == library.intake.joined == (("input", "set"),)
 

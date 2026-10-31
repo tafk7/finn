@@ -184,7 +184,7 @@ def _through_a_node_alias(key: str, reads: list[str]) -> bool:
     leaf below it."""
     selector = reads[0]
     return (
-        key.endswith("_neighbours.$output")
+        key.endswith("-neighbours.$output")
         and len(reads) > 1
         and all(read.startswith(f"{selector}.") for read in reads[1:])
     )
