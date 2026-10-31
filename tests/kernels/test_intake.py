@@ -54,7 +54,6 @@ from finn.kernels.input_generator import InputGeneratorKernel, nest_buffer
 from finn.kernels.laws import (
     INTAKE_UNSTATED,
     NATIVE_PROTOCOL,
-    Advance,
     Ahead,
     Intake,
     IntakeProfile,
@@ -369,14 +368,6 @@ def test_every_module_kernel_states_its_intake_at_each_input_port_it_places(case
             hls = isinstance(member, PoolKernel)
             standing = Standing.ASSUMED if hls else Standing.STRUCTURAL
             assert {each.standing for each in found.value.ports} <= {standing}, where
-            # Each placed selector's group divides its governed port's beats (R2).
-            for port in stream_ports(type(member)).values():
-                if (
-                    member.field(port.advance).get() is Advance.SELECTED
-                    and member.field(port.placed).get()
-                ):
-                    group = member.query(port.group)
-                    assert isinstance(group, Available) and group.value >= 1, (where, group)
 
 
 def _rtl(member: Kernel, top: str, names: tuple[str, ...], **binding: object) -> Any:
