@@ -21,7 +21,8 @@ TFC's least parallelism (no budget) reaches 50 176 cycles a frame at 1 131 LUT o
 10 875 in the Zynq shell; at 3 136 cycles it uses 1 196 and 10 940. Each end-to-end
 search budgets between the two: of the budgets measured, the cheapest search that
 still bisects both ways to a point that fits, its folds all at budgets of thousands
-of cycles. R3's budgets (``{lut: 0.5}``, ``0.07`` and ``0.2``) are its record's probe's.
+of cycles. The larger budgets measured before (``{lut: 0.5}``, ``0.07`` and ``0.2``)
+are not searched here.
 """
 
 from __future__ import annotations

@@ -125,7 +125,7 @@ def _pair(arriving: BeatSequence, leaving: BeatSequence, shape: tuple[int, ...] 
 @pytest.mark.parametrize(
     ("arriving", "leaving", "shape", "presented"),
     [
-        # Codex's ``vpc_reorder``: one lane each side, a 2 x 2 tensor transposed.
+        # A reorder: one lane each side, a 2 x 2 tensor transposed.
         (
             BeatSequence(vector_major((2, 2), 1)),
             BeatSequence(Traversal((2, 2), (Loop(2, 1), Loop(2, 2)), ())),

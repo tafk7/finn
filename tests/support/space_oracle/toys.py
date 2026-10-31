@@ -6,8 +6,8 @@
 (``Boundary``), each opened, with the values a walk may give its root facts and the change
 the dump makes on it.
 
-The boundary is the shape of S1's boundary (the collapse tests' ``Outer``,
-``core.space.test_collapse``): a formal read from outside its scope while that scope is
+The boundary has the shape of the collapse tests' ``Outer``
+(``core.space.test_collapse``): a formal read from outside its scope while that scope is
 absent. ``outside``'s width is bound to ``guarded.leaf.width``, and ``guarded`` is placed
 only when ``enabled``; with ``enabled`` false, the answer for ``outside.width`` is
 inapplicable (a formal bound by reference answers within its scope).

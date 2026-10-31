@@ -66,7 +66,8 @@ def _refuse_kind_overridden(cls: type[StreamPort]) -> None:
     ``port-advance``), but for this module's ``StreamPort``, ``InPort`` and ``OutPort``:
     each is its kind's, so the ABI, which reads ``direction``, and every check of a
     kernel's class, which reads the kind (``finn.kernels.port.port_direction``), agree by
-    construction, and a port's advance rule follows from its declaration (R3)."""
+    construction, and a port's advance rule follows from its declaration, checked when its
+    kernel's class is made."""
     for base in cls.__mro__:
         if base.__module__ == __name__ or base in StreamPort.__mro__:
             continue
@@ -291,7 +292,7 @@ class StreamPort(Space):
 
     @derived
     def group(self) -> int | Rejected | Inapplicable:
-        """A selector's group (R2, L4): the governed port's beats its one beat names the set
+        """A selector's group (L4): the governed port's beats its one beat names the set
         of (``InPort.group``); a port of another rule has none."""
         return Inapplicable()
 

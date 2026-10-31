@@ -150,7 +150,7 @@ def test_the_interval_travels_with_the_pace_through_a_wrapper() -> None:
 
 
 def test_a_port_of_a_kernel_s_body_states_no_interval_of_its_own() -> None:
-    """The interval is its kernel's (RF3 M1): a port of its body stating its own is refused
+    """A port's interval is its kernel's: a port of its body stating its own is refused
     when the class is made (``port-interval``), so that its pace in cycles and its kernel's
     cycles never read two intervals (Pool's output at 3, its cycles at 1)."""
     with refused("port-interval", error=DefinitionError, message=r"Odd\.output states its own"):
@@ -176,7 +176,7 @@ def test_a_port_of_a_kernel_s_body_states_no_interval_of_its_own() -> None:
 
 
 def test_a_kernel_with_no_module_states_no_interval() -> None:
-    """A composite has none (RF3 L3): its members' ports carry their own kernels', and its
+    """A composite has none: its members' ports carry their own kernels', and its
     cycles a frame are its members'; one it stated would be read and ignored."""
     with refused(
         "kernel-interval-composite", error=DefinitionError, message=r"Stating\.interval: "
@@ -243,7 +243,7 @@ def test_a_kernel_with_a_module_does_not_restate_its_cycles() -> None:
             def frame_cycles(self) -> int:
                 return 1
 
-    # Nor the base's private rate law behind them (RF3 L4).
+    # Nor the base's private rate law behind them (``_frame_cycles``).
     with refused("kernel-cycles-restated", error=DefinitionError, message=r"\._frame_cycles: "):
 
         class Behind(_Stage):

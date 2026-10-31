@@ -304,7 +304,7 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
 # direction, reading its ``governs`` or ``stored`` (+40 constants, one per active port; +47
 # after ``viable``).
 # Then non-ports' (1013, 42) and (1059, 42), ports' ((644, 344), (763, 407)) and the totals
-# ((1657, 386), (1822, 449)) became these when ports became InPort and OutPort (S4): a port's
+# ((1657, 386), (1822, 449)) became these when ports became InPort and OutPort: a port's
 # direction is its kind's, no Param, and its presentation reads no relation by direction
 # (-64 members, -104 constants at the baseline; -78, -125 after ``viable``), each kernel's
 # ports take its interface protocol's transport (+4, +6 non-port members); and when its presentation

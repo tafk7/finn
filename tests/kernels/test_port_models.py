@@ -605,7 +605,7 @@ def test_an_exposed_port_is_a_stream_port_of_each_case_of_its_kernel_s_member() 
 
     assert port_direction(Carried, "x") is Direction.IN
 
-    # A kind derived from a kind is its kind (RF2 M1's case: no direction is bound).
+    # A kind derived from a kind is its kind, though it binds no direction.
     class Tapped(OutPort):
         pass
 
@@ -620,7 +620,7 @@ def test_an_exposed_port_is_a_stream_port_of_each_case_of_its_kernel_s_member() 
 
     assert port_direction(Outputs, "x") is Direction.OUT
 
-    # One port, one name: a second alias of it is refused (RF2 L2).
+    # One port, one name: a second alias of it is refused.
     with refused("port-exposed-twice", error=DefinitionError, message="exposes the port w"):
 
         class Twice(Kernel):
@@ -704,7 +704,7 @@ def test_a_port_states_one_thing_its_advance_rule_follows_from() -> None:
 
 
 def test_a_selector_s_group_is_the_governed_port_s_beats_over_its_own() -> None:
-    """``group`` (R2, L4): the governed port's beats a frame over the selector's, each
+    """``group`` (L4): the governed port's beats a frame over the selector's, each
     selector beat naming the set of that many; refused where they do not divide, the design
     point with it (``port-group``, its ``presented``); a port that governs none has none."""
     wide = Tensor((4, 4), ELEMENT)
@@ -824,7 +824,7 @@ def test_a_stream_port_is_an_input_or_an_output() -> None:
 
 
 def test_a_port_class_states_neither_its_direction_nor_its_advance() -> None:
-    """Both are its kind's (RF3 M2): a port class overriding ``direction`` (an ``InPort``
+    """Both are its kind's: a port class overriding ``direction`` (an ``InPort``
     answering ``OUT``, so that its ABI's endpoint and its kernel's checks would disagree)
     is refused when it is made (``port-direction``), as is one overriding ``advance``
     (``port-advance``), or inheriting either from a class of its own; a kind derived from a

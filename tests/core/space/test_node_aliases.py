@@ -8,10 +8,10 @@ cache and stored choices are the owner's, and the alias owns nothing. Every look
 one frozen table of the class's aliases (``_aliases.alias_table``): class references,
 reads on a design space and in a method, read inference, presence and inspection.
 
-Each refusal and each answer here is one the third adversarial review of the alias
-amendment probed (``alias_adversarial.py``): mutation, foreign and inherited retargeting,
-the reserved name, a wrapper over a wrapper over a selector, a selector over aliased
-composites, a case placing nothing, a case lacking the node, and the outer-path reports.
+Each refusal and each answer here is one of aliasing's hard cases: mutation, foreign and
+inherited retargeting, the reserved name, a wrapper over a wrapper over a selector, a
+selector over aliased composites, a case placing nothing, a case lacking the node, and the
+outer-path reports.
 """
 
 from __future__ import annotations
@@ -219,7 +219,7 @@ def test_a_class_alias_is_neither_replaced_nor_deleted() -> None:
     with refused("structure-finalized", error=DefinitionError):
         del Root.x
     assert Root.x.answer == Root.inner.leaf.answer
-    # A selector alias's face, set on the closed class, as a plain one (RF2 L1).
+    # A selector alias's face, set on the closed class, is refused as a plain one's is.
     with refused("structure-finalized", error=DefinitionError):
         Pick.z = Pick.x
     assert not any(alias.name == "z" for alias in inspection.aliases(Pick))

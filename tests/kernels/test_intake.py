@@ -114,7 +114,7 @@ def test_an_intake_states_each_port_once() -> None:
 
 
 def test_an_intake_states_its_inputs_coupling_by_their_names() -> None:
-    """Beside the counts, its inputs' coupling (R2): ``joined``, groups of two or more inputs
+    """Beside the counts, its inputs' coupling: ``joined``, groups of two or more inputs
     whose beats transfer only together, each input in one at most; ``ahead``, how far an
     input in no group is accepted beyond another. Every name is one of the ports it states,
     and renaming renames them all."""
@@ -273,7 +273,7 @@ def test_a_kernel_s_intake_names_its_placed_inputs() -> None:
 
 
 def test_a_stated_intake_s_refusal_is_reported_under_a_public_name() -> None:
-    """A kernel's stated intake that refuses is reported under ``stated_intake`` (RF3 L2),
+    """A kernel's stated intake that refuses is reported under ``stated_intake``,
     never a private member's name: Pool's outside its profile."""
     found = _pool((1, 1), 5.0).query(Kernel.intake)
     assert isinstance(found, Rejected) and codes(found) == {INTAKE_UNSTATED}
@@ -595,7 +595,7 @@ def test_memstream_states_its_set_port_s_intake_by_its_credit() -> None:
         ).with_choices(ram_style="distributed", pumped_memory=pumped)
         entry = several.intake.of("set")
         assert (entry.before_stop, entry.most) == counts, (depth, pumped)
-        # Each set index names the set of a set's words: its group (R2, L4).
+        # Each set index names the set of a set's words: its group (L4).
         assert several.set.group == depth, (depth, pumped)
         credit = _rtl(several, "memstream", ("FULL_CREDIT",), SETS=2, DEPTH=depth, WIDTH=12)
         assert credit["FULL_CREDIT"] == 8
