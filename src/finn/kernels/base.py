@@ -1091,10 +1091,12 @@ def _install(
 #   any member's (a weight channel's ``set``, its source's), but for its outer ports
 #   (``outer_in``, ``outer_out``): placed only where its side is the boundary, a fact its
 #   holder is given, they are its holder's edge, presented by an alias where they are placed
-#   (a core's edge port). A port its member places only where it is given an optional fact,
-#   and is not given it (a selector's set port with one set: its tensor, ``set_tensor``, left
-#   out; a channel's ``set``, its source's, without an ``index_tensor``), is idle by its
-#   member's structure, held idle by its member, and needs neither. Whether the rule reaches
+#   (a core's edge port; a sealed core's design point that places one no alias presents is
+#   refused by its edge, ``finn.kernels.dataflow_core.DataflowCoreKernel.edge_buses``). A
+#   port its member places only where it is given an optional fact, and is not given it (a
+#   selector's set port with one set: its tensor, ``set_tensor``, left out; a channel's
+#   ``set``, its source's, without an ``index_tensor``), is idle by its member's structure,
+#   held idle by its member, and needs neither. Whether the rule reaches
 #   past such ports to ports placed by other facts is pending a decision; until then a port
 #   its structure may place is connected or refused.
 #

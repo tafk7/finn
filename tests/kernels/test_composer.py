@@ -40,9 +40,11 @@ from finn.core.space import (
     Decision,
     DefinitionError,
     Param,
+    Rejected,
     Select,
     Unresolved,
     derived,
+    design_space,
     divisors_of,
     inspection,
 )
@@ -1075,3 +1077,63 @@ def test_a_sealed_core_s_edge_port_is_a_channel_s_outer_port(body: str, exposed:
         s_axis_0 = x.outer_in
 
     assert [end.path for end in alias_table(Core)["s_axis_0"].ends] == ["x.outer_in"]
+
+
+def test_a_sealed_core_s_placed_outer_port_without_an_edge_port_is_refused_by_its_edge() -> None:
+    """A sealed core declared by hand that places an outer port no edge port names (``x``'s
+    producer side the boundary, ``x.outer_in`` aliased by none) is made, its class cannot
+    tell a boundary side from another; its design point's edge is refused, the port named
+    (``port-unconnected``), and so is its module, before any top is built."""
+
+    class Core(DataflowCoreKernel):
+        x_producer: Side = Param()
+        y_consumer: Side = Param()
+        activate = ThresholdingAxiKernel(
+            threshold_dtype=THRESHOLD_DTYPE,
+            thresholds=IntegerTensorValue.of(THRESHOLDS),
+            bias=0,
+            input_tensor=chain.HIDDEN_TENSOR,
+            platform=FULL_DSP48E2,
+        )
+        x = Channel(
+            tensor=chain.HIDDEN_TENSOR,
+            producer=x_producer,
+            consumer=activate.input.side,
+            platform=FULL_DSP48E2,
+        )
+        y = Channel(
+            tensor=LEVELS, producer=activate.output.side, consumer=y_consumer, platform=FULL_DSP48E2
+        )
+        m_axis_0 = y.outer_out
+
+    point = commit(
+        design_space(
+            Core(
+                x_producer=Side.boundary("s_axis_0"),
+                y_consumer=Side.boundary("m_axis_0"),
+                name="hand",
+            )
+        ),
+        {
+            **chain.ACTIVATE,
+            "activate.pe": chain.PE,
+            "x.transport": "direct",
+            "y.transport": "direct",
+            "x.adapter_ram_style": "distributed",
+            "y.adapter_ram_style": "distributed",
+        },
+    )
+    assert inspection.validity(point).status == "valid"
+    for view in (DataflowCoreKernel.edge_buses, DataflowCoreKernel.module):
+        found = point.query(view)
+        assert isinstance(found, Rejected)
+        assert [(f.code, f.owner, dict(f.details)["port"]) for f in found.findings] == [
+            ("port-unconnected", "x", "outer_in")
+        ]
+    edge = point.query(DataflowCoreKernel.edge_buses)
+    assert isinstance(edge, Rejected)
+    (finding,) = edge.findings
+    assert finding.message == (
+        "x.outer_in is placed, its side being the boundary, and exposed by no alias: a sealed "
+        "kernel presents each outer port it places as its edge port, by an alias"
+    )

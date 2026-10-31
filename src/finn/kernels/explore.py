@@ -645,8 +645,9 @@ class CoreComposition:
     def netlist(self) -> QueryResult[tuple[Fragment, tuple[Bus, ...]]]:
         """What its top is made of, as its class answers it (``answer``): its netlist
         (``Kernel.netlist``) and its module's edge (``DataflowCoreKernel.edge_buses``: each
-        edge port's AXIS bus); or why not: a slice's edge first (``slice-not-emitted``),
-        then what refuses its netlist, then what either waits on. The shell's counts read it
+        edge port's AXIS bus); or why not: its edge first (a slice's, ``slice-not-emitted``;
+        an outer port placed and named by no edge port, ``port-unconnected``), then what
+        refuses its netlist, then what either waits on. The shell's counts read it
         (``finn.custom_op.kernels.shell``), its top's pins counted without building it."""
         edge = self.answer(DataflowCoreKernel.edge_buses)
         if isinstance(edge, Rejected):

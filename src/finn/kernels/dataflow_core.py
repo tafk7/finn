@@ -37,9 +37,12 @@ its members' sums, are the base's (``Kernel.frame_cycles``, ``Kernel.resources``
 edge port's AXIS bus, in its instance order; refused for a slice (some of a graph's kernels,
 declared with an edge at a frozen neighbour, ``Side.neighbour``), whose edge there is a
 kernel's port outside its module and no AXIS port of it: a slice is not emitted
-(``slice-not-emitted``). Its module (``module``), its IP, is its netlist with its edge's
-buses (``core_module``), every marker pin of its edge ruled (``top_markers``), named after
-its name (``finn_<name>``, lower case) and derived by its class (``PRODUCER``: its ``id``).
+(``slice-not-emitted``); and refused where a member channel places an outer port (its side
+the boundary) that no edge port names, which its class cannot see, its sides being facts
+(``port-unconnected``, the port named). Its module (``module``), its IP, is its netlist
+with its edge's buses (``core_module``), every marker pin of its edge ruled
+(``top_markers``), named after its name (``finn_<name>``, lower case) and derived by its
+class (``PRODUCER``: its ``id``).
 
 ``edge_buses`` reads each member channel through a helper of its own, ``-edge-<i>`` in its
 instance order, each reading its channel's sides and its edge ports by the names its
@@ -228,9 +231,9 @@ def _edge_from(
     channel: str, entering: str | None, leaving: str | None, following: str
 ) -> Callable[[Kernel], tuple[Any, ...]]:
     """The reading of member channel ``channel`` (the module docstring): its frozen
-    neighbours' ports, by label, and the pins of its edge ports, ``entering`` (its outer
-    input's) and ``leaving`` (its outer output's), each where it has one and places it; then
-    the next helper's."""
+    neighbours' ports, by label, the pins of its edge ports, ``entering`` (its outer
+    input's) and ``leaving`` (its outer output's), each where it places it, and the outer
+    ports it places that no edge port names; then the next helper's."""
 
     def edge_from(self: Kernel) -> tuple[Any, ...]:
         held = getattr(self, channel)
@@ -238,11 +241,18 @@ def _edge_from(
             side.label for side in (held.producer, held.consumer) if side.kind is SideKind.NEIGHBOUR
         )
         pins: list[Any] = []
-        if entering is not None and held.entering:
-            pins.extend(getattr(self, entering).physical_pins)
-        if leaving is not None and held.leaving:
-            pins.extend(getattr(self, leaving).physical_pins)
-        return ((channel, frozen, tuple(pins)), *getattr(self, following)())
+        unaliased: list[str] = []
+        for port, alias, placed in (
+            ("outer_in", entering, held.entering),
+            ("outer_out", leaving, held.leaving),
+        ):
+            if not placed:
+                continue
+            if alias is None:
+                unaliased.append(port)
+            else:
+                pins.extend(getattr(self, alias).physical_pins)
+        return ((channel, frozen, tuple(pins), tuple(unaliased)), *getattr(self, following)())
 
     return edge_from
 
@@ -325,22 +335,37 @@ class DataflowCoreKernel(Kernel):
     def edge_buses(self) -> tuple[Bus, ...] | Rejected:
         """Its module's edge: each edge port's AXIS bus, its module's own pins, in its
         instance order; refused for a slice, each member channel at a frozen neighbour's
-        port named (``slice-not-emitted``, the module docstring)."""
+        port named (``slice-not-emitted``, the module docstring), and where a member channel
+        places an outer port no edge port names, the port named (``port-unconnected``: the
+        class cannot see which outer ports are placed, its sides being facts)."""
         read = getattr(self, "-edge-0")()
-        frozen = tuple(
-            Finding(
-                FindingKind.REJECTION,
-                "slice-not-emitted",
-                channel,
-                f"a slice is not emitted: its edge meets {label}, a frozen neighbour's port "
-                "outside its module, and no AXIS port of it",
+        refused: list[Finding] = []
+        for channel, labels, _, unaliased in read:
+            refused.extend(
+                Finding(
+                    FindingKind.REJECTION,
+                    "slice-not-emitted",
+                    channel,
+                    f"a slice is not emitted: its edge meets {label}, a frozen neighbour's port "
+                    "outside its module, and no AXIS port of it",
+                )
+                for label in labels
             )
-            for channel, labels, _ in read
-            for label in labels
-        )
-        if frozen:
-            return Rejected(frozen)
-        buses = tuple(pin for _, _, pins in read for pin in pins)
+            refused.extend(
+                Finding(
+                    FindingKind.AUTHORING,
+                    "port-unconnected",
+                    channel,
+                    f"{channel}.{port} is placed, its side being the boundary, and exposed by "
+                    "no alias: a sealed kernel presents each outer port it places as its edge "
+                    "port, by an alias",
+                    (("member", channel), ("port", port)),
+                )
+                for port in unaliased
+            )
+        if refused:
+            return Rejected(tuple(refused))
+        buses = tuple(pin for _, _, pins, _ in read for pin in pins)
         assert all(isinstance(pin, Bus) for pin in buses)  # an AXIS port's pins: its bus
         return buses
 
