@@ -494,10 +494,17 @@ def _stated(
     inputs: Mapping[str, Tensor],
     facts: Mapping[str, object],
 ) -> ScalarEncoding:
-    """The element of the tensor the kernel states on output ``name``, its outputs
-    unplaced."""
+    """The element of the tensor the kernel states on output ``name``: the kernel alone, given
+    its facts and its inputs' tensors, as ``_design`` gives them (a partition connects every
+    port it places, so it has no outputs unplaced)."""
     hint = f"give {name} a Tensor"
-    probe = design_member(_design(space_type, inputs, {}, facts), KERNEL)
+    formals = {f"{_port_name(each)}_tensor": tensor for each, tensor in inputs.items()}
+    given = {
+        formal: tensor
+        for formal, tensor in formals.items()
+        if isinstance(getattr(space_type, formal, None), Param)
+    }
+    probe = Facts(space_type, {**facts, **given}).bind()
     found = probe.query(getattr(type(probe), f"{_port_name(name)}_tensor"))
     if not isinstance(found, Available):
         raise ValueError(f"{space_type.__name__} states no tensor at {name}; {hint}: {found}")

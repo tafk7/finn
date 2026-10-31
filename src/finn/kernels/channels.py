@@ -79,9 +79,10 @@ its mover's, by kind (``source_cycles``, ``stage_cycles``, ``mover_cycles``), no
 the base's ``member_frame_cycles``: its mover is no kernel (it binds no RTL in the module), and
 its transport, whose cycles are inapplicable, is a choice still open when FIFO sizing reads
 them. Its hops to the ports beside it need those ports'
-stream pins, which its network holds: the network wires them (``outer_hops``, from the ports
-it read, ``Neighbours``) and places them around the channel's netlist; it reads the
-module's AXIS buses of its outer ports (``physical_pins``). It states its mover's contract
+stream pins, which the kernel holding it holds: that kernel wires them (``outer_hops``, from
+the ports it reads, ``Neighbours``; the base's ``finn.kernels.base.hops``) and places them
+around the channel's netlist; it reads the module's AXIS buses of its outer ports
+(``physical_pins``). It states its mover's contract
 (``mover_contracts``, one or none: ``placed_mover``, from the mover's own derived
 ``contract``). It is no module of its own.
 """
@@ -213,7 +214,7 @@ class Neighbours:
     known value) or its boundary; and each port's pace in cycles (its ``timed_pace``: its
     ``pace`` at its own kernel's interval, read where it is read), None where that port
     follows another (it has no pace) or the side is the channel's own.
-    Its network wires the hops to them (``outer_hops``); FIFO sizing reads the paces
+    The kernel holding it wires the hops to them (``outer_hops``); FIFO sizing reads the paces
     (``finn.kernels.fifo_sizing``)."""
 
     producer: PortPins | None = None
@@ -260,37 +261,26 @@ def _kernel_of(port: PortPins, owner: str) -> str | Rejected:
     return "^" + port.instance
 
 
-def _own_source(channel: Channel) -> _End:
-    """The producing end a channel holds itself: its source, below it at its label, or
-    its outer input, the module's own pins; a ``ValueError`` where its producer is a
-    port, and so neither."""
-    if channel.valued:
-        offered: PortPins = channel.source.output.stream_pins
-        return (channel.source_label, offered.pins)
-    if not channel.entering:
-        raise ValueError("a channel whose producer is a port has no outer input")
-    entered: PortPins = channel.outer_in.stream_pins
-    return (None, entered.pins)
-
-
-def _own_sink(channel: Channel) -> _End:
-    """The consuming end a channel holds itself: its outer output, the module's own pins;
-    a ``ValueError`` where its consumer is a port, and so none."""
-    if not channel.leaving:
-        raise ValueError("a channel whose consumer is a port has no outer output")
-    left: PortPins = channel.outer_out.stream_pins
-    return (None, left.pins)
-
-
-def outer_hops(channel: Channel, neighbours: Neighbours, *, owner: str) -> OuterHops | Rejected:
-    """``channel``'s hops to the ports beside it (``neighbours``, as its network reads
-    them), as wires (``wired``), of a channel whose netlist is answered.
+def outer_hops(
+    neighbours: Neighbours,
+    stages: tuple[Stage, ...],
+    source: _End | None,
+    sink: _End | None,
+    *,
+    owner: str,
+) -> OuterHops | Rejected:
+    """A channel's hops to the ports beside it (``neighbours``, as its holder reads them),
+    as wires (``wired``), around its ``stages``; where it has none, across to its own ends:
+    its ``source`` (its source, below it at its label, or its outer input, the module's own
+    pins) and its ``sink`` (its outer output), each None where that side is a port. Its
+    holder reads them of the channel (``finn.kernels.base``, a channel's hops).
 
     A port belongs to its kernel beside the channel (``_kernel_of``); a stage and the
     source sit below the channel at their labels; an outer port's pins are the module's
-    own (``None``). Refused where a port is no kernel's (``channel-port``), or where a
-    hop's wires do not form (``channel-link``), each finding owned by ``owner``: the
-    channel's name in its partition.
+    own (``None``). A side with neither a port beside it nor an end of its own (a frozen
+    neighbour's, outside its holder) has no hop. Refused where a port is no kernel's
+    (``channel-port``), or where a hop's wires do not form (``channel-link``), each finding
+    owned by ``owner``: the channel's name in its holder.
     """
     owners: list[str | None] = []
     for port in (neighbours.producer, neighbours.consumer):
@@ -304,20 +294,18 @@ def outer_hops(channel: Channel, neighbours: Neighbours, *, owner: str) -> Outer
     consuming: _End | None = None
     if neighbours.consumer is not None:
         consuming = (owners[1], neighbours.consumer.pins)
-    stages: tuple[Stage, ...] = channel.stages
     # What each port meets of the channel: its first stage or its last, or, with none,
     # the other side: the other port, or the channel's own source or outer port.
+    into: _End | None = consuming or sink
+    out_of: _End | None = producing or source
     if stages:
-        into: _End = (stages[0].label, stages[0].input)
-        out_of: _End = (stages[-1].label, stages[-1].output)
-    else:
-        into = consuming or _own_sink(channel)
-        out_of = producing or _own_source(channel)
+        into = (stages[0].label, stages[0].input)
+        out_of = (stages[-1].label, stages[-1].output)
     try:
-        produced = None if producing is None else wired(*producing, *into)
+        produced = None if producing is None or into is None else wired(*producing, *into)
         consumed = None
         # A channel of no stage between two ports is one hop, the producer's.
-        if consuming is not None and (stages or producing is None):
+        if consuming is not None and out_of is not None and (stages or producing is None):
             consumed = wired(*out_of, *consuming)
     except ArtifactError as error:
         return reject("channel-link", str(error), owner=owner)
@@ -463,6 +451,10 @@ class Channel(Kernel):
     """
 
     id = "finn.channel"
+
+    # A channel joins two of its holder's members' ports (``Kernel.connects``): its holder
+    # reads which its sides name, and wires its hops to them.
+    connects = True
 
     # The channel's policies: how the compiler gives its choices their first values (stated
     # below, once the class is made).
@@ -837,7 +829,7 @@ class Channel(Kernel):
     def stages(self) -> tuple[Stage, ...]:
         """Its stages' modules and ports' stream pins (each holder's ``stages``), in the order
         the stream runs through them, labelled below the channel: the product its netlist
-        and its network's ``outer_hops`` read to wire them."""
+        and its holder's ``outer_hops`` read to wire them."""
         found: list[Stage] = []
         if self.output_adapting:
             found += _below_stages("output_adapter", self.output_adapter.stages)
@@ -894,7 +886,7 @@ class Channel(Kernel):
         whose ends are its own (its source, below it at its label; its stages, at theirs;
         its outer ports, the module's own pins), from its children's stream pins (its
         ``stages``, its source's and its outer ports'). Its hops to the ports beside it are
-        its network's (``outer_hops``); a channel of wires between two kernels places
+        its holder's (``outer_hops``); a channel of wires between two kernels places
         nothing."""
         current: _End | None = None
         if self.valued:

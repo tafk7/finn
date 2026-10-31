@@ -177,16 +177,35 @@ def test_stage_7s_chain_of_eight_kernels_reads_alike_in_any_order_its_scopes_are
     assert len(_group_scopes(records)) == 55
 
 
+def _through_a_node_alias(key: str, reads: list[str]) -> bool:
+    """Whether method ``key``'s gained ``reads`` are a channel's neighbours read through a
+    node alias over its member's selector (``x = compute.x``), which the line, older than
+    node aliases, does not follow (``core.space.test_whole``): the selector, and each case's
+    leaf below it."""
+    selector = reads[0]
+    return (
+        key.endswith("_neighbours.$output")
+        and len(reads) > 1
+        and all(read.startswith(f"{selector}.") for read in reads[1:])
+    )
+
+
 def _answers_as_the_line(classes: list[type[Space]]) -> int:
     """Each class's answers to the questions about its whole design space, from templates,
-    equal the line's; no method gained an inferred read; the number of choices compared."""
+    equal the line's; no method gained an inferred read but through a node alias; the
+    number of choices compared."""
     failures: list[str] = []
     decisions = 0
     for space_type in classes:
         compared = differences(space_type)
         failures.extend(compared.differences)
-        if compared.gained:
-            failures.append(f"{space_type.__qualname__}: reads gained {compared.gained}")
+        gained = {
+            key: reads
+            for key, reads in compared.gained.items()
+            if not _through_a_node_alias(key, reads)
+        }
+        if gained:
+            failures.append(f"{space_type.__qualname__}: reads gained {gained}")
         decisions += compared.decisions
     assert not failures, "\n".join(failures)
     return decisions

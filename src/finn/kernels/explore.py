@@ -121,7 +121,8 @@ class KernelComposition(Composition, Protocol):
     in its shell, ``finn.custom_op.kernels.shell.in_shell``, and a test declares one by
     hand). Its channels among its members; per member its Space (``member``) and the
     answers it gives (``query``, and the open Decisions an answer waits on, ``waits``); per
-    channel the ports beside it (``neighbours``, whose paces FIFO sizing reads); its own
+    channel the ports beside it (``neighbours``, whose paces FIFO sizing reads; refused where
+    a rule refuses the partition); its own
     statement of what it uses, where it makes one (``own_resources``); the owner of each
     member's policies (``owner``); and in a shell, its shell member's name (``shell``: no
     member, but its validity is read by its name, the shell's budgets' rules).
@@ -137,7 +138,7 @@ class KernelComposition(Composition, Protocol):
 
     def member(self, name: str) -> Any: ...
 
-    def neighbours(self, name: str) -> Neighbours: ...
+    def neighbours(self, name: str) -> Neighbours | Rejected: ...
 
     def owner(self, name: str) -> Owner: ...
 
@@ -407,8 +408,14 @@ class Seam(search.Seam):
                 words = None if depth is None else _fifo_words(network, fifos[depth])
             if words is None:
                 continue
+            beside = network.neighbours(owner)
+            if isinstance(beside, Rejected):
+                not_modelled[owner] = "the partition is refused: " + "; ".join(
+                    f"{each.owner}: {each.message}" for each in beside.findings
+                )
+                continue
             try:
-                kept = holds(network.member(owner), network.neighbours(owner), period, words)
+                kept = holds(network.member(owner), beside, period, words)
             except NotModelled as error:
                 not_modelled[owner] = str(error)
                 continue
@@ -1547,11 +1554,28 @@ class SizeFifos:
             )
         self.period = bottleneck.cycles
         transports = self.transports(seam, network)
+        beside = {
+            transport.channel: network.neighbours(transport.channel) for transport in transports
+        }
+        # A partition a rule refuses has no channel's neighbours, so nothing to size them
+        # by: refused before sizing. Whether it should keep them is pending a decision.
+        refused = next((each for each in beside.values() if isinstance(each, Rejected)), None)
+        if refused is not None:
+            raise ExploreError(
+                "fifos-refused",
+                self.strategy,
+                "sizing FIFOs: the partition is refused, so the ports beside its channels are "
+                "not read: "
+                + "; ".join(f"{each.owner}: {each.message}" for each in refused.findings),
+                causes=refused.findings,
+            )
         proposals: dict[str, _Proposal] = {}
         for transport in transports:
+            neighbours = beside[transport.channel]
+            assert isinstance(neighbours, Neighbours)
             sized = size(
                 network.member(transport.channel),
-                network.neighbours(transport.channel),
+                neighbours,
                 bottleneck.cycles,
                 margin=self.margin,
                 ram_style=self._style(seam, transport, prior),

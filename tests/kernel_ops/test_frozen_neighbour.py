@@ -21,6 +21,7 @@ from typing import Any, cast
 
 from qonnx.core.modelwrapper import ModelWrapper
 from support.configure import write_raw
+from support.helpers import beside
 from support.models import TARGET, chain_model, fan_out_source, kernel_model
 from support.refusals import refused
 
@@ -213,18 +214,18 @@ def test_a_downstream_neighbour_brings_the_input_chain_it_needs_into_the_slice()
     )
     for name in ("a0", "a1"):
         assert part.member(name).query(Channel.input_chain) == Available("input_gen")
-        assert part.neighbours(name) == whole.neighbours(name)
+        assert beside(part, name) == beside(whole, name)
         assert part.hops(name) == whole.hops(name)
         assert part.query(name, Kernel.resources) == whole.query(name, Kernel.resources)
-        assert fifo_sizing.size(part.member(name), part.neighbours(name), 1024) == (
-            fifo_sizing.size(whole.member(name), whole.neighbours(name), 1024)
+        assert fifo_sizing.size(part.member(name), beside(part, name), 1024) == (
+            fifo_sizing.size(whole.member(name), beside(whole, name), 1024)
         )
     hops = part.hops("a1")
     assert isinstance(hops, OuterHops) and hops.consumer is not None
     stage = hops.consumer.source.instance
     assert stage is not None and stage.startswith("adapter.input_gen")
     assert hops.consumer.sink.instance == "^mm2.compute.packed"
-    consumer = part.neighbours("a1").consumer
+    consumer = beside(part, "a1").consumer
     assert consumer is not None and consumer.label == "mm2.x"
 
 

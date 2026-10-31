@@ -13,8 +13,14 @@ fact is a value, or a value a member states (``Stated("mm0", "carried_weights")`
 parameter channel's tensor and contents). The composer never reads a graph: FINN's graph
 layer reads one into a declaration, and a test declares one by hand.
 
-``compose(declared)`` makes the partition's class with ``composite()`` and gives it its
-facts (``Composed``; ``Composed.design_space()`` opens it):
+``compose(declared)`` makes the partition's class with ``composite()``, a ``Kernel``
+(``finn.kernels.base``, its ``id`` ``PRODUCER_ID``) whose members are its kernels and
+channels, and gives it its facts (``Composed``; ``Composed.design_space()`` opens it). The
+base connects its member channels' ports when the class is made, by their rules
+(``CONNECTION_RULES``: each member port on one channel at most, and each on one unless the
+structure leaves it idle), and wires each channel's hops and neighbours; a declaration that
+breaks a rule is refused (``PartitionRefused``, each finding owned by the graph name of the
+member whose port it names). Its facts:
 
 - **a Param per fact**, at the root: each kernel's arguments and each channel's value
   facts, and each side given as a value, named ``<member>-<fact>`` (``mm0-x_tensor``,
@@ -99,6 +105,7 @@ from finn.core.search import Key
 from finn.core.space import (
     MISSING,
     RESERVED_NAMES,
+    DefinitionError,
     Param,
     Space,
     composite,
@@ -110,7 +117,7 @@ from finn.core.space import (
 )
 from finn.core.space.compiler import compile_model
 from finn.kernels.artifacts.abi import Direction
-from finn.kernels.base import may_present_bus
+from finn.kernels.base import Kernel, may_present_bus
 from finn.kernels.budgets import (
     DOUBLED,
     INITIATORS,
@@ -133,6 +140,13 @@ CLASS_CACHE_BOUND = 16
 
 SIDES = ("producer", "consumer")
 """A channel's sides, the producer's first."""
+
+PRODUCER_ID = "finn.dataflow_core"
+"""The ``Kernel.id`` of every class the composer makes."""
+
+CONNECTION_RULES = ("port-unconnected", "port-connected-twice")
+"""The base's rules on the ports its member channels connect (``finn.kernels.base``), which
+a partition's class is refused by when it is made."""
 
 
 # -- the declaration ----------------------------------------------------------------------
@@ -250,8 +264,9 @@ class PartitionDeclaration:
 class PartitionRefused(Refusal):
     """A partition that cannot be composed as declared, each reason a finding by its code
     (``name-shared``, ``name-invalid``, ``name-reserved``, ``channel-users``,
-    ``channel-read``, ``channel-ranked``, ``fact-unknown``), owned by the name of the member
-    it is about."""
+    ``channel-read``, ``channel-ranked``, ``fact-unknown``, and the connection rules'
+    ``port-unconnected`` and ``port-connected-twice``), owned by the name of the member it
+    is about (a connection rule's: the member whose port it names)."""
 
 
 # -- names --------------------------------------------------------------------------------
@@ -658,13 +673,46 @@ def _made(
     digest = hashlib.sha256(repr(key).encode()).hexdigest()[:12]
     if declared.shell is not None:
         channels[SHELL] = _shell(declared, ranked, names, nodes, digest, params, annotations, roots)
-    space_type = composite(
-        f"Partition_{digest}",
-        {**params, **{names[owner]: nodes[names[owner]] for owner in declared.kernels}, **channels},
-        annotations=annotations,
-    )
+    try:
+        space_type = composite(
+            f"Partition_{digest}",
+            {
+                "id": PRODUCER_ID,
+                **params,
+                **{names[owner]: nodes[names[owner]] for owner in declared.kernels},
+                **channels,
+            },
+            base=Kernel,
+            annotations=annotations,
+        )
+    except DefinitionError as error:
+        refused = _unconnected(error, names)
+        if refused is None:
+            raise
+        raise refused from error
     members = {owner: names[owner] for owner in (*declared.kernels, *ranked)}
     return space_type, Names(members, roots, SHELL if declared.shell is not None else None)
+
+
+def _unconnected(error: DefinitionError, names: Mapping[str, str]) -> PartitionRefused | None:
+    """``error``, the base's refusal of the class by its connection rules
+    (``CONNECTION_RULES``), as the partition's: each finding owned by the graph name of the
+    member whose port it names, its channels by their graph names; None for any other
+    refusal."""
+    if not error.findings or any(each.code not in CONNECTION_RULES for each in error.findings):
+        return None
+    owners = {member: owner for owner, member in names.items()}
+    findings: list[Finding] = []
+    for each in error.findings:
+        details = dict(each.details)
+        member = str(details["member"])
+        owner = owners.get(member, member)
+        channels = details.get("channels", ())
+        named: tuple[tuple[str, object], ...] = (("port", f"{owner}.{details['port']}"),)
+        if isinstance(channels, tuple) and channels:
+            named += (("channels", tuple(owners.get(str(name), str(name)) for name in channels)),)
+        findings.append(Finding(FindingKind.REJECTION, each.code, owner, each.message, named))
+    return PartitionRefused(findings)
 
 
 def _shell(
@@ -766,6 +814,8 @@ def compose(declared: PartitionDeclaration) -> Composed:
 
 __all__ = [
     "CLASS_CACHE_BOUND",
+    "CONNECTION_RULES",
+    "PRODUCER_ID",
     "SEPARATOR",
     "ChannelDeclaration",
     "Composed",

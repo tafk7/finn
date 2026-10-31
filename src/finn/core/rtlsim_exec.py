@@ -67,10 +67,10 @@ from finn.core.graph.partition import kernel_partition_body
 from finn.core.onnx_exec import running, window
 from finn.core.rtlsim_bench import Receive, SimulationFailed, Tap, Words, stream_out
 from finn.core.rtlsim_pacing import STALLED, Pacing
-from finn.core.space import Rejected
 from finn.custom_op.kernels.shell import Configured, configured_network
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.traversal import Traversal, pack, unpack
+from finn.kernels.channels import OuterHops
 from finn.toolchain.launcher import Toolchain, host_toolchain
 from finn.transformation.kernels.package import free_side
 from finn.util.basic import make_build_dir
@@ -227,7 +227,7 @@ def links(body: ModelWrapper, point: Configured, tensors: Collection[str]) -> tu
             channel = point.channel(tensor)
             produced = channel.sides.source
             hops = point.network.hops(tensor)
-            if isinstance(hops, Rejected) or hops.producer is None:
+            if not isinstance(hops, OuterHops) or hops.producer is None:
                 raise ValueError(f"{tensor}: no hop from its producer's port: {hops}")
             end = hops.producer.source.under(point.node(tensor))
             form, bits = produced.sequence.form, produced.element.bits

@@ -66,7 +66,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, Loop, Traversal, vector_major
 from finn.kernels.artifacts.module import Composed, Leaf, ProducerIdentity
 from finn.kernels.base import Kernel
-from finn.kernels.channels import Channel
+from finn.kernels.channels import Channel, Neighbours
 from finn.kernels.composer import (
     ChannelDeclaration,
     Facts,
@@ -415,6 +415,14 @@ def matmul_network(
 def matmul_point(*, depthwise_datapath: str | None = None, **facts: Any) -> Partition:
     """``matmul_network`` of a ``MatMulKernel``, its ``depthwise_datapath`` committed when given."""
     return matmul_network(depthwise_datapath=depthwise_datapath, **facts)
+
+
+def beside(network: Partition, name: str) -> Neighbours:
+    """The ports beside channel ``name`` of ``network``, a partition no rule refuses
+    (``Partition.neighbours``: a refused one has none)."""
+    found = network.neighbours(name)
+    assert isinstance(found, Neighbours), found
+    return found
 
 
 def kernel_alone(network: Partition, name: str) -> Any:

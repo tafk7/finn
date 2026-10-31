@@ -38,8 +38,8 @@ a slice is not emitted (``slice-not-emitted``).
 
 **Its module** (``module``): its members' netlists, each under its node (its member name),
 in its module's instance order (``order``, the declaration's by default), a channel's with
-its hops to the ports beside it, read from the kernels' contract views (``hops``,
-``finn.kernels.channels.outer_hops``), with every boundary channel's AXIS bus
+its hops to the ports beside it, as the base wires them (``hops``,
+``finn.kernels.base.hops``), with every boundary channel's AXIS bus
 (``finn.kernels.artifacts.top.compose``), made of its ``netlist``, which a shell counts
 without building the top (``finn.platform.shells.bus_counts``). Its views are read out of
 the design space, never bound into it: the netlist, FIFO sizing's paces (``neighbours``)
@@ -76,15 +76,14 @@ from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.artifacts.module import Composed as Module
 from finn.kernels.artifacts.module import Fragment, ProducerIdentity
 from finn.kernels.artifacts.top import compose as top
-from finn.kernels.base import Kernel, PortPins, merged
+from finn.kernels.base import Kernel, hops, merged, neighbours, own_ends
 from finn.kernels.channels import Channel, Neighbours, OuterHops, outer_hops
 from finn.kernels.composer import Composed, Names, PartitionDeclaration, Port, compose
 from finn.kernels.control import Control
 from finn.kernels.control import presented as presented_buses
-from finn.kernels.laws import TimedPace
 from finn.kernels.movers import MoverOffer
 from finn.kernels.policies import Defaulted, Owner, Unstated, defaulted
-from finn.kernels.port import exposed_pins, stream_port
+from finn.kernels.port import stream_port
 from finn.kernels.sides import Side, SideKind
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
@@ -598,49 +597,72 @@ class Partition:
 
     # -- what it is -------------------------------------------------------------------------
 
-    def neighbours(self, name: str) -> Neighbours:
-        """The ports beside channel ``name`` (each kernel's port's ``stream_pins`` view,
-        labelled below its member's node): the producing kernel's and the consuming kernel's,
-        by the side each is declared on; a frozen neighbour's, outside a slice, as given at
-        its stored choices (``frozen``); and each one's pace at its kernel's interval (its
-        ``timed_pace``, where it owns its pacing).
-        FIFO sizing reads their paces (``finn.kernels.fifo_sizing``), and the netlist its
-        hops to them (``hops``)."""
-        found: dict[str, PortPins] = {}
-        paces: dict[str, TimedPace] = {}
+    def neighbours(self, name: str) -> Neighbours | Rejected:
+        """The ports beside channel ``name``, as its class answers them
+        (``finn.kernels.base.neighbours``: each kernel's port's stream pins, labelled below
+        its member's node, and its pace at its kernel's interval, where it owns its pacing), where
+        it answers them; a frozen neighbour's, outside a slice, as given at its stored
+        choices (``frozen``). FIFO sizing reads their paces (``finn.kernels.fifo_sizing``),
+        and the netlist its hops to them (``hops``). Refused where a rule refuses the
+        partition (``refused``): its class answers them only where every rule accepts it."""
+        refused = self.refused()
+        if refused is not None:
+            return refused
         frozen = self._frozen.get(name, Neighbours())
-        for side, declared in zip(("producer", "consumer"), self._sides[name], strict=True):
-            if isinstance(declared, Side) and declared.kind is SideKind.NEIGHBOUR:
-                given: PortPins | None = getattr(frozen, side)
-                if given is not None:
-                    found[side] = given
-                pace: TimedPace | None = getattr(frozen, f"{side}_pace")
-                if pace is not None:
-                    paces[side] = pace
-                continue
-            if not isinstance(declared, Port):
-                continue
-            point = self.member(declared.member)
-            port = stream_port(type(point), declared.port)
-            answer = point.query(port.stream_pins)
-            if isinstance(answer, Available) and isinstance(answer.value, PortPins):
-                exposed = exposed_pins(point, declared.port, answer.value)
-                found[side] = exposed.under(self.node(declared.member))
-            paced = point.query(port.timed_pace)
-            if isinstance(paced, Available) and isinstance(paced.value, TimedPace):
-                paces[side] = paced.value
+        found = self._point.query(neighbours(self._core, self.node(name)))
+        beside = found.value if isinstance(found, Available) else Neighbours()
         return Neighbours(
-            found.get("producer"),
-            found.get("consumer"),
-            paces.get("producer"),
-            paces.get("consumer"),
+            beside.producer or frozen.producer,
+            beside.consumer or frozen.consumer,
+            beside.producer_pace or frozen.producer_pace,
+            beside.consumer_pace or frozen.consumer_pace,
         )
 
-    def hops(self, name: str) -> OuterHops | Rejected:
-        """Channel ``name``'s hops to the ports beside it (``outer_hops``, from
-        ``neighbours``), of a channel whose netlist is answered, its refusals owned by
-        ``name``."""
-        return outer_hops(self.member(name), self.neighbours(name), owner=name)
+    @property
+    def _core(self) -> type[Kernel]:
+        """Its class, a ``Kernel`` (the composer makes it on the base)."""
+        found = type(self._point)
+        assert issubclass(found, Kernel)
+        return found
+
+    def refused(self) -> Rejected | None:
+        """Its refusal as a whole, where a rule of it refuses it (``inspection.validity``);
+        None where none does. Its class answers its channels' neighbours and hops only where
+        every rule of it accepts it: the engine answers a view of a Space only so, and they
+        are views of the partition's own, across its members. So a refused partition has
+        neither, and no netlist: whether it should keep them is pending a decision (today
+        it does not)."""
+
+        def read() -> Rejected | None:
+            found = inspection.validity(self._point).result
+            return found if isinstance(found, Rejected) else None
+
+        found: Rejected | None = self._read("refused", read)
+        return found
+
+    def hops(self, name: str) -> OuterHops | Rejected | Unresolved:
+        """Channel ``name``'s hops to the ports beside it, as its class answers them
+        (``finn.kernels.base.hops``); or why not, its refusals owned by ``name``, or what
+        they wait on."""
+        node = self.node(name)
+        found = self._result(name, self._point.query(hops(self._core, node)))
+        if isinstance(found, Available) and name in self._frozen:
+            # A frozen neighbour is no member: the class has no hop to it, and its pins are
+            # given beside the class (``frozen``).
+            ends = self._result(name, self._point.query(own_ends(self._core, node)))
+            beside = self.neighbours(name)
+            assert isinstance(beside, Neighbours)  # its hops are answered: no rule refuses it
+            if isinstance(ends, Available):
+                return outer_hops(beside, *ends.value, owner=name)
+            found = ends
+        if isinstance(found, Available):
+            wired: OuterHops = found.value
+            return wired
+        owned = tuple(
+            replace(each, owner=name) if each.owner == node else each
+            for each in getattr(found, "findings", ())
+        )
+        return Rejected(owned) if isinstance(found, Rejected) else Unresolved(owned)
 
     def netlist(self) -> QueryResult[tuple[Fragment, tuple[Bus, ...]]]:
         """What its top is made of, read once: each member's netlist under its node, in its
@@ -651,10 +673,11 @@ class Partition:
         (or, where none refuses, what they wait on; a channel's hops' own, ``channel-port``
         or ``channel-link``), each finding naming its member (``located``), or the merge's own
         (``kernel-netlist``); a channel none of whose netlist applies because a port of a
-        kernel it is on does not is refused as ``channel-unused`` (``_unused``). A slice with
-        a frozen neighbour at an edge is refused first, each such edge by name
-        (``slice-not-emitted``): a slice is not emitted. The shell's counts and its module
-        read the same."""
+        kernel it is on does not is refused as ``channel-unused`` (``_unused``, or its hops').
+        A partition a rule refuses has no channel's hops: where no member refuses, it is
+        refused once, by that rule (``refused``). A slice with a frozen neighbour at an edge
+        is refused first, each such edge by name (``slice-not-emitted``): a slice is not
+        emitted. The shell's counts and its module read the same."""
         found: QueryResult[tuple[Fragment, tuple[Bus, ...]]] = self._read("netlist", self._netlist)
         return found
 
@@ -687,13 +710,20 @@ class Partition:
         boundary: list[Bus] = []
         controls: list[tuple[str, Control]] = []
         failed: list[tuple[str, QueryResult[object]]] = []
+        # A partition a rule refuses has no channel's hops (``refused``): refused once, as a
+        # whole, not once a channel.
+        unhopped = False
         for name in self._order:
             netlist = self.query(name, Kernel.netlist)
             if name in self._sides and isinstance(netlist, Available):
-                hops = self.hops(name)
-                netlist = (
-                    hops if isinstance(hops, Rejected) else Available(hops.around(netlist.value))
-                )
+                hopped = self.hops(name)
+                if isinstance(hopped, OuterHops):
+                    netlist = Available(hopped.around(netlist.value))
+                elif self.refused() is not None:
+                    unhopped = True
+                    continue
+                else:
+                    netlist = hopped
             if isinstance(netlist, Available):
                 netlists.append((self.node(name), netlist.value))
             else:
@@ -715,6 +745,9 @@ class Partition:
                         boundary.extend(buses)
                     elif not isinstance(pins, Inapplicable):
                         failed.append((name, pins))
+        refused = self.refused() if unhopped else None
+        if refused is not None and not any(isinstance(each, Rejected) for _, each in failed):
+            return refused
         if failed:
             rejected = [(name, each) for name, each in failed if isinstance(each, Rejected)]
             findings = tuple(

@@ -27,7 +27,7 @@ import pytest
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from support.configure import configured
-from support.helpers import FULL_DSP48E2, with_adapter_memories
+from support.helpers import FULL_DSP48E2, beside, with_adapter_memories
 from support.helpers import built as module_built
 from support.models import (
     ROW_MAJOR_W2,
@@ -488,14 +488,14 @@ def test_a_row_offering_an_unknown_or_repeated_kind_is_refused() -> None:
 def test_sizing_reads_a_free_side_its_mover_paces() -> None:
     bound = cut_network()
     x = bound.member("x").mover_contract
-    supply, _ = sides(bound.member("x"), bound.neighbours("x"))
+    supply, _ = sides(bound.member("x"), beside(bound, "x"))
     assert supply == Pattern(x.times, x.cycles)
     y = bound.member("y").mover_contract
-    _, accept = sides(bound.member("y"), bound.neighbours("y"))
+    _, accept = sides(bound.member("y"), beside(bound, "y"))
     assert accept == Pattern(y.times, y.cycles)
     chain = chain_network(TARGET)
     with pytest.raises(NotModelled, match="a boundary: not modelled"):
-        sides(chain.member("x"), chain.neighbours("x"))
+        sides(chain.member("x"), beside(chain, "x"))
 
 
 @requires_xsim

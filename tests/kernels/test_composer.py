@@ -41,7 +41,7 @@ from finn.dataflow.gemm import Form, Window
 from finn.dataflow.schedule import Index
 from finn.kernels import composer
 from finn.kernels.artifacts.abi import Direction
-from finn.kernels.base import extent_of
+from finn.kernels.base import Kernel, extent_of, hops, neighbours
 from finn.kernels.channels import Channel
 from finn.kernels.composer import (
     CLASS_CACHE_BOUND,
@@ -524,3 +524,110 @@ def test_a_port_s_endpoint_is_read_off_its_class() -> None:
     assert port_direction(Channel, "set") is Direction.IN
     assert port_direction(ThresholdingAxiKernel, "output") is Direction.OUT
     assert port_direction(MatMulKernel, "z") is None
+
+
+# -- its member channels' connections ------------------------------------------------------
+
+
+def _connection_refused(declaration: PartitionDeclaration) -> list[tuple[object, ...]]:
+    with pytest.raises(PartitionRefused) as raised:
+        compose(declaration)
+    return [
+        (each.code, each.owner, each.message, dict(each.details)) for each in raised.value.findings
+    ]
+
+
+def test_a_placed_port_on_no_channel_is_refused(cache: None) -> None:
+    """A port a member places that no channel connects and no alias presents outside is
+    refused when the class is made (``port-unconnected``), owned by its member's graph name:
+    no holder ties a port off."""
+    unwired = {name: each for name, each in channels().items() if name != "y"}
+    assert _connection_refused(declared(channels_=unwired)) == [
+        (
+            "port-unconnected",
+            "second",
+            "second.y is on no channel and exposed by no alias: a member's port is connected "
+            "by a channel, or presented outside by an alias, and no holder ties a port off",
+            {"port": "second.y"},
+        )
+    ]
+
+
+def test_a_port_on_two_channels_is_refused(cache: None) -> None:
+    """Two channels on one port are refused when the class is made
+    (``port-connected-twice``), naming both: two readers of one value are its one channel."""
+    twice = channel(
+        Port("first", "y"),
+        Side.boundary("m_axis_1"),
+        tensor=chain.HIDDEN_TENSOR,
+        platform=FULL_DSP48E2,
+    )
+    assert _connection_refused(declared(channels_=_wired(copy=twice))) == [
+        (
+            "port-connected-twice",
+            "first",
+            "first.y is on the channels hidden, copy: a port is on one channel, and two "
+            "readers of one value are that value's one channel",
+            {"port": "first.y", "channels": ("hidden", "copy")},
+        )
+    ]
+
+
+def test_a_one_set_thresholding_needs_no_channel_on_its_set_port(cache: None) -> None:
+    """A port whose tensor is an optional fact its member is not given is idle by structure
+    and needs no channel: the Chain's Thresholding holds one set of thresholds, so its set
+    index port (``set``) is on none, and the class is made. Every other port is on its one
+    channel. (Which ports the rule reaches is pending a decision.)"""
+    space_type = compose(declared()).space_type
+    assert issubclass(space_type, Kernel)
+    connections = space_type.connections
+    named = {str(port) for sides in connections.values() for port in sides if port is not None}
+    assert "activate.set" not in named
+    assert named == {
+        "first.x",
+        "first.w",
+        "first.y",
+        "activate.input",
+        "activate.output",
+        "second.x",
+        "second.w",
+        "second.y",
+    }
+    assert {name: tuple(map(str, sides)) for name, sides in connections.items()} == {
+        "x": ("None", "first.x"),
+        "w1": ("None", "first.w"),
+        "hidden": ("first.y", "activate.input"),
+        "levels": ("activate.output", "second.x"),
+        "w2": ("None", "second.w"),
+        "y": ("second.y", "None"),
+    }
+
+
+def test_the_class_answers_each_channel_s_neighbours_and_hops(cache: None) -> None:
+    """The class answers the ports beside each member channel (``neighbours``) and its hops to
+    them (``hops``), and its own netlist wires them: configured as the Chain, it has the
+    partition's links."""
+    network = chain.chain()
+    point = network.point
+    space_type = type(point)
+    assert issubclass(space_type, Kernel)
+    beside = point.query(neighbours(space_type, "hidden"))
+    assert isinstance(beside, Available)
+    assert beside.value.producer is not None and beside.value.consumer is not None
+    assert (beside.value.producer.label, beside.value.consumer.label) == (
+        "first.y",
+        "activate.input",
+    )
+    entering = point.query(neighbours(space_type, "x"))
+    assert isinstance(entering, Available)
+    assert entering.value.producer is None and entering.value.consumer is not None
+    hopped = point.query(hops(space_type, "hidden"))
+    assert isinstance(hopped, Available)
+    assert hopped.value == network.hops("hidden")
+    wired = point.query(Kernel.netlist)
+    assert isinstance(wired, Available)
+    built = network.netlist()
+    assert isinstance(built, Available)
+    assert set(wired.value.links) == set(built.value[0].links)
+    with pytest.raises(KeyError):
+        neighbours(space_type, "first")

@@ -47,7 +47,7 @@ import finn.custom_op.kernels.shell as shell
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import search_record
-from finn.core.search import Refused
+from finn.core.search import ExploreError, Refused
 from finn.core.space import Available, inspection
 from finn.custom_op.kernels.network import network
 from finn.custom_op.kernels.shell import configured_network, in_shell, row_facts
@@ -235,7 +235,9 @@ def test_a_partition_of_kernel_ops_counts_its_movers() -> None:
 def test_a_refused_list_writes_nothing() -> None:
     """A list of strategies whose result the shell's budgets refuse (the Chain on a row taking
     one AXI-Lite bus, its movers alone exceeding it) leaves the model as it was: the choices
-    its entries made are not saved and no search's record is written."""
+    its entries made are not saved and no search's record is written. A partition a rule
+    refuses has no channel's neighbours, so ``SizeFifos`` refuses it before sizing, the
+    budget's finding its cause (whether it should keep them is pending a decision)."""
     model = kernel_model()
     write_target(model, ULTRA96)
     model = model.transform(MakeCutChoices())
@@ -244,10 +246,11 @@ def test_a_refused_list_writes_nothing() -> None:
     narrow = replace(PYNQ_ROW, control_budget=1)
     with pytest.MonkeyPatch.context() as patched:
         patched.setattr(shell, "shell_row", lambda *_: narrow)
-        with refused(
-            "interface-budget-exceeded", error=KernelOpError, owner="within_control_budget"
-        ):
+        with refused("fifos-refused", error=ExploreError, owner="size_fifos") as caught:
             explore_kernel_choices(model, [SizeFifos(margin=1)])
+    assert [(each.code, each.owner) for each in caught.finding.causes] == [
+        ("interface-budget-exceeded", "shell.within_control_budget")
+    ]
     assert model.model.SerializeToString() == before
     assert search_record(model)[0] == "current"  # the empty list's, written before
 

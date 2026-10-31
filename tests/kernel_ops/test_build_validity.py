@@ -17,6 +17,7 @@ from finn.core.space import (
     Available,
     Param,
     QueryResult,
+    Rejected,
     Space,
     Unresolved,
     constraint,
@@ -85,7 +86,16 @@ def test_real_netlist_does_not_certify_unrelated_rule_or_presence(
     bound._composed = composed
     bound._point = report.instance
     bound._memo = {}
-    assert isinstance(bound.module_of(PRODUCER), Available)
+    module = bound.module_of(PRODUCER)
+    if condition == "refused-rule":
+        # A partition a rule refuses has no channel's hops, so no module: refused once, by the
+        # rule. Whether it should keep them is pending a decision.
+        assert isinstance(module, Rejected)
+        assert [(each.code, each.owner) for each in module.findings] == [
+            ("unrelated-rule", "unrelated")
+        ]
+    else:
+        assert isinstance(module, Available)
     assert all(
         isinstance(bound.query(name, Kernel.frame_cycles), Available) for name in bound.members
     )
@@ -94,6 +104,9 @@ def test_real_netlist_does_not_certify_unrelated_rule_or_presence(
     if condition == "absent":
         configured, _ = shell.configured_network(model, "independent")
         assert configured.network is bound
+    elif condition == "refused-rule":
+        with refused("unrelated-rule", error=KernelOpError, owner="unrelated"):
+            shell.configured_network(model, "independent")
     else:
         with refused("design-incomplete", error=KernelOpError, node="independent"):
             shell.configured_network(model, "independent")

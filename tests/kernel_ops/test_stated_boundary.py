@@ -24,6 +24,7 @@ from typing import Any, cast
 
 import pytest
 from qonnx.core.modelwrapper import ModelWrapper
+from support.helpers import beside
 from support.models import kernel_model
 from support.packaging import PackagedByStub
 from support.ports import outer
@@ -162,9 +163,9 @@ def test_an_ip_partition_is_sized_from_the_paces_its_build_states(tmp_path: Path
     x, y = bound.member("x"), bound.member("y")
     assert x.producer.outside == Outside(BUILD, pace=Steady(2))
     assert y.consumer.outside == Outside(BUILD, None, 1, 4, BeatTimes((9, 10, 11), 12))
-    supply, _ = sides(x, bound.neighbours("x"))
+    supply, _ = sides(x, beside(bound, "x"))
     assert supply == Pattern((0, 2, 4, 6, 8, 10), 12)
-    _, accept = sides(y, bound.neighbours("y"))
+    _, accept = sides(y, beside(bound, "y"))
     assert accept == Pattern((9, 10, 11), 12)
     assert sized(tmp_path) == {
         "x": (0, 0, "direct absorbs it"),

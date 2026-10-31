@@ -29,7 +29,7 @@ from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.module import Fragment, Leaf
 from finn.kernels.base import Kernel, PortPins
-from finn.kernels.channels import Channel
+from finn.kernels.channels import Channel, OuterHops
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.laws import AXIS_CLOCKING, Axis
@@ -104,7 +104,7 @@ def test_an_adapted_channel_places_its_stage_and_wires_each_hop() -> None:
     assert (into.source.instance, into.sink.instance) == (None, label)
     assert (into.source.data, into.sink.data) == ("in0_V_tdata", "idat")
     hops = point.hops("x")
-    assert not isinstance(hops, Rejected) and hops.producer is None and hops.consumer
+    assert isinstance(hops, OuterHops) and hops.producer is None and hops.consumer
     out = hops.consumer
     assert (out.source.instance, out.sink.instance) == (label, "^compute")
     assert out.sink.data == "s_axis_input_tdata" and out.lanes == (0, 1) and out.lane_bits == 3

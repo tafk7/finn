@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 from support import chain
-from support.helpers import FULL_DSP48E2, by_hand, choose, keyed, with_defaults
+from support.helpers import FULL_DSP48E2, beside, by_hand, choose, keyed, with_defaults
 from support.ports import outer
 from support.refusals import refused
 from support.xsim import requires_xsim
@@ -225,12 +225,12 @@ def test_a_channel_s_sides_are_read_from_the_paces_its_ports_state() -> None:
     # hidden: first (PE 1, SIMD 4) closes a reduction of one step each beat, a lane a
     # word; the output adapter's vpc pairs them into activate's two lanes, a word the
     # cycle after its second lane. activate reads every beat.
-    supply, accept = sides(point.member("hidden"), point.neighbours("hidden"))
+    supply, accept = sides(point.member("hidden"), beside(point, "hidden"))
     assert supply == Pattern((2, 4, 6, 8, 10, 12), 12)
     assert accept == Pattern(tuple(range(6)), 6)
     # levels: activate's six beats, four lanes a word after its vpc, into second's
     # input_gen, which second reads every beat.
-    supply, accept = sides(point.member("levels"), point.neighbours("levels"))
+    supply, accept = sides(point.member("levels"), beside(point, "levels"))
     assert supply == Pattern((2, 4, 6), 6)
     assert isinstance(accept, Buffered)
     assert accept.reads == Pattern(tuple(range(12)), 12)
@@ -239,9 +239,9 @@ def test_a_channel_s_sides_are_read_from_the_paces_its_ports_state() -> None:
 def test_a_boundary_and_a_memory_are_not_modelled() -> None:
     _, point = _folded()
     with pytest.raises(NotModelled, match="a boundary: not modelled"):
-        sides(point.member("x"), point.neighbours("x"))
+        sides(point.member("x"), beside(point, "x"))
     with pytest.raises(NotModelled, match="a memory source: paced by its consumer"):
-        sides(point.member("w1"), point.neighbours("w1"))
+        sides(point.member("w1"), beside(point, "w1"))
 
 
 def test_a_stated_pace_is_its_pattern_and_a_steady_beat_is_expanded_at_the_edge_s_beats() -> None:
@@ -291,17 +291,17 @@ def test_sizing_reads_a_stated_pace_first_on_either_side() -> None:
     )
     x, y = point.member("x"), point.member("y")
     assert outer(x).form.beats == 3 and x.input_chain == "input_gen"
-    supply, accept = sides(x, point.neighbours("x"))
+    supply, accept = sides(x, beside(point, "x"))
     assert supply == Pattern((0, 3, 6), 9)
     assert isinstance(accept, Buffered) and accept.reads == Pattern(tuple(range(12)), 12)
-    supply, accept = sides(y, point.neighbours("y"))
+    supply, accept = sides(y, beside(point, "y"))
     assert accept == Pattern(tuple(range(12)), 12)
-    assert size(x, point.neighbours("x"), 12) == Sized(0, "direct absorbs it", 12, 0)
-    assert size(y, point.neighbours("y"), 12) == Sized(0, "direct absorbs it", 5, 0)
+    assert size(x, beside(point, "x"), 12) == Sized(0, "direct absorbs it", 12, 0)
+    assert size(y, beside(point, "y"), 12) == Sized(0, "direct absorbs it", 5, 0)
     _, unstated = _folded()
     assert unstated.chosen() == point.chosen()
     for name in ("x", "y"):
-        found = size(unstated.member(name), unstated.neighbours(name), 12)
+        found = size(unstated.member(name), beside(unstated, name), 12)
         assert found.why == "a boundary: not modelled"
 
 
@@ -322,18 +322,18 @@ def test_a_stated_pace_slower_than_the_members_bounds_the_channel_s_cycles_on_ei
     assert outer(x).form.beats == 3 and x.query(Channel.frame_cycles).value == 18
     assert explorer.cost(slow).bottleneck == Bottleneck(("x",), 18)
     assert slow.chosen() == unstated.chosen()
-    supply, _ = sides(x, slow.neighbours("x"))
+    supply, _ = sides(x, beside(slow, "x"))
     assert supply == Pattern((0, 6, 12), 18)
-    assert size(x, slow.neighbours("x"), 18) == Sized(0, "direct absorbs it", 12, 0)
+    assert size(x, beside(slow, "x"), 18) == Sized(0, "direct absorbs it", 12, 0)
     slow = _stated(None, Outside(BUILD, pace=Steady(3)))
     y = slow.member("y")
     assert outer(y).form.beats == 12 and y.query(Channel.frame_cycles).value == 36
     assert explorer.cost(slow).bottleneck == Bottleneck(("y",), 36)
     # TargetCycles relaxes its budget of 12 to the 36 reached, and folds again to it.
     assert explorer.cost(slow).cycles["first"] == 24
-    _, accept = sides(y, slow.neighbours("y"))
+    _, accept = sides(y, beside(slow, "y"))
     assert accept == Pattern(tuple(range(0, 36, 3)), 36)
-    assert size(y, slow.neighbours("y"), 36) == Sized(0, "direct absorbs it", 5, 0)
+    assert size(y, beside(slow, "y"), 36) == Sized(0, "direct absorbs it", 5, 0)
 
 
 # -- the strategy ---------------------------------------------------------------------------
