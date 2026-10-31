@@ -74,16 +74,16 @@ SPEC = KernelSpec(
     refuses=refuses(("kernel.compute", "int8_dsp58", "dotp-target")),
     probes=(
         Probe(
-            "a dense realization of depthwise weights it has no value of",
+            "the dense datapath of depthwise weights it has no value of",
             lambda: placed(depthwise()),
-            frozenset({"matmul-realization", "matmul-tensor"}),
-            {"realization": "dense"},
+            frozenset({"matmul-depthwise-datapath", "matmul-tensor"}),
+            {"depthwise_datapath": "dense"},
         ),
         Probe(
-            "a native depthwise realization no core of the platform reads",
+            "a native depthwise datapath no core of the platform reads",
             lambda: placed(depthwise()),
             frozenset({"matmul-native"}),
-            {"realization": "native"},
+            {"depthwise_datapath": "native"},
         ),
         # Its activations are then the window's image, which the channel does not carry.
         Probe(

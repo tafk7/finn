@@ -22,11 +22,11 @@ between three boundary channels. ``matmul_network`` places a MatMul (``matmul``)
 with several weight sets, ``set`` (``in2_V``). Its tensors are MatMul's own statements of
 them, the values its views present (``required_weights``, and its results,
 ``result_tensor``), read from its facts before it is placed: they read only its facts and
-its ``realization``, and the result's range is the same in either realization, so one
-partition serves every realization, a depthwise MatMul's left open until committed. Known
+its ``depthwise_datapath``, and the result's range is the same on either datapath, so one
+partition serves either, a depthwise MatMul's left open until committed. Known
 weights are a fact given to MatMul (``weights``, a ``KnownWeights``); the weight channel
 carries what MatMul states for it (``carried_weights``, ``stored_weights``: block-diagonal
-for a dense realization, over their range), with ``set``'s tensor its ``index_tensor`` (one
+on the dense datapath, over their range), with ``set``'s tensor its ``index_tensor`` (one
 index per row) and ``set`` on its source's set port (``Port("w", "set")``), so the channel's
 ``source`` stores them. The edge choices are the channels' (``x.adapter_ram_style``,
 ``w.transport``, ``w.source.ram_style``), the MatMul's its own (``matmul.pe``).
@@ -301,22 +301,22 @@ def placed_dotp(
 
 
 def _views(
-    space_type: type[MatMulKernel], facts: Mapping[str, Any], realization: str | None
+    space_type: type[MatMulKernel], facts: Mapping[str, Any], depthwise_datapath: str | None
 ) -> Any:
-    """A MatMul of ``space_type`` on ``facts`` alone, its ``realization`` committed where
+    """A MatMul of ``space_type`` on ``facts`` alone, its ``depthwise_datapath`` committed where
     it is depthwise (as named; else ``dense`` with known weights, ``native`` without, or
     whichever commits): what its statements of its weights and results read. The result's
-    range is the same in either realization."""
+    range is the same on either datapath."""
     probe = design_space(space_type(**facts))
     if facts.get("form") is not Form.DEPTHWISE:
         return probe
     known = isinstance(facts.get("weights"), KnownWeights)
-    preferred = realization or ("dense" if known else "native")
+    preferred = depthwise_datapath or ("dense" if known else "native")
     for case in (preferred, *(other for other in ("native", "dense") if other != preferred)):
         try:
-            return commit(probe, {"realization": case})
+            return commit(probe, {"depthwise_datapath": case})
         except ValueError:
-            if realization is not None:
+            if depthwise_datapath is not None:
                 raise
     return probe
 
@@ -343,13 +343,13 @@ def matmul_network(
     form: Form = Form.DENSE,
     weights: IntegerTensor | None = None,
     weight_sets: int = 1,
-    realization: str | None = None,
+    depthwise_datapath: str | None = None,
 ) -> Partition:
     """A MatMul of ``space_type`` (``matmul``; a ``MatMulKernel`` by default) on the
     channels of a partition: its activations ``(m, k)`` (``(m, k, n)`` depthwise) of
     ``activation_dtype``, its weights known (``weights``, declared ``weights_dtype``) or
     streamed (``(k, n)`` of ``weights_dtype``), its results its own statement; see the
-    module docstring. ``realization`` is committed where given."""
+    module docstring. ``depthwise_datapath`` is committed where given."""
     space_type = space_type or MatMulKernel
     shape = (m, k, n) if form is Form.DEPTHWISE else (m, k)
     facts: dict[str, Any] = dict(
@@ -359,13 +359,13 @@ def matmul_network(
         facts["weights"] = KnownWeights(integer_tensor(weights), weights_dtype)
     else:
         facts["weights"] = Tensor((k, n), ScalarEncoding(weights_dtype))
-    views = _views(space_type, facts, realization)
+    views = _views(space_type, facts, depthwise_datapath)
     tensors: dict[str, Any] = {
         "x_tensor": facts.pop("x_tensor"),
         "y_tensor": _stated(views, "result_tensor"),
     }
     if weights is None:
-        # Unknown weights are MatMul's statement of them at the realization committed;
+        # Unknown weights are MatMul's statement of them at the ``depthwise_datapath`` committed;
         # with none, as stored, (K, N) in their datatype.
         stated = views.query(type(views).required_weights)
         given = facts.pop("weights")
@@ -405,12 +405,16 @@ def matmul_network(
         {**facts, **{name: tensor for name, tensor in tensors.items() if name != "y_tensor"}},
     )
     network = by_hand(members)
-    return choose(network, {"matmul.realization": realization}) if realization else network
+    return (
+        choose(network, {"matmul.depthwise_datapath": depthwise_datapath})
+        if depthwise_datapath
+        else network
+    )
 
 
-def matmul_point(*, realization: str | None = None, **facts: Any) -> Partition:
-    """``matmul_network`` of a ``MatMulKernel``, its ``realization`` committed when given."""
-    return matmul_network(realization=realization, **facts)
+def matmul_point(*, depthwise_datapath: str | None = None, **facts: Any) -> Partition:
+    """``matmul_network`` of a ``MatMulKernel``, its ``depthwise_datapath`` committed when given."""
+    return matmul_network(depthwise_datapath=depthwise_datapath, **facts)
 
 
 def kernel_alone(network: Partition, name: str) -> Any:
@@ -778,7 +782,7 @@ def matmul_assembly(
     compute_pumping: bool = False,
     reducer: str = "tree",
     core: str | None = None,
-    realization: str | None = None,
+    depthwise_datapath: str | None = None,
     weight_delivery: WeightDelivery = WeightDelivery.EXTERNAL,
     weights: Sequence[object] | None = None,
     ram_style: str = "auto",
@@ -796,9 +800,9 @@ def matmul_assembly(
     ``weight_fifo_depth`` places a FIFO on the weight channel; ``None`` connects
     it directly. The ``platform``'s clock period is the clock the module must
     meet; it sets dotp's DSP58 chain segmentation. ``core`` names the
-    compute core (``packed`` or ``int8_dsp58``) and ``realization`` a depthwise
+    compute core (``packed`` or ``int8_dsp58``) and ``depthwise_datapath`` a depthwise
     MatMul's; each left out takes its policy, first valid in the flow order
-    (``finn.kernels.policies.defaulted``: the realization before the core), as conversion
+    (``finn.kernels.policies.defaulted``: ``depthwise_datapath`` before the core), as conversion
     would set it, on the kernel alone (MatMul states no policy; this layer reaches no
     KernelOp, so ``Unstated``). PE, SIMD and pumping are the core's, and the packed core's
     ``reducer``. The kernel's choices are set first, then its channels' open ones by their
@@ -825,19 +829,19 @@ def matmul_assembly(
     buffered = weight_fifo_depth is not None
     channel: dict[str, object] = {"w.transport": "fifo" if buffered else "direct"}
     # The memory's style is ordered by the bits its table holds, which a depthwise
-    # weight channel's realization sets: it is committed after the realization.
+    # weight channel's datapath sets: it is committed after ``depthwise_datapath``.
     if weight_delivery is WeightDelivery.MEMSTREAM:
         channel["w.source.ram_style"] = ram_style
         channel["w.source.pumped_memory"] = pumped_memory
     if buffered:
         channel["w.transport.fifo.depth"] = weight_fifo_depth
         channel["w.transport.fifo.buffer.ram_style"] = "auto"
-    network = matmul_point(realization=realization, **facts)
-    # What the caller leaves out of the realization and the core takes the kernel's
+    network = matmul_point(depthwise_datapath=depthwise_datapath, **facts)
+    # What the caller leaves out of ``depthwise_datapath`` and the core takes the kernel's
     # policy, first valid in the flow order, on the kernel alone (as conversion sets it);
     # every other choice is the caller's.
     point = kernel_alone(network, "matmul")
-    left = {"realization", "compute"} - ({"compute"} if core is not None else set())
+    left = {"depthwise_datapath", "compute"} - ({"compute"} if core is not None else set())
     kept = {key for key, _ in inspection.states(point)} - left
     done = defaulted(point, Alone(Unstated), kept=kept)
     if done.unset or done.refused:

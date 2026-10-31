@@ -26,7 +26,7 @@ element count and last axis (``carried``).
 
 Weights are read ``(k, n)``, as ONNX ``MatMul`` stores them. A depthwise
 operation runs natively (one channel per PE lane, INT8 DSP58 only) or, by the
-``realization`` Decision, on the dense datapath with block-diagonal weights
+``depthwise_datapath`` Decision, on the dense datapath with block-diagonal weights
 (``block_diagonal``), reading its (M, K, N) activations as (M, K * N).
 
 ``MatMulKernel`` is a kernel with children: the compute cores, which read the activations'
@@ -42,7 +42,7 @@ harness's, or the graph's, a KernelOp's alone or a partition's) declares each ch
 gives it the tensor MatMul's port reads or writes, and gives it MatMul's ports' streams,
 labels and widths. MatMul's own view of each tensor (``activation_tensor``,
 ``weight_tensor``, and its results, ``y_tensor``) reads only its facts and
-``realization``, never a port; ``carried`` refuses a given input tensor that is not what
+``depthwise_datapath``, never a port; ``carried`` refuses a given input tensor that is not what
 MatMul requires of it (the activations' element count and last axis, the weights' shape),
 or whose values do not fit what MatMul reads (``matmul-tensor``). A boundary channel there
 presents its ``port`` name (``in0_V``).
@@ -52,8 +52,8 @@ MatMul consumes its weights; it never holds them. Its weights are one fact,
 with the datatype the graph declares them in), or not (their ``Tensor``, which streams;
 an initializer a run may write is read as one too). Known weights are its weight
 channel's value: MatMul states what that channel carries, downstream of it.
-``w_stored`` is the contents its source stores, block-diagonal for a dense realization
-of a depthwise form (it may read ``realization``), and ``w_carried`` the tensor it
+``w_stored`` is the contents its source stores, block-diagonal for a depthwise form
+on the dense datapath (it may read ``depthwise_datapath``), and ``w_carried`` the tensor it
 carries, over the stored values' range, narrowed to it (``stored_element``:
 INT8-typed ternary weights are ``INT2``); without known weights, ``w_carried``
 is the weights' tensor. Its network binds the weight channel's ``tensor`` and
@@ -63,9 +63,9 @@ value. With several weight sets the contents hold one operand a set, and the
 channel's ``sets`` and ``index_tensor`` select one per row. Each core reads its
 weights as ``w_carried`` presents them, the value ``carried_weights`` (a rule reads
 values; a view is a product for its holder): its weight width, and the packed core's
-``NARROW_WEIGHTS``. A dense realization
-of a depthwise operation reads block-diagonal weights, so it needs known weights
-(``matmul-realization``).
+``NARROW_WEIGHTS``. A depthwise
+operation on the dense datapath reads block-diagonal weights, so it needs known weights
+(``matmul-depthwise-datapath``).
 
 The result's range is derived from the weights and the activations' range (their
 tensor's element: their datatype's, or the narrower range their producer states,
@@ -190,7 +190,7 @@ def block_diagonal(weights: IntegerTensor) -> IntegerTensorValue:
 
     W'[k * N + c, n] = W[k, n] when c = n, and 0 otherwise: the densely read
     activation row (k, c) meets only its own channel's weights. The value owner
-    states it for a dense realization; it reads the integers.
+    states it for a depthwise operation on the dense datapath; it reads the integers.
     """
     shape = integer_shape(weights)
     if shape is None or len(shape) not in (2, 3):
@@ -320,13 +320,13 @@ class MatMulKernel(Kernel):
 
     # A depthwise operation runs natively (one channel per PE lane, a core that reads
     # it) or on the dense datapath with block-diagonal weights, on any core.
-    realization: str = Decision(domain=("native", "dense"), when=depthwise)
+    depthwise_datapath: str = Decision(domain=("native", "dense"), when=depthwise)
 
     @constraint
     def native_readable(self) -> bool | Rejected | Inapplicable:
         if not self.depthwise:
             return Inapplicable()
-        if self.realization == "native" and not self.reads_depthwise:
+        if self.depthwise_datapath == "native" and not self.reads_depthwise:
             return reject(
                 "matmul-native",
                 "no core reads these depthwise operands natively "
@@ -337,7 +337,7 @@ class MatMulKernel(Kernel):
     @derived
     def datapath(self) -> Form:
         """The form the datapath computes: densely realized, a depthwise one is dense."""
-        if self.form is Form.DENSE or self.realization == "dense":
+        if self.form is Form.DENSE or self.depthwise_datapath == "dense":
             return Form.DENSE
         return Form.DEPTHWISE
 
@@ -349,7 +349,7 @@ class MatMulKernel(Kernel):
     @derived
     def widest_reduction(self) -> int:
         """The widest K a datapath of the operation reads, from its facts alone: the window
-        times the channels when depthwise (a dense realization reads that), else K. SIMD's
+        times the channels when depthwise (the dense datapath reads that), else K. SIMD's
         domain reads it (``widest_simd_extent``), which reads no choice."""
         return self.k * self.n if self.depthwise else self.k
 
@@ -412,7 +412,7 @@ class MatMulKernel(Kernel):
             )
         return True
 
-    # MatMul's own views of its tensors: its facts and realization, never a port.
+    # MatMul's own views of its tensors: its facts and depthwise datapath, never a port.
 
     def _tensor(
         self,
@@ -468,7 +468,7 @@ class MatMulKernel(Kernel):
     @derived
     def result_tensor(self) -> Tensor | Rejected:
         """Its results: ``(..., N)``, the activations' leading axes (``leading``) and N, in
-        the result type over the result range. A value of its facts and its realization,
+        the result type over the result range. A value of its facts and its depthwise datapath,
         which inference reads whatever MatMul's validity."""
         least, greatest = self.result_range
         return self._tensor((*self.leading, self.n), self.result_type, TensorRange(least, greatest))
@@ -576,11 +576,12 @@ class MatMulKernel(Kernel):
     y = compute.y
 
     @constraint
-    def realization_supported(self) -> bool | Rejected:
+    def depthwise_datapath_supported(self) -> bool | Rejected:
         if self.dense_view and not self.stored:
             return reject(
-                "matmul-realization",
-                "a dense realization reads block-diagonal weights, so it needs known weights",
+                "matmul-depthwise-datapath",
+                "a depthwise operation on the dense datapath reads block-diagonal weights, so it "
+                "needs known weights",
             )
         return True
 

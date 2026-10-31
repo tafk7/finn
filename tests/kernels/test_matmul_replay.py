@@ -84,7 +84,7 @@ def test_the_activation_stream_steps_are_the_replay_and_its_frame():
     # A depthwise row passes once: its one step is the frame marker.
     facts = {**FACTS, "platform": FULL_DSP58, "form": Form.DEPTHWISE}
     depthwise = choose(
-        matmul_point(realization="native", **facts),
+        matmul_point(depthwise_datapath="native", **facts),
         choices("int8_dsp58"),
     )
     assert depthwise.member("x").steps.kinds == (Step.MARKERS,)
