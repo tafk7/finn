@@ -211,10 +211,10 @@ KERNELS, CHANNELS = ("rom1", "rom2", "first", "second"), ("x", "h", "y")
 
 def test_the_network_s_cycles_are_its_slowest_member_s_and_its_buffering_their_sum():
     point = layered()
-    cycles = {name: point.member(name).cycles for name in KERNELS}
-    cycles |= {name: point.member(name).query(Channel.cycles).value for name in CHANNELS}
+    cycles = {name: point.member(name).frame_cycles for name in KERNELS}
+    cycles |= {name: point.member(name).query(Channel.frame_cycles).value for name in CHANNELS}
     # The hidden stream's input_gen replays each row once per output fold: twelve beats.
-    assert point.member("h").query(Channel.cycles).value == 12 == cycles["second"]
+    assert point.member("h").query(Channel.frame_cycles).value == 12 == cycles["second"]
     assert cycles_of(point).value == max(cycles.values()) == 12
     # Only channels hold bits between their sides.
     held = sum(point.member(name).query(Channel.buffering).value for name in CHANNELS)

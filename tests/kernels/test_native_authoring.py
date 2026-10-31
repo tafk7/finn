@@ -251,7 +251,7 @@ def test_channel_fifo_counts_no_cycles_and_reads_netlist_before_contracts() -> N
     point = design_space(Holder(tensor=TENSOR, arriving=ARRIVING, platform=FULL_DSP48E2))
     assert isinstance(point, Kernel)
     point = point.with_choices({Holder.depth: 4, Holder.buffer.ram_style: "auto"})
-    assert isinstance(point.query(Holder.cycles), Inapplicable)
+    assert isinstance(point.query(Holder.frame_cycles), Inapplicable)
     evidence = inspection.explain(point, Holder.stages)
     assert isinstance(evidence.result, Rejected)
     assert [f.code for f in evidence.result.findings] == ["native-module"]

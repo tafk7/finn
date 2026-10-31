@@ -205,10 +205,6 @@ class Given(Kernel):
         "given", (CopiedSource("finnlib", "rtl/given.sv", provides=("module:given",)),)
     )
 
-    @view
-    def cycles(self) -> int:
-        return self.x.stream.sequence.form.beats
-
 
 def _with_read(reads: ModelReads, method: Address, read: Address) -> ModelReads:
     """``reads`` with ``method`` reading ``read`` too."""

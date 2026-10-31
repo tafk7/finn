@@ -82,9 +82,9 @@ def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_th
     ] == [
         "buffering",
         "bus_control",
-        "cycles",
         # What its module and its resources read, and nothing in its space.
         "dsp_simd",
+        "frame_cycles",
         "held_bits",
         "module_data",
         "module_sources",

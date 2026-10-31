@@ -295,7 +295,7 @@ class StreamPort(Space):
         """Model input to pure pin assembly: its stream, placed; idle, its element."""
         return self.stream if self.placed else self.element
 
-    # -- what its kernel's module takes of it (``Kernel.netlist``, ``Kernel.cycles``) -------
+    # -- what its kernel's module takes of it (``Kernel.netlist``, ``Kernel.frame_cycles``) -
 
     def pin_values(self) -> tuple[Pin, ...] | Rejected:
         """Its pins of the module, from its transport (``finn.kernels.port.pins``): placed,
@@ -320,7 +320,7 @@ class StreamPort(Space):
 
     def frame_beats(self) -> int | None:
         """Placed, the beats a frame its stream carries; idle, None: what its kernel's
-        cycles read of it where the kernel has no schedule (``Kernel.cycles``, the rate
+        cycles read of it where the kernel has no schedule (``Kernel.frame_cycles``, the rate
         law)."""
         if not self.placed:
             return None

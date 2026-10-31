@@ -75,12 +75,12 @@ def test_a_fifo_answers_its_netlist_cycles_buffering_and_resources() -> None:
     assert module.name == "fifo"
     assert point.netlist == Fragment((("", module),))
     # Six words of its tensor, a word a beat; its depth of words; its own resources.
-    assert point.cycles == 6
+    assert point.frame_cycles == 6
     assert point.buffering == 8 * 13
     assert point.resources == fifo_resources(8, 13, "auto", fabric=FULL_DSP48E2.fabric)
     for member, value in (
         (FifoKernel.netlist, point.netlist),
-        (FifoKernel.cycles, 6),
+        (FifoKernel.frame_cycles, 6),
         (FifoKernel.buffering, 8 * 13),
         (FifoKernel.resources, point.resources),
     ):
@@ -91,14 +91,14 @@ def test_a_fifo_s_answers_wait_on_its_choices_and_refuse_with_it() -> None:
     undecided = design_space(fifo_node(word_bits=13, depth=8))
     assert isinstance(undecided.query(FifoKernel.netlist), Unresolved)
     # Its cycles read its ports' streams alone, which no choice decides.
-    assert undecided.query(FifoKernel.cycles) == Available(6)
+    assert undecided.query(FifoKernel.frame_cycles) == Available(6)
     refused_point = design_space(fifo_node(word_bits=13, depth=1)).with_choices(ram_style="auto")
     for answer in (FifoKernel.netlist, FifoKernel.buffering, FifoKernel.resources):
         assert "fifo-geometry" in codes(refused_point.query(answer))
 
 
 def test_a_fifo_s_own_statements_and_answers_use_inferred_fixed_reads() -> None:
-    for member in ("parameters", "held_bits", "resource_use", "netlist", "cycles"):
+    for member in ("parameters", "held_bits", "resource_use", "netlist", "frame_cycles"):
         assert isinstance(getattr(FifoKernel, member), View)
     # Native assembly infers its actual child/model dependencies from source.
     point = design_space(fifo_node(word_bits=13, depth=8)).with_choices(ram_style="auto")
@@ -145,10 +145,6 @@ class Stage(Kernel):
 
     module_spec = ModuleSpec("probe", (PROBE,))
 
-    @view
-    def cycles(self) -> int:
-        return self.input.stream.sequence.form.beats
-
 
 class Pair(Kernel):
     """Two stages, no module of its own."""
@@ -168,7 +164,7 @@ def test_a_kernel_with_members_answers_theirs_under_their_nodes() -> None:
     point = design_space(Pair())
     leaf = library_module(design_space(Stage(input_tensor=TENSOR, arriving=ARRIVING)))
     assert point.netlist == Fragment((("first", leaf), ("second", leaf)))
-    assert point.cycles == 4
+    assert point.frame_cycles == 4
     assert point.buffering == 10
     assert point.resources == Resources(lut=6)
     with pytest.raises(ValueError, match="Pair binds no library module"):
@@ -178,7 +174,7 @@ def test_a_kernel_with_members_answers_theirs_under_their_nodes() -> None:
 def test_a_kernel_with_neither_a_module_nor_a_member_is_refused_its_answers() -> None:
     point = design_space(Empty())
     assert codes(point.query(Empty.netlist)) == {"kernel-module"}
-    found = point.query(Empty.cycles)
+    found = point.query(Empty.frame_cycles)
     assert isinstance(found, Rejected)
     assert found.findings[0].message == "no member of Empty states cycles"
     assert point.buffering == 0 and point.resources == Resources()
@@ -192,7 +188,7 @@ class Uncounted(Kernel):
     stage = Stage(input_tensor=TENSOR, arriving=ARRIVING)
 
     @view
-    def cycles(self) -> int | Inapplicable:
+    def frame_cycles(self) -> int | Inapplicable:
         return Inapplicable()
 
 
@@ -205,15 +201,15 @@ class Beside(Kernel):
 
 
 def test_a_kernel_counting_no_cycles_is_left_out_of_its_parent_s_cycles() -> None:
-    """Its cycles are inapplicable, so its parent's ``member_cycles`` leaves it out and the
+    """Its cycles are inapplicable, so its parent's ``member_frame_cycles`` leaves it out and the
     parent's cycles are its other members'; its netlist, buffering and resources count as
     any kernel's."""
     alone = design_space(Uncounted())
-    assert isinstance(alone.query(Uncounted.cycles), Inapplicable)
+    assert isinstance(alone.query(Uncounted.frame_cycles), Inapplicable)
     assert alone.buffering == 5
     point = design_space(Beside())
-    assert [str(item.node) for item in point.member_cycles] == ["first"]
-    assert point.cycles == 4
+    assert [str(item.node) for item in point.member_frame_cycles] == ["first"]
+    assert point.frame_cycles == 4
     assert point.buffering == 10
     assert point.resources == Resources(lut=6)
 
@@ -225,7 +221,7 @@ def test_a_channel_s_fifo_is_a_kernel_whose_cycles_are_inapplicable() -> None:
     point = design_space(ChannelFifo(tensor=TENSOR, arriving=ARRIVING, platform=FULL_DSP48E2))
     point = point.with_choices({ChannelFifo.depth: 4, ChannelFifo.buffer.ram_style: "auto"})
     assert isinstance(point, Kernel)
-    assert isinstance(point.query(ChannelFifo.cycles), Inapplicable)
+    assert isinstance(point.query(ChannelFifo.frame_cycles), Inapplicable)
     assert point.buffering == point.buffer.buffering > 0
 
 
@@ -332,15 +328,11 @@ def test_a_kernel_with_a_module_states_its_ports_and_resources_and_places_no_ker
     def netlist(self: Kernel) -> Fragment:
         return Fragment()
 
-    def cycles(self: Kernel) -> int:
-        return 1
-
     def kernel(name: str, **members: object) -> type[Kernel]:
         body = {
             "id": f"test.{name}",
             "parameters": view(parameters),
             "netlist": view(netlist),
-            "cycles": view(cycles),
             "module_spec": ModuleSpec("probe", (PROBE,)),
             **members,
         }
@@ -455,10 +447,6 @@ def test_a_kernel_stating_a_stream_port_binds_a_module() -> None:
             return Resources()
 
         module_spec = ModuleSpec("probe", (PROBE,))
-
-        @view
-        def cycles(self) -> int:
-            return self.input.stream.sequence.form.beats
 
     assert library_module(design_space(Bound(input_tensor=TENSOR))).name == "probe"
 

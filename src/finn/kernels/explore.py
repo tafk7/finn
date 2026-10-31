@@ -462,7 +462,7 @@ class Seam(search.Seam):
         return self.reopen(network, found.stale)[0], found
 
     def cost(self, network: KernelComposition, members: Iterable[str] | None = None) -> Cost:
-        """Each member's cycles a frame, buffering and resources (``Kernel.cycles``,
+        """Each member's cycles a frame, buffering and resources (``Kernel.frame_cycles``,
         ``Kernel.buffering``, ``Kernel.resources``; only ``members``' when named),
         one member at a time, so a member that waits
         hides no other."""
@@ -481,7 +481,7 @@ class Seam(search.Seam):
                 resources[name] = used.value
             else:
                 unstated[name] = _findings_of(used)
-            answer = network.query(name, Kernel.cycles)
+            answer = network.query(name, Kernel.frame_cycles)
             if isinstance(answer, Available):
                 cycles[name] = answer.value
             elif isinstance(answer, Unresolved):

@@ -418,11 +418,11 @@ class MemStreamKernel(Kernel):
         return (self.init_file,)
 
     @view
-    def cycles(self) -> int | Rejected:
-        """The base's, by the rate law (``Kernel.cycles``: the most beats a frame its placed
+    def frame_cycles(self) -> int | Rejected:
+        """The base's, by the rate law (``Kernel.frame_cycles``: the most beats a frame its placed
         ports carry), declared here so that its channel counts it by its kind
         (``finn.kernels.channels.Channel.source_cycles``)."""
-        return self._cycles()
+        return self._frame_cycles()
 
 
 __all__ = ["MemStreamKernel", "memstream_resources"]

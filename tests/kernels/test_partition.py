@@ -90,7 +90,7 @@ def test_a_channel_s_sides_wait_on_its_kernels_folding() -> None:
     assert network.validity("x").status == "open"
     # Its cycles wait on what its consumer's side waits on: the kernel's core, open (its
     # folding's presence waits on it).
-    assert network.waits("x", network.query("x", Kernel.cycles)) == (("first", "compute"),)
+    assert network.waits("x", network.query("x", Kernel.frame_cycles)) == (("first", "compute"),)
     folded = choose(network, FOLDING)
     assert folded.member("x").consumer.label == "first.x"
 

@@ -214,7 +214,7 @@ def built(network: Partition, stem: str) -> Composed:
 
 def cycles_of(network: Partition) -> QueryResult[int]:
     """The most cycles a frame any member of ``network`` takes, once each states its own."""
-    found = [network.query(name, Kernel.cycles) for name in network.members]
+    found = [network.query(name, Kernel.frame_cycles) for name in network.members]
     waiting = [answer for answer in found if not isinstance(answer, Available)]
     if waiting:
         return waiting[0]

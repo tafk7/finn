@@ -285,7 +285,7 @@ def test_a_refused_input_port_leaves_its_kernels_domains_and_refuses_its_product
         "input.element_taken"
     ]
     assert isinstance(committed.instance.query(ThresholdingAxiKernel.netlist), Rejected)
-    assert isinstance(committed.instance.query(ThresholdingAxiKernel.cycles), Rejected)
+    assert isinstance(committed.instance.query(ThresholdingAxiKernel.frame_cycles), Rejected)
 
 
 def placed_on(channels: int, table: IntegerTensor) -> ThresholdingAxiKernel:

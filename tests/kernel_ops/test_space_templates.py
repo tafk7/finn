@@ -242,7 +242,7 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
     composed, _ = fresh_chain()
     point = composed.design_space()
     scopes = inspection.model(point).scopes
-    assert isinstance(point.mm0.query(MatMulKernel.cycles), Unresolved)  # type: ignore[attr-defined]
+    assert isinstance(point.mm0.query(MatMulKernel.frame_cycles), Unresolved)  # type: ignore[attr-defined]
     read = scopes.counts()
     # Keep the original real-owner ratio, and bound unevaluated Port/Group allocation
     # separately before any whole-model address walk can make additional records.

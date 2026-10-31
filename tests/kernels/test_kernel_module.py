@@ -104,10 +104,6 @@ class Probe(Kernel):
 
     module_spec = ModuleSpec("probe", (PROBE,))
 
-    @view
-    def cycles(self) -> int:
-        return self.x.stream.sequence.form.beats
-
 
 def probe(**facts: object) -> Probe:
     network = by_hand(
@@ -378,7 +374,7 @@ def test_a_control_bus_is_declared_once_and_the_base_derives_what_is_read_of_it(
 
 
 def test_a_kernel_s_cycles_are_the_most_beats_a_port_carries() -> None:
-    assert probe().cycles == 4
+    assert probe().frame_cycles == 4
     assert codes(probe().query(Kernel.resources)) == {"kernel-resources"}
 
 

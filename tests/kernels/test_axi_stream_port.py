@@ -114,10 +114,6 @@ class Pool(Kernel):
         ),
     )
 
-    @view
-    def cycles(self) -> int:
-        return max(self.x.stream.sequence.form.beats, self.y.stream.sequence.form.beats)
-
 
 def tensor(shape: tuple[int, ...], dtype: str) -> Tensor:
     return Tensor(shape, ScalarEncoding(DataType[dtype]))
@@ -159,7 +155,7 @@ def test_a_kernel_binds_its_extents_from_its_inputs_and_its_folding_factors_divi
     x, y = kernel.x.stream.sequence.form, kernel.y.stream.sequence.form
     assert (x.beats, x.lanes, y.beats, y.lanes) == (8, 4, 2, 4)
     assert dict(library_module(kernel).parameters) == {"CHANNELS": 8, "PE": 4}
-    assert kernel.cycles == 8  # the most beats a port carries: x's
+    assert kernel.frame_cycles == 8  # the most beats a port carries: x's
 
 
 def test_a_producers_tensor_is_its_kernels_and_its_channel_refuses_another() -> None:
@@ -308,10 +304,6 @@ class Holding(Kernel):
     @derived
     def extents(self) -> dict[Index, int] | Rejected:
         return bound_extents([self.x.access] if self.x.binds else [])
-
-    @view
-    def cycles(self) -> int:
-        return self.x.stream.sequence.form.beats
 
 
 def test_a_refused_port_still_states_its_access_and_its_kernel_its_extents() -> None:

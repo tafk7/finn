@@ -8,7 +8,7 @@ consumer`` (``finn.kernels.channels``); its ``transport`` is ``direct`` or a
 FIFO of ``depth`` words of what arrives at it, the pre-replay stream. The depth
 a channel needs is read from two patterns over a frame, repeated at the
 partition's bottleneck period ``P`` (its ``cycles``, which count a boundary's stated pace:
-``Channel.cycles``):
+``Channel.frame_cycles``):
 
 - the **supply**: when each word arrives at the transport, unthrottled. The
   producer's beat times, its port's pace (``StreamPort.pace``, ``Pace``: an iteration a

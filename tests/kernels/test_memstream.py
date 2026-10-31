@@ -151,8 +151,8 @@ def test_several_weight_sets_take_a_set_index_per_row():
     # memory of one set streams one pass.
     source = built.network.member("w").source
     assert source.output_sequence.form.beats == 3 * source.form.beats
-    assert source.cycles == 3 * source.form.beats
-    assert memory().cycles == memory().form.beats
+    assert source.frame_cycles == 3 * source.form.beats
+    assert memory().frame_cycles == memory().form.beats
     # The memory's choices are the weight channel's, keyed below it.
     keys = {dotted(key) for key in built.network.decisions()}
     assert {"w.source.ram_style", "w.source.pumped_memory"} <= keys

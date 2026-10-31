@@ -246,7 +246,9 @@ class Configured:
         emission. This preserves the held timing consumers' contract without making
         them a prerequisite of the untimed build bridge.
         """
-        cycles = {name: self.network.query(name, Kernel.cycles) for name in self.network.members}
+        cycles = {
+            name: self.network.query(name, Kernel.frame_cycles) for name in self.network.members
+        }
         found = tuple(
             self.network.located(name, finding)
             for name, each in cycles.items()

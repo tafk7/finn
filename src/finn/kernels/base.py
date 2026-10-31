@@ -3,14 +3,14 @@
 
 """Hardware design Spaces with actual model children and native outward source.
 
-Kernel, the one base, states netlist/cycles/buffering/resources; a channel's FIFO
-answers its cycles inapplicable. Real StreamPort children own intrinsic rules,
+Kernel, the one base, states netlist/frame_cycles/buffering/resources; a channel's FIFO
+answers its frame_cycles inapplicable. Real StreamPort children own intrinsic rules,
 included ControlModel Groups share their real parent, and plain ModuleSpec values
 describe sources.
 A kernel binding a module states its binding (ModuleSpec, parameters, sources,
 data) and its ports; the base assembles its netlist from them, serially, in the
 order the module's pins and holds take (``Kernel.netlist``). The base derives its
-cycles by the rate law (``Kernel.cycles``) and answers its intake unstated unless it
+cycles a frame by the rate law (``Kernel.frame_cycles``) and answers its intake unstated unless it
 states its own (``Kernel.intake``). Parents compose resolved child Members in ordinary
 source. Importing it registers FINN's value types (``finn.kernels.values.semantics``),
 which a kernel's facts hold and the engine admits only registered. No setter, read-list
@@ -810,11 +810,11 @@ class Kernel(Space):
     resources read its own statements and its members' answers. A composed kernel
     reaches those answers through ``Members`` over the member each states. A kernel that
     counts no cycles of its own, a channel's FIFO (``finn.kernels.channels.ChannelFifo``),
-    whose beats are counted where they are made, answers its ``cycles`` inapplicable, and
-    its parent's ``member_cycles`` leaves it out.
+    whose beats are counted where they are made, answers its ``frame_cycles`` inapplicable,
+    and its parent's ``member_frame_cycles`` leaves it out.
 
     A reader of a kernel's design point types it ``Kernel``: its four answers (``netlist``,
-    ``cycles``, ``buffering``, ``resources``) read as their accepted values, and raise where
+    ``frame_cycles``, ``buffering``, ``resources``) read as their accepted values, and raise where
     the kernel refuses them; ``point.query(type(point).netlist)`` gives the result,
     ``Available`` with the value or the refusal."""
 
@@ -1167,7 +1167,7 @@ class Kernel(Space):
         return total((self.resource_use, *(item.value for item in self.member_resources)))
 
     @view
-    def cycles(self) -> int | Rejected:
+    def frame_cycles(self) -> int | Rejected:
         """The clock cycles a frame takes through it, at full rate: characterization,
         derived by the rate law (CONTRACT.md L6). A kernel with a module advances one
         iteration a cycle when nothing blocks it: its cycles a frame are its schedule's
@@ -1176,20 +1176,21 @@ class Kernel(Space):
         frame any of its placed ports carries. A kernel with children takes the most any
         member takes, a member counting none (inapplicable) left out. A kernel states
         none of its own; one whose hardware stalls internally would state its exception."""
-        return self._cycles()
+        return self._frame_cycles()
 
-    def _cycles(self) -> int | Rejected:
-        """``cycles`` (above). A class restating ``cycles`` as the base's, to be counted by
-        its own kind (a channel's members, ``finn.kernels.channels.Channel``), calls it."""
+    def _frame_cycles(self) -> int | Rejected:
+        """``frame_cycles`` (above). A class restating ``frame_cycles`` as the base's, to be
+        counted by its own kind (a channel's members, ``finn.kernels.channels.Channel``),
+        calls it."""
         if type(self).module_spec is not None:
             return self._rate_cycles()
-        found = [item.value for item in self.member_cycles]
+        found = [item.value for item in self.member_frame_cycles]
         if found:
             return max(found)
         return reject("kernel-cycles", f"no member of {type(self).__qualname__} states cycles")
 
     def _rate_cycles(self) -> int | Rejected:
-        """A kernel with a module's cycles a frame by the rate law (``cycles``): its
+        """A kernel with a module's cycles a frame by the rate law (``frame_cycles``): its
         schedule's iterations where it states a schedule, else its placed ports' most beats
         a frame, each port read in its declaration order (``StreamPort.frame_beats``);
         refused where it places no port."""
@@ -1211,7 +1212,7 @@ class Kernel(Space):
     controls = Members(bus_control)
     member_buffering = Members(buffering)
     member_resources = Members(resources)
-    member_cycles = Members(cycles)
+    member_frame_cycles = Members(frame_cycles)
     member_intake = Members(intake)
 
 

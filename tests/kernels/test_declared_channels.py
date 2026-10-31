@@ -428,20 +428,20 @@ def regroups_rows_into_tiles(point: Any) -> None:
 
 def test_a_channel_s_cycles_wait_on_no_transport_and_count_every_member_but_its_fifo():
     """A channel counts its members' cycles by kind (``source_cycles``, ``stage_cycles``,
-    ``mover_cycles``), not through the base's ``member_cycles``, which ranges over its
+    ``mover_cycles``), not through the base's ``member_frame_cycles``, which ranges over its
     transport too: whether it places a FIFO is a choice FIFO sizing reads cycles before, so
     the base's waits on it, and the channel's do not. With a FIFO placed, the base's names
     the members the kinds name: the FIFO's cycles are inapplicable, and left out."""
     entering = edge(Side.boundary("s_axis_0", outside=stated(order=ROW_MAJOR)), reader(TILES))
     point = with_adapter_memories(entering)
-    assert isinstance(point.query(Channel.cycles), Available)
-    assert isinstance(point.query(Channel.member_cycles), Unresolved)
+    assert isinstance(point.query(Channel.frame_cycles), Available)
+    assert isinstance(point.query(Channel.member_frame_cycles), Unresolved)
     fifo = commit(point, {"transport": "fifo"})
-    assert isinstance(fifo.transport.query(ChannelFifo.cycles), Inapplicable)
+    assert isinstance(fifo.transport.query(ChannelFifo.frame_cycles), Inapplicable)
     counted = [item.node for item in (*fifo.source_cycles, *fifo.stage_cycles)]
     assert counted == ["output_adapter", "adapter.input_gen_vpc"]
-    assert [item.node for item in fifo.member_cycles] == counted
-    assert fifo.cycles == point.cycles
+    assert [item.node for item in fifo.member_frame_cycles] == counted
+    assert fifo.frame_cycles == point.frame_cycles
 
 
 def test_a_stated_side_is_regrouped_and_one_nothing_bridges_is_refused_by_channel_steps():
@@ -554,7 +554,7 @@ def test_every_member_of_a_channel_but_its_transport_counts_by_exactly_one_kind(
     or a kind losing its own ``cycles``, fails here by name."""
     kinds = (MemStreamKernel, StreamAdapter, IodmaMover)
     for kind in kinds:
-        assert "cycles" in vars(kind), kind
+        assert "frame_cycles" in vars(kind), kind
     placed: dict[str, list[type]] = {}
     for name, value in vars(Channel).items():
         declaration = slot_declaration(value)

@@ -66,7 +66,7 @@ def test_kernel_identity_is_validated_at_class_creation() -> None:
     assert views(empty) == [
         "buffering",
         "bus_control",
-        "cycles",
+        "frame_cycles",
         "held_bits",
         "module_data",
         "module_sources",

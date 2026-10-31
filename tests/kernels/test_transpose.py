@@ -77,7 +77,7 @@ def test_its_input_is_each_matrix_flat_and_its_output_each_column(simd: int) -> 
     assert widths["idat"] == widths["odat"] == 4 * simd
     # Its cycles a frame are the beats its ports carry, as every leaf's: a matrix's
     # elements, SIMD a beat, each batch.
-    assert kernel.cycles == BATCHES * ROWS * COLS // simd
+    assert kernel.frame_cycles == BATCHES * ROWS * COLS // simd
 
 
 def test_a_producer_of_rows_at_another_lane_count_is_only_a_width_conversion_away() -> None:

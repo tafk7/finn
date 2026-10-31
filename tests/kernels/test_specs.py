@@ -260,7 +260,7 @@ def _rate_checked(point: Partition) -> int:
         member = point.member(name)
         if not isinstance(member, Kernel) or type(member).module_spec is None:
             continue
-        cycles = member.query(Kernel.cycles)
+        cycles = member.query(Kernel.frame_cycles)
         assert isinstance(cycles, Available), name
         schedule = member.query(Kernel.schedule)
         if isinstance(schedule, Available):

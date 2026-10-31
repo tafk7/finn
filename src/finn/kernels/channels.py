@@ -71,9 +71,9 @@ are the base's views over theirs, but for two it states itself, calling the base
 netlist places its source and its output adapter at their labels and adds the hops between
 its own ends (its source, its stages, its boundary; ``netlist``), and a channel of wires
 takes no cycles of its own (0); a boundary whose outside states a pace takes no fewer than
-that pace's span a frame (``cycles``). Its cycles count its source's, its adapters' and
+that pace's span a frame (``frame_cycles``). Its cycles count its source's, its adapters' and
 its mover's, by kind (``source_cycles``, ``stage_cycles``, ``mover_cycles``), not through
-the base's ``member_cycles``: its mover is no kernel (it binds no RTL in the module), and
+the base's ``member_frame_cycles``: its mover is no kernel (it binds no RTL in the module), and
 its transport, whose cycles are inapplicable, is a choice still open when FIFO sizing reads
 them. Its hops to the ports beside it need those ports'
 stream pins, which its network holds: the network wires them (``outer_hops``, from the ports
@@ -352,8 +352,8 @@ def _below_stages(holder: str, stages: tuple[Stage, ...]) -> tuple[Stage, ...]:
 class ChannelFifo(Kernel):
     """An identity stage: what arrives at it, presented on both sides of a native FIFO.
 
-    Its netlist, buffering and resources are its FIFO's, by the base. Its cycles are
-    inapplicable, which a kernel's ``member_cycles`` leaves out: a FIFO presents what
+    Its netlist, buffering and resources are its FIFO's, by the base. Its frame_cycles are
+    inapplicable, which a kernel's ``member_frame_cycles`` leaves out: a FIFO presents what
     arrives, whose beats are counted where they are made (the channel's producer, its
     source, its output adapter), so its channel's cycles are its other members'. It
     presents no port: its channel checks it by its FIFO's streams (``stage_streams``) and
@@ -387,7 +387,7 @@ class ChannelFifo(Kernel):
     )
 
     @view
-    def cycles(self) -> int | Inapplicable:
+    def frame_cycles(self) -> int | Inapplicable:
         """Inapplicable: it counts no cycles of its own (the class docstring)."""
         return Inapplicable()
 
@@ -902,7 +902,7 @@ class Channel(Kernel):
         return merged(parts, buses, tuple(links))
 
     @view
-    def cycles(self) -> int | Rejected:
+    def frame_cycles(self) -> int | Rejected:
         """The clock cycles a frame takes through its own members: the slowest's (its
         source's, its adapters' stages', its mover's), one beat a cycle at best; a FIFO's
         are inapplicable, and a channel of wires takes none of its own. On a boundary whose
@@ -924,13 +924,13 @@ class Channel(Kernel):
         return max(found, *(beat_times(pace, edge.form.beats).span for pace in paces))
 
     # What its cycles count, by kind: its source's, its adapters' and its mover's. Not the
-    # base's ``member_cycles``, which ranges over its transport too: a FIFO's cycles are
+    # base's ``member_frame_cycles``, which ranges over its transport too: a FIFO's cycles are
     # inapplicable, but whether it places one is a choice FIFO sizing reads cycles before,
     # so the base's would wait on it. Its mover is no kernel; its cycles count here. Each
-    # kind declares ``cycles`` itself (``Members`` reads the declaring class), and must
+    # kind declares ``frame_cycles`` itself (``Members`` reads the declaring class), and must
     # keep doing so while the channel counts by kind.
-    source_cycles = Members(MemStreamKernel.cycles)
-    stage_cycles = Members(StreamAdapter.cycles)
+    source_cycles = Members(MemStreamKernel.frame_cycles)
+    stage_cycles = Members(StreamAdapter.frame_cycles)
     mover_cycles = Members(IodmaMover.cycles)
 
     @view

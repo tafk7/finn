@@ -351,7 +351,7 @@ class Partition:
 
     def query(self, name: str, member: object) -> QueryResult[Any]:
         """Member ``name``'s ``member``, a view or a derived value declared on a Space class
-        ``Base`` (``Kernel.netlist``, ``Kernel.cycles``): the member of that name of the
+        ``Base`` (``Kernel.netlist``, ``Kernel.frame_cycles``): the member of that name of the
         member's own class. ``Inapplicable`` where the member's class does not derive from
         ``Base`` (``Channel`` is no class with ``Kernel.bus_control``'s bus), or where
         the member's own answer is inapplicable (a kernel declaring no control bus)."""

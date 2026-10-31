@@ -188,7 +188,7 @@ def test_a_stated_pace_slower_than_the_members_bounds_the_partition_s_frame(
     stated = {port: {"pace": {"every": 3}}}
     parent = step_verify_partition(cut(tmp_path, stated), build(tmp_path, stated))
     channel = body_of(parent).member(tensor)
-    assert channel.boundary.form.beats == 6 and channel.cycles == 18
+    assert channel.boundary.form.beats == 6 and channel.frame_cycles == 18
     assert period(tmp_path) == 18
     assert sized(tmp_path)[tensor] == (0, 0, "direct absorbs it")
     cut(tmp_path / "unstated", {})
