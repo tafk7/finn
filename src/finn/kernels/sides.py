@@ -258,7 +258,7 @@ class Side:
 
     def under(self, member: str) -> Self:
         """A stated side as seen from where ``member``, which states it, is held: its label
-        below ``member`` (``first.compute.packed.x``), as ``PortPins.under``."""
+        below ``member`` (``first.x``), as ``PortPins.under``."""
         if not self.stated:
             raise ValueError(f"a {self.kind.value}'s side is labelled by no member")
         return replace(self, label=f"{member}.{self.label}")

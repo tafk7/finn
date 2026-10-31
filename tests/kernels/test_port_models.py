@@ -1,6 +1,6 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Actual lean port values, local ownership, sparse demand, discovery and served ports."""
+"""Actual lean port values, local ownership, sparse demand, discovery and exposed ports."""
 
 from __future__ import annotations
 

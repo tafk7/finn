@@ -370,7 +370,7 @@ def test_a_stream_whose_side_waits_keeps_the_node_on_the_host_with_the_side_s_fi
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The kernel's own rules refuse nothing and no choice lacks a value, but with ``pe``
-    left open neither stream's side (``x_side``, ``y_side``) is known: the stream check
+    left open neither stream's side (``x.side``, ``y.side``) is known: the stream check
     cannot meet them with a boundary, and the node stays on the host with the side's
     findings, each about its tensor, rather than converting with the stream unchecked."""
     assert convert(multithreshold())[1].outcomes == (Outcome(("mt",), "Thresholding"),)

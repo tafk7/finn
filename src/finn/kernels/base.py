@@ -822,7 +822,7 @@ class Kernel(Space):
 
     module_spec: ClassVar[ModuleSpec | None] = None
 
-    # The ports it serves, each by its child and the child's port: what its intake names
+    # The ports it exposes, each by its child and the child's port: what its intake names
     # the child's (``intake``). Recorded when its class is made (``_expose_ports``).
     _exposed_names: ClassVar[Mapping[tuple[str, str], str]] = MappingProxyType({})
 

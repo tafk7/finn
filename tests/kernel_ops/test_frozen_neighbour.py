@@ -44,7 +44,7 @@ def _slice(model: ModelWrapper, *names: str) -> Partition:
 
 
 def _side(point: Kernel, port: str) -> Side:
-    """A KernelOp's port's side, its own or served."""
+    """A KernelOp's port's side, its own or exposed."""
     found = point.query(cast(Any, stream_port(type(point), port).side))
     assert isinstance(found, Available) and isinstance(found.value, Side)
     return found.value

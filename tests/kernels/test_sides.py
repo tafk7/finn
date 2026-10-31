@@ -20,8 +20,8 @@ takes each kind in.
 - **What the outside states** (``Outside``, its pace ``BeatTimes`` or ``Steady``): value
   classes, each invariant refused by name as it is made; only the boundary's side carries
   one, and a mover's only where the side offers that mover.
-- **A served port** below the label its kernel states for its child (a channel's set port,
-  ``source.memstream.set``) states that label and its side below it.
+- **An exposed port** (a channel's set port, ``set = source.set``) states its side under
+  the alias's name, its pins on its source.
 """
 
 from __future__ import annotations
@@ -386,13 +386,12 @@ def test_offers_on_the_boundary_place_the_mover() -> None:
     assert (mover.port, mover.direction) == ("s_axis_0", "in")
 
 
-# -- a served port below a stated label ------------------------------------------------------
+# -- an exposed port under its alias's name ----------------------------------------------------
 
 
 def test_a_channel_s_set_port_states_its_source_s_label_and_side() -> None:
-    """With several weight sets, the weight channel's source serves its set port below the
-    label the channel states for it: the set channel's consumer, labelled from the
-    network."""
+    """With several weight sets, the weight channel exposes its source's set port under
+    its own name: the set channel's consumer, labelled from the network."""
     weights = ((1, 0), (0, 1))
     point = matmul_point(
         m=2,

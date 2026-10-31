@@ -8,8 +8,8 @@ A ``Channel`` is one producer-to-consumer edge, a member of a partition
 (``finn.kernels.partition``) or of a kernel with children, carrying one ``tensor`` given
 as a fact. Its two sides are facts too, ``producer`` and ``consumer``, each one value
 (``finn.kernels.sides.Side``) of its kind: a kernel's port (the ``Stream`` it presents,
-its label, ``matmul.compute.packed.x``, and on an output port its word width: a kernel's
-``x_side``), a frozen neighbour's (the same, given as a fact), the boundary's (its AXIS
+its label, ``matmul.x``, and on an output port its word width: a kernel's port's
+``side``), a frozen neighbour's (the same, given as a fact), the boundary's (its AXIS
 port's name, ``s_axis_0``, the movers a shell offers on it, and what the outside states
 of it, ``outside``, its stream never given), or, for a known value, its own source. Each
 side's role takes its kinds only (``channel-users``): a producer is an output port, the
@@ -169,7 +169,7 @@ from finn.platform.capabilities import Platform
 
 SOURCE_LABEL = "source.memstream"
 """Where a channel's netlist places its source: its producer's owner (``source_label``), and
-the label of the set port it serves (``source.memstream.set``)."""
+the instance of the set port it exposes (``set``, its pins on ``source.memstream``)."""
 
 OUTPUT_ADAPTER_LABEL = "output_adapter.vpc"
 """Where a channel's netlist places its output adapter, its chain's stages below it
@@ -227,7 +227,7 @@ def wired(source: str | None, produced: StreamPins, sink: str | None, consumed: 
 @dataclass(frozen=True)
 class Neighbours:
     """The ports beside a channel, as its partition reads them (each kernel's port's
-    stream pins view, labelled below its member's node: ``matmul.compute.packed.x``; a frozen
+    stream pins view, labelled below its member's node: ``matmul.x``; a frozen
     neighbour's, outside a slice, read at its stored choices): the producing kernel's and
     the consuming kernel's, each None where that side is the channel's own, its source (a
     known value) or its boundary; and each port's pace (its ``pace``, read where it is
@@ -439,7 +439,7 @@ class ChannelSides:
 
     @property
     def source_owner(self) -> str:
-        """Where the producing stream sits: its port's label (``matmul.compute.packed.y``),
+        """Where the producing stream sits: its port's label (``matmul.y``),
         the channel's source label (``SOURCE_LABEL``) for a known value, or the boundary's
         AXIS port's name."""
         if self.producer.kind is SideKind.SOURCE:
@@ -465,13 +465,13 @@ class Channel(Kernel):
     """One tensor between the two sides it takes: one producer, one consumer.
 
     ``producer`` and ``consumer`` are its sides, each one value (``Side``): a kernel's
-    port (its ``x_side``: its stream, its label, ``matmul.compute.packed.x``, and on an
+    port (its ``side``: its stream, its label, ``matmul.x``, and on an
     output port its word width), a frozen neighbour's, the boundary's (the AXIS port its
     label names, presented as ``boundary``, where the ``mover`` sits where the shell
     offers one: ``offered``), or its source's. A channel with a known value places its
     ``source`` as its producer; with several sets, the source reads the set indices
     (``index_tensor``) from the channel whose consumer is its ``set`` port, the one port it
-    serves (its source's). ``platform`` is the target's: its source, its
+    exposes (its source's, ``set = source.set``). ``platform`` is the target's: its source, its
     adapters' stages and its FIFO read it. Its members are declared in the order the stream
     runs through them, so its netlist places them in that order.
     """

@@ -217,8 +217,8 @@ class PortIntake:
 @dataclass(frozen=True)
 class Intake:
     """A kernel's intake (contract item 5): one ``PortIntake`` an input port it places, by
-    its label. A kernel with children derives its own from its members': a port it serves
-    by the name it serves it under, any other member's below the member."""
+    its label. A kernel with children derives its own from its members': a port it exposes
+    by the name it exposes it under, any other member's below the member."""
 
     ports: tuple[PortIntake, ...] = ()
 

@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 """A stream port declared in a Group keeps its actual lexical Group occurrence: discovery
-(``stream_ports``), lookup (``port_side``, ``port_stream_pins``, ``port_direction``) and the
+(``stream_ports``), lookup (``stream_port``, ``port_direction``) and the
 composer find it there, and nothing forwards it by hand."""
 
 from __future__ import annotations

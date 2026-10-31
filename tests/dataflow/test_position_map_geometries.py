@@ -337,7 +337,7 @@ def placed_stream(name: str, pe: int) -> Any:
     case["facts"] = {**case["facts"], "weights": weights}
     case["outputs"] = {"y_channel": matmul_spec._results(x, weights, window=window)}
     kernel: Any = placed(case, {"pe": pe, "simd": simd, **case["choices"]}, window=window)
-    return kernel.x_side.stream.sequence
+    return kernel.x.side.stream.sequence
 
 
 @pytest.mark.parametrize(("name", "pe"), CASES, ids=CASE_IDS)
