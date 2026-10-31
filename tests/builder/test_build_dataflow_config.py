@@ -53,6 +53,7 @@ from finn.builder.build_dataflow_strategies import Named
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.partition import partition_body
 from finn.core.reporting.findings import Finding, FindingKind
+from finn.custom_op.kernels.network import PARTITION
 from finn.kernels.sides import BUILD, ROW_MAJOR, BeatTimes, Outside, Steady
 from finn.platform.request import TargetRequest
 from finn.platform.resolve import resolve_target
@@ -613,7 +614,7 @@ def test_the_cut_refuses_a_port_the_partition_does_not_have_and_beat_times_its_p
             "passes are 3 beats",
         ),
     ]
-    assert not (tmp_path / "output" / "partition").exists()
+    assert not (Path(cfg.output_dir) / PARTITION).exists()
 
 
 def test_the_cut_refuses_stated_lanes_that_divide_none_of_the_port_s_elements_whatever_its_pace(
@@ -642,7 +643,7 @@ def test_the_cut_refuses_stated_lanes_that_divide_none_of_the_port_s_elements_wh
             "12 elements",
         ),
     ]
-    assert not (tmp_path / "output" / "partition").exists()
+    assert not (Path(cfg.output_dir) / PARTITION).exists()
 
 
 def test_an_output_is_a_step_so_generate_outputs_is_an_unknown_setting() -> None:
