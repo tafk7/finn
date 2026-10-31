@@ -44,6 +44,7 @@ from finn.core.space import (
     Group,
     Inapplicable,
     Members,
+    Param,
     Rejected,
     Space,
     derived,
@@ -1081,14 +1082,18 @@ def _install(
 #
 # - a member's port two channel sides name (``port-connected-twice``): a port is on one
 #   channel; two readers of one value are one channel's;
-# - a member's port (not a channel's) that no channel side names and no node alias of its
-#   own exposes (``port-unconnected``): a member's port is connected inside its holder, by a
-#   channel, or presented outside it, by an alias; no holder ties a port off. A port its
-#   member places only where it is given an optional fact, and is not given it (a selector's
-#   set port with one set: its tensor, ``set_tensor``, left out), is idle by its member's
-#   structure, held idle by its member, and needs neither. Whether the rule reaches past such
-#   ports to ports placed by other facts is pending a decision; until then a port its
-#   structure may place is connected or refused.
+# - a member's port that no channel side names and no node alias of its own exposes
+#   (``port-unconnected``): a member's port is connected inside its holder, by a channel, or
+#   presented outside it, by an alias; no holder ties a port off. A channel's ports count as
+#   any member's (a weight channel's ``set``, its source's), but for its outer ports
+#   (``outer_in``, ``outer_out``): placed only where its side is the boundary, a fact its
+#   holder is given, they are its holder's edge, presented by an alias where they are placed
+#   (a core's edge port). A port its member places only where it is given an optional fact,
+#   and is not given it (a selector's set port with one set: its tensor, ``set_tensor``, left
+#   out; a channel's ``set``, its source's, without an ``index_tensor``), is idle by its
+#   member's structure, held idle by its member, and needs neither. Whether the rule reaches
+#   past such ports to ports placed by other facts is pending a decision; until then a port
+#   its structure may place is connected or refused.
 #
 # And it installs, for each channel, three private views of its own: the ports beside it
 # (``finn.kernels.channels.Neighbours``: each port's stream pins as its member presents them,
@@ -1161,23 +1166,53 @@ def _side_named(ports: Mapping[object, MemberPort], binding: object) -> MemberPo
     return named.pop() if len(named) == 1 else None
 
 
+_OUTER = ("outer_in", "outer_out")
+"""A channel's outer ports (``finn.kernels.channels.Channel``), its holder's edge (above)."""
+
+
+def _optional(kind: type[Space], bound: object) -> Param[object] | None:
+    """The formal of ``kind`` that ``bound`` is, where it is an optional one with no value
+    by default (a fact its holder may leave out); None otherwise."""
+    formal = space_formals(kind).get(getattr(bound, "name", ""))
+    if formal is None or formal is not bound or is_required(formal) or formal.default is not None:
+        return None
+    return formal
+
+
 def _idle_by_structure(cls: type[Kernel], member: str, port: str) -> bool:
-    """Whether member ``member``'s own port ``port`` takes its tensor from an optional fact
-    the member is not given (left out, or given None): idle by its structure, whatever its
-    other facts (above)."""
-    from finn.kernels.port import exposed_name, stream_port  # noqa: PLC0415 - base/port cycle
+    """Whether member ``member``'s port ``port`` takes its tensor from an optional fact the
+    member is not given (left out, or given None): idle by its structure, whatever its other
+    facts (above). A port it exposes (``set = source.set``) is its leaf's, reached through
+    children (no selector), each binding the fact below it to an optional fact of its own
+    (``set_tensor=index_tensor``) or leaving it out."""
+    from finn.kernels.port import stream_port  # noqa: PLC0415 - base/port cycle
 
     record = node_record(_members(cls)[member])
     assert record is not None
     kind = _member_type(cls, member)
-    if exposed_name(kind, port) is not None:
-        return False
-    declared = node_record(stream_port(kind, port))
-    tensor = None if declared is None else declared.bindings.get("tensor")
-    formal = space_formals(kind).get(getattr(tensor, "name", ""))
-    if formal is None or formal is not tensor or is_required(formal) or formal.default is not None:
-        return False
-    return record.bindings.get(str(formal.name)) is None
+    holders: list[tuple[type[Space], NodeDecl]] = []
+    leaf, name = kind, port
+    entry = alias_table(kind).get(port)
+    if entry is not None:
+        if len(entry.ends) != 1:
+            return False
+        *below, name = entry.ends[0].path.split(".")
+        for segment in below:
+            held = space_members(leaf).get(segment)
+            if not isinstance(held, NodeDecl):
+                return False  # a selector: its cases' ports are not followed
+            holders.append((leaf, held))
+            leaf = cast("type[Space]", held.space_type)
+    declared = node_record(stream_port(leaf, name))
+    formal = _optional(leaf, None if declared is None else declared.bindings.get("tensor"))
+    for holder, held in reversed(holders):
+        if formal is None:
+            return False
+        bound = held.bindings.get(str(formal.name))
+        if bound is None:
+            return True
+        formal = _optional(holder, bound)
+    return formal is not None and record.bindings.get(str(formal.name)) is None
 
 
 def _connected(cls: type[Kernel]) -> dict[str, tuple[MemberPort | None, MemberPort | None]]:
@@ -1214,7 +1249,7 @@ def _connected(cls: type[Kernel]) -> dict[str, tuple[MemberPort | None, MemberPo
             )
     exposed = cls._exposed_names
     for port in dict.fromkeys(ports.values()):
-        if port in channels or _connects(_members(cls)[port.member]):
+        if port in channels or (_connects(_members(cls)[port.member]) and port.port in _OUTER):
             continue
         paths = _node_paths(cls, (port.member, *port.port.split(".")), ())
         if any(path in exposed for path in paths):

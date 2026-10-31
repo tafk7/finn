@@ -31,7 +31,7 @@ from support.chain import (
     Y_TENSOR,
     W,
 )
-from support.helpers import FULL_DSP48E2
+from support.helpers import FULL_DSP48E2, set_indices
 from support.refusals import refused
 
 from finn.core.space import Available, Decision, DefinitionError, Param, divisors_of, inspection
@@ -694,6 +694,32 @@ def test_a_one_set_thresholding_needs_no_channel_on_its_set_port(cache: None) ->
         "w2": ("None", "second.w"),
         "y": ("second.y", "None"),
     }
+
+
+def test_a_two_set_weight_channel_s_set_port_on_no_channel_is_refused(cache: None) -> None:
+    """A channel's own ports are any member's: a weight channel of two sets exposes its
+    source's set port (``set``), which a channel feeds or the class is refused when made
+    (``port-unconnected``, owned by the weight channel). Of one set (no ``index_tensor``, as
+    the Chain's ``w1``), the port is idle by structure, through the alias, and needs none."""
+    weights = channels()["w1"]
+    two_sets = ChannelDeclaration(
+        weights.producer,
+        weights.consumer,
+        {**weights.facts, "sets": 2, "index_tensor": set_indices(2, 1)},
+    )
+    assert _connection_refused(declared(channels_=_wired(w1=two_sets))) == [
+        (
+            "port-unconnected",
+            "w1",
+            "w1.set is on no channel and exposed by no alias: a member's port is connected by "
+            "a channel, or presented outside by an alias, and no holder ties a port off",
+            {"port": "w1.set"},
+        )
+    ]
+    space_type = compose(declared()).space_type
+    assert issubclass(space_type, Kernel)
+    named = space_type.connections
+    assert not any(str(port) == "w1.set" for sides in named.values() for port in sides)
 
 
 def test_the_class_answers_each_channel_s_neighbours_and_hops(cache: None) -> None:
