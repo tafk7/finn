@@ -110,7 +110,7 @@ def partition_of_host_graph(tmp_path: Path) -> ModelWrapper:
     body = tmp_path / "body.onnx"
     host_graph().save(str(body))
     node = helper.make_node(
-        PARTITION_OP, ["x"], ["y"], name="partition", domain=PARTITION_DOMAIN, model=str(body)
+        PARTITION_OP, ["x"], ["y"], name="DataflowCore_0", domain=PARTITION_DOMAIN, model=str(body)
     )
     graph = helper.make_graph([node], "parent", [tensor("x")], [tensor("y")])
     parent = ModelWrapper(qonnx_make_model(graph))
@@ -244,7 +244,7 @@ def test_a_hardware_executor_satisfies_a_run_that_requires_hardware(tmp_path: Pa
         parent, {"x": X}, executors=(simulator,), require_hardware=True, provenance=ran
     )["y"]
     assert np.array_equal(y, np.full_like(X, 5.0))
-    assert ran == {"partition": simulator}
+    assert ran == {"DataflowCore_0": simulator}
     ran = {}
     execute_onnx(host_graph(), {"x": X}, executors=(), require_hardware=True, provenance=ran)
     assert ran == {"relu": None, "negate": None}

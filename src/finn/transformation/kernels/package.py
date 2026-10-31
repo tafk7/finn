@@ -4,7 +4,7 @@
 """Packaging: a partition of KernelOps as the IP every shell reads (the stitched-IP contract).
 
 ``PackagePartition`` takes a partition model, a model of KernelOps (the body of
-a ``StreamingDataflowPartition``), and writes what CreateStitchedIP writes for
+a ``DataflowCore``), and writes what CreateStitchedIP writes for
 the shells (MakeZYNQProject; CreateVitisXO and VitisLink; SlashLink):
 
 - an IP at ``<vivado_stitch_proj>/ip``, self-contained (its sources and data

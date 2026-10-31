@@ -328,7 +328,7 @@ def test_two_graph_names_of_one_member_name_are_refused_by_the_composer() -> Non
         message="members share a node in the module: a_b: a.b, a_b",
     ) as caught:
         network(model, model.graph.node)
-    assert str(caught.error).startswith("partition: a.b: name-shared: ")
+    assert str(caught.error).startswith("DataflowCore_0: a.b: name-shared: ")
 
 
 def test_a_tensor_no_port_names_is_refused_by_name() -> None:

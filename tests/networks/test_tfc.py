@@ -125,7 +125,7 @@ def test_tfc_w2a2_computes_its_logits_in_xsim(tfc_streamlined: Path, tmp_path: P
     parent, body = partition(source, tmp_path)
     assert [node.op_type for node in parent.graph.node] == [
         "Reshape",
-        "StreamingDataflowPartition",
+        "DataflowCore",
         "TopK",
     ]
     assert [node.op_type for node in body.graph.node] == ["Thresholding", "MatMul"] * 4

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """The ONNX domain ``finn.custom_op.partition``: the parent graph's node for the
-partition of KernelOps.
+core of KernelOps.
 
 qonnx loads a domain by importing it and takes its op classes from ``__all__``, so this
 module exports only op classes.
@@ -18,8 +18,9 @@ from finn.core.graph.partition import body_file
 opset_version = 1
 
 
-class StreamingDataflowPartition(GenericPartition):
-    """The parent graph's node for the partition of KernelOps; ``model`` is the body's
+class DataflowCore(GenericPartition):
+    """The parent graph's node for the core of KernelOps, the
+    partition the cut makes; ``model`` is the body's
     file. Executing it runs the body with the caller's executors and start and end nodes
     (``finn.core.onnx_exec.running``), and writes the body's outputs the run reached.
 
@@ -73,4 +74,4 @@ class StreamingDataflowPartition(GenericPartition):
                     context[prefix + name] = value
 
 
-__all__ = ["StreamingDataflowPartition"]
+__all__ = ["DataflowCore"]

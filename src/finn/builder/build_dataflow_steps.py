@@ -63,7 +63,7 @@ from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.partition import partition_body, search_record
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.reporting.manifest import note, reported, write_report
-from finn.custom_op.kernels.network import partition_ports, stale_text
+from finn.custom_op.kernels.network import PARTITION, partition_ports, stale_text
 from finn.custom_op.kernels.shell import verify_partition
 from finn.kernels.explore import FIFOS_BY_MODEL
 from finn.kernels.sides import BeatTimes, Outside
@@ -359,10 +359,10 @@ def _boundary(model: ModelWrapper, cfg: DataflowBuildConfig) -> dict[str, Outsid
 
 
 def step_create_dataflow_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """Cut the KernelOps into one StreamingDataflowPartition, leaving the nodes before
+    """Cut the KernelOps into one DataflowCore, leaving the nodes before
     and after it on the host; the build's model is the parent graph from here on. The
-    partition is named ``partition``: its node, its body (partition/partition.onnx), its
-    IP and its block-design instance. Each channel's choices are created here (the channel's
+    partition is named ``DataflowCore_0``: its node, its body (DataflowCore_0/DataflowCore_0.onnx),
+    its IP and its block-design instance. Each channel's choices are created here (the channel's
     policies), and each KernelOp's checked again in context: one made stale by an edit
     since conversion is dropped (a kernel's left open for a strategy, a channel's set again
     by the channel's policies), noted as a limitation
@@ -377,7 +377,7 @@ def step_create_dataflow_partition(model: ModelWrapper, cfg: DataflowBuildConfig
     do not divide the port's tensor (``boundary-lanes``) and beat times that do not time
     the beats the statement's lanes and passes make of it (``boundary-pace-beats``), each
     at its port."""
-    cut = CutKernelPartition(Path(cfg.output_dir) / "partition", _boundary(model, cfg))
+    cut = CutKernelPartition(Path(cfg.output_dir) / PARTITION, _boundary(model, cfg))
     model = model.transform(cut)
     for key, found in cut.dropped.items():
         message = (

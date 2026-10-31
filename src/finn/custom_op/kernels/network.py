@@ -138,9 +138,9 @@ from finn.kernels.sides import Side
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
 
-PARTITION = "partition"
-"""The partition's name: the cut's node and body file, and the IP made from it, which
-is its module (``finn_partition``)."""
+PARTITION = "DataflowCore_0"
+"""The partition's name: the cut's node (the DataflowCore) and body file, and the IP made
+from it, which is its module (``finn_dataflowcore_0``)."""
 
 PRODUCER = ProducerIdentity("finn.custom_op.kernels.partition", "1")
 """What derives a partition's module: identified as the partition's, so the IP's name and

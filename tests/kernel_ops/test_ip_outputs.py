@@ -108,7 +108,7 @@ def test_the_description_beside_the_ip_reads_back_against_the_modules_pins(
         "vlnv": "xilinx_finn:finn:sdp_1:1.0",
         "top": described["ip"]["top"],
     }
-    assert described["ip"]["top"].startswith("finn_partition__")
+    assert described["ip"]["top"].startswith("finn_dataflowcore_0__")
     assert (described["part"], described["period_ns"]) == ("xczu3eg-sbva484-1-e", 5.0)
     # Each stream states its port's boundary facts, as the configured network's channels
     # state them, and the order its free side presents the tensor in: the Chain's,
@@ -220,7 +220,9 @@ def test_out_of_context_resources_are_stated_per_member_of_the_network(
     labels = [label for label, _ in point.module.fragment.instances]
     # Each instance 10 LUTs and its index in FFs; synthesis flattened the last into the
     # top, which so has no row for it.
-    rows = [f"| finn_partition | (top) | {len(labels) * 10} | 0 | 0 | 0 | 21 | 0 | 0 | 0 | 0 |"]
+    rows = [
+        f"| finn_dataflowcore_0 | (top) | {len(labels) * 10} | 0 | 0 | 0 | 21 | 0 | 0 | 0 | 0 |"
+    ]
     rows += [
         f"|   {instance_name(label)} | m | 10 | 0 | 0 | 0 | {index} | 0 | 0 | 0 | 0 |"
         for index, label in enumerate(labels[:-1])
@@ -229,7 +231,7 @@ def test_out_of_context_resources_are_stated_per_member_of_the_network(
         "| Instance | Module | Total LUTs | Logic LUTs | LUTRAMs | SRLs | FFs | RAMB36 | RAMB18 "
         "| URAM | DSP Blocks |"
     )
-    (tmp_path / "finn_partition_partition_util.rpt").write_text("\n".join([header, *rows]))
+    (tmp_path / "finn_dataflowcore_0_partition_util.rpt").write_text("\n".join([header, *rows]))
     found = ooc_member_resources(model, tmp_path)
     assert found["total"] == {"lut": 70, "ff": 21, "bram18": 0, "uram": 0, "dsp": 0}
     # Each instance is its member's: a boundary channel's adapter the channel's (x), a
@@ -256,7 +258,7 @@ class SynthesizedByStub(PackagedByStub):
         self, tool: str, args: object, *, cwd: Path, **options: object
     ) -> subprocess.CompletedProcess[bytes]:
         if "launch_runs synth_1" in (Path(cwd) / "package.tcl").read_text():
-            (Path(cwd) / "finn_partition_partition_util.rpt").write_text(REPORT)
+            (Path(cwd) / "finn_dataflowcore_0_partition_util.rpt").write_text(REPORT)
         return super().run(tool, args, cwd=cwd, **options)
 
 
@@ -280,7 +282,7 @@ def test_the_resources_report_reads_the_synthesis_of_the_ip_the_body_states(
         PackagePartition(node.name, run_synth=True, directory=project, toolchain=stub)
     )
     synthesized.save(body_file)
-    report = project / "finn_partition_partition_util.rpt"
+    report = project / "finn_dataflowcore_0_partition_util.rpt"
     assert built_reports(parent, toolchain=stub)["ooc_synth"] == report
     synthesized.set(OUTPUT_IP_KEY, "sha256:" + "0" * 64)
     synthesized.save(body_file)
@@ -322,7 +324,7 @@ def test_an_ip_the_store_holds_is_reused_and_the_step_says_so(
     caplog.clear()
     with caplog.at_level(logging.INFO, logger="finn"):
         step_package_partition(parent, cfg)
-    assert "Reused the stored IP partition (" in caplog.text
+    assert "Reused the stored IP DataflowCore_0 (" in caplog.text
     assert "Packaged IP partition" not in caplog.text
     statuses = [
         getattr(record, STORED)["status"]
@@ -626,11 +628,11 @@ def test_tfc_on_the_ip_shell_packages_and_its_testbench_passes_on_its_own(
     # The partition the build packaged, opened through the parent graph the step saved.
     parent = ModelWrapper(str(output / "intermediate_models" / "step_package_partition.onnx"))
     _, body, _ = partition_body(parent)
-    point, _ = configured_network(body, "partition")
+    point, _ = configured_network(body, "DataflowCore_0")
     described = json.loads((ip / "interface.json").read_text())
     read_back(described, point.module.abi.pins, 5.0)
     # The IP is the partition's, of its one name; the body states it.
-    assert described["ip"]["name"] == "partition"
+    assert described["ip"]["name"] == "DataflowCore_0"
     assert body.get(OUTPUT_IP) == str(ip / "ip")
     # The exploration folds the input's thresholds at 4 lanes and the last layer at 1
     # (Z0's choices), not test_tfc's 16 lanes by hand.

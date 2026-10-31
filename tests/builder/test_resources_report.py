@@ -44,7 +44,7 @@ def test_the_placed_hierarchy_is_read_by_depth() -> None:
         (1, "top_i"),
         (2, "smartconnect_0"),
         (3, "inst"),
-        (2, "partition"),
+        (2, "DataflowCore_0"),
         (2, "axi_interconnect_0"),
         (2, "idma0"),
         (2, "odma0"),
@@ -65,7 +65,7 @@ def test_a_partition_on_the_ip_shell_states_its_model_alone(tmp_path: Path) -> N
     assert (stated["shell"], stated["caveat"]) == ("ip", None)
     assert stated["members"] == {
         "partition": {
-            "instance": "partition",
+            "instance": "DataflowCore_0",
             "model": asdict(modelled.partition),
             "out_of_context": None,
             "placed": None,

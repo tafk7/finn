@@ -87,8 +87,8 @@ def chain(shell: str = "ip") -> ModelWrapper:
 def facts(model: ModelWrapper) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """The boundary facts of ``model``'s configured network, as the interface description
     and the testbench read them."""
-    point, boundary = configured_network(model, "partition")
-    return boundary_facts(model, point, boundary, "partition")
+    point, boundary = configured_network(model, "DataflowCore_0")
+    return boundary_facts(model, point, boundary, "DataflowCore_0")
 
 
 def port(name: str, tensor: str, dims: list[int], element: str, *counts: int) -> dict[str, Any]:
@@ -169,12 +169,12 @@ def test_the_cut_keeps_the_parent_graph_with_one_partition_of_one_name(tmp_path:
     model = chain("pynq")
     parent = model.transform(CutKernelPartition(tmp_path))
     (node,) = parent.graph.node
-    assert (node.op_type, node.name) == ("StreamingDataflowPartition", "partition")
+    assert (node.op_type, node.name) == ("DataflowCore", "DataflowCore_0")
     assert (list(node.input), list(node.output)) == (["x", "w2"], ["y"])
     found, body, body_file = partition_body(parent)
-    assert found is node and body_file == str(tmp_path / "partition.onnx")
+    assert found is node and body_file == str(tmp_path / "DataflowCore_0.onnx")
     # Only the body is left in the directory: the cut's own file is gone.
-    assert sorted(path.name for path in tmp_path.iterdir()) == ["partition.onnx"]
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["DataflowCore_0.onnx"]
     # The body carries the target, and its nodes as they were: of the space the cut
     # stores only the choices' baselines (no boundary facts; its configured network states
     # them).
@@ -210,7 +210,10 @@ def test_the_export_names_each_mover_its_iodma_and_every_connection(tmp_path: Pa
         ZYNQ.part,
         5.0,
     )
-    assert (export.partition, export.vlnv) == ("partition", "xilinx_finn:finn:partition:1.0")
+    assert (export.partition, export.vlnv) == (
+        "DataflowCore_0",
+        "xilinx_finn:finn:DataflowCore_0:1.0",
+    )
     # Movers by direction in port order, each IODMA_hls configured from its facts: a
     # frame's beats, the stream's bytes a beat in the UINT8 container, the memory port
     # and the stream's width; the element is the mover's.
@@ -251,9 +254,9 @@ def test_the_export_names_each_mover_its_iodma_and_every_connection(tmp_path: Pa
         "INT7",
     ]
     assert export.connections == (
-        Connection("axis", "idma0/m_axis_0", "partition/s_axis_0"),
-        Connection("axis", "idma1/m_axis_0", "partition/s_axis_1"),
-        Connection("axis", "partition/m_axis_0", "odma0/s_axis_0"),
+        Connection("axis", "idma0/m_axis_0", "DataflowCore_0/s_axis_0"),
+        Connection("axis", "idma1/m_axis_0", "DataflowCore_0/s_axis_1"),
+        Connection("axis", "DataflowCore_0/m_axis_0", "odma0/s_axis_0"),
         Connection("aximm", "idma0/m_axi_gmem0", "smartconnect_0/S00_AXI"),
         Connection("aximm", "idma1/m_axi_gmem0", "smartconnect_0/S01_AXI"),
         Connection("aximm", "odma0/m_axi_gmem0", "smartconnect_0/S02_AXI"),
@@ -262,7 +265,7 @@ def test_the_export_names_each_mover_its_iodma_and_every_connection(tmp_path: Pa
         Connection("axilite", "axi_interconnect_0/M02_AXI", "odma0/s_axi_control_0"),
         *(
             Connection(kind, f"smartconnect_0/{source}", f"{instance}/{pin}")
-            for instance in ("idma0", "idma1", "partition", "odma0")
+            for instance in ("idma0", "idma1", "DataflowCore_0", "odma0")
             for kind, source, pin in (
                 ("clock", "aclk", "ap_clk"),
                 ("reset", "aresetn", "ap_rst_n"),
@@ -376,7 +379,7 @@ def test_a_tiled_w2_is_regrouped_after_its_mover_by_a_vpc_and_an_input_gen(case:
     mover = w2.mover_contract
     assert (mover.beats, mover.tdata, mover.memory_width, mover.words) == (4, 16, 64, 1)
     choose_memories(model)
-    configured, boundary = configured_network(model, "partition")
+    configured, boundary = configured_network(model, "DataflowCore_0")
     assert boundary == (("x", "s_axis_0"), ("w2", "s_axis_1"), ("y", "m_axis_0"))
     stages = {
         name: (leaf.implementation_id, dict(leaf.parameters))
@@ -430,7 +433,7 @@ def test_a_row_major_w2_on_three_rows_is_replayed_by_an_input_gen_after_its_move
     mover = w2.mover_contract
     assert (mover.beats, mover.tdata, mover.memory_width, mover.words) == (4, 16, 64, 1)
     choose_memories(model)
-    configured_network(model, "partition")
+    configured_network(model, "DataflowCore_0")
     ip = kernel_model(second_weights=False)
     configured(ip, {"second": ROW_MAJOR_W2})
     unstated = in_shell(ip, ip.graph.node).member("w2")
@@ -499,10 +502,12 @@ def test_packaging_states_its_ip_typed_and_writes_no_flat_key(tmp_path: Path) ->
     before = {item.key for item in body.graph.metadata_props}
     project = tmp_path / "stitch"
     toolchain: Any = PackagedHere()
-    verified(body, "partition")
-    packaged = body.transform(PackagePartition("partition", directory=project, toolchain=toolchain))
+    verified(body, "DataflowCore_0")
+    packaged = body.transform(
+        PackagePartition("DataflowCore_0", directory=project, toolchain=toolchain)
+    )
     assert packaged.get(OUTPUT_IP) == str(project / "ip")
-    assert packaged.get(OUTPUT_VLNV) == "xilinx_finn:finn:partition:1.0"
+    assert packaged.get(OUTPUT_VLNV) == "xilinx_finn:finn:DataflowCore_0:1.0"
     interfaces = packaged.get(OUTPUT_INTERFACES)
     assert (interfaces["s_axis"], interfaces["m_axis"]) == (
         [["s_axis_0", 8], ["s_axis_1", 16]],
@@ -519,7 +524,7 @@ def test_packaging_states_its_ip_typed_and_writes_no_flat_key(tmp_path: Path) ->
         "finn.outputs/verified",
     }
     assert packaged.get(OUTPUT_IP_KEY) == ip_key(
-        body, "partition", run_synth=False, toolchain=toolchain
+        body, "DataflowCore_0", run_synth=False, toolchain=toolchain
     )
     assert packaged.get(OUTPUT_IP_OPTIONS) == {"run_synth": False}
     # Packaging leaves the design as it was.

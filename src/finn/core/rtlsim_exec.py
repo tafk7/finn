@@ -3,7 +3,7 @@
 
 """The XSim executor: a partition of KernelOps run as its hardware, in XSim.
 
-``XSim`` claims a partition node (StreamingDataflowPartition) whose body is a partition
+``XSim`` claims a partition node (DataflowCore) whose body is a partition
 of KernelOps (``kernel_partition_body``), and runs it as packaging builds it:
 
 1. **the network**: the body's network, its nodes' and its tensors' channel choices

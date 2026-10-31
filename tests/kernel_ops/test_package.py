@@ -62,9 +62,9 @@ from finn.transformation.kernels.package import (
 def test_the_partition_packages_its_nodes_choices() -> None:
     configure_partition(model := kernel_model())
     module = configured_network(model, "sdp_1")[0].module
-    reference = configured_network(model, "partition")[0].module
+    reference = configured_network(model, "DataflowCore_0")[0].module
     assert (module.fragment, module.abi) == (reference.fragment, reference.abi)
-    assert module.stem == "finn_partition"
+    assert module.stem == "finn_dataflowcore_0"
     assert [port.name for port in module.abi.pins] == [
         "ap_clk",
         "ap_rst_n",
@@ -91,7 +91,7 @@ def test_a_choice_never_created_refuses_packaging_and_is_named() -> None:
     keys = cast(KernelOpError, left.error).keys
     assert keys and {key.split(".")[0] for key in keys} <= channels
     module = configured_network(model.transform(MakeCutChoices()), "sdp_1")[0].module
-    assert module.stem == "finn_partition"
+    assert module.stem == "finn_dataflowcore_0"
 
 
 def test_a_choice_waiting_on_an_open_one_is_saved_and_emission_names_the_open_one() -> None:
@@ -162,7 +162,7 @@ def test_the_chains_emitted_top_elaborates_before_vivado(
         reaches_vivado(model, "sdp_1", tmp_path / "project")
     # The check logs that it ran, what it checked, and its time.
     (line,) = [record.getMessage() for record in caplog.records if record.name == logger]
-    assert line.startswith("sdp_1: slang elaborated finn_partition")
+    assert line.startswith("sdp_1: slang elaborated finn_dataflowcore_0")
     assert "its 4 ports agree with the pins (" in line and line.endswith(" s)")
 
 
@@ -255,7 +255,7 @@ def test_the_chain_packages_as_the_shells_ip(tmp_path: Path) -> None:
     files = {path.name for path in (project / "ip" / "src").iterdir()}
     for memory in ("memstream_", "thresholds_"):
         assert any(name.startswith(memory) and name.endswith(".dat") for name in files)
-    assert any(name.startswith("finn_partition__") for name in files)
+    assert any(name.startswith("finn_dataflowcore_0__") for name in files)
     # Movable: every path the IP names is its own, relative.
     assert str(tmp_path) not in (project / "ip" / "component.xml").read_text()
     second = tmp_path / "second"

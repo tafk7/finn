@@ -167,7 +167,7 @@ PLACED_HIERARCHY = (
     + _placed_row("  top_i", 1000, 2000, 2, 1, 0, 4)
     + _placed_row("    smartconnect_0", 300, 500, 0, 0, 0, 0)
     + _placed_row("      inst", 300, 500, 0, 0, 0, 0)
-    + _placed_row("    partition", 400, 800, 1, 1, 0, 4)
+    + _placed_row("    DataflowCore_0", 400, 800, 1, 1, 0, 4)
     + _placed_row("    axi_interconnect_0", 100, 200, 0, 0, 0, 0)
     + _placed_row("    idma0", 100, 250, 1, 0, 0, 0)
     + _placed_row("    odma0", 90, 240, 0, 0, 0, 0)
@@ -225,7 +225,7 @@ class FakeVivado:
         ]
         synthesized = [
             runs / f"top_{name}_0_synth_1" / f"top_{name}_0_utilization_synth.rpt"
-            for name in ("idma0", "partition", "smartconnect_0")
+            for name in ("idma0", "DataflowCore_0", "smartconnect_0")
         ]
         for path in made + synthesized:
             path.parent.mkdir(parents=True, exist_ok=True)

@@ -3,10 +3,10 @@
 
 """The cut: all KernelOps into one partition, the other nodes left on the host.
 
-``CutKernelPartition`` puts every KernelOp in one ``StreamingDataflowPartition`` and
+``CutKernelPartition`` puts every KernelOp in one ``DataflowCore`` and
 returns the parent graph, which the build keeps as its model. The partition is named
-``partition`` (``PARTITION``) for its node, its body's file
-(``<directory>/partition.onnx``), its IP and its block-design instance. The body carries
+``DataflowCore_0`` (``PARTITION``) for its node, its body's file
+(``<directory>/DataflowCore_0.onnx``), its IP and its block-design instance. The body carries
 the parent's target. Everything after the cut opens the body through the node
 (``finn.core.graph.partition.partition_body``).
 

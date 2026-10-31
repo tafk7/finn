@@ -49,7 +49,7 @@ def test_every_row_is_checked_by_a_tree() -> None:
         ("finn.core.graph.annotations.outputs.OUTPUT_IP", "graph.partition"),
         ("finn.core.graph.annotations.channel.CHANNEL", "graph"),
         ("finn.core.graph.walk.between", "graph"),
-        ("finn.custom_op.partition.StreamingDataflowPartition", "custom_op.partition"),
+        ("finn.custom_op.partition.DataflowCore", "custom_op.partition"),
         ("finn.builder.build_dataflow_steps", "flow"),
         ("finn.shells.pynq.runner.build_pynq", "shells"),
         ("finn.util.basic", "util"),
@@ -107,7 +107,7 @@ def test_a_name_outside_every_prefix_is_third_party(name: str) -> None:
         ("graph.partition", "finn.core.graph.annotations.channel.CHANNEL"),
         ("graph.partition", "finn.kernels.channels.Channel"),
         ("custom_op.partition", "finn.custom_op.kernels.network.PARTITION"),
-        ("executors", "finn.custom_op.partition.StreamingDataflowPartition"),
+        ("executors", "finn.custom_op.partition.DataflowCore"),
         ("tests.kernels", "finn.custom_op.kernels.base"),
         ("tests.kernels", "finn.core.onnx_exec"),
         # The XSim testbench: above the kernels and their transformations, below the

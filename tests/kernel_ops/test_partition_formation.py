@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """The kernel path's cut (``CutKernelPartition``) between host ops: its KernelOps one
-StreamingDataflowPartition of the partition domain, its body a model of KernelOps, the
+DataflowCore of the partition domain, its body a model of KernelOps, the
 graph's other ops left on the host.
 
 The Chain (``support.chain``) as KernelOps, its kernels' choices saved on its nodes,
@@ -98,7 +98,7 @@ def test_the_kernel_ops_become_one_partition_between_the_host_ops(tmp_path: Path
     source, parent, _ = partitioned(tmp_path)
     assert [(node.op_type, node.name) for node in parent.graph.node] == [
         ("Identity", "flatten"),
-        ("StreamingDataflowPartition", "partition"),
+        ("DataflowCore", "DataflowCore_0"),
         ("Identity", "select"),
     ]
     sdp = getCustomOp(parent.graph.node[1])
@@ -114,7 +114,7 @@ def test_the_kernel_ops_become_one_partition_between_the_host_ops(tmp_path: Path
 
 
 def test_the_parent_graph_imports_its_partition_nodes_domain(tmp_path: Path) -> None:
-    """The parent graph states the domain of its StreamingDataflowPartition, so reading
+    """The parent graph states the domain of its DataflowCore, so reading
     the node warns of no fallback version (TFC's one build-log warning, observation 37).
     The domain is the kernel path's own, the package that registers the node."""
     _, parent, _ = partitioned(tmp_path)
@@ -123,7 +123,7 @@ def test_the_parent_graph_imports_its_partition_nodes_domain(tmp_path: Path) -> 
     assert parent.graph.node[1].domain == partition_domain.__name__
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        (node,) = parent.get_nodes_by_op_type("StreamingDataflowPartition")
+        (node,) = parent.get_nodes_by_op_type("DataflowCore")
         getCustomOp(node).get_nodeattr("model")
 
 

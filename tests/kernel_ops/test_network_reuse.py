@@ -37,7 +37,7 @@ from finn.core.graph.annotations.platform import PLATFORM, write_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import design_digest
 from finn.core.search import dotted
-from finn.custom_op.kernels.network import network, persist
+from finn.custom_op.kernels.network import PARTITION, network, persist
 from finn.custom_op.kernels.shell import in_shell
 from finn.kernels.composer import cached_classes
 from finn.kernels.partition import Partition
@@ -132,7 +132,7 @@ def test_names_are_the_class_s_structure() -> None:
     assert other.composed.space_type is not first.composed.space_type
     named = network(model, model.graph.node, name="another")
     assert named.composed.space_type is first.composed.space_type
-    assert (named.name, first.name) == ("another", "partition")
+    assert (named.name, first.name) == ("another", PARTITION)
 
 
 def test_a_tensor_read_more_than_once_is_refused_before_any_composition() -> None:
