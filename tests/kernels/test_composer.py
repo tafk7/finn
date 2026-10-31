@@ -577,9 +577,10 @@ def _users(declaration: DataflowCoreDeclaration, name: str) -> set[tuple[str, st
 
 def test_a_port_on_the_wrong_side_composes_and_its_channel_refuses_it(cache: None) -> None:
     """The composer checks no role: a declaration with a port on the wrong side, or a
-    source on the consumer's, composes, and the channel refuses its design space by the
-    channel's name (``channel-users``), its port's side an input side or an output side
-    by the port's kind."""
+    source on the consumer's, composes, and, once stored choices resolve its sides (the
+    Chain's), the channel refuses its design space by the channel's name
+    (``channel-users``, among the findings of what reads the refused sides), its port's
+    side an input side or an output side by the port's kind."""
     platform = FULL_DSP48E2
     # An input port on the producer's side, an output port on the consumer's.
     backwards = channel(

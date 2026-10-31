@@ -63,7 +63,13 @@ side, by its kind (``InPort``, ``OutPort``), and the channel refuses a producer 
 output side, the boundary or its source, and a consumer that is no input side or the
 boundary (``Channel.sides``, ``channel-users``). The composer checks no role: a
 declaration with an input port as a channel's producer composes, and its design space is
-refused by the channel's name when its validity is read.
+refused by the channel's name when the channel's sides are read. A port's side is read
+whole, with its stream, so until the choices its stream waits on are set the channel's
+sides wait too: such a design space reads open, not refused, and each choice that would
+resolve them is impossible, as breaking ``<channel>.sides``. Bound with stored choices
+that resolve them, it reads refused, the findings of what reads the refused sides (a
+guard reading a refused input) before ``channel-users``. The graph layer never declares
+one: only a declaration by hand can.
 
 **In a shell**: a declaration that states its shell's row (``DataflowCoreDeclaration.shell``,
 the row's facts by name) composes one member more, ``shell`` (``finn.kernels.budgets``):
