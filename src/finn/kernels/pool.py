@@ -25,6 +25,11 @@ its results to the output beat, lane zero lowest, and ``pooling_stream`` with an
 elementwise ``std::max``. It runs on ``ap_clk`` and ``ap_rst_n``; its AXIS pins are
 spelled as HLS spells them (``s_axis_TDATA``). Its period is the platform's.
 
+Its initiation interval is 1, **assumed** (``interval``): its top's pipelines request II=1
+of Vitis HLS (``pool_top``'s ``from_axis`` and ``to_axis``, and ``pooling_stream``'s own
+pipeline), and nothing reads what the synthesis achieves. Its cycles a frame and the
+sizing of the FIFOs beside it use it, and say so (``finn.kernels.fifo_sizing.assumed``).
+
 Its domain is what that hardware takes: ordinary integers (``max`` over
 ``ap_int``/``ap_uint``), any window and stride its channel can present, any PE
 dividing the channels. Its resources are not characterised: it states so
@@ -54,7 +59,7 @@ from finn.kernels.artifacts.abi import Direction
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource, HlsSource
 from finn.kernels.artifacts.hls import axis_type
 from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
-from finn.kernels.laws import Axis, AxisSpelling, Intake, PortIntake, Standing
+from finn.kernels.laws import Axis, AxisSpelling, Intake, Interval, PortIntake, Standing
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port import axis
 from finn.kernels.port_model import StreamPort
@@ -165,6 +170,14 @@ _INTAKE_MEASURED = (
 )
 
 
+#: What its initiation interval rests on: the II its top requests, never read from synthesis.
+_INTERVAL_ASSUMED = (
+    "the II=1 its HLS top requests: '#pragma HLS pipeline II=1' in pool_top's from_axis and "
+    "to_axis (finn.kernels.pool) and in pooling_stream (FinnLib hls/nonlin/pooling.hpp); "
+    "Vitis HLS's achieved II is not read from its synthesis report"
+)
+
+
 #: The stem of its HLS top: the module is ``finn_pool_<key16>``.
 STEM = "finn_pool"
 
@@ -227,6 +240,12 @@ class PoolKernel(Kernel):
     @derived
     def output_index(self) -> tuple[Index | Affine, ...]:
         return (*self.leading, oh, ow, c)
+
+    @derived
+    def interval(self) -> Interval:
+        """1, assumed (the module docstring): the II its HLS top requests, which no
+        measurement confirms."""
+        return Interval(1, Standing.ASSUMED, _INTERVAL_ASSUMED)
 
     @derived
     def schedule(self) -> Schedule | Rejected:

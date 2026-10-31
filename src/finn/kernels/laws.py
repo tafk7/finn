@@ -24,6 +24,11 @@ And the terms a kernel states its intake in (``Intake``, ``PortIntake``, ``Stand
 intake is no law, every kernel states its own from its RTL, but its shape, its unit and
 its standing are the library's, and so is its answer where a kernel states none
 (``INTAKE_UNSTATED``).
+
+And the rate law's one exception, a kernel's initiation interval (``Interval``: L6's 1,
+``RATE_INTERVAL``, unless a kernel states its own, with its standing and source), with the
+one conversion from iterations to clock cycles (``in_cycles``) that a kernel's cycles a
+frame and FIFO sizing both read, and a scheduled port's pace in cycles (``TimedPace``).
 """
 
 from __future__ import annotations
@@ -31,6 +36,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from enum import Enum
 
+from finn.dataflow.schedule import Pace
 from finn.kernels.artifacts.abi import Clocking, Endpoint
 
 
@@ -87,8 +93,9 @@ RATE = Law(
     "a kernel advances one iteration a cycle (a stage one beat a side a cycle) when nothing "
     "blocks it; its cycles a frame at full rate follow from its pace, or a stage's from its "
     "larger beat count",
-    "a kernel that stalls internally; an HLS kernel whose initiation interval exceeds one "
-    "states it, measured",
+    "a kernel whose iterations take more than one cycle, or whose one rests on what its RTL "
+    "does not show (an HLS kernel's requested pipeline), states its initiation interval, with "
+    "its standing and source",
 )
 RESET_LAW = Law(
     "L7",
@@ -167,13 +174,16 @@ _ADVANCE_LAWS = {
 
 
 class Standing(Enum):
-    """What an intake stands on: ``STRUCTURAL``, read from the RTL (exact or bounded, cited
-    by file and line); ``MEASURED``, for an HLS kernel, from recorded traces, with their
-    conditions: a form fitted to them is stated, and where it is used beyond them, the
-    source says so (CONTRACT.md § 5)."""
+    """What a statement (an intake, an initiation interval) stands on: ``STRUCTURAL``, read
+    from the RTL (exact or bounded, cited by file and line); ``MEASURED``, for an HLS
+    kernel, from recorded traces, with their conditions: a form fitted to them is stated,
+    and where it is used beyond them, the source says so (CONTRACT.md § 5); ``ASSUMED``, an
+    admission assumption, named, with what it rests on and no measurement behind it (an HLS
+    pragma's requested initiation interval)."""
 
     STRUCTURAL = "structural"
     MEASURED = "measured"
+    ASSUMED = "assumed"
 
 
 @dataclass(frozen=True)
@@ -244,6 +254,71 @@ class Intake:
 INTAKE_UNSTATED = "intake-unstated"
 """The answer of a kernel that states no intake (CONTRACT.md § 5): named, never zero, and
 no refusal of its design point, since no rule reads intake."""
+
+
+# -- the initiation interval (L6) ---------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Interval:
+    """A kernel's initiation interval (L6): the clock cycles an iteration takes when nothing
+    blocks it (a stage's: a beat a side), at least 1. L6's is 1 (``RATE_INTERVAL``: no
+    ``standing``, no ``source``, the law's); a kernel whose hardware differs, or that rests
+    its 1 on what its RTL does not show (an HLS kernel's requested pipeline), states its
+    own with its ``standing`` and its ``source``. A kernel with a module states it; a
+    composite has none, having no schedule (``finn.kernels.base.Kernel.interval``)."""
+
+    cycles: int = 1
+    standing: Standing | None = None
+    source: str = ""
+
+    def __post_init__(self) -> None:
+        if type(self.cycles) is not int or self.cycles < 1:
+            raise ValueError(f"an interval is a positive count of cycles, not {self.cycles!r}")
+        if self.standing is None:
+            if self.cycles != 1 or self.source:
+                raise ValueError(
+                    "an interval without a standing is the law's (L6: 1); a kernel stating "
+                    "another states its standing and source"
+                )
+        elif not isinstance(self.standing, Standing) or not self.source:
+            raise ValueError("a stated interval has a Standing and states where it is read")
+
+    def __str__(self) -> str:
+        if self.standing is None:
+            return f"{self.cycles} (L6)"
+        return f"{self.cycles}, {self.standing.value}: {self.source}"
+
+
+RATE_INTERVAL = Interval()
+"""L6's interval: an iteration a cycle, the law's."""
+
+
+def in_cycles(iterations: int, interval: Interval) -> int:
+    """The clock cycles ``iterations`` take, from the first's start, at ``interval`` (L6):
+    an interval's cycles each. The one conversion from a kernel's iterations (a stage's
+    beats) to cycles: a kernel's cycles a frame (``Kernel.frame_cycles``) and FIFO sizing's
+    beat times (``TimedPace``) both read it."""
+    return iterations * interval.cycles
+
+
+@dataclass(frozen=True)
+class TimedPace:
+    """A scheduled port's pace (``finn.dataflow.schedule.Pace``, in iterations: THEORY says
+    nothing about time) at its kernel's interval: its beat ``times`` and its ``span`` in
+    clock cycles (``in_cycles``). The port carries both (``StreamPort.pace``,
+    ``StreamPort.interval``); FIFO sizing reads this."""
+
+    pace: Pace
+    interval: Interval
+
+    @property
+    def times(self) -> tuple[int, ...]:
+        return tuple(in_cycles(time, self.interval) for time in self.pace.times)
+
+    @property
+    def span(self) -> int:
+        return in_cycles(self.pace.span, self.interval)
 
 
 # -- the transports' pin defaults ---------------------------------------------------------
@@ -390,6 +465,7 @@ __all__ = [
     "IDLE_LEVEL",
     "INTAKE_UNSTATED",
     "Intake",
+    "Interval",
     "LAWS",
     "Law",
     "MARKERS",
@@ -398,10 +474,13 @@ __all__ = [
     "Native",
     "PortIntake",
     "RATE",
+    "RATE_INTERVAL",
     "RESET_LAW",
     "Standing",
+    "TimedPace",
     "TransportKind",
     "axis_carrier",
     "axis_pin",
     "doubled",
+    "in_cycles",
 ]

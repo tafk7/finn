@@ -80,6 +80,7 @@ def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_th
     assert [
         item.key for item in inspection.members(point) if item.kind == "view" and item.scope == ""
     ] == [
+        "assumed",
         "buffering",
         "bus_control",
         # What its module and its resources read, and nothing in its space.

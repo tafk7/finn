@@ -71,10 +71,10 @@ from finn.core.space import (
     reject,
 )
 from finn.core.space.declarations import View
-from finn.dataflow.schedule import Pace
 from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.artifacts.module import Composed as Module
+from finn.kernels.laws import TimedPace
 from finn.kernels.artifacts.module import Fragment, ProducerIdentity
 from finn.kernels.artifacts.top import compose as top
 from finn.kernels.base import Kernel, PortPins, merged
@@ -602,19 +602,19 @@ class Partition:
         """The ports beside channel ``name`` (each kernel's port's ``stream_pins`` view,
         labelled below its member's node): the producing kernel's and the consuming kernel's,
         by the side each is declared on; a frozen neighbour's, outside a slice, as given at
-        its stored choices (``frozen``); and each one's pace (its ``pace``, a scheduled
-        port's).
+        its stored choices (``frozen``); and each one's pace at its kernel's interval (its
+        ``timed_pace``, a scheduled port's).
         FIFO sizing reads their paces (``finn.kernels.fifo_sizing``), and the netlist its
         hops to them (``hops``)."""
         found: dict[str, PortPins] = {}
-        paces: dict[str, Pace] = {}
+        paces: dict[str, TimedPace] = {}
         frozen = self._frozen.get(name, Neighbours())
         for side, declared in zip(("producer", "consumer"), self._sides[name], strict=True):
             if isinstance(declared, Side) and declared.kind is SideKind.NEIGHBOUR:
                 given: PortPins | None = getattr(frozen, side)
                 if given is not None:
                     found[side] = given
-                pace: Pace | None = getattr(frozen, f"{side}_pace")
+                pace: TimedPace | None = getattr(frozen, f"{side}_pace")
                 if pace is not None:
                     paces[side] = pace
                 continue
@@ -626,8 +626,8 @@ class Partition:
             if isinstance(answer, Available) and isinstance(answer.value, PortPins):
                 exposed = exposed_pins(point, declared.port, answer.value)
                 found[side] = exposed.under(self.node(declared.member))
-            paced = point.query(port.pace)
-            if isinstance(paced, Available) and isinstance(paced.value, Pace):
+            paced = point.query(port.timed_pace)
+            if isinstance(paced, Available) and isinstance(paced.value, TimedPace):
                 paces[side] = paced.value
         return Neighbours(
             found.get("producer"),

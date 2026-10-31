@@ -60,7 +60,7 @@ from finn.core.space._nodes import (
     space_members,
     unwrap,
 )
-from finn.core.space.declarations import Declaration, Derived, unmet_required
+from finn.core.space.declarations import Declaration, Derived, View, unmet_required
 from finn.dataflow.schedule import (
     Access,
     Affine,
@@ -76,7 +76,15 @@ from finn.kernels.artifacts.abi import Clocking, Direction, Pin
 from finn.kernels.artifacts.contributions import Contribution, GeneratedData
 from finn.kernels.artifacts.module import BusExport, Fragment, Held, Link, merge
 from finn.kernels.control import Control, ControlModel, control_models, presented
-from finn.kernels.laws import AXIS_CLOCKING, INTAKE_UNSTATED, Intake
+from finn.kernels.laws import (
+    AXIS_CLOCKING,
+    INTAKE_UNSTATED,
+    RATE_INTERVAL,
+    Intake,
+    Interval,
+    Standing,
+    in_cycles,
+)
 from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
 from finn.kernels.transport import StreamPins
 from finn.kernels.utilization import total
@@ -131,6 +139,28 @@ def merged(
 def _declared(cls: type[Kernel], name: str) -> bool:
     """Whether a class from ``cls`` down to, not including, ``Kernel`` declares ``name``."""
     return any(name in vars(base) for base in cls.__mro__[: cls.__mro__.index(Kernel)])
+
+
+def _refuse_restated_cycles(cls: type[Kernel]) -> None:
+    """Refuse a kernel with a module that restates ``frame_cycles`` (``kernel-cycles-
+    restated``): the base derives them by the rate law from its ports and its
+    ``interval``, which it states where its hardware differs. A restatement as the base's
+    own (``frame_cycles = view(Kernel._frame_cycles)``) changes nothing and stays, so that
+    a channel counts its kind (MemStream's, ``finn.kernels.channels.Channel``), until the
+    channel counts its members' cycles otherwise."""
+    for base in cls.__mro__[: cls.__mro__.index(Kernel)]:
+        item = vars(base).get("frame_cycles")
+        if item is None or (isinstance(item, View) and item.function is Kernel._frame_cycles):
+            continue
+        where = f"{cls.__qualname__}.frame_cycles"
+        raise DefinitionError.broken(
+            "kernel-cycles-restated",
+            "Kernel",
+            f"{where}: a kernel with a module states no cycles of its own: the base derives "
+            "them by the rate law (L6) from its ports and its interval; state its interval "
+            "where its hardware differs",
+            declaration=where,
+        )
 
 
 def _members(cls: type[Kernel]) -> dict[str, object]:
@@ -214,9 +244,12 @@ def _is_stream_port(item: object) -> bool:
 
 def _supply_ports(cls: type[Kernel]) -> None:
     """Supply each stream port declared in ``cls``'s own body with what is the kernel's,
-    where the port does not state it: its ``label``, its name in the kernel, and its
+    where the port does not state it: its ``label``, its name in the kernel, its
     ``clocking``, the kernel's clock domain (``Kernel.port_clocking``; L8: a port's clock is
-    its kernel's). A port declared in a Group states both."""
+    its kernel's), and its ``interval``, the kernel's (``Kernel.interval``, L6), which it
+    carries with its pace. A port declared in a Group states its label and clocking; only a
+    kernel with no module declares one (``module-part-nested``), and such a kernel has no
+    interval, so the port keeps L6's."""
     from finn.kernels.port_model import StreamPort  # noqa: PLC0415
 
     for name, value in vars(cls).items():
@@ -227,6 +260,8 @@ def _supply_ports(cls: type[Kernel]) -> None:
             assign(value, "label", name)
         if "clocking" not in record.settings:
             assign(value, "clocking", Kernel.port_clocking)
+        if "interval" not in record.settings:
+            assign(value, "interval", Kernel.interval)
 
 
 # -- its stream ports' declarations ---------------------------------------------------------
@@ -880,6 +915,7 @@ class Kernel(Space):
                 declaration=cls.__qualname__,
             )
         if specs:
+            _refuse_restated_cycles(cls)
             pins, holds = _module_parts(cls)
             _install(cls, _PINS, _pins_from, pins)
             _install(cls, _HELD, _held_from, holds)
@@ -971,6 +1007,19 @@ class Kernel(Space):
         and moves its beats at its pace (§ 4). A kernel with scheduled ports states it, over
         its ``extents`` (``bound_schedule``); one with none has none."""
         return Inapplicable()
+
+    @derived
+    def interval(self) -> Interval | Inapplicable:
+        """Its initiation interval (L6, ``finn.kernels.laws.Interval``): the cycles an
+        iteration takes when nothing blocks it (a stage's: a beat a side). A kernel with a
+        module states it: L6's 1 here (``RATE_INTERVAL``), its own, with its standing and
+        source, where its hardware differs or its 1 rests on what its RTL does not show
+        (Pool's, assumed). A kernel with children has none: it has no schedule; each of its
+        members' ports carries its own kernel's (``StreamPort.interval``), and its cycles a
+        frame are its members' (``frame_cycles``)."""
+        if type(self).module_spec is None:
+            return Inapplicable()
+        return RATE_INTERVAL
 
     # -- its intake ------------------------------------------------------------------------
 
@@ -1170,39 +1219,56 @@ class Kernel(Space):
     def frame_cycles(self) -> int | Rejected:
         """The clock cycles a frame takes through it, at full rate: characterization,
         derived by the rate law (CONTRACT.md L6). A kernel with a module advances one
-        iteration a cycle when nothing blocks it: its cycles a frame are its schedule's
-        iterations (each of its scheduled ports' pace's span), or, a kernel with no
-        schedule (a stage, a memory), advancing one beat a side a cycle, the most beats a
-        frame any of its placed ports carries. A kernel with children takes the most any
-        member takes, a member counting none (inapplicable) left out. A kernel states
-        none of its own; one whose hardware stalls internally would state its exception."""
+        iteration an ``interval`` when nothing blocks it: its cycles a frame are its
+        schedule's iterations (each of its scheduled ports' pace's span), or, a kernel with
+        no schedule (a stage, a memory), advancing one beat a side an interval, the most
+        beats a frame any of its placed ports carries, times its interval (``in_cycles``,
+        the one conversion, which FIFO sizing reads too). A kernel with children takes the
+        most any member takes, a member counting none (inapplicable) left out. A kernel with
+        a module never restates it (``kernel-cycles-restated``, when its class is made): it
+        states its ``interval`` where its hardware differs."""
         return self._frame_cycles()
+
+    @view
+    def assumed(self) -> tuple[str, ...]:
+        """What its cycles a frame rest on that is assumed, not read or measured: its own
+        ``interval`` where it stands assumed (``Standing.ASSUMED``, Pool's), and each of its
+        members', below the member (``inner: interval 1, assumed: ...``). What a reader of
+        its cycles reports beside them (``finn.kernels.explore.Cost.assumed``)."""
+        own: tuple[str, ...] = ()
+        if type(self).module_spec is not None:
+            interval: Interval = self.interval
+            if interval.standing is Standing.ASSUMED:
+                own = (f"interval {interval}",)
+        below = (f"{item.node}: {each}" for item in self.member_assumed for each in item.value)
+        return (*own, *below)
 
     def _frame_cycles(self) -> int | Rejected:
         """``frame_cycles`` (above). A class restating ``frame_cycles`` as the base's, to be
         counted by its own kind (a channel's members, ``finn.kernels.channels.Channel``),
         calls it."""
         if type(self).module_spec is not None:
-            return self._rate_cycles()
+            return self._rate_frame_cycles()
         found = [item.value for item in self.member_frame_cycles]
         if found:
             return max(found)
         return reject("kernel-cycles", f"no member of {type(self).__qualname__} states cycles")
 
-    def _rate_cycles(self) -> int | Rejected:
+    def _rate_frame_cycles(self) -> int | Rejected:
         """A kernel with a module's cycles a frame by the rate law (``frame_cycles``): its
         schedule's iterations where it states a schedule, else its placed ports' most beats
-        a frame, each port read in its declaration order (``StreamPort.frame_beats``);
-        refused where it places no port."""
+        a frame, each port read in its declaration order (``StreamPort.frame_beats``), at
+        its ``interval``; refused where it places no port."""
+        interval: Interval = self.interval
         if _declared(type(self), "schedule"):
             schedule: Schedule = self.schedule
-            return schedule.iterations
+            return in_cycles(schedule.iterations, interval)
         beats = [each for each in self._module_beats_0() if each is not None]
         if not beats:
             return reject(
                 "kernel-cycles", f"no port of {type(self).__qualname__} carries a stream's beats"
             )
-        return max(beats)
+        return in_cycles(max(beats), interval)
 
     # -- what it reaches of its members: their answers, read by its views, and their intake,
     # read by its own (a derived value, contract) ------------------------------------------
@@ -1213,6 +1279,7 @@ class Kernel(Space):
     member_buffering = Members(buffering)
     member_resources = Members(resources)
     member_frame_cycles = Members(frame_cycles)
+    member_assumed = Members(assumed)
     member_intake = Members(intake)
 
 

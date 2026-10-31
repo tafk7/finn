@@ -274,7 +274,9 @@ class Cost:
     where known; for a member whose cycles are not known yet, the open Decisions they
     wait on (``waiting``, by key), or why they are refused, its findings; for a member
     that states no resources, why (``unstated``), its findings (an open Decision's
-    ``decision-unassigned`` where it waits on one)."""
+    ``decision-unassigned`` where it waits on one); and for a member whose cycles rest on
+    an assumption (an interval at standing assumed, Pool's), what it assumes
+    (``assumed``: ``Kernel.assumed``)."""
 
     cycles: Mapping[str, int]
     buffering: Mapping[str, int]
@@ -282,6 +284,7 @@ class Cost:
     refused: Mapping[str, tuple[Finding, ...]]
     resources: Mapping[str, Resources]
     unstated: Mapping[str, tuple[Finding, ...]]
+    assumed: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
     @property
     def used(self) -> Resources | None:
@@ -463,7 +466,8 @@ class Seam(search.Seam):
 
     def cost(self, network: KernelComposition, members: Iterable[str] | None = None) -> Cost:
         """Each member's cycles a frame, buffering and resources (``Kernel.frame_cycles``,
-        ``Kernel.buffering``, ``Kernel.resources``; only ``members``' when named),
+        ``Kernel.buffering``, ``Kernel.resources``; only ``members``' when named), and what
+        its cycles assume (``Kernel.assumed``, where known and not empty),
         one member at a time, so a member that waits
         hides no other."""
         cycles: dict[str, int] = {}
@@ -472,6 +476,7 @@ class Seam(search.Seam):
         refused: dict[str, tuple[Finding, ...]] = {}
         resources: dict[str, Resources] = {}
         unstated: dict[str, tuple[Finding, ...]] = {}
+        assumed: dict[str, tuple[str, ...]] = {}
         for name in network.members if members is None else members:
             held = network.query(name, Kernel.buffering)
             if isinstance(held, Available):
@@ -484,11 +489,14 @@ class Seam(search.Seam):
             answer = network.query(name, Kernel.frame_cycles)
             if isinstance(answer, Available):
                 cycles[name] = answer.value
+                rests = network.query(name, Kernel.assumed)
+                if isinstance(rests, Available) and rests.value:
+                    assumed[name] = rests.value
             elif isinstance(answer, Unresolved):
                 waiting[name] = network.waits(name, answer)
             else:
                 refused[name] = _findings_of(answer)
-        return Cost(cycles, buffering, waiting, refused, resources, unstated)
+        return Cost(cycles, buffering, waiting, refused, resources, unstated, assumed)
 
     def resources(self, network: KernelComposition) -> Stated | tuple[Finding, ...]:
         """What the network uses of the device as far as it is stated (``Stated``): its

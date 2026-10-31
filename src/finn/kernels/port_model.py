@@ -41,7 +41,7 @@ from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.abi import Clocking, Direction, Pin
 from finn.kernels.artifacts.module import Held
 from finn.kernels.base import PortPins
-from finn.kernels.laws import Advance, TransportKind
+from finn.kernels.laws import RATE_INTERVAL, Advance, Interval, TimedPace, TransportKind
 from finn.kernels.port import (
     LoopEnds,
     PhysicalPort,
@@ -69,11 +69,12 @@ class StreamPort(Space):
     and the elements an input admits (``admits``); its ``transport`` kind
     (``finn.kernels.laws``: ``AXIS``, ``NATIVE``, or the names its RTL states,
     ``Axis(bus=...)``, ``Native(prefix=...)``), never its pins: they, its idle holds and its
-    packing follow from the library. ``label`` is the port's name in its kernel and
-    ``clocking`` its kernel's clock domain (L8: the kernel's, never the port's): a kernel
-    supplies both for a port declared in its own body that does not state them
-    (``finn.kernels.base.Kernel``). Its ``transport`` has no default: a native port taken
-    for AXIS would be a bus the RTL does not have.
+    packing follow from the library. ``label`` is the port's name in its kernel,
+    ``clocking`` its kernel's clock domain (L8: the kernel's, never the port's) and
+    ``interval`` its kernel's initiation interval (L6, ``finn.kernels.laws.Interval``), which
+    it carries with its pace: a kernel supplies all three for a port declared in its own
+    body that does not state them (``finn.kernels.base.Kernel``). Its ``transport`` has no
+    default: a native port taken for AXIS would be a bus the RTL does not have.
 
     Its presentation, exactly one of: its kernel's ``schedule`` projected through its
     ``index`` (``lanes``, ``reduces``, ``holds``, ``closes``, ``reshaped``), or a given
@@ -85,9 +86,10 @@ class StreamPort(Space):
     Its relation, with a given sequence: an input selecting another port's beats
     (``governs``), an output of stored values (``stored``); its advance rule follows
     (``advance``). Its readouts: ``placed``, ``element``, ``stream``, ``advance``, ``pace``,
-    ``width``, ``side``, ``binds`` and ``access`` (an input with an index reads its tensor
-    to bind its kernel's extents), derived; ``stream_pins``, a view. A placed port's
-    presentation is accepted and carried, or its design point is refused (``presented``).
+    ``timed_pace``, ``width``, ``side``, ``binds`` and ``access`` (an input with an index
+    reads its tensor to bind its kernel's extents), derived; ``stream_pins``, a view. A
+    placed port's presentation is accepted and carried, or its design point is refused
+    (``presented``).
     """
 
     # -- its header: what a module header states of the port ----------------------------
@@ -98,6 +100,7 @@ class StreamPort(Space):
     transport: TransportKind = Param()
     label: str = Param()
     clocking: Clocking = Param()
+    interval: Interval = Param(default=RATE_INTERVAL)
 
     # -- its presentation: exactly one of (a) and (b), checked when its kernel's class is made
     # (a) a projection of its kernel's schedule
@@ -164,6 +167,16 @@ class StreamPort(Space):
         if schedule is None:
             return Inapplicable()
         return Pace(schedule, self.reduces, self.holds)
+
+    @derived
+    def timed_pace(self) -> TimedPace | Inapplicable:
+        """Its pace in clock cycles: its ``pace`` at its kernel's ``interval``
+        (``finn.kernels.laws.TimedPace``, by the one conversion, ``in_cycles``), a scheduled
+        port's only. Read through a node alias (``x = compute.x``), it is its own kernel's,
+        however deep: what FIFO sizing reads of the port beside a channel."""
+        if not self.placed or self.schedule is None:
+            return Inapplicable()
+        return TimedPace(self.pace, self.interval)
 
     @derived
     def stream(self) -> Stream | Rejected | Inapplicable:

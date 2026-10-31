@@ -107,7 +107,6 @@ from finn.core.space import (
     view,
 )
 from finn.dataflow.datatypes import QONNXDataType
-from finn.dataflow.schedule import Pace
 from finn.dataflow.steps import Steps, Unrealizable
 from finn.dataflow.steps import steps as between
 from finn.dataflow.streams import Stream, Streams, misfit
@@ -142,7 +141,7 @@ from finn.kernels.base import (
 )
 from finn.kernels.control import presented
 from finn.kernels.fifo import FifoKernel
-from finn.kernels.laws import AXIS_CLOCKING
+from finn.kernels.laws import AXIS_CLOCKING, TimedPace
 from finn.kernels.library import leaf_at_root
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.movers import IodmaMover, MoverContract, MoverOffer
@@ -230,15 +229,16 @@ class Neighbours:
     stream pins view, labelled below its member's node: ``matmul.x``; a frozen
     neighbour's, outside a slice, read at its stored choices): the producing kernel's and
     the consuming kernel's, each None where that side is the channel's own, its source (a
-    known value) or its boundary; and each port's pace (its ``pace``, read where it is
-    read), None where that port is no scheduled port's or the side is the channel's own.
+    known value) or its boundary; and each port's pace in cycles (its ``timed_pace``: its
+    ``pace`` at its own kernel's interval, read where it is read), None where that port is
+    no scheduled port's or the side is the channel's own.
     Its network wires the hops to them (``outer_hops``); FIFO sizing reads the paces
     (``finn.kernels.fifo_sizing``)."""
 
     producer: PortPins | None = None
     consumer: PortPins | None = None
-    producer_pace: Pace | None = None
-    consumer_pace: Pace | None = None
+    producer_pace: TimedPace | None = None
+    consumer_pace: TimedPace | None = None
 
 
 @dataclass(frozen=True)

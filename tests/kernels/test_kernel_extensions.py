@@ -64,6 +64,7 @@ def test_kernel_identity_is_validated_at_class_creation() -> None:
     # The base's views; a kernel that binds no module and places none has no netlist.
     empty = design_space(Empty())
     assert views(empty) == [
+        "assumed",
         "buffering",
         "bus_control",
         "frame_cycles",

@@ -118,11 +118,11 @@ from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.search import Key, dotted
 from finn.core.space import Available, Rejected, Space, Unresolved, inspection
 from finn.custom_op.kernels.base import KernelOp, kernel_op, typed
-from finn.dataflow.schedule import Pace
 from finn.dataflow.streams import Stream
 from finn.kernels.artifacts.module import ProducerIdentity
 from finn.kernels.base import PortPins
 from finn.kernels.channels import Channel, Neighbours
+from finn.kernels.laws import TimedPace
 from finn.kernels.composer import (
     ChannelDeclaration,
     PartitionDeclaration,
@@ -293,14 +293,14 @@ def _beyond(
 
 def _neighbour(
     model: ModelWrapper, tensor: str, side: str, node: NodeProto
-) -> tuple[Side, PortPins | None, Pace | None]:
+) -> tuple[Side, PortPins | None, TimedPace | None]:
     """The side a frozen neighbour, KernelOp ``node`` beyond the selection on ``side`` of
     ``tensor``, gives the edge channel, as a fact: its port's ``side`` at its stored
     choices (``KernelOp.point``; its facts alone, where it stores none), as a frozen
     neighbour's (``Side.neighbour``: an upstream one's stream, label and word width, a
     downstream one's stream and label), its label below the node's name; that port's
-    stream pins there (``stream_pins``), which its hop is wired to; and its pace there
-    (``pace``, a scheduled port's), which sizing reads. Only an
+    stream pins there (``stream_pins``), which its hop is wired to; and its pace there at
+    its kernel's interval (``timed_pace``, a scheduled port's), which sizing reads. Only an
     accepted value is a fact: refused (``neighbour-unaccepted``, naming the neighbour, its
     port and why) where its stored choices are refused, its kernel is refused, or its side
     is not known there (it waits on an open choice, or is refused)."""
@@ -349,12 +349,12 @@ def _neighbour(
     given = pins.value if isinstance(pins, Available) else None
     if isinstance(given, PortPins):
         given = exposed_pins(point, named, given)
-    paced = point.query(declared.pace)
+    paced = point.query(declared.timed_pace)
     pace = paced.value if isinstance(paced, Available) else None
     return (
         stated.under(node.name),
         given.under(node.name) if isinstance(given, PortPins) else None,
-        pace if isinstance(pace, Pace) else None,
+        pace if isinstance(pace, TimedPace) else None,
     )
 
 

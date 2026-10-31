@@ -417,12 +417,11 @@ class MemStreamKernel(Kernel):
         """Its module reads its contents from ``init_file``."""
         return (self.init_file,)
 
-    @view
-    def frame_cycles(self) -> int | Rejected:
-        """The base's, by the rate law (``Kernel.frame_cycles``: the most beats a frame its placed
-        ports carry), declared here so that its channel counts it by its kind
-        (``finn.kernels.channels.Channel.source_cycles``)."""
-        return self._frame_cycles()
+    # Its cycles a frame are the base's, by the rate law (``Kernel.frame_cycles``: the most
+    # beats a frame its placed ports carry, at its interval), restated as the base's own so
+    # that its channel counts it by its kind (``finn.kernels.channels.Channel.source_cycles``):
+    # the one restatement a kernel with a module keeps (``kernel-cycles-restated``).
+    frame_cycles = view(Kernel._frame_cycles)
 
 
 __all__ = ["MemStreamKernel", "memstream_resources"]
