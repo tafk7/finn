@@ -56,8 +56,8 @@ budget check and resources.
 A channel whose tensor has a known value (``contents``) places its ``source`` (a
 memory, ``MemStreamKernel``) as its producer (its producer side the source's,
 ``channel-users``), storing one one_pass in the order its consumer reads it; with several
-sets, the source's set port is the channel's port (``set``, served from its source,
-``finn.kernels.port_model.served``), which the index tensor's channel consumes.
+sets, the source's set port, which the channel exposes as its own (``set = source.set``, a
+node alias), is the port the index tensor's channel consumes.
 
 The source and the output adapter are placed where their condition holds, not chosen,
 and each keeps the label it is placed at (``SOURCE_LABEL``, ``OUTPUT_ADAPTER_LABEL``),
@@ -147,7 +147,6 @@ from finn.kernels.library import leaf_at_root
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.movers import IodmaMover, MoverContract, MoverOffer
 from finn.kernels.policies import Alone, FirstValid, Policy, Required, defaulted, stated
-from finn.kernels.port_model import served
 from finn.kernels.sides import BUILD, ROW_MAJOR, Outside, Side, SideKind, beat_times
 from finn.kernels.transport import (
     AxisBeat,
@@ -267,17 +266,17 @@ and the stream pins it presents."""
 
 
 def _kernel_of(port: PortPins, owner: str) -> str | Rejected:
-    """The node of the kernel whose port ``port`` is, beside the channel: the node above
-    its label (``matmul.compute.packed.x``, at any depth below the network:
-    ``^matmul.compute.packed``). Refused as ``channel-port``, owned by ``owner``."""
-    kernel = port.label.rpartition(".")[0]
-    if not kernel:
+    """The node of the leaf whose pins port ``port``'s are, beside the channel: its
+    instance (``PortPins.instance``, the leaf an exposed port is on: ``matmul.compute.packed``
+    for ``matmul.x``, ``^matmul.compute.packed``), never parsed from its label. Refused as
+    ``channel-port``, owned by ``owner``."""
+    if not port.instance:
         return reject(
             "channel-port",
             f"{port.label} presents stream pins, but is no kernel's port",
             owner=owner,
         )
-    return "^" + kernel
+    return "^" + port.instance
 
 
 def _own_source(channel: Channel) -> _End:
@@ -567,19 +566,12 @@ class Channel(Kernel):
             return Inapplicable()
         return SOURCE_LABEL
 
-    # With several sets, its source's set port, served as a port of the channel labelled
-    # below the source's label (``source.memstream.set``): the index tensor's channel's
+    # With several sets, its source's set port, which it exposes as its own (its pins on the
+    # source, where its netlist places it, ``SOURCE_LABEL``): the index tensor's channel's
     # consumer. A channel without a known value has no source, so its set port does not
-    # apply: nothing reads the indices.
-    set = served(source, "set", label=SOURCE_LABEL)
-
-    @derived
-    def takes_doubled_clock(self) -> bool:
-        """Whether it takes the doubled clock: its source's (a pumped memory), where it
-        places one; without a known value, no source, so not."""
-        if not self.valued:
-            return False
-        return bool(self.source.takes_doubled_clock)
+    # apply: nothing reads the indices. Whether it takes the doubled clock is the base's, from
+    # its source where it places one.
+    set = source.set
 
     @derived
     def sides(self) -> ChannelSides | Rejected:
@@ -861,6 +853,10 @@ class Channel(Kernel):
 
     # -- its answers: the base's, with its own hops, and none of a channel of wires' cycles --
 
+    # Where its netlist places its source and its output adapter (``_PLACED``): the instance
+    # its source's set port, which it exposes, is on.
+    placed_at = MappingProxyType(_PLACED)
+
     @view
     def netlist(self) -> Fragment | Rejected:
         """Its members' netlists under their nodes, in the order the stream runs through
@@ -896,11 +892,10 @@ class Channel(Kernel):
             # A hop that does not connect (another element, say) is refused by the
             # channel's constraints; its wires do not exist.
             return reject("channel-link", str(error))
-        parts = [
-            (_PLACED.get(str(item.node), str(item.node)), item.value) for item in self.netlists
-        ]
+        placed = type(self).placed_at
+        parts = [(placed.get(str(item.node), str(item.node)), item.value) for item in self.netlists]
         buses = presented(
-            (_PLACED.get(str(item.node), str(item.node)), item.value) for item in self.controls
+            (placed.get(str(item.node), str(item.node)), item.value) for item in self.controls
         )
         if isinstance(buses, Rejected):
             return buses

@@ -34,6 +34,7 @@ from finn.core.space import (
     Space,
     derived,
     design_space,
+    inspection,
     reject,
     view,
 )
@@ -56,8 +57,8 @@ from finn.kernels.control import Control, ControlModel, held_bus
 from finn.kernels.laws import NATIVE_CLOCKING, Axis
 from finn.kernels.library import ModuleSpec, library_module
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.port import port_side
-from finn.kernels.port_model import OtherPins, StreamPort, served
+from finn.kernels.port import exposed_pins, exposed_side, stream_port
+from finn.kernels.port_model import OtherPins, StreamPort
 from finn.kernels.sides import Side
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import Resources
@@ -385,17 +386,20 @@ def test_a_kernel_with_children_presents_a_childs_port_as_its_own() -> None:
     class Presenting(Kernel):
         id = "test.presenting"
         kernel = Probe(tensor=TENSOR)
-        x = served(kernel, "x")
+        x = kernel.x
 
     point = design_space(Presenting())
-    assert point.x_stream_pins.label == "kernel.x"
-    assert point.x_stream_pins.pins == point.kernel.x.stream_pins.pins
-    assert point.x_side.stream == point.kernel.x.stream
+    # One port, its child's, read by two names; presented under the alias's, on the child.
+    assert inspection.path(point.x) == "kernel.x"
+    exposed = exposed_pins(point, "x", point.x.stream_pins)
+    assert (exposed.label, exposed.instance) == ("x", "kernel")
+    assert exposed.pins == point.kernel.x.stream_pins.pins
+    assert exposed_side(Presenting, "x", point.x.side).label == "x"
 
     class Unserved(Kernel):
         id = "test.unserved"
         kernel = Probe(tensor=TENSOR)
 
-    # A child's port is its parent's only where the parent serves it.
+    # A child's port is its parent's only where the parent exposes it.
     with pytest.raises(KeyError):
-        port_side(Unserved, "y")
+        stream_port(Unserved, "y")

@@ -169,7 +169,7 @@ def test_it_refuses_two_sides_that_differ_by_more_than_their_width(
     the same element order, repetition and markers. Its RTL regroups lanes and does nothing
     else (the wire branch, at one lane count, passes each beat through), so any other pair
     is refused, and with it its parameters and netlist. A side its port cannot present is
-    refused by the port too (``presented``, R3's level 1)."""
+    refused by the port too (``presented``)."""
     kernel = _pair(arriving, leaving, shape)
     assert rejected(kernel) == {"vpc-width-only", *presented}
     netlist = kernel.query(VpcKernel.netlist)
@@ -187,8 +187,7 @@ def test_it_refuses_two_sides_that_differ_by_more_than_their_width(
             ROWS,
             set(),
         ),
-        # Its ports refuse a lane group (``presented``, R3's level 1); its association does
-        # not.
+        # Its ports refuse a lane group (``presented``); its association does not.
         (
             BeatSequence(COLUMNS),
             BeatSequence(regrouped(COLUMNS, 2)),

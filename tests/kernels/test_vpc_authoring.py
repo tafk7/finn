@@ -35,7 +35,7 @@ from finn.kernels.artifacts.module import Fragment
 from finn.kernels.base import Kernel
 from finn.kernels.laws import AXIS, AXIS_CLOCKING, Native
 from finn.kernels.library import ModuleSpec
-from finn.kernels.port import LoopEnds, port_direction, port_side, port_stream_pins
+from finn.kernels.port import LoopEnds, port_direction, stream_port
 from finn.kernels.port_model import StreamPort
 from finn.kernels.vpc import VpcKernel
 from finn.platform.capabilities import Resources
@@ -136,12 +136,14 @@ def test_actual_vpc_surfaces_are_typed_real_children_and_not_kernel_instances() 
     assert inspection.statistics(point).owning_decisions == 0
     assert port_direction(VpcKernel, "input") is Direction.IN
     assert port_direction(VpcKernel, "output") is Direction.OUT
-    assert point.query(port_side(VpcKernel, "output")) == Available(point.output.side)
-    assert point.query(port_stream_pins(VpcKernel, "output")) == Available(point.output.stream_pins)
+    assert point.query(stream_port(VpcKernel, "output").side) == Available(point.output.side)
+    assert point.query(stream_port(VpcKernel, "output").stream_pins) == Available(
+        point.output.stream_pins
+    )
     with pytest.raises(KeyError):
-        port_side(VpcKernel, "missing")
+        stream_port(VpcKernel, "missing")
     with pytest.raises(TypeError, match="node declaration"):
-        port_side(point, "input")
+        stream_port(point, "input")
 
 
 def test_actual_parent_refusal_blocks_module_body_but_not_valid_child_characterization() -> None:
@@ -217,7 +219,7 @@ def test_port_lookup_supports_discovered_group_paths_at_the_actual_node() -> Non
         group = Included()
 
     declaration = Host()
-    side = port_side(declaration, "group.port")
+    side = stream_port(declaration, "group.port").side
 
     class Envelope(Space):
         host = declaration
@@ -225,4 +227,4 @@ def test_port_lookup_supports_discovered_group_paths_at_the_actual_node() -> Non
     point = design_space(Envelope())
     assert point.query(side) == Available(point.host.group.port.side)
     with pytest.raises(KeyError):
-        port_side(Host, "group.missing")
+        stream_port(Host, "group.missing")

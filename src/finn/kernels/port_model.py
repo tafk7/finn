@@ -1,13 +1,14 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""A kernel's ports: real child Spaces, and the ports a kernel with children serves.
+"""A kernel's ports: real child Spaces, and the ports a kernel with children exposes.
 
 ``StreamPort`` is the one stream-port construct: a child Space with zero Decisions and
 intrinsic element admission at the port's real scope, presenting a given sequence or its
 kernel's schedule's projection, or idle. Folding and composition remain on the parent. A
-kernel with children presents a child's port as its own by serving it (``served``), which
-its base lowers into the members a channel reads; nothing forwards a port by hand.
+kernel with children exposes a member's port as its own by a node alias (``x = compute.x``,
+``finn.core.space``): the port stays its member's, one node read by two names, and nothing
+forwards it by hand. ``exposed_ports`` is a kernel's inventory of both.
 
 Public physical Views characterize the child's realization. Module assembly (the
 base's, ``Kernel.netlist``) calls each port's ordinary methods, ``pin_values``,
@@ -19,8 +20,7 @@ outside its ports and its control bus.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from finn.core.space import (
     Group,
@@ -87,8 +87,7 @@ class StreamPort(Space):
     (``advance``). Its readouts: ``placed``, ``element``, ``stream``, ``advance``, ``pace``,
     ``width``, ``side``, ``binds`` and ``access`` (an input with an index reads its tensor
     to bind its kernel's extents), derived; ``stream_pins``, a view. A placed port's
-    presentation is accepted and carried, or its design point is refused (``presented``,
-    R3's level 1).
+    presentation is accepted and carried, or its design point is refused (``presented``).
     """
 
     # -- its header: what a module header states of the port ----------------------------
@@ -223,14 +222,27 @@ class StreamPort(Space):
 
     @constraint
     def presented(self) -> bool | Rejected:
-        """R3's level 1 (``port-presented``): a stream port is an input or an output, and a
-        placed port's presentation is applicable, accepted and carried: its ``stream`` (its
+        """A stream port is an input or an output, its relation one its direction has, and
+        a placed port's presentation is applicable, accepted and carried: its ``stream`` (its
         schedule's projection, or its given sequence, on the physical schemas) and its
         ``width`` (its transport carries the stream) are answers, or its design point is
         refused with their refusal (a native port presenting markers its pins cannot
-        carry, ``port-markers``). An idle port presents nothing."""
-        if self.direction not in (Direction.IN, Direction.OUT):
+        carry, ``port-markers``). An idle port presents nothing. Its kernel's class refuses
+        what it sees of these in a declaration; this refuses a direction bound otherwise,
+        at the design point."""
+        direction = self.direction
+        if direction not in (Direction.IN, Direction.OUT):
             return reject("port-direction", f"{self.label}: a stream port is an input or an output")
+        if direction is Direction.OUT and self.governs is not None:
+            return reject(
+                "port-direction",
+                f"{self.label}: governs a port and is an output: a selector is an input",
+            )
+        if direction is Direction.IN and self.stored:
+            return reject(
+                "port-direction",
+                f"{self.label}: is stored and an input: stored values are an output's",
+            )
         if not self.placed:
             return True
         _ = self.stream
@@ -354,39 +366,11 @@ class OtherPins(Group):
         return False
 
 
-@dataclass(frozen=True)
-class ServedPort:
-    """A port a kernel with children presents as one of its child's stream ports (canon
-    AUTHORING's ``served``): ``child``, a child of the kernel or a selector over children,
-    and that child's port ``port``. Its stream, pins, pace, advance rule and intake are the
-    child's port's; its label is the port's below the child's case (``compute.<case>.x`` for
-    a selector's, MatMul's), or below the ``label`` the kernel states for its child
-    (``source.memstream.set``, a channel's source's).
-
-    Declared in a kernel's own body, after its child (``x = served(compute, "x")``); when
-    the kernel's class is made (``finn.kernels.base.Kernel``), it is lowered into the
-    members a channel and its sizing read of a port, ``<name>_side`` and
-    ``<name>_stream_pins``, each the child's port's labelled below it, ``<name>_pace`` and
-    ``<name>_advance``, the child's port's, and, for a selector, ``<child>_case``, its case.
-    A reader finds them by the port's name (``finn.kernels.port.port_side``,
-    ``port_stream_pins``, ``port_pace``, ``port_advance``), never by the members' names. Its
-    intake is its child's, under its name (``finn.kernels.base.Kernel.intake``)."""
-
-    child: object
-    port: str
-    label: str | None = None
-
-
-def served(child: Any, port: str, *, label: str | None = None) -> ServedPort:
-    """A port the kernel declaring it presents as ``child``'s stream port ``port``
-    (``ServedPort``)."""
-    return ServedPort(child, port, label)
-
-
 def stream_ports(space_type: type[Space]) -> dict[str, StreamPort]:
     """The stream ports ``space_type`` declares, in inherited declaration order, through
     its Groups (by dotted path, ``group.port``), each bound where it is declared. Stops at
-    child Spaces: a child's ports are not its parent's; a served port is not one."""
+    child Spaces: a child's ports are not its parent's, but where it exposes one
+    (``exposed_ports``)."""
 
     def below(
         namespace: type[Space] | type[Group], placed: Space | Group | None, prefix: str
@@ -408,10 +392,27 @@ def stream_ports(space_type: type[Space]) -> dict[str, StreamPort]:
     return below(space_type, None, "")
 
 
+def exposed_ports(space_type: type[Space]) -> dict[str, StreamPort]:
+    """The stream ports kernel class ``space_type`` presents, by the name it presents each
+    under: its own (``stream_ports``), then each node alias of a member's stream port
+    (``x = compute.x``: every node it may name a stream port), as a class reference to read
+    its readouts of (``exposed_ports(MatMulKernel)["x"].side``). The inventory a channel
+    may connect; a member's port it does not expose is no port of its."""
+    from finn.core.space._aliases import alias_table  # noqa: PLC0415 - the engine's own table
+    from finn.core.space._nodes import space_members  # noqa: PLC0415
+
+    found = stream_ports(space_type)
+    for name, entry in alias_table(cast(Any, space_type)).items():
+        if name not in space_members(space_type):
+            continue
+        if entry.ends and all(issubclass(end.space_type, StreamPort) for end in entry.ends):
+            found[name] = getattr(space_type, name)
+    return found
+
+
 __all__ = [
     "OtherPins",
-    "ServedPort",
     "StreamPort",
-    "served",
+    "exposed_ports",
     "stream_ports",
 ]

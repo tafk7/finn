@@ -453,7 +453,7 @@ def _chosen(design: Any, choices: Mapping[str, object]) -> Any:
 
 def _user(point: Any, name: str) -> str:
     """The path below the kernel of the port on channel ``name``: a member of a leaf
-    kernel (``input``), or a child's below a kernel with children (``compute.packed.x``)."""
+    kernel (``input``), or a child's a kernel with children exposes (``x``, MatMul's core's)."""
     sides = design_member(point, name).sides
     for owner in (sides.source_owner, sides.sink_owner):
         if owner is not None and owner.startswith(f"{KERNEL}."):
@@ -476,10 +476,11 @@ def _port(kernel: Any, path: str) -> Any:
             except RequestError:
                 pass
         node = getattr(node, part)
+    from finn.kernels.port import exposed_name  # noqa: PLC0415
     from finn.kernels.port_model import StreamPort  # noqa: PLC0415
 
     declaration = getattr(type(node), name)
-    if not isinstance(declaration, StreamPort):
+    if not isinstance(declaration, StreamPort) and exposed_name(type(node), name) is None:
         raise TypeError(f"{path} is not an actual stream port")
     port = getattr(node, name)
     # A scheduled port's resolved model metadata keeps its index axes; a given sequence has

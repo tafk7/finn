@@ -20,7 +20,7 @@ from finn.kernels.base import Kernel
 from finn.kernels.composer import Facts, PartitionDeclaration, Port, channel
 from finn.kernels.composer import _checked as checked
 from finn.kernels.laws import AXIS, AXIS_CLOCKING
-from finn.kernels.port import port_direction, port_side, port_stream_pins
+from finn.kernels.port import port_direction, stream_port
 from finn.kernels.port_model import StreamPort, stream_ports
 from finn.kernels.sides import Side
 
@@ -105,7 +105,7 @@ def test_discovery_lookup_and_real_source_agree_for_inherited_nested_groups(
     group = host.group.send if sending else host.group.receive
     assert discovered[key] is not None
     assert declared_path(discovered[key]) == declared_path(group.native)
-    side, contract = port_side(host, key), port_stream_pins(host, key)
+    side, contract = stream_port(host, key).side, stream_port(host, key).stream_pins
     assert reference_path(side) == reference_path(group.native.side)
     assert reference_path(contract) == reference_path(group.native.stream_pins)
     assert side == group.native.side
@@ -122,7 +122,7 @@ def test_discovery_lookup_and_real_source_agree_for_inherited_nested_groups(
         point.group.send.native.stream_pins if sending else point.group.receive.native.stream_pins
     )
     # Lookup must not borrow the root's same-spelling port.
-    assert side != port_side(host, "native")
+    assert side != stream_port(host, "native").side
 
 
 @pytest.mark.parametrize("placement", ["left", "right"])
@@ -135,13 +135,13 @@ def test_placed_node_ports_keep_the_exact_group_and_kernel_occurrence(
         right = ReplacedHost()
 
     namespace = Holder.left if placement == "left" else Holder.right
-    side = port_side(namespace, key)
+    side = stream_port(namespace, key).side
     sending = key == "group.send.native"
     group = namespace.group.send if sending else namespace.group.receive
     assert side == group.native.side
-    assert port_stream_pins(namespace, key) == group.native.stream_pins
+    assert stream_port(namespace, key).stream_pins == group.native.stream_pins
     assert reference_path(side) != reference_path(
-        port_side(Holder.right if placement == "left" else Holder.left, key)
+        stream_port(Holder.right if placement == "left" else Holder.left, key).side
     )
     tensor = OTHER if sending or placement == "right" else SMALL
     sequence = OTHER_SEQUENCE if tensor is OTHER else SMALL_SEQUENCE
@@ -222,7 +222,7 @@ def test_a_direction_bound_to_a_member_stays_unknown_even_when_configuration_res
     dotted = "group." + key
     assert port_direction(UnknownHost, dotted) is None
     assert dotted in stream_ports(UnknownHost)
-    port_side(UnknownHost, dotted)
+    stream_port(UnknownHost, dotted)
     # Static metadata inspection accepts a class, not a bound runtime instance.
     point = design_space(UnknownHost()).with_choices({UnknownHost.group.choice: Direction.OUT})
     assert port_direction(type(point), dotted) is None
@@ -240,6 +240,4 @@ def test_unknown_keys_and_real_space_crossing_remain_rejected(key: str) -> None:
     assert key not in stream_ports(Parent)
     assert port_direction(Parent, key) is None
     with pytest.raises(KeyError, match=key):
-        port_side(Parent, key)
-    with pytest.raises(KeyError, match=key):
-        port_stream_pins(Parent, key)
+        stream_port(Parent, key)

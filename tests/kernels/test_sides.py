@@ -41,6 +41,7 @@ from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.channels import Channel
 from finn.kernels.movers import IODMA_HLS, iodma_hls
+from finn.kernels.port import exposed_pins, exposed_side
 from finn.kernels.sides import (
     BUILD,
     ROW_MAJOR,
@@ -414,9 +415,12 @@ def test_a_channel_s_set_port_states_its_source_s_label_and_side() -> None:
         },
     )
     w = folded.member("w")
-    assert w.set_stream_pins.label == "source.memstream.set"
-    assert w.set_side == Side.kernel(w.source.set.stream, "source.memstream.set")
-    assert folded.member("set").consumer == w.set_side.under("w")
+    # The source's set port, which the channel exposes: under its name, on the source.
+    pins = exposed_pins(w, "set", w.set.stream_pins)
+    assert (pins.label, pins.instance) == ("set", "source.memstream")
+    side = exposed_side(Channel, "set", w.set.side)
+    assert side == Side.kernel(w.source.set.stream, "set")
+    assert folded.member("set").consumer == side.under("w")
 
 
 @pytest.mark.parametrize(

@@ -198,7 +198,7 @@ def test_extent_of_is_a_named_member() -> None:
 
 
 def test_a_port_presents_a_schedule_or_a_sequence_not_both() -> None:
-    """Refused when its kernel's class is made (``port-presentation``, R3's level 2)."""
+    """Refused when its kernel's class is made (``port-presentation``)."""
     with refused("port-presentation", error=DefinitionError, message="schedule and sequence"):
 
         class Both(Pool):

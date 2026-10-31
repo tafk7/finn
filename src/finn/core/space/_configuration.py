@@ -240,9 +240,9 @@ class _Namespace(metaclass=SpaceMeta):
         path = declared_path(self)
         if path is not None and len(path) > 1:
             # ``x = inner.leaf``: a second name for a member's node, which places nothing.
-            from ._nodes import install_alias
+            from ._nodes import install_alias, path_label
 
-            install_alias(owner, name, path, ())
+            install_alias(owner, name, path, (), path_label(self))
             return
         if path is None or len(path) != 1:
             raise DefinitionError.broken(
@@ -273,7 +273,7 @@ class _Namespace(metaclass=SpaceMeta):
 
             label = path_label(instance)
             if label is not None:
-                label = (*label, str(path[0].name))
+                label = (*label, path[0])
             return cast(Self, path_proxy(type(self), (*outer, path[0]), label))
         from .occurrence import child
 

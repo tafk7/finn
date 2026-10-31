@@ -417,7 +417,7 @@ def _hidden_needs_eight(
 ) -> Sized:
     """A double of the per-channel sizing: ``hidden`` (first's output) needs a FIFO of
     eight words, every other channel none."""
-    if channel.sides.source_owner == "first.compute.packed.y":
+    if channel.sides.source_owner == "first.y":
         return Sized(8, "least 8 words", 24, 8)
     return Sized(0, "direct absorbs it", 8, 0)
 
@@ -528,7 +528,7 @@ def test_a_style_held_as_none_is_sized_as_auto_and_left_to_its_hold(
     assert isinstance(placed, Accepted)
     explorer.held[("hidden", "transport.fifo.buffer.ram_style")] = None
     found = SizeFifos().explore(explorer, placed.network)
-    assert sized["first.compute.packed.y"] == "auto"
+    assert sized["first.y"] == "auto"
     assert set(sized.values()) == {"auto"}
     assert chosen(explorer, found)["hidden.transport.fifo.buffer.ram_style"] == "distributed"
     with refused(

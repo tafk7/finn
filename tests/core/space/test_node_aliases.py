@@ -184,6 +184,15 @@ def test_inspection_lists_the_aliases_and_a_nodes_path() -> None:
     assert [end.path for end in entry.ends] == ["compute.a.leaf", "compute.b.leaf"]
 
 
+def test_an_alias_keeps_the_names_it_was_written_with() -> None:
+    """Its steps are the owner's; the names written, read in the class body before the
+    outer class is named, are the alias's own: an alias of an alias names the first alias."""
+    assert Wrap.__dict__["x"].written == ("mm", "x")
+    assert alias_table(Wrap)["x"].steps == ("mm", "compute", "leaf")
+    assert Outer.__dict__["x"].written == ("wrap", "x")
+    assert Root.__dict__["y"].written == ("inner", "leaf")
+
+
 def test_a_parent_constraint_reads_through_an_alias() -> None:
     class Limited(Space):
         inner = Holder()

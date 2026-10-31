@@ -34,7 +34,7 @@ from finn.kernels.artifacts.abi import Direction
 from finn.kernels.base import Kernel
 from finn.kernels.configure import chosen, commit
 from finn.kernels.laws import AXIS
-from finn.kernels.port import port_direction, port_side
+from finn.kernels.port import port_direction, stream_port
 from finn.kernels.port_model import StreamPort, stream_ports
 from finn.kernels.values.domains import Integer
 
@@ -234,4 +234,4 @@ def test_port_discovery_reads_lexical_groups_without_implicit_child_lowering() -
     for hidden in ("child.inner", "choice.child.inner"):
         assert port_direction(Host, hidden) is None
         with pytest.raises(KeyError):
-            port_side(Host, hidden)
+            stream_port(Host, hidden)

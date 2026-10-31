@@ -300,12 +300,19 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
 # association (``VpcKernel.width_only``): the constraint of each output adapter's vpc the
 # trials evaluate, ``a1``'s and ``h2``'s (+2).
 # Then ports' ((508, 272), (601, 320)) and the totals ((1525, 314), (1664, 362)) became these
-# when each port's presentation became its own constraint (``StreamPort.presented``, R3's
-# level 1): a placed port's commit reads its direction and its width, its transport's word,
+# when each port's presentation became its own constraint (``StreamPort.presented``):
+# a placed port's commit reads its direction and its width, its transport's word,
 # beside its stream (+96 members, +32 constants at the baseline; +115, +40 after ``viable``).
-NONPORT_EVALUATED = ((1017, 42), (1063, 42))
-PORT_EVALUATED = ((604, 304), (716, 360))
-EVALUATED = ((1621, 346), (1779, 402))
+# Then non-ports' (1017, 42) and (1063, 42), ports' ((604, 304), (716, 360)) and the totals
+# ((1621, 346), (1779, 402)) became these when a MatMul exposed its core's ports by node alias
+# (``x = compute.x``) in place of serving them: its derived ``x_side``, ``w_side`` and
+# ``y_side`` and its lowered ``compute_case`` are gone (-16), each channel reads the port's
+# own ``side`` through the core's selector (+12); and a port's presentation checks its
+# direction, reading its ``governs`` or ``stored`` (+40 constants, one per active port; +47
+# after ``viable``).
+NONPORT_EVALUATED = ((1013, 42), (1059, 42))
+PORT_EVALUATED = ((644, 344), (763, 407))
+EVALUATED = ((1657, 386), (1822, 449))
 
 
 def _assert_evaluated(scopes: Scopes, stage: int) -> None:

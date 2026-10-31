@@ -26,6 +26,7 @@ from .declarations import (
     ChoiceMemberRef,
     Decision,
     Declaration,
+    Label,
     Param,
     PendingAnnotation,
     ValueRef,
@@ -33,6 +34,7 @@ from .declarations import (
     at,
     declared_path,
     guard,
+    label_text,
     literal,
     local_name,
     path_text,
@@ -174,7 +176,7 @@ def _declaration_object(space_type: type[_Namespace], path: tuple[Declaration, .
 def path_proxy(
     space_type: type[_Namespace],
     path: tuple[Declaration, ...],
-    label: tuple[str, ...] | None = None,
+    label: Label | None = None,
 ) -> _Namespace:
     """A child reached through a node declaration: ``house.kitchen``. ``label``: the names it
     was read through where a node alias is among them (``x``, for ``inner.leaf``), which a
@@ -185,11 +187,11 @@ def path_proxy(
     return node
 
 
-def path_label(node: object) -> tuple[str, ...] | None:
+def path_label(node: object) -> Label | None:
     """The names a declaration-mode node was read through, where a node alias is among them
     (``path_proxy``); None for a node read by its own path."""
     found = vars(node).get("_space_label") if hasattr(node, "__dict__") else None
-    return cast("tuple[str, ...] | None", found)
+    return cast("Label | None", found)
 
 
 class NodeAlias(Declaration):
@@ -200,22 +202,27 @@ class NodeAlias(Declaration):
     It places nothing and owns nothing: the node keeps its owner's keys, path, guard and
     choices, and its reads are the owner's. ``target`` is the node's path as declarations,
     the children it descends through, ending at the node or at a selector; ``below`` the
-    names read in each case of that selector (a node of each case, or a case's own alias).
-    It is resolved by declaration in the class that holds it, once
-    (``_aliases.alias_table``), and read as its node through that resolution: on the class,
-    a node to reference below (``Kind.x.side``); on a design space or a receiver, the node
-    (``point.x``), or None where a selection places nothing there."""
+    names read in each case of that selector (a node of each case, or a case's own alias);
+    ``written`` the names it was read through as written (``mm.x``, through MatMul's own
+    alias, where ``target`` is its path, ``mm.compute``). It is resolved by declaration in
+    the class that holds it, once (``_aliases.alias_table``), and read as its node through
+    that resolution: on the class, a node to reference below (``Kind.x.side``); on a design
+    space or a receiver, the node (``point.x``), or None where a selection places nothing
+    there."""
 
     _record_origin = False
 
-    def _init(self, target: tuple[Declaration, ...], below: tuple[str, ...]) -> None:
+    def _init(
+        self, target: tuple[Declaration, ...], below: tuple[str, ...], written: tuple[str, ...]
+    ) -> None:
         self.target = target
         self.below = below
+        self.written = written
 
     @property
     def spelled(self) -> str:
-        """The path it names, as written: its declarations' names, then the names below."""
-        return ".".join((*(str(record.name) for record in self.target), *self.below))
+        """The path it names, as written."""
+        return ".".join(self.written)
 
     def describe(self) -> str:
         where = f"{self.owner.__qualname__}.{self.name}" if self.owner is not None else "alias"
@@ -237,7 +244,7 @@ class NodeAlias(Declaration):
                 type(cast("_Namespace", instance)),
                 cast(str, self.name),
                 outer,
-                path_label(instance) or tuple(str(record.name) for record in outer),
+                path_label(instance) or outer,
             )
         return alias_node(cast("_Namespace", instance), cast(str, self.name))
 
@@ -261,16 +268,23 @@ def install_alias(
     name: str,
     target: tuple[Declaration, ...],
     below: tuple[str, ...],
+    label: Label | None = None,
 ) -> None:
     """``name = <a member's node>`` in the body of ``owner``: the class attribute becomes a
     ``NodeAlias``. Its path is checked as written: lexically the holding class's (its first
     declaration one of the class's own or inherited members, each next one a member of the
     class the one before places), reached through children and selectors, not a case handle;
-    its name no reserved one; unannotated (an alias is no formal)."""
+    its name no reserved one; unannotated (an alias is no formal). ``label`` is the names it
+    was read through, where another alias is on its path (``mm.x``)."""
     from .collection import RESERVED_NAMES
 
     where = f"{owner.__qualname__}.{name}"
-    spelled = ".".join((*(str(record.name) for record in target), *below))
+    written = (
+        tuple(label_text(label).split("."))
+        if label
+        else (*(str(record.name) for record in target), *below)
+    )
+    spelled = ".".join(written)
     if name in RESERVED_NAMES or name.startswith("__"):
         _refuse_alias("name-reserved", where, "reserved configuration name")
     if name in vars(owner).get("__annotations__", {}):
@@ -320,7 +334,7 @@ def install_alias(
             )
         above = record
     alias = Declaration.__new__(NodeAlias)
-    alias._init(target, below)
+    alias._init(target, below, written)
     object.__setattr__(alias, "origin", source_origin())
     type.__setattr__(owner, name, alias)
     alias.__set_name__(owner, name)
@@ -965,7 +979,7 @@ def read_below(
     names: tuple[str, ...],
     name: str,
     cases: Mapping[str, type[_Namespace]],
-    label: tuple[str, ...] | None,
+    label: Label | None,
 ) -> Any:
     """``selector.<names>.name`` in a class body: of each case that places something
     (``cases``: each class the names reach, by its case), a node (``ChoicePath``, for an
@@ -1052,7 +1066,7 @@ class ChoicePath:
         self,
         path: tuple[Declaration, ...],
         names: tuple[str, ...],
-        label: tuple[str, ...] | None = None,
+        label: Label | None = None,
     ) -> None:
         object.__setattr__(self, "_space_choice", path)
         object.__setattr__(self, "_space_names", names)
@@ -1067,7 +1081,7 @@ class ChoicePath:
         return ".".join((*(str(record.name) for record in self._space_choice), *self._space_names))
 
     def __set_name__(self, owner: type[object], name: str) -> None:
-        install_alias(owner, name, self._space_choice, self._space_names)
+        install_alias(owner, name, self._space_choice, self._space_names, self._space_label)
 
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):
@@ -1096,7 +1110,7 @@ class ChoicePath:
 
     def __repr__(self) -> str:
         label = self._space_label
-        shown = self.spelled if label is None else f"{'.'.join(label)} ({self.spelled})"
+        shown = self.spelled if label is None else f"{label_text(label)} ({self.spelled})"
         return f"<node {shown} of the selected case>"
 
 

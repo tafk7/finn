@@ -59,7 +59,7 @@ from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.laws import Axis
 from finn.kernels.library import ModuleSpec
-from finn.kernels.port_model import ServedPort, StreamPort
+from finn.kernels.port_model import StreamPort
 from finn.platform.capabilities import Resources
 
 MODEL_FIELDS = ("element", "stream", "access")
@@ -67,17 +67,11 @@ MODEL_FIELDS = ("element", "stream", "access")
 
 
 def model_port_members(space_type: type[Space]) -> Iterator[str]:
+    # A port a kernel exposes by a node alias is its member's: checked there, as its own.
     if issubclass(space_type, StreamPort):
         for name in MODEL_FIELDS:
             if hasattr(space_type, name):
                 yield name
-    elif issubclass(space_type, Kernel):
-        effective: dict[str, object] = {}
-        for base in reversed(space_type.__mro__):
-            effective.update(vars(base))
-        for name, declaration in effective.items():
-            if isinstance(declaration, ServedPort):
-                yield f"{name}_side"  # a served port's side, lowered by the base
 
 
 def kernels(scopes: Scopes) -> list[str]:
@@ -164,8 +158,8 @@ def test_stage_7s_chain_s_ports_read_only_their_own_kernels() -> None:
     model = chain_model(4)
     checked, failures = _checked(in_shell(model, model.graph.node).composed.space_type)
     assert not failures, "\n".join(failures)
-    # Each MatMul's three served streams, and its two cores' three ports each (element,
-    # stream, access where it binds); each thresholding's three ports.
+    # Each MatMul's two cores' three ports each, which it exposes (element, stream, access
+    # where it binds); each thresholding's three ports.
     assert sorted(checked) == [f"{kind}{layer}" for kind in ("mm", "mt") for layer in range(4)]
     assert all(count > 0 for count in checked.values()), checked
 

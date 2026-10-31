@@ -156,7 +156,7 @@ def test_a_set_port_that_does_not_match_the_sets_is_refused_both_ways() -> None:
             for finding in piece.result.findings
         ]
     # The set port presents the set order its kernel refuses: its presentation is refused
-    # too (R3's level 1).
+    # too.
     assert pieces == [
         ("selected", "threshold-set-channel", "several threshold sets take a set channel"),
         ("selected", "threshold-set-channel", "a single threshold set takes no set channel"),

@@ -88,7 +88,7 @@ def mover(control: int, memory: int) -> MoverContract:
 @pytest.mark.parametrize("size", [0, 1, 4])
 def test_actual_shell_counts_match_independent_arithmetic(size: int) -> None:
     names = tuple(f"k{index}" for index in range(size))
-    presented = tuple(index % 2 == 0 for index in range(size))
+    presented = tuple(("",) if index % 2 == 0 else () for index in range(size))
     memory = tuple(index + 2 for index in range(size))
     doubled = tuple(index == size - 1 for index in range(size))
     tuples = tuple((mover(index, 19), mover(2, 23)) for index in range(size))
@@ -120,9 +120,9 @@ def test_actual_shell_counts_match_independent_arithmetic(size: int) -> None:
 
 
 @pytest.mark.parametrize("budget", [None, 0, 2])
-@pytest.mark.parametrize("contributions", [(False, 0), (True, 3)])
+@pytest.mark.parametrize("contributions", [((), 0), (("",), 3)])
 def test_budget_limits_and_original_labels(
-    budget: int | None, contributions: tuple[bool, int]
+    budget: int | None, contributions: tuple[tuple[str, ...], int]
 ) -> None:
     bus, memory = contributions
     kind = shell_type(presented=("k0",), initiators=("k0",))
@@ -133,9 +133,9 @@ def test_budget_limits_and_original_labels(
         memory_ports=budget,
     )
     assert point.shell == "literal"
-    assert counts(point) == Available((int(bus), memory, False))
+    assert counts(point) == Available((len(bus), memory, False))
     for reference, amount, message in (
-        (ShellBudgets.within_control_budget, int(bus), "presents 1 and its movers 0"),
+        (ShellBudgets.within_control_budget, len(bus), "presents 1 and its movers 0"),
         (ShellBudgets.within_memory_ports, memory, "initiates 3"),
     ):
         result = cast(QueryResult[bool], point.query(reference))
@@ -153,7 +153,7 @@ def test_budget_limits_and_original_labels(
 def test_none_budgets_exit_before_open_counts() -> None:
     kind = shell_type(presented=("open",), initiators=("open",))
     host = bound_shell(
-        kind, {"open-presented": Inputs.first_bool, "open-initiators": Inputs.first_int}
+        kind, {"open-presented": Inputs.first_buses, "open-initiators": Inputs.first_int}
     )
     point = cast(Any, design_space(host())).shell_counts
     assert inspection.validity(point).status == "valid"
@@ -174,6 +174,11 @@ class Inputs(Space):
     first_bool: bool = Decision(domain=(False, True))
     later_bool: bool = Decision(domain=(False, True))
     moves: tuple[MoverContract, ...] = Param(default=())
+
+    @derived
+    def first_buses(self) -> tuple[str, ...]:
+        """A contributor's buses, its own where ``first_bool``: what it presents."""
+        return ("",) if self.first_bool else ()
 
     @derived
     def failed_int(self) -> int | Rejected:
@@ -356,8 +361,8 @@ def test_fresh_model_placements_preserve_counts_and_have_no_choices(
     left = shell_type(presented=("k",), doubled=("k",))
     right = shell_type(presented=("k",), doubled=("k",))
     assert left is not right
-    point = shell_point(left, **{"k-presented": True, "k-doubled": False})
-    other = shell_point(right, **{"k-presented": False, "k-doubled": True})
+    point = shell_point(left, **{"k-presented": ("",), "k-doubled": False})
+    other = shell_point(right, **{"k-presented": (), "k-doubled": True})
     assert counts(point) == Available((1, 0, False))
     assert counts(other) == Available((0, 0, True))
     assert counts(point) == Available((1, 0, False))

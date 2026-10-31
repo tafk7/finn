@@ -206,11 +206,11 @@ def test_each_kernel_formal_is_bound_to_a_root_param_only(cache: None) -> None:
 #: Each channel's sides' labels: a kernel's port below its member's node, the boundary's
 #: AXIS port, a source's none.
 LABELS = {
-    "x": ("s_axis_0", "first.compute.packed.x"),
-    "w1": ("", "first.compute.packed.w"),
-    "hidden": ("first.compute.packed.y", "activate.input"),
-    "levels": ("activate.output", "second.compute.packed.x"),
-    "y": ("second.compute.packed.y", "m_axis_0"),
+    "x": ("s_axis_0", "first.x"),
+    "w1": ("", "first.w"),
+    "hidden": ("first.y", "activate.input"),
+    "levels": ("activate.output", "second.x"),
+    "y": ("second.y", "m_axis_0"),
 }
 
 
@@ -226,7 +226,7 @@ def test_a_kernel_side_is_labelled_below_its_member_s_node(cache: None) -> None:
         assert all(isinstance(each, Available) for each in found), found
         assert tuple(each.value.label for each in found if isinstance(each, Available)) == labels
     side = point.hidden.query(Channel.producer)  # type: ignore[attr-defined]
-    assert isinstance(side, Available) and side.value.label == "first.compute.packed.y"
+    assert isinstance(side, Available) and side.value.label == "first.y"
     assert side.value.kind is SideKind.KERNEL
 
 
@@ -472,7 +472,7 @@ def test_a_read_no_member_states_is_refused(cache: None) -> None:
         Port("second", "z"), Side.boundary("m_axis_0"), tensor=Y_TENSOR, platform=platform
     )
     assert _refused(declared(channels_=_wired(y=no_port))) == [
-        ("channel-read", "y", "reads second, which states no z_side")
+        ("channel-read", "y", "reads second, which states no port z")
     ]
     with pytest.raises(PartitionRefused, match="ThresholdingAxiKernel takes no fact depth"):
         given = kernels()

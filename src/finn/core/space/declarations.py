@@ -277,7 +277,7 @@ class ValueDecl(ValueRef[T_co], Generic[T_co]):
         if path is not None:
             label = vars(instance).get("_space_label")
             if label is not None:
-                label = (*label, str(self.name))
+                label = (*label, self)
             return cast(T_co, MemberRef(path, self, label))
         from .occurrence import read_value
 
@@ -1074,6 +1074,16 @@ def view(function: object | None = None, /, **aliases: object) -> object:
 # -- Symbolic references ---------------------------------------------------------------
 
 
+Label = tuple["str | Declaration", ...]
+"""The names a reference was read through where a node alias is among them: each a name, or
+a declaration of the class whose body reads it, named once that class is made."""
+
+
+def label_text(label: Label) -> str:
+    """``label`` as its dotted names."""
+    return ".".join(part if isinstance(part, str) else str(part.name) for part in label)
+
+
 def path_text(path: Sequence[Declaration]) -> str:
     parts: list[str] = []
     for record in path:
@@ -1234,7 +1244,7 @@ class MemberRef(_Symbolic, ValueRef[T], Generic[T]):
         self,
         path: tuple[Declaration, ...],
         member: Declaration,
-        label: tuple[str, ...] | None = None,
+        label: Label | None = None,
     ) -> None:
         self.path, self.member = path, member
         # The names it was read through where a node alias is among them: reported beside
@@ -1244,7 +1254,7 @@ class MemberRef(_Symbolic, ValueRef[T], Generic[T]):
 
     def _describe(self) -> str:
         own = f"{path_text(self.path)}.{self.member.name}"
-        shown = own if self.label is None else f"{'.'.join(self.label)} ({own})"
+        shown = own if self.label is None else f"{label_text(self.label)} ({own})"
         return f"{shown}{at(self.origin)}"
 
     def _key(self) -> tuple[object, ...]:
@@ -1332,7 +1342,7 @@ class ChoiceMemberRef(_Symbolic, ValueRef[Any]):
         self,
         path: tuple[Declaration, ...],
         member: str,
-        label: tuple[str, ...] | None = None,
+        label: Label | None = None,
     ) -> None:
         # ``member``: a member of the selected case, or a path of names to one below it
         # (``port.side``: through the case's nodes and node aliases).
@@ -1342,7 +1352,7 @@ class ChoiceMemberRef(_Symbolic, ValueRef[Any]):
 
     def _describe(self) -> str:
         own = f"{path_text(self.path)}.{self.member}"
-        shown = own if self.label is None else f"{'.'.join(self.label)} ({own})"
+        shown = own if self.label is None else f"{label_text(self.label)} ({own})"
         return f"{shown}{at(self.origin)}"
 
     def _key(self) -> tuple[object, ...]:

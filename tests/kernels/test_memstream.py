@@ -34,6 +34,7 @@ from finn.kernels.artifacts.contributions import ContributionError, GeneratedDat
 from finn.kernels.channels import OUTPUT_ADAPTER_LABEL, SOURCE_LABEL
 from finn.kernels.library import library_module
 from finn.kernels.memstream import MemStreamKernel
+from finn.kernels.port import exposed_pins
 from finn.kernels.values.semantics import IntegerTensorValue
 
 WEIGHTS = ((-4, -3, -2, -1), (0, 1, 2, 3), (3, 2, 1, 0), (-1, -2, -3, -4))
@@ -219,7 +220,8 @@ def test_a_channel_s_placements_keep_the_labels_it_states_in_the_emitted_netlist
         "m_axis_0_tdata"
     ]
     # Its set port: labelled below it, and the index channel's hop ends at it.
-    assert w.set_stream_pins.label == f"{SOURCE_LABEL}.set"
+    pins = exposed_pins(w, "set", w.set.stream_pins)
+    assert (pins.label, pins.instance) == ("set", SOURCE_LABEL)
     assert [link.sink.data for link in links if link.sink.instance == instance] == [
         "s_axis_0_tdata"
     ]

@@ -264,7 +264,7 @@ def test_space_rejects_mistyped_values_at_binding(updates, error):
         kernel(**updates)
 
 
-# A refused schedule refuses each port's presentation too (R3's level 1, ``presented``).
+# A refused schedule refuses each port's presentation too (``presented``).
 PRESENTED = {(f"{port}.presented", "kernel-schedule") for port in ("x", "w", "y")}
 
 

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any, cast
 
 import pytest
@@ -42,16 +43,17 @@ from finn.kernels.port import (
     LoopEnds,
     PhysicalPort,
     data_width,
+    exposed_name,
+    exposed_pins,
+    exposed_side,
     held,
     pins,
-    port_advance,
     port_direction,
-    port_side,
-    port_stream_pins,
     stream_pins,
+    stream_port,
     transport,
 )
-from finn.kernels.port_model import StreamPort, served, stream_ports
+from finn.kernels.port_model import StreamPort, exposed_ports, stream_ports
 from finn.kernels.sides import Side
 from finn.kernels.values.domains import Integer
 from finn.kernels.vpc import VpcKernel
@@ -278,7 +280,7 @@ def test_native_loop_markers_and_physical_refusals_use_actual_values() -> None:
     bad = design_space(Bad())
     assert isinstance(bad.query(Bad.port.physical_pins), Rejected)
     # Its transport cannot carry its stream's marker: the port's own constraint refuses the
-    # design point (R3's level 1, ``presented``), with the carrier's refusal.
+    # design point (``presented``), with the carrier's refusal.
     validity = inspection.validity(bad)
     assert validity.status == "refused"
     assert isinstance(validity.result, Rejected)
@@ -331,7 +333,7 @@ def test_port_discovery_rebases_overrides_groups_and_stops_at_real_children() ->
     point = design_space(Child())
     assert point.query(ports["group.nested"].stream) == Available(Stream(ELEMENT, SEQUENCE))
     with pytest.raises(TypeError, match="node declaration"):
-        port_side(point, "first")
+        stream_port(point, "first")
 
 
 def test_port_children_are_not_hardware_kernels_or_member_netlists() -> None:
@@ -499,121 +501,147 @@ def test_a_port_states_its_transport() -> None:
 
 
 class Leaf(Kernel):
-    id = "test.served.leaf"
+    id = "test.exposed.leaf"
     input = StreamPort(direction=Direction.IN, transport=AXIS, tensor=TENSOR, sequence=SEQUENCE)
     output = StreamPort(transport=AXIS, tensor=TENSOR, sequence=SEQUENCE, direction=Direction.OUT)
 
 
 class OtherLeaf(Leaf):
-    id = "test.served.other_leaf"
+    id = "test.exposed.other_leaf"
 
 
-class Serving(Kernel):
-    id = "test.served"
+class Exposing(Kernel):
+    id = "test.exposed"
     core = Select(one=Leaf, other=OtherLeaf)
-    x = served(core, "input")
-    y = served(core, "output")
+    x = core.input
+    y = core.output
     kept = Leaf()
-    z = served(kept, "output", label="kept.leaf")
-    w = served(kept, "input")
+    z = kept.output
+    w = kept.input
 
 
-def test_a_kernel_serves_its_child_s_port_labelled_below_the_child() -> None:
-    """A served port's side and stream pins are its child's port's, labelled below the selected
-    case (``core.<case>.input``) or below the child, or the label the kernel states."""
-    point = design_space(Serving()).with_choices({Serving.core: "other"})
+def test_a_kernel_exposes_its_member_s_port_under_the_alias_s_name() -> None:
+    """An exposed port is its member's (one node, read by two names): its readouts are the
+    member's port's, and its kernel presents its side and stream pins under the alias's
+    name, its pins on the leaf the alias reaches (the selected case, or the child)."""
+    point = design_space(Exposing()).with_choices({Exposing.core: "other"})
+    assert list(exposed_ports(Exposing)) == ["x", "y", "z", "w"]
+    assert stream_ports(Exposing) == {}  # none of its own
+    assert inspection.path(point.x) == "core.other.input"
+    assert point.query(stream_port(Exposing, "x").stream) == Available(point.core.input.stream)
 
-    def side(port: str) -> object:
-        found = point.query(port_side(Serving, port))
+    def side(port: str) -> Side:
+        found = point.query(stream_port(Exposing, port).side)
         assert isinstance(found, Available), port
-        return found.value
+        return exposed_side(Exposing, port, found.value)
 
     def contract_of(port: str) -> PortPins:
-        found = point.query(port_stream_pins(Serving, port))
+        found = point.query(stream_port(Exposing, port).stream_pins)
         assert isinstance(found, Available) and isinstance(found.value, PortPins), port
-        return found.value
+        return exposed_pins(point, port, found.value)
 
-    child = point.core.input
-    assert side("x") == child.side.under("core.other")
-    assert contract_of("x") == child.stream_pins.under("core.other")
-    assert contract_of("x").label == "core.other.input"
-    assert side("y") == point.core.output.side.under("core.other")
-    assert contract_of("z").label == "kept.leaf.output"
-    assert side("w") == point.kept.input.side.under("kept")
-    # Lowered into members of the kernel, which the engine reads like any other.
-    assert port_side(Serving, "x") is getattr(Serving, "x_side")
-    assert port_stream_pins(Serving, "x") is getattr(Serving, "x_stream_pins")
-    assert getattr(point, "core_case") == "other"
-    assert port_direction(Serving, "x") is Direction.IN
-    assert port_direction(Serving, "y") is Direction.OUT
-    assert port_direction(Serving, "z") is Direction.OUT
-    # Its advance rule is its child's port's, found by the port's name too.
-    assert port_advance(Serving, "x") is getattr(Serving, "x_advance")
-    assert point.query(port_advance(Serving, "x")) == Available(Advance.BUFFERED)
-    assert point.query(port_advance(Serving, "y")) == Available(point.core.output.advance)
-    # Served ports are not the kernel's own stream ports: a module's ports are.
-    assert stream_ports(Serving) == {}
-    # Open, the case is not known, so neither is the label.
-    assert isinstance(design_space(Serving()).query(port_stream_pins(Serving, "x")), Unresolved)
+    assert side("x") == replace(point.core.input.side, label="x")
+    assert contract_of("x") == PortPins("x", point.core.input.stream_pins.pins, "core.other")
+    assert contract_of("x").under("net") == PortPins(
+        "net.x", point.core.input.stream_pins.pins, "net.core.other"
+    )
+    assert side("y") == replace(point.core.output.side, label="y")
+    assert (contract_of("z").label, contract_of("z").instance) == ("z", "kept")
+    assert side("w") == replace(point.kept.input.side, label="w")
+    assert port_direction(Exposing, "x") is Direction.IN
+    assert port_direction(Exposing, "y") is Direction.OUT
+    assert port_direction(Exposing, "z") is Direction.OUT
+    # Its advance rule is its member's port's, found by the alias's name too.
+    assert point.query(stream_port(Exposing, "x").advance) == Available(Advance.BUFFERED)
+    assert point.query(stream_port(Exposing, "y").advance) == Available(point.core.output.advance)
+    # Open, the case is not known, so neither is the port.
+    assert isinstance(
+        design_space(Exposing()).query(stream_port(Exposing, "x").stream_pins), Unresolved
+    )
+    # A kernel's own port is presented as it labels it.
+    leaf = design_space(Leaf())
+    assert exposed_name(Leaf, "input") is None
+    assert exposed_pins(leaf, "input", leaf.input.stream_pins) == leaf.input.stream_pins
 
 
-def test_a_served_port_names_a_child_and_a_stream_port_of_it() -> None:
-    with pytest.raises(DefinitionError, match="no child declared"):
+def test_an_exposed_port_is_a_stream_port_of_each_case_of_its_kernel_s_member() -> None:
+    with refused("alias-foreign", error=DefinitionError):
 
         class Orphan(Kernel):
-            id = "test.served.orphan"
-            x = served(Leaf(), "input")
+            id = "test.exposed.orphan"
+            x = Leaf().input
 
-    with pytest.raises(DefinitionError, match="no stream port"):
+    class InputOnly(Kernel):
+        id = "test.exposed.input_only"
+        input = StreamPort(direction=Direction.IN, transport=AXIS, tensor=TENSOR, sequence=SEQUENCE)
 
-        class Misnamed(Kernel):
-            id = "test.served.misnamed"
-            kept = Leaf()
-            x = served(kept, "missing")
-
-    with pytest.raises(DefinitionError, match="each case"):
+    with refused("alias-case-absent", error=DefinitionError, message=r"\['other'\]"):
 
         class Partial(Kernel):
-            id = "test.served.partial"
-            core = Select(one=Leaf, other=VpcKernel)
-            x = served(core, "x")
+            id = "test.exposed.partial"
+            core = Select(one=Leaf, other=InputOnly)
+            x = core.output
 
-    with pytest.raises(DefinitionError, match="served port x"):
+    # Its role is one in every selection; its carrier may differ by case.
+    class In_(Kernel):
+        id = "test.exposed.in"
+        port = StreamPort(direction=Direction.IN, transport=AXIS, tensor=TENSOR, sequence=SEQUENCE)
 
-        class Repeated(Kernel):
-            id = "test.served.repeated"
-            kept = Leaf()
-            x = served(kept, "input")
+    class Turned(Kernel):
+        id = "test.exposed.turned"
+        port = StreamPort(direction=Direction.OUT, transport=AXIS, tensor=TENSOR, sequence=SEQUENCE)
 
-            @derived
-            def x_side(self) -> Side:
-                return self.kept.input.side
+    class Native_(Kernel):
+        id = "test.exposed.native"
+        port = StreamPort(
+            direction=Direction.IN, transport=NATIVE, tensor=TENSOR, sequence=SEQUENCE
+        )
+
+    with refused("port-direction", error=DefinitionError, message="different directions"):
+
+        class Mixed(Kernel):
+            id = "test.exposed.mixed"
+            core = Select(i=In_, o=Turned)
+            x = core.port
+
+    class Carried(Kernel):
+        id = "test.exposed.carried"
+        core = Select(axis=In_, native=Native_)
+        x = core.port
+
+    assert port_direction(Carried, "x") is Direction.IN
+
+    # A node alias of no stream port is no port of its kernel.
+    class Holder(Kernel):
+        id = "test.exposed.holder"
+        exposing = Exposing()
+        leaf = exposing.kept
+        x = exposing.x
+
+    assert list(exposed_ports(Holder)) == ["x"]
+    with pytest.raises(KeyError):
+        stream_port(Holder, "leaf")
 
 
-def test_a_served_port_is_served_in_its_kernel_s_own_body() -> None:
-    """A port served in a Group (which reads nothing of its kernel) is refused,
-    and so is a body declaring the case a selector's served ports are lowered with."""
+def test_an_exposed_port_reaches_through_a_wrapper_to_its_leaf() -> None:
+    """A wrapper of a kernel exposing its member's port exposes the same port: one node,
+    owned where it is declared, its pins on the leaf below both."""
 
-    class InGroup(Group):
-        x = served(Leaf(), "input")
+    class Wrapper(Kernel):
+        id = "test.exposed.wrapper"
+        inner = Exposing()
+        x = inner.x
+        z = inner.z
 
-    with refused("served-port-nested", error=DefinitionError, message=r"\['g\.x'\]"):
-
-        class Holder(Kernel):
-            id = "test.served.holder"
-            kept = Leaf()
-            g = InGroup()
-
-    with refused("served-port-repeated", error=DefinitionError, message="core_case"):
-
-        class OwnCase(Kernel):
-            id = "test.served.own_case"
-            core = Select(one=Leaf, other=OtherLeaf)
-            x = served(core, "input")
-
-            @derived
-            def core_case(self) -> str:
-                return "one"
+    point = design_space(Wrapper()).with_choices({Wrapper.inner.core: "one"})
+    assert [d.key for d in inspection.decisions(point)] == ["inner.core"]
+    assert inspection.path(point.x) == "inner.core.one.input"
+    found = point.query(stream_port(Wrapper, "x").stream_pins)
+    assert isinstance(found, Available)
+    pins = exposed_pins(point, "x", found.value)
+    assert (pins.label, pins.instance) == ("x", "inner.core.one")
+    assert exposed_pins(point, "z", point.z.stream_pins).instance == "inner.kept"
+    assert port_direction(Wrapper, "x") is Direction.IN
 
 
 def test_a_port_states_one_thing_its_advance_rule_follows_from() -> None:
@@ -711,11 +739,11 @@ def test_a_scheduled_port_presents_its_kernel_s_one_schedule() -> None:
                 )
 
 
-# -- R3: a valid design point has a well-formed contract --------------------------------------
+# -- a valid design point has a well-formed contract ------------------------------------------
 #
-# Level 2, refused when a kernel's class is made: a port's direction, its one presentation
-# and its relation, and its kernel's schedule. Level 1, a placed port's own constraint
-# (``presented``): its stream and its carrier, at each design point.
+# Refused when a kernel's class is made, what no constraint sees: a port's direction, its one
+# presentation and its relation, and its kernel's schedule. At each design point, a placed
+# port's own constraint (``presented``): its stream and its carrier.
 
 
 def test_a_stream_port_states_its_direction_an_input_or_an_output() -> None:
@@ -928,10 +956,10 @@ def test_a_scheduled_port_s_kernel_states_a_schedule_never_inapplicable() -> Non
 
 
 def test_a_placed_port_s_presentation_is_accepted_and_carried_or_its_point_is_refused() -> None:
-    """R3's level 1 (``presented``): a schedule's projection that does not project (Codex's
-    ``bad_projection``), or a stream its transport cannot carry (W12's open point: a vpc
-    presenting the same marker on both sides, which its native pins carry no marker of),
-    refuses the design point, with the port's own refusal; an idle port presents nothing."""
+    """A placed port's presentation (``presented``): a schedule's projection that does not
+    project, or a stream its transport cannot carry (a vpc presenting the same marker on
+    both sides, which its native pins carry no marker of), refuses the design point, with
+    the port's own refusal; an idle port presents nothing."""
     r, c = Index("r"), Index("c")
 
     class Projection(Kernel):

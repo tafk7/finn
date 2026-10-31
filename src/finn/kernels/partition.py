@@ -84,7 +84,7 @@ from finn.kernels.control import Control
 from finn.kernels.control import presented as presented_buses
 from finn.kernels.movers import MoverOffer
 from finn.kernels.policies import Defaulted, Owner, Unstated, defaulted
-from finn.kernels.port import port_pace, port_side, port_stream_pins
+from finn.kernels.port import exposed_pins, stream_port
 from finn.kernels.sides import Side, SideKind
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
@@ -599,10 +599,11 @@ class Partition:
     # -- what it is -------------------------------------------------------------------------
 
     def neighbours(self, name: str) -> Neighbours:
-        """The ports beside channel ``name`` (each kernel's ``<p>_stream_pins`` view, labelled
-        below its member's node): the producing kernel's and the consuming kernel's, by the
-        side each is declared on; a frozen neighbour's, outside a slice, as given at its
-        stored choices (``frozen``); and each one's pace (``<p>_pace``, a scheduled port's).
+        """The ports beside channel ``name`` (each kernel's port's ``stream_pins`` view,
+        labelled below its member's node): the producing kernel's and the consuming kernel's,
+        by the side each is declared on; a frozen neighbour's, outside a slice, as given at
+        its stored choices (``frozen``); and each one's pace (its ``pace``, a scheduled
+        port's).
         FIFO sizing reads their paces (``finn.kernels.fifo_sizing``), and the netlist its
         hops to them (``hops``)."""
         found: dict[str, PortPins] = {}
@@ -620,10 +621,12 @@ class Partition:
             if not isinstance(declared, Port):
                 continue
             point = self.member(declared.member)
-            answer = point.query(port_stream_pins(type(point), declared.port))
+            port = stream_port(type(point), declared.port)
+            answer = point.query(port.stream_pins)
             if isinstance(answer, Available) and isinstance(answer.value, PortPins):
-                found[side] = answer.value.under(self.node(declared.member))
-            paced = point.query(port_pace(type(point), declared.port))
+                exposed = exposed_pins(point, declared.port, answer.value)
+                found[side] = exposed.under(self.node(declared.member))
+            paced = point.query(port.pace)
             if isinstance(paced, Available) and isinstance(paced.value, Pace):
                 paces[side] = paced.value
         return Neighbours(
@@ -746,7 +749,7 @@ class Partition:
         for declared in self._sides.get(name, ()):
             if isinstance(declared, Port):
                 point = self.member(declared.member)
-                answer = point.query(port_side(type(point), declared.port))
+                answer = point.query(stream_port(type(point), declared.port).side)
                 label = f"{declared.member}.{declared.port}"
                 (absent if isinstance(answer, Inapplicable) else present).append(label)
         if not absent:

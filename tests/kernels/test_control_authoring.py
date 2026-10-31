@@ -44,7 +44,7 @@ from finn.kernels.channels import Channel
 from finn.kernels.control import Control, ControlModel, control_models
 from finn.kernels.laws import AXIS, Axis
 from finn.kernels.library import ModuleSpec
-from finn.kernels.port import port_direction, port_side, port_stream_pins
+from finn.kernels.port import port_direction, stream_port
 from finn.kernels.port_model import StreamPort
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
@@ -353,15 +353,16 @@ def test_a_served_port_is_read_at_its_kernel_s_occurrence() -> None:
             platform=FULL_DSP48E2,
         )
 
-    left = port_side(Envelope.left, "set")
-    right = port_side(Channel, "set")
-    assert left is not right and left == getattr(Envelope.left, "set_side")
+    left = stream_port(Envelope.left, "set").side
+    right = stream_port(Channel, "set").side
+    # The source's set port, which the channel exposes: one port, read by two names.
+    assert left is not right and left == Envelope.left.source.set.side
     assert port_direction(Channel, "set") is Direction.IN
     point = design_space(Envelope())
     # Without a known value the channel places no source, so its set port does not apply.
     assert isinstance(point.query(left), Inapplicable)
-    # The deliberately unused channel is a known refused owning scope.
-    assert isinstance(point.query(port_stream_pins(Envelope.left, "set")), Rejected)
+    # Its pins are its source's port's: with no source placed, they do not apply either.
+    assert isinstance(point.query(stream_port(Envelope.left, "set").stream_pins), Inapplicable)
 
     class ValidEnvelope(Space):
         left = Channel(
@@ -376,9 +377,9 @@ def test_a_served_port_is_read_at_its_kernel_s_occurrence() -> None:
         )
 
     valid = design_space(ValidEnvelope())
-    assert isinstance(valid.query(port_stream_pins(ValidEnvelope.left, "set")), Inapplicable)
+    assert isinstance(valid.query(stream_port(ValidEnvelope.left, "set").stream_pins), Inapplicable)
     with pytest.raises(TypeError, match="node declaration"):
-        port_side(point, "set")
+        stream_port(point, "set")
 
 
 @pytest.mark.parametrize("shown", (False, True))

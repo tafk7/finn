@@ -421,6 +421,11 @@ def test_matmul_honors_its_cores_rules_not_just_its_raw_module(monkeypatch):
             pe=MatMulKernel.pe,
             simd=MatMulKernel.simd,
         )
+        # Its ports, its own compute's: an alias names the declaration it is written
+        # against, so a class replacing compute exposes its ports again.
+        x = compute.x
+        w = compute.w
+        y = compute.y
 
     # Substitute a fully authored Space class, without mutating declarations.
     monkeypatch.setattr("support.helpers.MatMulKernel", RestrictedMatMul)

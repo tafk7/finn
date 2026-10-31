@@ -25,7 +25,7 @@ from finn.kernels.base import Kernel
 from finn.kernels.composer import Facts, PartitionDeclaration, Port, channel
 from finn.kernels.composer import _checked as checked
 from finn.kernels.laws import AXIS, AXIS_CLOCKING
-from finn.kernels.port import port_direction, port_side
+from finn.kernels.port import port_direction, stream_port
 from finn.kernels.port_model import StreamPort, stream_ports
 from finn.kernels.sides import Side
 
@@ -150,7 +150,7 @@ def test_static_group_lookup_stops_at_real_spaces_and_unknown_names() -> None:
     assert port_direction(Parent, "child.group.ports.target") is None
     assert port_direction(Host, "group.ports.missing") is None
     with pytest.raises(KeyError):
-        port_side(Parent, "child.group.ports.target")
+        stream_port(Parent, "child.group.ports.target")
 
 
 @pytest.mark.parametrize(

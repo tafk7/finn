@@ -55,8 +55,8 @@ from finn.kernels.laws import Advance
 from finn.kernels.library import ModuleSpec
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.partition import Partition
-from finn.kernels.port import port_pace, port_side, port_stream_pins
-from finn.kernels.port_model import ServedPort, StreamPort, stream_ports
+from finn.kernels.port import exposed_name, exposed_pins, exposed_side, stream_port
+from finn.kernels.port_model import StreamPort, exposed_ports, stream_ports
 from finn.kernels.sides import Side
 
 BY_NAME = {spec.name: spec for spec in SPECS}
@@ -197,38 +197,35 @@ def test_the_base_assembles_every_library_module_s_netlist() -> None:
 
 
 def _ports(member: Space) -> tuple[str, ...]:
-    """The stream ports ``member``'s class declares, by name: its module's, and those it
-    serves for a child; none for a member that is no kernel."""
+    """The stream ports ``member``'s class presents, by name: its module's, and those it
+    exposes of a member; none for a member that is no kernel."""
     if not isinstance(member, Kernel):
         return ()
-    effective: dict[str, object] = {}
-    for base in reversed(type(member).__mro__):
-        effective.update(vars(base))
-    served = tuple(name for name, value in effective.items() if isinstance(value, ServedPort))
-    return (*stream_ports(type(member)), *served)
+    return tuple(exposed_ports(type(member)))
 
 
 def _ports_checked(point: Partition) -> int:
     """Each placed stream port of each member of ``point``, checked: its label is its
     contract's, and its side states its stream, that label and, on an output port, its
-    word width; a served port's, its child's port's, labelled as its contract. How many it
-    checked."""
+    word width; an exposed port's, its member's port's, presented under the alias's name as
+    its contract. How many it checked."""
     checked = 0
     for name in point.members:
         member = point.member(name)
         for port in _ports(member):
-            offered = member.query(port_stream_pins(type(member), port))
+            offered = member.query(stream_port(type(member), port).stream_pins)
             if not isinstance(offered, Available):
                 continue
-            contract: PortPins = offered.value
-            given = member.query(port_side(type(member), port))
+            contract: PortPins = exposed_pins(member, port, offered.value)
+            given = member.query(stream_port(type(member), port).side)
             where = f"{name}.{port}"
             assert isinstance(given, Available), where
-            side: Side = given.value
+            side: Side = exposed_side(type(member), port, given.value)
             frame: object = type(member)
             for part in port.split("."):
                 frame = getattr(frame, part)
-            if isinstance(frame, StreamPort):
+            own = exposed_name(type(member), port) is None
+            if own and isinstance(frame, StreamPort):
                 label: str = member.field(frame.label).get()
                 stream: Stream = member.field(frame.stream).get()
             else:
@@ -239,9 +236,9 @@ def _ports_checked(point: Partition) -> int:
             width = transport.data_width if output else None
             assert side == Side.kernel(stream, label, width), where
             # Its pace: a scheduled port's, over its kernel's one schedule; a port of
-            # another rule has none; a served port's is its child's port's.
-            paced = member.query(port_pace(type(member), port))
-            if isinstance(frame, StreamPort):
+            # another rule has none; an exposed port's is its member's port's.
+            paced = member.query(stream_port(type(member), port).pace)
+            if own and isinstance(frame, StreamPort):
                 scheduled = member.field(frame.advance).get() is Advance.SCHEDULED
                 assert isinstance(paced, Available) is scheduled, where
                 if scheduled:

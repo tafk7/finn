@@ -49,7 +49,7 @@ from ._nodes import (
     slot_declaration,
     space_members,
 )
-from .declarations import Declaration
+from .declarations import Declaration, Label
 from .errors import DefinitionError
 
 if TYPE_CHECKING:
@@ -241,7 +241,7 @@ def alias_face(
     space_type: type[_Namespace],
     name: str,
     outer: tuple[Declaration, ...],
-    label: tuple[str, ...],
+    label: Label,
 ) -> Any:
     """The class reference of alias ``name`` of ``space_type``, below the node path
     ``outer``: the node by its declarations, or through a selector a ``ChoicePath``,

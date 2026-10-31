@@ -79,7 +79,7 @@ of that statement: a network that finds the two differ refuses the graph as stal
 given as, an output's the kernel's derived value of the tensor it writes (``tensor``,
 ``x_tensor``, ``result_tensor``: an output's tensor is the kernel's statement, never
 given to it), and the kernel's port its channel takes the side and contract of (``port``,
-``x``: a stream port, or a served one, ``finn.kernels.port.port_side``). A parameter port,
+``x``: a stream port, ``finn.kernels.port.stream_port``). A parameter port,
 whose initializer the node may hold (MatMul's weights), also names the kernel's Param
 the held values are given as, in place of its tensor (``contents``; MatMul's ``weights``,
 the same Param, known weights or a tensor) and the kernel's derived values of what its
@@ -124,7 +124,7 @@ from finn.kernels.composer import Facts
 from finn.kernels.configure import describe
 from finn.kernels.configure import refusal as refusal_of
 from finn.kernels.policies import Alone, Defaulted, Policy, defaulted, stated
-from finn.kernels.port import port_side
+from finn.kernels.port import exposed_side, stream_port
 from finn.kernels.sides import Side
 from finn.platform.target import Target
 
@@ -605,8 +605,8 @@ class KernelOp(CustomOp):
 
     def streamed(self, point: Kernel) -> tuple[tuple[str, Side | tuple[Finding, ...], bool], ...]:
         """Each streamed port of this node at ``point``, its kernel's design space: the
-        tensor it carries, by graph name, the side it gives a channel (its kernel's
-        ``<p>_side``, labelled below the node's name) or, where ``point`` does not know that
+        tensor it carries, by graph name, the side it gives a channel (its kernel's port's
+        ``side``, labelled below the node's name) or, where ``point`` does not know that
         side (it waits on a choice, or its kernel refuses it), the side's findings, and
         whether it is an output; its inputs first, in port order. A streamed port is an AXIS
         one: not a parameter port whose initializer the node holds (its channel's source
@@ -622,9 +622,11 @@ class KernelOp(CustomOp):
         found += [(port, tensor, True) for port, tensor in zip(self.outputs, node.output)]
         sides: list[tuple[str, Side | tuple[Finding, ...], bool]] = []
         for port, tensor, output in found:
-            answer = point.query(port_side(type(point), self.wiring[port].port))
+            named = self.wiring[port].port
+            answer = point.query(stream_port(type(point), named).side)
             if isinstance(answer, Available) and isinstance(answer.value, Side):
-                sides.append((tensor, answer.value.under(self.label), output))
+                side = exposed_side(type(point), named, answer.value)
+                sides.append((tensor, side.under(self.label), output))
             elif isinstance(answer, (Rejected, Unresolved)):
                 sides.append((tensor, answer.findings, output))
         return tuple(sides)

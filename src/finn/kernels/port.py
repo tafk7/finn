@@ -3,16 +3,19 @@
 
 """Resolved physical port values and pure protocol calculations.
 
-Actual authoring uses StreamPort real children, and served ports for a kernel with
-children. Native module source reads model inputs serially, then calls these pure helpers.
-``port_side``, ``port_stream_pins``, ``port_pace`` and ``port_direction`` find a kernel's port by
-its name, through its lexical Group paths, stopping at real Space boundaries: what a channel
-and its sizing read of it, and its direction; they never authorize a model's reads.
+Actual authoring uses StreamPort real children, a module's and a kernel with children's
+alike. Native module source reads model inputs serially, then calls these pure helpers.
+``stream_port`` and ``port_direction`` find a kernel's port by its name, through its lexical
+Group paths, stopping at real Space boundaries but for a member's port it exposes by a node
+alias: the port whose readouts a channel and its sizing read (``point.<port>.side``), and
+its direction; ``exposed_side`` and ``exposed_pins`` give an exposed port's as its kernel
+presents it. They never authorize a model's reads.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, cast
 
 from finn.core.space import (
@@ -21,7 +24,8 @@ from finn.core.space import (
     Space,
     reject,
 )
-from finn.core.space._nodes import NodeDecision, NodeDecl, node_record, unwrap
+from finn.core.space._aliases import AliasEntry, alias_table
+from finn.core.space._nodes import NodeDecl
 from finn.core.space.declarations import Declaration, Required, declared_path
 from finn.dataflow.schedule import Index
 from finn.dataflow.streams import Stream
@@ -29,7 +33,7 @@ from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import LevelEnd, Marker, Traversal
 from finn.kernels.artifacts.abi import Clocking, Direction, Endpoint, Pin
 from finn.kernels.artifacts.module import Held
-from finn.kernels.base import Kernel
+from finn.kernels.base import Kernel, PortPins, _end_declaration
 from finn.kernels.laws import AXIS, AXIS_MARKERS, IDLE_LEVEL, Axis, Native, TransportKind
 from finn.kernels.transport import (
     AxisBeat,
@@ -40,7 +44,8 @@ from finn.kernels.transport import (
 )
 
 if TYPE_CHECKING:
-    from finn.kernels.port_model import ServedPort, StreamPort
+    from finn.kernels.port_model import StreamPort
+    from finn.kernels.sides import Side
 
 
 def _applies(space: Space, guard: str | None) -> bool:
@@ -292,125 +297,135 @@ def stream_pins(
     return StreamPins(found, stream, markers)
 
 
-# -- a port a kernel with children presents for a child -------------------------------------
+# -- a kernel's port, by its name ------------------------------------------------------------
 
 
-def _lexical_port(
-    namespace: type[Space] | Space, port: str
-) -> tuple[type[Space] | Space | Group, StreamPort | ServedPort] | None:
-    """The stream port or served port ``port`` names in ``namespace`` (a dotted path through
-    its Groups, ``group.port``), with the frame declaring it; None where it names neither.
-    Stops at child Spaces: a child's port is its parent's only where the parent serves it."""
-    from finn.kernels.port_model import ServedPort, StreamPort  # noqa: PLC0415 - base/port cycle
+def stream_port(namespace: type[Space] | Space, port: str) -> StreamPort:
+    """Kernel ``namespace``'s stream port ``port`` (a dotted path through its Groups,
+    ``group.port``), or the member's stream port it exposes by a node alias of that name
+    (``x = compute.x``, ``finn.kernels.port_model.exposed_ports``), as a reference to read
+    its readouts of (``namespace`` a Space class, or a node declaration for a reference
+    below it): ``point.query(stream_port(type(point), "x").side)``. An exposed port's
+    readouts are its member's port's, labelled as the member labels them: ``exposed_side``
+    and ``exposed_pins`` give them as the kernel presents them. Stops at child Spaces: a
+    member's port is its kernel's only where it exposes it. KeyError where ``port`` names
+    no stream port of it."""
+    from finn.kernels.port_model import StreamPort  # noqa: PLC0415 - base/port cycle
 
-    frame: type[Space] | Space | Group = namespace
-    segments = port.split(".")
-    for segment in segments[:-1]:
-        group = getattr(frame, segment, None)
-        if not isinstance(group, Group):
-            return None
-        frame = group
-    child = getattr(frame, segments[-1], None)
-    return (frame, child) if isinstance(child, (StreamPort, ServedPort)) else None
-
-
-def _found(namespace: type[Space] | Space, port: str) -> tuple[Any, StreamPort | ServedPort]:
     space_type = namespace if isinstance(namespace, type) else type(namespace)
     if not issubclass(space_type, Space) or (
         not isinstance(namespace, type) and declared_path(namespace) is None
     ):
         raise TypeError("a port is read of a Space class or node declaration")
-    found = _lexical_port(namespace, port)
-    if found is None:
+    if _exposed_entry(space_type, port) is not None:
+        return cast("StreamPort", getattr(namespace, port))
+    frame: type[Space] | Space | Group = namespace
+    segments = port.split(".")
+    for segment in segments[:-1]:
+        group = getattr(frame, segment, None)
+        if not isinstance(group, Group):
+            raise KeyError(port)
+        frame = group
+    found = getattr(frame, segments[-1], None)
+    if not isinstance(found, StreamPort):
         raise KeyError(port)
     return found
 
 
-def port_side(namespace: type[Space] | Space, port: str) -> Any:
-    """The side kernel ``namespace``'s port ``port`` gives a channel, as a reference to query
-    (``namespace`` a Space class, or a node declaration for a reference below it): a stream
-    port's ``side``, a served port's (``finn.kernels.port_model.ServedPort``). KeyError where
-    ``port`` names no port of it."""
-    frame, child = _found(namespace, port)
-    if isinstance(child, Space):
-        return child.side
-    return getattr(frame, f"{port.rsplit('.', 1)[-1]}_side")
+def _exposed_entry(space_type: type[Space], port: str) -> AliasEntry | None:
+    """The node alias ``port`` of ``space_type`` naming a member's stream port, in every
+    selection; None where ``port`` is no such alias."""
+    from finn.kernels.port_model import StreamPort  # noqa: PLC0415 - base/port cycle
 
-
-def port_stream_pins(namespace: type[Space] | Space, port: str) -> Any:
-    """The stream pins kernel ``namespace``'s port ``port`` gives a channel to wire to, as a
-    reference to query (``port_side``'s): a stream port's ``stream_pins``, a served port's."""
-    frame, child = _found(namespace, port)
-    if isinstance(child, Space):
-        return child.stream_pins
-    return getattr(frame, f"{port.rsplit('.', 1)[-1]}_stream_pins")
-
-
-def port_pace(namespace: type[Space] | Space, port: str) -> Any:
-    """Kernel ``namespace``'s port ``port``'s pace, as a reference to query (``port_side``'s):
-    a stream port's ``pace``, a served port's (its child's port's). Inapplicable for a port
-    no schedule paces (CONTRACT.md § 4)."""
-    frame, child = _found(namespace, port)
-    if isinstance(child, Space):
-        return child.pace
-    return getattr(frame, f"{port.rsplit('.', 1)[-1]}_pace")
-
-
-def port_advance(namespace: type[Space] | Space, port: str) -> Any:
-    """Kernel ``namespace``'s port ``port``'s advance rule, as a reference to query
-    (``port_side``'s): a stream port's ``advance``, a served port's (its child's port's)
-    (CONTRACT.md § 3)."""
-    frame, child = _found(namespace, port)
-    if isinstance(child, Space):
-        return child.advance
-    return getattr(frame, f"{port.rsplit('.', 1)[-1]}_advance")
-
-
-def _declared_direction(record: NodeDecl) -> Direction | None:
-    """The direction a stream port's declaration binds, a literal; None for any other."""
-    direction = record.bindings.get("direction")
-    return direction if isinstance(direction, Direction) else None
+    entry = alias_table(cast(Any, space_type)).get(port)
+    if entry is None or not entry.ends:
+        return None
+    if not all(issubclass(end.space_type, StreamPort) for end in entry.ends):
+        return None
+    return entry
 
 
 def port_direction(space_type: type[Space], port: str) -> Direction | None:
     """Whether kernel ``space_type``'s port ``port`` is an input or an output, from its
-    declaration: a served port's is its child's port's, the one every case of a selector
-    agrees on. None where it is not known: no such port, or a port bound otherwise than by
-    a literal."""
+    declaration: an exposed port's is its member's port's, the one every node the alias may
+    name agrees on. None where it is not known: no such port, or a port bound otherwise
+    than by a literal."""
     if not (isinstance(space_type, type) and issubclass(space_type, Kernel)):
         return None
-    found = _lexical_port(space_type, port)
-    if found is None:
-        return None
-    _, child = found
-    if isinstance(child, Space):
-        path = declared_path(child)
+    entry = _exposed_entry(space_type, port)
+    if entry is not None:
+        records = [_end_declaration(space_type, end.path) for end in entry.ends]
+    else:
+        try:
+            found = stream_port(space_type, port)
+        except KeyError:
+            return None
+        path = declared_path(found)
         if not path or not isinstance(path[-1], NodeDecl):
             return None
-        return _declared_direction(path[-1])
-    directions = {
-        None if declared is None else _declared_direction(declared)
-        for declared in served_ports(child)
-    }
-    return directions.pop() if len(directions) == 1 else None
+        records = [path[-1]]
+    directions = {record.bindings.get("direction") for record in records}
+    direction = directions.pop() if len(directions) == 1 else None
+    return direction if isinstance(direction, Direction) else None
 
 
-def served_ports(port: ServedPort) -> tuple[NodeDecl | None, ...]:
-    """The declaration of the stream port ``port`` serves in its child, or in each case of a
-    selector; None for a child that has no stream port so named."""
-    from finn.kernels.port_model import StreamPort  # noqa: PLC0415 - base/port cycle
+# -- a port as its kernel presents it -------------------------------------------------------
+#
+# A kernel presents a port of its own under the port's label, its pins on its own module; a
+# member's port it exposes (``x = compute.x``) under the alias's name, its pins on the leaf
+# whose module has them: the node the alias reaches, by its owner's path below the kernel,
+# each member read where its holder's netlist places it (``Kernel.placed_at``) and a
+# selector's case by its key (``compute.packed``). The port itself stays its owner's, and so
+# do its answers: only the name and the instance change, as its kernel presents it.
 
-    record = unwrap(port.child)
-    if isinstance(record, NodeDecision):
-        records = tuple(each for each in record.candidates.values() if each is not None)
-    else:
-        records = (record,) if isinstance(record, NodeDecl) else ()
-    found: list[NodeDecl | None] = []
-    for each in records:
-        declared = node_record(getattr(each.space_type, port.port, None))
-        is_port = declared is not None and issubclass(declared.space_type, StreamPort)
-        found.append(declared if is_port else None)
-    return tuple(found)
+
+def exposed_name(space_type: type[Space], port: str) -> str | None:
+    """The name kernel class ``space_type`` presents its port ``port`` under where it is no
+    port of its own: the node alias's (``x``); None for its own, labelled by its label."""
+    return None if _exposed_entry(space_type, port) is None else port
+
+
+def exposed_side(space_type: type[Space], port: str, side: Side) -> Side:
+    """``side``, port ``port``'s read through ``stream_port``, as kernel class
+    ``space_type`` presents it: an exposed port's under the alias's name."""
+    name = exposed_name(space_type, port)
+    return side if name is None else replace(side, label=name)
+
+
+def exposed_pins(point: Space, port: str, found: PortPins) -> PortPins:
+    """``found``, port ``port``'s stream pins read at kernel ``point`` through
+    ``stream_port``, as ``point`` presents them: an exposed port's under the alias's name,
+    on the leaf the alias reaches (``PortPins.instance``, above)."""
+    name = exposed_name(type(point), port)
+    if name is None:
+        return found
+    return PortPins(name, found.pins, _instance(point, getattr(point, port)))
+
+
+def _instance(point: Space, node: Space) -> str:
+    """The leaf holding port ``node``, below ``point``: the owner's path of the port's
+    kernel, each member where its holder places it (``Kernel.placed_at``)."""
+    from finn.core.space import inspection  # noqa: PLC0415
+
+    walked = inspection.path(point)
+    below = inspection.path(node)[len(walked) + 1 if walked else 0 :]
+    segments = below.split(".")[:-1]
+    parts: list[str] = []
+    current: Any = point
+    index = 0
+    while index < len(segments):
+        segment = segments[index]
+        placed: Mapping[str, str] = getattr(type(current), "placed_at", {})
+        parts.append(placed.get(segment, segment))
+        current = getattr(current, segment)
+        walked = f"{walked}.{segment}" if walked else segment
+        index += 1
+        if inspection.path(current) != walked:
+            # A selector reads as its selected case, one name below: its key.
+            parts.append(segments[index])
+            walked = f"{walked}.{segments[index]}"
+            index += 1
+    return ".".join(parts)
 
 
 __all__ = [
@@ -422,14 +437,13 @@ __all__ = [
     "data_width",
     "held",
     "lane_count",
-    "port_stream_pins",
     "port_direction",
-    "port_side",
-    "port_advance",
-    "port_pace",
-    "served_ports",
     "pins",
     "stream_endpoint",
     "stream_pins",
+    "exposed_name",
+    "exposed_pins",
+    "exposed_side",
+    "stream_port",
     "transport",
 ]

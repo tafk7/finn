@@ -32,10 +32,11 @@ operation runs natively (one channel per PE lane, INT8 DSP58 only) or, by the
 ``MatMulKernel`` is a kernel with children: the compute cores, which read the activations'
 tensor it is given (``x_tensor``) and the weights' tensor it carries
 (``carried_weights``), its folding factors (``pe``, ``simd``), and N and the widest K
-(``widest_reduction``), stated from its facts alone; it serves their ports (``x``, ``w``,
-``y``) as its own: each the selected core's (``finn.kernels.port_model.served``), its side
-and stream pins labelled ``compute.<core>.x`` (``x_side``, ``x_stream_pins``,
-``finn.kernels.base.PortPins``), and its pace the core's port's (``x_pace``). Each
+(``widest_reduction``), stated from its facts alone. Its ports (``x``, ``w``, ``y``) are the
+selected core's, which it exposes as its own by node aliases (``x = compute.x``): one port
+each, the core's, read by two names, so its stream, advance rule and pace are the core's,
+and it presents its side and stream pins under the alias's name (``x``), on the core's leaf
+(``compute.packed``, ``finn.kernels.port.exposed_pins``). Each
 channel, its adapter, its FIFO and its source are its network's: the network (a test
 harness's, or the graph's, a KernelOp's alone or a partition's) declares each channel,
 gives it the tensor MatMul's port reads or writes, and gives it MatMul's ports' streams,
@@ -125,7 +126,6 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import require_positive
 from finn.kernels.base import Kernel
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
-from finn.kernels.port_model import served
 from finn.kernels.values.domains import (
     admit_element,
     integer_bounds,
@@ -568,17 +568,12 @@ class MatMulKernel(Kernel):
         simd=simd,
     )
 
-    # Its ports, the selected core's, labelled below its case (``compute.<case>.x``).
-    x = served(compute, "x")
-    w = served(compute, "w")
-    y = served(compute, "y")
-
-    @derived
-    def takes_doubled_clock(self) -> bool:
-        """Whether it takes the doubled clock: its selected core's (a pumped core), a case
-        not selected never read."""
-        core = self.compute
-        return bool(core.takes_doubled_clock)
+    # Its ports, the selected core's, exposed under its own names; their pins are on the core
+    # (``compute.packed``). Whether it takes the doubled clock is the base's, from its
+    # selected core.
+    x = compute.x
+    w = compute.w
+    y = compute.y
 
     @constraint
     def realization_supported(self) -> bool | Rejected:
