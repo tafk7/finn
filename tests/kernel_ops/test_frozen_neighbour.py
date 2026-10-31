@@ -22,7 +22,7 @@ from typing import Any, cast
 
 from qonnx.core.modelwrapper import ModelWrapper
 from support.configure import composition, write_raw
-from support.helpers import beside
+from support.helpers import beside, root_facts
 from support.models import TARGET, chain_model, fan_out_source, kernel_model
 from support.refusals import refused
 
@@ -281,10 +281,19 @@ def test_a_slice_s_netlist_and_module_are_refused_by_their_code() -> None:
 
 
 def test_another_neighbour_is_another_design_space_of_the_same_class() -> None:
-    """``mm2`` at another simd reads another stream: a1's fact changes, its class does not."""
+    """``mm2`` at another simd reads another stream: a1's fact changes, its class does not.
+    The fact is the port beside a1 at ``mm2`` and its pace (``a1-frozen``), and a1's
+    neighbours, which FIFO sizing reads, follow it."""
     model = chain_model(4)
     part = _slice(model, "mm1", "mt1")
     write_raw(model, "mm2", "simd", 2)
     other = _slice(model, "mm1", "mt1")
     assert type(other.point) is type(part.point)
     assert other.member("a1").consumer != part.member("a1").consumer
+    before, after = root_facts(part.point)["a1-frozen"], root_facts(other.point)["a1-frozen"]
+    assert isinstance(before, Neighbours) and isinstance(after, Neighbours)
+    assert after.consumer != before.consumer
+    assert after.consumer_pace != before.consumer_pace
+    for network, given in ((part, before), (other, after)):
+        found = beside(network, "a1")
+        assert (found.consumer, found.consumer_pace) == (given.consumer, given.consumer_pace)

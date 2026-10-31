@@ -1,7 +1,8 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""A partition declared by hand: kernels and channels as one design space.
+"""A core declared by hand, read through its composition (``CoreComposition``): kernels and
+channels as one design space.
 
 On the Chain (``support.chain``): its members ranked kernels first, then each channel
 after the members it reads; a channel's sides waiting on its kernels' folding; a change
@@ -10,7 +11,7 @@ domain or by the rule it would break, with the stored choices standing in its wa
 module, one composed netlist, each member under its node (its name, ``\\W`` as ``_``),
 refused where its pins cannot be formed; its stored choices bound, as assignment (a value
 outside its domain dropped as stale, a rule they break binding and read refused); and a
-change that keeps a partition's class.
+change that keeps a core's class.
 """
 
 from __future__ import annotations
