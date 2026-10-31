@@ -15,9 +15,10 @@ A ``Channel`` (``finn.kernels.channels``) takes two sides, its ``producer`` and 
   kernel outside the selection at its accepted point;
 - the **boundary**'s (``Side.boundary``): the module's AXIS port, its name as its label
   (``s_axis_0``, ``m_axis_0``), the movers a shell offers on it (``offers``), and what the
-  outside states of it (``outside``). Its ``stream`` is None: the channel derives what the
-  port presents (``Channel.boundary``). **Unstated** (``outside`` None, the default), that
-  is what its other side presents; **stated** (an ``Outside``), the stated order, passes
+  outside states of it (``outside``). Its ``stream`` is None: the channel places the port,
+  its outer port (``Channel.outer_in``, ``Channel.outer_out``), and derives what it
+  presents. **Unstated** (``outside`` None, the default), that is what its other side
+  presents; **stated** (an ``Outside``), the stated order, passes
   and lanes, each one left None as the other side presents it. A side offered a mover
   carries that mover's statement (``MoverOffer.states``), and a mover's statement is made
   only on a side offered that mover: a mover is never placed on a side it does not state,

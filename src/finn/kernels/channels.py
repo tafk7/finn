@@ -38,19 +38,22 @@ nothing, or ``fifo``; the FIFO owns its ``depth`` (the channel's policies requir
 exploration sizes it, ``Channel.policies``) and its ``ram_style``, and carries data words
 only (``fifo-markers``). Its keys are the channel's, by its name (``("x", "transport")``).
 
-A channel with a boundary side presents the module's AXIS port its label names, whose
-pins the channel builds from its facts (``boundary``). Unstated (the side's ``outside``
-None), the boundary presents what its other side presents, by one rule: an input without
-the replay or window its receiver realizes (``unreplayed``), an output as produced, neither
-with markers. Stated (``finn.kernels.sides.Outside``), it presents the stated order, passes
-and lanes, each left None as that rule presents it, and the steps between it and the other
-side are placed as for any side's (a ``vpc`` before the transport for a width, an
-``input_gen`` after it for a reorder or a replay, its buffer the pass), or refused by the
-channel's own codes, ``channel-steps`` naming what states the side (``stated_by``). Where a
-shell offers movers on it (``offered``: the boundary side's ``offers``,
-``finn.kernels.movers``), the mover states the side (``MoverOffer.states``: each pass
-row-major, one pass a frame), and the channel places its ``mover`` on that free side; it
-binds no RTL in the module and states its contract (``mover_contracts``) for the shell's
+A channel with a boundary side places its outer port there, a stream port of its own: its
+outer input (``outer_in``, an ``InPort``) where its producer side is the boundary, its
+outer output (``outer_out``, an ``OutPort``) where its consumer side is; a channel between
+two ports places neither. The port is the module's AXIS port the side's label names: it
+presents a given sequence on that bus (``s_axis_0``), its advance stepped, with no pace.
+Unstated (the side's ``outside`` None), the boundary presents what its other side presents,
+by one rule: an input without the replay or window its receiver realizes (``unreplayed``),
+an output as produced, neither with markers. Stated (``finn.kernels.sides.Outside``), it
+presents the stated order, passes and lanes, each left None as that rule presents it, and
+the steps between it and the other side are placed as for any side's (a ``vpc`` before the
+transport for a width, an ``input_gen`` after it for a reorder or a replay, its buffer the
+pass), or refused by the channel's own codes, ``channel-steps`` naming what states the side
+(``stated_by``). Where a shell offers movers on it (``offered``: the boundary side's
+``offers``, ``finn.kernels.movers``), the mover states the side (``MoverOffer.states``: each
+pass row-major, one pass a frame), and the channel places its ``mover`` on that free side;
+it binds no RTL in the module and states its contract (``mover_contracts``) for the shell's
 budget check and resources.
 
 A channel whose tensor has a known value (``contents``) places its ``source`` (a
@@ -69,7 +72,7 @@ stream runs through them. It checks its stages by their streams (``staged``, eac
 own derived values) and wires them by their ports' stream pins (``stages``, a view). Its answers
 are the base's views over theirs, but for two it states itself, calling the base's: its
 netlist places its source and its output adapter at their labels and adds the hops between
-its own ends (its source, its stages, its boundary; ``netlist``), and a channel of wires
+its own ends (its source, its stages, its outer port; ``netlist``), and a channel of wires
 takes no cycles of its own (0); a boundary whose outside states a pace takes no fewer than
 that pace's span a frame (``frame_cycles``). Its cycles count its source's, its adapters' and
 its mover's, by kind (``source_cycles``, ``stage_cycles``, ``mover_cycles``), not through
@@ -77,9 +80,10 @@ the base's ``member_frame_cycles``: its mover is no kernel (it binds no RTL in t
 its transport, whose cycles are inapplicable, is a choice still open when FIFO sizing reads
 them. Its hops to the ports beside it need those ports'
 stream pins, which its network holds: the network wires them (``outer_hops``, from the ports
-it read, ``Neighbours``) and places them around the channel's netlist. It states its
-boundary's AXIS bus (``boundary_bus``) and its mover's contract (``mover_contracts``, one or none:
-``placed_mover``, from the mover's own derived ``contract``). It is no module of its own.
+it read, ``Neighbours``) and places them around the channel's netlist; it reads the
+module's AXIS buses of its outer ports (``physical_pins``). It states its mover's contract
+(``mover_contracts``, one or none: ``placed_mover``, from the mover's own derived
+``contract``). It is no module of its own.
 """
 
 from __future__ import annotations
@@ -110,10 +114,9 @@ from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.steps import Steps, Unrealizable
 from finn.dataflow.steps import steps as between
 from finn.dataflow.streams import Stream, Streams, misfit
-from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import (
     BeatSequence,
-    LevelEnd,
     Loop,
     Traversal,
     one_pass,
@@ -132,7 +135,6 @@ from finn.kernels.adapters import (
     realize,
 )
 from finn.kernels.artifacts import ArtifactError
-from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.artifacts.module import Fragment, Link, LinkEnd, Marker
 from finn.kernels.base import (
     Kernel,
@@ -141,14 +143,15 @@ from finn.kernels.base import (
 )
 from finn.kernels.control import presented
 from finn.kernels.fifo import FifoKernel
-from finn.kernels.laws import AXIS_CLOCKING, TimedPace
+from finn.kernels.laws import Axis, TimedPace, TransportKind
 from finn.kernels.library import leaf_at_root
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.movers import IodmaMover, MoverContract, MoverOffer
 from finn.kernels.policies import Alone, FirstValid, Policy, Required, defaulted, stated
+from finn.kernels.port import stream_pins as pins_of
+from finn.kernels.port_model import InPort, OutPort
 from finn.kernels.sides import BUILD, ROW_MAJOR, Outside, Side, SideKind, beat_times
 from finn.kernels.transport import (
-    AxisBeat,
     Mismatch,
     StreamPins,
     compatibility,
@@ -176,28 +179,6 @@ OUTPUT_ADAPTER_LABEL = "output_adapter.vpc"
 
 _PLACED = {"source": SOURCE_LABEL, "output_adapter": OUTPUT_ADAPTER_LABEL}
 """Each placement's node, and the label the channel's netlist places it at."""
-
-
-def boundary_pins(
-    name: str, element: ScalarEncoding, sequence: BeatSequence, endpoint: Endpoint
-) -> StreamPins:
-    """The AXIS port a composed module presents for one of its own channels: the stream
-    ``sequence`` of ``element`` on an AXIS bus named ``name``."""
-    if len(sequence.markers) > 1:
-        raise ValueError("an AXIS boundary carries at most one marker")
-    form = sequence.form
-    if not isinstance(form, Traversal):
-        raise ValueError("the physical boundary schema does not yet support Grouped")
-    if any(not isinstance(rule, LevelEnd) for rule in sequence.markers):
-        raise ValueError("the physical boundary does not yet support held LevelDone markers")
-    beat = AxisBeat(name, element.dtype, form.lanes, endpoint=endpoint, last=bool(sequence.markers))
-    transport = beat.native(clock=AXIS_CLOCKING.clock, reset=AXIS_CLOCKING.reset)
-    markers = (
-        ((transport.markers[0].signal, cast(LevelEnd, sequence.markers[0])),)
-        if sequence.markers
-        else ()
-    )
-    return StreamPins(transport, Stream(element, sequence), markers)
 
 
 def _link_end(instance: str | None, pins: StreamPins) -> LinkEnd:
@@ -281,20 +262,24 @@ def _kernel_of(port: PortPins, owner: str) -> str | Rejected:
 
 def _own_source(channel: Channel) -> _End:
     """The producing end a channel holds itself: its source, below it at its label, or
-    its boundary, the module's own pins."""
+    its outer input, the module's own pins; a ``ValueError`` where its producer is a
+    port, and so neither."""
     if channel.valued:
         offered: PortPins = channel.source.output.stream_pins
         return (channel.source_label, offered.pins)
-    return _own_boundary(channel)
+    if not channel.entering:
+        raise ValueError("a channel whose producer is a port has no outer input")
+    entered: PortPins = channel.outer_in.stream_pins
+    return (None, entered.pins)
 
 
-def _own_boundary(channel: Channel) -> _End:
-    """A channel's boundary, the module's own pins, as one end of a hop; a ``ValueError``
-    where it has a port on each side, and so none."""
-    found: StreamPins | None = channel.boundary
-    if found is None:
-        raise ValueError("a channel with a port on each side has no boundary")
-    return (None, found)
+def _own_sink(channel: Channel) -> _End:
+    """The consuming end a channel holds itself: its outer output, the module's own pins;
+    a ``ValueError`` where its consumer is a port, and so none."""
+    if not channel.leaving:
+        raise ValueError("a channel whose consumer is a port has no outer output")
+    left: PortPins = channel.outer_out.stream_pins
+    return (None, left.pins)
 
 
 def outer_hops(channel: Channel, neighbours: Neighbours, *, owner: str) -> OuterHops | Rejected:
@@ -302,8 +287,8 @@ def outer_hops(channel: Channel, neighbours: Neighbours, *, owner: str) -> Outer
     them), as wires (``wired``), of a channel whose netlist is answered.
 
     A port belongs to its kernel beside the channel (``_kernel_of``); a stage and the
-    source sit below the channel at their labels; a boundary side is the module's own
-    pins (``None``). Refused where a port is no kernel's (``channel-port``), or where a
+    source sit below the channel at their labels; an outer port's pins are the module's
+    own (``None``). Refused where a port is no kernel's (``channel-port``), or where a
     hop's wires do not form (``channel-link``), each finding owned by ``owner``: the
     channel's name in its partition.
     """
@@ -321,12 +306,12 @@ def outer_hops(channel: Channel, neighbours: Neighbours, *, owner: str) -> Outer
         consuming = (owners[1], neighbours.consumer.pins)
     stages: tuple[Stage, ...] = channel.stages
     # What each port meets of the channel: its first stage or its last, or, with none,
-    # the other side: the other port, or the channel's own source or boundary.
+    # the other side: the other port, or the channel's own source or outer port.
     if stages:
         into: _End = (stages[0].label, stages[0].input)
         out_of: _End = (stages[-1].label, stages[-1].output)
     else:
-        into = consuming or _own_boundary(channel)
+        into = consuming or _own_sink(channel)
         out_of = producing or _own_source(channel)
     try:
         produced = None if producing is None else wired(*producing, *into)
@@ -430,7 +415,8 @@ class ChannelSides:
     """A channel's producing and consuming sides: each its ``Side`` (``producer``,
     ``consumer``; its kind says whether it is the boundary) and its stream (``source``,
     ``sink``: a stated side's own; its source's, for a known value; on the boundary, what
-    the module's AXIS port presents, ``Channel.boundary``)."""
+    the module's AXIS port presents, the channel's outer port, ``Channel.outer_in`` or
+    ``Channel.outer_out``)."""
 
     producer: Side
     source: Stream
@@ -465,10 +451,10 @@ class Channel(Kernel):
     """One tensor between the two sides it takes: one producer, one consumer.
 
     ``producer`` and ``consumer`` are its sides, each one value (``Side``): a kernel's
-    port (its ``side``: its stream, its label, ``matmul.x``, and on an
-    output port its word width), a frozen neighbour's, the boundary's (the AXIS port its
-    label names, presented as ``boundary``, where the ``mover`` sits where the shell
-    offers one: ``offered``), or its source's. A channel with a known value places its
+    port (its ``side``: its stream, its label, ``matmul.x``, and on an output port its
+    word width), a frozen neighbour's, the boundary's (the AXIS port its label names, its
+    outer port there, ``outer_in`` or ``outer_out``, where the ``mover`` sits where the
+    shell offers one: ``offered``), or its source's. A channel with a known value places its
     ``source`` as its producer; with several sets, the source reads the set indices
     (``index_tensor``) from the channel whose consumer is its ``set`` port, the one port it
     exposes (its source's, ``set = source.set``). ``platform`` is the target's: its source, its
@@ -577,8 +563,9 @@ class Channel(Kernel):
     def sides(self) -> ChannelSides | Rejected:
         """The producing and consuming sides, without the stages between them: each its
         ``Side`` and its stream; with a known value, the producer is the channel's source
-        (its ``output_stream``); a boundary side presents what the module's AXIS port
-        presents (``boundary``). Each role takes its kinds only (``channel-users``)."""
+        (its ``output_stream``); a boundary side presents what the boundary rule or the
+        outside's statement gives it (``_outer``), what its outer port presents. Each role
+        takes its kinds only (``channel-users``)."""
         producer: Side = self.producer
         consumer: Side = self.consumer
         if not self.attached and not self.valued:
@@ -590,56 +577,98 @@ class Channel(Kernel):
         if self.valued:
             source = self.source.output.stream
         sink: Stream | None = consumer.stream
-        # A boundary side presents what the other side presents. Seen from inside, the
-        # module's input is the AXIS target and its output the initiator.
+        # A boundary side presents what the other side presents.
         try:
             if source is None and sink is not None:
-                source = _stream(self._boundary(producer, sink, Endpoint.TARGET))
+                source = self._outer(producer, sink, entering=True)
             elif sink is None and source is not None:
-                sink = _stream(self._boundary(consumer, source, Endpoint.INITIATOR))
+                sink = self._outer(consumer, source, entering=False)
         except ValueError as error:
             return reject("channel-boundary", str(error))
         if source is None or sink is None:
             return reject("channel-unused", "no present port is on this channel")
         return ChannelSides(producer, source, consumer, sink)
 
-    def _boundary(self, side: Side, inside: Stream, endpoint: Endpoint) -> StreamPins:
-        """The AXIS port the module presents for a boundary ``side`` (its label names it),
-        from what the other side presents (``inside``): an input without the replay or
-        window its receiver realizes (``unreplayed``), an output as produced, neither with
-        markers; where the outside states the side, as it states it (``stated_form``)."""
+    def _outer(self, side: Side, inside: Stream, *, entering: bool) -> Stream:
+        """What the module's AXIS port presents for a boundary ``side`` (its label names
+        it), from what the other side presents (``inside``): an input (``entering``)
+        without the replay or window its receiver realizes (``unreplayed``), an output as
+        produced, neither with markers; where the outside states the side, as it states it
+        (``stated_form``). A ``ValueError`` where the port cannot present it."""
         form = inside.sequence.form
-        if endpoint is Endpoint.TARGET:
+        if entering:
             form = unreplayed(form)
         if not isinstance(form, Traversal):
             raise ValueError("the physical boundary schema does not yet support Grouped")
         if side.outside is not None:
             form = stated_form(side.label, side.outside, form)
-        return boundary_pins(side.label, self.tensor.element, BeatSequence(form), endpoint)
+        return Stream(self.tensor.element, BeatSequence(form))
 
     @derived
-    def boundary(self) -> StreamPins | None:
-        """The AXIS port the module presents for its boundary side (``boundary_pins``:
-        the side's label, the tensor's element, and what the other side presents); None
-        where neither side is the boundary."""
+    def entering(self) -> bool:
+        """Whether its producer side is the boundary: the stream enters the module there,
+        at its outer input (``outer_in``)."""
+        return self.producer.kind is SideKind.BOUNDARY
+
+    @derived
+    def leaving(self) -> bool:
+        """Whether its consumer side is the boundary: the stream leaves the module there,
+        at its outer output (``outer_out``)."""
+        return self.consumer.kind is SideKind.BOUNDARY
+
+    @derived
+    def outer_sequence(self) -> BeatSequence:
+        """What its outer port presents: its boundary side's stream's beat sequence
+        (``sides``)."""
         found = self.sides
-        if found.producer.kind is SideKind.BOUNDARY:
-            return self._boundary(found.producer, found.sink, Endpoint.TARGET)
-        if found.consumer.kind is SideKind.BOUNDARY:
-            return self._boundary(found.consumer, found.source, Endpoint.INITIATOR)
-        return None
+        if self.entering:
+            return found.source.sequence
+        return found.sink.sequence
+
+    @derived
+    def outer_transport(self) -> TransportKind:
+        """Its outer port's transport: AXIS, on the bus its boundary side's label names
+        (``s_axis_0``, ``m_axis_0``)."""
+        side: Side = self.producer if self.entering else self.consumer
+        return Axis(bus=side.label)
+
+    # Its outer ports, each placed where its side is the boundary, presenting the boundary
+    # side's stream (``outer_sequence``) on the module's AXIS port (``outer_transport``):
+    # stepped, as a stage's side, with no pace. The outside's beat times stay a fact of the
+    # side (``Outside.pace``), which its cycles and FIFO sizing read.
+    outer_in = InPort(
+        when=entering,
+        tensor=tensor,
+        sequence=outer_sequence,
+        transport=cast("TransportKind", outer_transport),
+    )
+    outer_out = OutPort(
+        when=leaving,
+        tensor=tensor,
+        sequence=outer_sequence,
+        transport=cast("TransportKind", outer_transport),
+    )
 
     @derived
     def free_side(self) -> StreamPins | Rejected:
-        """The boundary side, as the module presents it (``boundary``): where a shell's
-        mover sits."""
-        found: StreamPins | None = self.boundary
-        if found is None:
-            return reject(
-                "channel-mover",
-                "a mover sits on a boundary's free side, and both sides have a port",
+        """The boundary side, as its outer port presents it (its stream on its pins,
+        ``finn.kernels.port.stream_pins``): where a shell's mover sits."""
+        if self.entering:
+            return pins_of(
+                self.outer_in.physical_spec(idle=False),
+                self.outer_in.stream,
+                self.outer_in.clocking,
             )
-        return found
+        if self.leaving:
+            return pins_of(
+                self.outer_out.physical_spec(idle=False),
+                self.outer_out.stream,
+                self.outer_out.clocking,
+            )
+        return reject(
+            "channel-mover",
+            "a mover sits on a boundary's free side, and both sides have a port",
+        )
 
     mover = IodmaMover(when=offered, offers=offers, side=free_side)
     mover_contract = view(mover.contract)
@@ -825,7 +854,7 @@ class Channel(Kernel):
         """Each hop's two streams, source through every stage to sink, connect directly
         (``compatibility``); and on a boundary output, the last producer's word (a stage's,
         the producing port's, its side's ``width``, or the source's) is no wider than the
-        AXIS word that carries it (``channel-padding``).
+        AXIS word that carries it, its outer output's (``channel-padding``).
 
         An element mismatch is ``well_formed``'s (``channel-tensor``: each side
         against the tensor); ``compatibility`` does not compare elements.
@@ -838,11 +867,10 @@ class Channel(Kernel):
             found += compatibility(current, stage.input)
             current, width = stage.output, stage.width
         found += compatibility(current, sides.sink)
-        boundary: StreamPins | None = self.boundary
-        if sides.consumer.kind is SideKind.BOUNDARY and boundary is not None:
-            if width is None and sides.producer.kind is not SideKind.BOUNDARY:
+        if self.leaving:
+            if width is None and not self.entering:
                 width = self.source.output.width if self.valued else sides.producer.width
-            if width is not None and width > boundary.transport.data_width:
+            if width is not None and width > self.outer_out.width:
                 found.append(
                     Mismatch(
                         "channel-padding",
@@ -864,17 +892,17 @@ class Channel(Kernel):
         stages), its source and its output adapter at their labels (``SOURCE_LABEL``,
         ``OUTPUT_ADAPTER_LABEL``), and its own hops, as wires (``wired``): each hop both of
         whose ends are its own (its source, below it at its label; its stages, at theirs;
-        its boundary, the module's own pins), from its children's stream pins (its
-        ``stages`` and its source's). Its hops to the ports beside it are its network's
-        (``outer_hops``); a channel of wires between two kernels places nothing."""
-        sides = self.sides
-        boundary: StreamPins | None = self.boundary
+        its outer ports, the module's own pins), from its children's stream pins (its
+        ``stages``, its source's and its outer ports'). Its hops to the ports beside it are
+        its network's (``outer_hops``); a channel of wires between two kernels places
+        nothing."""
         current: _End | None = None
         if self.valued:
             offered: PortPins = self.source.output.stream_pins
             current = (self.source_label, offered.pins)
-        elif sides.producer.kind is SideKind.BOUNDARY and boundary is not None:
-            current = (None, boundary)
+        elif self.entering:
+            entered: PortPins = self.outer_in.stream_pins
+            current = (None, entered.pins)
         stages: tuple[Stage, ...] = self.stages
         links: list[Link] = []
         try:
@@ -882,12 +910,9 @@ class Channel(Kernel):
                 if current is not None:
                     links.append(wired(*current, stage.label, stage.input))
                 current = (stage.label, stage.output)
-            if (
-                current is not None
-                and sides.consumer.kind is SideKind.BOUNDARY
-                and boundary is not None
-            ):
-                links.append(wired(*current, None, boundary))
+            if current is not None and self.leaving:
+                left: PortPins = self.outer_out.stream_pins
+                links.append(wired(*current, None, left.pins))
         except ArtifactError as error:
             # A hop that does not connect (another element, say) is refused by the
             # channel's constraints; its wires do not exist.
@@ -919,9 +944,10 @@ class Channel(Kernel):
         ]
         if isinstance(found, Rejected) or not paces:
             return found
-        edge: StreamPins | None = self.boundary
-        assert edge is not None  # a side the outside states is a boundary's
-        return max(found, *(beat_times(pace, edge.form.beats).span for pace in paces))
+        # A side the outside states is a boundary's: its outer port presents the edge.
+        edge: Stream = self.outer_in.stream if self.entering else self.outer_out.stream
+        beats = edge.sequence.form.beats
+        return max(found, *(beat_times(pace, beats).span for pace in paces))
 
     # What its cycles count, by kind: its source's, its adapters' and its mover's. Not the
     # base's ``member_frame_cycles``, which ranges over its transport too: a FIFO's cycles are
@@ -932,13 +958,6 @@ class Channel(Kernel):
     source_cycles = Members(MemStreamKernel.frame_cycles)
     stage_cycles = Members(StreamAdapter.frame_cycles)
     mover_cycles = Members(IodmaMover.cycles)
-
-    @view
-    def boundary_bus(self) -> tuple[Bus, ...]:
-        """The AXIS bus the module presents for it (``boundary``), when one side is the
-        boundary."""
-        found: StreamPins | None = self.boundary
-        return () if found is None else (found.transport.axis_bus(),)
 
     # The boundary channel's mover, as its contract (``MoverContract``): one, or none
     # without a mover. The shell's budget check counts their AXI-Lite buses, and it sums
@@ -1089,11 +1108,6 @@ def _misplaced(producer: Side, consumer: Side, valued: bool) -> str | None:
     return None
 
 
-def _stream(pins: StreamPins) -> Stream:
-    """The stream on ``pins``: its element and its beat sequence."""
-    return pins.stream
-
-
 def _refusal(found: Sequence[Mismatch]) -> bool | Rejected:
     if not found:
         return True
@@ -1108,7 +1122,6 @@ __all__ = [
     "ChannelSides",
     "Neighbours",
     "OuterHops",
-    "boundary_pins",
     "open_boundary_refusal",
     "outer_hops",
     "stated_by",

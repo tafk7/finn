@@ -758,12 +758,11 @@ def _check_model(
                 f"{schedule.iterations} less {dropped} dropped"
             )
         if name != fed:
-            boundary = _value(
-                design_member(point, name).query(Channel.boundary), space_type, sample
-            )
+            outer = Channel.outer_in if name in inputs else Channel.outer_out
+            edge = _value(design_member(point, name).query(outer.stream), space_type, sample)
             presented = unreplayed(form) if name in inputs else form
-            assert boundary.form == presented, (
-                f"{where}: {name}'s boundary presents {boundary.form}"
+            assert edge.sequence.form == presented, (
+                f"{where}: {name}'s outer port presents {edge.sequence.form}"
             )
 
 

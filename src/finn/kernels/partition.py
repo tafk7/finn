@@ -705,11 +705,16 @@ class Partition:
                 elif not isinstance(control, Inapplicable):
                     failed.append((name, control))
             else:
-                buses = self.query(name, Channel.boundary_bus)
-                if isinstance(buses, Available):
-                    boundary.extend(buses.value)
-                else:
-                    failed.append((name, buses))
+                # Its outer port's pins, where it places one: the module's AXIS bus.
+                channel = self.member(name)
+                for outer in (Channel.outer_in, Channel.outer_out):
+                    pins = self._result(name, channel.query(outer.physical_pins))
+                    if isinstance(pins, Available):
+                        buses = [pin for pin in pins.value if isinstance(pin, Bus)]
+                        assert len(buses) == len(pins.value)  # an AXIS port's pins: its bus
+                        boundary.extend(buses)
+                    elif not isinstance(pins, Inapplicable):
+                        failed.append((name, pins))
         if failed:
             rejected = [(name, each) for name, each in failed if isinstance(each, Rejected)]
             findings = tuple(

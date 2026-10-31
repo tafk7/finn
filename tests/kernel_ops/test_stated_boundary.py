@@ -26,6 +26,7 @@ import pytest
 from qonnx.core.modelwrapper import ModelWrapper
 from support.models import kernel_model
 from support.packaging import PackagedByStub
+from support.ports import outer
 from support.refusals import refused
 from support.tfc import ULTRA96
 
@@ -188,7 +189,7 @@ def test_a_stated_pace_slower_than_the_members_bounds_the_partition_s_frame(
     stated = {port: {"pace": {"every": 3}}}
     parent = step_verify_partition(cut(tmp_path, stated), build(tmp_path, stated))
     channel = body_of(parent).member(tensor)
-    assert channel.boundary.form.beats == 6 and channel.frame_cycles == 18
+    assert outer(channel).form.beats == 6 and channel.frame_cycles == 18
     assert period(tmp_path) == 18
     assert sized(tmp_path)[tensor] == (0, 0, "direct absorbs it")
     cut(tmp_path / "unstated", {})
@@ -208,10 +209,10 @@ def test_stated_lanes_place_a_width_step_and_the_port_takes_the_stated_word(
     )
     y = body_of(parent).member("y")
     assert y.output_adapting and [stage.kind for stage in y.output_adapter.chain] == ["vpc"]
-    assert (y.boundary.form.lanes, y.boundary.form.beats) == (4, 3)
-    assert y.boundary.transport.data_width == 24
+    assert (outer(y).form.lanes, outer(y).form.beats) == (4, 3)
+    assert outer(y).transport.data_width == 24
     unstated = body_of(cut(tmp_path / "unstated", {})).member("y")
-    assert not unstated.output_adapting and unstated.boundary.transport.data_width == 16
+    assert not unstated.output_adapting and outer(unstated).transport.data_width == 16
     _, body, _ = partition_body(parent)
     stub = cast(Toolchain, PackagedByStub())
     body.transform(PackagePartition("sdp_1", directory=tmp_path / "ip", toolchain=stub))
@@ -227,7 +228,7 @@ def test_an_output_stated_only_its_pace_is_as_produced(tmp_path: Path) -> None:
     stated = body_of(cut(tmp_path, {"m_axis_0": {"pace": {"every": 2}}})).member("y")
     unstated = body_of(cut(tmp_path / "unstated", {})).member("y")
     assert stated.consumer.outside == Outside(BUILD, pace=Steady(2))
-    assert stated.boundary == unstated.boundary and not stated.output_adapting
+    assert outer(stated) == outer(unstated) and not stated.output_adapting
 
 
 def test_a_slice_reads_the_statement_of_an_edge_that_is_a_partition_port(
@@ -338,6 +339,6 @@ def test_untimed_cut_keeps_tensor_association_and_logical_presentation(tmp_path:
     assert read_boundary(body) == {"y": stated}
     y = in_shell(body, body.graph.node).member("y")
     assert y.consumer.outside == stated and y.consumer.label == "m_axis_0"
-    assert (y.boundary.form.lanes, y.boundary.form.beats) == (4, 3)
+    assert (outer(y).form.lanes, outer(y).form.beats) == (4, 3)
     # The boundary port carries no pace: what the outside states of it owns one, here none.
-    assert y.boundary.form.row_major and y.consumer.outside.pace is None
+    assert outer(y).form.row_major and y.consumer.outside.pace is None

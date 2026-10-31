@@ -29,6 +29,7 @@ from support.models import (
     streamed_w2_model,
 )
 from support.packaging import NO_VIVADO, verified, verified_parent
+from support.ports import outer
 from support.refusals import refused
 from support.tfc import ULTRA96
 
@@ -359,7 +360,7 @@ def test_a_tiled_w2_is_regrouped_after_its_mover_by_a_vpc_and_an_input_gen(case:
     }
     w2 = bound.member("w2")
     row_major = Traversal((4, 4), (Loop(4, 4),), (Loop(4, 1),))
-    assert w2.boundary.form == row_major and w2.boundary.transport.data_width == 16
+    assert outer(w2).form == row_major and outer(w2).transport.data_width == 16
     read = w2.streams.sink.sequence.form
     assert read == Traversal(
         (4, 4),
@@ -427,7 +428,7 @@ def test_a_row_major_w2_on_three_rows_is_replayed_by_an_input_gen_after_its_move
     bound = in_shell(model, model.graph.node)
     w2 = bound.member("w2")
     assert bound.validity("w2").status == "valid"
-    assert (w2.boundary.form.lanes, w2.boundary.form.beats) == (4, 4)
+    assert (outer(w2).form.lanes, outer(w2).form.beats) == (4, 4)
     assert w2.input_chain == "input_gen" and w2.adapter.frame_bits == 16 * 3
     assert ("w2", "adapter_ram_style") in bound.chosen()
     mover = w2.mover_contract
@@ -437,7 +438,7 @@ def test_a_row_major_w2_on_three_rows_is_replayed_by_an_input_gen_after_its_move
     ip = kernel_model(second_weights=False)
     configured(ip, {"second": ROW_MAJOR_W2})
     unstated = in_shell(ip, ip.graph.node).member("w2")
-    assert unstated.boundary.form.beats == 12 and unstated.input_chain == "none"
+    assert outer(unstated).form.beats == 12 and unstated.input_chain == "none"
 
 
 def test_x_read_twice_on_one_row_is_replayed_by_an_input_gen_after_its_mover() -> None:
@@ -449,12 +450,12 @@ def test_x_read_twice_on_one_row_is_replayed_by_an_input_gen_after_its_mover() -
     bound = in_shell(model, model.graph.node)
     x = bound.member("x")
     assert bound.validity("x").status == "valid"
-    assert (x.boundary.form.beats, x.mover_contract.beats) == (2, 2)
+    assert (outer(x).form.beats, x.mover_contract.beats) == (2, 2)
     assert x.input_chain == "input_gen" and x.adapter.frame_bits == 4 * 3
     assert x.input_steps.describe() == "reorder -> markers"
     assert ("x", "adapter_ram_style") in bound.chosen()
     ip = kernel_model(second_weights=False, rows=1)
-    assert in_shell(ip, ip.graph.node).member("x").boundary.form.beats == 4
+    assert outer(in_shell(ip, ip.graph.node).member("x")).form.beats == 4
 
 
 def test_a_mover_or_bus_the_block_design_cannot_wire_is_refused_by_name(tmp_path: Path) -> None:

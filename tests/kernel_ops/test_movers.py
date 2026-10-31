@@ -36,6 +36,7 @@ from support.models import (
     configure_partition,
     kernel_model,
 )
+from support.ports import outer
 from support.tfc import ULTRA96
 from support.xsim import requires_xsim
 
@@ -254,12 +255,12 @@ def test_an_iodma_s_side_read_again_or_reordered_is_joined_by_an_input_gen_at_th
     the mover moves the one pass, 8 beats, not 24."""
     for form in (vector_major((4, 6), 3), vector_major((1, 784), 4), tile(4, 6, 1, 6)):
         moved = iodma_edge(form)
-        assert moved.boundary.form == form and moved.input_chain == "none" and valid(moved)
+        assert outer(moved).form == form and moved.input_chain == "none" and valid(moved)
     rows = vector_major((4, 6), 3)
     columns = Traversal.over((4, 6), ((1, 2, 3), (0, 4, 1)), ((1, 3, 1),))
     for form in (rows.repeated(3), columns):
         joined = iodma_edge(form)
-        assert joined.boundary.form == rows and joined.input_chain == "input_gen"
+        assert outer(joined).form == rows and joined.input_chain == "input_gen"
         assert joined.adapter.frame_bits == 4 * 6 * 8 and valid(joined)
         assert (joined.mover_contract.beats, joined.mover_contract.tdata) == (8, 24)
 
@@ -276,7 +277,7 @@ def test_an_iodma_s_side_read_in_tiles_is_regrouped_by_a_vpc_and_an_input_gen() 
     six, three = vector_major((4, 6), 6), vector_major((4, 6), 3)
     halves = Traversal((4, 6), (Loop(2, 12), Loop(2, 3), Loop(2, 6)), (Loop(3, 1),))
     joined = iodma_edge(tiles)
-    assert joined.boundary.form == six and joined.boundary.transport.data_width == 48
+    assert outer(joined).form == six and outer(joined).transport.data_width == 48
     hops = joined.steps.hops
     assert joined.steps.describe() == "width_conversion -> reorder -> width_conversion"
     assert [hop.source.form for hop in hops] == [six, three, halves]
@@ -316,7 +317,7 @@ def test_an_iodma_s_side_nothing_joins_is_refused_by_channel_steps_naming_the_mo
     half = Traversal.over((4, 6), ((0, 2, 2),), ((1, 6, 1),))
     assert sorted(int(offset) for offset in offsets(half)) == [*range(6), *range(12, 18)]
     refused = iodma_exit(half)
-    assert refused.boundary.form == vector_major((4, 6), 6)
+    assert outer(refused).form == vector_major((4, 6), 6)
     found = refused.query(Channel.steps)
     assert isinstance(found, Rejected)
     assert [(finding.code, finding.message) for finding in found.findings] == [
@@ -401,7 +402,7 @@ def test_each_boundary_side_is_stated_by_the_mover_its_shell_offers() -> None:
     assert x.producer.outside == y.consumer.outside == iodma_hls(128).states()
     ip = chain_network(TARGET)
     assert ip.member("x").producer.outside is None and ip.member("y").consumer.outside is None
-    assert x.boundary == ip.member("x").boundary and y.boundary == ip.member("y").boundary
+    assert outer(x) == outer(ip.member("x")) and outer(y) == outer(ip.member("y"))
 
 
 def test_the_shell_s_resources_are_its_partition_s_its_movers_and_its_static_region_s() -> None:
@@ -511,7 +512,7 @@ def test_a_pass_its_mover_moves_once_replayed_at_the_edge_computes_what_onnx_com
     write_target(model, ULTRA96)
     model = model.transform(MakeCutChoices())
     w2 = choose_memories(model).member("w2")
-    assert (w2.input_chain, w2.boundary.form.beats) == ("input_gen", 4)
+    assert (w2.input_chain, outer(w2).form.beats) == ("input_gen", 4)
     check_parity(model, tmp_path, inputs=boundary_inputs(model, 4), label="replayed")
 
 

@@ -20,6 +20,7 @@ from typing import Any
 import pytest
 from support import chain
 from support.helpers import FULL_DSP48E2, by_hand, choose, keyed, with_defaults
+from support.ports import outer
 from support.refusals import refused
 from support.xsim import requires_xsim
 
@@ -289,7 +290,7 @@ def test_sizing_reads_a_stated_pace_first_on_either_side() -> None:
         Outside(BUILD, pace=Steady(3)), Outside(BUILD, pace=BeatTimes(tuple(range(12)), 12))
     )
     x, y = point.member("x"), point.member("y")
-    assert x.boundary.form.beats == 3 and x.input_chain == "input_gen"
+    assert outer(x).form.beats == 3 and x.input_chain == "input_gen"
     supply, accept = sides(x, point.neighbours("x"))
     assert supply == Pattern((0, 3, 6), 9)
     assert isinstance(accept, Buffered) and accept.reads == Pattern(tuple(range(12)), 12)
@@ -318,7 +319,7 @@ def test_a_stated_pace_slower_than_the_members_bounds_the_channel_s_cycles_on_ei
     assert explorer.cost(unstated).bottleneck.cycles == 12  # type: ignore[union-attr]
     slow = _stated(Outside(BUILD, pace=Steady(6)), None)
     x = slow.member("x")
-    assert x.boundary.form.beats == 3 and x.query(Channel.frame_cycles).value == 18
+    assert outer(x).form.beats == 3 and x.query(Channel.frame_cycles).value == 18
     assert explorer.cost(slow).bottleneck == Bottleneck(("x",), 18)
     assert slow.chosen() == unstated.chosen()
     supply, _ = sides(x, slow.neighbours("x"))
@@ -326,7 +327,7 @@ def test_a_stated_pace_slower_than_the_members_bounds_the_channel_s_cycles_on_ei
     assert size(x, slow.neighbours("x"), 18) == Sized(0, "direct absorbs it", 12, 0)
     slow = _stated(None, Outside(BUILD, pace=Steady(3)))
     y = slow.member("y")
-    assert y.boundary.form.beats == 12 and y.query(Channel.frame_cycles).value == 36
+    assert outer(y).form.beats == 12 and y.query(Channel.frame_cycles).value == 36
     assert explorer.cost(slow).bottleneck == Bottleneck(("y",), 36)
     # TargetCycles relaxes its budget of 12 to the 36 reached, and folds again to it.
     assert explorer.cost(slow).cycles["first"] == 24

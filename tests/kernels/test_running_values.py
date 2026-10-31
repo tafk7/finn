@@ -95,11 +95,10 @@ from finn.dataflow.streams import Stream
 from finn.dataflow.traversal import LevelEnd, Repetition
 from finn.kernels import composer
 from finn.kernels.artifacts.abi import Clocking, Endpoint
-from finn.kernels.channels import boundary_pins
-from finn.kernels.laws import NATIVE, Axis, AxisSpelling, Interval, Native, Standing
+from finn.kernels.laws import AXIS_CLOCKING, NATIVE, Axis, AxisSpelling, Interval, Native, Standing
 from finn.kernels.matmul import KnownWeights
 from finn.kernels.movers import MoverOffer, iodma_hls
-from finn.kernels.port import LoopEnds
+from finn.kernels.port import LoopEnds, PhysicalPort, stream_pins
 from finn.kernels.sides import Side, SideKind
 from finn.kernels.transport import MarkerKind
 from finn.kernels.values.domains import Integer
@@ -319,7 +318,7 @@ def samples() -> dict[str, list[object]]:
     """Each name's samples: the configured Chain's facts and stored choices (each by its
     member's type), its channels' sides (a kernel's, which the channel is given from it), a
     copy of its first side, the stream contracts the streams of its sides make as a
-    channel's free side (a mover's side), and the values ``made`` here."""
+    channel's outer port presents them (a mover's side), and the values ``made`` here."""
     found: dict[str, list[object]] = {}
     network = chain()
     current = held(network.point).ds
@@ -336,7 +335,7 @@ def samples() -> dict[str, list[object]]:
     sides.append(dataclasses.replace(sides[0]))  # an equal one, another object
     streams = [side.stream for side in sides if side.stream is not None]
     found["StreamPins"] = [
-        boundary_pins("stream", stream.element, stream.sequence, endpoint)
+        stream_pins(PhysicalPort("stream", endpoint, Axis(bus="stream")), stream, AXIS_CLOCKING)
         for stream in streams
         for endpoint in Endpoint
     ]

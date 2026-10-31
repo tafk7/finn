@@ -31,6 +31,7 @@ from typing import Any
 import pytest
 from qonnx.core.datatype import DataType
 from support.helpers import FULL_DSP48E2, choose, matmul_point
+from support.ports import outer
 
 from finn.core.space import Available, Rejected, design_space, inspection
 from finn.core.space._running.cache import key, value_class
@@ -304,7 +305,8 @@ def test_a_channel_between_two_ports_takes_each_side() -> None:
     sides = point.sides
     assert (sides.producer, sides.consumer) == (OUTPUT, INPUT)
     assert (sides.source_owner, sides.sink_owner) == ("producer.y", "consumer.x")
-    assert point.boundary is None and not point.offered
+    assert not point.present(Channel.outer_in) and not point.present(Channel.outer_out)
+    assert not point.offered
 
 
 def test_a_valued_channel_with_a_producer_other_than_its_source_is_refused() -> None:
@@ -367,13 +369,16 @@ def test_two_boundaries_are_no_channel() -> None:
 
 def test_an_unstated_boundary_presents_its_other_side_at_the_port_its_label_names() -> None:
     entering = channel(Side.boundary("s_axis_0"), INPUT)
-    assert entering.boundary.transport.name == "s_axis_0"
-    assert entering.boundary.transport.endpoint is Endpoint.TARGET
-    assert entering.sides.source == Stream(INT3, entering.boundary.sequence)
+    # Its outer input, placed where its producer side is the boundary, and no outer output.
+    assert entering.present(Channel.outer_in) and not entering.present(Channel.outer_out)
+    assert outer(entering).transport.name == "s_axis_0"
+    assert outer(entering).transport.endpoint is Endpoint.TARGET
+    assert entering.sides.source == Stream(INT3, outer(entering).sequence)
     assert entering.sides.owners == (None, "consumer.x")
     leaving = channel(OUTPUT, Side.boundary("m_axis_0"))
-    assert leaving.boundary.transport.name == "m_axis_0"
-    assert leaving.boundary.transport.endpoint is Endpoint.INITIATOR
+    assert leaving.present(Channel.outer_out) and not leaving.present(Channel.outer_in)
+    assert outer(leaving).transport.name == "m_axis_0"
+    assert outer(leaving).transport.endpoint is Endpoint.INITIATOR
     assert leaving.sides.owners == ("producer.y", None)
 
 
@@ -448,10 +453,9 @@ def test_untimed_boundary_presents_logical_fields_without_a_timing_query() -> No
     """Logical presentation is available independently of timing-specific consumers."""
     stated = Outside(BUILD, ROW_MAJOR, 1, 4)
     point = channel(OUTPUT, Side.boundary("m_axis_0", outside=stated))
-    answer = point.query(Channel.boundary)
+    answer = point.query(Channel.outer_out.stream)
     assert isinstance(answer, Available)
-    presented = answer.value
-    assert presented is not None
+    presented = answer.value.sequence
     assert presented.form.lanes == 4 and presented.form.beats == 3
     assert presented.form.row_major
     assert stated.pace is None

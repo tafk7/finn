@@ -98,7 +98,7 @@ def test_an_adapted_channel_places_its_stage_and_wires_each_hop() -> None:
     ((label, leaf),) = fragment.instances
     assert label == "adapter.input_gen.input_gen"
     assert isinstance(leaf, Leaf) and leaf.name == "input_gen"
-    # Its own hop, from its boundary to its stage; the hop to compute's port is the
+    # Its own hop, from its outer input to its stage; the hop to compute's port is the
     # partition's, placed after it.
     (into,) = fragment.links
     assert (into.source.instance, into.sink.instance) == (None, label)
@@ -110,10 +110,11 @@ def test_an_adapted_channel_places_its_stage_and_wires_each_hop() -> None:
     assert out.sink.data == "s_axis_input_tdata" and out.lanes == (0, 1) and out.lane_bits == 3
     # The frame marker: the input_gen's olst bit closing each reduction drives TLAST.
     assert out.markers == (("olst", 1, "s_axis_input_tlast", None),)
-    # A direct channel is one hop, the partition's, and only a boundary channel presents
-    # a bus. The partition's netlist: each channel's hops in the order the stream runs.
+    # A direct channel is one hop, the partition's, and only a boundary channel's outer
+    # port presents a bus. The partition's netlist: each channel's hops in the order the
+    # stream runs.
     assert point.member("y").netlist.links == ()
-    assert [bus.name for bus in point.member("y").boundary_bus] == ["out0_V"]
+    assert [bus.name for bus in point.member("y").outer_out.physical_pins] == ["out0_V"]
     staged = f"x.{label}"
     assert links(point) == [
         (None, staged),

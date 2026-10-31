@@ -73,6 +73,7 @@ from itertools import accumulate
 from math import ceil
 from typing import Protocol
 
+from finn.dataflow.streams import Stream
 from finn.kernels.adapters import Convert
 from finn.kernels.base import PortPins
 from finn.kernels.channels import Channel, Neighbours
@@ -81,7 +82,6 @@ from finn.kernels.input_generator import Generate, NestBuffer, nest_buffer
 from finn.kernels.laws import Standing, TimedPace
 from finn.kernels.movers import MoverContract
 from finn.kernels.sides import BeatTimes, Side, SideKind, Steady, beat_times
-from finn.kernels.transport import StreamPins
 
 
 @dataclass(frozen=True)
@@ -356,14 +356,13 @@ def stated_pattern(pace: BeatTimes | Steady, beats: int) -> Pattern:
 
 def _free(channel: Channel, side: Side) -> Pattern:
     """A boundary's free side (``side``), paced, in order: by the pace the outside states
-    (``stated_pattern``, at the beats the edge presents a frame); else by its mover, its
-    beat times and its cycles a frame; else, an unstated side without a mover, not
-    modelled ("a boundary: not modelled")."""
+    (``stated_pattern``, at the beats the edge, its outer port, presents a frame); else by
+    its mover, its beat times and its cycles a frame; else, an unstated side without a
+    mover, not modelled ("a boundary: not modelled")."""
     outside = side.outside
     if outside is not None and outside.pace is not None:
-        edge: StreamPins | None = channel.boundary
-        assert edge is not None  # a channel with a boundary side presents its port
-        return stated_pattern(outside.pace, edge.form.beats)
+        edge: Stream = channel.outer_in.stream if channel.entering else channel.outer_out.stream
+        return stated_pattern(outside.pace, edge.sequence.form.beats)
     if not channel.offered:
         raise NotModelled("a boundary: not modelled")
     contract: MoverContract = channel.mover_contract
