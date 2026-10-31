@@ -29,6 +29,9 @@ Its initiation interval is 1, **assumed** (``interval``): its top's pipelines re
 of Vitis HLS (``pool_top``'s ``from_axis`` and ``to_axis``, and ``pooling_stream``'s own
 pipeline), and nothing reads what the synthesis achieves. Its cycles a frame and the
 sizing of the FIFOs beside it use it, and say so (``finn.kernels.fifo_sizing.assumed``).
+Its intake is a form fitted to traces, **assumed** within the profile they cover
+(``INTAKE_PROFILE``: the window's beats and the period traced, the part and tool stated) and
+unstated outside it (``intake``).
 
 Its domain is what that hardware takes: ordinary integers (``max`` over
 ``ap_int``/``ap_uint``), any window and stride its channel can present, any PE
@@ -59,7 +62,16 @@ from finn.kernels.artifacts.abi import Direction
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource, HlsSource
 from finn.kernels.artifacts.hls import axis_type
 from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
-from finn.kernels.laws import Axis, AxisSpelling, Intake, Interval, PortIntake, Standing
+from finn.kernels.laws import (
+    INTAKE_UNSTATED,
+    Axis,
+    AxisSpelling,
+    Intake,
+    IntakeProfile,
+    Interval,
+    PortIntake,
+    Standing,
+)
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port import axis
 from finn.kernels.port_model import StreamPort
@@ -159,14 +171,18 @@ void {name}(hls::stream<InBeat> &s_axis, hls::stream<OutBeat> &m_axis) {{
 """
 
 
-#: Where its intake is measured, under what conditions, and where it is stated beyond them.
-_INTAKE_MEASURED = (
+#: The traces its intake's form in K is fitted to, and their conditions.
+_INTAKE_TRACES = (
     "a form in K, the window's beats, fitted to Vivado 2025.2 simulation traces of pool_top "
     "as Vitis HLS 2025.2 synthesizes it for an xczu3eg: "
     "windows 2x2, 2x3, 3x3 (strides equal and 1), PE 1, 3, 6, "
     "INT4 and INT8, at 5 ns; 2x2 at 2.5 and 10 ns, 3x3 at 2.5 ns; the output stalled from "
-    "reset, and paced one beat in 64 cycles, two in 48, five in 96; stated beyond them, "
-    "unmeasured: at other windows, on other parts (Versal's included) and at other periods"
+    "reset, and paced one beat in 64 cycles, two in 48, five in 96; assumed between them, "
+    "within its profile"
+)
+#: Where the form holds: the part and tool traced, K and the period within the traced ranges.
+INTAKE_PROFILE = IntakeProfile(
+    part="xczu3eg", tool="Vitis HLS 2025.2", ranges=(("K", 4, 9), ("period_ns", 2.5, 10.0))
 )
 
 
@@ -293,23 +309,32 @@ class PoolKernel(Kernel):
         return ELEMENTS.check(self.input_tensor.element.dtype)
 
     @derived
-    def intake(self) -> Intake:
-        """Measured (CONTRACT.md § 5): an HLS top's registers and FIFOs are its synthesis's,
-        not text it states, so they are read from a trace of its RTL. ``pooling_stream``
-        reduces each window's ``K = KH * KW`` beats into one result, and its top's FIFOs and
-        AXIS registers hold whole results; with its output stalled from reset it took
-        ``4K + 5`` beats and stopped, and under stalls between output beats it held at most
-        ``5K + 5``, at every window, stride, PE and element measured (``_INTAKE_MEASURED``),
+    def intake(self) -> Intake | Rejected:
+        """Fitted to traces (CONTRACT.md § 5): an HLS top's registers and FIFOs are its
+        synthesis's, not text it states, so they are read from traces of its RTL.
+        ``pooling_stream`` reduces each window's ``K = KH * KW`` beats into one result, and its
+        top's FIFOs and AXIS registers hold whole results; with its output stalled from reset
+        it took ``4K + 5`` beats and stopped, and under stalls between output beats it held at
+        most ``5K + 5``, at every window, stride, PE and element traced (``_INTAKE_TRACES``),
         at 5 and 10 ns. At 2.5 ns its synthesis adds a register, one beat more on each. So
         below 5 ns it holds at most one more, and at 2.5 ns or less takes one more before it
-        stops: between, the register's period is not measured, and each bound keeps its
-        side. The form in ``K`` is fitted to three windows (``K`` 4, 6 and 9) on one part at
-        2.5 to 10 ns and stated beyond them, at every window, part and period, as its source
-        says: its FIFOs and registers holding whole results make the form in ``K`` likely,
-        but no other part, and no period below 2.5 ns, is measured."""
+        stops: between, the register's period is not traced, and each bound keeps its side.
+
+        The form is fitted to three windows (``K`` 4, 6 and 9) at 2.5 to 10 ns on one part:
+        within that profile (``INTAKE_PROFILE``) it stands **assumed**, holding between the
+        traces; outside it, at another ``K`` or period, Pool states none
+        (``intake-unstated``), naming the profile. The part and tool are stated and not
+        checked: a platform names neither."""
         rows, columns = self.window
         window = rows * columns
         period = self.platform.period_ns
+        outside = INTAKE_PROFILE.outside(K=window, period_ns=period)
+        if outside:
+            return reject(
+                INTAKE_UNSTATED,
+                f"{type(self).__qualname__} states its fitted intake within its profile "
+                f"({INTAKE_PROFILE}), not at {', '.join(outside)}",
+            )
         before = 4 * window + 5 + int(period <= 2.5)
         most = 5 * window + 5 + int(period < 5.0)
         rule = (
@@ -317,9 +342,10 @@ class PoolKernel(Kernel):
             f"five beats or more with its output stalled ({window} beats a window); resumes "
             "as the output takes each window's result"
         )
-        return Intake(
-            (PortIntake("input", before, most, rule, Standing.MEASURED, _INTAKE_MEASURED),)
+        entry = PortIntake(
+            "input", before, most, rule, Standing.ASSUMED, _INTAKE_TRACES, INTAKE_PROFILE
         )
+        return Intake((entry,))
 
     @view
     def resource_use(self) -> Resources | Rejected:
@@ -355,4 +381,4 @@ class PoolKernel(Kernel):
     module_spec: ClassVar[ModuleSpec] = ModuleSpec(STEM)
 
 
-__all__ = ["DIRECTIVES", "HEADERS", "PoolKernel", "STEM", "element_type"]
+__all__ = ["DIRECTIVES", "HEADERS", "INTAKE_PROFILE", "PoolKernel", "STEM", "element_type"]

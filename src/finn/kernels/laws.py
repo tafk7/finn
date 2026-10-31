@@ -20,7 +20,8 @@ read here rather than spell themselves:
 - the idle level (``IDLE_LEVEL``), AXIS's byte padding (``axis_carrier``) and the one
   marker an AXIS beat carries (``AXIS_MARKERS``).
 
-And the terms a kernel states its intake in (``Intake``, ``PortIntake``, ``Standing``):
+And the terms a kernel states its intake in (``Intake``, ``PortIntake``, ``Standing``, and a
+fitted intake's ``IntakeProfile``):
 intake is no law, every kernel states its own from its RTL, but its shape, its unit and
 its standing are the library's, and so is its answer where a kernel states none
 (``INTAKE_UNSTATED``).
@@ -176,14 +177,54 @@ _ADVANCE_LAWS = {
 class Standing(Enum):
     """What a statement (an intake, an initiation interval) stands on: ``STRUCTURAL``, read
     from the RTL (exact or bounded, cited by file and line); ``MEASURED``, for an HLS
-    kernel, from recorded traces, with their conditions: a form fitted to them is stated,
-    and where it is used beyond them, the source says so (CONTRACT.md § 5); ``ASSUMED``, an
+    kernel, from recorded traces, at their conditions (CONTRACT.md § 5); ``ASSUMED``, an
     admission assumption, named, with what it rests on and no measurement behind it (an HLS
-    pragma's requested initiation interval)."""
+    pragma's requested initiation interval; a form fitted to traces, between them, within
+    its ``IntakeProfile``)."""
 
     STRUCTURAL = "structural"
     MEASURED = "measured"
     ASSUMED = "assumed"
+
+
+@dataclass(frozen=True)
+class IntakeProfile:
+    """Where an intake fitted to traces holds: the ``part`` and ``tool`` version the traces
+    were taken on, and its form's domain, ``ranges``, each a quantity's name and the least
+    and most it was traced at, inclusive (``("K", 4, 9)``). Inside it the form's value
+    stands **assumed** (it holds between traces); outside, the kernel states no intake
+    (``INTAKE_UNSTATED``), naming the profile. A kernel checks its ranges (``outside``);
+    the part and tool are stated and not checked, until a platform names its part."""
+
+    part: str
+    tool: str
+    ranges: tuple[tuple[str, int | float, int | float], ...]
+
+    def __post_init__(self) -> None:
+        if not self.part or not self.tool:
+            raise ValueError("a profile names the part and the tool its traces were taken on")
+        names = [name for name, _, _ in self.ranges]
+        if not names or len(set(names)) != len(names):
+            raise ValueError(f"a profile states each quantity's range once, not {names}")
+        for name, least, most in self.ranges:
+            bounds = (least, most)
+            if not name or any(type(b) not in (int, float) for b in bounds) or least > most:
+                raise ValueError(f"{name!r}: a range is two numbers, least first, not {bounds}")
+
+    def outside(self, **values: int | float) -> tuple[str, ...]:
+        """Each of ``values``, by its quantity's name, that lies outside its range."""
+        ranges = {name: (least, most) for name, least, most in self.ranges}
+        if set(values) != set(ranges):
+            raise ValueError(f"a profile is checked at {sorted(ranges)}, not {sorted(values)}")
+        return tuple(
+            f"{name} {value}"
+            for name, value in values.items()
+            if not ranges[name][0] <= value <= ranges[name][1]
+        )
+
+    def __str__(self) -> str:
+        domain = ", ".join(f"{name} {least}..{most}" for name, least, most in self.ranges)
+        return f"{domain}; traced on {self.part} with {self.tool} (part and tool not checked)"
 
 
 @dataclass(frozen=True)
@@ -198,7 +239,8 @@ class PortIntake:
     RTL counts something else than the port's beats, ``before_stop`` rounds down and
     ``most`` up.
     ``rule``: when it stops and when it resumes; ``source``: where both are read, the RTL's
-    file and lines at the library's pin, or the trace and its conditions."""
+    file and lines at the library's pin, or the trace and its conditions; ``profile``: for a
+    form fitted to traces, where it holds (``IntakeProfile``), its standing **assumed**."""
 
     port: str
     before_stop: int
@@ -206,6 +248,7 @@ class PortIntake:
     rule: str
     standing: Standing
     source: str
+    profile: IntakeProfile | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.port, str) or not self.port:
@@ -218,6 +261,10 @@ class PortIntake:
             raise ValueError(f"{self.port}: an intake's standing is a Standing")
         if not self.rule or not self.source:
             raise ValueError(f"{self.port}: an intake states its rule and where it is read")
+        if self.profile is not None and (
+            not isinstance(self.profile, IntakeProfile) or self.standing is not Standing.ASSUMED
+        ):
+            raise ValueError(f"{self.port}: a fitted intake's profile is one, its standing assumed")
 
     def under(self, member: str) -> PortIntake:
         """The intake as seen from where ``member`` is held."""
@@ -465,6 +512,7 @@ __all__ = [
     "IDLE_LEVEL",
     "INTAKE_UNSTATED",
     "Intake",
+    "IntakeProfile",
     "Interval",
     "LAWS",
     "Law",

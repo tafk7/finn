@@ -5,9 +5,10 @@
 
 Its terms are the laws module's (``PortIntake``, ``Intake``, ``Standing``): one entry an
 input port, in beats of that port, read from the RTL (structural) or, for an HLS kernel,
-measured. The base answers a kernel with a module that states none ``intake-unstated``, by
-name, and its design point stays valid; a kernel with children derives its own from its
-members', a port it serves by its name, any other below the member.
+fitted to traces and assumed within their profile. The base answers a kernel with a module
+that states none ``intake-unstated``, by name, and its design point stays valid; a kernel
+with children derives its own from its members', a port it exposes by its name, any other
+below the member.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from support.helpers import (
     FULL_DSP48E2,
     FULL_DSP58,
     codes,
+    full_platform,
     fifo_node,
     nested,
     placed_dotp,
@@ -53,16 +55,17 @@ from finn.kernels.laws import (
     NATIVE,
     NATIVE_CLOCKING,
     Intake,
+    IntakeProfile,
     PortIntake,
     Standing,
 )
 from finn.kernels.library import ModuleSpec
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.pool import PoolKernel
+from finn.kernels.pool import INTAKE_PROFILE, PoolKernel
 from finn.kernels.port_model import StreamPort, stream_ports
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.kernels.vpc import VpcKernel
-from finn.platform.capabilities import Resources
+from finn.platform.capabilities import DspBlock, Resources
 
 TENSOR = Tensor((4, 1), ScalarEncoding(DataType["INT4"]))
 ARRIVING = BeatSequence(vector_major((4, 1), 1))
@@ -226,7 +229,8 @@ def _targets(member: Kernel) -> tuple[str, ...]:
 def test_every_module_kernel_states_its_intake_at_each_input_port_it_places(case: str) -> None:
     """At each covering point of each conformance case, every member binding a module
     states its intake (none unstated), one entry for each input port it places, in its
-    declaration order: structural, read from the RTL, but an HLS kernel's, measured."""
+    declaration order: structural, read from the RTL, but an HLS kernel's, fitted to traces
+    and assumed within their profile."""
     for where, point in _points(case):
         for name in point.members:
             member = point.member(name)
@@ -238,7 +242,7 @@ def test_every_module_kernel_states_its_intake_at_each_input_port_it_places(case
                 continue
             assert found.value.names == _targets(member), f"{where}: {name}"
             hls = isinstance(member, PoolKernel)
-            standing = Standing.MEASURED if hls else Standing.STRUCTURAL
+            standing = Standing.ASSUMED if hls else Standing.STRUCTURAL
             assert {each.standing for each in found.value.ports} <= {standing}, where
 
 
@@ -455,9 +459,10 @@ def test_memstream_states_its_set_port_s_intake_by_its_credit() -> None:
         assert credit["FULL_CREDIT"] == 8
 
 
-def test_pool_states_its_measured_intake_by_its_window_and_period() -> None:
-    """Measured, in windows of ``K = KH * KW`` beats: ``4K + 5`` before it stops, ``5K + 5``
-    at most at 5 and 10 ns, one more each at 2.5 ns (its source names the traces)."""
+def test_pool_states_its_fitted_intake_by_its_window_and_period() -> None:
+    """In windows of ``K = KH * KW`` beats: ``4K + 5`` before it stops, ``5K + 5`` at most at
+    5 and 10 ns, one more each at 2.5 ns; assumed, within its profile (its source names the
+    traces)."""
     for where, member, intake in _kernel("pool"):
         window = member.query(PoolKernel.window)
         assert isinstance(window, Available), where
@@ -467,6 +472,59 @@ def test_pool_states_its_measured_intake_by_its_window_and_period() -> None:
         period = member.platform.period_ns
         expected = (4 * k + 5 + (period <= 2.5), 5 * k + 5 + (period < 5.0))
         assert (entry.before_stop, entry.most) == expected, where
-        assert entry.standing is Standing.MEASURED and "Vitis HLS" in entry.source, where
-        # A form fitted to the traces, which its source says it states beyond them.
-        assert "stated beyond them" in entry.source, where
+        assert entry.standing is Standing.ASSUMED and "Vitis HLS" in entry.source, where
+        assert entry.profile == INTAKE_PROFILE, where
+
+
+def _pool(window: tuple[int, int], period_ns: float) -> Any:
+    image = Tensor((6, 6, 2), ScalarEncoding(DataType["INT4"]))
+    platform = full_platform(DspBlock.DSP48E2, period_ns=period_ns)
+    kernel = PoolKernel(window=window, stride=window, platform=platform, input_tensor=image)
+    return design_space(kernel).with_choices({PoolKernel.pe: 1})
+
+
+def test_pool_s_fitted_intake_holds_within_its_profile_and_is_unstated_outside() -> None:
+    """Inside the traced K (4..9) and period (2.5..10 ns), the form's value, assumed, at its
+    bounds included; outside, ``intake-unstated``, naming the profile and what lies outside.
+    The part and tool are stated, not checked."""
+    assert str(INTAKE_PROFILE) == (
+        "K 4..9, period_ns 2.5..10.0; traced on xczu3eg with Vitis HLS 2025.2 "
+        "(part and tool not checked)"
+    )
+    for window, period, counts in (((2, 2), 2.5, (22, 26)), ((3, 3), 10.0, (41, 50))):
+        entry = _pool(window, period).intake.of("input")
+        assert (entry.before_stop, entry.most) == counts, (window, period)
+    for window, period, beyond in (
+        ((1, 1), 5.0, "K 1"),
+        ((2, 5), 5.0, "K 10"),
+        ((2, 2), 2.0, "period_ns 2.0"),
+        ((2, 2), 12.0, "period_ns 12.0"),
+    ):
+        point = _pool(window, period)
+        found = point.query(Kernel.intake)
+        assert isinstance(found, Rejected) and codes(found) == {INTAKE_UNSTATED}
+        message = found.findings[0].message
+        assert str(INTAKE_PROFILE) in message and message.endswith(f"not at {beyond}")
+        # No rule reads intake: the point stays valid.
+        assert inspection.validity(point).status == "valid", (window, period)
+
+
+def test_an_intake_profile_states_its_part_tool_and_ranges() -> None:
+    profile = IntakeProfile("part", "tool", (("K", 1, 2),))
+    assert profile.outside(K=1) == () and profile.outside(K=3) == ("K 3",)
+    with pytest.raises(ValueError):
+        profile.outside(N=1)
+    for wrong in (
+        dict(part=""),
+        dict(tool=""),
+        dict(ranges=()),
+        dict(ranges=(("K", 2, 1),)),
+        dict(ranges=(("K", 1, 2), ("K", 1, 2))),
+        dict(ranges=(("K", True, 2),)),
+    ):
+        with pytest.raises(ValueError):
+            IntakeProfile(**({"part": "p", "tool": "t", "ranges": (("K", 1, 2),)} | wrong))  # type: ignore[arg-type]
+    # A profile is a fitted form's, so its standing is assumed.
+    with pytest.raises(ValueError):
+        PortIntake("input", 1, 1, "rule", Standing.MEASURED, "traces", profile)
+    assert PortIntake("input", 1, 1, "rule", Standing.ASSUMED, "traces", profile).profile
