@@ -4,13 +4,13 @@
 """A slice's frozen neighbours: an edge of a selection whose node beyond it is a KernelOp.
 
 The edge channel's side there is the neighbour's port's side at its stored choices, given
-as a fact (``Side.neighbour``): an upstream neighbour's stream, label and word width, a
-downstream one's stream and label. Only an accepted value is a fact, so a neighbour whose
-stored choices or kernel are refused, or whose side is not known at them, is refused by
-name (``neighbour-unaccepted``). The edge channel is the slice's: its adapters, its hops to
-the neighbour, its sizing (the neighbour's pace) and its resources derive as the whole
-partition's do; its netlist and module are refused (``slice-not-emitted``): a slice is not
-emitted."""
+as a fact (``Side.neighbour``): an upstream neighbour's output side, its stream, label and
+word width, a downstream one's input side, its stream and label. Only an accepted value is
+a fact, so a neighbour whose stored choices or kernel are refused, or whose side is not
+known at them, is refused by name (``neighbour-unaccepted``). The edge channel is the
+slice's: its adapters, its hops to the neighbour, its sizing (the neighbour's pace) and its
+resources derive as the whole partition's do; its netlist and module are refused
+(``slice-not-emitted``): a slice is not emitted."""
 
 from __future__ import annotations
 
@@ -32,6 +32,7 @@ from finn.core.space import Available, Rejected, inspection
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import declaration
 from finn.kernels import fifo_sizing
+from finn.kernels.artifacts.abi import Direction
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel, Neighbours, OuterHops
 from finn.kernels.composer import ChannelDeclaration, DataflowCoreDeclaration, compose
@@ -57,15 +58,15 @@ def _side(point: Kernel, port: str) -> Side:
 def _frozen(point: Kernel, port: str, label: str) -> Side:
     """The actual port side as a frozen neighbour's, labelled ``label``."""
     found = _side(point, port)
-    assert found.stream is not None
-    return Side.neighbour(found.stream, label, found.width)
+    assert found.stream is not None and found.direction is not None
+    return Side.neighbour(found.direction, found.stream, label, found.width)
 
 
-def test_an_upstream_neighbour_gives_its_width_and_a_downstream_one_none() -> None:
+def test_an_upstream_neighbour_gives_an_output_side_and_a_downstream_one_an_input_side() -> None:
     """``activate`` alone: ``first`` produces hidden, ``second`` reads levels. Each edge's
     side is the neighbour's port's at its stored choices, labelled below it: hidden's
-    producer an output port's (a width), levels' consumer an input port's (none). No edge
-    is a port of the slice, and both channels read valid."""
+    producer an output port's (with its width), levels' consumer an input port's (none).
+    No edge is a port of the slice, and both channels read valid."""
     model = kernel_model()
     alone = _slice(model, "activate")
     assert alone.boundary == ()
@@ -74,17 +75,17 @@ def test_an_upstream_neighbour_gives_its_width_and_a_downstream_one_none() -> No
     second = kernel_op(model, nodes["second"]).point()
     hidden, levels = alone.member("hidden"), alone.member("levels")
     assert hidden.producer == _frozen(first, "y", "first.y")
-    assert hidden.producer.width is not None
+    assert hidden.producer.direction is Direction.OUT and hidden.producer.width is not None
     assert levels.consumer == _frozen(second, "x", "second.x")
-    assert levels.consumer.width is None
+    assert levels.consumer.direction is Direction.IN and levels.consumer.width is None
     assert hidden.consumer.kind is levels.producer.kind is SideKind.KERNEL
     assert inspection.validity(hidden).status == inspection.validity(levels).status == "valid"
 
 
 def _flipped(model: ModelWrapper, tensor: str, side: str) -> CoreComposition:
     """``activate`` alone, declared with ``tensor``'s ``side`` (a neighbour's) given the
-    other direction: a width dropped from an output port's, one added to an input's; its
-    stored choices bound."""
+    other direction, its width dropped (an input side states none); its stored choices
+    bound."""
     stored = _slice(model, "activate").chosen()
     declared = declaration(
         model, [node for node in model.graph.node if node.name == "activate"], name=CUT_NAME
@@ -92,7 +93,8 @@ def _flipped(model: ModelWrapper, tensor: str, side: str) -> CoreComposition:
     each = declared.channels[tensor]
     given = getattr(each, side)
     assert isinstance(given, Side) and given.kind is SideKind.NEIGHBOUR
-    turned = replace(given, width=None if given.width is not None else 8)
+    other = Direction.IN if given.direction is Direction.OUT else Direction.OUT
+    turned = replace(given, direction=other, width=None)
     sides = {"producer": each.producer, "consumer": each.consumer, side: turned}
     channels = dict(declared.channels)
     channels[tensor] = ChannelDeclaration(sides["producer"], sides["consumer"], each.facts)
@@ -120,8 +122,9 @@ def _redeclared(
 
 
 def test_a_neighbour_s_side_in_the_other_direction_is_refused_each_way() -> None:
-    """A stated side's direction is its width: an upstream neighbour without one is an
-    input port's, and a downstream one with one an output port's (``channel-users``)."""
+    """A stated side's direction is its port's kind, read by the channel: an upstream
+    neighbour's input side, and a downstream neighbour's output side, are refused
+    (``channel-users``)."""
     model = kernel_model()
     for tensor, side, message in (
         (

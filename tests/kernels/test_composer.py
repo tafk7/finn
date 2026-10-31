@@ -7,9 +7,9 @@
 Its class: a Param per fact at the root, named ``<member>-<fact>``, each kernel's formals
 bound to those Params only, each channel's sides to its kernels' sides below their member's
 node; its answers, configured with the Chain's stored choices, keyed by pair; the class
-kept by its structure, at most ``CLASS_CACHE_BOUND`` of them; names, roles (each port's
-endpoint read off its class, ``port_direction``) and reads refused by name when the class is
-made; keys mapped between a path and FINN's pair.
+kept by its structure, at most ``CLASS_CACHE_BOUND`` of them; names and reads refused by
+name when the class is made, a side's role left to its channel (``channel-users``); keys
+mapped between a path and FINN's pair.
 """
 
 from __future__ import annotations
@@ -69,7 +69,13 @@ from finn.kernels.composer import (
     compose,
 )
 from finn.kernels.configure import commit
-from finn.kernels.dataflow_core import PRODUCER, SEPARATOR, DataflowCoreKernel, core_module
+from finn.kernels.dataflow_core import (
+    PRODUCER,
+    SEPARATOR,
+    DataflowCoreKernel,
+    bound,
+    core_module,
+)
 from finn.kernels.explore import CoreComposition
 from finn.kernels.matmul import KnownWeights, MatMulKernel
 from finn.kernels.port import exposed_pins, port_direction
@@ -543,29 +549,52 @@ def _wired(**changes: ChannelDeclaration) -> dict[str, ChannelDeclaration]:
     return {**channels(), **changes}
 
 
-def test_a_port_on_the_wrong_side_is_refused_by_its_declaration(cache: None) -> None:
+def _users(declaration: DataflowCoreDeclaration, name: str) -> set[tuple[str, str]]:
+    """``declaration`` composed, as it composes, and the Chain's stored choices bound (a
+    rule they break binds, read refused): channel ``name``'s role refusals
+    (``channel-users``), each its owner and text."""
+    found = CoreComposition(bound(compose(declaration), chain.chain().chosen()).point).validity(
+        name
+    )
+    assert found.status == "refused"
+    return {
+        (each.owner, each.message)
+        for each in getattr(found.result, "findings", ())
+        if each.code == "channel-users"
+    }
+
+
+def test_a_port_on_the_wrong_side_composes_and_its_channel_refuses_it(cache: None) -> None:
+    """The composer checks no role: a declaration with a port on the wrong side, or a
+    source on the consumer's, composes, and the channel refuses its design space by the
+    channel's name (``channel-users``), its port's side an input side or an output side
+    by the port's kind."""
     platform = FULL_DSP48E2
-    # An output port on the consumer's side, an input port on the producer's.
+    # An input port on the producer's side, an output port on the consumer's.
     backwards = channel(
         Port("activate", "input"), Port("first", "y"), tensor=chain.HIDDEN_TENSOR, platform=platform
     )
-    assert _refused(declared(channels_=_wired(hidden=backwards))) == [
-        (
-            "channel-users",
-            "hidden",
-            "a channel's producer is an output port, and activate.input is an input's",
-        ),
-        (
-            "channel-users",
-            "hidden",
-            "a channel's consumer is an input port, and first.y is an output's",
-        ),
-    ]
+    assert _users(declared(channels_=_wired(hidden=backwards)), "hidden") == {
+        ("sides", "a channel's producer is an output port, and activate.input is an input's")
+    }
+    # An output port on the consumer's side alone.
+    doubled = channel(
+        Port("first", "y"),
+        Port("activate", "output"),
+        tensor=chain.HIDDEN_TENSOR,
+        platform=platform,
+    )
+    levels = channel(
+        Port("activate", "input"), Port("second", "x"), tensor=LEVELS, platform=platform
+    )
+    assert _users(declared(channels_=_wired(hidden=doubled, levels=levels)), "hidden") == {
+        ("sides", "a channel's consumer is an input port, and activate.output is an output's")
+    }
     # A source on the consumer's side.
     sourced = channel(Port("second", "y"), Side.source(), tensor=Y_TENSOR, platform=platform)
-    assert _refused(declared(channels_=_wired(y=sourced))) == [
-        ("channel-users", "y", "a channel's source is its producer, never its consumer")
-    ]
+    assert _users(declared(channels_=_wired(y=sourced)), "y") == {
+        ("sides", "a channel's source is its producer, never its consumer")
+    }
 
 
 def test_a_read_no_member_states_is_refused(cache: None) -> None:

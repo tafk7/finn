@@ -65,6 +65,7 @@ from finn.dataflow.traversal import (
 )
 from finn.harness.ops import check_parity
 from finn.kernels.adapters import Convert
+from finn.kernels.artifacts.abi import Direction
 from finn.kernels.artifacts.module import module_name
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
@@ -193,7 +194,7 @@ def iodma_edge(form: Traversal, *, adaptable: bool = True) -> Any:
     128-bit port states (``MoverOffer.states``) and whose reader takes UINT8 lanes in
     ``form``; admitting adapters unless not ``adaptable``."""
     offer = iodma_hls(128)
-    reader = Side.kernel(Stream(UINT8, BeatSequence(form)), "reader.x")
+    reader = Side.kernel(Direction.IN, Stream(UINT8, BeatSequence(form)), "reader.x")
     return design_space(
         Channel(
             tensor=Tensor(form.shape, UINT8),
@@ -209,7 +210,9 @@ def iodma_exit(form: Traversal) -> Any:
     """An output's edge channel, alone, whose boundary side the ``IODMA_hls`` offer at a
     128-bit port states and whose writer presents UINT8 lanes in ``form``."""
     offer = iodma_hls(128)
-    writer = Side.kernel(Stream(UINT8, BeatSequence(form)), "writer.y", 8 * form.lanes)
+    writer = Side.kernel(
+        Direction.OUT, Stream(UINT8, BeatSequence(form)), "writer.y", 8 * form.lanes
+    )
     return design_space(
         Channel(
             tensor=Tensor(form.shape, UINT8),

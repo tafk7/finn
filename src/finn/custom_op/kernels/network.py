@@ -40,14 +40,15 @@ so only a model annotated by hand reaches this.
   ``s_axis_<i>`` and ``m_axis_<j>``. An edge of a slice (a selection short of every
   KernelOp) whose node beyond it is a KernelOp is no boundary: that node is a **frozen
   neighbour**, and the edge channel's side there is its port's side at its stored
-  choices, as a fact (``Side.neighbour``: an upstream neighbour's stream, label and word
-  width, a downstream one's stream and label), the edge channel the slice's member; its
-  port's stream pins there, which the edge channel's hop is wired to, and its pace, which
-  sizing reads, are facts of the slice's class too (``DataflowCoreDeclaration.frozen``). Only
-  an accepted value is a fact: a neighbour whose stored choices or kernel are refused, or
-  whose side is not known at them, is refused by name (``neighbour-unaccepted``); another
-  neighbour is another design space of the slice. An edge at a graph input or output, or
-  at a node that is no KernelOp, stays a boundary. A channel has one consumer, so a
+  choices, as a fact (``Side.neighbour``: an upstream neighbour's output side, its stream,
+  label and word width, a downstream one's input side, its stream and label), the edge
+  channel the slice's member; its port's stream pins there, which the edge channel's hop
+  is wired to, and its pace, which sizing reads, are facts of the slice's class too
+  (``DataflowCoreDeclaration.frozen``). Only an accepted value is a fact: a neighbour
+  whose stored choices or kernel are refused, or whose side is not known at them, is
+  refused by name (``neighbour-unaccepted``); another neighbour is another design space of
+  the slice. An edge at a graph input or output, or at a node that is no KernelOp, stays a
+  boundary. A channel has one consumer, so a
   tensor read more than once is refused by name before anything is declared
   (``tensor-fan-out``): read by two of the nodes (an edge, or a parameter both own), or
   read by one and at an output boundary too (a graph output, or read outside the nodes);
@@ -122,6 +123,7 @@ from finn.core.search import Key, dotted
 from finn.core.space import Available, Rejected, Space, Unresolved, inspection
 from finn.custom_op.kernels.base import KernelOp, kernel_op, typed
 from finn.dataflow.streams import Stream
+from finn.kernels.artifacts.abi import Direction
 from finn.kernels.base import PortPins
 from finn.kernels.channels import Channel, Neighbours
 from finn.kernels.composer import (
@@ -293,13 +295,14 @@ def _neighbour(
     """The side a frozen neighbour, KernelOp ``node`` beyond the selection on ``side`` of
     ``tensor``, gives the edge channel, as a fact: its port's ``side`` at its stored
     choices (``KernelOp.point``; its facts alone, where it stores none), as a frozen
-    neighbour's (``Side.neighbour``: an upstream one's stream, label and word width, a
-    downstream one's stream and label), its label below the node's name; that port's
-    stream pins there (``stream_pins``), which its hop is wired to; and its pace there at
-    its kernel's interval (``timed_pace``, where it owns its pacing), which sizing reads. Only an
-    accepted value is a fact: refused (``neighbour-unaccepted``, naming the neighbour, its
-    port and why) where its stored choices are refused, its kernel is refused, or its side
-    is not known there (it waits on an open choice, or is refused)."""
+    neighbour's (``Side.neighbour``: an upstream one's output side, its stream, label and
+    word width, a downstream one's input side, its stream and label), its label below the
+    node's name; that port's stream pins there (``stream_pins``), which its hop is wired to;
+    and its pace there at its kernel's interval (``timed_pace``, a scheduled port's), which
+    sizing reads. Only an accepted value is a fact: refused (``neighbour-unaccepted``,
+    naming the neighbour, its port and why) where its stored choices are refused, its kernel
+    is refused, or its side is not known there (it waits on an open choice, or is
+    refused)."""
     op = kernel_op(model, node)
     port = (
         op.outputs[list(node.output).index(tensor)]
@@ -340,7 +343,9 @@ def _neighbour(
         )
         raise unaccepted(why, getattr(answer, "findings", ()))
     found: Side = exposed_side(type(point), named, answer.value)
-    stated = Side.neighbour(cast(Stream, found.stream), found.label, found.width)
+    stated = Side.neighbour(
+        cast(Direction, found.direction), cast(Stream, found.stream), found.label, found.width
+    )
     pins = point.query(declared.stream_pins)
     given = pins.value if isinstance(pins, Available) else None
     if isinstance(given, PortPins):

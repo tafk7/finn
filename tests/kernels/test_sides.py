@@ -5,16 +5,16 @@
 takes each kind in.
 
 - **Whole or not made:** each kind is made by its own constructor; a stated side without
-  its label, a boundary without its port's name or with a stream, a source stating
-  anything, a width on a side that states no stream, offers beside no boundary: each is
-  refused as it is made.
+  its label or its direction, a boundary without its port's name or with a stream or a
+  direction, a source stating anything, a width on a side that is no output's, offers
+  beside no boundary: each is refused as it is made.
 - **A value class:** the running type's node cache keys a side field by field
   (``value_class``), under the semantics a channel's ``producer`` and ``consumer`` take, so
   every answer that reads one is kept.
 - **The roles** (``channel-users``, one case each): a channel with a known value has its
   source as its producer; a source without one is refused; a source is never a consumer;
-  a producer is an output port (a stated side with its word width) and a consumer an
-  input port (one without).
+  a stated producer is an output side and a stated consumer an input side, each by its
+  direction, its port's kind (``InPort``, ``OutPort``), whatever its width.
 - **The boundary**, unstated: its label names the AXIS port, which presents what the other
   side presents; a shell's offers on it place the mover (``offered``).
 - **What the outside states** (``Outside``, its pace ``BeatTimes`` or ``Steady``): value
@@ -39,7 +39,7 @@ from finn.core.space.compiler import compile_model
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
-from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.abi import Direction, Endpoint
 from finn.kernels.channels import Channel
 from finn.kernels.movers import IODMA_HLS, iodma_hls
 from finn.kernels.port import exposed_pins, exposed_side
@@ -60,8 +60,8 @@ INT3 = ScalarEncoding(DataType["INT3"])
 X = Tensor((3, 4), INT3)
 WORDS = Stream(INT3, BeatSequence(vector_major((3, 4), 2)))
 """What a port presents of ``X``: three rows of four, two a beat."""
-OUTPUT = Side.kernel(WORDS, "producer.y", 8)
-INPUT = Side.kernel(WORDS, "consumer.x")
+OUTPUT = Side.kernel(Direction.OUT, WORDS, "producer.y", 8)
+INPUT = Side.kernel(Direction.IN, WORDS, "consumer.x")
 OFFERS = (iodma_hls(64),)
 
 STATED = Outside(BUILD, ROW_MAJOR, 1, 2, BeatTimes((0, 2, 4), 6))
@@ -69,7 +69,7 @@ STATED = Outside(BUILD, ROW_MAJOR, 1, 2, BeatTimes((0, 2, 4), 6))
 
 SIDES = {
     "kernel": OUTPUT,
-    "neighbour": Side.neighbour(WORDS, "upstream.y", 8),
+    "neighbour": Side.neighbour(Direction.OUT, WORDS, "upstream.y", 8),
     "boundary": Side.boundary("s_axis_0", OFFERS, OFFERS[0].states()),
     "source": Side.source(),
 }
@@ -95,37 +95,59 @@ def refused(point: Any) -> list[tuple[str, str, str]]:
 
 def test_each_kind_is_made_whole_by_its_constructor() -> None:
     assert [side.kind for side in SIDES.values()] == list(SideKind)
-    assert (OUTPUT.stream, OUTPUT.label, OUTPUT.width) == (WORDS, "producer.y", 8)
-    assert INPUT.width is None and INPUT.stated
+    assert (OUTPUT.direction, OUTPUT.stream, OUTPUT.label, OUTPUT.width) == (
+        Direction.OUT,
+        WORDS,
+        "producer.y",
+        8,
+    )
+    assert INPUT.direction is Direction.IN and INPUT.width is None and INPUT.stated
+    # An output side's width is optional: the direction, not the width, says it is one.
+    assert Side.kernel(Direction.OUT, WORDS, "producer.y").width is None
     boundary = SIDES["boundary"]
     # The boundary is unstated: its stream is None, its label its AXIS port's name.
     assert (boundary.label, boundary.stream, boundary.offers) == ("s_axis_0", None, OFFERS)
     assert not boundary.stated and not Side.source().stated
+    assert boundary.direction is None and Side.source().direction is None
     assert Side.source() == Side(SideKind.SOURCE)
 
 
 @pytest.mark.parametrize(
     "made",
     [
-        lambda: Side.kernel(WORDS, ""),
-        lambda: Side(SideKind.KERNEL, "producer.y"),
-        lambda: Side(SideKind.NEIGHBOUR, "", WORDS),
+        lambda: Side.kernel(Direction.IN, WORDS, ""),
+        lambda: Side(SideKind.KERNEL, "producer.y", direction=Direction.OUT),
+        lambda: Side(SideKind.NEIGHBOUR, "", WORDS, Direction.OUT),
+        lambda: Side(SideKind.KERNEL, "producer.y", WORDS),
+        lambda: Side(SideKind.NEIGHBOUR, "upstream.y", WORDS),
+        lambda: Side.kernel(Direction.INOUT, WORDS, "producer.y"),
+        lambda: Side.kernel(Direction.IN, WORDS, "consumer.x", 8),
+        lambda: Side.neighbour(Direction.IN, WORDS, "downstream.x", 8),
         lambda: Side.boundary(""),
         lambda: Side(SideKind.BOUNDARY, "s_axis_0", WORDS),
         lambda: Side(SideKind.BOUNDARY, "s_axis_0", width=8),
+        lambda: Side(SideKind.BOUNDARY, "s_axis_0", direction=Direction.IN),
         lambda: Side(SideKind.SOURCE, "source.memstream"),
-        lambda: Side(SideKind.KERNEL, "producer.y", WORDS, offers=OFFERS),
-        lambda: Side(SideKind.KERNEL, "producer.y", WORDS, 8, outside=STATED),
+        lambda: Side(SideKind.SOURCE, direction=Direction.OUT),
+        lambda: Side(SideKind.KERNEL, "producer.y", WORDS, Direction.OUT, offers=OFFERS),
+        lambda: Side(SideKind.KERNEL, "producer.y", WORDS, Direction.OUT, 8, outside=STATED),
         lambda: Side(SideKind.SOURCE, outside=STATED),
     ],
     ids=[
         "a stream without its label",
         "a label without its stream",
         "a neighbour's stream without its label",
+        "a kernel's side without its direction",
+        "a neighbour's side without its direction",
+        "a kernel's side neither an input's nor an output's",
+        "an input side with a width",
+        "a neighbour's input side with a width",
         "a boundary without its port",
         "a boundary with a stream",
         "a boundary with a width",
+        "a boundary with a direction",
         "a source with a label",
+        "a source with a direction",
         "offers beside no boundary",
         "a statement on a kernel's side",
         "a statement on a source's side",
@@ -137,7 +159,7 @@ def test_a_side_not_whole_is_not_made(made: Any) -> None:
 
 
 def test_a_side_seen_from_its_member_s_holder_is_labelled_below_it() -> None:
-    assert OUTPUT.under("first") == Side.kernel(WORDS, "first.producer.y", 8)
+    assert OUTPUT.under("first") == Side.kernel(Direction.OUT, WORDS, "first.producer.y", 8)
     with pytest.raises(ValueError):
         SIDES["boundary"].under("first")
 
@@ -158,7 +180,11 @@ def test_a_side_is_a_value_class_the_node_cache_keys() -> None:
     keys = {name: key(side) for name, side in SIDES.items()}
     assert all(found is not None for found in keys.values()), keys
     assert len(set(keys.values())) == len(SIDES)
-    assert key(Side.kernel(WORDS, "producer.y", 8)) == keys["kernel"]
+    assert key(Side.kernel(Direction.OUT, WORDS, "producer.y", 8)) == keys["kernel"]
+    # Two sides alike but for their direction differ.
+    assert key(Side.kernel(Direction.IN, WORDS, "producer.y")) != key(
+        Side.kernel(Direction.OUT, WORDS, "producer.y")
+    )
 
 
 def test_what_the_outside_states_is_a_value_class_the_node_cache_keys() -> None:
@@ -266,7 +292,7 @@ def test_only_the_boundary_carries_a_statement_and_a_mover_s_where_it_is_offered
     with pytest.raises(ValueError, match="stated by an iodma_hls mover, and none is offered"):
         Side.boundary("s_axis_0", outside=mover)
     with pytest.raises(ValueError, match="only the boundary's side is stated by the outside"):
-        Side(SideKind.NEIGHBOUR, "upstream.y", WORDS, 8, outside=STATED)
+        Side(SideKind.NEIGHBOUR, "upstream.y", WORDS, Direction.OUT, 8, outside=STATED)
     assert Side.boundary("s_axis_0", outside=STATED).outside == STATED
 
 
@@ -332,7 +358,7 @@ def test_a_source_on_the_consumer_s_side_is_refused() -> None:
 
 
 def test_an_input_port_on_the_producer_s_side_is_refused() -> None:
-    assert refused(channel(Side.kernel(WORDS, "consumer.x"), INPUT)) == [
+    assert refused(channel(Side.kernel(Direction.IN, WORDS, "consumer.x"), INPUT)) == [
         (
             "channel-users",
             "sides",
@@ -342,7 +368,7 @@ def test_an_input_port_on_the_producer_s_side_is_refused() -> None:
 
 
 def test_an_output_port_on_the_consumer_s_side_is_refused() -> None:
-    assert refused(channel(OUTPUT, Side.kernel(WORDS, "other.y", 8))) == [
+    assert refused(channel(OUTPUT, Side.kernel(Direction.OUT, WORDS, "other.y", 8))) == [
         (
             "channel-users",
             "sides",
@@ -351,11 +377,28 @@ def test_an_output_port_on_the_consumer_s_side_is_refused() -> None:
     ]
 
 
+def test_a_role_is_read_from_the_side_s_direction_not_its_width() -> None:
+    """An output side without a word width is still an output's: the channel takes it as
+    its producer and refuses it as its consumer."""
+    unsized = Side.kernel(Direction.OUT, WORDS, "producer.y")
+    assert channel(unsized, INPUT).sides.source_owner == "producer.y"
+    assert refused(channel(OUTPUT, unsized)) == [
+        (
+            "channel-users",
+            "sides",
+            "a channel's consumer is an input port, and producer.y is an output's",
+        )
+    ]
+
+
 def test_a_neighbour_takes_a_kernel_s_roles() -> None:
-    upstream = Side.neighbour(WORDS, "upstream.y", 8)
+    upstream = Side.neighbour(Direction.OUT, WORDS, "upstream.y", 8)
+    downstream = Side.neighbour(Direction.IN, WORDS, "downstream.x")
     assert channel(upstream, INPUT).sides.source_owner == "upstream.y"
     assert inspection.validity(channel(upstream, INPUT)).status != "refused"
+    assert channel(OUTPUT, downstream).sides.sink_owner == "downstream.x"
     assert refused(channel(OUTPUT, upstream))[0][0] == "channel-users"
+    assert refused(channel(downstream, INPUT))[0][0] == "channel-users"
 
 
 def test_two_boundaries_are_no_channel() -> None:
@@ -423,7 +466,7 @@ def test_a_channel_s_set_port_states_its_source_s_label_and_side() -> None:
     pins = exposed_pins(w, "set", w.set.stream_pins)
     assert (pins.label, pins.instance) == ("set", "source.memstream")
     side = exposed_side(Channel, "set", w.set.side)
-    assert side == Side.kernel(w.source.set.stream, "set")
+    assert side == Side.kernel(Direction.IN, w.source.set.stream, "set")
     assert folded.member("set").consumer == side.under("w")
 
 

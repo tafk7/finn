@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """A stream port declared in a Group keeps its actual lexical Group occurrence: discovery
 (``stream_ports``), lookup (``stream_port``, ``port_direction``) and the
-composer find it there, and nothing forwards it by hand."""
+composer find it there, and nothing forwards it by hand; its side is its kind's, which a
+channel takes on its role."""
 
 from __future__ import annotations
 
@@ -10,13 +11,14 @@ import pytest
 from qonnx.core.datatype import DataType
 from support.helpers import FULL_DSP48E2, TEST_CORE
 
-from finn.core.space import Available, Group, Param, Space, design_space
+from finn.core.space import Available, Group, Param, Rejected, Space, design_space
 from finn.core.space.declarations import Declaration, MemberRef, declared_path
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Direction
 from finn.kernels.base import Kernel
+from finn.kernels.channels import Channel
 from finn.kernels.composer import DataflowCoreDeclaration, Facts, Port, channel
 from finn.kernels.composer import _checked as checked
 from finn.kernels.laws import AXIS, AXIS_CLOCKING
@@ -148,9 +150,12 @@ def test_placed_node_ports_keep_the_exact_group_and_kernel_occurrence(
 
 @pytest.mark.parametrize("key", ["group.receive.native", "group.send.native"])
 @pytest.mark.parametrize("role", ["producer", "consumer"])
-def test_actual_composer_accepts_valid_and_refuses_wrong_group_port_roles(
+def test_actual_composer_reads_and_channel_takes_or_refuses_group_port_roles(
     key: str, role: str
 ) -> None:
+    """The composer reads a port by its Group key on either role and checks no role; the
+    port's side is its kind's, which the channel takes on its role and refuses on the other
+    (``channel-users``)."""
     endpoint = Port("kernel", key)
     outside = Side.boundary("out0" if role == "producer" else "in0")
     producer, consumer = (endpoint, outside) if role == "producer" else (outside, endpoint)
@@ -159,19 +164,29 @@ def test_actual_composer_accepts_valid_and_refuses_wrong_group_port_roles(
         {"group-link": channel(producer, consumer, tensor=SMALL, platform=FULL_DSP48E2)},
         name=TEST_CORE,
     )
-    findings = checked(declaration)
+    assert checked(declaration) == []
+    found = design_space(InheritedHost()).query(stream_port(InheritedHost, key).side)
+    assert isinstance(found, Available) and isinstance(found.value, Side)
+    side = found.value.under("kernel")
+    sides = (side, outside) if role == "producer" else (outside, side)
+    tensor = OTHER if key == "group.send.native" else SMALL
+    point = design_space(
+        Channel(tensor=tensor, producer=sides[0], consumer=sides[1], platform=FULL_DSP48E2)
+    )
+    read = point.query(Channel.sides)
     valid = (key == "group.send.native") == (role == "producer")
     if valid:
-        assert findings == []
+        assert isinstance(read, Available)
     else:
         description = (
-            "a channel's producer is an output port, and kernel." + key + " is an input's"
+            "a channel's producer is an output port, and kernel.source is an input's"
             if role == "producer"
-            else "a channel's consumer is an input port, and kernel." + key + " is an output's"
+            else "a channel's consumer is an input port, and kernel.source is an output's"
         )
-        assert [finding.code for finding in findings] == ["channel-users"]
-        assert findings[0].message == description
-        assert findings[0].owner == "group-link"
+        assert isinstance(read, Rejected)
+        assert [(each.code, each.message) for each in read.findings] == [
+            ("channel-users", description)
+        ]
 
 
 @pytest.mark.parametrize(

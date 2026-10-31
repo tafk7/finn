@@ -51,7 +51,7 @@ from finn.dataflow.traversal import (
     vector_major,
 )
 from finn.kernels.adapters import StreamAdapter
-from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.abi import Direction, Endpoint
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel, ChannelFifo, stated_by, stated_form
 from finn.kernels.composer import Facts, Port, channel
@@ -170,7 +170,7 @@ def test_a_channel_waits_for_its_own_sides_only():
     first = point.member("first")
     produced = point.member("first_source")
     assert first.producer == Side.kernel(
-        produced.output.stream, "first_source.output", produced.output.width
+        Direction.OUT, produced.output.stream, "first_source.output", produced.output.width
     )
     assert first.producer.width == 8
     assert first.consumer == Side.boundary("out0_V")
@@ -184,7 +184,7 @@ def test_a_channel_waits_for_its_own_sides_only():
 def test_an_outer_port_is_axis_and_byte_aligned():
     """A boundary's outer port presents its stream on the AXIS bus its side's label names,
     its word padded to bytes: three INT4 lanes, 12 bits, on 16."""
-    read = Side.kernel(Stream(INT4, BeatSequence(vector_major((3,), 3))), "reader.x")
+    read = Side.kernel(Direction.IN, Stream(INT4, BeatSequence(vector_major((3,), 3))), "reader.x")
     point = design_space(
         Channel(
             tensor=Tensor((3,), INT4),
@@ -298,12 +298,14 @@ def stated(**fields: Any) -> Outside:
 
 def reader(form: Traversal) -> Side:
     """An input port reading ``MATRIX`` in ``form``."""
-    return Side.kernel(Stream(INT3, BeatSequence(form)), "reader.x")
+    return Side.kernel(Direction.IN, Stream(INT3, BeatSequence(form)), "reader.x")
 
 
 def writer(form: Traversal) -> Side:
     """An output port writing ``MATRIX`` in ``form``, its word its lanes padded to bytes."""
-    return Side.kernel(Stream(INT3, BeatSequence(form)), "writer.y", ceil(3 * form.lanes / 8) * 8)
+    return Side.kernel(
+        Direction.OUT, Stream(INT3, BeatSequence(form)), "writer.y", ceil(3 * form.lanes / 8) * 8
+    )
 
 
 def edge(producer: Side, consumer: Side) -> Any:

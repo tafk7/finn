@@ -318,11 +318,9 @@ class StreamPort(Space):
 
     @derived
     def side(self) -> Side | Inapplicable:
-        """The side it gives a channel: its stream and its label (an output's, its width
-        too, ``OutPort``)."""
-        if not self.placed:
-            return Inapplicable()
-        return Side.kernel(self.stream, self.label)
+        """The side it gives a channel, its kind's: an input side (``InPort``) or an
+        output side (``OutPort``); a port of neither kind gives none."""
+        return Inapplicable()
 
     @derived
     def binds(self) -> bool:
@@ -471,6 +469,13 @@ class InPort(StreamPort):
         return governed // beats
 
     @derived
+    def side(self) -> Side | Inapplicable:
+        """The input side it gives a channel: its stream and its label."""
+        if not self.placed:
+            return Inapplicable()
+        return Side.kernel(Direction.IN, self.stream, self.label)
+
+    @derived
     def binds(self) -> bool:
         """Whether it reads its tensor to bind its kernel's extents: placed, with an index."""
         if not self.placed:
@@ -503,10 +508,10 @@ class OutPort(StreamPort):
 
     @derived
     def side(self) -> Side | Inapplicable:
-        """The side it gives a channel: its stream, its label and its width."""
+        """The output side it gives a channel: its stream, its label and its width."""
         if not self.placed:
             return Inapplicable()
-        return Side.kernel(self.stream, self.label, self.width)
+        return Side.kernel(Direction.OUT, self.stream, self.label, self.width)
 
 
 class OtherPins(Group):

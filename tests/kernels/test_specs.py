@@ -48,7 +48,7 @@ from finn.core.space import Available, Inapplicable, Space
 from finn.core.space.declarations import unmet_required
 from finn.dataflow.streams import Stream
 from finn.harness.points import Covering, covering, refusal, refused_cases, rejected
-from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.abi import Direction, Endpoint
 from finn.kernels.base import Kernel, PortPins
 from finn.kernels.configure import undecided
 from finn.kernels.explore import CoreComposition
@@ -234,7 +234,8 @@ def _ports_checked(point: CoreComposition) -> int:
             transport = contract.pins.transport
             output = transport.endpoint is Endpoint.INITIATOR
             width = transport.data_width if output else None
-            assert side == Side.kernel(stream, label, width), where
+            direction = Direction.OUT if output else Direction.IN
+            assert side == Side.kernel(direction, stream, label, width), where
             # Its pace: a port its schedule paces has one, over its kernel's one schedule;
             # a port that follows another has none; an exposed port's is its member's port's.
             paced = member.query(stream_port(type(member), port).pace)

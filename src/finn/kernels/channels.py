@@ -7,15 +7,16 @@ two ports.
 A ``Channel`` is one producer-to-consumer edge, a member of a core
 (``finn.kernels.dataflow_core``) or of a kernel with children, carrying one ``tensor`` given
 as a fact. Its two sides are facts too, ``producer`` and ``consumer``, each one value
-(``finn.kernels.sides.Side``) of its kind: a kernel's port (the ``Stream`` it presents,
-its label, ``matmul.x``, and on an output port its word width: a kernel's port's
-``side``), a frozen neighbour's (the same, given as a fact), the boundary's (its AXIS
-port's name, ``s_axis_0``, the movers a shell offers on it, and what the outside states
-of it, ``outside``, its stream never given), or, for a known value, its own source. Each
-side's role takes its kinds only (``channel-users``): a producer is an output port, the
-boundary or the channel's source, and the source is the producer of a channel with a
-known value, and of no other; a consumer is an input port or the boundary. The channel's
-tensor is never derived from a port.
+(``finn.kernels.sides.Side``) of its kind: a kernel's port (an input side or an output
+side, by the port's kind, the ``Stream`` it presents, its label, ``matmul.x``, and on an
+output port its word width: a kernel's port's ``side``), a frozen neighbour's (the same,
+given as a fact), the boundary's (its AXIS port's name, ``s_axis_0``, the movers a shell
+offers on it, and what the outside states of it, ``outside``, its stream never given), or,
+for a known value, its own source. Each side's role takes its kinds only, the one check
+of a channel's roles (``channel-users``): a producer is an output side, the boundary or
+the channel's source, and the source is the producer of a channel with a known value, and
+of no other; a consumer is an input side or the boundary. The channel's tensor is never
+derived from a port.
 
 Each side's stream must traverse the tensor (``channel-tensor``), and the steps between
 their beat sequences (``finn.dataflow.steps``) must be ones a chain of FinnLib modules
@@ -136,6 +137,7 @@ from finn.kernels.adapters import (
     realize,
 )
 from finn.kernels.artifacts import ArtifactError
+from finn.kernels.artifacts.abi import Direction
 from finn.kernels.artifacts.module import Fragment, Link, LinkEnd, Marker
 from finn.kernels.base import (
     Kernel,
@@ -438,16 +440,17 @@ class ChannelSides:
 class Channel(Kernel):
     """One tensor between the two sides it takes: one producer, one consumer.
 
-    ``producer`` and ``consumer`` are its sides, each one value (``Side``): a kernel's
-    port (its ``side``: its stream, its label, ``matmul.x``, and on an output port its
-    word width), a frozen neighbour's, the boundary's (the AXIS port its label names, its
-    outer port there, ``outer_in`` or ``outer_out``, where the ``mover`` sits where the
-    shell offers one: ``offered``), or its source's. A channel with a known value places its
-    ``source`` as its producer; with several sets, the source reads the set indices
-    (``index_tensor``) from the channel whose consumer is its ``set`` port, the one port it
-    exposes (its source's, ``set = source.set``). ``platform`` is the target's: its source, its
-    adapters' stages and its FIFO read it. Its members are declared in the order the stream
-    runs through them, so its netlist places them in that order.
+    ``producer`` and ``consumer`` are its sides, each one value (``Side``): a kernel's port
+    (its ``side``: an input side or an output side, by the port's kind, its stream, its
+    label, ``matmul.x``, and on an output port its word width), a frozen neighbour's, the
+    boundary's (the AXIS port its label names, its outer port there, ``outer_in`` or
+    ``outer_out``, where the ``mover`` sits where the shell offers one: ``offered``), or its
+    source's. A channel with a known value places its ``source`` as its producer; with
+    several sets, the source reads the set indices (``index_tensor``) from the channel whose
+    consumer is its ``set`` port, the one port it exposes (its source's,
+    ``set = source.set``). ``platform`` is the target's: its source, its adapters' stages
+    and its FIFO read it. Its members are declared in the order the stream runs through
+    them, so its netlist places them in that order.
     """
 
     id = "finn.channel"
@@ -1085,17 +1088,17 @@ def stated_by(producer: Side, consumer: Side) -> str:
 def _misplaced(producer: Side, consumer: Side, valued: bool) -> str | None:
     """Why a side is in a role its kind does not take (``channel-users``), or None: a
     channel with a known value has its source as its producer, and one without has none; a
-    source is never a consumer; a producer is an output port (a stated side with its word
-    width), and a consumer an input port (one without)."""
+    source is never a consumer; a stated producer is an output side (an ``OutPort``'s), and
+    a stated consumer an input side (an ``InPort``'s)."""
     if valued and producer.kind is not SideKind.SOURCE:
         return f"a channel with a value has its source as its only producer, not {producer.label}"
     if not valued and producer.kind is SideKind.SOURCE:
         return "a source produces a known value, and this channel has none"
     if consumer.kind is SideKind.SOURCE:
         return "a channel's source is its producer, never its consumer"
-    if producer.stated and producer.width is None:
+    if producer.stated and producer.direction is not Direction.OUT:
         return f"a channel's producer is an output port, and {producer.label} is an input's"
-    if consumer.stated and consumer.width is not None:
+    if consumer.stated and consumer.direction is not Direction.IN:
         return f"a channel's consumer is an input port, and {consumer.label} is an output's"
     return None
 

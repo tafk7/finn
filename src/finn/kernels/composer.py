@@ -58,12 +58,12 @@ names). Its facts:
   (``DataflowCoreKernel.names``, ``finn.kernels.dataflow_core.Names``) and **each kernel's
   policies' owner** (``DataflowCoreKernel.policy_owners``).
 
-**The side is structural.** A producer side is an output port (its actual port model's
-direction ``OUT``), a consumer side an input port, and a
-source is never a consumer: a declaration that breaks one is refused when the class is
-made (``channel-users``, the channel's text, owned by the channel's name). The channel's
-own role check (``Channel.sides``) stays the backstop where a port's direction is not known
-when its class is made.
+**A side's role is the channel's to check.** A port's side is an input side or an output
+side, by its kind (``InPort``, ``OutPort``), and the channel refuses a producer that is no
+output side, the boundary or its source, and a consumer that is no input side or the
+boundary (``Channel.sides``, ``channel-users``). The composer checks no role: a
+declaration with an input port as a channel's producer composes, and its design space is
+refused by the channel's name when its validity is read.
 
 **In a shell**: a declaration that states its shell's row (``DataflowCoreDeclaration.shell``,
 the row's facts by name) composes one member more, ``shell`` (``finn.kernels.budgets``):
@@ -137,7 +137,6 @@ from finn.core.space import (
     space_formals,
 )
 from finn.core.space.compiler import compile_model
-from finn.kernels.artifacts.abi import Direction
 from finn.kernels.base import Kernel, may_present_bus
 from finn.kernels.budgets import (
     DOUBLED,
@@ -152,7 +151,7 @@ from finn.kernels.budgets import (
 from finn.kernels.channels import Channel, Neighbours
 from finn.kernels.dataflow_core import FROZEN, DataflowCoreKernel, Names, root_name
 from finn.kernels.policies import Owner, Unstated
-from finn.kernels.port import exposed_name, port_direction, stream_port
+from finn.kernels.port import exposed_name, stream_port
 from finn.kernels.sides import Side, SideKind
 
 CLASS_CACHE_BOUND = 16
@@ -312,8 +311,8 @@ class DataflowCoreDeclaration:
 
 class DataflowCoreRefused(Refusal):
     """A core that cannot be composed as declared, each reason a finding by its code
-    (``name-shared``, ``name-invalid``, ``name-reserved``, ``channel-users``,
-    ``channel-read``, ``channel-ranked``, ``fact-unknown``, and the connection rules'
+    (``name-shared``, ``name-invalid``, ``name-reserved``, ``channel-read``,
+    ``channel-ranked``, ``fact-unknown``, and the connection rules'
     ``port-unconnected`` and ``port-connected-twice``), owned by the name of the member it
     is about (a connection rule's: the member whose port it names)."""
 
@@ -452,8 +451,8 @@ def _states(space_type: type[Space], name: str) -> bool:
 
 
 def _checked(declared: DataflowCoreDeclaration) -> list[Finding]:
-    """What the declaration's channels read that no member states, and each side on the
-    wrong role (``channel-users``), by the channel's name."""
+    """What the declaration's channels read that no member states (``channel-read``), by
+    the channel's name."""
     members = {*declared.kernels, *declared.channels}
     findings: list[Finding] = []
     for name, each in declared.channels.items():
@@ -478,45 +477,7 @@ def _checked(declared: DataflowCoreDeclaration) -> list[Finding]:
                 findings.append(
                     _refused("channel-read", name, f"reads {read.member}, which states no {stated}")
                 )
-        findings.extend(_roles(declared, name, each))
     return findings
-
-
-def _roles(declared: DataflowCoreDeclaration, name: str, each: ChannelDeclaration) -> list[Finding]:
-    """Each side of channel ``name`` on the wrong role, by its port's declaration: an input
-    port on the producer's side, an output port on the consumer's, a source on the
-    consumer's (``channel-users``, the channel's own texts)."""
-    found: list[Finding] = []
-    producer, consumer = each.producer, each.consumer
-    if isinstance(consumer, Side) and consumer.kind is SideKind.SOURCE:
-        found.append(
-            _refused(
-                "channel-users", name, "a channel's source is its producer, never its consumer"
-            )
-        )
-    members = {*declared.kernels, *declared.channels}
-    for role, side in (("producer", producer), ("consumer", consumer)):
-        if not isinstance(side, Port) or side.member not in members:
-            continue
-        direction = port_direction(_class_of(declared, side.member), side.port)
-        label = f"{side.member}.{side.port}"
-        if role == "producer" and direction is Direction.IN:
-            found.append(
-                _refused(
-                    "channel-users",
-                    name,
-                    f"a channel's producer is an output port, and {label} is an input's",
-                )
-            )
-        if role == "consumer" and direction is Direction.OUT:
-            found.append(
-                _refused(
-                    "channel-users",
-                    name,
-                    f"a channel's consumer is an input port, and {label} is an output's",
-                )
-            )
-    return found
 
 
 def _ranked(declared: DataflowCoreDeclaration) -> list[str]:

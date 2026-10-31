@@ -6,12 +6,13 @@
 A ``Channel`` (``finn.kernels.channels``) takes two sides, its ``producer`` and its
 ``consumer``, each a ``Side`` of one of four kinds (``SideKind``):
 
-- a **kernel**'s port (``Side.kernel``): the stream it presents (``x.stream``), its label
+- a **kernel**'s port (``Side.kernel``): its direction, by the port's kind (``IN`` an
+  ``InPort``'s, ``OUT`` an ``OutPort``'s), the stream it presents (``x.stream``), its label
   (``x``, the label its stream pins carry, below its kernel's node in a network:
   ``matmul.x``) and, on an output port, its word width (``x.width``), read from its stream.
   Each port states it (``x.side``, a module's port's and an exposed port's alike:
   ``finn.kernels.port.stream_port`` finds the port by its name);
-- a **frozen neighbour**'s (``Side.neighbour``): the same three, given as a fact read from a
+- a **frozen neighbour**'s (``Side.neighbour``): the same four, given as a fact read from a
   kernel outside the selection at its accepted point;
 - the **boundary**'s (``Side.boundary``): the module's AXIS port, its name as its label
   (``s_axis_0``, ``m_axis_0``), the movers a shell offers on it (``offers``), and what the
@@ -27,9 +28,11 @@ A ``Channel`` (``finn.kernels.channels``) takes two sides, its ``producer`` and 
   its known value.
 
 Each kind is made by its own constructor, so a side is whole or not made: a stream comes
-with its label, a boundary with its port's name, a source with nothing. On a stated side
-(a kernel's or a frozen neighbour's), a word width says it is an output port's: a
-channel's producer side carries one, its consumer side none.
+with its direction and its label, a boundary with its port's name, a source with nothing.
+A stated side (a kernel's or a frozen neighbour's) is an input side or an output side, by
+its direction: a channel takes an output side as its producer and an input side as its
+consumer (``finn.kernels.channels.Channel.sides``). Only an output side states a word
+width, which the channel's padding check reads.
 
 A side is a value class: frozen, compared and hashed field by field. So are the values the
 outside states (``Outside``) and its pace (``BeatTimes``, or the steady shorthand
@@ -54,6 +57,7 @@ from enum import Enum
 from typing import Self
 
 from finn.dataflow.streams import Stream
+from finn.kernels.artifacts.abi import Direction
 from finn.kernels.movers import MOVERS, MoverOffer
 
 
@@ -68,7 +72,7 @@ class SideKind(Enum):
 
 
 STATED = (SideKind.KERNEL, SideKind.NEIGHBOUR)
-"""The kinds that state their stream."""
+"""The kinds that state their stream and their direction."""
 
 
 BUILD = "build"
@@ -178,7 +182,9 @@ class Side:
     """One side of a channel (the module docstring): its ``kind``, its ``label`` (a port's
     label, or the boundary's AXIS port's name; a source's is empty), its ``stream`` (a
     stated side's; None on the boundary, which the channel derives, and for a source), its
-    word width (``width``: an output port's), the movers a shell offers on the boundary
+    ``direction`` (a stated side's, its port's kind: ``IN`` an input port's, ``OUT`` an
+    output port's; None on the boundary and for a source), its word width (``width``: an
+    output side's), the movers a shell offers on the boundary
     (``offers``), and what the outside states of the boundary (``outside``: None, unstated,
     the boundary presents what its other side presents). Made by ``kernel``,
     ``neighbour``, ``boundary`` or ``source``. A boundary offered movers carries the
@@ -187,6 +193,7 @@ class Side:
     kind: SideKind
     label: str = ""
     stream: Stream | None = None
+    direction: Direction | None = None
     width: int | None = None
     offers: tuple[MoverOffer, ...] = ()
     outside: Outside | None = None
@@ -195,8 +202,12 @@ class Side:
         stated = self.kind in STATED
         if stated and (self.stream is None or not self.label):
             raise ValueError(f"a {self.kind.value}'s side states its stream and its label")
-        if not stated and self.width is not None:
-            raise ValueError(f"a {self.kind.value}'s side states no word width")
+        if stated and self.direction not in (Direction.IN, Direction.OUT):
+            raise ValueError(f"a {self.kind.value}'s side is an input's or an output's")
+        if not stated and self.direction is not None:
+            raise ValueError(f"a {self.kind.value}'s side states no direction")
+        if self.width is not None and self.direction is not Direction.OUT:
+            raise ValueError("only an output's side states a word width")
         if self.kind is SideKind.BOUNDARY and (self.stream is not None or not self.label):
             raise ValueError("the boundary's side is its AXIS port's name, its stream unstated")
         if self.kind is not SideKind.BOUNDARY and self.offers:
@@ -226,16 +237,20 @@ class Side:
             raise ValueError("a source's side states nothing: the channel's source is its own")
 
     @classmethod
-    def kernel(cls, stream: Stream, label: str, width: int | None = None) -> Self:
-        """A kernel's port: its ``stream``, its ``label``, and on an output port its word
-        ``width``."""
-        return cls(SideKind.KERNEL, label, stream, width)
+    def kernel(
+        cls, direction: Direction, stream: Stream, label: str, width: int | None = None
+    ) -> Self:
+        """A kernel's port: its ``direction`` (its kind's), its ``stream``, its ``label``,
+        and on an output port its word ``width``."""
+        return cls(SideKind.KERNEL, label, stream, direction, width)
 
     @classmethod
-    def neighbour(cls, stream: Stream, label: str, width: int | None = None) -> Self:
-        """A frozen neighbour's port, as a fact: its ``stream``, its ``label``, and on an
-        output port (an upstream neighbour's) its word ``width``."""
-        return cls(SideKind.NEIGHBOUR, label, stream, width)
+    def neighbour(
+        cls, direction: Direction, stream: Stream, label: str, width: int | None = None
+    ) -> Self:
+        """A frozen neighbour's port, as a fact: its ``direction``, its ``stream``, its
+        ``label``, and on an output port (an upstream neighbour's) its word ``width``."""
+        return cls(SideKind.NEIGHBOUR, label, stream, direction, width)
 
     @classmethod
     def boundary(
@@ -254,7 +269,8 @@ class Side:
 
     @property
     def stated(self) -> bool:
-        """Whether it states its stream: a kernel's port, or a frozen neighbour's."""
+        """Whether it states its stream and its direction: a kernel's port, or a frozen
+        neighbour's."""
         return self.kind in STATED
 
     def under(self, member: str) -> Self:
