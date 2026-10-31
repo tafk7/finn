@@ -2146,12 +2146,14 @@ class SizeFifos:
             transport.channel: network.neighbours(transport.channel) for transport in transports
         }
         # A partition a rule refuses has no channel's neighbours, so nothing to size them
-        # by: refused before sizing. Whether it should keep them is pending a decision. So
-        # is one whose class does not answer a channel's neighbours.
+        # by: refused before sizing (``fifos-refused``). Whether it should keep them is
+        # pending a decision. So is one whose class does not answer a channel's neighbours.
+        # One whose neighbours wait on an open choice is not decided, not refused: unread
+        # (``fifos-unread``).
         unread = next((each for each in beside.values() if not isinstance(each, Neighbours)), None)
         if unread is not None:
             raise ExploreError(
-                "fifos-refused",
+                "fifos-refused" if isinstance(unread, Rejected) else "fifos-unread",
                 self.strategy,
                 f"sizing FIFOs: {_unread(unread)}",
                 causes=unread.findings,

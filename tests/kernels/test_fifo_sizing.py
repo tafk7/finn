@@ -30,6 +30,7 @@ from finn import resources
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.rtlsim_bench import simulate as simulate_rtl
 from finn.core.search import Accepted, ExploreError, Hold, Refused, dotted, explore
+from finn.core.space import Unresolved
 from finn.harness.toolchain import finnlib_root
 from finn.kernels import input_generator
 from finn.kernels.artifacts.rtl import evaluate
@@ -392,6 +393,27 @@ def test_it_sizes_at_the_stored_folding_and_refuses_a_point_whose_cycles_are_unk
         message="needs every member's cycles: .*first.compute",
     ):
         SizeFifos().explore(explorer, point)
+
+
+def test_neighbours_that_wait_are_unread_not_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Where a channel's neighbours wait on an open choice, the point is not decided, not
+    refused: it refuses before sizing as unread (``fifos-unread``), what they wait on its
+    cause, as against a refused partition's ``fifos-refused``."""
+    explorer, point = _folded()
+    waiting = Finding(FindingKind.BLOCKER, "decision-unassigned", "compute", "open")
+    monkeypatch.setattr(
+        CoreComposition,
+        "neighbours",
+        lambda self, name: Unresolved((waiting,)),
+    )
+    with refused(
+        "fifos-unread",
+        error=ExploreError,
+        owner="size_fifos",
+        message="the ports beside its channel are not read, waiting: compute: open",
+    ) as caught:
+        SizeFifos().explore(explorer, point)
+    assert caught.finding.causes == (waiting,)
 
 
 def test_a_fifo_sized_before_is_sized_again_and_a_held_one_is_not(
