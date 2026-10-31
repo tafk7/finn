@@ -74,7 +74,6 @@ from finn.core.space.declarations import View
 from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.artifacts.module import Composed as Module
-from finn.kernels.laws import TimedPace
 from finn.kernels.artifacts.module import Fragment, ProducerIdentity
 from finn.kernels.artifacts.top import compose as top
 from finn.kernels.base import Kernel, PortPins, merged
@@ -82,6 +81,7 @@ from finn.kernels.channels import Channel, Neighbours, OuterHops, outer_hops
 from finn.kernels.composer import Composed, Names, PartitionDeclaration, Port, compose
 from finn.kernels.control import Control
 from finn.kernels.control import presented as presented_buses
+from finn.kernels.laws import TimedPace
 from finn.kernels.movers import MoverOffer
 from finn.kernels.policies import Defaulted, Owner, Unstated, defaulted
 from finn.kernels.port import exposed_pins, stream_port

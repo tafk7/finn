@@ -122,7 +122,6 @@ from finn.dataflow.streams import Stream
 from finn.kernels.artifacts.module import ProducerIdentity
 from finn.kernels.base import PortPins
 from finn.kernels.channels import Channel, Neighbours
-from finn.kernels.laws import TimedPace
 from finn.kernels.composer import (
     ChannelDeclaration,
     PartitionDeclaration,
@@ -130,6 +129,7 @@ from finn.kernels.composer import (
     Port,
     Stated,
 )
+from finn.kernels.laws import TimedPace
 from finn.kernels.movers import MoverOffer
 from finn.kernels.partition import Partition, partition
 from finn.kernels.port import exposed_pins, exposed_side, stream_port

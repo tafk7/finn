@@ -17,7 +17,6 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-
 from qonnx.core.datatype import DataType
 from support.helpers import FULL_DSP58, by_hand, choose, dotp_extents, keyed
 from support.refusals import refused
