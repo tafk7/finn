@@ -79,21 +79,21 @@ what its producer states, the graph is stale, refused by name (``tensor-stale``:
 InferKernelTensors"), before any channel's own ``channel-tensor`` is read.
 
 **Its module** is the partition's IP, the cut's (``PARTITION``; a slice with a frozen
-neighbour has none, ``slice-not-emitted``, ``finn.kernels.dataflow_core``): its members'
-netlists, named as the graph's nodes and tensors, with the boundary's pins, named after
-the partition (its stem ``finn_<name>``) and identified as the partition's IP
-(``PRODUCER``, which ``Partition.module_of`` is given), since a mover is integrated beside
-the IP, not in it. Its views are read out of the design space, composed from its members'
-(the netlist with each channel's outer hops from the kernels' stream pins views, FIFO
-sizing's paces, resources), never bound into it; a frozen neighbour's port's stream pins, which
-its hop is wired to, and its port's pace, which sizing reads, are read at its stored
-choices and given beside the declaration.
+neighbour has none, ``slice-not-emitted``), as its class answers it
+(``finn.kernels.dataflow_core.DataflowCoreKernel.module``, ``Partition.module_of``): its
+members' netlists, named as the graph's nodes and tensors, with the boundary's pins, named
+after the partition (its stem ``finn_<name>``) and derived by its class, since a mover is
+integrated beside the IP, not in it. Its views are read out of the design space, composed
+from its members' (the netlist with each channel's outer hops from the kernels' stream
+pins views, FIFO sizing's paces, resources), never bound into it; a frozen neighbour's
+port's stream pins, which its hop is wired to, and its port's pace, which sizing reads, are
+read at its stored choices and given beside the declaration.
 
-A partition's resources (``Partition.own_resources``) are its members', as its class answers
-them (``Kernel.resources``). A partition in its
-shell (``finn.custom_op.kernels.shell.in_shell``) holds the shell's budgets as rules of its
-own (its shell member, ``finn.kernels.budgets``); the shell's resources over a partition
-(its members', its movers' and its static region's), and the cut's choices
+A partition's resources (``Partition.own_resources``) are its members', as its class
+answers them (``Kernel.resources``). A partition in its shell
+(``finn.custom_op.kernels.shell.in_shell``) holds the shell's budgets as rules of its own
+(its shell member, ``finn.kernels.budgets``); the shell's resources over a partition (its
+members', its movers' and its static region's), and the cut's choices
 (``make_cut_choices``) on the partition in its shell, are ``finn.custom_op.kernels.shell``'s.
 """
 
@@ -121,7 +121,6 @@ from finn.core.search import Key, dotted
 from finn.core.space import Available, Rejected, Space, Unresolved, inspection
 from finn.custom_op.kernels.base import KernelOp, kernel_op, typed
 from finn.dataflow.streams import Stream
-from finn.kernels.artifacts.module import ProducerIdentity
 from finn.kernels.base import PortPins
 from finn.kernels.channels import Channel, Neighbours
 from finn.kernels.composer import (
@@ -143,10 +142,6 @@ if TYPE_CHECKING:
 PARTITION = "DataflowCore_0"
 """The partition's name: the cut's node (the DataflowCore) and body file, and the IP made
 from it, which is its module (``finn_dataflowcore_0``)."""
-
-PRODUCER = ProducerIdentity("finn.custom_op.kernels.partition", "1")
-"""What derives a partition's module: identified as the partition's, so the IP's name and
-digest are the partition's."""
 
 
 def stale_text(key: str, found: Iterable[Finding]) -> str:
@@ -776,7 +771,6 @@ def _channel_write(
 
 __all__ = [
     "PARTITION",
-    "PRODUCER",
     "Partition",
     "declaration",
     "network",

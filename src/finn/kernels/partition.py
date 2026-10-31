@@ -711,8 +711,9 @@ class Partition:
         return Available((found.value, edge.value))
 
     def module(self, producer: ProducerIdentity, stem: str) -> QueryResult[Module]:
-        """Its composed module (``finn.kernels.dataflow_core.core_module``) of its
-        ``netlist``; or why not, the netlist's refusal or wait, the marker pins its edge
+        """A module of it (``finn.kernels.dataflow_core.core_module``) of its ``netlist``,
+        named ``stem`` and derived by ``producer`` (a test's, its own; its IP is
+        ``module_of``'s); or why not, the netlist's refusal or wait, the marker pins its edge
         leaves unconsumed or unruled (``channel-top-marker``), or the top's own
         (``kernel-netlist``)."""
         found = self.netlist()
@@ -721,14 +722,11 @@ class Partition:
         made = core_module(producer, stem, *found.value)
         return made if isinstance(made, Rejected) else Available(made)
 
-    def module_of(self, producer: ProducerIdentity) -> QueryResult[Module]:
-        """Its module, the partition's IP (``finn_<name>``), derived by ``producer`` (the
-        graph's partition's, ``finn.custom_op.kernels.network.PRODUCER``), as far as its
-        members decide it, read once."""
-        found: QueryResult[Module] = self._read(
-            f"module {producer}", lambda: self.module(producer, f"finn_{self.name.lower()}")
-        )
-        return found
+    def module_of(self) -> QueryResult[Module]:
+        """Its module, the partition's IP, as its class answers it
+        (``DataflowCoreKernel.module``, ``answer``: named ``finn_<name>``, derived by the
+        class), as far as its members decide it."""
+        return self.answer(DataflowCoreKernel.module)
 
     def own_resources(self) -> QueryResult[Resources]:
         """What its members use, their own statements' sum, as its class answers it

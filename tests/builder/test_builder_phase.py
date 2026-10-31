@@ -1507,7 +1507,7 @@ def test_the_export_of_tfc_on_pynq_names_both_movers_iodmas_and_every_connection
     # thresholding's range.
     node, body, _ = partition_body(parent)
     point, _ = configured_network(body, node.name)
-    assert module_name(point.module) == "finn_dataflowcore_0__e450f7c209d10ea5"
+    assert module_name(point.module) == "finn_dataflowcore_0__bbdc1424bf7716b3"
     persisted = json.loads((output / "report" / "kernel_choices.json").read_text())
     assert persisted == kernel_choices_config(body)
     assert persisted == TFC_STORED

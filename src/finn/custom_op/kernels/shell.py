@@ -56,7 +56,7 @@ from finn.core.graph.partition import design_digest, search_record
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.search import Key, dotted
 from finn.core.space import Available, Inapplicable, QueryResult, Rejected, inspection
-from finn.custom_op.kernels.network import PARTITION, PRODUCER, _network, persist, stale_text
+from finn.custom_op.kernels.network import PARTITION, _network, persist, stale_text
 from finn.kernels.artifacts.module import Composed
 from finn.kernels.budgets import SHELL, counts
 from finn.kernels.channels import Channel
@@ -365,7 +365,7 @@ def configured_network(
             + "; ".join(map(str, over_budget)),
             findings=over_budget,
         )
-    module = bound.module_of(PRODUCER)
+    module = bound.module_of()
     found = [] if isinstance(module, Available) else list(module.findings)
     if not found and isinstance(module, Available):
         _counts_agree(bound, label)

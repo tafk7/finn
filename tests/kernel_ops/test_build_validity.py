@@ -26,7 +26,6 @@ from finn.core.space import (
     occurrence,
     reject,
 )
-from finn.custom_op.kernels.network import PRODUCER
 from finn.kernels.base import Kernel
 from finn.kernels.composer import Composed
 
@@ -88,7 +87,7 @@ def test_real_netlist_does_not_certify_unrelated_rule_or_presence(
     bound._composed = composed
     bound._point = report.instance
     bound._memo = {}
-    module = bound.module_of(PRODUCER)
+    module = bound.module_of()
     if condition == "refused-rule":
         # A partition a rule refuses has no channel's hops, so no module: refused once, by the
         # rule. Whether it should keep them is pending a decision.

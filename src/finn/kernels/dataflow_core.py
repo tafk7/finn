@@ -32,8 +32,9 @@ its members' sums, are the base's (``Kernel.frame_cycles``, ``Kernel.resources``
 edge port's AXIS bus, in its instance order; refused for a slice (some of a graph's kernels,
 declared with an edge at a frozen neighbour, ``Side.neighbour``), whose edge there is a
 kernel's port outside its module and no AXIS port of it: a slice is not emitted
-(``slice-not-emitted``). Its module is its netlist with its edge's buses
-(``core_module``), every marker pin of its edge ruled (``top_markers``).
+(``slice-not-emitted``). Its module (``module``), its IP, is its netlist with its edge's
+buses (``core_module``), every marker pin of its edge ruled (``top_markers``), named after
+its name (``finn_<name>``, lower case) and derived by its class (``PRODUCER``: its ``id``).
 
 ``edge_buses`` reads each member channel through a helper of its own, ``__core_edge_<i>`` in its
 instance order, each reading its channel's sides and its edge ports by the names its
@@ -56,6 +57,10 @@ from finn.kernels.artifacts.module import Fragment, ProducerIdentity
 from finn.kernels.artifacts.top import compose as top
 from finn.kernels.base import Kernel, _connects, _members
 from finn.kernels.sides import SideKind
+
+PRODUCER = ProducerIdentity("finn.dataflow_core", "1")
+"""What derives a core's module, its IP (``DataflowCoreKernel.module``): its class, by its
+``id``."""
 
 _EDGE = "__core_edge"
 
@@ -148,6 +153,17 @@ class DataflowCoreKernel(Kernel):
         assert all(isinstance(pin, Bus) for pin in buses)  # an AXIS port's pins: its bus
         return buses
 
+    @view
+    def module(self) -> Module | Rejected:
+        """Its module, its IP (``core_module``): its netlist with its edge's buses, named
+        ``finn_<name>`` (its name in lower case) and derived by its class (``PRODUCER``);
+        refused where its edge or its netlist is (a slice's edge first,
+        ``slice-not-emitted``), or where the module is not well formed."""
+        edge: tuple[Bus, ...] = self.edge_buses
+        fragment: Fragment = self.netlist
+        name: str = self.name
+        return core_module(PRODUCER, f"finn_{name.lower()}", fragment, edge)
+
 
 setattr(DataflowCoreKernel, f"{_EDGE}_0", Kernel._module_end)
 
@@ -215,4 +231,4 @@ def core_module(
         return reject("kernel-netlist", str(error))
 
 
-__all__ = ["DataflowCoreKernel", "core_module", "top_markers"]
+__all__ = ["PRODUCER", "DataflowCoreKernel", "core_module", "top_markers"]

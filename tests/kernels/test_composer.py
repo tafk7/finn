@@ -58,7 +58,7 @@ from finn.kernels.composer import (
     compose,
 )
 from finn.kernels.configure import commit
-from finn.kernels.dataflow_core import DataflowCoreKernel
+from finn.kernels.dataflow_core import PRODUCER, DataflowCoreKernel, core_module
 from finn.kernels.matmul import KnownWeights, MatMulKernel
 from finn.kernels.port import exposed_pins, port_direction
 from finn.kernels.sides import BUILD, Outside, Side, SideKind, Steady
@@ -715,8 +715,10 @@ def test_the_declaration_s_name_and_order_are_facts_of_the_class(cache: None) ->
 def test_the_class_answers_its_netlist_edge_cycles_and_resources(cache: None) -> None:
     """The class answers what its module is made of: its netlist (``Kernel.netlist``), its
     members in its instance order, and its module's edge (``DataflowCoreKernel.edge_buses``:
-    each edge port's bus, in its instance order); its cycles (the most any member takes) and
-    its resources (its members' sum). The partition reads each of them."""
+    each edge port's bus, in its instance order); its module, its IP, of them, named after
+    its name and derived by its class (``DataflowCoreKernel.module``); its cycles (the most
+    any member takes) and its resources (its members' sum). The partition reads each of
+    them."""
     network = chain.chain()
     point = network.point
     order = getattr(type(point), "instance_order")
@@ -728,6 +730,12 @@ def test_the_class_answers_its_netlist_edge_cycles_and_resources(cache: None) ->
     placed = list(dict.fromkeys(label.split(".")[0] for label, _ in wired.value.instances))
     assert placed == [name for name in order if name in placed]
     assert network.netlist() == Available((wired.value, edge.value))
+    module = point.query(DataflowCoreKernel.module)
+    assert isinstance(module, Available) and network.module_of() == module
+    made = module.value
+    assert (made.implementation_id, made.implementation_version) == ("finn.dataflow_core", "1")
+    assert made.stem == "finn_partition" and made.fragment == wired.value
+    assert made == core_module(PRODUCER, "finn_partition", wired.value, edge.value)
     cycles = point.query(Kernel.frame_cycles)
     assert isinstance(cycles, Available) and network.cycles() == cycles
     assert cycles.value == max(

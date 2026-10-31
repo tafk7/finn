@@ -24,7 +24,6 @@ from finn.core.graph.partition import design_digest
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.rtlsim_exec import XSim
 from finn.core.space import Available, QueryResult, Unresolved, reject
-from finn.custom_op.kernels.network import PRODUCER
 from finn.kernels.artifacts.build import netlist
 from finn.kernels.explore import Seam
 from finn.kernels.partition import Partition
@@ -48,7 +47,7 @@ def test_configuration_and_emission_do_not_read_refused_cycles(
     with pytest.raises(KernelOpError, match="cycle characterization unavailable"):
         _ = actual.cycles
     assert reads == ["cycles"]
-    assert isinstance(actual.network.module_of(PRODUCER), Available)
+    assert isinstance(actual.network.module_of(), Available)
 
 
 def _unavailable(timing: str, reads: list[str]) -> Any:

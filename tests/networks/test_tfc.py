@@ -41,7 +41,6 @@ from finn.core.rtlsim_pacing import FREE, STALLED
 from finn.core.search import Ranked, Refused
 from finn.core.space import Available, inspection
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.network import PRODUCER
 from finn.custom_op.kernels.shell import configured_network, in_shell
 from finn.kernels.budgets import SHELL, counts
 from finn.kernels.explore import Seam
@@ -294,7 +293,7 @@ def test_tfc_w2a2s_partition_holds_the_zynq_shells_budgets_as_its_rules(
     _, body = partition(ModelWrapper(str(tfc_streamlined)), tmp_path)
     bound = in_shell(body, body.graph.node)
     assert bound.shell == SHELL and SHELL not in {*bound.members, *bound.order}
-    module = bound.module_of(PRODUCER)
+    module = bound.module_of()
     assert isinstance(module, Available)
     assert not any(label.startswith(SHELL) for label, _ in module.value.fragment.instances)
     assert {owner for owner, _ in bound.chosen()} <= set(bound.members)

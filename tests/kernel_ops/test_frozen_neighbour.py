@@ -28,7 +28,7 @@ from support.refusals import refused
 from finn.core.graph.errors import KernelOpError
 from finn.core.space import Available, Rejected, inspection
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.network import PRODUCER, declaration, network
+from finn.custom_op.kernels.network import declaration, network
 from finn.kernels import fifo_sizing
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel, OuterHops
@@ -235,7 +235,7 @@ def test_a_slice_s_netlist_and_module_are_refused_by_their_code() -> None:
     bare error."""
     model = chain_model(4)
     part = _slice(model, "mm1", "mt1")
-    netlist, module = part.netlist(), part.module_of(PRODUCER)
+    netlist, module = part.netlist(), part.module_of()
     assert isinstance(netlist, Rejected) and isinstance(module, Rejected)
     for found in (netlist, module):
         assert [(f.code, f.owner, dict(f.details)["tensor"]) for f in found.findings] == [
