@@ -26,12 +26,22 @@ from support.helpers import (
     with_channel_defaults,
     with_direct_transports,
 )
+from support.refusals import refused
 
-from finn.core.space import Inapplicable, Param, Rejected, derived, inspection
+from finn.core.space import (
+    DefinitionError,
+    Inapplicable,
+    Param,
+    Rejected,
+    Space,
+    derived,
+    inspection,
+)
 from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import Tensor
 from finn.kernels.base import Kernel
 from finn.kernels.matmul import KnownWeights, MatMulKernel
+from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.partition import Partition
 from finn.kernels.port import exposed_name, port_direction
 from finn.kernels.port_model import exposed_ports
@@ -154,3 +164,27 @@ def test_the_wrapper_takes_the_doubled_clock_its_core_takes(pumped: bool) -> Non
     assert point.takes_doubled_clock is pumped
     assert point.mm.takes_doubled_clock is pumped
     assert point.clocking.doubling is False
+
+
+def test_a_member_s_guard_is_read_only_where_it_is_its_holder_s_own_member() -> None:
+    """Whether a member that may take the doubled clock or present a bus is placed is
+    read from its guard (``when``) where its holder derives its own: the holder's own
+    member, never another's (``member-guard-unread``)."""
+
+    class Own(Kernel):
+        id = "test.exposed.guard.own"
+        flag: bool = Param(default=True)
+        memory = MemStreamKernel(when=flag)
+
+    # Its own flag is read: it derives whether it takes the doubled clock from the memory's.
+    assert "takes_doubled_clock" in vars(Own)
+
+    class Flags(Space):
+        flag: bool = Param(default=True)
+
+    with refused("member-guard-unread", error=DefinitionError):
+
+        class Foreign(Kernel):
+            id = "test.exposed.guard.foreign"
+            flags = Flags()
+            memory = MemStreamKernel(when=flags.flag)
