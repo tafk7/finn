@@ -25,7 +25,6 @@ from finn.core.space import (
     reject,
 )
 from finn.core.space._aliases import AliasEntry, alias_table
-from finn.core.space._nodes import NodeDecl
 from finn.core.space.declarations import Declaration, Required, declared_path
 from finn.dataflow.schedule import Index
 from finn.dataflow.streams import Stream
@@ -33,7 +32,7 @@ from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import LevelEnd, Marker, Traversal
 from finn.kernels.artifacts.abi import Clocking, Direction, Endpoint, Pin
 from finn.kernels.artifacts.module import Held
-from finn.kernels.base import Kernel, PortPins, _end_declaration
+from finn.kernels.base import Kernel, PortPins
 from finn.kernels.laws import AXIS, AXIS_MARKERS, IDLE_LEVEL, Axis, Native, TransportKind
 from finn.kernels.transport import (
     AxisBeat,
@@ -346,27 +345,27 @@ def _exposed_entry(space_type: type[Space], port: str) -> AliasEntry | None:
 
 
 def port_direction(space_type: type[Space], port: str) -> Direction | None:
-    """Whether kernel ``space_type``'s port ``port`` is an input or an output, from its
-    declaration: an exposed port's is its member's port's, the one every node the alias may
-    name agrees on. None where it is not known: no such port, or a port bound otherwise
-    than by a literal."""
+    """Whether kernel ``space_type``'s port ``port`` is an input or an output, by its kind
+    (``InPort``, ``OutPort``): an exposed port's is its member's port's, the one every node
+    the alias may name is of. None where it is not known: no such port."""
+    from finn.kernels.port_model import InPort, OutPort  # noqa: PLC0415 - base/port cycle
+
     if not (isinstance(space_type, type) and issubclass(space_type, Kernel)):
         return None
     entry = _exposed_entry(space_type, port)
     if entry is not None:
-        records = [_end_declaration(space_type, end.path) for end in entry.ends]
+        kinds = [end.space_type for end in entry.ends]
     else:
         try:
             found = stream_port(space_type, port)
         except KeyError:
             return None
-        path = declared_path(found)
-        if not path or not isinstance(path[-1], NodeDecl):
-            return None
-        records = [path[-1]]
-    directions = {record.bindings.get("direction") for record in records}
-    direction = directions.pop() if len(directions) == 1 else None
-    return direction if isinstance(direction, Direction) else None
+        kinds = [type(found)]
+    if all(issubclass(kind, InPort) for kind in kinds):
+        return Direction.IN
+    if all(issubclass(kind, OutPort) for kind in kinds):
+        return Direction.OUT
+    return None
 
 
 # -- a port as its kernel presents it -------------------------------------------------------

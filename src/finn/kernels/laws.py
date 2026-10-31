@@ -15,8 +15,10 @@ read here rather than spell themselves:
 - each transport's pin names (``Axis``, ``Native``): an author declares a port's
   transport kind, not its pins, and overrides a name only where its RTL names a pin
   otherwise (``Axis(bus="s_axis_input")``, ``Native(prefix="a")``);
-- the two clock domains (``AXIS_CLOCKING``, ``NATIVE_CLOCKING``), chosen by a module's
-  family, never by its ports' transports, and the doubled clock's name (``doubled``);
+- the two pin families (``AXIS_FAMILY``, ``NATIVE_FAMILY``, ``PinFamily``), one a kernel,
+  chosen by its module's family: its clock and reset pins (``AXIS_CLOCKING``,
+  ``NATIVE_CLOCKING``) and its ports' transport where a port states none; and the doubled
+  clock's name (``doubled``);
 - the idle level (``IDLE_LEVEL``), AXIS's byte padding (``axis_carrier``) and the one
   marker an AXIS beat carries (``AXIS_MARKERS``).
 
@@ -108,8 +110,8 @@ RESET_LAW = Law(
 CLOCK_LAW = Law(
     "L8",
     "clock",
-    "one clock, the kernel's clock domain (AXIS_CLOCKING or NATIVE_CLOCKING); clock and "
-    "reset pins are the kernel's, never a port's",
+    "one clock, the kernel's pin family's clock and reset (AXIS_FAMILY or NATIVE_FAMILY); "
+    "clock and reset pins are the kernel's, never a port's",
     "a doubled clock at twice the kernel's clock, where the kernel takes one, declared "
     "(doubled): named <clock>2x (ap_clk2x, clk2x), held low while the kernel does not double",
 )
@@ -473,15 +475,41 @@ TransportKind = Axis | Native
 """A port's transport kind, with the pin names a kernel states for it."""
 
 
-# -- the clock domains (L7, L8) ----------------------------------------------------------
+# -- the pin families: clock and reset (L7, L8), and a port's default transport ------------
 
 AXIS_CLOCKING = Clocking(clock="ap_clk", reset="ap_rst_n", active_low=True)
-"""The AXIS family's clock domain: ``ap_clk`` and the synchronous, active-low
+"""The AXIS family's clock and reset: ``ap_clk`` and the synchronous, active-low
 ``ap_rst_n`` (dotp, thresholding, pool)."""
 
 NATIVE_CLOCKING = Clocking(clock="clk", reset="rst", active_low=False)
-"""FinnLib's native clock domain: ``clk`` and the synchronous, active-high ``rst`` (vpc,
-the FIFO, the input generator, MemStream, eltwise, pwpolyf, transpose)."""
+"""FinnLib's native family's clock and reset: ``clk`` and the synchronous, active-high
+``rst`` (vpc, the FIFO, the input generator, MemStream, eltwise, pwpolyf, transpose)."""
+
+
+@dataclass(frozen=True)
+class PinFamily:
+    """A module family's pin conventions, one a kernel (``Kernel.pin_family``): its clock and
+    reset pins and the reset's polarity (``clocking``, L7, L8), and the transport its ports
+    take where a port states none (``transport``). A port with its own pin names, or of
+    another family than its kernel's, states its transport."""
+
+    clocking: Clocking
+    transport: TransportKind
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.clocking, Clocking) or self.clocking.doubled is not None:
+            raise ValueError("a pin family's clocking is a plain Clocking, with no doubled clock")
+        if not isinstance(self.transport, (Axis, Native)):
+            raise ValueError("a pin family's transport is an Axis or a Native")
+
+
+AXIS_FAMILY = PinFamily(AXIS_CLOCKING, AXIS)
+"""The AXIS family: ``ap_clk``, ``ap_rst_n``, and AXIS ports on the library's default names
+(dotp, thresholding, pool)."""
+
+NATIVE_FAMILY = PinFamily(NATIVE_CLOCKING, NATIVE)
+"""FinnLib's native family: ``clk``, ``rst``, and native ports on the library's default names
+(vpc, the FIFO, the input generator, MemStream, eltwise, pwpolyf, transpose)."""
 
 
 def doubled(domain: Clocking, doubling: bool) -> Clocking:
@@ -502,6 +530,7 @@ __all__ = [
     "AXIS",
     "Advance",
     "AXIS_CLOCKING",
+    "AXIS_FAMILY",
     "AXIS_MARKERS",
     "AXIS_MEMBERS",
     "Axis",
@@ -519,7 +548,9 @@ __all__ = [
     "MARKERS",
     "NATIVE",
     "NATIVE_CLOCKING",
+    "NATIVE_FAMILY",
     "Native",
+    "PinFamily",
     "PortIntake",
     "RATE",
     "RATE_INTERVAL",

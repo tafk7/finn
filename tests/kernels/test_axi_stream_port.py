@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from qonnx.core.datatype import DataType
 from support.helpers import FULL_DSP58, by_hand, choose, dotp_extents, keyed
 from support.refusals import refused
@@ -38,7 +40,6 @@ from finn.dataflow.gemm import Form
 from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
-from finn.kernels.artifacts.abi import Direction
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
 from finn.kernels.composer import Facts, Port, channel
@@ -47,7 +48,7 @@ from finn.kernels.laws import Axis
 from finn.kernels.library import ModuleSpec, library_module
 from finn.kernels.partition import Partition
 from finn.kernels.port import lane_count
-from finn.kernels.port_model import StreamPort
+from finn.kernels.port_model import InPort, OutPort
 from finn.kernels.sides import Side
 from finn.kernels.values.domains import Integer
 from finn.platform.capabilities import Resources
@@ -79,19 +80,17 @@ class Pool(Kernel):
             return shape
         return Tensor(shape, ScalarEncoding(DataType["INT8"]))
 
-    x = StreamPort(
+    x = InPort(
         label="x",
         transport=Axis(bus="s_axis_input"),
-        direction=Direction.IN,
         tensor=x_tensor,
         schedule=schedule,
         index=(b, s, c),
         lanes=(c,),
     )
-    y = StreamPort(
+    y = OutPort(
         label="y",
         transport=Axis(bus="m_axis_output"),
-        direction=Direction.OUT,
         tensor=y_tensor,
         schedule=schedule,
         index=(b, c),
@@ -177,7 +176,7 @@ def test_an_input_without_its_tensor_is_idle_and_carries_one_lane() -> None:
     point = design_space(Pool())
     assert not point.x.placed
     ((code, message),) = coded_messages(point.query(Pool.x.element))
-    assert code == "port-element" and message == "x: an idle port states its dtype"
+    assert code == "port-element" and message == "x: an idle input states its dtype"
     ((code, message),) = coded_messages(
         lane_count(point.x.physical_spec(idle=True), ScalarEncoding(DataType["INT4"]))
     )
@@ -199,10 +198,9 @@ def test_a_port_presents_a_schedule_or_a_sequence_not_both() -> None:
 
         class Both(Pool):
             id = "test.accpool.both"
-            x = StreamPort(
+            x = InPort(
                 label="x",
                 transport=Axis(bus="s_axis_input"),
-                direction=Direction.IN,
                 tensor=Pool.x_tensor,
                 schedule=Pool.schedule,
                 sequence=BeatSequence(vector_major((1, 4, 8), 8)),
@@ -212,24 +210,21 @@ def test_a_port_presents_a_schedule_or_a_sequence_not_both() -> None:
 
 
 def test_a_producers_element_is_its_tensors() -> None:
-    class Stated(Pool):
-        id = "test.accpool.stated"
-        y = StreamPort(
-            label="y",
-            transport=Axis(bus="m_axis_output"),
-            direction=Direction.OUT,
-            tensor=Pool.y_tensor,
-            schedule=Pool.schedule,
-            index=(b, c),
-            lanes=(c,),
-            reduces=(s,),
-            dtype=DataType["INT9"],
-        )
+    """An output states no element of its own: ``dtype`` is an input's (``InPort``)."""
+    with pytest.raises(DefinitionError, match=r"unknown members \['dtype'\]"):
 
-    trial = placing(Facts(Stated, {"x_tensor": X})).trial(keyed({"kernel.pe": 4}))
-    ((code, message),) = coded_messages(Rejected(trial.refused[("kernel", "y.element")]))
-    assert code == "port-element"
-    assert message.startswith("y: an output's element is its tensor's")
+        class Stated(Pool):
+            id = "test.accpool.stated"
+            y = OutPort(
+                label="y",
+                transport=Axis(bus="m_axis_output"),
+                tensor=Pool.y_tensor,
+                schedule=Pool.schedule,
+                index=(b, c),
+                lanes=(c,),
+                reduces=(s,),
+                dtype=DataType["INT9"],
+            )
 
 
 def test_dotp_binds_from_its_inputs_through_the_dense_view() -> None:
@@ -277,10 +272,9 @@ class Holding(Kernel):
     def schedule(self) -> Schedule | Rejected:
         return bound_schedule(self.extents, order=(b, s, c))
 
-    x = StreamPort(
+    x = InPort(
         label="x",
         transport=Axis(bus="s_axis_input"),
-        direction=Direction.IN,
         tensor=X,
         schedule=schedule,
         index=(b, s, c),

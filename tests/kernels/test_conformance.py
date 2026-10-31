@@ -75,12 +75,11 @@ from finn.core.space import Rejected, derived, view
 from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.traversal import offsets, pack, vector_major
 from finn.harness.orders import decode
-from finn.kernels.artifacts.abi import Direction
 from finn.kernels.base import Kernel, bound_extents, bound_schedule
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.laws import Axis
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.port_model import StreamPort
+from finn.kernels.port_model import InPort, OutPort, StreamPort
 from finn.kernels.thresholding import ThresholdingAxiKernel
 
 # -- the loop-order proof: thresholding on a schedule ---------------------------------------
@@ -125,19 +124,17 @@ co, ci = Index("co"), Index("ci")
 
 def split_ports(schedule: Any, lanes: tuple[Index, ...]) -> tuple[StreamPort, StreamPort]:
     """Input and output reading channel ``c = 3 co + ci``, lanes in ``lanes`` order."""
-    input = StreamPort(
+    input = InPort(
         label="input",
         transport=Axis(bus="s_axis"),
-        direction=Direction.IN,
         tensor=ThresholdingAxiKernel.input_tensor,
         schedule=schedule,
         index=(r, co * 3 + ci),
         lanes=lanes,
     )
-    output = StreamPort(
+    output = OutPort(
         label="output",
         transport=Axis(bus="m_axis"),
-        direction=Direction.OUT,
         tensor=ThresholdingAxiKernel.output_tensor,
         schedule=schedule,
         index=(r, co * 3 + ci),
@@ -340,10 +337,9 @@ class Misnamed(MemStreamKernel):
     """memstream_axi with its output bus misnamed: the source has no such pins."""
 
     id = "test.memstream_axi.misnamed"
-    output = StreamPort(
+    output = OutPort(
         label="output",
         transport=Axis(bus="m_axis_1"),
-        direction=Direction.OUT,
         tensor=MemStreamKernel.output_tensor,
         sequence=MemStreamKernel.output_sequence,
     )

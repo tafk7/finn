@@ -57,7 +57,6 @@ from finn.core.space._nodes import (
     assign,
     node_record,
     selected,
-    space_members,
     unwrap,
 )
 from finn.core.space.declarations import Declaration, Derived, View, unmet_required
@@ -72,17 +71,19 @@ from finn.dataflow.schedule import (
     span,
 )
 from finn.kernels.artifacts import ArtifactError
-from finn.kernels.artifacts.abi import Clocking, Direction, Pin
+from finn.kernels.artifacts.abi import Clocking, Pin
 from finn.kernels.artifacts.contributions import Contribution, GeneratedData
 from finn.kernels.artifacts.module import BusExport, Fragment, Held, Link, merge
 from finn.kernels.control import Control, ControlModel, control_models, presented
 from finn.kernels.laws import (
-    AXIS_CLOCKING,
+    AXIS_FAMILY,
     INTAKE_UNSTATED,
     RATE_INTERVAL,
     Intake,
     Interval,
+    PinFamily,
     Standing,
+    TransportKind,
     in_cycles,
 )
 from finn.kernels.library import ModuleSpec, _each, assemble_module, module_unprovided
@@ -245,11 +246,12 @@ def _is_stream_port(item: object) -> bool:
 def _supply_ports(cls: type[Kernel]) -> None:
     """Supply each stream port declared in ``cls``'s own body with what is the kernel's,
     where the port does not state it: its ``label``, its name in the kernel, its
-    ``clocking``, the kernel's clock domain (``Kernel.port_clocking``; L8: a port's clock is
-    its kernel's), and its ``interval``, the kernel's (``Kernel.interval``, L6), which it
-    carries with its pace. A port declared in a Group states its label and clocking; only a
-    kernel with no module declares one (``module-part-nested``), and such a kernel has no
-    interval, so the port keeps L6's."""
+    ``clocking``, its kernel's pin family's clock and reset (``Kernel.port_clocking``; L8: a
+    port's clock is its kernel's), its ``transport``, its kernel's pin family's
+    (``Kernel.port_transport``), and its ``interval``, the kernel's (``Kernel.interval``,
+    L6), which it carries with its pace. A port declared in a Group states its label,
+    clocking and transport; only a kernel with no module declares one
+    (``module-part-nested``), and such a kernel has no interval, so the port keeps L6's."""
     from finn.kernels.port_model import StreamPort  # noqa: PLC0415
 
     for name, value in vars(cls).items():
@@ -260,6 +262,8 @@ def _supply_ports(cls: type[Kernel]) -> None:
             assign(value, "label", name)
         if "clocking" not in record.settings:
             assign(value, "clocking", Kernel.port_clocking)
+        if "transport" not in record.settings:
+            assign(value, "transport", Kernel.port_transport)
         if "interval" not in record.settings:
             assign(value, "interval", Kernel.interval)
 
@@ -268,8 +272,9 @@ def _supply_ports(cls: type[Kernel]) -> None:
 #
 # What a constraint cannot see is refused when a kernel's class is made: a constraint reading
 # an inapplicable value is inapplicable, not refused. Each stream port its body declares, in
-# the body or in a Group of it, states its header's direction, binds exactly one presentation
-# and its relation only where it applies; a port of its body presents its kernel's one
+# the body or in a Group of it, is an input or an output (its kind, InPort or OutPort, whose
+# relation's parameters are its own), binds exactly one presentation and states one advance
+# rule; a port of its body presents its kernel's one
 # schedule, which is stated and never inapplicable, and governs a port its kernel has. A
 # placed port's presentation at a design point is the port's own constraint
 # (``StreamPort.presented``).
@@ -301,16 +306,17 @@ def _declared_ports(cls: type[Kernel]) -> list[tuple[str, Any, bool]]:
 def _check_ports(cls: type[Kernel]) -> None:
     """Refuse, when ``cls`` is made, a stream port its own body declares (above) that:
 
-    - states no direction, or ``INOUT`` (``port-direction``): a stream is an input or an
-      output, and its bus role follows (``finn.kernels.port.stream_endpoint``);
+    - is a ``StreamPort`` of neither kind, ``InPort`` or ``OutPort`` (``port-direction``): a
+      stream is an input or an output, never ``INOUT``, and its bus role follows
+      (``finn.kernels.port.stream_endpoint``). What only an input states (``governs``,
+      ``dtype``) or only an output (``stored``) is its kind's, so no other port states it;
     - binds no presentation or both, its kernel's ``schedule`` and a given ``sequence``, or a
       given sequence with a projection's parameters (``index``, ``lanes``, ``reduces``,
       ``holds``, ``closes``, ``reshaped``) (``port-presentation``);
     - states more than one of what an advance rule follows from, its kernel's schedule, the
       port it governs or stored values, or states ``governs`` or ``stored`` bound to other
       than a literal (``port-advance-ambiguous``; CONTRACT.md § 3: a port states what it
-      is, one thing), or ``governs`` on an output, ``stored`` on an input
-      (``port-direction``);
+      is, one thing);
     - in its body, governs a port its kernel does not have (``port-governs-unknown``), or
       presents a schedule other than its kernel's one ``schedule``
       (``port-schedule-foreign``): its kernel's scheduled ports are projections of one
@@ -323,7 +329,7 @@ def _check_ports(cls: type[Kernel]) -> None:
     (``port-schedule-unstated``) or states one whose declared answer admits
     ``Inapplicable`` (``port-schedule-inapplicable``): a scheduled port's stream would be
     inapplicable, which no constraint refuses."""
-    from finn.kernels.port_model import StreamPort  # noqa: PLC0415
+    from finn.kernels.port_model import InPort, OutPort, StreamPort  # noqa: PLC0415
 
     ports = {name for name, item in _members(cls).items() if isinstance(item, StreamPort)}
     for name, record, own in _declared_ports(cls):
@@ -333,12 +339,11 @@ def _check_ports(cls: type[Kernel]) -> None:
             return DefinitionError.broken(code, "Kernel", f"{where} {message}", declaration=where)
 
         bound = record.bindings
-        direction = bound.get("direction")
-        if "direction" not in bound or direction is Direction.INOUT:
+        if not issubclass(record.space_type, (InPort, OutPort)):
             raise refused(
                 "port-direction",
-                ("states no direction" if "direction" not in bound else "is stated INOUT")
-                + ": a stream port is an input or an output (direction=Direction.IN, OUT)",
+                f"is a {record.space_type.__name__}, neither an input nor an output: a stream "
+                "port is declared as one (InPort, OutPort)",
             )
         presentations = [key for key in ("schedule", "sequence") if bound.get(key) is not None]
         if len(presentations) != 1:
@@ -370,12 +375,6 @@ def _check_ports(cls: type[Kernel]) -> None:
                     "port-advance-ambiguous",
                     f"binds {key} to {value!r}: its advance rule is its declaration's, a literal",
                 )
-        if governs is not None and direction is Direction.OUT:
-            raise refused(
-                "port-direction", "governs a port and is an output: a selector is an input"
-            )
-        if stored is True and direction is Direction.IN:
-            raise refused("port-direction", "is stored and an input: stored values are an output's")
         if not own:
             continue
         if isinstance(governs, str) and (governs == name or governs not in ports):
@@ -460,33 +459,16 @@ def _kernel_schedule(cls: type[Kernel], bound: object) -> bool:
 # member's port, ``Kernel.intake``); a port is exposed under one name.
 
 
-def _end_declaration(space_type: type[Any], path: str) -> NodeDecl:
-    """The declaration of the node at the owner's ``path`` below ``space_type``, through its
-    children and each selector's case (``compute.packed.x``): an alias's end."""
-    current: type[Any] = space_type
-    found: NodeDecl | None = None
-    segments = iter(path.split("."))
-    for segment in segments:
-        member: object = space_members(current)[segment]
-        if isinstance(member, NodeDecision):
-            member = member.candidates[next(segments)]
-        assert isinstance(member, NodeDecl)  # an alias's end is a node some case places
-        found, current = member, member.space_type
-    assert found is not None
-    return found
-
-
 def _expose_ports(cls: type[Kernel]) -> None:
     """Record the name each member's port ``cls`` exposes is exposed under, in
     ``Kernel._exposed_names`` (above); and refuse a port it exposes:
 
-    - whose nodes, one each selection, state different directions, or, more than one,
-      state any but a literal one (``port-direction``): a port is an input or an output in
-      each of its kernel's points, which only literals show when its class is made. Their
-      transports may differ, each case's carrier its own;
+    - whose nodes, one each selection, are not all inputs or all outputs, by their kind
+      (``port-direction``): a port is an input or an output in each of its kernel's points.
+      Their transports may differ, each case's carrier its own;
     - that another of its aliases exposes already (``port-exposed-twice``): one port, one
       name, so no two channels connect it under two."""
-    from finn.kernels.port_model import StreamPort  # noqa: PLC0415
+    from finn.kernels.port_model import InPort, OutPort, StreamPort  # noqa: PLC0415
 
     exposed: dict[tuple[str, str], str] = {}
     seen: dict[frozenset[object], str] = {}
@@ -505,19 +487,16 @@ def _expose_ports(cls: type[Kernel]) -> None:
                 declaration=where,
             )
         seen[ends] = name
-        stated = {
-            end.path: _end_declaration(cls, end.path).bindings.get("direction")
-            for end in entry.ends
-        }
-        literal = {value for value in stated.values() if isinstance(value, Direction)}
-        bound = len(stated) > 1 and not all(isinstance(v, Direction) for v in stated.values())
-        if len(literal) > 1 or bound:
+        kinds = {end.path: end.space_type for end in entry.ends}
+        if not (
+            all(issubclass(kind, InPort) for kind in kinds.values())
+            or all(issubclass(kind, OutPort) for kind in kinds.values())
+        ):
             raise DefinitionError.broken(
                 "port-direction",
                 "Kernel",
-                f"{where} exposes nodes of different directions, or of directions not stated "
-                "as literals ("
-                + ", ".join(f"{path}: {value}" for path, value in stated.items())
+                f"{where} exposes nodes not all inputs or all outputs ("
+                + ", ".join(f"{path}: {kind.__name__}" for path, kind in kinds.items())
                 + "): an exposed port is an input or an output in every selection",
                 declaration=where,
             )
@@ -976,25 +955,32 @@ class Kernel(Space):
                 declaration=cls.__qualname__,
             )
 
-    # -- its clock ------------------------------------------------------------------------
+    # -- its clock and its pins' family ---------------------------------------------------
 
-    # The clock and reset (and its polarity) its ports and its module run on (L8): a class
-    # constant, one of the library's two domains (``finn.kernels.laws``), chosen by its
-    # module's family, never by its ports' transports. The AXIS family's by default; a
-    # FinnLib native module states ``NATIVE_CLOCKING``.
-    clock_domain: ClassVar[Clocking] = AXIS_CLOCKING
+    # Its module's pin family (``finn.kernels.laws.PinFamily``): a class constant, one of the
+    # library's two, chosen by its module's family: the clock and reset (and its polarity)
+    # its ports and its module run on (L8), and the transport its ports take where a port
+    # states none. The AXIS family by default; a FinnLib native module states
+    # ``NATIVE_FAMILY``.
+    pin_family: ClassVar[PinFamily] = AXIS_FAMILY
 
     @derived
     def clocking(self) -> Clocking:
-        """Its module's clocking: its ``clock_domain``; a kernel with a doubled clock builds
-        on it (``finn.kernels.laws.doubled(type(self).clock_domain, doubling)``)."""
-        return type(self).clock_domain
+        """Its module's clocking: its pin family's; a kernel with a doubled clock builds on
+        it (``finn.kernels.laws.doubled(type(self).pin_family.clocking, doubling)``)."""
+        return type(self).pin_family.clocking
 
     @derived
     def port_clocking(self) -> Clocking:
-        """Its ports' clock and reset: its ``clock_domain`` (L8), never a doubled clock's
+        """Its ports' clock and reset: its pin family's (L8), never a doubled clock's
         choice. The base gives it to every port its body declares (``StreamPort``)."""
-        return type(self).clock_domain
+        return type(self).pin_family.clocking
+
+    @derived
+    def port_transport(self) -> TransportKind:
+        """Its ports' transport where a port states none: its pin family's. The base gives
+        it to every port its body declares that states none (``StreamPort.transport``)."""
+        return type(self).pin_family.transport
 
     @derived
     def takes_doubled_clock(self) -> bool:

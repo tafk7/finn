@@ -8,11 +8,10 @@ from finn.core.space import QueryResult, Space
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence
-from finn.kernels.artifacts.abi import Direction
 from finn.kernels.base import PortPins
 from finn.kernels.laws import NATIVE, NATIVE_CLOCKING
 from finn.kernels.port import stream_port
-from finn.kernels.port_model import StreamPort, exposed_ports, stream_ports
+from finn.kernels.port_model import InPort, StreamPort, exposed_ports, stream_ports
 from finn.kernels.sides import Side
 
 
@@ -26,15 +25,14 @@ def check(
     assert_type(port.stream_pins, PortPins)
     assert_type(port.query(StreamPort.stream), QueryResult[Stream])
     assert_type(
-        StreamPort(
+        InPort(
             label="x",
-            direction=Direction.IN,
             transport=NATIVE,
             tensor=tensor,
             sequence=sequence,
             clocking=NATIVE_CLOCKING,
         ),
-        StreamPort,
+        InPort,
     )
     assert_type(exposed_ports(type(root)), dict[str, StreamPort])
     assert_type(stream_ports(type(root)), dict[str, StreamPort])

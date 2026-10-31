@@ -35,7 +35,7 @@ from finn.kernels.base import Kernel
 from finn.kernels.configure import chosen, commit
 from finn.kernels.laws import AXIS
 from finn.kernels.port import port_direction, stream_port
-from finn.kernels.port_model import StreamPort, stream_ports
+from finn.kernels.port_model import InPort, OutPort, stream_ports
 from finn.kernels.values.domains import Integer
 
 
@@ -209,15 +209,12 @@ def test_port_discovery_reads_lexical_groups_without_implicit_child_lowering() -
     sequence = BeatSequence(vector_major((2, 4), 4))
 
     class Child(Space):
-        inner = StreamPort(
-            direction=Direction.IN, transport=AXIS, label="inner", tensor=tensor, sequence=sequence
-        )
+        inner = InPort(transport=AXIS, label="inner", tensor=tensor, sequence=sequence)
 
     class Included(Group):
-        nested = StreamPort(
+        nested = OutPort(
             transport=AXIS,
             label="nested",
-            direction=Direction.OUT,
             tensor=tensor,
             sequence=sequence,
         )

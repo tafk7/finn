@@ -4,10 +4,10 @@
 """A stream port for the tests of a kernel's module assembly."""
 
 from finn.core.space import constraint
-from finn.kernels.port_model import StreamPort
+from finn.kernels.port_model import InPort, OutPort
 
 
-class UncheckedPort(StreamPort):
+class UncheckedInPort(InPort):
     """A stream port whose own constraint (``StreamPort.presented``) is lifted,
     so that a fixture's port whose transport refuses its stream (a loop-completion vector
     on a native port named in full) leaves its design point valid, and its kernel's module
@@ -19,4 +19,12 @@ class UncheckedPort(StreamPort):
         return True
 
 
-__all__ = ["UncheckedPort"]
+class UncheckedOutPort(OutPort):
+    """The output counterpart of :class:`UncheckedInPort`."""
+
+    @constraint
+    def presented(self) -> bool:
+        return True
+
+
+__all__ = ["UncheckedInPort", "UncheckedOutPort"]

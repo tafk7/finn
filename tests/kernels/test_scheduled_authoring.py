@@ -9,7 +9,7 @@ import re
 import pytest
 from qonnx.core.datatype import DataType
 from support.helpers import FULL_DSP48E2
-from support.ports import UncheckedPort
+from support.ports import UncheckedInPort, UncheckedOutPort
 from support.refusals import refused
 
 from finn.core.space import (
@@ -29,11 +29,10 @@ from finn.dataflow.schedule import Access, Index, Pace, Schedule
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd
-from finn.kernels.artifacts.abi import Direction
 from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
 from finn.kernels.laws import AXIS, AXIS_CLOCKING, Axis, Native
 from finn.kernels.port import LoopEnds
-from finn.kernels.port_model import StreamPort
+from finn.kernels.port_model import InPort, OutPort, StreamPort
 from finn.kernels.transpose import TransposeKernel, i
 
 UNNAMED_ENDS = LoopEnds((LevelEnd(1),))
@@ -52,8 +51,7 @@ class Projection(Space):
     def scheduled(self) -> Schedule:
         return Schedule({R: 2, C: 4}, {C: self.fold})
 
-    input = StreamPort(
-        direction=Direction.IN,
+    input = InPort(
         clocking=AXIS_CLOCKING,
         label="input",
         tensor=TENSOR,
@@ -62,11 +60,10 @@ class Projection(Space):
         lanes=(C,),
         transport=Axis(bus="in"),
     )
-    output = StreamPort(
+    output = OutPort(
         clocking=AXIS_CLOCKING,
         label="output",
         transport=Axis(bus="out"),
-        direction=Direction.OUT,
         tensor=Tensor((2,), TENSOR.element),
         schedule=scheduled,
         index=(R,),
@@ -100,8 +97,7 @@ def test_projection_reduction_and_pace_are_the_current_schedule_values(fold: int
 def test_schedule_and_sequence_conflict_presents_nothing() -> None:
     """A kernel's class refuses a port binding both (``port-presentation``); a port no
     kernel's class checks presents nothing, and its point is refused (``presented``)."""
-    port = StreamPort(
-        direction=Direction.IN,
+    port = InPort(
         clocking=AXIS_CLOCKING,
         transport=AXIS,
         label="p",
@@ -120,8 +116,7 @@ def test_schedule_and_sequence_conflict_presents_nothing() -> None:
 @pytest.mark.parametrize("suppressed", ("reduces", "holds"))
 def test_closing_markers_and_suppressed_axes_keep_their_actual_pace(suppressed: str) -> None:
     source = design_space(
-        StreamPort(
-            direction=Direction.IN,
+        InPort(
             clocking=AXIS_CLOCKING,
             transport=AXIS,
             label="source",
@@ -137,11 +132,10 @@ def test_closing_markers_and_suppressed_axes_keep_their_actual_pace(suppressed: 
     reduces = (C,) if suppressed == "reduces" else ()
     holds = (C,) if suppressed == "holds" else ()
     output = design_space(
-        StreamPort(
+        OutPort(
             clocking=AXIS_CLOCKING,
             transport=AXIS,
             label="output",
-            direction=Direction.OUT,
             tensor=Tensor((2,), TENSOR.element),
             schedule=SCHEDULE,
             index=(R,),
@@ -155,8 +149,7 @@ def test_closing_markers_and_suppressed_axes_keep_their_actual_pace(suppressed: 
 
 def test_a_reshaped_affine_axis_preserves_the_local_schedule_refusal() -> None:
     point = design_space(
-        StreamPort(
-            direction=Direction.IN,
+        InPort(
             clocking=AXIS_CLOCKING,
             transport=AXIS,
             label="p",
@@ -177,8 +170,7 @@ def test_a_reshaped_affine_axis_preserves_the_local_schedule_refusal() -> None:
 def test_scheduled_child_presence_is_checked_before_local_work(enabled: bool | None) -> None:
     class Guarded(Space):
         enabled: bool = Decision(domain=(False, True))
-        port = StreamPort(
-            direction=Direction.IN,
+        port = InPort(
             clocking=AXIS_CLOCKING,
             transport=AXIS,
             when=enabled,
@@ -303,8 +295,7 @@ class SerialTranspose(TransposeKernel):
         _ = self.second_state
         return (i,)
 
-    input = UncheckedPort(
-        direction=Direction.IN,
+    input = UncheckedInPort(
         label="input",
         tensor=TransposeKernel.input_tensor,
         schedule=TransposeKernel.schedule,
@@ -314,9 +305,8 @@ class SerialTranspose(TransposeKernel):
         transport=Native(names=("idat", "ivld", "irdy")),
         loop_ends=UNNAMED_ENDS,
     )
-    output = UncheckedPort(
+    output = UncheckedOutPort(
         label="output",
-        direction=Direction.OUT,
         tensor=TransposeKernel.output_tensor,
         schedule=TransposeKernel.schedule,
         index=TransposeKernel.indices,

@@ -44,10 +44,7 @@ from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.port_model import (
-    StreamPort,
-    stream_ports,
-)
+from finn.kernels.port_model import InPort, OutPort, StreamPort, stream_ports
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.vpc import VpcKernel
 from finn.platform.shells import shell_row
@@ -99,13 +96,13 @@ def _port_scopes(records: Iterable[ScopeRecord]) -> set[ScopeRecord]:
 
 
 PORT_TYPES: dict[type[Space], dict[str, type[StreamPort]]] = {
-    FifoKernel: {"input": StreamPort, "output": StreamPort},
-    InputGeneratorKernel: {"input": StreamPort, "output": StreamPort},
-    VpcKernel: {"input": StreamPort, "output": StreamPort},
-    ThresholdingAxiKernel: {"input": StreamPort, "output": StreamPort, "set": StreamPort},
-    PackedDotpKernel: {"x": StreamPort, "w": StreamPort, "y": StreamPort},
-    Int8Dsp58DotpKernel: {"x": StreamPort, "w": StreamPort, "y": StreamPort},
-    MemStreamKernel: {"set": StreamPort, "output": StreamPort},
+    FifoKernel: {"input": InPort, "output": OutPort},
+    InputGeneratorKernel: {"input": InPort, "output": OutPort},
+    VpcKernel: {"input": InPort, "output": OutPort},
+    ThresholdingAxiKernel: {"input": InPort, "output": OutPort, "set": InPort},
+    PackedDotpKernel: {"x": InPort, "w": InPort, "y": OutPort},
+    Int8Dsp58DotpKernel: {"x": InPort, "w": InPort, "y": OutPort},
+    MemStreamKernel: {"set": InPort, "output": OutPort},
 }
 GROUP_TYPES = {_Sum, _PresentedSum, _MoverSum, _DoubledAny, _ClockRequirement, ControlModel}
 
@@ -167,11 +164,7 @@ def test_stage_7s_chain_of_eight_kernels_reads_alike_in_any_order_its_scopes_are
         == 17
     )
     assert {kind for kind in templates if issubclass(kind, Group)} == GROUP_TYPES
-    assert {kind for kind in templates if issubclass(kind, StreamPort)} == {
-        StreamPort,
-        StreamPort,
-        StreamPort,
-    }
+    assert {kind for kind in templates if issubclass(kind, StreamPort)} == {InPort, OutPort}
     records = compile_model(whole).scopes.ordered()
     ports = _assert_native_scope_ownership(records)
     # All original226 real non-port scopes remain; the assembled native Ports and
@@ -310,9 +303,9 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
 # own ``side`` through the core's selector (+12); and a port's presentation checks its
 # direction, reading its ``governs`` or ``stored`` (+40 constants, one per active port; +47
 # after ``viable``).
-NONPORT_EVALUATED = ((1013, 42), (1059, 42))
-PORT_EVALUATED = ((644, 344), (763, 407))
-EVALUATED = ((1657, 386), (1822, 449))
+NONPORT_EVALUATED = ((1017, 42), (1065, 42))
+PORT_EVALUATED = ((580, 240), (685, 282))
+EVALUATED = ((1597, 282), (1750, 324))
 
 
 def _assert_evaluated(scopes: Scopes, stage: int) -> None:

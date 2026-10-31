@@ -28,11 +28,11 @@ from finn.core.space import (
 )
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels.artifacts.abi import Bus, Direction
+from finn.kernels.artifacts.abi import Bus
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.laws import Axis
 from finn.kernels.library import library_module
-from finn.kernels.port_model import StreamPort
+from finn.kernels.port_model import InPort
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel, c
 from finn.kernels.values.domains import Integer
@@ -243,10 +243,9 @@ def test_threshold_rejects_unsupported_profiles_and_malformed_tables() -> None:
 class NarrowInput(ThresholdingAxiKernel):
     """A thresholding whose input port takes only elements of up to 4 bits."""
 
-    input = StreamPort(
+    input = InPort(
         label="input",
         transport=Axis(bus="s_axis"),
-        direction=Direction.IN,
         tensor=ThresholdingAxiKernel.input_tensor,
         schedule=ThresholdingAxiKernel.schedule,
         index=ThresholdingAxiKernel.indices,

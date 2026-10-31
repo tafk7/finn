@@ -45,7 +45,7 @@ from finn.kernels.control import Control, ControlModel, control_models
 from finn.kernels.laws import AXIS, Axis
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port import port_direction, stream_port
-from finn.kernels.port_model import StreamPort
+from finn.kernels.port_model import InPort, OutPort, StreamPort
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import IntegerTensorValue
@@ -81,19 +81,19 @@ def _gated(
     return pin_values, held_values
 
 
-class GatedSet(StreamPort):
+class GatedSet(InPort):
     pins_gate: str = Param(default="ready")
     held_gate: str = Param(default="ready")
     pin_values, held_values = _gated(StreamPort.pin_values, StreamPort.held_values)
 
 
-class GatedIndexed(StreamPort):
+class GatedIndexed(InPort):
     pins_gate: str = Param(default="ready")
     held_gate: str = Param(default="ready")
     pin_values, held_values = _gated(StreamPort.pin_values, StreamPort.held_values)
 
 
-class GatedScheduled(StreamPort):
+class GatedScheduled(OutPort):
     pins_gate: str = Param(default="ready")
     held_gate: str = Param(default="ready")
     pin_values, held_values = _gated(StreamPort.pin_values, StreamPort.held_values)
@@ -125,7 +125,6 @@ class SerialThreshold(ThresholdingAxiKernel):
     input = GatedIndexed(
         label="input",
         transport=Axis(bus="s_axis"),
-        direction=Direction.IN,
         tensor=ThresholdingAxiKernel.input_tensor,
         schedule=ThresholdingAxiKernel.schedule,
         index=ThresholdingAxiKernel.indices,
@@ -136,7 +135,6 @@ class SerialThreshold(ThresholdingAxiKernel):
     output = GatedScheduled(
         label="output",
         transport=Axis(bus="m_axis"),
-        direction=Direction.OUT,
         tensor=ThresholdingAxiKernel.output_tensor,
         schedule=ThresholdingAxiKernel.schedule,
         index=ThresholdingAxiKernel.indices,
@@ -147,7 +145,6 @@ class SerialThreshold(ThresholdingAxiKernel):
     set = GatedSet(
         label="set",
         transport=AXIS,
-        direction=Direction.IN,
         tensor=ThresholdingAxiKernel.set_tensor,
         sequence=ThresholdingAxiKernel.set_sequence,
         dtype=ThresholdingAxiKernel.selector_dtype,

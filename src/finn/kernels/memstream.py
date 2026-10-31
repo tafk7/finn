@@ -67,12 +67,12 @@ from finn.dataflow.traversal import (
     pack,
     vector_major,
 )
-from finn.kernels.artifacts.abi import Bus, Clocking, Direction, Member, StandardProtocol
+from finn.kernels.artifacts.abi import Bus, Clocking, Member, StandardProtocol
 from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData, hex_image
 from finn.kernels.base import Kernel
 from finn.kernels.control import ControlModel
 from finn.kernels.laws import (
-    NATIVE_CLOCKING,
+    NATIVE_FAMILY,
     Axis,
     Intake,
     Native,
@@ -81,7 +81,7 @@ from finn.kernels.laws import (
     doubled,
 )
 from finn.kernels.library import ModuleSpec
-from finn.kernels.port_model import StreamPort
+from finn.kernels.port_model import InPort, OutPort
 from finn.kernels.utilization import (
     Fit,
     auto_unstated,
@@ -129,7 +129,7 @@ class MemStreamKernel(Kernel):
     """A stored operand streamed in its consumer's order; see the module docstring."""
 
     id = "finnlib.memstream_axi"
-    clock_domain = NATIVE_CLOCKING
+    pin_family = NATIVE_FAMILY
 
     dtype: QONNXDataType = Param()
     form: Traversal = Param()
@@ -289,8 +289,8 @@ class MemStreamKernel(Kernel):
                     ("rdata", 32),
                 )
             ),
-            associated_clock=type(self).clock_domain.clock,
-            associated_reset=type(self).clock_domain.reset,
+            associated_clock=type(self).pin_family.clocking.clock,
+            associated_reset=type(self).pin_family.clocking.reset,
         )
 
     @derived
@@ -327,17 +327,15 @@ class MemStreamKernel(Kernel):
             fabric=self.platform.fabric,
         )
 
-    set = StreamPort(
+    set = InPort(
         transport=Native(names=("s_axis_0_tdata", "s_axis_0_tvalid", "s_axis_0_tready")),
-        direction=Direction.IN,
         tensor=set_tensor,
         sequence=set_sequence,
         dtype=set_dtype,
         governs="output",
     )
-    output = StreamPort(
+    output = OutPort(
         transport=Axis(bus="m_axis_0"),
-        direction=Direction.OUT,
         tensor=output_tensor,
         sequence=output_sequence,
         stored=True,
@@ -382,7 +380,7 @@ class MemStreamKernel(Kernel):
     def clocking(self) -> Clocking:
         """``clk2x`` runs a pumped memory, and is held low otherwise."""
         pumped = self.pumped_memory
-        return doubled(type(self).clock_domain, pumped)
+        return doubled(type(self).pin_family.clocking, pumped)
 
     @view
     def parameters(self) -> dict[str, int | str]:

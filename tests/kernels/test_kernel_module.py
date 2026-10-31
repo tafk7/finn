@@ -9,7 +9,7 @@ class is made: ``tests/kernels/test_kernel_space.py``). Its control bus is an in
 ``ControlModel``: held idle while it is not presented, presented (read as
 ``Kernel.bus_control``) while it is, so a bus is accounted for by construction; its
 pins come before every port's, its hold after theirs. Every port runs on its kernel's clock domain
-(``clock_domain``). Its module is the ``Leaf`` at the empty label of its netlist
+(``pin_family``). Its module is the ``Leaf`` at the empty label of its netlist
 (``library_module``). A kernel with children presents a child's port as its own
 through typed model forwards and an outward contract View, labelled below the
 child; its netlist merges its members'.
@@ -54,11 +54,11 @@ from finn.kernels.base import Kernel
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.configure import commit
 from finn.kernels.control import Control, ControlModel, held_bus
-from finn.kernels.laws import NATIVE_CLOCKING, Axis
+from finn.kernels.laws import NATIVE_FAMILY, Axis
 from finn.kernels.library import ModuleSpec, library_module
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port import exposed_pins, exposed_side, stream_port
-from finn.kernels.port_model import OtherPins, StreamPort
+from finn.kernels.port_model import InPort, OtherPins
 from finn.kernels.sides import Side
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import Resources
@@ -77,10 +77,9 @@ class Probe(Kernel):
 
     tensor: Tensor | None = Param(default=None)
 
-    x = StreamPort(
+    x = InPort(
         label="x",
         transport=Axis(bus="s_axis"),
-        direction=Direction.IN,
         tensor=tensor,
         sequence=BeatSequence(vector_major((4,), 1)),
     )
@@ -92,7 +91,7 @@ class Probe(Kernel):
 
     @derived
     def clocking(self) -> Clocking:
-        return replace(type(self).clock_domain, doubled="ap_clk2x", doubling=True)
+        return replace(type(self).pin_family.clocking, doubled="ap_clk2x", doubling=True)
 
     @view
     def parameters(self) -> dict[str, int | str]:
@@ -125,13 +124,13 @@ def test_a_kernel_s_other_pins_go_before_its_ports_and_their_hold_after() -> Non
     assert names == ["ap_clk", "ap_clk2x", "ap_rst_n", "mode", "busy", "s_axis"]
 
 
-def test_a_port_runs_on_its_kernels_clock_domain() -> None:
+def test_a_port_runs_on_its_kernels_pin_family() -> None:
     bus = library_module(probe()).abi.pins[-1]
     assert (bus.associated_clock, bus.associated_reset) == ("ap_clk", "ap_rst_n")
 
     class Native(Probe):
         id = "test.probe.native"
-        clock_domain = NATIVE_CLOCKING
+        pin_family = NATIVE_FAMILY
 
     point = design_space(Native(tensor=TENSOR))
     assert isinstance(point.query(Kernel.netlist), Available)
@@ -171,8 +170,7 @@ class Controlled(Kernel):
     )
     config = ControlModel(bus=config_bus, presented=writable)
     tensor: Tensor = Param()
-    x = StreamPort(
-        direction=Direction.IN,
+    x = InPort(
         label="x",
         tensor=tensor,
         sequence=BeatSequence(vector_major((4,), 1)),
@@ -182,7 +180,7 @@ class Controlled(Kernel):
 
     @derived
     def clocking(self) -> Clocking:
-        return replace(type(self).clock_domain, doubled="ap_clk2x", doubling=True)
+        return replace(type(self).pin_family.clocking, doubled="ap_clk2x", doubling=True)
 
     @view
     def resource_use(self) -> Resources | Rejected:

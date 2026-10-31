@@ -8,7 +8,7 @@ from typing import assert_type
 
 import pytest
 from qonnx.core.datatype import DataType
-from support.ports import UncheckedPort
+from support.ports import UncheckedInPort, UncheckedOutPort
 
 from finn.core.space import (
     Available,
@@ -36,7 +36,7 @@ from finn.kernels.base import Kernel
 from finn.kernels.laws import AXIS, AXIS_CLOCKING, Native
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port import LoopEnds, port_direction, stream_port
-from finn.kernels.port_model import StreamPort
+from finn.kernels.port_model import InPort
 from finn.kernels.vpc import VpcKernel
 from finn.platform.capabilities import Resources
 
@@ -63,17 +63,15 @@ class SerialVpc(VpcKernel):
         _ = self.second_state
         return SEQUENCE
 
-    input = UncheckedPort(
-        direction=Direction.IN,
+    input = UncheckedInPort(
         label="input",
         tensor=VpcKernel.input_tensor,
         sequence=first,
         transport=Native(names=("idat", "ivld", "irdy")),
         loop_ends=UNNAMED_ENDS,
     )
-    output = UncheckedPort(
+    output = UncheckedOutPort(
         label="output",
-        direction=Direction.OUT,
         tensor=VpcKernel.output_tensor,
         sequence=second,
         transport=Native(names=("odat", "ovld", "ordy")),
@@ -129,7 +127,7 @@ def test_actual_vpc_netlist_keeps_serial_body_demand_and_direct_refusal_order(
 
 def test_actual_vpc_surfaces_are_typed_real_children_and_not_kernel_instances() -> None:
     point = design_space(VpcKernel(input_tensor=TENSOR, arriving=SEQUENCE, leaving=SEQUENCE))
-    assert_type(VpcKernel.input, StreamPort)
+    assert_type(VpcKernel.input, InPort)
     assert isinstance(point.input, Space) and not isinstance(point.input, Kernel)
     assert point.netlists == ()
     assert isinstance(point.netlist, Fragment)
@@ -206,8 +204,7 @@ def test_a_module_requires_its_own_stream_ports() -> None:
 
 def test_port_lookup_supports_discovered_group_paths_at_the_actual_node() -> None:
     class Included(Group):
-        port = StreamPort(
-            direction=Direction.IN,
+        port = InPort(
             clocking=AXIS_CLOCKING,
             transport=AXIS,
             label="p",

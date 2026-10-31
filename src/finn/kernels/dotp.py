@@ -75,13 +75,13 @@ from finn.dataflow.datatypes import (
 from finn.dataflow.gemm import Form, Window, c, k, kh, kw, m, n, oh, ow
 from finn.dataflow.schedule import Access, Affine, Index, Schedule
 from finn.dataflow.tensor import Tensor
-from finn.kernels.artifacts.abi import Clocking, Direction
+from finn.kernels.artifacts.abi import Clocking
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
 from finn.kernels.laws import Axis, Intake, PortIntake, Standing, doubled
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port import axis
-from finn.kernels.port_model import StreamPort
+from finn.kernels.port_model import InPort, OutPort
 from finn.kernels.utilization import Fit
 from finn.kernels.values.domains import Integer, admit_element, integer_bounds, range_dtype
 from finn.platform.capabilities import DspBlock, Platform, Resources, dsp_widths
@@ -369,9 +369,8 @@ class DotpAxiKernel(Kernel):
         """The activation encodings the core takes (``activations``)."""
         return self.activations
 
-    x = StreamPort(
+    x = InPort(
         transport=Axis(bus="s_axis_input"),
-        direction=Direction.IN,
         tensor=x_tensor,
         admits=activation_policy,
         schedule=schedule,
@@ -380,9 +379,8 @@ class DotpAxiKernel(Kernel):
         closes=reduced,
         reshaped=x_viewed,
     )
-    w = StreamPort(
+    w = InPort(
         transport=Axis(bus="s_axis_weights"),
-        direction=Direction.IN,
         tensor=w_tensor,
         admits=Integer(min_bits=2, signed=True),
         schedule=schedule,
@@ -390,9 +388,8 @@ class DotpAxiKernel(Kernel):
         lanes=w_lanes,
         reshaped=windowed,
     )
-    y = StreamPort(
+    y = OutPort(
         transport=Axis(bus="m_axis_output"),
-        direction=Direction.OUT,
         tensor=y_tensor,
         admits=Integer(),
         schedule=schedule,
@@ -483,7 +480,7 @@ class DotpAxiKernel(Kernel):
     @derived
     def clocking(self) -> Clocking:
         # Unpumped, the RTL ignores its 2x clock input: it is held low.
-        return doubled(type(self).clock_domain, self.compute_pumping)
+        return doubled(type(self).pin_family.clocking, self.compute_pumping)
 
     @view
     def dsp_simd(self) -> int:

@@ -58,7 +58,6 @@ from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.gemm import ZERO
 from finn.dataflow.schedule import Affine, Index, Schedule
 from finn.dataflow.tensor import Tensor
-from finn.kernels.artifacts.abi import Direction
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource, HlsSource
 from finn.kernels.artifacts.hls import axis_type
 from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
@@ -74,7 +73,7 @@ from finn.kernels.laws import (
 )
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port import axis
-from finn.kernels.port_model import StreamPort
+from finn.kernels.port_model import InPort, OutPort
 from finn.kernels.values.domains import Integer
 from finn.platform.capabilities import Platform, Resources
 
@@ -268,9 +267,8 @@ class PoolKernel(Kernel):
         """Window by window, PE channels a beat, the window's positions innermost."""
         return bound_schedule(self.extents, order=(oh, ow, c, kh, kw), factors={c: self.pe})
 
-    input = StreamPort(
+    input = InPort(
         transport=Axis(bus="s_axis", spelling=AxisSpelling.UPPER),
-        direction=Direction.IN,
         tensor=input_tensor,
         admits=ELEMENTS,
         schedule=schedule,
@@ -292,9 +290,8 @@ class PoolKernel(Kernel):
             return shape
         return Tensor(shape, self.input.element)
 
-    output = StreamPort(
+    output = OutPort(
         transport=Axis(bus="m_axis", spelling=AxisSpelling.UPPER),
-        direction=Direction.OUT,
         tensor=output_tensor,
         admits=ELEMENTS,
         schedule=schedule,

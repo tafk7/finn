@@ -51,15 +51,15 @@ from finn.kernels.artifacts.abi import Direction, Signal
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource, GeneratedData
 from finn.kernels.artifacts.module import Fragment, Held
 from finn.kernels.base import Kernel
-from finn.kernels.port import exposed_pins
 from finn.kernels.channels import ChannelFifo
 from finn.kernels.fifo import FifoKernel, fifo_resources
-from finn.kernels.laws import NATIVE, NATIVE_CLOCKING
+from finn.kernels.laws import NATIVE, NATIVE_CLOCKING, NATIVE_FAMILY
 from finn.kernels.library import (
     ModuleSpec,
     library_module,
 )
-from finn.kernels.port_model import OtherPins, StreamPort
+from finn.kernels.port import exposed_pins
+from finn.kernels.port_model import InPort, OtherPins
 from finn.platform.capabilities import Resources
 
 TENSOR = Tensor((4, 1), ScalarEncoding(DataType["INT4"]))
@@ -119,14 +119,12 @@ class Stage(Kernel):
     """A model-only stage on a library module: one input port, three LUTs."""
 
     id = "test.kernel_space.stage"
-    clock_domain = NATIVE_CLOCKING
+    pin_family = NATIVE_FAMILY
 
     input_tensor: Tensor = Param()
     arriving: BeatSequence = Param()
-    input = StreamPort(
+    input = InPort(
         label="input",
-        direction=Direction.IN,
-        transport=NATIVE,
         tensor=input_tensor,
         sequence=arriving,
         clocking=NATIVE_CLOCKING,
@@ -278,9 +276,8 @@ def test_a_kernel_binds_one_library_module_at_most() -> None:
 def test_a_kernel_with_a_module_declares_its_module_s_parts_in_its_own_body() -> None:
     # The base reads each part by its name in the kernel's body; one in a Group is refused.
     class Ports(Group):
-        input = StreamPort(
+        input = InPort(
             label="input",
-            direction=Direction.IN,
             transport=NATIVE,
             tensor=TENSOR,
             sequence=ARRIVING,
@@ -291,7 +288,7 @@ def test_a_kernel_with_a_module_declares_its_module_s_parts_in_its_own_body() ->
 
         class Grouped(Kernel):
             id = "test.kernel_space.grouped"
-            clock_domain = NATIVE_CLOCKING
+            pin_family = NATIVE_FAMILY
             ports = Ports()
             module_spec = ModuleSpec("probe", (PROBE,))
 
@@ -339,9 +336,8 @@ def test_a_kernel_with_a_module_states_its_ports_and_resources_and_places_no_ker
         }
         return type(name, (Kernel,), body)
 
-    port = StreamPort(
+    port = InPort(
         label="input",
-        direction=Direction.IN,
         transport=NATIVE,
         tensor=TENSOR,
         sequence=ARRIVING,
@@ -357,9 +353,8 @@ def test_a_kernel_with_a_module_states_its_ports_and_resources_and_places_no_ker
     ):
         kernel(
             "Nesting",
-            input=StreamPort(
+            input=InPort(
                 label="input",
-                direction=Direction.IN,
                 transport=NATIVE,
                 tensor=TENSOR,
                 sequence=ARRIVING,
@@ -371,9 +366,8 @@ def test_a_kernel_with_a_module_states_its_ports_and_resources_and_places_no_ker
     with refused("module-resources-unstated", error=DefinitionError, message="states no"):
         kernel(
             "Unstated",
-            input=StreamPort(
+            input=InPort(
                 label="input",
-                direction=Direction.IN,
                 transport=NATIVE,
                 tensor=TENSOR,
                 sequence=ARRIVING,
@@ -391,9 +385,8 @@ def test_a_kernel_stating_a_stream_port_binds_a_module() -> None:
     # own, it is refused, naming the class and the port.
     class Unbound(Kernel):
         id = "test.kernel_space.unbound"
-        input = StreamPort(
+        input = InPort(
             label="input",
-            direction=Direction.IN,
             transport=NATIVE,
             tensor=TENSOR,
             sequence=ARRIVING,
@@ -418,12 +411,10 @@ def test_a_kernel_stating_a_stream_port_binds_a_module() -> None:
     # kernels on it, which bind the module.
     class Ported(Kernel):
         id = "test.kernel_space.ported"
-        clock_domain = NATIVE_CLOCKING
+        pin_family = NATIVE_FAMILY
         input_tensor: Tensor = Param()
-        input = StreamPort(
+        input = InPort(
             label="input",
-            direction=Direction.IN,
-            transport=NATIVE,
             tensor=input_tensor,
             sequence=ARRIVING,
             clocking=NATIVE_CLOCKING,
@@ -454,7 +445,7 @@ class Based(Stage):
     """A base of kernels: its module names its sources, which it leaves required."""
 
     id = "test.kernel_space.based"
-    clock_domain = NATIVE_CLOCKING
+    pin_family = NATIVE_FAMILY
     source_values = cast("tuple[Contribution, ...]", required(tuple))
 
     @view
@@ -474,9 +465,8 @@ class Sourced(Based):
     id = "test.kernel_space.sourced"
     input_tensor: Tensor = Param()
     arriving: BeatSequence = Param(default=ARRIVING)
-    input = StreamPort(
+    input = InPort(
         label="input",
-        direction=Direction.IN,
         transport=NATIVE,
         tensor=input_tensor,
         sequence=ARRIVING,
@@ -504,7 +494,7 @@ class Deep(Kernel):
     """A stand-in base of kernels: every kernel on it states its ``depth``."""
 
     id = "test.kernel_space.deep"
-    clock_domain = NATIVE_CLOCKING
+    pin_family = NATIVE_FAMILY
     depth = required(int)
 
 
@@ -514,9 +504,8 @@ class Forgetful(Deep):
     id = "test.kernel_space.forgetful"
     input_tensor: Tensor = Param()
     arriving: BeatSequence = Param(default=ARRIVING)
-    input = StreamPort(
+    input = InPort(
         label="input",
-        direction=Direction.IN,
         transport=NATIVE,
         tensor=input_tensor,
         sequence=ARRIVING,

@@ -26,7 +26,7 @@ from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
-from finn.kernels.artifacts.abi import Direction, Endpoint
+from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.module import Fragment, Leaf
 from finn.kernels.base import Kernel, PortPins
 from finn.kernels.channels import Channel
@@ -34,7 +34,7 @@ from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.laws import AXIS_CLOCKING, Axis
 from finn.kernels.partition import Partition
-from finn.kernels.port_model import StreamPort
+from finn.kernels.port_model import InPort
 from finn.kernels.sides import Side
 from finn.kernels.transport import AxisBeat, StreamPins
 
@@ -150,7 +150,7 @@ def reading() -> StreamPins:
     return StreamPins(transport, Stream(ScalarEncoding(INT3), sequence))
 
 
-class UnexportedPort(StreamPort):
+class UnexportedPort(InPort):
     """The original deliberately unlabelled contract, on a real model port."""
 
     @view
@@ -165,7 +165,6 @@ class Reader(Space):
         clocking=AXIS_CLOCKING,
         label="port",
         transport=Axis(bus="s_axis"),
-        direction=Direction.IN,
         tensor=X,
         sequence=reading().sequence,
     )

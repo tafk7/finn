@@ -26,13 +26,12 @@ from finn.core.space import (
 )
 from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.tensor import Tensor
-from finn.kernels.artifacts.abi import Direction
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
 from finn.kernels.fifo import fifo_resources, fifo_storage
-from finn.kernels.laws import NATIVE, NATIVE_CLOCKING, Intake, PortIntake, Standing
+from finn.kernels.laws import NATIVE_FAMILY, Intake, PortIntake, Standing
 from finn.kernels.library import ModuleSpec
-from finn.kernels.port_model import StreamPort
+from finn.kernels.port_model import InPort, OutPort
 from finn.kernels.utilization import (
     auto_unstated,
     memory,
@@ -104,7 +103,7 @@ class TransposeKernel(Kernel):
     """
 
     id = "finnlib.inner_shuffle"
-    clock_domain = NATIVE_CLOCKING
+    pin_family = NATIVE_FAMILY
 
     # The tensor its input port reads: a fact it is given.
     input_tensor: Tensor = Param()
@@ -172,18 +171,14 @@ class TransposeKernel(Kernel):
             return shape
         return Tensor(shape, self.input_tensor.element)
 
-    input = StreamPort(
-        transport=NATIVE,
-        direction=Direction.IN,
+    input = InPort(
         tensor=input_tensor,
         schedule=schedule,
         index=columns,
         lanes=(i,),
         reshaped=True,
     )
-    output = StreamPort(
-        transport=NATIVE,
-        direction=Direction.OUT,
+    output = OutPort(
         tensor=output_tensor,
         schedule=schedule,
         index=indices,

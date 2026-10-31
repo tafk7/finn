@@ -30,14 +30,12 @@ from finn.core.space import (
 from finn.dataflow.schedule import Pace
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
-from finn.kernels.artifacts.abi import Direction
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Neighbours
 from finn.kernels.fifo_sizing import assumed, pattern
 from finn.kernels.laws import (
-    NATIVE,
-    NATIVE_CLOCKING,
+    NATIVE_FAMILY,
     RATE_INTERVAL,
     Interval,
     Standing,
@@ -47,7 +45,7 @@ from finn.kernels.laws import (
 from finn.kernels.library import ModuleSpec
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.pool import PoolKernel
-from finn.kernels.port_model import StreamPort
+from finn.kernels.port_model import InPort
 from finn.platform.capabilities import Platform, Resources
 
 IMAGE = Tensor((4, 4, 2), ScalarEncoding(DataType["INT4"]))
@@ -160,12 +158,10 @@ class _Stage(Kernel):
     """A model-only stage on a library module."""
 
     id = "test.interval.stage"
-    clock_domain = NATIVE_CLOCKING
+    pin_family = NATIVE_FAMILY
     input_tensor: Tensor = Param()
     arriving: BeatSequence = Param()
-    input = StreamPort(
-        direction=Direction.IN, transport=NATIVE, tensor=input_tensor, sequence=arriving
-    )
+    input = InPort(tensor=input_tensor, sequence=arriving)
 
     @view
     def parameters(self) -> dict[str, int | str]:

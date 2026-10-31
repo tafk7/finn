@@ -22,8 +22,8 @@ from support.helpers import (
     FULL_DSP48E2,
     FULL_DSP58,
     codes,
-    full_platform,
     fifo_node,
+    full_platform,
     nested,
     placed_dotp,
     stage_tensor,
@@ -52,8 +52,7 @@ from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.input_generator import InputGeneratorKernel, nest_buffer
 from finn.kernels.laws import (
     INTAKE_UNSTATED,
-    NATIVE,
-    NATIVE_CLOCKING,
+    NATIVE_FAMILY,
     Intake,
     IntakeProfile,
     PortIntake,
@@ -62,7 +61,7 @@ from finn.kernels.laws import (
 from finn.kernels.library import ModuleSpec
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.pool import INTAKE_PROFILE, PoolKernel
-from finn.kernels.port_model import StreamPort, stream_ports
+from finn.kernels.port_model import InPort, OutPort, stream_ports
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.kernels.vpc import VpcKernel
 from finn.platform.capabilities import DspBlock, Resources
@@ -120,16 +119,12 @@ class Stage(Kernel):
     states no intake."""
 
     id = "test.intake.stage"
-    clock_domain = NATIVE_CLOCKING
+    pin_family = NATIVE_FAMILY
 
     input_tensor: Tensor = Param()
     arriving: BeatSequence = Param()
-    input = StreamPort(
-        direction=Direction.IN, transport=NATIVE, tensor=input_tensor, sequence=arriving
-    )
-    output = StreamPort(
-        direction=Direction.OUT, transport=NATIVE, tensor=input_tensor, sequence=arriving
-    )
+    input = InPort(tensor=input_tensor, sequence=arriving)
+    output = OutPort(tensor=input_tensor, sequence=arriving)
 
     @view
     def parameters(self) -> dict[str, int | str]:

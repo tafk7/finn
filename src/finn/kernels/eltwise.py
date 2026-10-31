@@ -36,12 +36,11 @@ from finn.core.space import (
 from finn.dataflow.datatypes import QONNXDataType, resolve_qonnx_datatype_name
 from finn.dataflow.schedule import Access, Index, Schedule
 from finn.dataflow.tensor import Tensor
-from finn.kernels.artifacts.abi import Direction
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
-from finn.kernels.laws import NATIVE, NATIVE_CLOCKING, Intake, Native, PortIntake, Standing
+from finn.kernels.laws import NATIVE_FAMILY, Intake, Native, PortIntake, Standing
 from finn.kernels.library import ModuleSpec
-from finn.kernels.port_model import StreamPort
+from finn.kernels.port_model import InPort, OutPort
 from finn.kernels.values.domains import Integer, admit_element
 from finn.platform.capabilities import DspBlock, Platform, Resources
 
@@ -82,7 +81,7 @@ class EltwiseKernel(Kernel):
     """
 
     id = "finnlib.eltwise"
-    clock_domain = NATIVE_CLOCKING
+    pin_family = NATIVE_FAMILY
 
     operation: str = Param()
     # The tensors its operand ports read: facts it is given.
@@ -203,25 +202,21 @@ class EltwiseKernel(Kernel):
             return element
         return Tensor(shape, element)
 
-    lhs = StreamPort(
+    lhs = InPort(
         transport=Native(prefix="a"),
-        direction=Direction.IN,
         tensor=lhs_tensor,
         schedule=schedule,
         index=indices,
         lanes=(c,),
     )
-    rhs = StreamPort(
+    rhs = InPort(
         transport=Native(prefix="b"),
-        direction=Direction.IN,
         tensor=rhs_tensor,
         schedule=schedule,
         index=rhs_indices,
         lanes=(c,),
     )
-    result = StreamPort(
-        transport=NATIVE,
-        direction=Direction.OUT,
+    result = OutPort(
         tensor=result_tensor,
         schedule=schedule,
         index=indices,

@@ -38,7 +38,16 @@ from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
 from finn.kernels.artifacts.abi import Direction, Endpoint
 from finn.kernels.artifacts.module import Held
 from finn.kernels.base import Kernel, PortPins
-from finn.kernels.laws import AXIS, AXIS_CLOCKING, NATIVE, NATIVE_CLOCKING, Advance, Axis, Native
+from finn.kernels.laws import (
+    AXIS,
+    AXIS_CLOCKING,
+    NATIVE,
+    NATIVE_CLOCKING,
+    NATIVE_FAMILY,
+    Advance,
+    Axis,
+    Native,
+)
 from finn.kernels.port import (
     LoopEnds,
     PhysicalPort,
@@ -53,7 +62,7 @@ from finn.kernels.port import (
     stream_port,
     transport,
 )
-from finn.kernels.port_model import StreamPort, exposed_ports, stream_ports
+from finn.kernels.port_model import InPort, OutPort, StreamPort, exposed_ports, stream_ports
 from finn.kernels.sides import Side
 from finn.kernels.values.domains import Integer
 from finn.kernels.vpc import VpcKernel
@@ -73,24 +82,21 @@ class Ports(Space):
     def sequence(self) -> BeatSequence:
         return BeatSequence(vector_major((2, 4), self.fold))
 
-    input = StreamPort(
+    input = InPort(
         label="input",
-        direction=Direction.IN,
         transport=NATIVE,
         tensor=tensor,
         sequence=sequence,
         clocking=NATIVE_CLOCKING,
     )
-    output = StreamPort(
+    output = OutPort(
         label="output",
-        direction=Direction.OUT,
         transport=NATIVE,
         tensor=tensor,
         sequence=input.sequence,
         clocking=NATIVE_CLOCKING,
     )
-    checked = StreamPort(
-        direction=Direction.IN,
+    checked = InPort(
         label="checked",
         transport=Axis(bus="s_axis_x"),
         tensor=tensor,
@@ -168,8 +174,7 @@ def test_optional_idle_skips_refused_sequence_and_keeps_physical_metadata() -> N
         def bad(self) -> BeatSequence | Rejected:
             return reject("unused-sequence", "must not be demanded")
 
-        port = StreamPort(
-            direction=Direction.IN,
+        port = InPort(
             transport=AXIS,
             label="set",
             dtype=DataType["INT3"],
@@ -191,15 +196,13 @@ def test_optional_idle_skips_refused_sequence_and_keeps_physical_metadata() -> N
 
 def test_an_idle_port_answers_its_stream_inapplicable_and_an_unindexed_one_binds_nothing() -> None:
     class Shape(Space):
-        idle = StreamPort(
-            direction=Direction.IN,
+        idle = InPort(
             clocking=AXIS_CLOCKING,
             transport=AXIS,
             label="idle",
             dtype=DataType["INT3"],
         )
-        live = StreamPort(
-            direction=Direction.IN,
+        live = InPort(
             clocking=AXIS_CLOCKING,
             transport=AXIS,
             label="live",
@@ -223,8 +226,7 @@ def test_an_idle_port_answers_its_stream_inapplicable_and_an_unindexed_one_binds
 def test_real_child_presence_is_distinct_from_idle(state: bool | None) -> None:
     class Guarded(Space):
         enabled: bool = Decision(domain=(False, True))
-        port = StreamPort(
-            direction=Direction.IN,
+        port = InPort(
             clocking=AXIS_CLOCKING,
             transport=AXIS,
             label="x",
@@ -244,9 +246,8 @@ def test_native_loop_markers_and_physical_refusals_use_actual_values() -> None:
     sequence = BeatSequence(SEQUENCE.form, markers=(LevelEnd(2),))
 
     class Marked(Space):
-        port = StreamPort(
+        port = OutPort(
             label="output",
-            direction=Direction.OUT,
             transport=NATIVE,
             tensor=TENSOR,
             sequence=sequence,
@@ -268,8 +269,7 @@ def test_native_loop_markers_and_physical_refusals_use_actual_values() -> None:
     assert point.port.stream_pins == PortPins("output", found)
 
     class Bad(Space):
-        port = StreamPort(
-            direction=Direction.IN,
+        port = InPort(
             clocking=AXIS_CLOCKING,
             label="bad",
             tensor=TENSOR,
@@ -289,8 +289,7 @@ def test_native_loop_markers_and_physical_refusals_use_actual_values() -> None:
 
 def test_port_discovery_rebases_overrides_groups_and_stops_at_real_children() -> None:
     class Included(Group):
-        nested = StreamPort(
-            direction=Direction.IN,
+        nested = InPort(
             clocking=AXIS_CLOCKING,
             transport=AXIS,
             label="nested",
@@ -299,16 +298,14 @@ def test_port_discovery_rebases_overrides_groups_and_stops_at_real_children() ->
         )
 
     class Base(Space):
-        first: StreamPort = StreamPort(
-            direction=Direction.IN,
+        first: StreamPort = InPort(
             clocking=AXIS_CLOCKING,
             transport=AXIS,
             label="first",
             tensor=TENSOR,
             sequence=SEQUENCE,
         )
-        second: object = StreamPort(
-            direction=Direction.IN,
+        second: object = InPort(
             clocking=AXIS_CLOCKING,
             transport=AXIS,
             label="second",
@@ -317,8 +314,7 @@ def test_port_discovery_rebases_overrides_groups_and_stops_at_real_children() ->
         )
 
     class Child(Base):
-        first = StreamPort(
-            direction=Direction.IN,
+        first = InPort(
             clocking=AXIS_CLOCKING,
             label="first",
             tensor=TENSOR,
@@ -339,9 +335,7 @@ def test_port_discovery_rebases_overrides_groups_and_stops_at_real_children() ->
 def test_port_children_are_not_hardware_kernels_or_member_netlists() -> None:
     class Host(Kernel):
         id = "test.port-host"
-        p = StreamPort(
-            direction=Direction.IN, transport=AXIS, label="p", tensor=TENSOR, sequence=SEQUENCE
-        )
+        p = InPort(label="p", tensor=TENSOR, sequence=SEQUENCE)
 
     point = design_space(Host())
     assert isinstance(point.p, Space)
@@ -359,9 +353,7 @@ def test_view_bindings_remain_model_read_in_errors() -> None:
         def inward(self) -> BeatSequence:
             return self.outward
 
-        port = StreamPort(
-            direction=Direction.IN, transport=AXIS, label="bad", tensor=TENSOR, sequence=inward
-        )
+        port = InPort(transport=AXIS, label="bad", tensor=TENSOR, sequence=inward)
 
     with pytest.raises(DefinitionError, match="view"):
         design_space(Bad())
@@ -388,10 +380,9 @@ def test_view_bindings_remain_model_read_in_errors() -> None:
 def test_a_port_follows_the_advance_rule_its_declaration_gives(
     declared: dict[str, object], rule: Advance
 ) -> None:
-    direction = Direction.OUT if declared.get("stored") else Direction.IN
-    port = cast(Any, StreamPort)(
+    kind = OutPort if declared.get("stored") else InPort
+    port = cast(Any, kind)(
         label="p",
-        direction=direction,
         transport=AXIS,
         clocking=AXIS_CLOCKING,
         tensor=TENSOR,
@@ -460,17 +451,13 @@ def test_every_module_kernel_of_the_specs_has_its_rules_stated() -> None:
     assert module_kernels == set(LIBRARY_RULES)
 
 
-def test_a_kernel_gives_each_port_of_its_body_its_name_and_its_clock_domain() -> None:
+def test_a_kernel_gives_each_port_of_its_body_its_name_and_its_pin_family_s_clock() -> None:
     class Native_(Kernel):
         id = "test.native_port_clock"
-        clock_domain = NATIVE_CLOCKING
-        input = StreamPort(
-            direction=Direction.IN, transport=NATIVE, tensor=TENSOR, sequence=SEQUENCE
-        )
-        named = StreamPort(
-            direction=Direction.IN,
+        pin_family = NATIVE_FAMILY
+        input = InPort(tensor=TENSOR, sequence=SEQUENCE)
+        named = InPort(
             label="other",
-            transport=NATIVE,
             tensor=TENSOR,
             sequence=SEQUENCE,
         )
@@ -481,29 +468,37 @@ def test_a_kernel_gives_each_port_of_its_body_its_name_and_its_clock_domain() ->
     assert point.input.stream_pins.pins.transport.clock == "clk"
     # A port declared outside a kernel's body states both.
     with pytest.raises(DefinitionError, match="clocking is not supplied"):
-        design_space(
-            StreamPort(
-                direction=Direction.IN, label="p", transport=AXIS, tensor=TENSOR, sequence=SEQUENCE
-            )
-        )
+        design_space(InPort(label="p", transport=AXIS, tensor=TENSOR, sequence=SEQUENCE))
 
 
-def test_a_port_states_its_transport() -> None:
-    """No default transport, so a native port is never taken for an AXIS bus."""
+def test_a_port_takes_its_kernel_s_family_s_transport_where_it_states_none() -> None:
+    """A port of a kernel's body that states no transport takes its kernel's pin family's
+    (``Kernel.pin_family``): AXIS by default, native for a native kernel; a port with its own
+    names states its own. A port outside a kernel's body states it: no family supplies it."""
 
+    class Axis_(Kernel):
+        id = "test.transport.axis"
+        input = InPort(tensor=TENSOR, sequence=SEQUENCE)
+
+    class Native_(Kernel):
+        id = "test.transport.native"
+        pin_family = NATIVE_FAMILY
+        input = InPort(tensor=TENSOR, sequence=SEQUENCE)
+        named = InPort(transport=AXIS, tensor=TENSOR, sequence=SEQUENCE)
+
+    assert design_space(Axis_()).input.transport == AXIS
+    native = design_space(Native_())
+    assert native.input.transport == NATIVE
+    assert native.named.transport == AXIS
+    assert [bus.name for bus in native.named.physical_pins] == ["s_axis_named"]
     with pytest.raises(DefinitionError, match="transport is not supplied"):
-
-        class Untransported(Kernel):
-            id = "test.untransported"
-            input = StreamPort(direction=Direction.IN, tensor=TENSOR, sequence=SEQUENCE)
-
-        design_space(Untransported())
+        design_space(InPort(label="p", clocking=AXIS_CLOCKING, tensor=TENSOR, sequence=SEQUENCE))
 
 
 class Leaf(Kernel):
     id = "test.exposed.leaf"
-    input = StreamPort(direction=Direction.IN, transport=AXIS, tensor=TENSOR, sequence=SEQUENCE)
-    output = StreamPort(transport=AXIS, tensor=TENSOR, sequence=SEQUENCE, direction=Direction.OUT)
+    input = InPort(tensor=TENSOR, sequence=SEQUENCE)
+    output = OutPort(tensor=TENSOR, sequence=SEQUENCE)
 
 
 class OtherLeaf(Leaf):
@@ -573,7 +568,7 @@ def test_an_exposed_port_is_a_stream_port_of_each_case_of_its_kernel_s_member() 
 
     class InputOnly(Kernel):
         id = "test.exposed.input_only"
-        input = StreamPort(direction=Direction.IN, transport=AXIS, tensor=TENSOR, sequence=SEQUENCE)
+        input = InPort(tensor=TENSOR, sequence=SEQUENCE)
 
     with refused("alias-case-absent", error=DefinitionError, message=r"\['other'\]"):
 
@@ -582,22 +577,20 @@ def test_an_exposed_port_is_a_stream_port_of_each_case_of_its_kernel_s_member() 
             core = Select(one=Leaf, other=InputOnly)
             x = core.output
 
-    # Its role is one in every selection; its carrier may differ by case.
+    # Its kind is one in every selection; its carrier may differ by case.
     class In_(Kernel):
         id = "test.exposed.in"
-        port = StreamPort(direction=Direction.IN, transport=AXIS, tensor=TENSOR, sequence=SEQUENCE)
+        port = InPort(tensor=TENSOR, sequence=SEQUENCE)
 
     class Turned(Kernel):
         id = "test.exposed.turned"
-        port = StreamPort(direction=Direction.OUT, transport=AXIS, tensor=TENSOR, sequence=SEQUENCE)
+        port = OutPort(tensor=TENSOR, sequence=SEQUENCE)
 
     class Native_(Kernel):
         id = "test.exposed.native"
-        port = StreamPort(
-            direction=Direction.IN, transport=NATIVE, tensor=TENSOR, sequence=SEQUENCE
-        )
+        port = InPort(transport=NATIVE, tensor=TENSOR, sequence=SEQUENCE)
 
-    with refused("port-direction", error=DefinitionError, message="different directions"):
+    with refused("port-direction", error=DefinitionError, message="not all inputs or all outputs"):
 
         class Mixed(Kernel):
             id = "test.exposed.mixed"
@@ -611,27 +604,20 @@ def test_an_exposed_port_is_a_stream_port_of_each_case_of_its_kernel_s_member() 
 
     assert port_direction(Carried, "x") is Direction.IN
 
-    # A direction bound otherwise than by a literal cannot be shown to agree with the other
-    # cases' when the class is made: refused where the port has more than one node (RF2 M1).
-    class Bound(Kernel):
-        id = "test.exposed.bound"
-        role: Direction = Param(default=Direction.OUT)
-        port = StreamPort(direction=role, transport=AXIS, tensor=TENSOR, sequence=SEQUENCE)
+    # A kind derived from a kind is its kind (RF2 M1's case: no direction is bound).
+    class Tapped(OutPort):
+        pass
 
-    with refused("port-direction", error=DefinitionError, message="not stated as literals"):
+    class Tapping(Kernel):
+        id = "test.exposed.tapping"
+        port = Tapped(tensor=TENSOR, sequence=SEQUENCE)
 
-        class Roled(Kernel):
-            id = "test.exposed.roled"
-            core = Select(i=In_, b=Bound)
-            x = core.port
+    class Outputs(Kernel):
+        id = "test.exposed.outputs"
+        core = Select(t=Turned, d=Tapping)
+        x = core.port
 
-    # One node, it is the port's own: checked at its design point (``presented``).
-    class Alone(Kernel):
-        id = "test.exposed.alone"
-        inner = Bound()
-        x = inner.port
-
-    assert port_direction(Alone, "x") is None
+    assert port_direction(Outputs, "x") is Direction.OUT
 
     # One port, one name: a second alias of it is refused (RF2 L2).
     with refused("port-exposed-twice", error=DefinitionError, message="exposes the port w"):
@@ -676,25 +662,29 @@ def test_an_exposed_port_reaches_through_a_wrapper_to_its_leaf() -> None:
 
 
 def test_a_port_states_one_thing_its_advance_rule_follows_from() -> None:
-    """One of a schedule, the port it governs, or stored values; and a port governs
-    another stream port of its kernel."""
-    with refused(
-        "port-advance-ambiguous", error=DefinitionError, message="schedule and governs and stored"
-    ):
+    """One of a schedule, the port it governs (an input's), or stored values (an
+    output's); and a port governs another stream port of its kernel."""
+    with refused("port-advance-ambiguous", error=DefinitionError, message="schedule and governs"):
 
-        class Both(Kernel):
-            id = "test.advance.both"
-            input = StreamPort(
-                direction=Direction.IN,
-                transport=AXIS,
+        class Governed(Kernel):
+            id = "test.advance.governed"
+            input = InPort(
                 tensor=TENSOR,
                 schedule=Schedule({Index("r"): 2, Index("c"): 4}),
                 index=(Index("r"), Index("c")),
                 governs="other",
-                stored=True,
             )
-            other = StreamPort(
-                direction=Direction.IN, transport=AXIS, tensor=TENSOR, sequence=SEQUENCE
+            other = InPort(tensor=TENSOR, sequence=SEQUENCE)
+
+    with refused("port-advance-ambiguous", error=DefinitionError, message="schedule and stored"):
+
+        class Stored(Kernel):
+            id = "test.advance.stored"
+            output = OutPort(
+                tensor=TENSOR,
+                schedule=Schedule({Index("r"): 2, Index("c"): 4}),
+                index=(Index("r"), Index("c")),
+                stored=True,
             )
 
     for governs in ("no_such_port", "input"):
@@ -702,24 +692,12 @@ def test_a_port_states_one_thing_its_advance_rule_follows_from() -> None:
 
             class Governs(Kernel):
                 id = "test.advance.governs"
-                input = StreamPort(
-                    direction=Direction.IN,
-                    transport=AXIS,
-                    tensor=TENSOR,
-                    sequence=SEQUENCE,
-                    governs=governs,
-                )
+                input = InPort(tensor=TENSOR, sequence=SEQUENCE, governs=governs)
 
     class Governing(Kernel):
         id = "test.advance.governing"
-        input = StreamPort(direction=Direction.IN, transport=AXIS, tensor=TENSOR, sequence=SEQUENCE)
-        set = StreamPort(
-            direction=Direction.IN,
-            transport=AXIS,
-            tensor=TENSOR,
-            sequence=SEQUENCE,
-            governs="input",
-        )
+        input = InPort(tensor=TENSOR, sequence=SEQUENCE)
+        set = InPort(tensor=TENSOR, sequence=SEQUENCE, governs="input")
 
     assert design_space(Governing()).set.advance is Advance.SELECTED
 
@@ -738,9 +716,7 @@ def test_a_scheduled_port_presents_its_kernel_s_one_schedule() -> None:
         def schedule(self) -> Schedule:
             return Schedule({r: 2, c: 4})
 
-        input = StreamPort(
-            direction=Direction.IN, transport=AXIS, tensor=TENSOR, schedule=schedule, index=(r, c)
-        )
+        input = InPort(tensor=TENSOR, schedule=schedule, index=(r, c))
 
     class Rows(Scheduled):
         @derived
@@ -761,9 +737,7 @@ def test_a_scheduled_port_presents_its_kernel_s_one_schedule() -> None:
                 def other(self) -> Schedule:
                     return Schedule({r: 2, c: 4})
 
-                input = StreamPort(
-                    direction=Direction.IN,
-                    transport=AXIS,
+                input = InPort(
                     tensor=TENSOR,
                     schedule=other if given is None else given,
                     index=(r, c),
@@ -777,45 +751,34 @@ def test_a_scheduled_port_presents_its_kernel_s_one_schedule() -> None:
 # port's own constraint (``presented``): its stream and its carrier.
 
 
-def test_a_stream_port_states_its_direction_an_input_or_an_output() -> None:
-    """``direction`` has no default, and no stream is ``INOUT`` (``port-direction``); a
-    stream's bus role follows from it: an input's AXIS bus is a target's (``s_axis_*``),
-    an output's an initiator's (``m_axis_*``)."""
-    with refused("port-direction", error=DefinitionError, message="input states no direction"):
+def test_a_stream_port_is_an_input_or_an_output() -> None:
+    """Its kind, ``InPort`` or ``OutPort``, is its direction, read-only (``direction``); a
+    ``StreamPort`` of neither is ``INOUT``, refused when its kernel's class is made and,
+    outside one, at its design point (``port-direction``). A stream's bus role follows from
+    its kind: an input's AXIS bus is a target's (``s_axis_*``), an output's an initiator's
+    (``m_axis_*``)."""
+    with refused("port-direction", error=DefinitionError, message="input is a StreamPort"):
 
-        class Unstated(Kernel):
-            id = "test.direction.unstated"
-            input = StreamPort(transport=AXIS, tensor=TENSOR, sequence=SEQUENCE)
+        class Neither(Kernel):
+            id = "test.direction.neither"
+            input = StreamPort(tensor=TENSOR, sequence=SEQUENCE)
 
-    with refused("port-direction", error=DefinitionError, message="input is stated INOUT"):
-
-        class Both(Kernel):
-            id = "test.direction.inout"
-            input = StreamPort(
-                direction=Direction.INOUT, transport=AXIS, tensor=TENSOR, sequence=SEQUENCE
-            )
+    alone = design_space(
+        StreamPort(
+            label="p", clocking=AXIS_CLOCKING, transport=AXIS, tensor=TENSOR, sequence=SEQUENCE
+        )
+    )
+    validity = inspection.validity(alone)
+    assert validity.status == "refused"
+    assert isinstance(validity.result, Rejected)
+    assert [finding.code for finding in validity.result.findings] == ["port-direction"]
 
     point = design_space(Leaf())
+    assert (point.input.direction, point.output.direction) == (Direction.IN, Direction.OUT)
     assert point.input.physical_spec(idle=False).endpoint is Endpoint.TARGET
     assert point.output.physical_spec(idle=False).endpoint is Endpoint.INITIATOR
     assert [bus.name for bus in point.input.physical_pins] == ["s_axis_input"]
     assert [bus.name for bus in point.output.physical_pins] == ["m_axis_output"]
-
-
-def test_a_direction_bound_otherwise_than_by_a_literal_is_checked_at_its_design_point() -> None:
-    """A direction its kernel binds from a fact is read at the design point: ``INOUT``
-    there refuses the point (``presented``, ``port-direction``)."""
-
-    class Bound(Kernel):
-        id = "test.direction.bound"
-        role: Direction = Param()
-        input = StreamPort(direction=role, transport=AXIS, tensor=TENSOR, sequence=SEQUENCE)
-
-    assert inspection.validity(design_space(Bound(role=Direction.IN))).status == "valid"
-    validity = inspection.validity(design_space(Bound(role=Direction.INOUT)))
-    assert validity.status == "refused"
-    assert isinstance(validity.result, Rejected)
-    assert [finding.code for finding in validity.result.findings] == ["port-direction"]
 
 
 def test_a_port_binds_exactly_one_presentation() -> None:
@@ -834,7 +797,7 @@ def test_a_port_binds_exactly_one_presentation() -> None:
 
         class Neither(Kernel):
             id = "test.presentation.neither"
-            input = StreamPort(direction=Direction.IN, transport=AXIS, tensor=TENSOR)
+            input = InPort(tensor=TENSOR)
 
     with refused(
         "port-presentation", error=DefinitionError, message="input binds schedule and sequence"
@@ -842,8 +805,7 @@ def test_a_port_binds_exactly_one_presentation() -> None:
 
         class Two(Scheduled):
             id = "test.presentation.both"
-            input = StreamPort(
-                direction=Direction.IN,
+            input = InPort(
                 transport=AXIS,
                 tensor=TENSOR,
                 schedule=Scheduled.schedule,
@@ -857,9 +819,7 @@ def test_a_port_binds_exactly_one_presentation() -> None:
 
         class Projected(Kernel):
             id = "test.presentation.projected"
-            input = StreamPort(
-                direction=Direction.IN,
-                transport=AXIS,
+            input = InPort(
                 tensor=TENSOR,
                 sequence=SEQUENCE,
                 lanes=(c,),
@@ -867,66 +827,35 @@ def test_a_port_binds_exactly_one_presentation() -> None:
             )
 
 
-def test_a_port_s_relation_is_a_literal_on_its_direction() -> None:
-    """``governs`` only on an input, ``stored`` only on an output (``port-direction``), each
-    bound to a literal (``port-advance-ambiguous``): the advance rule is its declaration's."""
-    with refused(
-        "port-direction", error=DefinitionError, message="governs a port and is an output"
-    ):
+def test_a_port_s_relation_is_its_kind_s() -> None:
+    """``governs`` is an input's, ``stored`` an output's: a port of the other kind has no
+    such parameter, so neither mypy (strict, ``call-arg``) nor the engine (``unknown
+    members``) admits one."""
+    with pytest.raises(DefinitionError, match=r"unknown members \['governs'\]"):
+        OutPort(tensor=TENSOR, sequence=SEQUENCE, governs="input")  # type: ignore[call-arg]
+    with pytest.raises(DefinitionError, match=r"unknown members \['stored'\]"):
+        InPort(tensor=TENSOR, sequence=SEQUENCE, stored=True)  # type: ignore[call-arg]
+    with pytest.raises(DefinitionError, match=r"unknown members \['dtype'\]"):
+        OutPort(tensor=TENSOR, sequence=SEQUENCE, dtype=DataType["INT4"])  # type: ignore[call-arg]
 
-        class GoverningOutput(Kernel):
-            id = "test.relation.governing_output"
-            input = StreamPort(
-                direction=Direction.IN, transport=AXIS, tensor=TENSOR, sequence=SEQUENCE
-            )
-            set = StreamPort(
-                direction=Direction.OUT,
-                transport=AXIS,
-                tensor=TENSOR,
-                sequence=SEQUENCE,
-                governs="input",
-            )
 
-    with refused("port-direction", error=DefinitionError, message="is stored and an input"):
-
-        class StoredInput(Kernel):
-            id = "test.relation.stored_input"
-            input = StreamPort(
-                direction=Direction.IN,
-                transport=AXIS,
-                tensor=TENSOR,
-                sequence=SEQUENCE,
-                stored=True,
-            )
-
+def test_a_port_s_relation_is_a_literal() -> None:
+    """``stored`` and ``governs`` are bound to literals (``port-advance-ambiguous``): the
+    advance rule is its declaration's."""
     with refused("port-advance-ambiguous", error=DefinitionError, message="binds stored to"):
 
         class StoredFact(Kernel):
             id = "test.relation.stored_fact"
             memory: bool = Param(default=True)
-            output = StreamPort(
-                direction=Direction.OUT,
-                transport=AXIS,
-                tensor=TENSOR,
-                sequence=SEQUENCE,
-                stored=memory,
-            )
+            output = OutPort(tensor=TENSOR, sequence=SEQUENCE, stored=memory)
 
     with refused("port-advance-ambiguous", error=DefinitionError, message="binds governs to"):
 
         class GovernsFact(Kernel):
             id = "test.relation.governs_fact"
             governed: str = Param(default="input")
-            input = StreamPort(
-                direction=Direction.IN, transport=AXIS, tensor=TENSOR, sequence=SEQUENCE
-            )
-            set = StreamPort(
-                direction=Direction.IN,
-                transport=AXIS,
-                tensor=TENSOR,
-                sequence=SEQUENCE,
-                governs=governed,
-            )
+            input = InPort(tensor=TENSOR, sequence=SEQUENCE)
+            set = InPort(tensor=TENSOR, sequence=SEQUENCE, governs=governed)
 
 
 def test_a_scheduled_port_s_kernel_states_a_schedule_never_inapplicable() -> None:
@@ -940,9 +869,7 @@ def test_a_scheduled_port_s_kernel_states_a_schedule_never_inapplicable() -> Non
 
         class Unstated(Kernel):
             id = "test.schedule.unstated"
-            input = StreamPort(
-                direction=Direction.IN,
-                transport=AXIS,
+            input = InPort(
                 tensor=TENSOR,
                 schedule=Kernel.schedule,
                 index=(r, c),
@@ -957,9 +884,7 @@ def test_a_scheduled_port_s_kernel_states_a_schedule_never_inapplicable() -> Non
             def schedule(self) -> Schedule | Inapplicable:
                 return Inapplicable()
 
-            input = StreamPort(
-                direction=Direction.IN,
-                transport=AXIS,
+            input = InPort(
                 tensor=TENSOR,
                 schedule=schedule,
                 index=(r, c),
@@ -972,9 +897,7 @@ def test_a_scheduled_port_s_kernel_states_a_schedule_never_inapplicable() -> Non
         def schedule(self) -> Schedule | Rejected:
             return Schedule({r: 2, c: 4})
 
-        input = StreamPort(
-            direction=Direction.IN, transport=AXIS, tensor=TENSOR, schedule=schedule, index=(r, c)
-        )
+        input = InPort(tensor=TENSOR, schedule=schedule, index=(r, c))
 
     with refused("port-schedule-inapplicable", error=DefinitionError, message="Inapplicable"):
 
@@ -1005,9 +928,7 @@ def test_a_placed_port_s_presentation_is_accepted_and_carried_or_its_point_is_re
         def index(self) -> tuple[Index, ...]:
             return (Index("q"), c) if self.foreign else (r, c)
 
-        input = StreamPort(
-            direction=Direction.IN, transport=AXIS, tensor=TENSOR, schedule=schedule, index=index
-        )
+        input = InPort(tensor=TENSOR, schedule=schedule, index=index)
 
     space = design_space(Projection())
     assert inspection.validity(space.with_choices({Projection.foreign: False})).status == "valid"
@@ -1029,9 +950,7 @@ def test_a_placed_port_s_presentation_is_accepted_and_carried_or_its_point_is_re
 
     class Idle(Kernel):
         id = "test.presented.idle"
-        input = StreamPort(
-            direction=Direction.IN, transport=AXIS, dtype=DataType["INT3"], sequence=SEQUENCE
-        )
+        input = InPort(dtype=DataType["INT3"], sequence=SEQUENCE)
 
     point = design_space(Idle())
     assert inspection.validity(point).status == "valid"

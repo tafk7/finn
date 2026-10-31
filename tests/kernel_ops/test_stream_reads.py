@@ -53,13 +53,12 @@ from finn.custom_op.kernels.shell import in_shell
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
-from finn.kernels.artifacts.abi import Direction
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.laws import Axis
 from finn.kernels.library import ModuleSpec
-from finn.kernels.port_model import StreamPort
+from finn.kernels.port_model import InPort, StreamPort
 from finn.platform.capabilities import Resources
 
 MODEL_FIELDS = ("element", "stream", "access")
@@ -185,9 +184,8 @@ class Given(Kernel):
     id = "test.reads.given"
     tensor: Tensor = Param()
     sequence: BeatSequence = Param()
-    x = StreamPort(
+    x = InPort(
         label="x",
-        direction=Direction.IN,
         tensor=tensor,
         sequence=sequence,
         transport=Axis(bus="s_axis"),

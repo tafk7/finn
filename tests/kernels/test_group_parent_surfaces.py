@@ -10,7 +10,7 @@ import pytest
 from qonnx.core.datatype import DataType
 from support.helpers import FULL_DSP48E2
 
-from finn.core.space import Available, Decision, Group, Param, Space, derived, design_space
+from finn.core.space import Available, Group, Param, Space, design_space
 from finn.core.space.declarations import Declaration, MemberRef, declared_path
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
@@ -21,7 +21,7 @@ from finn.kernels.composer import Facts, PartitionDeclaration, Port, channel
 from finn.kernels.composer import _checked as checked
 from finn.kernels.laws import AXIS, AXIS_CLOCKING
 from finn.kernels.port import port_direction, stream_port
-from finn.kernels.port_model import StreamPort, stream_ports
+from finn.kernels.port_model import InPort, OutPort, stream_ports
 from finn.kernels.sides import Side
 
 SMALL = Tensor((2, 4), ScalarEncoding(DataType["INT3"]))
@@ -33,8 +33,7 @@ OTHER_SEQUENCE = BeatSequence(vector_major(OTHER.shape, 2))
 class Receiving(Group):
     tensor: Tensor = Param()
     sequence: BeatSequence = Param()
-    native = StreamPort(
-        direction=Direction.IN,
+    native = InPort(
         clocking=AXIS_CLOCKING,
         transport=AXIS,
         label="source",
@@ -46,13 +45,12 @@ class Receiving(Group):
 class Sending(Group):
     tensor: Tensor = Param()
     sequence: BeatSequence = Param()
-    native = StreamPort(
+    native = OutPort(
         clocking=AXIS_CLOCKING,
         transport=AXIS,
         label="source",
         tensor=tensor,
         sequence=sequence,
-        direction=Direction.OUT,
     )
 
 
@@ -74,9 +72,7 @@ class Host(Kernel):
     group = InheritedFrame()
 
     # A port of its own, with the same name as the Groups' ports.
-    native = StreamPort(
-        direction=Direction.IN, tensor=OTHER, sequence=OTHER_SEQUENCE, transport=AXIS
-    )
+    native = InPort(tensor=OTHER, sequence=OTHER_SEQUENCE)
 
 
 class InheritedHost(Host):
@@ -175,58 +171,6 @@ def test_actual_composer_accepts_valid_and_refuses_wrong_group_port_roles(
         assert [finding.code for finding in findings] == ["channel-users"]
         assert findings[0].message == description
         assert findings[0].owner == "group-link"
-
-
-class UnknownRoles(Group):
-    fact: Direction = Param(default=Direction.IN)
-    choice: Direction = Decision(domain=(Direction.IN, Direction.OUT))
-
-    @derived
-    def inferred(self) -> Direction:
-        return Direction.OUT
-
-    fact_bound = StreamPort(
-        tensor=SMALL,
-        sequence=SMALL_SEQUENCE,
-        direction=fact,
-        transport=AXIS,
-        label="fact_bound",
-        clocking=AXIS_CLOCKING,
-    )
-    derived_bound = StreamPort(
-        tensor=SMALL,
-        sequence=SMALL_SEQUENCE,
-        direction=inferred,
-        transport=AXIS,
-        label="derived_bound",
-        clocking=AXIS_CLOCKING,
-    )
-    decision_bound = StreamPort(
-        tensor=SMALL,
-        sequence=SMALL_SEQUENCE,
-        direction=choice,
-        transport=AXIS,
-        label="decision_bound",
-        clocking=AXIS_CLOCKING,
-    )
-
-
-@pytest.mark.parametrize("key", ["fact_bound", "derived_bound", "decision_bound"])
-def test_a_direction_bound_to_a_member_stays_unknown_even_when_configuration_resolves_it(
-    key: str,
-) -> None:
-    class UnknownHost(Kernel):
-        id = "test.group-port-unknown-role"
-        group = UnknownRoles()
-
-    dotted = "group." + key
-    assert port_direction(UnknownHost, dotted) is None
-    assert dotted in stream_ports(UnknownHost)
-    stream_port(UnknownHost, dotted)
-    # Static metadata inspection accepts a class, not a bound runtime instance.
-    point = design_space(UnknownHost()).with_choices({UnknownHost.group.choice: Direction.OUT})
-    assert port_direction(type(point), dotted) is None
-    assert port_direction(UnknownHost, "group.unknown") is None
 
 
 @pytest.mark.parametrize(

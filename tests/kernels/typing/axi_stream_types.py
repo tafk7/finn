@@ -14,18 +14,18 @@ from finn.kernels.artifacts.abi import Pin
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.port import PhysicalPort, axis, pins, transport
-from finn.kernels.port_model import StreamPort
+from finn.kernels.port_model import InPort
 from finn.kernels.transport import AxisBeat, ReadyValidTransport
 
 
 def check(point: DotpAxiKernel, eltwise: EltwiseKernel) -> None:
     # Class access: a port is its declaration; the members its kernel reads, as values.
-    assert_type(DotpAxiKernel.x, StreamPort)
+    assert_type(DotpAxiKernel.x, InPort)
     assert_type(DotpAxiKernel.x.element, ScalarEncoding)
     assert_type(DotpAxiKernel.x.stream.sequence, BeatSequence)
     assert_type(point.query(DotpAxiKernel.pe), QueryResult[int])
     # Configuration reads.
-    assert_type(point.x, StreamPort)
+    assert_type(point.x, InPort)
     assert_type(point.x.element, ScalarEncoding)
     assert_type(point.x.stream, Stream)
     assert_type(point.pe, int)
@@ -34,9 +34,9 @@ def check(point: DotpAxiKernel, eltwise: EltwiseKernel) -> None:
     viewed = (point.x.physical_spec(idle=False), point.x.stream)
     assert_type(viewed, tuple[PhysicalPort, Stream])
     assert_type(axis(*viewed), AxisBeat | Rejected)
-    assert_type(pins(*viewed, DotpAxiKernel.clock_domain), tuple[Pin, ...] | Rejected)
+    assert_type(pins(*viewed, DotpAxiKernel.pin_family.clocking), tuple[Pin, ...] | Rejected)
     assert_type(point.x.physical_pins, tuple[Pin, ...])
     assert_type(point.query(DotpAxiKernel.x.physical_pins), QueryResult[tuple[Pin, ...]])
-    assert_type(eltwise.lhs, StreamPort)
+    assert_type(eltwise.lhs, InPort)
     lhs = (eltwise.lhs.physical_spec(idle=False), eltwise.lhs.stream)
     assert_type(transport(*lhs, eltwise.lhs.clocking), ReadyValidTransport | Rejected)

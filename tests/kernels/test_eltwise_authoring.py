@@ -7,7 +7,7 @@ from __future__ import annotations
 import pytest
 from qonnx.core.datatype import DataType
 from support.helpers import FULL_DSP48E2
-from support.ports import UncheckedPort
+from support.ports import UncheckedInPort, UncheckedOutPort
 
 from finn.core.space import (
     Available,
@@ -23,7 +23,6 @@ from finn.core.space import (
 from finn.dataflow.schedule import Index
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import LevelEnd
-from finn.kernels.artifacts.abi import Direction
 from finn.kernels.eltwise import EltwiseKernel, c
 from finn.kernels.laws import Native
 from finn.kernels.port import LoopEnds
@@ -80,8 +79,7 @@ class SerialEltwise(EltwiseKernel):
         _ = self.second_state
         return (c,)
 
-    lhs = UncheckedPort(
-        direction=Direction.IN,
+    lhs = UncheckedInPort(
         label="lhs",
         tensor=EltwiseKernel.lhs_tensor,
         schedule=EltwiseKernel.schedule,
@@ -90,8 +88,7 @@ class SerialEltwise(EltwiseKernel):
         transport=Native(names=("adat", "avld", "ardy")),
         loop_ends=UNNAMED_ENDS,
     )
-    rhs = UncheckedPort(
-        direction=Direction.IN,
+    rhs = UncheckedInPort(
         label="rhs",
         tensor=EltwiseKernel.rhs_tensor,
         schedule=EltwiseKernel.schedule,
@@ -100,9 +97,8 @@ class SerialEltwise(EltwiseKernel):
         transport=Native(names=("bdat", "bvld", "brdy")),
         loop_ends=UNNAMED_ENDS,
     )
-    result = UncheckedPort(
+    result = UncheckedOutPort(
         label="result",
-        direction=Direction.OUT,
         tensor=EltwiseKernel.result_tensor,
         schedule=EltwiseKernel.schedule,
         index=EltwiseKernel.indices,

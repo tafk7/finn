@@ -14,7 +14,7 @@ from finn.core.space import Available, Rejected, design_space
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
-from finn.kernels.artifacts.abi import Clocking, Direction, Endpoint
+from finn.kernels.artifacts.abi import Clocking, Endpoint
 from finn.kernels.base import Kernel
 from finn.kernels.eltwise import EltwiseKernel, c
 from finn.kernels.laws import (
@@ -31,7 +31,7 @@ from finn.kernels.laws import (
     doubled,
 )
 from finn.kernels.port import LoopEnds, PhysicalPort, pins, stream_pins
-from finn.kernels.port_model import StreamPort
+from finn.kernels.port_model import InPort
 
 TARGET, INITIATOR = Endpoint.TARGET, Endpoint.INITIATOR
 
@@ -82,7 +82,7 @@ def test_a_native_port_states_a_prefix_or_three_distinct_names(stated: dict[str,
 def test_the_two_clock_domains_and_the_doubled_clock_named_after_its_clock() -> None:
     assert AXIS_CLOCKING == Clocking(clock="ap_clk", reset="ap_rst_n", active_low=True)
     assert NATIVE_CLOCKING == Clocking(clock="clk", reset="rst", active_low=False)
-    assert Kernel.clock_domain == AXIS_CLOCKING
+    assert Kernel.pin_family.clocking == AXIS_CLOCKING
     pumped = doubled(AXIS_CLOCKING, True)
     assert (pumped.doubled, pumped.doubling) == ("ap_clk2x", True)
     held = doubled(NATIVE_CLOCKING, False)
@@ -95,19 +95,17 @@ class Undistinguished(EltwiseKernel):
     ``irdy``."""
 
     id = "test.laws.undistinguished"
-    lhs = StreamPort(
+    lhs = InPort(
         label="lhs",
         transport=NATIVE,
-        direction=Direction.IN,
         tensor=EltwiseKernel.lhs_tensor,
         schedule=EltwiseKernel.schedule,
         index=EltwiseKernel.indices,
         lanes=(c,),
     )
-    rhs = StreamPort(
+    rhs = InPort(
         label="rhs",
         transport=NATIVE,
-        direction=Direction.IN,
         tensor=EltwiseKernel.rhs_tensor,
         schedule=EltwiseKernel.schedule,
         index=EltwiseKernel.rhs_indices,

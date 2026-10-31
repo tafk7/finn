@@ -9,13 +9,13 @@ from finn.dataflow.schedule import Access, Schedule
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.base import PortPins
-from finn.kernels.port_model import StreamPort
+from finn.kernels.port_model import InPort, StreamPort
 from finn.kernels.transpose import TransposeKernel
 
 
 def check(port: StreamPort, transpose: TransposeKernel) -> None:
-    assert_type(TransposeKernel.input, StreamPort)
-    assert_type(transpose.input, StreamPort)
+    assert_type(TransposeKernel.input, InPort)
+    assert_type(transpose.input, InPort)
     assert_type(port.schedule, Schedule | None)
     assert_type(port.element, ScalarEncoding)
     assert_type(port.stream, Stream)

@@ -95,7 +95,6 @@ from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import (
     Bus,
-    Direction,
     Member,
     StandardProtocol,
 )
@@ -103,9 +102,9 @@ from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData, he
 from finn.kernels.artifacts.module import RegisterMap
 from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
 from finn.kernels.control import ControlModel
-from finn.kernels.laws import AXIS, Axis, Intake, PortIntake, Standing
+from finn.kernels.laws import Axis, Intake, PortIntake, Standing
 from finn.kernels.library import ModuleSpec
-from finn.kernels.port_model import StreamPort
+from finn.kernels.port_model import InPort, OutPort
 from finn.kernels.utilization import (
     Fit,
     auto_unstated,
@@ -479,8 +478,8 @@ class ThresholdingAxiKernel(Kernel):
                     ("RRESP", 2),
                 )
             ),
-            associated_clock=type(self).clock_domain.clock,
-            associated_reset=type(self).clock_domain.reset,
+            associated_clock=type(self).pin_family.clocking.clock,
+            associated_reset=type(self).pin_family.clocking.reset,
         )
 
     @derived
@@ -555,17 +554,15 @@ class ThresholdingAxiKernel(Kernel):
             return element
         return Tensor(shape, element)
 
-    input = StreamPort(
+    input = InPort(
         transport=Axis(bus="s_axis"),
-        direction=Direction.IN,
         tensor=input_tensor,
         schedule=schedule,
         index=indices,
         lanes=(c,),
     )
-    output = StreamPort(
+    output = OutPort(
         transport=Axis(bus="m_axis"),
-        direction=Direction.OUT,
         tensor=output_tensor,
         schedule=schedule,
         index=indices,
@@ -573,9 +570,7 @@ class ThresholdingAxiKernel(Kernel):
     )
     # The set port indexes beats (``c``'s folds), which no index of a tensor expresses: a
     # selector, its beat accepted with each input beat (L4).
-    set = StreamPort(
-        transport=AXIS,
-        direction=Direction.IN,
+    set = InPort(
         tensor=set_tensor,
         sequence=set_sequence,
         governs="input",
