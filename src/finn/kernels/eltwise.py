@@ -38,7 +38,7 @@ from finn.dataflow.schedule import Access, Index, Schedule
 from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
-from finn.kernels.laws import NATIVE_FAMILY, Ahead, Intake, Native, PortIntake, Standing
+from finn.kernels.laws import NATIVE_PROTOCOL, Ahead, Intake, Native, PortIntake, Standing
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port_model import InPort, OutPort
 from finn.kernels.values.domains import Integer, admit_element
@@ -81,7 +81,7 @@ class EltwiseKernel(Kernel):
     """
 
     id = "finnlib.eltwise"
-    pin_family = NATIVE_FAMILY
+    interface_protocol = NATIVE_PROTOCOL
 
     operation: str = Param()
     # The tensors its operand ports read: facts it is given.

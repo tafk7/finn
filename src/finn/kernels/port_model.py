@@ -75,10 +75,11 @@ class StreamPort(Space):
     name in its kernel, ``clocking`` its kernel's clock and reset (L8: the kernel's, never
     the port's) and ``interval`` its kernel's initiation interval (L6,
     ``finn.kernels.laws.Interval``), which it carries with its pace; its ``transport``, where
-    it states none, is its kernel's pin family's (``finn.kernels.laws.PinFamily``): a kernel
-    supplies all four for a port declared in its own body that does not state them
-    (``finn.kernels.base.Kernel``). A port with its own pin names, or of another family than
-    its kernel's (MemStream's AXIS-named output), states its transport.
+    it states none, is its kernel's interface protocol's
+    (``finn.kernels.laws.InterfaceProtocol``): a kernel supplies all four for a port declared
+    in its own body that does not state them (``finn.kernels.base.Kernel``). A port with its
+    own pin names, or of another interface protocol than its kernel's (MemStream's AXIS-named
+    output), states its transport.
 
     Its presentation, exactly one of: its kernel's ``schedule`` projected through its
     ``index`` (``lanes``, ``reduces``, ``holds``, ``closes``, ``reshaped``), or a given

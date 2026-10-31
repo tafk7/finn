@@ -29,7 +29,7 @@ from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
 from finn.kernels.fifo import fifo_resources, fifo_storage
-from finn.kernels.laws import NATIVE_FAMILY, Intake, PortIntake, Standing
+from finn.kernels.laws import NATIVE_PROTOCOL, Intake, PortIntake, Standing
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port_model import InPort, OutPort
 from finn.kernels.utilization import (
@@ -103,7 +103,7 @@ class TransposeKernel(Kernel):
     """
 
     id = "finnlib.inner_shuffle"
-    pin_family = NATIVE_FAMILY
+    interface_protocol = NATIVE_PROTOCOL
 
     # The tensor its input port reads: a fact it is given.
     input_tensor: Tensor = Param()

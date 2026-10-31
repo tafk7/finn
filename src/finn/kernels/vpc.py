@@ -34,7 +34,7 @@ from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, regrouped
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel
-from finn.kernels.laws import NATIVE_FAMILY, Intake, PortIntake, Standing
+from finn.kernels.laws import NATIVE_PROTOCOL, Intake, PortIntake, Standing
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port_model import InPort, OutPort
 from finn.kernels.utilization import Fit
@@ -58,7 +58,7 @@ class VpcKernel(Kernel):
     count; see the module docstring."""
 
     id = "finnlib.vpc"
-    pin_family = NATIVE_FAMILY
+    interface_protocol = NATIVE_PROTOCOL
 
     # The tensor whose elements it regroups, a fact, and the two sides of the conversion.
     input_tensor: Tensor = Param()

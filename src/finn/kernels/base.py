@@ -76,12 +76,12 @@ from finn.kernels.artifacts.contributions import Contribution, GeneratedData
 from finn.kernels.artifacts.module import BusExport, Fragment, Held, Link, merge
 from finn.kernels.control import Control, ControlModel, control_models, presented
 from finn.kernels.laws import (
-    AXIS_FAMILY,
+    AXIS_PROTOCOL,
     INTAKE_UNSTATED,
     RATE_INTERVAL,
     Intake,
+    InterfaceProtocol,
     Interval,
-    PinFamily,
     PortIntake,
     Standing,
     TransportKind,
@@ -253,8 +253,8 @@ def _is_input_port(item: object) -> bool:
 def _supply_ports(cls: type[Kernel]) -> None:
     """Supply each stream port declared in ``cls``'s own body with what is the kernel's,
     where the port does not state it: its ``label``, its name in the kernel, its
-    ``clocking``, its kernel's pin family's clock and reset (``Kernel.port_clocking``; L8: a
-    port's clock is its kernel's), its ``transport``, its kernel's pin family's
+    ``clocking``, its kernel's interface protocol's clock and reset (``Kernel.port_clocking``; L8: a
+    port's clock is its kernel's), its ``transport``, its kernel's interface protocol's
     (``Kernel.port_transport``), and its ``interval``, the kernel's (``Kernel.interval``,
     L6), which it carries with its pace. A port declared in a Group states its label,
     clocking and transport; only a kernel with no module declares one
@@ -1050,32 +1050,32 @@ class Kernel(Space):
                 declaration=cls.__qualname__,
             )
 
-    # -- its clock and its pins' family ---------------------------------------------------
+    # -- its clock and its interface protocol ---------------------------------------------------
 
-    # Its module's pin family (``finn.kernels.laws.PinFamily``): a class constant, one of the
-    # library's two, chosen by its module's family: the clock and reset (and its polarity)
-    # its ports and its module run on (L8), and the transport its ports take where a port
-    # states none. The AXIS family by default; a FinnLib native module states
-    # ``NATIVE_FAMILY``.
-    pin_family: ClassVar[PinFamily] = AXIS_FAMILY
+    # Its module's interface protocol (``finn.kernels.laws.InterfaceProtocol``): a class
+    # constant, one of the library's two, its module's own: the clock and reset (and its
+    # polarity) its ports and its module run on (L8), and the transport its ports take where
+    # a port states none. The AXIS protocol by default; a FinnLib native module states
+    # ``NATIVE_PROTOCOL``.
+    interface_protocol: ClassVar[InterfaceProtocol] = AXIS_PROTOCOL
 
     @derived
     def clocking(self) -> Clocking:
-        """Its module's clocking: its pin family's; a kernel with a doubled clock builds on
-        it (``finn.kernels.laws.doubled(type(self).pin_family.clocking, doubling)``)."""
-        return type(self).pin_family.clocking
+        """Its module's clocking: its interface protocol's; a kernel with a doubled clock builds on
+        it (``finn.kernels.laws.doubled(type(self).interface_protocol.clocking, doubling)``)."""
+        return type(self).interface_protocol.clocking
 
     @derived
     def port_clocking(self) -> Clocking:
-        """Its ports' clock and reset: its pin family's (L8), never a doubled clock's
+        """Its ports' clock and reset: its interface protocol's (L8), never a doubled clock's
         choice. The base gives it to every port its body declares (``StreamPort``)."""
-        return type(self).pin_family.clocking
+        return type(self).interface_protocol.clocking
 
     @derived
     def port_transport(self) -> TransportKind:
-        """Its ports' transport where a port states none: its pin family's. The base gives
+        """Its ports' transport where a port states none: its interface protocol's. The base gives
         it to every port its body declares that states none (``StreamPort.transport``)."""
-        return type(self).pin_family.transport
+        return type(self).interface_protocol.transport
 
     @derived
     def takes_doubled_clock(self) -> bool:

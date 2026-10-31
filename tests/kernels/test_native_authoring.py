@@ -36,7 +36,7 @@ from finn.kernels.base import Kernel, PortPins
 from finn.kernels.channels import ChannelFifo
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import InputGeneratorKernel
-from finn.kernels.laws import NATIVE, Native, PinFamily
+from finn.kernels.laws import NATIVE, InterfaceProtocol, Native
 from finn.kernels.port import LoopEnds
 from finn.kernels.port_model import InPort
 
@@ -216,7 +216,9 @@ def test_staged_unused_marker_has_real_pin_and_hold_category_order() -> None:
 
 def test_native_clock_overrides_are_physical_inputs() -> None:
     class Clocked(InputGeneratorKernel):
-        pin_family = PinFamily(Clocking(clock="fast", reset="clear", active_low=False), NATIVE)
+        interface_protocol = InterfaceProtocol(
+            Clocking(clock="fast", reset="clear", active_low=False), NATIVE
+        )
 
     point = design_space(
         Clocked(

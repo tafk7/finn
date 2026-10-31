@@ -45,7 +45,7 @@ from finn.dataflow.schedule import Access, Index, Schedule
 from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
-from finn.kernels.laws import NATIVE_FAMILY, Intake, Native, PortIntake, Standing
+from finn.kernels.laws import NATIVE_PROTOCOL, Intake, Native, PortIntake, Standing
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port_model import InPort, OutPort
 from finn.kernels.values.domains import admit_element
@@ -79,7 +79,7 @@ class PwPolyKernel(Kernel):
     docstring."""
 
     id = "finnlib.pwpolyf"
-    pin_family = NATIVE_FAMILY
+    interface_protocol = NATIVE_PROTOCOL
 
     # What it computes: a supplied input, not an interchangeable implementation choice.
     function: str = Param()

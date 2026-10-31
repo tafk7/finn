@@ -307,7 +307,7 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
 # ((1657, 386), (1822, 449)) became these when ports became InPort and OutPort (S4): a port's
 # direction is its kind's, no Param, and its presentation reads no relation by direction
 # (-64 members, -104 constants at the baseline; -78, -125 after ``viable``), each kernel's
-# ports take its pin family's transport (+4, +6 non-port members); and when its presentation
+# ports take its interface protocol's transport (+4, +6 non-port members); and when its presentation
 # reads its advance rule, to read a selector's group (+44, +12; +55, +16).
 NONPORT_EVALUATED = ((1017, 42), (1065, 42))
 PORT_EVALUATED = ((624, 252), (740, 298))

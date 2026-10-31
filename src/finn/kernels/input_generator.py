@@ -69,7 +69,7 @@ from finn.dataflow.traversal import Adaptation, BeatSequence, LevelEnd, Traversa
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.rtl import Declined, evaluate
 from finn.kernels.base import Kernel
-from finn.kernels.laws import NATIVE_FAMILY, Intake, PortIntake, Standing
+from finn.kernels.laws import NATIVE_PROTOCOL, Intake, PortIntake, Standing
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port import LoopEnds
 from finn.kernels.port_model import InPort, OutPort
@@ -197,7 +197,7 @@ class InputGeneratorKernel(Kernel):
     the module docstring."""
 
     id = "finnlib.input_generator"
-    pin_family = NATIVE_FAMILY
+    interface_protocol = NATIVE_PROTOCOL
 
     # The tensor whose words it reorders, a fact; what arrives of it, and the order and
     # markers it presents (``leaving``: the markers it must close).

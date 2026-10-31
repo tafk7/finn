@@ -34,7 +34,9 @@ def check(point: DotpAxiKernel, eltwise: EltwiseKernel) -> None:
     viewed = (point.x.physical_spec(idle=False), point.x.stream)
     assert_type(viewed, tuple[PhysicalPort, Stream])
     assert_type(axis(*viewed), AxisBeat | Rejected)
-    assert_type(pins(*viewed, DotpAxiKernel.pin_family.clocking), tuple[Pin, ...] | Rejected)
+    assert_type(
+        pins(*viewed, DotpAxiKernel.interface_protocol.clocking), tuple[Pin, ...] | Rejected
+    )
     assert_type(point.x.physical_pins, tuple[Pin, ...])
     assert_type(point.query(DotpAxiKernel.x.physical_pins), QueryResult[tuple[Pin, ...]])
     assert_type(eltwise.lhs, InPort)

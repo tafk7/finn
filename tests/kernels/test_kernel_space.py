@@ -53,7 +53,7 @@ from finn.kernels.artifacts.module import Fragment, Held
 from finn.kernels.base import Kernel
 from finn.kernels.channels import ChannelFifo
 from finn.kernels.fifo import FifoKernel, fifo_resources
-from finn.kernels.laws import NATIVE, NATIVE_CLOCKING, NATIVE_FAMILY
+from finn.kernels.laws import NATIVE, NATIVE_CLOCKING, NATIVE_PROTOCOL
 from finn.kernels.library import (
     ModuleSpec,
     library_module,
@@ -119,7 +119,7 @@ class Stage(Kernel):
     """A model-only stage on a library module: one input port, three LUTs."""
 
     id = "test.kernel_space.stage"
-    pin_family = NATIVE_FAMILY
+    interface_protocol = NATIVE_PROTOCOL
 
     input_tensor: Tensor = Param()
     arriving: BeatSequence = Param()
@@ -288,7 +288,7 @@ def test_a_kernel_with_a_module_declares_its_module_s_parts_in_its_own_body() ->
 
         class Grouped(Kernel):
             id = "test.kernel_space.grouped"
-            pin_family = NATIVE_FAMILY
+            interface_protocol = NATIVE_PROTOCOL
             ports = Ports()
             module_spec = ModuleSpec("probe", (PROBE,))
 
@@ -411,7 +411,7 @@ def test_a_kernel_stating_a_stream_port_binds_a_module() -> None:
     # kernels on it, which bind the module.
     class Ported(Kernel):
         id = "test.kernel_space.ported"
-        pin_family = NATIVE_FAMILY
+        interface_protocol = NATIVE_PROTOCOL
         input_tensor: Tensor = Param()
         input = InPort(
             label="input",
@@ -445,7 +445,7 @@ class Based(Stage):
     """A base of kernels: its module names its sources, which it leaves required."""
 
     id = "test.kernel_space.based"
-    pin_family = NATIVE_FAMILY
+    interface_protocol = NATIVE_PROTOCOL
     source_values = cast("tuple[Contribution, ...]", required(tuple))
 
     @view
@@ -494,7 +494,7 @@ class Deep(Kernel):
     """A stand-in base of kernels: every kernel on it states its ``depth``."""
 
     id = "test.kernel_space.deep"
-    pin_family = NATIVE_FAMILY
+    interface_protocol = NATIVE_PROTOCOL
     depth = required(int)
 
 

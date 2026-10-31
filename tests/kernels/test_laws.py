@@ -82,7 +82,7 @@ def test_a_native_port_states_a_prefix_or_three_distinct_names(stated: dict[str,
 def test_the_two_clock_domains_and_the_doubled_clock_named_after_its_clock() -> None:
     assert AXIS_CLOCKING == Clocking(clock="ap_clk", reset="ap_rst_n", active_low=True)
     assert NATIVE_CLOCKING == Clocking(clock="clk", reset="rst", active_low=False)
-    assert Kernel.pin_family.clocking == AXIS_CLOCKING
+    assert Kernel.interface_protocol.clocking == AXIS_CLOCKING
     pumped = doubled(AXIS_CLOCKING, True)
     assert (pumped.doubled, pumped.doubling) == ("ap_clk2x", True)
     held = doubled(NATIVE_CLOCKING, False)

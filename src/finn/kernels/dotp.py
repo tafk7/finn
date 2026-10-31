@@ -483,7 +483,7 @@ class DotpAxiKernel(Kernel):
     @derived
     def clocking(self) -> Clocking:
         # Unpumped, the RTL ignores its 2x clock input: it is held low.
-        return doubled(type(self).pin_family.clocking, self.compute_pumping)
+        return doubled(type(self).interface_protocol.clocking, self.compute_pumping)
 
     @view
     def dsp_simd(self) -> int:

@@ -72,7 +72,7 @@ from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData, he
 from finn.kernels.base import Kernel
 from finn.kernels.control import ControlModel
 from finn.kernels.laws import (
-    NATIVE_FAMILY,
+    NATIVE_PROTOCOL,
     Axis,
     Intake,
     Native,
@@ -129,7 +129,7 @@ class MemStreamKernel(Kernel):
     """A stored operand streamed in its consumer's order; see the module docstring."""
 
     id = "finnlib.memstream_axi"
-    pin_family = NATIVE_FAMILY
+    interface_protocol = NATIVE_PROTOCOL
 
     dtype: QONNXDataType = Param()
     form: Traversal = Param()
@@ -289,8 +289,8 @@ class MemStreamKernel(Kernel):
                     ("rdata", 32),
                 )
             ),
-            associated_clock=type(self).pin_family.clocking.clock,
-            associated_reset=type(self).pin_family.clocking.reset,
+            associated_clock=type(self).interface_protocol.clocking.clock,
+            associated_reset=type(self).interface_protocol.clocking.reset,
         )
 
     @derived
@@ -380,7 +380,7 @@ class MemStreamKernel(Kernel):
     def clocking(self) -> Clocking:
         """``clk2x`` runs a pumped memory, and is held low otherwise."""
         pumped = self.pumped_memory
-        return doubled(type(self).pin_family.clocking, pumped)
+        return doubled(type(self).interface_protocol.clocking, pumped)
 
     @view
     def parameters(self) -> dict[str, int | str]:

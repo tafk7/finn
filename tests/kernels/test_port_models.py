@@ -43,7 +43,7 @@ from finn.kernels.laws import (
     AXIS_CLOCKING,
     NATIVE,
     NATIVE_CLOCKING,
-    NATIVE_FAMILY,
+    NATIVE_PROTOCOL,
     Advance,
     Axis,
     Native,
@@ -451,10 +451,10 @@ def test_every_module_kernel_of_the_specs_has_its_rules_stated() -> None:
     assert module_kernels == set(LIBRARY_RULES)
 
 
-def test_a_kernel_gives_each_port_of_its_body_its_name_and_its_pin_family_s_clock() -> None:
+def test_a_kernel_gives_each_port_of_its_body_its_name_and_its_interface_protocol_s_clock() -> None:
     class Native_(Kernel):
         id = "test.native_port_clock"
-        pin_family = NATIVE_FAMILY
+        interface_protocol = NATIVE_PROTOCOL
         input = InPort(tensor=TENSOR, sequence=SEQUENCE)
         named = InPort(
             label="other",
@@ -471,10 +471,11 @@ def test_a_kernel_gives_each_port_of_its_body_its_name_and_its_pin_family_s_cloc
         design_space(InPort(label="p", transport=AXIS, tensor=TENSOR, sequence=SEQUENCE))
 
 
-def test_a_port_takes_its_kernel_s_family_s_transport_where_it_states_none() -> None:
-    """A port of a kernel's body that states no transport takes its kernel's pin family's
-    (``Kernel.pin_family``): AXIS by default, native for a native kernel; a port with its own
-    names states its own. A port outside a kernel's body states it: no family supplies it."""
+def test_a_port_takes_its_kernel_s_interface_protocol_s_transport_where_it_states_none() -> None:
+    """A port of a kernel's body that states no transport takes its kernel's interface
+    protocol's (``Kernel.interface_protocol``): AXIS by default, native for a native kernel; a
+    port with its own names states its own. A port outside a kernel's body states it: no
+    interface protocol supplies it."""
 
     class Axis_(Kernel):
         id = "test.transport.axis"
@@ -482,7 +483,7 @@ def test_a_port_takes_its_kernel_s_family_s_transport_where_it_states_none() -> 
 
     class Native_(Kernel):
         id = "test.transport.native"
-        pin_family = NATIVE_FAMILY
+        interface_protocol = NATIVE_PROTOCOL
         input = InPort(tensor=TENSOR, sequence=SEQUENCE)
         named = InPort(transport=AXIS, tensor=TENSOR, sequence=SEQUENCE)
 

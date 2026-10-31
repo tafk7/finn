@@ -35,7 +35,7 @@ from finn.kernels.base import Kernel
 from finn.kernels.channels import Neighbours
 from finn.kernels.fifo_sizing import assumed, pattern
 from finn.kernels.laws import (
-    NATIVE_FAMILY,
+    NATIVE_PROTOCOL,
     RATE_INTERVAL,
     Interval,
     Standing,
@@ -158,7 +158,7 @@ class _Stage(Kernel):
     """A model-only stage on a library module."""
 
     id = "test.interval.stage"
-    pin_family = NATIVE_FAMILY
+    interface_protocol = NATIVE_PROTOCOL
     input_tensor: Tensor = Param()
     arriving: BeatSequence = Param()
     input = InPort(tensor=input_tensor, sequence=arriving)

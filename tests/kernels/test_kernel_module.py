@@ -9,7 +9,7 @@ class is made: ``tests/kernels/test_kernel_space.py``). Its control bus is an in
 ``ControlModel``: held idle while it is not presented, presented (read as
 ``Kernel.bus_control``) while it is, so a bus is accounted for by construction; its
 pins come before every port's, its hold after theirs. Every port runs on its kernel's clock domain
-(``pin_family``). Its module is the ``Leaf`` at the empty label of its netlist
+(``interface_protocol``). Its module is the ``Leaf`` at the empty label of its netlist
 (``library_module``). A kernel with children presents a child's port as its own
 through typed model forwards and an outward contract View, labelled below the
 child; its netlist merges its members'.
@@ -54,7 +54,7 @@ from finn.kernels.base import Kernel
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.configure import commit
 from finn.kernels.control import Control, ControlModel, held_bus
-from finn.kernels.laws import NATIVE_FAMILY, Axis
+from finn.kernels.laws import NATIVE_PROTOCOL, Axis
 from finn.kernels.library import ModuleSpec, library_module
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port import exposed_pins, exposed_side, stream_port
@@ -91,7 +91,7 @@ class Probe(Kernel):
 
     @derived
     def clocking(self) -> Clocking:
-        return replace(type(self).pin_family.clocking, doubled="ap_clk2x", doubling=True)
+        return replace(type(self).interface_protocol.clocking, doubled="ap_clk2x", doubling=True)
 
     @view
     def parameters(self) -> dict[str, int | str]:
@@ -124,13 +124,13 @@ def test_a_kernel_s_other_pins_go_before_its_ports_and_their_hold_after() -> Non
     assert names == ["ap_clk", "ap_clk2x", "ap_rst_n", "mode", "busy", "s_axis"]
 
 
-def test_a_port_runs_on_its_kernels_pin_family() -> None:
+def test_a_port_runs_on_its_kernels_interface_protocol() -> None:
     bus = library_module(probe()).abi.pins[-1]
     assert (bus.associated_clock, bus.associated_reset) == ("ap_clk", "ap_rst_n")
 
     class Native(Probe):
         id = "test.probe.native"
-        pin_family = NATIVE_FAMILY
+        interface_protocol = NATIVE_PROTOCOL
 
     point = design_space(Native(tensor=TENSOR))
     assert isinstance(point.query(Kernel.netlist), Available)
@@ -180,7 +180,7 @@ class Controlled(Kernel):
 
     @derived
     def clocking(self) -> Clocking:
-        return replace(type(self).pin_family.clocking, doubled="ap_clk2x", doubling=True)
+        return replace(type(self).interface_protocol.clocking, doubled="ap_clk2x", doubling=True)
 
     @view
     def resource_use(self) -> Resources | Rejected:

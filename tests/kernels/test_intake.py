@@ -53,7 +53,7 @@ from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.input_generator import InputGeneratorKernel, nest_buffer
 from finn.kernels.laws import (
     INTAKE_UNSTATED,
-    NATIVE_FAMILY,
+    NATIVE_PROTOCOL,
     Advance,
     Ahead,
     Intake,
@@ -154,7 +154,7 @@ class Stage(Kernel):
     states no intake."""
 
     id = "test.intake.stage"
-    pin_family = NATIVE_FAMILY
+    interface_protocol = NATIVE_PROTOCOL
 
     input_tensor: Tensor = Param()
     arriving: BeatSequence = Param()

@@ -478,8 +478,8 @@ class ThresholdingAxiKernel(Kernel):
                     ("RRESP", 2),
                 )
             ),
-            associated_clock=type(self).pin_family.clocking.clock,
-            associated_reset=type(self).pin_family.clocking.reset,
+            associated_clock=type(self).interface_protocol.clocking.clock,
+            associated_reset=type(self).interface_protocol.clocking.reset,
         )
 
     @derived
