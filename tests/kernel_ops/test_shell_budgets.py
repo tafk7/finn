@@ -48,7 +48,7 @@ from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import search_record
 from finn.core.search import ExploreError, Refused
-from finn.core.space import Available, inspection
+from finn.core.space import Available, Rejected, inspection
 from finn.custom_op.kernels.network import network
 from finn.custom_op.kernels.shell import configured_network, in_shell, row_facts
 from finn.dataflow.tensor import ScalarEncoding, Tensor
@@ -213,6 +213,18 @@ def test_a_partition_of_kernel_ops_counts_its_movers() -> None:
         bound = in_shell(model, model.graph.node, name="chain")
         assert bound.row == narrow
         assert bound.composed.facts["shell-control_budget"] == 1
+        # Refused, its class answers no view (its resources among them), so neither its
+        # shell's resources nor its seam's are answered: each is the budget's refusal. The
+        # counts the budget reads (its shell member's) are answered.
+        resources = bound.own_resources()
+        assert isinstance(resources, Rejected)
+        seam = Seam().resources(bound)
+        assert isinstance(seam, tuple)
+        for findings in (resources.findings, seam):
+            assert [(f.code, f.owner) for f in findings] == [
+                ("interface-budget-exceeded", "within_control_budget")
+            ]
+        assert counts(bound.member(SHELL)) == Available((2, 0, False))
         with refused(
             "interface-budget-exceeded",
             error=KernelOpError,
