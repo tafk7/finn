@@ -221,7 +221,7 @@ def test_a_class_alias_is_neither_replaced_nor_deleted() -> None:
     assert Root.x.answer == Root.inner.leaf.answer
     # A selector alias's face, set on the closed class, as a plain one (RF2 L1).
     with refused("structure-finalized", error=DefinitionError):
-        Pick.z = Pick.x  # type: ignore[attr-defined]
+        Pick.z = Pick.x
     assert not any(alias.name == "z" for alias in inspection.aliases(Pick))
 
 
