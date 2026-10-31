@@ -84,8 +84,8 @@ def test_real_netlist_does_not_certify_unrelated_rule_or_presence(
     bound = shell.shell_composition(report.instance, shell.body_row(model))
     module = bound.answer(DataflowCoreKernel.module)
     if condition == "refused-rule":
-        # A partition a rule refuses has no channel's hops, so no module: refused once, by the
-        # rule. Whether it should keep them is pending a decision.
+        # A partition a rule refuses has no channel's hops (no view of a refused design point
+        # answers), so no module: refused once, by the rule. Its members' own views answer.
         assert isinstance(module, Rejected)
         assert [(each.code, each.owner) for each in module.findings] == [
             ("unrelated-rule", "unrelated")

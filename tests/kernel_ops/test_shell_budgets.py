@@ -247,8 +247,8 @@ def test_a_refused_list_writes_nothing() -> None:
     """A list of strategies whose result the shell's budgets refuse (the Chain on a row taking
     one AXI-Lite bus, its movers alone exceeding it) leaves the model as it was: the choices
     its entries made are not saved and no search's record is written. A partition a rule
-    refuses has no channel's neighbours, so ``SizeFifos`` refuses it before sizing, the
-    budget's finding its cause (whether it should keep them is pending a decision)."""
+    refuses has no channel's neighbours (no view of a refused design point answers), so
+    ``SizeFifos`` refuses it before sizing, the budget's finding its cause."""
     model = kernel_model()
     write_target(model, ULTRA96)
     model = model.transform(MakeCutChoices(CUT_NAME))

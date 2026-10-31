@@ -1095,9 +1095,9 @@ def _install(
 #   port its member places only where it is given an optional fact, and is not given it (a
 #   selector's set port with one set: its tensor, ``set_tensor``, left out; a channel's
 #   ``set``, its source's, without an ``index_tensor``), is idle by its member's structure,
-#   held idle by its member, and needs neither. Whether the rule reaches
-#   past such ports to ports placed by other facts is pending a decision; until then a port
-#   its structure may place is connected or refused.
+#   held idle by its member, and needs neither. No other port is exempt: a port its
+#   structure may place, by any other fact, is connected or refused, so no port is left
+#   dangling silently (an output nothing reads is refused like any other).
 #
 # And it installs, for each channel, three private views of its own: the ports beside it
 # (``finn.kernels.channels.Neighbours``: each port's stream pins as its member presents them,
@@ -1110,7 +1110,9 @@ def _install(
 # ``channel-unused`` where a port it is on is not placed, and which its ``netlist`` places
 # around the channel's own. Being views of the holder, each is answered only where every rule
 # of the holder accepts it (the engine answers a view so): a refused holder has neither its
-# channels' neighbours nor their hops. Whether it should keep them is pending a decision.
+# channels' neighbours nor their hops: a view of a design point a rule refuses would
+# describe a configuration that cannot be, so a reader gets the rule's refusal instead,
+# while each member's own views still answer.
 # Each reads its ports by the names its closure fixes, an exposed port's leaf by the case its
 # member's selector holds (``-<member>-<selector>-case``).
 

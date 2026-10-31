@@ -614,7 +614,9 @@ class CoreComposition:
         None where none does. Its class answers its channels' neighbours and hops only where
         every rule of it accepts it: the engine answers a view of a Space only so, and they
         are views of the core's own, across its members. So a refused core has neither, and
-        no netlist: whether it should keep them is pending a decision (today it does not)."""
+        no netlist: a view of a design point a rule refuses would describe a configuration
+        that cannot be, so a reader gets this refusal instead, while each member's own views
+        still answer."""
 
         def read() -> Rejected | None:
             found = inspection.validity(self._point).result
@@ -2145,11 +2147,11 @@ class SizeFifos:
         beside = {
             transport.channel: network.neighbours(transport.channel) for transport in transports
         }
-        # A partition a rule refuses has no channel's neighbours, so nothing to size them
-        # by: refused before sizing (``fifos-refused``). Whether it should keep them is
-        # pending a decision. So is one whose class does not answer a channel's neighbours.
-        # One whose neighbours wait on an open choice is not decided, not refused: unread
-        # (``fifos-unread``).
+        # A partition a rule refuses has no channel's neighbours (no view of a refused
+        # design point answers), so nothing to size them by: refused before sizing
+        # (``fifos-refused``), the rule's finding its cause. So is one whose class does not
+        # answer a channel's neighbours. One whose neighbours wait on an open choice is not
+        # decided, not refused: unread (``fifos-unread``).
         unread = next((each for each in beside.values() if not isinstance(each, Neighbours)), None)
         if unread is not None:
             raise ExploreError(

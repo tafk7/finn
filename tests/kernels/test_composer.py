@@ -726,7 +726,8 @@ def test_a_one_set_thresholding_needs_no_channel_on_its_set_port(cache: None) ->
     """A port whose tensor is an optional fact its member is not given is idle by structure
     and needs no channel: the Chain's Thresholding holds one set of thresholds, so its set
     index port (``set``) is on none, and the class is made. Every other port is on its one
-    channel. (Which ports the rule reaches is pending a decision.)"""
+    channel. No other port is exempt: a port its member may place by any other fact is
+    connected or refused, never left dangling."""
     space_type = type(compose(declared()))
     assert issubclass(space_type, Kernel)
     connections = space_type.connections
