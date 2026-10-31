@@ -35,7 +35,15 @@ from support.chain import (
 from support.helpers import FULL_DSP48E2, set_indices
 from support.refusals import refused
 
-from finn.core.space import Available, Decision, DefinitionError, Param, divisors_of, inspection
+from finn.core.space import (
+    Available,
+    Decision,
+    DefinitionError,
+    Param,
+    Select,
+    divisors_of,
+    inspection,
+)
 from finn.core.space._aliases import alias_table
 from finn.core.space._scopes import EAGER, PERMUTE
 from finn.core.space.compiler import compile_model
@@ -696,6 +704,86 @@ def test_a_one_set_thresholding_needs_no_channel_on_its_set_port(cache: None) ->
         "w2": ("None", "second.w"),
         "y": ("second.y", "None"),
     }
+
+
+def test_a_thresholding_given_its_set_tensor_needs_a_channel_on_its_set_port(
+    cache: None,
+) -> None:
+    """The exemption of a port idle by structure reaches only a member not given its
+    optional fact: the Chain's Thresholding given its set indices (``set_tensor``) places
+    its set port, which no channel feeds, so the class is refused when made."""
+    given = kernels()
+    activate = given["activate"]
+    given["activate"] = Facts(
+        activate.space_type, {**activate.arguments, "set_tensor": set_indices(2, 1)}
+    )
+    assert _connection_refused(PartitionDeclaration(given, channels())) == [
+        (
+            "port-unconnected",
+            "activate",
+            "activate.set is on no channel and exposed by no alias: a member's port is "
+            "connected by a channel, or presented outside by an alias, and no holder ties a "
+            "port off",
+            {"port": "activate.set"},
+        )
+    ]
+
+
+def test_a_member_s_port_an_alias_of_its_holder_exposes_needs_no_channel() -> None:
+    """A port a node alias of the holder exposes is presented outside it, and needs no
+    channel: a kernel holding a Thresholding fed by a channel, its output exposed
+    (``output = activate.output``), is made; without the alias, the output is refused."""
+
+    def holder(exposed: bool) -> type[Kernel]:
+        class Exposing(Kernel):
+            id = "test.exposing"
+            producer: Side = Param()
+            activate = ThresholdingAxiKernel()
+            x = Channel(
+                tensor=X_TENSOR,
+                producer=producer,
+                consumer=activate.input.side,
+                platform=FULL_DSP48E2,
+            )
+            if exposed:
+                output = activate.output
+
+        return Exposing
+
+    assert {name: tuple(map(str, sides)) for name, sides in holder(True).connections.items()} == {
+        "x": ("None", "activate.input")
+    }
+    with refused("port-unconnected", error=DefinitionError, member="activate", port="output"):
+        holder(False)
+
+
+def test_a_channel_on_a_port_reached_through_two_selectors_is_refused_when_made() -> None:
+    """A channel's port reaches its leaf through one selector at most: a kernel exposing a
+    MatMul's port through a selector of its own (``x = inner.x``, its leaf below
+    ``inner`` and MatMul's ``compute``) cannot take a channel on it, and its holder is
+    refused when its class is made (``channel-port``)."""
+
+    class Either(Kernel):
+        id = "test.either"
+        inner: MatMulKernel = Select(only=MatMulKernel)
+        x = inner.x
+        w = inner.w
+        y = inner.y
+
+    with refused("channel-port", error=DefinitionError, message="inner.only.compute"):
+
+        class Holder(Kernel):
+            id = "test.holder"
+            producer: Side = Param()
+            either = Either()
+            x = Channel(
+                tensor=X_TENSOR,
+                producer=producer,
+                consumer=either.x.side,
+                platform=FULL_DSP48E2,
+            )
+            w = either.w
+            y = either.y
 
 
 def test_a_two_set_weight_channel_s_set_port_on_no_channel_is_refused(cache: None) -> None:
