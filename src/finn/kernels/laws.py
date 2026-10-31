@@ -22,11 +22,13 @@ read here rather than spell themselves:
 - the idle level (``IDLE_LEVEL``), AXIS's byte padding (``axis_carrier``) and the one
   marker an AXIS beat carries (``AXIS_MARKERS``).
 
-And the terms a kernel states its intake in (``Intake``, ``PortIntake``, ``Standing``, and a
-fitted intake's ``IntakeProfile``):
-intake is no law, every kernel states its own from its RTL, but its shape, its unit and
-its standing are the library's, and so is its answer where a kernel states none
-(``INTAKE_UNSTATED``).
+And the terms a kernel states its intake in (``Intake``, with its ``joined`` inputs;
+``PortIntake``, with how far an input is accepted ``Ahead`` of another; ``Standing``, and a
+fitted intake's ``IntakeProfile``): intake is no law, every kernel states its own from its
+RTL, but its shape, its unit and its standing are the library's, and so is its answer
+where a kernel states none (``INTAKE_UNSTATED``). The advance laws (L2-L5) say when a beat
+**fires**, consumed or issued, relative to the kernel's other beats; when a beat is
+**accepted**, and whether only with another port's, is its kernel's intake.
 
 And the rate law's one exception, a kernel's initiation interval (``Interval``: L6's 1,
 ``RATE_INTERVAL``, unless a kernel states its own, with its standing and source), with the
@@ -36,6 +38,7 @@ frame and FIFO sizing both read, and a scheduled port's pace in cycles (``TimedP
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from enum import Enum
 
@@ -65,24 +68,25 @@ HANDSHAKE = Law(
 ADVANCE_SCHEDULED = Law(
     "L2",
     "advance, scheduled",
-    "inputs meet: the input beats an iteration reads are accepted together, never one "
-    "alone; issue is not delivery: an iteration issues its results into the kernel's own "
-    "output storage, it stops accepting by its intake rule, and results leave in order, "
-    "held under backpressure",
-    "a scheduled kernel whose inputs advance independently",
+    "inputs meet at firing: an iteration consumes the beats it reads together, and issues "
+    "its results into the kernel's own storage; issue is not delivery. When each input "
+    "beat is accepted, and whether only with another port's, is the kernel's intake",
+    "none known: a kernel whose inputs fire at different iterations is outside the scope, "
+    "and comes with a refinement of this contract",
 )
-ADVANCE_BUFFERED = Law(
+ADVANCE_STEPPED = Law(
     "L3",
-    "advance, buffered",
-    "input and output move separately: input is accepted while the buffer has room, "
-    "output presented once the beats it needs are in",
+    "advance, stepped",
+    "a stage's output beat is issued once the input beats its step makes it from are "
+    "consumed; it accepts input while its storage has room (its intake)",
     "none known",
 )
 ADVANCE_SELECTED = Law(
     "L4",
     "advance, selected",
-    "a selector beat is accepted together with the data beats it governs",
-    "the group size, which the kernel always states",
+    "a selector beat names the set its governed port's next group beats are made from. When "
+    "it is accepted is its intake",
+    "none known: its group is the governed port's beats a frame over its own (StreamPort.group)",
 )
 ADVANCE_SOURCED = Law(
     "L5",
@@ -137,7 +141,7 @@ IDLE = Law(
 LAWS: tuple[Law, ...] = (
     HANDSHAKE,
     ADVANCE_SCHEDULED,
-    ADVANCE_BUFFERED,
+    ADVANCE_STEPPED,
     ADVANCE_SELECTED,
     ADVANCE_SOURCED,
     RATE,
@@ -150,12 +154,27 @@ LAWS: tuple[Law, ...] = (
 
 
 class Advance(Enum):
-    """A port's advance rule: when it moves its next beat, relative to its kernel's other
-    ports (L2-L5). A port follows one by how it is declared and never names it
-    (``finn.kernels.port_model.StreamPort.advance``)."""
+    """A port's advance rule, its **firing** relation: which of its kernel's other beats each
+    of its beats is consumed or issued with, or after, by ordinal (L2-L5), each rule with
+    its event:
+
+    - ``SCHEDULED``: iteration *t* of its kernel's schedule consumes the input beats and
+      issues the output beats its ports' projections place at *t*; timed in iterations,
+      its pace (L2);
+    - ``STEPPED``: a stage's output beat *j* is issued once the input beats its step makes
+      it from are consumed (a FIFO's *j* from *j*, VPC's width step, ``input_gen``'s
+      replay) (L3);
+    - ``SELECTED``: the selector's beat *g* names the set the governed port's group *g* is
+      made from, and is consumed no later than that group's first beat (L4);
+    - ``SOURCED``: a memory's output beat *j* is its stored value at position *j* of its
+      consumer's order, issued whenever its consumer takes one (L5).
+
+    When a beat is **accepted**, and whether only with another port's, is not its advance
+    but its kernel's intake (``Intake``). A port follows one rule by how it is declared and
+    never names it (``finn.kernels.port_model.StreamPort.advance``)."""
 
     SCHEDULED = "scheduled"
-    BUFFERED = "buffered"
+    STEPPED = "stepped"
     SELECTED = "selected"
     SOURCED = "sourced"
 
@@ -167,7 +186,7 @@ class Advance(Enum):
 
 _ADVANCE_LAWS = {
     Advance.SCHEDULED: ADVANCE_SCHEDULED,
-    Advance.BUFFERED: ADVANCE_BUFFERED,
+    Advance.STEPPED: ADVANCE_STEPPED,
     Advance.SELECTED: ADVANCE_SELECTED,
     Advance.SOURCED: ADVANCE_SOURCED,
 }
@@ -230,6 +249,23 @@ class IntakeProfile:
 
 
 @dataclass(frozen=True)
+class Ahead:
+    """How far an input is accepted ahead of another input of its kernel, ``port`` (a label
+    in its kernel's namespace): the most beats it accepts beyond the beats of ``port``
+    accepted, ``beats``, a bound read from the RTL. Eltwise's operands: 1 each, its sidestep
+    register."""
+
+    port: str
+    beats: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.port, str) or not self.port:
+            raise ValueError("an input is ahead of a port it names")
+        if type(self.beats) is not int or self.beats < 0:
+            raise ValueError(f"ahead of {self.port}: a count of beats, not {self.beats!r}")
+
+
+@dataclass(frozen=True)
 class PortIntake:
     """How far a kernel takes input ahead of delivering output, at one input port (its
     ``port``, a label below the kernel stating it), in beats of that port.
@@ -242,7 +278,12 @@ class PortIntake:
     ``most`` up.
     ``rule``: when it stops and when it resumes; ``source``: where both are read, the RTL's
     file and lines at the library's pin, or the trace and its conditions; ``profile``: for a
-    form fitted to traces, where it holds (``IntakeProfile``), its standing **assumed**."""
+    form fitted to traces, where it holds (``IntakeProfile``), its standing **assumed**.
+
+    The counts are relative to output delivery, never to firing (L2-L5). Beside them, its
+    coupling to the kernel's other inputs: ``ahead``, for an input in no ``Intake.joined``
+    group, how far it is accepted beyond each other input it names (``Ahead``); none stated,
+    none known."""
 
     port: str
     before_stop: int
@@ -251,6 +292,7 @@ class PortIntake:
     standing: Standing
     source: str
     profile: IntakeProfile | None = None
+    ahead: tuple[Ahead, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.port, str) or not self.port:
@@ -267,25 +309,70 @@ class PortIntake:
             not isinstance(self.profile, IntakeProfile) or self.standing is not Standing.ASSUMED
         ):
             raise ValueError(f"{self.port}: a fitted intake's profile is one, its standing assumed")
+        object.__setattr__(self, "ahead", tuple(self.ahead))
+        partners = [each.port for each in self.ahead if isinstance(each, Ahead)]
+        if len(partners) != len(self.ahead) or len(set(partners)) != len(partners):
+            raise ValueError(f"{self.port}: ahead states each other input once, as an Ahead")
+        if self.port in partners:
+            raise ValueError(f"{self.port}: an input is ahead of another input, not of itself")
+
+    def renamed(self, name: Callable[[str], str]) -> PortIntake:
+        """The intake with every port it names renamed by ``name``: its own and those it is
+        ahead of."""
+        ahead = tuple(replace(each, port=name(each.port)) for each in self.ahead)
+        return replace(self, port=name(self.port), ahead=ahead)
 
     def under(self, member: str) -> PortIntake:
         """The intake as seen from where ``member`` is held."""
-        return replace(self, port=f"{member}.{self.port}")
+        return self.renamed(lambda port: f"{member}.{port}")
 
 
 @dataclass(frozen=True)
 class Intake:
     """A kernel's intake (contract item 5): one ``PortIntake`` an input port it places, by
-    its label. A kernel with children derives its own from its members': a port it exposes
-    by the name it exposes it under, any other member's below the member."""
+    its label, and its inputs' coupling: ``joined``, the groups of its inputs whose beats
+    transfer only together, in the same cycle, one beat of each (an atomic transfer group,
+    read from its RTL's ready equations: dotp's ``x`` and ``w``); each port's ``ahead``
+    beside it. Every name in it is a label in one namespace, its kernel's, of a placed input
+    (``intake-port-unknown``, ``finn.kernels.base.Kernel.intake``). An intake states no
+    coupling it does not know: none stated is none known, never assumed. A kernel with
+    children derives its own from its members': a port it exposes by the name it exposes it
+    under, any other member's below the member (``renamed``)."""
 
     ports: tuple[PortIntake, ...] = ()
+    joined: tuple[tuple[str, ...], ...] = ()
 
     def __post_init__(self) -> None:
         names = [each.port for each in self.ports]
         twice = sorted({name for name in names if names.count(name) > 1})
         if twice:
             raise ValueError(f"an intake states each port once, not {twice}")
+        joined = tuple(tuple(group) for group in self.joined)
+        object.__setattr__(self, "joined", joined)
+        grouped = [name for group in joined for name in group]
+        if any(len(set(group)) != len(group) or len(group) < 2 for group in joined):
+            raise ValueError(f"a joined group is two or more inputs, each once, not {joined}")
+        if len(set(grouped)) != len(grouped):
+            raise ValueError(f"an input is joined in one group at most, not {joined}")
+        partners = [ahead.port for each in self.ports for ahead in each.ahead]
+        unstated = sorted({name for name in (*grouped, *partners) if name not in names})
+        if unstated:
+            raise ValueError(f"an intake's coupling names the inputs it states, not {unstated}")
+        both = sorted(each.port for each in self.ports if each.ahead and each.port in grouped)
+        if both:
+            raise ValueError(f"an input joined with another is ahead of none: {both}")
+
+    def renamed(self, name: Callable[[str], str]) -> Intake:
+        """The intake with every port it names renamed by ``name``: its ports, its groups'
+        and its partners'."""
+        return Intake(
+            tuple(each.renamed(name) for each in self.ports),
+            tuple(tuple(map(name, group)) for group in self.joined),
+        )
+
+    def under(self, member: str) -> Intake:
+        """The intake as seen from where ``member`` is held."""
+        return self.renamed(lambda port: f"{member}.{port}")
 
     def of(self, port: str) -> PortIntake:
         """Port ``port``'s; ``KeyError`` for a port it states none of."""
@@ -523,12 +610,13 @@ IDLE_LEVEL = 0
 
 
 __all__ = [
-    "ADVANCE_BUFFERED",
     "ADVANCE_SCHEDULED",
     "ADVANCE_SELECTED",
     "ADVANCE_SOURCED",
+    "ADVANCE_STEPPED",
     "AXIS",
     "Advance",
+    "Ahead",
     "AXIS_CLOCKING",
     "AXIS_FAMILY",
     "AXIS_MARKERS",

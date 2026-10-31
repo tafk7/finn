@@ -165,6 +165,12 @@ def test_a_set_port_that_does_not_match_the_sets_is_refused_both_ways() -> None:
     # Given its set indices, the two sets stand.
     given = threshold_base(table=two_sets, set_tensor=set_indices(2, 2))
     assert inspection.validity(given).status != "refused"
+    # Each set index names the set of one input beat: its group (R2, L4).
+    several = threshold(table=two_sets, pe=1)
+    assert several.set.group == 1
+    # Its set port is joined with its input: each beat accepted only with one of the other.
+    assert several.intake.names == ("input", "set")
+    assert several.intake.joined == (("input", "set"),)
 
 
 def test_several_sets_without_their_indices_refuse_the_set_port_s_order() -> None:

@@ -39,13 +39,13 @@ or certify that the chosen FIFO capacity is temporally sufficient.
 | Start with | What to look for |
 |---|---|
 | [Native example](../examples/untimed/native.py) | Existing `VpcKernel` and `FifoKernel` placed by `Facts`, real `Port` references, and an explicit depth-four FIFO. |
-| [VPC definition](../src/finn/kernels/vpc.py) | Tensor and arriving/leaving `Param`s; native input/output `StreamPort` children; module parameters and sources, from which the base assembles its pins. |
+| [VPC definition](../src/finn/kernels/vpc.py) | Tensor and arriving/leaving `Param`s; native `InPort`/`OutPort` children (`StreamPort`s whose kind is their direction); module parameters and sources, from which the base assembles its pins. |
 | [FIFO definition](../src/finn/kernels/fifo.py) | Explicit depth, memory-style `Decision`, geometry and platform validity, and realized storage capacity. |
 | [Compute example](../examples/untimed/compute.py) | A real known-weight `MatMulKernel`, selected packed implementation/folding, owned result/weight facts, source memory and a fixed-capacity channel FIFO. |
 | [MatMul definition](../src/finn/kernels/matmul.py) | Model facts, range/type ownership, implementation selectors and the selected core's ports, exposed by node aliases (`x = compute.x`). |
 | [Packed compute definition](../src/finn/kernels/dotp.py) | Real scheduled/indexed Ports on the selected compute implementation; no included `ControlModel` on MatMul/Dotp. |
 | [Source memory definition](../src/finn/kernels/memstream.py) | `MemStream.config` is the included AXI-Lite `ControlModel`; the weight source owns its physical pins and held/tied-off values for build-time known contents. |
-| [Port models](../src/finn/kernels/port_model.py) | Ordinary child Spaces; placed/idle direction and datatype rules; native, scheduled and indexed projections. |
+| [Port models](../src/finn/kernels/port_model.py) | Ordinary child Spaces; `InPort`/`OutPort` (a `StreamPort` of neither is refused, `port-direction`; `direction` is a read-only derived of the class); `governs` and `dtype` an input's, `sourced` an output's; the advance rules scheduled, stepped, selected, sourced; a selector's `group`; a port's transport defaults to its kernel's pin family's (`pin_family`: `AXIS_FAMILY`, `NATIVE_FAMILY`); placed/idle datatype rules; native, scheduled and indexed projections. |
 | [Control models](../src/finn/kernels/control.py) | Included control and physical ownership, separate from logical dataflow. |
 | [Composer](../src/finn/kernels/composer.py) / [Partition](../src/finn/kernels/partition.py) | Real model/serial module assembly, source and port discovery, stable choice ownership and module wiring. |
 | [Channel/adapter definitions](../src/finn/kernels/channels.py) / [adapters](../src/finn/kernels/adapters.py) | Requirements from the canonical beat sequences and their registered existing physical realization. |

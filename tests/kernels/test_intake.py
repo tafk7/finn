@@ -13,6 +13,7 @@ below the member.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -53,6 +54,8 @@ from finn.kernels.input_generator import InputGeneratorKernel, nest_buffer
 from finn.kernels.laws import (
     INTAKE_UNSTATED,
     NATIVE_FAMILY,
+    Advance,
+    Ahead,
     Intake,
     IntakeProfile,
     PortIntake,
@@ -111,6 +114,38 @@ def test_an_intake_states_each_port_once() -> None:
         Intake((_intake("x"), _intake("x")))
 
 
+def test_an_intake_states_its_inputs_coupling_by_their_names() -> None:
+    """Beside the counts, its inputs' coupling (R2): ``joined``, groups of two or more inputs
+    whose beats transfer only together, each input in one at most; ``ahead``, how far an
+    input in no group is accepted beyond another. Every name is one of the ports it states,
+    and renaming renames them all."""
+    joined = Intake((_intake("x"), _intake("w"), _intake("s")), joined=(("x", "w"),))
+    ahead = Intake(
+        (
+            replace(_intake("lhs"), ahead=(Ahead("rhs", 1),)),
+            replace(_intake("rhs"), ahead=(Ahead("lhs", 1),)),
+        )
+    )
+    assert joined.under("mm").joined == (("mm.x", "mm.w"),)
+    assert ahead.under("e").of("e.lhs").ahead == (Ahead("e.rhs", 1),)
+    assert joined.renamed({"x": "a", "w": "b", "s": "c"}.__getitem__).joined == (("a", "b"),)
+    for ports, groups in (
+        ((_intake("x"),), (("x",),)),  # a group of one
+        ((_intake("x"), _intake("w")), (("x", "x"),)),  # an input twice in a group
+        ((_intake("x"), _intake("w"), _intake("s")), (("x", "w"), ("w", "s"))),  # in two
+        ((_intake("x"),), (("x", "w"),)),  # a port it does not state
+        ((replace(_intake("x"), ahead=(Ahead("w", 1),)), _intake("w")), (("x", "w"),)),
+        ((replace(_intake("x"), ahead=(Ahead("y", 1),)),), ()),  # ahead of a port not stated
+    ):
+        with pytest.raises(ValueError):
+            Intake(ports, joined=groups)
+    for wrong in ((Ahead("input", 1),), (Ahead("w", 1), Ahead("w", 2))):
+        with pytest.raises(ValueError):
+            replace(_intake("input"), ahead=wrong)
+    with pytest.raises(ValueError):
+        Ahead("w", -1)
+
+
 # -- the base: unstated, stated, derived ------------------------------------------------------
 
 
@@ -155,6 +190,27 @@ class OtherStage(StatedStage):
         return Intake((_intake("input", 5, 7),))
 
 
+class Coupled(StatedStage):
+    """The stage with a second input, its two inputs joined."""
+
+    id = "test.intake.coupled"
+    side = InPort(tensor=StatedStage.input_tensor, sequence=StatedStage.arriving)
+
+    @derived
+    def intake(self) -> Intake:
+        return Intake((_intake("input"), _intake("side")), joined=(("input", "side"),))
+
+
+class Misnamed(StatedStage):
+    """The stage, its intake naming a port it does not have."""
+
+    id = "test.intake.misnamed"
+
+    @derived
+    def intake(self) -> Intake:
+        return Intake((_intake("input"), _intake("other")))
+
+
 class Chain(Kernel):
     """Two stated stages, the first's input exposed as its own ``x``."""
 
@@ -188,6 +244,28 @@ def test_a_kernel_with_children_derives_its_intake_from_its_members() -> None:
     # A member that states none leaves its parent's unstated, by its name.
     holding = design_space(Holding()).query(Kernel.intake)
     assert isinstance(holding, Rejected) and codes(holding) == {INTAKE_UNSTATED}
+
+
+def test_a_kernel_s_intake_names_its_placed_inputs() -> None:
+    """The base reads what a kernel with a module states, and refuses an intake naming a
+    port that is no placed input of it (``intake-port-unknown``): the intake's refusal, its
+    design point still valid."""
+    point = design_space(Misnamed(input_tensor=TENSOR, arriving=ARRIVING))
+    found = point.query(Kernel.intake)
+    assert isinstance(found, Rejected) and codes(found) == {"intake-port-unknown"}
+    assert "['other']" in found.findings[0].message
+    assert inspection.validity(point).status == "valid"
+    coupled = design_space(Coupled(input_tensor=TENSOR, arriving=ARRIVING))
+    assert coupled.intake.joined == (("input", "side"),)
+
+
+def test_a_kernel_with_children_renames_its_members_coupling() -> None:
+    class Holder(Kernel):
+        id = "test.intake.holder"
+        inner = Coupled(input_tensor=TENSOR, arriving=ARRIVING)
+        x = inner.input
+
+    assert design_space(Holder()).intake.joined == (("x", "inner.side"),)
 
 
 def test_a_kernel_with_no_module_and_no_member_takes_nothing_ahead() -> None:
@@ -239,6 +317,14 @@ def test_every_module_kernel_states_its_intake_at_each_input_port_it_places(case
             hls = isinstance(member, PoolKernel)
             standing = Standing.ASSUMED if hls else Standing.STRUCTURAL
             assert {each.standing for each in found.value.ports} <= {standing}, where
+            # Each placed selector's group divides its governed port's beats (R2).
+            for port in stream_ports(type(member)).values():
+                if (
+                    member.field(port.advance).get() is Advance.SELECTED
+                    and member.field(port.placed).get()
+                ):
+                    group = member.query(port.group)
+                    assert isinstance(group, Available) and group.value >= 1, (where, group)
 
 
 def _rtl(member: Kernel, top: str, names: tuple[str, ...], **binding: object) -> Any:
@@ -281,6 +367,11 @@ def test_the_credit_kernels_state_their_rtl_s_credit_and_sidestep() -> None:
             credit = _rtl(member, top, ("CREDIT",))["CREDIT"]
             for port in ports:
                 assert intake.of(port).before_stop == intake.of(port).most == credit + 1, where
+            # eltwise's operands are not joined: each one beat ahead at most, its sidestep.
+            assert intake.joined == (), where
+            if case == "eltwise":
+                assert intake.of("lhs").ahead == (Ahead("rhs", 1),), where
+                assert intake.of("rhs").ahead == (Ahead("lhs", 1),), where
 
 
 def test_thresholding_states_its_rtl_s_pending_cap() -> None:
@@ -296,6 +387,9 @@ def test_thresholding_states_its_rtl_s_pending_cap() -> None:
             entry = intake.of("input")
             pending = (int(given["DEEP_PIPELINE"]) + 1) * m + 3
             assert entry.before_stop == entry.most == pending, where
+            # With several sets its set port is joined with its input (its ready equations);
+            # with one, it is idle and states none.
+            assert intake.joined == ((("input", "set"),) if "set" in intake.names else ()), where
 
 
 def test_dotp_states_its_rtl_s_output_queue_by_its_core_s_pipeline_depth() -> None:
@@ -331,9 +425,17 @@ def test_dotp_states_its_rtl_s_output_queue_by_its_core_s_pipeline_depth() -> No
             platform=platform,
         )
         where = (core.__name__, simd)
+        assert point.intake.joined == (("x", "w"),), where
         for port in ("x", "w"):
             entry = point.intake.of(port)
             assert (entry.before_stop, entry.most) == (2 * 2, (depth + 4) * 2 - 1), where
+
+
+def test_matmul_s_intake_is_its_core_s_joined_under_its_own_names() -> None:
+    """A kernel with children renames its member's coupling with its ports: MatMul's ``x``
+    and ``w``, its core's, joined."""
+    for where, member, intake in _kernel("matmul"):
+        assert intake.names == ("x", "w") and intake.joined == (("x", "w"),), where
 
 
 def test_a_fifo_states_its_storage_s_capacity_in_each_style() -> None:
@@ -450,6 +552,8 @@ def test_memstream_states_its_set_port_s_intake_by_its_credit() -> None:
         ).with_choices(ram_style="distributed", pumped_memory=pumped)
         entry = several.intake.of("set")
         assert (entry.before_stop, entry.most) == counts, (depth, pumped)
+        # Each set index names the set of a set's words: its group (R2, L4).
+        assert several.set.group == depth, (depth, pumped)
         credit = _rtl(several, "memstream", ("FULL_CREDIT",), SETS=2, DEPTH=depth, WIDTH=12)
         assert credit["FULL_CREDIT"] == 8
 

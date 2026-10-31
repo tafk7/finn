@@ -87,11 +87,12 @@ class StreamPort(Space):
     (``port-presentation``, ``finn.kernels.base``). A port with no tensor is idle and
     presents nothing, whatever it declares.
 
-    Its relation, with a given sequence, is its kind's: an input selecting another port's
-    beats (``InPort.governs``), an output of stored values (``OutPort.stored``); its
-    advance rule follows (``advance``). Its readouts: ``placed``, ``element``, ``stream``,
-    ``advance``, ``pace``, ``timed_pace``, ``width``, ``side``, ``binds`` and ``access`` (an
-    input with an index reads its tensor to bind its kernel's extents), derived;
+    Its relation, with a given sequence, is its kind's: an input naming the sets another
+    port's groups are made from (``InPort.governs``, a selector), a memory's output
+    (``OutPort.sourced``); its advance rule follows (``advance``, its firing relation, L2-L5).
+    Its readouts: ``placed``, ``element``, ``stream``, ``advance``, ``pace``, ``timed_pace``,
+    ``group`` (a selector's), ``width``, ``side``, ``binds`` and ``access`` (an input with an
+    index reads its tensor to bind its kernel's extents), derived;
     ``stream_pins``, a view. A placed port's presentation is accepted and carried, or its
     design point is refused (``presented``).
     """
@@ -119,7 +120,7 @@ class StreamPort(Space):
     # with (a) or (b): a native port's loop-completion vector (L9)
     loop_ends: LoopEnds | None = Param(default=None)
 
-    # -- its relation: its kind's (InPort.governs, OutPort.stored) -------------------------
+    # -- its relation: its kind's (InPort.governs, OutPort.sourced) ------------------------
 
     @derived
     def direction(self) -> Direction:
@@ -149,11 +150,11 @@ class StreamPort(Space):
     @derived
     def advance(self) -> Advance:
         """Its advance rule, by how it is declared: scheduled, a projection of its kernel's
-        schedule; else buffered, a stage's side. An input that ``governs`` another port is
-        selected (``InPort``), an output of ``stored`` values sourced (``OutPort``)."""
+        schedule; else stepped, a stage's side. An input that ``governs`` another port is
+        selected (``InPort``), a ``sourced`` output sourced (``OutPort``)."""
         if self.schedule is not None:
             return Advance.SCHEDULED
-        return Advance.BUFFERED
+        return Advance.STEPPED
 
     @derived
     def pace(self) -> Pace | Inapplicable:
@@ -253,7 +254,15 @@ class StreamPort(Space):
             return True
         _ = self.stream
         _ = self.width
+        if self.advance is Advance.SELECTED:
+            _ = self.group
         return True
+
+    @derived
+    def group(self) -> int | Rejected | Inapplicable:
+        """A selector's group (R2, L4): the governed port's beats its one beat names the set
+        of (``InPort.group``); a port of another rule has none."""
+        return Inapplicable()
 
     @derived
     def side(self) -> Side | Inapplicable:
@@ -352,11 +361,15 @@ class InPort(StreamPort):
     """An input stream port (``StreamPort``): its stream enters its kernel, a target (AXIS
     slave, ``s_axis_*``). An input's own: the element it states where its tensor's is not
     its (``dtype``; an idle input's), and its relation with a given sequence, the port whose
-    beats it selects (``governs``, a selector: its advance is selected). It reads its tensor
+    beats it selects (``governs``, a selector: its advance is selected, its ``group`` the
+    governed port's beats each of its beats names the set of). It reads its tensor
     to bind its kernel's extents where it has an index (``binds``, ``access``)."""
 
     dtype: QONNXDataType | None = Param(default=None)
     governs: str | None = Param(default=None)
+    # A selector's: the beats a frame of the port it governs, None where that is idle; its
+    # kernel supplies it (``finn.kernels.base.Kernel``).
+    governed_beats: int | None = Param(default=None)
 
     @derived
     def direction(self) -> Direction:
@@ -377,12 +390,32 @@ class InPort(StreamPort):
     @derived
     def advance(self) -> Advance:
         """Scheduled, a projection of its kernel's schedule; selected, a selector, which
-        ``governs`` the port whose beats it goes with; else buffered, a stage's side."""
+        ``governs`` the port whose groups it names; else stepped, a stage's side."""
         if self.schedule is not None:
             return Advance.SCHEDULED
         if self.governs is not None:
             return Advance.SELECTED
-        return Advance.BUFFERED
+        return Advance.STEPPED
+
+    @derived
+    def group(self) -> int | Rejected | Inapplicable:
+        """A placed selector's group: the governed port's beats a frame over its own, the
+        governed port's beats each of its beats names the set of (L4), refused where it does
+        not divide them, or the governed port is idle (``port-group``); a port it governs
+        none of has none."""
+        governs = self.governs
+        if not self.placed or governs is None:
+            return Inapplicable()
+        governed = self.governed_beats
+        if governed is None:
+            return reject("port-group", f"{self.label}: governs {governs}, which is idle")
+        beats: int = self.stream.sequence.form.beats
+        if beats == 0 or governed % beats:
+            return reject(
+                "port-group",
+                f"{self.label}: {beats} beats a frame do not group {governs}'s {governed}",
+            )
+        return governed // beats
 
     @derived
     def binds(self) -> bool:
@@ -395,10 +428,11 @@ class InPort(StreamPort):
 class OutPort(StreamPort):
     """An output stream port (``StreamPort``): its stream leaves its kernel, an initiator
     (AXIS master, ``m_axis_*``). Its element is its tensor's. An output's own: its relation
-    with a given sequence, stored values (``stored``, a memory's output: its advance is
-    sourced), and its width on the side it gives a channel."""
+    with a given sequence, ``sourced`` (a memory's output, each beat its stored value at its
+    position of its consumer's order, issued whenever its consumer takes one: its advance is
+    sourced, L5), and its width on the side it gives a channel."""
 
-    stored: bool = Param(default=False)
+    sourced: bool = Param(default=False)
 
     @derived
     def direction(self) -> Direction:
@@ -407,12 +441,12 @@ class OutPort(StreamPort):
     @derived
     def advance(self) -> Advance:
         """Scheduled, a projection of its kernel's schedule; sourced, a memory's output,
-        ``stored``; else buffered, a stage's side."""
+        ``sourced``; else stepped, a stage's side."""
         if self.schedule is not None:
             return Advance.SCHEDULED
-        if self.stored:
+        if self.sourced:
             return Advance.SOURCED
-        return Advance.BUFFERED
+        return Advance.STEPPED
 
     @derived
     def side(self) -> Side | Inapplicable:

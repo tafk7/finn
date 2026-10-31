@@ -372,15 +372,15 @@ def test_view_bindings_remain_model_read_in_errors() -> None:
             },
             Advance.SCHEDULED,
         ),
-        ({"sequence": SEQUENCE}, Advance.BUFFERED),
+        ({"sequence": SEQUENCE}, Advance.STEPPED),
         ({"sequence": SEQUENCE, "governs": "input"}, Advance.SELECTED),
-        ({"sequence": SEQUENCE, "stored": True}, Advance.SOURCED),
+        ({"sequence": SEQUENCE, "sourced": True}, Advance.SOURCED),
     ],
 )
 def test_a_port_follows_the_advance_rule_its_declaration_gives(
     declared: dict[str, object], rule: Advance
 ) -> None:
-    kind = OutPort if declared.get("stored") else InPort
+    kind = OutPort if declared.get("sourced") else InPort
     port = cast(Any, kind)(
         label="p",
         transport=AXIS,
@@ -392,7 +392,7 @@ def test_a_port_follows_the_advance_rule_its_declaration_gives(
     assert point.advance is rule
     assert (
         rule.law.id
-        == {"scheduled": "L2", "buffered": "L3", "selected": "L4", "sourced": "L5"}[rule.value]
+        == {"scheduled": "L2", "stepped": "L3", "selected": "L4", "sourced": "L5"}[rule.value]
     )
     # A scheduled port has a pace, its schedule's; a port of another rule has none.
     pace = point.query(StreamPort.pace)
@@ -403,7 +403,7 @@ def test_a_port_follows_the_advance_rule_its_declaration_gives(
         assert isinstance(pace, Inapplicable)
 
 
-SCHED, BUF, SEL, SRC = Advance.SCHEDULED, Advance.BUFFERED, Advance.SELECTED, Advance.SOURCED
+SCHED, BUF, SEL, SRC = Advance.SCHEDULED, Advance.STEPPED, Advance.SELECTED, Advance.SOURCED
 LIBRARY_RULES = {
     # CONTRACT.md § 9: each module kernel's ports, by the rule its RTL follows.
     "PackedDotpKernel": {"x": SCHED, "w": SCHED, "y": SCHED},
@@ -547,7 +547,7 @@ def test_a_kernel_exposes_its_member_s_port_under_the_alias_s_name() -> None:
     assert port_direction(Exposing, "y") is Direction.OUT
     assert port_direction(Exposing, "z") is Direction.OUT
     # Its advance rule is its member's port's, found by the alias's name too.
-    assert point.query(stream_port(Exposing, "x").advance) == Available(Advance.BUFFERED)
+    assert point.query(stream_port(Exposing, "x").advance) == Available(Advance.STEPPED)
     assert point.query(stream_port(Exposing, "y").advance) == Available(point.core.output.advance)
     # Open, the case is not known, so neither is the port.
     assert isinstance(
@@ -662,7 +662,7 @@ def test_an_exposed_port_reaches_through_a_wrapper_to_its_leaf() -> None:
 
 
 def test_a_port_states_one_thing_its_advance_rule_follows_from() -> None:
-    """One of a schedule, the port it governs (an input's), or stored values (an
+    """One of a schedule, the port it governs (an input's), or sourced values (an
     output's); and a port governs another stream port of its kernel."""
     with refused("port-advance-ambiguous", error=DefinitionError, message="schedule and governs"):
 
@@ -676,7 +676,7 @@ def test_a_port_states_one_thing_its_advance_rule_follows_from() -> None:
             )
             other = InPort(tensor=TENSOR, sequence=SEQUENCE)
 
-    with refused("port-advance-ambiguous", error=DefinitionError, message="schedule and stored"):
+    with refused("port-advance-ambiguous", error=DefinitionError, message="schedule and sourced"):
 
         class Stored(Kernel):
             id = "test.advance.stored"
@@ -684,7 +684,7 @@ def test_a_port_states_one_thing_its_advance_rule_follows_from() -> None:
                 tensor=TENSOR,
                 schedule=Schedule({Index("r"): 2, Index("c"): 4}),
                 index=(Index("r"), Index("c")),
-                stored=True,
+                sourced=True,
             )
 
     for governs in ("no_such_port", "input"):
@@ -700,6 +700,47 @@ def test_a_port_states_one_thing_its_advance_rule_follows_from() -> None:
         set = InPort(tensor=TENSOR, sequence=SEQUENCE, governs="input")
 
     assert design_space(Governing()).set.advance is Advance.SELECTED
+
+
+def test_a_selector_s_group_is_the_governed_port_s_beats_over_its_own() -> None:
+    """``group`` (R2, L4): the governed port's beats a frame over the selector's, each
+    selector beat naming the set of that many; refused where they do not divide, the design
+    point with it (``port-group``, its ``presented``); a port that governs none has none."""
+    wide = Tensor((4, 4), ELEMENT)
+    narrow = Tensor((1, 4), ELEMENT)
+
+    class Grouped(Kernel):
+        id = "test.group.grouped"
+        input = InPort(tensor=wide, sequence=BeatSequence(vector_major((4, 4), 4)))
+        set = InPort(tensor=narrow, sequence=BeatSequence(vector_major((1, 4), 4)), governs="input")
+
+    class Ungrouped(Kernel):
+        id = "test.group.ungrouped"
+        input = InPort(
+            tensor=Tensor((3, 4), ELEMENT), sequence=BeatSequence(vector_major((3, 4), 4))
+        )
+        set = InPort(tensor=TENSOR, sequence=SEQUENCE, governs="input")
+
+    class Idle(Kernel):
+        id = "test.group.idle"
+        input = InPort(dtype=DataType["INT4"], sequence=SEQUENCE)
+        set = InPort(tensor=TENSOR, sequence=SEQUENCE, governs="input")
+
+    class Governing(Kernel):
+        id = "test.group.governing"
+        input = InPort(tensor=TENSOR, sequence=SEQUENCE)
+        set = InPort(tensor=TENSOR, sequence=SEQUENCE, governs="input")
+
+    point = design_space(Governing())
+    assert point.set.group == 1
+    assert isinstance(point.query(Governing.input.group), Inapplicable)
+    assert design_space(Grouped()).set.group == 4
+    for kind, message in ((Ungrouped, "2 beats a frame do not group input's 3"), (Idle, "idle")):
+        found = design_space(kind()).query(kind.set.group)
+        assert isinstance(found, Rejected) and [f.code for f in found.findings] == ["port-group"]
+        assert message in found.findings[0].message
+        validity = inspection.validity(design_space(kind()))
+        assert validity.status == "refused", kind
 
 
 def test_a_scheduled_port_presents_its_kernel_s_one_schedule() -> None:
@@ -828,26 +869,26 @@ def test_a_port_binds_exactly_one_presentation() -> None:
 
 
 def test_a_port_s_relation_is_its_kind_s() -> None:
-    """``governs`` is an input's, ``stored`` an output's: a port of the other kind has no
+    """``governs`` is an input's, ``sourced`` an output's: a port of the other kind has no
     such parameter, so neither mypy (strict, ``call-arg``) nor the engine (``unknown
     members``) admits one."""
     with pytest.raises(DefinitionError, match=r"unknown members \['governs'\]"):
         OutPort(tensor=TENSOR, sequence=SEQUENCE, governs="input")  # type: ignore[call-arg]
-    with pytest.raises(DefinitionError, match=r"unknown members \['stored'\]"):
-        InPort(tensor=TENSOR, sequence=SEQUENCE, stored=True)  # type: ignore[call-arg]
+    with pytest.raises(DefinitionError, match=r"unknown members \['sourced'\]"):
+        InPort(tensor=TENSOR, sequence=SEQUENCE, sourced=True)  # type: ignore[call-arg]
     with pytest.raises(DefinitionError, match=r"unknown members \['dtype'\]"):
         OutPort(tensor=TENSOR, sequence=SEQUENCE, dtype=DataType["INT4"])  # type: ignore[call-arg]
 
 
 def test_a_port_s_relation_is_a_literal() -> None:
-    """``stored`` and ``governs`` are bound to literals (``port-advance-ambiguous``): the
+    """``sourced`` and ``governs`` are bound to literals (``port-advance-ambiguous``): the
     advance rule is its declaration's."""
-    with refused("port-advance-ambiguous", error=DefinitionError, message="binds stored to"):
+    with refused("port-advance-ambiguous", error=DefinitionError, message="binds sourced to"):
 
         class StoredFact(Kernel):
             id = "test.relation.stored_fact"
             memory: bool = Param(default=True)
-            output = OutPort(tensor=TENSOR, sequence=SEQUENCE, stored=memory)
+            output = OutPort(tensor=TENSOR, sequence=SEQUENCE, sourced=memory)
 
     with refused("port-advance-ambiguous", error=DefinitionError, message="binds governs to"):
 

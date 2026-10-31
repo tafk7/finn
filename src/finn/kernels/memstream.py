@@ -338,7 +338,7 @@ class MemStreamKernel(Kernel):
         transport=Axis(bus="m_axis_0"),
         tensor=output_tensor,
         sequence=output_sequence,
-        stored=True,
+        sourced=True,
     )
 
     @derived

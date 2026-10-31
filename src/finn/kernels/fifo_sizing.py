@@ -51,7 +51,7 @@ their owner (a port's pace, the outside's statement, the mover's contract) when 
 is sized, by one reader (``pattern``); a ``Pattern`` is the model's working value and is
 kept nowhere. An unstated boundary without a mover (the ``ip`` shell: its integrator's
 pacing), a memory source (paced by its consumer: its output is sourced) and a port no
-schedule paces (buffered, selected or sourced: it has no pace, CONTRACT.md § 4) are not
+schedule paces (stepped, selected or sourced: it has no pace, CONTRACT.md § 4) are not
 modelled: direct, with that reason. So is an adapter
 chain other than one ``vpc`` before the transport and one ``input_gen`` after it.
 The strategy proposing the depths is ``finn.kernels.explore.SizeFifos``; an rtlsim

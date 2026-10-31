@@ -38,7 +38,7 @@ from finn.dataflow.schedule import Access, Index, Schedule
 from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
-from finn.kernels.laws import NATIVE_FAMILY, Intake, Native, PortIntake, Standing
+from finn.kernels.laws import NATIVE_FAMILY, Ahead, Intake, Native, PortIntake, Standing
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port_model import InPort, OutPort
 from finn.kernels.values.domains import Integer, admit_element
@@ -229,8 +229,10 @@ class EltwiseKernel(Kernel):
         fewer than ``CREDIT = LATENCY + 3`` results are undelivered, each taking a beat of
         each operand, and parks one more beat of each in its sidestep register, so each
         operand takes ``CREDIT + 1`` beats before it stops, exact, with both offered, and
-        holds at most as many. ``LATENCY`` is its datapath's: integer, 3 multiplying else
-        1; float, 4 scaled else 2, 3 multiplying, and one more converting an integer."""
+        holds at most as many. Its operands are not joined: each is accepted ahead of the
+        other by one beat at most, its sidestep register (``ahead``). ``LATENCY`` is its
+        datapath's: integer, 3 multiplying else 1; float, 4 scaled else 2, 3 multiplying,
+        and one more converting an integer."""
         a, b = (dtype.name == "FLOAT32" for dtype in (self.lhs_dtype, self.rhs_dtype))
         multiply = self.operation == "MUL"
         if not (a or b):
@@ -244,13 +246,15 @@ class EltwiseKernel(Kernel):
             "the output takes each result"
         )
         source = (
-            "rtl/arith/eltwise.sv:52-61 (LATENCY, CREDIT), :94-111 (sidestep A, B), "
-            ":113-120 (take, Credit)"
+            "rtl/arith/eltwise.sv:52-61 (LATENCY, CREDIT), :94-111 (sidestep A, B; ardy, "
+            "brdy :108-109), :113-120 (take :116, Credit)"
         )
         return Intake(
             tuple(
-                PortIntake(port, beats, beats, rule, Standing.STRUCTURAL, source)
-                for port in ("lhs", "rhs")
+                PortIntake(
+                    port, beats, beats, rule, Standing.STRUCTURAL, source, ahead=(Ahead(other, 1),)
+                )
+                for port, other in (("lhs", "rhs"), ("rhs", "lhs"))
             )
         )
 

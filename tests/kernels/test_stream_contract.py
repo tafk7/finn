@@ -488,7 +488,7 @@ def test_a_lane_regroup_on_an_adaptable_channel_is_built_from_existing_stages():
 
 def test_a_lane_regroup_s_stages_are_library_kernels_that_keep_their_own_contracts():
     # The regroup adds no kernel and no rule: its three stages are the library's vpc and
-    # input generator, each port buffered (CONTRACT.md § 3, L3), none with a pace, and the
+    # input generator, each port stepped (CONTRACT.md § 3, L3), none with a pace, and the
     # channel lists each stage's intake below the stage, structural from its RTL (§ 5).
     point = with_adapter_memories(with_direct_transports(constant_network(STRIDED, adaptable=True)))
     found = point.member("c")
@@ -496,7 +496,7 @@ def test_a_lane_regroup_s_stages_are_library_kernels_that_keep_their_own_contrac
     assert [type(stage) for stage in stages] == [VpcKernel, InputGeneratorKernel, VpcKernel]
     for stage in stages:
         for port in (stage.input, stage.output):
-            assert port.advance is Advance.BUFFERED
+            assert port.advance is Advance.STEPPED
             assert isinstance(port.query(StreamPort.pace), Inapplicable)
     intake = found.intake
     assert intake.names == (

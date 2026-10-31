@@ -33,7 +33,7 @@ module ownership, required declarations and resource statements are checked.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from functools import partial
 from types import MappingProxyType
 from typing import Any, ClassVar, get_args, get_type_hints
@@ -82,6 +82,7 @@ from finn.kernels.laws import (
     Intake,
     Interval,
     PinFamily,
+    PortIntake,
     Standing,
     TransportKind,
     in_cycles,
@@ -243,6 +244,12 @@ def _is_stream_port(item: object) -> bool:
     return isinstance(item, StreamPort)
 
 
+def _is_input_port(item: object) -> bool:
+    from finn.kernels.port_model import InPort  # noqa: PLC0415
+
+    return isinstance(item, InPort)
+
+
 def _supply_ports(cls: type[Kernel]) -> None:
     """Supply each stream port declared in ``cls``'s own body with what is the kernel's,
     where the port does not state it: its ``label``, its name in the kernel, its
@@ -251,13 +258,30 @@ def _supply_ports(cls: type[Kernel]) -> None:
     (``Kernel.port_transport``), and its ``interval``, the kernel's (``Kernel.interval``,
     L6), which it carries with its pace. A port declared in a Group states its label,
     clocking and transport; only a kernel with no module declares one
-    (``module-part-nested``), and such a kernel has no interval, so the port keeps L6's."""
-    from finn.kernels.port_model import StreamPort  # noqa: PLC0415
+    (``module-part-nested``), and such a kernel has no interval, so the port keeps L6's.
 
-    for name, value in vars(cls).items():
+    And a selector of its body (``InPort.governs``, a literal naming another port of its
+    body) with the beats a frame of the port it governs (``InPort.governed_beats``, from
+    which its ``group`` follows), by a private derived member, ``_<selector>_governed``."""
+    from finn.kernels.port_model import InPort, StreamPort  # noqa: PLC0415
+
+    body = dict(vars(cls))
+    ports = {name for name, value in body.items() if isinstance(value, StreamPort)}
+    for name, value in body.items():
         record = node_record(value)
         if record is None or not issubclass(record.space_type, StreamPort):
             continue
+        governs = record.bindings.get("governs")
+        if (
+            issubclass(record.space_type, InPort)
+            and isinstance(governs, str)
+            and governs in ports - {name}
+            and "governed_beats" not in record.settings
+        ):
+            beats = derived(_governed_beats(governs))
+            setattr(cls, f"_{name}_governed", beats)
+            getattr(beats, "__set_name__")(cls, f"_{name}_governed")
+            assign(value, "governed_beats", beats)
         if "label" not in record.settings:
             assign(value, "label", name)
         if "clocking" not in record.settings:
@@ -266,6 +290,74 @@ def _supply_ports(cls: type[Kernel]) -> None:
             assign(value, "transport", Kernel.port_transport)
         if "interval" not in record.settings:
             assign(value, "interval", Kernel.interval)
+
+
+def _governed_beats(governed: str) -> Callable[[Kernel], int | None]:
+    """A selector's ``governed_beats`` (``_supply_ports``): the beats a frame of port
+    ``governed``, None where it is idle."""
+
+    def governed_beats(self: Kernel) -> int | None:
+        if not getattr(self, governed).placed:
+            return None
+        beats: int = getattr(self, governed).stream.sequence.form.beats
+        return beats
+
+    governed_beats.__annotations__ = {"return": int | None}
+    return governed_beats
+
+
+def _exposed_as(exposed: Mapping[tuple[str, str], str], node: str, port: str) -> str:
+    """The name a kernel with children gives its member ``node``'s port ``port`` in its
+    intake: the name it exposes it under, else its path below the member."""
+    return exposed.get((node.split(".", 1)[0], port), f"{node}.{port}")
+
+
+# -- what a kernel with a module states of its intake ---------------------------------------
+#
+# A kernel with a module states its intake (a derived ``intake`` of its own body); the base
+# reads it, as ``_stated_intake``, and installs its ``intake``: the stated one, refused where it
+# names a port that is no placed input of the kernel (``intake-port-unknown``). Its placed
+# inputs are read as its module's parts are, one helper each (``_placed_inputs_<i>``).
+
+_INPUTS = "_placed_inputs"
+
+
+def _inputs_from(part: str, following: str) -> Callable[[Kernel], tuple[Any, ...]]:
+    def inputs_from(self: Kernel) -> tuple[Any, ...]:
+        found = (getattr(self, part).label,) if getattr(self, part).placed else ()
+        return (*found, *getattr(self, following)())
+
+    return inputs_from
+
+
+def _checked_intake(owner: str) -> Callable[[Kernel], Intake | Rejected]:
+    def intake(self: Kernel) -> Intake | Rejected:
+        stated: Intake = getattr(self, "_stated_intake")
+        placed = self._placed_inputs_0()
+        unknown = [name for name in stated.names if name not in placed]
+        if unknown:
+            return reject(
+                "intake-port-unknown",
+                f"{owner} states the intake of {unknown}, no input it places: an intake "
+                "names its kernel's placed inputs",
+            )
+        return stated
+
+    return intake
+
+
+def _read_intake(cls: type[Kernel]) -> None:
+    """Install, for a kernel with a module whose own body states ``intake``, the base's
+    reading of it (above)."""
+    item = vars(cls).get("intake")
+    if getattr(cls, "module_spec", None) is None or not isinstance(item, Derived):
+        return
+    stated = derived(item.function)
+    setattr(cls, "_stated_intake", stated)
+    getattr(stated, "__set_name__")(cls, "_stated_intake")
+    checked = _checked_intake(cls.__qualname__)
+    checked.__doc__ = item.function.__doc__
+    _set_aggregated(cls, "intake", checked, Intake | Rejected)
 
 
 # -- its stream ports' declarations ---------------------------------------------------------
@@ -309,12 +401,12 @@ def _check_ports(cls: type[Kernel]) -> None:
     - is a ``StreamPort`` of neither kind, ``InPort`` or ``OutPort`` (``port-direction``): a
       stream is an input or an output, never ``INOUT``, and its bus role follows
       (``finn.kernels.port.stream_endpoint``). What only an input states (``governs``,
-      ``dtype``) or only an output (``stored``) is its kind's, so no other port states it;
+      ``dtype``) or only an output (``sourced``) is its kind's, so no other port states it;
     - binds no presentation or both, its kernel's ``schedule`` and a given ``sequence``, or a
       given sequence with a projection's parameters (``index``, ``lanes``, ``reduces``,
       ``holds``, ``closes``, ``reshaped``) (``port-presentation``);
     - states more than one of what an advance rule follows from, its kernel's schedule, the
-      port it governs or stored values, or states ``governs`` or ``stored`` bound to other
+      port it governs or its memory, or states ``governs`` or ``sourced`` bound to other
       than a literal (``port-advance-ambiguous``; CONTRACT.md § 3: a port states what it
       is, one thing);
     - in its body, governs a port its kernel does not have (``port-governs-unknown``), or
@@ -361,15 +453,15 @@ def _check_ports(cls: type[Kernel]) -> None:
                 "projection's parameters go with schedule",
             )
         stated = [key for key in ("schedule", "governs") if bound.get(key) is not None]
-        stated += ["stored"] if bound.get("stored") is True else []
+        stated += ["sourced"] if bound.get("sourced") is True else []
         if len(stated) > 1:
             raise refused(
                 "port-advance-ambiguous",
                 f"states {' and '.join(stated)}: a port's advance rule follows from one of "
-                "its kernel's schedule, the port it governs or stored values",
+                "its kernel's schedule, the port it governs or its memory (sourced)",
             )
-        governs, stored = bound.get("governs"), bound.get("stored", False)
-        for key, value, kind in (("governs", governs, str), ("stored", stored, bool)):
+        governs, sourced = bound.get("governs"), bound.get("sourced", False)
+        for key, value, kind in (("governs", governs, str), ("sourced", sourced, bool)):
             if value is not None and not isinstance(value, kind):
                 raise refused(
                     "port-advance-ambiguous",
@@ -863,6 +955,7 @@ class Kernel(Space):
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         _supply_ports(cls)
+        _read_intake(cls)
         _check_ports(cls)
         _expose_ports(cls)
         _derive_control(cls)
@@ -917,6 +1010,8 @@ class Kernel(Space):
             _install(cls, _PRESENTED, _presented_from, pins)
             beating = tuple(name for name, item in members.items() if _is_stream_port(item))
             _install(cls, _BEATS, _beats_from, beating)
+            inputs = tuple(name for name, item in members.items() if _is_input_port(item))
+            _install(cls, _INPUTS, _inputs_from, inputs)
         if unmet_required(cls) or not specs:
             return
         from finn.kernels.port_model import stream_ports  # noqa: PLC0415
@@ -1031,24 +1126,28 @@ class Kernel(Space):
         ``finn.kernels.laws.PortIntake`` an input port it places.
 
         A kernel with a module states its own, read from its RTL (an HLS kernel's
-        measured); one that does not answers ``intake-unstated``, by name, never zero, and
-        no refusal of its design point: no rule reads it. A kernel with children derives
-        its own from its members' (``member_intake``), never states it beside them: a
-        member's port it exposes takes the name it exposes it under (``x = compute.x``:
-        ``x``; one port, one name, however many aliases name it), any other member's port
-        its path below the member (``adapter.input_gen.input_gen.input``). A member that
-        states none leaves its parent's unstated too."""
+        measured), with its inputs' coupling (``Intake.joined``, ``PortIntake.ahead``); one
+        that does not answers ``intake-unstated``, by name, never zero, and no refusal of
+        its design point: no rule reads it. The base reads what it states, and refuses an
+        intake naming a port that is no placed input of it (``intake-port-unknown``, its
+        own answer's refusal, not its design point's). A kernel with children derives its
+        own from its members' (``member_intake``), never states it beside them, each
+        member's renamed, its ports, its groups and its partners alike: a member's port it
+        exposes takes the name it exposes it under (``x = compute.x``: ``x``; one port, one
+        name, however many aliases name it), any other member's port its path below the
+        member (``adapter.input_gen.input_gen.input``). A member that states none leaves
+        its parent's unstated too."""
         if type(self).module_spec is not None:
             return reject(INTAKE_UNSTATED, f"{type(self).__qualname__} states no intake")
         exposed = type(self)._exposed_names
-        found = []
+        ports: list[PortIntake] = []
+        joined: list[tuple[str, ...]] = []
         for item in self.member_intake:
             node = str(item.node)
-            child = node.split(".", 1)[0]
-            for each in item.value.ports:
-                name = exposed.get((child, each.port))
-                found.append(each.under(node) if name is None else replace(each, port=name))
-        return Intake(tuple(found))
+            renamed = item.value.renamed(partial(_exposed_as, exposed, node))
+            ports += renamed.ports
+            joined += renamed.joined
+        return Intake(tuple(ports), tuple(joined))
 
     # -- its own parts of its answers ----------------------------------------------------
 
@@ -1162,6 +1261,9 @@ class Kernel(Space):
         return ()
 
     def _module_beats_0(self) -> tuple[int | None, ...]:
+        return ()
+
+    def _placed_inputs_0(self) -> tuple[str, ...]:
         return ()
 
     def _module_end(self) -> tuple[Any, ...]:

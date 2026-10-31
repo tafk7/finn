@@ -303,9 +303,15 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
 # own ``side`` through the core's selector (+12); and a port's presentation checks its
 # direction, reading its ``governs`` or ``stored`` (+40 constants, one per active port; +47
 # after ``viable``).
+# Then non-ports' (1013, 42) and (1059, 42), ports' ((644, 344), (763, 407)) and the totals
+# ((1657, 386), (1822, 449)) became these when ports became InPort and OutPort (S4): a port's
+# direction is its kind's, no Param, and its presentation reads no relation by direction
+# (-64 members, -104 constants at the baseline; -78, -125 after ``viable``), each kernel's
+# ports take its pin family's transport (+4, +6 non-port members); and when its presentation
+# reads its advance rule, to read a selector's group (+44, +12; +55, +16).
 NONPORT_EVALUATED = ((1017, 42), (1065, 42))
-PORT_EVALUATED = ((580, 240), (685, 282))
-EVALUATED = ((1597, 282), (1750, 324))
+PORT_EVALUATED = ((624, 252), (740, 298))
+EVALUATED = ((1641, 294), (1805, 340))
 
 
 def _assert_evaluated(scopes: Scopes, stage: int) -> None:

@@ -582,8 +582,9 @@ class ThresholdingAxiKernel(Kernel):
         """Its input guard, from its RTL (CONTRACT.md § 5): it takes an input beat while
         fewer than ``MAX_PENDING = (DEEP_PIPELINE + 1) * M + 3`` thresholdings are pending
         across its pipeline and output queue, exact both before it stops and at most; a
-        configuration access takes precedence. With several sets its set port's beats join
-        its input's, one each (L4), so it states the same."""
+        configuration access takes precedence. With several sets its set port is joined with
+        its input, each beat accepted only with one of the other (its ready equations), so it
+        states the same."""
         pending = (int(self.deep_pipeline) + 1) * self.stages + 3
         rule = (
             f"takes a beat while fewer than {pending} results are pending and no "
@@ -593,12 +594,13 @@ class ThresholdingAxiKernel(Kernel):
         ports = ["input"]
         if self.set.placed:
             ports.append("set")
-            source += "; rtl/nonlin/thresholding_axi.sv:131-144 (the set join)"
+            source += "; rtl/nonlin/thresholding_axi.sv:131-144 (the set join, :142-143)"
         return Intake(
             tuple(
                 PortIntake(port, pending, pending, rule, Standing.STRUCTURAL, source)
                 for port in ports
-            )
+            ),
+            joined=(tuple(ports),) if len(ports) > 1 else (),
         )
 
     @view
