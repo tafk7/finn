@@ -41,6 +41,7 @@ from finn.core.space import (
     DefinitionError,
     Param,
     Select,
+    Unresolved,
     derived,
     divisors_of,
     inspection,
@@ -72,6 +73,7 @@ from finn.kernels.composer import (
 from finn.kernels.configure import commit
 from finn.kernels.dataflow_core import PRODUCER, DataflowCoreKernel, core_module
 from finn.kernels.matmul import KnownWeights, MatMulKernel
+from finn.kernels.partition import partition
 from finn.kernels.port import exposed_pins, port_direction
 from finn.kernels.sides import BUILD, Outside, Side, SideKind, Steady
 from finn.kernels.thresholding import ThresholdingAxiKernel
@@ -894,6 +896,21 @@ def test_the_class_answers_each_channel_s_neighbours_and_hops(cache: None) -> No
     assert _placed(_HIDDEN_HOP) in links
     with pytest.raises(KeyError):
         neighbours(space_type, "first")
+
+
+def test_a_channel_s_neighbours_its_class_does_not_answer_are_what_they_wait_on(
+    cache: None,
+) -> None:
+    """Where its class does not answer a channel's neighbours, the partition reads what they
+    wait on, each finding naming its member, never neighbours without the ports it could not
+    read: the Chain with no choice stored waits on its first MatMul's core."""
+    network = partition(declared(), {})
+    assert network.refused() is None
+    found = network.neighbours("hidden")
+    assert isinstance(found, Unresolved)
+    assert [(each.code, each.owner, dict(each.details)) for each in found.findings] == [
+        ("decision-unassigned", "compute", {"node": "first"})
+    ]
 
 
 def test_the_class_is_a_sealed_dataflow_core_whose_edge_ports_are_its_channels_outer_ports(

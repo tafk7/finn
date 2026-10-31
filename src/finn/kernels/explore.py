@@ -138,7 +138,7 @@ class KernelComposition(Composition, Protocol):
 
     def member(self, name: str) -> Any: ...
 
-    def neighbours(self, name: str) -> Neighbours | Rejected: ...
+    def neighbours(self, name: str) -> Neighbours | Rejected | Unresolved: ...
 
     def owner(self, name: str) -> Owner: ...
 
@@ -409,10 +409,8 @@ class Seam(search.Seam):
             if words is None:
                 continue
             beside = network.neighbours(owner)
-            if isinstance(beside, Rejected):
-                not_modelled[owner] = "the partition is refused: " + "; ".join(
-                    f"{each.owner}: {each.message}" for each in beside.findings
-                )
+            if not isinstance(beside, Neighbours):
+                not_modelled[owner] = _unread(beside)
                 continue
             try:
                 kept = holds(network.member(owner), beside, period, words)
@@ -527,6 +525,15 @@ class Seam(search.Seam):
         if own is None:
             return Stated(total(cost.resources.values()), {})
         return _findings_of(own)
+
+
+def _unread(found: Rejected | Unresolved) -> str:
+    """Why the ports beside a channel are not read (``KernelComposition.neighbours``): what
+    refuses them (the partition's rule, where a rule refuses the partition) or what they
+    wait on, each finding by its owner."""
+    why = "refused" if isinstance(found, Rejected) else "waiting"
+    findings = "; ".join(f"{each.owner}: {each.message}" for each in found.findings)
+    return f"the ports beside its channel are not read, {why}: {findings}"
 
 
 def _fifo_words(network: KernelComposition, ram_style: Key) -> int | None:
@@ -1558,16 +1565,15 @@ class SizeFifos:
             transport.channel: network.neighbours(transport.channel) for transport in transports
         }
         # A partition a rule refuses has no channel's neighbours, so nothing to size them
-        # by: refused before sizing. Whether it should keep them is pending a decision.
-        refused = next((each for each in beside.values() if isinstance(each, Rejected)), None)
-        if refused is not None:
+        # by: refused before sizing. Whether it should keep them is pending a decision. So
+        # is one whose class does not answer a channel's neighbours.
+        unread = next((each for each in beside.values() if not isinstance(each, Neighbours)), None)
+        if unread is not None:
             raise ExploreError(
                 "fifos-refused",
                 self.strategy,
-                "sizing FIFOs: the partition is refused, so the ports beside its channels are "
-                "not read: "
-                + "; ".join(f"{each.owner}: {each.message}" for each in refused.findings),
-                causes=refused.findings,
+                f"sizing FIFOs: {_unread(unread)}",
+                causes=unread.findings,
             )
         proposals: dict[str, _Proposal] = {}
         for transport in transports:

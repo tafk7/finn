@@ -594,20 +594,25 @@ class Partition:
 
     # -- what it is -------------------------------------------------------------------------
 
-    def neighbours(self, name: str) -> Neighbours | Rejected:
+    def neighbours(self, name: str) -> Neighbours | Rejected | Unresolved:
         """The ports beside channel ``name``, as its class answers them
         (``finn.kernels.base.neighbours``: each kernel's port's stream pins, labelled below
-        its member's node, and its pace at its kernel's interval, where it owns its pacing), where
-        it answers them; a frozen neighbour's, outside a slice, as given at its stored
-        choices (``frozen``). FIFO sizing reads their paces (``finn.kernels.fifo_sizing``),
-        and the netlist its hops to them (``hops``). Refused where a rule refuses the
-        partition (``refused``): its class answers them only where every rule accepts it."""
+        its member's node, and its pace at its kernel's interval, a scheduled port's), with
+        a frozen neighbour's, outside a slice, as given at its stored choices (``frozen``).
+        FIFO sizing reads their paces (``finn.kernels.fifo_sizing``), and the netlist its
+        hops to them (``hops``). Refused where a rule refuses the partition (``refused``):
+        its class answers them only where every rule accepts it; and where its class does
+        not answer them, what refuses them or what they wait on, each finding naming its
+        member (``answer``)."""
         refused = self.refused()
         if refused is not None:
             return refused
         frozen = self._frozen.get(name, Neighbours())
-        found = self._point.query(neighbours(self._core, self.node(name)))
-        beside = found.value if isinstance(found, Available) else Neighbours()
+        found = self.answer(neighbours(self._core, self.node(name)))
+        if isinstance(found, (Rejected, Unresolved)):
+            return found
+        assert isinstance(found, Available)  # a view of each member channel, never inapplicable
+        beside = found.value
         return Neighbours(
             beside.producer or frozen.producer,
             beside.consumer or frozen.consumer,
