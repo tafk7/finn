@@ -1078,8 +1078,11 @@ def _install(
 # names a member's port by its binding: the port's ``side``, bound directly or through a
 # derived value reading it (the composer's, which labels it below its member), and a side
 # given as a value names none. When its class is made, the base reads which member port each
-# side names (``Kernel.connections``), and refuses, each finding naming the port:
+# side names (``Kernel.connections``), and refuses, each finding naming the port (a side's,
+# its channel and role):
 #
+# - a channel side whose binding reads more than one member's port (``channel-side-ports``):
+#   a side names one port at most;
 # - a member's port two channel sides name (``port-connected-twice``): a port is on one
 #   channel; two readers of one value are one channel's;
 # - a member's port that no channel side names and no node alias of its own exposes
@@ -1154,16 +1157,18 @@ def _member_ports(cls: type[Kernel]) -> dict[object, MemberPort]:
     return found
 
 
-def _side_named(ports: Mapping[object, MemberPort], binding: object) -> MemberPort | None:
-    """The member port a channel side's binding names: its own reference, where it is one,
-    or a derived value's one argument that is; None for a side given as a value."""
+def _sides_named(ports: Mapping[object, MemberPort], binding: object) -> tuple[MemberPort, ...]:
+    """The member ports a channel side's binding reads: its own reference, where it is one,
+    or a derived value's arguments that are; none for a side given as a value. A side names
+    one at most (``channel-side-ports``, above)."""
     reads = tuple(binding.aliases.values()) if isinstance(binding, Derived) else (binding,)
-    named = {
-        ports[read]
-        for read in reads
-        if isinstance(read, (MemberRef, ChoiceMemberRef)) and read in ports
-    }
-    return named.pop() if len(named) == 1 else None
+    return tuple(
+        dict.fromkeys(
+            ports[read]
+            for read in reads
+            if isinstance(read, (MemberRef, ChoiceMemberRef)) and read in ports
+        )
+    )
 
 
 _OUTER = ("outer_in", "outer_out")
@@ -1220,21 +1225,36 @@ def _connected(cls: type[Kernel]) -> dict[str, tuple[MemberPort | None, MemberPo
     and its consumer side name (above); refused as the connection rules say."""
     ports = _member_ports(cls)
     found: dict[str, tuple[MemberPort | None, MemberPort | None]] = {}
+    findings: list[Finding] = []
+    unnamed: set[MemberPort] = set()
     for name, item in _members(cls).items():
         if not _connects(item):
             continue
         record = node_record(item)
         assert record is not None
-        found[name] = (
-            _side_named(ports, record.bindings.get("producer")),
-            _side_named(ports, record.bindings.get("consumer")),
-        )
+        sides: list[MemberPort | None] = []
+        for role in ("producer", "consumer"):
+            read = _sides_named(ports, record.bindings.get(role))
+            sides.append(read[0] if len(read) == 1 else None)
+            if len(read) > 1:
+                unnamed.update(read)
+                findings.append(
+                    Finding(
+                        FindingKind.AUTHORING,
+                        "channel-side-ports",
+                        "Kernel",
+                        f"{name}'s {role} side reads the ports "
+                        f"{', '.join(map(str, read))}: a channel side names one member port "
+                        "at most",
+                        (("declaration", cls.__qualname__), ("member", name), ("role", role)),
+                    )
+                )
+        found[name] = (sides[0], sides[1])
     channels: dict[MemberPort, list[str]] = {}
-    for name, sides in found.items():
-        for port in sides:
+    for name, pair in found.items():
+        for port in pair:
             if port is not None:
                 channels.setdefault(port, []).append(name)
-    findings: list[Finding] = []
     for port, named in channels.items():
         if len(named) > 1:
             findings.append(
@@ -1249,7 +1269,9 @@ def _connected(cls: type[Kernel]) -> dict[str, tuple[MemberPort | None, MemberPo
             )
     exposed = cls._exposed_names
     for port in dict.fromkeys(ports.values()):
-        if port in channels or (_connects(_members(cls)[port.member]) and port.port in _OUTER):
+        if port in channels or port in unnamed:
+            continue
+        if _connects(_members(cls)[port.member]) and port.port in _OUTER:
             continue
         paths = _node_paths(cls, (port.member, *port.port.split(".")), ())
         if any(path in exposed for path in paths):

@@ -41,6 +41,7 @@ from finn.core.space import (
     DefinitionError,
     Param,
     Select,
+    derived,
     divisors_of,
     inspection,
 )
@@ -755,6 +756,33 @@ def test_a_member_s_port_an_alias_of_its_holder_exposes_needs_no_channel() -> No
     }
     with refused("port-unconnected", error=DefinitionError, member="activate", port="output"):
         holder(False)
+
+
+def test_a_channel_side_reading_two_ports_is_refused_by_its_own_code() -> None:
+    """A channel side names one member port at most: a side derived from two ports' sides
+    names neither, and is refused as itself (``channel-side-ports``, naming the channel and
+    its role), not as two unconnected ports."""
+    with pytest.raises(DefinitionError) as raised:
+
+        class Both(Kernel):
+            id = "test.both"
+            producer: Side = Param()
+            one = ThresholdingAxiKernel()
+            two = ThresholdingAxiKernel()
+            output = one.output
+            second_output = two.output
+
+            @derived(first=one.input.side, second=two.input.side)
+            def either(first: Side, second: Side) -> Side:
+                return first
+
+            x = Channel(tensor=X_TENSOR, producer=producer, consumer=either, platform=FULL_DSP48E2)
+
+    assert [
+        (each.code, dict(each.details)["member"], dict(each.details)["role"])
+        for each in raised.value.findings
+    ] == [("channel-side-ports", "x", "consumer")]
+    assert "one.input, two.input" in raised.value.findings[0].message
 
 
 def test_a_channel_on_a_port_reached_through_two_selectors_is_refused_when_made() -> None:
