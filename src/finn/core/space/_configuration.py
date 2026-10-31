@@ -238,6 +238,12 @@ class _Namespace(metaclass=SpaceMeta):
 
     def __set_name__(self, owner: type[object], name: str) -> None:
         path = declared_path(self)
+        if path is not None and len(path) > 1:
+            # ``x = inner.leaf``: a second name for a member's node, which places nothing.
+            from ._nodes import install_alias
+
+            install_alias(owner, name, path, ())
+            return
         if path is None or len(path) != 1:
             raise DefinitionError.broken(
                 "space-holds-non-node",
@@ -263,9 +269,12 @@ class _Namespace(metaclass=SpaceMeta):
         assert path is not None and len(path) == 1
         outer = declared_path(instance)
         if outer is not None:
-            from ._nodes import path_proxy
+            from ._nodes import path_label, path_proxy
 
-            return cast(Self, path_proxy(type(self), (*outer, path[0])))
+            label = path_label(instance)
+            if label is not None:
+                label = (*label, str(path[0].name))
+            return cast(Self, path_proxy(type(self), (*outer, path[0]), label))
         from .occurrence import child
 
         return cast(Self, child(cast(_Namespace, instance), path[0]))

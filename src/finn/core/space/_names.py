@@ -200,7 +200,7 @@ class Names:
         for case, child in choice.cases:
             if child is None:
                 continue
-            member = self.table.named_at(Place(child), source.member)
+            member = self.path_at(Place(child), source.member, owner=owner)
             if member is not None:
                 alternatives.append((case, member))
         if not alternatives:
@@ -233,8 +233,7 @@ class Names:
         share in that class; else one this class makes for it, over the candidates'
         members. Where the classes are placed, the selections made for one member in one
         scope are one address (``_scopes``)."""
-        compiled = self.table.compiled_at(target)
-        index = compiled.choice_index.get(decision)
+        index = self.table.compiled_at(target).choice_index.get(decision)
         if index is None:
             raise DefinitionError.broken(
                 "node-decision-not-placed",
@@ -242,6 +241,11 @@ class Names:
                 f"{owner}: the selector is not placed here",
                 declaration=owner,
             )
+        return self._placed_choice(target, index, member, owner=owner)
+
+    def _placed_choice(self, target: Place, index: int, member: str, *, owner: str) -> NodeRef:
+        """``placed_choice_member`` of choice ``index`` of the class placed at ``target``."""
+        compiled = self.table.compiled_at(target)
         choice = compiled.choices[index]
         key = member_key(self.table.name(target), f"{choice.key}.$member.{member}")
         if member in choice.dropped:
@@ -263,7 +267,7 @@ class Names:
         for case, slot in choice.cases:
             if slot is None:
                 continue
-            found = self.table.named_at(self.table.below(target, slot), member)
+            found = self.path_at(self.table.below(target, slot), member, owner=owner)
             if found is not None:
                 alternatives.append((case, found))
         if not alternatives:
@@ -289,6 +293,29 @@ class Names:
         self.placed_choice_members[identity] = node
         self.table.chooses[node] = (self.table.path(target), index, member)
         return node
+
+    def path_at(self, place: Place, member: str, *, owner: str) -> NodeRef | None:
+        """A member of the class placed at ``place``, by its name, or by a path of names to a
+        member below it (``port.side``): through its children, its node aliases (their
+        steps) and a selector (the selection of the rest in its cases). None where nothing
+        of that name is there."""
+        *nodes, last = member.split(".")
+        for position, name in enumerate(nodes):
+            compiled = self.table.compiled_at(place)
+            slot = compiled.named_children.get(name)
+            if slot is not None:
+                place = self.table.below(place, slot)
+                continue
+            rest = ".".join((*nodes[position + 1 :], last))
+            alias = compiled.aliases.get(name)
+            if alias is not None:
+                return self.path_at(place, ".".join((*alias.steps, rest)), owner=owner)
+            selector = compiled.named_members.get(name)
+            choice = None if selector is None else compiled.selectors.get(selector)
+            if choice is None:
+                return None
+            return self._placed_choice(place, choice, rest, owner=owner)
+        return self.table.named_at(place, last)
 
     def descend(self, scope: int, path: Iterable[Declaration], *, owner: str) -> Place:
         place = Place(scope)

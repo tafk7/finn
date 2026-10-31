@@ -247,7 +247,7 @@ def replace_owner(reference: Declaration) -> Declaration:
     if isinstance(reference, MemberRef):
         return MemberRef(reference.path, reference.member)
     if isinstance(reference, ChoiceMemberRef):
-        return ChoiceMemberRef(reference.path, reference.member)
+        return ChoiceMemberRef(reference.path, reference.member, reference.label)
     if isinstance(reference, CaseRef):
         return CaseRef(reference.path)
     return reference
