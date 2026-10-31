@@ -17,6 +17,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 
 import pytest
 from core.space._line_reads import line_scopes
@@ -42,8 +43,9 @@ from finn.dataflow.gemm import Form, Window
 from finn.dataflow.schedule import Index
 from finn.kernels import composer
 from finn.kernels.artifacts.abi import Direction
+from finn.kernels.artifacts.module import Link, LinkEnd
 from finn.kernels.base import Kernel, extent_of, hops, neighbours, own_ends
-from finn.kernels.channels import Channel
+from finn.kernels.channels import Channel, OuterHops
 from finn.kernels.composer import (
     CLASS_CACHE_BOUND,
     SEPARATOR,
@@ -722,6 +724,30 @@ def test_a_two_set_weight_channel_s_set_port_on_no_channel_is_refused(cache: Non
     assert not any(str(port) == "w1.set" for sides in named.values() for port in sides)
 
 
+#: The Chain's hidden channel's hop, from its first MatMul's core to its Thresholding.
+_HIDDEN_HOP = Link(
+    LinkEnd(
+        "^first.compute.packed",
+        "m_axis_output_tdata",
+        16,
+        "m_axis_output_tvalid",
+        "m_axis_output_tready",
+    ),
+    LinkEnd("^activate", "s_axis_tdata", 16, "s_axis_tvalid", "s_axis_tready"),
+    6,
+    (0, 1),
+)
+
+
+def _placed(link: Link) -> Link:
+    """``link`` as the partition's netlist places it: each end at its member's node."""
+
+    def end(each: LinkEnd) -> LinkEnd:
+        return replace(each, instance=(each.instance or "").removeprefix("^") or None)
+
+    return replace(link, source=end(link.source), sink=end(link.sink))
+
+
 def test_the_class_answers_each_channel_s_neighbours_and_hops(cache: None) -> None:
     """The class answers the ports beside each member channel (``neighbours``) and its hops to
     them (``hops``), and its own netlist wires them: configured as the Chain, it has the
@@ -740,14 +766,16 @@ def test_the_class_answers_each_channel_s_neighbours_and_hops(cache: None) -> No
     entering = point.query(neighbours(space_type, "x"))
     assert isinstance(entering, Available)
     assert entering.value.producer is None and entering.value.consumer is not None
+    # The hidden channel places no stage: its one hop joins the ports beside it, each end
+    # relative to the channel (``^``).
     hopped = point.query(hops(space_type, "hidden"))
     assert isinstance(hopped, Available)
-    assert hopped.value == network.hops("hidden")
+    assert hopped.value == OuterHops(_HIDDEN_HOP, None)
     wired = point.query(Kernel.netlist)
     assert isinstance(wired, Available)
-    built = network.netlist()
-    assert isinstance(built, Available)
-    assert set(wired.value.links) == set(built.value[0].links)
+    links = wired.value.links
+    assert len(links) == 8 and len(set(links)) == 8
+    assert _placed(_HIDDEN_HOP) in links
     with pytest.raises(KeyError):
         neighbours(space_type, "first")
 
