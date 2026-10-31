@@ -41,6 +41,7 @@ from finn.kernels.composer import (
     ChannelDeclaration,
     Facts,
     PartitionDeclaration,
+    PartitionRefused,
     Port,
     Stated,
     channel,
@@ -300,9 +301,10 @@ def test_each_member_sits_under_its_node_in_the_module() -> None:
     assert named.member("x").consumer.label == "mm_first.x"
 
 
-def test_a_top_whose_pins_cannot_be_formed_is_refused_as_its_netlist() -> None:
-    """Two boundary channels at one port: the netlist is made, but the top's pins name that
-    port twice, so its module is refused (``kernel-netlist``), not raised."""
+def test_two_boundary_channels_at_one_port_are_refused_when_composed() -> None:
+    """Two boundary channels at one port: each edge port is named as its port, so the second
+    is refused when the class is made (``name-shared``, naming its channel), before any
+    netlist or top is made."""
     members = chain.members()
     members["y"] = channel(
         Port("second", "y"),
@@ -310,14 +312,10 @@ def test_a_top_whose_pins_cannot_be_formed_is_refused_as_its_netlist() -> None:
         tensor=chain.Y_TENSOR,
         platform=FULL_DSP48E2,
     )
-    clashing = by_hand(members, chain.chain().chosen())
-    netlist = clashing.netlist()
-    assert isinstance(netlist, Available)
-    module = module_of(clashing, chain.STEM)
-    assert isinstance(module, Rejected)
-    assert [(f.code, f.message) for f in module.findings] == [
-        ("kernel-netlist", "an ABI names one pin twice")
-    ]
+    with pytest.raises(PartitionRefused) as raised:
+        by_hand(members, chain.chain().chosen())
+    assert [(f.code, f.owner) for f in raised.value.findings] == [("name-shared", "y")]
+    assert "s_axis_0 is x's edge port too" in str(raised.value)
 
 
 def marked(bus: Bus) -> Bus:

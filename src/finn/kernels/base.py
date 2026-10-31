@@ -681,6 +681,47 @@ def _expose_ports(cls: type[Kernel]) -> None:
     cls._exposed_names = MappingProxyType(exposed)
 
 
+# -- a sealed kernel's edge ----------------------------------------------------------------
+#
+# A sealed kernel (``Kernel.sealed``: its realization is one module of its own) lowers the
+# ports it exposes itself, as its module's own pins (``finn.kernels.port.exposed_pins``).
+# Where a stream leaves a module the boundary rule applies, which a channel's outer port
+# presents (``finn.kernels.channels.Channel.outer_in``, ``outer_out``): so each port a sealed
+# kernel exposes is a member channel's own port, never a kernel's port or a channel's
+# member's, and a transparent kernel may expose any member's port.
+
+
+def _check_sealed(cls: type[Kernel]) -> None:
+    """Refuse, for a sealed kernel, a node alias of its own whose nodes are not each a member
+    channel's own port, ``<channel>.<port>`` (``core-edge-unchanneled``, above)."""
+    if not cls.sealed:
+        return
+    from finn.kernels.port_model import StreamPort  # noqa: PLC0415
+
+    members = _members(cls)
+    for name, entry in alias_table(cls).items():
+        unchanneled = [
+            end.path
+            for end in entry.ends
+            if not (
+                issubclass(end.space_type, StreamPort)
+                and len(end.path.split(".")) == 2
+                and _connects(members.get(end.path.split(".")[0]))
+            )
+        ]
+        if entry.ends and not unchanneled:
+            continue
+        where = f"{cls.__qualname__}.{name}"
+        raise DefinitionError.broken(
+            "core-edge-unchanneled",
+            "Kernel",
+            f"{where} exposes {unchanneled or 'nothing'}: a sealed kernel's edge port is a "
+            "member channel's outer port, where the boundary rule applies, never a kernel's "
+            "port",
+            declaration=where,
+        )
+
+
 # -- its control bus ------------------------------------------------------------------------
 #
 # A kernel declares its control bus once, a ``ControlModel`` in its own body, and the base
@@ -1202,12 +1243,13 @@ def _leaves(
     ``valued``, guarding its ``source``; None where it reads through no guarded child) and, by
     case, the leaf and whether the port there is scheduled (one entry, keyed ``""``, for an
     alias through no selector, and for a port of the member's own, whose pins are on the
-    member, its leaf ``""``)."""
+    member, its leaf ``""``). A sealed member's exposed port is its own too: its pins are its
+    module's."""
     from finn.kernels.port import stream_port  # noqa: PLC0415 - base/port cycle
 
     kind = _member_type(cls, member)
     entry = alias_table(kind).get(port)
-    if entry is None:
+    if entry is None or getattr(kind, "sealed", False):
         declared = node_record(stream_port(kind, port))
         bound = {} if declared is None else declared.bindings
         return None, None, {"": ("", bound.get("schedule") is not None)}
@@ -1527,6 +1569,14 @@ class Kernel(Space):
     # sides (``producer``, ``consumer``) name (``finn.kernels.channels.Channel``).
     connects: ClassVar[bool] = False
 
+    # Whether it is sealed: its realization is one module of its own, which a parent places
+    # as one instance, and the ports it exposes are that module's own pins, each a member
+    # channel's outer port (``_check_sealed``; the DataflowCore's,
+    # ``finn.kernels.dataflow_core``). Otherwise it is transparent: its members' instances
+    # are flattened into its parent's netlist, and a port it exposes has its pins on the
+    # leaf its alias reaches.
+    sealed: ClassVar[bool] = False
+
     # Each member channel, by its name, and the member port its producer side and its
     # consumer side name, None for a side given as a value. Recorded when its class is made,
     # its connection rules checked (``_connect``).
@@ -1539,6 +1589,7 @@ class Kernel(Space):
         _read_intake(cls)
         _check_ports(cls)
         _expose_ports(cls)
+        _check_sealed(cls)
         _derive_control(cls)
         _derive_doubled(cls)
         _connect(cls)

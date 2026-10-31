@@ -34,7 +34,8 @@ from support.chain import (
 from support.helpers import FULL_DSP48E2
 from support.refusals import refused
 
-from finn.core.space import Available, Decision, DefinitionError, divisors_of, inspection
+from finn.core.space import Available, Decision, DefinitionError, Param, divisors_of, inspection
+from finn.core.space._aliases import alias_table
 from finn.core.space._scopes import EAGER, PERMUTE
 from finn.core.space.compiler import compile_model
 from finn.dataflow.gemm import Form, Window
@@ -57,8 +58,9 @@ from finn.kernels.composer import (
     compose,
 )
 from finn.kernels.configure import commit
+from finn.kernels.dataflow_core import DataflowCoreKernel
 from finn.kernels.matmul import KnownWeights, MatMulKernel
-from finn.kernels.port import port_direction
+from finn.kernels.port import exposed_pins, port_direction
 from finn.kernels.sides import BUILD, Outside, Side, SideKind, Steady
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import IntegerTensorValue
@@ -396,6 +398,8 @@ def test_two_graph_names_of_one_member_name_are_refused(cache: None) -> None:
         ("", "name-invalid"),
         ("root", "name-reserved"),
         ("query", "name-reserved"),
+        ("netlist", "name-reserved"),
+        ("connections", "name-reserved"),
         ("shell", "name-reserved"),
         ("__init__", "name-reserved"),
     ],
@@ -403,6 +407,32 @@ def test_two_graph_names_of_one_member_name_are_refused(cache: None) -> None:
 def test_a_name_no_member_can_take_is_refused(cache: None, name: str, code: str) -> None:
     found = _refused(declared({"activate": name}))
     assert [(each[0], each[1]) for each in found] == [(code, name)]
+
+
+@pytest.mark.parametrize(
+    ("label", "code", "message"),
+    [
+        ("hidden", "name-shared", "y: its edge port and a member are both named hidden"),
+        ("s_axis_0", "name-shared", "y: its edge port s_axis_0 is x's edge port too"),
+        ("m-axis", "name-invalid", "y: its edge port 'm-axis' is no ASCII name segment"),
+        (
+            "netlist",
+            "name-reserved",
+            "y: its edge port netlist is a name the core's class reserves",
+        ),
+        ("shell", "name-reserved", "y: its edge port shell is a name the core's class reserves"),
+    ],
+)
+def test_an_edge_port_is_named_as_its_label_which_no_other_name_takes(
+    cache: None, label: str, code: str, message: str
+) -> None:
+    """Each boundary side is an edge port of the class named as its label: a label that is
+    no name segment, a name the core's class declares or reserves, a member's name or
+    another edge port's is refused when composed, owned by the channel."""
+    relabelled = _wired(
+        y=channel(Port("second", "y"), Side.boundary(label), tensor=Y_TENSOR, platform=FULL_DSP48E2)
+    )
+    assert _refused(declared(channels_=relabelled)) == [(code, "y", message)]
 
 
 def test_a_channel_named_as_the_shell_member_is_refused_in_a_shell_or_not(cache: None) -> None:
@@ -631,3 +661,78 @@ def test_the_class_answers_each_channel_s_neighbours_and_hops(cache: None) -> No
     assert set(wired.value.links) == set(built.value[0].links)
     with pytest.raises(KeyError):
         neighbours(space_type, "first")
+
+
+def test_the_class_is_a_sealed_dataflow_core_whose_edge_ports_are_its_channels_outer_ports(
+    cache: None,
+) -> None:
+    """The composer's class is a ``DataflowCoreKernel_<digest>`` on ``DataflowCoreKernel``,
+    sealed, its id the core's. Each boundary side is an edge port named as its label, an
+    alias of its channel's outer port: it reads the port's own answers, and its pins are the
+    module's own (no leaf's instance), on the bus of its name."""
+    network = chain.chain()
+    point = network.point
+    space_type = type(point)
+    assert issubclass(space_type, DataflowCoreKernel) and space_type.sealed
+    assert space_type.__name__.startswith("DataflowCoreKernel_")
+    assert space_type.id == "finn.dataflow_core"
+    assert {
+        name: [end.path for end in entry.ends] for name, entry in alias_table(space_type).items()
+    } == {"s_axis_0": ["x.outer_in"], "m_axis_0": ["y.outer_out"]}
+    for edge, channel_name, port in (("s_axis_0", "x", "outer_in"), ("m_axis_0", "y", "outer_out")):
+        found = point.query(getattr(space_type, edge).stream_pins)
+        assert isinstance(found, Available)
+        assert found == point.query(getattr(getattr(space_type, channel_name), port).stream_pins)
+        exposed = exposed_pins(point, edge, found.value)
+        assert (exposed.label, exposed.instance) == (edge, "")
+        assert exposed.pins.transport.name == edge
+
+
+def _unchanneled(body: str) -> list[tuple[str, str]]:
+    """The findings a sealed core declared by hand with ``body`` is refused with."""
+    namespace: dict[str, object] = {
+        "DataflowCoreKernel": DataflowCoreKernel,
+        "ThresholdingAxiKernel": ThresholdingAxiKernel,
+        "Channel": Channel,
+        "Param": Param,
+        "Side": Side,
+        "X_TENSOR": X_TENSOR,
+        "FULL_DSP48E2": FULL_DSP48E2,
+    }
+    with pytest.raises(DefinitionError) as raised:
+        exec(f"class Core(DataflowCoreKernel):\n    {body}\n", namespace)
+    return [(each.code, each.message) for each in raised.value.findings]
+
+
+_EDGE = (
+    "producer: Side = Param()\n    x = Channel(tensor=X_TENSOR, producer=producer, "
+    "consumer=producer, platform=FULL_DSP48E2)\n    "
+)
+
+
+@pytest.mark.parametrize(
+    ("body", "exposed"),
+    [
+        ("activate = ThresholdingAxiKernel()\n    s_axis_0 = activate.input", "activate.input"),
+        (_EDGE + "s_axis_0 = x.source.output", "x.source.output"),
+        (_EDGE + "s_axis_0 = x.set", "x.source.set"),
+    ],
+)
+def test_a_sealed_core_s_edge_port_is_a_channel_s_outer_port(body: str, exposed: str) -> None:
+    """A sealed kernel's edge port aliases a member channel's outer port, where the boundary
+    rule applies: a kernel's port, or a port of a channel's member, is refused when the class
+    is made (``core-edge-unchanneled``); a channel's outer port is accepted."""
+    assert _unchanneled(body) == [
+        (
+            "core-edge-unchanneled",
+            f"Core.s_axis_0 exposes [{exposed!r}]: a sealed kernel's edge port is a member "
+            "channel's outer port, where the boundary rule applies, never a kernel's port",
+        )
+    ]
+
+    class Core(DataflowCoreKernel):
+        producer: Side = Param()
+        x = Channel(tensor=X_TENSOR, producer=producer, consumer=producer, platform=FULL_DSP48E2)
+        s_axis_0 = x.outer_in
+
+    assert [end.path for end in alias_table(Core)["s_axis_0"].ends] == ["x.outer_in"]

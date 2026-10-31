@@ -13,10 +13,11 @@ fact is a value, or a value a member states (``Stated("mm0", "carried_weights")`
 parameter channel's tensor and contents). The composer never reads a graph: FINN's graph
 layer reads one into a declaration, and a test declares one by hand.
 
-``compose(declared)`` makes the partition's class with ``composite()``, a ``Kernel``
-(``finn.kernels.base``, its ``id`` ``PRODUCER_ID``) whose members are its kernels and
-channels, and gives it its facts (``Composed``; ``Composed.design_space()`` opens it). The
-base connects its member channels' ports when the class is made, by their rules
+``compose(declared)`` makes the partition's class with ``composite()``, a
+``DataflowCoreKernel_<digest>`` on ``finn.kernels.dataflow_core.DataflowCoreKernel`` (a sealed
+``Kernel``) whose members are its kernels and channels and whose ports are its edge ports,
+and gives it its facts (``Composed``; ``Composed.design_space()`` opens it). The base
+connects its member channels' ports when the class is made, by their rules
 (``CONNECTION_RULES``: each member port on one channel at most, and each on one unless the
 structure leaves it idle), and wires each channel's hops and neighbours; a declaration that
 breaks a rule is refused (``PartitionRefused``, each finding owned by the graph name of the
@@ -40,7 +41,10 @@ member whose port it names). Its facts:
   stated facts to the members' derived values. A kernel's side is labelled below the
   member's name, as FINN's network labels it (``mm0.y``): a derived value at
   the root, ``<channel>-producer`` or ``<channel>-consumer``, the port's ``side``
-  ``under`` the member, so a channel's findings name the node as today's network's do.
+  ``under`` the member, so a channel's findings name the node as today's network's do;
+- **its edge ports**, one per boundary side, each a node alias of its channel's outer port
+  named as the side's label, its bus (``s_axis_0 = x.outer_in``, ``m_axis_0 =
+  y.outer_out``), after its members.
 
 **The side is structural.** A producer side is an output port (its actual port model's
 direction ``OUT``), a consumer side an input port, and a
@@ -62,8 +66,12 @@ kernels or channels (``Names.members``), and is reached by its own name (``Names
 (``member_name``). Refused, each finding naming the graph name: two graph names that meet
 one member name (``name-shared``), a name that is no ASCII name segment once substituted
 (``name-invalid``: ``\\W`` keeps non-ASCII letters), a name the engine reserves
-(``name-reserved``: ``finn.core.space.RESERVED_NAMES``, and ``__`` names), and the shell
-member's (``name-reserved``: ``shell``, in a shell or not). Inside the
+(``name-reserved``: ``finn.core.space.RESERVED_NAMES``, and ``__`` names), a name the core's
+class declares (``name-reserved``: ``netlist``, ``resources``, ...), and the shell member's
+(``name-reserved``: ``shell``, in a shell or not). An edge port's label is a name of the
+class too: refused where it is no ASCII name segment (``name-invalid``) or a name the core's
+class declares (``name-reserved``), and where it meets a member's name or another edge
+port's (``name-shared``), each finding naming the channel. Inside the
 class a key is a path (``mm0.compute.packed.pe``); at FINN's surface it is the pair
 (owner, key), the owner a graph name: ``Names.path`` and ``Names.pair`` map one to the
 other, and ``Names.roots`` maps each root member (a Param, a side) to (owner, fact).
@@ -129,6 +137,7 @@ from finn.kernels.budgets import (
     shell_members,
 )
 from finn.kernels.channels import Channel
+from finn.kernels.dataflow_core import DataflowCoreKernel
 from finn.kernels.port import exposed_name, port_direction, stream_port
 from finn.kernels.sides import Side, SideKind
 
@@ -140,9 +149,6 @@ CLASS_CACHE_BOUND = 16
 
 SIDES = ("producer", "consumer")
 """A channel's sides, the producer's first."""
-
-PRODUCER_ID = "finn.dataflow_core"
-"""The ``Kernel.id`` of every class the composer makes."""
 
 CONNECTION_RULES = ("port-unconnected", "port-connected-twice")
 """The base's rules on the ports its member channels connect (``finn.kernels.base``), which
@@ -285,6 +291,16 @@ def root_name(member: str, fact: str) -> str:
 
 _SEGMENT = re.compile(r"[A-Za-z0-9_]+")
 
+_DECLARED = frozenset(
+    name
+    for base in DataflowCoreKernel.__mro__
+    if issubclass(base, Kernel)
+    for name in vars(base)
+    if not name.startswith("__")
+)
+"""The names the core's class declares, its own and the base's (``netlist``, ``resources``,
+...): no member or edge port takes one."""
+
 
 def _refused(code: str, owner: str, message: str) -> Finding:
     return Finding(FindingKind.REJECTION, code, owner, message)
@@ -308,6 +324,12 @@ def _named(graph: list[str]) -> dict[str, str]:
             findings.append(
                 _refused("name-reserved", name, f"{name}: {member} is a name the engine reserves")
             )
+        elif member in _DECLARED:
+            findings.append(
+                _refused(
+                    "name-reserved", name, f"{name}: {member} is a name the core's class declares"
+                )
+            )
         elif member == SHELL:
             findings.append(
                 _refused(
@@ -326,6 +348,60 @@ def _named(graph: list[str]) -> dict[str, str]:
     if findings:
         raise PartitionRefused(findings)
     return names
+
+
+def _edges(declared: PartitionDeclaration, names: Mapping[str, str]) -> list[Finding]:
+    """Each edge port's label that cannot name it (the module docstring), by the graph name
+    of its channel: no name segment (``name-invalid``), a name the engine reserves or the
+    core's class declares, or the shell member's (``name-reserved``), or a member's or
+    another edge port's (``name-shared``)."""
+    members = set(names.values())
+    taken: dict[str, str] = {}
+    findings: list[Finding] = []
+    for owner, each in declared.channels.items():
+        for side in (each.producer, each.consumer):
+            if not (isinstance(side, Side) and side.kind is SideKind.BOUNDARY):
+                continue
+            label = side.label
+            if _SEGMENT.fullmatch(label) is None:
+                findings.append(
+                    _refused(
+                        "name-invalid",
+                        owner,
+                        f"{owner}: its edge port {label!r} is no ASCII name segment",
+                    )
+                )
+            elif (
+                label in RESERVED_NAMES
+                or label.startswith("__")
+                or label in _DECLARED
+                or label == SHELL
+            ):
+                findings.append(
+                    _refused(
+                        "name-reserved",
+                        owner,
+                        f"{owner}: its edge port {label} is a name the core's class reserves",
+                    )
+                )
+            elif label in members:
+                findings.append(
+                    _refused(
+                        "name-shared",
+                        owner,
+                        f"{owner}: its edge port and a member are both named {label}",
+                    )
+                )
+            elif label in taken:
+                findings.append(
+                    _refused(
+                        "name-shared",
+                        owner,
+                        f"{owner}: its edge port {label} is {taken[label]}'s edge port too",
+                    )
+                )
+            taken.setdefault(label, owner)
+    return findings
 
 
 # Names and a composition are records FINN reads, never values a Space holds: plain classes.
@@ -668,6 +744,14 @@ def _made(
             params[root] = given[fact] = _param(Channel, fact, owner, annotations, root)
             roots[root] = (owner, fact)
         channels[member] = nodes[member] = cast(Any, Channel)(**given)
+    # Its edge ports, each its channel's outer port by alias, named as its side's label.
+    edges: dict[str, object] = {}
+    for owner, each in declared.channels.items():
+        held = nodes[names[owner]]
+        if isinstance(each.producer, Side) and each.producer.kind is SideKind.BOUNDARY:
+            edges[each.producer.label] = getattr(held, "outer_in")
+        if isinstance(each.consumer, Side) and each.consumer.kind is SideKind.BOUNDARY:
+            edges[each.consumer.label] = getattr(held, "outer_out")
     # Named by its key's digest (its classes and enums by their module and name): the same
     # structure is the same name in every process.
     digest = hashlib.sha256(repr(key).encode()).hexdigest()[:12]
@@ -675,14 +759,14 @@ def _made(
         channels[SHELL] = _shell(declared, ranked, names, nodes, digest, params, annotations, roots)
     try:
         space_type = composite(
-            f"Partition_{digest}",
+            f"DataflowCoreKernel_{digest}",
             {
-                "id": PRODUCER_ID,
                 **params,
                 **{names[owner]: nodes[names[owner]] for owner in declared.kernels},
                 **channels,
+                **edges,
             },
-            base=Kernel,
+            base=DataflowCoreKernel,
             annotations=annotations,
         )
     except DefinitionError as error:
@@ -777,7 +861,7 @@ def compose(declared: PartitionDeclaration) -> Composed:
     """``declared`` as one Space class, kept by its structure, with its facts (the module
     docstring); a ``PartitionRefused`` naming each reason it cannot be."""
     names = _named([*declared.kernels, *declared.channels])
-    findings = _checked(declared)
+    findings = _edges(declared, names) + _checked(declared)
     if findings:
         raise PartitionRefused(findings)
     ranked = _ranked(declared)
@@ -815,7 +899,6 @@ def compose(declared: PartitionDeclaration) -> Composed:
 __all__ = [
     "CLASS_CACHE_BOUND",
     "CONNECTION_RULES",
-    "PRODUCER_ID",
     "SEPARATOR",
     "ChannelDeclaration",
     "Composed",

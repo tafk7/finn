@@ -28,7 +28,7 @@ import numpy as np
 import pytest
 from qonnx.core.datatype import DataType
 from support.chain import STEM, chain
-from support.conformance import Sample, design_module, place
+from support.conformance import Sample, design_module, edges, place
 from support.helpers import (
     FULL_DSP48E2,
     built,
@@ -334,9 +334,14 @@ def test_a_pumped_module_gets_its_doubled_clock_aligned(tmp_path: Path) -> None:
     assert isinstance(found, Available)
     module = found.value
     assert module.abi.clock_alignments == (ClockAlignment("ap_clk", "ap_clk2x"),)
-    words: dict[str, Words] = {name: ([0], 8) for name in inputs}
+    ports = edges(inputs, ["y_channel"], None)
+    words: dict[str, Words] = {ports[name]: ([0], 8) for name in inputs}
     bench = stream_bench(
-        module, tmp_path, inputs=words, outputs={"y_channel": ([0], 8)}, toolchain=host_toolchain()
+        module,
+        tmp_path,
+        inputs=words,
+        outputs={ports["y_channel"]: ([0], 8)},
+        toolchain=host_toolchain(),
     )
     # Half the clock's period; each rising edge of ap_clk is one of ap_clk2x.
     assert (

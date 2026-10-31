@@ -341,14 +341,14 @@ def placed_on(channels: int, table: IntegerTensor) -> ThresholdingAxiKernel:
     network = by_hand(
         {
             "x": channel(
-                Side.boundary("x"),
+                Side.boundary("s_axis_0"),
                 Port("activate", "input"),
                 tensor=x_tensor,
                 platform=FULL_DSP48E2,
             ),
             "y": channel(
                 Port("activate", "output"),
-                Side.boundary("y"),
+                Side.boundary("m_axis_0"),
                 tensor=y_tensor,
                 platform=FULL_DSP48E2,
             ),

@@ -12,7 +12,8 @@ each sample it
    ``<port>_tensor`` where it declares that Param (else the case gives it among the
    kernel's facts: MatMul's ``weights``) and an output's the kernel's own
    (``<port>_tensor``, its statement), its one side the kernel's port (``Port("kernel",
-   "<port>")``), its other the boundary's AXIS port of its name. It commits the sample's
+   "<port>")``), its other the boundary's AXIS port (``edges``: an input's ``s_axis_<i>``, an
+   output's ``m_axis_<j>``, each in order). It commits the sample's
    factors and the pinned ``choices``, then the kernel's other open choices by their
    policies (``Placed``, on the kernel alone, as conversion sets them) and every
    channel's by the channel's policies, as the cut sets them (its transport and its input
@@ -91,7 +92,7 @@ import re
 import tempfile
 import warnings
 import zlib
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from math import prod
 from pathlib import Path
@@ -366,6 +367,17 @@ def _stem(space_type: type[Kernel]) -> str:
     return f"{space_type.__name__}Conformance".lower()
 
 
+def edges(inputs: Iterable[str], outputs: Iterable[str], fed: str | None) -> dict[str, str]:
+    """The boundary's AXIS port each channel meets, by channel: each input's
+    ``s_axis_<i>`` but the one a memory feeds (``fed``), and each output's ``m_axis_<j>``, in
+    order. A core's edge port is named as its port, so it never meets the channel's name."""
+    driven = [name for name in inputs if name != fed]
+    return {
+        **{name: f"s_axis_{index}" for index, name in enumerate(driven)},
+        **{name: f"m_axis_{index}" for index, name in enumerate(outputs)},
+    }
+
+
 def _design(
     space_type: type[Kernel],
     inputs: Mapping[str, Tensor],
@@ -374,18 +386,21 @@ def _design(
     fed: tuple[str, Traversal, object] | None = None,
 ) -> Any:
     """A partition of the kernel on one channel per tensor, each on the kernel's port of its
-    name and the boundary's AXIS port of its own; ``fed``'s channel from a memory
+    name and the boundary's AXIS port (``edges``); ``fed``'s channel from a memory
     (``source``)."""
     members: dict[str, Any] = {}
     tensors = {**inputs, **outputs}
+    ports = edges(inputs, outputs, None if fed is None else fed[0])
     for name, tensor in tensors.items():
         port = Port(KERNEL, _port_name(name))
         if name in inputs:
             fed_here = fed is not None and fed[0] == name
-            producer = Port(SOURCE, "output") if fed_here else Side.boundary(name)
+            producer = Port(SOURCE, "output") if fed_here else Side.boundary(ports[name])
             members[name] = channel(producer, port, tensor=tensor, platform=FULL_DSP48E2)
         else:
-            members[name] = channel(port, Side.boundary(name), tensor=tensor, platform=FULL_DSP48E2)
+            members[name] = channel(
+                port, Side.boundary(ports[name]), tensor=tensor, platform=FULL_DSP48E2
+            )
     formals = {name: f"{_port_name(name)}_tensor" for name in inputs}
     given = {
         formals[name]: tensor
@@ -857,13 +872,16 @@ def _simulate(
     tolerance: float | None = None,
 ) -> list[tuple[Sample, str, str]]:
     contracts = _contracts(point, space_type, sample, [*inputs, *outputs])
+    ports = edges(inputs, outputs, next(iter(inputs)) if sample.adapter else None)
     expected = reference(**{name: array.copy() for name, array in values.items()})
     produced = set(contracts) - set(inputs)
     assert set(expected) == produced, f"the reference returns {sorted(expected)}, not {produced}"
     driven: dict[str, tuple[list[int], int]] = {}
     for name, array in values.items():
         if not (sample.adapter and name == next(iter(inputs))):
-            driven[name] = _words(unreplayed(contracts[name].form), array, contracts[name].element)
+            driven[ports[name]] = _words(
+                unreplayed(contracts[name].form), array, contracts[name].element
+            )
     checked: dict[str, tuple[list[int], int]] = {}
     # The float outputs compared within the tolerance where their words differ.
     tolerated = (
@@ -875,14 +893,14 @@ def _simulate(
         contract, array = contracts[name], np.asarray(expected[name])
         assert array.shape == contract.form.shape, f"{name}: the reference gives {array.shape}"
         if _floating(contract.element):
-            checked[name] = _words(contract.form, array, contract.element)
+            checked[ports[name]] = _words(contract.form, array, contract.element)
             continue
         try:
             low, high = ordinary_integer_bounds(contract.element.dtype)
         except DatatypeError as error:
             raise AssertionError(f"{name}: the harness streams integers and FLOAT32") from error
         assert low <= array.min() and array.max() <= high, f"{name} leaves {contract.element}"
-        checked[name] = _words(contract.form, array.astype(np.int64), contract.element)
+        checked[ports[name]] = _words(contract.form, array.astype(np.int64), contract.element)
     module = _value(design_module(point, space_type), space_type, sample)
     # A cyclic source (the adapter sample's memory, or the kernel itself) never stops.
     repeating = sample.adapter or any(
@@ -907,14 +925,17 @@ def _simulate(
             exact = {
                 name
                 for name in produced - tolerated
-                if list(error.received[name]) != list(checked[name][0])
+                if list(error.received[ports[name]]) != list(checked[ports[name]][0])
             }
             far = (
                 {}
                 if tolerance is None
                 else {
                     name: _beyond(
-                        contracts[name].form, error.received[name], expected[name], tolerance
+                        contracts[name].form,
+                        error.received[ports[name]],
+                        expected[name],
+                        tolerance,
                     )
                     for name in tolerated
                 }
@@ -931,7 +952,7 @@ def _simulate(
                     name: _stream(point, name, contracts[name].form, contracts[name])
                     for name in produced
                 },
-                error.received,
+                {name: error.received[ports[name]] for name in produced},
                 inputs={
                     name: _stream(point, name, unreplayed(contracts[name].form), contracts[name])
                     for name in inputs

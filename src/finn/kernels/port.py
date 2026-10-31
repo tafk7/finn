@@ -374,8 +374,10 @@ def port_direction(space_type: type[Space], port: str) -> Direction | None:
 # member's port it exposes (``x = compute.x``) under the alias's name, its pins on the leaf
 # whose module has them: the node the alias reaches, by its owner's path below the kernel,
 # each member read where its holder's netlist places it (``Kernel.placed_at``) and a
-# selector's case by its key (``compute.packed``). The port itself stays its owner's, and so
-# do its answers: only the name and the instance change, as its kernel presents it.
+# selector's case by its key (``compute.packed``). A sealed kernel (``Kernel.sealed``) is one
+# module of its own: a port it exposes, a member channel's outer port, has its pins on that
+# module, as a port of its own. The port itself stays its owner's, and so do its answers:
+# only the name and the instance change, as its kernel presents it.
 
 
 def exposed_name(space_type: type[Space], port: str) -> str | None:
@@ -394,10 +396,14 @@ def exposed_side(space_type: type[Space], port: str, side: Side) -> Side:
 def exposed_pins(point: Space, port: str, found: PortPins) -> PortPins:
     """``found``, port ``port``'s stream pins read at kernel ``point`` through
     ``stream_port``, as ``point`` presents them: an exposed port's under the alias's name,
-    on the leaf the alias reaches (``PortPins.instance``, above)."""
+    on the leaf the alias reaches (``PortPins.instance``, above); a sealed kernel's
+    (``Kernel.sealed``) on its own module, as a port of its own: a channel's outer port,
+    which it exposes, reaches no leaf."""
     name = exposed_name(type(point), port)
     if name is None:
         return found
+    if getattr(type(point), "sealed", False):
+        return PortPins(name, found.pins)
     return PortPins(name, found.pins, _instance(point, getattr(point, port)))
 
 
