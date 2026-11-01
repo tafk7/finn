@@ -85,11 +85,11 @@ from finn.transformation.kernels import PackagePartition
 from finn.transformation.kernels.cut import CutKernelPartition
 from finn.transformation.kernels.integration import integration
 from finn.transformation.kernels.package import (
-    source_roots,
     boundary_facts,
     free_side,
     ooc_member_resources,
     resources_of,
+    source_roots,
     stream_order,
 )
 

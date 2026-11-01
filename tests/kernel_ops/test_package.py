@@ -55,10 +55,10 @@ from finn.toolchain.vivado import hierarchical_utilization
 from finn.transformation.kernels import PackagePartition
 from finn.transformation.kernels.cut import MakeCutChoices
 from finn.transformation.kernels.package import (
-    source_roots,
     ElaboratePartition,
     ip_key,
     partition_utilization_report,
+    source_roots,
 )
 
 
