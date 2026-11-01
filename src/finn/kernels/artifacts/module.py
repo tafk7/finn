@@ -26,7 +26,7 @@ a configuration may be is decided in the Spaces that derive it.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, fields, is_dataclass, replace
 from enum import Enum
 from typing import Union
@@ -399,10 +399,33 @@ def merge(*fragments: Fragment) -> Fragment:
     )
 
 
+def instance_name(label: str) -> str:
+    """The netlist's instance of the module's instance ``label``: ``u_`` and the label's
+    segments joined by ``_``, each segment that repeats the one before it dropped
+    (``x_out0.output_adapter.vpc.vpc`` is ``u_x_out0_output_adapter_vpc``): what a synthesis
+    report names it by. A module whose labels give one instance name twice is not made
+    (``instance_collisions``)."""
+    kept: list[str] = []
+    for segment in label.split("."):
+        if not kept or kept[-1] != segment:
+            kept.append(segment)
+    return "u_" + "_".join(kept)
+
+
+def instance_collisions(labels: Iterable[str]) -> dict[str, tuple[str, ...]]:
+    """Each instance name (``instance_name``) that two or more of ``labels`` give, with
+    those labels; empty where every label gives its own."""
+    given: dict[str, list[str]] = {}
+    for label in labels:
+        given.setdefault(instance_name(label), []).append(label)
+    return {name: tuple(found) for name, found in given.items() if len(found) > 1}
+
+
 @dataclass(frozen=True)
 class Composed:
-    """A flat netlist with an ABI: one generated module. Well formed when its links name
-    pins that exist and every instance input and root output has exactly one driver."""
+    """A flat netlist with an ABI: one generated module. Well formed when no two of its
+    instance labels give one instance name (``instance_collisions``), its links name pins
+    that exist and every instance input and root output has exactly one driver."""
 
     implementation_id: str
     implementation_version: str
@@ -419,6 +442,12 @@ class Composed:
         for label in leaves:
             if not _LABEL.fullmatch(label):
                 raise BuildError(f"{label!r} is not an instance label of the root")
+        collided = instance_collisions(leaves)
+        if collided:
+            raise BuildError(
+                "two instance labels give one instance name: "
+                + "; ".join(f"{list(labels)} each {name}" for name, labels in collided.items())
+            )
 
         def pins_of(instance: str | None, what: str) -> Mapping[str, PinInfo]:
             if instance is None:
@@ -548,6 +577,8 @@ __all__ = [
     "ScalarTable",
     "declared_registers",
     "fingerprint",
+    "instance_collisions",
+    "instance_name",
     "merge",
     "module_name",
 ]

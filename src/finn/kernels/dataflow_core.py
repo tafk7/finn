@@ -87,7 +87,7 @@ from finn.core.space._aliases import alias_table
 from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.artifacts.module import Composed as Module
-from finn.kernels.artifacts.module import Fragment, ProducerIdentity
+from finn.kernels.artifacts.module import Fragment, ProducerIdentity, instance_collisions
 from finn.kernels.artifacts.top import compose as top
 from finn.kernels.base import _END, Kernel, _connects, _installed, _members, _read_none
 from finn.kernels.channels import Neighbours
@@ -439,11 +439,26 @@ def core_module(
     """A core's module (``finn.kernels.artifacts.top.compose``), its stem ``stem`` and derived by
     ``producer``, of its netlist (``Kernel.netlist``) and its edge
     (``DataflowCoreKernel.edge_buses``); refused where its edge leaves a marker pin unconsumed or
-    unruled (``channel-top-marker``, ``top_markers``), or where the top is not well formed
-    (``kernel-netlist``)."""
+    unruled (``channel-top-marker``, ``top_markers``), where two of its members' labels give one
+    instance name (``instance-names-collide``, the labels named), or where the top is not well
+    formed (``kernel-netlist``)."""
     unruled = top_markers(fragment, edge)
     if unruled:
         return Rejected(unruled)
+    collided = instance_collisions(label for label, _ in fragment.instances)
+    if collided:
+        return Rejected(
+            tuple(
+                Finding(
+                    FindingKind.REJECTION,
+                    "instance-names-collide",
+                    "",
+                    f"the instance labels {list(labels)} are each the instance {name}",
+                    (("instance", name), ("labels", labels)),
+                )
+                for name, labels in collided.items()
+            )
+        )
     try:
         return top(producer, stem, fragment, edge)
     except ArtifactError as error:

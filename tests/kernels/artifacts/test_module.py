@@ -35,6 +35,8 @@ from finn.kernels.artifacts.module import (
     LinkEnd,
     RegisterMap,
     fingerprint,
+    instance_collisions,
+    instance_name,
     merge,
     module_name,
 )
@@ -206,6 +208,26 @@ def test_a_composed_module_s_digest_leaves_its_name_out() -> None:
     other = composed(stem="other")
     assert fingerprint(other) == fingerprint(composed())
     assert module_name(other) == f"other_{fingerprint(composed())[:16]}"
+
+
+def test_an_instance_is_its_label_a_repeated_segment_dropped() -> None:
+    assert instance_name("MatMul_0.compute.packed") == "u_MatMul_0_compute_packed"
+    # A stage named for its module, and the module in it: said once.
+    assert instance_name("x_out0.output_adapter.vpc.vpc") == "u_x_out0_output_adapter_vpc"
+    assert instance_name("x_out0.adapter.input_gen.input_gen") == "u_x_out0_adapter_input_gen"
+    # Only a segment that repeats the one before it.
+    assert instance_name("a.b.a") == "u_a_b_a" and instance_name("a.a.a") == "u_a"
+
+
+def test_two_labels_of_one_instance_name_make_no_module() -> None:
+    # A channel's member and a kernel's member a segment apart, and a repeat dropped.
+    labels = ("MatMul_0_param0.source", "MatMul_0.param0.source", "x.vpc.vpc", "x.vpc", "y")
+    assert instance_collisions(labels) == {
+        "u_MatMul_0_param0_source": ("MatMul_0_param0.source", "MatMul_0.param0.source"),
+        "u_x_vpc": ("x.vpc.vpc", "x.vpc"),
+    }
+    with pytest.raises(BuildError, match=r"\['a.b', 'a_b'\] each u_a_b"):
+        Composed("test.top", "1", "top", ROOT, Fragment((("a.b", stage()), ("a_b", stage()))))
 
 
 def test_a_composed_module_links_only_pins_that_exist() -> None:

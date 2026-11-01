@@ -55,6 +55,7 @@ from finn.kernels.artifacts.module import (
     Link,
     LinkEnd,
     Module,
+    instance_name,
     module_name,
 )
 from finn.kernels.artifacts.projection import content_digest
@@ -202,12 +203,6 @@ def _bits(net: str, width: int, offset: int = 0, bits: int | None = None) -> str
 
 def _constant(width: int, value: int) -> str:
     return f"{width}'h{value:x}"
-
-
-def instance_name(label: str) -> str:
-    """The netlist's instance of the module's instance ``label``: what a synthesis
-    report names it by."""
-    return "u_" + label.replace(".", "_")
 
 
 def instance_net(label: str, pin: str) -> str:
@@ -389,7 +384,6 @@ def netlist(module: Composed, name: str) -> str:
 __all__ = [
     "EmittedModule",
     "emit_module",
-    "instance_name",
     "instance_net",
     "netlist",
 ]

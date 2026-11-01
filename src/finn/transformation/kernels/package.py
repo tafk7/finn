@@ -113,10 +113,10 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import shape
 from finn.custom_op.kernels.shell import Configured, configured_network, refuse_unverified
 from finn.dataflow.traversal import Traversal, one_pass, passes
-from finn.kernels.artifacts.build import EmittedModule, emit_module, instance_name
+from finn.kernels.artifacts.build import EmittedModule, emit_module
 from finn.kernels.artifacts.interface import INTERFACE_FILE, describe_interface
 from finn.kernels.artifacts.ipxact import interface_names, package_tcl, vlnv
-from finn.kernels.artifacts.module import Abi, declared_registers, module_name
+from finn.kernels.artifacts.module import Abi, declared_registers, instance_name, module_name
 from finn.kernels.artifacts.rtl import Declined, check_abi
 from finn.kernels.artifacts.sources import include_directories, is_header
 from finn.kernels.movers import MoverContract

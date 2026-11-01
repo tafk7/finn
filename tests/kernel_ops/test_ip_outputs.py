@@ -67,9 +67,8 @@ from finn.core.reporting.findings import FindingKind
 from finn.core.reporting.manifest import STORED
 from finn.core.rtlsim_bench import SimulationFailed
 from finn.custom_op.kernels.shell import configured_network, verify_partition
-from finn.kernels.artifacts.build import instance_name
 from finn.kernels.artifacts.interface import STREAM_FACTS
-from finn.kernels.artifacts.module import module_name
+from finn.kernels.artifacts.module import instance_name, module_name
 from finn.platform.capabilities import Resources
 from finn.platform.request import TargetRequest
 from finn.platform.resolve import resolve_target

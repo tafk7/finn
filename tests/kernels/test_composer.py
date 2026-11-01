@@ -1010,8 +1010,8 @@ def test_the_declaration_s_name_and_order_are_facts_of_the_class(cache: None) ->
 def test_the_class_answers_its_netlist_edge_cycles_and_resources(cache: None) -> None:
     """The class answers what its module is made of: its netlist (``Kernel.netlist``), its
     members in its instance order, and its module's edge (``DataflowCoreKernel.edge_buses``:
-    each edge port's bus, in its instance order); its module, its IP, of them, named after
-    its name and derived by its class (``DataflowCoreKernel.module``); its cycles (the most
+    each edge port's bus, in its instance order); its module, its IP, of them, its stem its
+    kind and derived by its class (``DataflowCoreKernel.module``); its cycles (the most
     any member takes) and its resources (its members' sum). Its composition reads each of
     them."""
     network = chain.chain()
@@ -1032,6 +1032,15 @@ def test_the_class_answers_its_netlist_edge_cycles_and_resources(cache: None) ->
     # Its stem is its kind, whatever the core is called (its name, "partition" here).
     assert made.stem == STEM and made.fragment == wired.value
     assert made == core_module(PRODUCER, STEM, wired.value, edge.value)
+    # A netlist two of whose labels give one instance name is refused, the labels named.
+    label, leaf = wired.value.instances[0]
+    repeated = f"{label}.{label.split('.')[-1]}"
+    doubled = replace(wired.value, instances=(*wired.value.instances, (repeated, leaf)))
+    refused = core_module(PRODUCER, STEM, doubled, edge.value)
+    assert isinstance(refused, Rejected)
+    assert [(each.code, dict(each.details)["labels"]) for each in refused.findings] == [
+        ("instance-names-collide", (label, repeated))
+    ]
     cycles = point.query(Kernel.frame_cycles)
     assert isinstance(cycles, Available) and network.answer(Kernel.frame_cycles) == cycles
     assert cycles.value == max(
