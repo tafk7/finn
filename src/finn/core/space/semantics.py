@@ -5,8 +5,14 @@
 space.
 
 Values are immutable, and ``==`` with ``hash`` is their semantics. Two values of a member
-are the same exactly when they are of one type and ``==`` holds them equal (``same``); the
-engine compares, interns and keys values by that alone, and copies none of them.
+are the same exactly when they are of one type and ``==`` holds them equal, item by item
+where that ``==`` is the engine's to see through (``same``): a tuple's items, a frozen
+set's members and a value class's fields (``value_class``: a frozen dataclass whose ``==``
+and hash ``dataclasses`` generates) are each of one type and the same in turn, so
+``Box(3)`` is not ``Box(3.0)``, nor ``(True,)`` ``(1,)``. A registered value type, an enum
+member and a class with an ``==`` of its own are compared by that ``==``. ``identity`` is a
+value as a key equal exactly where values are the same. The engine compares, interns and
+keys values by that alone, and copies none of them.
 
 **The type check** is the member's annotation (``annotation_type``): a class recognizes its
 instances (``isinstance``, a ``bool`` not taken for an ``int``), a parametrized generic its
@@ -249,12 +255,132 @@ def recognize(semantics: ValueSemantics[T], value: object, *, owner: str, role: 
 
 def same(left: object, right: object, *, owner: str, role: str) -> bool:
     """Whether two values are the same value: the same object, or of one type and equal by
-    ``==``; an ``==`` that raises fails ``owner``."""
+    ``==``, item by item where the engine sees through that ``==`` (a tuple's items, a
+    frozen set's members, a value class's fields); an ``==`` that raises fails ``owner``."""
     if left is right:
         return True
     if type(left) is not type(right):
         return False
-    return _owned(lambda: bool(left == right), owner, role)
+    return _owned(lambda: _same(left, right), owner, role)
+
+
+def _same(left: object, right: object) -> bool:
+    """``same`` for two values of one type."""
+    kind = _walked(type(left))
+    if kind is tuple:
+        items = cast("tuple[object, ...]", left)
+        others = cast("tuple[object, ...]", right)
+        return len(items) == len(others) and all(
+            item is other or (type(item) is type(other) and _same(item, other))
+            for item, other in zip(items, others)
+        )
+    if kind is frozenset:
+        return bool(left == right) and identity(left) == identity(right)
+    if kind is _VALUE_CLASS:
+        return all(
+            (mine := getattr(left, name)) is (theirs := getattr(right, name))
+            or (type(mine) is type(theirs) and _same(mine, theirs))
+            for name in _compared(type(left))
+        )
+    return bool(left == right)
+
+
+def identity(value: object) -> object:
+    """``value`` as a key equal exactly where two values are the same (``same``): its type
+    with its items, members or fields, each so in turn, where the engine sees through its
+    ``==``; else its type with itself. Hashable wherever the value is."""
+    kind = type(value)
+    walked = _walked(kind)
+    if walked is tuple:
+        return (kind, tuple(identity(item) for item in cast("tuple[object, ...]", value)))
+    if walked is frozenset:
+        return (kind, frozenset(identity(item) for item in cast("frozenset[object]", value)))
+    if walked is _VALUE_CLASS:
+        return (kind, tuple(identity(getattr(value, name)) for name in _compared(kind)))
+    return (kind, value)
+
+
+_VALUE_CLASS = object()
+_WALKED: weakref.WeakKeyDictionary[type, object] = weakref.WeakKeyDictionary()
+"""``_walked``'s answer by class, made once."""
+
+
+def _walked(kind: type) -> object:
+    """How ``same`` sees through ``kind``'s ``==``: ``tuple`` (item by item: a tuple, or a
+    tuple subclass comparing as one, a named tuple's), ``frozenset`` (member by member,
+    likewise), ``_VALUE_CLASS`` (field by field: ``value_class``), else ``None`` (by its
+    ``==``: a plain value, a registered value type, an enum member, a class with an ``==``
+    of its own)."""
+    if kind is tuple or kind is frozenset:
+        return kind
+    if kind in _PLAIN:
+        return None
+    found = _WALKED.get(kind, _MISSING)
+    if found is _MISSING:
+        found = _WALKED[kind] = _walk(kind)
+    return found
+
+
+_MISSING = object()
+_PLAIN: frozenset[type] = frozenset((bool, int, float, complex, str, bytes, type(None)))
+
+
+def _walk(kind: type) -> object:
+    if issubclass(kind, Enum) or is_value_type(kind):
+        return None
+    for base in (tuple, frozenset):
+        if issubclass(kind, base) and kind.__eq__ is base.__eq__ and kind.__hash__ is base.__hash__:
+            return base
+    return _VALUE_CLASS if value_class(kind) else None
+
+
+@dataclass(frozen=True)
+class _Generated:
+    """A frozen dataclass: where ``dataclasses`` compiles the methods it generates."""
+
+
+_GENERATED = _Generated.__eq__.__code__.co_filename
+
+
+def _generated(method: object) -> bool:
+    code = getattr(method, "__code__", None)
+    return code is not None and code.co_filename == _GENERATED
+
+
+_VALUE_CLASSES: weakref.WeakKeyDictionary[type, bool] = weakref.WeakKeyDictionary()
+"""``value_class``'s answer by class, made once."""
+
+
+def value_class(kind: type) -> bool:
+    """Whether ``kind`` is a value class, compared (``same``) and keyed (the node cache's
+    ``key``) field by field: a frozen dataclass (declared so itself, not by a base) whose
+    ``__eq__`` and ``__hash__`` are the ones ``dataclasses`` generates, comparing the
+    fields' values with ``==``. A hand-written ``__eq__`` or hash, an ``eq=False``
+    dataclass (equal by identity) or a mutable one is not."""
+    found = _VALUE_CLASSES.get(kind)
+    if found is None:
+        found = _VALUE_CLASSES[kind] = _value_class(kind)
+    return found
+
+
+def _value_class(kind: type) -> bool:
+    params = kind.__dict__.get("__dataclass_params__")
+    if params is None or not (params.frozen and params.eq):
+        return False
+    return _generated(kind.__dict__.get("__eq__")) and _generated(kind.__dict__.get("__hash__"))
+
+
+_COMPARED: weakref.WeakKeyDictionary[type, tuple[str, ...]] = weakref.WeakKeyDictionary()
+"""A value class's compared fields' names, made once."""
+
+
+def _compared(kind: type) -> tuple[str, ...]:
+    names = _COMPARED.get(kind)
+    if names is None:
+        names = _COMPARED[kind] = tuple(
+            item.name for item in dataclasses.fields(cast(Any, kind)) if item.compare
+        )
+    return names
 
 
 R = TypeVar("R")
@@ -503,7 +629,9 @@ __all__ = [
     "canonical",
     "default_semantics",
     "holds_mutable",
+    "identity",
     "optional",
     "same",
     "union",
+    "value_class",
 ]

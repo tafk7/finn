@@ -321,10 +321,12 @@ def test_a_numpy_number_is_taken_as_it_is_as_a_plain_number() -> None:
         assert meter.box is not None
         assert meter.box.inner == value and type(meter.box.inner) is type(value)
         assert meter.with_facts({Meter.box: Box((value,))}).box == Box((value,))
-    # Hashed by its value: a value class holding it is one value with one holding the plain
-    # number ``==`` holds it equal to (the value class's ``==``).
+    # Hashed by its value, and of its own type: a value class holding it is not one holding
+    # the plain number ``==`` holds it equal to (the engine compares its fields, each of one
+    # type), though the two hash alike.
     given = held(design_space(Meter(rate=1.0, box=Box(numpy.int64(3))))).ds
-    assert given == held(design_space(Meter(rate=1.0, box=Box(3)))).ds
+    plain = held(design_space(Meter(rate=1.0, box=Box(3)))).ds
+    assert given != plain and hash(given) == hash(plain)
     signed = design_space(Meter(rate=1.0, box=Box((numpy.float32(-0.0), numpy.complex64(-0j)))))
     assert signed.box is not None
     zero, complex_zero = cast(tuple[object, object], signed.box.inner)
@@ -338,3 +340,49 @@ def test_a_numpy_number_is_taken_as_it_is_as_a_plain_number() -> None:
     # A numpy value that is no number is not admitted by this: an array is mutable.
     with pytest.raises(RequestError, match="^box: Box.inner: a ndarray"):
         signed.with_facts({Meter.box: Box(numpy.zeros(2))})
+
+
+# -- A value is the same as another of one type alone, item by item -------------------------
+
+
+def test_a_value_equal_to_one_met_before_keeps_its_own_type() -> None:
+    """A value class's fields, a tuple's items and a frozen set's members are each of one type
+    in the same value: a value equal by ``==`` to one a live design space holds, of another
+    type inside, is a design space of its own, holding what it was given, whatever was met
+    before. A change to it is a change; one to the same value is none."""
+    numpy: Any = pytest.importorskip("numpy")
+    seen: list[Meter] = []
+    for earlier, later in (
+        (Offset(3), numpy.int64(3)),
+        (Offset(3), 3),
+        (3, 3.0),
+        (True, 1),
+        ((True, 2), (1, 2)),
+        (frozenset({1}), frozenset({True})),
+        (Box(1), Box(1.0)),
+    ):
+        first = design_space(Meter(rate=1.0, box=Box(earlier)))
+        second = design_space(Meter(rate=1.0, box=Box(later)))
+        seen.extend((first, second))
+        assert Box(earlier) == Box(later)
+        for point, inner in ((first, earlier), (second, later)):
+            assert point.box is not None and same(point.box.inner, inner)
+        assert held(first).ds != held(second).ds
+        assert held(first).ds.layer is not held(second).ds.layer
+        changed = first.with_facts({Meter.box: Box(later)})
+        assert changed is not first and changed.box is not None
+        assert same(changed.box.inner, later)
+        assert first.with_facts({Meter.box: Box(earlier)}) is first
+    # The same value given anew is the one design space.
+    again = design_space(Meter(rate=1.0, box=Box(Offset(3))))
+    assert held(again).ds == held(seen[0]).ds
+    assert held(again).ds.layer is held(seen[0]).ds.layer
+
+
+def same(value: object, other: object) -> bool:
+    """Of one type, item by item, and equal by ``==``."""
+    if isinstance(value, (tuple, frozenset)) and type(value) is type(other):
+        mine = sorted(value, key=repr) if isinstance(value, frozenset) else value
+        theirs = sorted(other, key=repr) if isinstance(other, frozenset) else other  # type: ignore[arg-type]
+        return len(mine) == len(theirs) and all(map(same, mine, theirs))
+    return type(value) is type(other) and value == other

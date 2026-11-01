@@ -91,6 +91,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, cast
 
 from .._value_types import is_value_type
+from ..semantics import value_class
 from .value import hashkey
 
 if TYPE_CHECKING:
@@ -109,42 +110,6 @@ Table = dict[Member, dict[ReadSet, dict[object, "Ans"]]]
 
 WIDE = 32
 """The most reads a kept answer's read set holds, by default (``NodeCache(wide=...)``)."""
-
-
-@dataclasses.dataclass(frozen=True)
-class _Generated:
-    """A frozen dataclass: where ``dataclasses`` compiles the methods it generates."""
-
-
-_GENERATED = _Generated.__eq__.__code__.co_filename
-
-
-def _generated(method: object) -> bool:
-    code = getattr(method, "__code__", None)
-    return code is not None and code.co_filename == _GENERATED
-
-
-_VALUE_CLASSES: weakref.WeakKeyDictionary[type, bool] = weakref.WeakKeyDictionary()
-"""``value_class``'s answer by class, made once."""
-
-
-def value_class(kind: type) -> bool:
-    """Whether the cache keys ``kind``'s instances field by field: a frozen dataclass
-    (declared so itself, not by a base) whose ``__eq__`` and ``__hash__`` are the ones
-    ``dataclasses`` generates, comparing the fields' values with ``==``. A hand-written
-    ``__eq__`` or hash, an ``eq=False`` dataclass (equal by identity) or a mutable one is
-    not."""
-    found = _VALUE_CLASSES.get(kind)
-    if found is None:
-        found = _VALUE_CLASSES[kind] = _value_class(kind)
-    return found
-
-
-def _value_class(kind: type) -> bool:
-    params = kind.__dict__.get("__dataclass_params__")
-    if params is None or not (params.frozen and params.eq):
-        return False
-    return _generated(kind.__dict__.get("__eq__")) and _generated(kind.__dict__.get("__hash__"))
 
 
 def enum_key(member: Enum) -> object:
