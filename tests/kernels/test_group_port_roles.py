@@ -95,6 +95,10 @@ def test_static_group_lookup_stops_at_real_spaces_and_unknown_names() -> None:
     class Parent(Kernel):
         id = "test.group-port-stop"
         child = Host()
+        # The child's ports, exposed under names of the parent's own.
+        target = child.group.ports.target
+        explicit = child.group.ports.explicit
+        tapped = child.group.ports.tapped
 
     assert port_direction(Parent, "child.group.ports.target") is None
     assert port_direction(Host, "group.ports.missing") is None

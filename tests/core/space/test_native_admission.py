@@ -32,7 +32,7 @@ from finn.core.space import (
 from finn.core.space._failure import current
 from finn.core.space._running.evaluate import evaluation
 from finn.core.space._running.value import DesignSpace
-from finn.core.space.declarations import ValueRef
+from finn.core.space.declarations import DecisionDecl, ValueRef
 from finn.core.space.occurrence import ask, held
 
 
@@ -89,7 +89,7 @@ def test_dependent_admission_all_request_and_declaration_orders(
                 accepted, instance, outcomes = report.accepted, report.instance, report.outcomes
             else:
                 edits = [
-                    point.field(cast(Decision[int], getattr(space_type, name))).change(value)
+                    point.field(cast(DecisionDecl[int], getattr(space_type, name))).change(value)
                     for name, value in requested.items()
                 ]
                 committed = point.try_with_choices(*edits)

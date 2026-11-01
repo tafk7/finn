@@ -471,10 +471,17 @@ def test_a_kernel_with_children_presents_a_childs_port_as_its_own() -> None:
     assert exposed.pins == point.kernel.x.stream_pins.pins
     assert exposed_side(Presenting, "x", point.x.side).label == "x"
 
+    # A child's port is its parent's only where the parent exposes it; and where it places
+    # it, the parent exposes it or is refused (``port-unconnected``). Without its tensor the
+    # child's port is idle by structure, and needs no alias.
     class Unserved(Kernel):
         id = "test.unserved"
-        kernel = Probe(tensor=TENSOR)
+        kernel = Probe()
 
-    # A child's port is its parent's only where the parent exposes it.
     with pytest.raises(KeyError):
-        stream_port(Unserved, "y")
+        stream_port(Unserved, "x")
+    with refused("port-unconnected", error=DefinitionError, member="kernel", port="x"):
+
+        class Unexposed(Kernel):
+            id = "test.unexposed"
+            kernel = Probe(tensor=TENSOR)

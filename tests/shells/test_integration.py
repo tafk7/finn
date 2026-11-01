@@ -206,11 +206,11 @@ def test_a_movers_window_is_its_control_bus_s_range_holding_its_endpoint(
     each mover's window is its bus's range, as its endpoint's; a description placing an
     endpoint outside its unit's window is refused."""
 
-    def narrowed(model: ModelWrapper, name: str) -> tuple[Configured, tuple[tuple[str, str], ...]]:
-        point, boundary = configured_network(model, name)
+    def narrowed(model: ModelWrapper, name: str) -> Configured:
+        point = configured_network(model, name)
         assert point.row.control is not None
         control = replace(point.row.control, least_window=16)
-        return replace(point, row=replace(point.row, control=control)), boundary
+        return replace(point, row=replace(point.row, control=control))
 
     monkeypatch.setattr(integration, "configured_network", narrowed)
     described = describe(zynq_parent(tmp_path))

@@ -50,7 +50,8 @@ finn.core.onnx_exec, which runs a model with them) run the KernelOps and a
 partition's hardware with it, the partition node (finn.custom_op.partition) runs its
 body with the executors of the run that reached it,
 the harness (the hardware against the KernelOps' oracle, two runs of the
-executors) imports the testbench and the executors, and the flow imports all.
+executors) imports the testbench, the executors and the partition node, and the flow
+imports all.
 
 ``LAYERS`` is the one statement of that order. A module belongs to the layer
 with the longest module prefix that names it, so the flow (prefix ``finn``)
@@ -349,10 +350,10 @@ LAYERS: tuple[Layer, ...] = (
         "tests/kernel_ops",
     ),
     # The kernel harness: what checks a kernel's hardware (the hardware against its
-    # KernelOps' oracle, execute_node, on a model of them: two runs of the executors) and
-    # a KernelOp's reference against qonnx's execution of the ONNX it covers, on the
-    # draws. It reads no test tree and no pytest; the tests that use it stay in tests/.
-    # Nothing below the flow imports it.
+    # KernelOps' oracle, execute_node, on a model of them: two runs of the executors, the
+    # cut's core read through its partition node) and a KernelOp's reference against
+    # qonnx's execution of the ONNX it covers, on the draws. It reads no test tree and no
+    # pytest; the tests that use it stay in tests/. Nothing below the flow imports it.
     Layer(
         "harness",
         ("finn.harness",),
@@ -368,6 +369,7 @@ LAYERS: tuple[Layer, ...] = (
             "draws",
             "xsim",
             "executors",
+            "custom_op.partition",
         ),
         ("numpy", "qonnx"),
         "tests/kernel_ops",

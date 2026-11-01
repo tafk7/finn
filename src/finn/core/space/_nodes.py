@@ -24,7 +24,7 @@ from .declarations import (
     MISSING,
     CaseRef,
     ChoiceMemberRef,
-    Decision,
+    DecisionDecl,
     Declaration,
     Label,
     Param,
@@ -101,7 +101,7 @@ class NodeDecl(Declaration):
         return f"<{self.describe()}>"
 
 
-class NodeDecision(Decision[str]):
+class NodeDecision(DecisionDecl[str]):
     """The record of a Decision over nodes; its class-body face is a ``NodeChoice``."""
 
     candidates: Mapping[str, NodeDecl | None]
@@ -358,7 +358,7 @@ def slot_kind(declaration: Declaration) -> SlotKind:
         return "param"
     if isinstance(declaration, NodeDecision):
         return "choice"
-    if isinstance(declaration, Decision):
+    if isinstance(declaration, DecisionDecl):
         return "decision"
     if isinstance(declaration, NodeDecl):
         return "node"
@@ -446,9 +446,9 @@ def _value_supplier(
     # the call is told from a sibling member by the class body's namespace, and where
     # that cannot be read, when linking (``_bindings.classify``).
     if isinstance(value, (ValueRef, View)):
-        if isinstance(value, Decision) and not isinstance(value, NodeDecision):
-            _refuse_inline(cast(Decision[object], value), label)
-        if isinstance(value, (Param, Decision)) and not isinstance(value, NodeDecision):
+        if isinstance(value, DecisionDecl) and not isinstance(value, NodeDecision):
+            _refuse_inline(cast(DecisionDecl[object], value), label)
+        if isinstance(value, (Param, DecisionDecl)) and not isinstance(value, NodeDecision):
             try:  # a sibling in the class body: its annotation is already known
                 cast(Param[object], value).resolve()
             except DefinitionError:
@@ -470,7 +470,7 @@ def inline_decision(label: str) -> DefinitionError:
     )
 
 
-def _refuse_inline(decision: Decision[object], label: str) -> None:
+def _refuse_inline(decision: DecisionDecl[object], label: str) -> None:
     """Refuse a Decision written at the call: in the class body where it was made, it is
     no member yet (a sibling is). Outside a class body, linking refuses it."""
     if decision.owner is not None:
@@ -509,12 +509,17 @@ def check_supplier(
     if kind != "param":
         what = _KINDS.get(kind)
         belongs = "it belongs" if what else "behaviour belongs"
+        # A choice's value is set on a design space; the choice itself is its class's.
+        change = (
+            "set it on a design space (with_choices), or subclass the class to change it"
+            if kind in ("decision", "choice")
+            else "subclass it to change it"
+        )
         raise DefinitionError.broken(
             "member-belongs-to-class",
             _OWNER,
             f"{label}: {space_type.__qualname__}.{name} is a {what or type(member).__name__}: "
-            f"{belongs} to the Space class; subclass it to change it (a body supplies formals "
-            "only)",
+            f"{belongs} to the Space class; {change} (a body supplies formals only)",
             declaration=label,
         )
     cast(Param[object], member).resolve()

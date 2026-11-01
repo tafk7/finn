@@ -169,7 +169,8 @@ def measure_partition(
     """The stitched partition of ``model``'s nodes and each node alone, measured."""
     context = execute_onnx(model, feed, return_full_exec_context=True)
     nodes = list(model.graph.node)
-    point, boundary = configured_network(model, label)
+    point = configured_network(model, label)
+    boundary = point.network.boundary
     bound = CoreComposition(network(model, nodes, name=label).point)
     inputs, outputs = boundary_words(model, point, boundary, context, label)
     print(f"== {label}: stitched", flush=True)
@@ -204,7 +205,8 @@ def measure_partition(
     for index, node in enumerate(nodes):
         schedule = schedule_of(bound, node)
         body = alone_body(model, node)
-        alone_point, alone_boundary = configured_network(body, node.name)
+        alone_point = configured_network(body, node.name)
+        alone_boundary = alone_point.network.boundary
         alone_in, alone_out = boundary_words(body, alone_point, alone_boundary, context, node.name)
         print(f"== {label}: {node.name} alone", flush=True)
         alone = measure(

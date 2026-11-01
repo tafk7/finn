@@ -56,7 +56,6 @@ from finn.kernels.explore import CoreComposition
 from finn.kernels.iodma import IodmaIn, IodmaOut
 from finn.kernels.laws import Pacing
 from finn.kernels.library import ModuleSpec
-from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port import exposed_name, exposed_pins, exposed_side, stream_port
 from finn.kernels.port_model import StreamPort, exposed_ports, stream_ports
 from finn.kernels.sides import Side
@@ -295,21 +294,6 @@ def test_every_module_kernel_s_cycles_follow_the_rate_law(case: str) -> None:
         checked = _rate_checked(configured(base, chosen))
         # MatMul binds no module: its cycles are its core's, a dotp, checked in dotp's cases.
         assert checked or case == "matmul", f"{case} at {chosen}"
-
-
-def test_no_library_kernel_states_its_own_cycles() -> None:
-    """The base derives every module kernel's cycles by the rate law; a kernel states
-    none of its own. MemStream restates the base's so that its channel counts it by kind."""
-    found: set[type] = set()
-    for module in pkgutil.iter_modules(finn.kernels.__path__, "finn.kernels."):
-        for value in vars(importlib.import_module(module.name)).values():
-            if isinstance(value, type) and issubclass(value, Kernel) and value.module_spec:
-                found.add(value)
-    assert len(found) >= 11, found
-    for kind in found:
-        for cls in kind.__mro__[: kind.__mro__.index(Kernel)]:
-            if "cycles" in vars(cls):
-                assert cls is MemStreamKernel, cls
 
 
 @pytest.mark.parametrize("case", sorted(conformance_cases()))

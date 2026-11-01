@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from ._nodes import NodeDecision, NodeDecl, inline_decision
-from .declarations import Decision, Param, ValueRef, View
+from .declarations import DecisionDecl, Param, ValueRef, View
 from .errors import DefinitionError
 
 _OWNER = "space.bindings"
@@ -60,7 +60,11 @@ def classify(slot: Slot) -> tuple[BindingKind, object]:
             f"{slot.key}: a node or a selector is not a value; bind one of its members",
             declaration=slot.key,
         )
-    if isinstance(value, Decision) and value.owner is None and not isinstance(value, NodeDecision):
+    if (
+        isinstance(value, DecisionDecl)
+        and value.owner is None
+        and not isinstance(value, NodeDecision)
+    ):
         raise inline_decision(slot.key)
     if isinstance(value, (ValueRef, View)):
         return "reference", value

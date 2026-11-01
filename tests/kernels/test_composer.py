@@ -439,7 +439,7 @@ def test_two_graph_names_of_one_member_name_are_refused(cache: None) -> None:
         ("query", "name-reserved"),
         ("netlist", "name-reserved"),
         ("connections", "name-reserved"),
-        ("_frame_cycles", "name-reserved"),
+        ("_rate_frame_cycles", "name-reserved"),
         ("shell", "name-reserved"),
         ("__init__", "name-reserved"),
     ],

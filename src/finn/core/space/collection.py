@@ -8,12 +8,14 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType, UnionType
 from typing import Union, cast, get_args, get_origin
+from weakref import WeakKeyDictionary
 
 from ._configuration import _Namespace
 from ._nodes import NodeDecision, NodeDecl, slot_declaration
 from ._signatures import (
     BoundFunction,
     bind_function,
+    declared_non_values,
     output_semantics,
     resolve_annotations,
     resolve_source,
@@ -22,7 +24,7 @@ from ._signatures import (
 from .declarations import (
     MISSING,
     Constraint,
-    Decision,
+    DecisionDecl,
     Declaration,
     Derived,
     Param,
@@ -35,6 +37,7 @@ from .declarations import (
 )
 from .errors import DefinitionError
 from .groups import Group
+from .results import Rejected
 from .semantics import OptionalSemantics, ValueSemantics
 
 _OWNER = "space.collection"
@@ -234,6 +237,8 @@ def _collect_semantics(
                     f"{owner}: override changes declaration kind",
                     declaration=owner,
                 )
+            if isinstance(prior, (Derived, Constraint)):
+                _check_answer_within(prior, declaration, owner)
             old_semantics = getattr(prior, "semantics", None)
             if old_semantics is None and isinstance(prior, (Derived, View)):
                 prior_function = prior.function
@@ -252,6 +257,79 @@ def _collect_semantics(
                     declaration=owner,
                 )
     return semantics
+
+
+def _check_answer_within(
+    prior: Derived[object] | Constraint, declaration: Declaration, owner: str
+) -> None:
+    """An override of a rule admits no ``Inapplicable`` and no ``Unresolved`` the answer it
+    overrides does not (``override-widens-answer``): a reader of that answer relies on it,
+    as the Kernel's class checks rely on a ``schedule`` declared never inapplicable, and a
+    constraint reading an inapplicable value counts as true. ``Rejected`` is not compared:
+    the Kernel's base declares its ``schedule`` ``Inapplicable`` and each Kernel stating one
+    declares it ``Rejected``. Each answer is its own declaration's, read in the class that
+    declares it (``declared_answer``)."""
+    admitted, stated = declared_answer(prior, owner), declared_answer(declaration, owner)
+    if admitted is None or stated is None:
+        return
+    wider = stated - admitted - {Rejected}
+    if wider:
+        names = " and ".join(sorted(marker.__name__ for marker in wider))
+        raise DefinitionError.broken(
+            "override-widens-answer",
+            _OWNER,
+            f"{owner}: its answer admits {names}, which the answer it overrides does not",
+            declaration=owner,
+        )
+
+
+_ANSWERS: WeakKeyDictionary[Callable[..., object], dict[type, frozenset[type]]] = (
+    WeakKeyDictionary()
+)
+"""Each rule's declared answer, by its function and the class declaring it: read once."""
+
+
+def declared_answer(declaration: Declaration, owner: str) -> frozenset[type] | None:
+    """The non-values ``declaration``'s return annotation admits (``declared_non_values``),
+    its annotation resolved in the class that declares it, never in a subclass's namespace,
+    which may give its names other values; None for a declaration with no function."""
+    function = _function(declaration)
+    declaring = getattr(declaration, "owner", None)
+    if function is None or not isinstance(declaring, type):
+        return None
+    answers = _ANSWERS.setdefault(function, {})
+    if declaring not in answers:
+        hints = resolve_annotations(function, _annotation_namespace(declaring), owner)
+        answers[declaring] = declared_non_values(hints.get("return"))
+    return answers[declaring]
+
+
+def check_overrides(space_type: type[_Namespace]) -> None:
+    """Refuse, when ``space_type`` is made, an override of a rule its own body declares that
+    widens its base's answer (``_check_answer_within``). An answer whose annotation does not
+    resolve yet (a name its module binds further down) is compared when the class is
+    collected, which repeats the check and reports the annotation."""
+    for name, value in vars(space_type).items():
+        declaration = slot_declaration(value)
+        if not isinstance(declaration, (Derived, Constraint)):
+            continue
+        prior = next(
+            (
+                found
+                for base in space_type.__mro__[1:]
+                if (found := slot_declaration(vars(base).get(name))) is not None
+            ),
+            None,
+        )
+        if type(prior) is not type(declaration):
+            continue  # a change of kind is the collection's to refuse
+        owner = f"{space_type.__qualname__}.{name}"
+        try:
+            _check_answer_within(cast("Derived[object] | Constraint", prior), declaration, owner)
+        except DefinitionError as error:
+            if error.findings and error.findings[0].code == "annotation-unresolved":
+                continue
+            raise
 
 
 def _collect_guards(effective: EffectiveSpace) -> Mapping[Declaration, ValueRef[bool]]:
@@ -312,7 +390,7 @@ def collect_space(space_type: type[_Namespace]) -> EffectiveSpace:
         # The annotation is the single source of a member's value type.
         if isinstance(declaration, NodeDecision):
             _check_choice_annotation(declaration)
-        elif isinstance(declaration, (Param, Decision)):
+        elif isinstance(declaration, (Param, DecisionDecl)):
             declaration.resolve()
     semantics = _collect_semantics(space_type, members, inherited, hints_for)
     preliminary = EffectiveSpace(

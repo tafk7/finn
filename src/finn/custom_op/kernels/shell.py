@@ -344,17 +344,16 @@ def shell_resources(network: CoreComposition) -> ShellResources | tuple[Finding,
     return found.value if isinstance(found, Available) else found.findings
 
 
-def configured_network(
-    model: ModelWrapper, name: str
-) -> tuple[Configured, tuple[tuple[str, str], ...]]:
+def configured_network(model: ModelWrapper, name: str) -> Configured:
     """A DataflowCore's body's core, named ``name`` (the node's), in the shell of
     its target (``shell_point``), bound with
-    its nodes' and its tensors' channel choices, as emission builds it (``Configured``),
-    and its boundary (tensor, port). Every choice is stored where it is created (a
-    KernelOp's at conversion, a channel's at the cut) and replaced by the strategies, so
-    nothing is completed here. A stale choice; an open choice in play, each by name: one no
-    value of which is possible (each refused value's rules; a ``choice-no-valid-value``
-    cause each, owned by the key, the rules' findings its causes, as the cut reports it), a
+    its nodes' and its tensors' channel choices, as emission builds it (``Configured``; its
+    boundary, each edge tensor and its port, is its composition's, ``network.boundary``).
+    Every choice is stored where it is created (a KernelOp's at conversion, a channel's at
+    the cut) and replaced by the strategies, so nothing is completed here. A stale choice;
+    an open choice in play, each by name: one no value of which is possible (each refused
+    value's rules; a ``choice-no-valid-value`` cause each, owned by the key, the rules'
+    findings its causes, as the cut reports it), a
     required one no strategy set ("required: add size_fifos or
     debug_placeholder to step_explore's strategies"), any other one never set ("not set: the cut,
     MakeCutChoices, or a strategy sets it"; one finding, ``choices-open``); a partition
@@ -399,12 +398,7 @@ def configured_network(
             for key, item in bound.decisions().items()
             if isinstance(policy(bound.owner(key[0]), item), Required)
         }
-        listed = bound.viable(key for key in open_keys if key not in required)
-        impossible = {
-            key: _impossible(bound, key, viable.values)
-            for key, viable in listed
-            if viable.values is not None and not viable.cases
-        }
+        impossible = impossible_choices(bound, (key for key in open_keys if key not in required))
         named = [
             f"{dotted(key)}: {impossible[key].message}"
             if key in impossible
@@ -512,7 +506,20 @@ def configured_network(
             f" outputs in order {expected}",
             node=label,
         )
-    return Configured(bound, module.value, row), bound.boundary
+    return Configured(bound, module.value, row)
+
+
+def impossible_choices(bound: CoreComposition, keys: Iterable[Key]) -> dict[Key, Finding]:
+    """Each of the open choices ``keys`` of ``bound`` no value of which is possible (each
+    value its domain lists refused, or none listed), with why (``choice-no-valid-value``):
+    what emission refuses by name, and an exploration's result too. A choice whose values
+    are not listed (known by membership only, or waiting on a value not known) is not
+    one."""
+    return {
+        key: _impossible(bound, key, viable.values)
+        for key, viable in bound.viable(keys)
+        if viable.values is not None and not viable.cases
+    }
 
 
 def _impossible(
@@ -609,7 +616,7 @@ def verify_partition(model: ModelWrapper, name: str) -> tuple[Configured, FifoCh
     leave the verification marker unchanged. The model is changed only by the record;
     its caller saves it."""
     label = name
-    point, _ = configured_network(model, name)
+    point = configured_network(model, name)
     # This held consumer performs a timed FIFO check. Retain its former eager
     # cycle-refusal precondition explicitly: FifoCheck(None) is not verification.
     _ = point.cycles
@@ -747,6 +754,7 @@ __all__ = [
     "body_row",
     "configured_network",
     "core_grouping",
+    "impossible_choices",
     "make_cut_choices",
     "mover_contracts",
     "refuse_unverified",

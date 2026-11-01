@@ -15,12 +15,12 @@ from support.kernel_specs.eltwise import computed
 from support.refusals import refused
 
 from finn.core.space import (
-    Decision,
     DefinitionError,
     Rejected,
     RequestError,
     inspection,
 )
+from finn.core.space.declarations import DecisionDecl
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.kernels.artifacts.abi import Signal
 from finn.kernels.artifacts.contributions import CopiedSource
@@ -141,7 +141,7 @@ def test_eltwise_pe_is_a_divisor_of_the_channels_its_parameter_holds() -> None:
     (pe,) = inspection.viable(point, [EltwiseKernel.pe])
     assert pe.values is not None and [item.value for item in pe.values] == [1, 2, 3, 6]
     declared = EltwiseKernel.__dict__["pe"]
-    assert isinstance(declared, Decision)
+    assert isinstance(declared, DecisionDecl)
     assert declared.domain.accepts(candidate=2**31, extent=2**32) is True
     assert declared.domain.accepts(candidate=2**32, extent=2**33) is False
 

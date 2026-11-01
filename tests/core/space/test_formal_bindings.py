@@ -93,8 +93,8 @@ def test_a_node_below_a_declaration_is_not_assigned_through_a_path() -> None:
 @pytest.mark.parametrize(
     ("what", "supply"),
     [
-        ("Decision", lambda: Room(finish=2)),
-        ("Decision", lambda: Room(finish=Decision(domain=(1, 2)))),
+        ("Decision", lambda: Room(finish=2)),  # type: ignore[call-arg]
+        ("Decision", lambda: Room(finish=Decision(domain=(1, 2)))),  # type: ignore[call-arg]
         ("child node", lambda: Wing(kitchen=Room(area=9))),  # type: ignore[call-arg]
     ],
 )

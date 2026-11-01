@@ -401,7 +401,8 @@ def describe(model: ModelWrapper) -> Integration:
     (``refuse_unverified``), in its shell (see the module docstring)."""
     node, body, _ = partition_body(model)
     refuse_unverified(body, node.name)
-    point, boundary = configured_network(body, node.name)
+    point = configured_network(body, node.name)
+    boundary = point.network.boundary
     row = point.row
     if row.linker is None:
         raise IntegrationError(

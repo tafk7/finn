@@ -38,10 +38,12 @@ def test_configuration_and_emission_do_not_read_refused_cycles(
 ) -> None:
     model = kernel_model()
     configure_partition(model)
-    expected, boundary = shell.configured_network(model, CUT_NAME)
+    expected = shell.configured_network(model, CUT_NAME)
+    boundary = expected.network.boundary
     reads: list[str] = []
     monkeypatch.setattr(CoreComposition, "answer", _unavailable("refused", reads))
-    actual, actual_boundary = shell.configured_network(model, CUT_NAME)
+    actual = shell.configured_network(model, CUT_NAME)
+    actual_boundary = actual.network.boundary
     assert reads == []
     assert actual_boundary == boundary
     assert actual.module == expected.module
@@ -116,7 +118,7 @@ def test_held_verification_does_not_stamp_unchecked_timing(
 
 def test_known_cycle_verification_keeps_its_period_and_design_marker() -> None:
     model = _unverified_model()
-    expected, _ = shell.configured_network(model, CUT_NAME)
+    expected = shell.configured_network(model, CUT_NAME)
     period = expected.cycles
     configured, checked = shell.verify_partition(model, CUT_NAME)
     assert configured.module == expected.module

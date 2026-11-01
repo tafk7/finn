@@ -82,14 +82,15 @@ def chain(shell: str = "ip") -> ModelWrapper:
 def facts(model: ModelWrapper) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """The boundary facts of ``model``'s configured network, as the interface description
     and the testbench read them."""
-    point, boundary = configured_network(model, "DataflowCore_0")
+    point = configured_network(model, "DataflowCore_0")
+    boundary = point.network.boundary
     return boundary_facts(model, point, boundary, "DataflowCore_0")
 
 
 def movers(model: ModelWrapper) -> dict[str, dict[str, Any]]:
     """The movers the shell of ``model``'s configured network places, by name, each its
     contract's facts ``iodma`` states."""
-    point, _ = configured_network(model, "DataflowCore_0")
+    point = configured_network(model, "DataflowCore_0")
     found = mover_contracts(point.network)
     assert isinstance(found, Available), found
     return {
@@ -297,7 +298,8 @@ def test_a_tiled_w2_is_regrouped_after_its_mover_by_a_vpc_and_an_input_gen(case:
     mover = bound.member(bound.placed("in1")).contract
     assert (mover.beats, mover.tdata, mover.memory_width, mover.words) == (4, 16, 64, 1)
     choose_memories(model)
-    configured, boundary = configured_network(model, "DataflowCore_0")
+    configured = configured_network(model, "DataflowCore_0")
+    boundary = configured.network.boundary
     assert boundary == (("x", "s_axis_0"), ("w2", "s_axis_1"), ("y", "m_axis_0"))
     stages = {
         name: (leaf.implementation_id, dict(leaf.parameters))
@@ -416,7 +418,7 @@ def test_packaging_states_its_ip_typed_and_writes_no_flat_key(tmp_path: Path) ->
         PackagePartition("DataflowCore_0", directory=project, toolchain=toolchain)
     )
     assert packaged.get(OUTPUT_IP) == str(project / "ip")
-    top = live_name(configured_network(body, "DataflowCore_0")[0].module)
+    top = live_name(configured_network(body, "DataflowCore_0").module)
     assert top.startswith("finn_dataflowcore_")
     assert packaged.get(OUTPUT_VLNV) == f"xilinx_finn:finn:{top}:1.0"
     interfaces = packaged.get(OUTPUT_INTERFACES)

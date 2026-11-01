@@ -34,6 +34,7 @@ from finn.core.space import (
     reject,
     view,
 )
+from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Bus, Endpoint, Member, StandardProtocol
 from finn.kernels.artifacts.contributions import CopiedSource
@@ -74,11 +75,15 @@ MEMORY = Bus(
 
 
 class Stub(Kernel):
-    """A model-only leaf: one input port."""
+    """A model-only leaf: one input port, idle without the tensor it is not given (no
+    holder here connects it)."""
 
     id = "test.scopes.stub"
 
+    tensor: Tensor | None = Param(default=None)
+
     x = InPort(
+        tensor=tensor,
         dtype=DataType["UINT8"],
         transport=Axis(bus="s_axis"),
         sequence=BeatSequence(vector_major((4,), 1)),

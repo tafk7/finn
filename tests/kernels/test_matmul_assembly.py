@@ -23,7 +23,6 @@ from support.helpers import (
 from support.netlist import Const, Drive, Pin
 
 from finn.core.space import (
-    Decision,
     Rejected,
     Select,
     Unresolved,
@@ -32,6 +31,7 @@ from finn.core.space import (
     inspection,
     reject,
 )
+from finn.core.space.declarations import DecisionDecl
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.abi import Bus
@@ -358,7 +358,7 @@ def test_the_core_is_one_possible_case_and_is_given_the_folding():
     assert labels(module) == ["x.adapter.input_gen.input_gen", "matmul.compute.packed"]
     assert not hasattr(MatMulKernel, "contract")
     # The folding is MatMul's, the role's, which every core is given.
-    assert isinstance(MatMulKernel.pe, Decision) and isinstance(MatMulKernel.simd, Decision)
+    assert isinstance(MatMulKernel.pe, DecisionDecl) and isinstance(MatMulKernel.simd, DecisionDecl)
     assert matmul.compute.pe == matmul.pe == 2
     # Pumping with one SIMD lane is not possible: with SIMD 1 only False is, and the
     # change committing True is refused by the core's rule.

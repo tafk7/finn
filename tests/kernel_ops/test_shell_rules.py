@@ -28,6 +28,7 @@ buses built directly, a boundary initiator beside the streams standing for a mem
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import Any
 
 import pytest
 from support.configure import composition, configured, core_in_shell
@@ -71,7 +72,7 @@ from finn.kernels.artifacts.module import Abi, BusExport, Fragment, Leaf
 from finn.kernels.artifacts.top import module_abi
 from finn.kernels.base import Kernel
 from finn.kernels.composer import member_name
-from finn.kernels.explore import CoreComposition, Seam, SizeFifos
+from finn.kernels.explore import CoreComposition, Defaults, Seam, SizeFifos, TargetThroughput
 from finn.kernels.grouper import DECODER
 from finn.kernels.movers import MoverContract
 from finn.kernels.shell import grouper_name
@@ -291,6 +292,67 @@ def test_a_refused_list_writes_nothing() -> None:
     assert search_record(model)[0] == "current"  # the empty list's, written before
 
 
+@pytest.mark.parametrize(
+    "strategies",
+    [
+        pytest.param(lambda: [TargetThroughput(1000.0)], id="target"),
+        pytest.param(lambda: [TargetThroughput(1000.0), SizeFifos(margin=1)], id="target-sized"),
+        pytest.param(lambda: [Defaults()], id="defaults"),
+    ],
+)
+def test_a_list_that_cannot_lift_a_rule_is_refused_by_it(strategies: Any) -> None:
+    """The Chain on a row addressing one window, its movers alone exceeding it: a strategy
+    reopens the stored choices it decides, and every value of one of them breaks the rule,
+    so it leaves that choice open. The exploration refuses the point it leaves, each such
+    choice by name (``choice-no-valid-value``, the rule's finding among its causes), and
+    writes nothing, so an exploration with no strategy after it and emission meet the stored
+    choices again, refused by the rule, not by a choice left open."""
+    model = kernel_model()
+    write_target(model, ULTRA96)
+    model = model.transform(MakeCutChoices(CUT_NAME))
+    explore_kernel_choices(model, name=CUT_NAME)
+    before = model.model.SerializeToString()
+    narrow = narrowed(aperture=0x1000)
+    with pytest.MonkeyPatch.context() as patched:
+        patched.setattr(shell, "shell_row", lambda *_: narrow)
+        with refused("choice-no-valid-value", error=KernelOpError) as caught:
+            explore_kernel_choices(model, strategies(), name=CUT_NAME)
+        assert ("control-window-exceeded", "within_control_window") in [
+            (each.code, each.owner) for each in caught.finding.causes
+        ]
+        assert model.model.SerializeToString() == before
+        with refused("control-window-exceeded", error=KernelOpError, owner="within_control_window"):
+            explore_kernel_choices(model, name=CUT_NAME)
+        with refused("control-window-exceeded", error=KernelOpError, owner="within_control_window"):
+            configured_network(model, "chain")
+
+
+def test_a_target_names_the_choice_the_rule_leaves_no_value() -> None:
+    """A target throughput on the Chain on a row its movers alone exceed: the
+    thresholding's AXI-Lite choice, reopened, can take no value, each value named with the
+    rules it breaks."""
+    model = kernel_model()
+    write_target(model, ULTRA96)
+    model = model.transform(MakeCutChoices(CUT_NAME))
+    explore_kernel_choices(model, name=CUT_NAME)
+    narrow = narrowed(aperture=0x1000)
+    with pytest.MonkeyPatch.context() as patched:
+        patched.setattr(shell, "shell_row", lambda *_: narrow)
+        with refused(
+            "choice-no-valid-value",
+            error=KernelOpError,
+            owner="Thresholding_0.use_axilite",
+            message="no value is possible: False breaks shell.within_control_window; True "
+            "breaks shell.within_control_window",
+        ) as caught:
+            explore_kernel_choices(model, [TargetThroughput(1000.0)], name=CUT_NAME)
+    assert isinstance(caught.error, KernelOpError)
+    assert caught.error.keys == ("Thresholding_0.use_axilite",)
+    assert str(caught.error).startswith(
+        "the explored point is refused: Thresholding_0.use_axilite: "
+    )
+
+
 def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:
     """The shell row owns the doubled clock: the Chain, its first MatMul's
     compute pumped, which its kernel offers on any platform, is within the ip row,
@@ -303,7 +365,7 @@ def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:
     first = model.graph.node[0].name
     configured(model, {first: pumped})
     configure_partition(model)
-    point, _ = configured_network(model, "chain")
+    point = configured_network(model, "chain")
     assert point.row == IP_ROW and IP_ROW.clocks.doubled
     assert point.module.abi.clock_alignments
     netlist = point.network.netlist()
@@ -348,7 +410,7 @@ def test_emission_checks_the_netlists_count_against_the_rules() -> None:
     model = chain_model(4)
     write_target(model, ULTRA96)
     model = model.transform(MakeCutChoices(CUT_NAME))
-    point, _ = configured_network(model, "chain")
+    point = configured_network(model, "chain")
     assert counts(point.network.member(SHELL)) == Available(((), 0, False))
     with pytest.MonkeyPatch.context() as patched:
         patched.setattr(shell, "netlist_counts", lambda *_: ((4096,), 0, True))

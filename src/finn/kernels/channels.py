@@ -75,10 +75,10 @@ are the base's views over theirs, but for two it states itself, calling the base
 netlist places its source and its output adapter at their labels and adds the hops between
 its own ends (its source, its stages, its outer port; ``netlist``), and a channel of wires
 takes no cycles of its own (0); a boundary whose outside states a pace takes no fewer than
-that pace's span a frame (``frame_cycles``). Its cycles count its source's and its
-adapters', by kind (``source_cycles``, ``stage_cycles``), not through the base's
-``member_frame_cycles``: its transport, whose cycles are inapplicable, is a choice still
-open when FIFO sizing reads them. Its hops to the ports beside it need those ports'
+that pace's span a frame (``frame_cycles``). Its cycles are the most of its members' that
+count any, each read where it is placed (its source's, its adapters'), not through the
+base's ``member_frame_cycles``: its transport, whose cycles are inapplicable, is a choice
+still open when FIFO sizing reads them. Its hops to the ports beside it need those ports'
 stream pins, which the kernel holding it holds: that kernel wires them (``outer_hops``, from
 the ports it reads, ``Neighbours``; the base's ``finn.kernels.base.hops``) and places them
 around the channel's netlist; it reads the module's AXIS buses of its outer ports
@@ -97,7 +97,6 @@ from finn.core.reporting.findings import Finding
 from finn.core.space import (
     Decision,
     Inapplicable,
-    Members,
     Param,
     Rejected,
     Select,
@@ -130,7 +129,6 @@ from finn.kernels.adapters import (
     RealizedStage,
     Stage,
     StageStreams,
-    StreamAdapter,
     realize,
 )
 from finn.kernels.artifacts import ArtifactError
@@ -898,27 +896,30 @@ class Channel(Kernel):
         supplies an input or takes an output. A side the outside leaves unstated, or
         states without a pace (a mover's: the mover's cycles are the shell's), bounds
         nothing more."""
-        counted = (*self.source_cycles, *self.stage_cycles)
-        found = max((item.value for item in counted), default=0)
+        # Its members' cycles, each its own (``Kernel.frame_cycles``), read where each is
+        # placed. Not the base's ``member_frame_cycles``, which ranges over its transport
+        # too: a FIFO's cycles are inapplicable, but whether it places one is a choice FIFO
+        # sizing reads cycles before, so the base's would wait on it.
+        counted: list[int] = []
+        if self.valued:
+            counted.append(self.source.frame_cycles)
+        if self.output_adapting:
+            counted.append(self.output_adapter.frame_cycles)
+        adapter = self.adapter
+        if adapter is not None:
+            counted.append(adapter.frame_cycles)
+        found = max(counted, default=0)
         paces = [
             side.outside.pace
             for side in (self.producer, self.consumer)
             if side.outside is not None and side.outside.pace is not None
         ]
-        if isinstance(found, Rejected) or not paces:
+        if not paces:
             return found
         # A side the outside states is a boundary's: its outer port presents the edge.
         edge: Stream = self.outer_in.stream if self.entering else self.outer_out.stream
         beats = edge.sequence.form.beats
         return max(found, *(beat_times(pace, beats).span for pace in paces))
-
-    # What its cycles count, by kind: its source's and its adapters'. Not the base's
-    # ``member_frame_cycles``, which ranges over its transport too: a FIFO's cycles are
-    # inapplicable, but whether it places one is a choice FIFO sizing reads cycles before,
-    # so the base's would wait on it. Each kind declares ``frame_cycles`` itself (``Members``
-    # reads the declaring class), and must keep doing so while the channel counts by kind.
-    source_cycles = Members(MemStreamKernel.frame_cycles)
-    stage_cycles = Members(StreamAdapter.frame_cycles)
 
 
 # The channel's policies (``finn.kernels.policies``), as a KernelOp states its kernel's:

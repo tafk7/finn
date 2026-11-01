@@ -58,7 +58,7 @@ def test_a_partition_on_the_ip_shell_states_its_model_alone(tmp_path: Path) -> N
     mover and no static region; neither Vivado column was made, and each says why."""
     parent = kernel_model().transform(CutKernelPartition(tmp_path))
     node, body, _ = partition_body(parent)
-    point, _ = configured_network(body, node.name)
+    point = configured_network(body, node.name)
     modelled = shell_resources(point.network)
     assert isinstance(modelled, ShellResources)
     stated = shell_resources_report(parent, {})
@@ -93,7 +93,7 @@ def test_a_core_presenting_a_bus_reports_its_grouper_as_its_model_states_it(
     partition's."""
     parent = zynq_parent(tmp_path, presenting=True)
     node, body, _ = partition_body(parent)
-    point, _ = configured_network(body, node.name)
+    point = configured_network(body, node.name)
     modelled = shell_resources(point.network)
     assert isinstance(modelled, ShellResources)
     assert modelled.groupers == (("DataflowCore_0_grouper", Resources()),)

@@ -34,7 +34,7 @@ from ._running.per_class import flow_below, scopes_below
 from .compiler import Model, compile_model
 from .declarations import (
     Constraint,
-    Decision,
+    DecisionDecl,
     ValueRef,
     View,
 )
@@ -263,7 +263,7 @@ def decisions(subject: Space | Model[S] | type[Space]) -> tuple[DecisionInfo[obj
 
 @overload
 def decision_handle(
-    subject: Space | Model[S] | type[Space], reference: Decision[T]
+    subject: Space | Model[S] | type[Space], reference: DecisionDecl[T]
 ) -> DecisionHandle[T]: ...
 
 

@@ -19,6 +19,7 @@ from finn.core.space import (
     design_space,
     inspection,
 )
+from finn.core.space.declarations import DecisionDecl
 from finn.core.space.domains import Domain, divisors_of, domain, finite
 from finn.core.space.results import Available, Unresolved
 
@@ -91,7 +92,7 @@ def test_domain_object_keeps_its_own_order_and_lazy_callbacks() -> None:
         number: int = Decision(domain=allowed)
 
     assert calls == []
-    assert cast(Decision[int], Choice.number).domain is allowed
+    assert cast(DecisionDecl[int], Choice.number).domain is allowed
     point = design_space(Choice())
     assert calls == []
     (info,) = inspection.decisions(point)

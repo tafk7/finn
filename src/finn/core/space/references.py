@@ -17,7 +17,7 @@ from ._nodes import NodeChoice, unwrap
 from .declarations import (
     CaseRef,
     ChoiceMemberRef,
-    Decision,
+    DecisionDecl,
     Declaration,
     MemberRef,
     ValueRef,
@@ -195,7 +195,7 @@ def resolve_decision(scopes: Scopes, scope: ScopeRecord, reference: object) -> A
 
     index = resolve_reference(scopes, scope, reference, candidate=True)
     member = unwrap(reference.member) if isinstance(reference, MemberRef) else unwrap(reference)
-    follow = isinstance(member, Decision) or isinstance(reference, DecisionHandle)
+    follow = isinstance(member, DecisionDecl) or isinstance(reference, DecisionHandle)
     seen: set[Address] = set()
     while follow and index.kind == "alias":
         output = index.output

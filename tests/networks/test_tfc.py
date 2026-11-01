@@ -159,7 +159,8 @@ def test_tfc_w2a2_computes_its_logits_in_xsim(tfc_streamlined: Path, tmp_path: P
         name: {key: getattr(contract, key) for key in MOVERS[name]}
         for name, contract in contracts.value
     } == MOVERS
-    point, boundary = configured_network(body, "partition")
+    point = configured_network(body, "partition")
+    boundary = point.network.boundary
     # The input's one threshold row, shared by its 784 pixels, is bound as it is
     # (thresholding_axi's C = 1), not tiled to 784 rows.
     first = body.graph.node[0]
@@ -220,7 +221,7 @@ def test_tfc_w2a2_packages_as_the_shells_ip(tfc_streamlined: Path, tmp_path: Pat
     body = body.transform(PackagePartition(sdp.name, directory=project))
     # The IP is named as the core's module, by its kind and content; the node's name is its
     # display name.
-    top = live_name(configured_network(body, sdp.name)[0].module)
+    top = live_name(configured_network(body, sdp.name).module)
     assert top.startswith("finn_dataflowcore_")
     assert body.get(OUTPUT_VLNV) == f"xilinx_finn:finn:{top}:1.0"
     names = body.get(OUTPUT_INTERFACES)
@@ -235,7 +236,8 @@ def test_tfc_w2a2_packages_as_the_shells_ip(tfc_streamlined: Path, tmp_path: Pat
         for bus in root.iter(f"{spirit}busInterface")
     }
     assert (widths["s_axis_0"], widths["m_axis_0"]) == ("16", "9")
-    point, boundary = configured_network(body, sdp.name)
+    point = configured_network(body, sdp.name)
+    boundary = point.network.boundary
     assert boundary_facts(body, point, boundary, sdp.name) == FACTS
     assert "-part xczu3eg-sbva484-1-e" in (project / "package.tcl").read_text()
     # The interface description beside the IP: the module's pins, the boundary facts.

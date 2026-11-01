@@ -102,7 +102,8 @@ def test_the_description_beside_the_ip_reads_back_against_the_modules_pins(
     stub = cast(Toolchain, PackagedByStub())
     model = model.transform(PackagePartition("sdp_1", directory=project, toolchain=stub))
     described = json.loads((project / "interface.json").read_text())
-    point, boundary = configured_network(model, "sdp_1")
+    point = configured_network(model, "sdp_1")
+    boundary = point.network.boundary
     read_back(described, point.module.abi.pins, 5.0)
     # The IP is named as its module, which leaves its node's name out, and shown as its node.
     top = live_name(point.module)
@@ -220,7 +221,7 @@ def test_out_of_context_resources_are_stated_per_member_of_the_network(
 ) -> None:
     # Its adapters' memories at their baselines: the module is the one packaged.
     configure_partition(model := kernel_model())
-    point, _ = configured_network(model, "chain")
+    point = configured_network(model, "chain")
     labels = [label for label, _ in point.module.fragment.instances]
     # Each instance 10 LUTs and its index in FFs; synthesis flattened the last into the
     # top, which so has no row for it.
@@ -409,7 +410,7 @@ def test_verification_records_the_design_it_verified_and_a_save_keeps_it(
     point, check = verify_partition(body, node.name)
     assert body.get(OUTPUT_VERIFIED) == design_digest(body) == before
     assert check.stale == {} and check.findings == ()
-    assert point.network.members == configured_network(body, node.name)[0].network.members
+    assert point.network.members == configured_network(body, node.name).network.members
     body.save(body_file)
     _, again, _ = partition_body(parent)
     assert again.get(OUTPUT_VERIFIED) == design_digest(again) == before
@@ -634,7 +635,7 @@ def test_tfc_on_the_ip_shell_packages_and_its_testbench_passes_on_its_own(
     # The partition the build packaged, opened through the parent graph the step saved.
     parent = ModelWrapper(str(output / "intermediate_models" / "step_package_partition.onnx"))
     _, body, _ = partition_body(parent)
-    point, _ = configured_network(body, "DataflowCore_0")
+    point = configured_network(body, "DataflowCore_0")
     described = json.loads((core / "ip" / "interface.json").read_text())
     read_back(described, point.module.abi.pins, 5.0)
     # The IP is the partition's, named as its module and shown as its node; the body states it.
