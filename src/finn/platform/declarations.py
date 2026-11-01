@@ -25,7 +25,7 @@ They are found in three places, in this order:
 
 1. FINN's own, ``finn/platform/data/platform.toml``;
 2. each entry point of the group ``finn.platform``, which names a package holding a
-   ``platform.toml``;
+   ``platform.toml``, found through its distribution's metadata without importing it;
 3. each directory on ``FINN_PLATFORM_PATH`` (``os.pathsep`` between them) holding a
    ``platform.toml``.
 
@@ -45,11 +45,13 @@ from __future__ import annotations
 
 import functools
 import importlib
+import importlib.util
 import os
 import re
 import tomllib
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from importlib.metadata import Distribution, EntryPoint, entry_points
 from pathlib import Path
 from typing import Any
 
@@ -78,6 +80,7 @@ KINDS = ("boards", "linkers", "runtimes", "movers", "shells")
 """The kinds of declaration, as the tables of a ``platform.toml`` name them."""
 
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+_PACKAGE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*")
 _SHELL_OWN = {"based_on", "linker", "runtimes", "boards"}
 
 
@@ -389,30 +392,47 @@ def _shell(name: str, table: dict[str, Any], based_on: str | None, origin: Origi
 # -- the sources -------------------------------------------------------------------------
 
 
+def _package_file(package: str, dist: Distribution | None) -> Path | None:
+    """The ``platform.toml`` of ``package``, found without importing it: among its
+    distribution's recorded files, else in the search locations of its top-level package
+    (an editable install's), which finding runs none of its code."""
+    names = package.split(".")
+    if dist is not None:
+        for recorded in dist.files or ():
+            if tuple(recorded.parts) == (*names, FILE):
+                return Path(str(dist.locate_file(recorded)))
+    try:
+        spec = importlib.util.find_spec(names[0])
+    except (ImportError, ValueError):
+        return None
+    for location in (spec and spec.submodule_search_locations) or ():
+        file = Path(location, *names[1:], FILE)
+        if file.is_file():
+            return file
+    return None
+
+
 def package_sources() -> list[tuple[Origin, Path]]:
     """Each installed package's declarations, from the ``finn.platform`` entry points,
-    in order of distribution and name: its origin and its directory."""
-    from importlib.metadata import entry_points  # noqa: PLC0415
-    from importlib.resources import files  # noqa: PLC0415
-
+    in order of distribution and name: its origin and its directory. The package an entry
+    point names is not imported; one that holds no ``platform.toml`` is refused."""
     found = []
-    for point in sorted(
-        entry_points(group=GROUP), key=lambda p: ((p.dist.name if p.dist else ""), p.name)
-    ):
-        dist = point.dist.name if point.dist else "?"
-        where = f"entry point {point.name!r} of {dist}"
-        try:
-            directory = files(point.value)
-        except (ImportError, TypeError) as error:
+    for point in sorted(entry_points(group=GROUP), key=lambda p: (_distribution(p), p.name)):
+        dist, version = _distribution(point), point.dist.version if point.dist else None
+        where = f"package {dist} {version}: entry point {point.name!r}"
+        if not _PACKAGE.fullmatch(point.value):
             raise TargetRefused(
-                "declaration-invalid", where, f"cannot import {point.value}: {error}"
-            ) from None
-        file = directory.joinpath(FILE)
-        if not isinstance(file, Path) or not file.is_file():
+                "declaration-invalid", where, f"names a package, not {point.value!r}"
+            )
+        file = _package_file(point.value, point.dist)
+        if file is None or not file.is_file():
             raise TargetRefused("declaration-invalid", where, f"{point.value} holds no {FILE}")
-        version = point.dist.version if point.dist else None
         found.append((Origin(PACKAGE, file, package=dist, version=version), file.parent))
     return found
+
+
+def _distribution(point: EntryPoint) -> str:
+    return point.dist.name if point.dist else "?"
 
 
 def path_sources(environ: Mapping[str, str] | None = None) -> list[tuple[Origin, Path]]:

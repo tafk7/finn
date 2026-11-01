@@ -10,6 +10,8 @@ outside FINN, which needs no change to FINN."""
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -148,6 +150,7 @@ def test_an_added_file_or_directory_that_declares_nothing_is_refused(tmp_path: P
 class _Dist:
     name: str
     version: str
+    files: None = None  # recorded none: an editable install's
 
 
 @dataclass(frozen=True)
@@ -167,11 +170,81 @@ def test_an_installed_package_declares_through_its_entry_point(
     def entry_points(*, group: str) -> list[_EntryPoint]:
         return [point] if group == GROUP else []
 
-    monkeypatch.setattr("importlib.metadata.entry_points", entry_points)
+    monkeypatch.setattr("finn.platform.declarations.entry_points", entry_points)
     found = load(environ=FINN_ONLY)
     assert str(found.origin("shells", "example")) == "package example-platform 0.1"
     assert found.directories == ((found.origin("shells", "example"), EXAMPLE),)
     assert check(found) == []
+
+
+_INITIALIZER = """\
+import os, pathlib
+pathlib.Path(os.environ["MARKER"]).write_text("ran")
+print("the package was imported")
+"""
+
+_LIST_BOARDS = """\
+from finn.platform import _cli
+from finn.platform.declarations import declarations
+print(declarations().origin("boards", "Marked"))
+_cli.main(["list", "boards"])
+"""
+
+
+def _installed(site: Path, package: str, *, declares: bool) -> None:
+    """``package`` installed in ``site`` as a wheel installs it: its code, which marks that
+    it ran, its ``platform.toml`` (if it ``declares``), and its distribution's metadata,
+    recording its files and naming it in the group ``finn.platform``."""
+    (site / package).mkdir(parents=True)
+    (site / package / "__init__.py").write_text(_INITIALIZER)
+    files = [f"{package}/__init__.py"]
+    if declares:
+        (site / package / "platform.toml").write_text(
+            '[boards.Marked]\npart = "xczu3eg-sbva484-1-e"\n'
+        )
+        files.append(f"{package}/platform.toml")
+    info = site / f"{package}-1.0.dist-info"
+    info.mkdir()
+    (info / "METADATA").write_text(f"Metadata-Version: 2.1\nName: {package}\nVersion: 1.0\n")
+    (info / "entry_points.txt").write_text(f"[{GROUP}]\nmarked = {package}\n")
+    (info / "RECORD").write_text("".join(f"{each},,\n" for each in files))
+
+
+def _fresh(site: Path, script: str, marker: Path) -> subprocess.CompletedProcess[str]:
+    """``script`` run in a fresh interpreter with ``site`` on its path."""
+    environ = {key: value for key, value in os.environ.items() if key != PATH_SETTING}
+    environ["PYTHONPATH"] = os.pathsep.join(
+        each for each in (str(site), os.environ.get("PYTHONPATH")) if each
+    )
+    environ["MARKER"] = str(marker)
+    return subprocess.run(
+        [sys.executable, "-c", script], env=environ, capture_output=True, text=True, check=False
+    )
+
+
+def test_an_installed_packages_declarations_are_read_without_running_its_code(
+    tmp_path: Path,
+) -> None:
+    """Found through its distribution's metadata in a fresh process, an installed package's
+    declarations are read, listed and shown, and the package's own code never runs; one that
+    holds no declarations is refused, owned by its distribution."""
+    site, marker = tmp_path / "site", tmp_path / "marker"
+    _installed(site, "marked_platform", declares=True)
+    ran = _fresh(site, _LIST_BOARDS, marker)
+    assert ran.returncode == 0, ran.stderr
+    origin, *listed = ran.stdout.splitlines()
+    assert origin == "package marked_platform 1.0"
+    assert ["Marked", "package", "marked_platform", "1.0"] in [line.split() for line in listed]
+    assert "imported" not in ran.stdout and not marker.exists()
+
+    bare = tmp_path / "bare"
+    _installed(bare, "bare_platform", declares=False)
+    ran = _fresh(bare, _LIST_BOARDS, marker)
+    assert ran.returncode != 0 and not marker.exists()
+    assert (
+        "package bare_platform 1.0: entry point 'marked': declaration-invalid: "
+        "bare_platform holds no platform.toml"
+    ) in ran.stderr
 
 
 @pytest.mark.parametrize(
