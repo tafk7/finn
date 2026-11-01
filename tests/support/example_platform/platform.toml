@@ -1,0 +1,50 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+
+# A made-up platform, declared as a package outside FINN would declare its own: a board, a
+# linker, a runtime, a pushed mover kind and a shell on them, with no change to FINN. Its
+# code is support.example_platform's.
+
+[boards.Example-ZU3]
+part = "xczu3eg-sbva484-1-e"
+
+[linkers.example-link]
+# Writes the description it is given and a stub image.
+code = "support.example_platform:link"
+tool = "example-tool"
+board_keys = ["slot"]
+image = "example-image"
+
+[runtimes.example-run]
+# Records the operations it is asked for.
+code = "support.example_platform:RecordingRuntime"
+images = ["example-image"]
+movers = ["iodma_hls", "example_push"]
+kinds = ["moved", "pushed"]
+schemas = [1]
+
+[movers.example_push]
+# An adapter the host pushes each frame through.
+code = "support.example_platform:ExamplePush"
+kinds = ["pushed"]
+
+[shells.example]
+# pynq's facts, with its own linker and runtime, a pushed input beside the moved one, and
+# no characterisation of its own.
+based_on = "pynq"
+linker = "example-link"
+runtimes = ["example-run"]
+supply = [
+    { kind = "moved", movers = ["iodma_hls"], width_cap = 128 },
+    { kind = "pushed", movers = ["example_push"] },
+]
+characterised = "nothing: a made-up shell"
+timed = []
+caveat = "the 'example' shell is made up: on {board} ({part}) nothing is measured"
+
+[shells.example.boards.Ultra96]
+slot = "A"
+
+[shells.example.boards.Example-ZU3]
+slot = "B"
+versions = ">=1.0"

@@ -171,9 +171,9 @@ again and reports every part, device or field that differs (exit 0: identical);
 processes at once, 8 by default).
 
 **A device FINN does not ship** (a new part, an engineering sample, a board with a
-custom part) is added without editing FINN: an overlay file, named by the machine
-setting `FINN_PLATFORM_CATALOG` (read once, when the catalog is first queried). It
-holds records of the committed data's schema, each list optional, and is validated
+custom part) is added without editing FINN: a parts overlay, a file `parts.json` in a
+declaration directory (one on the machine setting `FINN_PLATFORM_PATH`, below, or an
+installed package's), read once, when the catalog is first queried. It holds records of the committed data's schema, each list optional, and is validated
 when it is loaded (`catalog-overlay-invalid` names what is wrong):
 
 ```json
@@ -195,7 +195,7 @@ when it is loaded (`catalog-overlay-invalid` names what is wrong):
 ```
 
 ```bash
-FINN_PLATFORM_CATALOG=~/acme/parts.json build_dataflow ...
+FINN_PLATFORM_PATH=~/acme build_dataflow ...     # ~/acme/parts.json
 ```
 
 - A device's `resources` is its record, or the `digest` of one the catalog ships
@@ -211,6 +211,33 @@ FINN_PLATFORM_CATALOG=~/acme/parts.json build_dataflow ...
   (`report/step_explore.json`, `resources.part.source`).
 - An entry whose name is a shipped part or device is refused, unless it says
   `"overrides": true`; `overrides` on a name the catalog does not ship is refused.
+  A name two overlays both add is refused.
+
+**Boards, shells and the rest of a platform** are declarations: a file `platform.toml`
+of five kinds (`boards`, `linkers`, `runtimes`, `movers`, `shells`), read from FINN's
+own (`src/finn/platform/data/platform.toml`), from each installed package's entry point
+in the group `finn.platform` (its value a directory holding `platform.toml` and,
+optionally, `parts.json`), and from each directory on `FINN_PLATFORM_PATH`
+(`os.pathsep`-separated). A source only adds names: one declared twice is refused,
+`platform-name-taken`, naming both origins. A shell may start from another's
+declaration (`based_on`) and replace its keys; a linker, runtime or mover kind names
+its code by `module:attribute`, imported only when it is used.
+
+```toml
+[boards.Acme-ZU3]
+part = "xczu3eg_es1-sbva484-1-e"
+
+[shells.acme]
+based_on = "pynq"
+
+[shells.acme.boards.Acme-ZU3]
+board_part = "acme.com:zu3:part0:1.0"
+```
+
+`finn-platform list [KIND]` prints every declaration with its origin, `finn-platform
+show part|board|shell NAME` one of them (a shell as its typed rows), and `finn-platform
+check` checks them all against each other and against the part catalog, importing each
+declared code (exit 1 on any finding).
 
 ## Co-develop QONNX, Brevitas, finn-hlslib or another dependency
 
