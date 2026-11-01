@@ -70,7 +70,6 @@ from finn.core.space.declarations import (
     Declaration,
     Derived,
     MemberRef,
-    View,
     unmet_required,
 )
 from finn.dataflow.schedule import (
@@ -158,20 +157,12 @@ def _declared(cls: type[Kernel], name: str) -> bool:
 
 def _refuse_restated_cycles(cls: type[Kernel]) -> None:
     """Refuse a kernel with a module that restates ``frame_cycles``, or the base's private
-    rate law behind it (``_frame_cycles``, ``_rate_frame_cycles``) (``kernel-cycles-
-    restated``): the base derives them by the rate law from its ports and its
-    ``interval``, which it states where its hardware differs. A restatement as the base's
-    own (``frame_cycles = view(Kernel._frame_cycles)``) changes nothing and stays, so that
-    a channel counts its kind (MemStream's, ``finn.kernels.channels.Channel``), until the
-    channel counts its members' cycles otherwise."""
+    rate law behind it (``_rate_frame_cycles``) (``kernel-cycles-restated``): the base
+    derives them by the rate law from its ports and its ``interval``, which it states
+    where its hardware differs."""
     for base in cls.__mro__[: cls.__mro__.index(Kernel)]:
-        for name in ("frame_cycles", "_frame_cycles", "_rate_frame_cycles"):
-            item = vars(base).get(name)
-            if item is None or (
-                name == "frame_cycles"
-                and isinstance(item, View)
-                and item.function is Kernel._frame_cycles
-            ):
+        for name in ("frame_cycles", "_rate_frame_cycles"):
+            if name not in vars(base):
                 continue
             where = f"{cls.__qualname__}.{name}"
             raise DefinitionError.broken(
@@ -1628,14 +1619,14 @@ class Kernel(Space):
     kernel names. Its answers are Views: its netlist, the cycles a frame takes through it,
     the bits it holds and what it uses of the device. A native kernel states its netlist
     in ordinary serial source over typed model inputs and pure physical helpers; the base
-    derives its cycles by the rate law, and a kernel restates them only to be counted by
-    its kind (MemStream; a composite, StreamAdapter). Its contract's intake (``intake``)
-    it states from its RTL, else the base answers it unstated, by name. Buffering and
-    resources read its own statements and its members' answers. A composed kernel
-    reaches those answers through ``Members`` over the member each states. A kernel that
-    counts no cycles of its own, a channel's FIFO (``finn.kernels.channels.ChannelFifo``),
-    whose beats are counted where they are made, answers its ``frame_cycles`` inapplicable,
-    and its parent's ``member_frame_cycles`` leaves it out.
+    derives its cycles by the rate law, and a kernel with a module never restates them.
+    Its contract's intake (``intake``) it states from its RTL, else the base answers it
+    unstated, by name. Buffering and resources read its own statements and its members'
+    answers. A composed kernel reaches those answers through ``Members`` over the member
+    each states. A kernel that counts no cycles of its own, a channel's FIFO
+    (``finn.kernels.channels.ChannelFifo``), whose beats are counted where they are made,
+    answers its ``frame_cycles`` inapplicable, and its parent's ``member_frame_cycles``
+    leaves it out.
 
     A reader of a kernel's design point types it ``Kernel``: its four answers (``netlist``,
     ``frame_cycles``, ``buffering``, ``resources``) read as their accepted values, and raise where
@@ -2047,7 +2038,12 @@ class Kernel(Space):
         most any member takes, a member counting none (inapplicable) left out. A kernel with
         a module never restates it (``kernel-cycles-restated``, when its class is made): it
         states its ``interval`` where its hardware differs."""
-        return self._frame_cycles()
+        if type(self).module_spec is not None:
+            return self._rate_frame_cycles()
+        found = [item.value for item in self.member_frame_cycles]
+        if found:
+            return max(found)
+        return reject("kernel-cycles", f"no member of {type(self).__qualname__} states cycles")
 
     @view
     def assumed(self) -> tuple[str, ...]:
@@ -2062,17 +2058,6 @@ class Kernel(Space):
                 own = (f"interval {interval}",)
         below = (f"{item.node}: {each}" for item in self.member_assumed for each in item.value)
         return (*own, *below)
-
-    def _frame_cycles(self) -> int | Rejected:
-        """``frame_cycles`` (above). A class restating ``frame_cycles`` as the base's, to be
-        counted by its own kind (a channel's members, ``finn.kernels.channels.Channel``),
-        calls it."""
-        if type(self).module_spec is not None:
-            return self._rate_frame_cycles()
-        found = [item.value for item in self.member_frame_cycles]
-        if found:
-            return max(found)
-        return reject("kernel-cycles", f"no member of {type(self).__qualname__} states cycles")
 
     def _rate_frame_cycles(self) -> int | Rejected:
         """A kernel with a module's cycles a frame by the rate law (``frame_cycles``): its

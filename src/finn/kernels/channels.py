@@ -76,17 +76,16 @@ are the base's views over theirs, but for two it states itself, calling the base
 netlist places its source and its output adapter at their labels and adds the hops between
 its own ends (its source, its stages, its outer port; ``netlist``), and a channel of wires
 takes no cycles of its own (0); a boundary whose outside states a pace takes no fewer than
-that pace's span a frame (``frame_cycles``). Its cycles count its source's, its adapters' and
-its mover's, by kind (``source_cycles``, ``stage_cycles``, ``mover_cycles``), not through
-the base's ``member_frame_cycles``: its mover is no kernel (it binds no RTL in the module), and
-its transport, whose cycles are inapplicable, is a choice still open when FIFO sizing reads
-them. Its hops to the ports beside it need those ports'
-stream pins, which the kernel holding it holds: that kernel wires them (``outer_hops``, from
-the ports it reads, ``Neighbours``; the base's ``finn.kernels.base.hops``) and places them
-around the channel's netlist; it reads the module's AXIS buses of its outer ports
-(``physical_pins``). It states its mover's contract
-(``mover_contracts``, one or none: ``placed_mover``, from the mover's own derived
-``contract``). It is no module of its own.
+that pace's span a frame (``frame_cycles``). Its cycles are the most of its members' that
+count any, each read where it is placed (its source's, its adapters', its mover's), not
+through the base's ``member_frame_cycles``: its mover is no kernel (it binds no RTL in the
+module), and its transport, whose cycles are inapplicable, is a choice still open when FIFO
+sizing reads them. Its hops to the ports beside it need those ports' stream pins, which
+the kernel holding it holds: that kernel wires them (``outer_hops``, from the ports it
+reads, ``Neighbours``; the base's ``finn.kernels.base.hops``) and places them around the
+channel's netlist; it reads the module's AXIS buses of its outer ports
+(``physical_pins``). It states its mover's contract (``mover_contracts``, one or none:
+``placed_mover``, from the mover's own derived ``contract``). It is no module of its own.
 """
 
 from __future__ import annotations
@@ -101,7 +100,6 @@ from finn.core.reporting.findings import Finding
 from finn.core.space import (
     Decision,
     Inapplicable,
-    Members,
     Param,
     Rejected,
     Select,
@@ -134,7 +132,6 @@ from finn.kernels.adapters import (
     RealizedStage,
     Stage,
     StageStreams,
-    StreamAdapter,
     realize,
 )
 from finn.kernels.artifacts import ArtifactError
@@ -932,29 +929,33 @@ class Channel(Kernel):
         (``finn.kernels.sides.beat_times``): the partition runs no faster than its outside
         supplies an input or takes an output. A side the outside leaves unstated, or
         states without a pace (a mover's, its contract's), bounds nothing more."""
-        counted = (*self.source_cycles, *self.stage_cycles, *self.mover_cycles)
-        found = max((item.value for item in counted), default=0)
+        # Its members' cycles, each its own (``Kernel.frame_cycles``; its mover's, its
+        # contract's), read where each is placed. Not the base's ``member_frame_cycles``,
+        # which ranges over its transport too: a FIFO's cycles are inapplicable, but whether
+        # it places one is a choice FIFO sizing reads cycles before, so the base's would wait
+        # on it.
+        counted: list[int] = []
+        if self.valued:
+            counted.append(self.source.frame_cycles)
+        if self.output_adapting:
+            counted.append(self.output_adapter.frame_cycles)
+        adapter = self.adapter
+        if adapter is not None:
+            counted.append(adapter.frame_cycles)
+        if self.offered:
+            counted.append(self.mover.cycles)
+        found = max(counted, default=0)
         paces = [
             side.outside.pace
             for side in (self.producer, self.consumer)
             if side.outside is not None and side.outside.pace is not None
         ]
-        if isinstance(found, Rejected) or not paces:
+        if not paces:
             return found
         # A side the outside states is a boundary's: its outer port presents the edge.
         edge: Stream = self.outer_in.stream if self.entering else self.outer_out.stream
         beats = edge.sequence.form.beats
         return max(found, *(beat_times(pace, beats).span for pace in paces))
-
-    # What its cycles count, by kind: its source's, its adapters' and its mover's. Not the
-    # base's ``member_frame_cycles``, which ranges over its transport too: a FIFO's cycles are
-    # inapplicable, but whether it places one is a choice FIFO sizing reads cycles before,
-    # so the base's would wait on it. Its mover is no kernel; its cycles count here. Each
-    # kind declares ``frame_cycles`` itself (``Members`` reads the declaring class), and must
-    # keep doing so while the channel counts by kind.
-    source_cycles = Members(MemStreamKernel.frame_cycles)
-    stage_cycles = Members(StreamAdapter.frame_cycles)
-    mover_cycles = Members(IodmaMover.cycles)
 
     # The boundary channel's mover, as its contract (``MoverContract``): one, or none
     # without a mover. The shell's budget check counts their AXI-Lite buses, and it sums
