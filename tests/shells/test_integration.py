@@ -22,6 +22,7 @@ from support.refusals import refused
 from finn.core.graph.annotations.outputs import OUTPUT_IP, OUTPUT_VLNV
 from finn.core.graph.partition import partition_body
 from finn.custom_op.kernels.shell import Configured, configured_network
+from finn.kernels.movers import IODMA_REGISTERS
 from finn.shells import integration
 from finn.shells.integration import (
     CORE,
@@ -33,11 +34,13 @@ from finn.shells.integration import (
     Endpoint,
     IntegrationError,
     IpRef,
+    Linked,
     Supply,
     Unit,
     _range,
     describe,
     mover_pins,
+    runtime_file,
 )
 from finn.transformation.kernels.cut import CutKernelPartition
 
@@ -91,9 +94,10 @@ def test_the_chain_is_described_by_its_core_units_and_wiring(tmp_path: Path) -> 
     assert described.bindings == tuple(
         Binding(f"{unit}/m_axi_gmem", "HP0") for unit in ("in0", "in1", "out0")
     )
-    # The Chain's kernels present no control bus: the movers' are its endpoints.
+    # The Chain's kernels present no control bus: the movers' are its endpoints, each with
+    # the registers a runtime drives it by.
     assert described.endpoints == tuple(
-        Endpoint(unit=unit, bus="s_axi_control", offset=0, range=4096)
+        Endpoint(unit=unit, bus="s_axi_control", offset=0, range=4096, registers=IODMA_REGISTERS)
         for unit in ("in0", "in1", "out0")
     )
     assert described.clocks == tuple(
@@ -131,12 +135,54 @@ def test_the_description_names_nothing_of_a_platform(tmp_path: Path) -> None:
             "unit": "out0",
             "target": "HP0",
             "mover": "iodma_hls",
+            "bits": 32,
+            "beats": 1,
+            "lanes": 4,
         }
     ]
+    assert report["units"][0] == {"name": "in0", "kind": "iodma_hls", "window": 4096}
+    assert report["endpoints"][0] == {
+        "unit": "in0",
+        "bus": "s_axi_control",
+        "node": None,
+        "offset": 0,
+        "range": 4096,
+        "registers": {
+            "control": {"offset": 0x00, "bits": 32},
+            "address": {"offset": 0x10, "bits": 64},
+            "count": {"offset": 0x1C, "bits": 32},
+        },
+    }
     text = json.dumps(report)
     for name in ('"idma', '"odma', "/idma", "/odma", "smartconnect", "axi_interconnect"):
         assert name not in text
     assert "_AXI" not in text and "s_axi_control_0" not in text and "0xa000" not in text
+
+
+def test_the_runtime_file_is_the_description_with_its_placement_and_clocks(
+    tmp_path: Path,
+) -> None:
+    """The runtime file: its layout (schema 1), the description as a runtime reads it, no
+    unit's IP (the build's, with the build machine's paths), each placed unit's base and the
+    clocks as delivered; ``period_ns`` the build's request beside them."""
+    described = describe(zynq_parent(tmp_path)).packaged(
+        {"in0": IpRef("v:in0", (str(tmp_path / "in0"),))}
+    )
+    linked = Linked(
+        image=tmp_path / "a.bit",
+        placement={"in0": 0xA000_0000, "in1": 0xA000_1000, "out0": 0xA000_2000},
+        clocks_mhz={MAIN: 187.512},
+        reports={},
+    )
+    written = runtime_file(described, linked)
+    assert written == {
+        "schema": 1,
+        **described.report(),
+        "placement": {"in0": 0xA000_0000, "in1": 0xA000_1000, "out0": 0xA000_2000},
+        "clocks_mhz": {"main": 187.512},
+    }
+    assert written["period_ns"] == 5.0
+    assert str(tmp_path) not in json.dumps(written)
 
 
 def test_the_core_unit_is_the_ip_its_packaging_gave_it(tmp_path: Path) -> None:
@@ -162,8 +208,16 @@ def test_a_core_presenting_a_bus_is_one_unit_of_its_grouper_s_window(tmp_path: P
     assert described.unit("DataflowCore_0") == Unit(
         name="DataflowCore_0", kind=CORE, ip=None, window=4096
     )
+    # The bus is the thresholding's: its node is named, and a runtime drives it by no
+    # named register (its writes are the node's configuration).
     assert [each for each in described.endpoints if each.unit == "DataflowCore_0"] == [
-        Endpoint(unit="DataflowCore_0", bus="Thresholding_0_s_axilite", offset=0, range=64)
+        Endpoint(
+            unit="DataflowCore_0",
+            bus="Thresholding_0_s_axilite",
+            node="Thresholding_0",
+            offset=0,
+            range=64,
+        )
     ]
     _, body, body_file = partition_body(parent)
     body.set(OUTPUT_VLNV, "xilinx_finn:finn:finn_dataflowcore_packaged:1.0")

@@ -27,11 +27,11 @@ from finn.shells.pynq.linker import (
     LinkerRefused,
     Wire,
     block_design,
-    endpoint_addresses,
     linked_row,
     placement,
     project_script,
     report,
+    unit_bases,
     wire_one_bus_each,
     wiring,
 )
@@ -94,7 +94,9 @@ def test_each_control_bus_is_placed_from_the_processors_window(
         Address("out0/s_axi_control", 0xA000_2000, 4096),
     )
     stated = report(described)
-    assert sorted(stated) == ["addresses", "wires"]
+    assert sorted(stated) == ["addresses", "units", "wires"]
+    # Each unit's IP is the build's, none before it is packaged.
+    assert stated["units"][0] == {"name": "in0", "ip": None}
     assert stated["addresses"][2] == {
         "interface": "out0/s_axi_control",
         "offset": "0xa0002000",
@@ -140,13 +142,11 @@ def test_a_core_unit_is_one_control_port_its_buses_at_their_offsets(
         Address("DataflowCore_0/s_axi_control", 0xA000_2000, 4096),
         Address("out0/s_axi_control", 0xA000_3000, 4096),
     )
-    assert endpoint_addresses(core, row) == {
-        "in0/s_axi_control": 0xA000_0000,
-        "in1/s_axi_control": 0xA000_1000,
-        "out0/s_axi_control": 0xA000_3000,
-        "DataflowCore_0/t0_s_axilite": 0xA000_2000,
-        "DataflowCore_0/t1_s_axilite": 0xA000_2020,
-        "DataflowCore_0/t2_s_axilite": 0xA000_2040,
+    assert unit_bases(core, row) == {
+        "in0": 0xA000_0000,
+        "in1": 0xA000_1000,
+        "DataflowCore_0": 0xA000_2000,
+        "out0": 0xA000_3000,
     }
     assigned = [
         line
@@ -398,8 +398,6 @@ def test_the_link_is_made_under_the_directory_it_is_given(
     assert args[-1] == f"{project}/ip_config.tcl"
     assert linked.image.is_relative_to(project)
     assert all(path.is_relative_to(project) for path in linked.reports.values())
-    assert linked.placement == {
-        "in0/s_axi_control": 0xA000_0000,
-        "in1/s_axi_control": 0xA000_1000,
-        "out0/s_axi_control": 0xA000_2000,
-    }
+    assert linked.placement == {"in0": 0xA000_0000, "in1": 0xA000_1000, "out0": 0xA000_2000}
+    # The fake's timing report names no PL clock: no clock is known delivered.
+    assert linked.clocks_mhz == {}

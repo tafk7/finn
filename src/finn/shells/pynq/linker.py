@@ -25,9 +25,9 @@ It takes every name the platform gives and places every control bus:
 - the placement (``placement``): each unit's window from the fixed shell's
   ``control_base``, in that order, aligned to itself
   (``finn.kernels.shell_rules.placed_windows``, by which the shell's control window rule
-  admitted them); the block design assigns each unit's port its address from it, and each
-  endpoint is its unit's base and its offset (``Linked.placement``), so the placement it
-  returns is the one Vivado was given;
+  admitted them); the block design assigns each unit's port its address from it, and it
+  returns each unit's base (``unit_bases``, ``Linked.placement``), the one Vivado was
+  given;
 - the board (``project_script``): its board part, the board's declared fact
   (``board_part``), and its processor's family, the fixed shell's processor's
   (``PROCESSORS``).
@@ -45,9 +45,9 @@ select (``project_script``).
 ``BlockDesignLinker.link`` writes the block design (``block_design``) into
 ``templates.custom_zynq_shell_template`` (``project_script``) in a new project under the
 directory it is given, runs Vivado on it and collects what it made (``collect``): the
-bitfile, its hardware handoff, the routed timing report, the template's ``impl_1``
-hierarchical utilization report and each IP's out-of-context synthesis report. Every
-unit's IP is packaged before it links.
+bitfile, the main clock as the routed design delivers it, its hardware handoff, the routed
+timing report, the template's ``impl_1`` hierarchical utilization report and each IP's
+out-of-context synthesis report. Every unit's IP is packaged before it links.
 """
 
 from __future__ import annotations
@@ -68,7 +68,7 @@ from finn.platform.shells import VIVADO_BLOCK_DESIGN, ShellRow, shell_row
 from finn.shells.integration import MAIN, Integration, IntegrationError, Linked, Unit
 from finn.shells.pynq import templates
 from finn.toolchain.launcher import StrPath, Toolchain, ToolFailed
-from finn.toolchain.vivado import tcl_quote, vivado_jobs
+from finn.toolchain.vivado import delivered_clock, tcl_quote, vivado_jobs
 
 #: The project the template creates (``create_project finn_zynq_link``).
 PROJECT = "finn_zynq_link"
@@ -282,22 +282,28 @@ def placement(integration: Integration, row: ShellRow) -> tuple[Address, ...]:
     )
 
 
-def endpoint_addresses(integration: Integration, row: ShellRow) -> dict[str, int]:
-    """Each endpoint of ``integration``, ``<unit>/<bus>``, at its address: its unit's base
-    (``placement``) and its offset in the unit."""
-    bases = {
-        address.interface.split("/")[0]: address.offset for address in placement(integration, row)
-    }
+def unit_bases(integration: Integration, row: ShellRow) -> dict[str, int]:
+    """Each unit of ``integration`` with a control window at its base address
+    (``placement``); an endpoint is at its unit's base and its offset in the unit."""
     return {
-        f"{each.unit}/{each.bus}": bases[each.unit] + each.offset for each in integration.endpoints
+        address.interface.split("/")[0]: address.offset for address in placement(integration, row)
     }
 
 
 def report(integration: Integration) -> dict[str, Any]:
-    """What the linker names and places of ``integration``, as JSON: the wires and the
-    addresses."""
+    """What the linker names and places of ``integration``, as JSON: each unit's IP, the
+    wires and the addresses."""
     row = linked_row(integration)
     return {
+        "units": [
+            {
+                "name": unit.name,
+                "ip": None
+                if unit.ip is None
+                else {"vlnv": unit.ip.vlnv, "repositories": list(unit.ip.repositories)},
+            }
+            for unit in integration.units
+        ],
         "wires": [
             {"kind": each.kind, "source": each.source, "sink": each.sink}
             for each in wiring(integration, row)
@@ -460,7 +466,9 @@ def collect(
     project: str, integration: Integration, row: ShellRow, transcript: StrPath | None = None
 ) -> Linked:
     """What Vivado made in ``project`` (the template's project) of ``integration``: the
-    bitfile (``image``), the placement of each control bus (``<unit>/<bus>``), and the
+    bitfile (``image``), each unit's base (``unit_bases``), the row's main clock as the
+    routed design delivers it (none where there is no timing report, or it names no PL
+    clock), and the
     reports: the hardware handoff (``hwh``), the routed timing summary (``timing``), the
     template's ``impl_1`` hierarchical utilization (``placed``), the project itself
     (``project``) and each IP's out-of-context synthesis utilization by its run
@@ -493,7 +501,14 @@ def collect(
             for path in sorted(runs.glob("*_synth_1/*_utilization_synth.rpt"))
         }
     )
-    return Linked(image=bitfile, placement=endpoint_addresses(integration, row), reports=reports)
+    timing = reports["timing"]
+    clock = delivered_clock(str(timing), integration.period_ns) if timing.is_file() else {}
+    return Linked(
+        image=bitfile,
+        placement=unit_bases(integration, row),
+        clocks_mhz={MAIN: clock["delivered_mhz"]} if "delivered_mhz" in clock else {},
+        reports=reports,
+    )
 
 
 class BlockDesignLinker:
@@ -550,13 +565,13 @@ __all__ = [
     "control_instance",
     "control_tree",
     "debug_lines",
-    "endpoint_addresses",
     "family",
     "linked_row",
     "placed_units",
     "placement",
     "project_script",
     "report",
+    "unit_bases",
     "wire_one_bus_each",
     "wiring",
 ]

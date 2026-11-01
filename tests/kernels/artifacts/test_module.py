@@ -36,6 +36,7 @@ from finn.kernels.artifacts.module import (
     Link,
     LinkEnd,
     RegisterMap,
+    Registers,
     Snapshot,
     fingerprint,
     instance_collisions,
@@ -319,6 +320,22 @@ def test_a_register_map_writes_whole_words_at_word_addresses() -> None:
     writes = RegisterMap(((0, 7),))
     kernel = Fragment((("", stage()),), (), (BusExport("", CONFIG, "s_axilite", writes),))
     assert kernel.under("activate").exports[0].registers == writes
+
+
+def test_named_registers_are_whole_words_named_once_and_apart() -> None:
+    """A bus's registers by name: 32 or 64 bits, each at a 32-bit word's address, named
+    once, a 64-bit one taking two words; an overlap is refused, naming both."""
+    named = Registers((("control", 0x00, 32), ("address", 0x10, 64), ("count", 0x1C, 32)))
+    assert (named.offset("address"), named.offset("count")) == (0x10, 0x1C)
+    assert Registers().registers == ()
+    with pytest.raises(BuildError, match="32 or 64 bits, not 16"):
+        Registers((("a", 0, 16),))
+    with pytest.raises(BuildError, match="0x2 is not a 32-bit word's address"):
+        Registers((("a", 2, 32),))
+    with pytest.raises(BuildError, match=r"\['a'\] are named twice"):
+        Registers((("a", 0, 32), ("a", 4, 32)))
+    with pytest.raises(BuildError, match="count and address both take 0x14"):
+        Registers((("address", 0x10, 64), ("count", 0x14, 32)))
 
 
 def test_every_artifact_error_is_an_artifact_error() -> None:

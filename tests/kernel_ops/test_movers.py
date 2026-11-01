@@ -97,6 +97,7 @@ from finn.kernels.library import library_module
 from finn.kernels.movers import (
     DIVISIBLE,
     IODMA_HLS,
+    IODMA_REGISTERS,
     LCM,
     MEMORY_LATENCY,
     NO_CONVERTER,
@@ -137,6 +138,7 @@ def contract(tdata: int, beats: int, memory: int, call: int, frames: int = 1) ->
         call_cycles=call,
         frames_per_call=frames,
         control_buses=1,
+        registers=IODMA_REGISTERS,
         memory_ports=1,
         resources=Resources(),
     )

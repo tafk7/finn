@@ -1916,10 +1916,11 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
     assert body.get(OUTPUT_IP_KEY) == IP_KEY
     for model in (reread, body):
         assert list(model.model.metadata_props) == []
-    integrated = json.loads((report / "integration.json").read_text())
-    (core_unit,) = (unit for unit in integrated["units"] if unit["name"] == "DataflowCore_0")
+    designed = json.loads((report / "block_design.json").read_text())
+    (core_unit,) = (unit for unit in designed["units"] if unit["name"] == "DataflowCore_0")
     assert core_unit["ip"]["vlnv"] == packaged
-    assert integrated["block_design"]["wires"][0] == {
+    assert json.loads((report / "integration.json").read_text())["schema"] == 1
+    assert designed["wires"][0] == {
         "kind": "axis",
         "source": "in0/out0_V",
         "sink": "DataflowCore_0/s_axis_0",

@@ -39,7 +39,9 @@ stream side, the free side's contract:
   before the stream runs dry, or once its last word left);
 - it presents one AXI-Lite bus to the shell's processor (its ``s_axi_control``),
   whose window the shell's rules place beside the partition's
-  (``MoverContract.control_buses``);
+  (``MoverContract.control_buses``), and on it the registers a runtime drives it by
+  (``IODMA_REGISTERS``: its HLS block control at 0x00, the buffer's address at 0x10, a
+  64-bit pointer, and the frames a call moves at 0x1C);
 - the memory latency ``L`` is **excluded**: the shell does not know it, and each call
   adds it (``MEMORY_LATENCY``, what the exploration report states). A frame a call is
   the bound that holds for any batch, since the batch is the driver's runtime argument;
@@ -69,6 +71,7 @@ from math import ceil, gcd, lcm
 
 from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.module import Registers
 from finn.kernels.sides import ROW_MAJOR, Outside
 from finn.kernels.transport import StreamPins
 from finn.kernels.utilization import Fit
@@ -83,6 +86,11 @@ kind is placed by its declared code."""
 
 MEMORY_LATENCY = "memory latency: unmeasured; each call adds L"
 """What a mover's cycles leave out, as the exploration report states it."""
+
+IODMA_REGISTERS = Registers((("control", 0x00, 32), ("address", 0x10, 64), ("count", 0x1C, 32)))
+"""The registers of ``IODMA_hls``'s control bus a runtime drives a call by: the HLS top's
+block control (``control``), the buffer's address (``address``) and the frames it moves
+(``count``), at the offsets its HLS export gives them."""
 
 NO_CONVERTER, DIVISIBLE, LCM = "none", "divisible", "lcm"
 """The converters between a mover's memory port and its stream (``converter_kind``)."""
@@ -202,7 +210,8 @@ class MoverContract:
       ``converter`` sits between the two;
     - the rate: ``call_cycles`` (the constant each call adds), ``frames_per_call`` and
       ``cycles`` a frame, the memory latency excluded (``MEMORY_LATENCY``);
-    - ``control_buses``: the AXI-Lite buses it presents to the shell's processor;
+    - ``control_buses``: the AXI-Lite buses it presents to the shell's processor, and
+      ``registers``, those a runtime drives it by on its own (``Registers``);
     - ``memory_ports``: the AXI memory ports it initiates into the shell's memory;
     - ``resources``: what it uses of the device, the shell's (``SHELL_CHARACTERISED``)."""
 
@@ -219,6 +228,7 @@ class MoverContract:
     call_cycles: int
     frames_per_call: int
     control_buses: int
+    registers: Registers
     memory_ports: int
     resources: Resources
 
@@ -273,6 +283,7 @@ def iodma_contract(offer: MoverOffer, side: StreamPins) -> MoverContract:
         call_cycles=offer.call_converted if converter else offer.call_direct,
         frames_per_call=offer.frames_per_call,
         control_buses=1,
+        registers=IODMA_REGISTERS,
         memory_ports=1,
         resources=iodma_hls_resources(direction=direction, intf_width=memory, stream_width=tdata),
     )
@@ -281,6 +292,7 @@ def iodma_contract(offer: MoverOffer, side: StreamPins) -> MoverContract:
 __all__ = [
     "DIVISIBLE",
     "IODMA_HLS",
+    "IODMA_REGISTERS",
     "LCM",
     "MEMORY_LATENCY",
     "NO_CONVERTER",

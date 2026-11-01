@@ -73,7 +73,7 @@ from finn.core.graph.partition import design_digest, partition_body
 from finn.core.reporting.findings import Finding, FindingKind, Refusal
 from finn.kernels.artifacts.ipxact import vlnv
 from finn.platform.shells import VIVADO_BLOCK_DESIGN, ShellRow, shell_row
-from finn.shells.integration import Edge, Integration, IpRef, describe
+from finn.shells.integration import Edge, Integration, IpRef, Linked, describe, runtime_file
 from finn.shells.pynq import linker
 from finn.toolchain.ip import COMPONENT
 from finn.toolchain.launcher import Toolchain, ToolFailed, host_toolchain, transcript_files
@@ -101,8 +101,9 @@ class PynqBuilt:
     template's ``impl_1`` hierarchical utilization report (``placed``), each IP's
     out-of-context synthesis utilization report by its run (``out_of_context``,
     ``top_<cell>_0`` for the cells), the digest of the partition's design
-    (``made_from``, ``design_digest``), the key of the partition's IP (``ip_key``) and
-    the description it linked, each unit given the IP it was built as (``integration``)."""
+    (``made_from``, ``design_digest``), the key of the partition's IP (``ip_key``),
+    the description it linked, each unit given the IP it was built as (``integration``),
+    and what the linker made of it (``linked``)."""
 
     project: str
     bitfile: str
@@ -112,6 +113,7 @@ class PynqBuilt:
     made_from: str
     ip_key: str
     integration: Integration
+    linked: Linked
     out_of_context: dict[str, str] = field(default_factory=dict)
 
 
@@ -212,6 +214,7 @@ def build_pynq(
         made_from=design_digest(body),
         ip_key=packaged_key,
         integration=built,
+        linked=linked,
         out_of_context={
             name.removeprefix("out_of_context/"): str(path)
             for name, path in reports.items()
@@ -228,6 +231,7 @@ BITFILE = Path("bitfile") / "finn-accel.bit"
 HWH = Path("bitfile") / "finn-accel.hwh"
 REPORTS = {
     "integration": Path("report") / "integration.json",
+    "block_design": Path("report") / "block_design.json",
     "timing": Path("report") / "post_route_timing.rpt",
     "placed": Path("report") / "placed_utilization.xml",
     "out_of_context": Path("report") / "out_of_context",
@@ -333,27 +337,12 @@ def delivered_clock_findings(clock: dict[str, Any], timing_report: str) -> tuple
     )
 
 
-REPORT_SCHEMA = 0
-"""The layout of report/integration.json, its ``schema``: 0, the description and what the
-linker names and places of it, until it is the runtime file (schema 1). The integration
-export's report, before the description, had no ``schema``."""
-
-
-def integration_report(integration: Integration) -> dict[str, Any]:
-    """report/integration.json: its layout (``schema``, ``REPORT_SCHEMA``), the description
-    (``Integration.report``) and what the ``pynq`` linker names and places of it
-    (``block_design``: ``linker.report``)."""
-    return {
-        "schema": REPORT_SCHEMA,
-        **integration.report(),
-        "block_design": linker.report(integration),
-    }
-
-
 class BuildPynqBitfile(Transformation):
     """The Zynq block design's bitfile around the parent graph's partition (``build_pynq``), from
-    the partition's integration description, written with its linking as
-    report/integration.json (``integration_report``), into the output ``directory``: the
+    the partition's integration description, written with its linking as the runtime file
+    (report/integration.json, ``finn.shells.integration.runtime_file``), what the linker
+    names and places of it (report/block_design.json, ``linker.report``: each unit's IP
+    the one the build made), into the output ``directory``: the
     bitfile and its hardware handoff (bitfile/), the routed timing report
     (report/post_route_timing.rpt), the template's impl_1 hierarchical utilization
     (report/placed_utilization.xml), each IP's out-of-context synthesis utilization
@@ -411,10 +400,11 @@ class BuildPynqBitfile(Transformation):
             jobs=toolchain.selection.vivado_jobs,
             options=self.options,
         )
-        # Each unit's IP is the one the build made: the core's, the one its packaging gave it.
         reports["integration"].write_text(
-            json.dumps(integration_report(built.integration), indent=2)
+            json.dumps(runtime_file(built.integration, built.linked), indent=2)
         )
+        # Each unit's IP is the one the build made: the core's, the one its packaging gave it.
+        reports["block_design"].write_text(json.dumps(linker.report(built.integration), indent=2))
         shutil.copy(built.bitfile, self.bitfile)
         shutil.copy(built.hwh, hwh)
         shutil.copy(built.timing, reports["timing"])
@@ -491,8 +481,6 @@ __all__ = [
     "build_pynq",
     "delivered_clock_findings",
     "exported_vlnv",
-    "REPORT_SCHEMA",
-    "integration_report",
     "mover_ip",
     "pynq_row",
     "refuse_stale_bitfile",

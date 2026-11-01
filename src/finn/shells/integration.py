@@ -25,7 +25,8 @@ shell's row. It states (``Integration``):
   bits;
 - the bindings (``Binding``): each mover's memory port to a memory target of the row;
 - the endpoints (``Endpoint``): each control bus, by unit and bus, at its offset in its unit
-  and its range;
+  and its range: a core's bus with the KernelOp node presenting it (``node``), a mover's
+  with the registers a runtime drives it by (``registers``, its contract's);
 - the clocks (``ClockPin``): each unit's clock and reset pins, on a clock the row names.
 
 Every port is its unit's own pin: a core's edge ports its module's, a mover's stream,
@@ -51,6 +52,11 @@ range. Every endpoint takes a byte at least, at an offset of zero or more
 It is a function of a configured point: the description is a build's, needed once a build
 and not at every point an exploration costs. A shell without a linker (``ip``) has no
 description: its user links the core.
+
+The runtime file (``runtime_file``, ``integration.json``, ``RUNTIME_SCHEMA``) is the
+description as every runtime reads it (``Integration.report``: no unit's IP, which is the
+build's), with what its linker made of it (``Linked``): each placed unit's base, where the
+platform has no name lookup, and each clock as delivered.
 """
 
 from __future__ import annotations
@@ -74,7 +80,7 @@ from finn.custom_op.kernels.shell import (
 )
 from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.artifacts.abi import Bus, StandardProtocol, bus_window
-from finn.kernels.artifacts.module import Leaf
+from finn.kernels.artifacts.module import Leaf, Registers
 from finn.kernels.artifacts.unit import CONTROL, unsupported
 from finn.kernels.library import library_module
 from finn.kernels.movers import MoverContract
@@ -93,6 +99,9 @@ MAIN = "main"
 
 CLOCK, RESET = "ap_clk", "ap_rst_n"
 """Every unit's clock and reset pins."""
+
+RUNTIME_SCHEMA = 1
+"""The layout of the runtime file (``runtime_file``), its ``schema``."""
 
 
 @dataclass(frozen=True)
@@ -173,13 +182,17 @@ class Binding:
 
 @dataclass(frozen=True, kw_only=True)
 class Endpoint:
-    """A control bus: its ``unit``, the ``bus`` inside it, at ``offset`` in the unit's window,
-    of ``range`` bytes."""
+    """A control bus: its ``unit``, the ``bus`` inside it, the graph ``node`` it configures
+    (a core's bus: the KernelOp presenting it; None for a mover's), at ``offset`` in the
+    unit's window, of ``range`` bytes, and the ``registers`` a runtime drives it by (a
+    mover's; none for a core's, whose writes are its node's configuration)."""
 
     unit: str
     bus: str
+    node: str | None = None
     offset: int
     range: int
+    registers: Registers = Registers()
 
 
 @dataclass(frozen=True)
@@ -258,7 +271,9 @@ class Integration:
         return tuple(edge for core in self.cores for edge in (*core.inputs, *core.outputs))
 
     def report(self) -> dict[str, Any]:
-        """The description as JSON."""
+        """The description as JSON, as a runtime reads it: each edge with its mover's
+        stream (``bits`` a beat, ``beats`` a frame, ``lanes`` a beat), each endpoint with its
+        node and its registers; no unit's IP, which is the build's."""
 
         def edge(each: Edge) -> dict[str, Any]:
             return {
@@ -270,6 +285,9 @@ class Integration:
                 "unit": each.unit,
                 "target": each.target,
                 "mover": each.contract.kind,
+                "bits": each.contract.tdata,
+                "beats": each.contract.beats,
+                "lanes": each.contract.lanes,
             }
 
         return {
@@ -287,15 +305,7 @@ class Integration:
                 for core in self.cores
             ],
             "units": [
-                {
-                    "name": unit.name,
-                    "kind": unit.kind,
-                    "ip": None
-                    if unit.ip is None
-                    else {"vlnv": unit.ip.vlnv, "repositories": list(unit.ip.repositories)},
-                    "window": unit.window,
-                }
-                for unit in self.units
+                {"name": unit.name, "kind": unit.kind, "window": unit.window} for unit in self.units
             ],
             "connections": [
                 {"source": each.source, "sink": each.sink, "bits": each.bits}
@@ -303,7 +313,17 @@ class Integration:
             ],
             "bindings": [{"port": each.port, "target": each.target} for each in self.bindings],
             "endpoints": [
-                {"unit": each.unit, "bus": each.bus, "offset": each.offset, "range": each.range}
+                {
+                    "unit": each.unit,
+                    "bus": each.bus,
+                    "node": each.node,
+                    "offset": each.offset,
+                    "range": each.range,
+                    "registers": {
+                        name: {"offset": offset, "bits": bits}
+                        for name, offset, bits in each.registers.registers
+                    },
+                }
                 for each in self.endpoints
             ],
             "clocks": [
@@ -316,12 +336,28 @@ class Integration:
 @dataclass(frozen=True)
 class Linked:
     """What a linker made of a description: the ``image`` the platform loads, the
-    ``placement`` (each endpoint, ``<unit>/<bus>``, to its base address, where the platform
-    has no name lookup) and its ``reports`` by name."""
+    ``placement`` (each unit with a control window to its base address, where the platform
+    has no name lookup; an endpoint is at its unit's base and its offset), each of the row's
+    clocks as it delivers it, in MHz (``clocks_mhz``: none it does not know), and its
+    ``reports`` by name."""
 
     image: Path
     placement: Mapping[str, int]
+    clocks_mhz: Mapping[str, float]
     reports: Mapping[str, Path]
+
+
+def runtime_file(integration: Integration, linked: Linked) -> dict[str, Any]:
+    """The runtime file of ``integration`` as ``linked`` made it (``integration.json``):
+    its layout (``schema``, ``RUNTIME_SCHEMA``), the description as a runtime reads it
+    (``Integration.report``: ``period_ns`` the build's request among it), each placed unit's
+    base (``placement``) and each clock as delivered (``clocks_mhz``)."""
+    return {
+        "schema": RUNTIME_SCHEMA,
+        **integration.report(),
+        "placement": dict(linked.placement),
+        "clocks_mhz": dict(linked.clocks_mhz),
+    }
 
 
 class Linker(Protocol):
@@ -455,6 +491,11 @@ def describe(model: ModelWrapper) -> Integration:
         if isinstance(pin, Bus) and pin.protocol is StandardProtocol.AXILITE
     ]
     grouping = core_grouping(point.network)
+    # Each bus is presented by its member's instance, named by the member's node.
+    owners = {member: name for name, member in point.network.names.members.items()}
+    presenting = {
+        each.port: owners[each.instance.split(".")[0]] for each in point.module.fragment.exports
+    }
     for bus in buses if grouping is not None else ():
         reason = unsupported(bus)
         if reason is not None:
@@ -500,11 +541,23 @@ def describe(model: ModelWrapper) -> Integration:
         if placed.kind != CORE:
             control = pins[placed.name]["control"]
             endpoints.append(
-                Endpoint(unit=placed.name, bus=control.name, offset=0, range=_range(control, least))
+                Endpoint(
+                    unit=placed.name,
+                    bus=control.name,
+                    offset=0,
+                    range=_range(control, least),
+                    registers=contracted[placed.name].registers,
+                )
             )
         elif grouping is not None:
             endpoints += [
-                Endpoint(unit=placed.name, bus=bus.name, offset=offset, range=_range(bus, 1))
+                Endpoint(
+                    unit=placed.name,
+                    bus=bus.name,
+                    node=presenting[bus.name],
+                    offset=offset,
+                    range=_range(bus, 1),
+                )
                 for bus, offset in zip(buses, grouping[0], strict=True)
             ]
     target = read_target(body)
@@ -532,6 +585,7 @@ __all__ = [
     "MAIN",
     "MOVER_ROLES",
     "RESET",
+    "RUNTIME_SCHEMA",
     "Binding",
     "ClockPin",
     "Connection",
@@ -548,4 +602,5 @@ __all__ = [
     "Unit",
     "describe",
     "mover_pins",
+    "runtime_file",
 ]
