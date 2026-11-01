@@ -110,6 +110,8 @@ def check(declared: Declarations) -> list[Finding]:
         except TargetRefused as refused:
             findings += _refusal(refused)
             boards = []
+        if shell.linker is not None and shell.linker not in declared.linkers:
+            boards = []  # its rows need their linker: linker-undeclared says so
         for each in boards:
             if each in unknown:
                 continue

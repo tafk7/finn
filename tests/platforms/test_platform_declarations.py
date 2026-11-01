@@ -408,6 +408,33 @@ def test_a_shells_own_facts_and_its_linkers_needs_are_read_whatever_its_boards(
     ]
 
 
+def test_a_shell_on_an_undeclared_linker_is_one_finding_and_its_row_refused(
+    tmp_path: Path,
+) -> None:
+    """A shell naming a linker nothing declares, with a board entry narrowing its releases:
+    the check names the linker once and goes on to the next declaration, and its row is
+    refused, named."""
+    path = declared(
+        tmp_path,
+        '[shells.bad]\nlinker = "misspelled"\n'
+        'clocks = { main = "clk", set_at = "build", doubled = false }\n'
+        '[shells.bad.boards.Ultra96]\nversions = ">=2024.1"\n'
+        '[boards.Nowhere]\npart = "xcnothing-0"\n',
+    )
+    found = load([path], environ=FINN_ONLY)
+    assert findings(found) == [
+        ("unknown-part", "boards.Nowhere"),
+        ("linker-undeclared", "shells.bad"),
+    ]
+    with refused(
+        "declaration-invalid",
+        error=TargetRefused,
+        owner=f"{path}: shells.bad",
+        message="^shells.bad: its linker 'misspelled' is not declared$",
+    ):
+        shell_row("bad", "Ultra96", found)
+
+
 def test_checking_goes_on_past_a_malformed_shell_and_code_that_fails_to_import(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

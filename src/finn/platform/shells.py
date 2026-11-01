@@ -435,6 +435,8 @@ def _row(shell: Shell, board: str | None, declared: Declarations) -> ShellRow:
     linker = None if shell.linker is None else declared.linkers.get(shell.linker)
     board_facts: dict[str, str] = {}
     narrowed = None
+    if shell.linker is not None and linker is None:
+        raise valid.Invalid(f"{where}: its linker {shell.linker!r} is not declared")
     if board is None and linker is not None and linker.board_keys:
         raise valid.Invalid(
             f"{where} supports any part, and its linker {linker.name!r} needs "
@@ -457,8 +459,7 @@ def _row(shell: Shell, board: str | None, declared: Declarations) -> ShellRow:
         raise valid.Invalid(f"{where} states no clocks")
     specs = [each for each in (None if linker is None else linker.versions, narrowed) if each]
     versions = None
-    if specs:
-        assert linker is not None
+    if linker is not None and specs:
         versions = Versions(tool=linker.tool, spec=",".join(specs))
     template = facts.get("caveat")
     caveat = None
