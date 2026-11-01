@@ -13,7 +13,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import pytest
-from support.models import configure_partition, kernel_model
+from support.models import configure_partition, kernel_model, zynq_parent
 from support.packaging import PLACED_HIERARCHY, UTILIZATION_SYNTH
 
 from finn.builder.build_dataflow_resources import shell_resources_report
@@ -71,6 +71,7 @@ def test_a_partition_on_the_ip_shell_states_its_model_alone(tmp_path: Path) -> N
             "placed": None,
         },
         "movers": {},
+        "groupers": {},
         "static_region": {},
     }
     assert stated["total"] == {
@@ -81,6 +82,31 @@ def test_a_partition_on_the_ip_shell_states_its_model_alone(tmp_path: Path) -> N
     assert stated["unattributed"]["model"] == asdict(Resources())
     assert set(stated["absent"]) == {"out_of_context", "placed"}
     assert "not placed" in stated["absent"]["placed"]
+
+
+def test_a_core_presenting_a_bus_reports_its_grouper_as_its_model_states_it(
+    tmp_path: Path,
+) -> None:
+    """The Chain on pynq, its thresholds runtime-writable: its core presents one bus, so its
+    shell places a grouper, a rename of no hardware (no decoder: no instance); the model
+    states it alone, none, and Vivado's columns would count it in its unit's cell, the
+    partition's."""
+    parent = zynq_parent(tmp_path, presenting=True)
+    node, body, _ = partition_body(parent)
+    point, _ = configured_network(body, node.name)
+    modelled = shell_resources(point.network)
+    assert isinstance(modelled, ShellResources)
+    assert modelled.groupers == (("DataflowCore_0_grouper", Resources()),)
+    stated = shell_resources_report(parent, {})
+    assert stated["members"]["groupers"] == {
+        "DataflowCore_0_grouper": {
+            "instance": None,
+            "model": asdict(Resources()),
+            "out_of_context": None,
+            "placed": None,
+        }
+    }
+    assert stated["unattributed"]["model"] == asdict(Resources())
 
 
 @pytest.mark.parametrize("board", ["Ultra96", "ZCU104"])

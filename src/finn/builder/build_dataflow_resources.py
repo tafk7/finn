@@ -5,8 +5,9 @@
 shell.
 
 ``shell_resources_report`` lists each member of the partition's shell (the partition,
-each mover by its name in the shell, ``in0``, each IP of the static region) and their
-total, in up to three columns:
+each mover by its name in the shell, ``in0``, the grouper of a core presenting control buses,
+``DataflowCore_0_grouper``, each IP of the static region) and their total, in up to three
+columns:
 
 - ``model``: the partition's network's own figures
   (``finn.custom_op.kernels.shell.shell_resources``): the partition's kernels from their
@@ -20,6 +21,11 @@ total, in up to three columns:
 - ``placed``: the routed design's hierarchical report (``vivado.placed_hierarchy``),
   each instance directly below the block design's top counted to its member. ``ip`` is
   not placed.
+
+A grouper is a part of its core's unit, the block design's cell of the partition: Vivado's
+columns count it in the partition's row, and only the model states it alone. Its instance
+is the decoder's in the unit (``DataflowCore_0/u_grouper``), or ``null`` where it has none
+(one bus, renamed).
 
 A column the build did not produce is ``null`` for every member, and ``absent`` says
 why. A member a column has no row for (the placed design has none for the processor and
@@ -56,6 +62,8 @@ from finn.core.graph.annotations.outputs import OUTPUT_IP, OUTPUT_IP_KEY, OUTPUT
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.partition import partition_body
 from finn.custom_op.kernels.shell import ShellResources, configured_network, shell_resources
+from finn.kernels.artifacts.unit import GROUPER
+from finn.kernels.shell import grouper_name
 from finn.kernels.utilization import SHELL_CHARACTERISED
 from finn.platform.capabilities import Resources
 from finn.platform.shells import shell_row
@@ -90,22 +98,24 @@ def _less(total: Resources, parts: list[Resources]) -> dict[str, int]:
     return {f.name: getattr(total, f.name) - getattr(claimed, f.name) for f in fields(total)}
 
 
-def _instance_of(name: str, instances: Mapping[str, str]) -> str | None:
+def _instance_of(name: str, instances: Mapping[str, str | None]) -> str | None:
     """The member whose instance is ``name``, or a prefix of it (an IP's own runs and
     sub-instances, such as ``axi_interconnect_0_imp_auto_ds``); the longest match wins."""
     found = [
         (len(instance), key)
         for key, instance in instances.items()
-        if name == instance or name.startswith(instance.rstrip("_") + "_")
+        if instance is not None
+        and (name == instance or name.startswith(instance.rstrip("_") + "_"))
     ]
     return max(found)[1] if found else None
 
 
-def _member_instances(parent: ModelWrapper) -> dict[str, str]:
+def _member_instances(parent: ModelWrapper) -> dict[str, str | None]:
     """Each member of the shell's block design by its report key (``partition``,
-    ``movers.<mover>``, ``static_region.<ip>``), with its instance name, or the prefix of
-    a name Vivado chooses (the reset's, after its clock). A shell without an integration
-    has the partition alone, by its node's name."""
+    ``movers.<mover>``, ``groupers.<grouper>``, ``static_region.<ip>``), with its instance
+    name, or the prefix of a name Vivado chooses (the reset's, after its clock); a grouper's
+    the decoder's in its unit, None for none. A shell without an integration has the
+    partition alone, by its node's name."""
     node, body, _ = partition_body(parent)
     target = read_target(body)
     row = shell_row(target.shell, target.board)
@@ -113,8 +123,12 @@ def _member_instances(parent: ModelWrapper) -> dict[str, str]:
         return {"partition": node.name}
     described = describe(parent)
     (core,) = described.cores
-    instances = {"partition": core.name}
+    instances: dict[str, str | None] = {"partition": core.name}
     instances.update({f"movers.{edge.unit}": edge.unit for edge in described.edges})
+    if described.unit(core.name).window is not None:
+        buses = [each for each in described.endpoints if each.unit == core.name]
+        decoder = f"{core.name}/{GROUPER}" if len(buses) > 1 else None
+        instances[f"groupers.{grouper_name(core.name)}"] = decoder
     static = row.fixed
     if static is not None:
         instances.update(
@@ -127,12 +141,18 @@ def _member_instances(parent: ModelWrapper) -> dict[str, str]:
 
 
 def _members(split: Mapping[str, Any]) -> dict[str, Any]:
-    """The report's members, ``partition``, ``movers`` by name and ``static_region`` by
-    IP, each with its columns (``model``, ``out_of_context``, ``placed``)."""
+    """The report's members, ``partition``, ``movers`` and ``groupers`` by name and
+    ``static_region`` by IP, each with its columns (``model``, ``out_of_context``,
+    ``placed``)."""
     return {
         "partition": split["partition"],
         "movers": {
             key[len("movers.") :]: row for key, row in split.items() if key.startswith("movers.")
+        },
+        "groupers": {
+            key[len("groupers.") :]: row
+            for key, row in split.items()
+            if key.startswith("groupers.")
         },
         "static_region": {
             key[len("static_region.") :]: row
@@ -184,6 +204,7 @@ def shell_resources_report(parent: ModelWrapper, reports: Mapping[str, Path]) ->
     if isinstance(modelled, ShellResources):
         stated: dict[str, Resources | None] = {"partition": modelled.partition}
         stated.update({f"movers.{key}": value for key, value in modelled.movers})
+        stated.update({f"groupers.{key}": value for key, value in modelled.groupers})
         stated.update({f"static_region.{key}": value for key, value in modelled.static_region})
         for key in instances:
             columns[key]["model"] = stated.get(key)
