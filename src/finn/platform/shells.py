@@ -34,6 +34,7 @@ block design, one row per board it supports. Any other shell is a declaration's.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from functools import partial
@@ -358,12 +359,18 @@ def _resources(table: Mapping[str, Any], where: str) -> Resources:
 
 
 def _fit(stated: object, where: str) -> Fit:
+    """A scaled IP's fit over its one feature, the count that scales it: ``[constant,
+    slope]``, each a finite number."""
     numbers = valid.typed(stated, list, where)
-    if not numbers or not all(
-        isinstance(each, (int, float)) and not isinstance(each, bool) for each in numbers
+    if len(numbers) != 2 or not all(
+        isinstance(each, (int, float)) and not isinstance(each, bool) and math.isfinite(each)
+        for each in numbers
     ):
-        raise valid.Invalid(f"{where} is a fit: [constant, slope, ...], not {stated!r}")
-    return Fit(float(numbers[0]), tuple(float(each) for each in numbers[1:]))
+        raise valid.Invalid(
+            f"{where} is a fit over the count that scales it, [constant, slope], two finite "
+            f"numbers, not {stated!r}"
+        )
+    return Fit(float(numbers[0]), (float(numbers[1]),))
 
 
 def _use(stated: object, where: str) -> tuple[str, Resources]:

@@ -371,6 +371,15 @@ def test_a_shell_based_on_another_replaces_each_key_it_states(tmp_path: Path) ->
             "supply[0].width_cap: 128 bits is wider than every memory target (HP0 8 bits)",
         ),
         ("memory = []", "supply[0]: a moved offer, and no memory target to bind it"),
+        *(
+            (
+                "fixed = { control_base = 0, processor = { ip = 'p' }, reset = { ip = 'r' }, "
+                "memory_interconnect = { ip = 'm' }, "
+                f"control_interconnect = {{ ip = 'c', lut = {fit} }} }}",
+                "fixed.control_interconnect.lut is a fit over the count that scales it",
+            )
+            for fit in ("[10.0]", "[10.0, 2.0, 3.0]", "[inf, 1.0]", "[1.0, nan]")
+        ),
     ],
     ids=[
         "a count not a number",
@@ -387,6 +396,10 @@ def test_a_shell_based_on_another_replaces_each_key_it_states(tmp_path: Path) ->
         "a memory target named twice",
         "an offer wider than every memory target",
         "a moved offer with no memory target",
+        "a fit with no slope",
+        "a fit with two slopes",
+        "a fit with an infinite constant",
+        "a fit with a slope not a number",
     ],
 )
 def test_a_fact_not_of_its_type_is_refused_when_its_row_is_read(
