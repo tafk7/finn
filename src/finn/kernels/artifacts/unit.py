@@ -126,13 +126,16 @@ def unsupported(bus: Bus) -> str | None:
 
 @dataclass(frozen=True)
 class CoreUnit:
-    """The unit of the core whose module is named ``core``, of the ABI ``core_abi``: its
-    AXI-Lite targets, in order, at the offsets ``map`` in the unit's ``window`` (the
-    grouper's). A ``BuildError`` where it cannot be made: no bus, a map of another length, a
-    bus the unit cannot wire (``unsupported``), or one not aligned to its window or outside
-    the unit's."""
+    """The unit of the core whose module is named ``core``, packaged as the IP ``subcore``
+    (its VLNV, as its packaging states it), of the ABI ``core_abi``: its AXI-Lite targets,
+    in order, at the offsets ``map`` in the unit's ``window`` (the grouper's). A
+    ``BuildError`` where it cannot be made: no bus, a map of another length, a bus the unit
+    cannot wire (``unsupported``), one at a negative offset, not aligned to its window,
+    outside the unit's or overlapping another's, or one bus anywhere but at 0 (its unit
+    renames it)."""
 
     core: str
+    subcore: str
     core_abi: Abi
     map: tuple[int, ...]
     window: int
@@ -148,17 +151,28 @@ class CoreUnit:
             )
         if self.window < 1 or self.window & (self.window - 1):
             raise BuildError(f"a unit's window is a power of two, not {self.window}")
+        spans = []
         for bus, offset in zip(buses, self.map, strict=True):
             reason = unsupported(bus)
             if reason is not None:
                 raise BuildError(f"{self.core}: {reason}")
             size = bus_window(bus)
             assert size is not None  # it has an awaddr
-            if offset % size or offset + size > self.window:
+            if offset < 0 or offset % size or offset + size > self.window:
                 raise BuildError(
                     f"{self.core}.{bus.name}: {size} bytes at {offset:#x} is not aligned to "
                     f"itself within the unit's {self.window}"
                 )
+            spans.append((offset, offset + size, bus.name))
+        spans.sort()
+        for (_, end, first), (start, _, second) in zip(spans, spans[1:]):
+            if start < end:
+                raise BuildError(f"{self.core}: {first} and {second} overlap at {start:#x}")
+        if len(buses) == 1 and self.map != (0,):
+            raise BuildError(
+                f"{self.core}.{buses[0].name}: one bus is the unit's port, at 0, not "
+                f"{self.map[0]:#x}"
+            )
 
     @property
     def pins(self) -> tuple[Pin, ...]:
@@ -267,10 +281,10 @@ class CoreUnit:
 
     def name(self, decoder: bytes | None) -> str:
         """The unit's module name: ``finn_coreunit_<digest>``, of its text with its name left
-        out and of the decoder's bytes (``decoder``; None for one bus, which takes none)."""
-        found = digest(
-            ("coreunit-v1", self.text(STEM), None if decoder is None else content_digest(decoder))
-        )
+        out, of the decoder's bytes (``decoder``; None for one bus, which takes none) and of
+        the IP it holds (``subcore``)."""
+        held = None if decoder is None else content_digest(decoder)
+        found = digest(("coreunit-v1", self.text(STEM), held, self.subcore))
         return f"{STEM}_{found[:16]}"
 
 

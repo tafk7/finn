@@ -32,6 +32,9 @@ from finn.kernels.artifacts.unit import (
 from finn.kernels.shell_rules import placed_windows
 
 CORE = "finn_dataflowcore_0123456789abcdef"
+#: The core's IP as its packaging states it: its VLNV, of a vendor, library and version
+#: of its own.
+SUBCORE = f"vendor:library:{CORE}:2.7"
 
 
 def axilite(port: str, bits: int, *, protections: bool = False, data: int = 32) -> Bus:
@@ -76,7 +79,8 @@ def unit(*bits: int, protections: bool = False) -> CoreUnit:
     buses = [axilite(f"s_axilite_{index}", each) for index, each in enumerate(bits)]
     if protections:
         buses[-1] = axilite(f"s_axilite_{len(bits) - 1}", bits[-1], protections=True)
-    return CoreUnit(CORE, core_abi(*buses), placed_windows([1 << each for each in bits], 0), 4096)
+    offsets = placed_windows([1 << each for each in bits], 0)
+    return CoreUnit(CORE, SUBCORE, core_abi(*buses), offsets, 4096)
 
 
 TWO = """\
@@ -266,17 +270,20 @@ def test_one_bus_is_the_unit_s_port_renamed_and_no_decoder() -> None:
 
 
 def test_the_unit_is_named_as_its_content(tmp_path: Path) -> None:
-    """One content, one name: the text and the decoder's bytes, its own name left out;
-    another map, core or decoder is another name. Its files are the decoder, read from its
-    root, and its module; one bus has its module alone."""
+    """One content, one name: the text, the decoder's bytes and the core's IP, its own name
+    left out; another map, core, decoder or IP is another name. Its files are the decoder,
+    read from its root, and its module; one bus has its module alone."""
     found = unit(5, 6)
     assert found.name(b"decoder") == unit(5, 6).name(b"decoder")
     others = {
         found.name(b"other decoder"),
-        CoreUnit(CORE, found.core_abi, (0, 128), 4096).name(b"decoder"),
-        CoreUnit(CORE.replace("0", "1"), found.core_abi, (0, 64), 4096).name(b"decoder"),
+        CoreUnit(CORE, SUBCORE, found.core_abi, (0, 128), 4096).name(b"decoder"),
+        CoreUnit(CORE.replace("0", "1"), SUBCORE, found.core_abi, (0, 64), 4096).name(b"decoder"),
+        CoreUnit(CORE, f"vendor:library:{CORE}:2.8", found.core_abi, (0, 64), 4096).name(
+            b"decoder"
+        ),
     }
-    assert found.name(b"decoder") not in others and len(others) == 3
+    assert found.name(b"decoder") not in others and len(others) == 4
     decoder = tmp_path / "finnlib" / DECODER_SOURCE.path
     decoder.parent.mkdir(parents=True)
     decoder.write_bytes(b"decoder")
@@ -312,12 +319,16 @@ def test_a_bus_the_unit_cannot_wire_says_why(bus: Bus, reason: str) -> None:
         ((5, 6), (0,), "1 offsets for its 2 AXI-Lite buses"),
         ((5, 6), (0, 32), "64 bytes at 0x20 is not aligned"),
         ((5, 6), (0, 4096), "64 bytes at 0x1000 is not aligned to itself within"),
+        ((6, 6), (-64, 0), "64 bytes at -0x40 is not aligned to itself within"),
+        ((6, 6), (0, 0), "s_axilite_0 and s_axilite_1 overlap at 0x0"),
+        ((5, 6), (0, 0), "s_axilite_0 and s_axilite_1 overlap at 0x0"),
+        ((6,), (64,), "one bus is the unit's port, at 0, not 0x40"),
     ],
-    ids=["no-bus", "short-map", "misaligned", "outside"],
+    ids=["no-bus", "short-map", "misaligned", "outside", "negative", "same", "inside", "one"],
 )
 def test_a_unit_that_cannot_be_made_is_refused(
     bits: tuple[int, ...], offsets: tuple[int, ...], message: str
 ) -> None:
     buses = (axilite(f"s_axilite_{index}", each) for index, each in enumerate(bits))
     with pytest.raises(BuildError, match=message):
-        CoreUnit(CORE, core_abi(*buses), offsets, 4096)
+        CoreUnit(CORE, SUBCORE, core_abi(*buses), offsets, 4096)

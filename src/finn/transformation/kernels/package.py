@@ -395,12 +395,14 @@ def staged_project(
 UNIT_CORE = "core"
 
 
-def core_unit(model: ModelWrapper, point: Configured, name: str) -> CoreUnit | None:
-    """The core unit of the partition model ``model``'s configured network ``point``, its
-    node ``name``: its core the IP its body states (``finn.outputs`` ``vlnv``), its buses
-    placed by its grouper (``core_grouping``); None where its core presents no bus (its unit
-    is the core). A core whose IP the body does not state (``unit-core-unpackaged``), or
-    whose unit cannot be made (``unit-unmade``), is refused."""
+def unit_grouping(
+    model: ModelWrapper, point: Configured, name: str
+) -> tuple[str, tuple[int, ...], int] | None:
+    """What the core unit of the partition model ``model``'s configured network ``point``,
+    its node ``name``, holds: its core's IP, as its body states it (``finn.outputs``
+    ``vlnv``, whole), and where its grouper places its buses, its map and the unit's window
+    (``core_grouping``); None where its core presents no bus (its unit is the core). A core
+    whose IP the body does not state is refused (``unit-core-unpackaged``)."""
     grouping = core_grouping(point.network)
     if grouping is None:
         return None
@@ -412,15 +414,13 @@ def core_unit(model: ModelWrapper, point: Configured, name: str) -> CoreUnit | N
             f"{name}: its body states no packaged IP; package the partition first",
             node=name,
         )
-    try:
-        return CoreUnit(stated.split(":")[2], point.module.abi, *grouping)
-    except BuildError as error:
-        raise KernelOpError.refused("unit-unmade", "PackageUnit", str(error), node=name) from error
+    return (stated, *grouping)
 
 
 @contextmanager
 def staged_unit(
-    unit: CoreUnit,
+    subcore: str,
+    grouping: tuple[tuple[int, ...], int],
     core: Composed,
     core_project: Path,
     *,
@@ -429,13 +429,17 @@ def staged_unit(
     clock_ns: float,
     toolchain: Toolchain,
 ) -> Iterator[tuple[Path, EmittedModule]]:
-    """The project Vivado is given to package ``unit``, the core unit of the module
-    ``core``, its node ``name``, for ``part`` at ``clock_ns``, as an IP named as its module,
-    in a new directory of the build directory, removed on exit, and the unit's module as
-    emitted there: its files (``src/``, ``emit_unit``), checked by slang beside the core's
-    module as emitted (``check_elaborates``); the core's IP and the sources it names, from
-    its packaging project ``core_project`` (``UNIT_CORE``); and ``package.tcl``, the core's
-    IP held as a subcore."""
+    """The project Vivado is given to package the core unit of the module ``core``, its
+    node ``name``, packaged as the IP ``subcore`` (its VLNV) from the project
+    ``core_project``, its buses at ``grouping`` (the grouper's map and window), for
+    ``part`` at ``clock_ns``, as an IP named as its module, in a new directory of the build
+    directory, removed on exit, and the unit's module as emitted there. The core's module
+    is emitted beside it, which names the module the unit instantiates; the unit
+    (``CoreUnit``) is its files (``src/``, ``emit_unit``), checked by slang beside the
+    core's (``check_elaborates``); the core's IP and the sources it names, from its
+    packaging project (``UNIT_CORE``); and ``package.tcl``, the core's IP held as a subcore
+    by the VLNV it was packaged as. A unit that cannot be made is refused
+    (``unit-unmade``)."""
     root: Path = scratch()  # type: ignore[no-untyped-call]
     root.mkdir(parents=True, exist_ok=True)
     with (
@@ -443,13 +447,19 @@ def staged_unit(
         tempfile.TemporaryDirectory(dir=root, prefix="unit_core_") as held,
     ):
         project = Path(staging)
-        emitted = emit_unit(unit, project / "src", roots=source_roots())
         beside = emit_module(
             core,
             Path(held),
             roots=source_roots(),
             built=built_hls(core, part, toolchain=toolchain),
         )
+        try:
+            unit = CoreUnit(beside.entry_point, subcore, core.abi, *grouping)
+            emitted = emit_unit(unit, project / "src", roots=source_roots())
+        except BuildError as error:
+            raise KernelOpError.refused(
+                "unit-unmade", "PackageUnit", f"{name}: {error}", node=name
+            ) from error
         check_elaborates(emitted, unit.abi, name, (beside,))
         for each in ("ip", "src"):
             place(core_project / each, project / UNIT_CORE / each)
@@ -461,7 +471,7 @@ def staged_unit(
                 clock_ns=clock_ns,
                 display_name=name,
                 run_synth=False,
-                subcores=((vlnv(unit.core), f"{UNIT_CORE}/ip"),),
+                subcores=((subcore, f"{UNIT_CORE}/ip"),),
             )
         )
         yield project, emitted
@@ -568,8 +578,8 @@ class PackageUnit(Transformation):
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
         refuse_unverified(model, self.name)
         point, _ = configured_network(model, self.name)
-        unit = core_unit(model, point, self.name)
-        if unit is None:
+        held = unit_grouping(model, point, self.name)
+        if held is None:
             raise KernelOpError.refused(
                 "unit-unneeded",
                 "PackageUnit",
@@ -581,9 +591,11 @@ class PackageUnit(Transformation):
         ).resolve()
         toolchain = self.toolchain
         built, packaged_ip = read_target(model), model.get(OUTPUT_IP)
-        assert packaged_ip is not None  # ``core_unit`` read the body's IP
+        assert packaged_ip is not None  # ``unit_grouping`` read the body's IP
+        subcore, offsets, window = held
         staging = staged_unit(
-            unit,
+            subcore,
+            (offsets, window),
             point.module,
             Path(packaged_ip).parent,
             name=self.name,
@@ -658,7 +670,7 @@ __all__ = [
     "PackagePartition",
     "PackageUnit",
     "boundary_facts",
-    "core_unit",
+    "unit_grouping",
     "ip_key",
     "ooc_member_resources",
     "partition_utilization_report",

@@ -44,7 +44,6 @@ from finn.core.space import Available, inspection
 from finn.custom_op.kernels.network import persist
 from finn.custom_op.kernels.shell import configured_network, core_grouping
 from finn.kernels.artifacts import build
-from finn.kernels.artifacts.ipxact import vlnv
 from finn.kernels.artifacts.unit import CoreUnit
 from finn.kernels.dataflow_core import STEM, DataflowCoreKernel
 from finn.platform.shells import shell_row
@@ -222,14 +221,16 @@ def test_a_core_unit_elaborates_beside_its_core_and_holds_its_ip(
     """A core presenting three buses (thresholdings built by hand: no KernelOp presents
     one) staged as its unit: the unit's module elaborates beside the core's, its project
     holds the core's packaging project (its IP and the sources it names, ``core/``), and its
-    script finds the core's IP there and holds it as a subcore. Packaging gets as far as
+    script finds the core's IP there and holds it as a subcore, by the VLNV it was packaged
+    as, whole (here of a vendor, library and version of its own). Packaging gets as far as
     running Vivado."""
     point = thresholdings(3, shell_row("pynq", "Ultra96"))
     module = point.core_answer(DataflowCoreKernel.module)
     grouping = core_grouping(point)
     assert isinstance(module, Available) and grouping == ((0, 32, 64), 4096)
     core = module.value
-    unit = CoreUnit(live_name(core), core.abi, *grouping)
+    subcore = f"vendor:library:{live_name(core)}:2.7"
+    unit = CoreUnit(live_name(core), subcore, core.abi, *grouping)
     project = tmp_path / "core_project"
     for each in ("ip/component.xml", "src/core.sv"):
         (project / each).parent.mkdir(parents=True, exist_ok=True)
@@ -237,7 +238,8 @@ def test_a_core_unit_elaborates_beside_its_core_and_holds_its_ip(
     toolchain = cast(Toolchain, NoVivado())
     logger = "finn.transformation.kernels.package"
     staging = staged_unit(
-        unit,
+        subcore,
+        grouping,
         core,
         project,
         name="core",
@@ -253,7 +255,7 @@ def test_a_core_unit_elaborates_beside_its_core_and_holds_its_ip(
             assert (staged / UNIT_CORE / each).read_text() == each
         script = (staged / PACKAGE_SCRIPT).read_text()
         assert f"set_property ip_repo_paths [list $project/{UNIT_CORE}/ip]" in script
-        assert f"ipx::add_subcore {vlnv(unit.core)} " in script
+        assert f"ipx::add_subcore {subcore} " in script
         with pytest.raises(ReachedVivado):
             packaged(
                 staged,
@@ -265,6 +267,28 @@ def test_a_core_unit_elaborates_beside_its_core_and_holds_its_ip(
     (line,) = [record.getMessage() for record in caplog.records if record.name == logger]
     assert line.startswith(f"core: slang elaborated {emitted.entry_point} under ")
     assert "its 5 ports agree with the pins (" in line
+
+
+def test_a_unit_that_cannot_be_made_is_refused_before_it_is_staged(tmp_path: Path) -> None:
+    """A map the grouper never gives (two buses at one offset) is refused by name, before
+    any file of the unit is written or any tool runs."""
+    point = thresholdings(2, shell_row("pynq", "Ultra96"))
+    module = point.core_answer(DataflowCoreKernel.module)
+    assert isinstance(module, Available)
+    toolchain = NoVivado()
+    with refused("unit-unmade", error=KernelOpError, owner="PackageUnit", node="core"):
+        with staged_unit(
+            "vendor:library:core:1.0",
+            ((0, 0), 4096),
+            module.value,
+            tmp_path,
+            name="core",
+            part="xczu3eg-sbva484-1-e",
+            clock_ns=5.0,
+            toolchain=cast(Toolchain, toolchain),
+        ):
+            pass
+    assert toolchain.ran == []
 
 
 @requires_vivado
