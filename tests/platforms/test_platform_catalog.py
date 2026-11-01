@@ -283,6 +283,10 @@ def test_an_overlay_redefines_a_shipped_entry_only_where_it_says_so(
         load(data, overlay(tmp_path, CUSTOM | {"parts": [stray]}))
 
 
+KEYS = ("resources", "devices", "parts")
+"""An overlay's collections, each a JSON array."""
+
+
 @pytest.mark.parametrize(
     "stated, reason",
     [
@@ -308,6 +312,24 @@ def test_an_overlay_redefines_a_shipped_entry_only_where_it_says_so(
             "no device 'xcnone'",
         ),
         ([], "a record is a JSON object"),
+        *(({"source": "s", key: None}, f"{key}: a JSON array, not None") for key in KEYS),
+        *(({"source": "s", key: {}}, f"{key}: a JSON array, not {{}}") for key in KEYS),
+        (
+            {
+                "source": "s",
+                "parts": [
+                    {
+                        "name": "xczu3eg-sbva484-1-e",
+                        "device": "xc7a35t",
+                        "package": "sbva484",
+                        "speed": "-1",
+                        "temperature": "e",
+                        "overrides": "false",
+                    }
+                ],
+            },
+            "part xczu3eg-sbva484-1-e: overrides is true or false, not 'false'",
+        ),
     ],
 )
 def test_an_invalid_overlay_is_refused_on_load(

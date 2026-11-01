@@ -406,6 +406,7 @@ def _read_entries(
             entries.resources[found.digest] = found
         _text(stated["resources"], f"{where}: resources")
         if overlay is not None:
+            _overrides(stated, where)
             stated["source"] = _source(stated, source, where)
             stated["overlay"] = overlay
         _no_duplicate(entries.devices, str(name), where)
@@ -420,11 +421,23 @@ def _read_entries(
         for key in ("package", "speed", "temperature"):
             _text(stated[key], f"{where}: {key}", optional=True)
         if overlay is not None:
+            _overrides(stated, where)
             stated["source"] = _source(stated, source, where)
             stated["overlay"] = overlay
         _no_duplicate(entries.parts, str(name), where)
         entries.parts[str(name).lower()] = stated
     return entries
+
+
+def _array(value: object, where: str) -> list[object]:
+    if not isinstance(value, list):
+        raise _Invalid(f"{where}: a JSON array, not {value!r}")
+    return value
+
+
+def _overrides(stated: Mapping[str, object], where: str) -> None:
+    if not isinstance(stated.get("overrides", False), bool):
+        raise _Invalid(f"{where}: overrides is true or false, not {stated['overrides']!r}")
 
 
 def _source(stated: Mapping[str, object], default: str | None, where: str) -> str:
@@ -471,9 +484,7 @@ def load(data: Path = DATA, *overlays: Path) -> Catalog:
             stated = json.loads(Path(overlay).read_text())
             top = _expect(stated, str(overlay), set(), {"source", "resources", "devices", "parts"})
             entries = _read_entries(
-                top.get("resources", []),
-                top.get("devices", []),
-                top.get("parts", []),
+                *(_array(top.get(key, []), key) for key in ("resources", "devices", "parts")),
                 overlay=Path(overlay),
                 source=_text(top["source"], "source") if "source" in top else None,
             )
