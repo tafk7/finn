@@ -269,6 +269,7 @@ def test_an_installed_packages_declarations_are_read_without_running_its_code(
             "shells.s",
             "a shell with no linker supports any part",
         ),
+        ('[shells.s]\nbased_on = "pynq"\nboards = {}\n', "shells.s", "supports no board"),
         ('[shells.s]\nbased_on = "s"\nboards = "any"\n', "shells.s.based_on", "based on itself"),
         ('[shells.s]\nbased_on = "t"\nboards = "any"\n', "shells.s.based_on", "not a declared"),
     ],
@@ -280,6 +281,7 @@ def test_an_installed_packages_declarations_are_read_without_running_its_code(
         "a schema 0",
         "a shell with no boards",
         "boards with no linker",
+        "no board",
         "based on itself",
         "based on nothing",
     ],
@@ -349,6 +351,40 @@ def test_a_fact_not_of_its_type_is_refused_when_its_row_is_read(
         shell_row("broken", "Ultra96", found)
     assert named in str(caught.error)
     assert ("declaration-invalid", "shells.broken") in findings(found)
+
+
+def test_a_shells_own_facts_and_its_linkers_needs_are_read_whatever_its_boards(
+    tmp_path: Path,
+) -> None:
+    """A shell's own facts are read apart from its boards, so an entry stating a fact in
+    its place, or a board nothing declares, hides no malformed one; and a shell of any
+    part on a linker that needs keys of each board is refused, as nothing gives them."""
+    path = declared(
+        tmp_path,
+        '[shells.hidden]\nbased_on = "pynq"\nclocks = "oops"\n'
+        '[shells.hidden.boards.Ultra96]\nboard_part = "avnet.com:ultra96v1:part0:1.2"\n'
+        'clocks = { main = "c", set_at = "build", doubled = false }\n'
+        '[shells.nowhere]\nbased_on = "pynq"\nclocks = "oops"\n'
+        '[shells.nowhere.boards.Nowhere]\nboard_part = "x"\n'
+        '[shells.wild]\nbased_on = "pynq"\nboards = "any"\n',
+    )
+    found = load([path], environ=FINN_ONLY)
+    with refused("declaration-invalid", error=TargetRefused, message="clocks is a table"):
+        shell_row("hidden", "Ultra96", found)
+    with refused(
+        "declaration-invalid",
+        error=TargetRefused,
+        owner=f"{path}: shells.wild",
+        message="^shells.wild supports any part, and its linker 'vivado-block-design' needs "
+        "board_part of each board",
+    ):
+        resolve_target(part="xcu55c-fsvh2892-2L-e", period_ns=5.0, shell="wild", declared=found)
+    assert sorted(set(findings(found))) == [
+        ("board-undeclared", "shells.nowhere"),
+        ("declaration-invalid", "shells.hidden"),
+        ("declaration-invalid", "shells.nowhere"),
+        ("declaration-invalid", "shells.wild"),
+    ]
 
 
 def test_checking_goes_on_past_a_malformed_shell_and_code_that_fails_to_import(

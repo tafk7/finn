@@ -379,6 +379,8 @@ def _shell(name: str, table: dict[str, Any], based_on: str | None, origin: Origi
         raise _refused(origin, where, "states no boards (a table of entries, or 'any')")
     if table.get("linker") is None and table["boards"] != ANY:
         raise _refused(origin, where, "a shell with no linker supports any part: boards = 'any'")
+    if not table["boards"]:
+        raise _refused(origin, where, "supports no board: its boards are a table of entries")
     return Shell(
         name=name,
         linker=table.get("linker"),

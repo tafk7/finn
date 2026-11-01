@@ -11,8 +11,9 @@ prints them.
   nothing declares (a mover kind nothing declares is ``declaration-invalid``, when its row
   is read);
 - ``board-undeclared``: a shell supports a board nothing declares;
-- ``declaration-invalid``: a shell's row on one of its boards does not read (a fact not of
-  its type, or a board entry without a key its linker needs);
+- ``declaration-invalid``: a fact a shell states does not read, whatever boards it
+  supports, or its row on one of its boards does not (a fact not of its type, a board
+  entry without a key its linker needs, or no board for a linker that needs one);
 - ``image-unloaded``: a runtime a shell offers does not load its linker's image;
 - ``mover-undriven``: a runtime a shell offers does not drive a mover kind the shell offers;
 - ``kind-unserved``: a runtime a shell offers, or a mover kind it offers for a kind, does
@@ -30,7 +31,7 @@ from finn.core.reporting.findings import Finding, FindingKind
 from finn.platform.catalog import DATA, load
 from finn.platform.declarations import Declarations, code, overlays
 from finn.platform.refusal import TargetRefused
-from finn.platform.shells import row
+from finn.platform.shells import own_facts, row
 
 
 def _finding(declared: Declarations, kind: str, name: str, reason: str, message: str) -> Finding:
@@ -92,6 +93,11 @@ def check(declared: Declarations) -> list[Finding]:
                 )
             )
         rows = []
+        try:
+            own_facts(shell, declared)
+        except TargetRefused as refused:
+            findings += _refusal(refused)
+            boards = []
         for each in boards:
             if each in unknown:
                 continue

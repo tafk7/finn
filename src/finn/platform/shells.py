@@ -35,10 +35,11 @@ block design, one row per board it supports. Any other shell is a declaration's.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
+from functools import partial
 from string import Formatter
-from typing import Any
+from typing import Any, TypeVar
 
 from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
 from finn.kernels.artifacts.module import Fragment
@@ -261,6 +262,8 @@ def bus_counts(fragment: Fragment, boundary: Iterable[Bus]) -> tuple[int, int, b
 
 # -- a row from its declaration ----------------------------------------------------------
 
+T = TypeVar("T")
+
 _FACTS = {
     "clocks",
     "control",
@@ -403,34 +406,53 @@ def _fixed(stated: object, where: str) -> FixedShell:
     )
 
 
-def _optional_count(facts: Mapping[str, Any], key: str, where: str) -> int | None:
-    return None if key not in facts else valid.count(facts[key], f"{where}.{key}")
-
-
-def _optional_text(facts: Mapping[str, Any], key: str, where: str) -> str | None:
-    return None if key not in facts else valid.text(facts[key], f"{where}.{key}")
-
-
-def _caveat(facts: Mapping[str, Any], where: str) -> str | None:
+def _caveat(stated: object, where: str) -> str:
     """A shell's ``caveat``: a template naming its board (``{board}``) and its part
     (``{part}``), and nothing else."""
-    template = _optional_text(facts, "caveat", where)
-    for _, name, spec, conversion in Formatter().parse(template or ""):
+    template = valid.text(stated, where)
+    for _, name, spec, conversion in Formatter().parse(template):
         if name is not None and (name not in ("board", "part") or spec or conversion):
             raise valid.Invalid(
-                f"{where}.caveat names {{board}} and {{part}} only, not {{{name}}} in {template!r}"
+                f"{where} names {{board}} and {{part}} only, not {{{name}}} in {template!r}"
             )
     return template
+
+
+def _facts(stated: Mapping[str, Any], where: str, declared: Declarations) -> dict[str, Any]:
+    """Each of the facts ``stated`` (a shell's, or a board entry's), read for its type."""
+    readers: dict[str, Callable[[object, str], object]] = {
+        "clocks": _clocks,
+        "control": _control,
+        "memory": _memory,
+        "units": valid.count,
+        "supply": partial(_offers, kinds=SUPPLY_KINDS, declared=declared),
+        "delivery": partial(_offers, kinds=DELIVERY_KINDS, declared=declared),
+        "fixed": _fixed,
+        "characterised": valid.text,
+        "timed": valid.texts,
+        "caveat": _caveat,
+        "control_budget": valid.count,
+        "memory_ports": valid.count,
+    }
+    unknown = sorted(set(stated) - _FACTS)
+    if unknown:
+        raise valid.Invalid(f"{where} states {', '.join(unknown)}, which a shell does not have")
+    return {key: readers[key](value, f"{where}.{key}") for key, value in stated.items()}
 
 
 def _row(shell: Shell, board: str | None, declared: Declarations) -> ShellRow:
     """The row of ``shell`` on ``board`` (``None`` on a shell of any part), its board
     entry's facts in place of the shell's."""
     where = f"shells.{shell.name}"
-    facts = dict(shell.facts)
+    facts = _facts(shell.facts, where, declared)
     linker = None if shell.linker is None else declared.linkers.get(shell.linker)
     board_facts: dict[str, str] = {}
     narrowed = None
+    if board is None and linker is not None and linker.board_keys:
+        raise valid.Invalid(
+            f"{where} supports any part, and its linker {linker.name!r} needs "
+            f"{', '.join(linker.board_keys)} of each board: its boards are a table of entries"
+        )
     if board is not None and not isinstance(shell.boards, str):
         entry = shell.boards[board]
         here = f"{where}.boards.{board}"
@@ -440,10 +462,8 @@ def _row(shell: Shell, board: str | None, declared: Declarations) -> ShellRow:
         narrowed = (
             None if "versions" not in entry else valid.text(entry["versions"], f"{here}.versions")
         )
-        facts.update({key: value for key, value in entry.items() if key in _FACTS})
-    unknown = sorted(set(facts) - _FACTS)
-    if unknown:
-        raise valid.Invalid(f"{where} states {', '.join(unknown)}, which a shell does not have")
+        stated = {key: value for key, value in entry.items() if key in _FACTS}
+        facts.update(_facts(stated, here, declared))
     if "clocks" not in facts:
         raise valid.Invalid(f"{where} states no clocks")
     specs = [each for each in (None if linker is None else linker.versions, narrowed) if each]
@@ -452,42 +472,56 @@ def _row(shell: Shell, board: str | None, declared: Declarations) -> ShellRow:
         assert linker is not None
         versions = Versions(tool=linker.tool, spec=",".join(specs))
         _clauses(versions.spec)
-    timed = valid.texts(facts.get("timed", []), f"{where}.timed")
-    template = _caveat(facts, where)
+    template = facts.get("caveat")
     caveat = None
-    if board is not None and board not in timed and template is not None:
+    if board is not None and board not in facts.get("timed", ()) and template is not None:
         caveat = template.format(board=board, part=declared.board(board).part)
     return ShellRow(
         shell=shell.name,
         board=board,
         board_facts=board_facts,
-        clocks=_clocks(facts["clocks"], f"{where}.clocks"),
-        control=None if "control" not in facts else _control(facts["control"], f"{where}.control"),
-        memory=_memory(facts.get("memory", []), f"{where}.memory"),
-        units=_optional_count(facts, "units", where),
-        supply=_offers(facts.get("supply", []), f"{where}.supply", SUPPLY_KINDS, declared),
-        delivery=_offers(facts.get("delivery", []), f"{where}.delivery", DELIVERY_KINDS, declared),
+        clocks=facts["clocks"],
+        control=facts.get("control"),
+        memory=facts.get("memory", ()),
+        units=facts.get("units"),
+        supply=facts.get("supply", ()),
+        delivery=facts.get("delivery", ()),
         linker=shell.linker,
         runtimes=shell.runtimes,
         versions=versions,
-        fixed=None if "fixed" not in facts else _fixed(facts["fixed"], f"{where}.fixed"),
-        characterised=_optional_text(facts, "characterised", where),
+        fixed=facts.get("fixed"),
+        characterised=facts.get("characterised"),
         caveat=caveat,
-        control_budget=_optional_count(facts, "control_budget", where),
-        memory_ports=_optional_count(facts, "memory_ports", where),
+        control_budget=facts.get("control_budget"),
+        memory_ports=facts.get("memory_ports"),
     )
 
 
-def row(shell: Shell, board: str | None, declared: Declarations) -> ShellRow:
-    """The row of the declared ``shell`` on ``board`` (one it supports, or ``None`` on a
-    shell of any part); a fact not of its type is refused (``declaration-invalid``)."""
+def _refusing(shell: Shell, declared: Declarations, read: Callable[[], T]) -> T:
     try:
-        return _row(shell, board, declared)
+        return read()
     except (ValueError, KeyError) as error:
         origin = declared.origin("shells", shell.name)
         raise TargetRefused(
             "declaration-invalid", f"{origin.file}: shells.{shell.name}", str(error)
         ) from None
+
+
+def row(shell: Shell, board: str | None, declared: Declarations) -> ShellRow:
+    """The row of the declared ``shell`` on ``board`` (one it supports, or ``None`` on a
+    shell of any part); a fact not of its type is refused (``declaration-invalid``), the
+    shell's own read apart from the board's, so a board entry stating a fact in its place
+    does not hide it. A shell of any part whose linker needs keys of a board is refused."""
+    return _refusing(shell, declared, partial(_row, shell, board, declared))
+
+
+def own_facts(shell: Shell, declared: Declarations) -> dict[str, Any]:
+    """The facts ``shell`` itself states, apart from any board, each read for its type;
+    refused where one is not (``declaration-invalid``). ``finn.platform.check`` reads them
+    whatever boards the shell supports."""
+    return _refusing(
+        shell, declared, partial(_facts, shell.facts, f"shells.{shell.name}", declared)
+    )
 
 
 def shell_row(shell: str, board: str | None, declared: Declarations | None = None) -> ShellRow:
@@ -562,6 +596,7 @@ __all__ = [
     "ShellRow",
     "Versions",
     "bus_counts",
+    "own_facts",
     "row",
     "shell_row",
     "shell_rows",
