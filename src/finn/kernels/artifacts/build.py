@@ -15,7 +15,10 @@ The one step that touches the filesystem, in two parts:
   (``capture``), which the module is named from and its files are written from.
   Each path is staged once and providers come first (``sources.ordered``); two
   different files claiming one path or one symbol are refused. Each data file is
-  written once.
+  written once. Before anything is written, two staged names one filesystem may take for
+  one file (alike but for case, or one a directory of the other) are refused, and so is a
+  destination where a staged name passes through a link: one staged file is one file
+  written (``_refuse_aliases``).
 - **Netlist.** A ``Composed`` module adds one SystemVerilog module, named
   ``<stem>_<fingerprint>`` (``module.module_name``, of the snapshot) and written here from its
   value: its ports from its pins; one net per instance input and per output
@@ -35,7 +38,8 @@ local source, ABI and compilation checks still belong here.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import stat
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -49,7 +53,7 @@ from finn.kernels.artifacts.abi import (
     Signal,
     abi_pins,
 )
-from finn.kernels.artifacts.contributions import HlsSource
+from finn.kernels.artifacts.contributions import ContributionError, HlsSource, relative_name
 from finn.kernels.artifacts.module import (
     BuildError,
     Composed,
@@ -102,6 +106,11 @@ def _hls_product(request: HlsSource, built: Mapping[str, Path]) -> tuple[tuple[s
     if product is None:
         raise BuildError(f"no HLS product is given for {function}: synthesize it first")
     names = sorted(path.name for path in Path(product).iterdir() if path.is_file())
+    for name in names:
+        try:
+            relative_name(name, f"the HLS product {product}")
+        except ContributionError as error:
+            raise BuildError(str(error)) from error
     if f"{function}.v" not in names:
         raise BuildError(f"the HLS product {product} has no top {function}.v")
     unknown = [
@@ -121,11 +130,12 @@ def capture(
     source from its root, ``roots`` resolving it by name, and each HLS request's product from
     the directory ``built`` names for its top. The module's name (``module_name``) and its
     emitted files are both this snapshot's. Before anything is read, a ``BuildError`` where two
-    copied sources would be staged as one path (from two roots), or one under an HLS product's
-    directory (its top's name): one staged file is one file read."""
+    copied sources would be staged as one path (from two roots, or alike but for case), or one
+    under an HLS product's directory (its top's name, whatever the case): one staged file is
+    one file read."""
     staged: dict[str, tuple[str, str]] = {}
     tops = {
-        item.function
+        item.function.casefold()
         for leaf in _leaves(module)
         for item in leaf.sources
         if isinstance(item, HlsSource)
@@ -134,12 +144,17 @@ def capture(
         for item in leaf.sources:
             if isinstance(item, HlsSource):
                 continue
-            other = staged.setdefault(item.path, (item.root, item.path))
+            other = staged.setdefault(item.path.casefold(), (item.root, item.path))
+            if other[1] != item.path:
+                raise BuildError(
+                    f"two sources are staged as one file where case is not told apart: "
+                    f"{other[1]} of {other[0]!r} and {item.path} of {item.root!r}"
+                )
             if other != (item.root, item.path):
                 raise BuildError(
                     f"two sources are staged as {item.path}: {other[0]!r}'s and {item.root!r}'s"
                 )
-            if item.path.split("/")[0] in tops:
+            if item.path.split("/")[0].casefold() in tops:
                 raise BuildError(
                     f"{item.path} of {item.root!r} would be staged among the HLS product of "
                     f"{item.path.split('/')[0]}"
@@ -173,7 +188,9 @@ def emit_module(
 ) -> EmittedModule:
     """Write the module's sources and data files into ``directory``, from one snapshot of
     them (``capture``: ``roots`` resolves each copied source's root, ``built`` each HLS
-    request's product by its top's name), the module named from it."""
+    request's product by its top's name), the module named from it. ``directory`` is resolved
+    once, the links above it followed as the caller meant them: the module is checked and
+    written under that directory alone (``EmittedModule.directory``)."""
     snapshot = capture(module, roots=roots, built=built)
     copied = {(root, path): content for root, path, content in snapshot.copied}
     products = dict(snapshot.products)
@@ -212,18 +229,66 @@ def emit_module(
     except SourceError as error:
         raise BuildError(str(error)) from error
     contents = dict(drafts)
+    written = tuple(file.path for file in order)
+    directory = directory.resolve()
+    _refuse_aliases(directory, written, tuple(data))
 
     directory.mkdir(parents=True, exist_ok=True)
     for file in order:
-        target = directory / file.path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(contents[file])
-    written = tuple(file.path for file in order)
+        _place(directory / file.path, contents[file])
     for path, content in data.items():
-        if path in written:
-            raise BuildError(f"a data file and a source are both named {path}")
-        (directory / path).write_bytes(content)
+        _place(directory / path, content)
     return EmittedModule(name, directory, written, tuple(data))
+
+
+def _refuse_aliases(directory: Path, sources: Sequence[str], data: Sequence[str]) -> None:
+    """Refuse, before anything is written, staged names that would reach one file twice: a
+    data file named as a source; two names alike but for case, which a filesystem that does not
+    tell case apart takes for one; a file's name that another's names as its directory; a
+    ``directory`` (resolved: no link above it or at it) that is a file; and, in ``directory``
+    as it is, a staged name that passes through a link or a file, or ends at a directory (a
+    link there would lead a staged name to another staged file's place, or out of the module's
+    directory)."""
+    for path in data:
+        if path in sources:
+            raise BuildError(f"a data file and a source are both named {path}")
+    if directory.exists() and not directory.is_dir():
+        raise BuildError(f"the module's directory {directory} is a file")
+    names: dict[str, str] = {}
+    for path in (*sources, *data):
+        other = names.setdefault(path.casefold(), path)
+        if other != path:
+            raise BuildError(f"{other} and {path} are one file where case is not told apart")
+    for path in (*sources, *data):
+        parts = path.split("/")
+        for depth in range(1, len(parts)):
+            above = "/".join(parts[:depth]).casefold()
+            if above in names:
+                raise BuildError(f"{names[above]} is a file, and a directory of {path}")
+        here = directory
+        for depth, part in enumerate(parts, start=1):
+            here = here / part
+            try:
+                mode = here.lstat().st_mode
+            except FileNotFoundError:
+                break
+            if depth == len(parts):
+                if stat.S_ISDIR(mode):
+                    raise BuildError(f"{here} is a directory, where {path} would be written")
+            elif stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
+                kind = "a link" if stat.S_ISLNK(mode) else "a file"
+                raise BuildError(
+                    f"{here} is {kind}, which {path} would be written through: emit into a "
+                    "directory without links"
+                )
+
+
+def _place(target: Path, content: bytes) -> None:
+    """Write ``content`` as a new file at ``target``, its directories made: what was there, a
+    link or a file linked elsewhere among it, is replaced, not written through."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.unlink(missing_ok=True)
+    target.write_bytes(content)
 
 
 # -- the netlist ---------------------------------------------------------------------------

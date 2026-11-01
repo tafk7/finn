@@ -133,3 +133,123 @@ def test_a_file_has_one_name() -> None:
     with pytest.raises(ContributionError, match="'./a.sv' is not a canonical name: 'a.sv'"):
         CopiedSource("fixture", "./a.sv")
     assert CopiedSource("fixture", "a/a.sv").path == "a/a.sv"
+    # The same name on every host: no other separator, drive, stream, dropped trailing '.',
+    # device, or character outside POSIX's portable ones.
+    for path in (
+        "a\\a.sv",
+        "..\\a.sv",
+        ".",
+        "a.sv.",
+        "c:a.sv",
+        "a.sv:s",
+        "con",
+        "NUL.sv",
+        "a b.sv",
+    ):
+        with pytest.raises(ContributionError, match="is not a portable name|not a name relative"):
+            CopiedSource("fixture", path)
+        with pytest.raises(ContributionError, match="is not a portable name|not a name relative"):
+            GeneratedData(path, b"")
+    assert GeneratedData("images/w-0_1.dat", b"").path == "images/w-0_1.dat"
+
+
+def test_two_names_one_filesystem_may_take_for_one_file_are_refused(tmp_path: Path) -> None:
+    """Names alike but for case, a data file named as a source, and a file's name that
+    another's names as its directory are refused before anything is read or written."""
+    root = _write(tmp_path / "src")
+    (root / "Core.sv").write_text("module other; endmodule\n")
+    cased = _leaf(sources=(CopiedSource("fixture", "core.sv"), CopiedSource("fixture", "Core.sv")))
+    with pytest.raises(BuildError, match="case is not told apart: core.sv of 'fixture' and Core"):
+        emit_module(cased, tmp_path / "out", roots={"fixture": root})
+    for data, refusal in (
+        ("core.sv", "a data file and a source are both named core.sv"),
+        ("CORE.sv", "core.sv and CORE.sv are one file where case is not told apart"),
+        ("core.sv/w.dat", "core.sv is a file, and a directory of core.sv/w.dat"),
+    ):
+        leaf = replace(_leaf(), data=(GeneratedData(data, b"01\n"),))
+        with pytest.raises(BuildError, match=refusal):
+            emit_module(leaf, tmp_path / "out", roots={"fixture": root})
+        assert not (tmp_path / "out").exists()
+
+
+def test_a_destination_s_link_is_refused_and_a_staged_file_replaced(tmp_path: Path) -> None:
+    """A reused destination where a staged name passes through a link (here to the directory
+    another staged file is written to) is refused before anything is written. A link or a
+    hard link where a file is staged is replaced, not written through."""
+    root = tmp_path / "src"
+    (root / "real").mkdir(parents=True)
+    (root / "alias").mkdir()
+    (root / "real" / "a.sv").write_text("module a; endmodule\n")
+    (root / "alias" / "a.sv").write_text("module b; endmodule\n")
+    both = _leaf(
+        sources=(
+            CopiedSource("fixture", "real/a.sv", provides=("module:a",)),
+            CopiedSource("fixture", "alias/a.sv", provides=("module:b",)),
+        )
+    )
+    out = tmp_path / "out"
+    (out / "real").mkdir(parents=True)
+    (out / "real" / "a.sv").write_text("before\n")
+    (out / "alias").symlink_to("real", target_is_directory=True)
+    with pytest.raises(BuildError, match="alias is a link, which alias/a.sv would be written"):
+        emit_module(both, out, roots={"fixture": root})
+    assert (out / "real" / "a.sv").read_text() == "before\n"
+    assert not (out / "weights.dat").exists()
+
+    (out / "alias").unlink()
+    elsewhere, linked = tmp_path / "elsewhere.sv", tmp_path / "linked.sv"
+    elsewhere.write_text("kept\n")
+    linked.write_text("kept\n")
+    (out / "real" / "a.sv").unlink()
+    (out / "real" / "a.sv").symlink_to(elsewhere)
+    (out / "alias").mkdir()
+    (out / "alias" / "a.sv").hardlink_to(linked)
+    emitted = emit_module(both, out, roots={"fixture": root})
+    assert emitted.sources == ("real/a.sv", "alias/a.sv")
+    for path, source in (("real/a.sv", "real/a.sv"), ("alias/a.sv", "alias/a.sv")):
+        assert not (out / path).is_symlink()
+        assert (out / path).read_bytes() == (root / source).read_bytes()
+    assert elsewhere.read_text() == linked.read_text() == "kept\n"
+
+
+def test_a_data_file_is_written_in_its_own_directory(tmp_path: Path) -> None:
+    """A data file's name may name a directory, which emission makes, as for a source."""
+    root = _write(tmp_path / "src")
+    leaf = replace(_leaf(), data=(GeneratedData("images/weights.dat", b"01\n"),))
+    emitted = emit_module(leaf, tmp_path / "out", roots={"fixture": root})
+    assert emitted.data == ("images/weights.dat",)
+    assert (tmp_path / "out" / "images" / "weights.dat").read_bytes() == b"01\n"
+
+
+@pytest.mark.parametrize("linked", ["the destination", "an ancestor"])
+def test_a_linked_destination_is_resolved_once_and_written_under_alone(
+    tmp_path: Path, linked: str
+) -> None:
+    """A link at or above the destination is followed once, as the caller meant it: the
+    module is checked and written under the directory it leads to, and nothing beside that
+    directory is touched. A destination that is a file is refused before anything is
+    written."""
+    root = _write(tmp_path / "src")
+    outside = tmp_path / "outside"
+    (outside / "inner").mkdir(parents=True)
+    beside = outside / "core.sv"
+    beside.write_text("kept\n")
+    if linked == "the destination":
+        (tmp_path / "out").symlink_to(outside / "inner", target_is_directory=True)
+        destination = tmp_path / "out"
+    else:
+        (tmp_path / "parent").symlink_to(outside, target_is_directory=True)
+        destination = tmp_path / "parent" / "inner"
+    emitted = emit_module(_leaf(), destination, roots={"fixture": root})
+    assert emitted.directory == (outside / "inner").resolve()
+    assert (outside / "inner" / "core.sv").read_bytes() == (root / "core.sv").read_bytes()
+    assert beside.read_text() == "kept\n"
+    # A link below the resolved directory, on a staged path, is still refused.
+    (outside / "inner" / "nested").symlink_to(outside, target_is_directory=True)
+    nested = replace(_leaf(), data=(GeneratedData("nested/core.sv", b"01\n"),))
+    with pytest.raises(BuildError, match="nested is a link, which nested/core.sv would be"):
+        emit_module(nested, destination, roots={"fixture": root})
+    assert beside.read_text() == "kept\n"
+    (tmp_path / "file").write_text("")
+    with pytest.raises(BuildError, match="the module's directory .*file is a file"):
+        emit_module(_leaf(), tmp_path / "file", roots={"fixture": root})
