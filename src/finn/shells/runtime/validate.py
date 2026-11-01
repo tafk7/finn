@@ -126,11 +126,11 @@ def main(argv: Sequence[str] | None, open_device: OpenDevice, here: Path, image:
     args = arguments(image).parse_args(argv)
     try:
         description = read(here / RUNTIME_FILE)
-        driver = Driver(open_device(description, args.device), description)
-        driver.load(Path(args.bitfile))
-        driver.write_weight_files(Path(args.runtime_weight_dir))
-        images, labels = dataset_of(args.dataset, args.dataset_root)
-        accuracy = validate(driver, images, labels, args.batchsize)
+        with Driver(open_device(description, args.device), description) as driver:
+            driver.load(Path(args.bitfile))
+            driver.write_weight_files(Path(args.runtime_weight_dir))
+            images, labels = dataset_of(args.dataset, args.dataset_root)
+            accuracy = validate(driver, images, labels, args.batchsize)
     except Refused as refused:
         sys.stderr.write(f"refused: {refused}\n")
         return 1

@@ -3,11 +3,15 @@
 
 """A stand-in for PYNQ on a build machine (``PYNQ_STUB``, written by ``stub``): what the
 ``pynq`` runtime's device (``finn.shells.pynq.device``) calls, each call a line of the log
-file ``$PYNQ_STUB_LOG`` names, with the device it acts on: the one named, else PYNQ's active
-one, ``device0`` of two. Every register reads idle and done; a buffer is zeros at the next
-address. ``stub`` also writes a ``sitecustomize`` that makes onnx, qonnx and finn
-unimportable when ``$PYNQ_STUB_BLOCK`` is set, so a driver run there runs as on a board
-without them."""
+file ``$PYNQ_STUB_LOG`` names, with the device it acts on: the one named when an overlay,
+an MMIO or a buffer is made, else PYNQ's active one, ``device0`` of two; an MMIO and a
+buffer act on their own device from then on. Each device keeps its own state: the overlay
+loaded, its registers and its live buffers. A register is reached only on a device with an
+overlay loaded and within its MMIO's window, and every register reads idle and done; a
+buffer is zeros at the next address, and a freed one can be neither synced nor freed again.
+Each breach raises, so the driver's run fails. ``stub`` also writes a ``sitecustomize``
+that makes onnx, qonnx and finn unimportable when ``$PYNQ_STUB_BLOCK`` is set, so a driver
+run there runs as on a board without them."""
 
 from __future__ import annotations
 
@@ -31,6 +35,9 @@ def record(*fields):
 class Device:
     def __init__(self, name):
         self.name = name
+        self.loaded = None
+        self.registers = {}
+        self.memory = set()
 
     def __str__(self):
         return self.name
@@ -46,18 +53,31 @@ def acting(device):
 
 class Overlay:
     def __init__(self, bitfile, download=True, device=None):
-        record("overlay", os.path.basename(bitfile), download, acting(device))
+        self.device = acting(device)
+        self.device.loaded = os.path.basename(bitfile)
+        record("overlay", self.device.loaded, download, self.device)
 
 
 class Buffer(np.ndarray):
+    def live(self, operation):
+        if self.device_address not in self.device.memory:
+            raise RuntimeError(
+                f"{operation} of the buffer {hex(self.device_address)} on {self.device}, "
+                "which is not live there"
+            )
+
     def sync_to_device(self):
-        record("sync_to_device", hex(self.device_address), self.size)
+        self.live("sync_to_device")
+        record("sync_to_device", hex(self.device_address), self.size, self.device)
 
     def sync_from_device(self):
-        record("sync_from_device", hex(self.device_address), self.size)
+        self.live("sync_from_device")
+        record("sync_from_device", hex(self.device_address), self.size, self.device)
 
     def freebuffer(self):
-        record("freebuffer", hex(self.device_address))
+        self.live("freebuffer")
+        self.device.memory.discard(self.device_address)
+        record("freebuffer", hex(self.device_address), self.device)
 
 
 ADDRESSES = [0x1_2000_0000]
@@ -65,22 +85,34 @@ ADDRESSES = [0x1_2000_0000]
 
 def allocate(shape, dtype, target=None):
     buffer = np.zeros(shape, dtype).view(Buffer)
+    buffer.device = acting(target)
     buffer.device_address = ADDRESSES[0]
     ADDRESSES[0] += 0x10_0000
-    record("allocate", shape, np.dtype(dtype).name, hex(buffer.device_address), acting(target))
+    buffer.device.memory.add(buffer.device_address)
+    record("allocate", shape, np.dtype(dtype).name, hex(buffer.device_address), buffer.device)
     return buffer
 
 
 class MMIO:
     def __init__(self, base, length, device=None):
-        self.base = base
-        record("mmio", hex(base), length, acting(device))
+        self.base, self.length, self.device = base, length, acting(device)
+        record("mmio", hex(base), length, self.device)
+
+    def reached(self, offset):
+        if self.device.loaded is None:
+            raise RuntimeError(f"a register of {self.device}, which has no overlay loaded")
+        if not 0 <= offset < self.length:
+            raise RuntimeError(f"offset {hex(offset)} outside the window of {self.length}")
+        return self.base + offset
 
     def write(self, offset, value):
-        record("write", hex(self.base + offset), hex(value))
+        address = self.reached(offset)
+        self.device.registers[address] = value
+        record("write", hex(address), hex(value), self.device)
 
     def read(self, offset):
-        record("read", hex(self.base + offset))
+        address = self.reached(offset)
+        record("read", hex(address), self.device)
         return 0x6
 ''',
     "pynq/ps.py": '''"""PYNQ's clocks, each set recorded."""

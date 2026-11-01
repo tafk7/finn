@@ -40,7 +40,7 @@ from finn.shells.integration import MAIN, Linked, describe, runtime_file
 from finn.shells.pynq.linker import linked_row, unit_bases
 from finn.shells.pynq.runtime import PynqRuntime, shipped
 from finn.shells.runtime import Description, Driver, Refused, cli, read, validate
-from finn.shells.runtime.movers import DONE, IDLE
+from finn.shells.runtime.movers import DONE, IDLE, START
 from finn.shells.runtime.packing import Element, pack, unpack
 from finn.util import data_packing
 
@@ -377,6 +377,127 @@ def test_a_mover_holds_one_buffer_allocated_when_staged() -> None:
     assert sorted(device.buffers.values()) == ["in0", "out0"]
     with pytest.raises(Refused, match="^batch-invalid: a batch of 0 frames"):
         cli.throughput(driver, 0)
+
+
+class Stalling(FakeDevice):
+    """The device double whose movers' control, once started, fails to read ``failures``
+    times, then reads as written while ``stalled`` (started: neither idle nor done), else
+    idle and done."""
+
+    failures = 0
+    stalled = False
+
+    def read32(self, unit: str, offset: int) -> int:
+        if self.registers.get((unit, offset)) == START:
+            if self.failures:
+                self.failures -= 1
+                raise OSError(f"{unit}: its status did not read")
+            if self.stalled:
+                return START
+        return super().read32(unit, offset)
+
+
+def test_a_launch_that_did_not_complete_keeps_its_buffers_until_its_movers_settle() -> None:
+    """A status read that fails after the movers started leaves them armed: a call of
+    another batch or of the same, and a collection, are refused before any buffer is
+    written, released or read; settling finds each mover idle, then the driver goes on. A
+    mover not idle is refused at settling, and stays armed."""
+    found = recorded()
+    (core,) = found["cores"]
+    (given,) = core["inputs"]
+    device = Stalling(answers=device_for(found).answers)
+    driver = Driver(device, read(found))
+    device.failures = 1
+    with pytest.raises(OSError, match="out0: its status did not read"):
+        driver.run_core(core["name"], {given["tensor"]: np.zeros((1, 784))})
+    held, made = dict(device.buffers), len(device.calls)
+    for frames in (2, 1):
+        with pytest.raises(
+            Refused, match=r"^mover-armed: DataflowCore_0: a launch on \['in0', 'out0'\]"
+        ):
+            driver.run_core(core["name"], {given["tensor"]: np.zeros((frames, 784))})
+    with pytest.raises(Refused, match="^mover-armed: "):
+        driver.collect(core["name"], 1)
+    assert (device.buffers, device.calls[made:]) == (held, [])
+    device.stalled = True
+    with pytest.raises(Refused, match="^mover-busy: out0: its mover is not idle"):
+        driver.settle(core["name"])
+    with pytest.raises(Refused, match="^mover-armed: "):
+        driver.run_core(core["name"], {given["tensor"]: np.zeros((1, 784))})
+    device.stalled = False
+    driver.settle(core["name"])
+    driver.run_core(core["name"], {given["tensor"]: np.zeros((2, 784))})
+    assert [line for line in device.calls[made:] if line.startswith("release")] == [
+        f"release in0 {BASE:#x}",
+        f"release out0 {BASE + STEP:#x}",
+    ]
+
+
+def test_closing_releases_every_buffer_once_its_movers_are_idle() -> None:
+    """A driver closes on its context's exit: every buffer it holds released, once; a
+    closed driver is refused. An armed mover not idle refuses closing, every buffer kept;
+    leaving the context on an error keeps them so, and raises the error."""
+    found = recorded()
+    (core,) = found["cores"]
+    (given,) = core["inputs"]
+    inputs = {given["tensor"]: np.zeros((1, 784))}
+    device = device_for(found)
+    with Driver(device, read(found)) as driver:
+        driver.run_core(core["name"], inputs)
+    assert device.buffers == {}
+    assert device.calls[-2:] == [f"release in0 {BASE:#x}", f"release out0 {BASE + STEP:#x}"]
+    driver.close()
+    assert device.calls[-1] == f"release out0 {BASE + STEP:#x}"
+    with pytest.raises(Refused, match="^driver-closed: DataflowCore_0"):
+        driver.run_core(core["name"], inputs)
+    stalling = Stalling(answers=device.answers)
+    stalling.failures, stalling.stalled = 1, True
+    kept = Driver(stalling, read(found))
+    with pytest.raises(OSError):
+        kept.run_core(core["name"], inputs)
+    with pytest.raises(Refused, match="^mover-busy: in0: its mover is not idle"):
+        kept.close()
+    assert sorted(stalling.buffers.values()) == ["in0", "out0"]
+    stalling = Stalling(answers=device.answers)
+    stalling.failures, stalling.stalled = 1, True
+    with pytest.raises(OSError), Driver(stalling, read(found)) as driver:
+        driver.run_core(core["name"], inputs)
+    assert sorted(stalling.buffers.values()) == ["in0", "out0"]
+    assert not any(line.startswith("release") for line in stalling.calls)
+
+
+def test_the_pynq_stand_in_keeps_each_device_s_state(tmp_path: Path) -> None:
+    """The PYNQ stand-in acts on the device each overlay, MMIO and buffer was made on, and
+    raises on a register of a device with no overlay loaded, one outside the MMIO's window,
+    a freed buffer synced and a buffer freed twice."""
+    breaches = {
+        "pynq.MMIO(0xA0000000, 4096, device=device0).read(0)": "device0, which has no overlay",
+        "mmio.write(4096, 1)": "outside the window",
+        "freed.sync_from_device()": "sync_from_device of the buffer 0x120000000 on device1",
+        "freed.freebuffer()": "freebuffer of the buffer 0x120000000 on device1",
+    }
+    setup = (
+        "import numpy as np\nimport pynq\n"
+        "device0, device1 = pynq.Device.devices\n"
+        "pynq.Overlay('finn-accel.bit', device=device1)\n"
+        "mmio = pynq.MMIO(0xA0000000, 4096, device=device1)\n"
+        "mmio.write(0, 1)\n"
+        "freed = pynq.allocate((8,), np.uint8, target=device1)\n"
+        "freed.freebuffer()\n"
+        "assert (device0.registers, device1.registers) == ({}, {0xA0000000: 1})\n"
+        "assert (device0.memory, device1.memory) == (set(), set())\n"
+    )
+    env = {**os.environ, "PYTHONPATH": str(stub(tmp_path)), "PYTHONDONTWRITEBYTECODE": "1"}
+    for breach, said in breaches.items():
+        ran = subprocess.run(
+            [sys.executable, "-c", setup + breach],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert ran.returncode == 1 and "RuntimeError: " in ran.stderr, (breach, ran.stderr)
+        assert said in ran.stderr, (breach, ran.stderr)
 
 
 def test_the_recorded_texts_hold_no_machine_s_path() -> None:

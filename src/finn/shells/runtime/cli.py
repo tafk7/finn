@@ -169,15 +169,15 @@ def main(argv: Sequence[str] | None, open_device: OpenDevice, here: Path, image:
     args = arguments(image).parse_args(argv)
     try:
         description = read(here / RUNTIME_FILE)
-        driver = Driver(open_device(description, args.device), description)
-        driver.load(Path(args.bitfile))
-        driver.write_weight_files(Path(args.runtime_weight_dir))
-        if args.exec_mode == "execute":
-            execute(driver, args.inputfile, args.outputfile)
-        else:
-            found = throughput(driver, args.batchsize)
-            METRICS.write_text(str(found))
-            sys.stdout.write(f"Results written to {METRICS}\n")
+        with Driver(open_device(description, args.device), description) as driver:
+            driver.load(Path(args.bitfile))
+            driver.write_weight_files(Path(args.runtime_weight_dir))
+            if args.exec_mode == "execute":
+                execute(driver, args.inputfile, args.outputfile)
+            else:
+                found = throughput(driver, args.batchsize)
+                METRICS.write_text(str(found))
+                sys.stdout.write(f"Results written to {METRICS}\n")
     except Refused as refused:
         sys.stderr.write(f"refused: {refused}\n")
         return 1
