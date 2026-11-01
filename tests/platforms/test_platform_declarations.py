@@ -420,7 +420,8 @@ def test_a_fact_not_of_its_type_is_refused_when_its_row_is_read(
     ) as caught:
         shell_row("broken", "Ultra96", found)
     assert named in str(caught.error)
-    assert ("declaration-invalid", "shells.broken") in findings(found)
+    # Once, though every board's row is refused for it.
+    assert findings(found).count(("declaration-invalid", "shells.broken")) == 1
 
 
 def test_a_shells_own_facts_and_its_linkers_needs_are_read_whatever_its_boards(

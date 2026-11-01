@@ -113,13 +113,15 @@ def check(declared: Declarations) -> list[Finding]:
             boards = []
         if shell.linker is not None and shell.linker not in declared.linkers:
             boards = []  # its rows need their linker: linker-undeclared says so
+        refused_rows: dict[Finding, None] = {}  # one refusal of every board's row, once
         for each in boards:
             if each in unknown:
                 continue
             try:
                 rows.append(row(shell, each, declared))
             except TargetRefused as refused:
-                findings += _refusal(refused)
+                refused_rows.update(dict.fromkeys(_refusal(refused)))
+        findings += refused_rows
         for runtime_name in shell.runtimes:
             runtime = declared.runtimes.get(runtime_name)
             if runtime is None:
