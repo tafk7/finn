@@ -108,3 +108,41 @@ def test_upstream_is_every_node_outside_the_set_it_depends_on_in_graph_order() -
         ["q", "z"],
     )
     assert [node.name for node in upstream(model, matmul)] == ["scale", "bias", "shift"]
+
+
+def reading(name: str, read: str, output: str, *, depth: int = 1) -> NodeProto:
+    """A host ``If`` ``name`` on x whose branches read ``read`` from the graph, ``depth``
+    subgraphs down, and output it as ``output``: no input of the node names ``read``."""
+    out = helper.make_tensor_value_info(output, TensorProto.FLOAT, [1, 4])
+    inner = helper.make_node("Identity", [read], [output])
+    for level in range(depth):
+        body = helper.make_graph([inner], f"level{level}", [], [out])
+        inner = helper.make_node(
+            "If", ["x"], [output], name=name, then_branch=body, else_branch=body
+        )
+    return inner
+
+
+def test_a_subgraph_s_capture_is_an_edge_of_the_walks() -> None:
+    """A node depends on what its subgraphs read from outside them, at any depth, as on its
+    inputs: ``branches`` reads ``a``'s h only from a branch's branch, and ``b`` reads its
+    output, so it is between them; and ``b`` depends on ``early``, whose output a branch
+    reads."""
+    model = graph(
+        [
+            helper.make_node("MatMul", ["x", "w"], ["h"], name="a"),
+            reading("branches", "h", "t", depth=2),
+            helper.make_node("MatMul", ["t", "w"], ["y"], name="b"),
+        ],
+        ["y"],
+    )
+    assert names(model) == ["branches"]
+    model = graph(
+        [
+            helper.make_node("Relu", ["x"], ["r"], name="early"),
+            reading("branches", "r", "t"),
+            helper.make_node("MatMul", ["t", "w"], ["y"], name="b"),
+        ],
+        ["y"],
+    )
+    assert [node.name for node in upstream(model, matmul)] == ["early", "branches"]

@@ -32,13 +32,30 @@ class ContributionError(ArtifactError):
     """A contribution names no file it could stand for."""
 
 
-def _relative(path: str, label: str) -> None:
-    """Refuse a ``path`` that is not relative to ``label``, or not in its one spelling (no
-    ``.`` part, empty part or trailing ``/``), so that one file has one name."""
+#: A part of a portable name: POSIX's portable filename characters (letters, digits, ``.``,
+#: ``_``, ``-``), so no host reads another separator (``\``), a drive (``:``) or a stream in it.
+_PART = re.compile(r"[A-Za-z0-9._-]+")
+#: The names Windows takes for a device, whatever their case or suffix.
+_DEVICE = re.compile(r"(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?", re.IGNORECASE)
+
+
+def relative_name(path: str, label: str) -> None:
+    """Refuse a ``path`` that is not relative to ``label``, not in its one spelling (no ``.``
+    part, empty part or trailing ``/``), or not portable: each part of POSIX's portable
+    filename characters, not ending in ``.`` (which Windows drops) and no device's name. So
+    one file has one name on every host, but for case: two names one filesystem may take for
+    one file, ``A.sv`` and ``a.sv``, are refused where a module stages both
+    (``finn.kernels.artifacts.build``)."""
     if not path or path.startswith("/") or ".." in path.split("/"):
         raise ContributionError(f"{path!r} is not a name relative to {label}")
     if posixpath.normpath(path) != path:
         raise ContributionError(f"{path!r} is not a canonical name: {posixpath.normpath(path)!r}")
+    for part in path.split("/"):
+        if not _PART.fullmatch(part) or part.endswith(".") or _DEVICE.fullmatch(part):
+            raise ContributionError(
+                f"{path!r} is not a portable name: {part!r} is not letters, digits, '.', '_' "
+                "and '-', not ending in '.', nor a device's name"
+            )
 
 
 @dataclass(frozen=True)
@@ -54,7 +71,7 @@ class CopiedSource:
     def __post_init__(self) -> None:
         if not self.root:
             raise ContributionError("a copied source names its root")
-        _relative(self.path, "its source root")
+        relative_name(self.path, "its source root")
         object.__setattr__(self, "provides", tuple(sorted(set(self.provides))))
         object.__setattr__(self, "requires", tuple(sorted(set(self.requires))))
 
@@ -72,7 +89,7 @@ class GeneratedData:
     data: bytes
 
     def __post_init__(self) -> None:
-        _relative(self.path, "the module's directory")
+        relative_name(self.path, "the module's directory")
         if type(self.data) is not bytes:
             raise ContributionError("generated data is bytes")
 
@@ -217,5 +234,6 @@ __all__ = [
     "HEADER_SUFFIXES",
     "HlsSource",
     "hex_image",
+    "relative_name",
     "request_stem",
 ]

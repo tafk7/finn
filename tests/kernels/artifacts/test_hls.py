@@ -255,14 +255,18 @@ def test_a_composed_module_s_name_covers_its_hls_products(tmp_path: Path) -> Non
     assert module_name(other, capture(other, roots=roots, built=built)) == names["as built"]
 
 
-def test_a_copied_source_is_not_staged_among_an_hls_product(tmp_path: Path) -> None:
+@pytest.mark.parametrize("cased", [False, True])
+def test_a_copied_source_is_not_staged_among_an_hls_product(tmp_path: Path, cased: bool) -> None:
+    """Nor under its directory's name in another case, which a filesystem that does not tell
+    case apart takes for the same directory."""
     request = _top()
+    directory = request.function.upper() if cased else request.function
     beside = Leaf(
         "test.beside",
         "beside",
         (),
         Abi(PINS),
-        (CopiedSource("fixture", f"{request.function}/beside.sv", provides=("module:beside",)),),
+        (CopiedSource("fixture", f"{directory}/beside.sv", provides=("module:beside",)),),
     )
     module = Composed(
         "test.hls.beside",
