@@ -6,8 +6,10 @@ whose module is an HLS top, exported into the IP catalog as FINN's IP.
 
 ``IodmaKernel`` is the mover the shell places on each edge of the core: ``IodmaIn``
 supplies a core's input from memory, ``IodmaOut`` delivers its output to memory. Its facts
-are ``IodmaMover``'s on the same edge (``finn.kernels.movers.iodma_contract``): its rate a
-frame, its resources, its control bus and its memory port. Its module is the
+are its contract on that edge (``finn.kernels.movers.iodma_contract``): its rate a frame,
+its resources, its control bus and its memory port. The shell places it
+(``finn.kernels.shell``), where its row offers the ``iodma_hls`` mover kind, whose
+declaration's code (``IodmaHls``) makes the offer at the row's width cap. Its module is the
 ``IODMA_hls`` top the HWCustomOp flow generated (``iodma_top``), named by its request's
 digest (``finn_iodma_<key16>``), synthesized over finn-hlslib (``IODMA_HEADERS``, the
 header root ``hlslib``) and exported under FINN's vendor and library.
@@ -47,6 +49,7 @@ from finn.kernels.movers import (
     MoverOffer,
     converter_kind,
     iodma_contract,
+    iodma_hls,
 )
 from finn.kernels.port_model import InPort, MemoryPort, OtherPins, OutPort
 from finn.kernels.transport import StreamPins
@@ -280,7 +283,7 @@ class IodmaKernel(Kernel):
       word), so that it joins the core's port as it is; an edge with transport markers is
       refused (``iodma-markers``): its top sends and reads no ``TLAST``; so is an edge moving
       the other way (``iodma-direction``).
-    - Its facts are ``IodmaMover``'s on the same edge (``iodma_contract``): its rate a
+    - Its facts are its contract on the edge (``iodma_contract``): its rate a
       frame (``stated_rate``: its beat times within its cycles, measured), its resources
       (out of context, ``SHELL_CHARACTERISED``) and the one memory port it initiates
       (``memory_initiators``).
@@ -466,11 +469,24 @@ class IodmaOut(IodmaKernel):
     )
 
 
+class IodmaHls:
+    """The ``iodma_hls`` mover kind, as its declaration's code names it
+    (``finn.platform.declarations``): its offer at a shell's width cap. The shell places
+    ``IodmaIn`` and ``IodmaOut`` where its row offers it."""
+
+    @staticmethod
+    def offer(width_cap: int) -> MoverOffer:
+        """Its offer on a shell whose memory port is at most ``width_cap`` bits wide
+        (``iodma_hls``)."""
+        return iodma_hls(width_cap)
+
+
 __all__ = [
     "IODMA_CONTROL_ADDRESS",
     "IODMA_DIRECTIVES",
     "IODMA_HEADERS",
     "IODMA_STEM",
+    "IodmaHls",
     "IodmaIn",
     "IodmaKernel",
     "IodmaOut",

@@ -1,18 +1,19 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The movers a shell offers on its boundary channels (``finn.kernels.movers``).
+"""The movers a shell offers on its core's edges (``finn.kernels.movers``,
+``finn.kernels.iodma``).
 
-A partition's network in its shell (``core_in_shell``) reads its target's shell row
-(``finn.platform.shells``), whose offer places an ``IODMA_hls`` mover on each free side that
-meets the host, and states that side (row-major, one pass a frame), which the edge channel
-joins to its reader: placed by the channel where the shell offers one, no choice, so nothing
-persists it; binding no RTL, so the module is the ``ip`` shell's; its cycles a frame
-the channel's, so an exploration's bottleneck can name it, and FIFO sizing reads
-both boundaries through it; its resources by its widths are the shell's, which
-the shell sums with its partition's and its static region's. On the Chain
-(``support.chain`` as KernelOps), and on TFC_W2A2 for Ultra96 in the Zynq shell
-(``pynq``), whose memory port is 128 bits wide.
+A partition's core in its shell (``core_in_shell``) reads its target's shell row
+(``finn.platform.shells``), whose offer places an ``IODMA_hls`` mover on each edge that
+meets the host, and states that edge's side (row-major, one pass a frame), which the edge
+channel joins to its reader. Each mover is a member of the shell (``finn.kernels.shell``:
+``in0``, ``out0``), placed where the row offers one, no choice, so nothing persists it;
+binding no RTL in the core, so the core's module is the ``ip`` shell's; its cycles a frame
+its own (its stated rate's), so an exploration's bottleneck can name it, and FIFO sizing
+reads both boundaries' paces through it; its resources by its widths, which the shell sums
+with its core's and its static region's. On the Chain (``support.chain`` as KernelOps), and
+on TFC_W2A2 for Ultra96 in the Zynq shell (``pynq``), whose memory port is 128 bits wide.
 """
 
 from __future__ import annotations
@@ -52,7 +53,7 @@ from finn.custom_op.kernels.shell import (
     ShellResources,
     body_row,
     configured_network,
-    row_movers,
+    row_offer,
     shell_resources,
 )
 from finn.dataflow.steps import Hop
@@ -218,7 +219,7 @@ def iodma_edge(form: Traversal, *, adaptable: bool = True) -> Any:
     return design_space(
         Channel(
             tensor=Tensor(form.shape, UINT8),
-            producer=Side.boundary("s_axis_0", (offer,), offer.states()),
+            producer=Side.boundary("s_axis_0", offer.states()),
             consumer=reader,
             platform=FULL_DSP48E2,
             adaptable=adaptable,
@@ -237,7 +238,7 @@ def iodma_exit(form: Traversal) -> Any:
         Channel(
             tensor=Tensor(form.shape, UINT8),
             producer=writer,
-            consumer=Side.boundary("m_axis_0", (offer,), offer.states()),
+            consumer=Side.boundary("m_axis_0", offer.states()),
             platform=FULL_DSP48E2,
         )
     )
@@ -284,7 +285,7 @@ def test_an_iodma_s_side_read_again_or_reordered_is_joined_by_an_input_gen_at_th
         joined = iodma_edge(form)
         assert outer(joined).form == rows and joined.input_chain == "input_gen"
         assert joined.adapter.frame_bits == 4 * 6 * 8 and valid(joined)
-        assert (joined.mover_contract.beats, joined.mover_contract.tdata) == (8, 24)
+        assert (outer(joined).form.beats, outer(joined).transport.data_width) == (8, 24)
 
 
 def test_an_iodma_s_side_read_in_tiles_is_regrouped_by_a_vpc_and_an_input_gen() -> None:
@@ -313,7 +314,7 @@ def test_an_iodma_s_side_read_in_tiles_is_regrouped_by_a_vpc_and_an_input_gen() 
         Convert(3, 6),
     ]
     assert joined.adapter.frame_bits == 4 * 3 * 8
-    assert (joined.mover_contract.beats, joined.mover_contract.tdata) == (4, 48)
+    assert (outer(joined).form.beats, outer(joined).transport.data_width) == (4, 48)
     assert valid(joined)
 
 
@@ -378,47 +379,48 @@ def test_the_network_in_its_shell_reads_its_targets_shell_row() -> None:
     model = kernel_model()
     chain_network(model=model)
     row = body_row(model)
-    assert row == shell_row("pynq", "Ultra96") and row_movers(row) == (iodma_hls(128),)
+    assert row == shell_row("pynq", "Ultra96") and row_offer(row) == iodma_hls(128)
     chain_network(TARGET, model=model)
     assert body_row(model) == shell_row("ip", None)
 
 
-def test_the_network_takes_the_movers_it_is_offered_and_states_its_members_resources() -> None:
-    """The network reads no shell: its movers are the ones it is given (none by default),
-    and what it uses is its members' sum; the shell adds its movers' and static region's."""
+def test_the_core_alone_places_no_mover_and_its_shell_adds_its_movers_and_static_region() -> None:
+    """The core reads no shell: alone (``network``) it places no mover, and what it uses is
+    its members' sum; its shell, of the same choices, adds its movers' and its static
+    region's."""
     model = kernel_model()
     configure_partition(model)
     write_target(model, ULTRA96)
     model = model.transform(MakeCutChoices(CUT_NAME))
     plain = CoreComposition(network(model, model.graph.node, name="chain").point)
-    assert plain.movers == () and not plain.member("x").offered
-    offered = CoreComposition(
-        network(model, model.graph.node, name="chain", movers=(iodma_hls(128),)).point
-    )
+    assert plain.movers == () and plain.shell is None
     shelled = core_in_shell(model, model.graph.node, name="chain")
-    assert offered.movers == shelled.movers == ("x", "y")
-    assert offered.chosen() == shelled.chosen()
-    split = shell_resources(shelled.point, body_row(model))
+    assert shelled.movers == ("in0", "out0")
+    assert plain.chosen() == shelled.chosen()
+    split = shell_resources(shelled)
     assert isinstance(split, ShellResources) and split.movers and split.static_region
-    assert offered.own_resources() == Available(split.partition)
+    assert plain.own_resources() == Available(split.partition)
     assert shelled.own_resources() == Available(split.total)
 
 
-def test_an_offer_places_a_mover_on_each_free_side() -> None:
-    """Each free side's mover is placed by its channel where the shell offers one: no
-    choice, open before the cut or stored after it."""
-    assert not [key for key in chain_network().undecided() if key[1].startswith("mover")]
+def test_an_offer_places_a_mover_on_each_edge() -> None:
+    """Each edge's mover is placed by the shell where its row offers one: no choice, open
+    before the cut or stored after it. Its cycles a frame are its own, beside the edge
+    channel's stages'."""
+    assert not [key for key in chain_network().undecided() if key[0] in ("in0", "out0")]
     bound = cut_network()
-    assert bound.movers == ("x", "y")
-    assert not [key for key in bound.chosen() if key[1].startswith("mover")]
-    x, y = bound.member("x").mover_contract, bound.member("y").mover_contract
+    assert bound.movers == ("in0", "out0")
+    assert (bound.mover("x"), bound.mover("y")) == ("in0", "out0")
+    assert not [key for key in bound.chosen() if key[0] in bound.movers]
+    x, y = bound.member("in0").contract, bound.member("out0").contract
     # x: two INT3 lanes padded to a byte, 6 beats; 48 bits a frame share 16 with 128.
     assert (x.direction, x.port, x.tdata, x.beats, x.lanes) == ("in", "s_axis_0", 8, 6, 2)
     assert (x.element.dtype.name, x.memory_width, x.words, x.converter) == ("INT3", 16, 3, True)
     assert (y.direction, y.port, y.memory_width, y.words) == ("out", "m_axis_0", 32, 3)
-    # The mover's cycles are the channel's, beside its stages': y has none of its own.
-    assert bound.member("y").frame_cycles == y.cycles == 6 + 4
-    assert bound.member("x").frame_cycles == max(12, x.cycles)
+    assert bound.member("out0").frame_cycles == y.cycles == 6 + 4
+    assert bound.member("in0").frame_cycles == x.cycles
+    # The edge channels' cycles are their stages': y has none.
+    assert bound.member("y").frame_cycles == 0 and bound.member("x").frame_cycles == 12
 
 
 def test_each_boundary_side_is_stated_by_the_mover_its_shell_offers() -> None:
@@ -441,12 +443,12 @@ def test_the_shell_s_resources_are_its_partition_s_its_movers_and_its_static_reg
     model = kernel_model()
     configure_partition(model)
     bound = cut_network(model=model)
-    split = shell_resources(bound.point, body_row(model))
+    split = shell_resources(bound)
     assert isinstance(split, ShellResources)
-    x, y = bound.member("x").mover_contract, bound.member("y").mover_contract
+    x, y = bound.member("in0").contract, bound.member("out0").contract
     assert split.movers == (
-        ("x", iodma_hls_resources(direction="in", intf_width=16, stream_width=8)),
-        ("y", iodma_hls_resources(direction="out", intf_width=32, stream_width=y.tdata)),
+        ("in0", iodma_hls_resources(direction="in", intf_width=16, stream_width=8)),
+        ("out0", iodma_hls_resources(direction="out", intf_width=32, stream_width=y.tdata)),
     )
     assert (x.memory_width, x.tdata, y.memory_width) == (16, 8, 32)
     fixed = body_row(model).fixed
@@ -461,7 +463,7 @@ def test_the_shell_s_resources_are_its_partition_s_its_movers_and_its_static_reg
         )
     )
     ip = chain_network(TARGET, model=model)
-    assert shell_resources(ip.point, body_row(model)) == ShellResources(split.partition, (), ())
+    assert shell_resources(ip) == ShellResources(split.partition, (), ())
     assert ip.own_resources() == Available(split.partition)
 
 
@@ -470,12 +472,11 @@ def test_a_network_waits_for_its_members_resources() -> None:
     # answer.
     model = kernel_model()
     bound = chain_network(model=model)
-    row = body_row(model)
     assert bound.undecided() == ()
-    assert isinstance(shell_resources(bound.point, row), ShellResources)
+    assert isinstance(shell_resources(bound), ShellResources)
     # A weight's memory style cleared: it waits on that open choice, owned by its member.
     opened = bound.trial({}, clear=[("MatMul_0_param0", "source.ram_style")]).network
-    waiting = shell_resources(opened.point, row)
+    waiting = shell_resources(opened)
     assert isinstance(waiting, tuple)
     assert {(finding.code, finding.owner) for finding in waiting} == {
         ("decision-unassigned", "source.ram_style")
@@ -485,7 +486,7 @@ def test_a_network_waits_for_its_members_resources() -> None:
 def test_the_ip_shell_offers_no_mover() -> None:
     bound = chain_network(TARGET)
     assert bound.movers == ()
-    assert not bound.member("x").offered and bound.member("y").frame_cycles == 0
+    assert bound.mover("x") is None and bound.member("y").frame_cycles == 0
 
 
 def test_a_mover_binds_no_rtl() -> None:
@@ -511,10 +512,10 @@ def test_a_network_with_movers_persists_and_replays_as_itself() -> None:
 
 def test_sizing_reads_a_free_side_its_mover_paces() -> None:
     bound = cut_network()
-    x = bound.member("x").mover_contract
+    x = bound.member("in0").contract
     supply, _ = sides(bound.member("x"), beside(bound, "x"))
     assert supply == Pattern(x.times, x.cycles)
-    y = bound.member("y").mover_contract
+    y = bound.member("out0").contract
     _, accept = sides(bound.member("y"), beside(bound, "y"))
     assert accept == Pattern(y.times, y.cycles)
     chain = chain_network(TARGET)
@@ -544,32 +545,28 @@ def test_a_pass_its_mover_moves_once_replayed_at_the_edge_computes_what_onnx_com
 
 
 def iodma_kernels(bound: CoreComposition) -> dict[str, IodmaKernel]:
-    """An ``IODMA_hls`` kernel on each free side of ``bound`` its channel places a mover on,
-    by channel: offered the channel's offer, on its free side, at its platform."""
+    """The ``IODMA_hls`` kernel its shell places on each of ``bound``'s edges, by name."""
     found: dict[str, IodmaKernel] = {}
     for name in bound.movers:
-        channel = bound.member(name)
-        (offer,) = (each for each in channel.offers if each.kind == IODMA_HLS)
-        kind = IodmaIn if channel.mover_contract.direction == "in" else IodmaOut
-        found[name] = design_space(
-            kind(offer=offer, edge=channel.free_side, platform=channel.platform)
-        )
+        placed = bound.member(name)
+        assert isinstance(placed, IodmaKernel)
+        found[name] = placed
     return found
 
 
 def test_an_iodma_kernel_states_its_channel_s_mover_on_each_free_side() -> None:
-    """On each of the Chain's free sides the kernel states what the channel's mover states:
-    its contract, its cycles a frame (its stated rate's span, its beat times the contract's,
-    measured) and its resources; its one port presents the free side's stream at its
-    word, and it initiates one memory port and presents one control bus, which takes no
-    configuration."""
+    """On each of the Chain's free sides the shell's kernel states its contract, its cycles a
+    frame (its stated rate's span, its beat times the contract's, measured) and its
+    resources; its one port presents the free side's stream at its word, and it initiates
+    one memory port and presents one control bus, which takes no configuration."""
     bound = cut_network()
     movers = iodma_kernels(bound)
-    assert list(movers) == ["x", "y"]
+    assert list(movers) == ["in0", "out0"]
+    edges = dict(bound.boundary)
     for name, point in movers.items():
-        channel = bound.member(name)
-        contract = channel.mover_contract
-        assert point.contract == contract
+        (tensor,) = [each for each in edges if bound.mover(each) == name]
+        channel = bound.member(tensor)
+        contract = point.contract
         port = point.output if isinstance(point, IodmaIn) else cast(IodmaOut, point).input
         assert port.stream == channel.free_side.stream
         assert port.width == channel.free_side.transport.data_width == contract.tdata
@@ -581,7 +578,7 @@ def test_an_iodma_kernel_states_its_channel_s_mover_on_each_free_side() -> None:
         assert point.memory_initiators == 1
         control = point.bus_control
         assert (control.port, control.registers) == ("s_axi_control", RegisterMap())
-    assert movers["x"].direction == "in" and movers["y"].direction == "out"
+    assert movers["in0"].direction == "in" and movers["out0"].direction == "out"
 
 
 def test_an_iodma_kernel_s_module_is_its_hls_top_exported_as_finn_s_ip(tmp_path: Path) -> None:
@@ -593,7 +590,7 @@ def test_an_iodma_kernel_s_module_is_its_hls_top_exported_as_finn_s_ip(tmp_path:
     declared, and the script exports the IP as ``xilinx_finn:finn:<top>:1.0``."""
     movers = iodma_kernels(cut_network())
     # x moves 16-bit memory words, which HLS widens to 32 bits on the bus.
-    expected = {"x": ("out0_V", 32, 8), "y": ("in0_V", 32, 16)}
+    expected = {"in0": ("out0_V", 32, 8), "out0": ("in0_V", 32, 16)}
     for name, point in movers.items():
         (request,) = point.module_sources
         assert isinstance(request, HlsSource) and request.export
@@ -636,16 +633,16 @@ def test_an_iodma_kernel_s_module_is_its_hls_top_exported_as_finn_s_ip(tmp_path:
         assert script.index("csynth_design") < script.index("export_design -format ip_catalog")
     twin = design_space(
         IodmaIn(
-            offer=movers["x"].offer,
-            edge=movers["x"].edge,
-            platform=movers["x"].platform,
+            offer=movers["in0"].offer,
+            edge=movers["in0"].edge,
+            platform=movers["in0"].platform,
         )
     )
-    assert twin.module_sources == movers["x"].module_sources
+    assert twin.module_sources == movers["in0"].module_sources
 
 
 def test_an_iodma_kernel_refuses_another_kind_s_offer_a_marked_edge_and_the_other_way() -> None:
-    x = iodma_kernels(cut_network())["x"]
+    x = iodma_kernels(cut_network())["in0"]
     other = IodmaIn(offer=replace(x.offer, kind="other"), edge=x.edge, platform=x.platform)
     refusal = design_space(other).query(IodmaIn.offered)
     assert isinstance(refusal, Rejected)
@@ -662,7 +659,7 @@ def test_an_iodma_kernel_refuses_another_kind_s_offer_a_marked_edge_and_the_othe
     )
     assert isinstance(refusal, Rejected)
     assert [finding.code for finding in refusal.findings] == ["iodma-markers"]
-    y = iodma_kernels(cut_network())["y"]
+    y = iodma_kernels(cut_network())["out0"]
     refusal = design_space(IodmaIn(offer=y.offer, edge=y.edge, platform=y.platform)).query(
         IodmaIn.facing
     )
@@ -793,10 +790,10 @@ def test_tfc_with_ultra96_s_movers_at_1e6_fps_names_its_input_mover(tfc: ModelWr
     # partition at its 196; the budget of 200 is met, nothing relaxed.
     rows = report["movers"]
     assert {name: (row["beats"], row["words"], row["cycles"]) for name, row in rows.items()} == {
-        "Reshape_0_out0": (196, 49, 200),
-        "MatMul_3_out0": (10, 5, 14),
+        "in0": (196, 49, 200),
+        "out0": (10, 5, 14),
     }
-    assert rows["Reshape_0_out0"] == {
+    assert rows["in0"] == {
         "kind": "iodma_hls",
         "direction": "in",
         "port": "s_axis_0",
@@ -816,12 +813,12 @@ def test_tfc_with_ultra96_s_movers_at_1e6_fps_names_its_input_mover(tfc: ModelWr
         "cycles_16_frames_a_call": 197,
     }
     # The logits INT7 (the last MatMul's range), one a beat in a byte: the same words.
-    assert (rows["MatMul_3_out0"]["element"], rows["MatMul_3_out0"]["memory_width"]) == (
+    assert (rows["out0"]["element"], rows["out0"]["memory_width"]) == (
         "INT7",
         16,
     )
     assert report["memory_latency"] == MEMORY_LATENCY
-    assert report["bottleneck"] == {"members": ["Reshape_0_out0"], "cycles": 200}
+    assert report["bottleneck"] == {"members": ["in0"], "cycles": 200}
     target, sizing = report["strategies"]
     assert (target["cycles"], target["relaxed_to"]) == (200, None)
     # SizeFifos reads both boundaries through their movers, at the period they set.
@@ -863,18 +860,18 @@ def test_at_3e6_fps_a_64_bit_memory_port_binds_and_128_bits_do_not(
     with monkeypatch.context() as patched:
         patched.setattr(shell, "shell_row", lambda *row: narrowed(shell_row(*row)))
         _, narrow = explored(tfc, 3e6)
-    mover = narrow["movers"]["Reshape_0_out0"]
+    mover = narrow["movers"]["in0"]
     assert (mover["memory_width"], mover["words"]) == (64, 98)
     assert (mover["tdata"], mover["beats"], mover["lanes"]) == (64, 98, 8)
     assert (mover["converter"], mover["call_cycles"], mover["cycles"]) == (False, 13, 111)
     (target,) = narrow["strategies"]
     assert (target["cycles"], target["relaxed_to"]) == (66, 102)
-    assert narrow["bottleneck"] == {"members": ["Reshape_0_out0"], "cycles": 111}
-    mover = wide["movers"]["Reshape_0_out0"]
+    assert narrow["bottleneck"] == {"members": ["in0"], "cycles": 111}
+    mover = wide["movers"]["in0"]
     assert (mover["memory_width"], mover["words"], mover["cycles"]) == (128, 49, 60)
     bottleneck = wide["bottleneck"]
     assert bottleneck["cycles"] == 64 and "MatMul_3" in bottleneck["members"]
-    assert "Reshape_0_out0" not in bottleneck["members"]
+    assert "in0" not in bottleneck["members"]
 
 
 def module_of(model: ModelWrapper, directory: Path) -> str:
@@ -892,8 +889,8 @@ def test_tfc_on_the_default_ip_shell_is_tfc_in_the_zynq_shell_without_its_movers
 ) -> None:
     """With no shell stated, the target is the ip shell's, which offers a doubled clock
     and no mover; TFC explored by [target_throughput 1e6, size_fifos] makes the same
-    choices as in the Zynq shell, at the same cycles but its two boundary channels', and
-    packages as the same module: a mover binds no RTL."""
+    choices as in the Zynq shell, at the same cycles, its movers beside them, and packages
+    as the same module: a mover binds no RTL in the partition."""
     assert (ULTRA96_IP.shell, ULTRA96_IP.board) == ("ip", None)
     assert ULTRA96_IP.platform == ULTRA96.platform
     zynq_model, zynq = explored(tfc, 1e6, sizing=True)
@@ -905,12 +902,13 @@ def test_tfc_on_the_default_ip_shell_is_tfc_in_the_zynq_shell_without_its_movers
     # shell's.
     in_zynq = built(zynq_model)
     assert built(ip_model) == {name: {**held, **pumping(name)} for name, held in in_zynq.items()}
-    # Every member's cycles but the boundary channels', whose movers are the Zynq shell's.
+    # Every member's cycles alike; the movers are the Zynq shell's, beside its members.
     cycles = {name: row["cycles"] for name, row in ip["members"].items()}
-    in_shell = {name: row["cycles"] for name, row in zynq["members"].items()}
-    moved = {"Reshape_0_out0": 200, "MatMul_3_out0": 14}
-    assert {name: in_shell[name] for name in moved} == moved
-    assert cycles == {**in_shell, **{name: cycles[name] for name in moved}}
+    assert cycles == {name: row["cycles"] for name, row in zynq["members"].items()}
+    assert {name: row["cycles"] for name, row in zynq["movers"].items()} == {
+        "in0": 200,
+        "out0": 14,
+    }
     assert ip["bottleneck"]["cycles"] == 196 and zynq["bottleneck"]["cycles"] == 200
     assert ip["strategies"][-1]["fifos"] == zynq["strategies"][-1]["fifos"]
     # The shell's resources: on ip its partition's alone; the Zynq shell adds its two
@@ -919,7 +917,7 @@ def test_tfc_on_the_default_ip_shell_is_tfc_in_the_zynq_shell_without_its_movers
     assert on_ip["shell"] == {"partition": on_ip["used"], "movers": {}, "static_region": {}}
     in_zynq_shell = on_zynq["shell"]
     assert in_zynq_shell["partition"] == on_ip["used"]
-    assert list(in_zynq_shell["movers"]) == ["Reshape_0_out0", "MatMul_3_out0"]
+    assert list(in_zynq_shell["movers"]) == ["in0", "out0"]
     assert list(in_zynq_shell["static_region"]) == [
         "zynq_ultra_ps_e",
         "proc_sys_reset",

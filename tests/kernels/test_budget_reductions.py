@@ -8,7 +8,6 @@ from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
 import pytest
-from qonnx.core.datatype import DataType
 
 from finn.core.space import (
     Available,
@@ -27,10 +26,7 @@ from finn.core.space import (
 )
 from finn.core.space.errors import DefinitionError
 from finn.core.space.extensions import composite
-from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.budgets import ShellBudgets, contributor, counts, shell_members
-from finn.kernels.movers import MoverContract
-from finn.platform.capabilities import Resources
 
 
 def shell_type(
@@ -56,32 +52,11 @@ def shell_point(kind: type[ShellBudgets], **values: object) -> ShellBudgets:
                     "control_budget": None,
                     "memory_ports": None,
                     "clk2x": True,
+                    "fixed": None,
                     **values,
                 }
             )
         ),
-    )
-
-
-def mover(control: int, memory: int) -> MoverContract:
-    # Actual immutable mover data. Distinct non-control fields make accidental resource,
-    # memory or clock counting visible; no timing property is supplied or evaluated.
-    return MoverContract(
-        kind="test",
-        direction="in",
-        port="stream",
-        tdata=8,
-        beats=5,
-        lanes=1,
-        element=ScalarEncoding(DataType["INT8"]),
-        memory_width=32,
-        words=3,
-        converter=True,
-        call_cycles=17,
-        frames_per_call=2,
-        control_buses=control,
-        memory_ports=memory,
-        resources=Resources(lut=43, ff=29, bram18=7, dsp=11),
     )
 
 
@@ -91,14 +66,17 @@ def test_actual_shell_counts_match_independent_arithmetic(size: int) -> None:
     presented = tuple(("",) if index % 2 == 0 else () for index in range(size))
     memory = tuple(index + 2 for index in range(size))
     doubled = tuple(index == size - 1 for index in range(size))
-    tuples = tuple((mover(index, 19), mover(2, 23)) for index in range(size))
+    # Each mover's buses, and a memory port each, which the static region counts.
+    buses = tuple(("",) * (index + 2) for index in range(size))
+    ports = tuple(19 for _ in range(size))
     values = {
         contributor(name, kind): value
         for kind, items in (
             ("presented", presented),
             ("initiators", memory),
             ("doubled", doubled),
-            ("mover", tuples),
+            ("mover", buses),
+            ("memory", ports),
         )
         for name, value in zip(names, items)
     }
@@ -112,6 +90,7 @@ def test_actual_shell_counts_match_independent_arithmetic(size: int) -> None:
     assert point.presented_buses == (size + 1) // 2
     assert point.mover_buses == size * (size - 1) // 2 + 2 * size
     assert point.memory_initiators == expected_memory
+    assert point.mover_memory == 19 * size
     assert point.doubled_clock is (size > 0)
     assert inspection.validity(point).status == "valid"
     assert inspection.statistics(point).owning_decisions == 0
@@ -173,7 +152,8 @@ class Inputs(Space):
     last_int: int = Decision(domain=(2, 5, 11))
     first_bool: bool = Decision(domain=(False, True))
     later_bool: bool = Decision(domain=(False, True))
-    moves: tuple[MoverContract, ...] = Param(default=())
+    moves: tuple[str, ...] = Param(default=())
+    moved: int = Param(default=0)
 
     @derived
     def first_buses(self) -> tuple[str, ...]:
@@ -221,7 +201,12 @@ class Inputs(Space):
 def bound_shell(kind: type[ShellBudgets], values: Mapping[str, object]) -> type[Inputs]:
     class Host(Inputs):
         shell_counts = cast(Any, kind)(
-            shell="bound", control_budget=None, memory_ports=None, clk2x=True, **values
+            shell="bound",
+            control_budget=None,
+            memory_ports=None,
+            clk2x=True,
+            fixed=None,
+            **values,
         )
 
     return Host
@@ -327,11 +312,12 @@ def test_open_sum_head_halts_before_later_refusal() -> None:
     assert "first_int" in {finding.owner for finding in folded[0].findings}
 
 
-def test_movers_are_bound_model_tuples_and_only_project_control_buses() -> None:
+def test_a_movers_buses_are_counted_and_its_memory_ports_beside_the_kernels() -> None:
     kind = shell_type(movers=("actual",))
-    host = bound_shell(kind, {"actual-mover": Inputs.moves})
-    point = design_space(host(moves=(mover(2, 47), mover(3, 53))))
+    host = bound_shell(kind, {"actual-mover": Inputs.moves, "actual-memory": Inputs.moved})
+    point = design_space(host(moves=("",) * 5, moved=47))
     assert counts(cast(Any, point).shell_counts) == Available((5, 0, False))
+    assert cast(Any, point).shell_counts.mover_memory == 47
     evidence = inspection.explain(point, cast(Any, host).shell_counts.mover_buses)
     assert any(node.declaration.key == "moves" for node in evidence.nodes)
     assert not any(
@@ -519,6 +505,7 @@ def test_clock_requirement_preserves_exact_source_order_and_owners(
             clk2x=ClockInputs.supplied,
             control_budget=None,
             memory_ports=None,
+            fixed=None,
             **{"k0-doubled": ClockInputs.actual_doubled},
         )
 

@@ -5,8 +5,8 @@
 kernels declared here, each with one choice listed breaking value first, and on the Chain
 (``support.chain``).
 
-A partition declared with its shell's row (``DataflowCoreDeclaration.shell``) holds the shell
-member (``shell``), whose rules read its members' derived values: a kernel's presented
+A partition's core in a shell of a row (``finn.kernels.shell.shell``) has the shell member
+beside it (``shell``), whose rules read its members' derived values: a kernel's presented
 control bus, the memory ports it initiates, whether it takes the doubled clock. A value
 that breaks a budget is refused in the partition: ``viable`` lists it refused, naming the
 shell's rule, a change setting it is refused (``CoreComposition.trial``, the seam), and the
@@ -92,7 +92,14 @@ class Pumping(Kernel):
 
 def row(**budgets: object) -> Mapping[str, object]:
     """A shell's row as a partition in it holds it: the Zynq shell's, but ``budgets``."""
-    return {"shell": "pynq", "control_budget": 9, "memory_ports": 0, "clk2x": False, **budgets}
+    return {
+        "shell": "pynq",
+        "control_budget": 9,
+        "memory_ports": 0,
+        "clk2x": False,
+        "fixed": None,
+        **budgets,
+    }
 
 
 IP: Mapping[str, object] = {
@@ -100,6 +107,7 @@ IP: Mapping[str, object] = {
     "control_budget": None,
     "memory_ports": None,
     "clk2x": True,
+    "fixed": None,
 }
 """The ``ip`` shell's row: no bound, the doubled clock supplied."""
 
@@ -216,6 +224,7 @@ def test_the_shell_member_is_no_kernel_or_channel() -> None:
         "shell-control_budget",
         "shell-memory_ports",
         "shell-clk2x",
+        "shell-fixed",
     }
     bare = kernels(Presenting, Pumping, shell=None)
     assert bare.shell is None and names.shell == SHELL and bare.names.shell is None

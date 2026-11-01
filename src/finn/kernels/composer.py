@@ -70,14 +70,8 @@ that resolve them, it reads refused, the findings of what reads the refused side
 guard reading a refused input) before ``channel-users``. The graph layer never declares
 one: only a declaration by hand can.
 
-**In a shell**: a declaration that states its shell's row (``DataflowCoreDeclaration.shell``,
-the row's facts by name) composes one member more, ``shell`` (``finn.kernels.budgets``):
-the row's facts, each a root Param (``shell-control_budget``), and each contributor's
-derived value bound to its Param (the control buses a kernel presents, its own and its
-members', where it may present one, its memory ports and doubled clock, a boundary
-channel's movers, a valued channel's doubled clock), as a channel's side is
-bound to its kernel's port, and the shell's budgets as its rules. It is in none of the
-kernels or channels (``Names.members``), and is reached by its own name (``Names.shell``).
+**In a shell** the core is a member of the shell's design space (``finn.kernels.shell``),
+which places its movers and its budgets beside it: a core's class is the same in any shell.
 
 **Names** (``finn.kernels.dataflow_core.Names``): a member's name is its graph name with
 ``\\W`` as ``_`` (``member_name``). Refused, each finding naming the graph name: two graph
@@ -85,10 +79,11 @@ names that meet one member name (``name-shared``), a name that is no ASCII name 
 substituted (``name-invalid``: ``\\W`` keeps non-ASCII letters), a name the engine reserves
 (``name-reserved``: ``finn.core.space.RESERVED_NAMES``, and ``__`` names), a name the core's
 class declares (``name-reserved``: ``netlist``, ``resources``, ``names``, ...), and the shell
-member's (``name-reserved``: ``shell``, in a shell or not). An edge port's label is a name of
-the class too: refused where it is no ASCII name segment (``name-invalid``) or a name the
-core's class declares (``name-reserved``), and where it meets a member's name or another edge
-port's (``name-shared``), each finding naming the channel. Inside the class a key is a path
+member's (``name-reserved``: ``shell``, the name the shell reads its budgets by). An edge
+port's label is a name of the class too: refused where it is no ASCII name segment
+(``name-invalid``) or a name the core's class declares (``name-reserved``), and where it
+meets a member's name or another edge port's (``name-shared``), each finding naming the
+channel. Inside the class a key is a path
 (``mm0.compute.packed.pe``); at FINN's surface it is the pair (owner, key), the owner a graph
 name: ``Names.path`` and ``Names.pair`` map one to the other, and ``Names.roots`` maps each
 root member (a Param, a side) to (owner, fact).
@@ -99,10 +94,9 @@ model made in the modes asked when it was first compiled, so another mode is ano
 class), each member's name and its class's identity, each kernel's policies' owner, each
 channel's sides as (member, port) or the side's kind (a boundary's with its port), each
 member's facts by name with how each is given (a value, or stated by a member), in order,
-which edge channels are given the port beside them at a frozen neighbour, whether it is in a
-shell, and its instance order. A declaration of the same structure with other facts
-(another shell's row, another module name, another frozen neighbour's port among them) is a
-new design space of the same class, and compiles nothing.
+which edge channels are given the port beside them at a frozen neighbour, and its instance
+order. A declaration of the same structure with other facts (another name, another frozen
+neighbour's port among them) is a new design space of the same class, and compiles nothing.
 The cache is **bounded**: it holds at most ``CLASS_CACHE_BOUND`` classes (16), the least
 recently composed dropped past it (a dropped class lives on while a design space of it
 does, and a later composition of its structure makes it again). Each class holds its
@@ -142,17 +136,8 @@ from finn.core.space import (
     space_formals,
 )
 from finn.core.space.compiler import compile_model
-from finn.kernels.base import Kernel, may_present_bus
-from finn.kernels.budgets import (
-    DOUBLED,
-    INITIATORS,
-    MOVER,
-    PRESENTED,
-    SHELL,
-    ShellBudgets,
-    contributor,
-    shell_members,
-)
+from finn.kernels.base import Kernel
+from finn.kernels.budgets import SHELL
 from finn.kernels.channels import Channel, Neighbours
 from finn.kernels.dataflow_core import FROZEN, DataflowCoreKernel, Names, root_name
 from finn.kernels.policies import Owner, Unstated
@@ -258,10 +243,9 @@ def channel(producer: Port | Side, consumer: Port | Side, **facts: object) -> Ch
 
 class DataflowCoreDeclaration:
     """A core as declared: its ``kernels`` by graph name, each its ``Facts``, in their order (the
-    graph's), its ``channels`` by the name of the tensor each carries, in a shell, the shell's row
-    (``shell``: its facts by name, ``finn.kernels.budgets.ShellBudgets``'s formals; None outside
-    one), its name (``name``, what its refusals are reported under: a node's its own, a test core's
-    its caller's; no fact of its class), the order its module places its members in, by graph name
+    graph's), its ``channels`` by the name of the tensor each carries, its name (``name``, what
+    its refusals are reported under: a node's its own, a test core's its caller's; no fact of
+    its class), the order its module places its members in, by graph name
     (``order``: the kernels, then the channels, as declared, by default; ``Kernel.instance_order``),
     each kernel's policies' owner, by graph name (``owners``: a KernelOp's its op class;
     ``Unstated`` for a kernel not named) and, for a slice, the port beside each edge channel at a
@@ -269,11 +253,10 @@ class DataflowCoreDeclaration:
     neighbour's stored choices). An order that does not name each member once, or an owner or a
     frozen port of no kernel or channel of it, is a ``ValueError``."""
 
-    __slots__ = ("channels", "frozen", "kernels", "name", "order", "owners", "shell")
+    __slots__ = ("channels", "frozen", "kernels", "name", "order", "owners")
 
     kernels: Mapping[str, Facts]
     channels: Mapping[str, ChannelDeclaration]
-    shell: Mapping[str, object] | None
     name: str
     order: tuple[str, ...]
     owners: Mapping[str, Owner]
@@ -283,7 +266,6 @@ class DataflowCoreDeclaration:
         self,
         kernels: Mapping[str, Facts],
         channels: Mapping[str, ChannelDeclaration],
-        shell: Mapping[str, object] | None = None,
         *,
         name: str,
         order: Sequence[str] | None = None,
@@ -292,7 +274,6 @@ class DataflowCoreDeclaration:
     ) -> None:
         self.kernels = MappingProxyType(dict(kernels))
         self.channels = MappingProxyType(dict(channels))
-        self.shell = None if shell is None else MappingProxyType(dict(shell))
         self.name = name
         members = (*self.kernels, *self.channels)
         self.order = members if order is None else tuple(order)
@@ -536,9 +517,8 @@ def _fact_key(value: object) -> Hashable:
 def structure(declared: DataflowCoreDeclaration, ranked: list[str]) -> Hashable:
     """The class's key (the module docstring): the engine's test modes, each kernel's name,
     class, policies' owner and facts given, then each channel's name, sides and facts given,
-    and whether it is given the port beside it at a frozen neighbour, ranked, whether it is
-    in a shell (never its row: the row's values are facts), and its instance order (never
-    its name, nor a frozen neighbour's port: facts)."""
+    and whether it is given the port beside it at a frozen neighbour, ranked, and its
+    instance order (never its name, nor a frozen neighbour's port: facts)."""
     return (
         model_modes(),
         tuple(
@@ -563,7 +543,6 @@ def structure(declared: DataflowCoreDeclaration, ranked: list[str]) -> Hashable:
             )
             for name in ranked
         ),
-        declared.shell is not None,
         declared.order,
     )
 
@@ -689,12 +668,8 @@ def _made(
     # Named by its key's digest (its classes and enums by their module and name): the same
     # structure is the same name in every process.
     digest = hashlib.sha256(repr(key).encode()).hexdigest()[:16]
-    if declared.shell is not None:
-        channels[SHELL] = _shell(declared, ranked, names, nodes, digest, params, annotations, roots)
     members = {owner: names[owner] for owner in (*declared.kernels, *ranked)}
-    table = Names(
-        members, roots, SHELL if declared.shell is not None else None, channels=declared.channels
-    )
+    table = Names(members, roots, channels=declared.channels)
     try:
         return composite(
             f"DataflowCoreKernel_{digest}",
@@ -740,64 +715,6 @@ def _unconnected(error: DefinitionError, names: Mapping[str, str]) -> DataflowCo
     return DataflowCoreRefused(findings)
 
 
-def _shell(
-    declared: DataflowCoreDeclaration,
-    ranked: list[str],
-    names: dict[str, str],
-    nodes: dict[str, Any],
-    digest: str,
-    params: dict[str, object],
-    annotations: dict[str, object],
-    roots: dict[str, Key],
-) -> object:
-    """The shell member of ``declared`` (``finn.kernels.budgets``, the module docstring):
-    its row's facts, each a root Param (added to ``params``, ``annotations`` and
-    ``roots``), and each contributor's Param bound to its member's derived value."""
-    given: dict[str, object] = {}
-    # Every fact of the row, None too: the row's values are facts, never the class's key.
-    for fact in sorted(declared.shell or {}):
-        root = root_name(SHELL, fact)
-        params[root] = given[fact] = _param(ShellBudgets, fact, SHELL, annotations, root)
-        roots[root] = (SHELL, fact)
-    presented: list[str] = []
-    initiators: list[str] = []
-    doubled: list[str] = []
-    for owner, facts in declared.kernels.items():
-        member = names[owner]
-        if may_present_bus(facts.space_type):
-            # Bind the actual placed occurrence, not a borrowed class reference.
-            presented.append(member)
-            given[contributor(member, PRESENTED)] = nodes[member].control_buses
-        for kind, name, found in (
-            (INITIATORS, "memory_initiators", initiators),
-            (DOUBLED, "takes_doubled_clock", doubled),
-        ):
-            if _states(facts.space_type, name):
-                found.append(member)
-                given[contributor(member, kind)] = getattr(nodes[member], name)
-    movers: list[str] = []
-    for owner in ranked:
-        each = declared.channels[owner]
-        member = names[owner]
-        if any(
-            isinstance(side, Side) and side.kind is SideKind.BOUNDARY
-            for side in (each.producer, each.consumer)
-        ):
-            movers.append(member)
-            given[contributor(member, MOVER)] = nodes[member].placed_mover
-        if may_present_bus(Channel):
-            presented.append(member)
-            given[contributor(member, PRESENTED)] = nodes[member].control_buses
-        if "contents" in each.facts:
-            doubled.append(member)
-            given[contributor(member, DOUBLED)] = nodes[member].takes_doubled_clock
-    members, typed = shell_members(
-        presented=presented, movers=movers, initiators=initiators, doubled=doubled
-    )
-    made = composite(f"Shell_{digest}", members, base=ShellBudgets, annotations=typed)
-    return cast(Any, made)(**given)
-
-
 def compose(declared: DataflowCoreDeclaration) -> DataflowCoreKernel:
     """``declared`` as one Space class, kept by its structure, given its facts (the module
     docstring): one design space of it, nothing chosen; a ``DataflowCoreRefused`` naming each
@@ -835,8 +752,6 @@ def compose(declared: DataflowCoreDeclaration) -> DataflowCoreKernel:
                 facts[table.root(owner, fact)] = value
     for owner, beside in declared.frozen.items():
         facts[table.root(owner, FROZEN)] = beside
-    for fact, value in (declared.shell or {}).items():
-        facts[table.root(SHELL, fact)] = value
     point: DataflowCoreKernel = design_space(cast(Any, found)(**facts))
     return point
 

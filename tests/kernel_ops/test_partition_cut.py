@@ -44,10 +44,12 @@ from finn.core.graph.annotations.outputs import (
 from finn.core.graph.annotations.platform import PLATFORM_KEYS, read_target, write_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import CUT_NAME, KERNEL_OPS_DOMAIN, design_digest, partition_body
+from finn.core.space import Available
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import body_row, configured_network, shell_composition
+from finn.custom_op.kernels.shell import configured_network, mover_contracts
 from finn.dataflow.traversal import Loop, Reorder, Traversal, offsets
 from finn.kernels.artifacts.module import module_name
+from finn.kernels.explore import CoreComposition
 from finn.platform.resolve import resolve_target
 from finn.transformation.kernels import (
     InferKernelTensors,
@@ -84,6 +86,18 @@ def facts(model: ModelWrapper) -> tuple[list[dict[str, Any]], list[dict[str, Any
     return boundary_facts(model, point, boundary, "DataflowCore_0")
 
 
+def movers(model: ModelWrapper) -> dict[str, dict[str, Any]]:
+    """The movers the shell of ``model``'s configured network places, by name, each its
+    contract's facts ``iodma`` states."""
+    point, _ = configured_network(model, "DataflowCore_0")
+    found = mover_contracts(point.network)
+    assert isinstance(found, Available), found
+    return {
+        name: {key: getattr(contract, key) for key in iodma("in", 0)}
+        for name, contract in found.value
+    }
+
+
 def port(name: str, tensor: str, dims: list[int], element: str, *counts: int) -> dict[str, Any]:
     lanes, beats, tdata = counts
     bits = int(element[3:])
@@ -96,7 +110,6 @@ def port(name: str, tensor: str, dims: list[int], element: str, *counts: int) ->
         "lanes": lanes,
         "beats": beats,
         "tdata": tdata,
-        "mover": None,
     }
 
 
@@ -131,14 +144,19 @@ PYNQ_Y_MOVER = {**iodma("out", 32), "converter": False, "call_cycles": 13}
 
 
 def test_on_ip_the_facts_are_the_boundary_streams_with_no_mover() -> None:
-    assert facts(chain()) == ([X, W2], [Y])
+    model = chain()
+    assert facts(model) == ([X, W2], [Y])
+    assert movers(model) == {}
 
 
-def test_on_pynq_each_boundary_port_states_its_mover_and_the_channels_element() -> None:
-    assert facts(chain("pynq")) == (
-        [{**PYNQ_X, "mover": iodma("in", 16)}, {**PYNQ_W2, "mover": iodma("in", 64)}],
-        [{**PYNQ_Y, "mover": PYNQ_Y_MOVER}],
-    )
+def test_on_pynq_each_boundary_port_states_the_channels_element_beside_its_mover() -> None:
+    model = chain("pynq")
+    assert facts(model) == ([PYNQ_X, PYNQ_W2], [PYNQ_Y])
+    assert movers(model) == {
+        "in0": iodma("in", 16),
+        "in1": iodma("in", 64),
+        "out0": PYNQ_Y_MOVER,
+    }
 
 
 def test_packaging_reads_the_part_and_period_from_the_target() -> None:
@@ -176,7 +194,7 @@ def test_the_cut_keeps_the_parent_graph_with_one_partition_of_one_name(tmp_path:
         item.key for item in model.graph.metadata_props
     }
     assert [item.domain for item in body.graph.node] == [KERNEL_OPS_DOMAIN] * 3
-    assert facts(body)[0][0]["mover"] == iodma("in", 16)
+    assert movers(body)["in0"] == iodma("in", 16)
 
 
 def test_the_kernel_path_cuts_once(tmp_path: Path) -> None:
@@ -275,7 +293,8 @@ def test_a_tiled_w2_is_regrouped_after_its_mover_by_a_vpc_and_an_input_gen(case:
     assert delivered(row_major, hops) == [int(offset) for offset in offsets(read)]
     assert w2.output_adapting and w2.input_chain == "input_gen_vpc"
     assert w2.adapter.frame_bits == 16 * 3
-    mover = w2.mover_contract
+    assert bound.mover("w2") == "in1"
+    mover = bound.member("in1").contract
     assert (mover.beats, mover.tdata, mover.memory_width, mover.words) == (4, 16, 64, 1)
     choose_memories(model)
     configured, boundary = configured_network(model, "DataflowCore_0")
@@ -344,7 +363,8 @@ def test_a_row_major_w2_on_three_rows_is_replayed_by_an_input_gen_after_its_move
     assert (outer(w2).form.lanes, outer(w2).form.beats) == (4, 4)
     assert w2.input_chain == "input_gen" and w2.adapter.frame_bits == 16 * 3
     assert ("w2", "adapter_ram_style") in bound.chosen()
-    mover = w2.mover_contract
+    assert bound.mover("w2") == "in1"
+    mover = bound.member("in1").contract
     assert (mover.beats, mover.tdata, mover.memory_width, mover.words) == (4, 16, 64, 1)
     choose_memories(model)
     configured_network(model, "DataflowCore_0")
@@ -363,7 +383,7 @@ def test_x_read_twice_on_one_row_is_replayed_by_an_input_gen_after_its_mover() -
     bound = core_in_shell(model, model.graph.node)
     x = bound.member("x")
     assert bound.validity("x").status == "valid"
-    assert (outer(x).form.beats, x.mover_contract.beats) == (2, 2)
+    assert (outer(x).form.beats, bound.member("in0").contract.beats) == (2, 2)
     assert x.input_chain == "input_gen" and x.adapter.frame_bits == 4 * 3
     assert x.input_steps.describe() == "reorder -> markers"
     assert ("x", "adapter_ram_style") in bound.chosen()
@@ -484,6 +504,6 @@ def test_tfc_s_choices_are_created_at_conversion_and_at_the_cut(
     assert not [name for name, held in channels.items() if "adapter" in held]
     assert not [name for name, held in channels.items() if "mover" in held]
     found = bound_in_shell(body, body.graph.node)
-    bound = shell_composition(found.point, body_row(body))
+    bound = CoreComposition(found.point)
     assert found.stale == {}
     assert bound.undecided() == ()

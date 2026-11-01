@@ -59,7 +59,7 @@ from finn.kernels.configure import commit
 from finn.kernels.explore import CoreComposition
 from finn.kernels.laws import AXIS_CLOCKING, Axis
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.movers import IODMA_HLS, IodmaMover, iodma_hls
+from finn.kernels.movers import IODMA_HLS
 from finn.kernels.port_model import InPort, StreamPort
 from finn.kernels.sides import BUILD, ROW_MAJOR, Outside, Side, Steady
 from finn.kernels.transport import AxisBeat, StreamPins
@@ -443,10 +443,10 @@ def regroups_rows_into_tiles(point: Any) -> None:
 
 
 def test_a_channel_s_cycles_wait_on_no_transport_and_count_every_member_but_its_fifo():
-    """A channel counts its members' cycles by kind (``source_cycles``, ``stage_cycles``,
-    ``mover_cycles``), not through the base's ``member_frame_cycles``, which ranges over its
-    transport too: whether it places a FIFO is a choice FIFO sizing reads cycles before, so
-    the base's waits on it, and the channel's do not. With a FIFO placed, the base's names
+    """A channel counts its members' cycles by kind (``source_cycles``, ``stage_cycles``),
+    not through the base's ``member_frame_cycles``, which ranges over its transport too:
+    whether it places a FIFO is a choice FIFO sizing reads cycles before, so the base's
+    waits on it, and the channel's do not. With a FIFO placed, the base's names
     the members the kinds name: the FIFO's cycles are inapplicable, and left out."""
     entering = edge(Side.boundary("s_axis_0", outside=stated(order=ROW_MAJOR)), reader(TILES))
     point = with_adapter_memories(entering)
@@ -504,7 +504,7 @@ def test_an_interior_channel_s_channel_steps_names_no_statement():
     assert inspection.validity(refused).status == "refused"
     assert stated_by(rows, tiles) == stated_by(Side.boundary("s_axis_0"), tiles) == ""
     mover = Outside(IODMA_HLS, ROW_MAJOR, 1)
-    offered = Side.boundary("s_axis_1", (iodma_hls(128),), mover)
+    offered = Side.boundary("s_axis_1", mover)
     assert stated_by(offered, tiles) == (
         "the boundary s_axis_1, stated by the iodma_hls mover (row-major, one pass a frame): "
     )
@@ -569,7 +569,7 @@ def test_every_member_of_a_channel_but_its_transport_counts_by_exactly_one_kind(
     the transport again) and every placed class but the FIFO and its outer ports (stream
     ports, no members counting cycles) is one kind's: a new member, or a kind losing its
     own ``cycles``, fails here by name."""
-    kinds = (MemStreamKernel, StreamAdapter, IodmaMover)
+    kinds = (MemStreamKernel, StreamAdapter)
     for kind in kinds:
         assert "frame_cycles" in vars(kind), kind
     placed: dict[str, list[type]] = {}
@@ -583,7 +583,7 @@ def test_every_member_of_a_channel_but_its_transport_counts_by_exactly_one_kind(
             declaration.space_type, StreamPort
         ):
             placed[name] = [declaration.space_type]
-    assert set(placed) == {"source", "mover", "output_adapter", "transport", "adapter"}
+    assert set(placed) == {"source", "output_adapter", "transport", "adapter"}
     assert placed.pop("transport") == [ChannelFifo]
     for name, classes in placed.items():
         for each in classes:

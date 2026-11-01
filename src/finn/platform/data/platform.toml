@@ -79,7 +79,7 @@ kinds = ["moved"]
 schemas = [1]
 
 [movers.iodma_hls]
-code = "finn.kernels.movers:IodmaMover"
+code = "finn.kernels.iodma:IodmaHls"
 kinds = ["moved"]
 
 # -- shells ------------------------------------------------------------------------------

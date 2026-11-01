@@ -5,9 +5,11 @@ its tensor, each with the guards that decide whether it exists.
 
 A port is a child of its kernel (``finn.kernels.port_model.StreamPort``), its members its
 ``element``, ``stream`` and ``access``; a kernel with children serves its child's port,
-lowered into members of its own (``<p>_side``). For every kernel of a partition, one Space
-as the graph layer binds it in its shell (``core_in_shell``: stage 7's chain of eight kernels,
-and TFC's partition from its cut body), every such member at any depth below it, and each
+lowered into members of its own (``<p>_side``). For every kernel of a partition's core, one
+Space as the graph layer binds it in its shell (``core_in_shell``, its core: stage 7's chain
+of eight kernels, and TFC's partition from its cut body; the shell's movers take their
+edges' streams from the core's channels, as the shell places them, and are no kernel of the
+core), every such member at any depth below it, and each
 of its existence guards (``_scopes.existence``): the reads the engine infers
 (``_reads.infer``: a method's, the model's reads, not its source) and each member's own
 edges (its arguments, guard, binding, selector and cases), followed through every address
@@ -155,7 +157,7 @@ def _checked(whole: type[Space]) -> tuple[dict[str, int], list[str]]:
 
 def test_stage_7s_chain_s_ports_read_only_their_own_kernels() -> None:
     model = chain_model(4)
-    checked, failures = _checked(type(core_in_shell(model, model.graph.node).point))
+    checked, failures = _checked(type(core_in_shell(model, model.graph.node).core))
     assert not failures, "\n".join(failures)
     # Each MatMul's two cores' three ports each, which it exposes (element, stream, access
     # where it binds); each thresholding's three ports.
@@ -166,7 +168,7 @@ def test_stage_7s_chain_s_ports_read_only_their_own_kernels() -> None:
 
 
 def test_tfc_s_partition_s_ports_read_only_their_own_kernels(tfc: ModelWrapper) -> None:
-    checked, failures = _checked(type(core_in_shell(tfc, tfc.graph.node).point))
+    checked, failures = _checked(type(core_in_shell(tfc, tfc.graph.node).core))
     assert not failures, "\n".join(failures)
     assert len(checked) == len(tfc.graph.node)
     assert all(count > 0 for count in checked.values()), checked

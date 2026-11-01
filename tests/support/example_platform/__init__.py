@@ -4,8 +4,8 @@
 """A made-up platform outside FINN (``platform.toml`` beside this file): the code its
 declarations name. Its linker writes the description it is given and a stub image, its
 runtime records the operations it is asked for, and its moved mover kind makes an offer
-as FINN's own does (``finn.kernels.movers.IodmaMover.offer``). Its shell offers FINN's
-own mover kind, the one a core places yet (``finn.kernels.movers.PLACED_KINDS``). A test
+as FINN's own does (``finn.kernels.iodma.IodmaHls.offer``). Its shell offers FINN's
+own mover kind, the one a shell places yet (``finn.kernels.movers.PLACED_KINDS``). A test
 loads the declarations with ``extra=``, or as an installed package's entry point would
 name this package.
 

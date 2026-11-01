@@ -5,8 +5,8 @@
 shell.
 
 ``shell_resources_report`` lists each member of the partition's shell (the partition,
-each mover by its boundary channel, each IP of the static region) and their total, in up
-to three columns:
+each mover by its name in the shell, ``in0``, each IP of the static region) and their
+total, in up to three columns:
 
 - ``model``: the partition's network's own figures
   (``finn.custom_op.kernels.shell.shell_resources``): the partition's kernels from their
@@ -56,7 +56,6 @@ from finn.core.graph.annotations.outputs import OUTPUT_IP, OUTPUT_IP_KEY, OUTPUT
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.partition import partition_body
 from finn.custom_op.kernels.shell import ShellResources, configured_network, shell_resources
-from finn.kernels.composer import member_name
 from finn.kernels.utilization import SHELL_CHARACTERISED
 from finn.platform.capabilities import Resources
 from finn.platform.shells import shell_row
@@ -104,7 +103,7 @@ def _instance_of(name: str, instances: Mapping[str, str]) -> str | None:
 
 def _member_instances(parent: ModelWrapper) -> dict[str, str]:
     """Each member of the shell's block design by its report key (``partition``,
-    ``movers.<channel>``, ``static_region.<ip>``), with its instance name, or the prefix of
+    ``movers.<mover>``, ``static_region.<ip>``), with its instance name, or the prefix of
     a name Vivado chooses (the reset's, after its clock). A shell without an integration
     has the partition alone, by its node's name."""
     node, body, _ = partition_body(parent)
@@ -115,9 +114,7 @@ def _member_instances(parent: ModelWrapper) -> dict[str, str]:
     described = describe(parent)
     (core,) = described.cores
     instances = {"partition": cell(core.name)}
-    instances.update(
-        {f"movers.{member_name(edge.tensor)}": cell(edge.unit) for edge in described.edges}
-    )
+    instances.update({f"movers.{edge.unit}": cell(edge.unit) for edge in described.edges})
     static = row.fixed
     if static is not None:
         instances.update(
@@ -130,7 +127,7 @@ def _member_instances(parent: ModelWrapper) -> dict[str, str]:
 
 
 def _members(split: Mapping[str, Any]) -> dict[str, Any]:
-    """The report's members, ``partition``, ``movers`` by channel and ``static_region`` by
+    """The report's members, ``partition``, ``movers`` by name and ``static_region`` by
     IP, each with its columns (``model``, ``out_of_context``, ``placed``)."""
     return {
         "partition": split["partition"],
@@ -177,7 +174,7 @@ def shell_resources_report(parent: ModelWrapper, reports: Mapping[str, Path]) ->
     node, body, _ = partition_body(parent)
     target = read_target(body)
     point, _ = configured_network(body, node.name)
-    modelled = shell_resources(point.network.point, point.row)
+    modelled = shell_resources(point.network)
     instances = _member_instances(parent)
     columns: dict[str, dict[str, Resources | None]] = {key: {} for key in instances}
     totals: dict[str, Resources | None] = {}

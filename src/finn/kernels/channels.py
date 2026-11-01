@@ -10,8 +10,8 @@ as a fact. Its two sides are facts too, ``producer`` and ``consumer``, each one 
 (``finn.kernels.sides.Side``) of its kind: a kernel's port (an input side or an output
 side, by the port's kind, the ``Stream`` it presents, its label, ``matmul.x``, and on an
 output port its word width: a kernel's port's ``side``), a frozen neighbour's (the same,
-given as a fact), the boundary's (its AXIS port's name, ``s_axis_0``, the movers a shell
-offers on it, and what the outside states of it, ``outside``, its stream never given), or,
+given as a fact), the boundary's (its AXIS port's name, ``s_axis_0``, and what the outside
+states of it, ``outside``, its stream never given), or,
 for a known value, its own source. Each side's role takes its kinds only, the one check
 of a channel's roles (``channel-users``): a producer is an output side, the boundary or
 the channel's source, and the source is the producer of a channel with a known value, and
@@ -52,11 +52,10 @@ presents the stated order, passes and lanes, each left None as that rule present
 the steps between it and the other side are placed as for any side's (a ``vpc`` before the
 transport for a width, an ``input_gen`` after it for a reorder or a replay, its buffer the
 pass), or refused by the channel's own codes, ``channel-steps`` naming what states the side
-(``stated_by``). Where a shell offers movers on it (``offered``: the boundary side's
-``offers``, ``finn.kernels.movers``), the mover states the side (``MoverOffer.states``: each
-pass row-major, one pass a frame), and the channel places its ``mover`` on that free side;
-it binds no RTL in the module and states its contract (``mover_contracts``) for the shell's
-budget check and resources.
+(``stated_by``). Where a shell places a mover beside it (``finn.kernels.shell``), the mover
+states the side (``MoverOffer.states``: each pass row-major, one pass a frame); the mover
+is the shell's member, beside the core, never the channel's, and its pace is read beside
+the channel there (``finn.kernels.fifo_sizing``).
 
 A channel whose tensor has a known value (``contents``) places its ``source`` (a
 memory, ``MemStreamKernel``) as its producer (its producer side the source's,
@@ -69,24 +68,21 @@ and each keeps the label it is placed at (``SOURCE_LABEL``, ``OUTPUT_ADAPTER_LAB
 so the names emitted from them do not depend on its node.
 
 As a kernel with children (a ``Kernel`` binding no module), its members are its
-source, its adapters' stages, its FIFO (``ChannelFifo``) and its mover, in the order the
+source, its adapters' stages and its FIFO (``ChannelFifo``), in the order the
 stream runs through them. It checks its stages by their streams (``staged``, each stage's
 own derived values) and wires them by their ports' stream pins (``stages``, a view). Its answers
 are the base's views over theirs, but for two it states itself, calling the base's: its
 netlist places its source and its output adapter at their labels and adds the hops between
 its own ends (its source, its stages, its outer port; ``netlist``), and a channel of wires
 takes no cycles of its own (0); a boundary whose outside states a pace takes no fewer than
-that pace's span a frame (``frame_cycles``). Its cycles count its source's, its adapters' and
-its mover's, by kind (``source_cycles``, ``stage_cycles``, ``mover_cycles``), not through
-the base's ``member_frame_cycles``: its mover is no kernel (it binds no RTL in the module), and
-its transport, whose cycles are inapplicable, is a choice still open when FIFO sizing reads
-them. Its hops to the ports beside it need those ports'
+that pace's span a frame (``frame_cycles``). Its cycles count its source's and its
+adapters', by kind (``source_cycles``, ``stage_cycles``), not through the base's
+``member_frame_cycles``: its transport, whose cycles are inapplicable, is a choice still
+open when FIFO sizing reads them. Its hops to the ports beside it need those ports'
 stream pins, which the kernel holding it holds: that kernel wires them (``outer_hops``, from
 the ports it reads, ``Neighbours``; the base's ``finn.kernels.base.hops``) and places them
 around the channel's netlist; it reads the module's AXIS buses of its outer ports
-(``physical_pins``). It states its mover's contract
-(``mover_contracts``, one or none: ``placed_mover``, from the mover's own derived
-``contract``). It is no module of its own.
+(``physical_pins``). It is no module of its own.
 """
 
 from __future__ import annotations
@@ -147,10 +143,9 @@ from finn.kernels.base import (
 )
 from finn.kernels.control import presented
 from finn.kernels.fifo import FifoKernel
-from finn.kernels.laws import Axis, TimedPace, TransportKind
+from finn.kernels.laws import Axis, StatedRate, TimedPace, TransportKind
 from finn.kernels.library import leaf_at_root
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.movers import IodmaMover, MoverContract, MoverOffer
 from finn.kernels.policies import Alone, FirstValid, Policy, Required, defaulted, stated
 from finn.kernels.port import stream_pins as pins_of
 from finn.kernels.port_model import InPort, OutPort
@@ -216,14 +211,16 @@ class Neighbours:
     the consuming kernel's, each None where that side is the channel's own, its source (a
     known value) or its boundary; and each port's pace in cycles (its ``timed_pace``: its
     ``pace`` at its own kernel's interval, read where it is read), None where that port
-    follows another (it has no pace) or the side is the channel's own.
+    follows another (it has no pace) or the side is the channel's own. On a boundary side
+    in a shell, the pace of the mover placed there (its ``stated_rate``,
+    ``finn.kernels.shell``), its port none of the channel's holder's.
     The kernel holding it wires the hops to them (``outer_hops``); FIFO sizing reads the paces
     (``finn.kernels.fifo_sizing``)."""
 
     producer: PortPins | None = None
     consumer: PortPins | None = None
-    producer_pace: TimedPace | None = None
-    consumer_pace: TimedPace | None = None
+    producer_pace: TimedPace | StatedRate | None = None
+    consumer_pace: TimedPace | StatedRate | None = None
 
 
 @dataclass(frozen=True)
@@ -445,13 +442,13 @@ class Channel(Kernel):
     (its ``side``: an input side or an output side, by the port's kind, its stream, its
     label, ``matmul.x``, and on an output port its word width), a frozen neighbour's, the
     boundary's (the AXIS port its label names, its outer port there, ``outer_in`` or
-    ``outer_out``, where the ``mover`` sits where the shell offers one: ``offered``), or its
-    source's. A channel with a known value places its ``source`` as its producer; with
-    several sets, the source reads the set indices (``index_tensor``) from the channel whose
-    consumer is its ``set`` port, the one port it exposes (its source's,
-    ``set = source.set``). ``platform`` is the target's: its source, its adapters' stages
-    and its FIFO read it. Its members are declared in the order the stream runs through
-    them, so its netlist places them in that order.
+    ``outer_out``, beside which a shell places its mover), or its source's. A channel with
+    a known value places its ``source`` as its producer; with several sets, the source
+    reads the set indices (``index_tensor``) from the channel whose consumer is its ``set``
+    port, the one port it exposes (its source's, ``set = source.set``). ``platform`` is
+    the target's: its source, its adapters' stages and its FIFO read it. Its members are
+    declared in the order the stream runs through them, so its netlist places them in that
+    order.
     """
 
     id = "finn.channel"
@@ -479,26 +476,6 @@ class Channel(Kernel):
         """Whether the channel carries a known value, which its source drives: without
         ``contents`` its source is not in play."""
         return self.contents is not None
-
-    @derived
-    def offered(self) -> bool:
-        """Whether a shell offers movers on its boundary: a boundary side with offers. Where
-        none is, the mover is never placed."""
-        return any(
-            side.kind is SideKind.BOUNDARY and bool(side.offers)
-            for side in (self.producer, self.consumer)
-        )
-
-    @derived
-    def offers(self) -> tuple[MoverOffer, ...] | Inapplicable:
-        """The movers a shell offers on its boundary side."""
-        if not self.offered:
-            return Inapplicable()
-        return next(
-            side.offers
-            for side in (self.producer, self.consumer)
-            if side.kind is SideKind.BOUNDARY and side.offers
-        )
 
     @derived
     def attached(self) -> tuple[Stream, ...]:
@@ -666,18 +643,6 @@ class Channel(Kernel):
             "channel-mover",
             "a mover sits on a boundary's free side, and both sides have a port",
         )
-
-    mover = IodmaMover(when=offered, offers=offers, side=free_side)
-    mover_contract = view(mover.contract)
-
-    @derived
-    def placed_mover(self) -> tuple[MoverContract, ...]:
-        """Its mover's contract (the mover's own derived value), or none without a
-        mover."""
-        if not self.offered:
-            return ()
-        contract: MoverContract = self.mover.contract
-        return (contract,)
 
     @derived
     def streams(self) -> Streams:
@@ -926,13 +891,14 @@ class Channel(Kernel):
     @view
     def frame_cycles(self) -> int | Rejected:
         """The clock cycles a frame takes through its own members: the slowest's (its
-        source's, its adapters' stages', its mover's), one beat a cycle at best; a FIFO's
+        source's, its adapters' stages'), one beat a cycle at best; a FIFO's
         are inapplicable, and a channel of wires takes none of its own. On a boundary whose
         outside states a pace, no fewer than that pace's span at the edge's beats
         (``finn.kernels.sides.beat_times``): the partition runs no faster than its outside
         supplies an input or takes an output. A side the outside leaves unstated, or
-        states without a pace (a mover's, its contract's), bounds nothing more."""
-        counted = (*self.source_cycles, *self.stage_cycles, *self.mover_cycles)
+        states without a pace (a mover's: the mover's cycles are the shell's), bounds
+        nothing more."""
+        counted = (*self.source_cycles, *self.stage_cycles)
         found = max((item.value for item in counted), default=0)
         paces = [
             side.outside.pace
@@ -946,20 +912,13 @@ class Channel(Kernel):
         beats = edge.sequence.form.beats
         return max(found, *(beat_times(pace, beats).span for pace in paces))
 
-    # What its cycles count, by kind: its source's, its adapters' and its mover's. Not the
-    # base's ``member_frame_cycles``, which ranges over its transport too: a FIFO's cycles are
+    # What its cycles count, by kind: its source's and its adapters'. Not the base's
+    # ``member_frame_cycles``, which ranges over its transport too: a FIFO's cycles are
     # inapplicable, but whether it places one is a choice FIFO sizing reads cycles before,
-    # so the base's would wait on it. Its mover is no kernel; its cycles count here. Each
-    # kind declares ``frame_cycles`` itself (``Members`` reads the declaring class), and must
-    # keep doing so while the channel counts by kind.
+    # so the base's would wait on it. Each kind declares ``frame_cycles`` itself (``Members``
+    # reads the declaring class), and must keep doing so while the channel counts by kind.
     source_cycles = Members(MemStreamKernel.frame_cycles)
     stage_cycles = Members(StreamAdapter.frame_cycles)
-    mover_cycles = Members(IodmaMover.cycles)
-
-    # The boundary channel's mover, as its contract (``MoverContract``): one, or none
-    # without a mover. The shell's budget check counts their AXI-Lite buses, and it sums
-    # their resources and counts their memory ports.
-    mover_contracts = view(placed_mover)
 
 
 # The channel's policies (``finn.kernels.policies``), as a KernelOp states its kernel's:
@@ -977,7 +936,7 @@ class Channel(Kernel):
 #   by the channel's ``adapter_ram_preference``: each by the bits it holds) is first valid
 #   in its ranking;
 # - every other choice of a channel is first valid, in listed order: its transport and its
-#   source's pumped memory. Its source, its output adapter and its mover are placements,
+#   source's pumped memory. Its source and its output adapter are placements,
 #   and its input adapter is picked by its steps (``Channel.input_chain``), no choices.
 Channel.policies = stated(
     "Channel",

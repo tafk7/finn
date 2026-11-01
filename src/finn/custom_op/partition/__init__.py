@@ -22,7 +22,8 @@ from finn.core.graph.partition import body_file
 if TYPE_CHECKING:
     from finn.core.search import Key
     from finn.custom_op.kernels.shell import Configured
-    from finn.kernels.dataflow_core import Bound, DataflowCoreKernel
+    from finn.kernels.dataflow_core import Bound
+    from finn.kernels.shell import ShellKernel
 
 opset_version = 1
 
@@ -52,32 +53,36 @@ class DataflowCore(GenericPartition):
         """Its body, the model of KernelOps its ``model`` attribute names."""
         return ModelWrapper(body_file(self.onnx_node))
 
-    def bound(self) -> DataflowCoreKernel:
-        """Its core's design space, nothing chosen: its body's KernelOps and channels
-        composed in the shell of its target (``shell.core_space``)."""
-        from finn.custom_op.kernels.shell import core_space  # noqa: PLC0415
+    def bound(self) -> ShellKernel:
+        """Its core's design space in its shell, nothing chosen: its body's KernelOps and
+        channels composed in the shell of its target (``shell.shell_space``)."""
+        from finn.custom_op.kernels.shell import shell_space  # noqa: PLC0415
 
-        return core_space(self.body(), self.onnx_node.name)
+        return shell_space(self.body(), self.onnx_node.name)
 
-    def point(self, extra: Mapping[Key, object] | None = None) -> Bound:
-        """Its core's design space with its body's stored choices bound (``shell.core_point``:
+    def point(self, extra: Mapping[Key, object] | None = None) -> Bound[ShellKernel]:
+        """Its core's design space in its shell with its body's stored choices bound
+        (``shell.shell_point``:
         a value outside its domain dropped as stale, with why, ``Bound.stale``), and
         ``extra``, by ``(member, key)``, set on it as one change; a change refused is a
         ``ValueError`` naming each refused value or rule
         (``finn.kernels.explore.CoreComposition.with_choices``)."""
-        from finn.custom_op.kernels.shell import core_point  # noqa: PLC0415
+        from finn.custom_op.kernels.shell import shell_point  # noqa: PLC0415
         from finn.kernels.dataflow_core import Bound  # noqa: PLC0415
         from finn.kernels.explore import CoreComposition  # noqa: PLC0415
+        from finn.kernels.shell import ShellKernel  # noqa: PLC0415
 
-        found = core_point(self.body(), self.onnx_node.name)
+        found = shell_point(self.body(), self.onnx_node.name)
         if not extra:
             return found
-        changed = CoreComposition(found.point).with_choices(extra)
-        return Bound(changed.point, found.dropped, found.stale)
+        changed = CoreComposition(found.point).with_choices(extra).point
+        assert isinstance(changed, ShellKernel)
+        return Bound(changed, found.dropped, found.stale)
 
-    def persist(self, point: DataflowCoreKernel) -> None:
-        """Write ``point``'s choices, a design space of its core, onto its body's KernelOps
-        and tensors, each owner's whole (``network.persist``), and save its body."""
+    def persist(self, point: ShellKernel) -> None:
+        """Write ``point``'s choices, a design space of its core in its shell, onto its
+        body's KernelOps and tensors, each owner's whole (``network.persist``), and save its
+        body."""
         from finn.custom_op.kernels.network import persist  # noqa: PLC0415
 
         body = self.body()

@@ -1,16 +1,15 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The movers a shell offers on its boundary channels: where a partition's stream meets memory.
+"""The movers a shell offers on a core's edge: where a partition's stream meets memory.
 
-A boundary channel of a partition's network has a side without a port, its **free
-side**: the AXIS port the network presents (``Channel.free_side``). A shell with movers
-offers each such channel the movers it can place there (``MoverOffer``, each of a mover
-kind a platform declaration names, ``finn.platform.declarations``), and the channel
-places its ``mover`` there where the shell offers one, as it places its ``source`` where
-its tensor has a value: no choice. A mover binds no RTL in the partition's module: its
-pins stay its own, and the shell integrates the mover beside the IP from its facts
-(``MoverContract``).
+A boundary channel of a partition's core has a side without a port, its **free side**: the
+AXIS port the core presents (``Channel.free_side``). A shell with movers offers each such
+port the mover it places there (``MoverOffer``, of a mover kind a platform declaration
+names, ``finn.platform.declarations``), and the shell places it beside the core as a
+member of its own (``finn.kernels.shell``), a kernel (``finn.kernels.iodma``): no choice.
+A mover binds no RTL in the core's module: it is a unit of its own, which the shell
+integrates beside the core's IP, and its facts are its contract (``MoverContract``).
 
 **``IODMA_hls``** (kind ``iodma_hls``), the Zynq shell's memory mover, modelled at its
 stream side, the free side's contract:
@@ -35,33 +34,30 @@ stream side, the free side's contract:
   and stream when the two widths differ;
 - its cycles a frame are ``max(beats, words) + ceil(c / frames a call)``: a beat or a
   word a cycle, and each call's constant ``c``, which the offer states with and
-  without a converter (``iodma_hls``: measured in XSim against a memory model, 4
+  without a converter (``iodma_hls``: measured in simulation against a memory model, 4
   cycles a call with a converter, 13 without; the call ends two converter words
   before the stream runs dry, or once its last word left);
 - it presents one AXI-Lite bus to the shell's processor (its ``s_axi_control``),
   which the shell's budget check counts against its budget beside the
-  partition's (``Channel.mover_contracts``, ``MoverContract.control_buses``);
+  partition's (``MoverContract.control_buses``);
 - the memory latency ``L`` is **excluded**: the shell does not know it, and each call
   adds it (``MEMORY_LATENCY``, what the exploration report states). A frame a call is
   the bound that holds for any batch, since the batch is the driver's runtime argument;
 - its beat times over a frame (``MoverContract.times``), one a cycle, or once the memory
   word that completes the beat arrived where the memory is the narrower; FIFO sizing
-  reads them, and its cycles as its span, as a kernel's port's pace
-  (``finn.kernels.fifo_sizing.sides``);
+  reads them, and its cycles as its span, as a kernel's port's pace, beside the boundary
+  channel in its shell (``finn.kernels.fifo_sizing.sides``);
 - it initiates one AXI memory port into the shell's memory interconnect
   (``MoverContract.memory_ports``), which the shell's static region scales by;
 - its resources (``iodma_hls_resources``), by its widths: its memory port
   (``intfWidth``), its stream (``streamWidth``, the free side's ``tdata``) and the
   converters between them (``converter_kind``: none where the two are equal, one
   where either divides the other, two through their least common multiple
-  otherwise). They are the shell's, not the channel's (``Channel.resource_use``):
-  out of context (``SHELL_CHARACTERISED``), which overstates the placed mover.
+  otherwise). They are the shell's, not the core's: out of context
+  (``SHELL_CHARACTERISED``), which overstates the placed mover.
 
-A boundary channel states its mover's contract as its member ``mover_contracts`` (one, or
-none without a mover), which the shell sums with its static region
-(``finn.custom_op.kernels.shell``). The mover states its cycles a frame as its member
-``cycles``, the channel's member that it is: the channel's are at least its mover's
-(``Channel.mover_cycles``).
+The mover kernel states its contract (``IodmaKernel.contract``), its cycles a frame and its
+resources as the shell's member, beside the core's, whose cycles no longer count it.
 A mover is not a channel's stream (``finn.dataflow.streams``: the two beat sequences a
 channel's producer and consumer present, ``Stream``, ``Streams``).
 """
@@ -70,32 +66,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import ceil, gcd, lcm
-from typing import TYPE_CHECKING
 
-from finn.core.space import (
-    Param,
-    Rejected,
-    Space,
-    constraint,
-    derived,
-    reject,
-    view,
-)
 from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.sides import ROW_MAJOR, Outside
 from finn.kernels.transport import StreamPins
 from finn.kernels.utilization import Fit
 from finn.platform.capabilities import Resources
-
-if TYPE_CHECKING:
-    from finn.kernels.sides import Outside
 
 IODMA_HLS = "iodma_hls"
 """The kind of the ``IODMA_hls`` mover."""
 
 PLACED_KINDS = (IODMA_HLS,)
-"""The mover kinds a boundary channel places (``IodmaMover``): FINN's own alone, until a
-mover kind is placed by its declared code."""
+"""The mover kinds a shell places (``finn.kernels.iodma``): FINN's own alone, until a mover
+kind is placed by its declared code."""
 
 MEMORY_LATENCY = "memory latency: unmeasured; each call adds L"
 """What a mover's cycles leave out, as the exploration report states it."""
@@ -191,11 +175,7 @@ class MoverOffer:
         row-major, one pass a frame, as the host's buffer holds the tensor. It states no
         word: the edge's lanes stay the inside's, and the mover, generated for that word,
         converts to its memory port itself. It states no pace either: its pace is its
-        contract at the edge's word (``IodmaMover.contract``)."""
-        # The sides import this module (a side's offers, the movers' kinds): the statement
-        # is made from them when it is asked for.
-        from finn.kernels.sides import ROW_MAJOR, Outside  # noqa: PLC0415
-
+        contract at the edge's word (``finn.kernels.iodma.IodmaKernel.contract``)."""
         return Outside(self.kind, order=ROW_MAJOR, passes=1)
 
 
@@ -298,46 +278,6 @@ def iodma_contract(offer: MoverOffer, side: StreamPins) -> MoverContract:
     )
 
 
-class IodmaMover(Space):
-    """The ``IODMA_hls`` mover on a free side (``side``), where ``offers`` offer it. It is
-    no kernel (it binds no RTL in the partition's module), but its ``cycles`` count in its
-    channel's (``Channel.mover_cycles``). The side is the one it states
-    (``MoverOffer.states``: row-major, one pass a frame), so it states no rule of its own
-    on it. It is the code of the ``iodma_hls`` mover kind's declaration, which makes its
-    offer at a shell's width cap (``offer``)."""
-
-    offers: tuple[MoverOffer, ...] = Param()
-    side: StreamPins = Param()
-
-    @staticmethod
-    def offer(width_cap: int) -> MoverOffer:
-        """Its offer on a shell whose memory port is at most ``width_cap`` bits wide
-        (``iodma_hls``)."""
-        return iodma_hls(width_cap)
-
-    @constraint
-    def offered(self) -> bool | Rejected:
-        """The shell offers this kind."""
-        if not any(offer.kind == IODMA_HLS for offer in self.offers):
-            return reject("mover-not-offered", f"the shell offers no {IODMA_HLS} mover here")
-        return True
-
-    @derived
-    def contract(self) -> MoverContract:
-        """Its facts on ``side``, sized by its offer (``iodma_contract``)."""
-        (offer,) = (offer for offer in self.offers if offer.kind == IODMA_HLS)
-        return iodma_contract(offer, self.side)
-
-    @derived
-    def frame_cycles(self) -> int:
-        """Its cycles a frame (``MoverContract.cycles``)."""
-        contract: MoverContract = self.contract
-        return contract.cycles
-
-    # Cost, not validity: read apart from its constraints.
-    cycles = view(frame_cycles)
-
-
 __all__ = [
     "DIVISIBLE",
     "IODMA_HLS",
@@ -345,7 +285,6 @@ __all__ = [
     "MEMORY_LATENCY",
     "NO_CONVERTER",
     "PLACED_KINDS",
-    "IodmaMover",
     "MoverContract",
     "MoverOffer",
     "converter_kind",

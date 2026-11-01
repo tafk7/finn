@@ -9,7 +9,7 @@ model of KernelOps the build's cut made (``CutKernelPartition``; the build's
 ``step_explore`` opens it through the parent graph's node, ``partition_body``, and saves it
 in its file), so which KernelOps go together is the cut's alone: a model holding any other
 node is refused. It binds the body's core in its shell, named by the partition
-node's name (``finn.custom_op.kernels.shell.core_point``: their kernels, the channels
+node's name (``finn.custom_op.kernels.shell.shell_point``: their kernels, the channels
 between them and the channels on its boundary, members named as the graph, ``MatMul_0``;
 the nodes' and the channels' saved choices set as it binds, a stale one dropped with why),
 which its ``Seam`` (``finn.kernels.explore``) explores, each choice keyed
@@ -92,10 +92,11 @@ limitation (``resources-over-part``, in the result's and the resources' ``findin
 naming the binding resource, whichever strategy chose it: the report ranks and states
 it, and refuses nothing.
 
-The shell is the model's target's (``finn.custom_op.kernels.shell``): its row offers the
-boundary channels its movers (none: the ``ip`` shell). Where a channel has a mover, the
-report has its row (``movers``: its facts and its cycles a frame, a frame a call and 16) and
-says what the cycles leave out (``memory_latency``: unmeasured, each call adds it).
+The shell is the model's target's (``finn.custom_op.kernels.shell``): its row offers a mover
+on each edge of the core (none: the ``ip`` shell), which the shell places. Where it places
+movers, the report has each one's row, by its name in the shell (``movers``: its facts and
+its cycles a frame, a frame a call and 16) and says what the cycles leave out
+(``memory_latency``: unmeasured, each call adds it).
 """
 
 from __future__ import annotations
@@ -118,8 +119,8 @@ from finn.custom_op.kernels.network import persist, stale_text
 from finn.custom_op.kernels.shell import (
     ShellResources,
     body_row,
-    core_point,
-    shell_composition,
+    mover_contracts,
+    shell_point,
     shell_resources,
 )
 from finn.kernels.dataflow_core import Bound
@@ -136,8 +137,9 @@ from finn.kernels.explore import (
     TargetThroughput,
 )
 from finn.kernels.fifo import FifoKernel
-from finn.kernels.movers import MEMORY_LATENCY, MoverContract
+from finn.kernels.movers import MEMORY_LATENCY
 from finn.kernels.policies import Required
+from finn.kernels.shell import ShellKernel
 from finn.kernels.utilization import SHELL_CHARACTERISED, binding, over, total
 from finn.platform.capabilities import Platform
 from finn.platform.catalog import part_report
@@ -383,11 +385,14 @@ def _placed(seam: Seam, network: CoreComposition) -> dict[Key, object]:
     return found
 
 
-def _mover_rows(network: CoreComposition, movers: Sequence[str]) -> dict[str, dict[str, object]]:
-    """Each mover's facts and cycles a frame, by its boundary channel."""
+def _mover_rows(network: CoreComposition) -> dict[str, dict[str, object]]:
+    """Each mover's facts and cycles a frame, by its name in the shell; none where one
+    states none."""
+    contracts = mover_contracts(network)
+    if not isinstance(contracts, Available):
+        return {}
     rows: dict[str, dict[str, object]] = {}
-    for name in movers:
-        contract: MoverContract = network.member(name).mover_contract
+    for name, contract in contracts.value:
         rows[name] = {
             "kind": contract.kind,
             "direction": contract.direction,
@@ -411,7 +416,7 @@ def _mover_rows(network: CoreComposition, movers: Sequence[str]) -> dict[str, di
 
 
 def _hold_refused(
-    error: ExploreError, strategy: KernelExplorer, bound: Bound
+    error: ExploreError, strategy: KernelExplorer, bound: Bound[ShellKernel]
 ) -> ExploreError | None:
     """``error``, a hold's ``pin-refused``, as the entry that states a held key the bind
     dropped as stale refuses it: the bind's findings for those keys (``domain-membership``,
@@ -509,9 +514,9 @@ def explore_kernel_choices(
         )
     started = time.perf_counter()
     row = body_row(model)
-    bound = core_point(model, name)
+    bound = shell_point(model, name)
     seam = Seam(read_target(model).platform)
-    network = shell_composition(bound.point, row)
+    network = CoreComposition(bound.point)
     # Who set each value: the body (what it stated), or the entry that changed it.
     set_by = dict.fromkeys(network.chosen(), "saved")
     entries: list[dict[str, Any]] = []
@@ -583,14 +588,14 @@ def explore_kernel_choices(
     cost = seam.cost(network)
     resources, over_part = _resources_report(
         cost,
-        shell_resources(network.point, row),
+        shell_resources(network),
         seam.platform,
         part_report(read_target(model).part),
         row.caveat,
     )
     movers: dict[str, object] = {}
     if network.movers and not cost.waiting and not cost.refused:
-        movers = {"movers": _mover_rows(network, network.movers), "memory_latency": MEMORY_LATENCY}
+        movers = {"movers": _mover_rows(network), "memory_latency": MEMORY_LATENCY}
     final = seam.chosen(network)
     explored = {
         "strategies": entries,
@@ -658,7 +663,7 @@ def shell_bottleneck(model: ModelWrapper, name: str) -> Bottleneck | None:
     """The slowest members of a partition model of KernelOps' core in its shell, named
     ``name`` (the partition node's), movers included, and their cycles a frame,
     its saved choices replayed (None where a member's cycles wait on a choice left open)."""
-    core = shell_composition(core_point(model, name).point, body_row(model))
+    core = CoreComposition(shell_point(model, name).point)
     return Seam(read_target(model).platform).cost(core).bottleneck
 
 

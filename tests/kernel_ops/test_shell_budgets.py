@@ -50,7 +50,7 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import CUT_NAME, search_record
 from finn.core.search import ExploreError, Refused
 from finn.core.space import Available, Rejected, inspection
-from finn.custom_op.kernels.shell import configured_network, row_facts, row_movers
+from finn.custom_op.kernels.shell import configured_network, mover_contracts, row_facts, row_offer
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import (
     Bus,
@@ -70,6 +70,7 @@ from finn.kernels.artifacts.top import module_abi
 from finn.kernels.budgets import SHELL, counts
 from finn.kernels.composer import Facts, Port, channel, member_name
 from finn.kernels.explore import CoreComposition, Seam, SizeFifos
+from finn.kernels.movers import MoverContract
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingKernel
 from finn.kernels.values.semantics import IntegerTensorValue
@@ -97,19 +98,15 @@ def thresholdings(count: int, row: ShellRow, presenting: int | None = None) -> C
     # Each channel is on the ports of the thresholdings on either side of it; the first's
     # and the last's other side the boundary, offered the row's movers and stated by them.
     names = ["x", *(f"c{index}" for index in range(count - 1)), "y"]
-    movers = row_movers(row)
-    stated = movers[0].states() if movers else None
+    offer = row_offer(row)
+    stated = offer.states() if offer is not None else None
     channels: dict[str, Any] = {}
     for index, name in enumerate(names):
         producer = (
-            Port(f"t{index - 1}", "output")
-            if index > 0
-            else Side.boundary("s_axis_0", movers, stated)
+            Port(f"t{index - 1}", "output") if index > 0 else Side.boundary("s_axis_0", stated)
         )
         consumer = (
-            Port(f"t{index}", "input")
-            if index < count
-            else Side.boundary("m_axis_0", movers, stated)
+            Port(f"t{index}", "input") if index < count else Side.boundary("m_axis_0", stated)
         )
         channels[name] = channel(producer, consumer, tensor=TENSOR, platform=platform)
     members: dict[str, Any] = {name: channels[name] for name in names[:-1]}
@@ -132,14 +129,16 @@ def thresholdings(count: int, row: ShellRow, presenting: int | None = None) -> C
         held = {"pe": 1, "deep_pipeline": False, "ram_style": "auto", "ultra_stages": 0}
         held["use_axilite"] = index < presented
         choices |= {f"t{index}.{key}": value for key, value in held.items()}
-    point = by_hand(members, shell=row_facts(row))
+    point = by_hand(members, shell=row_facts(row), offer=offer)
     point = with_direct_transports(choose(point, choices))
     return with_channel_defaults(with_adapter_memories(point))
 
 
-def movers_of(point: CoreComposition) -> tuple[Any, ...]:
-    """The movers the shell places on the network's boundary channels."""
-    return tuple(point.member("x").placed_mover) + tuple(point.member("y").placed_mover)
+def movers_of(point: CoreComposition) -> tuple[MoverContract, ...]:
+    """The contracts of the movers the shell places on the network's edges."""
+    found = mover_contracts(point)
+    assert isinstance(found, Available), found
+    return tuple(contract for _, contract in found.value)
 
 
 def netlist_counts(point: CoreComposition) -> tuple[int, int, bool]:
@@ -188,7 +187,7 @@ def test_seven_and_two_movers_fill_the_budget_and_the_counts_agree() -> None:
 def test_the_ip_shell_takes_the_same_partition_presenting_every_bus() -> None:
     point = thresholdings(8, IP_ROW)
     assert point.validity(SHELL).status == "valid"
-    assert tuple(point.member("x").placed_mover) == ()
+    assert point.movers == ()
     assert (
         counts(point.member(SHELL)) == Available(netlist_counts(point)) == Available((8, 0, False))
     )
@@ -336,12 +335,14 @@ def test_emission_checks_the_netlists_count_against_the_rules() -> None:
             configured_network(model, "chain")
 
 
-def test_one_class_serves_every_shells_row_and_a_bare_network_has_no_shell() -> None:
-    """The rows' values are facts of the partition: the ip row and two boards' pynq rows
-    compose one class (its key holds the structure and whether it is in a shell); a
-    network bound outside a shell (``network``) has no shell member, another class."""
+def test_one_class_serves_every_shells_row_and_one_core_class_every_shell() -> None:
+    """The rows' values are facts of the shell: two boards' pynq rows compose one class (its
+    key holds the core's structure and whether movers are placed), the ip row, placing
+    none, another; the core's class is the same in each and outside a shell (``network``),
+    where there is no shell member."""
     model = chain_model(4)
-    classes = set()
+    classes = []
+    cores = set()
     for target in (
         resolve_target(part="xczu3eg-sbva484-1-e", period_ns=5.0),
         ULTRA96,
@@ -350,11 +351,13 @@ def test_one_class_serves_every_shells_row_and_a_bare_network_has_no_shell() -> 
         write_target(model, target)
         bound = core_in_shell(model, model.graph.node)
         assert bound.shell == SHELL and SHELL not in bound.members
-        classes.add(type(bound.point))
-    assert len(classes) == 1
+        classes.append(type(bound.point))
+        cores.add(type(bound.core))
+    ip, *pynq = classes
+    assert len(set(pynq)) == 1 and ip not in pynq
     bare = composition(model, model.graph.node)
     assert bare.shell is None and SHELL not in bare.names.owners
-    assert type(bare.point) not in classes
+    assert cores == {type(bare.point)}
 
 
 def test_the_counts_are_the_modules_pins() -> None:

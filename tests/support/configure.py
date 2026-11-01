@@ -6,7 +6,7 @@
 ``composition(model)``: the core of ``model``'s KernelOps, its stored choices bound, read
 by key. ``bound_in_shell(model)`` and ``core_in_shell(model)``: the core of ``model``'s KernelOps
 in the shell of its target, as exploration binds a partition's body
-(``finn.custom_op.kernels.shell.core_point``, ``shell_composition``), its module named as
+(``finn.custom_op.kernels.shell.shell_point``, ``finn.kernels.shell``), its module named as
 the cut names its node (``CUT_NAME``) unless a test names it: its stored choices bound
 (``Bound``), or its composition, as the seam reads it.
 
@@ -51,10 +51,12 @@ from finn.core.graph.partition import CUT_NAME, KERNEL_OPS_DOMAIN
 from finn.core.reporting.findings import Refusal
 from finn.core.search import Accepted, Key, Refused
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.network import network, persist
-from finn.custom_op.kernels.shell import body_row, row_facts, row_movers, shell_composition
+from finn.custom_op.kernels.network import bound_from, network, persist
+from finn.custom_op.kernels.shell import body_row, row_facts, row_offer
+from finn.kernels.composer import DataflowCoreDeclaration
 from finn.kernels.dataflow_core import Bound
 from finn.kernels.explore import CoreComposition, Seam
+from finn.kernels.shell import ShellKernel, shell
 
 
 def composition(
@@ -69,22 +71,27 @@ def composition(
 
 def bound_in_shell(
     model: ModelWrapper, nodes: Iterable[NodeProto] | None = None, *, name: str = CUT_NAME
-) -> Bound:
+) -> Bound[ShellKernel]:
     """The core of ``nodes`` (every node of ``model`` where None), KernelOp nodes of
-    ``model``, in the shell of its target (``finn.custom_op.kernels.shell.core_point``:
-    its row offers its movers, its budgets the core's rules), its module named ``name``,
-    its stored choices bound."""
+    ``model``, in the shell of its target (``finn.custom_op.kernels.shell.shell_point``:
+    its row offers the mover on each edge and states its budgets), its module named
+    ``name``, its stored choices bound."""
     row = body_row(model)
+    offer = row_offer(row)
+    facts = row_facts(row)
     selected = model.graph.node if nodes is None else nodes
-    return network(model, selected, name=name, movers=row_movers(row), shell=row_facts(row))
+
+    def made(declared: DataflowCoreDeclaration) -> ShellKernel:
+        return shell(declared, row=facts, offer=offer)
+
+    return bound_from(model, selected, name=name, made=made, offer=offer)
 
 
 def core_in_shell(
     model: ModelWrapper, nodes: Iterable[NodeProto] | None = None, *, name: str = CUT_NAME
 ) -> CoreComposition:
-    """``bound_in_shell``'s design space, read as the seam reads it in its shell
-    (``shell_composition``: what it uses is the shell's)."""
-    return shell_composition(bound_in_shell(model, nodes, name=name).point, body_row(model))
+    """``bound_in_shell``'s design space, read as the seam reads it."""
+    return CoreComposition(bound_in_shell(model, nodes, name=name).point)
 
 
 def configured(model: ModelWrapper, choices: Mapping[str, Mapping[str, object]]) -> ModelWrapper:

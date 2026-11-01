@@ -36,8 +36,8 @@ from finn.core.space.compiler import compile_model
 from finn.core.space.occurrence import ask, held
 from finn.core.space.results import Available, QueryResult, Unresolved
 from finn.custom_op.kernels.network import declaration
-from finn.custom_op.kernels.shell import row_movers
-from finn.kernels.budgets import _ClockRequirement, _DoubledAny, _MoverSum, _PresentedSum, _Sum
+from finn.custom_op.kernels.shell import row_offer
+from finn.kernels.budgets import _ClockRequirement, _DoubledAny, _PresentedSum, _Sum
 from finn.kernels.channels import Channel
 from finn.kernels.composer import clear_classes, compose
 from finn.kernels.configure import commit
@@ -109,7 +109,7 @@ PORT_TYPES: dict[type[Space], dict[str, type[StreamPort]]] = {
     MemStreamKernel: {"set": InPort, "output": OutPort},
     Channel: {"outer_in": InPort, "outer_out": OutPort},
 }
-GROUP_TYPES = {_Sum, _PresentedSum, _MoverSum, _DoubledAny, _ClockRequirement, ControlModel}
+GROUP_TYPES = {_Sum, _PresentedSum, _DoubledAny, _ClockRequirement, ControlModel}
 
 
 def _group_scopes(records: Iterable[ScopeRecord]) -> set[ScopeRecord]:
@@ -172,12 +172,15 @@ def test_stage_7s_chain_of_eight_kernels_reads_alike_in_any_order_its_scopes_are
     assert {kind for kind in templates if issubclass(kind, StreamPort)} == {InPort, OutPort}
     records = compile_model(whole).scopes.ordered()
     ports = _assert_native_scope_ownership(records)
-    # All original226 real non-port scopes remain; the assembled native Ports and
-    # Control/budget Group namespaces are accounted separately, with ownership checked. The
-    # ports count each channel's two outer ports, placed or not (26 of the 296).
-    assert len(_real_nonport_scopes(records)) == 226
+    # All original real non-port scopes remain, 214: the core's 212 (each channel's mover
+    # placement gone, 13), the core's member itself and the shell member, beside it; the
+    # assembled native Ports and Control/budget Group namespaces are accounted separately,
+    # with ownership checked. The ports count each channel's two outer ports, placed or not
+    # (26 of the 296). The ip shell places no mover: no sum of movers' buses (2 fewer groups
+    # than when its two boundary channels each counted the movers they placed).
+    assert len(_real_nonport_scopes(records)) == 214
     assert len(ports) == 296
-    assert len(_group_scopes(records)) == 55
+    assert len(_group_scopes(records)) == 53
 
 
 def _through_a_node_alias(key: str, reads: list[str]) -> bool:
@@ -233,15 +236,15 @@ def test_stage_7s_chain_of_eight_kernels_answers_as_the_line() -> None:
 
 def fresh_chain() -> tuple[DataflowCoreKernel, dict[str, object]]:
     """Stage 7's chain at 8 kernels composed as one Space with a model of its own (the
-    graph layer's declaration, in its shell, composed), and its stored values by path:
-    the graph layer binds a partition of the same class as it reads the stored values
-    (``finn.custom_op.kernels.shell.core_point``), so the composer's classes are dropped
-    before it is composed."""
+    graph layer's declaration, stated by its shell's movers, composed), and its stored
+    values by path: the graph layer binds a partition's core of the same class as it reads
+    the stored values (``finn.custom_op.kernels.shell.shell_point``), so the composer's
+    classes are dropped before it is composed."""
     model = chain_model(4)
     nodes = list(model.graph.node)
     target = read_target(model)
     row = shell_row(target.shell, target.board)
-    declared = declaration(model, nodes, name=CUT_NAME, movers=row_movers(row))
+    declared = declaration(model, nodes, name=CUT_NAME, offer=row_offer(row))
     stored = core_in_shell(model, nodes).chosen()
     clear_classes()
     composed = compose(declared)
@@ -268,7 +271,7 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
     # Keep the original real-owner ratio, and bound unevaluated Port/Group allocation
     # separately before any whole-model address walk can make additional records.
     made = tuple(scopes.registry.records.values())
-    assert len(_real_nonport_scopes(made)) < 225 // 8
+    assert len(_real_nonport_scopes(made)) < 212 // 8
     ports = _assert_native_scope_ownership(made)
     assert {record.name for record in ports} == {
         f"MatMul_0.compute.{core}.{port}"
@@ -349,9 +352,13 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
 # their port presents (``outer_sequence``, ``outer_transport``, +4); and the two outer ports
 # placed, ``x.outer_in`` and ``y.outer_out``, their own members, as a stage's port does, each
 # reading ``follows`` as well (+31, +11 constants).
-NONPORT_EVALUATED = ((1060, 42), (1108, 42))
+# Then (1060, 42) and (1108, 42), and the totals (1727, 305) and (1895, 351), became these
+# when the movers left the channels for the shell (``finn.kernels.shell``): each channel no
+# longer evaluates the movers it is offered nor the guard of the mover it places (-2 each of
+# the 13 channels).
+NONPORT_EVALUATED = ((1034, 42), (1082, 42))
 PORT_EVALUATED = ((667, 263), (787, 309))
-EVALUATED = ((1727, 305), (1895, 351))
+EVALUATED = ((1701, 305), (1869, 351))
 
 
 def _assert_evaluated(scopes: Scopes, stage: int) -> None:
@@ -408,9 +415,9 @@ def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
     made_ports = _assert_native_scope_ownership(scopes.registry.records.values())
     in_play = set(scopes.in_play())
     active_ports = _port_scopes(in_play)
-    assert len(_real_nonport_scopes(scopes.registry.records.values())) == 225
+    assert len(_real_nonport_scopes(scopes.registry.records.values())) == 212
     assert len(_group_scopes(scopes.registry.records.values())) == 17
-    assert counted["scopes made"] == 225 + 296 + 17
+    assert counted["scopes made"] == 212 + 296 + 17
     assert counted["scopes in play"] - len(active_ports) == 38
     assert len(made_ports) == 296 and len(active_ports) == 42
     _assert_evaluated(scopes, 0)
@@ -452,9 +459,9 @@ def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
     assert len(middle) == 6 and "MatMul_2.depthwise_datapath" not in middle
     inspection.viable(committed, [handles[key] for key in middle])
     counted = scopes.counts()
-    assert len(_real_nonport_scopes(scopes.registry.records.values())) == 225
+    assert len(_real_nonport_scopes(scopes.registry.records.values())) == 212
     assert len(_group_scopes(scopes.registry.records.values())) == 17
-    assert counted["scopes made"] == 225 + 296 + 17
+    assert counted["scopes made"] == 212 + 296 + 17
     assert counted["scopes in play"] - len(_port_scopes(scopes.in_play())) == 43
     assert len(_port_scopes(scopes.in_play())) == 49
     _assert_evaluated(scopes, 1)
@@ -481,9 +488,9 @@ def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
     report = committed.try_with_choices({handles["MatMul_2.pe"]: 2})
     assert report.accepted
     counted = scopes.counts()
-    assert len(_real_nonport_scopes(scopes.registry.records.values())) == 225
+    assert len(_real_nonport_scopes(scopes.registry.records.values())) == 212
     assert len(_group_scopes(scopes.registry.records.values())) == 17
-    assert counted["scopes made"] == 225 + 296 + 17
+    assert counted["scopes made"] == 212 + 296 + 17
     assert counted["scopes in play"] - len(_port_scopes(scopes.in_play())) == 43
     assert len(_port_scopes(scopes.in_play())) == 49
     _assert_evaluated(scopes, 1)

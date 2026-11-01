@@ -16,7 +16,7 @@ import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pytest
 from support.configure import core_in_shell
@@ -28,9 +28,9 @@ from support.refusals import refused
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.partition import CUT_NAME
 from finn.core.space import Available
-from finn.custom_op.kernels.shell import row_movers
-from finn.kernels.channels import Channel
-from finn.kernels.movers import IODMA_HLS, IodmaMover
+from finn.custom_op.kernels.shell import mover_contracts, row_offer
+from finn.kernels.iodma import IodmaHls
+from finn.kernels.movers import IODMA_HLS
 from finn.platform import _cli
 from finn.platform.catalog import catalog
 from finn.platform.check import check
@@ -193,7 +193,7 @@ print("the package was imported")
 """
 
 _LIST_BOARDS = """\
-from finn.custom_op.kernels.shell import row_movers
+from finn.custom_op.kernels.shell import row_offer
 from finn.platform import _cli
 from finn.platform.declarations import declarations
 print(declarations().origin("boards", "Marked"))
@@ -651,7 +651,7 @@ def test_an_offer_a_core_cannot_place_is_refused_not_changed(
     found = load([path], environ=FINN_ONLY)
     row = shell_row("variant", "Ultra96", found)
     with refused("offer-unplaced", error=TargetRefused, owner="shells.variant", message=why):
-        row_movers(row)
+        row_offer(row)
     assert ("offer-unplaced", "shells.variant") in findings(found)
 
 
@@ -662,7 +662,7 @@ def test_a_moved_mover_kinds_code_makes_its_offer(tmp_path: Path) -> None:
     path = declared(
         tmp_path,
         '[movers.intlike]\ncode = "builtins:int"\nkinds = ["moved"]\n'
-        '[movers.borrowed]\ncode = "finn.kernels.movers:IodmaMover"\nkinds = ["moved"]\n'
+        '[movers.borrowed]\ncode = "finn.kernels.iodma:IodmaHls"\nkinds = ["moved"]\n'
         + "".join(
             f'[shells.{name}]\nbased_on = "pynq"\n'
             f"supply = [{_MOVED_128.replace('iodma_hls', name)}]\n"
@@ -686,7 +686,7 @@ def test_a_moved_mover_kinds_code_makes_its_offer(tmp_path: Path) -> None:
     with refused(
         "mover-offer-invalid",
         error=TargetRefused,
-        message=r"^finn.kernels.movers:IodmaMover.offer\(128\) made MoverOffer\(kind='iodma_hls'",
+        message=r"^finn.kernels.iodma:IodmaHls.offer\(128\) made MoverOffer\(kind='iodma_hls'",
     ):
         mover_offer(MoverKind(name="borrowed", code=found.movers["borrowed"].code), 128)
 
@@ -787,15 +787,15 @@ def test_a_made_up_platform_declares_checks_and_resolves_with_no_change_to_finn(
     assert row.supply == row.delivery
     assert [mover.name for offer in row.offers for mover in offer.movers] == [IODMA_HLS] * 2
     assert (row.fixed, row.control) == (pynq.fixed, pynq.control)
-    assert row_movers(row) == (IodmaMover.offer(64),)
-    # A core placed in it: each boundary channel moved by FINN's mover, within the shell's cap.
+    assert row_offer(row) == IodmaHls.offer(64)
+    # A core placed in it: each edge moved by FINN's mover, within the shell's cap.
     model = kernel_model()
     write_target(model, target)
     model = model.transform(MakeCutChoices(CUT_NAME))
     core = core_in_shell(model, model.graph.node, name="chain")
-    contracts = [core.query(name, Channel.mover_contracts) for name in core.movers]
-    assert contracts and all(isinstance(each, Available) for each in contracts)
-    placed = [contract for each in contracts for contract in cast(Available[Any], each).value]
+    contracts = mover_contracts(core)
+    assert isinstance(contracts, Available) and contracts.value
+    placed = [contract for _, contract in contracts.value]
     assert {contract.kind for contract in placed} == {IODMA_HLS}
     assert all(contract.memory_width <= 64 for contract in placed)
     assert isinstance(core.own_resources(), Available)

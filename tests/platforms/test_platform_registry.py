@@ -16,7 +16,7 @@ from support.refusals import refused
 
 from finn.core.reporting.findings import FindingKind
 from finn.core.space import design_space, inspection
-from finn.custom_op.kernels.shell import row_movers
+from finn.custom_op.kernels.shell import row_offer
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import tile
 from finn.kernels.memstream import MemStreamKernel
@@ -101,10 +101,10 @@ def test_every_boards_row_agrees_with_its_part_and_dsp(board: str) -> None:
     assert target.platform.dsp is DspBlock(dsp)
     assert target.platform.resources == part(part_name).device.resources  # the table's totals
     row = shell_row("pynq", board)
-    iodma = MoverKind(name="iodma_hls", code="finn.kernels.movers:IodmaMover")
+    iodma = MoverKind(name="iodma_hls", code="finn.kernels.iodma:IodmaHls")
     offer = Offer(kind=MOVED, movers=(iodma,), width_cap=width)
     assert (row.supply, row.delivery) == ((offer,), (offer,))
-    assert row_movers(row) == (iodma_hls(width),)
+    assert row_offer(row) == iodma_hls(width)
 
 
 @pytest.mark.parametrize("board", sorted(BOARDS))
@@ -326,8 +326,8 @@ def test_the_ip_shell_is_the_default_with_a_doubled_clock_and_no_bound() -> None
 
 def test_the_pynq_row_states_its_movers_budgets_linker_and_fixed_shell() -> None:
     row = shell_row("pynq", "Ultra96")
-    (mover,) = row_movers(row)
-    assert mover == iodma_hls(128) and mover.frames_per_call == 1
+    mover = row_offer(row)
+    assert mover == iodma_hls(128) and mover is not None and mover.frames_per_call == 1
     assert (row.control_budget, row.memory_ports, row.clocks.doubled) == (9, 0, False)
     assert (row.linker, row.runtimes) == ("vivado-block-design", ("pynq",))
     assert row.fixed is not None and row.fixed.control_base == 0xA000_0000

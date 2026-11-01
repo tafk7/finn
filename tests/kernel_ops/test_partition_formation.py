@@ -166,7 +166,7 @@ def test_the_body_is_the_partition_packaging_takes(tmp_path: Path) -> None:
         (tensor, key): value for tensor, held in channels.items() for key, value in held.items()
     }
     bound = composition(source, kernel_ops, name=parent.graph.node[1].name)
-    built = bound.with_choices(stated).answer(DataflowCoreKernel.module)
+    built = bound.with_choices(stated).core_answer(DataflowCoreKernel.module)
     assert isinstance(built, Available)
     reference = built.value
     assert (module.fragment, module.abi) == (reference.fragment, reference.abi)

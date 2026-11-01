@@ -224,8 +224,8 @@ importing the package), and from each directory on `FINN_PLATFORM_PATH`
 `platform-name-taken`, naming both origins. A shell may start from another's
 declaration (`based_on`) and replace its keys; a linker, runtime or mover kind names
 its code by `module:attribute`, imported only when it is used. A moved mover kind's
-code has an `offer(width_cap)` making what it offers a boundary channel, as
-`finn.kernels.movers.IodmaMover` does.
+code has an `offer(width_cap)` making what it offers each edge of a core, as
+`finn.kernels.iodma.IodmaHls` does.
 
 ```toml
 [boards.Acme-ZU3]

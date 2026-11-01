@@ -110,8 +110,8 @@ from finn.core.onnx_exec import execute_onnx
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.reporting.manifest import FINDING, RECORDS
 from finn.core.search import ExploreError, Hold, Ranked
-from finn.core.space import design_space
-from finn.custom_op.kernels.shell import configured_network
+from finn.core.space import Available
+from finn.custom_op.kernels.shell import configured_network, mover_contracts
 from finn.kernels.artifacts.contributions import HlsSource
 from finn.kernels.artifacts.module import module_name
 from finn.kernels.channels import Channel, Neighbours
@@ -347,9 +347,12 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     # both.
     point, boundary = configured_network(built, "DataflowCore_0")
     inputs, outputs = boundary_facts(built, point, boundary, "DataflowCore_0")
-    assert [(port["tensor"], port["mover"]["kind"]) for port in inputs + outputs] == [
-        ("Reshape_0_out0", "iodma_hls"),
-        ("MatMul_3_out0", "iodma_hls"),
+    contracts = mover_contracts(point.network)
+    assert isinstance(contracts, Available)
+    assert [port["tensor"] for port in inputs + outputs] == ["Reshape_0_out0", "MatMul_3_out0"]
+    assert [(name, contract.kind) for name, contract in contracts.value] == [
+        ("in0", "iodma_hls"),
+        ("out0", "iodma_hls"),
     ]
     assert json.loads((output / "report" / "kernel_choices.json").read_text()) == (
         kernel_choices_config(built)
@@ -1319,7 +1322,7 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
     # The Zynq shell's input mover binds: 196 beats and a call's 4 cycles (a
     # frame a call), within the budget of 200; the slowest of the other members, the
     # first layer's activations, weights, thresholds and MatMul, tie at 196.
-    assert report["bottleneck"] == {"members": ["Reshape_0_out0"], "cycles": 200}
+    assert report["bottleneck"] == {"members": ["in0"], "cycles": 200}
     members = {name: row["cycles"] for name, row in report["members"].items()}
     assert [name for name, cycles in members.items() if cycles == 196] == [
         "Thresholding_0",
@@ -1327,7 +1330,7 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
         "Thresholding_0_out0",
         "MatMul_0_param0",
     ]
-    assert set(report["movers"]) == {"Reshape_0_out0", "MatMul_3_out0"}
+    assert set(report["movers"]) == {"in0", "out0"}
 
 
 @pytest.mark.slow
@@ -1688,9 +1691,9 @@ def test_the_runner_generates_z0s_iodmas_for_tfc(
 def test_z0s_movers_as_kernels_state_their_channels_movers_and_generate_z0s_iodmas(
     z0_tfc: ModelWrapper,
 ) -> None:
-    """On each of TFC's edges at Z0's choices, the mover as a kernel (``IodmaIn``,
-    ``IodmaOut``) on its channel's free side states the contract its description states, and
-    its HLS top is Z0's IODMA code but for the top's name: the input mover's cycles a frame
+    """On each of TFC's edges at Z0's choices, the mover its shell places (an ``IodmaIn`` or
+    an ``IodmaOut``, by its unit's name) states the contract its description states, and its
+    HLS top is Z0's IODMA code but for the top's name: the input mover's cycles a frame
     TFC's bottleneck."""
     described = describe(z0_tfc)
     (core,) = described.cores
@@ -1698,10 +1701,9 @@ def test_z0s_movers_as_kernels_state_their_channels_movers_and_generate_z0s_iodm
     network = configured_network(body, core.name)[0].network
     cycles: dict[str, int] = {}
     for edge in described.edges:
-        channel = network.member(edge.tensor)
-        (offer,) = channel.offers
+        point = network.member(edge.unit)
         kind = IodmaIn if edge.contract.direction == "in" else IodmaOut
-        point = design_space(kind(offer=offer, edge=channel.free_side, platform=channel.platform))
+        assert isinstance(point, kind) and network.mover(edge.tensor) == edge.unit
         assert point.contract == edge.contract
         (request,) = point.module_sources
         assert isinstance(request, HlsSource)
@@ -1856,7 +1858,7 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
     bottleneck = shell_bottleneck(body, CUT_NAME)
     assert bottleneck is not None
     assert (clock["delivered_mhz"], clock["bottleneck_cycles"]) == (187.512, bottleneck.cycles)
-    assert (bottleneck.members, bottleneck.cycles) == (("Reshape_0_out0",), TFC_BOTTLENECK)
+    assert (bottleneck.members, bottleneck.cycles) == (("in0",), TFC_BOTTLENECK)
     assert clock["objective_fps"] == 1_000_000
     assert [finding["code"] for finding in clock["findings"]] == ["clock-below-asked"]
     # The resources per member: Z7's model of TFC (the thresholdings read INT7 sums); the
@@ -1872,8 +1874,8 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
     }
     assert {key: row["instance"] for key, row in rows.items()} == {
         "partition": "DataflowCore_0",
-        "movers.Reshape_0_out0": "idma0",
-        "movers.MatMul_3_out0": "odma0",
+        "movers.in0": "idma0",
+        "movers.out0": "odma0",
         "static_region.zynq_ultra_ps_e": "zynq_ps",
         "static_region.proc_sys_reset": "rst_zynq_ps_",
         "static_region.smartconnect": "smartconnect_0",
@@ -1885,8 +1887,8 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
 
     assert {key: row["model"] for key, row in rows.items()} == {
         "partition": counts(5270, 7077, 19, 100),
-        "movers.Reshape_0_out0": counts(1305, 2279, 4),
-        "movers.MatMul_3_out0": counts(1390, 2069),
+        "movers.in0": counts(1305, 2279, 4),
+        "movers.out0": counts(1390, 2069),
         "static_region.zynq_ultra_ps_e": counts(264, 0),
         "static_region.proc_sys_reset": counts(19, 40),
         "static_region.smartconnect": counts(5364, 8530),
@@ -1895,7 +1897,7 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
     # FakeVivado's runs: idma0, the partition and the SmartConnect, each its own LUTs.
     synthesized = {
         "partition": 200,
-        "movers.Reshape_0_out0": 100,
+        "movers.in0": 100,
         "static_region.smartconnect": 300,
     }
     assert {key: row["out_of_context"] for key, row in rows.items()} == {
@@ -1904,8 +1906,8 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
     # The placed hierarchy lists neither the processor nor its reset.
     assert {key: row["placed"] for key, row in rows.items()} == {
         "partition": counts(400, 800, 3, 4),
-        "movers.Reshape_0_out0": counts(100, 250, 2),
-        "movers.MatMul_3_out0": counts(90, 240),
+        "movers.in0": counts(100, 250, 2),
+        "movers.out0": counts(90, 240),
         "static_region.zynq_ultra_ps_e": None,
         "static_region.proc_sys_reset": None,
         "static_region.smartconnect": counts(300, 500),

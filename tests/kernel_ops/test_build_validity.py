@@ -29,6 +29,7 @@ from finn.core.space import (
 )
 from finn.kernels.base import Kernel
 from finn.kernels.dataflow_core import Bound, DataflowCoreKernel
+from finn.kernels.explore import CoreComposition
 
 
 @pytest.mark.parametrize("condition", ("open-rule", "refused-rule", "open-presence", "absent"))
@@ -81,8 +82,8 @@ def test_real_netlist_does_not_certify_unrelated_rule_or_presence(
     report = occurrence.bind(point, {refs[key]: value for key, value in choices.items()})
     assert not any(outcome.status == "dropped" for outcome in report.outcomes)
     # The real graph, members, bindings and saved choices; only a root rule added.
-    bound = shell.shell_composition(report.instance, shell.body_row(model))
-    module = bound.answer(DataflowCoreKernel.module)
+    bound = CoreComposition(report.instance)
+    module = bound.core_answer(DataflowCoreKernel.module)
     if condition == "refused-rule":
         # A partition a rule refuses has no channel's hops (no view of a refused design point
         # answers), so no module: refused once, by the rule. Its members' own views answer.
@@ -96,7 +97,7 @@ def test_real_netlist_does_not_certify_unrelated_rule_or_presence(
         isinstance(bound.query(name, Kernel.frame_cycles), Available) for name in bound.members
     )
     assert not bound.undecided()
-    monkeypatch.setattr(shell, "core_point", lambda *_: Bound(bound.point, {}, {}))
+    monkeypatch.setattr(shell, "shell_point", lambda *_: Bound(bound.point, {}, {}))
     if condition == "absent":
         configured, _ = shell.configured_network(model, "independent")
         assert configured.network.point is bound.point

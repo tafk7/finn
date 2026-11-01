@@ -20,7 +20,7 @@ states in their place. The facts:
   does) and the runtimes it offers, the first the default;
 - ``versions``: the linker's tool releases, narrowed for this board (``Versions``);
 - ``board_facts``: what the linker needs of this board (its ``board_keys``);
-- ``fixed``: its own logic and that logic's cost (``FixedShell``);
+- ``fixed``: its own logic and that logic's cost (``finn.kernels.budgets.FixedShell``);
 - ``characterised`` and ``caveat``: where its cost was characterised and the shell built
   and timed, and what that does not cover on this board;
 - ``control_budget`` and ``memory_ports``: the AXI-Lite buses the partition and its
@@ -44,6 +44,7 @@ from typing import Any, TypeVar
 from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
 from finn.kernels.artifacts.module import Fragment
 from finn.kernels.artifacts.top import doubled, top_buses
+from finn.kernels.budgets import FixedShell, Scaled
 from finn.kernels.movers import PLACED_KINDS, MoverOffer
 from finn.kernels.utilization import Fit
 from finn.platform import _stated as valid
@@ -149,56 +150,6 @@ def _compare(release: tuple[int, int], clause: tuple[str, tuple[int, int]]) -> b
         ">": release > against,
         "<": release < against,
     }[operator]
-
-
-@dataclass(frozen=True, kw_only=True)
-class Scaled:
-    """An IP's resources by the count that scales it: ``fixed``, plus LUTs and FFs by a
-    ``Fit`` over the count (``lut``, ``ff``) from ``scales_from`` on, none below it."""
-
-    fixed: Resources = Resources()
-    lut: Fit = Fit(0, (0,))
-    ff: Fit = Fit(0, (0,))
-    scales_from: int = 1
-
-    def at(self, count: int) -> Resources:
-        if count < self.scales_from:
-            return self.fixed
-        return self.fixed + Resources(lut=self.lut.at(count), ff=self.ff.at(count))
-
-
-@dataclass(frozen=True, kw_only=True)
-class FixedShell:
-    """A shell's own logic beside the partition and its movers, each IP with its
-    resources out of context. The memory interconnect takes one master per memory
-    port, and the control interconnect gives one slave per AXI-Lite bus. The processor
-    addresses the AXI-Lite buses from ``control_base``, in connection order, each
-    aligned to its window, at least the row's ``Control.least_window``."""
-
-    processor: str
-    reset: str
-    memory_interconnect: str
-    control_interconnect: str
-    control_base: int
-    processor_use: Resources
-    reset_use: Resources
-    memory_interconnect_use: Scaled
-    control_interconnect_use: Scaled
-
-    def resources(self, *, masters: int, slaves: int) -> tuple[tuple[str, Resources], ...]:
-        """What each IP uses, by its Vivado IP name, with ``masters`` memory ports and
-        ``slaves`` AXI-Lite buses connected. The template connects at least one of each."""
-        if masters < 1 or slaves < 1:
-            raise ValueError(
-                f"a fixed shell connects at least one memory port and one AXI-Lite bus, "
-                f"not {masters} and {slaves}"
-            )
-        return (
-            (self.processor, self.processor_use),
-            (self.reset, self.reset_use),
-            (self.memory_interconnect, self.memory_interconnect_use.at(masters)),
-            (self.control_interconnect, self.control_interconnect_use.at(slaves)),
-        )
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -559,10 +510,10 @@ def own_facts(shell: Shell, declared: Declarations) -> dict[str, Any]:
 
 
 def placed_offer(row: ShellRow) -> Offer | None:
-    """The offer a core places on its boundary channels in ``row`` (``None``: it offers
-    none). Until the movers are kernels of their own, a core places one offer on every
-    boundary side, inputs and outputs alike: one mover kind it places (``PLACED_KINDS``),
-    moved, at a bounded width cap. A row offering anything else is refused
+    """The offer a core's shell places on its edges in ``row`` (``None``: it offers
+    none). The shell places one offer on every edge, inputs and outputs alike
+    (``finn.kernels.shell``): one mover kind it places (``PLACED_KINDS``), moved, at a
+    bounded width cap. A row offering anything else is refused
     (``offer-unplaced``), naming what it offers, rather than placed as something it does
     not offer."""
     if not row.offers:
@@ -695,11 +646,9 @@ __all__ = [
     "VIVADO_BLOCK_DESIGN",
     "Clocks",
     "Control",
-    "FixedShell",
     "MemoryTarget",
     "MoverKind",
     "Offer",
-    "Scaled",
     "ShellRow",
     "Versions",
     "bus_counts",

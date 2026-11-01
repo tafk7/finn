@@ -59,7 +59,7 @@ def test_a_partition_on_the_ip_shell_states_its_model_alone(tmp_path: Path) -> N
     parent = kernel_model().transform(CutKernelPartition(tmp_path))
     node, body, _ = partition_body(parent)
     point, _ = configured_network(body, node.name)
-    modelled = shell_resources(point.network.point, point.row)
+    modelled = shell_resources(point.network)
     assert isinstance(modelled, ShellResources)
     stated = shell_resources_report(parent, {})
     assert (stated["shell"], stated["caveat"]) == ("ip", None)
