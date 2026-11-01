@@ -45,7 +45,7 @@ description: its user links the core.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -202,6 +202,11 @@ class Integration:
         """The unit named ``name``."""
         (found,) = (unit for unit in self.units if unit.name == name)
         return found
+
+    def packaged(self, ips: Mapping[str, IpRef]) -> Integration:
+        """This description, each unit named in ``ips`` given that IP."""
+        units = tuple(replace(unit, ip=ips.get(unit.name, unit.ip)) for unit in self.units)
+        return replace(self, units=units)
 
     @property
     def edges(self) -> tuple[Edge, ...]:

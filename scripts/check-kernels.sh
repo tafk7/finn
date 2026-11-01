@@ -64,7 +64,8 @@ gate_ruff src/finn/kernels tests/kernels tests/support src/finn/platform src/fin
 # finn.toolchain.launcher: the toolchain packaging takes (PackagePartition's toolchain=);
 # finn.toolchain.ip: the packaged-IP store PackagePartition packages through;
 # finn.toolchain.xsim: XSim's driver, which the testbench and packaging's elaboration run.
-# finn.shells.integration: the integration description and what a linker gives back.
+# finn.shells.integration: the integration description and what a linker gives back;
+# finn.shells.pynq.linker: the pynq shell's linker.
 # finn.shells.pynq's runner, driver and deployment package; its IODMA and IP generation
 # are annotated, not strictly checked: frozen extractions of the HWCustomOp flow's.
 # finn.builder: its configuration, its plan, its checks
@@ -76,7 +77,7 @@ gate_mypy -p finn.kernels -p finn.platform -p finn.core.graph -p finn.custom_op.
     -m finn.util.draws -m finn.util.typed_json \
     -m finn.core.executor -m finn.core.rtlsim_bench -m finn.core.rtlsim_exec \
     -m finn.core.rtlsim_pacing -m finn.core.onnx_exec \
-    -m finn.shells.integration \
+    -m finn.shells.integration -m finn.shells.pynq.linker \
     -m finn.shells.pynq.runner -m finn.shells.pynq.driver -m finn.shells.pynq.deploy \
     -m finn.toolchain.launcher -m finn.toolchain.ip \
     -m finn.toolchain.xsim \

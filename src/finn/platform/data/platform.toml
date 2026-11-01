@@ -65,7 +65,7 @@ part = "xcve2802-vsvh1760-2MP-e-S"
 
 [linkers.vivado-block-design]
 # The Zynq block design around the partition, run through Vivado to a bitstream.
-code = "finn.shells.pynq.runner:BuildPynqBitfile"
+code = "finn.shells.pynq.linker:BlockDesignLinker"
 tool = "vivado"
 board_keys = ["board_part"]
 image = "bit"

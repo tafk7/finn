@@ -3,7 +3,8 @@
 
 """The kernel path's one cut, its partition's boundary (its free sides' and movers' facts,
 read from the configured network: ``boundary_facts``), what is built of it
-(``finn.outputs``) and the integration export read from its movers.
+(``finn.outputs``). The integration description read from its movers is the shells'
+(``tests/shells``).
 
 The Chain (``support.chain``), its choices saved, as the partition; with its second
 weights streamed, so two inputs cross the boundary. No Vivado.
@@ -12,7 +13,6 @@ weights streamed, so two inputs cross the boundary. No Vivado.
 from __future__ import annotations
 
 import subprocess
-from dataclasses import replace
 from itertools import product
 from pathlib import Path
 from typing import Any
@@ -20,7 +20,6 @@ from typing import Any
 import pytest
 from qonnx.core.modelwrapper import ModelWrapper
 from support.configure import bound_in_shell, configured, core_in_shell
-from support.ipxact_ports import AXILITE
 from support.models import (
     ROW_MAJOR_W2,
     choose_memories,
@@ -28,7 +27,7 @@ from support.models import (
     kernel_model,
     streamed_w2_model,
 )
-from support.packaging import NO_VIVADO, verified, verified_parent
+from support.packaging import NO_VIVADO, verified
 from support.ports import outer
 from support.refusals import refused
 from support.tfc import ULTRA96
@@ -57,14 +56,6 @@ from finn.transformation.kernels import (
     kernel_choices_config,
 )
 from finn.transformation.kernels.cut import CutKernelPartition, MakeCutChoices
-from finn.transformation.kernels.integration import (
-    Address,
-    Connection,
-    IntegrationError,
-    _aperture,
-    integration,
-    wire_one_bus_each,
-)
 from finn.transformation.kernels.package import boundary_facts, ip_key
 
 #: Ultra96 in the Zynq shell: its rows offer an IODMA_hls mover at a 128-bit port.
@@ -201,100 +192,6 @@ def test_the_kernel_path_cuts_once(tmp_path: Path) -> None:
         "partition-count", owner="partition_body", message="holds 0 partitions of KernelOps"
     ):
         partition_body(chain())
-
-
-def test_the_export_names_each_mover_its_iodma_and_every_connection(tmp_path: Path) -> None:
-    parent = verified_parent(chain("pynq").transform(CutKernelPartition(tmp_path)))
-    export = integration(parent)
-    assert (export.shell, export.board, export.part, export.period_ns) == (
-        "pynq",
-        "Ultra96",
-        ZYNQ.part,
-        5.0,
-    )
-    # The instance is the node's name, the IP its module's.
-    _, body, _ = partition_body(parent)
-    top = module_name(configured_network(body, "DataflowCore_0")[0].module)
-    assert (export.partition, export.vlnv) == ("DataflowCore_0", f"xilinx_finn:finn:{top}:1.0")
-    # Movers by direction in port order, each IODMA_hls configured from its facts: a
-    # frame's beats, the stream's bytes a beat in the UINT8 container, the memory port
-    # and the stream's width; the element is the mover's.
-    assert [(mover.instance, mover.tensor, mover.port) for mover in export.movers] == [
-        ("idma0", "x", "s_axis_0"),
-        ("idma1", "w2", "s_axis_1"),
-        ("odma0", "y", "m_axis_0"),
-    ]
-    assert [mover.iodma.attributes for mover in export.movers] == [
-        {
-            "numInputVectors": [1, 2],
-            "NumChannels": 1,
-            "dataType": "UINT8",
-            "intfWidth": 16,
-            "streamWidth": 8,
-            "direction": "in",
-        },
-        {
-            "numInputVectors": [1, 4],
-            "NumChannels": 2,
-            "dataType": "UINT8",
-            "intfWidth": 64,
-            "streamWidth": 16,
-            "direction": "in",
-        },
-        {
-            "numInputVectors": [1, 1],
-            "NumChannels": 4,
-            "dataType": "UINT8",
-            "intfWidth": 32,
-            "streamWidth": 32,
-            "direction": "out",
-        },
-    ]
-    assert [mover.contract.element.dtype.name for mover in export.movers] == [
-        "INT3",
-        "INT3",
-        "INT7",
-    ]
-    assert export.connections == (
-        Connection("axis", "idma0/m_axis_0", "DataflowCore_0/s_axis_0"),
-        Connection("axis", "idma1/m_axis_0", "DataflowCore_0/s_axis_1"),
-        Connection("axis", "DataflowCore_0/m_axis_0", "odma0/s_axis_0"),
-        Connection("aximm", "idma0/m_axi_gmem0", "smartconnect_0/S00_AXI"),
-        Connection("aximm", "idma1/m_axi_gmem0", "smartconnect_0/S01_AXI"),
-        Connection("aximm", "odma0/m_axi_gmem0", "smartconnect_0/S02_AXI"),
-        Connection("axilite", "axi_interconnect_0/M00_AXI", "idma0/s_axi_control_0"),
-        Connection("axilite", "axi_interconnect_0/M01_AXI", "idma1/s_axi_control_0"),
-        Connection("axilite", "axi_interconnect_0/M02_AXI", "odma0/s_axi_control_0"),
-        *(
-            Connection(kind, f"smartconnect_0/{source}", f"{instance}/{pin}")
-            for instance in ("idma0", "idma1", "DataflowCore_0", "odma0")
-            for kind, source, pin in (
-                ("clock", "aclk", "ap_clk"),
-                ("reset", "aresetn", "ap_rst_n"),
-            )
-        ),
-    )
-    # Each control map from the processor's peripheral base, 4 KiB apart.
-    assert export.addresses == (
-        Address("idma0/s_axi_control_0", 0xA000_0000, 4096),
-        Address("idma1/s_axi_control_0", 0xA000_1000, 4096),
-        Address("odma0/s_axi_control_0", 0xA000_2000, 4096),
-    )
-    assert export.report()["addresses"][2] == {
-        "interface": "odma0/s_axi_control_0",
-        "offset": "0xa0002000",
-        "range": 4096,
-    }
-
-
-def test_a_shell_without_a_linker_has_no_export(tmp_path: Path) -> None:
-    parent = verified_parent(chain().transform(CutKernelPartition(tmp_path)))
-    with refused(
-        "integration-unexported",
-        error=IntegrationError,
-        message="the 'ip' shell's linker is None: no export",
-    ):
-        integration(parent)
 
 
 #: The Chain with its weights w2 streamed, by its rows and a folding, as the boundary's
@@ -472,31 +369,6 @@ def test_x_read_twice_on_one_row_is_replayed_by_an_input_gen_after_its_mover() -
     assert ("x", "adapter_ram_style") in bound.chosen()
     ip = kernel_model(second_weights=False, rows=1)
     assert outer(core_in_shell(ip, ip.graph.node).member("x")).form.beats == 4
-
-
-def test_a_mover_or_bus_the_block_design_cannot_wire_is_refused_by_name(tmp_path: Path) -> None:
-    """The block design wires one AXI-Lite bus and one memory port a mover, and maps a bus
-    by its ``awaddr``: a mover stating other counts, or a bus without one, is refused."""
-    parent = verified_parent(chain("pynq").transform(CutKernelPartition(tmp_path)))
-    mover = integration(parent).movers[0]
-    wire_one_bus_each(mover.contract, "x")
-    for counts in ({"control_buses": 2}, {"memory_ports": 2}, {"memory_ports": 0}):
-        with refused(
-            "mover-buses-unwired",
-            error=IntegrationError,
-            owner="vivado-block-design",
-            message="x: its iodma_hls mover states .* AXI-Lite",
-        ):
-            wire_one_bus_each(replace(mover.contract, **counts), "x")
-    assert _aperture(AXILITE, 4096) == 4096 and _aperture(AXILITE, 16) == 32
-    bare = replace(AXILITE, signals=tuple(s for s in AXILITE.signals if s.logical != "awaddr"))
-    with refused(
-        "bus-aperture-unknown",
-        error=IntegrationError,
-        owner="vivado-block-design",
-        message="s_axilite: an AXI-Lite bus with no awaddr",
-    ):
-        _aperture(bare, 4096)
 
 
 class PackagedHere:

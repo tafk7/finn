@@ -198,7 +198,7 @@ def test_the_table_rejects_an_import_across_its_order(layer: str, name: str) -> 
         ("executors", "finn.core.onnx_exec.running"),
         ("executors", "finn.core.graph.partition.kernel_partition_body"),
         ("flow", "finn.shells.pynq.runner.build_pynq"),
-        ("shells", "finn.transformation.kernels.integration.integration"),
+        ("shells", "finn.shells.integration.describe"),
         ("shells", "finn.core.graph.partition.partition_body"),
     ],
 )

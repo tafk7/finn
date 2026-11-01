@@ -3,7 +3,8 @@
 
 """Graph transformations of the KernelOps: conversion (``convert``), inference
 (``infer``), the cut (``cut``), exploration of the choices (``choose``, ``config``), and
-packaging and integration (``package``, ``hls``, ``integration``).
+packaging (``package``, ``hls``). The integration description is the shells'
+(``finn.shells.integration``).
 """
 
 from finn.transformation.kernels.choose import (

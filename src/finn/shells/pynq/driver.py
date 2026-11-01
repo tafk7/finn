@@ -2,10 +2,11 @@
 # Copyright (C) 2025-2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The pynq shell's PYNQ driver, from the partition's integration export
-(``finn.transformation.kernels.integration``): its I/O the export's movers (each mover's
-tensor and shape, the channel's element, and its beats and lanes); it sets PL0 to the
-clock it is given, the one the bitfile delivers, and runs the bitfile it is given
+"""The pynq shell's PYNQ driver, from the partition's integration description
+(``finn.shells.integration``): its I/O the description's edge ports (each mover's tensor
+and shape, its element, and its beats and lanes), each mover by its cell in the block
+design (``linker.cell``); its platform its runtime's (``HOST_RUNTIMES``); it sets PL0 to
+the clock it is given, the one the bitfile delivers, and runs the bitfile it is given
 (``write_driver``). ``driver_description`` states what it takes and returns.
 ``MakePynqDriver`` writes both for the build's parent graph, from its target, the
 bitfile it states and the clock that bitfile delivers (its build's report,
@@ -42,7 +43,8 @@ import finn.util
 import finn.util.data_packing
 from finn.core.graph.annotations.outputs import OUTPUT_BITFILE, OUTPUT_BITFILE_IP_KEY
 from finn.core.graph.partition import design_digest, partition_body
-from finn.shells.pynq import templates
+from finn.shells.integration import Edge, Integration, describe
+from finn.shells.pynq import linker, templates
 from finn.shells.pynq.ipgen import data_path
 from finn.shells.pynq.runner import (
     DELIVERED_CLOCK,
@@ -50,7 +52,6 @@ from finn.shells.pynq.runner import (
     pynq_row,
     refuse_stale_bitfile,
 )
-from finn.transformation.kernels.integration import Integration, integration
 from finn.util.data_packing import finnpy_to_packed_bytearray
 
 
@@ -215,69 +216,85 @@ def pynq_driver_text(platform: str, shapes: dict[str, Any], fclk_mhz: float, bit
     return driver
 
 
-def driver_shapes(export: Integration) -> dict[str, Any]:
-    """The driver's I/O from the export's movers: each input mover's (``i``) and output
-    mover's (``o``) element as its ``DataType``, its tensor's shape (``normal``), its
-    frame as the stream carries it, ``(1, beats, lanes)`` (``folded``), and that packed
-    into bytes (``packed``), and its instance."""
+#: The PYNQ driver's platform (its template's ``$PLATFORM$``) by the shell's runtime.
+HOST_RUNTIMES = {"pynq": "zynq-iodma"}
+
+
+def _edges(integration: Integration, direction: str) -> list[Edge]:
+    """The edge ports of ``integration`` in ``direction`` (``in``, ``out``), in order."""
+    return [edge for edge in integration.edges if edge.contract.direction == direction]
+
+
+def driver_shapes(integration: Integration) -> dict[str, Any]:
+    """The driver's I/O from the description's edge ports: each input's (``i``) and
+    output's (``o``) element as its ``DataType``, its tensor's shape (``normal``), its frame
+    as the mover's stream carries it, ``(1, beats, lanes)`` (``folded``), and that packed
+    into bytes (``packed``), and its mover's cell."""
     shapes: dict[str, Any] = {}
     for side, direction, dma in (("i", "in", "idma_names"), ("o", "out", "odma_names")):
-        movers = [mover for mover in export.movers if mover.contract.direction == direction]
-        folded = [(1, mover.contract.beats, mover.contract.lanes) for mover in movers]
-        shapes[f"{side}dt"] = [
-            f"DataType['{mover.contract.element.dtype.name}']" for mover in movers
-        ]
-        shapes[f"{side}shape_normal"] = [tuple(mover.shape) for mover in movers]
+        edges = _edges(integration, direction)
+        folded = [(1, edge.contract.beats, edge.contract.lanes) for edge in edges]
+        shapes[f"{side}dt"] = [f"DataType['{edge.element.dtype.name}']" for edge in edges]
+        shapes[f"{side}shape_normal"] = [tuple(edge.shape) for edge in edges]
         shapes[f"{side}shape_folded"] = folded
         shapes[f"{side}shape_packed"] = [
-            packed_shape(mover.contract.element.dtype, each) for mover, each in zip(movers, folded)
+            packed_shape(edge.element.dtype, each) for edge, each in zip(edges, folded)
         ]
-        shapes[dma] = [mover.instance for mover in movers]
+        shapes[dma] = [linker.cell(edge.unit) for edge in edges]
     return shapes
 
 
-def write_driver(export: Integration, directory: str, fclk_mhz: float, bitfile: str) -> None:
-    """The PYNQ driver of the integration ``export`` into ``directory``: its I/O the
-    export's (``driver_shapes``), PL0 set to ``fclk_mhz``, the clock the bitfile
-    delivers; driver.py and validate.py run ``bitfile``, relative to ``directory``,
-    unless told another."""
+def host_runtime(integration: Integration) -> str | None:
+    """The PYNQ driver's platform for the runtime of ``integration`` (``HOST_RUNTIMES``)."""
+    return None if integration.runtime is None else HOST_RUNTIMES.get(integration.runtime)
+
+
+def write_driver(integration: Integration, directory: str, fclk_mhz: float, bitfile: str) -> None:
+    """The PYNQ driver of the integration description ``integration`` into ``directory``:
+    its I/O the description's (``driver_shapes``), PL0 set to ``fclk_mhz``, the clock the
+    bitfile delivers; driver.py and validate.py run ``bitfile``, relative to
+    ``directory``, unless told another."""
     os.makedirs(directory, exist_ok=True)
     write_pynq_driver_support(directory)
-    host_runtime = export.host_runtime
-    if host_runtime is None:
+    platform = host_runtime(integration)
+    if platform is None:
         raise PynqRefused(
             "pynq_driver",
             "host-runtime-absent",
-            f"the {export.shell!r} shell states no host runtime to drive",
+            f"the {integration.row[0]!r} shell states no host runtime to drive",
             owner="configuration.target.shell",
         )
     with open(os.path.join(directory, "driver.py"), "w") as f:
-        f.write(pynq_driver_text(host_runtime, driver_shapes(export), fclk_mhz, bitfile))
+        f.write(pynq_driver_text(platform, driver_shapes(integration), fclk_mhz, bitfile))
 
 
 def driver_description(
-    export: Integration, fclk_mhz: float, bitfile: str, before: list[str], after: list[str]
+    integration: Integration,
+    fclk_mhz: float,
+    bitfile: str,
+    before: list[str],
+    after: list[str],
 ) -> dict[str, Any]:
-    """What the driver of ``export`` takes and returns: the bitfile it runs, by
+    """What the driver of ``integration`` takes and returns: the bitfile it runs, by
     its path in the build's output directory and in the deployment package, both of
     which hold bitfile/ beside driver/; the partition's inputs and outputs, each by its
-    tensor's name, element and shape, and the mover that moves it; the clock it sets; and
-    the host's nodes of the parent graph that run ``before`` and ``after`` it."""
+    tensor's name, element and shape, and the cell of the mover that moves it; the clock
+    it sets; and the host's nodes of the parent graph that run ``before`` and ``after``
+    it."""
 
     def tensors(direction: str) -> list[dict[str, Any]]:
         return [
             {
-                "name": mover.tensor,
-                "element": mover.contract.element.dtype.name,
-                "shape": list(mover.shape),
-                "dma": mover.instance,
+                "name": edge.tensor,
+                "element": edge.element.dtype.name,
+                "shape": list(edge.shape),
+                "dma": linker.cell(edge.unit),
             }
-            for mover in export.movers
-            if mover.contract.direction == direction
+            for edge in _edges(integration, direction)
         ]
 
     return {
-        "host_runtime": export.host_runtime,
+        "host_runtime": host_runtime(integration),
         "bitfile": bitfile,
         "fclk_mhz": fclk_mhz,
         "takes": tensors("in"),
@@ -332,7 +349,7 @@ class MakePynqDriver(Transformation):
     """The PYNQ driver the build's parent graph's shell's host runtime runs
     (``write_driver``), into driver/ under the output ``directory``, written afresh:
     nothing an earlier build left there stays. Its shell is the target the partition's
-    body states (``pynq_row``); its I/O the partition's integration export's movers, from
+    body states (``pynq_row``); its I/O the partition's integration description's, from
     the choices the partition saves; PL0 set to the clock the bitfile delivers
     (``delivered_mhz``, report/delivered_clock.json under ``directory``); the bitfile the
     parent graph states (finn.outputs) its default, relative to driver/. A bitfile built
@@ -353,15 +370,17 @@ class MakePynqDriver(Transformation):
         fclk_mhz = delivered_mhz(self.directory)
         bitfile = shipped_bitfile(model, self.directory)
         refuse_stale_bitfile(model, "pynq_driver")
-        export = integration(model)
+        described = describe(model)
         driver = self.directory / DRIVER_DIR
         shutil.rmtree(driver, ignore_errors=True)
-        write_driver(export, str(driver), fclk_mhz, os.path.relpath(bitfile, DRIVER_DIR))
+        write_driver(described, str(driver), fclk_mhz, os.path.relpath(bitfile, DRIVER_DIR))
         node, body, _ = partition_body(model)
         names = [each.name for each in model.graph.node]
         index = names.index(node.name)
         self.description = {
-            **driver_description(export, fclk_mhz, str(bitfile), names[:index], names[index + 1 :]),
+            **driver_description(
+                described, fclk_mhz, str(bitfile), names[:index], names[index + 1 :]
+            ),
             "made_from": design_digest(body),
             "ip_key": model.get(OUTPUT_BITFILE_IP_KEY),
         }
@@ -374,10 +393,12 @@ class MakePynqDriver(Transformation):
 __all__ = [
     "DRIVER_DIR",
     "DRIVER_REPORT",
+    "HOST_RUNTIMES",
     "MakePynqDriver",
     "delivered_mhz",
     "driver_description",
     "driver_shapes",
+    "host_runtime",
     "packed_shape",
     "pynq_driver_text",
     "shipped_bitfile",

@@ -12,18 +12,15 @@ from dataclasses import replace
 from pathlib import Path
 
 from qonnx.core.datatype import DataType
-from qonnx.core.modelwrapper import ModelWrapper
 from support.ipxact_ports import AXILITE
-from support.models import choose_memories, kernel_model, streamed_w2_model
+from support.models import choose_memories, kernel_model, zynq_parent
 from support.packaging import verified_parent
 from support.refusals import refused
 
-from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.partition import partition_body
 from finn.custom_op.kernels.shell import configured_network
 from finn.kernels.artifacts.ipxact import vlnv
 from finn.kernels.artifacts.module import module_name
-from finn.platform.resolve import resolve_target
 from finn.shells.integration import (
     CORE,
     MAIN,
@@ -42,26 +39,13 @@ from finn.shells.integration import (
 )
 from finn.transformation.kernels.cut import CutKernelPartition
 
-#: Ultra96 in the Zynq shell at 5 ns.
-ZYNQ = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
-
-
-def zynq_model(directory: Path) -> ModelWrapper:
-    """The Chain, x and w2 crossing its boundary, stated for Ultra96 in the Zynq shell, its
-    choices saved, cut once (its body in ``directory``) and verified: the parent graph as
-    step_verify_partition leaves it."""
-    model = streamed_w2_model()
-    write_target(model, ZYNQ)
-    choose_memories(model)
-    return verified_parent(model.transform(CutKernelPartition(directory / "cut")))
-
 
 def test_the_chain_is_described_by_its_core_units_and_wiring(tmp_path: Path) -> None:
     """One core under its node's name, a mover unit for each edge port (``in<i>``,
     ``out<j>``, by direction in port order), each mover's stream to its port with its
     bits, its memory port bound to the row's target, its control bus an endpoint at
     offset 0 of the row's least window, and every unit on the main clock."""
-    parent = zynq_model(tmp_path)
+    parent = zynq_parent(tmp_path)
     described = describe(parent)
     assert (described.row, described.linker, described.runtime) == (
         ("pynq", "Ultra96"),
@@ -117,7 +101,7 @@ def test_the_chain_is_described_by_its_core_units_and_wiring(tmp_path: Path) -> 
 def test_the_description_names_nothing_of_a_platform(tmp_path: Path) -> None:
     """Its JSON holds every field, by unit and port, and none of the block design's names:
     no cell, interconnect, interconnect port or address."""
-    described = describe(zynq_model(tmp_path))
+    described = describe(zynq_parent(tmp_path))
     report = described.report()
     assert sorted(report) == [
         "bindings",

@@ -183,7 +183,7 @@ LAYERS: tuple[Layer, ...] = (
     # What is read of a partition and what a build made of it (finn.outputs, the search's
     # record among it, which no design digest covers): below both its writers
     # (the cut, PackagePartition) and its readers (the channel's annotation, whose choices
-    # a partition's body states; the builder, the integration export, the shell's build,
+    # a partition's body states; the builder, the integration description, the shell's build,
     # the executors). qonnx (and onnx, which qonnx depends on: its nodes are NodeProto)
     # and the findings only, so the builder reads it without loading the kernel stack.
     Layer(
@@ -373,7 +373,7 @@ LAYERS: tuple[Layer, ...] = (
         "tests/kernel_ops",
     ),
     # The shells' builds: what builds the partition into a shell (the pynq shell's block
-    # design, its movers' IODMAs, its driver), from the integration export. Below the
+    # design, its movers' IODMAs, its driver), from the integration description. Below the
     # flow: the builder runs them. The board's driver files (finn.shells.pynq.data)
     # import pynq, each other and, to validate, dataset_loading.
     Layer(

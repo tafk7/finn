@@ -60,10 +60,11 @@ from finn.kernels.composer import member_name
 from finn.kernels.utilization import SHELL_CHARACTERISED
 from finn.platform.capabilities import Resources
 from finn.platform.shells import shell_row
-from finn.shells.pynq.runner import REPORTS, STATIC_INSTANCES, bitfile_directory
+from finn.shells.integration import describe
+from finn.shells.pynq.linker import STATIC_INSTANCES, cell
+from finn.shells.pynq.runner import REPORTS, bitfile_directory
 from finn.toolchain import vivado
 from finn.toolchain.launcher import Toolchain, ToolFailed
-from finn.transformation.kernels.integration import integration
 from finn.transformation.kernels.package import (
     ip_key,
     ooc_member_resources,
@@ -111,10 +112,11 @@ def _member_instances(parent: ModelWrapper) -> dict[str, str]:
     row = shell_row(target.shell, target.board)
     if row.linker is None:
         return {"partition": node.name}
-    export = integration(parent)
-    instances = {"partition": export.partition}
+    described = describe(parent)
+    (core,) = described.cores
+    instances = {"partition": cell(core.name)}
     instances.update(
-        {f"movers.{member_name(mover.tensor)}": mover.instance for mover in export.movers}
+        {f"movers.{member_name(edge.tensor)}": cell(edge.unit) for edge in described.edges}
     )
     static = row.fixed
     if static is not None:
