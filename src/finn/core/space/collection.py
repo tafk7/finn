@@ -8,7 +8,6 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType, UnionType
 from typing import Union, cast, get_args, get_origin
-from weakref import WeakKeyDictionary
 
 from ._configuration import _Namespace
 from ._nodes import NodeDecision, NodeDecl, slot_declaration
@@ -78,6 +77,24 @@ def _annotation_namespace(space_type: type[_Namespace]) -> dict[str, object]:
     namespace: dict[str, object] = {base.__name__: base for base in reversed(space_type.__mro__)}
     namespace.update(class_namespace(space_type))
     return namespace
+
+
+Namespaces = Callable[[type[_Namespace]], Mapping[str, object]]
+"""A collection pass's annotation namespaces (``_namespaces``)."""
+
+
+def _namespaces() -> Namespaces:
+    """A collection pass's annotation namespace of each class, built once in the pass and
+    kept nowhere after it (a namespace holds its class's declarations, which name the
+    class)."""
+    by_class: dict[type[_Namespace], Mapping[str, object]] = {}
+
+    def namespace_of(space_type: type[_Namespace]) -> Mapping[str, object]:
+        if space_type not in by_class:
+            by_class[space_type] = _annotation_namespace(space_type)
+        return by_class[space_type]
+
+    return namespace_of
 
 
 def _function(declaration: Declaration) -> Callable[..., object] | None:
@@ -177,6 +194,7 @@ def _collect_semantics(
     members: Mapping[str, Declaration],
     inherited: Mapping[str, list[Declaration]],
     hints_for: Callable[[Callable[..., object], str], Mapping[str, object]],
+    namespace_of: Namespaces,
 ) -> dict[Declaration, ValueSemantics[object]]:
     """Check overrides and infer the local semantics of each effective member."""
     semantics: dict[Declaration, ValueSemantics[object]] = {}
@@ -238,7 +256,7 @@ def _collect_semantics(
                     declaration=owner,
                 )
             if isinstance(prior, (Derived, Constraint)):
-                _check_answer_within(prior, declaration, owner)
+                _check_answer_within(prior, declaration, owner, namespace_of)
             old_semantics = getattr(prior, "semantics", None)
             if old_semantics is None and isinstance(prior, (Derived, View)):
                 prior_function = prior.function
@@ -260,7 +278,10 @@ def _collect_semantics(
 
 
 def _check_answer_within(
-    prior: Derived[object] | Constraint, declaration: Declaration, owner: str
+    prior: Derived[object] | Constraint,
+    declaration: Declaration,
+    owner: str,
+    namespace_of: Namespaces,
 ) -> None:
     """An override of a rule admits no ``Inapplicable`` the answer it overrides does not
     (``override-widens-answer``): a reader of that answer relies on it, as the Kernel's
@@ -269,7 +290,8 @@ def _check_answer_within(
     admitted by every answer (``_running.answers._finish``), so neither widens one. Each
     answer is its own declaration's, read in the class that declares it
     (``declared_answer``)."""
-    admitted, stated = declared_answer(prior, owner), declared_answer(declaration, owner)
+    admitted = declared_answer(prior, owner, namespace_of)
+    stated = declared_answer(declaration, owner, namespace_of)
     if admitted is None or stated is None:
         return
     if Inapplicable in stated and Inapplicable not in admitted:
@@ -281,25 +303,27 @@ def _check_answer_within(
         )
 
 
-_ANSWERS: WeakKeyDictionary[Callable[..., object], dict[type, frozenset[type]]] = (
-    WeakKeyDictionary()
-)
-"""Each rule's declared answer, by its function and the class declaring it: read once."""
-
-
-def declared_answer(declaration: Declaration, owner: str) -> frozenset[type] | None:
+def declared_answer(
+    declaration: Declaration,
+    owner: str,
+    namespace_of: Namespaces,
+    hints: Mapping[str, object] | None = None,
+) -> frozenset[type] | None:
     """The non-values ``declaration``'s return annotation admits (``declared_non_values``),
-    its annotation resolved in the class that declares it, never in a subclass's namespace,
-    which may give its names other values; None for a declaration with no function."""
+    its annotation resolved in the class that declares it (its namespace ``namespace_of``'s,
+    the pass's, or its ``hints`` already resolved there), never in a subclass's namespace,
+    which may give its names other values; None for a declaration with no function. Read
+    once, and kept on the declaration (``Declaration._answer``), whose class it lives with."""
     function = _function(declaration)
     declaring = getattr(declaration, "owner", None)
     if function is None or not isinstance(declaring, type):
         return None
-    answers = _ANSWERS.setdefault(function, {})
-    if declaring not in answers:
-        hints = resolve_annotations(function, _annotation_namespace(declaring), owner)
-        answers[declaring] = declared_non_values(hints.get("return"))
-    return answers[declaring]
+    if declaration._answer is None:
+        if hints is None:
+            hints = resolve_annotations(function, namespace_of(declaring), owner)
+        declaration._settle(_answer=declared_non_values(hints.get("return")))
+    assert declaration._answer is not None
+    return declaration._answer
 
 
 def check_overrides(space_type: type[_Namespace]) -> None:
@@ -307,6 +331,7 @@ def check_overrides(space_type: type[_Namespace]) -> None:
     widens its base's answer (``_check_answer_within``). An answer whose annotation does not
     resolve yet (a name its module binds further down) is compared when the class is
     collected, which repeats the check and reports the annotation."""
+    namespace_of = _namespaces()
     for name, value in vars(space_type).items():
         declaration = slot_declaration(value)
         if not isinstance(declaration, (Derived, Constraint)):
@@ -323,7 +348,9 @@ def check_overrides(space_type: type[_Namespace]) -> None:
             continue  # a change of kind is the collection's to refuse
         owner = f"{space_type.__qualname__}.{name}"
         try:
-            _check_answer_within(cast("Derived[object] | Constraint", prior), declaration, owner)
+            _check_answer_within(
+                cast("Derived[object] | Constraint", prior), declaration, owner, namespace_of
+            )
         except DefinitionError as error:
             if error.findings and error.findings[0].code == "annotation-unresolved":
                 continue
@@ -374,7 +401,8 @@ def collect_space(space_type: type[_Namespace]) -> EffectiveSpace:
         raise DefinitionError.broken(
             "not-a-space", _OWNER, "collect_space expects a Space subclass"
         )
-    annotation_namespace = _annotation_namespace(space_type)
+    namespace_of = _namespaces()
+    annotation_namespace = namespace_of(space_type)
     hint_cache: dict[int, dict[str, object]] = {}
 
     def hints_for(function: Callable[..., object], owner: str) -> dict[str, object]:
@@ -390,7 +418,7 @@ def collect_space(space_type: type[_Namespace]) -> EffectiveSpace:
             _check_choice_annotation(declaration)
         elif isinstance(declaration, (Param, DecisionDecl)):
             declaration.resolve()
-    semantics = _collect_semantics(space_type, members, inherited, hints_for)
+    semantics = _collect_semantics(space_type, members, inherited, hints_for, namespace_of)
     preliminary = EffectiveSpace(
         space_type,
         MappingProxyType(members),
@@ -409,7 +437,12 @@ def collect_space(space_type: type[_Namespace]) -> EffectiveSpace:
                 annotations=hint_cache[id(function)],
                 semantics=semantics[declaration],
             )
-            answer = declared_answer(declaration, f"{space_type.__qualname__}.{name}")
+            answer = declared_answer(
+                declaration,
+                f"{space_type.__qualname__}.{name}",
+                namespace_of,
+                hint_cache[id(function)] if declaration.owner is space_type else None,
+            )
             if answer is None:
                 answer = declared_non_values(hint_cache[id(function)].get("return"))
             functions[name] = replace(bound, admits_inapplicable=Inapplicable in answer)

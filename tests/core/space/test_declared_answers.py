@@ -14,6 +14,8 @@ subclasses, each in the class that declares it.
 
 from __future__ import annotations
 
+import gc
+import weakref
 from typing import TypeAlias, TypeAliasType, TypeVar
 
 import pytest
@@ -279,3 +281,21 @@ def test_a_constraint_answering_inapplicable_undeclared_fails() -> None:
     with pytest.raises(EvaluationError, match="answered Inapplicable"):
         inspection.validity(design_space(Holds()))
     assert inspection.validity(design_space(Declared())).status == "valid"
+
+
+def test_a_collected_class_s_declared_answers_do_not_keep_it_alive() -> None:
+    """Each answer is kept on its declaration, which lives with its class: a class no one
+    holds is reclaimed once collected."""
+
+    def make() -> weakref.ref[type[Space]]:
+        class Transient(Base):
+            @derived
+            def refusing(self) -> int:
+                return self.n
+
+        collect_space(Transient)
+        return weakref.ref(Transient)
+
+    held = make()
+    gc.collect()
+    assert held() is None

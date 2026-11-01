@@ -128,6 +128,9 @@ class Declaration:
     when: ValueRef[bool] | None = None
     origin: str | None = None
     frozen: str | None = None
+    # A computation's: the non-values its return annotation admits, read once
+    # (``collection.declared_answer``). Private: a node's member may be named ``answer``.
+    _answer: frozenset[type] | None = None
     _record_origin = True
 
     def __new__(cls, *args: object, **kwargs: object) -> Self:
