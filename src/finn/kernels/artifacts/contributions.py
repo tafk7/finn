@@ -106,7 +106,10 @@ class HlsSource:
     ``headers`` are the files ``top`` and they include by quoted name, copied from their
     roots, each found on the include path its directory joins (``-I``). ``period_ns`` is
     the clock period HLS schedules for; ``directives`` the configuration commands
-    (``config_rtl ...``) it runs before synthesis, in order.
+    (``config_rtl ...``) it runs before synthesis, in order. With ``export``, the synthesis
+    also exports its top into the IP catalog as the IP named as its top, in FINN's vendor
+    and library (``xilinx_finn:finn:<function>:1.0``), whose IP-XACT a shell instantiates;
+    the request's digest says so.
     """
 
     function: str
@@ -114,6 +117,7 @@ class HlsSource:
     headers: tuple[CopiedSource, ...]
     period_ns: float
     directives: tuple[str, ...] = ()
+    export: bool = False
 
     def __post_init__(self) -> None:
         headers, directives = tuple(self.headers), tuple(self.directives)
@@ -139,8 +143,10 @@ class HlsSource:
             raise ContributionError(f"{self.function!r} is not a top's name, <stem>_<key16>")
         if self.function not in self.top:
             raise ContributionError(f"the top's text does not define {self.function}")
+        if not isinstance(self.export, bool):
+            raise ContributionError("whether an HLS request exports its IP is a bool")
         unnamed = self.top.replace(self.function, NAME_PLACEHOLDER)
-        if key != request_key(unnamed, headers, self.period_ns, directives)[:16]:
+        if key != request_key(unnamed, headers, self.period_ns, directives, self.export)[:16]:
             raise ContributionError(f"{self.function} is not the request's own digest")
 
     @classmethod
@@ -151,14 +157,17 @@ class HlsSource:
         headers: tuple[CopiedSource, ...],
         period_ns: float,
         directives: tuple[str, ...] = (),
+        export: bool = False,
     ) -> HlsSource:
         """The request whose top ``write(name)`` writes, named ``<stem>_<key16>`` by its
         digest: ``write`` is given the placeholder, then the name."""
         if not _STEM.fullmatch(stem):
             raise ContributionError(f"{stem!r} is no HLS top's stem: an identifier, no '__'")
-        key = request_key(write(NAME_PLACEHOLDER), tuple(headers), period_ns, tuple(directives))
+        key = request_key(
+            write(NAME_PLACEHOLDER), tuple(headers), period_ns, tuple(directives), export
+        )
         function = f"{stem}_{key[:16]}"
-        return cls(function, write(function), headers, period_ns, directives)
+        return cls(function, write(function), headers, period_ns, directives, export)
 
 
 def request_stem(function: str) -> str | None:
@@ -174,8 +183,11 @@ def request_key(
     headers: tuple[CopiedSource, ...],
     period_ns: float,
     directives: tuple[str, ...],
+    export: bool = False,
 ) -> str:
-    """The digest of a request whose top's name is ``NAME_PLACEHOLDER`` in ``unnamed``."""
+    """The digest of a request whose top's name is ``NAME_PLACEHOLDER`` in ``unnamed``; a
+    request that exports its IP says so in it, and one that does not digests as before."""
+    exported = ("export-ip-catalog",) if export else ()
     return digest(
         (
             "hls-request-v1",
@@ -183,6 +195,7 @@ def request_key(
             tuple((item.root, item.path) for item in headers),
             float(period_ns),
             tuple(directives),
+            *exported,
         )
     )
 

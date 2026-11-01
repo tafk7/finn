@@ -5,7 +5,8 @@
 
 ``built_hls`` lists the module's HLS requests (``hls_requests``: each leaf whose
 source is an ``HlsSource``, each request once), stages each
-(``finn.kernels.artifacts.hls.stage_hls``, FinnLib as FINN resolves it), and takes
+(``finn.kernels.artifacts.hls.stage_hls``, each header root the resource FINN resolves
+by its name: FinnLib, finn-hlslib), and takes
 its product from the HLS cache, synthesizing what is missing
 (``finn.toolchain.hls.synthesize``), the requests in parallel, each its own tool
 process, at most as many at once as the toolchain's selection states Vivado's runs
@@ -91,14 +92,17 @@ def built_hls(
 ) -> dict[str, Path]:
     """Each HLS request's exported Verilog in ``module``, by its top's name, synthesized for
     ``part`` unless cached (``cache``, ``$FINN_HOME/hls`` by default) and checked against
-    its leaf's pins. ``roots`` resolves the headers' roots (FinnLib as FINN resolves it by
-    default); ``toolchain`` runs HLS, at most ``vivado_jobs(toolchain.selection.vivado_jobs)``
+    its leaf's pins. ``roots`` resolves the headers' roots (by default each root the
+    requests name, as FINN resolves the resource of its name: FinnLib, finn-hlslib);
+    ``toolchain`` runs HLS, at most ``vivado_jobs(toolchain.selection.vivado_jobs)``
     syntheses at once: the number its selection states for Vivado's runs, else the machine's
     cores, capped."""
     requests = hls_requests(module)
     if not requests:
         return {}
-    roots = {"finnlib": resources.finnlib_root()} if roots is None else roots
+    if roots is None:
+        named = sorted({item.root for _, request in requests for item in request.headers})
+        roots = {name: Path(resources.path(name)) for name in named}
     scratch: Path = resources.scratch()  # type: ignore[no-untyped-call]
     scratch.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=scratch, prefix="hls_requests_") as staging:
