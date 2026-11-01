@@ -714,6 +714,8 @@ def test_the_command_lists_shows_and_checks(capsys: pytest.CaptureFixture[str]) 
     assert status == 1 and err.startswith(
         "finn-platform: configuration.target.shell: unknown-shell"
     )
+    status, out, err = run(["show", "part", "xc-not-a-part"], capsys)
+    assert status == 1 and not out and "unknown-part" in err
 
 
 def test_the_command_reports_each_finding_and_fails(

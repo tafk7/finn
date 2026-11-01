@@ -23,7 +23,7 @@ from collections.abc import Sequence
 from dataclasses import fields, is_dataclass
 from typing import Any
 
-from finn.platform.catalog import part_report
+from finn.platform.catalog import part, part_report
 from finn.platform.check import check
 from finn.platform.declarations import KINDS, Declarations, declarations
 from finn.platform.refusal import TargetRefused
@@ -65,6 +65,7 @@ def _row(found: ShellRow) -> dict[str, Any]:
 
 def _show(declared: Declarations, what: str, name: str, board: str | None) -> None:
     if what == "part":
+        part(name)  # an unknown part is refused, as an unknown board or shell is
         _write(json.dumps(part_report(name), indent=2))
         return
     if what == "board":
