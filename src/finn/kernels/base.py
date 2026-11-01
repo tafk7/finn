@@ -97,6 +97,7 @@ from finn.kernels.laws import (
     Interval,
     PortIntake,
     Standing,
+    StatedRate,
     TransportKind,
     in_cycles,
 )
@@ -182,6 +183,23 @@ def _refuse_restated_cycles(cls: type[Kernel]) -> None:
                 "interval where its hardware differs",
                 declaration=where,
             )
+
+
+def _refuse_misplaced_rate(cls: type[Kernel], module: bool) -> None:
+    """Refuse a kernel stating its rate a frame (``stated_rate``) that has no module or
+    states a schedule (``kernel-rate-stated``): a composite's cycles are its members', and a
+    scheduled kernel's follow from its schedule at its interval."""
+    if not _declared(cls, "stated_rate") or (module and not _declared(cls, "schedule")):
+        return
+    where = f"{cls.__qualname__}.stated_rate"
+    raise DefinitionError.broken(
+        "kernel-rate-stated",
+        "Kernel",
+        f"{where}: only a kernel with a module and no schedule states its rate a frame: a "
+        "composite's cycles are its members', a scheduled kernel's its schedule's at its "
+        "interval",
+        declaration=where,
+    )
 
 
 def _refuse_composite_interval(cls: type[Kernel]) -> None:
@@ -1731,6 +1749,7 @@ class Kernel(Space):
                 "a kernel binds one at most",
                 declaration=cls.__qualname__,
             )
+        _refuse_misplaced_rate(cls, bool(specs))
         if not specs:
             _refuse_composite_interval(cls)
         if specs:
@@ -1848,6 +1867,15 @@ class Kernel(Space):
         if type(self).module_spec is None:
             return Inapplicable()
         return RATE_INTERVAL
+
+    @derived
+    def stated_rate(self) -> StatedRate | Inapplicable:
+        """Its rate a frame where the rate law cannot give it (L6,
+        ``finn.kernels.laws.StatedRate``): a kernel with a module and no schedule that
+        advances otherwise than a beat a side (a memory mover) states it, its port's beat
+        times and its span, with their standing and source; its cycles a frame are then its
+        span (``frame_cycles``). Any other kernel states none (``kernel-rate-stated``)."""
+        return Inapplicable()
 
     # -- its intake ------------------------------------------------------------------------
 
@@ -2043,10 +2071,11 @@ class Kernel(Space):
         schedule's iterations (the span of each pace of its ports), or, a kernel with
         no schedule (a stage, a memory), advancing one beat a side an interval, the most
         beats a frame any of its placed ports carries, times its interval (``in_cycles``,
-        the one conversion, which FIFO sizing reads too). A kernel with children takes the
-        most any member takes, a member counting none (inapplicable) left out. A kernel with
-        a module never restates it (``kernel-cycles-restated``, when its class is made): it
-        states its ``interval`` where its hardware differs."""
+        the one conversion, which FIFO sizing reads too), or, where it states its rate
+        (``stated_rate``: a memory mover), the cycles its frame spans. A kernel with children
+        takes the most any member takes, a member counting none (inapplicable) left out. A
+        kernel with a module never restates it (``kernel-cycles-restated``, when its class is
+        made): it states its ``interval`` where its hardware differs, or its rate."""
         return self._frame_cycles()
 
     @view
@@ -2060,6 +2089,10 @@ class Kernel(Space):
             interval: Interval = self.interval
             if interval.standing is Standing.ASSUMED:
                 own = (f"interval {interval}",)
+            if _declared(type(self), "stated_rate"):
+                rate: StatedRate = self.stated_rate
+                if rate.standing is Standing.ASSUMED:
+                    own = (*own, f"rate {rate}")
         below = (f"{item.node}: {each}" for item in self.member_assumed for each in item.value)
         return (*own, *below)
 
@@ -2078,7 +2111,11 @@ class Kernel(Space):
         """A kernel with a module's cycles a frame by the rate law (``frame_cycles``): its
         schedule's iterations where it states a schedule, else its placed ports' most beats
         a frame, each port read in its declaration order (``StreamPort.frame_beats``), at
-        its ``interval``; refused where it places no port."""
+        its ``interval``; refused where it places no port. Where it states its rate, its
+        span, refused unless it times each beat a frame of a port it has
+        (``kernel-rate-port``)."""
+        if _declared(type(self), "stated_rate"):
+            return self._stated_frame_cycles()
         interval: Interval = self.interval
         if _declared(type(self), "schedule"):
             schedule: Schedule = self.schedule
@@ -2089,6 +2126,26 @@ class Kernel(Space):
                 "kernel-cycles", f"no port of {type(self).__qualname__} carries a stream's beats"
             )
         return in_cycles(max(beats), interval)
+
+    def _stated_frame_cycles(self) -> int | Rejected:
+        """``_rate_frame_cycles`` where it states its rate (``stated_rate``): its ports'
+        beats a frame read as the rate law reads them, by name."""
+        rate: StatedRate = self.stated_rate
+        owner = type(self).__qualname__
+        names = (name for name, item in _members(type(self)).items() if _is_stream_port(item))
+        by_port = dict(zip(names, getattr(self, "-beats-0")()))
+        if rate.port not in by_port:
+            return reject(
+                "kernel-rate-port", f"{owner} states the rate of {rate.port!r}, no port of it"
+            )
+        beats = by_port[rate.port]
+        if beats != len(rate.times):
+            return reject(
+                "kernel-rate-port",
+                f"{owner} times {len(rate.times)} beats of {rate.port}, which carries "
+                f"{beats} a frame",
+            )
+        return rate.span
 
     # -- what it reaches of its members: their answers, read by its views, and their intake,
     # read by its own (a derived value, contract) ------------------------------------------
