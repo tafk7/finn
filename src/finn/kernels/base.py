@@ -233,9 +233,9 @@ def _members(cls: type[Kernel]) -> dict[str, object]:
 # member channel ``h``'s hops; ``<what>`` one of ``neighbours``, ``ends``, ``hops``,
 # ``producer``, ``consumer``, ``placed``, ``case`` and ``governed``), ``-<what>-<i>`` for the
 # ``i``-th helper of a reading (``-hops-0``), and the base's own ``-end`` (ending each
-# reading), ``-placed``, ``-no-port`` and ``-own-buses``. No member's name holds a ``-`` (a
-# Python name, or a graph name as ``finn.kernels.composer`` names its member, ``\W`` as
-# ``_``), and a composed class's root members begin with their member's name
+# reading), ``-placed``, ``-no-port``, ``-own-buses`` and ``-own-windows``. No member's name
+# holds a ``-`` (a Python name, or a graph name as ``finn.kernels.composer`` names its
+# member, ``\W`` as ``_``), and a composed class's root members begin with their member's name
 # (``mm0-x_tensor``), so no member meets one, whatever its name; their last segments, a word
 # or a number, keep them apart.
 
@@ -816,6 +816,23 @@ def _own_buses(model: str) -> Callable[[Any], tuple[str, ...]]:
     return own_buses
 
 
+def _own_windows(model: str) -> Callable[[Any], tuple[int, ...] | Rejected]:
+    def own_windows(self: Any) -> tuple[int, ...] | Rejected:
+        config = getattr(self, model)
+        if not config.presented:
+            return ()
+        bus = config.bus
+        widths = [member.width for member in bus.signals if member.logical == "awaddr"]
+        if not widths:
+            return reject(
+                "bus-aperture-unknown",
+                f"{bus.name}: an AXI-Lite bus with no awaddr has no aperture",
+            )
+        return (1 << widths[0],)
+
+    return own_windows
+
+
 def _derive_control(cls: type[Kernel]) -> None:
     """Derive ``cls``'s ``declares_bus`` and ``bus_control`` from the control bus its own body
     declares (above); one a kernel it derives from declares, it inherits with that kernel's
@@ -882,6 +899,7 @@ def _derive_control(cls: type[Kernel]) -> None:
     if may_present:
         cls._presents_buses = True
         setattr(cls, "-own-buses", _own_buses(name))
+        setattr(cls, "-own-windows", _own_windows(name))
     declares = _declares_bus()
     declares.__annotations__ = {"return": bool}
     declares.__doc__ = f"Whether it declares a control bus: it does, {name}."
@@ -902,14 +920,15 @@ def _derive_control(cls: type[Kernel]) -> None:
 #
 # A kernel with members takes the doubled clock where it or any present member takes it, and
 # presents the control buses it and its present members present, each under its member's
-# path: the base derives both once, when its class is made, from the members whose class may
-# take a doubled clock (one deriving its own ``clocking``, or a kernel with such members) or
-# may present a bus. It reads those members only, one after another, each where it is
-# present (its guard read by the name its closure fixes) and, a selector, its selected case
-# only: a dormant case is never read. As for the module's parts, each member is read by its
-# own helper, ``-<prefix>-<i>``, so that each read names its member.
+# path, each with the window it takes: the base derives them once, when its class is made,
+# from the members whose class may take a doubled clock (one deriving its own ``clocking``,
+# or a kernel with such members) or may present a bus. It reads those members only, one
+# after another, each where it is present (its guard read by the name its closure fixes)
+# and, a selector, its selected case only: a dormant case is never read. As for the module's
+# parts, each member is read by its own helper, ``-<prefix>-<i>``, so that each read names
+# its member.
 
-_DOUBLED, _BUSES = "doubled", "buses"
+_DOUBLED, _BUSES, _WINDOWS = "doubled", "buses", "windows"
 _AGGREGATED = "_finn_aggregated"
 
 
@@ -995,6 +1014,19 @@ def _buses_from(
     return buses_from
 
 
+def _windows_from(
+    guard: str | None, member: str, following: str
+) -> Callable[[Kernel], tuple[int, ...]]:
+    def windows_from(self: Kernel) -> tuple[int, ...]:
+        found: tuple[int, ...] = ()
+        if guard is None or getattr(self, guard):
+            found = getattr(self, member).control_windows
+        following_: tuple[int, ...] = getattr(self, following)()
+        return (*found, *following_)
+
+    return windows_from
+
+
 def _case_member(cls: type[Kernel], member: str, item: object) -> str | None:
     """The name of ``cls``'s private member answering a selector member's case
     (``-<member>-case``), installed where it is not yet; None for a child."""
@@ -1009,8 +1041,9 @@ def _case_member(cls: type[Kernel], member: str, item: object) -> str | None:
 
 
 def _derive_doubled(cls: type[Kernel]) -> None:
-    """Derive ``cls``'s ``takes_doubled_clock`` and ``control_buses`` from the members that
-    may require them (above), where it has any and does not state its own."""
+    """Derive ``cls``'s ``takes_doubled_clock``, ``control_buses`` and ``control_windows``
+    from the members that may require them (above), where it has any and does not state its
+    own."""
     members = [
         (name, item)
         for name, item in _members(cls).items()
@@ -1055,6 +1088,21 @@ def _derive_doubled(cls: type[Kernel]) -> None:
 
         control_buses.__doc__ = vars(Kernel)["control_buses"].function.__doc__
         _set_aggregated(cls, "control_buses", control_buses, tuple[str, ...])
+        _install_reading(
+            cls,
+            _WINDOWS,
+            [(partial(_windows_from, _guarded(cls, item)), name) for name, item in presenting],
+        )
+
+        def control_windows(self: Kernel) -> tuple[int, ...] | Rejected:
+            own: tuple[int, ...] | Rejected = getattr(self, "-own-windows")()
+            if isinstance(own, Rejected):
+                return own
+            found: tuple[int, ...] = (*own, *getattr(self, "-windows-0")())
+            return found
+
+        control_windows.__doc__ = vars(Kernel)["control_windows"].function.__doc__
+        _set_aggregated(cls, "control_windows", control_windows, tuple[int, ...] | Rejected)
 
 
 def _install_reading(
@@ -2046,6 +2094,15 @@ class Kernel(Space):
         return found
 
     @derived
+    def control_windows(self) -> tuple[int, ...] | Rejected:
+        """The bytes each control bus it presents takes (``2**awaddr`` of its bus), one for
+        each of its ``control_buses``, in their order: what a shell's control window rule
+        places. The base derives it beside ``control_buses``; a presented bus with no
+        ``awaddr`` has none (``bus-aperture-unknown``)."""
+        found: tuple[int, ...] | Rejected = getattr(self, "-own-windows")()
+        return found
+
+    @derived
     def declares_bus(self) -> bool:
         """Whether it declares a control bus (presented or not): False here; the base derives
         True for a kernel declaring one (``ControlModel``) when its class is made."""
@@ -2191,10 +2248,11 @@ def _doubled_none(self: Kernel) -> bool:
     return False
 
 
-for _head in (_PINS, _HELD, _PRESENTED, _BEATS, _INPUTS, _BUSES, _HOPS):
+for _head in (_PINS, _HELD, _PRESENTED, _BEATS, _INPUTS, _BUSES, _WINDOWS, _HOPS):
     setattr(Kernel, _installed(_head, "0"), _read_none)
 setattr(Kernel, _installed(_DOUBLED, "0"), _doubled_none)
 setattr(Kernel, "-own-buses", _read_none)
+setattr(Kernel, "-own-windows", _read_none)
 setattr(Kernel, _END, _read_none)
 setattr(Kernel, "-no-port", _no_port)
 setattr(Kernel, "-placed", _placed)

@@ -261,6 +261,43 @@ def test_a_control_bus_presented_is_read_with_its_port_and_registers() -> None:
     assert library_module(point).held.inputs == (("mode", 1),)
 
 
+ADDRESSED = Bus(
+    "s_axilite",
+    StandardProtocol.AXILITE,
+    (*BUS.signals, Member("awaddr", "s_axilite_awaddr", 12)),
+)
+"""The probe's bus with 12 address bits: a 4 KiB window."""
+
+
+class Addressed(Probe):
+    """The probe with an addressed control bus it presents where ``writable``."""
+
+    id = "test.probe.addressed"
+    writable: bool = Param(default=False)
+    control: str | None = Param(default=None)
+
+    @view
+    def register_map(self) -> RegisterMap:
+        return RegisterMap(((0, 7),))
+
+    config = ControlModel(bus=ADDRESSED, presented=writable)
+
+
+def test_a_presented_control_bus_takes_the_window_its_address_spans() -> None:
+    """A kernel's control windows (``Kernel.control_windows``) are its presented buses',
+    each ``2**awaddr`` bytes, one for each of its ``control_buses``: none while its bus is
+    held. A presented bus with no ``awaddr`` has no window to take
+    (``bus-aperture-unknown``)."""
+    held = design_space(Addressed(tensor=TENSOR))
+    assert (held.control_buses, held.control_windows) == ((), ())
+    point = design_space(Addressed(tensor=TENSOR, writable=True, control="s_axilite"))
+    assert (point.control_buses, point.control_windows) == (("",), (4096,))
+    unaddressed = controlled(writable=True, control="s_axilite")
+    assert unaddressed.control_buses == ("",)
+    answer = unaddressed.query(Controlled.control_windows)
+    assert isinstance(answer, Rejected) and codes(answer) == {"bus-aperture-unknown"}
+
+
 def test_a_control_bus_presented_without_its_port_is_refused() -> None:
     # A bus it presents names the port it is presented at: presented with no port (the
     # optional ``control`` left out, None), its control view refuses rather than present a

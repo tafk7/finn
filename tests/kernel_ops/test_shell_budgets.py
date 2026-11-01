@@ -65,8 +65,10 @@ from finn.kernels.artifacts.abi import (
     StandardProtocol,
 )
 from finn.kernels.artifacts.contributions import CopiedSource
+from finn.kernels.artifacts.ipxact import address_width
 from finn.kernels.artifacts.module import Abi, BusExport, Fragment, Leaf
 from finn.kernels.artifacts.top import module_abi
+from finn.kernels.base import Kernel
 from finn.kernels.budgets import SHELL, counts
 from finn.kernels.composer import Facts, Port, channel, member_name
 from finn.kernels.explore import CoreComposition, Seam, SizeFifos
@@ -369,6 +371,26 @@ def test_the_counts_are_the_modules_pins() -> None:
     assert isinstance(netlist, Available)
     module = built(point, "shell")
     assert bus_counts(*netlist.value) == bus_counts_of_abi(module.abi) == (3, 0, False)
+
+
+def test_each_bus_presented_takes_the_window_its_module_states() -> None:
+    """The control windows the core derives (``Kernel.control_windows``) are those of the
+    AXI-Lite buses its module presents, ``2**awaddr`` each, in the module's order: the two
+    thresholdings presenting theirs, not the third holding its own. Each mover's is its
+    ``s_axi_control``'s, 64 bytes."""
+    point = thresholdings(3, PYNQ_ROW, presenting=2)
+    buses = [
+        pin
+        for pin in built(point, "shell").abi.pins
+        if isinstance(pin, Bus) and pin.protocol is StandardProtocol.AXILITE
+    ]
+    assert [bus.name for bus in buses] == ["t0_s_axilite", "t1_s_axilite"]
+    assert point.core.control_buses == ("t0", "t1")
+    assert point.core.control_windows == tuple(1 << address_width(bus) for bus in buses)
+    assert [point.query(name, Kernel.control_windows) for name in point.movers] == [
+        Available((64,)),
+        Available((64,)),
+    ]
 
 
 def test_the_shells_netlist_presents_each_bus_with_its_writes() -> None:
