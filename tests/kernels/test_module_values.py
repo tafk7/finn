@@ -6,6 +6,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 from qonnx.core.datatype import DataType
+from support.module_names import fixed_snapshot
 
 from finn.core.space import DefinitionError, Rejected, design_space
 from finn.dataflow.tensor import ScalarEncoding, Tensor
@@ -21,13 +22,13 @@ from finn.kernels.artifacts.module import BuildError, Held, Leaf, fingerprint
 from finn.kernels.laws import NATIVE_CLOCKING
 from finn.kernels.library import ModuleSpec, assemble_module, library_module, module_unprovided
 from finn.kernels.vpc import VpcKernel
-from finn.resources import finnlib_root
 
-# Captured from immutable FINN0dd7e4ac5; full canonical values/pins are retained
-# in the output record. This is the original public module fingerprint, not a new oracle.
+# The fingerprint (``module-v2``) of each Vpc leaf this test resolves, over fixed stand-in
+# bytes for its source (``support.module_names.fixed_snapshot``), recorded from that leaf: it
+# moves with the leaf's value or the fingerprint's format, never with the FinnLib checked out.
 VPC_FINGERPRINTS = {
-    "INT3": "30f1b1d3869a24af3ade2a3bbea7724f600436ca0467e0e3f02d12138299e0d5",
-    "UINT7": "0b1ec47fe8a22238ded8d2aa00096716039c11998e6261f514c9e01d6ca6f3b3",
+    "INT3": "0352756f1882044c100e79a830e66bc229f1a5af55b5d7f8dad5523665eb7e40",
+    "UINT7": "739c20200899eeab4d02e3aa5e54063279b2922fbf3ff5cb0793838bc87eea04",
 }
 
 VPC_SOURCE = CopiedSource("finnlib", "rtl/shape/vpc.sv", provides=("module:vpc",))
@@ -67,8 +68,8 @@ def test_resolved_module_matches_actual_existing_vpc_leaf(
     )
     assert new == old
     assert isinstance(new, Leaf)
-    roots = {"finnlib": finnlib_root()}
-    assert fingerprint(new, roots) == fingerprint(old, roots) == VPC_FINGERPRINTS[dtype]
+    fixed = fixed_snapshot(new)
+    assert fingerprint(new, fixed) == fingerprint(old, fixed) == VPC_FINGERPRINTS[dtype]
 
 
 def test_constant_and_dynamic_source_provision_have_one_plain_contract() -> None:

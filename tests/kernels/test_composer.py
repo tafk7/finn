@@ -33,6 +33,7 @@ from support.chain import (
     W,
 )
 from support.helpers import FULL_DSP48E2, TEST_CORE, by_hand, choose, root_facts, set_indices
+from support.module_names import live_name
 from support.refusals import refused
 
 from finn.core.space import (
@@ -55,7 +56,7 @@ from finn.dataflow.gemm import Form, Window
 from finn.dataflow.schedule import Index
 from finn.kernels import composer
 from finn.kernels.artifacts.abi import Direction
-from finn.kernels.artifacts.module import Link, LinkEnd, module_name
+from finn.kernels.artifacts.module import Link, LinkEnd
 from finn.kernels.base import Kernel, extent_of, hops, neighbours, own_ends
 from finn.kernels.channels import Channel, OuterHops
 from finn.kernels.composer import (
@@ -85,7 +86,6 @@ from finn.kernels.port import exposed_pins, port_direction
 from finn.kernels.sides import BUILD, Outside, Side, SideKind, Steady
 from finn.kernels.thresholding import ThresholdingKernel
 from finn.kernels.values.semantics import IntegerTensorValue
-from finn.resources import finnlib_root
 
 
 def _matmul(weights: object, x_tensor: object) -> Facts:
@@ -1045,8 +1045,7 @@ def test_the_declaration_s_order_is_a_fact_of_the_class_and_its_name_is_none(
     ]
     module, other = (each.answer(DataflowCoreKernel.module) for each in configured)
     assert isinstance(module, Available) and other == module
-    roots = {"finnlib": finnlib_root()}
-    assert module_name(other.value, roots) == module_name(module.value, roots)
+    assert live_name(other.value) == live_name(module.value)
     order = (
         "x",
         *kernels(),

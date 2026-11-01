@@ -11,11 +11,13 @@ The one step that touches the filesystem, in two parts:
   directory ``built`` names for the request's top (``finn.toolchain.hls``, through
   ``finn.transformation.kernels.hls.built_hls``), staged below a directory named
   by the top, its top file providing the module, and the memory images beside it
-  (``*.dat``) written as data files. Each path is staged once and providers come
-  first (``sources.ordered``); two different files claiming one path or one
-  symbol are refused. Each data file is written once.
+  (``*.dat``) written as data files. Each file is read once, into one snapshot
+  (``capture``), which the module is named from and its files are written from.
+  Each path is staged once and providers come first (``sources.ordered``); two
+  different files claiming one path or one symbol are refused. Each data file is
+  written once.
 - **Netlist.** A ``Composed`` module adds one SystemVerilog module, named
-  ``<stem>_<fingerprint>`` (``module.module_name``) and written here from its
+  ``<stem>_<fingerprint>`` (``module.module_name``, of the snapshot) and written here from its
   value: its ports from its pins; one net per instance input and per output
   something reads; per link, the data lanes (lane zero least significant), the
   sink's padding driven zero (a root output carries the source's own padding),
@@ -55,6 +57,7 @@ from finn.kernels.artifacts.module import (
     Link,
     LinkEnd,
     Module,
+    Snapshot,
     instance_name,
     module_name,
 )
@@ -91,11 +94,9 @@ HLS_SOURCE_SUFFIXES = (".v",)
 HLS_DATA_SUFFIXES = (".dat",)
 
 
-def _hls_product(
-    request: HlsSource, built: Mapping[str, Path]
-) -> tuple[list[tuple[SourceFile, bytes]], dict[str, bytes]]:
-    """An HLS request's exported Verilog, below a directory named by its top, and the
-    images its memories read, beside the module's sources."""
+def _hls_product(request: HlsSource, built: Mapping[str, Path]) -> tuple[tuple[str, bytes], ...]:
+    """An HLS request's product, each file's bytes by its name: its exported Verilog, its
+    top ``<top>.v`` among it, and the images its memories read (``*.dat``)."""
     function = request.function
     product = built.get(function)
     if product is None:
@@ -110,16 +111,57 @@ def _hls_product(
         raise BuildError(
             f"the HLS product {product} holds files emission does not stage: {unknown}"
         )
-    files: list[tuple[SourceFile, bytes]] = []
-    data: dict[str, bytes] = {}
-    for name in names:
-        content = _read(Path(product) / name, "HLS product file")
-        if name.endswith(HLS_DATA_SUFFIXES):
-            data[name] = content
-            continue
-        provides = (f"module:{function}",) if name == f"{function}.v" else ()
-        files.append((SourceFile(f"{function}/{name}", content_digest(content), provides), content))
-    return files, data
+    return tuple((name, _read(Path(product) / name, "HLS product file")) for name in names)
+
+
+def capture(
+    module: Module, *, roots: Mapping[str, Path], built: Mapping[str, Path] | None = None
+) -> Snapshot:
+    """Read every file the module's leaves stage from outside it, each once: each copied
+    source from its root, ``roots`` resolving it by name, and each HLS request's product from
+    the directory ``built`` names for its top. The module's name (``module_name``) and its
+    emitted files are both this snapshot's. Before anything is read, a ``BuildError`` where two
+    copied sources would be staged as one path (from two roots), or one under an HLS product's
+    directory (its top's name): one staged file is one file read."""
+    staged: dict[str, tuple[str, str]] = {}
+    tops = {
+        item.function
+        for leaf in _leaves(module)
+        for item in leaf.sources
+        if isinstance(item, HlsSource)
+    }
+    for leaf in _leaves(module):
+        for item in leaf.sources:
+            if isinstance(item, HlsSource):
+                continue
+            other = staged.setdefault(item.path, (item.root, item.path))
+            if other != (item.root, item.path):
+                raise BuildError(
+                    f"two sources are staged as {item.path}: {other[0]!r}'s and {item.root!r}'s"
+                )
+            if item.path.split("/")[0] in tops:
+                raise BuildError(
+                    f"{item.path} of {item.root!r} would be staged among the HLS product of "
+                    f"{item.path.split('/')[0]}"
+                )
+    copied: dict[tuple[str, str], bytes] = {}
+    products: dict[str, tuple[tuple[str, bytes], ...]] = {}
+    for leaf in _leaves(module):
+        for item in leaf.sources:
+            if isinstance(item, HlsSource):
+                if item.function not in products:
+                    products[item.function] = _hls_product(item, built or {})
+                continue
+            key = (item.root, item.path)
+            if key not in copied:
+                root = roots.get(item.root)
+                if root is None:
+                    raise BuildError(f"no source root resolves {item.root!r}")
+                copied[key] = _read(Path(root) / item.path, "copied source")
+    return Snapshot(
+        tuple((root, path, content) for (root, path), content in copied.items()),
+        tuple(products.items()),
+    )
 
 
 def emit_module(
@@ -129,12 +171,14 @@ def emit_module(
     roots: Mapping[str, Path],
     built: Mapping[str, Path] | None = None,
 ) -> EmittedModule:
-    """Write the module's sources and data files into ``directory``; ``roots`` resolves
-    each copied source's root, ``built`` each HLS request's product by its top's name."""
-
+    """Write the module's sources and data files into ``directory``, from one snapshot of
+    them (``capture``: ``roots`` resolves each copied source's root, ``built`` each HLS
+    request's product by its top's name), the module named from it."""
+    snapshot = capture(module, roots=roots, built=built)
+    copied = {(root, path): content for root, path, content in snapshot.copied}
+    products = dict(snapshot.products)
     drafts: list[tuple[SourceFile, bytes]] = []
     data: dict[str, bytes] = {}
-    read: dict[tuple[str, str], bytes] = {}
 
     def add_data(path: str, content: bytes) -> None:
         if data.setdefault(path, content) != content:
@@ -143,23 +187,21 @@ def emit_module(
     for leaf in _leaves(module):
         for item in leaf.sources:
             if isinstance(item, HlsSource):
-                files, images = _hls_product(item, built or {})
-                drafts += files
-                for path, content in images.items():
-                    add_data(path, content)
+                function = item.function
+                for name, content in products[function]:
+                    if name.endswith(HLS_DATA_SUFFIXES):
+                        add_data(name, content)
+                        continue
+                    provides = (f"module:{function}",) if name == f"{function}.v" else ()
+                    file = SourceFile(f"{function}/{name}", content_digest(content), provides)
+                    drafts.append((file, content))
                 continue
-            key = (item.root, item.path)
-            if key not in read:
-                root = roots.get(item.root)
-                if root is None:
-                    raise BuildError(f"no source root resolves {item.root!r}")
-                read[key] = _read(Path(root) / item.path, "copied source")
-            content = read[key]
+            content = copied[(item.root, item.path)]
             file = SourceFile(item.path, content_digest(content), item.provides, item.requires)
             drafts.append((file, content))
         for datum in leaf.data:
             add_data(datum.path, datum.data)
-    name = module_name(module, roots)
+    name = module_name(module, snapshot)
     if isinstance(module, Composed):
         text = netlist(module, name).encode()
         drafts.append((SourceFile(f"{name}.sv", content_digest(text), (f"module:{name}",)), text))
@@ -383,6 +425,7 @@ def netlist(module: Composed, name: str) -> str:
 
 __all__ = [
     "EmittedModule",
+    "capture",
     "emit_module",
     "instance_net",
     "netlist",
