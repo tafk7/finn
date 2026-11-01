@@ -74,6 +74,7 @@ from finn.kernels.configure import commit
 from finn.kernels.dataflow_core import (
     PRODUCER,
     SEPARATOR,
+    STEM,
     DataflowCoreKernel,
     bound,
     core_module,
@@ -1028,8 +1029,9 @@ def test_the_class_answers_its_netlist_edge_cycles_and_resources(cache: None) ->
     assert isinstance(module, Available) and network.answer(DataflowCoreKernel.module) == module
     made = module.value
     assert (made.implementation_id, made.implementation_version) == ("finn.dataflow_core", "1")
-    assert made.stem == "finn_partition" and made.fragment == wired.value
-    assert made == core_module(PRODUCER, "finn_partition", wired.value, edge.value)
+    # Its stem is its kind, whatever the core is called (its name, "partition" here).
+    assert made.stem == STEM and made.fragment == wired.value
+    assert made == core_module(PRODUCER, STEM, wired.value, edge.value)
     cycles = point.query(Kernel.frame_cycles)
     assert isinstance(cycles, Available) and network.answer(Kernel.frame_cycles) == cycles
     assert cycles.value == max(

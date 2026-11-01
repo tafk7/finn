@@ -48,6 +48,7 @@ from finn.core.graph.partition import CUT_NAME, KERNEL_OPS_DOMAIN, design_digest
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import body_row, configured_network, shell_composition
 from finn.dataflow.traversal import Loop, Reorder, Traversal, offsets
+from finn.kernels.artifacts.module import module_name
 from finn.platform.resolve import resolve_target
 from finn.transformation.kernels import (
     InferKernelTensors,
@@ -211,10 +212,10 @@ def test_the_export_names_each_mover_its_iodma_and_every_connection(tmp_path: Pa
         ZYNQ.part,
         5.0,
     )
-    assert (export.partition, export.vlnv) == (
-        "DataflowCore_0",
-        "xilinx_finn:finn:DataflowCore_0:1.0",
-    )
+    # The instance is the node's name, the IP its module's.
+    _, body, _ = partition_body(parent)
+    top = module_name(configured_network(body, "DataflowCore_0")[0].module)
+    assert (export.partition, export.vlnv) == ("DataflowCore_0", f"xilinx_finn:finn:{top}:1.0")
     # Movers by direction in port order, each IODMA_hls configured from its facts: a
     # frame's beats, the stream's bytes a beat in the UINT8 container, the memory port
     # and the stream's width; the element is the mover's.
@@ -508,7 +509,9 @@ def test_packaging_states_its_ip_typed_and_writes_no_flat_key(tmp_path: Path) ->
         PackagePartition("DataflowCore_0", directory=project, toolchain=toolchain)
     )
     assert packaged.get(OUTPUT_IP) == str(project / "ip")
-    assert packaged.get(OUTPUT_VLNV) == "xilinx_finn:finn:DataflowCore_0:1.0"
+    top = module_name(configured_network(body, "DataflowCore_0")[0].module)
+    assert top.startswith("finn_dataflowcore_")
+    assert packaged.get(OUTPUT_VLNV) == f"xilinx_finn:finn:{top}:1.0"
     interfaces = packaged.get(OUTPUT_INTERFACES)
     assert (interfaces["s_axis"], interfaces["m_axis"]) == (
         [["s_axis_0", 8], ["s_axis_1", 16]],

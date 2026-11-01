@@ -238,7 +238,7 @@ def test_what_a_build_made_is_typed_in_finn_outputs() -> None:
     model = holder()
     made = {
         OUTPUT_IP: "/build/stitch/ip",
-        OUTPUT_VLNV: "xilinx_finn:finn:DataflowCore_0:1.0",
+        OUTPUT_VLNV: "xilinx_finn:finn:finn_dataflowcore_0123456789abcdef:1.0",
         OUTPUT_INTERFACES: {"clk": ["ap_clk"], "s_axis": [["s_axis_0", 32]], "axilite": []},
         OUTPUT_IP_KEY: DIGEST,
         OUTPUT_IP_OPTIONS: {"run_synth": False},

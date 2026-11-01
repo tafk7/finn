@@ -15,7 +15,7 @@ The one step that touches the filesystem, in two parts:
   first (``sources.ordered``); two different files claiming one path or one
   symbol are refused. Each data file is written once.
 - **Netlist.** A ``Composed`` module adds one SystemVerilog module, named
-  ``<stem>__<fingerprint>`` (``module.module_name``) and written here from its
+  ``<stem>_<fingerprint>`` (``module.module_name``) and written here from its
   value: its ports from its pins; one net per instance input and per output
   something reads; per link, the data lanes (lane zero least significant), the
   sink's padding driven zero (a root output carries the source's own padding),

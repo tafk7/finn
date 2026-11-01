@@ -42,6 +42,8 @@ from finn.core.space import inspection
 from finn.custom_op.kernels.network import persist
 from finn.custom_op.kernels.shell import configured_network
 from finn.kernels.artifacts import build
+from finn.kernels.artifacts.module import module_name
+from finn.kernels.dataflow_core import STEM
 from finn.toolchain.launcher import (
     Selection,
     Toolchain,
@@ -64,7 +66,8 @@ def test_the_partition_packages_its_nodes_choices() -> None:
     module = configured_network(model, "sdp_1")[0].module
     reference = configured_network(model, "DataflowCore_0")[0].module
     assert (module.fragment, module.abi) == (reference.fragment, reference.abi)
-    assert module.stem == "finn_sdp_1"
+    # Its module is named by its kind and content, not by its node: one name under both.
+    assert module.stem == STEM and module_name(module) == module_name(reference)
     assert [port.name for port in module.abi.pins] == [
         "ap_clk",
         "ap_rst_n",
@@ -91,7 +94,7 @@ def test_a_choice_never_created_refuses_packaging_and_is_named() -> None:
     keys = cast(KernelOpError, left.error).keys
     assert keys and {key.split(".")[0] for key in keys} <= channels
     module = configured_network(model.transform(MakeCutChoices(CUT_NAME)), "sdp_1")[0].module
-    assert module.stem == "finn_sdp_1"
+    assert module.stem == STEM
 
 
 def test_a_choice_waiting_on_an_open_one_is_saved_and_emission_names_the_open_one() -> None:
@@ -162,7 +165,7 @@ def test_the_chains_emitted_top_elaborates_before_vivado(
         reaches_vivado(model, "sdp_1", tmp_path / "project")
     # The check logs that it ran, what it checked, and its time.
     (line,) = [record.getMessage() for record in caplog.records if record.name == logger]
-    assert line.startswith("sdp_1: slang elaborated finn_sdp_1")
+    assert line.startswith("sdp_1: slang elaborated finn_dataflowcore_")
     assert "its 4 ports agree with the pins (" in line and line.endswith(" s)")
 
 
@@ -204,11 +207,12 @@ def test_the_chain_packages_as_the_shells_ip(tmp_path: Path) -> None:
     configure_partition(model := kernel_model())
     project = tmp_path / "vivado_stitch_proj"
     key = ip_key(model, "sdp_1", run_synth=False, toolchain=host_toolchain())
+    name = module_name(configured_network(model, "sdp_1")[0].module)
     model = model.transform(PackagePartition("sdp_1", directory=project))
     assert model.get(OUTPUT_IP_KEY) == key
-    # What packaging states of the IP, typed; no flat key.
+    # What packaging states of the IP, typed; no flat key. The IP is named as its module.
     assert model.get(OUTPUT_IP) == str(project.resolve() / "ip")
-    assert model.get(OUTPUT_VLNV) == "xilinx_finn:finn:sdp_1:1.0"
+    assert model.get(OUTPUT_VLNV) == f"xilinx_finn:finn:{name}:1.0"
     assert model.get(OUTPUT_INTERFACES) == {
         "clk": ["ap_clk"],
         "rst": ["ap_rst_n"],
@@ -231,7 +235,7 @@ def test_the_chain_packages_as_the_shells_ip(tmp_path: Path) -> None:
     assert [root.find(f"{spirit}{tag}").text for tag in ("vendor", "library", "name")] == [
         "xilinx_finn",
         "finn",
-        "sdp_1",
+        name,
     ]
     interfaces = {}
     for bus in root.iter(f"{spirit}busInterface"):
@@ -254,8 +258,8 @@ def test_the_chain_packages_as_the_shells_ip(tmp_path: Path) -> None:
     # weights' and the thresholds' alike.
     files = {path.name for path in (project / "ip" / "src").iterdir()}
     for memory in ("memstream_", "thresholds_"):
-        assert any(name.startswith(memory) and name.endswith(".dat") for name in files)
-    assert any(name.startswith("finn_sdp_1__") for name in files)
+        assert any(file.startswith(memory) and file.endswith(".dat") for file in files)
+    assert f"{name}.sv" in files
     # Movable: every path the IP names is its own, relative.
     assert str(tmp_path) not in (project / "ip" / "component.xml").read_text()
     second = tmp_path / "second"
@@ -302,7 +306,7 @@ def test_a_failed_packaging_run_is_vivados_failure_naming_its_transcript(
     for tools in (toolchain, toolchain.transcripts_in(logs)):
         with pytest.raises(ToolFailed) as failed:
             model.transform(PackagePartition("sdp_1", directory=project, toolchain=tools))
-        (kept,) = ip_store.glob("sdp_1-*.failed")
+        (kept,) = ip_store.glob("finn_dataflowcore_*-*.failed")
         transcript = (kept if tools is toolchain else logs) / "package.sh.stdout.log"
         assert (failed.value.tool, failed.value.status) == ("vivado", 1)
         assert failed.value.transcript == transcript
@@ -352,9 +356,11 @@ def test_a_run_that_packages_no_ip_is_vivados_failure(tmp_path: Path, ip_store: 
     configure_partition(model := kernel_model())
     project = tmp_path / "project"
     toolchain = _tools(tmp_path, {"vivado": "echo done > package.log\n"})
-    with pytest.raises(ToolFailed, match="sdp_1: no IP packaged") as failed:
+    with pytest.raises(
+        ToolFailed, match="finn_dataflowcore_[0-9a-f]{16}: no IP packaged"
+    ) as failed:
         model.transform(PackagePartition("sdp_1", directory=project, toolchain=toolchain))
-    (kept,) = ip_store.glob("sdp_1-*.failed")
+    (kept,) = ip_store.glob("finn_dataflowcore_*-*.failed")
     transcript = kept / "package.sh.stdout.log"
     assert (failed.value.status, failed.value.transcript) == (None, transcript)
     # Nor is a missing or empty utilization report a refusal of the partition.

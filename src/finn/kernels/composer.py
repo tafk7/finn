@@ -50,7 +50,7 @@ names). Its facts:
 - **its edge ports**, one per boundary side, each a node alias of its channel's outer port
   named as the side's label, its bus (``s_axis_0 = x.outer_in``, ``m_axis_0 =
   y.outer_out``), after its members, in its instance order;
-- **its module's name**, the class's own fact (``DataflowCoreKernel.name``), and, for each
+- **its name**, the class's own fact (``DataflowCoreKernel.name``), and, for each
   edge channel at a frozen neighbour, the port beside it (``<channel>-frozen``, a
   ``finn.kernels.channels.Neighbours``, which the class answers that channel's neighbours
   and hops from); and, as class facts, **its instance order** (``Kernel.instance_order``:
@@ -261,8 +261,8 @@ class DataflowCoreDeclaration:
     """A core as declared: its ``kernels`` by graph name, each its ``Facts``, in their order
     (the graph's), its ``channels`` by the name of the tensor each carries, in a shell, the
     shell's row (``shell``: its facts by name, ``finn.kernels.budgets.ShellBudgets``'s
-    formals; None outside one), its module's name (``name``, ``DataflowCoreKernel.name``:
-    a node's its own, a test core's its caller's), the order its module places its members
+    formals; None outside one), its name (``name``, ``DataflowCoreKernel.name``: a node's
+    its own, a test core's its caller's), the order its module places its members
     in, by graph name (``order``: the kernels, then the channels, as declared, by default;
     ``Kernel.instance_order``), each kernel's policies' owner, by graph name (``owners``:
     a KernelOp's its op class; ``Unstated`` for a kernel not named) and, for a slice, the
@@ -540,7 +540,7 @@ def structure(declared: DataflowCoreDeclaration, ranked: list[str]) -> Hashable:
     class, policies' owner and facts given, then each channel's name, sides and facts given,
     and whether it is given the port beside it at a frozen neighbour, ranked, whether it is
     in a shell (never its row: the row's values are facts), and its instance order (never
-    its module's name, nor a frozen neighbour's port: facts)."""
+    its name, nor a frozen neighbour's port: facts)."""
     return (
         model_modes(),
         tuple(
@@ -690,7 +690,7 @@ def _made(
             edges[sides.consumer.label] = getattr(held, "outer_out")
     # Named by its key's digest (its classes and enums by their module and name): the same
     # structure is the same name in every process.
-    digest = hashlib.sha256(repr(key).encode()).hexdigest()[:12]
+    digest = hashlib.sha256(repr(key).encode()).hexdigest()[:16]
     if declared.shell is not None:
         channels[SHELL] = _shell(declared, ranked, names, nodes, digest, params, annotations, roots)
     members = {owner: names[owner] for owner in (*declared.kernels, *ranked)}

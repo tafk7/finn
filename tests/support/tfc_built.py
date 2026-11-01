@@ -3,7 +3,8 @@
 
 """What TFC_W2A2 is built with at 1,000,000 frames a second: SetFolding's folding as the
 oracle captured it, every persisted choice of the build before the engine core
-(``TFC_BUILT``), and every one stored now (``TFC_STORED``)."""
+(``TFC_BUILT``), every one stored now (``TFC_STORED``), and the module it is packaged as
+(``TFC_MODULE``)."""
 
 from __future__ import annotations
 
@@ -95,3 +96,7 @@ STORED: dict[str, dict[str, object]] = {
 #: Every value TFC_W2A2 is built with and stores at 1,000,000 frames a second, 69 by
 #: graph name: ``TFC_BUILT`` and ``STORED``.
 TFC_STORED = {owner: {**TFC_BUILT[owner], **STORED.get(owner, {})} for owner in TFC_BUILT}
+
+#: The module TFC_W2A2 is packaged as with ``TFC_STORED`` (``module_name``): its kind and the
+#: digest of its content, its name left out, so one name in every shell.
+TFC_MODULE = "finn_dataflowcore_3ed5a36d6110aec3"

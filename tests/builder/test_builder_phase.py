@@ -52,7 +52,7 @@ from support.packaging import (
 )
 from support.refusals import refused
 from support.tfc import EXPORT, SHAPE, ULTRA96, built, io_settings, partition, run_steps
-from support.tfc_built import SET_FOLDING, TFC_BUILT, TFC_STORED
+from support.tfc_built import SET_FOLDING, TFC_BUILT, TFC_MODULE, TFC_STORED
 
 import finn.kernels.explore as explore_module
 from finn.builder import build_dataflow_steps
@@ -1502,24 +1502,24 @@ def test_the_export_of_tfc_on_pynq_names_both_movers_iodmas_and_every_connection
         Address("idma0/s_axi_control_0", 0xA000_0000, 4096),
         Address("odma0/s_axi_control_0", 0xA000_1000, 4096),
     )
-    assert (export.period_ns, export.vlnv) == (5.0, "xilinx_finn:finn:DataflowCore_0:1.0")
+    assert (export.period_ns, export.vlnv) == (5.0, f"xilinx_finn:finn:{TFC_MODULE}:1.0")
     # Z0's module, its memories in their explicit baseline styles, its thresholds a data
     # file (THRESHOLDS_FILE), and choices; its MatMuls after the first INT7, reading each
     # thresholding's range.
     node, body, _ = partition_body(parent)
     point, _ = configured_network(body, node.name)
-    assert module_name(point.module) == "finn_dataflowcore_0__bbdc1424bf7716b3"
+    assert module_name(point.module) == TFC_MODULE
     persisted = json.loads((output / "report" / "kernel_choices.json").read_text())
     assert persisted == kernel_choices_config(body)
     assert persisted == TFC_STORED
 
 
 #: The block design Z0's build wrote for TFC (its ip_config.tcl's custom section, its
-#: partition StreamingDataflowPartition_1 renamed), each build directory as normalized
-#: ($BUILD, a random suffix XXXXXXXX). The oracle's is the same but for the partition's
-#: IP and the quoting
+#: partition StreamingDataflowPartition_1 renamed, its IP named as its module), each build
+#: directory as normalized ($BUILD, a random suffix XXXXXXXX). The oracle's is the same but
+#: for the partition's IP and the quoting
 #: (``test_the_z0_literal_is_the_oracles_block_design_but_for_the_partitions_ip``).
-Z0_BLOCK_DESIGN = """\
+Z0_BLOCK_DESIGN = f"""\
 set_property ip_repo_paths [concat [get_property ip_repo_paths [current_project]] [list "$BUILD/code_gen_ipgen_idma0_IODMA_hls_0_XXXXXXXX/project_idma0_IODMA_hls_0/sol1/impl/ip" "$BUILD/vivado_stitch_proj_XXXXXXXX/ip"]] [current_project]
 update_ip_catalog -rebuild -scan_changes
 create_bd_cell -type ip -vlnv xilinx_finn:finn:idma0:1.0 idma0
@@ -1530,7 +1530,7 @@ connect_bd_net [get_bd_pins idma0/ap_clk] [get_bd_pins smartconnect_0/aclk]
 connect_bd_net [get_bd_pins idma0/ap_rst_n] [get_bd_pins smartconnect_0/aresetn]
 set_property ip_repo_paths [concat [get_property ip_repo_paths [current_project]] [list "$BUILD/vivado_stitch_proj_XXXXXXXX/ip"]] [current_project]
 update_ip_catalog -rebuild -scan_changes
-create_bd_cell -type ip -vlnv xilinx_finn:finn:DataflowCore_0:1.0 DataflowCore_0
+create_bd_cell -type ip -vlnv xilinx_finn:finn:{TFC_MODULE}:1.0 DataflowCore_0
 connect_bd_net [get_bd_pins DataflowCore_0/ap_clk] [get_bd_pins smartconnect_0/aclk]
 connect_bd_net [get_bd_pins DataflowCore_0/ap_rst_n] [get_bd_pins smartconnect_0/aresetn]
 connect_bd_intf_net [get_bd_intf_pins DataflowCore_0/s_axis_0] [get_bd_intf_pins idma0/m_axis_0]
@@ -1558,17 +1558,20 @@ Z0_IODMA_CODE = {
 def test_the_z0_literal_is_the_oracles_block_design_but_for_the_partitions_ip() -> None:
     """This checks the test's own literal against the oracle's capture, not FINN: the
     oracle's block design for TFC, its partitions renamed, is ``Z0_BLOCK_DESIGN`` line for
-    line, the HWCustomOp flow's paths unquoted, except the partition's IP repositories: the
-    flow's partition is its layers' IPs stitched, so it lists each layer's IP and
-    memstream beside the stitched one; the build's partition is one packaged IP."""
+    line, the HWCustomOp flow's paths unquoted, except the partition's IP: its repositories
+    (the flow's partition is its layers' IPs stitched, so it lists each layer's IP and
+    memstream beside the stitched one; the build's partition is one packaged IP) and its
+    name (the flow's is its node's, the build's its module's)."""
     z0 = Z0_BLOCK_DESIGN.replace('"', "").splitlines()
     oracle = [renamed(line) for line in ZYNQ_BUILD["block_design"]]
     assert len(oracle) == len(z0)
     differing = [index for index, (ours, theirs) in enumerate(zip(z0, oracle)) if ours != theirs]
-    assert [z0[index + 2] for index in differing] == [
-        "create_bd_cell -type ip -vlnv xilinx_finn:finn:DataflowCore_0:1.0 DataflowCore_0"
-    ]
-    (index,) = differing
+    index, cell = differing
+    assert cell == index + 2
+    assert (z0[cell], oracle[cell]) == (
+        f"create_bd_cell -type ip -vlnv xilinx_finn:finn:{TFC_MODULE}:1.0 DataflowCore_0",
+        "create_bd_cell -type ip -vlnv xilinx_finn:finn:DataflowCore_0:1.0 DataflowCore_0",
+    )
 
     def repositories(line: str) -> list[str]:
         match = re.search(r"\[list (.*?)\]\]", line)
@@ -1600,8 +1603,8 @@ def test_the_runner_writes_z0s_block_design_for_tfc(z0_tfc: ModelWrapper) -> Non
         )
         for instance in ("idma0", "odma0")
     }
-    ips["DataflowCore_0"] = InstanceIP("xilinx_finn:finn:DataflowCore_0:1.0", (stitched,))
     export = integration(z0_tfc)
+    ips["DataflowCore_0"] = InstanceIP(export.vlnv, (stitched,))
     design = block_design(export, ips)
     assert design == Z0_BLOCK_DESIGN.replace("$BUILD", "/BUILD")
     script = project_script(export, design, 16)
@@ -1663,7 +1666,8 @@ TFC_IO_SHAPES = {
 def tool_recorders(tmp_path: Path) -> dict[str, object]:
     """The runner's tool steps, each replaced by one that states what the tool would
     have made, in ``tmp_path``: prepare_ip and hls_synth_ip do nothing,
-    create_stitched_ip states a mover's IP, PackagePartition the partition's."""
+    create_stitched_ip states a mover's IP, PackagePartition the partition's, named as its
+    module."""
 
     class Packaged(Transformation):
         def __init__(self, name: str, **kwargs: object) -> None:
@@ -1672,7 +1676,8 @@ def tool_recorders(tmp_path: Path) -> dict[str, object]:
 
         def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
             model.set(OUTPUT_IP, str(tmp_path / "packaged" / "ip"))
-            model.set(OUTPUT_VLNV, f"xilinx_finn:finn:{self.name}:1.0")
+            top = module_name(configured_network(model, self.name)[0].module)
+            model.set(OUTPUT_VLNV, f"xilinx_finn:finn:{top}:1.0")
             model.set(OUTPUT_INTERFACES, {"axilite": []})
             model.set(OUTPUT_IP_KEY, IP_KEY)
             model.set(OUTPUT_IP_OPTIONS, {"run_synth": False})
@@ -1763,7 +1768,7 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
         f"top_{name}_0_utilization_synth.rpt"
         for name in ("DataflowCore_0", "idma0", "smartconnect_0")
     ]
-    assert body.get(OUTPUT_VLNV) == "xilinx_finn:finn:DataflowCore_0:1.0"
+    assert body.get(OUTPUT_VLNV) == f"xilinx_finn:finn:{TFC_MODULE}:1.0"
     assert body.get(OUTPUT_IP_KEY) == IP_KEY
     for model in (reread, body):
         assert list(model.model.metadata_props) == []

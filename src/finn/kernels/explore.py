@@ -239,7 +239,7 @@ class CoreComposition:
 
     @property
     def name(self) -> str:
-        """Its module's name (``DataflowCoreKernel.name``, a fact of its class)."""
+        """Its name, its node's (``DataflowCoreKernel.name``, a fact of its class)."""
         return self._point.name
 
     @property

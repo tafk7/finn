@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -68,6 +69,7 @@ from finn.core.rtlsim_bench import SimulationFailed
 from finn.custom_op.kernels.shell import configured_network, verify_partition
 from finn.kernels.artifacts.build import instance_name
 from finn.kernels.artifacts.interface import STREAM_FACTS
+from finn.kernels.artifacts.module import module_name
 from finn.platform.capabilities import Resources
 from finn.platform.request import TargetRequest
 from finn.platform.resolve import resolve_target
@@ -102,12 +104,15 @@ def test_the_description_beside_the_ip_reads_back_against_the_modules_pins(
     described = json.loads((project / "interface.json").read_text())
     point, boundary = configured_network(model, "sdp_1")
     read_back(described, point.module.abi.pins, 5.0)
+    # The IP is named as its module, which leaves its node's name out, and shown as its node.
+    top = module_name(point.module)
     assert described["ip"] == {
-        "name": "sdp_1",
-        "vlnv": "xilinx_finn:finn:sdp_1:1.0",
-        "top": described["ip"]["top"],
+        "name": top,
+        "vlnv": f"xilinx_finn:finn:{top}:1.0",
+        "top": top,
+        "display_name": "sdp_1",
     }
-    assert described["ip"]["top"].startswith("finn_sdp_1__")
+    assert top.startswith("finn_dataflowcore_")
     assert (described["part"], described["period_ns"]) == ("xczu3eg-sbva484-1-e", 5.0)
     # Each stream states its port's boundary facts, as the configured network's channels
     # state them, and the order its free side presents the tensor in: the Chain's,
@@ -254,8 +259,11 @@ class SynthesizedByStub(PackagedByStub):
     def run(
         self, tool: str, args: object, *, cwd: Path, **options: object
     ) -> subprocess.CompletedProcess[bytes]:
-        if "launch_runs synth_1" in (Path(cwd) / "package.tcl").read_text():
-            (Path(cwd) / "finn_dataflowcore_0_partition_util.rpt").write_text(REPORT)
+        script = (Path(cwd) / "package.tcl").read_text()
+        if "launch_runs synth_1" in script:
+            top = re.search(r"^set_property top (\S+) ", script, re.MULTILINE)
+            assert top is not None
+            (Path(cwd) / f"{top[1]}_partition_util.rpt").write_text(REPORT)
         return super().run(tool, args, cwd=cwd, **options)
 
 
@@ -279,7 +287,7 @@ def test_the_resources_report_reads_the_synthesis_of_the_ip_the_body_states(
         PackagePartition(node.name, run_synth=True, directory=project, toolchain=stub)
     )
     synthesized.save(body_file)
-    report = project / "finn_dataflowcore_0_partition_util.rpt"
+    (report,) = project.glob("finn_dataflowcore_*_partition_util.rpt")
     assert built_reports(parent, toolchain=stub)["ooc_synth"] == report
     synthesized.set(OUTPUT_IP_KEY, "sha256:" + "0" * 64)
     synthesized.save(body_file)
@@ -628,8 +636,9 @@ def test_tfc_on_the_ip_shell_packages_and_its_testbench_passes_on_its_own(
     point, _ = configured_network(body, "DataflowCore_0")
     described = json.loads((ip / "interface.json").read_text())
     read_back(described, point.module.abi.pins, 5.0)
-    # The IP is the partition's, of its one name; the body states it.
-    assert described["ip"]["name"] == "DataflowCore_0"
+    # The IP is the partition's, named as its module and shown as its node; the body states it.
+    assert described["ip"]["name"] == module_name(point.module)
+    assert described["ip"]["display_name"] == "DataflowCore_0"
     assert body.get(OUTPUT_IP) == str(ip / "ip")
     # The exploration folds the input's thresholds at 4 lanes and the last layer at 1
     # (Z0's choices), not test_tfc's 16 lanes by hand.

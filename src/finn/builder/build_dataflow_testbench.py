@@ -145,7 +145,7 @@ def write_testbench(
     toolchain: Toolchain,
     name: str,
 ) -> None:
-    """Write the XSim testbench of the partition ``body``, its module named ``name`` (the
+    """Write the XSim testbench of the partition ``body``, named ``name`` (the
     partition node's), into ``directory`` (see the module docstring). It streams ``frame`` (the
     inputs by tensor name) and expects the body's outputs for it, executed in Python. Like
     PackagePartition, it writes only the design step_verify_partition verified: a body that

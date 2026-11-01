@@ -81,7 +81,7 @@ def test_a_composed_module_is_named_from_what_it_is_built_from(tmp_path: Path) -
     roots = {"fixture": root}
     emitted = emit_module(_composed(), tmp_path / "a", roots=roots)
     name = emitted.entry_point
-    assert name.startswith("generated_top__")
+    assert name.startswith("generated_top_")
     assert emitted.sources == ("helper.sv", "core.sv", name + ".sv")
     # The emitted file declares the module of that name, elaborating as the top.
     assert read(_composed(), (emitted.directory / (name + ".sv")).read_text()).top == name

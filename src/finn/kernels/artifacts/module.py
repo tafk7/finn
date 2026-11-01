@@ -96,18 +96,26 @@ def typed_canonical(value: object) -> object:
     if isinstance(value, Enum):
         return (f"enum:{type(value).__module__}.{type(value).__qualname__}", value.name)
     if is_dataclass(value) and not isinstance(value, type):
-        tag = f"dataclass:{type(value).__module__}.{type(value).__qualname__}"
-        return (
-            tag,
-            tuple(
-                (item.name, typed_canonical(getattr(value, item.name))) for item in fields(value)
-            ),
-        )
+        return _tagged(value, ())
     if isinstance(value, Mapping):
         return tuple((name, typed_canonical(value[name])) for name in sorted(value))
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         return tuple(typed_canonical(item) for item in value)
     return value
+
+
+def _tagged(value: object, left_out: tuple[str, ...]) -> object:
+    """A dataclass ``value`` tagged by its type, its fields but ``left_out`` canonical."""
+    assert is_dataclass(value) and not isinstance(value, type)
+    tag = f"dataclass:{type(value).__module__}.{type(value).__qualname__}"
+    return (
+        tag,
+        tuple(
+            (item.name, typed_canonical(getattr(value, item.name)))
+            for item in fields(value)
+            if item.name not in left_out
+        ),
+    )
 
 
 def sanitize_stem(stem: str) -> str:
@@ -498,8 +506,12 @@ Module = Union[Leaf, Composed]
 
 
 def fingerprint(module: Module) -> str:
-    """The digest of everything the module says; equal modules share it."""
-    return digest(("module-v1", typed_canonical(module)))
+    """The digest of everything the module says but its own name: a composed module's stem
+    is left out (as an HLS top's name is, ``contributions.NAME_PLACEHOLDER``), so equal
+    netlists share it, whatever their callers name them; a leaf's name is its content."""
+    if isinstance(module, Leaf):
+        return digest(("module-v1", typed_canonical(module)))
+    return digest(("module-v1", _tagged(module, ("stem",))))
 
 
 def declared_registers(module: Module) -> dict[str, RegisterMap]:
@@ -511,10 +523,11 @@ def declared_registers(module: Module) -> dict[str, RegisterMap]:
 
 
 def module_name(module: Module) -> str:
-    """A leaf's own name; a composed module's ``<stem>__<fingerprint[:16]>``."""
+    """A leaf's own name; a composed module's ``<stem>_<fingerprint[:16]>``: its kind, a FINN
+    word (``finn_dataflowcore``), and the digest of its content with its name left out."""
     if isinstance(module, Leaf):
         return module.name
-    return f"{sanitize_stem(module.stem)}__{fingerprint(module)[:16]}"
+    return f"{sanitize_stem(module.stem)}_{fingerprint(module)[:16]}"
 
 
 __all__ = [

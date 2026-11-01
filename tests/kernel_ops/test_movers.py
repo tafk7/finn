@@ -38,6 +38,7 @@ from support.models import (
 )
 from support.ports import outer
 from support.tfc import ULTRA96
+from support.tfc_built import TFC_MODULE
 from support.xsim import requires_xsim
 
 import finn.custom_op.kernels.shell as shell
@@ -719,5 +720,5 @@ def test_tfc_on_the_default_ip_shell_is_tfc_in_the_zynq_shell_without_its_movers
     # The module TFC in the Zynq shell was packaged as before the shells had rows (its
     # thresholds a data file, THRESHOLDS_FILE; its MatMuls after the first INT7, reading each
     # thresholding's range).
-    assert module_of(ip_model, tmp_path / "ip") == "finn_dataflowcore_0__bbdc1424bf7716b3"
-    assert module_of(zynq_model, tmp_path / "zynq") == "finn_dataflowcore_0__bbdc1424bf7716b3"
+    assert module_of(ip_model, tmp_path / "ip") == TFC_MODULE
+    assert module_of(zynq_model, tmp_path / "zynq") == TFC_MODULE

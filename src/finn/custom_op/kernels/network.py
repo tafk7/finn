@@ -9,18 +9,18 @@ graph: it reads the graph once, its tensors from one index
 (``finn.core.graph.facts.reading``), into a declaration (``declaration``), which the
 composer (``finn.kernels.composer``) makes one Space class of, a ``DataflowCoreKernel``, and
 binds its stored choices on one design space of that class
-(``finn.kernels.dataflow_core.bound``: a ``Bound``). Its module's name (``name``) is its
-caller's: a node's own name (``finn.custom_op.partition.DataflowCore``), which every step
-holding only its body is given. The movers offered on its boundary (``movers``, each a
-``finn.kernels.movers.MoverOffer``; none by default) are a fact its caller gives: a shell's
-row offers them, and ``finn.custom_op.kernels.shell`` binds a body's core in the shell of
-the model's target (``core_point``). A mover offered states each boundary side it is offered
-on (``MoverOffer.states``: row-major, one pass a frame); where none is, the build states the
-side its statement for the side's tensor (``finn.core.graph.annotations.boundary``,
-``finn.boundary``: the build's ``boundary``, by port, which the cut writes by tensor), and
-where it states none the side is unstated. A build statement on a boundary offered a mover
-is refused by name (``boundary-stated-twice``): the build refuses it before its first step,
-so only a model annotated by hand reaches this.
+(``finn.kernels.dataflow_core.bound``: a ``Bound``). Its name (``name``), which its module's
+name leaves out, is its caller's: a node's own name (``finn.custom_op.partition.DataflowCore``),
+which every step holding only its body is given. The movers offered on its boundary
+(``movers``, each a ``finn.kernels.movers.MoverOffer``; none by default) are a fact its
+caller gives: a shell's row offers them, and ``finn.custom_op.kernels.shell`` binds a body's
+core in the shell of the model's target (``core_point``). A mover offered states each
+boundary side it is offered on (``MoverOffer.states``: row-major, one pass a frame); where
+none is, the build states the side its statement for the side's tensor
+(``finn.core.graph.annotations.boundary``, ``finn.boundary``: the build's ``boundary``, by port,
+which the cut writes by tensor), and where it states none the side is unstated. A build statement on
+a boundary offered a mover is refused by name (``boundary-stated-twice``): the build refuses it
+before its first step, so only a model annotated by hand reaches this.
 
 **The declaration** (``declaration``):
 
@@ -61,7 +61,7 @@ so only a model annotated by hand reaches this.
   output boundary channels, which the composer ranks (each after the members it reads); its
   module places them input boundary channels, the other channels, the kernels, output
   boundary channels (``Reshape_0_out0``, ..., ``MatMul_0``, ...), its instance order, which
-  the declaration states with its module's name (``DataflowCoreDeclaration.order``,
+  the declaration states with its name (``DataflowCoreDeclaration.order``,
   ``name``); each member's node in the module is its member name (``member_name``: ``\\W``
   as ``_``).
 
@@ -466,7 +466,7 @@ def _stale(
 
 
 class _Read:
-    """What the graph states of a selection: its declaration (its module's name, its order,
+    """What the graph states of a selection: its declaration (its name, its order,
     its kernels' policies' owners and the ports beside its edge channels at frozen
     neighbours among it), its KernelOps, and the choices it stores and those stray. A record
     read once, never a value a Space holds."""
@@ -492,7 +492,7 @@ def _graph(
     shell: Mapping[str, object] | None = None,
 ) -> _Read:
     """The selection ``nodes`` of ``model`` as the graph states it (``_Read``; the module
-    docstring), its module named ``name``, in a shell where ``shell`` states its row's facts
+    docstring), named ``name``, in a shell where ``shell`` states its row's facts
     (``DataflowCoreDeclaration.shell``), refused where a tensor is read more than once
     (``tensor-fan-out``) or two members share a name (``name-shared``)."""
     ops = [kernel_op(model, node) for node in nodes]
@@ -610,7 +610,7 @@ def declaration(
     shell: Mapping[str, object] | None = None,
 ) -> DataflowCoreDeclaration:
     """The core of ``nodes``, KernelOp nodes of ``model``, as the graph declares it (the
-    module docstring), its module named ``name``: each node's kernel by its facts, in graph
+    module docstring), named ``name``: each node's kernel by its facts, in graph
     order, and each channel by its tensor with its sides and facts, its boundary offered
     ``movers``; in a shell where ``shell`` states its row's facts."""
     with reading(model):
@@ -648,7 +648,7 @@ def network(
     movers: tuple[MoverOffer, ...] = (),
     shell: Mapping[str, object] | None = None,
 ) -> Bound:
-    """The core of ``nodes``, KernelOp nodes of ``model``, its module named ``name`` (its
+    """The core of ``nodes``, KernelOp nodes of ``model``, named ``name`` (its
     node's), on the platform of the model's target, its stored choices bound (``Bound``):
     ``movers`` offered on the boundary channels (none by default; a shell's row offers
     them), in a shell where ``shell`` states its row's facts

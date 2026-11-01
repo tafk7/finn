@@ -194,12 +194,18 @@ def composed(*, data: bytes = b"00\n", stem: str = "top") -> Composed:
 def test_a_composed_module_is_named_by_its_stem_and_fingerprint() -> None:
     module = composed()
     name = module_name(module)
-    assert name.startswith("top__") and len(name) == len("top__") + 16
+    assert name == f"top_{fingerprint(module)[:16]}"
     # Equal values, equal fingerprints; any change, a data file's bytes among them, renames.
     assert fingerprint(composed()) == fingerprint(module) and module_name(composed()) == name
     assert module_name(composed(data=b"01\n")) != name
-    assert module_name(composed(stem="other")).startswith("other__")
     assert fingerprint(stage()) != fingerprint(stage(width=4))
+
+
+def test_a_composed_module_s_digest_leaves_its_name_out() -> None:
+    # One netlist under two stems: one digest, two names, each its stem's.
+    other = composed(stem="other")
+    assert fingerprint(other) == fingerprint(composed())
+    assert module_name(other) == f"other_{fingerprint(composed())[:16]}"
 
 
 def test_a_composed_module_links_only_pins_that_exist() -> None:
