@@ -89,7 +89,8 @@ def chain(shell: str = "ip") -> ModelWrapper:
 def facts(model: ModelWrapper) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """The boundary facts of ``model``'s configured network, as the interface description
     and the testbench read them."""
-    point, boundary = configured_network(model, "DataflowCore_0")
+    point = configured_network(model, "DataflowCore_0")
+    boundary = point.network.boundary
     return boundary_facts(model, point, boundary, "DataflowCore_0")
 
 
@@ -221,7 +222,7 @@ def test_the_export_names_each_mover_its_iodma_and_every_connection(tmp_path: Pa
         PackagePartition("DataflowCore_0", directory=tmp_path / "ip", toolchain=toolchain)
     )
     body.save(body_file)
-    top = live_name(configured_network(body, "DataflowCore_0")[0].module)
+    top = live_name(configured_network(body, "DataflowCore_0").module)
     assert integration(parent).vlnv == body.get(OUTPUT_VLNV) == f"xilinx_finn:finn:{top}:1.0"
     # Movers by direction in port order, each IODMA_hls configured from its facts: a
     # frame's beats, the stream's bytes a beat in the UINT8 container, the memory port
@@ -388,7 +389,8 @@ def test_a_tiled_w2_is_regrouped_after_its_mover_by_a_vpc_and_an_input_gen(case:
     mover = w2.mover_contract
     assert (mover.beats, mover.tdata, mover.memory_width, mover.words) == (4, 16, 64, 1)
     choose_memories(model)
-    configured, boundary = configured_network(model, "DataflowCore_0")
+    configured = configured_network(model, "DataflowCore_0")
+    boundary = configured.network.boundary
     assert boundary == (("x", "s_axis_0"), ("w2", "s_axis_1"), ("y", "m_axis_0"))
     stages = {
         name: (leaf.implementation_id, dict(leaf.parameters))
@@ -531,7 +533,7 @@ def test_packaging_states_its_ip_typed_and_writes_no_flat_key(tmp_path: Path) ->
         PackagePartition("DataflowCore_0", directory=project, toolchain=toolchain)
     )
     assert packaged.get(OUTPUT_IP) == str(project / "ip")
-    top = live_name(configured_network(body, "DataflowCore_0")[0].module)
+    top = live_name(configured_network(body, "DataflowCore_0").module)
     assert top.startswith("finn_dataflowcore_")
     assert packaged.get(OUTPUT_VLNV) == f"xilinx_finn:finn:{top}:1.0"
     interfaces = packaged.get(OUTPUT_INTERFACES)

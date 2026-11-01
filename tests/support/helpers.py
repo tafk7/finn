@@ -51,13 +51,13 @@ from qonnx.core.ranges import TensorRange
 
 from finn.core.search import Choice, Key, dotted
 from finn.core.space import (
-    Decision,
     Rejected,
     Space,
     design_space,
     inspection,
     space_formals,
 )
+from finn.core.space.declarations import DecisionDecl
 from finn.core.space.results import Available, QueryResult
 from finn.dataflow.datatypes import (
     QONNXDataType,
@@ -258,7 +258,7 @@ def cycles_of(network: CoreComposition) -> QueryResult[int]:
 def is_decision(space_type: object, name: str) -> bool:
     """Whether ``space_type``'s member ``name`` is a Decision (the packed core's
     ``reducer``; the INT8 core states its own)."""
-    return isinstance(getattr(space_type, name, None), Decision)
+    return isinstance(getattr(space_type, name, None), DecisionDecl)
 
 
 class DotpExtents(TypedDict):

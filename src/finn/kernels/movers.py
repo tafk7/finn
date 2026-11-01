@@ -60,7 +60,7 @@ A boundary channel states its mover's contract as its member ``mover_contracts``
 none without a mover), which the shell sums with its static region
 (``finn.custom_op.kernels.shell``). The mover states its cycles a frame as its member
 ``cycles``, the channel's member that it is: the channel's are at least its mover's
-(``Channel.mover_cycles``).
+(``Channel.frame_cycles``).
 A mover is not a channel's stream (``finn.dataflow.streams``: the two beat sequences a
 channel's producer and consumer present, ``Stream``, ``Streams``).
 """
@@ -269,7 +269,7 @@ class MoverContract:
 class IodmaMover(Space):
     """The ``IODMA_hls`` mover on a free side (``side``), where ``offers`` offer it. It is
     no kernel (it binds no RTL in the partition's module), but its ``cycles`` count in its
-    channel's (``Channel.mover_cycles``). The side is the one it states
+    channel's (``Channel.frame_cycles``). The side is the one it states
     (``MoverOffer.states``: row-major, one pass a frame), so it states no rule of its own
     on it."""
 

@@ -30,7 +30,12 @@ fills a value in but a strategy):
   among its causes); a held key not at its held value at the end (``held-not-kept``,
   ``Seam.unkept``); a network a member's validity refuses (``Seam.refusals``), its shell's
   budgets among them (its shell member's rules: its AXI-Lite buses, memory ports and doubled
-  clock against the shell's row), by name (a ``KernelOpError`` carrying their findings);
+  clock against the shell's row), by name (a ``KernelOpError`` carrying their findings); a
+  network with an open choice in play, not required, no value of which is possible, each
+  by name (``choice-no-valid-value``, the rules each value breaks among its causes, as
+  emission refuses it, ``finn.custom_op.kernels.shell.impossible_choices``): a strategy that
+  reopened a stored choice a rule refuses and found no value for it leaves it open, and
+  the point stays refused, that rule's findings among the causes;
 - persists every value of the network where it is stated, each owner's whole
   (``persist``): a kernel's on its node, a channel's on its tensor (``finn.channel``);
   a required choice no strategy set stays open, and emission refuses it by name
@@ -119,6 +124,7 @@ from finn.custom_op.kernels.shell import (
     ShellResources,
     body_row,
     core_point,
+    impossible_choices,
     shell_composition,
     shell_resources,
 )
@@ -576,10 +582,20 @@ def explore_kernel_choices(
                 network.located(name, finding) for name, why in refused.items() for finding in why
             ),
         )
-    left = [
-        dotted(key) + (" (required)" if isinstance(seam.policy(network, key), Required) else "")
-        for key in network.undecided()
-    ]
+    undecided = network.undecided()
+    required = {key for key in undecided if isinstance(seam.policy(network, key), Required)}
+    # A choice no value of which is possible leaves the point refused whatever is set: a
+    # stored choice a rule refuses, reopened by a strategy that found no value for it, is
+    # left so, and its rule's refusal would otherwise be lost.
+    impossible = impossible_choices(network, (key for key in undecided if key not in required))
+    if impossible:
+        raise KernelOpError(
+            "the explored point is refused: "
+            + "; ".join(f"{dotted(key)}: {finding.message}" for key, finding in impossible.items()),
+            tuple(map(dotted, impossible)),
+            findings=tuple(impossible.values()),
+        )
+    left = [dotted(key) + (" (required)" if key in required else "") for key in undecided]
     cost = seam.cost(network)
     resources, over_part = _resources_report(
         cost,

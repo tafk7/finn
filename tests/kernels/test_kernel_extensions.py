@@ -224,6 +224,9 @@ def test_port_discovery_reads_lexical_groups_without_implicit_child_lowering() -
         group = Included()
         child = Child()
         choice = Select(child=Child(), absent=None)
+        # A member's port is presented by an alias, under a name of its own.
+        inner = child.inner
+        chosen = choice.inner
 
     # Groups are the parent's lexical frame, not children. Real child scopes and
     # selector candidates publish no implicit parent port: a parent serves one explicitly.

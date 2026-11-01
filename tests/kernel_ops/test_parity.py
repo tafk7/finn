@@ -334,7 +334,7 @@ def test_the_versal_points_take_its_dsp58_core_and_ultraram() -> None:
     assert VERSAL.platform.dsp is DspBlock.DSP58 and VERSAL.platform.uram
     assert VERSAL.platform.uram_init
     model = persisted(matmul(VERSAL), ON_VERSAL["matmul"]).transform(MakeCutChoices(CUT_NAME))
-    point, _ = configured_network(model, "versal")
+    point = configured_network(model, "versal")
     assert type(point.network.member("first").compute).__name__ == "Int8Dsp58DotpKernel"
     styles = {
         label: dict(leaf.parameters).get("RAM_STYLE")

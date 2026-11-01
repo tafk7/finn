@@ -98,7 +98,7 @@ def test_real_netlist_does_not_certify_unrelated_rule_or_presence(
     assert not bound.undecided()
     monkeypatch.setattr(shell, "core_point", lambda *_: Bound(bound.point, {}, {}))
     if condition == "absent":
-        configured, _ = shell.configured_network(model, "independent")
+        configured = shell.configured_network(model, "independent")
         assert configured.network.point is bound.point
     elif condition == "refused-rule":
         with refused("unrelated-rule", error=KernelOpError, owner="unrelated") as caught:

@@ -12,10 +12,11 @@ generates computes what those ops compute, on the same inputs:
    one cut): a parent graph of one partition node, its body
    saved under ``directory``, its tensors' channel choices moved into the body; the
    hardware checked is the partition a build ships;
-2. **the network**: the body's network, its nodes' persisted choices and its tensors'
-   channel choices replayed, as packaging builds it (``configured_network``, which refuses
-   an open choice): a chosen design point is the choices saved on the nodes and the
-   tensors, every one stored where it was created (at conversion and at the cut);
+2. **the network**: the core the partition node reads of its body, its nodes' persisted
+   choices and its tensors' channel choices replayed, as packaging builds it
+   (``DataflowCore.configured``, which refuses an open choice): a chosen design point is
+   the choices saved on the nodes and the tensors, every one stored where it was created
+   (at conversion and at the cut);
 3. **the oracle**: each graph output as the nodes' ``execute_node`` computes it, the
    model run by ``finn.core.onnx_exec.execute_onnx`` with its default executor
    (``Python()``) on the inputs as integers (int64, which hold every value of a type
@@ -55,7 +56,7 @@ from finn.core.rtlsim_bench import WordsDiffer
 from finn.core.rtlsim_exec import XSim
 from finn.core.rtlsim_pacing import STALLED, Pacing
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import configured_network
+from finn.custom_op.partition import DataflowCore
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.traversal import pack
 from finn.harness.orders import Reference, Stream, decode
@@ -105,8 +106,11 @@ def check_parity(
     ``directory``; see the module docstring. Raises ``WordsDiffer`` (an output word the
     hardware computed otherwise), ``SimulationFailed`` or ``Disagreement``."""
     parent = model.transform(CutKernelPartition(directory))
-    node, body, _ = partition_body(parent)
-    point, boundary = configured_network(body, node.name)
+    node, _, _ = partition_body(parent)
+    core = parent.get_customop_wrapper(node)
+    assert isinstance(core, DataflowCore), f"{node.name}: the cut makes a DataflowCore"
+    point = core.configured()
+    boundary = point.network.boundary
     expected = dict(execute_onnx(model, inputs) if reference is None else reference(inputs))
     outputs = {item.name for item in model.graph.output}
     if set(expected) != outputs:

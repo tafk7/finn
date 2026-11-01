@@ -283,6 +283,8 @@ def test_group_frames_preserve_kernel_descendant_reads_and_guards(is_present: bo
 
     class Parent(Given):
         components = Components(active=is_present)
+        # The grouped kernel's port is presented outside its holder, as any member's is.
+        inner = components.child.x
 
     whole = composite(
         "grouped",

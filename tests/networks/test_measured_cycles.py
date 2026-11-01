@@ -36,7 +36,8 @@ def test_the_chain_leaves_a_frame_per_bottleneck_beat_count(tmp_path: Path) -> N
     feed = {"x": np.array(chain.X, dtype=np.float32)}
     context = execute_onnx(model, feed, return_full_exec_context=True)
     bound = composition(model, model.graph.node, name="chain")
-    point, boundary = configured_network(model, "chain")
+    point = configured_network(model, "chain")
+    boundary = point.network.boundary
     inputs, outputs = boundary_words(model, point, boundary, context, "chain")
     beats = {node.name: schedule_of(bound, node).iterations for node in model.graph.node}
     assert beats == {"MatMul_0": 12, "Thresholding_0": 6, "MatMul_1": 12}

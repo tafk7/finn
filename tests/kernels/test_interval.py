@@ -7,8 +7,8 @@ standing and source, where its hardware differs (Pool's 1, assumed). A composite
 Each port carries its own kernel's, through any alias, with its pace (``timed_pace``). One
 conversion (``finn.kernels.laws.in_cycles``) gives a kernel's cycles a frame and FIFO
 sizing's beat times. A kernel with a module never restates its cycles
-(``kernel-cycles-restated``), MemStream's restatement as the base's own aside; a port of
-its body states no interval of its own (``port-interval``), and a composite none
+(``kernel-cycles-restated``), not even as the base's own; a port of its body states no
+interval of its own (``port-interval``), and a composite none
 (``kernel-interval-composite``).
 """
 
@@ -243,15 +243,7 @@ def test_a_kernel_with_a_module_does_not_restate_its_cycles() -> None:
             def frame_cycles(self) -> int:
                 return 1
 
-    # Nor the base's private rate law behind them (``_frame_cycles``).
-    with refused("kernel-cycles-restated", error=DefinitionError, message=r"\._frame_cycles: "):
-
-        class Behind(_Stage):
-            id = "test.interval.behind"
-
-            def _frame_cycles(self) -> int:
-                return 1
-
+    # Nor the base's private rate law behind them (``_rate_frame_cycles``).
     with refused(
         "kernel-cycles-restated", error=DefinitionError, message=r"\._rate_frame_cycles: "
     ):
@@ -262,14 +254,15 @@ def test_a_kernel_with_a_module_does_not_restate_its_cycles() -> None:
             def _rate_frame_cycles(self) -> int:
                 return 1
 
-    # MemStream's restatement is the base's own, so that its channel counts it by kind.
-    assert MemStreamKernel.__dict__["frame_cycles"].function is Kernel._frame_cycles
+    # Nor as the base's own: no library kernel does (MemStream included).
+    own = vars(Kernel)["frame_cycles"].function
+    with refused("kernel-cycles-restated", error=DefinitionError, message=r"\.frame_cycles: "):
 
-    class Counted(_Stage):
-        id = "test.interval.counted"
-        frame_cycles = view(Kernel._frame_cycles)
+        class Same(_Stage):
+            id = "test.interval.same"
+            frame_cycles = view(own)
 
-    assert design_space(Counted(input_tensor=TENSOR, arriving=ARRIVING)).frame_cycles == 4
+    assert "frame_cycles" not in vars(MemStreamKernel)
 
 
 class WrappedPool(Kernel):

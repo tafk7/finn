@@ -25,6 +25,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Generic,
+    Literal,
     NoReturn,
     Self,
     TypeAlias,
@@ -567,7 +568,63 @@ def _refuse_retired(entries: tuple[object, ...], retired: Mapping[str, object]) 
         )
 
 
-class Decision(ValueDecl[T], Generic[T]):
+class DecisionDecl(ValueDecl[T], Generic[T]):
+    """A Decision's record: what ``Decision(...)`` declares (below), a class attribute of
+    the Space class that owns the choice, keyed by its path there."""
+
+    domain: Domain[T]
+    resolved: bool
+
+    def __set_name__(self, owner: type[object], name: str) -> None:
+        super().__set_name__(owner, name)
+        try:
+            self.resolve()
+        except PendingAnnotation:
+            pass  # a forward reference: resolved again when the Space class is collected
+
+    def resolve(self) -> DecisionDecl[T]:
+        """A class attribute reads its annotation (in its class body, before the class is
+        made, as its sibling's binding reads it)."""
+        if self.resolved:
+            return self
+        annotation = declared_annotation(self, "Decision")
+        if annotation is MISSING and self.owner is None:
+            return self  # still in its class body: resolved when the class is made
+        if annotation is MISSING:
+            raise _unannotated(self, "Decision")
+        self._settle(
+            semantics=_annotation_semantics(annotation, describe_formal(self, "Decision")),
+            resolved=True,
+        )
+        return self
+
+
+@overload
+def Decision(  # noqa: N802 - a declaration, spelled as one
+    *,
+    domain: Iterable[T],
+    when: Guard = None,
+    ordered: bool = False,
+    init: Literal[False] = False,
+) -> T: ...
+
+
+@overload
+def Decision(  # noqa: N802 - a declaration, spelled as one
+    *,
+    domain: Domain[T],
+    when: Guard = None,
+    init: Literal[False] = False,
+) -> T: ...
+
+
+def Decision(  # noqa: N802 - a declaration, spelled as one
+    *entries: object,
+    domain: object = None,
+    when: object = None,
+    ordered: object = None,
+    **retired: object,
+) -> Any:
     """An independently editable choice, annotated with its value type.
 
     ``finish: int = Decision(domain=(1, 2, 3))`` chooses a value; the
@@ -587,103 +644,54 @@ class Decision(ValueDecl[T], Generic[T]):
     and is supplied to a formal by binding that attribute
     (``depth: int = Decision(...)``, then ``buffer = Fifo(depth=depth)``). No body
     supplies it a value, a key or another Decision. A choice is set on a design space
-    (``with_choices``); a narrower one is a subclass's.
+    (``with_choices``); a narrower one is a subclass's. Its record is a
+    ``DecisionDecl``.
+
+    ``init=`` is the type checker's alone: ``Decision`` is a field specifier of every
+    Space class's call (``dataclass_transform``), and its literal ``False`` keeps the
+    choice out of that call, which binds formals only. A call does not take it.
 
     Retired spellings, each refused with its replacement: entries
     (``Decision({...})``: ``Select``), ``optional=`` (a ``None`` case of a ``Select``),
     ``required=`` (a policy, the compiler's), ``name=`` and a Decision given at a call
     (declare it on the class, and bind it), ``semantics=`` (the annotation).
     """
-
-    domain: Domain[T]
-    resolved: bool
-
-    @overload
-    def __new__(  # type: ignore[misc]
-        cls,
-        /,
-        *,
-        domain: Iterable[T],
-        when: Guard = None,
-        ordered: bool = False,
-    ) -> T: ...
-
-    @overload
-    def __new__(  # type: ignore[misc]
-        cls,
-        /,
-        *,
-        domain: Domain[T],
-        when: Guard = None,
-    ) -> T: ...
-
-    def __new__(
-        cls,
-        *entries: object,
-        domain: object = None,
-        when: object = None,
-        ordered: object = None,
-        **retired: object,
-    ) -> Any:
-        _refuse_retired(entries, retired)
-        if isinstance(domain, Mapping):
-            raise DefinitionError.broken(
-                "node-decision-not-entries",
-                _OWNER,
-                f"Decision{at(source_origin())}: a choice among Space classes is a selector: "
-                "write Select(key=Room, other=Room(...)); a case that places nothing is None",
-            )
-        if domain is None:
-            raise DefinitionError.broken(
-                "decision-domain-required",
-                _OWNER,
-                "a Decision needs domain= (a finite iterable or a Domain)",
-            )
-        if not isinstance(domain, (Domain, Iterable)):
-            raise DefinitionError.broken(
-                "domain-argument-invalid", _OWNER, "domain= must be a finite iterable or a Domain"
-            )
-        if ordered is not None and (isinstance(domain, Domain) or type(ordered) is not bool):
-            raise DefinitionError.broken(
-                "ordered-invalid",
-                _OWNER,
-                "ordered= is a bool for finite iterables (a Domain states its own order)",
-            )
-        instance = cast(Decision[object], super().__new__(cls))
-        object.__setattr__(instance, "_body", class_body())
-        instance.semantics = None
-        instance.resolved = False
-        instance.when = guard(when)
-        # The domain is bound to the value's type check when the model is linked.
-        instance.domain = (
-            cast(Domain[object], domain)
-            if isinstance(domain, Domain)
-            else finite(cast(Iterable[object], domain), ordered=ordered is True)
+    _refuse_retired(entries, retired)
+    if isinstance(domain, Mapping):
+        raise DefinitionError.broken(
+            "node-decision-not-entries",
+            _OWNER,
+            f"Decision{at(source_origin())}: a choice among Space classes is a selector: "
+            "write Select(key=Room, other=Room(...)); a case that places nothing is None",
         )
-        return instance
-
-    def __set_name__(self, owner: type[object], name: str) -> None:
-        super().__set_name__(owner, name)
-        try:
-            self.resolve()
-        except PendingAnnotation:
-            pass  # a forward reference: resolved again when the Space class is collected
-
-    def resolve(self) -> Decision[T]:
-        """A class attribute reads its annotation (in its class body, before the class is
-        made, as its sibling's binding reads it)."""
-        if self.resolved:
-            return self
-        annotation = declared_annotation(self, "Decision")
-        if annotation is MISSING and self.owner is None:
-            return self  # still in its class body: resolved when the class is made
-        if annotation is MISSING:
-            raise _unannotated(self, "Decision")
-        self._settle(
-            semantics=_annotation_semantics(annotation, describe_formal(self, "Decision")),
-            resolved=True,
+    if domain is None:
+        raise DefinitionError.broken(
+            "decision-domain-required",
+            _OWNER,
+            "a Decision needs domain= (a finite iterable or a Domain)",
         )
-        return self
+    if not isinstance(domain, (Domain, Iterable)):
+        raise DefinitionError.broken(
+            "domain-argument-invalid", _OWNER, "domain= must be a finite iterable or a Domain"
+        )
+    if ordered is not None and (isinstance(domain, Domain) or type(ordered) is not bool):
+        raise DefinitionError.broken(
+            "ordered-invalid",
+            _OWNER,
+            "ordered= is a bool for finite iterables (a Domain states its own order)",
+        )
+    instance = cast(DecisionDecl[object], Declaration.__new__(DecisionDecl))
+    object.__setattr__(instance, "_body", class_body())
+    instance.semantics = None
+    instance.resolved = False
+    instance.when = guard(when)
+    # The domain is bound to the value's type check when the model is linked.
+    instance.domain = (
+        cast(Domain[object], domain)
+        if isinstance(domain, Domain)
+        else finite(cast(Iterable[object], domain), ordered=ordered is True)
+    )
+    return instance
 
 
 def Select(  # noqa: N802 - a declaration, spelled as one

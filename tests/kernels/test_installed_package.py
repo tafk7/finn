@@ -282,16 +282,20 @@ def test_installed_wheel_materializes_independent_kernel_builds(tmp_path: Path) 
         tmp_path,
     )
     (wheel,) = wheels.glob("finn-*.whl")
+    # Every typing marker in the source tree ships, so no typed package installs untyped.
+    markers = {
+        path.relative_to(snapshot / "src").as_posix()
+        for path in (snapshot / "src").rglob("py.typed")
+    }
+    assert "finn/dataflow/py.typed" in markers
     with zipfile.ZipFile(wheel) as archive:
+        shipped = set(archive.namelist())
+        assert markers <= shipped, sorted(markers - shipped)
         assert {
-            "finn/kernels/py.typed",
-            "finn/core/space/py.typed",
-            "finn/dataflow/py.typed",
-            "finn/platform/py.typed",
             "finn/dataflow/datatypes.py",
             "finn/dataflow/traversal.py",
             "finn/kernels/artifacts/module.py",
-        } <= set(archive.namelist())
+        } <= shipped
         (metadata_name,) = (
             name for name in archive.namelist() if name.endswith(".dist-info/METADATA")
         )

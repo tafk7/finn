@@ -255,7 +255,8 @@ def integration(model: ModelWrapper) -> Integration:
     (``refuse_unverified``), in its shell's integration (see the module docstring)."""
     node, body, _ = partition_body(model)
     refuse_unverified(body, node.name)
-    point, boundary = configured_network(body, node.name)
+    point = configured_network(body, node.name)
+    boundary = point.network.boundary
     row = point.row
     if row.integration != VIVADO_BLOCK_DESIGN or row.static_region is None:
         raise IntegrationError(

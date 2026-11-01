@@ -334,7 +334,8 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     assert read_target(built) == read_target(parent) == ULTRA96
     # The body's boundary, read from its configured network: the pynq shell's IODMA_hls on
     # both.
-    point, boundary = configured_network(built, "DataflowCore_0")
+    point = configured_network(built, "DataflowCore_0")
+    boundary = point.network.boundary
     inputs, outputs = boundary_facts(built, point, boundary, "DataflowCore_0")
     assert [(port["tensor"], port["mover"]["kind"]) for port in inputs + outputs] == [
         ("Reshape_0_out0", "iodma_hls"),
@@ -1520,7 +1521,7 @@ def test_the_export_of_tfc_on_pynq_names_both_movers_iodmas_and_every_connection
     # file (THRESHOLDS_FILE), and choices; its MatMuls after the first INT7, reading each
     # thresholding's range.
     node, body, _ = partition_body(parent)
-    point, _ = configured_network(body, node.name)
+    point = configured_network(body, node.name)
     assert fixed_name(point.module) == TFC_MODULE
     persisted = json.loads((output / "report" / "kernel_choices.json").read_text())
     assert persisted == kernel_choices_config(body)
@@ -1691,7 +1692,7 @@ def tool_recorders(tmp_path: Path) -> dict[str, object]:
 
         def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
             model.set(OUTPUT_IP, str(tmp_path / "packaged" / "ip"))
-            top = live_name(configured_network(model, self.name)[0].module)
+            top = live_name(configured_network(model, self.name).module)
             model.set(OUTPUT_VLNV, f"xilinx_finn:finn:{top}:1.0")
             model.set(OUTPUT_INTERFACES, {"axilite": []})
             model.set(OUTPUT_IP_KEY, IP_KEY)
@@ -1784,7 +1785,7 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
         for name in ("DataflowCore_0", "idma0", "smartconnect_0")
     ]
     packaged = (
-        f"xilinx_finn:finn:{live_name(configured_network(body, 'DataflowCore_0')[0].module)}:1.0"
+        f"xilinx_finn:finn:{live_name(configured_network(body, 'DataflowCore_0').module)}:1.0"
     )
     assert body.get(OUTPUT_VLNV) == packaged
     assert body.get(OUTPUT_IP_KEY) == IP_KEY

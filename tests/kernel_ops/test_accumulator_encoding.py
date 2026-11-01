@@ -250,7 +250,8 @@ def test_narrowed_weights_shrink_the_memory_image() -> None:
 def _frames(model: ModelWrapper, x: Any, y: Any) -> dict[str, Any]:
     """The input and the expected output as each boundary port's words, row-major in its
     lanes, from the partition's boundary facts (its configured network's)."""
-    point, boundary = configured_network(model, "DataflowCore_0")
+    point = configured_network(model, "DataflowCore_0")
+    boundary = point.network.boundary
     inputs, outputs = boundary_facts(model, point, boundary, "DataflowCore_0")
     words = {}
     for facts, values in ((inputs[0], x), (outputs[0], y)):
@@ -268,7 +269,7 @@ def _computes(case: Case, directory: Path, **options: Any) -> None:
     found = network(model, model.graph.node, name=CUT_NAME)
     bound = CoreComposition(found.point)
     assert bound.undecided() == () and not found.stale
-    point, _ = configured_network(model, "DataflowCore_0")
+    point = configured_network(model, "DataflowCore_0")
     low, high = int(DataType[case.activations].min()), int(DataType[case.activations].max())
     k = len(case.layers[0].weights)
     x = np.random.default_rng(5).integers(low, high + 1, size=(ROWS, k)).astype(np.float32)

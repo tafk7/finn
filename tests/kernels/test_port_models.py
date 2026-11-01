@@ -652,8 +652,11 @@ def test_an_exposed_port_is_a_stream_port_of_each_case_of_its_kernel_s_member() 
         exposing = Exposing()
         leaf = exposing.kept
         x = exposing.x
+        y = exposing.y
+        z = exposing.z
+        w = exposing.w
 
-    assert list(exposed_ports(Holder)) == ["x"]
+    assert list(exposed_ports(Holder)) == ["x", "y", "z", "w"]
     with pytest.raises(KeyError):
         stream_port(Holder, "leaf")
 
@@ -666,7 +669,9 @@ def test_an_exposed_port_reaches_through_a_wrapper_to_its_leaf() -> None:
         id = "test.exposed.wrapper"
         inner = Exposing()
         x = inner.x
+        y = inner.y
         z = inner.z
+        w = inner.w
 
     point = design_space(Wrapper()).with_choices({Wrapper.inner.core: "one"})
     assert [d.key for d in inspection.decisions(point)] == ["inner.core"]

@@ -50,6 +50,7 @@ class Producer(Space):
 class Parent(Space):
     child = Child(width=4)
     bare = Child()  # not an error: an assignment may supply the width
+    chosen = Child(width=1, lanes=2)  # E
     bare.width = "four"  # E
     bare.depth = 2  # E
     producer = Producer(spec=child)  # E
@@ -84,6 +85,9 @@ def bad(point: Child, parent: Parent) -> None:
     wrong_value: str = point.width  # E
     wrong_descriptor: str = Child.width  # E
     wrong_configuration: str = design_space(Child(width=1))  # E
+    Child(width=1, lanes=2)  # E
+    design_space(Child())  # not an error: a formal is optional at the call (refused at runtime)
+    Parent(heating=Boiler(kw=1))  # not an error: a selector is typed by its annotation (refused)
     point.field(Child.lanes).change("two")  # E
     point.field(Child.width).change(2)  # not an error: a Param key types as a Decision's
     point.physical(3)  # E

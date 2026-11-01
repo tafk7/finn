@@ -290,7 +290,7 @@ def ooc_member_resources(model: ModelWrapper, name: str, project: Path) -> dict[
     the members'), and the module's instances with no row are ``unreported_instances``. Every
     count is Vivado's synthesis estimate out of context, not placed."""
     report = partition_utilization_report(project)
-    point, _ = configured_network(model, name)
+    point = configured_network(model, name)
     owners = {point.node(member): member for member in point.network.members}
     labels = {instance_name(label): label for label, _ in point.module.fragment.instances}
     rows = vivado.hierarchical_utilization(report.read_text())
@@ -391,7 +391,7 @@ def ip_key(model: ModelWrapper, name: str, *, run_synth: bool, toolchain: Toolch
     ``model``'s IP as it is now: its project staged (``staged_project``) and discarded,
     Vivado not run. An HLS leaf's product comes from the HLS cache, or is synthesized. It
     only binds (``configured_network``): its callers compare the verified design first."""
-    point, _ = configured_network(model, name)
+    point = configured_network(model, name)
     with staged_project(model, point, name, run_synth=run_synth, toolchain=toolchain) as staged:
         return packaging_key(staged[0], run_synth=run_synth, toolchain=toolchain)
 
@@ -428,7 +428,8 @@ class PackagePartition(Transformation):
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
         refuse_unverified(model, self.name)
-        point, boundary = configured_network(model, self.name)
+        point = configured_network(model, self.name)
+        boundary = point.network.boundary
         project = Path(
             self.directory or make_build_dir(prefix="package_")  # type: ignore[no-untyped-call]
         ).resolve()
@@ -480,7 +481,7 @@ class ElaboratePartition(Transformation):
         self.toolchain = host_toolchain() if toolchain is None else toolchain
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
-        point, _ = configured_network(model, self.name)
+        point = configured_network(model, self.name)
         directory = Path(
             self.directory or make_build_dir(prefix="elaborate_partition_")  # type: ignore[no-untyped-call]
         ).resolve()

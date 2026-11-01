@@ -34,7 +34,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
-from functools import partial
+from functools import partial, reduce
 from types import MappingProxyType
 from typing import Any, ClassVar, cast, get_args, get_type_hints
 
@@ -158,20 +158,12 @@ def _declared(cls: type[Kernel], name: str) -> bool:
 
 def _refuse_restated_cycles(cls: type[Kernel]) -> None:
     """Refuse a kernel with a module that restates ``frame_cycles``, or the base's private
-    rate law behind it (``_frame_cycles``, ``_rate_frame_cycles``) (``kernel-cycles-
-    restated``): the base derives them by the rate law from its ports and its
-    ``interval``, which it states where its hardware differs. A restatement as the base's
-    own (``frame_cycles = view(Kernel._frame_cycles)``) changes nothing and stays, so that
-    a channel counts its kind (MemStream's, ``finn.kernels.channels.Channel``), until the
-    channel counts its members' cycles otherwise."""
+    rate law behind it (``_rate_frame_cycles``) (``kernel-cycles-restated``): the base
+    derives them by the rate law from its ports and its ``interval``, which it states
+    where its hardware differs."""
     for base in cls.__mro__[: cls.__mro__.index(Kernel)]:
-        for name in ("frame_cycles", "_frame_cycles", "_rate_frame_cycles"):
-            item = vars(base).get(name)
-            if item is None or (
-                name == "frame_cycles"
-                and isinstance(item, View)
-                and item.function is Kernel._frame_cycles
-            ):
+        for name in ("frame_cycles", "_rate_frame_cycles"):
+            if name not in vars(base):
                 continue
             where = f"{cls.__qualname__}.{name}"
             raise DefinitionError.broken(
@@ -1076,9 +1068,10 @@ def _install(
 # what is given as a value (its boundary, its source, a frozen neighbour). A channel side
 # names a member's port by its binding: the port's ``side``, bound directly or through a
 # derived value reading it (the composer's, which labels it below its member), and a side
-# given as a value names none. When its class is made, the base reads which member port each
-# side names (``Kernel.connections``), and refuses, each finding naming the port (a side's,
-# its channel and role):
+# given as a value names none. When the class of a kernel with members is made, with
+# channels among them or not, the base reads which member port each side names
+# (``Kernel.connections``), and refuses, each finding naming the port (a side's, its channel
+# and role):
 #
 # - a channel side whose binding reads more than one member's port (``channel-side-ports``):
 #   a side names one port at most;
@@ -1095,9 +1088,22 @@ def _install(
 #   port its member places only where it is given an optional fact, and is not given it (a
 #   selector's set port with one set: its tensor, ``set_tensor``, left out; a channel's
 #   ``set``, its source's, without an ``index_tensor``), is idle by its member's structure,
-#   held idle by its member, and needs neither. No other port is exempt: a port its
-#   structure may place, by any other fact, is connected or refused, so no port is left
-#   dangling silently (an output nothing reads is refused like any other).
+#   held idle by its member, and needs neither; a port the member exposes is idle where each
+#   leaf it reaches is, through children and a selector's cases (``set = source.set``). No
+#   other port is exempt: a port its structure may place, by any other fact, is connected
+#   or refused, so no port is left dangling silently (an output nothing reads is refused
+#   like any other). A selector's member ports are each case's (``compute.packed.w``),
+#   connected where a channel side names the selector's port (``compute.w.side``: one side
+#   whichever case is selected, its hops meeting the case selected, ``compute.packed``), and
+#   exposed where an alias names the port of every case (``w = compute.w``). A kernel an
+#   included Group holds is a member as its holder's own are, its ports named by their path
+#   (``parts.fifo.input``). A kernel that states its ``stages`` as a view (a channel, its
+#   adapter chains, its FIFO's wrapper) is taken at its word: it wires its members' ports
+#   itself, hop by hop, or presents them so to the channel that does, and they need neither,
+#   a subclass's members too. Which members its stages are is its design point's, not read
+#   when the class is made, so a member it leaves unwired is refused only where its module
+#   is composed, by pin (``kernel-netlist``): ``stages`` is stated only by a kernel whose
+#   members are its stages.
 #
 # And it installs, for each channel, three private views of its own: the ports beside it
 # (``finn.kernels.channels.Neighbours``: each port's stream pins as its member presents them,
@@ -1132,33 +1138,58 @@ class MemberPort:
 
 def _connects(item: object) -> bool:
     """Whether member ``item`` is a channel (its class ``connects``)."""
-    record = node_record(item)
+    record = item if isinstance(item, NodeDecl) else node_record(item)
     return (
         record is not None and issubclass(record.space_type, Kernel) and record.space_type.connects
     )
 
 
+def _member_declaration(cls: type[Kernel], member: str) -> object:
+    """The declaration of ``cls``'s member at path ``member``: a child's, one held in an
+    included Group (``parts.fifo``), or a selector's case by its key (``compute.packed``)."""
+    kind: Any = cls
+    held: object = None
+    segments = iter(member.split("."))
+    for segment in segments:
+        held = space_members(kind)[segment]
+        if isinstance(held, NodeDecision):
+            key = next(segments, None)
+            if key is None:
+                return held
+            held = held.candidates[key]
+        assert isinstance(held, NodeDecl)
+        kind = held.space_type
+    return held
+
+
 def _member_type(cls: type[Kernel], member: str) -> type[Space]:
-    """The class of ``cls``'s member ``member``, a Space."""
-    record = node_record(_members(cls)[member])
-    assert record is not None
-    return cast("type[Space]", record.space_type)
+    """The class of ``cls``'s member at path ``member`` (``_member_declaration``), a Space."""
+    held = _member_declaration(cls, member)
+    assert isinstance(held, NodeDecl)
+    return cast("type[Space]", held.space_type)
+
+
+def _member_node(owner: object, member: str) -> Any:
+    """``owner``'s member at path ``member``, read segment by segment: of a class, its
+    declaration's reference; of a design point, its configuration."""
+    return reduce(getattr, member.split("."), owner)
 
 
 def _member_ports(cls: type[Kernel]) -> dict[object, MemberPort]:
     """Each stream port a member of ``cls`` presents (its own and those it exposes,
-    ``finn.kernels.port_model.exposed_ports``), by the reference to its ``side``: a kernel's,
-    and a model's that is none (a channel on it is refused where it is wired, ``hops``)."""
+    ``finn.kernels.port_model.exposed_ports``; ``_held_ports``), by the reference to its
+    ``side``: a kernel's, and a model's that is none (a channel on it is refused where it is
+    wired, ``hops``). A selector's is its own (``compute.w``), each case's port under it."""
     from finn.kernels.port import stream_port  # noqa: PLC0415 - base/port cycle
-    from finn.kernels.port_model import exposed_ports  # noqa: PLC0415
 
     found: dict[object, MemberPort] = {}
-    for name, item in _members(cls).items():
-        if node_record(item) is None:
-            continue
-        node = getattr(cls, name)
-        for port in exposed_ports(_member_type(cls, name)):
-            found[stream_port(node, port).side] = MemberPort(name, port)
+    for held, _, port in _held_ports(cls):
+        node = _member_node(cls, held.member)
+        if held.port == port:
+            found[stream_port(node, port).side] = held
+        else:
+            # A case's port: its selector's, one side whichever case is selected.
+            found[getattr(node, port).side] = MemberPort(held.member, port)
     return found
 
 
@@ -1189,30 +1220,59 @@ def _optional(kind: type[Space], bound: object) -> Param[object] | None:
     return formal
 
 
-def _idle_by_structure(cls: type[Kernel], member: str, port: str) -> bool:
-    """Whether member ``member``'s port ``port`` takes its tensor from an optional fact the
-    member is not given (left out, or given None): idle by its structure, whatever its other
-    facts (above). A port it exposes (``set = source.set``) is its leaf's, reached through
-    children (no selector), each binding the fact below it to an optional fact of its own
+def _held_ports(cls: type[Kernel]) -> Iterator[tuple[MemberPort, NodeDecl, str]]:
+    """Each stream port a member of ``cls`` presents (``_member_ports``), with the node
+    declaration placing it and its name there: a child's, one's an included Group holds
+    (``parts.fifo.input``), and each case's of a selector, the port named below its case
+    (``compute.packed.w``)."""
+    yield from _ports_held(cls, "")
+
+
+def _ports_held(kind: type[Any], prefix: str) -> Iterator[tuple[MemberPort, NodeDecl, str]]:
+    from finn.kernels.port_model import exposed_ports  # noqa: PLC0415 - base/port cycle
+
+    for name, member in space_members(kind).items():
+        if isinstance(member, NodeDecl) and issubclass(member.space_type, Group):
+            yield from _ports_held(member.space_type, f"{prefix}{name}.")
+            continue
+        cases = {"": member} if isinstance(member, NodeDecl) else {}
+        if isinstance(member, NodeDecision):
+            cases = {f"{key}.": case for key, case in member.candidates.items() if case is not None}
+        for case, held in cases.items():
+            if not issubclass(held.space_type, Space):
+                continue
+            for port in exposed_ports(held.space_type):
+                yield MemberPort(prefix + name, case + port), held, port
+
+
+def _idle_by_structure(member: NodeDecl, port: str) -> bool:
+    """Whether the port ``port`` of the member ``member`` declares takes its tensor from an
+    optional fact the member is not given (left out, or given None): idle by its structure,
+    whatever its other facts (above). A port it exposes (``set = source.set``) is idle where
+    each of its leaves is, each reached through children and a selector's cases
+    (``source.packed.set``), each binding the fact below it to an optional fact of its own
     (``set_tensor=index_tensor``) or leaving it out."""
+    entry = alias_table(member.space_type).get(port)
+    ends = [port] if entry is None else [end.path for end in entry.ends]
+    return all(_idle_end(member, end) for end in ends)
+
+
+def _idle_end(member: NodeDecl, end: str) -> bool:
+    """``_idle_by_structure`` of one leaf, at path ``end`` below ``member``."""
     from finn.kernels.port import stream_port  # noqa: PLC0415 - base/port cycle
 
-    record = node_record(_members(cls)[member])
-    assert record is not None
-    kind = _member_type(cls, member)
     holders: list[tuple[type[Space], NodeDecl]] = []
-    leaf, name = kind, port
-    entry = alias_table(kind).get(port)
-    if entry is not None:
-        if len(entry.ends) != 1:
+    leaf = cast("type[Space]", member.space_type)
+    *below, name = end.split(".")
+    segments = iter(below)
+    for segment in segments:
+        held = space_members(leaf).get(segment)
+        if isinstance(held, NodeDecision):
+            held = held.candidates.get(next(segments, ""))
+        if not isinstance(held, NodeDecl):
             return False
-        *below, name = entry.ends[0].path.split(".")
-        for segment in below:
-            held = space_members(leaf).get(segment)
-            if not isinstance(held, NodeDecl):
-                return False  # a selector: its cases' ports are not followed
-            holders.append((leaf, held))
-            leaf = cast("type[Space]", held.space_type)
+        holders.append((leaf, held))
+        leaf = cast("type[Space]", held.space_type)
     declared = node_record(stream_port(leaf, name))
     formal = _optional(leaf, None if declared is None else declared.bindings.get("tensor"))
     for holder, held in reversed(holders):
@@ -1222,7 +1282,7 @@ def _idle_by_structure(cls: type[Kernel], member: str, port: str) -> bool:
         if bound is None:
             return True
         formal = _optional(holder, bound)
-    return formal is not None and record.bindings.get(str(formal.name)) is None
+    return formal is not None and member.bindings.get(str(formal.name)) is None
 
 
 def _connected(cls: type[Kernel]) -> dict[str, tuple[MemberPort | None, MemberPort | None]]:
@@ -1273,15 +1333,17 @@ def _connected(cls: type[Kernel]) -> dict[str, tuple[MemberPort | None, MemberPo
                 )
             )
     exposed = cls._exposed_names
-    for port in dict.fromkeys(ports.values()):
-        if port in channels or port in unnamed:
+    wired = isinstance(_members(cls).get("stages"), View)
+    for port, held, name in () if wired else _held_ports(cls):
+        # A case's port is connected where its selector's is (``compute.w``).
+        if {port, MemberPort(port.member, name)} & {*channels, *unnamed}:
             continue
-        if _connects(_members(cls)[port.member]) and port.port in _OUTER:
+        if _connects(held) and port.port in _OUTER:
             continue
-        paths = _node_paths(cls, (port.member, *port.port.split(".")), ())
+        paths = _node_paths(cls, (*port.member.split("."), *port.port.split(".")), ())
         if any(path in exposed for path in paths):
             continue
-        if _idle_by_structure(cls, port.member, port.port):
+        if _idle_by_structure(held, name):
             continue
         findings.append(
             _connection_finding(
@@ -1391,16 +1453,44 @@ def _leaves(
     )
 
 
+def _case_leaves(cls: type[Kernel], member: str, port: str) -> dict[str, tuple[str, bool]]:
+    """``_leaves`` of a selector member ``member``'s port ``port``, by case: each case's leaf
+    below the member (``compute.packed``, or below it where the case exposes the port) and
+    whether it owns its pacing there, for each case with such a port. Refused as
+    ``channel-port`` where a case reaches its leaf through a further selector or a guarded
+    child (its port is read through the member's one selector)."""
+    from finn.kernels.port_model import exposed_ports  # noqa: PLC0415 - base/port cycle
+
+    decision = _member_declaration(cls, member)
+    assert isinstance(decision, NodeDecision)
+    leaves: dict[str, tuple[str, bool]] = {}
+    for key, case in decision.candidates.items():
+        if case is None or port not in exposed_ports(cast("type[Space]", case.space_type)):
+            continue
+        selector, guard, below = _leaves(cls, f"{member}.{key}", port)
+        if selector is not None or guard is not None:
+            raise DefinitionError.broken(
+                "channel-port",
+                "Kernel",
+                f"{cls.__qualname__}: a channel is on {member}.{port}, whose case {key} "
+                "reaches its leaf through a selector or a guarded child of its own: a channel's "
+                "port reaches its leaf through one selector at most",
+                declaration=cls.__qualname__,
+            )
+        leaf, scheduled = below[""]
+        leaves[key] = (f"{key}.{leaf}" if leaf else key, scheduled)
+    return leaves
+
+
 def _selector_case(cls: type[Kernel], member: str, selector: str) -> str:
     """The name of ``cls``'s private member answering the case of member ``member``'s
     selector at ``selector``, its path below the member (``-<member>-<selector>-case``, each
-    segment of the path its own), installed where it is not yet."""
-    case = _installed(member, *selector.split("."), "case")
+    segment of the path its own; ``""`` for a member that is a selector), installed where it
+    is not yet."""
+    below = selector.split(".") if selector else []
+    case = _installed(*member.split("."), *below, "case")
     if case not in vars(cls):
-        node: Any = getattr(cls, member)
-        for segment in selector.split("."):
-            node = getattr(node, segment)
-        found = selected(node)
+        found = selected(reduce(getattr, below, _member_node(cls, member)))
         setattr(cls, case, found)
         getattr(found, "__set_name__")(cls, case)
     return case
@@ -1411,7 +1501,7 @@ def _guard_reading(member: str, guard: str) -> Callable[[Kernel], bool]:
     ``guard``."""
 
     def placed(self: Kernel) -> bool:
-        return bool(getattr(getattr(self, member), guard))
+        return bool(getattr(_member_node(self, member), guard))
 
     return placed
 
@@ -1427,10 +1517,11 @@ def _beside(
     def beside(self: Kernel) -> tuple[Any, Any]:
         if not getattr(self, present)():
             return None, None
-        if not getattr(getattr(self, member), port).placed:
+        held = getattr(_member_node(self, member), port)
+        if not held.placed:
             return None, None
-        found: PortPins = getattr(getattr(self, member), port).stream_pins
-        pace = getattr(getattr(self, member), port).timed_pace if scheduled else None
+        found: PortPins = held.stream_pins
+        pace = held.timed_pace if scheduled else None
         pins = PortPins(port, found.pins, leaf) if exposed else found
         return pins.under(member), pace
 
@@ -1440,18 +1531,22 @@ def _beside(
 def _beside_case(
     member: str, port: str, case: str, leaves: Mapping[str, tuple[str, bool]], present: str
 ) -> Callable[[Kernel], tuple[Any, Any]]:
-    """``_beside`` of a port its member exposes through a selector: its leaf and whether it
-    owns its pacing are its selected case's (``case``, the member answering it)."""
+    """``_beside`` of a port its member exposes through a selector, or of a member that is
+    one: its leaf and whether it owns its pacing are its selected case's (``case``, the
+    member answering it); none where that case has no such port."""
 
     def beside(self: Kernel) -> tuple[Any, Any]:
         if not getattr(self, present)():
             return None, None
-        if not getattr(getattr(self, member), port).placed:
-            return None, None
         selected_case: str = getattr(self, case)
+        if selected_case not in leaves:
+            return None, None
+        held = getattr(_member_node(self, member), port)
+        if not held.placed:
+            return None, None
         leaf, scheduled = leaves[selected_case]
-        found: PortPins = getattr(getattr(self, member), port).stream_pins
-        pace = getattr(getattr(self, member), port).timed_pace if scheduled else None
+        found: PortPins = held.stream_pins
+        pace = held.timed_pace if scheduled else None
         return PortPins(port, found.pins, leaf).under(member), pace
 
     return beside
@@ -1547,15 +1642,16 @@ _HOPS = "hops"
 
 
 def _connect(cls: type[Kernel]) -> None:
-    """Record, for a kernel with member channels, the member port each channel side names
-    (``Kernel.connections``), refused by the connection rules; and install each channel's
-    neighbours and hops, and the reading of its hops its netlist makes (above)."""
-    if not any(_connects(item) for item in _members(cls).values()):
+    """Refuse a kernel's class by the connection rules; and record, for a kernel with member
+    channels, the member port each channel side names (``Kernel.connections``), and install
+    each channel's neighbours and hops, and the reading of its hops its netlist makes
+    (above)."""
+    connections = _connected(cls)
+    if not connections:
         return
     from finn.kernels.channels import Neighbours, OuterHops, outer_hops  # noqa: PLC0415
     from finn.kernels.port import exposed_name  # noqa: PLC0415 - base/port cycle
 
-    connections = _connected(cls)
     readers: list[tuple[Callable[[str, str], Callable[[Kernel], Any]], str]] = []
     for name, sides in connections.items():
         helpers: list[str] = []
@@ -1566,6 +1662,12 @@ def _connect(cls: type[Kernel]) -> None:
                 # holder's to read where it states that side's reading (a slice's frozen
                 # neighbour's, finn.kernels.dataflow_core), else it has none.
                 helpers.append(helper if helper in vars(cls) else "-no-port")
+                continue
+            if isinstance(_member_declaration(cls, port.member), NodeDecision):
+                case = _selector_case(cls, port.member, "")
+                leaves = _case_leaves(cls, port.member, port.port)
+                setattr(cls, helper, _beside_case(port.member, port.port, case, leaves, "-placed"))
+                helpers.append(helper)
                 continue
             selector, guard, leaves = _leaves(cls, port.member, port.port)
             present = "-placed"
@@ -1628,14 +1730,14 @@ class Kernel(Space):
     kernel names. Its answers are Views: its netlist, the cycles a frame takes through it,
     the bits it holds and what it uses of the device. A native kernel states its netlist
     in ordinary serial source over typed model inputs and pure physical helpers; the base
-    derives its cycles by the rate law, and a kernel restates them only to be counted by
-    its kind (MemStream; a composite, StreamAdapter). Its contract's intake (``intake``)
-    it states from its RTL, else the base answers it unstated, by name. Buffering and
-    resources read its own statements and its members' answers. A composed kernel
-    reaches those answers through ``Members`` over the member each states. A kernel that
-    counts no cycles of its own, a channel's FIFO (``finn.kernels.channels.ChannelFifo``),
-    whose beats are counted where they are made, answers its ``frame_cycles`` inapplicable,
-    and its parent's ``member_frame_cycles`` leaves it out.
+    derives its cycles by the rate law, and a kernel with a module never restates them.
+    Its contract's intake (``intake``) it states from its RTL, else the base answers it
+    unstated, by name. Buffering and resources read its own statements and its members'
+    answers. A composed kernel reaches those answers through ``Members`` over the member
+    each states. A kernel that counts no cycles of its own, a channel's FIFO
+    (``finn.kernels.channels.ChannelFifo``), whose beats are counted where they are made,
+    answers its ``frame_cycles`` inapplicable, and its parent's ``member_frame_cycles``
+    leaves it out.
 
     A reader of a kernel's design point types it ``Kernel``: its four answers (``netlist``,
     ``frame_cycles``, ``buffering``, ``resources``) read as their accepted values, and raise where
@@ -2047,7 +2149,12 @@ class Kernel(Space):
         most any member takes, a member counting none (inapplicable) left out. A kernel with
         a module never restates it (``kernel-cycles-restated``, when its class is made): it
         states its ``interval`` where its hardware differs."""
-        return self._frame_cycles()
+        if type(self).module_spec is not None:
+            return self._rate_frame_cycles()
+        found = [item.value for item in self.member_frame_cycles]
+        if found:
+            return max(found)
+        return reject("kernel-cycles", f"no member of {type(self).__qualname__} states cycles")
 
     @view
     def assumed(self) -> tuple[str, ...]:
@@ -2062,17 +2169,6 @@ class Kernel(Space):
                 own = (f"interval {interval}",)
         below = (f"{item.node}: {each}" for item in self.member_assumed for each in item.value)
         return (*own, *below)
-
-    def _frame_cycles(self) -> int | Rejected:
-        """``frame_cycles`` (above). A class restating ``frame_cycles`` as the base's, to be
-        counted by its own kind (a channel's members, ``finn.kernels.channels.Channel``),
-        calls it."""
-        if type(self).module_spec is not None:
-            return self._rate_frame_cycles()
-        found = [item.value for item in self.member_frame_cycles]
-        if found:
-            return max(found)
-        return reject("kernel-cycles", f"no member of {type(self).__qualname__} states cycles")
 
     def _rate_frame_cycles(self) -> int | Rejected:
         """A kernel with a module's cycles a frame by the rate law (``frame_cycles``): its

@@ -90,8 +90,7 @@ class DataflowCore(GenericPartition):
         broken or a choice open, named."""
         from finn.custom_op.kernels.shell import configured_network  # noqa: PLC0415
 
-        configured, _ = configured_network(self.body(), self.onnx_node.name)
-        return configured
+        return configured_network(self.body(), self.onnx_node.name)
 
     def execute_node(self, context: dict[str, Any], graph: Any) -> None:
         # Imported when it runs: resolving the domain loads no executor.

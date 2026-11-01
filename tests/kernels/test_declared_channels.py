@@ -50,7 +50,6 @@ from finn.dataflow.traversal import (
     tile,
     vector_major,
 )
-from finn.kernels.adapters import StreamAdapter
 from finn.kernels.artifacts.abi import Direction, Endpoint
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel, ChannelFifo, stated_by, stated_form
@@ -59,7 +58,7 @@ from finn.kernels.configure import commit
 from finn.kernels.explore import CoreComposition
 from finn.kernels.laws import AXIS_CLOCKING, Axis
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.movers import IODMA_HLS, IodmaMover, iodma_hls
+from finn.kernels.movers import IODMA_HLS, iodma_hls
 from finn.kernels.port_model import InPort, StreamPort
 from finn.kernels.sides import BUILD, ROW_MAJOR, Outside, Side, Steady
 from finn.kernels.transport import AxisBeat, StreamPins
@@ -443,21 +442,20 @@ def regroups_rows_into_tiles(point: Any) -> None:
 
 
 def test_a_channel_s_cycles_wait_on_no_transport_and_count_every_member_but_its_fifo():
-    """A channel counts its members' cycles by kind (``source_cycles``, ``stage_cycles``,
-    ``mover_cycles``), not through the base's ``member_frame_cycles``, which ranges over its
-    transport too: whether it places a FIFO is a choice FIFO sizing reads cycles before, so
-    the base's waits on it, and the channel's do not. With a FIFO placed, the base's names
-    the members the kinds name: the FIFO's cycles are inapplicable, and left out."""
+    """A channel's cycles are its members', each read where it is placed, not through the
+    base's ``member_frame_cycles``, which ranges over its transport too: whether it places
+    a FIFO is a choice FIFO sizing reads cycles before, so the base's waits on it, and the
+    channel's do not. With a FIFO placed, the base's names the members the channel reads:
+    the FIFO's cycles are inapplicable, and left out."""
     entering = edge(Side.boundary("s_axis_0", outside=stated(order=ROW_MAJOR)), reader(TILES))
     point = with_adapter_memories(entering)
     assert isinstance(point.query(Channel.frame_cycles), Available)
     assert isinstance(point.query(Channel.member_frame_cycles), Unresolved)
     fifo = commit(point, {"transport": "fifo"})
     assert isinstance(fifo.transport.query(ChannelFifo.frame_cycles), Inapplicable)
-    counted = [item.node for item in (*fifo.source_cycles, *fifo.stage_cycles)]
-    assert counted == ["output_adapter", "adapter.input_gen_vpc"]
-    assert [item.node for item in fifo.member_frame_cycles] == counted
-    assert fifo.frame_cycles == point.frame_cycles
+    counted = fifo.member_frame_cycles
+    assert [item.node for item in counted] == ["output_adapter", "adapter.input_gen_vpc"]
+    assert fifo.frame_cycles == max(item.value for item in counted) == point.frame_cycles
 
 
 def test_a_stated_side_is_regrouped_and_one_nothing_bridges_is_refused_by_channel_steps():
@@ -563,15 +561,11 @@ def test_a_statement_of_nothing_the_inside_does_not_present_answers_as_unstated(
         assert answers[0] == answers[1]
 
 
-def test_every_member_of_a_channel_but_its_transport_counts_by_exactly_one_kind():
-    """The by-kind count holds while each kind declares ``cycles`` itself (``Members``
-    reads the class declaring the member; a kind relying on the base's would range over
-    the transport again) and every placed class but the FIFO and its outer ports (stream
-    ports, no members counting cycles) is one kind's: a new member, or a kind losing its
-    own ``cycles``, fails here by name."""
-    kinds = (MemStreamKernel, StreamAdapter, IodmaMover)
-    for kind in kinds:
-        assert "frame_cycles" in vars(kind), kind
+def test_a_channel_s_cycles_read_every_member_but_its_transport():
+    """A channel's cycles read each member it places (``Channel.frame_cycles``: its source,
+    its output adapter, its input adapter, its mover) but its transport, whose only case
+    is a FIFO, counting none. A new member, its outer ports aside (stream ports, no members
+    counting cycles), fails here by name until its cycles are read there too."""
     placed: dict[str, list[type]] = {}
     for name, value in vars(Channel).items():
         declaration = slot_declaration(value)
@@ -584,7 +578,4 @@ def test_every_member_of_a_channel_but_its_transport_counts_by_exactly_one_kind(
         ):
             placed[name] = [declaration.space_type]
     assert set(placed) == {"source", "mover", "output_adapter", "transport", "adapter"}
-    assert placed.pop("transport") == [ChannelFifo]
-    for name, classes in placed.items():
-        for each in classes:
-            assert sum(issubclass(each, kind) for kind in kinds) == 1, (name, each)
+    assert placed["transport"] == [ChannelFifo]
