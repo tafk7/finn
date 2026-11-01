@@ -271,6 +271,33 @@ class MoverContract:
         return tuple(max(beat, ceil((beat + 1) * words / beats) - 1) for beat in range(beats))
 
 
+def iodma_contract(offer: MoverOffer, side: StreamPins) -> MoverContract:
+    """``IODMA_hls``'s facts on a free side (``side``, the module's port it serves), sized by
+    ``offer`` (see the module docstring)."""
+    tdata, beats = side.transport.data_width, side.form.beats
+    memory = gcd(tdata * beats, offer.width_cap)
+    converter = memory != tdata
+    # Seen from inside the module, its input is the AXIS target.
+    direction = "in" if side.transport.endpoint is Endpoint.TARGET else "out"
+    return MoverContract(
+        kind=IODMA_HLS,
+        direction=direction,
+        port=side.transport.name,
+        tdata=tdata,
+        beats=beats,
+        lanes=side.lanes,
+        element=side.element,
+        memory_width=memory,
+        words=tdata * beats // memory,
+        converter=converter,
+        call_cycles=offer.call_converted if converter else offer.call_direct,
+        frames_per_call=offer.frames_per_call,
+        control_buses=1,
+        memory_ports=1,
+        resources=iodma_hls_resources(direction=direction, intf_width=memory, stream_width=tdata),
+    )
+
+
 class IodmaMover(Space):
     """The ``IODMA_hls`` mover on a free side (``side``), where ``offers`` offer it. It is
     no kernel (it binds no RTL in the partition's module), but its ``cycles`` count in its
@@ -297,33 +324,9 @@ class IodmaMover(Space):
 
     @derived
     def contract(self) -> MoverContract:
-        """Its facts on ``side``, sized by its offer (see the module docstring)."""
+        """Its facts on ``side``, sized by its offer (``iodma_contract``)."""
         (offer,) = (offer for offer in self.offers if offer.kind == IODMA_HLS)
-        side = self.side
-        tdata, beats = side.transport.data_width, side.form.beats
-        memory = gcd(tdata * beats, offer.width_cap)
-        converter = memory != tdata
-        # Seen from inside the module, its input is the AXIS target.
-        direction = "in" if side.transport.endpoint is Endpoint.TARGET else "out"
-        return MoverContract(
-            kind=IODMA_HLS,
-            direction=direction,
-            port=side.transport.name,
-            tdata=tdata,
-            beats=beats,
-            lanes=side.lanes,
-            element=side.element,
-            memory_width=memory,
-            words=tdata * beats // memory,
-            converter=converter,
-            call_cycles=offer.call_converted if converter else offer.call_direct,
-            frames_per_call=offer.frames_per_call,
-            control_buses=1,
-            memory_ports=1,
-            resources=iodma_hls_resources(
-                direction=direction, intf_width=memory, stream_width=tdata
-            ),
-        )
+        return iodma_contract(offer, self.side)
 
     @derived
     def frame_cycles(self) -> int:
@@ -346,6 +349,7 @@ __all__ = [
     "MoverContract",
     "MoverOffer",
     "converter_kind",
+    "iodma_contract",
     "iodma_hls",
     "iodma_hls_resources",
 ]

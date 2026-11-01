@@ -110,11 +110,14 @@ from finn.core.onnx_exec import execute_onnx
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.reporting.manifest import FINDING, RECORDS
 from finn.core.search import ExploreError, Hold, Ranked
+from finn.core.space import design_space
 from finn.custom_op.kernels.shell import configured_network
+from finn.kernels.artifacts.contributions import HlsSource
 from finn.kernels.artifacts.module import module_name
 from finn.kernels.channels import Channel, Neighbours
 from finn.kernels.explore import KernelExplorer, TargetThroughput
 from finn.kernels.fifo_sizing import Sized
+from finn.kernels.iodma import IodmaIn, IodmaOut
 from finn.platform.refusal import TargetRefused
 from finn.platform.request import TargetRequest
 from finn.platform.resolve import resolve_target
@@ -1679,6 +1682,34 @@ def test_the_runner_generates_z0s_iodmas_for_tfc(
         assert str(tmp_path) not in script and described.part not in script
         assert 'set config_proj_part "$part"\n' in script
         assert 'set config_bnnlibdir "$hlslib"\n' in script
+
+
+@pytest.mark.slow
+def test_z0s_movers_as_kernels_state_their_channels_movers_and_generate_z0s_iodmas(
+    z0_tfc: ModelWrapper,
+) -> None:
+    """On each of TFC's edges at Z0's choices, the mover as a kernel (``IodmaIn``,
+    ``IodmaOut``) on its channel's free side states the contract its description states, and
+    its HLS top is Z0's IODMA code but for the top's name: the input mover's cycles a frame
+    TFC's bottleneck."""
+    described = describe(z0_tfc)
+    (core,) = described.cores
+    _, body, _ = partition_body(z0_tfc)
+    network = configured_network(body, core.name)[0].network
+    cycles: dict[str, int] = {}
+    for edge in described.edges:
+        channel = network.member(edge.tensor)
+        (offer,) = channel.offers
+        kind = IodmaIn if edge.contract.direction == "in" else IodmaOut
+        point = design_space(kind(offer=offer, edge=channel.free_side, platform=channel.platform))
+        assert point.contract == edge.contract
+        (request,) = point.module_sources
+        assert isinstance(request, HlsSource)
+        assert request.top == Z0_IODMA_CODE[cell(edge.unit)].replace(
+            f"{cell(edge.unit)}_IODMA_hls_0", request.function
+        )
+        cycles[edge.unit] = point.frame_cycles
+    assert cycles == {"in0": TFC_BOTTLENECK, "out0": 14}
 
 
 #: TFC's bottleneck at Z0's choices on its partition's network, movers included: the input

@@ -44,6 +44,7 @@ from finn.kernels.artifacts.abi import (
     Bus,
     Clocking,
     Direction,
+    Endpoint,
     Member,
     Signal,
     StandardProtocol,
@@ -58,7 +59,7 @@ from finn.kernels.laws import NATIVE_PROTOCOL, Axis
 from finn.kernels.library import ModuleSpec, library_module
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port import exposed_pins, exposed_side, stream_port
-from finn.kernels.port_model import InPort, OtherPins
+from finn.kernels.port_model import InPort, MemoryPort, OtherPins
 from finn.kernels.sides import Side
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import Resources
@@ -122,6 +123,49 @@ def test_a_kernel_s_other_pins_go_before_its_ports_and_their_hold_after() -> Non
     assert isinstance(module, Leaf) and module.held.inputs == (("mode", 1),)
     names = [pin.name for pin in module.abi.pins]
     assert names == ["ap_clk", "ap_clk2x", "ap_rst_n", "mode", "busy", "s_axis"]
+
+
+def _memory(protocol: StandardProtocol, endpoint: Endpoint) -> Bus:
+    members = ("araddr", "arvalid", "arready", "rdata", "rvalid", "rready")
+    widths = {"araddr": 32, "rdata": 32}
+    return Bus(
+        "m_axi_gmem",
+        protocol,
+        tuple(Member(name, f"m_axi_gmem_{name}", widths.get(name, 1)) for name in members),
+        endpoint,
+    )
+
+
+def test_a_memory_port_goes_after_the_other_pins_and_before_the_ports_and_holds_nothing() -> None:
+    """A memory port its module initiates is presented, for its shell to bind: its pins
+    after the other pins (and the control bus) and before the ports; any other bus
+    declared as one is refused."""
+
+    class Reading(Probe):
+        id = "test.probe.reading"
+        memory = MemoryPort(bus=_memory(StandardProtocol.AXIMM, Endpoint.INITIATOR))
+
+    module = library_module(design_space(Reading(tensor=TENSOR)))
+    names = [pin.name for pin in module.abi.pins]
+    assert names == ["ap_clk", "ap_clk2x", "ap_rst_n", "mode", "busy", "m_axi_gmem", "s_axis"]
+    assert module.held.inputs == (("mode", 1),)
+    for protocol, endpoint in (
+        (StandardProtocol.AXIMM, Endpoint.TARGET),
+        (StandardProtocol.AXILITE, Endpoint.INITIATOR),
+    ):
+
+        class Misread(Probe):
+            id = "test.probe.misread"
+            memory = MemoryPort(bus=_memory(protocol, endpoint))
+
+        netlist = design_space(Misread(tensor=TENSOR)).query(Kernel.netlist)
+        assert isinstance(netlist, Rejected)
+        assert codes(netlist) == {"memory-port-bus"}
+        (finding,) = netlist.findings
+        assert finding.message == (
+            f"m_axi_gmem is a {endpoint.value} of {protocol.value}: a memory port is an AXI4 "
+            "initiator"
+        )
 
 
 def test_a_port_runs_on_its_kernels_interface_protocol() -> None:

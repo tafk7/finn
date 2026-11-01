@@ -22,7 +22,7 @@ channel's side is bound to its kernel's port (``contributor`` names each):
   none where its shell offers none); a mover presents its own AXI-Lite bus. Another kind of
   mover a shell places is one more Param;
 - each kernel: the memory ports it initiates itself (``<member>-initiators``, its
-  ``memory_initiators``: none today);
+  ``memory_initiators``: a memory mover's one, ``finn.kernels.iodma``);
 - each kernel, and each channel with a known value (its source): whether it takes the
   doubled clock (``<member>-doubled``, its ``takes_doubled_clock``).
 

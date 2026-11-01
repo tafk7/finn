@@ -251,8 +251,9 @@ _END = _installed("end")
 
 # -- the module's parts, read serially ------------------------------------------------------
 #
-# A module's pins are its other pins' (``OtherPins``), its control bus's, then its ports',
-# each in declaration order; its holds its ports', its other pins', then its control bus's.
+# A module's pins are its other pins' (``OtherPins``), its control bus's, its memory ports'
+# (``MemoryPort``), then its ports', each in declaration order; its holds its ports', its
+# other pins', its control bus's, then its memory ports' (none: each is presented).
 # The base reads each part's ``pin_values``, ``held_values`` and ``pins_presented`` in that
 # order, one after another: a part's refusal is collected with the later parts' (``_each``),
 # and a part not yet known stops the reading there. A Space method's reads are found from its
@@ -294,7 +295,12 @@ def _beats_from(part: str, following: str) -> Callable[[Kernel], tuple[Any, ...]
 
 def _module_parts(cls: type[Kernel]) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """The names of its module's parts in pin order and in hold order (above)."""
-    from finn.kernels.port_model import OtherPins, StreamPort, stream_ports  # noqa: PLC0415
+    from finn.kernels.port_model import (  # noqa: PLC0415
+        MemoryPort,
+        OtherPins,
+        StreamPort,
+        stream_ports,
+    )
 
     nested = [
         name for names in (control_models(cls), stream_ports(cls)) for name in names if "." in name
@@ -310,8 +316,9 @@ def _module_parts(cls: type[Kernel]) -> tuple[tuple[str, ...], tuple[str, ...]]:
     members = _members(cls)
     others = tuple(name for name, item in members.items() if isinstance(item, OtherPins))
     controls = tuple(name for name, item in members.items() if isinstance(item, ControlModel))
+    memories = tuple(name for name, item in members.items() if isinstance(item, MemoryPort))
     ports = tuple(name for name, item in members.items() if isinstance(item, StreamPort))
-    return (*others, *controls, *ports), (*ports, *others, *controls)
+    return (*others, *controls, *memories, *ports), (*ports, *others, *controls, *memories)
 
 
 def _is_stream_port(item: object) -> bool:
@@ -1840,8 +1847,9 @@ class Kernel(Space):
     @derived
     def memory_initiators(self) -> int:
         """The memory ports it initiates itself (a memory-mapped bus it is the initiator
-        of): none here, and no kernel declares one today. A kernel that does states its
-        own; a shell's memory rule counts them (``finn.kernels.budgets``)."""
+        of, ``finn.kernels.port_model.MemoryPort``): none here. A kernel that declares one
+        states its own (a memory mover's, ``finn.kernels.iodma``); a shell's memory rule
+        counts them (``finn.kernels.budgets``)."""
         return 0
 
     # -- its schedule ----------------------------------------------------------------------

@@ -20,8 +20,9 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 from itertools import product
+from math import lcm
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from qonnx.core.datatype import DataType
@@ -42,6 +43,7 @@ from support.tfc_built import TFC_MODULE
 from support.xsim import requires_xsim
 
 import finn.custom_op.kernels.shell as shell
+from finn import resources
 from finn.core.graph.annotations.platform import read_target, write_target
 from finn.core.graph.partition import CUT_NAME, partition_body
 from finn.core.space import Available, Rejected, design_space, inspection
@@ -58,6 +60,7 @@ from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import (
     BeatSequence,
+    LevelEnd,
     Loop,
     Reorder,
     Traversal,
@@ -67,14 +70,28 @@ from finn.dataflow.traversal import (
 )
 from finn.harness.ops import check_parity
 from finn.kernels.adapters import Convert
-from finn.kernels.artifacts.abi import Direction
-from finn.kernels.artifacts.module import module_name
+from finn.kernels.artifacts.abi import Bus, Direction, Endpoint, StandardProtocol
+from finn.kernels.artifacts.contributions import HlsSource
+from finn.kernels.artifacts.hls import SCRIPT, stage_hls
+from finn.kernels.artifacts.module import RegisterMap, module_name
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
 from finn.kernels.explore import CoreComposition, KernelExplorer, SizeFifos, TargetThroughput
 from finn.kernels.fifo_sizing import NotModelled, Pattern, sides
 from finn.kernels.input_generator import Generate
+from finn.kernels.iodma import (
+    IODMA_CONTROL_ADDRESS,
+    IODMA_DIRECTIVES,
+    IODMA_HEADERS,
+    IODMA_STEM,
+    IodmaIn,
+    IodmaKernel,
+    IodmaOut,
+    iodma_top,
+)
+from finn.kernels.laws import Standing
+from finn.kernels.library import library_module
 from finn.kernels.movers import (
     DIVISIBLE,
     IODMA_HLS,
@@ -87,6 +104,7 @@ from finn.kernels.movers import (
     iodma_hls_resources,
 )
 from finn.kernels.sides import ROW_MAJOR, ROW_MAJOR_HOST, Outside, Side
+from finn.kernels.transport import AxisBeat, StreamPins
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
 from finn.platform.resolve import resolve_target
@@ -519,6 +537,205 @@ def test_a_pass_its_mover_moves_once_replayed_at_the_edge_computes_what_onnx_com
     w2 = choose_memories(model).member("w2")
     assert (w2.input_chain, outer(w2).form.beats) == ("input_gen", 4)
     check_parity(model, tmp_path, inputs=boundary_inputs(model, 4), label="replayed")
+
+
+# -- the mover as a kernel ------------------------------------------------------------------
+
+
+def iodma_kernels(bound: CoreComposition) -> dict[str, IodmaKernel]:
+    """An ``IODMA_hls`` kernel on each free side of ``bound`` its channel places a mover on,
+    by channel: offered the channel's offer, on its free side, at its platform."""
+    found: dict[str, IodmaKernel] = {}
+    for name in bound.movers:
+        channel = bound.member(name)
+        (offer,) = (each for each in channel.offers if each.kind == IODMA_HLS)
+        kind = IodmaIn if channel.mover_contract.direction == "in" else IodmaOut
+        found[name] = design_space(
+            kind(offer=offer, edge=channel.free_side, platform=channel.platform)
+        )
+    return found
+
+
+def test_an_iodma_kernel_states_its_channel_s_mover_on_each_free_side() -> None:
+    """On each of the Chain's free sides the kernel states what the channel's mover states:
+    its contract, its cycles a frame (its stated rate's span, its beat times the contract's,
+    measured) and its resources; its one port presents the free side's stream at its
+    word, and it initiates one memory port and presents one control bus, which takes no
+    configuration."""
+    bound = cut_network()
+    movers = iodma_kernels(bound)
+    assert list(movers) == ["x", "y"]
+    for name, point in movers.items():
+        channel = bound.member(name)
+        contract = channel.mover_contract
+        assert point.contract == contract
+        port = point.output if isinstance(point, IodmaIn) else cast(IodmaOut, point).input
+        assert port.stream == channel.free_side.stream
+        assert port.width == channel.free_side.transport.data_width == contract.tdata
+        rate = point.stated_rate
+        assert (rate.port, rate.times, rate.span) == (point.port, contract.times, contract.cycles)
+        assert rate.standing is Standing.MEASURED and point.assumed == ()
+        assert point.frame_cycles == contract.cycles
+        assert point.resource_use == contract.resources
+        assert point.memory_initiators == 1
+        control = point.bus_control
+        assert (control.port, control.registers) == ("s_axi_control", RegisterMap())
+    assert movers["x"].direction == "in" and movers["y"].direction == "out"
+
+
+def test_an_iodma_kernel_s_module_is_its_hls_top_exported_as_finn_s_ip(tmp_path: Path) -> None:
+    """Its module is its HLS top, named by the request's digest, which leaves the name out
+    (a twin edge shares the top), exported under FINN's identity: its control bus
+    (AXI-Lite, 6 address bits), its memory port (AXI4, 64-bit addresses, data at least 32
+    bits, as HLS widens it), its interrupt and its stream, ``out0_V`` from memory or
+    ``in0_V`` to it, upper case. Staged over finn-hlslib, every header its top includes is
+    declared, and the script exports the IP as ``xilinx_finn:finn:<top>:1.0``."""
+    movers = iodma_kernels(cut_network())
+    # x moves 16-bit memory words, which HLS widens to 32 bits on the bus.
+    expected = {"x": ("out0_V", 32, 8), "y": ("in0_V", 32, 16)}
+    for name, point in movers.items():
+        (request,) = point.module_sources
+        assert isinstance(request, HlsSource) and request.export
+        assert request.function.startswith(IODMA_STEM + "_")
+        assert request.headers == IODMA_HEADERS and request.directives == IODMA_DIRECTIVES
+        module = library_module(point)
+        assert module.name == request.function
+        pins = {pin.name: pin for pin in module.abi.pins}
+        stream, data, tdata = expected[name]
+        assert list(pins) == [
+            "ap_clk",
+            "ap_rst_n",
+            "interrupt",
+            "s_axi_control",
+            "m_axi_gmem",
+            stream,
+        ]
+        control, memory, axis = pins["s_axi_control"], pins["m_axi_gmem"], pins[stream]
+        assert isinstance(control, Bus) and isinstance(memory, Bus) and isinstance(axis, Bus)
+        widths = {member.physical: member.width for member in control.signals}
+        assert widths["s_axi_control_AWADDR"] == IODMA_CONTROL_ADDRESS == 6
+        assert (memory.protocol, memory.endpoint) == (StandardProtocol.AXIMM, Endpoint.INITIATOR)
+        widths = {member.physical: member.width for member in memory.signals}
+        assert (widths["m_axi_gmem_ARADDR"], widths["m_axi_gmem_RDATA"]) == (64, data)
+        assert widths["m_axi_gmem_WSTRB"] == data // 8
+        assert {member.physical: member.width for member in axis.signals} == {
+            f"{stream}_TDATA": tdata,
+            f"{stream}_TVALID": 1,
+            f"{stream}_TREADY": 1,
+        }
+        staged = stage_hls(
+            request, tmp_path / name, roots={"hlslib": Path(resources.path("hlslib"))}
+        )
+        script = (staged.directory / SCRIPT).read_text()
+        export = (
+            f"config_export -format ip_catalog -vendor xilinx_finn -library finn "
+            f"-ipname {request.function} -version 1.0"
+        )
+        assert script.index(export) < script.index("csynth_design")
+        assert script.index("csynth_design") < script.index("export_design -format ip_catalog")
+    twin = design_space(
+        IodmaIn(
+            offer=movers["x"].offer,
+            edge=movers["x"].edge,
+            platform=movers["x"].platform,
+        )
+    )
+    assert twin.module_sources == movers["x"].module_sources
+
+
+def test_an_iodma_kernel_refuses_another_kind_s_offer_a_marked_edge_and_the_other_way() -> None:
+    x = iodma_kernels(cut_network())["x"]
+    other = IodmaIn(offer=replace(x.offer, kind="other"), edge=x.edge, platform=x.platform)
+    refusal = design_space(other).query(IodmaIn.offered)
+    assert isinstance(refusal, Rejected)
+    assert [finding.code for finding in refusal.findings] == ["mover-not-offered"]
+    beat = AxisBeat("s_axis", DataType["INT4"], 2, endpoint=Endpoint.TARGET, last=True)
+    form = vector_major((2, 4), 2)
+    marked = StreamPins(
+        beat.native(clock="ap_clk", reset="ap_rst_n"),
+        Stream(ScalarEncoding(DataType["INT4"]), BeatSequence(form, markers=(LevelEnd(4),))),
+        markers=(("s_axis_tlast", LevelEnd(4)),),
+    )
+    refusal = design_space(IodmaIn(offer=x.offer, edge=marked, platform=x.platform)).query(
+        IodmaIn.unmarked
+    )
+    assert isinstance(refusal, Rejected)
+    assert [finding.code for finding in refusal.findings] == ["iodma-markers"]
+    y = iodma_kernels(cut_network())["y"]
+    refusal = design_space(IodmaIn(offer=y.offer, edge=y.edge, platform=y.platform)).query(
+        IodmaIn.facing
+    )
+    assert isinstance(refusal, Rejected)
+    assert [finding.message for finding in refusal.findings] == [
+        "an IODMA moving in serves no m_axis_0, which moves out"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("direction", "memory", "stream", "body"),
+    [
+        ("in", 32, 32, ["Mem2Stream_Batch<DataWidth1, NumBytes1>(in0_V, out0_V, numReps);"]),
+        (
+            "in",
+            64,
+            16,
+            [
+                "hls::stream<ap_uint<64> > dma2dwc;",
+                "Mem2Stream_Batch<DataWidth1, NumBytes1>(in0_V, dma2dwc, numReps);",
+                "StreamingDataWidthConverter_Batch<64, 16, 15>(dma2dwc, out0_V, numReps);",
+            ],
+        ),
+        (
+            "in",
+            64,
+            24,
+            [
+                "hls::stream<ap_uint<64> > dma2lcm;",
+                "hls::stream<ap_uint<192> > lcm2out;",
+                "Mem2Stream_Batch<DataWidth1, NumBytes1>(in0_V, dma2lcm, numReps);",
+                "StreamingDataWidthConverter_Batch<64, 192, 15>(dma2lcm, lcm2out, numReps);",
+                "StreamingDataWidthConverter_Batch<192, 24, 5>(lcm2out, out0_V, numReps);",
+            ],
+        ),
+        ("out", 32, 32, ["Stream2Mem_Batch<DataWidth1, NumBytes1>(in0_V, out0_V, numReps);"]),
+        (
+            "out",
+            64,
+            16,
+            [
+                "hls::stream<ap_uint<64> > dwc2dma;",
+                "StreamingDataWidthConverter_Batch<16, 64, 60>(in0_V, dwc2dma, numReps);",
+                "Stream2Mem_Batch<DataWidth1, NumBytes1>(dwc2dma, out0_V, numReps);",
+            ],
+        ),
+        (
+            "out",
+            64,
+            24,
+            [
+                "hls::stream<ap_uint<192> > in2lcm;",
+                "hls::stream<ap_uint<64> > lcm2dma;",
+                "StreamingDataWidthConverter_Batch<24, 192, 40>(in0_V, in2lcm, numReps);",
+                "StreamingDataWidthConverter_Batch<192, 64, 5>(in2lcm, lcm2dma, numReps);",
+                "Stream2Mem_Batch<DataWidth1, NumBytes1>(lcm2dma, out0_V, numReps);",
+            ],
+        ),
+    ],
+)
+def test_an_iodma_top_moves_through_the_converters_its_widths_take(
+    direction: str, memory: int, stream: int, body: list[str]
+) -> None:
+    """Its top moves a frame (960 bits here) between its memory port and its stream
+    directly, through one width converter where either width divides the other, or through
+    two via their least common multiple, as the HWCustomOp flow's ``IODMA_hls`` did."""
+    text = iodma_top(
+        "top", direction=direction, memory_width=memory, stream_width=stream, frame_bits=960
+    )
+    lines = text.splitlines()
+    assert lines[1] == f"#define AP_INT_MAX_W {lcm(memory, stream)}"
+    assert "#define NumBytes1 120" in lines and f"#define DataWidth1 {memory}" in lines
+    assert lines[lines.index("#pragma HLS DATAFLOW") + 1 : -1] == body
+    assert lines[-1] == "}"
 
 
 # -- on TFC_W2A2 ---------------------------------------------------------------------------
