@@ -50,7 +50,7 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import CUT_NAME, search_record
 from finn.core.search import ExploreError, Refused
 from finn.core.space import Available, Rejected, inspection
-from finn.custom_op.kernels.shell import configured_network, row_facts
+from finn.custom_op.kernels.shell import configured_network, row_facts, row_movers
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import (
     Bus,
@@ -74,10 +74,11 @@ from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.resolve import resolve_target
-from finn.platform.shells import IP_ROW, ShellRow, bus_counts, shell_row
+from finn.platform.shells import ShellRow, bus_counts, shell_row
 from finn.transformation.kernels import explore_kernel_choices
 from finn.transformation.kernels.cut import MakeCutChoices
 
+IP_ROW = shell_row("ip", None)
 PYNQ_ROW = shell_row("pynq", "Ultra96")
 
 UINT2 = DataType["UINT2"]
@@ -96,18 +97,19 @@ def thresholdings(count: int, row: ShellRow, presenting: int | None = None) -> C
     # Each channel is on the ports of the thresholdings on either side of it; the first's
     # and the last's other side the boundary, offered the row's movers and stated by them.
     names = ["x", *(f"c{index}" for index in range(count - 1)), "y"]
-    stated = row.movers[0].states() if row.movers else None
+    movers = row_movers(row)
+    stated = movers[0].states() if movers else None
     channels: dict[str, Any] = {}
     for index, name in enumerate(names):
         producer = (
             Port(f"t{index - 1}", "output")
             if index > 0
-            else Side.boundary("s_axis_0", row.movers, stated)
+            else Side.boundary("s_axis_0", movers, stated)
         )
         consumer = (
             Port(f"t{index}", "input")
             if index < count
-            else Side.boundary("m_axis_0", row.movers, stated)
+            else Side.boundary("m_axis_0", movers, stated)
         )
         channels[name] = channel(producer, consumer, tensor=TENSOR, platform=platform)
     members: dict[str, Any] = {name: channels[name] for name in names[:-1]}
@@ -279,7 +281,7 @@ def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:
     configured(model, {first: pumped})
     configure_partition(model)
     point, _ = configured_network(model, "chain")
-    assert point.row is IP_ROW and IP_ROW.clk2x
+    assert point.row == IP_ROW and IP_ROW.clocks.doubled
     assert point.module.abi.clock_alignments
     netlist = point.network.netlist()
     assert isinstance(netlist, Available)
@@ -288,7 +290,7 @@ def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:
     write_target(model, ULTRA96)
     model = model.transform(MakeCutChoices(CUT_NAME))  # the movers the pynq row offers
     bound = core_in_shell(model, model.graph.node, name="chain")
-    assert not shell.body_row(model).clk2x
+    assert not shell.body_row(model).clocks.doubled
     rule = f"{member_name(first)}-clock"
     found = Seam().refusals(bound)
     assert list(found) == [SHELL] and [each.owner for each in found[SHELL]] == [rule]

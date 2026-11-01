@@ -52,7 +52,7 @@ from finn.core.reporting.findings import Refusal
 from finn.core.search import Accepted, Key, Refused
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import network, persist
-from finn.custom_op.kernels.shell import body_row, row_facts, shell_composition
+from finn.custom_op.kernels.shell import body_row, row_facts, row_movers, shell_composition
 from finn.kernels.dataflow_core import Bound
 from finn.kernels.explore import CoreComposition, Seam
 
@@ -76,7 +76,7 @@ def bound_in_shell(
     its stored choices bound."""
     row = body_row(model)
     selected = model.graph.node if nodes is None else nodes
-    return network(model, selected, name=name, movers=row.movers, shell=row_facts(row))
+    return network(model, selected, name=name, movers=row_movers(row), shell=row_facts(row))
 
 
 def core_in_shell(

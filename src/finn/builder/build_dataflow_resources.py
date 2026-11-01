@@ -109,14 +109,14 @@ def _member_instances(parent: ModelWrapper) -> dict[str, str]:
     node, body, _ = partition_body(parent)
     target = read_target(body)
     row = shell_row(target.shell, target.board)
-    if row.integration is None:
+    if row.linker is None:
         return {"partition": node.name}
     export = integration(parent)
     instances = {"partition": export.partition}
     instances.update(
         {f"movers.{member_name(mover.tensor)}": mover.instance for mover in export.movers}
     )
-    static = row.static_region
+    static = row.fixed
     if static is not None:
         instances.update(
             {
@@ -236,7 +236,7 @@ def shell_resources_report(parent: ModelWrapper, reports: Mapping[str, Path]) ->
         totals["placed"] = None
         absent["placed"] = (
             f"the {target.shell!r} shell is not placed by the build"
-            if shell_row(target.shell, target.board).integration is None
+            if shell_row(target.shell, target.board).linker is None
             else "no placed design: step_build_bitfile not listed"
         )
 

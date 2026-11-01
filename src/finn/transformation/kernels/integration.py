@@ -24,8 +24,9 @@ place
   partition's, output movers) from the control interconnect's next master port, and every
   instance's clock and reset from the shell's;
 - the clock: the period asked (the target's), which the shell's processor is asked for;
-- the addresses: each AXI-Lite bus from the row's ``control_base``, in that order,
-  aligned to its aperture, at least the row's ``control_aperture`` (an ``IODMA_hls``
+- the addresses: each AXI-Lite bus from the fixed shell's ``control_base``, in that order,
+  aligned to its aperture, at least the row's least window (``Control.least_window``: an
+  ``IODMA_hls``
   control map, three scalar registers, fits the least; a partition's bus takes
   ``2**awaddr`` bytes, as its IP's register map states).
 
@@ -34,14 +35,15 @@ other counts is refused, by name (``wire_one_bus_each``), as is a partition bus 
 no ``awaddr`` (no aperture).
 
 The names are the block design's: movers ``idma<i>`` and ``odma<j>`` by direction in port
-order, the static region's instances ``<ip>_0`` (``finn.platform.shells.StaticRegion``), and an
+order, the fixed shell's instances ``<ip>_0`` (``finn.platform.shells.FixedShell``), and a
 mover's pins those of its ``IODMA_hls`` IP as the pynq shell's runner packages it
 (``IODMA_PINS``).
 
 It is a function of the configured network: the export is the integration's (a block
 design's names, addresses and Vivado IPs), needed once a build and not at every point
-an exploration costs, and the partition's name is its graph node's. A shell without an
-integration (``ip``) has no export.
+an exploration costs, and the partition's name is its graph node's. A shell without a
+linker (``ip``) has no export. Its host runtime is the PYNQ driver's platform for the
+shell's runtime (``HOST_RUNTIMES``).
 """
 
 from __future__ import annotations
@@ -76,6 +78,9 @@ shell's runner, ``finn.shells.pynq.runner``)."""
 
 CLOCK, RESET = "ap_clk", "ap_rst_n"
 """Every instance's clock and reset pins."""
+
+HOST_RUNTIMES = {"pynq": "zynq-iodma"}
+"""The PYNQ driver's platform (``finn.shells.pynq.driver``) by the shell's runtime."""
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -255,14 +260,15 @@ def integration(model: ModelWrapper) -> Integration:
     refuse_unverified(body, node.name)
     point, boundary = configured_network(body, node.name)
     row = point.row
-    if row.integration != VIVADO_BLOCK_DESIGN or row.static_region is None:
+    if row.linker != VIVADO_BLOCK_DESIGN or row.fixed is None or row.control is None:
         raise IntegrationError(
             "integration-unexported",
             "configuration.target.shell",
-            f"the {row.shell!r} shell's integration is {row.integration!r}: no export "
-            f"(the {VIVADO_BLOCK_DESIGN!r} integration has one)",
+            f"the {row.shell!r} shell's linker is {row.linker!r}: no export "
+            f"(the {VIVADO_BLOCK_DESIGN!r} linker has one)",
         )
-    region = row.static_region
+    region = row.fixed
+    least = row.control.least_window
     memory, control = f"{region.memory_interconnect}_0", f"{region.control_interconnect}_0"
     counts = {"in": 0, "out": 0}
     movers = []
@@ -307,14 +313,10 @@ def integration(model: ModelWrapper) -> Integration:
     ]
     # The block design's order: the input movers, the partition, the output movers.
     control_buses: list[tuple[str, int]] = [
-        (f"{mover.instance}/{IODMA_PINS['control']}", region.control_aperture) for mover in inputs
+        (f"{mover.instance}/{IODMA_PINS['control']}", least) for mover in inputs
     ]
-    control_buses += [
-        (f"{partition}/{bus.name}", _aperture(bus, region.control_aperture)) for bus in buses
-    ]
-    control_buses += [
-        (f"{mover.instance}/{IODMA_PINS['control']}", region.control_aperture) for mover in outputs
-    ]
+    control_buses += [(f"{partition}/{bus.name}", _aperture(bus, least)) for bus in buses]
+    control_buses += [(f"{mover.instance}/{IODMA_PINS['control']}", least) for mover in outputs]
     connections: list[Connection] = []
     for mover in movers:
         if mover.contract.direction == "in":
@@ -351,8 +353,8 @@ def integration(model: ModelWrapper) -> Integration:
         shell=row.shell,
         board=row.board,
         part=target.part,
-        integration=row.integration,
-        host_runtime=row.host_runtime,
+        integration=row.linker,
+        host_runtime=HOST_RUNTIMES.get(row.runtimes[0]) if row.runtimes else None,
         period_ns=target.platform.period_ns,
         partition=partition,
         vlnv=vlnv(partition),
@@ -363,6 +365,7 @@ def integration(model: ModelWrapper) -> Integration:
 
 
 __all__ = [
+    "HOST_RUNTIMES",
     "MOVER_INSTANCES",
     "IODMA_PINS",
     "VIVADO_BLOCK_DESIGN",

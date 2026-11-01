@@ -39,7 +39,7 @@ outside states (``Outside``) and its pace (``BeatTimes``, or the steady shorthan
 ``Steady``).
 
 **The outside's statement** (``Outside``) is made by its ``source``: a mover a shell offers
-on the boundary (a ``MOVERS`` kind, ``iodma_hls``), or the build (``BUILD``). It states
+on the boundary (a declared mover kind, ``iodma_hls``), or the build (``BUILD``). It states
 the order of each pass (``ROW_MAJOR``, or None: as the inside presents it), the passes a
 frame (1, or None: as presented), the lanes a beat (the edge's word, or None: the inside's),
 the pace (the outside's beat times over a frame, or None when timing is not stated; a
@@ -58,7 +58,7 @@ from typing import Self
 
 from finn.dataflow.streams import Stream
 from finn.kernels.artifacts.abi import Direction
-from finn.kernels.movers import MOVERS, MoverOffer
+from finn.kernels.movers import MoverOffer
 
 
 class SideKind(Enum):
@@ -146,7 +146,8 @@ def beat_times(pace: BeatTimes | Steady, beats: int) -> BeatTimes:
 @dataclass(frozen=True)
 class Outside:
     """What the outside states of a boundary side (the module docstring): its ``source``
-    (a ``MOVERS`` kind, or ``BUILD``), the ``order`` of each pass (``ROW_MAJOR``), the
+    (a declared mover kind, or ``BUILD``; a boundary side refuses a mover its shell does
+    not offer there), the ``order`` of each pass (``ROW_MAJOR``), the
     ``passes`` a frame (1), the ``lanes`` a beat (at least 1), the ``pace``
     (``BeatTimes`` or ``Steady``) and the host buffer's ``layout`` (``ROW_MAJOR_HOST``).
     ``order``, ``passes`` and ``lanes`` left None are as the inside presents them; the
@@ -160,11 +161,8 @@ class Outside:
     layout: str = ROW_MAJOR_HOST
 
     def __post_init__(self) -> None:
-        if self.source != BUILD and self.source not in MOVERS:
-            raise ValueError(
-                f"a boundary is stated by a mover ({', '.join(sorted(MOVERS))}) or the "
-                f"build, not {self.source!r}"
-            )
+        if not isinstance(self.source, str) or not self.source:
+            raise ValueError(f"a boundary is stated by a mover or the build, not {self.source!r}")
         if self.order not in (ROW_MAJOR, None):
             raise ValueError(f"the outside states a {ROW_MAJOR} order, not {self.order!r}")
         if self.passes is not None and (not _count(self.passes) or self.passes != 1):

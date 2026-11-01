@@ -1,37 +1,163 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Shell rows: what each shell gives a partition on each board (its movers, budgets,
-clocks, integration, host runtime and static region) and what it costs.
+"""Shell rows: what a declared shell gives a partition on one of its boards, as typed
+facts, and what it costs.
+
+A row (``ShellRow``) is what one shell declaration (``finn.platform.declarations``)
+gives on one of its boards: the shell's facts, with any fact its entry for that board
+states in their place. The facts:
+
+- ``clocks`` (``Clocks``): the clock it gives ``ap_clk``, who sets its frequency, and
+  whether it gives an aligned doubled clock (``ap_clk2x``);
+- ``control`` (``Control``): how the platform reaches a unit's control port, the least
+  window a unit takes and the aperture all units share (``None``: nothing is addressed);
+- ``memory``: the memory targets a mover may bind (``MemoryTarget``);
+- ``units``: the most units the integration may place (``None``: no bound);
+- ``supply`` and ``delivery``: the kinds offered on input and output edge ports, each
+  with its mover kinds (``Offer``);
+- ``linker`` and ``runtimes``: the declared linker that links it (``None``: its user
+  does) and the runtimes it offers, the first the default;
+- ``versions``: the linker's tool releases, narrowed for this board (``Versions``);
+- ``board_facts``: what the linker needs of this board (its ``board_keys``);
+- ``fixed``: its own logic and that logic's cost (``FixedShell``);
+- ``characterised`` and ``caveat``: where its cost was characterised and the shell built
+  and timed, and what that does not cover on this board;
+- ``control_budget`` and ``memory_ports``: the AXI-Lite buses the partition and its
+  movers may present together, and the memory ports the partition may initiate beside
+  its movers' (``None``: no bound), which the partition's shell rules read
+  (``finn.kernels.budgets``).
 
 ``ip`` is the packaged IP for the user to integrate, on any part. ``pynq`` is the Zynq
-block design, one row per board the template supports. ``xrt`` and ``slash`` are
-recognised and refused.
+block design, one row per board it supports. Any other shell is a declaration's.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+import re
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from typing import Any
 
 from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
 from finn.kernels.artifacts.module import Fragment
 from finn.kernels.artifacts.top import doubled, top_buses
-from finn.kernels.movers import IODMA_HLS, MOVERS, MoverOffer, iodma_hls
-from finn.kernels.utilization import SHELL_CHARACTERISED, Fit
-from finn.platform.boards import BOARDS
-from finn.platform.capabilities import Resources
+from finn.kernels.utilization import Fit
+from finn.platform.capabilities import RESOURCE_NAMES, Resources
+from finn.platform.declarations import Declarations, Shell, declarations
 from finn.platform.refusal import TargetRefused
 
-IP, PYNQ, XRT, SLASH = "ip", "pynq", "xrt", "slash"
-SHELL_NAMES = (IP, PYNQ, XRT, SLASH)
-"""Every shell a build may name."""
-
-NOT_BUILT = {XRT: "the Vitis (XRT) shell", SLASH: "the SLASH shell"}
-"""Shells a build may name that FINN does not build, so they are refused."""
+IP, PYNQ = "ip", "pynq"
+"""FINN's own shells: the packaged IP, the default, and the Zynq block design."""
 
 VIVADO_BLOCK_DESIGN = "vivado-block-design"
-"""The integration of the Zynq shell (``ShellRow.integration``)."""
+"""The name FINN's own linker of the Zynq block design is declared under."""
+
+MOVED, FETCHED, PUSHED, CHAINED = "moved", "fetched", "pushed", "chained"
+"""How an edge port's data reaches the core or leaves it: moved by a mover once a frame,
+fetched every frame from memory written while idle, pushed by the host or a peer, or
+chained to another core's edge port (stated, never offered)."""
+
+SUPPLY_KINDS = (MOVED, FETCHED, PUSHED)
+"""The kinds a shell may offer an input edge port."""
+DELIVERY_KINDS = (MOVED, PUSHED)
+"""The kinds a shell may offer an output edge port."""
+
+BUILD, RUNTIME = "build", "runtime"
+"""Who sets a shell's clock: the build, or the runtime at load (``Clocks.set_at``)."""
+
+
+@dataclass(frozen=True, kw_only=True)
+class Clocks:
+    """The clock a shell gives ``ap_clk`` (``main``), who sets its frequency (``set_at``:
+    ``build`` or ``runtime``), what it runs at unless set (``default_mhz``; ``None``:
+    unstated), and whether it gives an aligned ``ap_clk2x`` (``doubled``)."""
+
+    main: str
+    set_at: str
+    default_mhz: float | None
+    doubled: bool
+
+
+@dataclass(frozen=True, kw_only=True)
+class Control:
+    """How a shell addresses units: whether the platform reaches a unit by one control port
+    (``one_port_per_unit``), the least window a unit takes, aligned to itself
+    (``least_window``, bytes), and the bytes the host addresses for all units together
+    (``aperture``)."""
+
+    one_port_per_unit: bool
+    least_window: int
+    aperture: int
+
+
+@dataclass(frozen=True, kw_only=True)
+class MemoryTarget:
+    """A memory target a mover may bind: its ``name``, its port's ``width`` (bits, a
+    mover's width cap) and the most mover ports it takes (``masters``; ``None``: no
+    bound)."""
+
+    name: str
+    width: int
+    masters: int | None
+
+
+@dataclass(frozen=True, kw_only=True)
+class MoverKind:
+    """A mover kind a shell offers: its declared ``name`` and its ``code``
+    (``module:attr``), imported where a step places it."""
+
+    name: str
+    code: str
+
+
+@dataclass(frozen=True, kw_only=True)
+class Offer:
+    """A kind a shell offers its edge ports (``kind``: ``moved``, ``fetched`` or
+    ``pushed``), the mover kinds that serve it there, the first the default (``movers``),
+    and the widest memory port they may take (``width_cap``, bits; ``None``: no cap)."""
+
+    kind: str
+    movers: tuple[MoverKind, ...]
+    width_cap: int | None
+
+
+@dataclass(frozen=True, kw_only=True)
+class Versions:
+    """The releases of a ``tool`` a row builds with: ``spec``, comparisons of a release
+    (``year.minor``) joined by commas, each of which it meets (``>=2024.1``)."""
+
+    tool: str
+    spec: str
+
+    def admits(self, release: tuple[int, int]) -> bool:
+        """Whether ``release`` meets every comparison of ``spec``."""
+        return all(_compare(release, clause) for clause in _clauses(self.spec))
+
+
+_CLAUSE = re.compile(r"\s*(>=|<=|==|!=|>|<)\s*(\d+)\.(\d+)\s*")
+
+
+def _clauses(spec: str) -> list[tuple[str, tuple[int, int]]]:
+    clauses = []
+    for clause in spec.split(","):
+        found = _CLAUSE.fullmatch(clause)
+        if found is None:
+            raise ValueError(f"{clause!r} is no release comparison (>=2024.1)")
+        clauses.append((found[1], (int(found[2]), int(found[3]))))
+    return clauses
+
+
+def _compare(release: tuple[int, int], clause: tuple[str, tuple[int, int]]) -> bool:
+    operator, against = clause
+    return {
+        ">=": release >= against,
+        "<=": release <= against,
+        "==": release == against,
+        "!=": release != against,
+        ">": release > against,
+        "<": release < against,
+    }[operator]
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -51,19 +177,18 @@ class Scaled:
 
 
 @dataclass(frozen=True, kw_only=True)
-class StaticRegion:
+class FixedShell:
     """A shell's own logic beside the partition and its movers, each IP with its
     resources out of context. The memory interconnect takes one master per memory
     port, and the control interconnect gives one slave per AXI-Lite bus. The processor
     addresses the AXI-Lite buses from ``control_base``, in connection order, each
-    aligned to its aperture and at least ``control_aperture`` bytes."""
+    aligned to its window, at least the row's ``Control.least_window``."""
 
     processor: str
     reset: str
     memory_interconnect: str
     control_interconnect: str
     control_base: int
-    control_aperture: int
     processor_use: Resources
     reset_use: Resources
     memory_interconnect_use: Scaled
@@ -74,7 +199,7 @@ class StaticRegion:
         ``slaves`` AXI-Lite buses connected. The template connects at least one of each."""
         if masters < 1 or slaves < 1:
             raise ValueError(
-                f"a static region connects at least one memory port and one AXI-Lite bus, "
+                f"a fixed shell connects at least one memory port and one AXI-Lite bus, "
                 f"not {masters} and {slaves}"
             )
         return (
@@ -87,46 +212,31 @@ class StaticRegion:
 
 @dataclass(frozen=True, kw_only=True)
 class ShellRow:
-    """What a shell gives and takes for one board (``board``: ``None`` for the row of
-    any board):
-
-    - ``movers``: the movers it offers each boundary channel's free side, each kind
-      ``MOVERS`` knows, once;
-    - ``control_budget``: the AXI-Lite buses the partition and its movers may present
-      together (``None``: no bound);
-    - ``memory_ports``: the AXI memory ports the partition itself may use, beside its
-      movers' (``None``: no bound);
-    - ``clk2x``: it supplies an aligned doubled clock;
-    - ``integration``: how the shell is put together around the partition (``None``:
-      by its user);
-    - ``host_runtime``: what runs it on the host (``None``: the user's);
-    - ``static_region``: its own logic (``None``: none of its own);
-    - ``characterised``: where its movers' and static region's statements were
-      characterised and the shell built and timed (``None``: it states neither);
-    - ``caveat``: what that does not cover on its board, as a report states it
-      (``None``: nothing: its board is one it was built and timed on, or it states
-      no cost of its own).
-    """
+    """What a shell gives and takes on one board (``board``: ``None`` for the row of any
+    part): its typed facts (the module docstring)."""
 
     shell: str
     board: str | None
-    movers: tuple[MoverOffer, ...]
-    control_budget: int | None
-    memory_ports: int | None
-    clk2x: bool
-    integration: str | None
-    host_runtime: str | None
-    static_region: StaticRegion | None
+    board_facts: Mapping[str, str]
+    clocks: Clocks
+    control: Control | None
+    memory: tuple[MemoryTarget, ...]
+    units: int | None
+    supply: tuple[Offer, ...]
+    delivery: tuple[Offer, ...]
+    linker: str | None
+    runtimes: tuple[str, ...]
+    versions: Versions | None
+    fixed: FixedShell | None
     characterised: str | None
     caveat: str | None
+    control_budget: int | None
+    memory_ports: int | None
 
-    def __post_init__(self) -> None:
-        kinds = [offer.kind for offer in self.movers]
-        unknown = sorted(set(kinds) - set(MOVERS))
-        if unknown:
-            raise ValueError(f"no mover of kind {', '.join(unknown)} (one of {sorted(MOVERS)})")
-        if len(set(kinds)) != len(kinds):
-            raise ValueError(f"a shell offers each kind of mover once, not {kinds}")
+    @property
+    def offers(self) -> tuple[Offer, ...]:
+        """Its supply offers, then its delivery offers."""
+        return self.supply + self.delivery
 
 
 def bus_counts(fragment: Fragment, boundary: Iterable[Bus]) -> tuple[int, int, bool]:
@@ -136,8 +246,8 @@ def bus_counts(fragment: Fragment, boundary: Iterable[Bus]) -> tuple[int, int, b
     that it initiates: a boundary bus, since each presented bus is a target port), and
     whether it takes an aligned doubled clock (an instance's doubled clock, ``doubled``).
     The budgets are rules of the partition in its shell, over its members' derived values
-    (``finn.kernels.budgets``); emission checks this count against theirs, and the static
-    region is sized by it."""
+    (``finn.kernels.budgets``); emission checks this count against theirs, and the fixed
+    shell is sized by it."""
     buses = top_buses(fragment, boundary)
     control = sum(bus.protocol is StandardProtocol.AXILITE for bus in buses)
     memory = sum(
@@ -147,157 +257,332 @@ def bus_counts(fragment: Fragment, boundary: Iterable[Bus]) -> tuple[int, int, b
     return control, memory, doubled(fragment)
 
 
-IP_ROW = ShellRow(
-    shell=IP,
-    board=None,
-    movers=(),
-    control_budget=None,
-    memory_ports=None,
-    clk2x=True,
-    integration=None,
-    host_runtime=None,
-    static_region=None,
-    characterised=None,
-    caveat=None,
-)
-"""The ``ip`` shell's row, for any part. It integrates nothing, so it bounds no budget,
-and the IP's integrator supplies the doubled clock."""
+# -- a row from its declaration ----------------------------------------------------------
 
-PYNQ_MEMORY_PORT = 128
-"""The bits of the processing system's HP port the Zynq template connects each mover to,
-on every board it builds for."""
-
-PYNQ_CONTROL_BUDGET = 9
-"""The AXI-Lite buses the Zynq template's interconnect takes."""
-
-PYNQ_TIMED = ("Ultra96",)
-"""The boards the ``pynq`` shell was built and timed on."""
-
-PYNQ_CHARACTERISED = (
-    f"movers ({IODMA_HLS}) and static region {SHELL_CHARACTERISED} (movers on xczu3eg, the "
-    f"static region on xczu3eg and xczu7ev); the shell built and timed on "
-    f"{', '.join(PYNQ_TIMED)} only"
-)
-"""Where the ``pynq`` rows' movers and static region were characterised, and the shell
-built and timed."""
+_FACTS = {
+    "clocks",
+    "control",
+    "memory",
+    "units",
+    "supply",
+    "delivery",
+    "fixed",
+    "characterised",
+    "timed",
+    "caveat",
+    "control_budget",
+    "memory_ports",
+}
+"""The facts a shell states, and its entry for a board may state in their place."""
 
 
-def pynq_caveat(board: str) -> str | None:
-    """What ``PYNQ_CHARACTERISED`` does not cover on ``board``: ``None`` on a board the
-    shell was built and timed on."""
-    if board in PYNQ_TIMED:
-        return None
-    return (
-        f"the {PYNQ!r} shell was built and timed on {', '.join(PYNQ_TIMED)} only, and its "
-        f"movers and static region characterised {SHELL_CHARACTERISED}: on {board} "
-        f"({BOARDS[board].part}) its cost is carried over, not measured"
+class _Invalid(ValueError):
+    """A fact of a shell's declaration that is not of its type."""
+
+
+def _expect(table: object, where: str, required: set[str], optional: set[str]) -> dict[str, Any]:
+    if not isinstance(table, dict):
+        raise _Invalid(f"{where} is a table, not {table!r}")
+    missing, unknown = required - set(table), set(table) - required - optional
+    if missing or unknown:
+        raise _Invalid(
+            f"{where}: "
+            + "; ".join(
+                text
+                for text in (
+                    missing and f"states no {', '.join(sorted(missing))}",
+                    unknown and f"states {', '.join(sorted(unknown))}, which it does not have",
+                )
+                if text
+            )
+        )
+    return table
+
+
+def _typed(value: object, kind: type | tuple[type, ...], where: str) -> Any:
+    # bool is an int: a count is never true or false.
+    if isinstance(value, bool) and kind is not bool:
+        raise _Invalid(f"{where} is not {value!r}")
+    if not isinstance(value, kind):
+        raise _Invalid(f"{where} is not {value!r}")
+    return value
+
+
+def _count(value: object, where: str, *, least: int = 0) -> int:
+    count: int = _typed(value, int, where)
+    if count < least:
+        raise _Invalid(f"{where} is a count of at least {least}, not {count}")
+    return count
+
+
+def _clocks(stated: object, where: str) -> Clocks:
+    table = _expect(stated, where, {"main", "set_at", "doubled"}, {"default_mhz"})
+    set_at = table["set_at"]
+    if set_at not in (BUILD, RUNTIME):
+        raise _Invalid(f"{where}.set_at is {BUILD!r} or {RUNTIME!r}, not {set_at!r}")
+    default = table.get("default_mhz")
+    return Clocks(
+        main=_typed(table["main"], str, f"{where}.main"),
+        set_at=set_at,
+        default_mhz=None if default is None else float(_typed(default, (int, float), where)),
+        doubled=_typed(table["doubled"], bool, f"{where}.doubled"),
     )
 
 
-# Fitted from out-of-context synthesis of the Zynq template on xczu3eg and xczu7ev,
-# which agree. Other boards' parts were not synthesized.
-ZYNQ_STATIC_REGION = StaticRegion(
-    processor="zynq_ultra_ps_e",
-    reset="proc_sys_reset",
-    memory_interconnect="smartconnect",
-    control_interconnect="axi_interconnect",
-    # The template's: its processor's M_AXI_HPM0_FPD window, 4 KiB at least a bus.
-    control_base=0xA000_0000,
-    control_aperture=4096,
-    processor_use=Resources(lut=264),
-    reset_use=Resources(lut=19, ff=40),
-    memory_interconnect_use=Scaled(lut=Fit(932.8, (2215.5,)), ff=Fit(2171.7, (3179.0,))),
-    control_interconnect_use=Scaled(
-        fixed=Resources(lut=1277, ff=1397),
-        lut=Fit(58.6, (33.35,)),
-        ff=Fit(135.7, (1.27,)),
-        scales_from=2,
-    ),
-)
+def _control(stated: object, where: str) -> Control:
+    table = _expect(stated, where, {"one_port_per_unit", "least_window", "aperture"}, set())
+    return Control(
+        one_port_per_unit=_typed(table["one_port_per_unit"], bool, f"{where}.one_port_per_unit"),
+        least_window=_count(table["least_window"], f"{where}.least_window", least=1),
+        aperture=_count(table["aperture"], f"{where}.aperture", least=1),
+    )
 
-ROWS: dict[tuple[str, str | None], ShellRow] = {
-    (IP, None): IP_ROW,
-    **{
-        (PYNQ, board): ShellRow(
-            shell=PYNQ,
-            board=board,
-            movers=(iodma_hls(PYNQ_MEMORY_PORT),),
-            control_budget=PYNQ_CONTROL_BUDGET,
-            memory_ports=0,
-            clk2x=False,
-            integration=VIVADO_BLOCK_DESIGN,
-            host_runtime="zynq-iodma",
-            static_region=ZYNQ_STATIC_REGION,
-            characterised=PYNQ_CHARACTERISED,
-            caveat=pynq_caveat(board),
+
+def _memory(stated: object, where: str) -> tuple[MemoryTarget, ...]:
+    targets = []
+    for index, each in enumerate(_typed(stated, list, where)):
+        here = f"{where}[{index}]"
+        table = _expect(each, here, {"name", "width"}, {"masters"})
+        masters = table.get("masters")
+        targets.append(
+            MemoryTarget(
+                name=_typed(table["name"], str, f"{here}.name"),
+                width=_count(table["width"], f"{here}.width", least=8),
+                masters=None if masters is None else _count(masters, f"{here}.masters", least=1),
+            )
         )
-        for board, facts in BOARDS.items()
-        if facts.preset is not None
-    },
-}
-"""The shell rows, by (shell, board); the ``ip`` row's board is ``None``, any board."""
+    return tuple(targets)
 
 
-def built_shell(shell: str) -> str:
-    """Return ``shell`` if FINN builds it; refuse it otherwise."""
-    if shell in NOT_BUILT:
+def _offers(
+    stated: object, where: str, kinds: tuple[str, ...], declared: Declarations
+) -> tuple[Offer, ...]:
+    offers: list[Offer] = []
+    for index, each in enumerate(_typed(stated, list, where)):
+        here = f"{where}[{index}]"
+        table = _expect(each, here, {"kind", "movers"}, {"width_cap"})
+        kind = table["kind"]
+        if kind not in kinds:
+            raise _Invalid(f"{here}.kind is one of {', '.join(kinds)}, not {kind!r}")
+        if kind in (offer.kind for offer in offers):
+            raise _Invalid(f"{here}: {where} offers the {kind} kind once")
+        movers = []
+        for name in _typed(table["movers"], list, f"{here}.movers"):
+            if name not in declared.movers:
+                raise _Invalid(
+                    f"{here}.movers: {name!r} is not a declared mover kind "
+                    f"(one of {sorted(declared.movers)})"
+                )
+            movers.append(MoverKind(name=name, code=declared.movers[name].code))
+        cap = table.get("width_cap")
+        if cap is not None and (_count(cap, f"{here}.width_cap", least=8) % 8):
+            raise _Invalid(f"{here}.width_cap: a memory port of {cap} bits is no whole bytes")
+        offers.append(Offer(kind=kind, movers=tuple(movers), width_cap=cap))
+    return tuple(offers)
+
+
+def _resources(table: Mapping[str, Any], where: str) -> Resources:
+    counts = {key: table[key] for key in RESOURCE_NAMES if key in table}
+    return Resources(**{key: _count(value, f"{where}.{key}") for key, value in counts.items()})
+
+
+def _fit(stated: object, where: str) -> Fit:
+    numbers = _typed(stated, list, where)
+    if not numbers or not all(
+        isinstance(each, (int, float)) and not isinstance(each, bool) for each in numbers
+    ):
+        raise _Invalid(f"{where} is a fit: [constant, slope, ...], not {stated!r}")
+    return Fit(float(numbers[0]), tuple(float(each) for each in numbers[1:]))
+
+
+def _use(stated: object, where: str) -> tuple[str, Resources]:
+    table = _expect(stated, where, {"ip"}, set(RESOURCE_NAMES))
+    return _typed(table["ip"], str, f"{where}.ip"), _resources(table, where)
+
+
+def _scaled(stated: object, where: str) -> tuple[str, Scaled]:
+    table = _expect(stated, where, {"ip"}, {"fixed", "lut", "ff", "scales_from"})
+    fixed = table.get("fixed", {})
+    _expect(fixed, f"{where}.fixed", set(), set(RESOURCE_NAMES))
+    return _typed(table["ip"], str, f"{where}.ip"), Scaled(
+        fixed=_resources(fixed, f"{where}.fixed"),
+        lut=_fit(table["lut"], f"{where}.lut") if "lut" in table else Fit(0, (0,)),
+        ff=_fit(table["ff"], f"{where}.ff") if "ff" in table else Fit(0, (0,)),
+        scales_from=_count(table.get("scales_from", 1), f"{where}.scales_from", least=1),
+    )
+
+
+def _fixed(stated: object, where: str) -> FixedShell:
+    table = _expect(
+        stated,
+        where,
+        {"control_base", "processor", "reset", "memory_interconnect", "control_interconnect"},
+        set(),
+    )
+    processor, processor_use = _use(table["processor"], f"{where}.processor")
+    reset, reset_use = _use(table["reset"], f"{where}.reset")
+    memory, memory_use = _scaled(table["memory_interconnect"], f"{where}.memory_interconnect")
+    control, control_use = _scaled(table["control_interconnect"], f"{where}.control_interconnect")
+    return FixedShell(
+        processor=processor,
+        reset=reset,
+        memory_interconnect=memory,
+        control_interconnect=control,
+        control_base=_count(table["control_base"], f"{where}.control_base"),
+        processor_use=processor_use,
+        reset_use=reset_use,
+        memory_interconnect_use=memory_use,
+        control_interconnect_use=control_use,
+    )
+
+
+def _optional_count(facts: Mapping[str, Any], key: str, where: str) -> int | None:
+    return None if key not in facts else _count(facts[key], f"{where}.{key}")
+
+
+def _text(facts: Mapping[str, Any], key: str, where: str) -> str | None:
+    return None if key not in facts else _typed(facts[key], str, f"{where}.{key}")
+
+
+def _row(shell: Shell, board: str | None, declared: Declarations) -> ShellRow:
+    """The row of ``shell`` on ``board`` (``None`` on a shell of any part), its board
+    entry's facts in place of the shell's."""
+    where = f"shells.{shell.name}"
+    facts = dict(shell.facts)
+    linker = None if shell.linker is None else declared.linkers.get(shell.linker)
+    board_facts: dict[str, str] = {}
+    narrowed = None
+    if board is not None and not isinstance(shell.boards, str):
+        entry = shell.boards[board]
+        here = f"{where}.boards.{board}"
+        keys = set() if linker is None else set(linker.board_keys)
+        _expect(entry, here, keys, _FACTS | {"versions"})
+        board_facts = {key: _typed(entry[key], str, f"{here}.{key}") for key in sorted(keys)}
+        narrowed = None if "versions" not in entry else _typed(entry["versions"], str, here)
+        facts.update({key: value for key, value in entry.items() if key in _FACTS})
+    unknown = sorted(set(facts) - _FACTS)
+    if unknown:
+        raise _Invalid(f"{where} states {', '.join(unknown)}, which a shell does not have")
+    if "clocks" not in facts:
+        raise _Invalid(f"{where} states no clocks")
+    specs = [each for each in (None if linker is None else linker.versions, narrowed) if each]
+    versions = None
+    if specs:
+        assert linker is not None
+        versions = Versions(tool=linker.tool, spec=",".join(specs))
+        _clauses(versions.spec)
+    timed = facts.get("timed", [])
+    caveat = None
+    if board is not None and board not in _typed(timed, list, f"{where}.timed"):
+        template = _text(facts, "caveat", where)
+        part = declared.board(board).part
+        caveat = None if template is None else template.format(board=board, part=part)
+    return ShellRow(
+        shell=shell.name,
+        board=board,
+        board_facts=board_facts,
+        clocks=_clocks(facts["clocks"], f"{where}.clocks"),
+        control=None if "control" not in facts else _control(facts["control"], f"{where}.control"),
+        memory=_memory(facts.get("memory", []), f"{where}.memory"),
+        units=_optional_count(facts, "units", where),
+        supply=_offers(facts.get("supply", []), f"{where}.supply", SUPPLY_KINDS, declared),
+        delivery=_offers(facts.get("delivery", []), f"{where}.delivery", DELIVERY_KINDS, declared),
+        linker=shell.linker,
+        runtimes=shell.runtimes,
+        versions=versions,
+        fixed=None if "fixed" not in facts else _fixed(facts["fixed"], f"{where}.fixed"),
+        characterised=_text(facts, "characterised", where),
+        caveat=caveat,
+        control_budget=_optional_count(facts, "control_budget", where),
+        memory_ports=_optional_count(facts, "memory_ports", where),
+    )
+
+
+def row(shell: Shell, board: str | None, declared: Declarations) -> ShellRow:
+    """The row of the declared ``shell`` on ``board`` (one it supports, or ``None`` on a
+    shell of any part); a fact not of its type is refused (``declaration-invalid``)."""
+    try:
+        return _row(shell, board, declared)
+    except (_Invalid, ValueError, KeyError) as error:
+        origin = declared.origin("shells", shell.name)
         raise TargetRefused(
-            "unsupported-shell",
-            "configuration.target.shell",
-            f"{shell!r} ({NOT_BUILT[shell]}) is named but not built: "
-            f"FINN builds {IP!r} and {PYNQ!r}",
-        )
-    if shell not in SHELL_NAMES:
-        raise TargetRefused(
-            "unknown-shell",
-            "configuration.target.shell",
-            f"{shell!r} is not a shell (one of {SHELL_NAMES})",
-        )
-    return shell
+            "declaration-invalid", f"{origin.file}: shells.{shell.name}", str(error)
+        ) from None
 
 
-def shell_row(shell: str, board: str | None) -> ShellRow:
-    """The row of ``shell`` for ``board``. Refuses a shell that is not built, a missing
-    board, and a board the shell has no row for (on ``pynq``, a board the Zynq template
-    has no branch for)."""
-    if built_shell(shell) == IP:
-        return IP_ROW
+def shell_row(shell: str, board: str | None, declared: Declarations | None = None) -> ShellRow:
+    """The row of ``shell`` for ``board``, from ``declared`` (the process's declarations
+    by default). Refuses a shell nothing declares (``unknown-shell``), a missing board
+    on a shell built for one (``board-required``), and a board the shell does not support
+    (``board-unsupported``, naming the shells that do). On a shell of any part the board
+    is not read."""
+    declared = declarations() if declared is None else declared
+    found = declared.shell(shell)
+    if found.any_board:
+        return row(found, None, declared)
     if board is None:
+        supported = sorted(found.boards)
         raise TargetRefused(
             "board-required",
             "configuration.target.board",
-            f"the {shell!r} shell is built for a board: name one of {sorted(BOARDS)}",
+            f"the {shell!r} shell is built for a board: name one of {supported}",
         )
-    if (shell, board) not in ROWS:
-        why = (
-            ": the Zynq template has no branch for it (no board preset)"
-            if shell == PYNQ and board in BOARDS and BOARDS[board].preset is None
-            else ""
-        )
+    known = declared.board(board)
+    if not found.supports(board):
+        others = [name for name in declared.supporting(board) if name != shell]
         raise TargetRefused(
-            "no-shell-row",
+            "board-unsupported",
             "configuration.target.board",
-            f"the {shell!r} shell has no row for board {board!r}{why}",
+            f"the {shell!r} shell does not support board {board!r} ({known.part}); "
+            f"{_listed(others)} supports it",
         )
-    return ROWS[shell, board]
+    return row(found, board, declared)
+
+
+def _listed(shells: list[str]) -> str:
+    if not shells:
+        return "no declared shell"
+    quoted = [repr(each) for each in shells]
+    if len(quoted) == 1:
+        return f"only {quoted[0]}"
+    return "each of " + ", ".join(quoted)
+
+
+def shell_rows(declared: Declarations | None = None) -> dict[tuple[str, str | None], ShellRow]:
+    """Every row of ``declared`` (the process's by default), by (shell, board): a shell of
+    any part has one, its board ``None``."""
+    declared = declarations() if declared is None else declared
+    rows: dict[tuple[str, str | None], ShellRow] = {}
+    for name, shell in declared.shells.items():
+        boards = [None] if isinstance(shell.boards, str) else list(shell.boards)
+        for board in boards:
+            rows[name, board] = row(shell, board, declared)
+    return rows
 
 
 __all__ = [
+    "BUILD",
+    "CHAINED",
+    "DELIVERY_KINDS",
+    "FETCHED",
     "IP",
-    "IP_ROW",
+    "MOVED",
+    "PUSHED",
     "PYNQ",
-    "PYNQ_CHARACTERISED",
-    "PYNQ_CONTROL_BUDGET",
-    "ROWS",
-    "SHELL_NAMES",
-    "SLASH",
+    "RUNTIME",
+    "SUPPLY_KINDS",
+    "VIVADO_BLOCK_DESIGN",
+    "Clocks",
+    "Control",
+    "FixedShell",
+    "MemoryTarget",
+    "MoverKind",
+    "Offer",
     "Scaled",
     "ShellRow",
-    "StaticRegion",
-    "VIVADO_BLOCK_DESIGN",
-    "XRT",
-    "ZYNQ_STATIC_REGION",
-    "built_shell",
+    "Versions",
     "bus_counts",
+    "row",
     "shell_row",
+    "shell_rows",
 ]

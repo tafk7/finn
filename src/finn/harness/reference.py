@@ -67,10 +67,10 @@ from finn.custom_op.kernels.base import KernelOp, kernel_op
 from finn.dataflow.tensor import full
 from finn.harness.ops import executed
 from finn.platform.architectures import RULES
-from finn.platform.boards import BOARDS
 from finn.platform.catalog import part
+from finn.platform.declarations import declarations
 from finn.platform.resolve import resolve_target
-from finn.platform.shells import IP, ROWS
+from finn.platform.shells import IP, shell_rows
 from finn.platform.target import Target
 from finn.transformation.kernels.convert import ToKernelOps
 from finn.util.draws import Integers, drawn_inputs
@@ -188,15 +188,15 @@ def platform_rows(period_ns: float) -> dict[Row, Target]:
     ``resolve_target`` makes it: each device family FINN builds for (each supported
     rule of ``finn.platform.architectures.RULES``, in its order) on the ``ip`` shell,
     for the part its rule was probed on (``Rule.sample``); and on each other shell,
-    each family a board of its rows carries (``finn.platform.shells.ROWS``), for the first
-    such board."""
+    each family a board of its rows carries (``finn.platform.shells.shell_rows``), for the
+    first such board."""
     rows: dict[Row, Target] = {}
     for rule in RULES.values():
         if rule.unsupported is None:
             rows[rule.family, IP] = resolve_target(part=rule.sample, period_ns=period_ns)
-    for shell, board in ROWS:
+    for shell, board in shell_rows():
         if board is not None:
-            family = part(BOARDS[board].part).device.family
+            family = part(declarations().board(board).part).device.family
             if (family, shell) not in rows:
                 rows[family, shell] = resolve_target(board=board, period_ns=period_ns, shell=shell)
     return rows

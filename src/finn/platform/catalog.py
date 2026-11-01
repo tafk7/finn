@@ -33,11 +33,12 @@ for is catalogued with its identity and totals, and states why (``unsupported``)
 the resolution refuses its parts (``unsupported-architecture``).
 
 A user adds what the catalog does not ship (a new part, an engineering sample, a
-board's custom part) without editing FINN: an overlay file, named by the machine
-setting ``FINN_PLATFORM_CATALOG`` (read once, when the catalog is first queried),
-in the committed data's schema (``load``). It is validated on load; it may add
-resource records, devices and parts, and refuses by name an entry that redefines a
-shipped one unless the entry says it ``overrides``. Each entry carries its
+board's custom part) without editing FINN: an overlay file, ``parts.json`` in a
+declaration directory (a directory on ``FINN_PLATFORM_PATH``, or an installed package's,
+``finn.platform.declarations``; read once, when the catalog is first queried), in the
+committed data's schema (``load``). Each is validated on load; it may add resource
+records, devices and parts, and refuses by name an entry that redefines a shipped one
+unless the entry says it ``overrides``, or one another overlay states. Each entry carries its
 ``source`` (or the file's), which the part's ``source`` states. A device's fabric
 and DSP block are its pair's rule, or stated on the device (``fabric``, ``dsp``,
 ``uram_init``).
@@ -49,7 +50,6 @@ import difflib
 import functools
 import hashlib
 import json
-import os
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, field
@@ -59,13 +59,12 @@ from typing import Any
 
 from finn.platform.architectures import CAP_EVIDENCE, CapEvidence, rule
 from finn.platform.capabilities import RESOURCE_NAMES, DspBlock, Fabric, Resources
+from finn.platform.declarations import PARTS_OVERLAY, declarations, overlays
 from finn.platform.refusal import TargetRefused
 
 DATA = Path(__file__).resolve().parent / "data"
 FILES = ("resources.jsonl", "devices.jsonl", "parts.jsonl", "manifest.json")
 """The data files: the resource, device and part records, one a line, then the manifest."""
-OVERLAY_SETTING = "FINN_PLATFORM_CATALOG"
-"""The machine setting that names a catalog overlay file (unset: none)."""
 
 
 SLRS_CAPPED = (
@@ -199,12 +198,12 @@ class Part:
 @dataclass(frozen=True)
 class Catalog:
     """A loaded catalog: its devices and parts by lower-cased name, the
-    ``manifest`` of its committed data, and the ``overlay`` laid over it (if any)."""
+    ``manifest`` of its committed data, and the ``overlays`` laid over it, in order."""
 
     devices: Mapping[str, Device]
     by_name: Mapping[str, Part]
     manifest: Mapping[str, Any]
-    overlay: Path | None = None
+    overlays: tuple[Path, ...] = ()
     _sorted: tuple[str, ...] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -215,7 +214,8 @@ class Catalog:
         tool = self.manifest["tool"]
         series = ", ".join(self.manifest["series"])
         named = f"Vivado {tool['version']} ({tool['build']}): {series}"
-        return named if self.overlay is None else f"{named}; overlay {self.overlay}"
+        laid = "".join(f"; overlay {each}" for each in self.overlays)
+        return named + laid
 
     def part(self, name: str) -> Part:
         """The part ``name`` (compared without case); refused if the catalog has no
@@ -352,6 +352,22 @@ class _Entries:
     devices: dict[str, dict[str, Any]] = field(default_factory=dict)
     parts: dict[str, dict[str, Any]] = field(default_factory=dict)
 
+    def add(self, other: _Entries) -> None:
+        """Add an overlay's entries; a device or part another overlay states is refused,
+        naming both."""
+        for kind, ours, theirs in (
+            ("device", self.devices, other.devices),
+            ("part", self.parts, other.parts),
+        ):
+            for key, entry in theirs.items():
+                if key in ours:
+                    raise _Invalid(
+                        f"{kind} {entry['name']} is stated by {ours[key]['overlay']} and "
+                        f"{entry['overlay']}"
+                    )
+                ours[key] = entry
+        self.resources.update(other.resources)
+
 
 _DEVICE_FIELDS = {"name", "architecture", "family", "resources"}
 _PART_FIELDS = {"name", "device", "package", "speed", "temperature"}
@@ -364,42 +380,48 @@ def _read_entries(
     devices: Iterable[object],
     parts: Iterable[object],
     *,
-    overlay: bool,
+    overlay: Path | None,
     source: str | None = None,
 ) -> _Entries:
+    """The entries of the committed data (``overlay`` ``None``) or of the overlay file
+    ``overlay``, each of whose devices and parts records it as its ``overlay``."""
     entries = _Entries()
     for index, record in enumerate(resources):
         where = f"resources[{index}]"
-        found = _record(record, where, overlay=overlay)
+        found = _record(record, where, overlay=overlay is not None)
         entries.resources[found.digest] = found
     for index, record in enumerate(devices):
         where = f"devices[{index}]"
-        stated = dict(_expect(record, where, _DEVICE_FIELDS, _OVERLAY_DEVICE if overlay else set()))
+        optional = set() if overlay is None else _OVERLAY_DEVICE
+        stated = dict(_expect(record, where, _DEVICE_FIELDS, optional))
         name = _text(stated["name"], f"{where}: name")
         where = f"device {name}"
         for key in ("architecture", "family"):
             _text(stated[key], f"{where}: {key}")
         if isinstance(stated["resources"], dict):  # an overlay may state its record inline
-            if not overlay:
+            if overlay is None:
                 raise _Invalid(f"{where}: resources is a digest")
             found = _record(stated["resources"], f"{where}: resources", overlay=True)
             stated["resources"] = found.digest
             entries.resources[found.digest] = found
         _text(stated["resources"], f"{where}: resources")
-        if overlay:
+        if overlay is not None:
             stated["source"] = _source(stated, source, where)
+            stated["overlay"] = overlay
         _no_duplicate(entries.devices, str(name), where)
         entries.devices[str(name).lower()] = stated
     for index, record in enumerate(parts):
         where = f"parts[{index}]"
-        stated = dict(_expect(record, where, _PART_FIELDS, _OVERLAY_PART if overlay else set()))
+        optional = set() if overlay is None else _OVERLAY_PART
+        stated = dict(_expect(record, where, _PART_FIELDS, optional))
         name = _text(stated["name"], f"{where}: name")
         where = f"part {name}"
         _text(stated["device"], f"{where}: device")
         for key in ("package", "speed", "temperature"):
             _text(stated[key], f"{where}: {key}", optional=True)
-        if overlay:
+        if overlay is not None:
             stated["source"] = _source(stated, source, where)
+            stated["overlay"] = overlay
         _no_duplicate(entries.parts, str(name), where)
         entries.parts[str(name).lower()] = stated
     return entries
@@ -424,10 +446,11 @@ def _jsonl(path: Path) -> list[object]:
 # -- loading -----------------------------------------------------------------------------
 
 
-def load(data: Path = DATA, overlay: Path | None = None) -> Catalog:
-    """The catalog in ``data`` (the committed one), with ``overlay`` laid over it.
+def load(data: Path = DATA, *overlays: Path) -> Catalog:
+    """The catalog in ``data`` (the committed one), with each of ``overlays`` laid over
+    it; no two overlays state one name.
 
-    The overlay is a JSON object of the committed data's records, each list
+    An overlay is a JSON object of the committed data's records, each list
     optional: ``resources`` (``{"slrs": [...]}``, a ``digest`` checked if stated),
     ``devices`` (``resources`` the digest of a shipped or overlay record, or the
     record itself; ``fabric``, ``dsp`` and ``uram_init`` stated where the pair has
@@ -436,28 +459,36 @@ def load(data: Path = DATA, overlay: Path | None = None) -> Catalog:
     shipped one of its name. Anything else is refused (``catalog-overlay-invalid``)."""
     *records, manifest_file = (data / name for name in FILES)
     manifest = json.loads(manifest_file.read_text())
-    shipped = _read_entries(*(_jsonl(path) for path in records), overlay=False)
+    shipped = _read_entries(*(_jsonl(path) for path in records), overlay=None)
     tool = manifest["tool"]
     origin = (
         f"FINN's part catalog, from Vivado {tool['version']} ({tool['build']}): get_parts and "
         "each SLR's sites in an empty design"
     )
-    if overlay is None:
-        return _build(shipped, _Entries(), manifest, origin, None)
+    added = _Entries()
+    for overlay in overlays:
+        try:
+            stated = json.loads(Path(overlay).read_text())
+            top = _expect(stated, str(overlay), set(), {"source", "resources", "devices", "parts"})
+            entries = _read_entries(
+                top.get("resources", []),
+                top.get("devices", []),
+                top.get("parts", []),
+                overlay=Path(overlay),
+                source=_text(top["source"], "source") if "source" in top else None,
+            )
+            added.add(entries)
+        except (OSError, json.JSONDecodeError, _Invalid) as error:
+            raise TargetRefused(
+                "catalog-overlay-invalid", PARTS_OVERLAY, f"{overlay}: {error}"
+            ) from error
+    if not overlays:
+        return _build(shipped, added, manifest, origin, ())
     try:
-        stated = json.loads(Path(overlay).read_text())
-        top = _expect(stated, str(overlay), set(), {"source", "resources", "devices", "parts"})
-        added = _read_entries(
-            top.get("resources", []),
-            top.get("devices", []),
-            top.get("parts", []),
-            overlay=True,
-            source=_text(top["source"], "source") if "source" in top else None,
-        )
-        return _build(shipped, added, manifest, origin, Path(overlay))
-    except (OSError, json.JSONDecodeError, _Invalid) as error:
+        return _build(shipped, added, manifest, origin, tuple(Path(each) for each in overlays))
+    except _Invalid as error:
         raise TargetRefused(
-            "catalog-overlay-invalid", OVERLAY_SETTING, f"{overlay}: {error}"
+            "catalog-overlay-invalid", PARTS_OVERLAY, f"{', '.join(map(str, overlays))}: {error}"
         ) from error
 
 
@@ -466,7 +497,7 @@ def _build(
     added: _Entries,
     manifest: Mapping[str, object],
     origin: str,
-    overlay: Path | None,
+    overlays: tuple[Path, ...],
 ) -> Catalog:
     for kind, theirs, ours in (
         ("device", shipped.devices, added.devices),
@@ -488,7 +519,7 @@ def _build(
             raise _Invalid(f"device {entry['name']}: no resource record {entry['resources']}")
         by_digest[entry["resources"]].append(entry["name"])
     devices = {
-        key: _device(entry, records, by_digest, origin, overlay)
+        key: _device(entry, records, by_digest, origin)
         for key, entry in sorted(stated_devices.items())
     }
     parts: dict[str, Part] = {}
@@ -500,7 +531,7 @@ def _build(
         if part_source is None:
             source = device.source
         else:
-            source = f"{part_source} (overlay {overlay})"
+            source = f"{part_source} (overlay {entry['overlay']})"
             if source != device.source:
                 source = f"{source}; its device {device.name}: {device.source}"
         parts[key] = Part(
@@ -511,7 +542,7 @@ def _build(
             temperature=entry["temperature"],
             source=source,
         )
-    return Catalog(devices, parts, manifest, overlay)
+    return Catalog(devices, parts, manifest, overlays)
 
 
 def _device(
@@ -519,7 +550,6 @@ def _device(
     records: Mapping[str, Record],
     by_digest: Mapping[str, list[str]],
     origin: str,
-    overlay: Path | None,
 ) -> Device:
     name, architecture, family = (
         str(entry["name"]),
@@ -556,7 +586,7 @@ def _device(
             found.unsupported,
         )
     digest = str(entry["resources"])
-    source = origin if "source" not in entry else f"{entry['source']} (overlay {overlay})"
+    source = origin if "source" not in entry else f"{entry['source']} (overlay {entry['overlay']})"
     capped = records[digest].capped_resources()
     return Device(
         name=name,
@@ -580,10 +610,9 @@ def _device(
 
 @functools.cache
 def catalog() -> Catalog:
-    """The catalog this process resolves by: the committed one, with the overlay the
-    machine setting ``FINN_PLATFORM_CATALOG`` names, read once."""
-    named = os.environ.get(OVERLAY_SETTING) or None
-    return load(DATA, None if named is None else Path(named))
+    """The catalog this process resolves by: the committed one, with the overlays its
+    declaration directories hold (``finn.platform.declarations.overlays``), read once."""
+    return load(DATA, *overlays(declarations()))
 
 
 def part(name: str) -> Part:
@@ -639,7 +668,6 @@ def part_report(name: str) -> dict[str, object]:
 __all__ = [
     "DATA",
     "FILES",
-    "OVERLAY_SETTING",
     "Catalog",
     "Device",
     "Part",

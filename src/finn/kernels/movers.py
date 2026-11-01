@@ -5,11 +5,12 @@
 
 A boundary channel of a partition's network has a side without a port, its **free
 side**: the AXIS port the network presents (``Channel.free_side``). A shell with movers
-offers each such channel the movers it can place there (``MoverOffer``, each of a kind
-``MOVERS`` knows), and the channel places its ``mover`` there where the shell offers one,
-as it places its ``source`` where its tensor has a value: no choice. A mover binds no RTL
-in the partition's module: its pins stay its own, and the shell integrates the mover
-beside the IP from its facts (``MoverContract``).
+offers each such channel the movers it can place there (``MoverOffer``, each of a mover
+kind a platform declaration names, ``finn.platform.declarations``), and the channel
+places its ``mover`` there where the shell offers one, as it places its ``source`` where
+its tensor has a value: no choice. A mover binds no RTL in the partition's module: its
+pins stay its own, and the shell integrates the mover beside the IP from its facts
+(``MoverContract``).
 
 **``IODMA_hls``** (kind ``iodma_hls``), the Zynq shell's memory mover, modelled at its
 stream side, the free side's contract:
@@ -159,8 +160,8 @@ def iodma_hls_resources(*, direction: str, intf_width: int, stream_width: int) -
 
 @dataclass(frozen=True, kw_only=True)
 class MoverOffer:
-    """What a shell offers a boundary channel's free side: a mover's ``kind`` (a key of
-    ``MOVERS``), its memory port's widest (``width_cap``, bits: it bounds the mover's
+    """What a shell offers a boundary channel's free side: a mover's ``kind`` (a declared
+    mover kind's name), its memory port's widest (``width_cap``, bits: it bounds the mover's
     memory port, never the stream, whose word is the edge's), the frames each call moves
     (``frames_per_call``), and the cycles each call adds beside the memory latency, with
     a width converter (``call_converted``) and without (``call_direct``). What the mover
@@ -271,10 +272,17 @@ class IodmaMover(Space):
     no kernel (it binds no RTL in the partition's module), but its ``cycles`` count in its
     channel's (``Channel.mover_cycles``). The side is the one it states
     (``MoverOffer.states``: row-major, one pass a frame), so it states no rule of its own
-    on it."""
+    on it. It is the code of the ``iodma_hls`` mover kind's declaration, which makes its
+    offer at a shell's width cap (``offer``)."""
 
     offers: tuple[MoverOffer, ...] = Param()
     side: StreamPins = Param()
+
+    @staticmethod
+    def offer(width_cap: int) -> MoverOffer:
+        """Its offer on a shell whose memory port is at most ``width_cap`` bits wide
+        (``iodma_hls``)."""
+        return iodma_hls(width_cap)
 
     @constraint
     def offered(self) -> bool | Rejected:
@@ -323,13 +331,8 @@ class IodmaMover(Space):
     cycles = view(frame_cycles)
 
 
-MOVERS: dict[str, type[Space] | Space] = {IODMA_HLS: IodmaMover}
-"""The movers a shell can offer a free side, by kind."""
-
-
 __all__ = [
     "DIVISIBLE",
-    "MOVERS",
     "IODMA_HLS",
     "LCM",
     "MEMORY_LATENCY",

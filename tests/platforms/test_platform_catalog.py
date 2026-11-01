@@ -23,7 +23,6 @@ from finn.platform.architectures import CAP_EVIDENCE, RULES, rules_digest
 from finn.platform.capabilities import RESOURCE_NAMES, DspBlock, Fabric, Resources
 from finn.platform.catalog import (
     DATA,
-    OVERLAY_SETTING,
     SLRS_CAPPED,
     Catalog,
     Record,
@@ -33,6 +32,7 @@ from finn.platform.catalog import (
     part_report,
     parts,
 )
+from finn.platform.declarations import PARTS_OVERLAY, PATH_SETTING, declarations
 from finn.platform.generate import (
     DeviceProbe,
     GenerationError,
@@ -240,7 +240,7 @@ def test_an_overlay_device_states_its_fabric_where_its_pair_has_no_rule(
     with refused(
         "catalog-overlay-invalid",
         error=TargetRefused,
-        owner="FINN_PLATFORM_CATALOG",
+        owner="parts.json",
         message="no rule for newarch/newfamily: state its fabric",
     ):
         load(data, overlay(tmp_path, {"devices": [device]}))
@@ -331,17 +331,21 @@ def guide_overlay() -> dict[str, Any]:
 
 @pytest.fixture
 def machine_overlay(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
-    """The committed catalog with the guide's overlay named by the machine setting."""
-    path = overlay(tmp_path, guide_overlay())
-    monkeypatch.setenv(OVERLAY_SETTING, str(path))
+    """The committed catalog with the guide's overlay, ``parts.json`` in a directory on the
+    machine setting ``FINN_PLATFORM_PATH``."""
+    path = tmp_path / PARTS_OVERLAY
+    path.write_text(json.dumps(guide_overlay()))
+    monkeypatch.setenv(PATH_SETTING, str(tmp_path))
+    declarations.cache_clear()
     catalog.cache_clear()
     yield path
-    monkeypatch.delenv(OVERLAY_SETTING)
+    monkeypatch.delenv(PATH_SETTING)
+    declarations.cache_clear()
     catalog.cache_clear()
 
 
 def test_the_guides_overlay_resolves_its_custom_part(machine_overlay: Path) -> None:
-    """``docs/installation.md``'s example, named by ``FINN_PLATFORM_CATALOG``: its part
+    """``docs/installation.md``'s example, in a directory on ``FINN_PLATFORM_PATH``: its part
     resolves with its device's totals, and the exploration report states their source."""
     target = resolve_target(part="XCZU3EG_ES1-SBVA484-1-E", period_ns=5.0)
     assert target.part == "xczu3eg_es1-sbva484-1-e"

@@ -435,7 +435,7 @@ def _refuse_shell(cfg: DataflowBuildConfig, step: str) -> None:
     """Refuse ``step`` where the target's shell has no bitfile build: the bitfile, the
     driver and the deployment are that build's."""
     target = cfg.resolved_target
-    if shell_row(target.shell, target.board).integration == VIVADO_BLOCK_DESIGN:
+    if shell_row(target.shell, target.board).linker == VIVADO_BLOCK_DESIGN:
         return
     message = (
         f"the {target.shell!r} shell has no bitfile build, which {step} needs; state a "

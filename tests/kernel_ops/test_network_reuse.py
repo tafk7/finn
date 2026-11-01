@@ -179,8 +179,8 @@ def test_a_body_bound_plain_and_in_shells_states_its_shell_s_resources() -> None
     model = model.transform(MakeCutChoices(CUT_NAME))
     nodes = list(model.graph.node)
     row = shell_row("pynq", "Ultra96")
-    bare = replace(row, static_region=None)
-    assert row.movers and row.static_region is not None
+    bare = replace(row, fixed=None)
+    assert row.offers and row.fixed is not None
     plain = CoreComposition(network(model, nodes, name="chain").point)
     shelled = core_in_shell(model, nodes, name="chain")
     assert shell.body_row(model) == row

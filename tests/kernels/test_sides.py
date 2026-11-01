@@ -240,7 +240,7 @@ def test_a_steady_beat_is_expanded_at_the_edge_s_beats_and_beat_times_are_as_sta
 @pytest.mark.parametrize(
     ("made", "message"),
     [
-        (lambda: Outside("dma", pace=Steady(1)), "a mover \\(iodma_hls\\) or the build"),
+        (lambda: Outside("", pace=Steady(1)), "stated by a mover or the build, not ''"),
         (lambda: Outside(BUILD, "column_major", pace=Steady(1)), "a row_major order"),
         (lambda: Outside(BUILD, passes=2, pace=Steady(1)), "one pass a frame, not 2"),
         (lambda: Outside(BUILD, passes=0, pace=Steady(1)), "one pass a frame, not 0"),
@@ -291,6 +291,10 @@ def test_only_the_boundary_carries_a_statement_and_a_mover_s_where_it_is_offered
     mover = Outside(IODMA_HLS, ROW_MAJOR, 1)
     with pytest.raises(ValueError, match="stated by an iodma_hls mover, and none is offered"):
         Side.boundary("s_axis_0", outside=mover)
+    # A mover kind the shell does not offer (none declares it, or the shell offers another)
+    # is refused where it would state the side.
+    with pytest.raises(ValueError, match="stated by an dma mover, and none is offered"):
+        Side.boundary("s_axis_0", OFFERS, Outside("dma", ROW_MAJOR, 1))
     with pytest.raises(ValueError, match="only the boundary's side is stated by the outside"):
         Side(SideKind.NEIGHBOUR, "upstream.y", WORDS, Direction.OUT, 8, outside=STATED)
     assert Side.boundary("s_axis_0", outside=STATED).outside == STATED
@@ -507,7 +511,7 @@ def test_untimed_boundary_presents_logical_fields_without_a_timing_query() -> No
 @pytest.mark.parametrize(
     "fields",
     [
-        {"source": "dma"},
+        {"source": ""},
         {"order": "column_major"},
         {"passes": 2},
         {"passes": True},

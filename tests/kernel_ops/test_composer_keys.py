@@ -21,7 +21,7 @@ from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.partition import CUT_NAME
 from finn.core.space import inspection
 from finn.custom_op.kernels.network import declaration
-from finn.custom_op.kernels.shell import make_cut_choices, row_facts
+from finn.custom_op.kernels.shell import make_cut_choices, row_facts, row_movers
 from finn.kernels.budgets import SHELL
 from finn.kernels.composer import compose
 from finn.kernels.dataflow_core import DataflowCoreKernel
@@ -37,7 +37,7 @@ def _round_trip(model: ModelWrapper) -> tuple[DataflowCoreKernel, int]:
     target = read_target(model)
     row = shell_row(target.shell, target.board)
     composed = compose(
-        declaration(model, nodes, name=CUT_NAME, movers=row.movers, shell=row_facts(row))
+        declaration(model, nodes, name=CUT_NAME, movers=row_movers(row), shell=row_facts(row))
     )
     names = composed.names
     network = core_in_shell(model, nodes)

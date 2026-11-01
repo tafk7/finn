@@ -36,6 +36,7 @@ from finn.core.space.compiler import compile_model
 from finn.core.space.occurrence import ask, held
 from finn.core.space.results import Available, QueryResult, Unresolved
 from finn.custom_op.kernels.network import declaration
+from finn.custom_op.kernels.shell import row_movers
 from finn.kernels.budgets import _ClockRequirement, _DoubledAny, _MoverSum, _PresentedSum, _Sum
 from finn.kernels.channels import Channel
 from finn.kernels.composer import clear_classes, compose
@@ -240,7 +241,7 @@ def fresh_chain() -> tuple[DataflowCoreKernel, dict[str, object]]:
     nodes = list(model.graph.node)
     target = read_target(model)
     row = shell_row(target.shell, target.board)
-    declared = declaration(model, nodes, name=CUT_NAME, movers=row.movers)
+    declared = declaration(model, nodes, name=CUT_NAME, movers=row_movers(row))
     stored = core_in_shell(model, nodes).chosen()
     clear_classes()
     composed = compose(declared)

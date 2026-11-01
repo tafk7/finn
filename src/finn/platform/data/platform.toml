@@ -1,0 +1,144 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+
+# FINN's own platform declarations (finn.platform.declarations): the boards FINN knows,
+# the shells it builds, their linker, runtime and mover kind. A package or a directory
+# on FINN_PLATFORM_PATH adds its own beside these, under new names.
+
+# -- boards: each board's part, built by a shell or not ---------------------------------
+
+[boards.Ultra96]
+part = "xczu3eg-sbva484-1-e"
+
+[boards.Ultra96-V2]
+part = "xczu3eg-sbva484-1-i"
+
+[boards.ZCU102]
+part = "xczu9eg-ffvb1156-2-e"
+
+[boards.ZCU104]
+part = "xczu7ev-ffvc1156-2-e"
+
+[boards.ZCU111]
+part = "xczu28dr-ffvg1517-2-e"
+
+[boards.RFSoC2x2]
+part = "xczu28dr-ffvg1517-2-e"
+
+[boards.RFSoC4x2]
+part = "xczu48dr-ffvg1517-2-e"
+
+[boards.KV260_SOM]
+part = "xck26-sfvc784-2LV-c"
+
+[boards.AUP-ZU3_8GB]
+part = "xczu3eg-sfvc784-2-e"
+
+[boards.Pynq-Z1]
+part = "xc7z020clg400-1"
+
+[boards.Pynq-Z2]
+part = "xc7z020clg400-1"
+
+[boards.U50]
+part = "xcu50-fsvh2104-2L-e"
+
+[boards.U200]
+part = "xcu200-fsgd2104-2-e"
+
+[boards.U250]
+part = "xcu250-figd2104-2L-e"
+
+[boards.U55C]
+part = "xcu55c-fsvh2892-2L-e"
+
+[boards.V80]
+part = "xcv80-lsva4737-2MHP-e-S"
+
+[boards.VCK190]
+part = "xcvc1902-vsva2197-2MP-e-S"
+
+[boards.VEK280]
+part = "xcve2802-vsvh1760-2MP-e-S"
+
+# -- the linker, runtime and mover kind of the pynq shell --------------------------------
+
+[linkers.vivado-block-design]
+# The Zynq block design around the partition, run through Vivado to a bitstream.
+code = "finn.shells.pynq.runner:BuildPynqBitfile"
+tool = "vivado"
+board_keys = ["board_part"]
+image = "bit"
+
+[runtimes.pynq]
+# The PYNQ driver, over the board's Overlay, allocate and MMIO.
+code = "finn.shells.pynq.driver:MakePynqDriver"
+images = ["bit"]
+movers = ["iodma_hls"]
+kinds = ["moved"]
+schemas = [1]
+
+[movers.iodma_hls]
+code = "finn.kernels.movers:IodmaMover"
+kinds = ["moved"]
+
+# -- shells ------------------------------------------------------------------------------
+
+[shells.ip]
+# The packaged IP, for its user to integrate into their own shell, on any part. It
+# integrates nothing, so it bounds nothing, and its user supplies the doubled clock.
+boards = "any"
+clocks = { main = "ap_clk", set_at = "build", doubled = true }
+
+[shells.pynq]
+# The Zynq block design: the processing system, a reset, a SmartConnect into HP0 for the
+# movers' memory ports and an AXI interconnect from HPM0_FPD for the control buses.
+linker = "vivado-block-design"
+runtimes = ["pynq"]
+clocks = { main = "pl_clk0", set_at = "build", doubled = false }
+# The processor's HPM0_FPD window: 256 MiB at 0xA000_0000; each unit at least 4 KiB.
+control = { one_port_per_unit = false, least_window = 4096, aperture = 0x1000_0000 }
+memory = [{ name = "HP0", width = 128, masters = 16 }]
+supply = [{ kind = "moved", movers = ["iodma_hls"], width_cap = 128 }]
+delivery = [{ kind = "moved", movers = ["iodma_hls"], width_cap = 128 }]
+# The AXI-Lite buses the template's interconnect takes, and the memory ports the
+# partition may initiate beside its movers'.
+control_budget = 9
+memory_ports = 0
+characterised = "movers (iodma_hls) and static region out of context, Vivado 2025.2, xczu3eg/xczu7ev (movers on xczu3eg, the static region on xczu3eg and xczu7ev); the shell built and timed on Ultra96 only"
+timed = ["Ultra96"]
+caveat = "the 'pynq' shell was built and timed on Ultra96 only, and its movers and static region characterised out of context, Vivado 2025.2, xczu3eg/xczu7ev: on {board} ({part}) its cost is carried over, not measured"
+
+# Fitted from out-of-context synthesis of the Zynq template on xczu3eg and xczu7ev, which
+# agree. Other boards' parts were not synthesized.
+[shells.pynq.fixed]
+control_base = 0xA000_0000
+processor = { ip = "zynq_ultra_ps_e", lut = 264 }
+reset = { ip = "proc_sys_reset", lut = 19, ff = 40 }
+memory_interconnect = { ip = "smartconnect", lut = [932.8, 2215.5], ff = [2171.7, 3179.0] }
+control_interconnect = { ip = "axi_interconnect", fixed = { lut = 1277, ff = 1397 }, lut = [58.6, 33.35], ff = [135.7, 1.27], scales_from = 2 }
+
+[shells.pynq.boards.Ultra96]
+board_part = "avnet.com:ultra96v1:part0:1.2"
+
+[shells.pynq.boards.Ultra96-V2]
+board_part = "avnet.com:ultra96v2:part0:1.2"
+
+[shells.pynq.boards.ZCU102]
+board_part = "xilinx.com:zcu102:part0:3.3"
+
+[shells.pynq.boards.ZCU104]
+board_part = "xilinx.com:zcu104:part0:1.1"
+
+[shells.pynq.boards.RFSoC2x2]
+board_part = "xilinx.com:rfsoc2x2:part0:1.1"
+
+[shells.pynq.boards.RFSoC4x2]
+board_part = "realdigital.org:rfsoc4x2:part0:1.0"
+
+[shells.pynq.boards.KV260_SOM]
+board_part = "xilinx.com:kv260_som:part0:1.3"
+
+[shells.pynq.boards.AUP-ZU3_8GB]
+board_part = "realdigital.org:aup-zu3-8gb:part0:1.0"
+versions = ">=2024.1"

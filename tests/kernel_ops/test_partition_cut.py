@@ -286,12 +286,12 @@ def test_the_export_names_each_mover_its_iodma_and_every_connection(tmp_path: Pa
     }
 
 
-def test_a_shell_without_an_integration_has_no_export(tmp_path: Path) -> None:
+def test_a_shell_without_a_linker_has_no_export(tmp_path: Path) -> None:
     parent = verified_parent(chain().transform(CutKernelPartition(tmp_path)))
     with refused(
         "integration-unexported",
         error=IntegrationError,
-        message="the 'ip' shell's integration is None: no export",
+        message="the 'ip' shell's linker is None: no export",
     ):
         integration(parent)
 

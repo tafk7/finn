@@ -197,7 +197,7 @@ def test_a_failed_step_is_the_outcome_by_its_kind(tmp_path, error, kind):
 
 def test_a_refused_configuration_is_the_outcome_with_its_findings(tmp_path):
     # A board that requires a Vivado release; the fake toolchain has no Vivado.
-    with refused("board-vivado", error=ConfigurationRefused) as caught:
+    with refused("tool-version", error=ConfigurationRefused) as caught:
         build_of(
             tmp_path,
             [step_reports, "step_explore"],
@@ -212,7 +212,7 @@ def test_a_refused_configuration_is_the_outcome_with_its_findings(tmp_path):
     }
     assert manifest["steps"] == []
     found = [(each["code"], each["kind"]) for each in manifest["configuration_findings"]]
-    assert found == [("board-vivado", "rejection"), ("setting-unread", "limitation")]
+    assert found == [("tool-version", "rejection"), ("setting-unread", "limitation")]
 
 
 def test_an_unknown_step_is_refused_before_the_first(tmp_path):

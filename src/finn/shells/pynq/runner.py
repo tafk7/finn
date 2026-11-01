@@ -459,11 +459,11 @@ def pynq_row(model: ModelWrapper, output: str) -> ShellRow:
     """The shell row of the target the parent graph ``model``'s partition body states,
     refused for ``output`` (the output asked, by name) unless the shell builds the Zynq
     block design around the partition, as this shell's build and driver take it: the
-    ``ip`` shell integrates nothing, and another integration has no build here."""
+    ``ip`` shell links nothing, and another linker has no build here."""
     _, body, _ = partition_body(model)
     target = read_target(body)
     row = shell_row(target.shell, target.board)
-    if row.integration is None:
+    if row.linker is None:
         raise PynqRefused(
             output,
             "shell-integrates-nothing",
@@ -471,10 +471,8 @@ def pynq_row(model: ModelWrapper, output: str) -> ShellRow:
             "state a shell that does (pynq, for a board)",
             owner="configuration.target.shell",
         )
-    if row.integration != VIVADO_BLOCK_DESIGN:
-        raise PynqRefused(
-            output, "integration-unbuilt", f"no build for the {row.integration!r} integration"
-        )
+    if row.linker != VIVADO_BLOCK_DESIGN:
+        raise PynqRefused(output, "integration-unbuilt", f"no build for the {row.linker!r} linker")
     return row
 
 

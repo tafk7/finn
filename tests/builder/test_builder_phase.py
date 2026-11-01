@@ -846,7 +846,7 @@ def test_the_builds_target_is_the_one_its_configuration_states(tmp_path: Path) -
     with refused("board-part-mismatch", error=TargetRefused):
         step_convert_to_hw(chain_source(), config(tmp_path, target=asserted))
     xrt = TargetRequest(part="xcu250-figd2104-2L-e", period_ns=5.0, shell="xrt")
-    with refused("unsupported-shell", error=TargetRefused, message="^'xrt' "):
+    with refused("unknown-shell", error=TargetRefused, message="^'xrt' "):
         step_convert_to_hw(chain_source(), config(tmp_path, target=xrt))
 
 
@@ -1185,21 +1185,21 @@ def test_a_step_that_moves_the_target_s_folding_leaves_the_bitfile_no_objective(
 
 
 def test_a_target_the_registry_refuses_is_refused_before_the_build(tmp_path: Path) -> None:
-    unknown = TargetRequest(board="U250", period_ns=5.0)
+    unknown = TargetRequest(board="U280", period_ns=5.0)
     assert build_refused_by(
         config(tmp_path, target=unknown),
         "unknown-board",
         owner="configuration.target.board",
-        message="^'U250' is not a board",
+        message="^'U280' is not a board",
     ) == ["unknown-board"]
     # A board the Zynq template cannot build: refused before any step runs.
     zcu111 = TargetRequest(board="ZCU111", period_ns=5.0, shell="pynq")
     assert build_refused_by(
         config(tmp_path, target=zcu111),
-        "no-shell-row",
+        "board-unsupported",
         owner="configuration.target.board",
-        message="has no row for board 'ZCU111'",
-    ) == ["no-shell-row"]
+        message="does not support board 'ZCU111'",
+    ) == ["board-unsupported"]
     # The ip shell takes the part.
     on_part = TargetRequest(part="xcu250-figd2104-2L-e", period_ns=5.0)
     assert failed_checks(config(tmp_path, target=on_part)) == {}

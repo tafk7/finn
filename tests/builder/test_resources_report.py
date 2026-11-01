@@ -23,7 +23,7 @@ from finn.custom_op.kernels.shell import ShellResources, configured_network, she
 from finn.kernels.utilization import SHELL_CHARACTERISED
 from finn.platform.capabilities import Resources
 from finn.platform.resolve import resolve_target
-from finn.platform.shells import PYNQ_CHARACTERISED, shell_row
+from finn.platform.shells import shell_row
 from finn.toolchain.vivado import placed_hierarchy, utilization_synth
 from finn.transformation.kernels import explore_kernel_choices
 from finn.transformation.kernels.cut import CutKernelPartition
@@ -92,9 +92,9 @@ def test_off_the_board_the_shell_was_timed_on_both_reports_name_the_caveat(
     an exploration's report's ``exact`` and resources.json's ``caveat`` name it, the
     board and its part; on Ultra96 neither has a caveat."""
     row = shell_row("pynq", board)
-    assert row.characterised == PYNQ_CHARACTERISED
-    assert "xczu3eg and xczu7ev" in PYNQ_CHARACTERISED
-    assert "built and timed on Ultra96 only" in PYNQ_CHARACTERISED
+    assert row.characterised == shell_row("pynq", "Ultra96").characterised
+    assert row.characterised is not None and "xczu3eg and xczu7ev" in row.characterised
+    assert "built and timed on Ultra96 only" in row.characterised
     model = kernel_model()
     write_target(model, resolve_target(board=board, period_ns=5.0, shell="pynq"))
     configure_partition(model)

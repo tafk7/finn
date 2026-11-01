@@ -24,11 +24,11 @@ budgets, they stay here.
   (``shell-counts-differ``);
 - **resources** (``shell_resources``; the seam reads them of the core's composition in its
   shell, ``shell_composition``, as its own): the sum of its members' own statements
-  (``Kernel.resources``), each mover's (its contract's) and its row's static region's, at
-  the memory ports and AXI-Lite buses it connects (the module's and its movers'). The
-  movers' and the static region's are out of context (``SHELL_CHARACTERISED``), which
-  overstates the placed shell. The ``ip`` shell has neither, so its resources are its
-  members'.
+  (``Kernel.resources``), each mover's (its contract's) and its row's static region's
+  (``ShellRow.fixed``), at the memory ports and AXI-Lite buses it connects (the module's
+  and its movers'). The movers' and the static region's are out of context
+  (``SHELL_CHARACTERISED``), which overstates the placed shell. The ``ip`` shell has
+  neither, so its resources are its members'.
 
 ``configured_network`` is a core as emission builds it (``Configured``: its composition in
 its shell, its module, and its cycles a frame), bound only: a stored choice it dropped as
@@ -74,11 +74,12 @@ from finn.kernels.channels import Channel
 from finn.kernels.configure import refusal
 from finn.kernels.dataflow_core import Bound, DataflowCoreKernel
 from finn.kernels.explore import CoreComposition, FifoCheck, Seam
-from finn.kernels.movers import MoverContract
+from finn.kernels.movers import MoverContract, MoverOffer
 from finn.kernels.policies import Required, policy
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
-from finn.platform.shells import ShellRow, bus_counts, shell_row
+from finn.platform.declarations import code
+from finn.platform.shells import MOVED, ShellRow, bus_counts, shell_row
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
@@ -102,13 +103,31 @@ class ShellResources:
 
 def row_facts(row: ShellRow) -> dict[str, object]:
     """The facts of ``row`` a partition in its shell holds (``finn.kernels.budgets.ShellBudgets``):
-    the shell's name and its budgets, as the row states them."""
+    the shell's name, its budgets, and whether it gives an aligned doubled clock, as the row
+    states them."""
     return {
         "shell": row.shell,
         "control_budget": row.control_budget,
         "memory_ports": row.memory_ports,
-        "clk2x": row.clk2x,
+        "clk2x": row.clocks.doubled,
     }
+
+
+def row_movers(row: ShellRow) -> tuple[MoverOffer, ...]:
+    """The movers ``row`` offers its boundary channels: for each mover kind its ``moved``
+    offers name, inputs' then outputs', once, the offer its declared code makes at the
+    offer's width cap (``offer``, ``finn.platform.declarations.code``)."""
+    offers: dict[str, MoverOffer] = {}
+    for offered in row.offers:
+        if offered.kind != MOVED or offered.width_cap is None:
+            continue
+        for mover in offered.movers:
+            if mover.name not in offers:
+                made = getattr(code(mover.code), "offer")(offered.width_cap)
+                if not isinstance(made, MoverOffer):
+                    raise TypeError(f"{mover.code}.offer made {made!r}, not a mover's offer")
+                offers[mover.name] = made
+    return tuple(offers.values())
 
 
 def body_row(model: ModelWrapper) -> ShellRow:
@@ -124,7 +143,7 @@ def core_point(model: ModelWrapper, name: str) -> Bound:
     core's rules (``row_facts``); its stored choices bound. The node's point
     (``finn.custom_op.partition.DataflowCore.point``)."""
     row = body_row(model)
-    return network(model, model.graph.node, name=name, movers=row.movers, shell=row_facts(row))
+    return network(model, model.graph.node, name=name, movers=row_movers(row), shell=row_facts(row))
 
 
 def core_space(model: ModelWrapper, name: str) -> DataflowCoreKernel:
@@ -132,7 +151,7 @@ def core_space(model: ModelWrapper, name: str) -> DataflowCoreKernel:
     it, its design space with nothing chosen (``network.core``): the node's
     (``finn.custom_op.partition.DataflowCore.bound``)."""
     row = body_row(model)
-    return core(model, model.graph.node, name=name, movers=row.movers, shell=row_facts(row))
+    return core(model, model.graph.node, name=name, movers=row_movers(row), shell=row_facts(row))
 
 
 def shell_composition(point: DataflowCoreKernel, row: ShellRow) -> CoreComposition:
@@ -228,7 +247,7 @@ def _resources(network: CoreComposition, row: ShellRow) -> QueryResult[ShellReso
         movers = tuple(
             (network.node(name), contract.resources) for name, contract in contracts.value
         )
-        region = row.static_region
+        region = row.fixed
         if region is None:
             return Available(ShellResources(partition, movers, ()))
         buses = _buses(network)
@@ -711,6 +730,7 @@ __all__ = [
     "core_space",
     "refuse_unverified",
     "row_facts",
+    "row_movers",
     "shell_composition",
     "shell_resources",
     "verify_partition",

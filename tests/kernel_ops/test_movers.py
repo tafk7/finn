@@ -49,6 +49,7 @@ from finn.custom_op.kernels.shell import (
     ShellResources,
     body_row,
     configured_network,
+    row_movers,
     shell_resources,
 )
 from finn.dataflow.steps import Hop
@@ -80,7 +81,6 @@ from finn.kernels.movers import (
     MEMORY_LATENCY,
     NO_CONVERTER,
     MoverContract,
-    MoverOffer,
     converter_kind,
     iodma_hls,
     iodma_hls_resources,
@@ -89,7 +89,7 @@ from finn.kernels.sides import ROW_MAJOR, ROW_MAJOR_HOST, Outside, Side
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
 from finn.platform.resolve import resolve_target
-from finn.platform.shells import IP_ROW, ZYNQ_STATIC_REGION, ShellRow, shell_row
+from finn.platform.shells import ShellRow, shell_row
 from finn.platform.target import Target
 from finn.transformation.kernels import (
     explore_kernel_choices,
@@ -358,9 +358,9 @@ def test_the_network_in_its_shell_reads_its_targets_shell_row() -> None:
     model = kernel_model()
     chain_network(model=model)
     row = body_row(model)
-    assert row == shell_row("pynq", "Ultra96") and row.movers == (iodma_hls(128),)
+    assert row == shell_row("pynq", "Ultra96") and row_movers(row) == (iodma_hls(128),)
     chain_network(TARGET, model=model)
-    assert body_row(model) == IP_ROW
+    assert body_row(model) == shell_row("ip", None)
 
 
 def test_the_network_takes_the_movers_it_is_offered_and_states_its_members_resources() -> None:
@@ -429,7 +429,8 @@ def test_the_shell_s_resources_are_its_partition_s_its_movers_and_its_static_reg
         ("y", iodma_hls_resources(direction="out", intf_width=32, stream_width=y.tdata)),
     )
     assert (x.memory_width, x.tdata, y.memory_width) == (16, 8, 32)
-    assert split.static_region == ZYNQ_STATIC_REGION.resources(masters=2, slaves=2)
+    fixed = body_row(model).fixed
+    assert fixed is not None and split.static_region == fixed.resources(masters=2, slaves=2)
     members = [bound.query(name, Kernel.resources) for name in bound.members]
     assert split.partition == total(each.value for each in members if isinstance(each, Available))
     assert (
@@ -486,14 +487,6 @@ def test_a_network_with_movers_persists_and_replays_as_itself() -> None:
     assert not [name for name, values in held.items() if "mover" in values]
     again = bound_in_shell(model, model.graph.node, name="chain")
     assert CoreComposition(again.point).chosen() == bound.chosen() and not again.stale
-
-
-def test_a_row_offering_an_unknown_or_repeated_kind_is_refused() -> None:
-    other = MoverOffer(kind="dma", width_cap=64, frames_per_call=1, call_converted=0, call_direct=0)
-    with pytest.raises(ValueError, match="no mover of kind dma"):
-        replace(IP_ROW, movers=(other,))
-    with pytest.raises(ValueError, match="each kind of mover once"):
-        replace(IP_ROW, movers=(iodma_hls(64), iodma_hls(128)))
 
 
 def test_sizing_reads_a_free_side_its_mover_paces() -> None:
@@ -623,7 +616,11 @@ def test_tfc_with_ultra96_s_movers_at_1e6_fps_names_its_input_mover(tfc: ModelWr
 
 def narrowed(row: ShellRow) -> ShellRow:
     """``row`` with its IODMA_hls mover's memory port at 64 bits."""
-    return replace(row, movers=(iodma_hls(64),))
+    return replace(
+        row,
+        supply=tuple(replace(offer, width_cap=64) for offer in row.supply),
+        delivery=tuple(replace(offer, width_cap=64) for offer in row.delivery),
+    )
 
 
 @pytest.mark.slow
