@@ -1200,7 +1200,7 @@ def _held_ports(cls: type[Kernel]) -> Iterator[tuple[MemberPort, NodeDecl, str]]
         for case, held in cases.items():
             if not issubclass(held.space_type, Space):
                 continue
-            for port in exposed_ports(cast("type[Space]", held.space_type)):
+            for port in exposed_ports(held.space_type):
                 yield MemberPort(name, case + port), held, port
 
 
