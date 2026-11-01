@@ -178,6 +178,10 @@ class Address(tuple["ScopeRecord", int]):
         return self._read()[0].call_style
 
     @property
+    def admits_inapplicable(self) -> bool:
+        return self._read()[0].admits_inapplicable
+
+    @property
     def value(self) -> object:
         return self._read()[0].value
 

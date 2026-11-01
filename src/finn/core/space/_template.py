@@ -373,6 +373,7 @@ class _Freezing:
             arguments=tuple((argument.name, edge(argument.node)) for argument in node.arguments),
             function=node.function,
             call_style=node.call_style,
+            admits_inapplicable=node.admits_inapplicable,
             value=node.value,
             required=node.required,
             domain=node.domain,

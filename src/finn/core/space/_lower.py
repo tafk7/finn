@@ -140,6 +140,7 @@ class _Lowering:
         return {
             "function": function.function,
             "call_style": function.call_style,
+            "admits_inapplicable": function.admits_inapplicable,
             "arguments": self.arguments(node.scope, function, owner=node.owner),
         }
 

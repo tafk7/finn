@@ -37,7 +37,7 @@ from .declarations import (
 )
 from .errors import DefinitionError
 from .groups import Group
-from .results import Rejected
+from .results import Inapplicable
 from .semantics import OptionalSemantics, ValueSemantics
 
 _OWNER = "space.collection"
@@ -262,23 +262,21 @@ def _collect_semantics(
 def _check_answer_within(
     prior: Derived[object] | Constraint, declaration: Declaration, owner: str
 ) -> None:
-    """An override of a rule admits no ``Inapplicable`` and no ``Unresolved`` the answer it
-    overrides does not (``override-widens-answer``): a reader of that answer relies on it,
-    as the Kernel's class checks rely on a ``schedule`` declared never inapplicable, and a
-    constraint reading an inapplicable value counts as true. ``Rejected`` is not compared:
-    the Kernel's base declares its ``schedule`` ``Inapplicable`` and each Kernel stating one
-    declares it ``Rejected``. Each answer is its own declaration's, read in the class that
-    declares it (``declared_answer``)."""
+    """An override of a rule admits no ``Inapplicable`` the answer it overrides does not
+    (``override-widens-answer``): a reader of that answer relies on it, as the Kernel's
+    class checks rely on a ``schedule`` declared never inapplicable, and a constraint
+    reading an inapplicable value counts as true. ``Rejected`` and ``Unresolved`` are
+    admitted by every answer (``_running.answers._finish``), so neither widens one. Each
+    answer is its own declaration's, read in the class that declares it
+    (``declared_answer``)."""
     admitted, stated = declared_answer(prior, owner), declared_answer(declaration, owner)
     if admitted is None or stated is None:
         return
-    wider = stated - admitted - {Rejected}
-    if wider:
-        names = " and ".join(sorted(marker.__name__ for marker in wider))
+    if Inapplicable in stated and Inapplicable not in admitted:
         raise DefinitionError.broken(
             "override-widens-answer",
             _OWNER,
-            f"{owner}: its answer admits {names}, which the answer it overrides does not",
+            f"{owner}: its answer admits Inapplicable, which the answer it overrides does not",
             declaration=owner,
         )
 
@@ -402,14 +400,19 @@ def collect_space(space_type: type[_Namespace]) -> EffectiveSpace:
     )
     functions: dict[str, BoundFunction] = {}
     for name, declaration in members.items():
-        if _function(declaration) is not None:
-            functions[name] = bind_function(
+        function = _function(declaration)
+        if function is not None:
+            bound = bind_function(
                 cast("Derived[object] | Constraint | View[object]", declaration),
                 preliminary,
                 name=name,
-                annotations=hint_cache[id(_function(declaration))],
+                annotations=hint_cache[id(function)],
                 semantics=semantics[declaration],
             )
+            answer = declared_answer(declaration, f"{space_type.__qualname__}.{name}")
+            if answer is None:
+                answer = declared_non_values(hint_cache[id(function)].get("return"))
+            functions[name] = replace(bound, admits_inapplicable=Inapplicable in answer)
     for declaration in members.values():
         if isinstance(declaration, View):
             inferred = source_semantics(declaration, preliminary)
