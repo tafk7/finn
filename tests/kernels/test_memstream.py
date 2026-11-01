@@ -159,7 +159,7 @@ def test_several_weight_sets_take_a_set_index_per_row():
 
 
 def test_several_sets_without_their_indices_refuse_the_sequences_that_read_them():
-    # Its rule refuses such a memory (``selected``); its set port's order and its output's
+    # Its rule refuses such a memory (``sets_indexed``); its set port's order and its output's
     # read the indices, and refuse the same way rather than read what is not given.
     space = design_space(
         MemStreamKernel(

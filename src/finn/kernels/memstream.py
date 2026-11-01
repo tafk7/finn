@@ -212,7 +212,7 @@ class MemStreamKernel(Kernel):
         return True
 
     @constraint
-    def selected(self) -> bool | Rejected:
+    def sets_indexed(self) -> bool | Rejected:
         """Several sets take a tensor of set indices, one a beat; a single set none."""
         if self.sets < 2:
             if self.set_tensor is not None:
@@ -296,7 +296,7 @@ class MemStreamKernel(Kernel):
     @derived
     def set_sequence(self) -> BeatSequence | Rejected:
         """One index a beat, one beat per pass of the weights. Without a set tensor its port
-        is idle, and its order is refused: several sets as ``selected`` refuses them, a
+        is idle, and its order is refused: several sets as ``sets_indexed`` refuses them, a
         single set because it takes no set channel."""
         if self.set_tensor is None:
             if self.sets < 2:
@@ -307,7 +307,7 @@ class MemStreamKernel(Kernel):
     @derived
     def output_sequence(self) -> BeatSequence | Rejected:
         """One set streams cyclically; several stream one pass per accepted index, and
-        without their indices are refused, as ``selected`` refuses them."""
+        without their indices are refused, as ``sets_indexed`` refuses them."""
         if self.sets > 1:
             if self.set_tensor is None:
                 return reject("memstream-set-channel", "several sets take a set channel")

@@ -507,14 +507,14 @@ def test_a_source_whose_rule_is_false_refuses_the_change_that_places_it():
     # channel's rules and guards that read its sides.
     validity = by_hand(members, stored=keyed(folding)).validity("w")
     assert validity.status == "refused"
-    assert "source.selected" in {piece.owner for piece in validity.pieces}
+    assert "source.sets_indexed" in {piece.owner for piece in validity.pieces}
     assert {
         (finding.code, finding.owner)
         for piece in validity.pieces
         for finding in piece.result.findings
         if finding.code != "guard-refused"
     } == {
-        ("memstream-set-channel", "source.selected"),
+        ("memstream-set-channel", "source.sets_indexed"),
         ("memstream-set-channel", "source.output_sequence"),
     }
 

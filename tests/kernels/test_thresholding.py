@@ -158,9 +158,9 @@ def test_a_set_port_that_does_not_match_the_sets_is_refused_both_ways() -> None:
     # The set port presents the set order its kernel refuses: its presentation is refused
     # too.
     assert pieces == [
-        ("selected", "threshold-set-channel", "several threshold sets take a set channel"),
-        ("selected", "threshold-set-channel", "a single threshold set takes no set channel"),
+        ("sets_indexed", "threshold-set-channel", "several threshold sets take a set channel"),
         ("set.presented", "threshold-set-channel", "a single threshold set takes no set channel"),
+        ("sets_indexed", "threshold-set-channel", "a single threshold set takes no set channel"),
     ]
     # Given its set indices, the two sets stand.
     given = threshold_base(table=two_sets, set_tensor=set_indices(2, 2))
@@ -174,7 +174,7 @@ def test_a_set_port_that_does_not_match_the_sets_is_refused_both_ways() -> None:
 
 
 def test_several_sets_without_their_indices_refuse_the_set_port_s_order() -> None:
-    # Its rule refuses such a thresholding (``selected``); the set port's order reads the
+    # Its rule refuses such a thresholding (``sets_indexed``); the set port's order reads the
     # indices, and refuses the same way rather than read what is not given.
     two_sets = (((-2, 0, 3), (-1, 1, 4)), ((-3, 0, 5), (-2, 0, 6)))
     answer = threshold_base(table=two_sets).query(ThresholdingAxiKernel.set_sequence)
