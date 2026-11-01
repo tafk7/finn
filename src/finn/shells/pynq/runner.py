@@ -355,10 +355,21 @@ def delivered_clock_findings(clock: dict[str, Any], timing_report: str) -> tuple
     )
 
 
+REPORT_SCHEMA = 0
+"""The layout of report/integration.json, its ``schema``: 0, the description and what the
+linker names and places of it, until it is the runtime file (schema 1). The integration
+export's report, before the description, had no ``schema``."""
+
+
 def integration_report(integration: Integration) -> dict[str, Any]:
-    """report/integration.json: the description (``Integration.report``) and what the
-    ``pynq`` linker names and places of it (``block_design``: ``linker.report``)."""
-    return {**integration.report(), "block_design": linker.report(integration)}
+    """report/integration.json: its layout (``schema``, ``REPORT_SCHEMA``), the description
+    (``Integration.report``) and what the ``pynq`` linker names and places of it
+    (``block_design``: ``linker.report``)."""
+    return {
+        "schema": REPORT_SCHEMA,
+        **integration.report(),
+        "block_design": linker.report(integration),
+    }
 
 
 class BuildPynqBitfile(Transformation):
@@ -501,6 +512,7 @@ __all__ = [
     "build_pynq",
     "delivered_clock_findings",
     "generate_mover_ip",
+    "REPORT_SCHEMA",
     "integration_report",
     "iodma_model",
     "pynq_row",

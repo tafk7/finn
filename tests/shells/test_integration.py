@@ -159,3 +159,18 @@ def test_a_control_bus_takes_its_aperture_and_the_least_window_at_least() -> Non
         message="s_axilite: an AXI-Lite bus with no awaddr",
     ):
         _range(bare, 4096)
+
+
+def test_a_core_named_as_a_movers_unit_is_refused(tmp_path: Path) -> None:
+    """Each unit is named once: a core whose node is named ``in0`` would be a mover's unit."""
+    parent = zynq_parent(tmp_path)
+    node, _, _ = partition_body(parent)
+    node.name = "in0"
+    verified_parent(parent)
+    with refused(
+        "unit-name-collides",
+        error=IntegrationError,
+        owner="describe",
+        message="the core 'in0' is named as a mover's unit \\(in0\\)",
+    ):
+        describe(parent)

@@ -17,7 +17,8 @@ generation does (``configured_network``), and reads the movers its boundary chan
   unit, the memory target it binds and the mover's facts (``MoverContract``);
 - the units the platform places (``Unit``): each core's, named as its node, and each
   mover's, ``in<i>`` and ``out<j>`` by its direction, numbered across the integration in
-  edge-port order, each with its kind, its IP (``IpRef``) and its control window;
+  edge-port order, each with its kind, its IP (``IpRef``) and its control window; each
+  named once (a core named as a mover's unit is refused, ``unit-name-collides``);
 - the connections (``Connection``): each mover's stream to its core's edge port, with its
   bits;
 - the bindings (``Binding``): each mover's memory port to a memory target of the row;
@@ -380,6 +381,15 @@ def describe(model: ModelWrapper) -> Integration:
         Unit(name=core.name, kind=CORE, ip=ip, window=None),
         *(Unit(name=each.unit, kind=each.contract.kind, ip=None, window=least) for each in outputs),
     )
+    names = [unit.name for unit in units]
+    shared = sorted({name for name in names if names.count(name) > 1})
+    if shared:
+        raise IntegrationError(
+            "unit-name-collides",
+            "describe",
+            f"the core {core.name!r} is named as a mover's unit ({', '.join(shared)}): "
+            "each unit is named once",
+        )
     connections = (
         *(
             Connection(

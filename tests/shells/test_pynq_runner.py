@@ -75,6 +75,7 @@ from finn.shells.pynq.runner import (
     BITFILE,
     DELIVERED_CLOCK,
     HWH,
+    REPORT_SCHEMA,
     REPORTS,
     BuildPynqBitfile,
     PynqOptions,
@@ -557,9 +558,10 @@ def test_the_bitfile_build_is_a_transformation_of_the_parent_graph(
     assert (output / BITFILE).read_text() == "top_wrapper.bit"
     assert (output / HWH).read_text() == "top.hwh"
     assert len(list((report / "out_of_context").iterdir())) == 3
-    assert json.loads((report / "integration.json").read_text()) == integration_report(
-        describe(parent)
-    )
+    integrated = json.loads((report / "integration.json").read_text())
+    assert integrated == integration_report(describe(parent))
+    # Its layout stated, which the integration export's report did not.
+    assert integrated["schema"] == REPORT_SCHEMA == 0
     clock = json.loads((output / DELIVERED_CLOCK).read_text())
     assert clock == building.clock
     assert (clock["delivered_mhz"], clock["objective_fps"]) == (187.512, 1000)
