@@ -65,33 +65,35 @@ HANDSHAKE = Law(
     "producer never waits for ready before raising valid",
     "a port with another transport (none known)",
 )
-ADVANCE_SCHEDULED = Law(
+PACING_SCHEDULE = Law(
     "L2",
-    "advance, scheduled",
-    "inputs meet at firing: an iteration consumes the beats it reads together, and issues "
-    "its results into the kernel's own storage; issue is not delivery. When each input "
-    "beat is accepted, and whether only with another port's, is the kernel's intake",
+    "pacing, schedule",
+    "a port owns its pacing as a projection of its kernel's schedule, and the inputs it paces "
+    "meet at an iteration: an iteration consumes the beats it reads together, and issues its "
+    "results into the kernel's own storage; issue is not delivery. When each input beat is "
+    "accepted, and whether only with another port's, is the kernel's intake",
     "none known: a kernel whose inputs fire at different iterations is outside the scope, "
     "and comes with a refinement of this contract",
 )
-ADVANCE_STEPPED = Law(
+PACING_PASS_THROUGH = Law(
     "L3",
-    "advance, stepped",
-    "a stage's output beat is issued once the input beats its step makes it from are "
-    "consumed; it accepts input while its storage has room (its intake)",
+    "follows, pass-through",
+    "a stage's side follows its other side, one side's beats the other's, re-cut: an output "
+    "beat is issued once the input beats it is made from are consumed; it accepts input "
+    "while its storage has room (its intake)",
     "none known",
 )
-ADVANCE_SELECTED = Law(
+PACING_GROUPS = Law(
     "L4",
-    "advance, selected",
-    "a selector beat names the set its governed port's next group beats are made from. When "
-    "it is accepted is its intake",
+    "follows, groups",
+    "a selector follows the port it governs, one beat a group: its beat names the set its "
+    "governed port's next group of beats are made from. When it is accepted is its intake",
     "none known: its group is the governed port's beats a frame over its own (StreamPort.group)",
 )
-ADVANCE_SOURCED = Law(
+PACING_READER = Law(
     "L5",
-    "advance, sourced",
-    "a memory presents its next beat whenever its consumer takes one",
+    "follows, reader",
+    "a memory's output follows its reader: it presents its next beat whenever its reader takes one",
     "none known",
 )
 RATE = Law(
@@ -142,10 +144,10 @@ IDLE = Law(
 
 LAWS: tuple[Law, ...] = (
     HANDSHAKE,
-    ADVANCE_SCHEDULED,
-    ADVANCE_STEPPED,
-    ADVANCE_SELECTED,
-    ADVANCE_SOURCED,
+    PACING_SCHEDULE,
+    PACING_PASS_THROUGH,
+    PACING_GROUPS,
+    PACING_READER,
     RATE,
     RESET_LAW,
     CLOCK_LAW,
@@ -155,45 +157,54 @@ LAWS: tuple[Law, ...] = (
 """The laws, in the order of their IDs."""
 
 
-class Advance(Enum):
-    """A port's advance rule, its **firing** relation: which of its kernel's other beats each
-    of its beats is consumed or issued with, or after, by ordinal (L2-L5), each rule with
-    its event:
+class Pacing(Enum):
+    """What paces a port's beats, by ordinal: what each of its beats is consumed or issued
+    with, or after, among its kernel's other beats (the pacing laws, L2-L5).
 
-    - ``SCHEDULED``: iteration *t* of its kernel's schedule consumes the input beats and
-      issues the output beats its ports' projections place at *t*; timed in iterations,
-      its pace (L2);
-    - ``STEPPED``: a stage's output beat *j* is issued once the input beats its step makes
-      it from are consumed (a FIFO's *j* from *j*, VPC's width step, ``input_gen``'s
-      replay) (L3);
-    - ``SELECTED``: the selector's beat *g* names the set the governed port's group *g* is
-      made from, and is consumed no later than that group's first beat (L4);
-    - ``SOURCED``: a memory's output beat *j* is its stored value at position *j* of its
-      consumer's order, issued whenever its consumer takes one (L5).
+    - ``SCHEDULE``: the port owns its pacing, a projection of its kernel's schedule:
+      iteration *t* consumes the input beats and issues the output beats its kernel's ports'
+      projections place at *t*. Only such a port has a pace, in iterations (L2);
+    - ``FOLLOWS``: it follows another port, by the relation its ``follows`` names
+      (``Follows``), and has no pace of its own.
 
-    When a beat is **accepted**, and whether only with another port's, is not its advance
-    but its kernel's intake (``Intake``). A port declares its relation and its rule follows
-    (``finn.kernels.port_model.StreamPort.advance``): a projection of its kernel's schedule,
-    an input that ``governs`` another port, an output that is ``sourced`` (a memory's
-    output, that declaration), else a stage's side; it never names *scheduled* or
-    *stepped*, and no port class states its own (``port-advance``)."""
+    When a beat is **accepted**, and whether only with another port's, is not its pacing but
+    its kernel's intake (``Intake``). A port declares what it is and its pacing follows
+    (``finn.kernels.port_model.StreamPort.pacing``, ``StreamPort.follows``): a projection of
+    its kernel's schedule, an input that ``governs`` another port, an output that is
+    ``sourced`` (a memory's output, that declaration), else a stage's side; it never names
+    its pacing, and no port class states its own (``port-pacing``)."""
 
-    SCHEDULED = "scheduled"
-    STEPPED = "stepped"
-    SELECTED = "selected"
-    SOURCED = "sourced"
+    SCHEDULE = "schedule"
+    FOLLOWS = "follows"
+
+
+class Follows(Enum):
+    """How a port that does not own its pacing (``Pacing.FOLLOWS``) follows another port's
+    beats, each relation with its event and its law:
+
+    - ``PASS_THROUGH``: a stage's side (a FIFO, a width converter, ``input_gen``), one side's
+      beats the other's, re-cut: output beat *j* is issued once the input beats it is made
+      from are consumed (a FIFO's *j* from *j*, VPC's widths, ``input_gen``'s replay) (L3);
+    - ``GROUPS``: a selector, one beat a group of the port it ``governs``: its beat *g* names
+      the set the governed port's group *g* is made from, and is consumed no later than that
+      group's first beat (L4);
+    - ``READER``: a memory's output, one beat whenever its reader takes one: beat *j* is its
+      stored value at position *j* of its reader's order (L5)."""
+
+    PASS_THROUGH = "pass-through"
+    GROUPS = "groups"
+    READER = "reader"
 
     @property
     def law(self) -> Law:
         """The law it follows."""
-        return _ADVANCE_LAWS[self]
+        return _FOLLOWS_LAWS[self]
 
 
-_ADVANCE_LAWS = {
-    Advance.SCHEDULED: ADVANCE_SCHEDULED,
-    Advance.STEPPED: ADVANCE_STEPPED,
-    Advance.SELECTED: ADVANCE_SELECTED,
-    Advance.SOURCED: ADVANCE_SOURCED,
+_FOLLOWS_LAWS = {
+    Follows.PASS_THROUGH: PACING_PASS_THROUGH,
+    Follows.GROUPS: PACING_GROUPS,
+    Follows.READER: PACING_READER,
 }
 
 
@@ -617,12 +628,7 @@ IDLE_LEVEL = 0
 
 
 __all__ = [
-    "ADVANCE_SCHEDULED",
-    "ADVANCE_SELECTED",
-    "ADVANCE_SOURCED",
-    "ADVANCE_STEPPED",
     "AXIS",
-    "Advance",
     "Ahead",
     "AXIS_CLOCKING",
     "AXIS_PROTOCOL",
@@ -631,6 +637,7 @@ __all__ = [
     "Axis",
     "AxisSpelling",
     "CLOCK_LAW",
+    "Follows",
     "HANDSHAKE",
     "IDLE",
     "IDLE_LEVEL",
@@ -646,6 +653,11 @@ __all__ = [
     "NATIVE_PROTOCOL",
     "Native",
     "InterfaceProtocol",
+    "PACING_GROUPS",
+    "PACING_PASS_THROUGH",
+    "PACING_READER",
+    "PACING_SCHEDULE",
+    "Pacing",
     "PortIntake",
     "RATE",
     "RATE_INTERVAL",

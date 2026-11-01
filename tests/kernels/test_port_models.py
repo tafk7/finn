@@ -44,9 +44,11 @@ from finn.kernels.laws import (
     NATIVE,
     NATIVE_CLOCKING,
     NATIVE_PROTOCOL,
-    Advance,
+    PACING_SCHEDULE,
     Axis,
+    Follows,
     Native,
+    Pacing,
 )
 from finn.kernels.port import (
     LoopEnds,
@@ -359,7 +361,7 @@ def test_view_bindings_remain_model_read_in_errors() -> None:
         design_space(Bad())
 
 
-# -- the one construct: its advance rule, and what its kernel supplies ---------------------
+# -- the one construct: what paces its beats, and what its kernel supplies -----------------
 
 
 @pytest.mark.parametrize(
@@ -370,15 +372,15 @@ def test_view_bindings_remain_model_read_in_errors() -> None:
                 "schedule": Schedule({Index("r"): 2, Index("c"): 4}),
                 "index": (Index("r"), Index("c")),
             },
-            Advance.SCHEDULED,
+            Pacing.SCHEDULE,
         ),
-        ({"sequence": SEQUENCE}, Advance.STEPPED),
-        ({"sequence": SEQUENCE, "governs": "input"}, Advance.SELECTED),
-        ({"sequence": SEQUENCE, "sourced": True}, Advance.SOURCED),
+        ({"sequence": SEQUENCE}, Follows.PASS_THROUGH),
+        ({"sequence": SEQUENCE, "governs": "input"}, Follows.GROUPS),
+        ({"sequence": SEQUENCE, "sourced": True}, Follows.READER),
     ],
 )
-def test_a_port_follows_the_advance_rule_its_declaration_gives(
-    declared: dict[str, object], rule: Advance
+def test_a_port_is_paced_as_its_declaration_gives(
+    declared: dict[str, object], rule: Pacing | Follows
 ) -> None:
     kind = OutPort if declared.get("sourced") else InPort
     port = cast(Any, kind)(
@@ -389,41 +391,54 @@ def test_a_port_follows_the_advance_rule_its_declaration_gives(
         **declared,
     )
     point = design_space(port)
-    assert point.advance is rule
+    assert _rule(point) is rule
+    law = PACING_SCHEDULE if rule is Pacing.SCHEDULE else cast(Follows, rule).law
     assert (
-        rule.law.id
-        == {"scheduled": "L2", "stepped": "L3", "selected": "L4", "sourced": "L5"}[rule.value]
+        law.id
+        == {"schedule": "L2", "pass-through": "L3", "groups": "L4", "reader": "L5"}[rule.value]
     )
-    # A scheduled port has a pace, its schedule's; a port of another rule has none.
+    # A port its schedule paces has a pace, its schedule's, and follows no other port; a
+    # port that follows another has no pace.
     pace = point.query(StreamPort.pace)
-    if rule is Advance.SCHEDULED:
+    if rule is Pacing.SCHEDULE:
+        assert isinstance(point.query(StreamPort.follows), Inapplicable)
         assert isinstance(pace, Available)
         assert pace.value == Pace(cast(Schedule, declared["schedule"]), (), ())
     else:
         assert isinstance(pace, Inapplicable)
 
 
-SCHED, BUF, SEL, SRC = Advance.SCHEDULED, Advance.STEPPED, Advance.SELECTED, Advance.SOURCED
+def _rule(port: Any) -> Pacing | Follows:
+    """A placed port's pacing, ``SCHEDULE``, or how it follows another port."""
+    pacing: Pacing = port.pacing
+    if pacing is Pacing.SCHEDULE:
+        return pacing
+    follows: Follows = port.follows
+    assert pacing is Pacing.FOLLOWS
+    return follows
+
+
+SCHED, PASS, GRP, READ = Pacing.SCHEDULE, Follows.PASS_THROUGH, Follows.GROUPS, Follows.READER
 LIBRARY_RULES = {
-    # CONTRACT.md § 9: each module kernel's ports, by the rule its RTL follows.
+    # CONTRACT.md § 9: each module kernel's ports, by what paces them in its RTL.
     "PackedDotpKernel": {"x": SCHED, "w": SCHED, "y": SCHED},
     "Int8Dsp58DotpKernel": {"x": SCHED, "w": SCHED, "y": SCHED},
-    "ThresholdingAxiKernel": {"input": SCHED, "output": SCHED, "set": SEL},
+    "ThresholdingAxiKernel": {"input": SCHED, "output": SCHED, "set": GRP},
     "EltwiseKernel": {"lhs": SCHED, "rhs": SCHED, "result": SCHED},
     "TransposeKernel": {"input": SCHED, "output": SCHED},
-    "MemStreamKernel": {"set": SEL, "output": SRC},
-    "FifoKernel": {"input": BUF, "output": BUF},
-    "VpcKernel": {"input": BUF, "output": BUF},
-    "InputGeneratorKernel": {"input": BUF, "output": BUF},
+    "MemStreamKernel": {"set": GRP, "output": READ},
+    "FifoKernel": {"input": PASS, "output": PASS},
+    "VpcKernel": {"input": PASS, "output": PASS},
+    "InputGeneratorKernel": {"input": PASS, "output": PASS},
     "PoolKernel": {"input": SCHED, "output": SCHED},
     "PwPolyKernel": {"input": SCHED, "output": SCHED},
 }
 
 
 @pytest.mark.parametrize("name", sorted(LIBRARY_RULES))
-def test_library_ports_follow_their_rtl_s_advance_rules(name: str) -> None:
+def test_library_ports_are_paced_as_their_rtl_is(name: str) -> None:
     """Every port of each module kernel, at its spec's first sampled design point, answers
-    the advance rule CONTRACT.md § 9 states: evaluated, not re-derived."""
+    the pacing CONTRACT.md § 9 states: evaluated, not re-derived."""
     (spec,) = [spec for spec in SPECS if spec.name == name]
     case = {key: value for key, value in spec.cases[spec.space]().items() if key != "reference"}
     given = {key: value for key, value in case.items() if key != "tolerance"}
@@ -437,7 +452,7 @@ def test_library_ports_follow_their_rtl_s_advance_rules(name: str) -> None:
         facts=case.get("facts", {}),
     )
     kernel = design_member(point, KERNEL)
-    assert {port: getattr(kernel, port).advance for port in stream_ports(type(kernel))} == (
+    assert {port: _rule(getattr(kernel, port)) for port in stream_ports(type(kernel))} == (
         LIBRARY_RULES[name]
     )
 
@@ -547,9 +562,10 @@ def test_a_kernel_exposes_its_member_s_port_under_the_alias_s_name() -> None:
     assert port_direction(Exposing, "x") is Direction.IN
     assert port_direction(Exposing, "y") is Direction.OUT
     assert port_direction(Exposing, "z") is Direction.OUT
-    # Its advance rule is its member's port's, found by the alias's name too.
-    assert point.query(stream_port(Exposing, "x").advance) == Available(Advance.STEPPED)
-    assert point.query(stream_port(Exposing, "y").advance) == Available(point.core.output.advance)
+    # Its pacing is its member's port's, found by the alias's name too.
+    assert point.query(stream_port(Exposing, "x").pacing) == Available(Pacing.FOLLOWS)
+    assert point.query(stream_port(Exposing, "x").follows) == Available(Follows.PASS_THROUGH)
+    assert point.query(stream_port(Exposing, "y").pacing) == Available(point.core.output.pacing)
     # Open, the case is not known, so neither is the port.
     assert isinstance(
         design_space(Exposing()).query(stream_port(Exposing, "x").stream_pins), Unresolved
@@ -662,13 +678,13 @@ def test_an_exposed_port_reaches_through_a_wrapper_to_its_leaf() -> None:
     assert port_direction(Wrapper, "x") is Direction.IN
 
 
-def test_a_port_states_one_thing_its_advance_rule_follows_from() -> None:
+def test_a_port_states_one_thing_its_pacing_follows_from() -> None:
     """One of a schedule, the port it governs (an input's), or sourced values (an
     output's); and a port governs another stream port of its kernel."""
-    with refused("port-advance-ambiguous", error=DefinitionError, message="schedule and governs"):
+    with refused("port-pacing-ambiguous", error=DefinitionError, message="schedule and governs"):
 
         class Governed(Kernel):
-            id = "test.advance.governed"
+            id = "test.pacing.governed"
             input = InPort(
                 tensor=TENSOR,
                 schedule=Schedule({Index("r"): 2, Index("c"): 4}),
@@ -677,10 +693,10 @@ def test_a_port_states_one_thing_its_advance_rule_follows_from() -> None:
             )
             other = InPort(tensor=TENSOR, sequence=SEQUENCE)
 
-    with refused("port-advance-ambiguous", error=DefinitionError, message="schedule and sourced"):
+    with refused("port-pacing-ambiguous", error=DefinitionError, message="schedule and sourced"):
 
         class Stored(Kernel):
-            id = "test.advance.stored"
+            id = "test.pacing.stored"
             output = OutPort(
                 tensor=TENSOR,
                 schedule=Schedule({Index("r"): 2, Index("c"): 4}),
@@ -692,15 +708,15 @@ def test_a_port_states_one_thing_its_advance_rule_follows_from() -> None:
         with refused("port-governs-unknown", error=DefinitionError, message=repr(governs)):
 
             class Governs(Kernel):
-                id = "test.advance.governs"
+                id = "test.pacing.governs"
                 input = InPort(tensor=TENSOR, sequence=SEQUENCE, governs=governs)
 
     class Governing(Kernel):
-        id = "test.advance.governing"
+        id = "test.pacing.governing"
         input = InPort(tensor=TENSOR, sequence=SEQUENCE)
         set = InPort(tensor=TENSOR, sequence=SEQUENCE, governs="input")
 
-    assert design_space(Governing()).set.advance is Advance.SELECTED
+    assert _rule(design_space(Governing()).set) is Follows.GROUPS
 
 
 def test_a_selector_s_group_is_the_governed_port_s_beats_over_its_own() -> None:
@@ -823,12 +839,12 @@ def test_a_stream_port_is_an_input_or_an_output() -> None:
     assert [bus.name for bus in point.output.physical_pins] == ["m_axis_output"]
 
 
-def test_a_port_class_states_neither_its_direction_nor_its_advance() -> None:
+def test_a_port_class_states_neither_its_direction_nor_its_pacing() -> None:
     """Both are its kind's: a port class overriding ``direction`` (an ``InPort``
     answering ``OUT``, so that its ABI's endpoint and its kernel's checks would disagree)
-    is refused when it is made (``port-direction``), as is one overriding ``advance``
-    (``port-advance``), or inheriting either from a class of its own; a kind derived from a
-    kind keeps both."""
+    is refused when it is made (``port-direction``), as is one overriding ``pacing`` or
+    ``follows`` (``port-pacing``), or inheriting either from a class of its own; a kind
+    derived from a kind keeps both."""
     with refused("port-direction", error=DefinitionError, message=r"Turned\.direction: "):
 
         class Turned(InPort):
@@ -836,19 +852,26 @@ def test_a_port_class_states_neither_its_direction_nor_its_advance() -> None:
             def direction(self) -> Direction:
                 return Direction.OUT
 
-    with refused("port-advance", error=DefinitionError, message=r"Sourcing\.advance: "):
+    with refused("port-pacing", error=DefinitionError, message=r"Sourcing\.follows: "):
 
         class Sourcing(InPort):
             @derived
-            def advance(self) -> Advance:
-                return Advance.SOURCED
+            def follows(self) -> Follows:
+                return Follows.READER
 
-    with refused("port-advance", error=DefinitionError, message=r"Selecting\.advance: "):
+    with refused("port-pacing", error=DefinitionError, message=r"Selecting\.follows: "):
 
         class Selecting(OutPort):
             @derived
-            def advance(self) -> Advance:
-                return Advance.SELECTED
+            def follows(self) -> Follows:
+                return Follows.GROUPS
+
+    with refused("port-pacing", error=DefinitionError, message=r"Owning\.pacing: "):
+
+        class Owning(OutPort):
+            @derived
+            def pacing(self) -> Pacing:
+                return Pacing.SCHEDULE
 
     class Facing:
         direction = Direction.OUT
@@ -864,7 +887,7 @@ def test_a_port_class_states_neither_its_direction_nor_its_advance() -> None:
     port = design_space(
         Kept(label="k", clocking=AXIS_CLOCKING, transport=AXIS, tensor=TENSOR, sequence=SEQUENCE)
     )
-    assert (port.direction, port.advance) == (Direction.OUT, Advance.STEPPED)
+    assert (port.direction, _rule(port)) == (Direction.OUT, Follows.PASS_THROUGH)
 
 
 def test_a_port_binds_exactly_one_presentation() -> None:
@@ -926,16 +949,16 @@ def test_a_port_s_relation_is_its_kind_s() -> None:
 
 
 def test_a_port_s_relation_is_a_literal() -> None:
-    """``sourced`` and ``governs`` are bound to literals (``port-advance-ambiguous``): the
-    advance rule is its declaration's."""
-    with refused("port-advance-ambiguous", error=DefinitionError, message="binds sourced to"):
+    """``sourced`` and ``governs`` are bound to literals (``port-pacing-ambiguous``): its
+    pacing is its declaration's."""
+    with refused("port-pacing-ambiguous", error=DefinitionError, message="binds sourced to"):
 
         class StoredFact(Kernel):
             id = "test.relation.stored_fact"
             memory: bool = Param(default=True)
             output = OutPort(tensor=TENSOR, sequence=SEQUENCE, sourced=memory)
 
-    with refused("port-advance-ambiguous", error=DefinitionError, message="binds governs to"):
+    with refused("port-pacing-ambiguous", error=DefinitionError, message="binds governs to"):
 
         class GovernsFact(Kernel):
             id = "test.relation.governs_fact"

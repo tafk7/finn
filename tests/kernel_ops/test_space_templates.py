@@ -308,10 +308,13 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
 # direction is its kind's, no Param, and its presentation reads no relation by direction
 # (-64 members, -104 constants at the baseline; -78, -125 after ``viable``), each kernel's
 # ports take its interface protocol's transport (+4, +6 non-port members); and when its presentation
-# reads its advance rule, to read a selector's group (+44, +12; +55, +16).
+# reads what paces its beats, to read a selector's group (+44, +12; +55, +16).
+# Then ports' ((624, 252), (740, 298)) and the totals ((1641, 294), (1805, 340)) became these
+# when that one readout became two, ``pacing`` and, for a port that follows another,
+# ``follows``: a placed port that follows another reads both (+12 members; +16).
 NONPORT_EVALUATED = ((1017, 42), (1065, 42))
-PORT_EVALUATED = ((624, 252), (740, 298))
-EVALUATED = ((1641, 294), (1805, 340))
+PORT_EVALUATED = ((636, 252), (756, 298))
+EVALUATED = ((1653, 294), (1821, 340))
 
 
 def _assert_evaluated(scopes: Scopes, stage: int) -> None:

@@ -51,7 +51,7 @@ from finn.harness.points import Covering, covering, refusal, refused_cases, reje
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.base import Kernel, PortPins
 from finn.kernels.configure import undecided
-from finn.kernels.laws import Advance
+from finn.kernels.laws import Pacing
 from finn.kernels.library import ModuleSpec
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.partition import Partition
@@ -235,11 +235,11 @@ def _ports_checked(point: Partition) -> int:
             output = transport.endpoint is Endpoint.INITIATOR
             width = transport.data_width if output else None
             assert side == Side.kernel(stream, label, width), where
-            # Its pace: a scheduled port's, over its kernel's one schedule; a port of
-            # another rule has none; an exposed port's is its member's port's.
+            # Its pace: a port its schedule paces has one, over its kernel's one schedule;
+            # a port that follows another has none; an exposed port's is its member's port's.
             paced = member.query(stream_port(type(member), port).pace)
             if own and isinstance(frame, StreamPort):
-                scheduled = member.field(frame.advance).get() is Advance.SCHEDULED
+                scheduled = member.field(frame.pacing).get() is Pacing.SCHEDULE
                 assert isinstance(paced, Available) is scheduled, where
                 if scheduled:
                     schedule = member.query(Kernel.schedule)

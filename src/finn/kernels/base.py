@@ -425,8 +425,8 @@ def _read_intake(cls: type[Kernel]) -> None:
 # What a constraint cannot see is refused when a kernel's class is made: a constraint reading
 # an inapplicable value is inapplicable, not refused. Each stream port its body declares, in
 # the body or in a Group of it, is an input or an output (its kind, InPort or OutPort, whose
-# relation's parameters are its own), binds exactly one presentation and states one advance
-# rule; a port of its body presents its kernel's one
+# relation's parameters are its own), binds exactly one presentation and states one thing its
+# pacing follows from; a port of its body presents its kernel's one
 # schedule, which is stated and never inapplicable, and governs a port its kernel has. A
 # placed port's presentation at a design point is the port's own constraint
 # (``StreamPort.presented``).
@@ -465,9 +465,9 @@ def _check_ports(cls: type[Kernel]) -> None:
     - binds no presentation or both, its kernel's ``schedule`` and a given ``sequence``, or a
       given sequence with a projection's parameters (``index``, ``lanes``, ``reduces``,
       ``holds``, ``closes``, ``reshaped``) (``port-presentation``);
-    - states more than one of what an advance rule follows from, its kernel's schedule, the
+    - states more than one of what its pacing follows from, its kernel's schedule, the
       port it governs or its memory, or states ``governs`` or ``sourced`` bound to other
-      than a literal (``port-advance-ambiguous``; CONTRACT.md § 3: a port states what it
+      than a literal (``port-pacing-ambiguous``; CONTRACT.md § 3: a port states what it
       is, one thing);
     - in its body, governs a port its kernel does not have (``port-governs-unknown``), or
       presents a schedule other than its kernel's one ``schedule``
@@ -518,16 +518,16 @@ def _check_ports(cls: type[Kernel]) -> None:
         stated += ["sourced"] if bound.get("sourced") is True else []
         if len(stated) > 1:
             raise refused(
-                "port-advance-ambiguous",
-                f"states {' and '.join(stated)}: a port's advance rule follows from one of "
+                "port-pacing-ambiguous",
+                f"states {' and '.join(stated)}: a port's pacing follows from one of "
                 "its kernel's schedule, the port it governs or its memory (sourced)",
             )
         governs, sourced = bound.get("governs"), bound.get("sourced", False)
         for key, value, kind in (("governs", governs, str), ("sourced", sourced, bool)):
             if value is not None and not isinstance(value, kind):
                 raise refused(
-                    "port-advance-ambiguous",
-                    f"binds {key} to {value!r}: its advance rule is its declaration's, a literal",
+                    "port-pacing-ambiguous",
+                    f"binds {key} to {value!r}: its pacing is its declaration's, a literal",
                 )
         if not own:
             continue

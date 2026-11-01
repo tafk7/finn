@@ -43,7 +43,14 @@ from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.abi import Clocking, Direction, Pin
 from finn.kernels.artifacts.module import Held
 from finn.kernels.base import PortPins
-from finn.kernels.laws import RATE_INTERVAL, Advance, Interval, TimedPace, TransportKind
+from finn.kernels.laws import (
+    RATE_INTERVAL,
+    Follows,
+    Interval,
+    Pacing,
+    TimedPace,
+    TransportKind,
+)
 from finn.kernels.port import (
     LoopEnds,
     PhysicalPort,
@@ -58,16 +65,16 @@ from finn.kernels.port import stream_pins as pins_of
 from finn.kernels.sides import Side
 from finn.kernels.values.domains import Integer, admit_element
 
-_KIND_MEMBERS = {"direction": "port-direction", "advance": "port-advance"}
+_KIND_MEMBERS = {"direction": "port-direction", "pacing": "port-pacing", "follows": "port-pacing"}
 
 
 def _refuse_kind_overridden(cls: type[StreamPort]) -> None:
-    """Refuse a port class that declares ``direction`` or ``advance`` (``port-direction``,
-    ``port-advance``), but for this module's ``StreamPort``, ``InPort`` and ``OutPort``:
-    each is its kind's, so the ABI, which reads ``direction``, and every check of a
-    kernel's class, which reads the kind (``finn.kernels.port.port_direction``), agree by
-    construction, and a port's advance rule follows from its declaration, checked when its
-    kernel's class is made."""
+    """Refuse a port class that declares ``direction``, ``pacing`` or ``follows``
+    (``port-direction``, ``port-pacing``), but for this module's ``StreamPort``, ``InPort``
+    and ``OutPort``: each is its kind's, so the ABI, which reads ``direction``, and every
+    check of a kernel's class, which reads the kind (``finn.kernels.port.port_direction``),
+    agree by construction, and a port's pacing follows from its declaration, checked when
+    its kernel's class is made."""
     for base in cls.__mro__:
         if base.__module__ == __name__ or base in StreamPort.__mro__:
             continue
@@ -92,7 +99,8 @@ class StreamPort(Space):
 
     Its header: its kind, the class it is declared by, from which its ``direction``
     (``finn.kernels.artifacts.abi.Direction``, ``IN`` or ``OUT``, a read-only derived value
-    no port class overrides, ``port-direction``, nor its ``advance``, ``port-advance``)
+    no port class overrides, ``port-direction``, nor its ``pacing`` or ``follows``,
+    ``port-pacing``)
     and its bus role follow (``finn.kernels.port.stream_endpoint``); a ``StreamPort`` itself
     is neither, ``INOUT``, and refused (``port-direction``). Its tensor and the elements it
     admits (``admits``); its ``transport`` kind (``finn.kernels.laws``: ``AXIS``, ``NATIVE``,
@@ -117,10 +125,11 @@ class StreamPort(Space):
 
     Its relation, with a given sequence, is its kind's: an input naming the sets another
     port's groups are made from (``InPort.governs``, a selector), a memory's output
-    (``OutPort.sourced``); its advance rule follows (``advance``, its firing relation, L2-L5).
-    Its readouts: ``placed``, ``element``, ``stream``, ``advance``, ``pace``, ``timed_pace``,
-    ``group`` (a selector's), ``width``, ``side``, ``binds`` and ``access`` (an input with an
-    index reads its tensor to bind its kernel's extents), derived;
+    (``OutPort.sourced``); what paces its beats follows (``pacing``: its kernel's schedule,
+    or another port it ``follows``; the pacing laws, L2-L5).
+    Its readouts: ``placed``, ``element``, ``stream``, ``pacing``, ``follows``, ``pace``,
+    ``timed_pace``, ``group`` (a selector's), ``width``, ``side``, ``binds`` and ``access``
+    (an input with an index reads its tensor to bind its kernel's extents), derived;
     ``stream_pins``, a view. A placed port's presentation is accepted and carried, or its
     design point is refused (``presented``).
     """
@@ -180,13 +189,22 @@ class StreamPort(Space):
         return True if policy is None else policy.check(self.element.dtype)
 
     @derived
-    def advance(self) -> Advance:
-        """Its advance rule, by how it is declared: scheduled, a projection of its kernel's
-        schedule; else stepped, a stage's side. An input that ``governs`` another port is
-        selected (``InPort``), a ``sourced`` output sourced (``OutPort``)."""
+    def pacing(self) -> Pacing:
+        """What paces its beats, by how it is declared: it owns its pacing, ``SCHEDULE``, as a
+        projection of its kernel's schedule; else it ``FOLLOWS`` another port (``follows``)."""
         if self.schedule is not None:
-            return Advance.SCHEDULED
-        return Advance.STEPPED
+            return Pacing.SCHEDULE
+        return Pacing.FOLLOWS
+
+    @derived
+    def follows(self) -> Follows | Inapplicable:
+        """How it follows another port, a port that does not own its pacing only: a stage's
+        side, ``PASS_THROUGH``. An input that ``governs`` another port follows its
+        ``GROUPS`` (``InPort``), a ``sourced`` output its ``READER`` (``OutPort``). A port
+        its schedule paces follows none."""
+        if self.schedule is not None:
+            return Inapplicable()
+        return Follows.PASS_THROUGH
 
     @derived
     def pace(self) -> Pace | Inapplicable:
@@ -286,7 +304,7 @@ class StreamPort(Space):
             return True
         _ = self.stream
         _ = self.width
-        if self.advance is Advance.SELECTED:
+        if self.pacing is Pacing.FOLLOWS and self.follows is Follows.GROUPS:
             _ = self.group
         return True
 
@@ -393,8 +411,8 @@ class InPort(StreamPort):
     """An input stream port (``StreamPort``): its stream enters its kernel, a target (AXIS
     slave, ``s_axis_*``). An input's own: the element it states where its tensor's is not
     its (``dtype``; an idle input's), and its relation with a given sequence, the port whose
-    beats it selects (``governs``, a selector: its advance is selected, its ``group`` the
-    governed port's beats each of its beats names the set of). It reads its tensor
+    beats it selects (``governs``, a selector: it follows that port's groups, its ``group``
+    the governed port's beats each of its beats names the set of). It reads its tensor
     to bind its kernel's extents where it has an index (``binds``, ``access``)."""
 
     dtype: QONNXDataType | None = Param(default=None)
@@ -420,14 +438,14 @@ class InPort(StreamPort):
         return tensor.element
 
     @derived
-    def advance(self) -> Advance:
-        """Scheduled, a projection of its kernel's schedule; selected, a selector, which
-        ``governs`` the port whose groups it names; else stepped, a stage's side."""
+    def follows(self) -> Follows | Inapplicable:
+        """None where its schedule paces it; ``GROUPS``, a selector, which ``governs`` the
+        port whose groups it names; else ``PASS_THROUGH``, a stage's side."""
         if self.schedule is not None:
-            return Advance.SCHEDULED
+            return Inapplicable()
         if self.governs is not None:
-            return Advance.SELECTED
-        return Advance.STEPPED
+            return Follows.GROUPS
+        return Follows.PASS_THROUGH
 
     @derived
     def group(self) -> int | Rejected | Inapplicable:
@@ -461,8 +479,8 @@ class OutPort(StreamPort):
     """An output stream port (``StreamPort``): its stream leaves its kernel, an initiator
     (AXIS master, ``m_axis_*``). Its element is its tensor's. An output's own: its relation
     with a given sequence, ``sourced`` (a memory's output, each beat its stored value at its
-    position of its consumer's order, issued whenever its consumer takes one: its advance is
-    sourced, L5), and its width on the side it gives a channel."""
+    position of its reader's order, issued whenever its reader takes one: it follows its
+    reader, L5), and its width on the side it gives a channel."""
 
     sourced: bool = Param(default=False)
 
@@ -471,14 +489,14 @@ class OutPort(StreamPort):
         return Direction.OUT
 
     @derived
-    def advance(self) -> Advance:
-        """Scheduled, a projection of its kernel's schedule; sourced, a memory's output,
-        ``sourced``; else stepped, a stage's side."""
+    def follows(self) -> Follows | Inapplicable:
+        """None where its schedule paces it; ``READER``, a memory's output, ``sourced``; else
+        ``PASS_THROUGH``, a stage's side."""
         if self.schedule is not None:
-            return Advance.SCHEDULED
+            return Inapplicable()
         if self.sourced:
-            return Advance.SOURCED
-        return Advance.STEPPED
+            return Follows.READER
+        return Follows.PASS_THROUGH
 
     @derived
     def side(self) -> Side | Inapplicable:
