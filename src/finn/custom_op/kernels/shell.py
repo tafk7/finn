@@ -42,7 +42,8 @@ and refuses a design never verified or changed since. Simulation and elaboration
 bind. The cut makes a body's channel choices (``make_cut_choices``) on its core in its
 shell, which alone holds both sides of a boundary channel, by the channel's policies
 (``Channel.policies``), and writes them with ``persist``. Each is given the core's name,
-its node's (``finn.custom_op.partition.DataflowCore``), which its module's name leaves out.
+its node's (``finn.custom_op.partition.DataflowCore``), which names its refusals; its module's
+name leaves it out.
 """
 
 from __future__ import annotations

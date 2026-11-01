@@ -21,9 +21,8 @@ edge port aliasing anything but a member channel's outer port is refused when th
 made (``core-edge-unchanneled``, ``finn.kernels.base``): where a stream leaves a module, the
 boundary rule applies, which the channel's outer port presents.
 
-**Its facts**: its name (``name``: the node's, which its module's name leaves out) and, for
-a slice, the port beside each edge channel at a frozen neighbour, read at the
-neighbour's stored choices (``<channel>-frozen``, ``finn.kernels.channels.Neighbours``: its
+**Its facts**: for a slice, the port beside each edge channel at a frozen neighbour, read at
+the neighbour's stored choices (``<channel>-frozen``, ``finn.kernels.channels.Neighbours``: its
 stream pins and its pace), from which its class answers that channel's neighbours and hops
 as it does a member's. **Its class facts**: the order its module places its members in
 (``Kernel.instance_order``), its keyed names (``names``: each member's graph name and each
@@ -75,7 +74,6 @@ from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.search import Key, dotted
 from finn.core.space import (
     BrokenRule,
-    Param,
     Rejected,
     Unresolved,
     bind,
@@ -327,8 +325,6 @@ class DataflowCoreKernel(Kernel):
     # (the module docstring), the composer's.
     names: ClassVar[Names] = Names({}, {})
     policy_owners: ClassVar[Mapping[str, Owner]] = MappingProxyType({})
-
-    name: str = Param()
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         _install_edge(cls)
