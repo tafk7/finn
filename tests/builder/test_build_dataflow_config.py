@@ -140,6 +140,7 @@ def test_a_configuration_holds_through_json() -> None:
         "board": "Ultra96",
         "part": None,
         "shell": "pynq",
+        "runtime": None,
     }
     # The settings beside the fields, as stated; the list as written; no base directory.
     assert {name: stated[name] for name in SETTINGS} == SETTINGS
@@ -907,6 +908,20 @@ def test_a_configuration_is_refused_with_every_rejection_at_once(tmp_path: Path)
     assert manifest["plan"] is not None
     log = (tmp_path / "output" / "build_dataflow.log").read_text()
     assert log.count("configuration.strategies: setting-unread: ") == 1
+
+
+def test_a_runtime_the_shell_does_not_offer_refuses_the_configuration(tmp_path: Path) -> None:
+    """The build's runtime resolves with its target, before the first step: one its shell
+    does not offer refuses the configuration, and the manifest states no target."""
+    target = {"period_ns": 5.0, "board": "Ultra96", "shell": "pynq", "runtime": "vrt"}
+    stated = {**STATED, "output_dir": str(tmp_path / "output"), "target": target}
+    cfg = DataflowBuildConfig.from_json(json.dumps(stated))
+    assert cfg.target.runtime == "vrt"
+    owner = "configuration.target.runtime"
+    with refused("runtime-not-offered", error=ConfigurationRefused, owner=owner):
+        build_dataflow_cfg(str(tmp_path / "absent.onnx"), cfg)
+    manifest = json.loads((tmp_path / "output" / MANIFEST_FILE).read_text())
+    assert manifest["identity"]["target"] is None
 
 
 def test_a_build_directory_states_its_configuration(tmp_path: Path) -> None:

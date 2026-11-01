@@ -45,7 +45,7 @@ from finn.platform.declarations import (
     load,
 )
 from finn.platform.refusal import TargetRefused
-from finn.platform.resolve import resolve_target
+from finn.platform.resolve import origins, resolve_runtime, resolve_target
 from finn.platform.shells import MoverKind, Versions, mover_offer, shell_row, shell_rows
 from finn.transformation.kernels.cut import MakeCutChoices
 
@@ -778,8 +778,9 @@ def test_a_made_up_platform_declares_checks_and_resolves_with_no_change_to_finn(
     """``support.example_platform`` declares a board, a linker, a runtime, a moved mover
     kind and a shell based on ``pynq``: they check, a build's target resolves on them, a
     core is placed in the shell, its boundary moved by FINN's mover at the shell's cap, and
-    the command shows them, each with its origin. No core is linked or run through it, as
-    FINN calls no linker or runtime through its declarations yet."""
+    the command shows them, each with its origin, and a build on it records where each
+    declaration it stands on comes from. No core is linked or run through it, as FINN
+    calls no linker or runtime through its declarations yet."""
     found = declarations()
     assert check(found) == []
     origin = f"{PATH_SETTING} {example_on_path}"
@@ -790,6 +791,19 @@ def test_a_made_up_platform_declares_checks_and_resolves_with_no_change_to_finn(
         "Example-ZU3",
         "xczu3eg-sbva484-1-e",
     )
+    selected = resolve_runtime("example")
+    assert selected == "example-run"
+    # Its own declarations from its directory, the shell it is based on and the mover kind
+    # it offers from FINN's.
+    own = {"kind": "path", "file": str(example_on_path / "platform.toml")}
+    assert {name: each.record() for name, each in origins(target, selected).items()} == {
+        "shells.example": own,
+        "shells.pynq": {"kind": "finn"},
+        "boards.Example-ZU3": own,
+        "linkers.example-link": own,
+        "runtimes.example-run": own,
+        "movers.iodma_hls": {"kind": "finn"},
+    }
     row = shell_row("example", "Example-ZU3")
     pynq = shell_row("pynq", "Ultra96")
     assert (row.linker, row.runtimes, row.board_facts) == (

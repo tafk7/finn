@@ -526,7 +526,8 @@ transcript under `logs/<step>/` (`<run>.stdout.log`, `.stderr.log`, written as t
 tool runs), the intermediate models, and the outputs its steps made. `report/build.json` is
 the build's manifest, the index of the run a program reads after the exit code, and
 never the log: the build's identity (FINN's revision where it is known, the
-toolchain's selection, the target and the model), what checking the
+toolchain's selection, the target with its shell's linker, the runtime and where each
+declaration it stands on is declared, and the model), what checking the
 configuration found (its rejections and the limitations warned of), the plan (the steps
 it runs, and each setting with its value or default and its readers), each step with
 its status (`running` while it runs, then
@@ -624,7 +625,9 @@ the configuration states no `toolchain`):
 `target` states the clock period, a `board` or a `part` (a board gives its part; a
 part beside it is an assertion) and the `shell`: `ip` unless one is stated, the
 packaged IP its user integrates, whose target states the part alone; `pynq`, the
-Zynq block design for a board.
+Zynq block design for a board. It may name the `runtime` the build's driver runs on, of
+those its shell offers (`pynq` offers `pynq`); unstated, it is the shell's first, and a
+runtime the shell does not offer is refused (`runtime-not-offered`).
 
 `boundary` states, for the `ip` shell, what its integrator presents or takes at each
 port of the partition, by the partition's port names (`s_axis_<i>` for its i-th input,

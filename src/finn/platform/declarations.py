@@ -106,6 +106,17 @@ class Origin:
             return f"{PATH_SETTING} {self.file.parent}"
         return str(self.file)
 
+    def record(self) -> dict[str, str | None]:
+        """It as a build records it: its ``kind``, with the package and its version for a
+        package's (``None`` where the distribution states none), the file for a
+        directory's or a caller's, and nothing more for FINN's (the build records FINN's
+        revision)."""
+        if self.kind == FINN:
+            return {"kind": FINN}
+        if self.kind == PACKAGE:
+            return {"kind": PACKAGE, "package": self.package, "version": self.version}
+        return {"kind": self.kind, "file": str(self.file)}
+
 
 @dataclass(frozen=True, kw_only=True)
 class Linker:

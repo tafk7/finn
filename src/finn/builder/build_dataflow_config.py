@@ -111,9 +111,11 @@ class DataflowBuildConfig:
     #: The directory the build writes its outputs and reports in.
     output_dir: str
 
-    #: The target: a clock period, a board or a part (a board implies its part), and a
-    #: shell, ``ip`` unless given. In JSON:
-    #: {"period_ns": 5.0, "board": "Ultra96", "part": null, "shell": "pynq"}.
+    #: The target: a clock period, a board or a part (a board implies its part), a
+    #: shell, ``ip`` unless given, and the runtime the build runs on its board, the
+    #: shell's first unless given (one it does not offer is refused). In JSON:
+    #: {"period_ns": 5.0, "board": "Ultra96", "part": null, "shell": "pynq",
+    #: "runtime": null}.
     target: TargetRequest
 
     #: What the build states of the partition's boundary, by the partition's port names
@@ -246,6 +248,12 @@ class DataflowBuildConfig:
         """The build's target, resolved on first use; its ``TargetRefused`` refuses the
         configuration."""
         return self.target.resolve()
+
+    @cached_property
+    def resolved_runtime(self) -> str | None:
+        """The runtime the build runs on its board, resolved on first use (``None`` on a
+        shell that offers none); its ``TargetRefused`` refuses the configuration."""
+        return self.target.resolve_runtime()
 
     @cached_property
     def prepared_toolchain(self) -> Toolchain:

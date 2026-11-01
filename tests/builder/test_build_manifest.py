@@ -116,6 +116,9 @@ def test_a_completed_build_is_indexed_step_by_step(tmp_path):
         "shell": "ip",
         "board": None,
         "period_ns": 10.0,
+        "linker": None,
+        "runtime": None,
+        "origins": {"shells.ip": {"kind": "finn"}},
     }
     assert set(identity["toolchain"]) == {
         "settings",

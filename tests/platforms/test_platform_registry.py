@@ -29,7 +29,7 @@ from finn.platform.catalog import part
 from finn.platform.declarations import declarations
 from finn.platform.refusal import TargetRefused
 from finn.platform.request import TargetRequest
-from finn.platform.resolve import refuse_drift, resolve_target
+from finn.platform.resolve import origins, refuse_drift, resolve_runtime, resolve_target
 from finn.platform.shells import MOVED, MoverKind, Offer, shell_row, shell_rows
 from finn.platform.target import Target
 from finn.shells.pynq.linker import PROCESSORS
@@ -429,6 +429,60 @@ def test_a_request_resolves_as_the_resolver_does() -> None:
     assert pynq.resolve() == resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
     with refused("board-required", error=TargetRefused):
         TargetRequest(period_ns=5.0, part="xczu3eg-sbva484-1-e", shell="pynq").resolve()
+
+
+def test_a_build_runs_on_the_runtime_its_shell_offers_first_unless_it_names_another() -> None:
+    """The runtime is the build's, not the target's: a request resolves the same target
+    with or without it, and its shell's first runtime (``pynq``'s ``pynq``) unless it names
+    one the shell offers; ``ip`` offers none."""
+    pynq = TargetRequest(period_ns=5.0, board="Ultra96", shell="pynq")
+    named = TargetRequest(period_ns=5.0, board="Ultra96", shell="pynq", runtime="pynq")
+    assert pynq.resolve_runtime() == named.resolve_runtime() == "pynq"
+    assert named.resolve() == pynq.resolve()
+    assert resolve_runtime("ip") is None
+    assert TargetRequest(period_ns=5.0, part="xczu3eg-sbva484-1-e").resolve_runtime() is None
+
+
+def test_a_build_on_pynq_stands_on_finns_declarations_alone() -> None:
+    """Where each declaration a build stands on is declared (``origins``): pynq's shell, the
+    board, its linker, the runtime and its mover kind, each FINN's; on ``ip`` its shell."""
+    target = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
+    assert {name: str(each) for name, each in origins(target, "pynq").items()} == {
+        "shells.pynq": "FINN",
+        "boards.Ultra96": "FINN",
+        "linkers.vivado-block-design": "FINN",
+        "runtimes.pynq": "FINN",
+        "movers.iodma_hls": "FINN",
+    }
+    ip = resolve_target(board="Ultra96", period_ns=5.0)
+    assert list(origins(ip, None)) == ["shells.ip"]
+
+
+@pytest.mark.parametrize(
+    "shell, board, message",
+    [
+        (
+            "pynq",
+            "Ultra96",
+            "^the 'pynq' shell does not offer the runtime 'vrt'; it offers 'pynq'$",
+        ),
+        (
+            "ip",
+            None,
+            "^the 'ip' shell does not offer the runtime 'vrt'; it offers no runtime: "
+            "leave the runtime unstated$",
+        ),
+    ],
+)
+def test_a_runtime_the_shell_does_not_offer_is_refused_with_the_target(
+    shell: str, board: str | None, message: str
+) -> None:
+    request = TargetRequest(
+        period_ns=5.0, board=board, part="xczu3eg-sbva484-1-e", shell=shell, runtime="vrt"
+    )
+    owner = "configuration.target.runtime"
+    with refused("runtime-not-offered", owner=owner, message=message, error=TargetRefused):
+        request.resolve()
 
 
 # -- drift -------------------------------------------------------------------------------
