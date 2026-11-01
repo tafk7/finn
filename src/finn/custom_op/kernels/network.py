@@ -100,7 +100,7 @@ resources (its members', its movers' and its static region's), and the cut's cho
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, TypeVar, cast
 
 from onnx import NodeProto
@@ -667,6 +667,35 @@ def bound_from(
         return found
 
 
+def bound_over(
+    bodies: Sequence[tuple[ModelWrapper, str]],
+    *,
+    made: Callable[[Sequence[DataflowCoreDeclaration]], K],
+    offer: MoverOffer | None = None,
+) -> Bound[K]:
+    """Several cores in one design space: each body ``(model, name)``'s KernelOp nodes
+    declared as ``network`` declares them, named ``name`` (its node's), its boundary stated
+    by the mover ``offer`` where one is offered; the design space ``made`` makes of their
+    declarations, in order (a build's cores in their shell,
+    ``finn.custom_op.kernels.shell.build_shell``), every body's stored choices bound on it.
+    A body's staleness is its own point's to refuse (``bound_from``); a refusal of the
+    composer's is raised as the graph's, named by the cores' names."""
+    reads: list[_Read] = []
+    for model, name in bodies:
+        with reading(model):
+            reads.append(_graph(model, list(model.graph.node), name, offer))
+    declared = [read.declared for read in reads]
+    try:
+        point = made(declared)
+    except DataflowCoreRefused as error:
+        names = ", ".join(each.name for each in declared)
+        message = f"{names}: " + "; ".join(map(str, error.findings))
+        raise KernelOpError(message, findings=error.findings) from error
+    stored = {key: value for read in reads for key, value in read.stored.items()}
+    stray = {key: value for read in reads for key, value in read.stray.items()}
+    return bound(point, stored, stray=stray)
+
+
 # -- writing choices back -----------------------------------------------------------------
 
 
@@ -778,6 +807,7 @@ def _channel_write(
 
 __all__ = [
     "bound_from",
+    "bound_over",
     "composed",
     "core",
     "declaration",

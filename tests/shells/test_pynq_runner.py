@@ -55,6 +55,7 @@ from finn.kernels.artifacts.ipxact import vlnv
 from finn.kernels.artifacts.module import Leaf
 from finn.platform.resolve import resolve_target
 from finn.shells.integration import RUNTIME_SCHEMA, Integration, IpRef, describe
+from finn.shells.pynq import linker as pynq_linker
 from finn.shells.pynq import runner as pynq_runner
 from finn.shells.pynq.driver import (
     DRIVER_DIR,
@@ -70,7 +71,6 @@ from finn.shells.pynq.linker import (
     collect,
     linked_row,
     project_script,
-    report as report_of,
     unit_bases,
 )
 from finn.shells.pynq.runner import (
@@ -595,7 +595,7 @@ def test_the_bitfile_build_is_a_transformation_of_the_parent_graph(
     assert None not in ips.values()
     built_ips = {name: IpRef(ip["vlnv"], tuple(ip["repositories"])) for name, ip in ips.items()}
     described = describe(parent)
-    assert designed == report_of(described.packaged(built_ips))
+    assert designed == pynq_linker.report(described.packaged(built_ips))
     # The runtime file: its layout, the description as a runtime reads it (no unit's IP),
     # each placed unit's base and the main clock as the routed design delivers it.
     integrated = json.loads((report / "integration.json").read_text())

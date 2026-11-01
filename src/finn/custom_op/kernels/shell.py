@@ -28,6 +28,11 @@ node's name. Every row composes one, the ``ip`` row's with no movers and no limi
   static region's are out of context (``SHELL_CHARACTERISED``), which overstates the placed
   shell. The ``ip`` shell has neither, so its resources are its core's.
 
+``build_shell`` is the build's shell: every DataflowCore of a parent graph in one shell of
+their target, whose rules read every unit; the integration description reads its movers and
+its rules (``finn.shells.integration.describe``), each core's own facts from its
+``configured_network``.
+
 ``configured_network`` is a core as emission builds it (``Configured``: its composition in
 its shell, its module and its cycles a frame), bound only: a stored choice it dropped as
 stale, a rule its stored choices break (a member's, a mover's, or a budget of its shell's),
@@ -52,7 +57,7 @@ from typing import TYPE_CHECKING, Any
 from finn.core.graph.annotations.outputs import OUTPUT_VERIFIED
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.errors import KernelOpError
-from finn.core.graph.partition import design_digest, search_record
+from finn.core.graph.partition import core_bodies, design_digest, search_record
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.search import Key, dotted
 from finn.core.space import (
@@ -65,6 +70,7 @@ from finn.core.space import (
 )
 from finn.custom_op.kernels.network import (
     bound_from,
+    bound_over,
     composed,
     declaration,
     persist,
@@ -178,6 +184,75 @@ def shell_space(model: ModelWrapper, name: str) -> ShellKernel:
     offer = row_offer(row)
     declared = declaration(model, model.graph.node, name=name, offer=offer)
     return composed(declared, _in_shell(row, offer))
+
+
+def build_shell(model: ModelWrapper) -> ShellKernel:
+    """Every DataflowCore of the build's parent graph ``model`` (``core_bodies``, in its
+    order) in one shell of their target (``shell``), each body's core declared as
+    ``shell_point`` declares it, named by its node, every body's stored choices bound
+    (``bound_over``): the movers numbered across the cores and the shell's rules over every
+    unit. Cores of different targets (``cores-targets-differ``), a stored choice dropped as
+    stale (``choices-stale``) and a shell over its row's limits ("refused by the <shell>
+    shell", each broken limit a finding) are refused, named. Each core's own facts, its
+    module and its edge, are its ``configured_network``'s."""
+    bodies = core_bodies(model)
+    targets = {node.name: read_target(body) for node, body, _ in bodies}
+    first = next(iter(targets.values()))
+    if any(target != first for target in targets.values()):
+        raise KernelOpError.refused(
+            "cores-targets-differ",
+            "build_shell",
+            "the cores' targets differ: "
+            + "; ".join(f"{name}: {target}" for name, target in targets.items())
+            + "; a build's cores share its target",
+        )
+    row = body_row(bodies[0][1])
+    offer = row_offer(row)
+    facts = row_facts(row)
+    label = ", ".join(targets)
+    held = bound_over(
+        [(body, node.name) for node, body, _ in bodies],
+        made=lambda declared: shell(declared, row=facts, offer=offer),
+        offer=offer,
+    )
+    _refuse_stale(held, label)
+    point = held.point
+    names = point.names
+    over_limits = tuple(
+        names.local(SHELL, finding)
+        for finding in refusal(inspection.validity(getattr(point, SHELL)))
+    )
+    if over_limits:
+        raise KernelOpError(
+            f"{label}: refused by the {row.shell!r} shell: " + "; ".join(map(str, over_limits)),
+            findings=over_limits,
+        )
+    return point
+
+
+def _refuse_stale(held: Bound[Any], label: str) -> None:
+    """Refuse ``held``'s stored choices the bind dropped as stale, by key
+    (``choices-stale``), its core or cores named ``label``."""
+    if not held.stale:
+        return
+    keys = tuple(held.stale)
+    message = f"{label}: stale choices, refused by the partition: " + "; ".join(
+        stale_text(key, found) for key, found in held.stale.items()
+    )
+    raise KernelOpError(
+        message,
+        keys,
+        findings=(
+            Finding(
+                FindingKind.REJECTION,
+                "choices-stale",
+                "configured_network",
+                message,
+                (("keys", keys), ("node", label)),
+                tuple(finding for found in held.stale.values() for finding in found),
+            ),
+        ),
+    )
 
 
 def _together(results: Iterable[QueryResult[Any]]) -> Rejected | Unresolved:
@@ -371,25 +446,7 @@ def configured_network(model: ModelWrapper, name: str) -> Configured:
     label = name
     row = body_row(model)
     held = shell_point(model, name)
-    if held.stale:
-        keys = tuple(held.stale)
-        message = f"{label}: stale choices, refused by the partition: " + "; ".join(
-            stale_text(key, found) for key, found in held.stale.items()
-        )
-        raise KernelOpError(
-            message,
-            keys,
-            findings=(
-                Finding(
-                    FindingKind.REJECTION,
-                    "choices-stale",
-                    "configured_network",
-                    message,
-                    (("keys", keys), ("node", label)),
-                    tuple(finding for found in held.stale.values() for finding in found),
-                ),
-            ),
-        )
+    _refuse_stale(held, label)
     bound = CoreComposition(held.point)
     open_keys = bound.undecided()
     if open_keys:
@@ -752,6 +809,7 @@ __all__ = [
     "CutChoices",
     "ShellResources",
     "body_row",
+    "build_shell",
     "configured_network",
     "core_grouping",
     "impossible_choices",

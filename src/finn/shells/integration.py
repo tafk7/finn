@@ -69,22 +69,25 @@ from typing import TYPE_CHECKING, Any, Protocol
 from finn.core.graph.annotations.outputs import OUTPUT_IP, OUTPUT_VLNV
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.facts import known_shape
-from finn.core.graph.partition import partition_body
+from finn.core.graph.partition import core_bodies
 from finn.core.reporting.findings import Finding, FindingKind, Refusal
 from finn.core.space import Available
 from finn.custom_op.kernels.shell import (
+    Configured,
+    build_shell,
     configured_network,
     core_grouping,
-    mover_contracts,
     refuse_unverified,
 )
 from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.artifacts.abi import Bus, StandardProtocol, bus_window
 from finn.kernels.artifacts.module import Leaf, Registers
 from finn.kernels.artifacts.unit import CONTROL, unsupported
+from finn.kernels.composer import member_name
 from finn.kernels.library import library_module
 from finn.kernels.movers import MoverContract
-from finn.platform.shells import placed_offer
+from finn.kernels.shell import ShellKernel
+from finn.platform.shells import Offer, placed_offer
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
@@ -432,14 +435,16 @@ def mover_pins(unit: str, module: Leaf) -> dict[str, Bus]:
 
 
 def describe(model: ModelWrapper) -> Integration:
-    """The integration description of the build's parent graph ``model``: its partition's
-    network, as emission builds it (``configured_network``), the design its check verified
-    (``refuse_unverified``), in its shell (see the module docstring)."""
-    node, body, _ = partition_body(model)
-    refuse_unverified(body, node.name)
-    point = configured_network(body, node.name)
-    boundary = point.network.boundary
-    row = point.row
+    """The integration description of the build's parent graph ``model``: every
+    DataflowCore of it (``core_bodies``), in its order, each the design its check verified
+    (``refuse_unverified``), its network as emission builds it (``configured_network``),
+    all in the build's shell (``build_shell``: its movers named across the cores, its rules
+    over every unit), in its shell (see the module docstring)."""
+    configured = []
+    for node, body, _ in core_bodies(model):
+        refuse_unverified(body, node.name)
+        configured.append((node, body, configured_network(body, node.name)))
+    row = configured[0][2].row
     if row.linker is None:
         raise IntegrationError(
             "integration-unexported",
@@ -448,13 +453,63 @@ def describe(model: ModelWrapper) -> Integration:
         )
     least = 1 if row.control is None else row.control.least_window
     offer = placed_offer(row)
-    contracts = mover_contracts(point.network)
-    contracted = dict(contracts.value) if isinstance(contracts, Available) else {}
+    whole = build_shell(model)
+    placed = {edge: unit for unit, edge in type(whole).movers.items()}
+    cores: list[Core] = []
+    units: list[Unit] = []
+    connections: list[Connection] = []
+    endpoints: list[Endpoint] = []
+    for node, body, point in configured:
+        core, core_units, core_connections, core_endpoints = _core(
+            node.name, body, point, whole, placed, offer, least
+        )
+        cores.append(core)
+        units += core_units
+        connections += core_connections
+        endpoints += core_endpoints
+    target = read_target(configured[0][1])
+    edges = [edge for core in cores for edge in (*core.inputs, *core.outputs)]
+    return Integration(
+        row=(row.shell, row.board),
+        linker=row.linker,
+        runtime=row.runtimes[0] if row.runtimes else None,
+        part=target.part,
+        period_ns=target.platform.period_ns,
+        cores=tuple(cores),
+        units=tuple(units),
+        connections=tuple(connections),
+        bindings=tuple(
+            Binding(f"{each.unit}/{mover_pins(each.unit, each.module)['memory'].name}", each.target)
+            for each in edges
+        ),
+        endpoints=tuple(endpoints),
+        clocks=tuple(ClockPin(unit.name, CLOCK, RESET, MAIN) for unit in units),
+    )
+
+
+def _core(
+    name: str,
+    body: ModelWrapper,
+    point: Configured,
+    whole: ShellKernel,
+    placed: Mapping[tuple[str, str], str],
+    offer: Offer | None,
+    least: int,
+) -> tuple[Core, list[Unit], list[Connection], list[Endpoint]]:
+    """Core ``name`` of the build (its body ``body``, its network as emission builds it,
+    ``point``) in the build's shell ``whole``, whose movers serve each edge port
+    (``placed``: by the core's member and the port): the core with its edge's supplies and
+    deliveries, its units (its input movers', its own, its output movers'), its movers'
+    streams to its edge ports, and its endpoints, each mover's control bus at offset 0 of
+    ``least`` bytes at least."""
+    row = point.row
     inputs: list[Supply] = []
     outputs: list[Delivery] = []
-    for tensor, port in boundary:
-        unit = point.network.mover(tensor)
-        if unit is None or unit not in contracted or offer is None:
+    for tensor, port in point.network.boundary:
+        unit = placed.get((member_name(name), port))
+        member = None if unit is None else getattr(whole, unit)
+        contract = None if member is None else member.query(type(member).contract)
+        if unit is None or member is None or offer is None or not isinstance(contract, Available):
             raise IntegrationError(
                 "mover-absent",
                 "describe",
@@ -468,34 +523,29 @@ def describe(model: ModelWrapper) -> Integration:
                 "describe",
                 f"{tensor} ({port}): the partition states no shape for it",
             )
-        contract = contracted[unit]
-        edge = (Supply if contract.direction == "in" else Delivery)(
+        stated: MoverContract = contract.value
+        edge = (Supply if stated.direction == "in" else Delivery)(
             port=port,
             tensor=tensor,
             shape=shape,
-            element=contract.element,
+            element=stated.element,
             kind=offer.kind,
             unit=unit,
             target=row.memory[0].name,
-            contract=contract,
-            module=library_module(point.network.member(point.network.placed(unit))),
+            contract=stated,
+            module=library_module(member),
         )
         if isinstance(edge, Supply):
             inputs.append(edge)
         else:
             outputs.append(edge)
-    core = Core(name=node.name, inputs=tuple(inputs), outputs=tuple(outputs))
+    core = Core(name=name, inputs=tuple(inputs), outputs=tuple(outputs))
     buses = [
         pin
         for pin in point.module.abi.pins
         if isinstance(pin, Bus) and pin.protocol is StandardProtocol.AXILITE
     ]
     grouping = core_grouping(point.network)
-    # Each bus is presented by its member's instance, named by the member's node.
-    owners = {member: name for name, member in point.network.names.members.items()}
-    presenting = {
-        each.port: owners[each.instance.split(".")[0]] for each in point.module.fragment.exports
-    }
     for bus in buses if grouping is not None else ():
         reason = unsupported(bus)
         if reason is not None:
@@ -504,6 +554,11 @@ def describe(model: ModelWrapper) -> Integration:
                 "describe",
                 f"{core.name}: {reason}; its unit's grouper takes 32-bit AXI-Lite targets",
             )
+    # Each bus is presented by its member's instance, named by the member's node.
+    owners = {member: graph for graph, member in point.network.names.members.items()}
+    presenting = {
+        each.port: owners[each.instance.split(".")[0]] for each in point.module.fragment.exports
+    }
     packaged, packaged_ip = body.get(OUTPUT_VLNV), body.get(OUTPUT_IP)
     ip = None if packaged is None or packaged_ip is None else IpRef(packaged, (packaged_ip,))
     pins = {each.unit: mover_pins(each.unit, each.module) for each in (*inputs, *outputs)}
@@ -517,8 +572,8 @@ def describe(model: ModelWrapper) -> Integration:
         if grouping is None
         else Unit(name=core.name, kind=CORE, ip=None, window=grouping[1])
     )
-    units = (*map(mover, inputs), placed_core, *map(mover, outputs))
-    connections = (
+    units = [*map(mover, inputs), placed_core, *map(mover, outputs)]
+    connections = [
         *(
             Connection(
                 f"{each.unit}/{pins[each.unit]['stream'].name}",
@@ -535,24 +590,25 @@ def describe(model: ModelWrapper) -> Integration:
             )
             for each in outputs
         ),
-    )
+    ]
+    contracts = {each.unit: each.contract for each in (*inputs, *outputs)}
     endpoints: list[Endpoint] = []
-    for placed in units:
-        if placed.kind != CORE:
-            control = pins[placed.name]["control"]
+    for each in units:
+        if each.kind != CORE:
+            control = pins[each.name]["control"]
             endpoints.append(
                 Endpoint(
-                    unit=placed.name,
+                    unit=each.name,
                     bus=control.name,
                     offset=0,
                     range=_range(control, least),
-                    registers=contracted[placed.name].registers,
+                    registers=contracts[each.name].registers,
                 )
             )
         elif grouping is not None:
             endpoints += [
                 Endpoint(
-                    unit=placed.name,
+                    unit=each.name,
                     bus=bus.name,
                     node=presenting[bus.name],
                     offset=offset,
@@ -560,23 +616,7 @@ def describe(model: ModelWrapper) -> Integration:
                 )
                 for bus, offset in zip(buses, grouping[0], strict=True)
             ]
-    target = read_target(body)
-    return Integration(
-        row=(row.shell, row.board),
-        linker=row.linker,
-        runtime=row.runtimes[0] if row.runtimes else None,
-        part=target.part,
-        period_ns=target.platform.period_ns,
-        cores=(core,),
-        units=units,
-        connections=connections,
-        bindings=tuple(
-            Binding(f"{each.unit}/{pins[each.unit]['memory'].name}", each.target)
-            for each in (*inputs, *outputs)
-        ),
-        endpoints=tuple(endpoints),
-        clocks=tuple(ClockPin(placed.name, CLOCK, RESET, MAIN) for placed in units),
-    )
+    return core, units, connections, endpoints
 
 
 __all__ = [
