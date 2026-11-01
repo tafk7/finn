@@ -3,14 +3,15 @@
 
 """A made-up platform outside FINN (``platform.toml`` beside this file): the code its
 declarations name. Its linker writes the description it is given and a stub image, its
-runtime records the operations it is asked for, and its moved mover kind makes the offer
-a core's boundary takes, as FINN's own does (``finn.kernels.movers.IodmaMover.offer``).
-A test loads the declarations with ``extra=``, or as an installed package's entry point
-would name this package.
+runtime records the operations it is asked for, and its moved mover kind makes an offer
+as FINN's own does (``finn.kernels.movers.IodmaMover.offer``). Its shell offers FINN's
+own mover kind, the one a core places yet (``finn.kernels.movers.PLACED_KINDS``). A test
+loads the declarations with ``extra=``, or as an installed package's entry point would
+name this package.
 
-It shows a platform declared, checked, resolved and its code found with no change to
-FINN. It does not show a core built and linked through it: FINN does not call a linker
-or a runtime through its declarations yet."""
+It shows a platform declared, checked and resolved, its code found, and a core placed in
+its shell with no change to FINN. It does not show a core linked or run through it: FINN
+does not call a linker or a runtime through its declarations yet."""
 
 from __future__ import annotations
 

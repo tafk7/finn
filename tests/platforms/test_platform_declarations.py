@@ -16,14 +16,21 @@ import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from support.example_platform import DIRECTORY as EXAMPLE
+from support.configure import core_in_shell
 from support.example_platform import EXAMPLE_DMA, IMAGE, ExampleDma, RecordingRuntime
+from support.models import kernel_model
 from support.refusals import refused
 
+from finn.core.graph.annotations.platform import write_target
+from finn.core.graph.partition import CUT_NAME
+from finn.core.space import Available
 from finn.custom_op.kernels.shell import row_movers
+from finn.kernels.channels import Channel
+from finn.kernels.movers import IODMA_HLS, IodmaMover
 from finn.platform import _cli
 from finn.platform.catalog import catalog
 from finn.platform.check import check
@@ -39,7 +46,8 @@ from finn.platform.declarations import (
 )
 from finn.platform.refusal import TargetRefused
 from finn.platform.resolve import resolve_target
-from finn.platform.shells import Versions, shell_row, shell_rows
+from finn.platform.shells import MoverKind, Versions, mover_offer, shell_row, shell_rows
+from finn.transformation.kernels.cut import MakeCutChoices
 
 FINN_ONLY: dict[str, str] = {}
 """An environment with no ``FINN_PLATFORM_PATH``."""
@@ -609,16 +617,29 @@ _MOVED_128 = '{ kind = "moved", movers = ["iodma_hls"], width_cap = 128 }'
         (
             'supply = [{ kind = "moved", movers = ["iodma_hls", "other"], width_cap = 128 }]\n'
             'delivery = [{ kind = "moved", movers = ["iodma_hls", "other"], width_cap = 128 }]',
-            "names 2 mover kinds, not one$",
+            "names 2 mover kinds, not one; a core places iodma_hls movers alone yet, not other$",
+        ),
+        (
+            f"supply = [{_MOVED_128.replace('iodma_hls', 'other')}]\n"
+            f"delivery = [{_MOVED_128.replace('iodma_hls', 'other')}]",
+            "^a core places iodma_hls movers alone yet, not other$",
         ),
     ],
-    ids=["uncapped", "capped differently each way", "inputs only", "pushed", "two kinds"],
+    ids=[
+        "uncapped",
+        "capped differently each way",
+        "inputs only",
+        "pushed",
+        "two kinds",
+        "a kind of its own",
+    ],
 )
 def test_an_offer_a_core_cannot_place_is_refused_not_changed(
     tmp_path: Path, offers: str, why: str
 ) -> None:
     """A core places one mover kind, moved, at a bounded cap, the same on its inputs and its
-    outputs: a shell offering anything else is refused where its movers are offered, and
+    outputs, and that kind FINN's own until a declared kind's code places it: a shell
+    offering anything else is refused where its movers are offered, and
     by the check, rather than placed as something it does not offer."""
     path = declared(
         tmp_path,
@@ -635,7 +656,8 @@ def test_an_offer_a_core_cannot_place_is_refused_not_changed(
 
 def test_a_moved_mover_kinds_code_makes_its_offer(tmp_path: Path) -> None:
     """A moved mover kind's code makes the offer a core's boundary takes: ``offer`` at the
-    shell's width cap, of its own kind at that cap. Callable is not enough."""
+    shell's width cap, of its own kind at that cap. Callable is not enough. The check calls
+    it at each cap a shell offers the kind at, though a core does not place the kind yet."""
     path = declared(
         tmp_path,
         '[movers.intlike]\ncode = "builtins:int"\nkinds = ["moved"]\n'
@@ -659,13 +681,13 @@ def test_a_moved_mover_kinds_code_makes_its_offer(tmp_path: Path) -> None:
         error=TargetRefused,
         message=r"^builtins:int.offer\(128\) does not make an offer: AttributeError",
     ):
-        row_movers(shell_row("intlike", "Ultra96", found))
+        mover_offer(MoverKind(name="intlike", code=found.movers["intlike"].code), 128)
     with refused(
         "mover-offer-invalid",
         error=TargetRefused,
         message=r"^finn.kernels.movers:IodmaMover.offer\(128\) made MoverOffer\(kind='iodma_hls'",
     ):
-        row_movers(shell_row("borrowed", "Ultra96", found))
+        mover_offer(MoverKind(name="borrowed", code=found.movers["borrowed"].code), 128)
 
 
 # -- the command -------------------------------------------------------------------------
@@ -739,9 +761,9 @@ def test_a_made_up_platform_declares_checks_and_resolves_with_no_change_to_finn(
     example_on_path: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """``support.example_platform`` declares a board, a linker, a runtime, a moved mover
-    kind and a shell based on ``pynq``: they check, a build's target resolves on them, the
-    shell's boundary is offered the platform's own mover, and the command shows them, each
-    with its origin. Discovery and lookup only: no core is built and linked through it, as
+    kind and a shell based on ``pynq``: they check, a build's target resolves on them, a
+    core is placed in the shell, its boundary moved by FINN's mover at the shell's cap, and
+    the command shows them, each with its origin. No core is linked or run through it, as
     FINN calls no linker or runtime through its declarations yet."""
     found = declarations()
     assert check(found) == []
@@ -762,9 +784,20 @@ def test_a_made_up_platform_declares_checks_and_resolves_with_no_change_to_finn(
     )
     assert row.versions == Versions(tool="example-tool", spec=">=1.0")
     assert row.supply == row.delivery
-    assert [mover.name for offer in row.offers for mover in offer.movers] == [EXAMPLE_DMA] * 2
+    assert [mover.name for offer in row.offers for mover in offer.movers] == [IODMA_HLS] * 2
     assert (row.fixed, row.control) == (pynq.fixed, pynq.control)
-    assert row_movers(row) == (ExampleDma.offer(128),)
+    assert row_movers(row) == (IodmaMover.offer(64),)
+    # A core placed in it: each boundary channel moved by FINN's mover, within the shell's cap.
+    model = kernel_model()
+    write_target(model, target)
+    model = model.transform(MakeCutChoices(CUT_NAME))
+    core = core_in_shell(model, model.graph.node, name="chain")
+    contracts = [core.query(name, Channel.mover_contracts) for name in core.movers]
+    assert contracts and all(isinstance(each, Available) for each in contracts)
+    placed = [contract for each in contracts for contract in cast(Available[Any], each).value]
+    assert {contract.kind for contract in placed} == {IODMA_HLS}
+    assert all(contract.memory_width <= 64 for contract in placed)
+    assert isinstance(core.own_resources(), Available)
     assert row.caveat == (
         "the 'example' shell is made up: on Example-ZU3 (xczu3eg-sbva484-1-e) nothing is measured"
     )
@@ -778,6 +811,9 @@ def test_a_made_up_platform_declares_checks_and_resolves_with_no_change_to_finn(
     runtime.load(image)
     assert runtime.operations == [("load", IMAGE)]
     assert code(found.movers[EXAMPLE_DMA].code) is ExampleDma
+    assert mover_offer(MoverKind(name=EXAMPLE_DMA, code=found.movers[EXAMPLE_DMA].code), 64) == (
+        ExampleDma.offer(64)
+    )
     status, out, _ = run(["list"], capsys)
     assert status == 0 and f"  {'example':<24} {origin}" in out
     status, out, _ = run(["show", "board", "Ultra96"], capsys)

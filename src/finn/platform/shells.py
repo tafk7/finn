@@ -44,7 +44,7 @@ from typing import Any, TypeVar
 from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
 from finn.kernels.artifacts.module import Fragment
 from finn.kernels.artifacts.top import doubled, top_buses
-from finn.kernels.movers import MoverOffer
+from finn.kernels.movers import PLACED_KINDS, MoverOffer
 from finn.kernels.utilization import Fit
 from finn.platform import _stated as valid
 from finn.platform.capabilities import RESOURCE_NAMES, Resources
@@ -561,9 +561,10 @@ def own_facts(shell: Shell, declared: Declarations) -> dict[str, Any]:
 def placed_offer(row: ShellRow) -> Offer | None:
     """The offer a core places on its boundary channels in ``row`` (``None``: it offers
     none). Until the movers are kernels of their own, a core places one offer on every
-    boundary side, inputs and outputs alike: one mover kind, moved, at a bounded width cap.
-    A row offering anything else is refused (``offer-unplaced``), naming what it offers,
-    rather than placed as something it does not offer."""
+    boundary side, inputs and outputs alike: one mover kind it places (``PLACED_KINDS``),
+    moved, at a bounded width cap. A row offering anything else is refused
+    (``offer-unplaced``), naming what it offers, rather than placed as something it does
+    not offer."""
     if not row.offers:
         return None
     why = []
@@ -582,6 +583,12 @@ def placed_offer(row: ShellRow) -> Offer | None:
             why.append(f"{_said([offer])} has no width cap, and a core's mover needs one")
         if len(offer.movers) != 1:
             why.append(f"{_said([offer])} names {len(offer.movers)} mover kinds, not one")
+        unplaced = [mover.name for mover in offer.movers if mover.name not in PLACED_KINDS]
+        if unplaced:
+            why.append(
+                f"a core places {', '.join(PLACED_KINDS)} movers alone yet, not "
+                f"{', '.join(unplaced)}"
+            )
     if why:
         raise TargetRefused("offer-unplaced", f"shells.{row.shell}", "; ".join(why))
     return supply[0] if supply else None

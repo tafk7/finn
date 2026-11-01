@@ -19,22 +19,25 @@ image = "example-image"
 # Records the operations it is asked for.
 code = "support.example_platform:RecordingRuntime"
 images = ["example-image"]
-movers = ["example_dma"]
+movers = ["iodma_hls", "example_dma"]
 kinds = ["moved"]
 schemas = [1]
 
 [movers.example_dma]
 # A mover of the platform's own, moving each frame between memory and a boundary channel.
+# Declared and checked; its shell offers FINN's own, as a core places no other kind yet.
 code = "support.example_platform:ExampleDma"
 kinds = ["moved"]
 
 [shells.example]
-# pynq's facts, with its own linker, runtime and mover, and no characterisation of its own.
+# pynq's facts, with its own linker and runtime, a narrower memory port, and no
+# characterisation of its own.
 based_on = "pynq"
 linker = "example-link"
 runtimes = ["example-run"]
-supply = [{ kind = "moved", movers = ["example_dma"], width_cap = 128 }]
-delivery = [{ kind = "moved", movers = ["example_dma"], width_cap = 128 }]
+memory = [{ name = "PORT0", width = 64, masters = 4 }]
+supply = [{ kind = "moved", movers = ["iodma_hls"], width_cap = 64 }]
+delivery = [{ kind = "moved", movers = ["iodma_hls"], width_cap = 64 }]
 characterised = "nothing: a made-up shell"
 timed = []
 caveat = "the 'example' shell is made up: on {board} ({part}) nothing is measured"

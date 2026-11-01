@@ -93,6 +93,10 @@ if TYPE_CHECKING:
 IODMA_HLS = "iodma_hls"
 """The kind of the ``IODMA_hls`` mover."""
 
+PLACED_KINDS = (IODMA_HLS,)
+"""The mover kinds a boundary channel places (``IodmaMover``): FINN's own alone, until a
+mover kind is placed by its declared code."""
+
 MEMORY_LATENCY = "memory latency: unmeasured; each call adds L"
 """What a mover's cycles leave out, as the exploration report states it."""
 
@@ -337,6 +341,7 @@ __all__ = [
     "LCM",
     "MEMORY_LATENCY",
     "NO_CONVERTER",
+    "PLACED_KINDS",
     "IodmaMover",
     "MoverContract",
     "MoverOffer",
