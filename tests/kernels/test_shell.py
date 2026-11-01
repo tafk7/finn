@@ -136,7 +136,8 @@ def test_the_cores_are_members_by_name_their_movers_numbered_across_the_shell() 
     """Each core under its node's name, its kernels and channels below it; the movers
     numbered across the shell, the cores in order; each unit's windows, its core's (its
     grouper's) after its input movers' and before its output movers', the cores in order,
-    then each core's own, which emission counts."""
+    then each core's own, which emission counts. A composition reads one core: it refuses
+    the shell by its second core's name."""
     first = declared_by_hand(stated(OFFER.states()), name="DataflowCore_0")
     second = declared_by_hand(suffixed(stated(OFFER.states()), "_1"), name="DataflowCore_1")
     point = shell((first, second), row=row(), offer=OFFER)
@@ -168,6 +169,11 @@ def test_the_cores_are_members_by_name_their_movers_numbered_across_the_shell() 
         "DataflowCore_1",
     ]
     assert point.shell.placed == 6  # type: ignore[attr-defined]
+    with pytest.raises(DataflowCoreRefused) as caught:
+        CoreComposition(point)
+    assert [(each.code, each.owner) for each in caught.value.findings] == [
+        ("cores-several", "DataflowCore_1")
+    ]
 
 
 def test_a_graph_name_beside_a_placed_member_s_binds_in_its_core() -> None:
@@ -230,6 +236,26 @@ def test_a_name_the_shell_takes_twice_is_refused() -> None:
     assert [(each.code, each.owner) for each in caught.value.findings] == [
         ("name-reserved", "shell.in0")
     ]
+
+
+@pytest.mark.parametrize(
+    ("name", "code"),
+    [
+        ("names", "name-reserved"),
+        ("query", "name-reserved"),
+        ("with_choices", "name-reserved"),
+        ("__init__", "name-reserved"),
+        ("", "name-invalid"),
+        ("\u00e9", "name-invalid"),
+    ],
+    ids=["annotated", "query", "with_choices", "dunder", "empty", "non-ascii"],
+)
+def test_a_core_named_as_no_member_can_be_is_refused_by_name(name: str, code: str) -> None:
+    """A core named as a name the shell's class only annotates, or the engine reserves, or
+    as no ASCII name segment, is refused before its class is made, owned by its name."""
+    with pytest.raises(DataflowCoreRefused) as caught:
+        shell((declared_by_hand(stated(OFFER.states()), name=name),), row=row(), offer=OFFER)
+    assert [(each.code, each.owner) for each in caught.value.findings] == [(code, name)]
 
 
 @pytest.mark.parametrize("label", ["movers", "regions", TEST_CORE])

@@ -79,6 +79,7 @@ from typing import Any, ClassVar, cast
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.search import Key
 from finn.core.space import (
+    RESERVED_NAMES,
     Inapplicable,
     Members,
     Param,
@@ -194,11 +195,14 @@ _DECLARED = frozenset(
     name
     for base in ShellKernel.__mro__
     if issubclass(base, Kernel)
-    for name in vars(base)
+    for name in (*vars(base), *vars(base).get("__annotations__", {}))
     if not name.startswith("__")
 )
-"""The names the shell's class declares, its own and the base's (``movers``, ``regions``,
-``netlist``, ...): no member of it takes one."""
+"""The names the shell's class declares, its own and the base's, given a value or only
+annotated (``movers``, ``regions``, ``names``, ``netlist``, ...): no member of it takes
+one."""
+
+_SEGMENT = re.compile(r"[A-Za-z0-9_]+")
 
 
 def _refused(owner: str, message: str) -> Finding:
@@ -254,11 +258,30 @@ def _exposed(cores: Mapping[str, DataflowCoreDeclaration], placed: bool) -> list
 def _taken(
     cores: Sequence[tuple[str, DataflowCoreDeclaration]], placed: list[str], exposed: list[str]
 ) -> None:
-    """Refuse (``name-reserved``) a member of the shell named twice or as a name its class
-    declares: a core's member, a mover, a connection, an edge port it presents as its own,
-    or its rules (``SHELL``); a graph name that is a placed member's surface name
-    (``Names``: ``shell.in0``); and (``name-shared``) a graph name of two cores."""
+    """Refuse a core whose node's name names no member (``name-invalid``: one ASCII name
+    segment once ``\\W`` is ``_``, as a core's members are named) or a name the engine
+    reserves (``name-reserved``: ``finn.core.space.RESERVED_NAMES``, and ``__`` names), each
+    owned by its node's name; (``name-reserved``) a member of the shell named twice or as a
+    name its class declares: a core's member, a mover, a connection, an edge port it
+    presents as its own, or its rules (``SHELL``); a graph name that is a placed member's
+    surface name (``Names``: ``shell.in0``); and (``name-shared``) a graph name of two
+    cores."""
     findings: list[Finding] = []
+    for member, declared in cores:
+        if _SEGMENT.fullmatch(member) is None:
+            findings.append(
+                Finding(
+                    FindingKind.REJECTION,
+                    "name-invalid",
+                    declared.name,
+                    f"{declared.name!r}: a core's name is one ASCII name segment once \\W is "
+                    f"_, not {member!r}",
+                )
+            )
+        elif member in RESERVED_NAMES or member.startswith("__"):
+            findings.append(
+                _refused(declared.name, f"{declared.name}: {member} is a name the engine reserves")
+            )
     named = [*(member for member, _ in cores), *placed, *exposed, SHELL]
     for name, count in Counter(named).items():
         if count > 1 or name in _DECLARED:

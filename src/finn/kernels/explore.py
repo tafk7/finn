@@ -115,6 +115,7 @@ from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.module import Fragment
 from finn.kernels.base import Kernel, hops, neighbours
 from finn.kernels.channels import Channel, ChannelFifo, Neighbours, OuterHops
+from finn.kernels.composer import DataflowCoreRefused
 from finn.kernels.dataflow_core import (
     DataflowCoreKernel,
     Names,
@@ -180,7 +181,9 @@ class CoreComposition:
     their cycles are costed beside the members' and their validity read by their surface
     names, ``placed``), its connections and its shell member's name (``shell``: its validity
     read by its name, the shell's rules). A shell's members beside its core are named below
-    the shell member (``shell.in0``, ``Names.placed``), never as a graph's members are.
+    the shell member (``shell.in0``, ``Names.placed``), never as a graph's members are. It
+    reads one core: a shell of several is refused where it is made (``cores-several``,
+    owned by the second core's name), as its members' graph names are read in one core.
 
     A member's answers are read as its own space's were: its keys, and the owners of its
     findings, relative to it (``pe``, ``transport.fifo.depth``); a finding of another member
@@ -199,6 +202,19 @@ class CoreComposition:
     _memo: dict[str, object]
 
     def __init__(self, point: Kernel) -> None:
+        cores = names_of(point).cores
+        if len(cores) > 1:
+            raise DataflowCoreRefused(
+                (
+                    Finding(
+                        FindingKind.REJECTION,
+                        "cores-several",
+                        cores[1],
+                        f"a shell of the cores {', '.join(cores)}: a composition reads one "
+                        "core, its members by their graph names",
+                    ),
+                )
+            )
         self._point = point
         self._decisions = MappingProxyType(_decisions(point))
         self._memo = {}
