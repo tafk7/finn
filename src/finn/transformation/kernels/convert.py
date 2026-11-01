@@ -71,7 +71,7 @@ from dataclasses import dataclass, replace
 from itertools import count
 from typing import Any
 
-from onnx import GraphProto, NodeProto, TensorProto, helper
+from onnx import GraphProto, NodeProto, TensorAnnotation, TensorProto, helper
 from qonnx.core.metadata import FOLLOW, SEPARATOR, VERSION
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.base import Transformation
@@ -251,9 +251,10 @@ def name_kernel_ops(model: ModelWrapper) -> tuple[int, ...]:
     entry whose key names a tensor (``SCALE_TENSOR``, ``ZERO_POINT_TENSOR``). It does not reach
     a subgraph, a string attribute or the graph's metadata. Refused, each naming the tensor
     and its graph name, before anything is renamed: a name the rule gives that a host node, or
-    a tensor it does not rename (a sparse initializer among them), already has
-    (``graph-name-taken``); a renamed tensor a node's subgraph names from the graph, by a
-    node's input or an annotation (``graph-name-captured``); and a renamed tensor an
+    a tensor it does not rename (a sparse initializer among them), or a subgraph defines at any
+    depth, where the renamed tensor would be visible (``graph-name-taken``); a renamed tensor
+    a node's subgraph names from the graph, by a node's input or an annotation
+    (``graph-name-captured``); and a renamed tensor an
     annotation's entry names under any other key (``graph-name-unmapped``), unless the key is
     qonnx's or a typed namespace's (``_typed``), whose values name no tensor. A tensor that
     already has its graph name is not renamed, so nothing that reads it is refused for its
@@ -305,6 +306,10 @@ def name_kernel_ops(model: ModelWrapper) -> tuple[int, ...]:
         if new in kept_tensors:
             raise _taken(new, f"the tensor {new}, which it does not rename", tensor=old)
     renamed = {old: new for old, new in tensors.items() if old != new}
+    below = _defined_below(model.graph)
+    for old, new in renamed.items():
+        if new in below:
+            raise _taken(new, f"a tensor a subgraph of {below[new]} defines", tensor=old)
     for node in model.graph.node:
         for tensor in sorted(_references(node) & set(renamed)):
             raise KernelOpError.refused(
@@ -372,7 +377,9 @@ def _refuse_cleanup(graph: GraphProto, order: tuple[int, ...]) -> None:
     (``RemoveUnusedTensors``), then orders the nodes by their inputs alone (``SortGraph``, its
     order ``order``: ``_cleanup_order``), keeping one only if it reads a graph input, a dense
     initializer or another node's output, or if a node it keeps reads it. What the graph needs
-    is its outputs and what its kept nodes' subgraphs name from it (``_references``). So
+    is its outputs, what its kept nodes' subgraphs name from it (``_references``), and what the
+    annotations the cleanup keeps (of a tensor a node reads or makes) name (``_naming``), under
+    any key that may name a tensor. So
     refused, each by the node and the tensor: a node the order drops that makes what the graph
     needs, through dropped nodes too (``cleanup-drops-node``), a sparse initializer's reader
     among them; a dense initializer the graph needs that no node reads
@@ -384,9 +391,11 @@ def _refuse_cleanup(graph: GraphProto, order: tuple[int, ...]) -> None:
     outputs = {item.name for item in graph.output}
     namer: dict[str, int] = {}
     for index in order:
-        for name in _references(graph.node[index]):
+        for name in _references(graph.node[index], unknown=True):
             namer.setdefault(name, index)
-    needed = outputs | set(namer)
+    used = {name for node in graph.node for name in (*node.input, *node.output)}
+    annotating = _named_by_annotations(graph, used)
+    needed = outputs | set(namer) | set(annotating)
     dropped = [index for index in range(len(graph.node)) if index not in position]
     lost: set[int] = set()
     while grown := {i for i in dropped if i not in lost and needed & set(graph.node[i].output)}:
@@ -411,12 +420,14 @@ def _refuse_cleanup(graph: GraphProto, order: tuple[int, ...]) -> None:
             node=_label(node),
             tensor=read if read is not None else made,
         )
-    used = {name for node in graph.node for name in (*node.input, *node.output)}
     for item in graph.initializer:
-        if item.name in used or not (item.name in outputs or item.name in namer):
+        if item.name in used or item.name not in needed:
             continue
         if item.name in outputs:
             needs, node_label = "the graph outputs it", None
+        elif item.name in annotating:
+            needs = f"the quantization annotation of {annotating[item.name]} names it"
+            node_label = None
         else:
             namer_node = graph.node[namer[item.name]]
             node_label = _label(namer_node)
@@ -448,36 +459,80 @@ def _refuse_cleanup(graph: GraphProto, order: tuple[int, ...]) -> None:
                 )
 
 
+def _defined_below(graph: GraphProto) -> dict[str, str]:
+    """Each name a subgraph of ``graph``'s nodes defines, at any depth (``own``: its inputs,
+    what it holds and what its nodes make), with the label of the node of ``graph`` it is
+    under. A tensor of ``graph`` is visible in each of them, so it cannot take such a name."""
+    found: dict[str, str] = {}
+
+    def visit(inner: GraphProto, label: str) -> None:
+        for name in own(inner):
+            found.setdefault(name, label)
+        for node in inner.node:
+            for deeper in subgraphs(node):
+                visit(deeper, label)
+
+    for node in graph.node:
+        for inner in subgraphs(node):
+            visit(inner, _label(node))
+    return found
+
+
 def _held(graph: GraphProto) -> Iterator[str]:
     """The names ``graph``'s initializers hold, its sparse initializers' among them."""
     yield from (item.name for item in graph.initializer)
     yield from (item.values.name for item in graph.sparse_initializer)
 
 
-def _annotated(node: NodeProto) -> set[str]:
+def _naming(annotation: TensorAnnotation) -> Iterator[tuple[str, str]]:
+    """The entries of a quantization annotation whose value may name a tensor, each key and
+    value: a reference a rename maps (``_TENSOR_REFERENCES``), and an entry under any key that
+    is neither qonnx's value keys (``_ANNOTATION_VALUES``) nor a typed namespace's
+    (``_typed``)."""
+    keys = [entry.key for entry in annotation.quant_parameter_tensor_names]
+    values = [entry.value for entry in annotation.quant_parameter_tensor_names]
+    typed = _typed(keys, values)
+    for key, value in zip(keys, values, strict=True):
+        namespace, separator, _ = key.partition(SEPARATOR)
+        if key not in _ANNOTATION_VALUES and not (separator and namespace in typed):
+            yield key, value
+
+
+def _annotated(node: NodeProto, *, unknown: bool = False) -> set[str]:
     """The tensors ``node``'s subgraphs' quantization annotations name from outside them, at
-    any depth: the tensor one annotates, and an entry's tensor (``_TENSOR_REFERENCES``). No
-    execution reads them, so they order nothing, but a rename or a removal leaves them
-    behind."""
+    any depth: the tensor one annotates, and an entry's tensor (``_TENSOR_REFERENCES``; with
+    ``unknown``, any entry that may name one, ``_naming``). No execution reads them, so they
+    order nothing, but a rename or a removal leaves them behind."""
     found: set[str] = set()
     for graph in subgraphs(node):
-        named = {name for inner in graph.node for name in _annotated(inner)}
+        named = {name for inner in graph.node for name in _annotated(inner, unknown=unknown)}
         for annotation in graph.quantization_annotation:
             named.add(annotation.tensor_name)
             named |= {
-                entry.value
-                for entry in annotation.quant_parameter_tensor_names
-                if entry.key in _TENSOR_REFERENCES
+                value for key, value in _naming(annotation) if unknown or key in _TENSOR_REFERENCES
             }
         found |= named - own(graph)
     return found
 
 
-def _references(node: NodeProto) -> set[str]:
+def _references(node: NodeProto, *, unknown: bool = False) -> set[str]:
     """Every tensor ``node``'s subgraphs name from outside them: what they read
     (``captures``, which orders the node after its producer) and what their annotations name
-    (``_annotated``)."""
-    return captures(node) | _annotated(node)
+    (``_annotated``; with ``unknown``, under any key that may name a tensor, as a removal
+    counts them: a rename refuses those as unmapped instead)."""
+    return captures(node) | _annotated(node, unknown=unknown)
+
+
+def _named_by_annotations(graph: GraphProto, kept: set[str]) -> dict[str, str]:
+    """The tensors ``graph``'s own quantization annotations name (``_naming``), each with the
+    tensor whose annotation names it, of the annotations of tensors in ``kept`` only (the
+    others are removed with their tensor)."""
+    named: dict[str, str] = {}
+    for annotation in graph.quantization_annotation:
+        if annotation.tensor_name in kept:
+            for _, value in _naming(annotation):
+                named.setdefault(value, annotation.tensor_name)
+    return named
 
 
 #: A typed namespace's version as qonnx's reader admits it: a positive integer.
@@ -523,14 +578,9 @@ def _unregistered(graph: GraphProto) -> Iterator[tuple[str, str, str]]:
     the key and its value. A key with a ``/`` in a namespace qonnx would not read as typed is
     an unknown key like any other. A subgraph's only where the value is not the subgraph's own
     tensor."""
-    known = (*_TENSOR_REFERENCES, *_ANNOTATION_VALUES)
     for annotation in graph.quantization_annotation:
-        keys = [entry.key for entry in annotation.quant_parameter_tensor_names]
-        values = [entry.value for entry in annotation.quant_parameter_tensor_names]
-        typed = _typed(keys, values)
-        for key, value in zip(keys, values, strict=True):
-            namespace, separator, _ = key.partition(SEPARATOR)
-            if key not in known and not (separator and namespace in typed):
+        for key, value in _naming(annotation):
+            if key not in _TENSOR_REFERENCES:
                 yield annotation.tensor_name, key, value
     for node in graph.node:
         for inner in subgraphs(node):
@@ -612,8 +662,9 @@ def _structure(
     """Why conversion refuses the set a match covers, by its graph: a path that leaves
     it and re-enters it (``match-not-convex``, a subgraph's capture a path too), an interior
     tensor read outside it, by a node's input or a node's subgraph (``_references``), named by
-    an annotation's entry outside it, or a graph output (``match-interior-exposed``): the
-    KernelOp would leave each without its tensor. Nothing for a match of one node."""
+    an annotation's entry outside it under any key that may name a tensor (``_naming``), or a
+    graph output (``match-interior-exposed``): the KernelOp would leave each without its
+    tensor. Nothing for a match of one node."""
     if len(subgraph.indices) == 1:
         return ()
     nodes = list(model.graph.node)
@@ -634,7 +685,7 @@ def _structure(
         )
     graph_outputs = {output.name for output in model.graph.output}
     reading = [
-        (_label(each), {*each.input, *_references(each)})
+        (_label(each), {*each.input, *_references(each, unknown=True)})
         for position, each in enumerate(nodes)
         if position not in subgraph.indices
     ]
@@ -644,10 +695,7 @@ def _structure(
             f"the quantization annotation of {annotation.tensor_name}"
             for annotation in model.graph.quantization_annotation
             if annotation.tensor_name not in subgraph.interior
-            and any(
-                entry.key in _TENSOR_REFERENCES and entry.value == tensor
-                for entry in annotation.quant_parameter_tensor_names
-            )
+            and any(value == tensor for _, value in _naming(annotation))
         ]
         if readers or tensor in graph_outputs:
             outside = readers + (["the graph's outputs"] if tensor in graph_outputs else [])

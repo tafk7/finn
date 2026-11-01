@@ -291,6 +291,40 @@ def test_a_renamed_tensor_a_subgraph_reads_is_refused() -> None:
     assert [node.name for node in model.graph.node] == ["MatMul_0", "host"]
 
 
+@pytest.mark.parametrize("depth", [1, 2])
+def test_a_graph_name_a_subgraph_defines_is_refused(depth: int) -> None:
+    """A subgraph sees the graph's tensors, so a tensor it defines, at any depth, holds its
+    name against a rename: the renamed tensor would be defined twice in its scope."""
+    inner = branch("local", "x")
+    inner.node[0].output[0] = "MatMul_0_out0"
+    inner.output[0].name = "MatMul_0_out0"
+    for level in range(depth - 1):
+        out = helper.make_tensor_value_info(f"b{level}", TensorProto.FLOAT, [4, 4])
+        node = helper.make_node(
+            "If", ["condition"], [f"b{level}"], then_branch=inner, else_branch=inner
+        )
+        inner = helper.make_graph([node], f"level{level}", [], [out])
+    source = graph(
+        [
+            helper.make_node("MatMul", ["x", "w"], ["h"], name="a"),
+            helper.make_node(
+                "If", ["condition"], ["y"], name="branches", then_branch=inner, else_branch=inner
+            ),
+        ],
+        ["y"],
+    )
+    source.graph.input.append(helper.make_tensor_value_info("condition", TensorProto.BOOL, []))
+    with refused(
+        "graph-name-taken",
+        error=KernelOpError,
+        owner="ToKernelOps",
+        tensor="h",
+        message="h: its graph name by position is MatMul_0_out0, but a tensor a subgraph of "
+        "branches defines has it",
+    ):
+        convert(source)
+
+
 def test_a_subgraph_reading_a_tensor_that_keeps_its_name_is_converted() -> None:
     """A tensor that already has its graph name is not renamed, so a subgraph may read it."""
     source = graph(
@@ -549,6 +583,36 @@ def test_an_initializer_the_cleanup_would_drop_is_refused() -> None:
         convert(captured)
     with refused("cleanup-drops-initializer", error=KernelOpError, tensor="held"):
         name_kernel_ops(holding(outputs=("y", "held")))
+    # An annotation the cleanup keeps (its tensor a node's) that names it needs it too: a
+    # scale, or an entry under a key a rename does not map, in the graph or a subgraph.
+    scaled = holding()
+    entry = scaled.graph.quantization_annotation.add(tensor_name="y")
+    entry.quant_parameter_tensor_names.add(key="SCALE_TENSOR", value="held")
+    with refused(
+        "cleanup-drops-initializer",
+        error=KernelOpError,
+        tensor="held",
+        message="held: the quantization annotation of y names it, but no node",
+    ):
+        convert(scaled)
+    named = holding(
+        helper.make_node(
+            "If",
+            ["condition"],
+            ["z"],
+            name="branches",
+            then_branch=branch("then", "x", ("z", "vendor/BLOCK_SCALE_TENSOR", "held")),
+            else_branch=branch("else", "x", ("z", "vendor/BLOCK_SCALE_TENSOR", "held")),
+        ),
+        outputs=("y", "z"),
+    )
+    with refused(
+        "cleanup-drops-initializer",
+        error=KernelOpError,
+        node="branches",
+        message="held: a subgraph of branches names it",
+    ):
+        convert(named)
     model, _ = convert(holding())
     assert "held" not in {item.name for item in model.graph.initializer}
 
