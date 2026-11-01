@@ -212,15 +212,32 @@ class Nested(Kernel):
     x = child.x
 
 
+class SelectedFirst(Kernel):
+    """A selector placed before its sibling: its selected case a leaf presenting an 8 KiB
+    window or a composite whose child presents 16 KiB; its sibling 4 KiB."""
+
+    id = "test.scopes.selected-first"
+
+    selected = Select(leaf=Windowed(bits=13, control="selected_cfg"), nested=Nested(bits=14))
+    after = Windowed(bits=12, control="after_cfg")
+    x = selected.x
+    x2 = after.x
+    instance_order = ("selected", "after")
+
+
 BITS = {"small": 12, "large": 13, "small2": 12}
 """Each windowed leaf's address bits: 4, 8 and 4 KiB."""
 
 
 def windowed(
-    order: tuple[str, ...], aperture: int | None, kernels: Mapping[str, Facts] | None = None
+    order: tuple[str, ...],
+    aperture: int | None,
+    kernels: Mapping[str, Facts] | None = None,
+    chosen: Mapping[tuple[str, str], object] | None = None,
 ) -> CoreComposition:
     """A core of ``kernels``, by default the windowed leaves (``BITS``), placed in
-    ``order``, in a shell of ``ROW`` but ``aperture``, its edge ports its own."""
+    ``order``, in a shell of ``ROW`` but ``aperture``, its edge ports its own, ``chosen``
+    set."""
     declared = DataflowCoreDeclaration(
         kernels
         or {
@@ -231,22 +248,27 @@ def windowed(
         name=TEST_CORE,
         order=order,
     )
-    return CoreComposition(bound(shell((declared,), row={**ROW, "aperture": aperture})).point)
+    made = shell((declared,), row={**ROW, "aperture": aperture})
+    return CoreComposition(bound(made, dict(chosen or {})).point)
 
 
 def agree(
-    order: tuple[str, ...], windows: tuple[int, ...], kernels: Mapping[str, Facts] | None = None
+    order: tuple[str, ...],
+    windows: tuple[int, ...],
+    kernels: Mapping[str, Facts] | None = None,
+    chosen: Mapping[tuple[str, str], object] | None = None,
 ) -> None:
-    """The rules place ``windows`` for a core of ``kernels`` in ``order`` (``windowed``),
-    as its netlist exports them, and admit the span they take and refuse a byte less."""
-    network = windowed(order, None, kernels)
+    """The rules place ``windows`` for a core of ``kernels`` in ``order``, ``chosen`` set
+    (``windowed``), as its netlist exports them, and admit the span they take and refuse a
+    byte less."""
+    network = windowed(order, None, kernels, chosen)
     netlist = network.netlist()
     assert isinstance(netlist, Available)
     assert counts(network.member(SHELL)) == Available((windows, 0, False))
     assert netlist_counts(*netlist.value) == (windows, 0, False)
     span = placed_windows(windows)[-1] + windows[-1]
     for aperture, status in ((span, "valid"), (span - 1, "refused")):
-        assert windowed(order, aperture, kernels).validity(SHELL).status == status
+        assert windowed(order, aperture, kernels, chosen).validity(SHELL).status == status
 
 
 @pytest.mark.parametrize("order", list(permutations(BITS)), ids="-".join)
@@ -274,6 +296,18 @@ def test_a_child_s_bus_is_at_its_member_s_place_among_the_core_s_windows(
         "last": Facts(Windowed, {"control": "last_cfg", "bits": 12}),
     }
     agree(order, tuple(1 << bits[name] for name in order), kernels)
+
+
+@pytest.mark.parametrize(
+    ("case", "windows"), [("leaf", (8192, 4096)), ("nested", (16384, 4096))], ids=str
+)
+def test_a_selected_case_s_bus_is_at_its_selector_s_place(
+    case: str, windows: tuple[int, ...]
+) -> None:
+    """A selector before its sibling: its selected case's bus, a leaf's or its child's, is
+    at the selector's place, before the sibling's, in the netlist as in the rules."""
+    kernels = {"k": Facts(SelectedFirst, {})}
+    agree(("k",), windows, kernels, {("k", "selected"): case})
 
 
 def core_of(

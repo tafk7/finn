@@ -2078,7 +2078,9 @@ class Kernel(Space):
         rank = {name: index for index, name in enumerate(order)}
 
         def ranked(item: Any) -> int:
-            return rank.get(str(item.node), len(order))
+            # By the member each is of, as the windows are: a selected case's node is its
+            # path below its selector (``selected.leaf``), placed where the selector is.
+            return rank.get(str(item.node).split(".", 1)[0], len(order))
 
         # Each member channel's, with its hops to the ports beside it around its own links.
         hopped: dict[str, Any] = dict(getattr(self, "-hops-0")())
