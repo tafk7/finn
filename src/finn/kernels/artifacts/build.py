@@ -188,7 +188,9 @@ def emit_module(
 ) -> EmittedModule:
     """Write the module's sources and data files into ``directory``, from one snapshot of
     them (``capture``: ``roots`` resolves each copied source's root, ``built`` each HLS
-    request's product by its top's name), the module named from it."""
+    request's product by its top's name), the module named from it. ``directory`` is resolved
+    once, the links above it followed as the caller meant them: the module is checked and
+    written under that directory alone (``EmittedModule.directory``)."""
     snapshot = capture(module, roots=roots, built=built)
     copied = {(root, path): content for root, path, content in snapshot.copied}
     products = dict(snapshot.products)
@@ -228,6 +230,7 @@ def emit_module(
         raise BuildError(str(error)) from error
     contents = dict(drafts)
     written = tuple(file.path for file in order)
+    directory = directory.resolve()
     _refuse_aliases(directory, written, tuple(data))
 
     directory.mkdir(parents=True, exist_ok=True)
@@ -242,25 +245,15 @@ def _refuse_aliases(directory: Path, sources: Sequence[str], data: Sequence[str]
     """Refuse, before anything is written, staged names that would reach one file twice: a
     data file named as a source; two names alike but for case, which a filesystem that does not
     tell case apart takes for one; a file's name that another's names as its directory; a
-    ``directory`` that is, or lies below, a link or a file (the path to it, from the root, is
-    checked as it is); and, in ``directory`` as it is, a staged name that passes through a link
-    or a file, or ends at a directory (a link there would lead a staged name to another staged
-    file's place, or out of the module's directory)."""
+    ``directory`` (resolved: no link above it or at it) that is a file; and, in ``directory``
+    as it is, a staged name that passes through a link or a file, or ends at a directory (a
+    link there would lead a staged name to another staged file's place, or out of the module's
+    directory)."""
     for path in data:
         if path in sources:
             raise BuildError(f"a data file and a source are both named {path}")
-    above_directory = directory.absolute()
-    for here in (*reversed(above_directory.parents), above_directory):
-        try:
-            mode = here.lstat().st_mode
-        except FileNotFoundError:
-            break
-        if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
-            kind = "a link" if stat.S_ISLNK(mode) else "a file"
-            raise BuildError(
-                f"{here} is {kind}, which the module's directory {directory} would be written "
-                "through: emit into a directory without links"
-            )
+    if directory.exists() and not directory.is_dir():
+        raise BuildError(f"the module's directory {directory} is a file")
     names: dict[str, str] = {}
     for path in (*sources, *data):
         other = names.setdefault(path.casefold(), path)
