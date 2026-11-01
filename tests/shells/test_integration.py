@@ -1,0 +1,177 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+
+"""The integration description (``finn.shells.integration``): what ``describe`` states of
+the Chain on ``pynq``, its second weights streamed (two inputs and one output), with no
+platform's names in it; a shell with no linker; a control bus's range."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import replace
+from pathlib import Path
+
+from qonnx.core.datatype import DataType
+from qonnx.core.modelwrapper import ModelWrapper
+from support.ipxact_ports import AXILITE
+from support.models import choose_memories, kernel_model, streamed_w2_model
+from support.packaging import verified_parent
+from support.refusals import refused
+
+from finn.core.graph.annotations.platform import write_target
+from finn.core.graph.partition import partition_body
+from finn.custom_op.kernels.shell import configured_network
+from finn.kernels.artifacts.ipxact import vlnv
+from finn.kernels.artifacts.module import module_name
+from finn.platform.resolve import resolve_target
+from finn.shells.integration import (
+    CORE,
+    MAIN,
+    MOVER_PORTS,
+    Binding,
+    ClockPin,
+    Connection,
+    Delivery,
+    Endpoint,
+    IntegrationError,
+    IpRef,
+    Supply,
+    Unit,
+    _range,
+    describe,
+)
+from finn.transformation.kernels.cut import CutKernelPartition
+
+#: Ultra96 in the Zynq shell at 5 ns.
+ZYNQ = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
+
+
+def zynq_model(directory: Path) -> ModelWrapper:
+    """The Chain, x and w2 crossing its boundary, stated for Ultra96 in the Zynq shell, its
+    choices saved, cut once (its body in ``directory``) and verified: the parent graph as
+    step_verify_partition leaves it."""
+    model = streamed_w2_model()
+    write_target(model, ZYNQ)
+    choose_memories(model)
+    return verified_parent(model.transform(CutKernelPartition(directory / "cut")))
+
+
+def test_the_chain_is_described_by_its_core_units_and_wiring(tmp_path: Path) -> None:
+    """One core under its node's name, a mover unit for each edge port (``in<i>``,
+    ``out<j>``, by direction in port order), each mover's stream to its port with its
+    bits, its memory port bound to the row's target, its control bus an endpoint at
+    offset 0 of the row's least window, and every unit on the main clock."""
+    parent = zynq_model(tmp_path)
+    described = describe(parent)
+    assert (described.row, described.linker, described.runtime) == (
+        ("pynq", "Ultra96"),
+        "vivado-block-design",
+        "pynq",
+    )
+    assert (described.part, described.period_ns) == ("xczu3eg-sbva484-1-e", 5.0)
+    (core,) = described.cores
+    assert core.name == "DataflowCore_0"
+    assert [
+        (type(each), each.port, each.tensor, each.shape, each.unit, each.kind, each.target)
+        for each in described.edges
+    ] == [
+        (Supply, "s_axis_0", "x", (1, 4), "in0", "moved", "HP0"),
+        (Supply, "s_axis_1", "w2", (4, 4), "in1", "moved", "HP0"),
+        (Delivery, "m_axis_0", "y", (1, 4), "out0", "moved", "HP0"),
+    ]
+    assert [each.element.dtype for each in described.edges] == [
+        DataType["INT3"],
+        DataType["INT3"],
+        DataType["INT7"],
+    ]
+    assert all(each.element == each.contract.element for each in described.edges)
+    # The core's IP named as its module, its repositories none until it is packaged.
+    _, body, _ = partition_body(parent)
+    module = module_name(configured_network(body, core.name)[0].module)
+    assert described.units == (
+        Unit(name="in0", kind="iodma_hls", ip=None, window=4096),
+        Unit(name="in1", kind="iodma_hls", ip=None, window=4096),
+        Unit(name="DataflowCore_0", kind=CORE, ip=IpRef(vlnv(module), ()), window=None),
+        Unit(name="out0", kind="iodma_hls", ip=None, window=4096),
+    )
+    assert described.connections == (
+        Connection("in0/m_axis_0", "DataflowCore_0/s_axis_0", 8),
+        Connection("in1/m_axis_0", "DataflowCore_0/s_axis_1", 16),
+        Connection("DataflowCore_0/m_axis_0", "out0/s_axis_0", 32),
+    )
+    assert described.bindings == tuple(
+        Binding(f"{unit}/m_axi_gmem0", "HP0") for unit in ("in0", "in1", "out0")
+    )
+    # The Chain's kernels present no control bus: the movers' are its endpoints.
+    assert described.endpoints == tuple(
+        Endpoint(unit=unit, bus=MOVER_PORTS["control"], offset=0, range=4096)
+        for unit in ("in0", "in1", "out0")
+    )
+    assert described.clocks == tuple(
+        ClockPin(unit, "ap_clk", "ap_rst_n", MAIN)
+        for unit in ("in0", "in1", "DataflowCore_0", "out0")
+    )
+    assert described.unit("in1") == described.units[1]
+
+
+def test_the_description_names_nothing_of_a_platform(tmp_path: Path) -> None:
+    """Its JSON holds every field, by unit and port, and none of the block design's names:
+    no cell, interconnect, interconnect port or address."""
+    described = describe(zynq_model(tmp_path))
+    report = described.report()
+    assert sorted(report) == [
+        "bindings",
+        "clocks",
+        "connections",
+        "cores",
+        "endpoints",
+        "linker",
+        "part",
+        "period_ns",
+        "row",
+        "runtime",
+        "units",
+    ]
+    assert report["cores"][0]["outputs"] == [
+        {
+            "port": "m_axis_0",
+            "tensor": "y",
+            "shape": [1, 4],
+            "element": "INT7",
+            "kind": "moved",
+            "unit": "out0",
+            "target": "HP0",
+            "mover": "iodma_hls",
+        }
+    ]
+    text = json.dumps(report)
+    for name in ('"idma', '"odma', "/idma", "/odma", "smartconnect", "axi_interconnect"):
+        assert name not in text
+    assert "_AXI" not in text and "s_axi_control_0" not in text and "0xa000" not in text
+
+
+def test_a_shell_without_a_linker_has_no_description(tmp_path: Path) -> None:
+    model = kernel_model(second_weights=False)
+    choose_memories(model)
+    parent = verified_parent(model.transform(CutKernelPartition(tmp_path)))
+    with refused(
+        "integration-unexported",
+        error=IntegrationError,
+        owner="configuration.target.shell",
+        message="the 'ip' shell has no linker: its user links the core",
+    ):
+        describe(parent)
+
+
+def test_a_control_bus_takes_its_aperture_and_the_least_window_at_least() -> None:
+    """A bus's range is ``2**awaddr`` bytes, and the row's least window at least; a bus
+    with no ``awaddr`` has none, and is refused by name."""
+    assert _range(AXILITE, 4096) == 4096 and _range(AXILITE, 16) == 32
+    bare = replace(AXILITE, signals=tuple(s for s in AXILITE.signals if s.logical != "awaddr"))
+    with refused(
+        "bus-aperture-unknown",
+        error=IntegrationError,
+        owner="describe",
+        message="s_axilite: an AXI-Lite bus with no awaddr",
+    ):
+        _range(bare, 4096)
