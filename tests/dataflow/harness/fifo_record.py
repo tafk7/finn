@@ -210,8 +210,8 @@ def _message(error: BaseException) -> str:
 
 def _end(side_name: str, owners: Any, pace: Any, channel: Any, side: Any) -> End:
     """One end of a channel: a kernel's port, a boundary's free side, a memory source, or an
-    end the line does not pace. ``pace`` is the port's beside the channel, where it has one
-    (``Neighbours``); a kernel's port is named by its side's label below its member's node
+    end the line does not pace. ``pace`` is the pace beside the channel, where it has one
+    (``Neighbours``: a kernel's port's, or at a boundary the mover's); a kernel's port is named by its side's label below its member's node
     (``matmul.y``), its kernel by graph name (``owners``: each member name's)."""
     from finn.kernels.fifo_sizing import NotModelled, _free  # noqa: PLC0415
     from finn.kernels.sides import SideKind  # noqa: PLC0415
@@ -223,7 +223,7 @@ def _end(side_name: str, owners: Any, pace: Any, channel: Any, side: Any) -> End
         return Port(owners[member], port, pace)
     if side.kind is SideKind.BOUNDARY:
         try:
-            return Edge(beats_of(_free(channel, side)))
+            return Edge(beats_of(_free(channel, side, pace)))
         except NotModelled as error:
             return Unpaced(str(error))
     return Unpaced(f"a {side.kind.value} side")
