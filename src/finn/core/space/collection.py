@@ -7,8 +7,8 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType, UnionType
-from weakref import WeakKeyDictionary
 from typing import Union, cast, get_args, get_origin
+from weakref import WeakKeyDictionary
 
 from ._configuration import _Namespace
 from ._nodes import NodeDecision, NodeDecl, slot_declaration
