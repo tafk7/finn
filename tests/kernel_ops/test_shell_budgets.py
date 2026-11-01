@@ -324,6 +324,7 @@ def test_a_target_names_the_choice_the_budget_leaves_no_value() -> None:
             "breaks control_for_writes, shell.within_control_budget",
         ) as caught:
             explore_kernel_choices(model, [TargetThroughput(1000.0)], name=CUT_NAME)
+    assert isinstance(caught.error, KernelOpError)
     assert caught.error.keys == ("activate.use_axilite",)
     assert str(caught.error).startswith("the explored point is refused: activate.use_axilite: ")
 
