@@ -300,7 +300,7 @@ def _neighbour(
     neighbour's (``Side.neighbour``: an upstream one's stream, label and word width, a
     downstream one's stream and label), its label below the node's name; that port's
     stream pins there (``stream_pins``), which its hop is wired to; and its pace there at
-    its kernel's interval (``timed_pace``, a scheduled port's), which sizing reads. Only an
+    its kernel's interval (``timed_pace``, where it owns its pacing), which sizing reads. Only an
     accepted value is a fact: refused (``neighbour-unaccepted``, naming the neighbour, its
     port and why) where its stored choices are refused, its kernel is refused, or its side
     is not known there (it waits on an open choice, or is refused)."""

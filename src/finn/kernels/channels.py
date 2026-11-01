@@ -230,8 +230,8 @@ class Neighbours:
     neighbour's, outside a slice, read at its stored choices): the producing kernel's and
     the consuming kernel's, each None where that side is the channel's own, its source (a
     known value) or its boundary; and each port's pace in cycles (its ``timed_pace``: its
-    ``pace`` at its own kernel's interval, read where it is read), None where that port is
-    no scheduled port's or the side is the channel's own.
+    ``pace`` at its own kernel's interval, read where it is read), None where that port
+    follows another (it has no pace) or the side is the channel's own.
     Its network wires the hops to them (``outer_hops``); FIFO sizing reads the paces
     (``finn.kernels.fifo_sizing``)."""
 

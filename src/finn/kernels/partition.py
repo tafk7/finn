@@ -603,7 +603,7 @@ class Partition:
         labelled below its member's node): the producing kernel's and the consuming kernel's,
         by the side each is declared on; a frozen neighbour's, outside a slice, as given at
         its stored choices (``frozen``); and each one's pace at its kernel's interval (its
-        ``timed_pace``, a scheduled port's).
+        ``timed_pace``, where it owns its pacing).
         FIFO sizing reads their paces (``finn.kernels.fifo_sizing``), and the netlist its
         hops to them (``hops``)."""
         found: dict[str, PortPins] = {}

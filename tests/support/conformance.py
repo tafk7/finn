@@ -29,8 +29,8 @@ each sample it
    established. An HLS leaf's RTL is its synthesis's product, so it is checked
    so only with ``xsim`` (synthesized for the harness's part, or taken from the
    HLS cache); offline its request is staged, its includes checked;
-3. checks the model: every port's traversal covers its tensor, a scheduled
-   port presents the schedule's beats less the ones it drops, each boundary
+3. checks the model: every port's traversal covers its tensor, a port that
+   owns its pacing presents the schedule's beats less the ones it drops, each boundary
    presents its port's traversal (an input's ``unreplayed``), and
    ``parameters`` names exactly the module's parameters;
 4. given an ``xsim`` directory, streams random integers in each input's range
@@ -483,8 +483,8 @@ def _port(kernel: Any, path: str) -> Any:
     if not isinstance(declaration, StreamPort) and exposed_name(type(node), name) is None:
         raise TypeError(f"{path} is not an actual stream port")
     port = getattr(node, name)
-    # A scheduled port's resolved model metadata keeps its index axes; a given sequence has
-    # no schedule or tensor-index binding metadata.
+    # A port projecting its schedule keeps its index axes in its resolved model metadata; a
+    # given sequence has no schedule or tensor-index binding metadata.
     return port if port.schedule is not None else None
 
 

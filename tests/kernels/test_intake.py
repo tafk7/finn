@@ -595,7 +595,8 @@ def test_memstream_states_its_set_port_s_intake_by_its_credit() -> None:
         ).with_choices(ram_style="distributed", pumped_memory=pumped)
         entry = several.intake.of("set")
         assert (entry.before_stop, entry.most) == counts, (depth, pumped)
-        # Each set index names the set of a set's words: its group (L4).
+        # Each set index names the set of a set's words: its group (L4, it follows the
+        # output's groups).
         assert several.set.group == depth, (depth, pumped)
         credit = _rtl(several, "memstream", ("FULL_CREDIT",), SETS=2, DEPTH=depth, WIDTH=12)
         assert credit["FULL_CREDIT"] == 8

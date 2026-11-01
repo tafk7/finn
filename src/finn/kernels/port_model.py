@@ -208,11 +208,12 @@ class StreamPort(Space):
 
     @derived
     def pace(self) -> Pace | Inapplicable:
-        """Its pace (CONTRACT.md § 4), a scheduled port's only: the iterations of its
+        """Its pace (CONTRACT.md § 4), only where it owns its pacing: the iterations of its
         kernel's schedule at which it moves a beat (``Pace.times``, a reduced index's on its
         last value, a held one's on its first; an output's are when it issues them) and the
-        iterations a frame takes (``Pace.span``). Derived, never declared. A port of
-        another rule has none (its rule states its relation), nor has an idle port."""
+        iterations a frame takes (``Pace.span``). Derived, never declared. A port that
+        follows another has none (it takes its timing from the port it follows), nor has an
+        idle port."""
         if not self.placed:
             return Inapplicable()
         schedule = self.schedule
@@ -223,9 +224,9 @@ class StreamPort(Space):
     @derived
     def timed_pace(self) -> TimedPace | Inapplicable:
         """Its pace in clock cycles: its ``pace`` at its kernel's ``interval``
-        (``finn.kernels.laws.TimedPace``, by the one conversion, ``in_cycles``), a scheduled
-        port's only. Read through a node alias (``x = compute.x``), it is its own kernel's,
-        however deep: what FIFO sizing reads of the port beside a channel."""
+        (``finn.kernels.laws.TimedPace``, by the one conversion, ``in_cycles``), only where
+        it owns its pacing. Read through a node alias (``x = compute.x``), it is its own
+        kernel's, however deep: what FIFO sizing reads of the port beside a channel."""
         if not self.placed or self.schedule is None:
             return Inapplicable()
         return TimedPace(self.pace, self.interval)
@@ -310,8 +311,9 @@ class StreamPort(Space):
 
     @derived
     def group(self) -> int | Rejected | Inapplicable:
-        """A selector's group (L4): the governed port's beats its one beat names the set
-        of (``InPort.group``); a port of another rule has none."""
+        """A selector's group (L4, it follows the groups of the port it governs): the
+        governed port's beats its one beat names the set of (``InPort.group``); a port that
+        does not follow by groups has none."""
         return Inapplicable()
 
     @derived
@@ -399,7 +401,8 @@ class StreamPort(Space):
     def stream_pins(self) -> PortPins | Rejected | Inapplicable:
         """What a channel wires to, realization: its stream on its transport's pins, under
         its label (``finn.kernels.port.stream_pins``). Its contract is its stream, its
-        carrier (``transport``, ``width``), its label and, scheduled, its pace."""
+        carrier (``transport``, ``width``), its label and, where it owns its pacing, its
+        pace."""
         if not self.placed:
             return Inapplicable()
         stream = self.stream
@@ -450,9 +453,9 @@ class InPort(StreamPort):
     @derived
     def group(self) -> int | Rejected | Inapplicable:
         """A placed selector's group: the governed port's beats a frame over its own, the
-        governed port's beats each of its beats names the set of (L4), refused where it does
-        not divide them, or the governed port is idle (``port-group``); a port it governs
-        none of has none."""
+        governed port's beats each of its beats names the set of (L4, it follows that port's
+        groups), refused where it does not divide them, or the governed port is idle
+        (``port-group``); a port it governs none of has none."""
         governs = self.governs
         if not self.placed or governs is None:
             return Inapplicable()

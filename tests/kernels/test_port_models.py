@@ -720,9 +720,10 @@ def test_a_port_states_one_thing_its_pacing_follows_from() -> None:
 
 
 def test_a_selector_s_group_is_the_governed_port_s_beats_over_its_own() -> None:
-    """``group`` (L4): the governed port's beats a frame over the selector's, each
-    selector beat naming the set of that many; refused where they do not divide, the design
-    point with it (``port-group``, its ``presented``); a port that governs none has none."""
+    """``group`` (L4, a selector follows the groups of the port it governs): the governed port's
+    beats a frame over the selector's, each selector beat naming the set of that many; refused where
+    they do not divide, the design point with it (``port-group``, its ``presented``); a port that
+    governs none has none."""
     wide = Tensor((4, 4), ELEMENT)
     narrow = Tensor((1, 4), ELEMENT)
 
@@ -760,11 +761,11 @@ def test_a_selector_s_group_is_the_governed_port_s_beats_over_its_own() -> None:
         assert validity.status == "refused", kind
 
 
-def test_a_scheduled_port_presents_its_kernel_s_one_schedule() -> None:
-    """A port of a kernel's body presents its kernel's
-    ``schedule`` or no schedule (``port-schedule-foreign``), so its kernel's scheduled
-    ports present one index point at each iteration and their paces count the same
-    iterations; a subclass's override of ``schedule`` is the one its inherited ports read."""
+def test_a_port_that_owns_its_pacing_presents_its_kernel_s_one_schedule() -> None:
+    """A port of a kernel's body presents its kernel's ``schedule`` or no schedule
+    (``port-schedule-foreign``), so its kernel's ports that own their pacing present one
+    index point at each iteration and their paces count the same iterations; a subclass's
+    override of ``schedule`` is the one its inherited ports read."""
     r, c = Index("r"), Index("c")
 
     class Scheduled(Kernel):

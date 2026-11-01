@@ -471,18 +471,19 @@ def _check_ports(cls: type[Kernel]) -> None:
       is, one thing);
     - in its body, governs a port its kernel does not have (``port-governs-unknown``), or
       presents a schedule other than its kernel's one ``schedule``
-      (``port-schedule-foreign``): its kernel's scheduled ports are projections of one
-      schedule, so they present one index point at each iteration (their association) and
-      their paces count the same iterations (§ 4). A port presents its kernel's schedule
-      by binding it by name (``schedule=schedule``), which a subclass overriding
-      ``schedule`` then gives it; or states an ``interval`` other than its kernel's
-      (``port-interval``): a port carries its kernel's (L6, ``Kernel.interval``), which the
-      base supplies, so its pace in cycles and its kernel's cycles read one interval.
+      (``port-schedule-foreign``): the ports of its kernel that own their pacing are
+      projections of one schedule, so they present one index point at each iteration
+      (their association) and their paces count the same iterations (§ 4). A port presents
+      its kernel's schedule by binding it by name (``schedule=schedule``), which a subclass
+      overriding ``schedule`` then gives it; or states an ``interval`` other than its
+      kernel's (``port-interval``): a port carries its kernel's (L6, ``Kernel.interval``),
+      which the base supplies, so its pace in cycles and its kernel's cycles read one
+      interval.
 
     And refuse ``cls`` where a port it places presents its schedule and it states none
     (``port-schedule-unstated``) or states one whose declared answer admits
-    ``Inapplicable`` (``port-schedule-inapplicable``): a scheduled port's stream would be
-    inapplicable, which no constraint refuses."""
+    ``Inapplicable`` (``port-schedule-inapplicable``): the stream of a port projecting it
+    would be inapplicable, which no constraint refuses."""
     from finn.kernels.port_model import InPort, OutPort, StreamPort  # noqa: PLC0415
 
     ports = {name for name, item in _members(cls).items() if isinstance(item, StreamPort)}
@@ -549,8 +550,8 @@ def _check_ports(cls: type[Kernel]) -> None:
                 "port-schedule-foreign",
                 "presents "
                 + (f"{named!r}" if named else f"a {type(schedule).__name__} of its own")
-                + f", not {cls.__qualname__}'s schedule: a scheduled port is a projection of "
-                "its kernel's one schedule (schedule=schedule)",
+                + f", not {cls.__qualname__}'s schedule: a port that owns its pacing is a "
+                "projection of its kernel's one schedule (schedule=schedule)",
             )
     _check_schedule(cls)
 
@@ -563,19 +564,19 @@ def _check_schedule(cls: type[Kernel]) -> None:
     records = {
         name: node_record(item) for name, item in members.items() if isinstance(item, StreamPort)
     }
-    scheduled = [
+    projecting = [
         name
         for name, record in records.items()
         if record is not None and _kernel_schedule(cls, record.bindings.get("schedule"))
     ]
-    if not scheduled:
+    if not projecting:
         return
     if not _declared(cls, "schedule"):
         raise DefinitionError.broken(
             "port-schedule-unstated",
             "Kernel",
-            f"{cls.__qualname__} presents its schedule on {scheduled} and states none: a "
-            "kernel with scheduled ports states its schedule",
+            f"{cls.__qualname__} presents its schedule on {projecting} and states none: a "
+            "kernel whose ports project its schedule states it",
             declaration=cls.__qualname__,
         )
     item = members["schedule"]
@@ -590,8 +591,8 @@ def _check_schedule(cls: type[Kernel]) -> None:
         raise DefinitionError.broken(
             "port-schedule-inapplicable",
             "Kernel",
-            f"{cls.__qualname__} presents its schedule on {scheduled} and declares it "
-            f"{answer}: a scheduled port's schedule is never inapplicable",
+            f"{cls.__qualname__} presents its schedule on {projecting} and declares it "
+            f"{answer}: the schedule its ports project is never inapplicable",
             declaration=cls.__qualname__,
         )
 
@@ -1175,11 +1176,11 @@ class Kernel(Space):
 
     @derived
     def schedule(self) -> Schedule | Inapplicable:
-        """Its schedule: the iteration its scheduled ports are projections of
+        """Its schedule: the iteration its ports that own their pacing are projections of
         (``StreamPort(schedule=schedule, ...)``), so that every one presents, at each
         iteration, the positions of one index point (their association, CONTRACT.md § 3)
-        and moves its beats at its pace (§ 4). A kernel with scheduled ports states it, over
-        its ``extents`` (``bound_schedule``); one with none has none."""
+        and moves its beats at its pace (§ 4). A kernel with such ports states it, over its
+        ``extents`` (``bound_schedule``); one with none has none."""
         return Inapplicable()
 
     @derived
@@ -1401,7 +1402,7 @@ class Kernel(Space):
         """The clock cycles a frame takes through it, at full rate: characterization,
         derived by the rate law (CONTRACT.md L6). A kernel with a module advances one
         iteration an ``interval`` when nothing blocks it: its cycles a frame are its
-        schedule's iterations (each of its scheduled ports' pace's span), or, a kernel with
+        schedule's iterations (the span of each pace of its ports), or, a kernel with
         no schedule (a stage, a memory), advancing one beat a side an interval, the most
         beats a frame any of its placed ports carries, times its interval (``in_cycles``,
         the one conversion, which FIFO sizing reads too). A kernel with children takes the
@@ -1468,9 +1469,9 @@ class Kernel(Space):
 #
 # The computations are ``finn.dataflow.schedule``'s, over the tensors a kernel's ports read
 # (each target with an index reads one, ``StreamPort.access``): ``bind_extents``,
-# ``schedule_over`` and ``span``. A kernel with scheduled ports states two derived values by
-# them, its ``extents`` (its facts: the indices' extents, bound from the accesses and any it
-# gives itself, which its folding's domains read through ``extent_of``) and its
+# ``schedule_over`` and ``span``. A kernel whose ports own their pacing states two derived
+# values by them, its ``extents`` (its facts: the indices' extents, bound from the accesses
+# and any it gives itself, which its folding's domains read through ``extent_of``) and its
 # ``schedule`` (over the extents, with its folding). These give dataflow's refusal as the
 # kernel's own: ``kernel-schedule`` for a schedule its order or folding cannot build,
 # ``kernel-extents`` for anything else, each with dataflow's message.

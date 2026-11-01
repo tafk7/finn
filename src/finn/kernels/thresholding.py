@@ -569,7 +569,8 @@ class ThresholdingAxiKernel(Kernel):
         lanes=(c,),
     )
     # The set port indexes beats (``c``'s folds), which no index of a tensor expresses: a
-    # selector, its beat accepted with each input beat (L4).
+    # selector, following the input's groups, one set index a group of one input beat (L4),
+    # its beat accepted with each input beat (its intake: joined).
     set = InPort(
         tensor=set_tensor,
         sequence=set_sequence,

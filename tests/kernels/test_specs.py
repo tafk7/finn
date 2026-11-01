@@ -239,9 +239,9 @@ def _ports_checked(point: Partition) -> int:
             # a port that follows another has none; an exposed port's is its member's port's.
             paced = member.query(stream_port(type(member), port).pace)
             if own and isinstance(frame, StreamPort):
-                scheduled = member.field(frame.pacing).get() is Pacing.SCHEDULE
-                assert isinstance(paced, Available) is scheduled, where
-                if scheduled:
+                owns = member.field(frame.pacing).get() is Pacing.SCHEDULE
+                assert isinstance(paced, Available) is owns, where
+                if owns:
                     schedule = member.query(Kernel.schedule)
                     assert isinstance(schedule, Available), where
                     assert paced.value.schedule == schedule.value, where

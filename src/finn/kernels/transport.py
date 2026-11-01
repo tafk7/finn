@@ -250,9 +250,9 @@ class StreamPins:
     ``signal[bit]`` (``olst[1]``). For a producer these are guarantees; for a consumer,
     requirements. Transport markers without a rule can be neither required nor matched.
 
-    It carries no label (the port's name, ``finn.kernels.base.PortPins``) and no pace (a
-    scheduled port's own, ``finn.kernels.port_model.StreamPort.pace``): whether two sides
-    connect reads neither.
+    It carries no label (the port's name, ``finn.kernels.base.PortPins``) and no pace (that
+    of a port that owns its pacing, ``finn.kernels.port_model.StreamPort.pace``):
+    whether two sides connect reads neither.
     """
 
     transport: ReadyValidTransport

@@ -34,7 +34,7 @@ tensor it is given (``x_tensor``) and the weights' tensor it carries
 (``carried_weights``), its folding factors (``pe``, ``simd``), and N and the widest K
 (``widest_reduction``), stated from its facts alone. Its ports (``x``, ``w``, ``y``) are the
 selected core's, which it exposes as its own by node aliases (``x = compute.x``): one port
-each, the core's, read by two names, so its stream, advance rule and pace are the core's,
+each, the core's, read by two names, so its stream, pacing and pace are the core's,
 and it presents its side and stream pins under the alias's name (``x``), on the core's leaf
 (``compute.packed``, ``finn.kernels.port.exposed_pins``). Each
 channel, its adapter, its FIFO and its source are its network's: the network (a test

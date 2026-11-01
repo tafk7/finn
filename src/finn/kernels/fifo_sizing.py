@@ -36,26 +36,25 @@ pipeline latency is a constant shift of a side's times, and the acceptance follo
 supply's data, so they do not change the depth.
 
 ``size`` reads a channel's sides, its producer's and its consumer's paces from the ports
-beside it (its network's ``neighbours``: each a scheduled port's ``timed_pace``; at a
-slice's edge, a frozen neighbour's port's, at its stored choices, as a kernel's), and gives
-its ``Sized``: a depth (``0``: direct) and why, naming any interval an assumption
-(``finn.kernels.laws.Standing.ASSUMED``) it was sized at. The least depth counts the
-words the FIFO must hold; the DEPTH proposed is the least whose native storage holds them
-(``least_depth_holding``: FinnLib's FIFO is a shift register of five words up to
-33, so a DEPTH of two holds up to five). A boundary's free side is paced, in order, by
-the pace the outside states of it (``Side.outside``, ``finn.kernels.sides``: its beat
-times, or a steady beat expanded at the edge's beats, ``stated_pattern``), else by the
-mover the shell places there (``Channel.mover``, ``finn.kernels.movers``): its beat
-times over a frame, and its cycles a frame as its span. Each side's times are read from
-their owner (a port's pace, the outside's statement, the mover's contract) when a channel
-is sized, by one reader (``pattern``); a ``Pattern`` is the model's working value and is
-kept nowhere. An unstated boundary without a mover (the ``ip`` shell: its integrator's
-pacing), a memory source (paced by its consumer: its output is sourced) and a port no
-schedule paces (stepped, selected or sourced: it has no pace, CONTRACT.md § 4) are not
-modelled: direct, with that reason. So is an adapter
-chain other than one ``vpc`` before the transport and one ``input_gen`` after it.
-The strategy proposing the depths is ``finn.kernels.explore.SizeFifos``; an rtlsim
-check is evidence outside it.
+beside it (its network's ``neighbours``: each the ``timed_pace`` of a port that owns its
+pacing; at a slice's edge, a frozen neighbour's port's, at its stored choices, as a
+kernel's), and gives its ``Sized``: a depth (``0``: direct) and why, naming any interval an
+assumption (``finn.kernels.laws.Standing.ASSUMED``) it was sized at. The least depth counts
+the words the FIFO must hold; the DEPTH proposed is the least whose native storage holds
+them (``least_depth_holding``: FinnLib's FIFO is a shift register of five words up to 33,
+so a DEPTH of two holds up to five). A boundary's free side is paced, in order, by the pace
+the outside states of it (``Side.outside``, ``finn.kernels.sides``: its beat times, or a
+steady beat expanded at the edge's beats, ``stated_pattern``), else by the mover the shell
+places there (``Channel.mover``, ``finn.kernels.movers``): its beat times over a frame, and
+its cycles a frame as its span. Each side's times are read from their owner (a port's pace,
+the outside's statement, the mover's contract) when a channel is sized, by one reader
+(``pattern``); a ``Pattern`` is the model's working value and is kept nowhere. An unstated
+boundary without a mover (the ``ip`` shell: its integrator's pacing), a memory source
+(paced by its consumer: its output follows its reader) and a port that follows another
+(pass-through, groups or reader: it has no pace, CONTRACT.md § 4) are not modelled: direct,
+with that reason. So is an adapter chain other than one ``vpc`` before the transport and
+one ``input_gen`` after it. The strategy proposing the depths is
+``finn.kernels.explore.SizeFifos``; an rtlsim check is evidence outside it.
 
 ``holds`` checks a channel's transport, a FIFO of so many words or ``direct``, against
 its stream again (``keeps``, one simulation): a depth is sized at one bottleneck period,
@@ -110,8 +109,8 @@ class Pattern:
 
 
 class Paced(Protocol):
-    """What owns a side's beat times over a frame and its span: a scheduled port's pace in
-    cycles (``finn.kernels.laws.TimedPace``, its iterations at its kernel's interval), the
+    """What owns a side's beat times over a frame and its span: the pace in cycles of a port that
+    owns its pacing (``finn.kernels.laws.TimedPace``, its iterations at its kernel's interval), the
     beat times the outside states (``finn.kernels.sides.BeatTimes``), a mover's contract
     (``finn.kernels.movers.MoverContract``)."""
 
@@ -328,8 +327,8 @@ class NotModelled(ValueError):
 
 def _paced(neighbours: Neighbours, side: str) -> Pattern:
     """The pace in cycles of the port beside the channel on ``side`` (``Neighbours``): a
-    scheduled port's, at its own kernel's interval; ``NotModelled`` for a port of another
-    rule, which has none."""
+    port's that owns its pacing, at its own kernel's interval; ``NotModelled`` for a port
+    that follows another, which has none."""
     port: PortPins | None = getattr(neighbours, side)
     if port is None:
         raise ValueError(f"the channel's {side} is a port, and none is given beside it")

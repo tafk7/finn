@@ -43,7 +43,7 @@ or certify that the chosen FIFO capacity is temporally sufficient.
 | [FIFO definition](../src/finn/kernels/fifo.py) | Explicit depth, memory-style `Decision`, geometry and platform validity, and realized storage capacity. |
 | [Compute example](../examples/untimed/compute.py) | A real known-weight `MatMulKernel`, selected packed implementation/folding, owned result/weight facts, source memory and a fixed-capacity channel FIFO. |
 | [MatMul definition](../src/finn/kernels/matmul.py) | Model facts, range/type ownership, implementation selectors and the selected core's ports, exposed by node aliases (`x = compute.x`). |
-| [Packed compute definition](../src/finn/kernels/dotp.py) | Real scheduled/indexed Ports on the selected compute implementation; no included `ControlModel` on MatMul/Dotp. |
+| [Packed compute definition](../src/finn/kernels/dotp.py) | Real Ports projecting the schedule through indices on the selected compute implementation; no included `ControlModel` on MatMul/Dotp. |
 | [Source memory definition](../src/finn/kernels/memstream.py) | `MemStream.config` is the included AXI-Lite `ControlModel`; the weight source owns its physical pins and held/tied-off values for build-time known contents. |
 | [Port models](../src/finn/kernels/port_model.py) | Ordinary child Spaces; `InPort`/`OutPort` (a `StreamPort` of neither is refused, `port-direction`; `direction`, `pacing` and `follows` are its kind's, which no port class overrides, `port-direction`, `port-pacing`); `governs` and `dtype` an input's, `sourced` an output's; its pacing, `SCHEDULE` or `FOLLOWS`, and how it follows, `PASS_THROUGH`, `GROUPS` or `READER`; a selector's `group`; a port's transport defaults to its kernel's interface protocol's (`interface_protocol`: `AXIS_PROTOCOL`, `NATIVE_PROTOCOL`); placed/idle datatype rules; native, scheduled and indexed projections. |
 | [Control models](../src/finn/kernels/control.py) | Included control and physical ownership, separate from logical dataflow. |
@@ -90,7 +90,7 @@ lower logical reads/storage bookkeeping is not a faster physical rate.
 Logical `Schedule.closing` accepts one contiguous reduced block, not only a
 suffix. A non-suffix block whose inner folded extent is one can normalize to a
 `LevelEnd` and use an existing TLAST; this is a deliberate authoring behavior
-change. A genuine held `LevelDone` remains refused by the physical scheduled `StreamPort`
+change. A genuine held `LevelDone` remains refused by a physical `StreamPort` projecting a schedule
 and adapter contracts. In-tree kernels still close their original suffixes;
 no held-marker hardware or new kernel capability is added.
 

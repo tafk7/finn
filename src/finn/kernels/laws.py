@@ -26,14 +26,17 @@ And the terms a kernel states its intake in (``Intake``, with its ``joined`` inp
 ``PortIntake``, with how far an input is accepted ``Ahead`` of another; ``Standing``, and a
 fitted intake's ``IntakeProfile``): intake is no law, every kernel states its own from its
 RTL, but its shape, its unit and its standing are the library's, and so is its answer
-where a kernel states none (``INTAKE_UNSTATED``). The advance laws (L2-L5) say when a beat
-**fires**, consumed or issued, relative to the kernel's other beats; when a beat is
-**accepted**, and whether only with another port's, is its kernel's intake.
+where a kernel states none (``INTAKE_UNSTATED``). The pacing laws (L2-L5: a port that owns
+its pacing, by its kernel's schedule, or one of the three ways a port follows another) say
+when a beat is **consumed** or **issued**, relative to the kernel's other beats (``Pacing``,
+``Follows``); how far input beats are **accepted** ahead of output beats **delivered**, and
+whether one is accepted only with another port's, is its kernel's intake.
 
 And the rate law's one exception, a kernel's initiation interval (``Interval``: L6's 1,
 ``RATE_INTERVAL``, unless a kernel states its own, with its standing and source), with the
 one conversion from iterations to clock cycles (``in_cycles``) that a kernel's cycles a
-frame and FIFO sizing both read, and a scheduled port's pace in cycles (``TimedPace``).
+frame and FIFO sizing both read, and the pace in cycles of a port that owns its pacing
+(``TimedPace``).
 """
 
 from __future__ import annotations
@@ -296,10 +299,10 @@ class PortIntake:
     file and lines at the library's pin, or the trace and its conditions; ``profile``: for a
     form fitted to traces, where it holds (``IntakeProfile``), its standing **assumed**.
 
-    The counts are relative to output delivery, never to firing (L2-L5). Beside them, its
-    coupling to the kernel's other inputs: ``ahead``, for an input in no ``Intake.joined``
-    group, how far it is accepted beyond each other input it names (``Ahead``); none stated,
-    none known."""
+    The counts are relative to output delivery, never to when beats are consumed or issued
+    (the pacing laws, L2-L5). Beside them, its coupling to the kernel's other inputs:
+    ``ahead``, for an input in no ``Intake.joined`` group, how far it is accepted beyond
+    each other input it names (``Ahead``); none stated, none known."""
 
     port: str
     before_stop: int
@@ -456,10 +459,10 @@ def in_cycles(iterations: int, interval: Interval) -> int:
 
 @dataclass(frozen=True)
 class TimedPace:
-    """A scheduled port's pace (``finn.dataflow.schedule.Pace``, in iterations: THEORY says
-    nothing about time) at its kernel's interval: its beat ``times`` and its ``span`` in
-    clock cycles (``in_cycles``). The port carries both (``StreamPort.pace``,
-    ``StreamPort.interval``); FIFO sizing reads this."""
+    """The pace of a port that owns its pacing (``finn.dataflow.schedule.Pace``, in
+    iterations: THEORY says nothing about time) at its kernel's interval: its beat ``times``
+    and its ``span`` in clock cycles (``in_cycles``). The port carries both
+    (``StreamPort.pace``, ``StreamPort.interval``); FIFO sizing reads this."""
 
     pace: Pace
     interval: Interval
