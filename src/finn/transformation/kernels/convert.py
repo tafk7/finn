@@ -39,11 +39,13 @@ Once every node is visited, each KernelOp is named by its position (``name_kerne
 ``<OpType>_<i>``, ``i`` its index among the graph's nodes of its op type in graph order (as
 qonnx's ``GiveUniqueNodeNames`` names a node), each of its outputs ``<name>_out<k>`` and
 each initializer it reads, its own copy, ``<name>_param<k>`` (as ``GiveReadableTensorNames``
-names a tensor), so the name says what the node is. Host nodes, the graph's inputs and
-outputs and the tensors only host nodes make keep their names; a name the rule gives that
-one of them already has refuses the conversion (``graph-name-taken``). The names are given
-once, here: what is stored by graph name after conversion (a node's choices, a channel's on
-its tensor, a hold) is stored under them.
+names a tensor), so the name says what the node is. The graph order is the one qonnx's
+cleanup leaves, so a second conversion gives the same names. Host nodes, the graph's inputs
+and outputs and the tensors only host nodes make keep their names; a name the rule gives
+that one of them already has refuses the conversion (``graph-name-taken``), and so does a
+renamed tensor a node's subgraph reads (``graph-name-captured``). The names are given once,
+here: what is stored by graph name after conversion (a node's choices, a channel's on its
+tensor, a hold) is stored under them.
 
 Every node gets an ``Outcome``: what it became, its name, or the findings that say why it
 stayed on the host. ``kernel_ops_report`` and ``kernel_ops_summary`` turn them into the report
@@ -57,11 +59,13 @@ import copy
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any
+from itertools import count
+from typing import Any
 
-from onnx import NodeProto, helper
+from onnx import NodeProto, TensorProto, helper
+from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.base import Transformation
-from qonnx.transformation.general import GiveUniqueParameterTensors
+from qonnx.transformation.general import GiveUniqueParameterTensors, SortGraph
 
 import finn.custom_op.kernels as domain
 from finn.core.graph.annotations.platform import read_target, write_target
@@ -77,9 +81,6 @@ from finn.kernels.channels import open_boundary_refusal
 from finn.kernels.policies import Defaulted
 from finn.platform.target import Target
 from finn.transformation.kernels.infer import infer_node
-
-if TYPE_CHECKING:
-    from qonnx.core.modelwrapper import ModelWrapper
 
 
 @dataclass(frozen=True)
@@ -192,8 +193,10 @@ class ToKernelOps(Transformation):
                 Outcome(labels, converted, tuple(each.about(node=about) for each in findings))
             )
             index += 1
-        name_kernel_ops(model)
-        # One outcome a node, in graph order: each conversion's is its KernelOp's.
+        order = name_kernel_ops(model)
+        # One outcome a node, in the order the graph is named in: each conversion's is its
+        # KernelOp's.
+        outcomes = [outcomes[index] for index in order]
         assert len(outcomes) == len(model.graph.node)
         self.outcomes = tuple(
             outcome if outcome.op is None else replace(outcome, name=node.name)
@@ -202,19 +205,35 @@ class ToKernelOps(Transformation):
         return model, False
 
 
-#: What a tensor is named while ``name_kernel_ops`` renames it: no name a graph gives.
+#: What a tensor is named while ``name_kernel_ops`` renames it, the first such name no tensor
+#: of the graph holds.
 _RENAMING = "finn.renaming/{}"
+#: The quantization annotation's entries whose value is a tensor's name (ONNX's).
+_TENSOR_REFERENCES = ("SCALE_TENSOR", "ZERO_POINT_TENSOR")
 
 
-def name_kernel_ops(model: ModelWrapper) -> None:
+def name_kernel_ops(model: ModelWrapper) -> tuple[int, ...]:
     """Name each KernelOp of ``model`` by its position, and its tensors with it (see the module
     docstring): ``<OpType>_<i>``, ``i`` its index among the nodes of its op type in graph
     order; its outputs ``<name>_out<k>`` and the initializers it reads ``<name>_param<k>``,
     each its own: an initializer two nodes read is copied for each reader after the first
     (``GiveUniqueParameterTensors``, as qonnx's cleanup after a transformation copies it), so
-    the copy is named too. A graph input or output keeps its name. A name the rule gives that a
-    host node, or a tensor it does not rename, already has is refused (``graph-name-taken``),
-    naming both, before anything is renamed."""
+    the copy is named too. A graph input or output keeps its name.
+
+    The graph order is the one qonnx's cleanup after a transformation leaves (``SortGraph``):
+    the nodes are put in it first, so the graph returned is in the order it was named in, and
+    a second conversion, its order the same, gives the same names. Returns that order: each
+    node's index before it.
+
+    A rename reaches every reference to the tensor: the nodes', the graph's, its annotations
+    and a quantization annotation's scale or zero point. A name the rule gives that a host
+    node, or a tensor it does not rename, already has is refused (``graph-name-taken``), and
+    so is a renamed tensor a node's subgraph reads from the graph (``graph-name-captured``:
+    a subgraph is not renamed), each naming both, before anything is renamed."""
+    order = _cleanup_order(model)
+    nodes_in_order = [model.graph.node[index] for index in order]
+    del model.graph.node[:]
+    model.graph.node.extend(nodes_in_order)
     GiveUniqueParameterTensors().apply(model)  # type: ignore[no-untyped-call]
     counts: Counter[str] = Counter()
     nodes: list[tuple[NodeProto, str]] = []
@@ -234,29 +253,85 @@ def name_kernel_ops(model: ModelWrapper) -> None:
             if tensor not in edge:
                 tensors[tensor] = f"{name}_param{k}"
     kept_nodes = {node.name for node in model.graph.node if node.domain != KERNEL_OPS_DOMAIN}
-    kept_tensors = {
+    held = {
         tensor
         for tensor in (
             *(name for node in model.graph.node for name in (*node.input, *node.output)),
             *(item.name for item in model.graph.initializer),
             *(item.name for item in model.graph.value_info),
+            *(item.tensor_name for item in model.graph.quantization_annotation),
             *edge,
         )
-        if tensor and tensor not in tensors
+        if tensor
     }
+    kept_tensors = held - set(tensors)
     for node, name in nodes:
         if name in kept_nodes:
             raise _taken(name, f"the host node {name}", node=_label(node))
     for old, new in tensors.items():
         if new in kept_tensors:
             raise _taken(new, f"the tensor {new}, which it does not rename", tensor=old)
+    for node in model.graph.node:
+        for tensor in sorted(_captures(node) & set(tensors)):
+            raise KernelOpError.refused(
+                "graph-name-captured",
+                ToKernelOps.__name__,
+                f"{_label(node)}: its subgraph reads {tensor}, which conversion names "
+                f"{tensors[tensor]}, and a subgraph is not renamed: pass the tensor in as an "
+                "input of the node",
+                node=_label(node),
+                tensor=tensor,
+            )
     renamed = [(old, new) for old, new in tensors.items() if old != new]
-    for index, (old, _) in enumerate(renamed):
-        model.rename_tensor(old, _RENAMING.format(index))
-    for index, (_, new) in enumerate(renamed):
-        model.rename_tensor(_RENAMING.format(index), new)
+    occupied = held | set(tensors.values())
+    free = (_RENAMING.format(index) for index in count())
+    temporaries = [next(name for name in free if name not in occupied) for _ in renamed]
+    for (old, _), temporary in zip(renamed, temporaries, strict=True):
+        model.rename_tensor(old, temporary)
+    for (_, new), temporary in zip(renamed, temporaries, strict=True):
+        model.rename_tensor(temporary, new)
+    for annotation in model.graph.quantization_annotation:
+        for entry in annotation.quant_parameter_tensor_names:
+            if entry.key in _TENSOR_REFERENCES and entry.value in tensors:
+                entry.value = tensors[entry.value]
     for node, name in nodes:
         node.name = name
+    return order
+
+
+def _cleanup_order(model: ModelWrapper) -> tuple[int, ...]:
+    """The order qonnx's cleanup puts ``model``'s nodes in (``SortGraph``, run on a copy of
+    the graph's structure, each node named by its index): each node's index, in that order. A
+    node the sort drops (it reads nothing the graph holds and nothing reads it) is not in it."""
+    graph = model.graph
+    nodes = [
+        helper.make_node(node.op_type, node.input, node.output, name=str(index))
+        for index, node in enumerate(graph.node)
+    ]
+    initializers = [
+        helper.make_tensor(item.name, TensorProto.FLOAT, [0], []) for item in graph.initializer
+    ]
+    shape = helper.make_graph(nodes, graph.name, graph.input, graph.output, initializers)
+    sorted_shape = ModelWrapper(helper.make_model(shape))
+    SortGraph().apply(sorted_shape)  # type: ignore[no-untyped-call]
+    return tuple(int(node.name) for node in sorted_shape.graph.node)
+
+
+def _captures(node: NodeProto) -> set[str]:
+    """The tensors ``node``'s subgraphs read from outside them: a name a subgraph's node
+    reads that the subgraph neither takes as an input nor holds nor makes."""
+    found: set[str] = set()
+    for attribute in node.attribute:
+        for graph in (*([attribute.g] if attribute.HasField("g") else []), *attribute.graphs):
+            local = {
+                *(item.name for item in graph.input),
+                *(item.name for item in graph.initializer),
+                *(name for inner in graph.node for name in inner.output),
+            }
+            read = {name for inner in graph.node for name in inner.input if name}
+            read |= {name for inner in graph.node for name in _captures(inner)}
+            found |= read - local
+    return found
 
 
 def _taken(
