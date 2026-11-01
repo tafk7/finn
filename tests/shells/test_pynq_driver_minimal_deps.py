@@ -72,8 +72,12 @@ def test_generated_modules_have_no_heavy_imports(tmp_path: Path) -> None:
         assert "Copyright" in text
 
 
+@pytest.mark.parametrize(
+    "datatype",
+    ["INT4", "INT8", "UINT8", "INT16", "UINT16", "FLOAT16", "FLOAT32", "FIXED<8,4>", "FIXED<16,8>"],
+)
 def test_generated_modules_import_and_roundtrip(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, datatype: str
 ) -> None:
     basic_py, data_packing_py = _write_minimal_tree(tmp_path)
     # make the heavy deps unavailable: importing them now raises ImportError
@@ -84,10 +88,10 @@ def test_generated_modules_import_and_roundtrip(
     gen_basic = _load_module(monkeypatch, "qonnx.util.basic", basic_py)
     gen_dp = _load_module(monkeypatch, "finn.util.data_packing", data_packing_py)
 
-    dt = qonnx.core.datatype.DataType["INT4"]
+    dt = qonnx.core.datatype.DataType[datatype]
     x = gen_basic.gen_finn_dt_tensor(dt, (2, 8))
     packed = gen_dp.finnpy_to_packed_bytearray(x, dt, reverse_inner=True, reverse_endian=True)
     y = gen_dp.packed_bytearray_to_finnpy(
-        packed, dt, x.shape, reverse_inner=True, reverse_endian=True
+        np.ascontiguousarray(packed), dt, x.shape, reverse_inner=True, reverse_endian=True
     )
     assert np.array_equal(x, y)

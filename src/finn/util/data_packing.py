@@ -219,8 +219,13 @@ def packed_bytearray_to_finnpy(
     if packed_bytearray.ndim == 0:
         raise Exception("packed_bytearray_to_finnpy expects at least 1D ndarray")
 
-    if (dtype.bitwidth() in [8, 16]) and (reverse_inner and reverse_endian):
-        # Fast mode from the previous implemenation
+    if (
+        dtype.bitwidth() in [8, 16]
+        and reverse_inner
+        and reverse_endian
+        and not dtype.is_fixed_point()
+    ):
+        # Fixed-point bytes encode scaled integers, not the NumPy float container.
         data_unpacked = packed_bytearray_to_finnpy_fast(packed_bytearray, dtype, output_shape)
     elif dtype.name == "BIPOLAR":
         data_prepared = prepare_values(
