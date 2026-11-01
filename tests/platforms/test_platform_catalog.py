@@ -32,7 +32,9 @@ from finn.platform.catalog import (
     part_report,
     parts,
 )
+from finn.platform.check import check
 from finn.platform.declarations import PARTS_OVERLAY, PATH_SETTING, declarations
+from finn.platform.declarations import load as load_declarations
 from finn.platform.generate import (
     DeviceProbe,
     GenerationError,
@@ -355,6 +357,24 @@ def test_the_guides_overlay_resolves_its_custom_part(machine_overlay: Path) -> N
     reported = part_report(target.part)
     assert reported["source"] == f"{guide_overlay()['source']} (overlay {machine_overlay})"
     assert reported["slrs"] == [stated]
+
+
+def test_declarations_given_resolve_by_the_overlay_they_hold(tmp_path: Path) -> None:
+    """Declarations loaded with a directory holding a board, a shell for it and the guide's
+    overlay check and resolve by their own catalog, whatever the process's environment:
+    the part is known to them and to no other load."""
+    (tmp_path / PARTS_OVERLAY).write_text(json.dumps(guide_overlay()))
+    (tmp_path / "platform.toml").write_text(
+        '[boards.Custom]\npart = "xczu3eg_es1-sbva484-1-e"\n'
+        '[shells.custom]\nbased_on = "pynq"\n'
+        '[shells.custom.boards.Custom]\nboard_part = "example.com:custom:part0:1.0"\n'
+    )
+    found = load_declarations([tmp_path], environ={})
+    assert check(found) == []
+    target = resolve_target(board="Custom", shell="custom", period_ns=5.0, declared=found)
+    assert target.part == "xczu3eg_es1-sbva484-1-e"
+    with refused("unknown-part", error=TargetRefused):
+        resolve_target(part=target.part, period_ns=5.0, declared=load_declarations(environ={}))
 
 
 def test_device_and_parts_answer_from_the_process_catalog(machine_overlay: Path) -> None:

@@ -59,7 +59,7 @@ from typing import Any
 
 from finn.platform.architectures import CAP_EVIDENCE, CapEvidence, rule
 from finn.platform.capabilities import RESOURCE_NAMES, DspBlock, Fabric, Resources
-from finn.platform.declarations import PARTS_OVERLAY, declarations, overlays
+from finn.platform.declarations import PARTS_OVERLAY, Declarations, declarations, overlays
 from finn.platform.refusal import TargetRefused
 
 DATA = Path(__file__).resolve().parent / "data"
@@ -615,6 +615,13 @@ def catalog() -> Catalog:
     return load(DATA, *overlays(declarations()))
 
 
+def catalog_for(declared: Declarations | None) -> Catalog:
+    """The catalog ``declared`` resolves by: the committed one, with the overlays its
+    declaration directories hold; the process's (``catalog()``, read once) for ``None``,
+    the process's declarations."""
+    return catalog() if declared is None else load(DATA, *overlays(declared))
+
+
 def part(name: str) -> Part:
     """``catalog().part(name)``."""
     return catalog().part(name)
@@ -672,6 +679,7 @@ __all__ = [
     "Device",
     "Part",
     "catalog",
+    "catalog_for",
     "device",
     "load",
     "part",

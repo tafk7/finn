@@ -28,8 +28,8 @@ and resolving imports none.
 from __future__ import annotations
 
 from finn.core.reporting.findings import Finding, FindingKind
-from finn.platform.catalog import DATA, load
-from finn.platform.declarations import Declarations, code, overlays
+from finn.platform.catalog import catalog_for
+from finn.platform.declarations import Declarations, code
 from finn.platform.refusal import TargetRefused
 from finn.platform.shells import own_facts, row
 
@@ -46,7 +46,7 @@ def _refusal(refused: TargetRefused) -> list[Finding]:
 def check(declared: Declarations) -> list[Finding]:
     """Every finding of ``declared`` (the module docstring), in order of kind and name."""
     findings: list[Finding] = []
-    parts = load(DATA, *overlays(declared))
+    parts = catalog_for(declared)
     for name, declared_board in sorted(declared.boards.items()):
         try:
             parts.part(declared_board.part)
