@@ -5,7 +5,7 @@
 its design.
 
 A kernel partition is a model whose nodes are all KernelOps, or the
-``StreamingDataflowPartition`` node whose body is one. The cut makes exactly one
+``DataflowCore`` node whose body is one. The cut makes exactly one
 (``partition_body`` opens it). ``design_digest`` identifies a design, so an artifact can
 record the design it was made from (``annotations.outputs``).
 
@@ -35,8 +35,13 @@ PARTITION_DOMAIN = "finn.custom_op.partition"
 """The domain of the parent graph's partition node: the name of the package that
 registers it."""
 
-PARTITION_OP = "StreamingDataflowPartition"
+PARTITION_OP = "DataflowCore"
 """The op type of the parent graph's node whose body is a partition."""
+
+CUT_NAME = f"{PARTITION_OP}_0"
+"""The name the cut gives the partition node it makes (``finn.transformation.kernels.cut``):
+its op type and the first index. The node's name names its core's module; nothing reads
+it as a body's name where no node gives one."""
 
 
 def _sort(field: MutableSequence[Any], key: Callable[[Any], Any]) -> None:
@@ -85,7 +90,7 @@ def search_record(
 
 
 def is_partition(node: NodeProto) -> bool:
-    """Whether ``node`` is a partition node (StreamingDataflowPartition): its body is a
+    """Whether ``node`` is a partition node (DataflowCore): its body is a
     model of its own."""
     return bool(node.domain == PARTITION_DOMAIN and node.op_type == PARTITION_OP)
 
@@ -107,7 +112,7 @@ def body_file(node: NodeProto) -> str:
 
 
 def kernel_partition_body(node: NodeProto) -> ModelWrapper | None:
-    """The body of a StreamingDataflowPartition node whose body is a partition of
+    """The body of a DataflowCore node whose body is a partition of
     KernelOps, opened through the node; None for any other node."""
     if not is_partition(node):
         return None
@@ -116,7 +121,7 @@ def kernel_partition_body(node: NodeProto) -> ModelWrapper | None:
 
 
 def kernel_partition_nodes(model: ModelWrapper) -> list[NodeProto]:
-    """The model's partition nodes (``PARTITION_DOMAIN``'s StreamingDataflowPartition)
+    """The model's partition nodes (``PARTITION_DOMAIN``'s DataflowCore)
     whose body is a partition of KernelOps."""
     return [node for node in model.graph.node if kernel_partition_body(node) is not None]
 
@@ -141,6 +146,7 @@ def partition_body(model: ModelWrapper) -> tuple[NodeProto, ModelWrapper, str]:
 
 __all__ = [
     "KERNEL_OPS_DOMAIN",
+    "CUT_NAME",
     "PARTITION_DOMAIN",
     "PARTITION_OP",
     "body_file",

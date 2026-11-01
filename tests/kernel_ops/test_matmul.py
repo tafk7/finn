@@ -20,7 +20,7 @@ import pytest
 from onnx import helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import get_domain_opset_version, getCustomOp, op_identity
-from support.configure import configured, write_raw
+from support.configure import composition, configured, write_raw
 from support.models import INT3, TARGET, WEIGHTS, X, matmul_model, schema_digest
 from support.op_specs import matmul as spec
 from support.refusals import refused
@@ -34,12 +34,12 @@ from finn.core.space import inspection
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.conv import Conv
 from finn.custom_op.kernels.matmul import MatMul
-from finn.custom_op.kernels.network import network, persist
+from finn.custom_op.kernels.network import persist
 from finn.custom_op.kernels.thresholding import Thresholding
 from finn.harness.reference import converted
+from finn.kernels.explore import CoreComposition
 from finn.kernels.matmul import KnownWeights, MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.partition import Partition
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.transformation.kernels import InferKernelTensors
 
@@ -241,17 +241,19 @@ def test_persist_checks_every_value_before_it_writes_any(monkeypatch: pytest.Mon
     model = matmul_model()
     configured(model, {"first": FOLDING})
     before = op(model).choices()
-    bound = network(model, model.graph.node)
+    bound = composition(model, model.graph.node)
     for forged, code in (
         ("compute.packed.typo", "choice-unknown"),
         ("simd", "choice-value-invalid"),
     ):
         stated = {("first", "pe"): 4, ("first", forged): "two"}
-        monkeypatch.setattr(Partition, "chosen", lambda self, names=None, stated=stated: stated)
+        monkeypatch.setattr(
+            CoreComposition, "chosen", lambda self, names=None, stated=stated: stated
+        )
         with refused(
             code, error=KernelOpError, owner="MatMul", node="first", keys=(forged,)
         ) as caught:
-            persist(model, bound)
+            persist(model, bound.point)
         assert dict(caught.finding.details)["node"] == op(model).label
     assert op(model).choices() == before
 
@@ -283,12 +285,12 @@ def test_the_weight_sources_choices_persist_on_the_weights_and_the_network_repla
         "source.pumped_memory": False,
         "transport": "direct",
     }
-    weights = network(model, model.graph.node).member("w")
+    weights = composition(model, model.graph.node).member("w")
     assert weights.source.ram_style == "block" and isinstance(weights.source, MemStreamKernel)
     with refused("not-a-decision", owner="w.source"):
         configured(model, {"w": {"source": "memstream"}})
     assert "source" not in channel_choices(model, "w")
-    assert network(model, model.graph.node).member("w").source.ram_style == "block"
+    assert composition(model, model.graph.node).member("w").source.ram_style == "block"
 
 
 def test_conversion_stores_every_value_its_policies_set() -> None:

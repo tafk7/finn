@@ -12,9 +12,9 @@ from common import PLATFORM, configured, emit
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
-from finn.kernels.composer import Facts, PartitionDeclaration, Port, channel
+from finn.kernels.composer import DataflowCoreDeclaration, Facts, Port, channel
+from finn.kernels.explore import CoreComposition
 from finn.kernels.fifo import FifoKernel
-from finn.kernels.partition import Partition
 from finn.kernels.sides import BUILD, Outside, Side
 from finn.kernels.vpc import VpcKernel
 
@@ -24,7 +24,7 @@ THREE = BeatSequence(vector_major(TENSOR.shape, 3))
 
 # Real native authoring lives in src/finn/kernels/vpc.py and fifo.py. Each owns
 # ordinary Param/Decision and PortModel children; the parent names real ports.
-DECLARATION = PartitionDeclaration(
+DECLARATION = DataflowCoreDeclaration(
     {
         "convert": Facts(VpcKernel, {"input_tensor": TENSOR, "arriving": TWO, "leaving": THREE}),
         "buffer": Facts(
@@ -51,10 +51,11 @@ DECLARATION = PartitionDeclaration(
             Port("buffer", "output"), Side.boundary("m_axis_0"), tensor=TENSOR, platform=PLATFORM
         ),
     },
+    name="native",
 )
 
 
-def network() -> Partition:
+def network() -> CoreComposition:
     # Explicit physical capacity, not derived from a rate or claimed sufficient.
     return configured(DECLARATION, {("buffer", "ram_style"): "distributed"})
 

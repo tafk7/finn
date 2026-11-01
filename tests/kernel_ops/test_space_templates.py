@@ -21,11 +21,13 @@ from core.space._domains_support import domain_differences
 from core.space._templates_support import assert_reads_alike, defined, links, reached
 from core.space._whole_support import differences
 from support.chain import MEMBERS, chain
+from support.configure import core_in_shell
 from support.models import chain_model
 
 import finn.custom_op
 import finn.kernels
 from finn.core.graph.annotations.platform import read_target
+from finn.core.graph.partition import CUT_NAME
 from finn.core.space import Group, Space, inspection
 from finn.core.space._running.evaluate import evaluation
 from finn.core.space._scopes import EAGER, Address, ScopeRecord, Scopes
@@ -34,11 +36,12 @@ from finn.core.space.compiler import compile_model
 from finn.core.space.occurrence import ask, held
 from finn.core.space.results import Available, QueryResult, Unresolved
 from finn.custom_op.kernels.network import declaration
-from finn.custom_op.kernels.shell import in_shell
 from finn.kernels.budgets import _ClockRequirement, _DoubledAny, _MoverSum, _PresentedSum, _Sum
-from finn.kernels.composer import Composed, clear_classes, compose
+from finn.kernels.channels import Channel
+from finn.kernels.composer import clear_classes, compose
 from finn.kernels.configure import commit
 from finn.kernels.control import ControlModel
+from finn.kernels.dataflow_core import DataflowCoreKernel
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import InputGeneratorKernel
@@ -103,6 +106,7 @@ PORT_TYPES: dict[type[Space], dict[str, type[StreamPort]]] = {
     PackedDotpKernel: {"x": InPort, "w": InPort, "y": OutPort},
     Int8Dsp58DotpKernel: {"x": InPort, "w": InPort, "y": OutPort},
     MemStreamKernel: {"set": InPort, "output": OutPort},
+    Channel: {"outer_in": InPort, "outer_out": OutPort},
 }
 GROUP_TYPES = {_Sum, _PresentedSum, _MoverSum, _DoubledAny, _ClockRequirement, ControlModel}
 
@@ -168,22 +172,42 @@ def test_stage_7s_chain_of_eight_kernels_reads_alike_in_any_order_its_scopes_are
     records = compile_model(whole).scopes.ordered()
     ports = _assert_native_scope_ownership(records)
     # All original226 real non-port scopes remain; the assembled native Ports and
-    # Control/budget Group namespaces are accounted separately, with ownership checked.
+    # Control/budget Group namespaces are accounted separately, with ownership checked. The
+    # ports count each channel's two outer ports, placed or not (26 of the 296).
     assert len(_real_nonport_scopes(records)) == 226
-    assert len(ports) == 270
+    assert len(ports) == 296
     assert len(_group_scopes(records)) == 55
+
+
+def _through_a_node_alias(key: str, reads: list[str]) -> bool:
+    """Whether method ``key``'s gained ``reads`` are a channel's neighbours read through a
+    node alias over its member's selector (``x = compute.x``), which the line, older than
+    node aliases, does not follow (``core.space.test_whole``): the selector, and each case's
+    leaf below it."""
+    selector = reads[0]
+    return (
+        key.endswith("-neighbours.$output")
+        and len(reads) > 1
+        and all(read.startswith(f"{selector}.") for read in reads[1:])
+    )
 
 
 def _answers_as_the_line(classes: list[type[Space]]) -> int:
     """Each class's answers to the questions about its whole design space, from templates,
-    equal the line's; no method gained an inferred read; the number of choices compared."""
+    equal the line's; no method gained an inferred read but through a node alias; the
+    number of choices compared."""
     failures: list[str] = []
     decisions = 0
     for space_type in classes:
         compared = differences(space_type)
         failures.extend(compared.differences)
-        if compared.gained:
-            failures.append(f"{space_type.__qualname__}: reads gained {compared.gained}")
+        gained = {
+            key: reads
+            for key, reads in compared.gained.items()
+            if not _through_a_node_alias(key, reads)
+        }
+        if gained:
+            failures.append(f"{space_type.__qualname__}: reads gained {gained}")
         decisions += compared.decisions
     assert not failures, "\n".join(failures)
     return decisions
@@ -206,26 +230,29 @@ def test_stage_7s_chain_of_eight_kernels_answers_as_the_line() -> None:
     assert _answers_as_the_line([whole]) == 130
 
 
-def fresh_chain() -> tuple[Composed, dict[str, object]]:
+def fresh_chain() -> tuple[DataflowCoreKernel, dict[str, object]]:
     """Stage 7's chain at 8 kernels composed as one Space with a model of its own (the
     graph layer's declaration, in its shell, composed), and its stored values by path:
     the graph layer binds a partition of the same class as it reads the stored values
-    (``in_shell``), so the composer's classes are dropped before it is composed."""
+    (``finn.custom_op.kernels.shell.core_point``), so the composer's classes are dropped
+    before it is composed."""
     model = chain_model(4)
     nodes = list(model.graph.node)
     target = read_target(model)
-    declared = declaration(model, nodes, movers=shell_row(target.shell, target.board).movers)
-    stored = in_shell(model, nodes).chosen()
+    row = shell_row(target.shell, target.board)
+    declared = declaration(model, nodes, name=CUT_NAME, movers=row.movers)
+    stored = core_in_shell(model, nodes).chosen()
     clear_classes()
     composed = compose(declared)
-    return composed, {composed.names.path(key): value for key, value in stored.items()}
+    names = type(composed).names
+    return composed, {names.path(key): value for key, value in stored.items()}
 
 
 def chain_class() -> type[Space]:
     """Stage 7's chain at 8 kernels: its partition's class, as the graph layer binds it in
     its shell."""
     model = chain_model(4)
-    return in_shell(model, model.graph.node).composed.space_type
+    return type(core_in_shell(model, model.graph.node).point)
 
 
 def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
@@ -233,7 +260,7 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
 ) -> None:
     monkeypatch.delenv(EAGER, raising=False)  # the eager test mode makes everything at once
     composed, _ = fresh_chain()
-    point = composed.design_space()
+    point = composed
     scopes = inspection.model(point).scopes
     assert isinstance(point.mm0.query(MatMulKernel.frame_cycles), Unresolved)  # type: ignore[attr-defined]
     read = scopes.counts()
@@ -309,12 +336,21 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
 # (-64 members, -104 constants at the baseline; -78, -125 after ``viable``), each kernel's
 # ports take its interface protocol's transport (+4, +6 non-port members); and when its presentation
 # reads what paces its beats, to read a selector's group (+44, +12; +55, +16).
-# Then ports' ((624, 252), (740, 298)) and the totals ((1641, 294), (1805, 340)) became these
-# when that one readout became two, ``pacing`` and, for a port that follows another,
-# ``follows``: a placed port that follows another reads both (+12 members; +16).
-NONPORT_EVALUATED = ((1017, 42), (1065, 42))
-PORT_EVALUATED = ((636, 252), (756, 298))
-EVALUATED = ((1653, 294), (1821, 340))
+# Then ports' ((624, 252), (740, 298)) and the totals ((1641, 294), (1805, 340)) became
+# ((636, 252), (756, 298)) and ((1653, 294), (1821, 340)) when that one readout became two,
+# ``pacing`` and, for a port that follows another, ``follows``: a placed port that follows
+# another reads both (+12 members; +16).
+# Then non-ports' (1017, 42) and (1065, 42), and ports' and the totals, became these when a
+# channel's boundary became a port of its own, its outer port (``outer_in``, ``outer_out``,
+# each placed where its side is the boundary): each channel's derived ``boundary`` is gone,
+# and it evaluates which side is the boundary (``entering``, ``leaving``) and each outer
+# port's guard (+3 each of the 13 channels); the two boundary channels, ``x`` and ``y``, what
+# their port presents (``outer_sequence``, ``outer_transport``, +4); and the two outer ports
+# placed, ``x.outer_in`` and ``y.outer_out``, their own members, as a stage's port does, each
+# reading ``follows`` as well (+31, +11 constants).
+NONPORT_EVALUATED = ((1060, 42), (1108, 42))
+PORT_EVALUATED = ((667, 263), (787, 309))
+EVALUATED = ((1727, 305), (1895, 351))
 
 
 def _assert_evaluated(scopes: Scopes, stage: int) -> None:
@@ -354,7 +390,7 @@ def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
     its scope reads it. An absent scope's validity is read from its guard and its choices'
     presence from their guards, so no scope absent at the baseline has a member evaluated
     for either, and none of unknown presence in the design space before the change
-    either: in-play scopes are the38 original non-port owners plus40 native Port children,
+    either: in-play scopes are the38 original non-port owners plus42 native Port children,
     all present at the baseline; Group namespaces have no independent validity. Each
     MatMul's ``compute.int8_dsp58`` case, of
     unknown presence before the change, has none evaluated.
@@ -364,7 +400,7 @@ def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
     streams)."""
     monkeypatch.delenv(EAGER, raising=False)
     composed, stored = fresh_chain()
-    point = composed.design_space()
+    point = composed
     scopes = inspection.model(point).scopes
     committed = commit(point, stored)
     counted = scopes.counts()
@@ -373,9 +409,9 @@ def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
     active_ports = _port_scopes(in_play)
     assert len(_real_nonport_scopes(scopes.registry.records.values())) == 225
     assert len(_group_scopes(scopes.registry.records.values())) == 17
-    assert counted["scopes made"] == 225 + 270 + 17
+    assert counted["scopes made"] == 225 + 296 + 17
     assert counted["scopes in play"] - len(active_ports) == 38
-    assert len(made_ports) == 270 and len(active_ports) == 40
+    assert len(made_ports) == 296 and len(active_ports) == 42
     _assert_evaluated(scopes, 0)
 
     def answer(of: Space, index: Address) -> QueryResult[object]:
@@ -398,7 +434,7 @@ def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
         record for record in records if record.compiled.validity is not None and present(record)
     }
     assert len(_real_nonport_scopes(present_scopes)) == 38
-    assert len(_port_scopes(present_scopes)) == 40
+    assert len(_port_scopes(present_scopes)) == 42
     assert in_play == present_scopes
     unknown = {record for record in records if record.name.endswith(".compute.int8_dsp58")}
     assert {record.name for record in unknown} == {
@@ -417,9 +453,9 @@ def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
     counted = scopes.counts()
     assert len(_real_nonport_scopes(scopes.registry.records.values())) == 225
     assert len(_group_scopes(scopes.registry.records.values())) == 17
-    assert counted["scopes made"] == 225 + 270 + 17
+    assert counted["scopes made"] == 225 + 296 + 17
     assert counted["scopes in play"] - len(_port_scopes(scopes.in_play())) == 43
-    assert len(_port_scopes(scopes.in_play())) == 47
+    assert len(_port_scopes(scopes.in_play())) == 49
     _assert_evaluated(scopes, 1)
     additional = set(scopes.in_play()) - in_play
     assert {record.name for record in additional - _port_scopes(additional)} == {
@@ -443,7 +479,7 @@ def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
     counted = scopes.counts()
     assert len(_real_nonport_scopes(scopes.registry.records.values())) == 225
     assert len(_group_scopes(scopes.registry.records.values())) == 17
-    assert counted["scopes made"] == 225 + 270 + 17
+    assert counted["scopes made"] == 225 + 296 + 17
     assert counted["scopes in play"] - len(_port_scopes(scopes.in_play())) == 43
-    assert len(_port_scopes(scopes.in_play())) == 47
+    assert len(_port_scopes(scopes.in_play())) == 49
     _assert_evaluated(scopes, 1)

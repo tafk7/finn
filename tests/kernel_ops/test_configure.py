@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
-from support.configure import configured, write_raw
+from support.configure import composition, configured, core_in_shell, write_raw
 from support.explore_models import kernel_model as open_chain
 from support.helpers import FULL_DSP58, choose
 from support.models import (
@@ -29,10 +29,11 @@ from support.refusals import refused
 
 from finn.core.graph.annotations.channel import channel_choices
 from finn.core.graph.annotations.platform import write_target
+from finn.core.graph.partition import CUT_NAME
 from finn.core.space import inspection
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import network, persist
-from finn.custom_op.kernels.shell import in_shell
+from finn.kernels.explore import CoreComposition
 from finn.platform.target import Target
 from finn.transformation.kernels import InferKernelTensors
 
@@ -74,7 +75,7 @@ def test_a_kernels_choices_are_set_and_persisted_on_its_node() -> None:
     model = matmul_model()
     assert configured(model, {"first": FOLDED}) is model
     assert stored(model) == FOLDED
-    assert network(model, model.graph.node).member("first").compute.pe == 2
+    assert composition(model, model.graph.node).member("first").compute.pe == 2
 
 
 def test_a_channels_choices_are_set_with_its_kernels_in_one_batch() -> None:
@@ -92,7 +93,7 @@ def test_a_channels_choices_are_set_with_its_kernels_in_one_batch() -> None:
         "source.pumped_memory": False,
         "transport": "direct",
     }
-    assert network(model, model.graph.node).member("w").source.ram_style == "block"
+    assert composition(model, model.graph.node).member("w").source.ram_style == "block"
     # What a later call does not name stays.
     configured(model, {"w": {"transport": "fifo", "transport.fifo.depth": 8}})
     assert channel_choices(model, "w")["source.ram_style"] == "block"
@@ -109,8 +110,9 @@ def test_the_chain_is_configured_as_the_compiler_states_it() -> None:
         model,
         {"first": MATMUL, "activate": THRESHOLDING, "second": MATMUL, **channels},
     )
-    bound = network(model, model.graph.node)
-    assert not bound.stale
+    found = network(model, model.graph.node, name=CUT_NAME)
+    bound = CoreComposition(found.point)
+    assert not found.stale
     assert bound.member("first").compute.pe == MATMUL["pe"]
     assert {key for key in bound.chosen() if key[0] in channels} >= {
         ("w1", "transport"),
@@ -208,7 +210,7 @@ def test_a_nested_choice_under_a_case_not_selected_is_stored_out_of_play() -> No
     model = matmul_model()
     configured(model, {"first": {**FOLDED, "compute.int8_dsp58.compute_pumping": False}})
     assert stored(model)["compute.int8_dsp58.compute_pumping"] == 0  # stored as an int
-    bound = network(model, model.graph.node)
+    bound = composition(model, model.graph.node)
     states = dict(bound.states(("first",)))
     assert states[("first", "compute.int8_dsp58.compute_pumping")] == inspection.Dormant(False)
     # The folding is MatMul's: in play whatever the core.
@@ -256,7 +258,7 @@ def test_a_channel_whose_contracts_wait_on_an_open_kernel_stores_its_choice() ->
     assert channel_choices(model, "w") == {}
     configured(model, {"w": {"source.ram_style": "block"}})
     assert channel_choices(model, "w")["source.ram_style"] == "block"
-    bound = network(model, model.graph.node)
+    bound = composition(model, model.graph.node)
     assert bound.chosen(["w"])[("w", "source.ram_style")] == "block"
     validity = bound.validity("w")
     assert validity.status == "open"
@@ -306,9 +308,9 @@ def test_persist_refuses_a_channel_choice_on_a_graph_with_host_nodes_before_any_
     configured(model, {"first": FOLDED})
     before = stored(model)
     nodes = [node for node in model.graph.node if node.name == "first"]
-    stated = choose(in_shell(model, nodes), {"w.transport": "direct"})
+    stated = choose(core_in_shell(model, nodes), {"w.transport": "direct"})
     with refused("channel-choices-outside-body", keys=("w",)):
-        persist(model, stated)
+        persist(model, stated.point)
     assert channel_choices(model, "w") == {}
     assert stored(model) == before
 

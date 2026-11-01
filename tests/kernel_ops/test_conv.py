@@ -43,7 +43,7 @@ from support.op_specs.base import GENERAL, source
 from support.tfc import ULTRA96, run_steps
 from support.xsim import requires_xsim
 
-from finn.core.graph.partition import KERNEL_OPS_DOMAIN, partition_body
+from finn.core.graph.partition import CUT_NAME, KERNEL_OPS_DOMAIN, partition_body
 from finn.custom_op.kernels import Conv
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import configured_network
@@ -99,7 +99,7 @@ def folded(name: str, simd: int, pe: int, directory: Path) -> ModelWrapper:
     body = single_layer(name, directory)
     (node,) = body.graph.node
     configured(body, {node.name: {"simd": simd, "pe": pe}})
-    return body.transform(MakeCutChoices())
+    return body.transform(MakeCutChoices(CUT_NAME))
 
 
 @pytest.mark.parametrize(("name", "simd", "pe", "nest"), FOLDED)
@@ -178,7 +178,9 @@ def test_a_window_inside_the_partition_is_its_edges_reorder(
     pe: int, simd: int, steps: tuple[str, ...]
 ) -> None:
     # Converted, not cut: its channels' choices created as the cut creates them.
-    point, _ = configured_network(thresholded(pe, simd).transform(MakeCutChoices()), "inside")
+    point, _ = configured_network(
+        thresholded(pe, simd).transform(MakeCutChoices(CUT_NAME)), "inside"
+    )
     assert tuple(hop.step.value for hop in point.channel("a").steps.hops) == steps
     labels = [label for label, _ in point.module.fragment.instances if label.startswith("a.")]
     assert "a.adapter.input_gen.input_gen" in labels

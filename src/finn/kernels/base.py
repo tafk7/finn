@@ -36,17 +36,20 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from functools import partial
 from types import MappingProxyType
-from typing import Any, ClassVar, get_args, get_type_hints
+from typing import Any, ClassVar, cast, get_args, get_type_hints
 
+from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import (
     DefinitionError,
     Group,
     Inapplicable,
     Members,
+    Param,
     Rejected,
     Space,
     derived,
     reject,
+    space_formals,
     view,
 )
 from finn.core.space._aliases import alias_table
@@ -56,12 +59,20 @@ from finn.core.space._nodes import (
     NodeDecision,
     NodeDecl,
     assign,
+    is_required,
     node_record,
     selected,
     space_members,
     unwrap,
 )
-from finn.core.space.declarations import Declaration, Derived, View, unmet_required
+from finn.core.space.declarations import (
+    ChoiceMemberRef,
+    Declaration,
+    Derived,
+    MemberRef,
+    View,
+    unmet_required,
+)
 from finn.dataflow.schedule import (
     Access,
     Affine,
@@ -73,9 +84,9 @@ from finn.dataflow.schedule import (
     span,
 )
 from finn.kernels.artifacts import ArtifactError
-from finn.kernels.artifacts.abi import Clocking, Pin
+from finn.kernels.artifacts.abi import Clocking
 from finn.kernels.artifacts.contributions import Contribution, GeneratedData
-from finn.kernels.artifacts.module import BusExport, Fragment, Held, Link, merge
+from finn.kernels.artifacts.module import BusExport, Fragment, Link, merge
 from finn.kernels.control import Control, ControlModel, control_models, presented
 from finn.kernels.laws import (
     AXIS_PROTOCOL,
@@ -197,6 +208,29 @@ def _members(cls: type[Kernel]) -> dict[str, object]:
     return found
 
 
+# -- the names the base installs ------------------------------------------------------------
+#
+# Each member the base installs on a kernel's class, and each helper it reads them through,
+# is named beginning with ``-``: ``-<member>-...-<what>`` for one of a member's (``-h-hops``,
+# member channel ``h``'s hops; ``<what>`` one of ``neighbours``, ``ends``, ``hops``,
+# ``producer``, ``consumer``, ``placed``, ``case`` and ``governed``), ``-<what>-<i>`` for the
+# ``i``-th helper of a reading (``-hops-0``), and the base's own ``-end`` (ending each
+# reading), ``-placed``, ``-no-port`` and ``-own-buses``. No member's name holds a ``-`` (a
+# Python name, or a graph name as ``finn.kernels.composer`` names its member, ``\W`` as
+# ``_``), and a composed class's root members begin with their member's name
+# (``mm0-x_tensor``), so no member meets one, whatever its name; their last segments, a word
+# or a number, keep them apart.
+
+
+def _installed(*parts: str) -> str:
+    """The name of a member or helper the base installs (above): ``-`` and its ``parts``,
+    joined by ``-``."""
+    return "-" + "-".join(parts)
+
+
+_END = _installed("end")
+
+
 # -- the module's parts, read serially ------------------------------------------------------
 #
 # A module's pins are its other pins' (``OtherPins``), its control bus's, then its ports',
@@ -208,8 +242,8 @@ def _members(cls: type[Kernel]) -> dict[str, object]:
 # installs, for a kernel with a module, one helper a part, each reading its part by the name
 # its closure holds and then the next helper by name, the last reading none.
 
-_PINS, _HELD, _PRESENTED = "_module_pins", "_module_held", "_module_presented"
-_BEATS = "_module_beats"
+_PINS, _HELD, _PRESENTED = "pins", "held", "presented"
+_BEATS = "beats"
 
 
 def _pins_from(part: str, following: str) -> Callable[[Kernel], tuple[Any, ...]]:
@@ -288,7 +322,7 @@ def _supply_ports(cls: type[Kernel]) -> None:
     And a selector of its body (``InPort.governs``, a literal naming another port of its
     kernel, declared in its body or inherited) with the beats a frame of the port it governs
     (``InPort.governed_beats``, from which its ``group`` follows), by a private derived
-    member of its body, ``_<selector>_governed``."""
+    member of its body, ``-<selector>-governed``."""
     from finn.kernels.port_model import InPort, StreamPort  # noqa: PLC0415
 
     body = dict(vars(cls))
@@ -305,8 +339,9 @@ def _supply_ports(cls: type[Kernel]) -> None:
             and "governed_beats" not in record.settings
         ):
             beats = derived(_governed_beats(governs))
-            setattr(cls, f"_{name}_governed", beats)
-            getattr(beats, "__set_name__")(cls, f"_{name}_governed")
+            governed = _installed(name, "governed")
+            setattr(cls, governed, beats)
+            getattr(beats, "__set_name__")(cls, governed)
             assign(value, "governed_beats", beats)
         if "label" not in record.settings:
             assign(value, "label", name)
@@ -373,13 +408,13 @@ def _node_paths(
 # outside its profile, is reported under that name), and installs its ``intake``: the
 # stated one, refused where it names a port that is no placed input of the kernel
 # (``intake-port-unknown``). Its placed inputs are read as its module's parts are, one
-# helper each (``_placed_inputs_<i>``).
+# helper each (``-inputs-<i>``).
 #
 # The refusal is the intake's alone, and its design point stays valid: a rule reading the
 # stated intake would be refused wherever the intake is (an unstated one, Pool's outside
 # its profile, one reading a refused fact), and would read the kernel's choices.
 
-_INPUTS = "_placed_inputs"
+_INPUTS = "inputs"
 
 
 def _inputs_from(part: str, following: str) -> Callable[[Kernel], tuple[Any, ...]]:
@@ -393,7 +428,7 @@ def _inputs_from(part: str, following: str) -> Callable[[Kernel], tuple[Any, ...
 def _checked_intake(owner: str) -> Callable[[Kernel], Intake | Rejected]:
     def intake(self: Kernel) -> Intake | Rejected:
         stated: Intake = getattr(self, "stated_intake")
-        placed = self._placed_inputs_0()
+        placed = getattr(self, "-inputs-0")()
         unknown = [name for name in stated.names if name not in placed]
         if unknown:
             return reject(
@@ -671,6 +706,46 @@ def _expose_ports(cls: type[Kernel]) -> None:
     cls._exposed_names = MappingProxyType(exposed)
 
 
+# -- a sealed kernel's edge ----------------------------------------------------------------
+#
+# A sealed kernel (``Kernel.sealed``: its realization is one module of its own) lowers the
+# ports it exposes itself, as its module's own pins (``finn.kernels.port.exposed_pins``).
+# Where a stream leaves a module the boundary rule applies, which a channel's outer port
+# presents (``finn.kernels.channels.Channel.outer_in``, ``outer_out``): so each port a sealed
+# kernel exposes is a member channel's outer port, never a kernel's port or a channel's
+# member's, and a transparent kernel may expose any member's port.
+
+
+def _check_sealed(cls: type[Kernel]) -> None:
+    """Refuse, for a sealed kernel, a node alias of its own whose nodes are not each a member
+    channel's outer port, ``<channel>.outer_in`` or ``<channel>.outer_out``
+    (``core-edge-unchanneled``, above)."""
+    if not cls.sealed:
+        return
+    members = _members(cls)
+    for name, entry in alias_table(cls).items():
+        unchanneled = [
+            end.path
+            for end in entry.ends
+            if not (
+                len(end.path.split(".")) == 2
+                and end.path.split(".")[1] in _OUTER
+                and _connects(members.get(end.path.split(".")[0]))
+            )
+        ]
+        if entry.ends and not unchanneled:
+            continue
+        where = f"{cls.__qualname__}.{name}"
+        raise DefinitionError.broken(
+            "core-edge-unchanneled",
+            "Kernel",
+            f"{where} exposes {unchanneled or 'nothing'}: a sealed kernel's edge port is a "
+            "member channel's outer port, where the boundary rule applies, never a kernel's "
+            "port",
+            declaration=where,
+        )
+
+
 # -- its control bus ------------------------------------------------------------------------
 #
 # A kernel declares its control bus once, a ``ControlModel`` in its own body, and the base
@@ -781,7 +856,7 @@ def _derive_control(cls: type[Kernel]) -> None:
         )
     if may_present:
         cls._presents_buses = True
-        setattr(cls, "_own_buses", _own_buses(name))
+        setattr(cls, "-own-buses", _own_buses(name))
     declares = _declares_bus()
     declares.__annotations__ = {"return": bool}
     declares.__doc__ = f"Whether it declares a control bus: it does, {name}."
@@ -807,9 +882,9 @@ def _derive_control(cls: type[Kernel]) -> None:
 # may present a bus. It reads those members only, one after another, each where it is
 # present (its guard read by the name its closure fixes) and, a selector, its selected case
 # only: a dormant case is never read. As for the module's parts, each member is read by its
-# own helper, ``<prefix>_<i>``, so that each read names its member.
+# own helper, ``-<prefix>-<i>``, so that each read names its member.
 
-_DOUBLED, _BUSES = "_doubled", "_buses"
+_DOUBLED, _BUSES = "doubled", "buses"
 _AGGREGATED = "_finn_aggregated"
 
 
@@ -897,10 +972,10 @@ def _buses_from(
 
 def _case_member(cls: type[Kernel], member: str, item: object) -> str | None:
     """The name of ``cls``'s private member answering a selector member's case
-    (``_<member>_case``), installed where it is not yet; None for a child."""
+    (``-<member>-case``), installed where it is not yet; None for a child."""
     if not isinstance(item, NodeChoice):
         return None
-    case = f"_{member}_case"
+    case = _installed(member, "case")
     if case not in vars(cls):
         found = selected(item)
         setattr(cls, case, found)
@@ -929,7 +1004,7 @@ def _derive_doubled(cls: type[Kernel]) -> None:
         def takes_doubled_clock(self: Kernel) -> bool:
             if self.clocking.doubling:
                 return True
-            return bool(self._doubled_0())
+            return bool(getattr(self, "-doubled-0")())
 
         takes_doubled_clock.__doc__ = vars(Kernel)["takes_doubled_clock"].function.__doc__
         _set_aggregated(cls, "takes_doubled_clock", takes_doubled_clock, bool)
@@ -950,7 +1025,7 @@ def _derive_doubled(cls: type[Kernel]) -> None:
         )
 
         def control_buses(self: Kernel) -> tuple[str, ...]:
-            found: tuple[str, ...] = (*self._own_buses(), *self._buses_0())
+            found: tuple[str, ...] = (*getattr(self, "-own-buses")(), *getattr(self, "-buses-0")())
             return found
 
         control_buses.__doc__ = vars(Kernel)["control_buses"].function.__doc__
@@ -962,12 +1037,12 @@ def _install_reading(
     prefix: str,
     readers: list[tuple[Callable[[str, str], Callable[[Kernel], Any]], str]],
 ) -> None:
-    """The helpers ``<prefix>_<i>``, each reading its member, by the reading made for it
+    """The helpers ``-<prefix>-<i>``, each reading its member, by the reading made for it
     from its member's name and the next helper's, and then the next helper; the last
-    reads none (``_module_end``)."""
+    reads none (``-end``)."""
     for index, (reading, member) in enumerate(readers):
-        following = f"{prefix}_{index + 1}" if index + 1 < len(readers) else "_module_end"
-        setattr(cls, f"{prefix}_{index}", reading(member, following))
+        following = _installed(prefix, str(index + 1)) if index + 1 < len(readers) else _END
+        setattr(cls, _installed(prefix, str(index)), reading(member, following))
 
 
 def _set_aggregated(
@@ -986,12 +1061,563 @@ def _install(
     reading: Callable[[str, str], Callable[[Kernel], tuple[Any, ...]]],
     parts: tuple[str, ...],
 ) -> None:
-    """The helpers ``<prefix>_<i>`` reading ``parts`` from the ``i``-th on (above)."""
+    """The helpers ``-<prefix>-<i>`` reading ``parts`` from the ``i``-th on (above)."""
     for index, part in enumerate(parts):
-        following = f"{prefix}_{index + 1}" if index + 1 < len(parts) else "_module_end"
-        setattr(cls, f"{prefix}_{index}", reading(part, following))
+        following = _installed(prefix, str(index + 1)) if index + 1 < len(parts) else _END
+        setattr(cls, _installed(prefix, str(index)), reading(part, following))
     if not parts:
-        setattr(cls, f"{prefix}_0", Kernel._module_end)
+        setattr(cls, _installed(prefix, "0"), _read_none)
+
+
+# -- its member channels: the ports each connects, the ports beside it, its hops to them -----
+#
+# A kernel may hold channels among its members (a kernel that ``connects``: a channel,
+# ``finn.kernels.channels.Channel``), each joining two of its members' ports, or a port and
+# what is given as a value (its boundary, its source, a frozen neighbour). A channel side
+# names a member's port by its binding: the port's ``side``, bound directly or through a
+# derived value reading it (the composer's, which labels it below its member), and a side
+# given as a value names none. When its class is made, the base reads which member port each
+# side names (``Kernel.connections``), and refuses, each finding naming the port (a side's,
+# its channel and role):
+#
+# - a channel side whose binding reads more than one member's port (``channel-side-ports``):
+#   a side names one port at most;
+# - a member's port two channel sides name (``port-connected-twice``): a port is on one
+#   channel; two readers of one value are one channel's;
+# - a member's port that no channel side names and no node alias of its own exposes
+#   (``port-unconnected``): a member's port is connected inside its holder, by a channel, or
+#   presented outside it, by an alias; no holder ties a port off. A channel's ports count as
+#   any member's (a weight channel's ``set``, its source's), but for its outer ports
+#   (``outer_in``, ``outer_out``): placed only where its side is the boundary, a fact its
+#   holder is given, they are its holder's edge, presented by an alias where they are placed
+#   (a core's edge port; a sealed core's design point that places one no alias presents is
+#   refused by its edge, ``finn.kernels.dataflow_core.DataflowCoreKernel.edge_buses``). A
+#   port its member places only where it is given an optional fact, and is not given it (a
+#   selector's set port with one set: its tensor, ``set_tensor``, left out; a channel's
+#   ``set``, its source's, without an ``index_tensor``), is idle by its member's structure,
+#   held idle by its member, and needs neither. No other port is exempt: a port its
+#   structure may place, by any other fact, is connected or refused, so no port is left
+#   dangling silently (an output nothing reads is refused like any other).
+#
+# And it installs, for each channel, three private views of its own: the ports beside it
+# (``finn.kernels.channels.Neighbours``: each port's stream pins as its member presents them,
+# labelled below the member, and its pace in cycles where it owns its pacing; a side
+# given as a value has none, but where its holder states that side's reading, ``-<channel>-
+# <role>``: a slice's frozen neighbour's port, given as a fact), which
+# ``neighbours`` names and FIFO sizing reads; the channel's own ends its hops meet (its
+# stages, its source, its outer ports), which ``own_ends`` names; and its hops to the ports
+# beside it (``finn.kernels.channels.outer_hops``), which ``hops`` names, refused as
+# ``channel-unused`` where a port it is on is not placed, and which its ``netlist`` places
+# around the channel's own. Being views of the holder, each is answered only where every rule
+# of the holder accepts it (the engine answers a view so): a refused holder has neither its
+# channels' neighbours nor their hops: a view of a design point a rule refuses would
+# describe a configuration that cannot be, so a reader gets the rule's refusal instead,
+# while each member's own views still answer.
+# Each reads its ports by the names its closure fixes, an exposed port's leaf by the case its
+# member's selector holds (``-<member>-<selector>-case``).
+
+
+@dataclass(frozen=True)
+class MemberPort:
+    """A member's stream port a channel side names: member ``member``'s port ``port``, under
+    the name the member presents it (its own port's, or the node alias it exposes a member's
+    port under, ``x = compute.x``)."""
+
+    member: str
+    port: str
+
+    def __str__(self) -> str:
+        return f"{self.member}.{self.port}"
+
+
+def _connects(item: object) -> bool:
+    """Whether member ``item`` is a channel (its class ``connects``)."""
+    record = node_record(item)
+    return (
+        record is not None and issubclass(record.space_type, Kernel) and record.space_type.connects
+    )
+
+
+def _member_type(cls: type[Kernel], member: str) -> type[Space]:
+    """The class of ``cls``'s member ``member``, a Space."""
+    record = node_record(_members(cls)[member])
+    assert record is not None
+    return cast("type[Space]", record.space_type)
+
+
+def _member_ports(cls: type[Kernel]) -> dict[object, MemberPort]:
+    """Each stream port a member of ``cls`` presents (its own and those it exposes,
+    ``finn.kernels.port_model.exposed_ports``), by the reference to its ``side``: a kernel's,
+    and a model's that is none (a channel on it is refused where it is wired, ``hops``)."""
+    from finn.kernels.port import stream_port  # noqa: PLC0415 - base/port cycle
+    from finn.kernels.port_model import exposed_ports  # noqa: PLC0415
+
+    found: dict[object, MemberPort] = {}
+    for name, item in _members(cls).items():
+        if node_record(item) is None:
+            continue
+        node = getattr(cls, name)
+        for port in exposed_ports(_member_type(cls, name)):
+            found[stream_port(node, port).side] = MemberPort(name, port)
+    return found
+
+
+def _sides_named(ports: Mapping[object, MemberPort], binding: object) -> tuple[MemberPort, ...]:
+    """The member ports a channel side's binding reads: its own reference, where it is one,
+    or a derived value's arguments that are; none for a side given as a value. A side names
+    one at most (``channel-side-ports``, above)."""
+    reads = tuple(binding.aliases.values()) if isinstance(binding, Derived) else (binding,)
+    return tuple(
+        dict.fromkeys(
+            ports[read]
+            for read in reads
+            if isinstance(read, (MemberRef, ChoiceMemberRef)) and read in ports
+        )
+    )
+
+
+_OUTER = ("outer_in", "outer_out")
+"""A channel's outer ports (``finn.kernels.channels.Channel``), its holder's edge (above)."""
+
+
+def _optional(kind: type[Space], bound: object) -> Param[object] | None:
+    """The formal of ``kind`` that ``bound`` is, where it is an optional one with no value
+    by default (a fact its holder may leave out); None otherwise."""
+    formal = space_formals(kind).get(getattr(bound, "name", ""))
+    if formal is None or formal is not bound or is_required(formal) or formal.default is not None:
+        return None
+    return formal
+
+
+def _idle_by_structure(cls: type[Kernel], member: str, port: str) -> bool:
+    """Whether member ``member``'s port ``port`` takes its tensor from an optional fact the
+    member is not given (left out, or given None): idle by its structure, whatever its other
+    facts (above). A port it exposes (``set = source.set``) is its leaf's, reached through
+    children (no selector), each binding the fact below it to an optional fact of its own
+    (``set_tensor=index_tensor``) or leaving it out."""
+    from finn.kernels.port import stream_port  # noqa: PLC0415 - base/port cycle
+
+    record = node_record(_members(cls)[member])
+    assert record is not None
+    kind = _member_type(cls, member)
+    holders: list[tuple[type[Space], NodeDecl]] = []
+    leaf, name = kind, port
+    entry = alias_table(kind).get(port)
+    if entry is not None:
+        if len(entry.ends) != 1:
+            return False
+        *below, name = entry.ends[0].path.split(".")
+        for segment in below:
+            held = space_members(leaf).get(segment)
+            if not isinstance(held, NodeDecl):
+                return False  # a selector: its cases' ports are not followed
+            holders.append((leaf, held))
+            leaf = cast("type[Space]", held.space_type)
+    declared = node_record(stream_port(leaf, name))
+    formal = _optional(leaf, None if declared is None else declared.bindings.get("tensor"))
+    for holder, held in reversed(holders):
+        if formal is None:
+            return False
+        bound = held.bindings.get(str(formal.name))
+        if bound is None:
+            return True
+        formal = _optional(holder, bound)
+    return formal is not None and record.bindings.get(str(formal.name)) is None
+
+
+def _connected(cls: type[Kernel]) -> dict[str, tuple[MemberPort | None, MemberPort | None]]:
+    """Each member channel of ``cls``, by its name, and the member port its producer side
+    and its consumer side name (above); refused as the connection rules say."""
+    ports = _member_ports(cls)
+    found: dict[str, tuple[MemberPort | None, MemberPort | None]] = {}
+    findings: list[Finding] = []
+    unnamed: set[MemberPort] = set()
+    for name, item in _members(cls).items():
+        if not _connects(item):
+            continue
+        record = node_record(item)
+        assert record is not None
+        sides: list[MemberPort | None] = []
+        for role in ("producer", "consumer"):
+            read = _sides_named(ports, record.bindings.get(role))
+            sides.append(read[0] if len(read) == 1 else None)
+            if len(read) > 1:
+                unnamed.update(read)
+                findings.append(
+                    Finding(
+                        FindingKind.AUTHORING,
+                        "channel-side-ports",
+                        "Kernel",
+                        f"{name}'s {role} side reads the ports "
+                        f"{', '.join(map(str, read))}: a channel side names one member port "
+                        "at most",
+                        (("declaration", cls.__qualname__), ("member", name), ("role", role)),
+                    )
+                )
+        found[name] = (sides[0], sides[1])
+    channels: dict[MemberPort, list[str]] = {}
+    for name, pair in found.items():
+        for port in pair:
+            if port is not None:
+                channels.setdefault(port, []).append(name)
+    for port, named in channels.items():
+        if len(named) > 1:
+            findings.append(
+                _connection_finding(
+                    "port-connected-twice",
+                    cls,
+                    port,
+                    f"{port} is on the channels {', '.join(named)}: a port is on one channel, "
+                    "and two readers of one value are that value's one channel",
+                    named,
+                )
+            )
+    exposed = cls._exposed_names
+    for port in dict.fromkeys(ports.values()):
+        if port in channels or port in unnamed:
+            continue
+        if _connects(_members(cls)[port.member]) and port.port in _OUTER:
+            continue
+        paths = _node_paths(cls, (port.member, *port.port.split(".")), ())
+        if any(path in exposed for path in paths):
+            continue
+        if _idle_by_structure(cls, port.member, port.port):
+            continue
+        findings.append(
+            _connection_finding(
+                "port-unconnected",
+                cls,
+                port,
+                f"{port} is on no channel and exposed by no alias: a member's port is "
+                "connected by a channel, or presented outside by an alias, and no holder ties "
+                "a port off",
+                [],
+            )
+        )
+    if findings:
+        raise DefinitionError(
+            f"{cls.__qualname__}: " + "; ".join(each.message for each in findings),
+            findings=findings,
+        )
+    return found
+
+
+def _connection_finding(
+    code: str, cls: type[Kernel], port: MemberPort, message: str, channels: list[str]
+) -> Finding:
+    """A connection rule's finding (above), its port, member and channels in its details."""
+    details: tuple[tuple[str, object], ...] = (
+        ("declaration", cls.__qualname__),
+        ("member", port.member),
+        ("port", port.port),
+    )
+    if channels:
+        details += (("channels", tuple(channels)),)
+    return Finding(FindingKind.AUTHORING, code, "Kernel", message, details)
+
+
+def _leaves(
+    cls: type[Kernel], member: str, port: str
+) -> tuple[str | None, str | None, dict[str, tuple[str, bool]]]:
+    """Where member ``member``'s port ``port`` has its pins, relative to the member, and
+    whether it owns its pacing there (it presents its kernel's schedule: it has a pace in
+    cycles, ``timed_pace``). An exposed port's are on its leaf, the node its alias reaches,
+    each holder where it places it (``Kernel.placed_at``) and a selector's case by its key
+    (``compute.packed``), as ``finn.kernels.port.exposed_pins`` finds them of a design space.
+    Returned as the selector the alias reads through (its path below the member; None where
+    none), the member's own derived value guarding the child it reads through (a channel's
+    ``valued``, guarding its ``source``; None where it reads through no guarded child) and, by
+    case, the leaf and whether the port there is scheduled (one entry, keyed ``""``, for an
+    alias through no selector, and for a port of the member's own, whose pins are on the
+    member, its leaf ``""``). A sealed member's exposed port is its own too: its pins are its
+    module's."""
+    from finn.kernels.port import stream_port  # noqa: PLC0415 - base/port cycle
+
+    kind = _member_type(cls, member)
+    entry = alias_table(kind).get(port)
+    if entry is None or getattr(kind, "sealed", False):
+        declared = node_record(stream_port(kind, port))
+        bound = {} if declared is None else declared.bindings
+        return None, None, {"": ("", bound.get("schedule") is not None)}
+    selectors: set[str] = set()
+    guards: set[str] = set()
+    deep: set[str] = set()
+    leaves: dict[str, tuple[str, bool]] = {}
+    for end in entry.ends:
+        segments = end.path.split(".")
+        current: Any = kind
+        parts: list[str] = []
+        case, index = "", 0
+        while index < len(segments) - 1:
+            segment = segments[index]
+            placed: Mapping[str, str] = getattr(current, "placed_at", {})
+            parts.append(placed.get(segment, segment))
+            held = space_members(current)[segment]
+            when = getattr(held, "when", None)
+            guard = getattr(when, "name", None)
+            if when is not None and (index or not isinstance(guard, str)):
+                deep.add(".".join(segments[: index + 1]))
+            elif isinstance(guard, str):
+                guards.add(guard)
+            if isinstance(held, NodeDecision):
+                case = segments[index + 1]
+                selectors.add(".".join(segments[: index + 1]))
+                parts.append(case)
+                candidate = held.candidates[case]
+                assert candidate is not None
+                current = candidate.space_type
+                index += 2
+            else:
+                assert isinstance(held, NodeDecl)
+                current = held.space_type
+                index += 1
+        leaf = space_members(current)[segments[-1]]
+        bound = leaf.bindings if isinstance(leaf, NodeDecl) else {}
+        leaves[case] = (".".join(parts), bound.get("schedule") is not None)
+    if len(selectors) > 1 or len(guards) > 1 or deep:
+        raise DefinitionError.broken(
+            "channel-port",
+            "Kernel",
+            f"{cls.__qualname__}: a channel is on {member}.{port}, which reaches its leaf "
+            f"through the selectors {sorted(selectors)} and the guarded children "
+            f"{sorted({*guards, *deep})}: a channel's port reaches its leaf through one "
+            "selector at most, and through one child its member guards by its own member",
+            declaration=cls.__qualname__,
+        )
+    return (
+        selectors.pop() if selectors else None,
+        guards.pop() if guards else None,
+        leaves,
+    )
+
+
+def _selector_case(cls: type[Kernel], member: str, selector: str) -> str:
+    """The name of ``cls``'s private member answering the case of member ``member``'s
+    selector at ``selector``, its path below the member (``-<member>-<selector>-case``, each
+    segment of the path its own), installed where it is not yet."""
+    case = _installed(member, *selector.split("."), "case")
+    if case not in vars(cls):
+        node: Any = getattr(cls, member)
+        for segment in selector.split("."):
+            node = getattr(node, segment)
+        found = selected(node)
+        setattr(cls, case, found)
+        getattr(found, "__set_name__")(cls, case)
+    return case
+
+
+def _guard_reading(member: str, guard: str) -> Callable[[Kernel], bool]:
+    """Whether member ``member`` places the child its exposed port is read through: its
+    ``guard``."""
+
+    def placed(self: Kernel) -> bool:
+        return bool(getattr(getattr(self, member), guard))
+
+    return placed
+
+
+def _beside(
+    member: str, port: str, leaf: str, exposed: bool, scheduled: bool, present: str
+) -> Callable[[Kernel], tuple[Any, Any]]:
+    """The reading of member ``member``'s port ``port`` beside a channel (above): its stream
+    pins as the member presents them (an exposed port's on its ``leaf``), below the member,
+    and its pace in cycles where it is ``scheduled``; neither where it is not placed, or
+    where the child it is read through is not (``present``, the helper reading that)."""
+
+    def beside(self: Kernel) -> tuple[Any, Any]:
+        if not getattr(self, present)():
+            return None, None
+        if not getattr(getattr(self, member), port).placed:
+            return None, None
+        found: PortPins = getattr(getattr(self, member), port).stream_pins
+        pace = getattr(getattr(self, member), port).timed_pace if scheduled else None
+        pins = PortPins(port, found.pins, leaf) if exposed else found
+        return pins.under(member), pace
+
+    return beside
+
+
+def _beside_case(
+    member: str, port: str, case: str, leaves: Mapping[str, tuple[str, bool]], present: str
+) -> Callable[[Kernel], tuple[Any, Any]]:
+    """``_beside`` of a port its member exposes through a selector: its leaf and whether it
+    owns its pacing are its selected case's (``case``, the member answering it)."""
+
+    def beside(self: Kernel) -> tuple[Any, Any]:
+        if not getattr(self, present)():
+            return None, None
+        if not getattr(getattr(self, member), port).placed:
+            return None, None
+        selected_case: str = getattr(self, case)
+        leaf, scheduled = leaves[selected_case]
+        found: PortPins = getattr(getattr(self, member), port).stream_pins
+        pace = getattr(getattr(self, member), port).timed_pace if scheduled else None
+        return PortPins(port, found.pins, leaf).under(member), pace
+
+    return beside
+
+
+def _neighbours_of(producer: str, consumer: str, made: Callable[..., Any]) -> Callable[..., Any]:
+    """A channel's neighbours (above), from the readings of its producer's side and its
+    consumer's, each a helper's name (``-no-port`` for a side naming no port whose reading
+    its holder does not state)."""
+
+    def neighbours(self: Kernel) -> Any:
+        before = getattr(self, producer)()
+        after = getattr(self, consumer)()
+        return made(before[0], after[0], before[1], after[1])
+
+    return neighbours
+
+
+def _ends_of(channel: str) -> Callable[..., Any]:
+    """Member channel ``channel``'s own ends its hops meet (above): its stages and, where it
+    has none, its source (below it at its label) and its outer ports (the module's own pins),
+    each None where it places none."""
+
+    def ends(self: Kernel) -> Any:
+        held = getattr(self, channel)
+        stages = held.stages
+        source: Any = None
+        sink: Any = None
+        if not stages:
+            if held.valued:
+                offered: PortPins = held.source.output.stream_pins
+                source = (held.source_label, offered.pins)
+            elif held.entering:
+                entered: PortPins = held.outer_in.stream_pins
+                source = (None, entered.pins)
+            if held.leaving:
+                left: PortPins = held.outer_out.stream_pins
+                sink = (None, left.pins)
+        return stages, source, sink
+
+    return ends
+
+
+def _hops_of(
+    channel: str,
+    neighbours: str,
+    ends: str,
+    named: tuple[MemberPort | None, MemberPort | None],
+    hopped: Callable[..., Any],
+) -> Callable[..., Any]:
+    """Member channel ``channel``'s hops to the ports beside it (above): ``hopped``
+    (``finn.kernels.channels.outer_hops``) of its neighbours (the view ``neighbours``) and its
+    own ends (the view ``ends``); refused as ``channel-unused`` where a port ``named`` on it
+    is not placed."""
+
+    def hops(self: Kernel) -> Any:
+        found = getattr(self, neighbours)
+        given = tuple(zip(named, (found.producer, found.consumer), strict=True))
+        absent = [str(port) for port, pins in given if port is not None and pins is None]
+        if absent:
+            present = [str(port) for port, pins in given if port is not None and pins is not None]
+            ports = ", ".join(absent)
+            return reject(
+                "channel-unused",
+                f"a port of this channel does not apply, so it is not formed: {ports} "
+                "(its member places no such port)"
+                if present
+                else f"no present port is on this channel: {ports} does not apply "
+                "(its member places no such port)",
+                owner=channel,
+            )
+        stages, source, sink = getattr(self, ends)
+        return hopped(found, stages, source, sink, owner=channel)
+
+    return hops
+
+
+def _hops_from(view_name: str, channel: str, following: str) -> Callable[[Kernel], tuple[Any, ...]]:
+    def hops_from(self: Kernel) -> tuple[Any, ...]:
+        return ((channel, getattr(self, view_name)), *getattr(self, following)())
+
+    return hops_from
+
+
+def _install_view(cls: type[Kernel], name: str, function: Callable[..., Any], answer: Any) -> None:
+    function.__annotations__ = {"return": answer}
+    member = view(function)
+    setattr(cls, name, member)
+    getattr(member, "__set_name__")(cls, name)
+
+
+_HOPS = "hops"
+
+
+def _connect(cls: type[Kernel]) -> None:
+    """Record, for a kernel with member channels, the member port each channel side names
+    (``Kernel.connections``), refused by the connection rules; and install each channel's
+    neighbours and hops, and the reading of its hops its netlist makes (above)."""
+    if not any(_connects(item) for item in _members(cls).values()):
+        return
+    from finn.kernels.channels import Neighbours, OuterHops, outer_hops  # noqa: PLC0415
+    from finn.kernels.port import exposed_name  # noqa: PLC0415 - base/port cycle
+
+    connections = _connected(cls)
+    readers: list[tuple[Callable[[str, str], Callable[[Kernel], Any]], str]] = []
+    for name, sides in connections.items():
+        helpers: list[str] = []
+        for role, port in zip(("producer", "consumer"), sides, strict=True):
+            helper = _installed(name, role)
+            if port is None:
+                # A side given as a value names no member port: the ports beside it are its
+                # holder's to read where it states that side's reading (a slice's frozen
+                # neighbour's, finn.kernels.dataflow_core), else it has none.
+                helpers.append(helper if helper in vars(cls) else "-no-port")
+                continue
+            selector, guard, leaves = _leaves(cls, port.member, port.port)
+            present = "-placed"
+            if guard is not None:
+                present = _installed(name, role, "placed")
+                setattr(cls, present, _guard_reading(port.member, guard))
+            if selector is None:
+                leaf, scheduled = leaves[""]
+                exposed = exposed_name(_member_type(cls, port.member), port.port) is not None
+                beside = _beside(port.member, port.port, leaf, exposed, scheduled, present)
+            else:
+                case = _selector_case(cls, port.member, selector)
+                beside = _beside_case(port.member, port.port, case, leaves, present)
+            setattr(cls, helper, beside)
+            helpers.append(helper)
+        around, own, hopped = (_installed(name, what) for what in ("neighbours", "ends", "hops"))
+        _install_view(cls, around, _neighbours_of(helpers[0], helpers[1], Neighbours), Neighbours)
+        _install_view(cls, own, _ends_of(name), tuple)
+        hopping = _hops_of(name, around, own, sides, outer_hops)
+        _install_view(cls, hopped, hopping, OuterHops | Rejected)
+        readers.append((partial(_hops_from, hopped), name))
+    _install_reading(cls, _HOPS, readers)
+    cls.connections = MappingProxyType(connections)
+
+
+def neighbours(space_type: type[Kernel], channel: str) -> Any:
+    """The view answering member channel ``channel``'s neighbours in kernel class
+    ``space_type`` (``finn.kernels.channels.Neighbours``, above), to query of a design space:
+    ``point.query(neighbours(type(point), "h"))``. A ``KeyError`` where ``channel`` is no
+    member channel of it."""
+    if channel not in space_type.connections:
+        raise KeyError(channel)
+    return getattr(space_type, _installed(channel, "neighbours"))
+
+
+def own_ends(space_type: type[Kernel], channel: str) -> Any:
+    """The view answering member channel ``channel``'s own ends its hops meet in kernel class
+    ``space_type`` (above: its stages, its source, its outer ports), to query of a design
+    space, as its hops read them. A ``KeyError`` where ``channel`` is no member channel of
+    it."""
+    if channel not in space_type.connections:
+        raise KeyError(channel)
+    return getattr(space_type, _installed(channel, "ends"))
+
+
+def hops(space_type: type[Kernel], channel: str) -> Any:
+    """The view answering member channel ``channel``'s hops to the ports beside it in kernel
+    class ``space_type`` (``finn.kernels.channels.OuterHops``, above), to query of a design
+    space. A ``KeyError`` where ``channel`` is no member channel of it."""
+    if channel not in space_type.connections:
+        raise KeyError(channel)
+    return getattr(space_type, _installed(channel, "hops"))
 
 
 class Kernel(Space):
@@ -1029,13 +1655,40 @@ class Kernel(Space):
     # member is on (``finn.kernels.port.exposed_pins``).
     placed_at: ClassVar[Mapping[str, str]] = MappingProxyType({})
 
+    # The order its netlist places its members in, by name, where not their declaration
+    # order: its module's instance order (a DataflowCore's, ``finn.kernels.dataflow_core``),
+    # which its control buses follow too. A member it does not name follows, in declaration
+    # order.
+    instance_order: ClassVar[tuple[str, ...]] = ()
+
+    # Whether it is a channel: a member joining two of its holder's members' ports, which its
+    # sides (``producer``, ``consumer``) name (``finn.kernels.channels.Channel``).
+    connects: ClassVar[bool] = False
+
+    # Whether it is sealed: its realization is one module of its own, which a parent places
+    # as one instance, and the ports it exposes are that module's own pins, each a member
+    # channel's outer port (``_check_sealed``; the DataflowCore's,
+    # ``finn.kernels.dataflow_core``). Otherwise it is transparent: its members' instances
+    # are flattened into its parent's netlist, and a port it exposes has its pins on the
+    # leaf its alias reaches.
+    sealed: ClassVar[bool] = False
+
+    # Each member channel, by its name, and the member port its producer side and its
+    # consumer side name, None for a side given as a value. Recorded when its class is made,
+    # its connection rules checked (``_connect``).
+    connections: ClassVar[Mapping[str, tuple[MemberPort | None, MemberPort | None]]] = (
+        MappingProxyType({})
+    )
+
     def __init_subclass__(cls, **kwargs: Any) -> None:
         _supply_ports(cls)
         _read_intake(cls)
         _check_ports(cls)
         _expose_ports(cls)
+        _check_sealed(cls)
         _derive_control(cls)
         _derive_doubled(cls)
+        _connect(cls)
         super().__init_subclass__(**kwargs)
         if type(cls.id) is not str or not cls.id:
             raise DefinitionError.broken(
@@ -1270,7 +1923,7 @@ class Kernel(Space):
     def netlist(self) -> Fragment | Rejected:
         """Its netlist, labelled relative to itself: its module at the empty label (``under``
         names it by its node where it is held), or its members' under theirs (or where it
-        places them, ``placed_at``).
+        places them, ``placed_at``), in its instance order (``instance_order``).
 
         A kernel with a module is its one leaf, assembled from its binding and its parts
         (``finn.kernels.library.assemble_module``): its clocking, its parameters, its parts'
@@ -1279,14 +1932,31 @@ class Kernel(Space):
         if type(self).module_spec is not None:
             return self._module()
         placed = type(self).placed_at
-        parts = [(placed.get(str(item.node), str(item.node)), item.value) for item in self.netlists]
+        order = type(self).instance_order
+        rank = {name: index for index, name in enumerate(order)}
+
+        def ranked(item: Any) -> int:
+            return rank.get(str(item.node), len(order))
+
+        # Each member channel's, with its hops to the ports beside it around its own links.
+        hopped: dict[str, Any] = dict(getattr(self, "-hops-0")())
+        parts = [
+            (
+                placed.get(str(item.node), str(item.node)),
+                hopped[str(item.node)].around(item.value)
+                if str(item.node) in hopped
+                else item.value,
+            )
+            for item in sorted(self.netlists, key=ranked)
+        ]
         if not parts:
             return reject(
                 "kernel-module",
                 f"{type(self).__qualname__} declares no module and places no kernel",
             )
         buses = presented(
-            (placed.get(str(item.node), str(item.node)), item.value) for item in self.controls
+            (placed.get(str(item.node), str(item.node)), item.value)
+            for item in sorted(self.controls, key=ranked)
         )
         if isinstance(buses, Rejected):
             return buses
@@ -1299,7 +1969,7 @@ class Kernel(Space):
         owner = type(self).__qualname__
         clocking = self.clocking
         parameters = tuple(sorted(self.parameters.items()))
-        pin_parts = _each(self._module_pins_0())
+        pin_parts = _each(getattr(self, "-pins-0")())
         if isinstance(pin_parts, Rejected):
             return pin_parts
         sources = spec.constant_sources
@@ -1309,7 +1979,7 @@ class Kernel(Space):
         if isinstance(refused, Rejected):
             return refused
         data = self.module_data
-        held_parts = _each(self._module_held_0())
+        held_parts = _each(getattr(self, "-held-0")())
         if isinstance(held_parts, Rejected):
             return held_parts
         leaf = assemble_module(
@@ -1322,42 +1992,9 @@ class Kernel(Space):
             sources,
             data,
             tuple(held_parts),
-            self._module_presented_0(),
+            getattr(self, "-presented-0")(),
         )
         return leaf if isinstance(leaf, Rejected) else Fragment((("", leaf),))
-
-    # The heads of its module's readings, which a kernel with a module has installed for
-    # it; the end of each.
-
-    def _module_pins_0(self) -> tuple[tuple[Pin, ...] | Rejected, ...]:
-        return ()
-
-    def _module_held_0(self) -> tuple[Held | Rejected, ...]:
-        return ()
-
-    def _module_presented_0(self) -> tuple[bool, ...]:
-        return ()
-
-    def _module_beats_0(self) -> tuple[int | None, ...]:
-        return ()
-
-    def _placed_inputs_0(self) -> tuple[str, ...]:
-        return ()
-
-    def _module_end(self) -> tuple[Any, ...]:
-        return ()
-
-    # What its members require of its holder (``_derive_doubled``): the head of each reading,
-    # which the base installs for a kernel with such members, and its own control bus's part.
-
-    def _doubled_0(self) -> bool:
-        return False
-
-    def _buses_0(self) -> tuple[str, ...]:
-        return ()
-
-    def _own_buses(self) -> tuple[str, ...]:
-        return ()
 
     # Whether it or a member may present a control bus (``may_present_bus``).
     _presents_buses: ClassVar[bool] = False
@@ -1369,7 +2006,8 @@ class Kernel(Space):
         (``compute.packed``, a selector's case). What a shell's budget counts
         (``finn.kernels.budgets``); the base derives it for a kernel with members that may
         present one when its class is made (``_derive_doubled``)."""
-        return self._own_buses()
+        found: tuple[str, ...] = getattr(self, "-own-buses")()
+        return found
 
     @derived
     def declares_bus(self) -> bool:
@@ -1445,7 +2083,7 @@ class Kernel(Space):
         if _declared(type(self), "schedule"):
             schedule: Schedule = self.schedule
             return in_cycles(schedule.iterations, interval)
-        beats = [each for each in self._module_beats_0() if each is not None]
+        beats = [each for each in getattr(self, "-beats-0")() if each is not None]
         if not beats:
             return reject(
                 "kernel-cycles", f"no port of {type(self).__qualname__} carries a stream's beats"
@@ -1463,6 +2101,39 @@ class Kernel(Space):
     member_frame_cycles = Members(frame_cycles)
     member_assumed = Members(assumed)
     member_intake = Members(intake)
+
+
+# The heads of the base's readings (above), which it installs for a kernel that has what each
+# reads, read on every kernel: none on ``Kernel`` (its module's parts and placed inputs, its
+# members' doubled clock and control buses, its own control bus, its member channels' hops);
+# and the end of each, the reading of a channel side that names no port, and of a member's
+# port read through no child its member guards.
+
+
+def _read_none(self: Kernel) -> tuple[()]:
+    return ()
+
+
+def _no_port(self: Kernel) -> tuple[None, None]:
+    return None, None
+
+
+def _placed(self: Kernel) -> bool:
+    return True
+
+
+def _doubled_none(self: Kernel) -> bool:
+    return False
+
+
+for _head in (_PINS, _HELD, _PRESENTED, _BEATS, _INPUTS, _BUSES, _HOPS):
+    setattr(Kernel, _installed(_head, "0"), _read_none)
+setattr(Kernel, _installed(_DOUBLED, "0"), _doubled_none)
+setattr(Kernel, "-own-buses", _read_none)
+setattr(Kernel, _END, _read_none)
+setattr(Kernel, "-no-port", _no_port)
+setattr(Kernel, "-placed", _placed)
+del _head
 
 
 # -- a kernel's extents and schedule, by finn.dataflow's rules ------------------------------
@@ -1541,10 +2212,14 @@ _READS_EXTENTS = "_finn_reads_extents"
 
 __all__ = [
     "Kernel",
+    "MemberPort",
     "PortPins",
     "bound_extents",
     "bound_schedule",
     "extent_of",
+    "hops",
     "merged",
+    "neighbours",
+    "own_ends",
     "spanned",
 ]

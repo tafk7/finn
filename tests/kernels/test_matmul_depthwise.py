@@ -28,6 +28,7 @@ from support.helpers import (
     with_adapter_memories,
     with_direct_transports,
 )
+from support.ports import outer
 
 from finn.core.space import Available, Unresolved, inspection
 from finn.dataflow.gemm import Form
@@ -82,7 +83,7 @@ def test_depthwise_rows_pass_once_with_a_frame_per_window():
     x = configured.member("x")
     # Nothing is replayed: the channel only closes each window's frame.
     assert x.steps.kinds == (Step.MARKERS,)
-    boundary = x.boundary
+    boundary = outer(x)
     # Rows, then channel folds, then window folds; lane s * PE + p is window
     # position s of channel p.
     channel_tile = Traversal.over(

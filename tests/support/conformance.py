@@ -12,7 +12,8 @@ each sample it
    ``<port>_tensor`` where it declares that Param (else the case gives it among the
    kernel's facts: MatMul's ``weights``) and an output's the kernel's own
    (``<port>_tensor``, its statement), its one side the kernel's port (``Port("kernel",
-   "<port>")``), its other the boundary's AXIS port of its name. It commits the sample's
+   "<port>")``), its other the boundary's AXIS port (``edges``: an input's ``s_axis_<i>``, an
+   output's ``m_axis_<j>``, each in order). It commits the sample's
    factors and the pinned ``choices``, then the kernel's other open choices by their
    policies (``Placed``, on the kernel alone, as conversion sets them) and every
    channel's by the channel's policies, as the cut sets them (its transport and its input
@@ -64,7 +65,7 @@ member of a leaf kernel (``input``) or a child's (``compute.packed.x``).
 
 Factors: ``SAMPLED`` takes the smallest, an interior and the largest
 configuration of the kernel's open choices that ``choices`` leaves open, each from
-its possible values (``Partition.viable``: never a value a rule refuses) with the
+its possible values (``CoreComposition.viable``: never a value a rule refuses) with the
 choices before it in the flow order set, and deduplicates them; a selector, or a
 choice with one possible value, takes its default policy and is no factor. Explicit
 configurations name the kernel's own members: a Decision is committed, a Param is
@@ -91,7 +92,7 @@ import re
 import tempfile
 import warnings
 import zlib
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from math import prod
 from pathlib import Path
@@ -134,8 +135,8 @@ from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.configure import chosen, describe
+from finn.kernels.explore import CoreComposition
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.partition import Partition
 from finn.kernels.policies import Alone, FirstValid, Policy, defaulted
 from finn.kernels.sides import Side
 from finn.kernels.transport import StreamPins
@@ -268,7 +269,7 @@ def _label(config: Mapping[str, object]) -> str:
 
 def _possible(point: Any, key: Key) -> tuple[object, ...]:
     """The possible values of the kernel's open choice ``key`` on a design, in its list's
-    order: those setting it alone accepts (``Partition.viable``), never a value its domain
+    order: those setting it alone accepts (``CoreComposition.viable``), never a value its domain
     lists that a rule refuses."""
     ((_, found),) = point.viable((key,))
     assert found.cases, f"{dotted(key)} has no possible value: {found}"
@@ -318,7 +319,7 @@ def _defaulted(point: Any) -> Any:
 def _enumerated(base: Any, choices: Mapping[str, object]) -> list[tuple[str, dict[str, object]]]:
     """Configurations of the kernel's open choices, each set in turn.
 
-    The kernel's open choices in play are taken in its flow order (``Partition.undecided``),
+    The kernel's open choices in play are taken in its flow order (``CoreComposition.undecided``),
     one at a time, so a choice another brings into play, or whose possible values another
     narrows (pumping by SIMD), is taken after it. A pinned choice takes its value; a
     selector, or a choice with one possible value, its default policy (nothing to sample);
@@ -366,6 +367,17 @@ def _stem(space_type: type[Kernel]) -> str:
     return f"{space_type.__name__}Conformance".lower()
 
 
+def edges(inputs: Iterable[str], outputs: Iterable[str], fed: str | None) -> dict[str, str]:
+    """The boundary's AXIS port each channel meets, by channel: each input's
+    ``s_axis_<i>`` but the one a memory feeds (``fed``), and each output's ``m_axis_<j>``, in
+    order. A core's edge port is named as its port, so it never meets the channel's name."""
+    driven = [name for name in inputs if name != fed]
+    return {
+        **{name: f"s_axis_{index}" for index, name in enumerate(driven)},
+        **{name: f"m_axis_{index}" for index, name in enumerate(outputs)},
+    }
+
+
 def _design(
     space_type: type[Kernel],
     inputs: Mapping[str, Tensor],
@@ -374,18 +386,21 @@ def _design(
     fed: tuple[str, Traversal, object] | None = None,
 ) -> Any:
     """A partition of the kernel on one channel per tensor, each on the kernel's port of its
-    name and the boundary's AXIS port of its own; ``fed``'s channel from a memory
+    name and the boundary's AXIS port (``edges``); ``fed``'s channel from a memory
     (``source``)."""
     members: dict[str, Any] = {}
     tensors = {**inputs, **outputs}
+    ports = edges(inputs, outputs, None if fed is None else fed[0])
     for name, tensor in tensors.items():
         port = Port(KERNEL, _port_name(name))
         if name in inputs:
             fed_here = fed is not None and fed[0] == name
-            producer = Port(SOURCE, "output") if fed_here else Side.boundary(name)
+            producer = Port(SOURCE, "output") if fed_here else Side.boundary(ports[name])
             members[name] = channel(producer, port, tensor=tensor, platform=FULL_DSP48E2)
         else:
-            members[name] = channel(port, Side.boundary(name), tensor=tensor, platform=FULL_DSP48E2)
+            members[name] = channel(
+                port, Side.boundary(ports[name]), tensor=tensor, platform=FULL_DSP48E2
+            )
     formals = {name: f"{_port_name(name)}_tensor" for name in inputs}
     given = {
         formals[name]: tensor
@@ -413,7 +428,7 @@ def _source(tensor: Tensor, form: Traversal, contents: object) -> Facts:
     )
 
 
-def design_member(design: Partition, name: str) -> Any:
+def design_member(design: CoreComposition, name: str) -> Any:
     """Member ``name`` of a design, a partition: a kernel alone, its own design space with
     its choices (``kernel_alone``), as its Decisions and validity are read; a channel's
     Space in the partition's design space."""
@@ -494,10 +509,17 @@ def _stated(
     inputs: Mapping[str, Tensor],
     facts: Mapping[str, object],
 ) -> ScalarEncoding:
-    """The element of the tensor the kernel states on output ``name``, its outputs
-    unplaced."""
+    """The element of the tensor the kernel states on output ``name``: the kernel alone, given
+    its facts and its inputs' tensors, as ``_design`` gives them (a partition connects every
+    port it places, so it has no outputs unplaced)."""
     hint = f"give {name} a Tensor"
-    probe = design_member(_design(space_type, inputs, {}, facts), KERNEL)
+    formals = {f"{_port_name(each)}_tensor": tensor for each, tensor in inputs.items()}
+    given = {
+        formal: tensor
+        for formal, tensor in formals.items()
+        if isinstance(getattr(space_type, formal, None), Param)
+    }
+    probe = Facts(space_type, {**facts, **given}).bind()
     found = probe.query(getattr(type(probe), f"{_port_name(name)}_tensor"))
     if not isinstance(found, Available):
         raise ValueError(f"{space_type.__name__} states no tensor at {name}; {hint}: {found}")
@@ -720,7 +742,7 @@ def _contracts(
     point: Any, space_type: type[Kernel], sample: Sample, names: Sequence[str]
 ) -> dict[str, StreamPins]:
     """The contract the kernel presents on each channel: its port beside the channel, as
-    the partition reads it (``Partition.neighbours``)."""
+    the partition reads it (``CoreComposition.neighbours``)."""
     found: dict[str, StreamPins] = {}
     for name in names:
         owner = f"{KERNEL}.{_user(point, name)}"
@@ -758,12 +780,11 @@ def _check_model(
                 f"{schedule.iterations} less {dropped} dropped"
             )
         if name != fed:
-            boundary = _value(
-                design_member(point, name).query(Channel.boundary), space_type, sample
-            )
+            outer = Channel.outer_in if name in inputs else Channel.outer_out
+            edge = _value(design_member(point, name).query(outer.stream), space_type, sample)
             presented = unreplayed(form) if name in inputs else form
-            assert boundary.form == presented, (
-                f"{where}: {name}'s boundary presents {boundary.form}"
+            assert edge.sequence.form == presented, (
+                f"{where}: {name}'s outer port presents {edge.sequence.form}"
             )
 
 
@@ -851,13 +872,16 @@ def _simulate(
     tolerance: float | None = None,
 ) -> list[tuple[Sample, str, str]]:
     contracts = _contracts(point, space_type, sample, [*inputs, *outputs])
+    ports = edges(inputs, outputs, next(iter(inputs)) if sample.adapter else None)
     expected = reference(**{name: array.copy() for name, array in values.items()})
     produced = set(contracts) - set(inputs)
     assert set(expected) == produced, f"the reference returns {sorted(expected)}, not {produced}"
     driven: dict[str, tuple[list[int], int]] = {}
     for name, array in values.items():
         if not (sample.adapter and name == next(iter(inputs))):
-            driven[name] = _words(unreplayed(contracts[name].form), array, contracts[name].element)
+            driven[ports[name]] = _words(
+                unreplayed(contracts[name].form), array, contracts[name].element
+            )
     checked: dict[str, tuple[list[int], int]] = {}
     # The float outputs compared within the tolerance where their words differ.
     tolerated = (
@@ -869,14 +893,14 @@ def _simulate(
         contract, array = contracts[name], np.asarray(expected[name])
         assert array.shape == contract.form.shape, f"{name}: the reference gives {array.shape}"
         if _floating(contract.element):
-            checked[name] = _words(contract.form, array, contract.element)
+            checked[ports[name]] = _words(contract.form, array, contract.element)
             continue
         try:
             low, high = ordinary_integer_bounds(contract.element.dtype)
         except DatatypeError as error:
             raise AssertionError(f"{name}: the harness streams integers and FLOAT32") from error
         assert low <= array.min() and array.max() <= high, f"{name} leaves {contract.element}"
-        checked[name] = _words(contract.form, array.astype(np.int64), contract.element)
+        checked[ports[name]] = _words(contract.form, array.astype(np.int64), contract.element)
     module = _value(design_module(point, space_type), space_type, sample)
     # A cyclic source (the adapter sample's memory, or the kernel itself) never stops.
     repeating = sample.adapter or any(
@@ -901,14 +925,17 @@ def _simulate(
             exact = {
                 name
                 for name in produced - tolerated
-                if list(error.received[name]) != list(checked[name][0])
+                if list(error.received[ports[name]]) != list(checked[ports[name]][0])
             }
             far = (
                 {}
                 if tolerance is None
                 else {
                     name: _beyond(
-                        contracts[name].form, error.received[name], expected[name], tolerance
+                        contracts[name].form,
+                        error.received[ports[name]],
+                        expected[name],
+                        tolerance,
                     )
                     for name in tolerated
                 }
@@ -925,7 +952,7 @@ def _simulate(
                     name: _stream(point, name, contracts[name].form, contracts[name])
                     for name in produced
                 },
-                error.received,
+                {name: error.received[ports[name]] for name in produced},
                 inputs={
                     name: _stream(point, name, unreplayed(contracts[name].form), contracts[name])
                     for name in inputs

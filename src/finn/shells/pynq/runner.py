@@ -569,8 +569,8 @@ class BuildPynqBitfile(Transformation):
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
         pynq_row(model, "bitfile")
-        _, body, body_file = partition_body(model)
-        bottleneck = shell_bottleneck(body)
+        node, body, body_file = partition_body(model)
+        bottleneck = shell_bottleneck(body, node.name)
         export = integration(model)
         reports = {name: self.directory / path for name, path in REPORTS.items()}
         hwh = self.directory / HWH

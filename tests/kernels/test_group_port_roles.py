@@ -1,21 +1,22 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Port kinds and Composer rejection for real ports under lexical Group frames."""
+"""Port kinds, and a channel's roles, for real ports under lexical Group frames."""
 
 from __future__ import annotations
+
+from typing import Any
 
 import pytest
 from qonnx.core.datatype import DataType
 from support.helpers import FULL_DSP48E2
 from support.refusals import refused
 
-from finn.core.space import Available, DefinitionError, Group, design_space
+from finn.core.space import Available, DefinitionError, Group, Rejected, design_space
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Direction
 from finn.kernels.base import Kernel
-from finn.kernels.composer import Facts, PartitionDeclaration, Port, channel
-from finn.kernels.composer import _checked as checked
+from finn.kernels.channels import Channel
 from finn.kernels.laws import AXIS, AXIS_CLOCKING
 from finn.kernels.port import port_direction, stream_port
 from finn.kernels.port_model import InPort, OutPort, StreamPort, stream_ports
@@ -101,25 +102,38 @@ def test_static_group_lookup_stops_at_real_spaces_and_unknown_names() -> None:
         stream_port(Parent, "child.group.ports.target")
 
 
-@pytest.mark.parametrize(
-    "port,role",
-    [
-        ("group.ports.target", "producer"),
-        ("group.ports.explicit", "consumer"),
-        ("group.ports.tapped", "consumer"),
-    ],
-)
-def test_composer_refuses_known_wrong_roles_under_group_keys(port: str, role: str) -> None:
-    endpoint = Port("kernel", port)
+def _sides(port: str, role: str) -> Any:
+    """Host's ``port``'s side, below the member ``kernel``, on ``role``'s side of a channel
+    of ``TENSOR`` alone, the boundary on its other side: the channel's sides, as it reads
+    them."""
+    found = design_space(Host()).query(stream_ports(Host)[port].side)
+    assert isinstance(found, Available) and isinstance(found.value, Side)
+    endpoint = found.value.under("kernel")
     outside = Side.boundary("out0" if role == "producer" else "in0")
     producer, consumer = (endpoint, outside) if role == "producer" else (outside, endpoint)
-    declared = PartitionDeclaration(
-        {"kernel": Facts(Host, {})},
-        {"link": channel(producer, consumer, tensor=TENSOR, platform=FULL_DSP48E2)},
+    point = design_space(
+        Channel(tensor=TENSOR, producer=producer, consumer=consumer, platform=FULL_DSP48E2)
     )
-    findings = checked(declared)
-    assert [finding.code for finding in findings] == ["channel-users"]
-    assert f"kernel.{port}" in findings[0].message
+    return point.query(Channel.sides)
+
+
+@pytest.mark.parametrize(
+    "port,label,role",
+    [
+        ("group.ports.target", "t", "producer"),
+        ("group.ports.explicit", "o", "consumer"),
+        ("group.ports.tapped", "d", "consumer"),
+    ],
+)
+def test_a_channel_refuses_known_wrong_roles_under_group_keys(
+    port: str, label: str, role: str
+) -> None:
+    """A port under Group keys gives its kind's side, labelled as the port, which a channel
+    refuses on the other role (``channel-users``)."""
+    found = _sides(port, role)
+    assert isinstance(found, Rejected)
+    assert [finding.code for finding in found.findings] == ["channel-users"]
+    assert f"kernel.{label} is an" in found.findings[0].message
 
 
 def test_inherited_host_retains_group_placement_and_port_directions() -> None:
@@ -142,19 +156,14 @@ def test_inherited_host_retains_group_placement_and_port_directions() -> None:
     "port,role",
     [("group.ports.target", "consumer"), ("group.ports.explicit", "producer")],
 )
-def test_composer_accepts_known_valid_group_producer_and_consumer_roles(
+def test_a_channel_takes_known_valid_group_producer_and_consumer_roles(
     port: str, role: str
 ) -> None:
     expected = Direction.OUT if role == "producer" else Direction.IN
     assert port_direction(Host, port) is expected
-    endpoint = Port("kernel", port)
-    outside = Side.boundary("out0" if role == "producer" else "in0")
-    producer, consumer = (endpoint, outside) if role == "producer" else (outside, endpoint)
-    declared = PartitionDeclaration(
-        {"kernel": Facts(Host, {})},
-        {"link": channel(producer, consumer, tensor=TENSOR, platform=FULL_DSP48E2)},
-    )
-    assert checked(declared) == []
+    found = _sides(port, role)
+    assert isinstance(found, Available)
+    assert getattr(found.value, role).direction is expected
 
 
 def test_a_port_of_neither_kind_is_refused() -> None:

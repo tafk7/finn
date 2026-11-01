@@ -29,6 +29,7 @@ from support.conformance import (
     design_cycles,
     design_member,
     design_module,
+    edges,
     place,
 )
 from support.kernel_specs.pool import INT4, max_pool, pool
@@ -212,12 +213,13 @@ def test_it_takes_a_beat_a_cycle_as_its_schedule_states(tmp_path: Path) -> None:
     cycles = found.value
     input_form = unreplayed(window.form)
     assert isinstance(input_form, Traversal)
+    ports = edges(["input_channel"], ["output_channel"], None)  # the module's edge ports
     measured = measure(
         module.value,
         tmp_path,
-        inputs={"input_channel": _words(input_form, x, window.element)},
+        inputs={ports["input_channel"]: _words(input_form, x, window.element)},
         outputs={
-            "output_channel": _words(
+            ports["output_channel"]: _words(
                 contracts["output_channel"].form,
                 np.asarray(expected),
                 contracts["output_channel"].element,

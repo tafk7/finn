@@ -4,7 +4,7 @@
 """The shell's budgets as rules of a partition in its shell.
 
 A partition composed in a shell (``finn.kernels.composer``: a declaration that states its
-shell's row, ``PartitionDeclaration.shell``) holds one member beside its kernels and
+shell's row, ``DataflowCoreDeclaration.shell``) holds one member beside its kernels and
 channels, ``shell`` (``SHELL``): a Space of the shell's row and of what each member gives
 the shell to count. Its owner is the shell, and its validity is a member's: a value that
 breaks a budget is refused in the partition, where the seam, a policy and emission read

@@ -19,12 +19,14 @@ from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.ranges import TensorRange
 from qonnx.util.basic import qonnx_make_model
+from support.configure import composition
 from support.models import DOMAIN, TARGET
 from support.refusals import refused
 
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import edge_tensor, initializer, reading
+from finn.core.graph.partition import CUT_NAME
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import network
 from finn.dataflow.datatypes import DatatypeError
@@ -86,7 +88,7 @@ def test_each_output_states_its_range_and_the_next_kernel_reads_it() -> None:
         TensorRange(-3, 3),
     )
     # Every output on the graph is its producer's statement: the network binds.
-    assert not network(model, model.graph.node).stale
+    assert not network(model, model.graph.node, name=CUT_NAME).stale
 
 
 def test_inference_states_each_output_again_with_its_range() -> None:
@@ -112,7 +114,7 @@ def test_an_output_whose_range_is_not_its_producers_is_stale() -> None:
         tensor="y",
         message=r"the graph states y \[3, 4\] INT3, its",
     ):
-        network(model, model.graph.node)
+        composition(model, model.graph.node)
 
 
 def test_a_stored_range_its_datatype_does_not_hold_is_refused() -> None:

@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """The class-based oracle's TFC target (``tfc``): TFC's partition (``support.tfc``) after
 the cut, and after each of seven strategy lists explored on the cut's body
-(``SEQUENCES``), each its partition's class as the graph layer binds it in its shell
-(``in_shell``), configured with its stored choices; and the oracle's tool with every target,
+(``SEQUENCES``), each its core's class as the graph layer binds it in its shell
+(``core_point``), configured with its stored choices; and the oracle's tool with every target,
 TFC's too:
 
     python -m support.space_oracle_tfc dump tfc OUT.json [--implementation M:A]
@@ -28,9 +28,11 @@ from pathlib import Path
 
 from qonnx.core.modelwrapper import ModelWrapper
 
+from finn.core.graph.partition import CUT_NAME
 from finn.core.search import Hold, Ranked
-from finn.custom_op.kernels.shell import in_shell
+from finn.custom_op.kernels.shell import core_point
 from finn.kernels.explore import (
+    CoreComposition,
     Defaults,
     KernelExplorer,
     MaxThroughput,
@@ -65,7 +67,7 @@ whose strategy is now ``Defaults``."""
 def _tfc_partition(label: str, body: ModelWrapper) -> Station:
     nodes = list(body.graph.node)
     matmuls = [node.name for node in nodes if "MatMul" in node.op_type]
-    bound = in_shell(body, nodes)
+    bound = CoreComposition(core_point(body, CUT_NAME).point)
     return _partition(f"tfc-{label}", bound, len(nodes), _middle(matmuls))
 
 
@@ -83,7 +85,7 @@ def tfc(work: Path | None = None) -> list[Station]:
     stations = [_tfc_partition("cut", ModelWrapper(saved))]
     for name, sequence in SEQUENCES.items():
         model = ModelWrapper(saved)
-        explore_kernel_choices(model, sequence())
+        explore_kernel_choices(model, sequence(), name=CUT_NAME)
         stations.append(_tfc_partition(name, model))
     return stations
 

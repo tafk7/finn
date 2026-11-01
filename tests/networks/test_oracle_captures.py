@@ -16,11 +16,10 @@ from pathlib import Path
 import pytest
 from oracle import CAPTURES, capture_file, document
 from qonnx.core.modelwrapper import ModelWrapper
+from support.configure import composition
 from support.measure_cycles import finn_cycles, schedule_of
 from support.models import configure_partition, kernel_model
 from support.tfc import partition
-
-from finn.custom_op.kernels.network import network
 
 PROBES = ("fifo_cost", "exp_cycles", "tfc_streamlined", "tfc_set_folding", "tfc_zynq_build")
 
@@ -40,7 +39,7 @@ def test_every_capture_is_one_oracles_with_the_files_it_names() -> None:
 
 def measured(model: ModelWrapper, label: str) -> dict[str, int]:
     """FINN's cycles of each layer ``measure_cycles`` measures in ``model``."""
-    bound = network(model, model.graph.node, name=label)
+    bound = composition(model, model.graph.node, name=label)
     return {node.name: finn_cycles(node, schedule_of(bound, node)) for node in model.graph.node}
 
 

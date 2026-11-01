@@ -41,6 +41,7 @@ from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, Traversal, vector_major
 from finn.kernels.adapters import Convert, realize
+from finn.kernels.artifacts.abi import Direction
 from finn.kernels.channels import Channel, ChannelFifo, OuterHops
 from finn.kernels.library import library_module
 from finn.kernels.sides import Side
@@ -163,9 +164,12 @@ def _channel(source, sink, shape, platform=FULL_DSP48E2):
         Channel(
             tensor=Tensor(shape, ELEMENT),
             producer=Side.kernel(
-                Stream(ELEMENT, source), "producer.y", ELEMENT.bits * source.form.lanes
+                Direction.OUT,
+                Stream(ELEMENT, source),
+                "producer.y",
+                ELEMENT.bits * source.form.lanes,
             ),
-            consumer=Side.kernel(Stream(ELEMENT, sink), "consumer.x"),
+            consumer=Side.kernel(Direction.IN, Stream(ELEMENT, sink), "consumer.x"),
             platform=platform,
         )
     )

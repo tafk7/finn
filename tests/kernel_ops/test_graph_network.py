@@ -20,7 +20,7 @@ import numpy as np
 import pytest
 from qonnx.transformation.infer_shapes import InferShapes
 from support import chain
-from support.configure import configured, write_raw
+from support.configure import composition, configured, write_raw
 from support.helpers import Lanes, built, choose, cycles_of, labels
 from support.models import (
     INT3,
@@ -41,6 +41,7 @@ from support.xsim import requires_xsim
 import finn.custom_op.kernels.network as graph_network
 from finn.core.graph.annotations.channel import CHANNEL_KEYS, channel_choices
 from finn.core.graph.errors import KernelOpError
+from finn.core.graph.partition import CUT_NAME
 from finn.core.onnx_exec import execute_onnx
 from finn.core.reporting.findings import FindingKind
 from finn.core.rtlsim_bench import pack_lanes, stream_through
@@ -50,7 +51,7 @@ from finn.custom_op.kernels import shell
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import network, persist
 from finn.kernels.channels import Channel
-from finn.kernels.explore import Seam, SizeFifos
+from finn.kernels.explore import CoreComposition, Seam, SizeFifos
 from finn.kernels.policies import ranked
 from finn.kernels.utilization import BLOCK_FIRST_BITS
 from finn.toolchain.launcher import host_toolchain
@@ -83,7 +84,7 @@ def test_a_network_refuses_a_node_that_is_not_a_kernel_op() -> None:
         node="activate",
         message="MultiThreshold is not a KernelOp",
     ):
-        network(model, model.graph.node[1:2])
+        composition(model, model.graph.node[1:2])
 
 
 def test_channel_choices_persist_on_their_tensors() -> None:
@@ -101,10 +102,11 @@ def test_a_refold_that_converts_widths_keeps_the_input_side_s_memory() -> None:
     model = kernel_model()
     configure_partition(model)
     configured(model, {model.graph.node[2].name: {"simd": 4}})
-    bound = network(model, model.graph.node, name="chain")
+    found = network(model, model.graph.node, name="chain")
+    bound = CoreComposition(found.point)
     # The levels edge now converts widths before its transport; its replay after it is
     # the same input_gen, whose memory choice still applies.
-    assert not bound.stale
+    assert not found.stale
     assert [stage.label for stage in bound.member("levels").stages] == [
         "output_adapter.vpc.vpc",
         "adapter.input_gen.input_gen",
@@ -118,8 +120,9 @@ def test_an_edge_choice_under_no_input_adapter_is_kept_out_of_play() -> None:
     model = kernel_model()
     configure_partition(model)
     configured(model, {"hidden": {"adapter_ram_style": "auto"}})
-    bound = network(model, model.graph.node, name="chain")
-    assert not bound.stale
+    found = network(model, model.graph.node, name="chain")
+    bound = CoreComposition(found.point)
+    assert not found.stale
     key = ("hidden", "adapter_ram_style")
     assert dict(bound.states(["hidden"]))[key] == inspection.Dormant("auto")
     assert bound.member("hidden").query(Channel.adapter).value == "none"
@@ -137,7 +140,7 @@ def test_a_lifted_initializers_source_choices_are_out_of_play_in_the_partition()
     model = matmul_model()
     configured(model, {"first": MATMUL})  # folded, so its channels' contracts are known
     configured(model, {"w": {"source.ram_style": "block"}})
-    owned = network(model, model.graph.node)
+    owned = composition(model, model.graph.node)
     assert owned.member("w").source.ram_style == "block"  # the node owns w's channel
     lift(model, "w")
     model.set_tensor_datatype("w", INT3)
@@ -156,7 +159,7 @@ def test_a_lifted_initializers_source_choices_are_out_of_play_in_the_partition()
         tensor="y",
         message="the graph states y .*run InferKernelTensors",
     ):
-        network(model, model.graph.node)
+        composition(model, model.graph.node)
     model = model.transform(InferKernelTensors())
     streamed = kernel_op(model, model.graph.node[0])
     # The node replays its own choices only: the weight edge's are the partition's, its
@@ -168,8 +171,9 @@ def test_a_lifted_initializers_source_choices_are_out_of_play_in_the_partition()
     assert channel_choices(model, "w") == {**source, "transport": "direct"}
     point: Any = streamed.point()
     assert point.compute.pe == 2 and streamed.verify_node() == []
-    edge = network(model, model.graph.node)
-    assert not edge.stale
+    found = network(model, model.graph.node, name=CUT_NAME)
+    edge = CoreComposition(found.point)
+    assert not found.stale
     states = dict(edge.states(["w"]))
     assert {key: states[("w", key)] for key in source} == {
         key: inspection.Dormant(value) for key, value in source.items()
@@ -185,15 +189,15 @@ def test_a_stale_output_is_refused_before_its_channel_reads_it() -> None:
     with refused(
         "tensor-stale", error=KernelOpError, owner="stale_outputs", node="first", tensor="y"
     ):
-        network(model, model.graph.node)
+        composition(model, model.graph.node)
     # Another shape of the same elements and last axis is what the kernel requires.
     model = matmul_model().transform(InferKernelTensors())
-    assert not network(model, model.graph.node).stale
+    assert not network(model, model.graph.node, name=CUT_NAME).stale
 
 
 def test_a_partition_has_ports_for_its_onnx_inputs_and_outputs_only() -> None:
     model = kernel_model()
-    bound = network(model, model.graph.node, name="chain")
+    bound = composition(model, name="chain")
     # hidden and levels run between its nodes: channels with no port.
     assert bound.boundary == (("x", "s_axis_0"), ("y", "m_axis_0"))
     _, styles = open_memories(bound)
@@ -211,17 +215,18 @@ def test_any_selection_of_nodes_is_a_network() -> None:
     inputs and outputs (no second-partition refusal). An edge it cuts at a KernelOp is no
     port: that node is a frozen neighbour (``test_frozen_neighbour``)."""
     model = kernel_model()
-    front = network(model, model.graph.node[:2], name="front")
+    found = network(model, model.graph.node[:2], name="front")
+    front = CoreComposition(found.point)
     assert front.kernels == ("first", "activate")
     assert front.boundary == (("x", "s_axis_0"),)
-    alone = network(model, model.graph.node[1:2], name="alone")
+    alone = composition(model, model.graph.node[1:2], name="alone")
     assert alone.boundary == ()
-    assert not alone.whole and not front.stale
+    assert not found.stale
 
 
 def test_streamed_weights_are_a_boundary_of_the_partition() -> None:
     model = kernel_model(second_weights=False)
-    bound = network(model, model.graph.node, name="chain")
+    bound = composition(model, name="chain")
     assert bound.boundary == (("x", "s_axis_0"), ("w2", "s_axis_1"), ("y", "m_axis_0"))
     # Every channel has a transport, the weight edge's as x's: each its tensor's.
     keys = set(bound.decisions())
@@ -230,7 +235,7 @@ def test_streamed_weights_are_a_boundary_of_the_partition() -> None:
 
 def test_members_are_named_as_the_graph() -> None:
     model = kernel_model()
-    bound = network(model, model.graph.node, name="chain")
+    bound = composition(model, name="chain")
     # Each member is its graph name: a channel's tensor, a kernel's node; ranked kernels
     # first; declared in the module's order.
     assert bound.members == (
@@ -261,30 +266,32 @@ def test_members_are_named_as_the_graph() -> None:
 
 def test_a_choice_in_the_network_persists_on_the_weights_tensor() -> None:
     model = kernel_model()
-    bound = network(model, model.graph.node, name="chain")
-    written = persist(model, choose(bound, {"w2.source.ram_style": "block"}))
+    bound = composition(model, name="chain")
+    written = persist(model, choose(bound, {"w2.source.ram_style": "block"}).point)
     assert written["w2"]["source.ram_style"] == "block"
     assert channel_choices(model, "w2")["source.ram_style"] == "block"
     rebuilt = network(model, model.graph.node, name="chain")
-    assert rebuilt.member("w2").source.ram_style == "block" and not rebuilt.stale
+    assert CoreComposition(rebuilt.point).member("w2").source.ram_style == "block"
+    assert not rebuilt.stale
 
 
 def test_an_explored_network_persists_and_replays_as_itself() -> None:
     """Every choice an exploration commits, a boundary channel's and the others',
     goes back to its owner (a node or a tensor) and replays onto the same network."""
     model = kernel_model()
-    explore_kernel_choices(model, [Ranked(Lanes(2))])
-    explored = explore_kernel_choices(model, [SizeFifos()])
+    explore_kernel_choices(model, [Ranked(Lanes(2))], name=CUT_NAME)
+    explored = explore_kernel_choices(model, [SizeFifos()], name=CUT_NAME)
     made = {dotted(key): value for key, value in explored.network.chosen().items()}
     assert {"x.transport", "y.transport", "levels.transport"} <= set(made)
     assert "first.pe" in made
-    rebuilt = network(model, model.graph.node)
-    assert not rebuilt.stale
+    found = network(model, model.graph.node, name=CUT_NAME)
+    rebuilt = CoreComposition(found.point)
+    assert not found.stale
     assert {dotted(key): value for key, value in rebuilt.chosen().items()} == made
     # Written again from the replayed network, every node and tensor holds what it held.
     held = kernel_choices_config(model)
     assert {"first", "x", "levels", "y"} <= set(held)
-    persist(model, rebuilt)
+    persist(model, rebuilt.point)
     assert kernel_choices_config(model) == held
 
 
@@ -298,7 +305,7 @@ def test_a_node_named_like_a_tensor_is_refused() -> None:
         node="hidden",
         message="a node and a tensor are both named hidden",
     ):
-        network(model, model.graph.node)
+        composition(model, model.graph.node)
 
 
 def test_two_nodes_of_one_name_are_refused() -> None:
@@ -311,7 +318,7 @@ def test_two_nodes_of_one_name_are_refused() -> None:
         node="first",
         message="a node and another node are both named",
     ):
-        network(model, model.graph.node)
+        composition(model, model.graph.node)
 
 
 def test_two_graph_names_of_one_member_name_are_refused_by_the_composer() -> None:
@@ -327,8 +334,8 @@ def test_two_graph_names_of_one_member_name_are_refused_by_the_composer() -> Non
         owner="a.b",
         message="members share a node in the module: a_b: a.b, a_b",
     ) as caught:
-        network(model, model.graph.node)
-    assert str(caught.error).startswith("partition: a.b: name-shared: ")
+        composition(model, model.graph.node)
+    assert str(caught.error).startswith("DataflowCore_0: a.b: name-shared: ")
 
 
 def test_a_tensor_no_port_names_is_refused_by_name() -> None:
@@ -346,18 +353,18 @@ def test_a_tensor_no_port_names_is_refused_by_name() -> None:
         tensor="y",
         message="y: a boundary of its partition, but no port names it",
     ):
-        network(model, model.graph.node)
+        composition(model, model.graph.node)
 
 
 def test_a_refused_value_names_each_rule_and_choice_standing_by_its_owner() -> None:
     """The seam offers a choice's values with each refused one's rules and the stored
     choices standing in their way, keyed by owner and key: the partition answers each by
-    its path in the design space, mapped back (``Partition.pair``), so a rule of another
+    its path in the design space, mapped back (``CoreComposition.pair``), so a rule of another
     member a value reaches is named by that member. Pumping the MatMul's core at SIMD 1 is
     refused by the core's rule, the stored ``simd`` standing."""
     model = matmul_model()
     configured(model, {"first": {**MATMUL, "simd": 1, "compute.packed.compute_pumping": False}})
-    bound = network(model, model.graph.node)
+    bound = composition(model, model.graph.node)
     (pumping,) = Seam().choices(
         bound.trial({}, [("first", "compute.packed.compute_pumping")]).network,
         keys=[("first", "compute.packed.compute_pumping")],
@@ -385,7 +392,7 @@ def test_a_member_s_ranking_view_orders_its_choice_inside_the_partition() -> Non
     k = n = 64
     weights = np.array([[(3 * j + 2 * i) % 7 - 3 for j in range(n)] for i in range(k)])
     model = matmul_model(weights=weights, x_shape=[1, 3, k])
-    bound = network(model, model.graph.node)
+    bound = composition(model, model.graph.node)
     key = ("w", "source.ram_style")
     source = bound.member("w").source
     assert source.table_bits == 12_288 >= BLOCK_FIRST_BITS
@@ -400,7 +407,7 @@ def test_a_member_s_ranking_view_orders_its_choice_inside_the_partition() -> Non
     (offered,) = Seam().choices(bound, keys=[key])
     assert offered.cases == ("block", "distributed", "auto")  # ultra: no UltraRAM here
     assert offered.fallback is None
-    made = shell.make_cut_choices(model)
+    made = shell.make_cut_choices(model, CUT_NAME)
     assert not made.fallbacks and not made.unset
     assert channel_choices(model, "w")["source.ram_style"] == "block"
 
@@ -453,7 +460,7 @@ def test_a_parameter_two_nodes_own_is_refused_by_name() -> None:
         tensor="w",
         message="w is read by a, b",
     ) as fan:
-        network(model, model.graph.node)
+        composition(model, model.graph.node)
     # Fan-out refuses the network: a rejection.
     assert [each.kind for each in fan.error.findings] == [FindingKind.REJECTION]
 
@@ -465,15 +472,16 @@ def test_a_kernel_choice_the_network_refuses_is_dropped_named_and_cleared_by_per
     model = kernel_model()
     write_raw(model, "first", "simd", 2)
     write_raw(model, "first", "pe", 3)
-    bound = network(model, model.graph.node, name="chain")
-    assert list(bound.stale) == ["first.pe"]
+    found = network(model, model.graph.node, name="chain")
+    assert list(found.stale) == ["first.pe"]
     # Its own domain refuses 3: nothing else stands beside it.
-    assert {(f.code, f.owner) for f in bound.stale["first.pe"]} == {
+    assert {(f.code, f.owner) for f in found.stale["first.pe"]} == {
         ("domain-membership", "pe"),
     }
+    bound = CoreComposition(found.point)
     assert bound.member("first").compute.simd == 2
     # Its pe is open again; once chosen, the node holds the new value, nothing stale.
-    persist(model, choose(bound, {"first.pe": 2}))
+    persist(model, choose(bound, {"first.pe": 2}).point)
     assert kernel_op(model, model.graph.node[0]).choices()["pe"] == 2
     assert not network(model, model.graph.node, name="chain").stale
 
@@ -486,14 +494,14 @@ def test_a_stale_choice_keeps_the_kernel_s_finding_naming_its_value_and_candidat
     model = kernel_model()
     write_raw(model, "first", "simd", 2)
     write_raw(model, "first", "pe", 3)
-    bound = network(model, model.graph.node, name="chain")
-    ((key, findings),) = bound.stale.items()
+    stored = network(model, model.graph.node, name="chain")
+    ((key, findings),) = stored.stale.items()
     assert key == "first.pe"
     assert {(f.kind, f.code, f.owner) for f in findings} == {
         (FindingKind.REJECTION, "domain-membership", "pe"),
     }
     (found,) = findings
-    ((_, viable),) = bound.viable([("first", "pe")])
+    ((_, viable),) = CoreComposition(stored.point).viable([("first", "pe")])
     assert 3 not in viable.cases
     assert dict(found.details) == {"value": 3, "candidates": viable.cases}
     assert found.message == "not one of " + ", ".join(map(str, viable.cases))
@@ -527,14 +535,14 @@ def test_persist_clears_what_the_network_does_not_hold() -> None:
     model = kernel_model()
     model.set(CHANNEL_KEYS["adapter_ram_style"], "auto", tensor="hidden")
     write_raw(model, "first", "pe", 3)
-    bound = network(model, model.graph.node, name="chain")
-    assert list(bound.stale) == ["first.pe"]
-    persist(model, bound)
+    found = network(model, model.graph.node, name="chain")
+    assert list(found.stale) == ["first.pe"]
+    persist(model, found.point)
     assert "pe" not in kernel_op(model, model.graph.node[0]).choices()
     assert channel_choices(model, "hidden")["adapter_ram_style"] == "auto"
     # Every owner holds what the network holds, by graph name and the key there.
     expected: dict[str, dict[str, object]] = {}
-    for (owner, key), value in bound.chosen().items():
+    for (owner, key), value in CoreComposition(found.point).chosen().items():
         expected.setdefault(owner, {})[key] = value
     assert kernel_choices_config(model) == expected
 
@@ -559,19 +567,20 @@ def test_persist_checks_every_value_before_it_writes_any(
 
     monkeypatch.setattr(graph_network, "_encoded", refuse_y)
     with refused("channel-choice-invalid", error=KernelOpError, owner="finn.channel", tensor="y"):
-        persist(model, changed)
+        persist(model, changed.point)
     assert kernel_choices_config(model) == held
 
 
 def test_the_shell_s_cycles_and_resources_are_its_members() -> None:
-    bound = configure_partition(kernel_model())
+    model = kernel_model()
+    bound = configure_partition(model)
     cycles = cycles_of(bound)
     # the slowest member of the Chain at its baselines
     assert cycles == Available(12)
     used = bound.own_resources()
     assert isinstance(used, Available)
     # The ip shell has no movers or static region: its resources are its members' sum.
-    split = shell.shell_resources(bound)
+    split = shell.shell_resources(bound.point, shell.body_row(model))
     assert isinstance(split, shell.ShellResources)
     assert split.movers == () and split.static_region == ()
     assert split.total == used.value

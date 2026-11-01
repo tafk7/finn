@@ -47,7 +47,7 @@ from finn.harness.toolchain import print_identity
 from finn.kernels.artifacts.module import declared_registers
 from finn.kernels.channels import Channel
 from finn.kernels.composer import Facts, Port, channel
-from finn.kernels.partition import Partition
+from finn.kernels.explore import CoreComposition
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import IntegerTensorValue
@@ -82,7 +82,7 @@ CASES = (
 )
 
 
-def placed(case: Case) -> Partition:
+def placed(case: Case) -> CoreComposition:
     """The kernel between boundary channels ``s_axis_0`` and ``m_axis_0``, presenting its
     control bus at ``s_axilite`` when the case writes its table."""
     count = len(case.initial[0])

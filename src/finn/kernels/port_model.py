@@ -71,10 +71,12 @@ _KIND_MEMBERS = {"direction": "port-direction", "pacing": "port-pacing", "follow
 def _refuse_kind_overridden(cls: type[StreamPort]) -> None:
     """Refuse a port class that declares ``direction``, ``pacing`` or ``follows``
     (``port-direction``, ``port-pacing``), but for this module's ``StreamPort``, ``InPort``
-    and ``OutPort``: each is its kind's, so the ABI, which reads ``direction``, and every
-    check of a kernel's class, which reads the kind (``finn.kernels.port.port_direction``),
-    agree by construction, and a port's pacing follows from its declaration, checked when
-    its kernel's class is made."""
+    and ``OutPort``: each is its kind's, so the ABI, which reads ``direction``, and what
+    reads the kind agree by construction: the side a port gives a channel (``side``, an
+    input side or an output side), whose role the channel checks, an exposed port's kind,
+    checked when its kernel's class is made, and a reader of a class's port
+    (``finn.kernels.port.port_direction``). A port's pacing follows from its declaration,
+    checked when its kernel's class is made."""
     for base in cls.__mro__:
         if base.__module__ == __name__ or base in StreamPort.__mro__:
             continue
@@ -318,11 +320,9 @@ class StreamPort(Space):
 
     @derived
     def side(self) -> Side | Inapplicable:
-        """The side it gives a channel: its stream and its label (an output's, its width
-        too, ``OutPort``)."""
-        if not self.placed:
-            return Inapplicable()
-        return Side.kernel(self.stream, self.label)
+        """The side it gives a channel, its kind's: an input side (``InPort``) or an
+        output side (``OutPort``); a port of neither kind gives none."""
+        return Inapplicable()
 
     @derived
     def binds(self) -> bool:
@@ -471,6 +471,13 @@ class InPort(StreamPort):
         return governed // beats
 
     @derived
+    def side(self) -> Side | Inapplicable:
+        """The input side it gives a channel: its stream and its label."""
+        if not self.placed:
+            return Inapplicable()
+        return Side.kernel(Direction.IN, self.stream, self.label)
+
+    @derived
     def binds(self) -> bool:
         """Whether it reads its tensor to bind its kernel's extents: placed, with an index."""
         if not self.placed:
@@ -503,10 +510,10 @@ class OutPort(StreamPort):
 
     @derived
     def side(self) -> Side | Inapplicable:
-        """The side it gives a channel: its stream, its label and its width."""
+        """The output side it gives a channel: its stream, its label and its width."""
         if not self.placed:
             return Inapplicable()
-        return Side.kernel(self.stream, self.label, self.width)
+        return Side.kernel(Direction.OUT, self.stream, self.label, self.width)
 
 
 class OtherPins(Group):

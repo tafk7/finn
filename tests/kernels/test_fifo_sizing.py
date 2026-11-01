@@ -19,7 +19,8 @@ from typing import Any
 
 import pytest
 from support import chain
-from support.helpers import FULL_DSP48E2, by_hand, choose, keyed, with_defaults
+from support.helpers import FULL_DSP48E2, beside, by_hand, choose, keyed, with_defaults
+from support.ports import outer
 from support.refusals import refused
 from support.xsim import requires_xsim
 
@@ -29,12 +30,20 @@ from finn import resources
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.rtlsim_bench import simulate as simulate_rtl
 from finn.core.search import Accepted, ExploreError, Hold, Refused, dotted, explore
+from finn.core.space import Unresolved
 from finn.harness.toolchain import finnlib_root
 from finn.kernels import input_generator
 from finn.kernels.artifacts.rtl import evaluate
 from finn.kernels.channels import Channel, Neighbours
 from finn.kernels.composer import Port, channel
-from finn.kernels.explore import Bottleneck, FifoCheck, Seam, SizeFifos, TargetCycles
+from finn.kernels.explore import (
+    Bottleneck,
+    CoreComposition,
+    FifoCheck,
+    Seam,
+    SizeFifos,
+    TargetCycles,
+)
 from finn.kernels.fifo import least_depth_holding
 from finn.kernels.fifo_sizing import (
     FIFO_LATENCY,
@@ -52,7 +61,6 @@ from finn.kernels.fifo_sizing import (
     stated_pattern,
 )
 from finn.kernels.input_generator import NestBuffer, nest_buffer, nest_geometry
-from finn.kernels.partition import Partition
 from finn.kernels.policies import Required
 from finn.kernels.sides import BUILD, BeatTimes, Outside, Side, Steady
 from finn.toolchain.launcher import host_toolchain
@@ -206,7 +214,7 @@ def test_a_fifo_s_depth_is_the_least_whose_storage_holds_the_words() -> None:
 # -- a channel's sides, from the paces its ports state ----------------------------------------
 
 
-def _folded() -> tuple[Seam, Partition]:
+def _folded() -> tuple[Seam, CoreComposition]:
     """The Chain as conversion and the cut leave it (``with_defaults``), folded to 12
     cycles a frame."""
     explorer = Seam(FULL_DSP48E2)
@@ -214,7 +222,7 @@ def _folded() -> tuple[Seam, Partition]:
     return explorer, TargetCycles(12).explore(explorer, with_defaults(chain.network()))
 
 
-def chosen(explorer: Seam, network: Partition) -> dict[str, object]:
+def chosen(explorer: Seam, network: CoreComposition) -> dict[str, object]:
     """``network``'s stored choices, each by ``member.key``."""
     return {dotted(key): value for key, value in explorer.chosen(network).items()}
 
@@ -224,12 +232,12 @@ def test_a_channel_s_sides_are_read_from_the_paces_its_ports_state() -> None:
     # hidden: first (PE 1, SIMD 4) closes a reduction of one step each beat, a lane a
     # word; the output adapter's vpc pairs them into activate's two lanes, a word the
     # cycle after its second lane. activate reads every beat.
-    supply, accept = sides(point.member("hidden"), point.neighbours("hidden"))
+    supply, accept = sides(point.member("hidden"), beside(point, "hidden"))
     assert supply == Pattern((2, 4, 6, 8, 10, 12), 12)
     assert accept == Pattern(tuple(range(6)), 6)
     # levels: activate's six beats, four lanes a word after its vpc, into second's
     # input_gen, which second reads every beat.
-    supply, accept = sides(point.member("levels"), point.neighbours("levels"))
+    supply, accept = sides(point.member("levels"), beside(point, "levels"))
     assert supply == Pattern((2, 4, 6), 6)
     assert isinstance(accept, Buffered)
     assert accept.reads == Pattern(tuple(range(12)), 12)
@@ -238,9 +246,9 @@ def test_a_channel_s_sides_are_read_from_the_paces_its_ports_state() -> None:
 def test_a_boundary_and_a_memory_are_not_modelled() -> None:
     _, point = _folded()
     with pytest.raises(NotModelled, match="a boundary: not modelled"):
-        sides(point.member("x"), point.neighbours("x"))
+        sides(point.member("x"), beside(point, "x"))
     with pytest.raises(NotModelled, match="a memory source: paced by its consumer"):
-        sides(point.member("w1"), point.neighbours("w1"))
+        sides(point.member("w1"), beside(point, "w1"))
 
 
 def test_a_stated_pace_is_its_pattern_and_a_steady_beat_is_expanded_at_the_edge_s_beats() -> None:
@@ -258,7 +266,7 @@ def test_a_stated_pace_is_its_pattern_and_a_steady_beat_is_expanded_at_the_edge_
         stated_pattern(BeatTimes((0, 2, 5), 8), 4)
 
 
-def _stated(x: Outside | None, y: Outside | None) -> Partition:
+def _stated(x: Outside | None, y: Outside | None) -> CoreComposition:
     """The Chain with its input stated ``x`` and its output ``y`` (None: unstated), as
     conversion and the cut leave it, folded to 12 cycles a frame (``_folded``)."""
     members = chain.members()
@@ -289,18 +297,18 @@ def test_sizing_reads_a_stated_pace_first_on_either_side() -> None:
         Outside(BUILD, pace=Steady(3)), Outside(BUILD, pace=BeatTimes(tuple(range(12)), 12))
     )
     x, y = point.member("x"), point.member("y")
-    assert x.boundary.form.beats == 3 and x.input_chain == "input_gen"
-    supply, accept = sides(x, point.neighbours("x"))
+    assert outer(x).form.beats == 3 and x.input_chain == "input_gen"
+    supply, accept = sides(x, beside(point, "x"))
     assert supply == Pattern((0, 3, 6), 9)
     assert isinstance(accept, Buffered) and accept.reads == Pattern(tuple(range(12)), 12)
-    supply, accept = sides(y, point.neighbours("y"))
+    supply, accept = sides(y, beside(point, "y"))
     assert accept == Pattern(tuple(range(12)), 12)
-    assert size(x, point.neighbours("x"), 12) == Sized(0, "direct absorbs it", 12, 0)
-    assert size(y, point.neighbours("y"), 12) == Sized(0, "direct absorbs it", 5, 0)
+    assert size(x, beside(point, "x"), 12) == Sized(0, "direct absorbs it", 12, 0)
+    assert size(y, beside(point, "y"), 12) == Sized(0, "direct absorbs it", 5, 0)
     _, unstated = _folded()
     assert unstated.chosen() == point.chosen()
     for name in ("x", "y"):
-        found = size(unstated.member(name), unstated.neighbours(name), 12)
+        found = size(unstated.member(name), beside(unstated, name), 12)
         assert found.why == "a boundary: not modelled"
 
 
@@ -318,21 +326,21 @@ def test_a_stated_pace_slower_than_the_members_bounds_the_channel_s_cycles_on_ei
     assert explorer.cost(unstated).bottleneck.cycles == 12  # type: ignore[union-attr]
     slow = _stated(Outside(BUILD, pace=Steady(6)), None)
     x = slow.member("x")
-    assert x.boundary.form.beats == 3 and x.query(Channel.frame_cycles).value == 18
+    assert outer(x).form.beats == 3 and x.query(Channel.frame_cycles).value == 18
     assert explorer.cost(slow).bottleneck == Bottleneck(("x",), 18)
     assert slow.chosen() == unstated.chosen()
-    supply, _ = sides(x, slow.neighbours("x"))
+    supply, _ = sides(x, beside(slow, "x"))
     assert supply == Pattern((0, 6, 12), 18)
-    assert size(x, slow.neighbours("x"), 18) == Sized(0, "direct absorbs it", 12, 0)
+    assert size(x, beside(slow, "x"), 18) == Sized(0, "direct absorbs it", 12, 0)
     slow = _stated(None, Outside(BUILD, pace=Steady(3)))
     y = slow.member("y")
-    assert y.boundary.form.beats == 12 and y.query(Channel.frame_cycles).value == 36
+    assert outer(y).form.beats == 12 and y.query(Channel.frame_cycles).value == 36
     assert explorer.cost(slow).bottleneck == Bottleneck(("y",), 36)
     # TargetCycles relaxes its budget of 12 to the 36 reached, and folds again to it.
     assert explorer.cost(slow).cycles["first"] == 24
-    _, accept = sides(y, slow.neighbours("y"))
+    _, accept = sides(y, beside(slow, "y"))
     assert accept == Pattern(tuple(range(0, 36, 3)), 36)
-    assert size(y, slow.neighbours("y"), 36) == Sized(0, "direct absorbs it", 5, 0)
+    assert size(y, beside(slow, "y"), 36) == Sized(0, "direct absorbs it", 5, 0)
 
 
 # -- the strategy ---------------------------------------------------------------------------
@@ -385,6 +393,27 @@ def test_it_sizes_at_the_stored_folding_and_refuses_a_point_whose_cycles_are_unk
         message="needs every member's cycles: .*first.compute",
     ):
         SizeFifos().explore(explorer, point)
+
+
+def test_neighbours_that_wait_are_unread_not_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Where a channel's neighbours wait on an open choice, the point is not decided, not
+    refused: it refuses before sizing as unread (``fifos-unread``), what they wait on its
+    cause, as against a refused partition's ``fifos-refused``."""
+    explorer, point = _folded()
+    waiting = Finding(FindingKind.BLOCKER, "decision-unassigned", "compute", "open")
+    monkeypatch.setattr(
+        CoreComposition,
+        "neighbours",
+        lambda self, name: Unresolved((waiting,)),
+    )
+    with refused(
+        "fifos-unread",
+        error=ExploreError,
+        owner="size_fifos",
+        message="the ports beside its channel are not read, waiting: compute: open",
+    ) as caught:
+        SizeFifos().explore(explorer, point)
+    assert caught.finding.causes == (waiting,)
 
 
 def test_a_fifo_sized_before_is_sized_again_and_a_held_one_is_not(
@@ -603,7 +632,7 @@ def test_the_check_is_sizing_s_own_test_at_the_words_a_transport_holds() -> None
     assert keeps(_burst(32), _every(1, 32), 32, sized)
 
 
-def _with_fifo(depth: int = 8) -> tuple[Seam, Partition]:
+def _with_fifo(depth: int = 8) -> tuple[Seam, CoreComposition]:
     """The folded Chain with a FIFO of ``depth`` on ``levels`` (a shift register of
     ``max(5, depth)`` words)."""
     explorer, point = _folded()

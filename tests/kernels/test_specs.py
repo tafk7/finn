@@ -48,13 +48,13 @@ from finn.core.space import Available, Inapplicable, Space
 from finn.core.space.declarations import unmet_required
 from finn.dataflow.streams import Stream
 from finn.harness.points import Covering, covering, refusal, refused_cases, rejected
-from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.abi import Direction, Endpoint
 from finn.kernels.base import Kernel, PortPins
 from finn.kernels.configure import undecided
+from finn.kernels.explore import CoreComposition
 from finn.kernels.laws import Pacing
 from finn.kernels.library import ModuleSpec
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.partition import Partition
 from finn.kernels.port import exposed_name, exposed_pins, exposed_side, stream_port
 from finn.kernels.port_model import StreamPort, exposed_ports, stream_ports
 from finn.kernels.sides import Side
@@ -93,7 +93,7 @@ def test_the_covering_points_reach_every_case_and_are_valid(name: str) -> None:
         point = configured(base, chosen)
         kernel: Space = design_member(point, KERNEL)
         assert not rejected(kernel), f"{name} refuses its covering point {chosen}"
-        open_ = point.undecided() if isinstance(point, Partition) else undecided(point, "*")
+        open_ = point.undecided() if isinstance(point, CoreComposition) else undecided(point, "*")
         assert not open_, f"{name} at {chosen}"
         module = design_module(point, spec.kernel)
         assert isinstance(module, Available), f"{name} at {chosen}: {module}"
@@ -204,7 +204,7 @@ def _ports(member: Space) -> tuple[str, ...]:
     return tuple(exposed_ports(type(member)))
 
 
-def _ports_checked(point: Partition) -> int:
+def _ports_checked(point: CoreComposition) -> int:
     """Each placed stream port of each member of ``point``, checked: its label is its
     contract's, and its side states its stream, that label and, on an output port, its
     word width; an exposed port's, its member's port's, presented under the alias's name as
@@ -234,7 +234,8 @@ def _ports_checked(point: Partition) -> int:
             transport = contract.pins.transport
             output = transport.endpoint is Endpoint.INITIATOR
             width = transport.data_width if output else None
-            assert side == Side.kernel(stream, label, width), where
+            direction = Direction.OUT if output else Direction.IN
+            assert side == Side.kernel(direction, stream, label, width), where
             # Its pace: a port its schedule paces has one, over its kernel's one schedule;
             # a port that follows another has none; an exposed port's is its member's port's.
             paced = member.query(stream_port(type(member), port).pace)
@@ -251,7 +252,7 @@ def _ports_checked(point: Partition) -> int:
     return checked
 
 
-def _rate_checked(point: Partition) -> int:
+def _rate_checked(point: CoreComposition) -> int:
     """Each member of ``point`` binding a module, its cycles checked against the rate law
     (CONTRACT.md L6): its schedule's iterations where it states one, else the most
     beats a frame a placed port of it carries. How many it checked."""

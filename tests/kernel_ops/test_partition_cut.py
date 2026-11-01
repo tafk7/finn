@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 from qonnx.core.modelwrapper import ModelWrapper
-from support.configure import configured
+from support.configure import bound_in_shell, configured, core_in_shell
 from support.ipxact_ports import AXILITE
 from support.models import (
     ROW_MAJOR_W2,
@@ -29,6 +29,7 @@ from support.models import (
     streamed_w2_model,
 )
 from support.packaging import NO_VIVADO, verified, verified_parent
+from support.ports import outer
 from support.refusals import refused
 from support.tfc import ULTRA96
 
@@ -43,9 +44,9 @@ from finn.core.graph.annotations.outputs import (
 )
 from finn.core.graph.annotations.platform import PLATFORM_KEYS, read_target, write_target
 from finn.core.graph.errors import KernelOpError
-from finn.core.graph.partition import KERNEL_OPS_DOMAIN, design_digest, partition_body
+from finn.core.graph.partition import CUT_NAME, KERNEL_OPS_DOMAIN, design_digest, partition_body
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import configured_network, in_shell
+from finn.custom_op.kernels.shell import body_row, configured_network, shell_composition
 from finn.dataflow.traversal import Loop, Reorder, Traversal, offsets
 from finn.platform.resolve import resolve_target
 from finn.transformation.kernels import (
@@ -77,7 +78,7 @@ def chain(shell: str = "ip") -> ModelWrapper:
     if shell == "pynq":
         model = streamed_w2_model()
         write_target(model, ZYNQ)
-        model = model.transform(MakeCutChoices())
+        model = model.transform(MakeCutChoices(CUT_NAME))
     else:
         model = kernel_model(second_weights=False)
     choose_memories(model)
@@ -87,8 +88,8 @@ def chain(shell: str = "ip") -> ModelWrapper:
 def facts(model: ModelWrapper) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """The boundary facts of ``model``'s configured network, as the interface description
     and the testbench read them."""
-    point, boundary = configured_network(model, "partition")
-    return boundary_facts(model, point, boundary, "partition")
+    point, boundary = configured_network(model, "DataflowCore_0")
+    return boundary_facts(model, point, boundary, "DataflowCore_0")
 
 
 def port(name: str, tensor: str, dims: list[int], element: str, *counts: int) -> dict[str, Any]:
@@ -169,12 +170,12 @@ def test_the_cut_keeps_the_parent_graph_with_one_partition_of_one_name(tmp_path:
     model = chain("pynq")
     parent = model.transform(CutKernelPartition(tmp_path))
     (node,) = parent.graph.node
-    assert (node.op_type, node.name) == ("StreamingDataflowPartition", "partition")
+    assert (node.op_type, node.name) == ("DataflowCore", "DataflowCore_0")
     assert (list(node.input), list(node.output)) == (["x", "w2"], ["y"])
     found, body, body_file = partition_body(parent)
-    assert found is node and body_file == str(tmp_path / "partition.onnx")
+    assert found is node and body_file == str(tmp_path / "DataflowCore_0.onnx")
     # Only the body is left in the directory: the cut's own file is gone.
-    assert sorted(path.name for path in tmp_path.iterdir()) == ["partition.onnx"]
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["DataflowCore_0.onnx"]
     # The body carries the target, and its nodes as they were: of the space the cut
     # stores only the choices' baselines (no boundary facts; its configured network states
     # them).
@@ -210,7 +211,10 @@ def test_the_export_names_each_mover_its_iodma_and_every_connection(tmp_path: Pa
         ZYNQ.part,
         5.0,
     )
-    assert (export.partition, export.vlnv) == ("partition", "xilinx_finn:finn:partition:1.0")
+    assert (export.partition, export.vlnv) == (
+        "DataflowCore_0",
+        "xilinx_finn:finn:DataflowCore_0:1.0",
+    )
     # Movers by direction in port order, each IODMA_hls configured from its facts: a
     # frame's beats, the stream's bytes a beat in the UINT8 container, the memory port
     # and the stream's width; the element is the mover's.
@@ -251,9 +255,9 @@ def test_the_export_names_each_mover_its_iodma_and_every_connection(tmp_path: Pa
         "INT7",
     ]
     assert export.connections == (
-        Connection("axis", "idma0/m_axis_0", "partition/s_axis_0"),
-        Connection("axis", "idma1/m_axis_0", "partition/s_axis_1"),
-        Connection("axis", "partition/m_axis_0", "odma0/s_axis_0"),
+        Connection("axis", "idma0/m_axis_0", "DataflowCore_0/s_axis_0"),
+        Connection("axis", "idma1/m_axis_0", "DataflowCore_0/s_axis_1"),
+        Connection("axis", "DataflowCore_0/m_axis_0", "odma0/s_axis_0"),
         Connection("aximm", "idma0/m_axi_gmem0", "smartconnect_0/S00_AXI"),
         Connection("aximm", "idma1/m_axi_gmem0", "smartconnect_0/S01_AXI"),
         Connection("aximm", "odma0/m_axi_gmem0", "smartconnect_0/S02_AXI"),
@@ -262,7 +266,7 @@ def test_the_export_names_each_mover_its_iodma_and_every_connection(tmp_path: Pa
         Connection("axilite", "axi_interconnect_0/M02_AXI", "odma0/s_axi_control_0"),
         *(
             Connection(kind, f"smartconnect_0/{source}", f"{instance}/{pin}")
-            for instance in ("idma0", "idma1", "partition", "odma0")
+            for instance in ("idma0", "idma1", "DataflowCore_0", "odma0")
             for kind, source, pin in (
                 ("clock", "aclk", "ap_clk"),
                 ("reset", "aresetn", "ap_rst_n"),
@@ -308,7 +312,7 @@ def streamed_on_pynq(rows: int, choices: dict[str, Any]) -> ModelWrapper:
     model = kernel_model(second_weights=False, rows=rows)
     configured(model, choices)
     write_target(model, ZYNQ)
-    cut = MakeCutChoices()
+    cut = MakeCutChoices(CUT_NAME)
     model = model.transform(cut)
     assert cut.unset == {}
     return model
@@ -348,7 +352,7 @@ def test_a_tiled_w2_is_regrouped_after_its_mover_by_a_vpc_and_an_input_gen(case:
     boundary to the MatMul's weights."""
     rows, choices = TILED_W2[case]
     model = streamed_on_pynq(rows, choices)
-    bound = in_shell(model, model.graph.node)
+    bound = core_in_shell(model, model.graph.node)
     assert bound.validity("w2").status == "valid"
     assert {key: value for key, value in bound.chosen().items() if key[0] == "w2"} == {
         ("w2", "transport"): "direct",
@@ -356,7 +360,7 @@ def test_a_tiled_w2_is_regrouped_after_its_mover_by_a_vpc_and_an_input_gen(case:
     }
     w2 = bound.member("w2")
     row_major = Traversal((4, 4), (Loop(4, 4),), (Loop(4, 1),))
-    assert w2.boundary.form == row_major and w2.boundary.transport.data_width == 16
+    assert outer(w2).form == row_major and outer(w2).transport.data_width == 16
     read = w2.streams.sink.sequence.form
     assert read == Traversal(
         (4, 4),
@@ -376,7 +380,7 @@ def test_a_tiled_w2_is_regrouped_after_its_mover_by_a_vpc_and_an_input_gen(case:
     mover = w2.mover_contract
     assert (mover.beats, mover.tdata, mover.memory_width, mover.words) == (4, 16, 64, 1)
     choose_memories(model)
-    configured, boundary = configured_network(model, "partition")
+    configured, boundary = configured_network(model, "DataflowCore_0")
     assert boundary == (("x", "s_axis_0"), ("w2", "s_axis_1"), ("y", "m_axis_0"))
     stages = {
         name: (leaf.implementation_id, dict(leaf.parameters))
@@ -410,7 +414,7 @@ def test_a_tiled_w2_is_regrouped_after_its_mover_by_a_vpc_and_an_input_gen(case:
         ("w2.adapter.input_gen_vpc.input_gen", "odat", "w2.adapter.input_gen_vpc.vpc", "idat"),
         ("w2.adapter.input_gen_vpc.vpc", "odat", "second.compute.packed", "s_axis_weights_tdata"),
     ]
-    assert in_shell(model, model.graph.node).validity("x").status == "valid"
+    assert core_in_shell(model, model.graph.node).validity("x").status == "valid"
 
 
 def test_a_row_major_w2_on_three_rows_is_replayed_by_an_input_gen_after_its_mover() -> None:
@@ -421,20 +425,20 @@ def test_a_row_major_w2_on_three_rows_is_replayed_by_an_input_gen_after_its_move
     the channel's choice (``adapter_ram_style``), which the cut makes. The network is
     configured; unstated (on ip) the edge presents the three passes and places nothing."""
     model = streamed_on_pynq(3, {"second": ROW_MAJOR_W2})
-    bound = in_shell(model, model.graph.node)
+    bound = core_in_shell(model, model.graph.node)
     w2 = bound.member("w2")
     assert bound.validity("w2").status == "valid"
-    assert (w2.boundary.form.lanes, w2.boundary.form.beats) == (4, 4)
+    assert (outer(w2).form.lanes, outer(w2).form.beats) == (4, 4)
     assert w2.input_chain == "input_gen" and w2.adapter.frame_bits == 16 * 3
     assert ("w2", "adapter_ram_style") in bound.chosen()
     mover = w2.mover_contract
     assert (mover.beats, mover.tdata, mover.memory_width, mover.words) == (4, 16, 64, 1)
     choose_memories(model)
-    configured_network(model, "partition")
+    configured_network(model, "DataflowCore_0")
     ip = kernel_model(second_weights=False)
     configured(ip, {"second": ROW_MAJOR_W2})
-    unstated = in_shell(ip, ip.graph.node).member("w2")
-    assert unstated.boundary.form.beats == 12 and unstated.input_chain == "none"
+    unstated = core_in_shell(ip, ip.graph.node).member("w2")
+    assert outer(unstated).form.beats == 12 and unstated.input_chain == "none"
 
 
 def test_x_read_twice_on_one_row_is_replayed_by_an_input_gen_after_its_mover() -> None:
@@ -443,15 +447,15 @@ def test_x_read_twice_on_one_row_is_replayed_by_an_input_gen_after_its_mover() -
     ``input_gen`` replays it (and marks it), its buffer the pass (4 INT3), its memory the
     cut's choice. Unstated, the edge presents the two passes."""
     model = streamed_on_pynq(1, {})
-    bound = in_shell(model, model.graph.node)
+    bound = core_in_shell(model, model.graph.node)
     x = bound.member("x")
     assert bound.validity("x").status == "valid"
-    assert (x.boundary.form.beats, x.mover_contract.beats) == (2, 2)
+    assert (outer(x).form.beats, x.mover_contract.beats) == (2, 2)
     assert x.input_chain == "input_gen" and x.adapter.frame_bits == 4 * 3
     assert x.input_steps.describe() == "reorder -> markers"
     assert ("x", "adapter_ram_style") in bound.chosen()
     ip = kernel_model(second_weights=False, rows=1)
-    assert in_shell(ip, ip.graph.node).member("x").boundary.form.beats == 4
+    assert outer(core_in_shell(ip, ip.graph.node).member("x")).form.beats == 4
 
 
 def test_a_mover_or_bus_the_block_design_cannot_wire_is_refused_by_name(tmp_path: Path) -> None:
@@ -499,10 +503,12 @@ def test_packaging_states_its_ip_typed_and_writes_no_flat_key(tmp_path: Path) ->
     before = {item.key for item in body.graph.metadata_props}
     project = tmp_path / "stitch"
     toolchain: Any = PackagedHere()
-    verified(body, "partition")
-    packaged = body.transform(PackagePartition("partition", directory=project, toolchain=toolchain))
+    verified(body, "DataflowCore_0")
+    packaged = body.transform(
+        PackagePartition("DataflowCore_0", directory=project, toolchain=toolchain)
+    )
     assert packaged.get(OUTPUT_IP) == str(project / "ip")
-    assert packaged.get(OUTPUT_VLNV) == "xilinx_finn:finn:partition:1.0"
+    assert packaged.get(OUTPUT_VLNV) == "xilinx_finn:finn:DataflowCore_0:1.0"
     interfaces = packaged.get(OUTPUT_INTERFACES)
     assert (interfaces["s_axis"], interfaces["m_axis"]) == (
         [["s_axis_0", 8], ["s_axis_1", 16]],
@@ -519,7 +525,7 @@ def test_packaging_states_its_ip_typed_and_writes_no_flat_key(tmp_path: Path) ->
         "finn.outputs/verified",
     }
     assert packaged.get(OUTPUT_IP_KEY) == ip_key(
-        body, "partition", run_synth=False, toolchain=toolchain
+        body, "DataflowCore_0", run_synth=False, toolchain=toolchain
     )
     assert packaged.get(OUTPUT_IP_OPTIONS) == {"run_synth": False}
     # Packaging leaves the design as it was.
@@ -587,6 +593,7 @@ def test_tfc_s_choices_are_created_at_conversion_and_at_the_cut(
     ]
     assert not [name for name, held in channels.items() if "adapter" in held]
     assert not [name for name, held in channels.items() if "mover" in held]
-    bound = in_shell(body, body.graph.node)
-    assert bound.stale == {}
+    found = bound_in_shell(body, body.graph.node)
+    bound = shell_composition(found.point, body_row(body))
+    assert found.stale == {}
     assert bound.undecided() == ()

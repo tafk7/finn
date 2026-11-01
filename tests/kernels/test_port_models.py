@@ -133,8 +133,9 @@ def test_actual_native_values_parent_bindings_and_snapshot_history(
         expected = Stream(ELEMENT, SEQUENCE)
         assert port.stream == expected
         assert port.width == data_width(old, expected) == 12
+        output = endpoint is Endpoint.INITIATOR
         assert port.side == Side.kernel(
-            expected, name, 12 if endpoint is Endpoint.INITIATOR else None
+            Direction.OUT if output else Direction.IN, expected, name, 12 if output else None
         )
         assert port.physical_pins == pins(old, expected, NATIVE_CLOCKING)
         assert port.idle_pins == Held()

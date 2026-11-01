@@ -1,30 +1,31 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The partition of KernelOp nodes a graph binds, one design space, and its choices
-written back.
+"""The core of KernelOp nodes a graph binds, one design space, and its choices written back.
 
-``network(model, nodes, movers=...)`` binds a ``Partition`` straight from the graph, for any
-selection of KernelOp nodes (a partition's body, a slice of it, one node), and changes no
+``network(model, nodes, name=..., movers=...)`` binds a core straight from the graph, for any
+selection of KernelOp nodes (a DataflowCore's body, a slice of it, one node), and changes no
 graph: it reads the graph once, its tensors from one index
 (``finn.core.graph.facts.reading``), into a declaration (``declaration``), which the
-composer (``finn.kernels.composer``) makes one Space class of, and binds its stored choices
-on one design space of that class (``finn.kernels.partition.partition``). The movers offered
-on its boundary (``movers``, each a ``finn.kernels.movers.MoverOffer``; none by default) are
-a fact its caller gives: a shell's row offers them, and ``finn.custom_op.kernels.shell``
-binds a partition in the shell of the model's target (``in_shell``). A mover offered states
-each boundary side it is offered on (``MoverOffer.states``: row-major, one pass a frame);
-where none is, the build states the side its statement for the side's tensor
-(``finn.core.graph.annotations.boundary``, ``finn.boundary``: the build's ``boundary``, by
-port, which the cut writes by tensor), and where it states none the side is unstated. A
-build statement on a boundary offered a mover is refused by name
-(``boundary-stated-twice``): the build refuses it before its first step, so only a model
-annotated by hand reaches this.
+composer (``finn.kernels.composer``) makes one Space class of, a ``DataflowCoreKernel``, and
+binds its stored choices on one design space of that class
+(``finn.kernels.dataflow_core.bound``: a ``Bound``). Its module's name (``name``) is its
+caller's: a node's own name (``finn.custom_op.partition.DataflowCore``), which every step
+holding only its body is given. The movers offered on its boundary (``movers``, each a
+``finn.kernels.movers.MoverOffer``; none by default) are a fact its caller gives: a shell's
+row offers them, and ``finn.custom_op.kernels.shell`` binds a body's core in the shell of
+the model's target (``core_point``). A mover offered states each boundary side it is offered
+on (``MoverOffer.states``: row-major, one pass a frame); where none is, the build states the
+side its statement for the side's tensor (``finn.core.graph.annotations.boundary``,
+``finn.boundary``: the build's ``boundary``, by port, which the cut writes by tensor), and
+where it states none the side is unstated. A build statement on a boundary offered a mover
+is refused by name (``boundary-stated-twice``): the build refuses it before its first step,
+so only a model annotated by hand reaches this.
 
 **The declaration** (``declaration``):
 
 - **kernels**, one per node, named as the node: its kernel's facts, read once
-  (``KernelOp.facts``);
+  (``KernelOp.facts``), and its policies' owner, its KernelOp class;
 - **channels**, one per ONNX tensor, named as the tensor, in node order: a node's graph
   inputs, the parameter channels it owns (named after the initializer), its outputs. Each
   has its two sides, a kernel's port (``Port``: the op's ``wiring``, an input on the
@@ -39,37 +40,42 @@ annotated by hand reaches this.
   ``s_axis_<i>`` and ``m_axis_<j>``. An edge of a slice (a selection short of every
   KernelOp) whose node beyond it is a KernelOp is no boundary: that node is a **frozen
   neighbour**, and the edge channel's side there is its port's side at its stored
-  choices, as a fact (``Side.neighbour``: an upstream neighbour's stream, label and word
-  width, a downstream one's stream and label), the edge channel the slice's member. Only
-  an accepted value is a fact: a neighbour whose stored choices or kernel are refused, or
-  whose side is not known at them, is refused by name (``neighbour-unaccepted``); another
-  neighbour is another design space of the slice. An edge at a graph input or output, or
-  at a node that is no KernelOp, stays a boundary. A channel has one consumer, so a
+  choices, as a fact (``Side.neighbour``: an upstream neighbour's output side, its stream,
+  label and word width, a downstream one's input side, its stream and label), the edge
+  channel the slice's member; its port's stream pins there, which the edge channel's hop
+  is wired to, and its pace, which sizing reads, are facts of the slice's class too
+  (``DataflowCoreDeclaration.frozen``). Only an accepted value is a fact: a neighbour
+  whose stored choices or kernel are refused, or whose side is not known at them, is
+  refused by name (``neighbour-unaccepted``); another neighbour is another design space of
+  the slice. An edge at a graph input or output, or at a node that is no KernelOp, stays a
+  boundary. A channel has one consumer, so a
   tensor read more than once is refused by name before anything is declared
   (``tensor-fan-out``): read by two of the nodes (an edge, or a parameter both own), or
   read by one and at an output boundary too (a graph output, or read outside the nodes);
   and at a frozen neighbour, read by anything else beside the channel's two sides, as the
-  whole partition reads it. Fan-out waits for a channel that forks. A node and a tensor,
+  whole core reads it. Fan-out waits for a channel that forks. A node and a tensor,
   or two nodes, of one name are refused (``name-shared``):
   a member is named once, as the choices log ``kernel_choices.json`` names it; and so is
-  what the composer refuses (``PartitionRefused``: its findings, as a ``KernelOpError``);
+  what the composer refuses (``DataflowCoreRefused``: its findings, as a ``KernelOpError``);
 - **its order**: the channels are declared input boundary channels, the other channels,
   output boundary channels, which the composer ranks (each after the members it reads); its
   module places them input boundary channels, the other channels, the kernels, output
-  boundary channels (``Reshape_0_out0``, ..., ``MatMul_0``, ...), its instance order; each
-  member's node in the module is its member name (``member_name``: ``\\W`` as ``_``).
+  boundary channels (``Reshape_0_out0``, ..., ``MatMul_0``, ...), its instance order, which
+  the declaration states with its module's name (``DataflowCoreDeclaration.order``,
+  ``name``); each member's node in the module is its member name (``member_name``: ``\\W``
+  as ``_``).
 
 **Its stored choices** (bind is assignment): every node's attributes and every channel's
-``finn.channel`` on its tensor (in a partition's body only, ``refuse_outside_body``), bound
-with the engine's ``bind`` on the design space of the graph's facts, never refused there. A
-stored value outside its domain over the current facts (or a key that is no choice) is
-dropped as stale, with why (``Partition.stale``). A stored set that breaks a rule binds, and
-the partition reads refused: the member's validity names the rule, and so do its readers
-(``configured_network``, ``verify_partition``, and the seam's step, ``Seam.refusals``). A
-channel whose choices wait on an open kernel choice holds them, waiting
-(``inspection.Waiting``). Nothing is filled in. With every KernelOp of the model selected,
-choices a tensor states that is no channel of it are stale too. Nothing is written:
-``persist``, the one writer of choices, writes a partition's choices back, each owner's
+``finn.channel`` on its tensor (in a DataflowCore's body only, ``refuse_outside_body``),
+bound with the engine's ``bind`` on the design space of the graph's facts, never refused
+there. A stored value outside its domain over the current facts (or a key that is no
+choice) is dropped as stale, with why (``Bound.stale``). A stored set that breaks a rule
+binds, and the core reads refused: the member's validity names the rule, and so do its
+readers (``configured_network``, ``verify_partition``, and the seam's step,
+``Seam.refusals``). A channel whose choices wait on an open kernel choice holds them,
+waiting (``inspection.Waiting``). Nothing is filled in. With every KernelOp of the model
+selected, choices a tensor states that is no channel of it are stale too. Nothing is
+written: ``persist``, the one writer of choices, writes a core's choices back, each owner's
 whole.
 
 **Its outputs**: each node's output is its kernel's product. Where the graph's annotation of
@@ -77,28 +83,26 @@ an output (its shape's element count and last axis, its datatype and its range) 
 what its producer states, the graph is stale, refused by name (``tensor-stale``: "run
 InferKernelTensors"), before any channel's own ``channel-tensor`` is read.
 
-**Its module** is the partition's IP, the cut's (``PARTITION``; a slice with a frozen
-neighbour has none, ``slice-not-emitted``, ``finn.kernels.partition``): its members'
-netlists, named as the graph's nodes and tensors, with the boundary's pins, named after
-the partition (its stem ``finn_<name>``) and identified as the partition's IP
-(``PRODUCER``, which ``Partition.module_of`` is given), since a mover is integrated beside
-the IP, not in it. Its views are read out of the design space, composed from its members'
-(the netlist with each channel's outer hops from the kernels' stream pins views, FIFO
-sizing's paces, resources), never bound into it; a frozen neighbour's port's stream pins, which
-its hop is wired to, and its port's pace, which sizing reads, are read at its stored
-choices and given beside the declaration.
+**Its module** is the DataflowCore's IP (a slice with a frozen neighbour has none,
+``slice-not-emitted``), as its class answers it
+(``finn.kernels.dataflow_core.DataflowCoreKernel.module``): its members' netlists, named as
+the graph's nodes and tensors, with the boundary's pins, named after its name (its stem
+``finn_<name>``) and derived by its class, since a mover is integrated beside the IP, not in
+it. Its views are read out of the design space, composed from its members' (the netlist
+with each channel's outer hops from the kernels' stream pins views, FIFO sizing's paces,
+resources), never bound into it.
 
-A partition's resources (``Partition.own_resources``) are its members'. A partition in its
-shell (``finn.custom_op.kernels.shell.in_shell``) holds the shell's budgets as rules of its
-own (its shell member, ``finn.kernels.budgets``); the shell's resources over a partition
-(its members', its movers' and its static region's), and the cut's choices
-(``make_cut_choices``) on the partition in its shell, are ``finn.custom_op.kernels.shell``'s.
+A core's resources are its members', as its class answers them (``Kernel.resources``). A
+core in its shell (``finn.custom_op.kernels.shell.core_point``) holds the shell's budgets as
+rules of its own (its shell member, ``finn.kernels.budgets``); the shell's resources over a
+core (its members', its movers' and its static region's), and the cut's choices
+(``make_cut_choices``) on the core in its shell, are ``finn.custom_op.kernels.shell``'s.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Collection, Iterable, Mapping
-from typing import TYPE_CHECKING, TypeVar, cast
+from typing import TYPE_CHECKING, cast
 
 from onnx import NodeProto
 from qonnx.core.metadata import MetadataError
@@ -119,32 +123,26 @@ from finn.core.search import Key, dotted
 from finn.core.space import Available, Rejected, Space, Unresolved, inspection
 from finn.custom_op.kernels.base import KernelOp, kernel_op, typed
 from finn.dataflow.streams import Stream
-from finn.kernels.artifacts.module import ProducerIdentity
+from finn.kernels.artifacts.abi import Direction
 from finn.kernels.base import PortPins
 from finn.kernels.channels import Channel, Neighbours
 from finn.kernels.composer import (
     ChannelDeclaration,
-    PartitionDeclaration,
-    PartitionRefused,
+    DataflowCoreDeclaration,
+    DataflowCoreRefused,
     Port,
     Stated,
+    compose,
 )
+from finn.kernels.dataflow_core import Bound, DataflowCoreKernel, bound
+from finn.kernels.explore import CoreComposition
 from finn.kernels.laws import TimedPace
 from finn.kernels.movers import MoverOffer
-from finn.kernels.partition import Partition, partition
 from finn.kernels.port import exposed_pins, exposed_side, stream_port
 from finn.kernels.sides import Side
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
-
-PARTITION = "partition"
-"""The partition's name: the cut's node and body file, and the IP made from it, which
-is its module (``finn_partition``)."""
-
-PRODUCER = ProducerIdentity("finn.custom_op.kernels.partition", "1")
-"""What derives a partition's module: identified as the partition's, so the IP's name and
-digest are the partition's."""
 
 
 def stale_text(key: str, found: Iterable[Finding]) -> str:
@@ -297,13 +295,14 @@ def _neighbour(
     """The side a frozen neighbour, KernelOp ``node`` beyond the selection on ``side`` of
     ``tensor``, gives the edge channel, as a fact: its port's ``side`` at its stored
     choices (``KernelOp.point``; its facts alone, where it stores none), as a frozen
-    neighbour's (``Side.neighbour``: an upstream one's stream, label and word width, a
-    downstream one's stream and label), its label below the node's name; that port's
-    stream pins there (``stream_pins``), which its hop is wired to; and its pace there at
-    its kernel's interval (``timed_pace``, where it owns its pacing), which sizing reads. Only an
-    accepted value is a fact: refused (``neighbour-unaccepted``, naming the neighbour, its
-    port and why) where its stored choices are refused, its kernel is refused, or its side
-    is not known there (it waits on an open choice, or is refused)."""
+    neighbour's (``Side.neighbour``: an upstream one's output side, its stream, label and
+    word width, a downstream one's input side, its stream and label), its label below the
+    node's name; that port's stream pins there (``stream_pins``), which its hop is wired to;
+    and its pace there at its kernel's interval (``timed_pace``, where it owns its pacing), which
+    sizing reads. Only an accepted value is a fact: refused (``neighbour-unaccepted``,
+    naming the neighbour, its port and why) where its stored choices are refused, its kernel
+    is refused, or its side is not known there (it waits on an open choice, or is
+    refused)."""
     op = kernel_op(model, node)
     port = (
         op.outputs[list(node.output).index(tensor)]
@@ -344,7 +343,9 @@ def _neighbour(
         )
         raise unaccepted(why, getattr(answer, "findings", ()))
     found: Side = exposed_side(type(point), named, answer.value)
-    stated = Side.neighbour(cast(Stream, found.stream), found.label, found.width)
+    stated = Side.neighbour(
+        cast(Direction, found.direction), cast(Stream, found.stream), found.label, found.width
+    )
     pins = point.query(declared.stream_pins)
     given = pins.value if isinstance(pins, Available) else None
     if isinstance(given, PortPins):
@@ -429,14 +430,14 @@ def _stored(
 
 
 def _stale(
-    model: ModelWrapper, bound: Partition, nodes: list[NodeProto], ops: list[KernelOp]
+    model: ModelWrapper, core: CoreComposition, nodes: list[NodeProto], ops: list[KernelOp]
 ) -> None:
     """Refuse a graph whose annotation of an output differs from what its producer
     states (its element count, its last axis, or its element: the datatype and its
     range), by name: the graph is stale (``tensor-stale``)."""
     findings: list[Finding] = []
     for node, op in zip(nodes, ops):
-        kernel = bound.member(node.name)
+        kernel = core.member(node.name)
         for port, tensor in zip(op.outputs, node.output):
             stated = kernel.query(getattr(type(kernel), op.wiring[port].tensor))
             if not isinstance(stated, Available):
@@ -465,26 +466,22 @@ def _stale(
 
 
 class _Read:
-    """What the graph states of a selection: its declaration, its module's order, its
-    boundary's ports, its KernelOps, the choices it stores and those stray, whether it
-    holds every KernelOp of the model, and the ports' stream pins and paces of the frozen neighbours
-    beside its edge channels. A record read once, never a value a Space holds."""
+    """What the graph states of a selection: its declaration (its module's name, its order,
+    its kernels' policies' owners and the ports beside its edge channels at frozen
+    neighbours among it), its KernelOps, and the choices it stores and those stray. A record
+    read once, never a value a Space holds."""
 
-    __slots__ = ("declared", "frozen", "ops", "order", "ports", "stored", "stray", "whole")
+    __slots__ = ("declared", "ops", "stored", "stray")
 
     def __init__(
         self,
-        declared: PartitionDeclaration,
-        order: tuple[str, ...],
-        ports: dict[str, str],
+        declared: DataflowCoreDeclaration,
         ops: list[KernelOp],
         stored: dict[Key, object],
         stray: dict[str, tuple[Finding, ...]],
-        whole: bool,
-        frozen: dict[str, Neighbours],
     ) -> None:
-        self.declared, self.order, self.ports, self.ops = declared, order, ports, ops
-        self.stored, self.stray, self.whole, self.frozen = stored, stray, whole, frozen
+        self.declared, self.ops = declared, ops
+        self.stored, self.stray = stored, stray
 
 
 def _graph(
@@ -495,8 +492,8 @@ def _graph(
     shell: Mapping[str, object] | None = None,
 ) -> _Read:
     """The selection ``nodes`` of ``model`` as the graph states it (``_Read``; the module
-    docstring), in a shell where ``shell`` states its row's facts
-    (``PartitionDeclaration.shell``), refused where a tensor is read more than once
+    docstring), its module named ``name``, in a shell where ``shell`` states its row's facts
+    (``DataflowCoreDeclaration.shell``), refused where a tensor is read more than once
     (``tensor-fan-out``) or two members share a name (``name-shared``)."""
     ops = [kernel_op(model, node) for node in nodes]
     owned = [op.owned() for op in ops]
@@ -592,78 +589,78 @@ def _graph(
 
     kernels = {node.name: op.facts() for node, op in zip(nodes, ops)}
     declared_order = [*on("s_axis_"), *on(""), *on("m_axis_")]
-    declared = PartitionDeclaration(
-        kernels, {tensor: channels[tensor] for tensor in declared_order}, shell
+    declared = DataflowCoreDeclaration(
+        kernels,
+        {tensor: channels[tensor] for tensor in declared_order},
+        shell,
+        name=name,
+        order=(*on("s_axis_"), *on(""), *kernels, *on("m_axis_")),
+        owners={node.name: type(op) for node, op in zip(nodes, ops)},
+        frozen=frozen,
     )
-    order = (*on("s_axis_"), *on(""), *kernels, *on("m_axis_"))
-    return _Read(declared, order, ports, ops, stored, stray, whole, frozen)
+    return _Read(declared, ops, stored, stray)
 
 
 def declaration(
     model: ModelWrapper,
     nodes: Iterable[NodeProto],
     *,
+    name: str,
     movers: tuple[MoverOffer, ...] = (),
     shell: Mapping[str, object] | None = None,
-) -> PartitionDeclaration:
-    """The partition of ``nodes``, KernelOp nodes of ``model``, as the graph declares it
-    (the module docstring): each node's kernel by its facts, in graph order, and each
-    channel by its tensor with its sides and facts, its boundary offered ``movers``; in a
-    shell where ``shell`` states its row's facts."""
+) -> DataflowCoreDeclaration:
+    """The core of ``nodes``, KernelOp nodes of ``model``, as the graph declares it (the
+    module docstring), its module named ``name``: each node's kernel by its facts, in graph
+    order, and each channel by its tensor with its sides and facts, its boundary offered
+    ``movers``; in a shell where ``shell`` states its row's facts."""
     with reading(model):
-        return _graph(model, list(nodes), PARTITION, movers, shell).declared
+        return _graph(model, list(nodes), name, movers, shell).declared
+
+
+def _composed(declared: DataflowCoreDeclaration) -> DataflowCoreKernel:
+    """The design space of ``declared``'s class (``compose``), nothing chosen; a refusal of
+    the composer's raised as the graph's, named by the core's name."""
+    try:
+        return compose(declared)
+    except DataflowCoreRefused as error:
+        message = f"{declared.name}: " + "; ".join(map(str, error.findings))
+        raise KernelOpError(message, findings=error.findings) from error
+
+
+def core(
+    model: ModelWrapper,
+    nodes: Iterable[NodeProto],
+    *,
+    name: str,
+    movers: tuple[MoverOffer, ...] = (),
+    shell: Mapping[str, object] | None = None,
+) -> DataflowCoreKernel:
+    """The core of ``nodes``, KernelOp nodes of ``model``, as ``network`` makes it, its
+    design space with nothing chosen: no stored choice read (``network`` binds them)."""
+    return _composed(declaration(model, nodes, name=name, movers=movers, shell=shell))
 
 
 def network(
     model: ModelWrapper,
     nodes: Iterable[NodeProto],
     *,
-    name: str = PARTITION,
-    movers: tuple[MoverOffer, ...] = (),
-) -> Partition:
-    """The partition of ``nodes``, KernelOp nodes of ``model``, its module the partition
-    ``name``'s IP, on the platform of the model's target: ``movers`` offered on the boundary
-    channels (none by default; a shell's row offers them, ``in_shell``); see the module
-    docstring. A tensor read more than once is refused (``tensor-fan-out``), and so is a
-    stale output (``tensor-stale``)."""
-    return _network(model, list(nodes), name, movers, Partition)
-
-
-P = TypeVar("P", bound=Partition)
-
-
-def _network(
-    model: ModelWrapper,
-    nodes: list[NodeProto],
     name: str,
-    movers: tuple[MoverOffer, ...],
-    kind: Callable[..., P],
+    movers: tuple[MoverOffer, ...] = (),
     shell: Mapping[str, object] | None = None,
-) -> P:
-    """``network``, made by ``kind`` (``Partition``, or a shell's partition over it), in a
-    shell where ``shell`` states its row's facts, the graph's tensors read from one
-    index."""
+) -> Bound:
+    """The core of ``nodes``, KernelOp nodes of ``model``, its module named ``name`` (its
+    node's), on the platform of the model's target, its stored choices bound (``Bound``):
+    ``movers`` offered on the boundary channels (none by default; a shell's row offers
+    them), in a shell where ``shell`` states its row's facts
+    (``finn.custom_op.kernels.shell.core_point``); see the module docstring. A tensor read
+    more than once is refused (``tensor-fan-out``), and so is a stale output
+    (``tensor-stale``)."""
+    selected = list(nodes)
     with reading(model):
-        read = _graph(model, nodes, name, movers, shell)
-        try:
-            made = partition(
-                read.declared,
-                read.stored,
-                name=name,
-                order=read.order,
-                owners={node.name: type(op) for node, op in zip(nodes, read.ops)},
-                ports=tuple(read.ports.items()),
-                movers=movers,
-                stray=read.stray,
-                whole=read.whole,
-                frozen=read.frozen,
-                kind=kind,
-            )
-        except PartitionRefused as error:
-            message = f"{name}: " + "; ".join(map(str, error.findings))
-            raise KernelOpError(message, findings=error.findings) from error
-        _stale(model, made, nodes, read.ops)
-        return made
+        read = _graph(model, selected, name, movers, shell)
+        found = bound(_composed(read.declared), read.stored, stray=read.stray)
+        _stale(model, CoreComposition(found.point), selected, read.ops)
+        return found
 
 
 # -- writing choices back -----------------------------------------------------------------
@@ -701,27 +698,30 @@ def _write_channel(model: ModelWrapper, tensor: str, choices: Mapping[str, objec
         model.set(CHANNEL_KEYS[key], value, tensor=tensor)
 
 
-def persist(model: ModelWrapper, partition: Partition) -> dict[str, dict[str, object]]:
-    """Write ``partition``'s choices, a partition of ``model``'s nodes (``network``), back
-    where they are stated, each owner's whole: every choice its design space stores,
+def persist(model: ModelWrapper, point: DataflowCoreKernel) -> dict[str, dict[str, object]]:
+    """Write ``point``'s choices, a design space of the core of ``model``'s nodes
+    (``network``), back where they are stated, each owner's whole: every choice it stores,
     whatever its state (set, waiting or dormant), split by member, on its owner, a kernel's
-    node or a channel's tensor; a choice an owner holds that the partition does not (one the
-    bind dropped as stale) cleared, and, where it holds every KernelOp of the model, so are
-    the channel choices of a tensor that is no channel of it.
+    node or a channel's tensor; a choice an owner holds that the core does not (one the bind
+    dropped as stale) cleared, and, where it holds every KernelOp of the model, so are the
+    channel choices of a tensor that is no channel of it.
 
-    The one writer of a partition's choices: a route to one is a hold in step_explore's
+    The one writer of a core's choices: a route to one is a hold in step_explore's
     strategies, this function for the compiler (``persist_kernel`` beside it for conversion,
-    one node's kernel alone), and ``support.configure.configured`` for a test. Channel
-    choices are a partition's body's only: written on a graph that is not (host nodes
-    beside the KernelOps) they are refused, by name, before anything is written
+    one node's kernel alone, and ``finn.custom_op.partition.DataflowCore.persist`` for a
+    node's body), and ``support.configure.configured`` for a test. Channel choices are a
+    DataflowCore's body's only: written on a graph that is not (host nodes beside the
+    KernelOps) they are refused, by name, before anything is written
     (``channel-choices-outside-body``). Every value is checked and encoded before any is
     written, so a write cannot fail halfway; none is set again on a fresh point, since the
-    partition has bound each (its choices are checked as they are set).
+    core has bound each (its choices are checked as they are set).
     Returns what each owner now holds, by graph name."""
-    names = list(partition.members)
-    kernels = set(partition.kernels)
+    core = CoreComposition(point)
+    names = list(core.members)
+    kernels = set(core.kernels)
+    whole = kernels >= {node.name for node in model.graph.node if node.domain == KERNEL_OPS_DOMAIN}
     held_by: dict[str, dict[str, object]] = {name: {} for name in names}
-    for (owner, key), value in partition.chosen(names).items():
+    for (owner, key), value in core.chosen(names).items():
         held_by[owner][key] = value
     refuse_outside_body(
         model, [name for name, values in held_by.items() if values and name not in kernels]
@@ -737,7 +737,7 @@ def persist(model: ModelWrapper, partition: Partition) -> dict[str, dict[str, ob
         elif values or name in stated:
             _encoded(name, values)
             writes.append(_channel_write(model, name, values))
-    stray = [tensor for tensor in stated if partition.whole and tensor not in held_by]
+    stray = [tensor for tensor in stated if whole and tensor not in held_by]
     for write in writes:
         write()
     for tensor in stray:
@@ -749,7 +749,7 @@ def persist_kernel(model: ModelWrapper, node: NodeProto, point: Space) -> dict[s
     """Write ``point``, the KernelOp ``node``'s kernel alone, on the node, its whole: every
     choice it stores, by key, whatever its state (``inspection.states``: set, waiting or
     dormant). Conversion's write (``finn.transformation.kernels.convert``): one node, no
-    partition, nothing on a tensor. As ``persist``, every value is checked and encoded
+    core, nothing on a tensor. As ``persist``, every value is checked and encoded
     before any is written. Returns what the node now holds."""
     held = {
         key: state.value
@@ -772,9 +772,7 @@ def _channel_write(
 
 
 __all__ = [
-    "PARTITION",
-    "PRODUCER",
-    "Partition",
+    "core",
     "declaration",
     "network",
     "partition_ports",

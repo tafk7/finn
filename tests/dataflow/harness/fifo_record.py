@@ -208,18 +208,19 @@ def _message(error: BaseException) -> str:
     return f"{type(error).__name__}: {error}"
 
 
-def _end(side_name: str, declared: Any, pace: Any, channel: Any, side: Any) -> End:
+def _end(side_name: str, owners: Any, pace: Any, channel: Any, side: Any) -> End:
     """One end of a channel: a kernel's port, a boundary's free side, a memory source, or an
     end the line does not pace. ``pace`` is the port's beside the channel, where it has one
-    (``Neighbours``)."""
-    from finn.kernels.composer import Port as Declared  # noqa: PLC0415
+    (``Neighbours``); a kernel's port is named by its side's label below its member's node
+    (``matmul.y``), its kernel by graph name (``owners``: each member name's)."""
     from finn.kernels.fifo_sizing import NotModelled, _free  # noqa: PLC0415
     from finn.kernels.sides import SideKind  # noqa: PLC0415
 
     if channel.valued and side_name == "producer":
         return Stored()
-    if isinstance(declared, Declared):
-        return Port(declared.member, declared.port, pace)
+    if side.kind is SideKind.KERNEL:
+        member, _, port = side.label.partition(".")
+        return Port(owners[member], port, pace)
     if side.kind is SideKind.BOUNDARY:
         try:
             return Edge(beats_of(_free(channel, side)))
@@ -228,13 +229,13 @@ def _end(side_name: str, declared: Any, pace: Any, channel: Any, side: Any) -> E
     return Unpaced(f"a {side.kind.value} side")
 
 
-def _wire(name: str, channel: Any, neighbours: Any, declared: tuple[Any, Any]) -> Wire:
+def _wire(name: str, channel: Any, neighbours: Any, owners: Any) -> Wire:
     from finn.kernels.adapters import Convert  # noqa: PLC0415
     from finn.kernels.input_generator import Generate, nest_buffer  # noqa: PLC0415
 
     found = channel.sides
-    producer = _end("producer", declared[0], neighbours.producer_pace, channel, found.producer)
-    consumer = _end("consumer", declared[1], neighbours.consumer_pace, channel, found.consumer)
+    producer = _end("producer", owners, neighbours.producer_pace, channel, found.producer)
+    consumer = _end("consumer", owners, neighbours.consumer_pace, channel, found.consumer)
     convert: tuple[int, int] | None = None
     buffer: Buffer | None = None
     refused = ""
@@ -258,11 +259,12 @@ def _wire(name: str, channel: Any, neighbours: Any, declared: tuple[Any, Any]) -
 
 
 def read_partition(network: Any, period: int) -> Partition:
-    """The plain partition of ``network``, a ``finn.kernels.partition.Partition``, sized at
-    ``period``: a read the network refuses is ``Partition.refused``, with the error."""
+    """The plain partition of ``network``, a ``finn.kernels.explore.CoreComposition``, sized
+    at ``period``: a read the network refuses is ``Partition.refused``, with the error."""
     try:
+        owners = network.names.owners
         wires = tuple(
-            _wire(name, network.member(name), network.neighbours(name), network._sides[name])
+            _wire(name, network.member(name), network.neighbours(name), owners)
             for name in network.channels
         )
         return Partition(tuple(network.kernels), wires, period)

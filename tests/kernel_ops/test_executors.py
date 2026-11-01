@@ -37,6 +37,7 @@ from support.xsim import requires_xsim
 
 from finn.core.executor import Context, Python
 from finn.core.graph.partition import (
+    CUT_NAME,
     KERNEL_OPS_DOMAIN,
     PARTITION_DOMAIN,
     PARTITION_OP,
@@ -51,7 +52,6 @@ from finn.core.onnx_exec import (
     running,
 )
 from finn.core.rtlsim_exec import Unstreamable, XSim, _read, boundary, links
-from finn.custom_op.kernels.network import PARTITION
 from finn.dataflow.traversal import pack, vector_major
 from finn.transformation.kernels.cut import CutKernelPartition
 from finn.util.draws import boundary_inputs
@@ -110,7 +110,7 @@ def partition_of_host_graph(tmp_path: Path) -> ModelWrapper:
     body = tmp_path / "body.onnx"
     host_graph().save(str(body))
     node = helper.make_node(
-        PARTITION_OP, ["x"], ["y"], name="partition", domain=PARTITION_DOMAIN, model=str(body)
+        PARTITION_OP, ["x"], ["y"], name="DataflowCore_0", domain=PARTITION_DOMAIN, model=str(body)
     )
     graph = helper.make_graph([node], "parent", [tensor("x")], [tensor("y")])
     parent = ModelWrapper(qonnx_make_model(graph))
@@ -244,7 +244,7 @@ def test_a_hardware_executor_satisfies_a_run_that_requires_hardware(tmp_path: Pa
         parent, {"x": X}, executors=(simulator,), require_hardware=True, provenance=ran
     )["y"]
     assert np.array_equal(y, np.full_like(X, 5.0))
-    assert ran == {"partition": simulator}
+    assert ran == {"DataflowCore_0": simulator}
     ran = {}
     execute_onnx(host_graph(), {"x": X}, executors=(), require_hardware=True, provenance=ran)
     assert ran == {"relu": None, "negate": None}
@@ -442,7 +442,7 @@ def test_xsim_runs_a_one_node_partition_as_python_does(tmp_path: Path) -> None:
     found = execute_onnx(
         parent, inputs, executors=(simulator,), require_hardware=True, provenance=ran
     )
-    assert ran == {PARTITION: simulator}
+    assert ran == {CUT_NAME: simulator}
     assert np.array_equal(found["y"], execute_onnx(model, inputs)["y"])
     assert np.array_equal(found["y"], execute_onnx(parent, inputs)["y"])
 

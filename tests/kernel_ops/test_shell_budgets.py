@@ -29,11 +29,12 @@ from typing import Any
 
 import pytest
 from qonnx.core.datatype import DataType
-from support.configure import configured
+from support.configure import composition, configured, core_in_shell
 from support.helpers import (
     built,
     by_hand,
     choose,
+    root_facts,
     with_adapter_memories,
     with_channel_defaults,
     with_direct_transports,
@@ -46,11 +47,10 @@ from support.top_pins import bus_counts_of_abi
 import finn.custom_op.kernels.shell as shell
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
-from finn.core.graph.partition import search_record
-from finn.core.search import Refused
-from finn.core.space import Available, inspection
-from finn.custom_op.kernels.network import network
-from finn.custom_op.kernels.shell import configured_network, in_shell, row_facts
+from finn.core.graph.partition import CUT_NAME, search_record
+from finn.core.search import ExploreError, Refused
+from finn.core.space import Available, Rejected, inspection
+from finn.custom_op.kernels.shell import configured_network, row_facts
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import (
     Bus,
@@ -69,8 +69,7 @@ from finn.kernels.artifacts.module import Abi, BusExport, Fragment, Leaf
 from finn.kernels.artifacts.top import module_abi
 from finn.kernels.budgets import SHELL, counts
 from finn.kernels.composer import Facts, Port, channel, member_name
-from finn.kernels.explore import Seam, SizeFifos
-from finn.kernels.partition import Partition
+from finn.kernels.explore import CoreComposition, Seam, SizeFifos
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import IntegerTensorValue
@@ -88,7 +87,7 @@ TABLE = IntegerTensorValue.of((((0, 1, 2), (0, 1, 2)),))
 """Each thresholding's table: two channels of three thresholds over UINT2, to UINT2."""
 
 
-def thresholdings(count: int, row: ShellRow, presenting: int | None = None) -> Partition:
+def thresholdings(count: int, row: ShellRow, presenting: int | None = None) -> CoreComposition:
     """A partition declared by hand in the shell of ``row``, of ``count`` AXI-Lite
     thresholdings in a row, the first ``presenting`` (every one by default) presenting
     its bus (``t<i>_s_axilite``) and the others not, configured: at its baseline otherwise,
@@ -136,12 +135,12 @@ def thresholdings(count: int, row: ShellRow, presenting: int | None = None) -> P
     return with_channel_defaults(with_adapter_memories(point))
 
 
-def movers_of(point: Partition) -> tuple[Any, ...]:
+def movers_of(point: CoreComposition) -> tuple[Any, ...]:
     """The movers the shell places on the network's boundary channels."""
     return tuple(point.member("x").placed_mover) + tuple(point.member("y").placed_mover)
 
 
-def netlist_counts(point: Partition) -> tuple[int, int, bool]:
+def netlist_counts(point: CoreComposition) -> tuple[int, int, bool]:
     """The netlist's count (``bus_counts``), its movers' AXI-Lite buses added."""
     netlist = point.netlist()
     assert isinstance(netlist, Available), netlist
@@ -204,22 +203,34 @@ def test_a_partition_of_kernel_ops_counts_its_movers() -> None:
     movers are set as the cut sets them (``MakeCutChoices``)."""
     model = kernel_model()
     write_target(model, ULTRA96)
-    model = model.transform(MakeCutChoices())
-    explore_kernel_choices(model)
+    model = model.transform(MakeCutChoices(CUT_NAME))
+    explore_kernel_choices(model, name=CUT_NAME)
     configured_network(model, "chain")
     narrow = replace(PYNQ_ROW, control_budget=1)
     with pytest.MonkeyPatch.context() as patched:
         patched.setattr(shell, "shell_row", lambda *_: narrow)
-        bound = in_shell(model, model.graph.node, name="chain")
-        assert bound.row == narrow
-        assert bound.composed.facts["shell-control_budget"] == 1
+        bound = core_in_shell(model, model.graph.node, name="chain")
+        assert shell.body_row(model) == narrow
+        assert root_facts(bound.point)["shell-control_budget"] == 1
+        # Refused, its class answers no view (its resources among them), so neither its
+        # shell's resources nor its seam's are answered: each is the budget's refusal. The
+        # counts the budget reads (its shell member's) are answered.
+        resources = bound.own_resources()
+        assert isinstance(resources, Rejected)
+        seam = Seam().resources(bound)
+        assert isinstance(seam, tuple)
+        for findings in (resources.findings, seam):
+            assert [(f.code, f.owner) for f in findings] == [
+                ("interface-budget-exceeded", "within_control_budget")
+            ]
+        assert counts(bound.member(SHELL)) == Available((2, 0, False))
         with refused(
             "interface-budget-exceeded",
             error=KernelOpError,
             owner="within_control_budget",
             message="the 'pynq' shell",
         ) as explored:
-            explore_kernel_choices(model)
+            explore_kernel_choices(model, name=CUT_NAME)
         with refused(
             "interface-budget-exceeded",
             error=KernelOpError,
@@ -235,19 +246,22 @@ def test_a_partition_of_kernel_ops_counts_its_movers() -> None:
 def test_a_refused_list_writes_nothing() -> None:
     """A list of strategies whose result the shell's budgets refuse (the Chain on a row taking
     one AXI-Lite bus, its movers alone exceeding it) leaves the model as it was: the choices
-    its entries made are not saved and no search's record is written."""
+    its entries made are not saved and no search's record is written. A partition a rule
+    refuses has no channel's neighbours (no view of a refused design point answers), so
+    ``SizeFifos`` refuses it before sizing, the budget's finding its cause."""
     model = kernel_model()
     write_target(model, ULTRA96)
-    model = model.transform(MakeCutChoices())
-    explore_kernel_choices(model)
+    model = model.transform(MakeCutChoices(CUT_NAME))
+    explore_kernel_choices(model, name=CUT_NAME)
     before = model.model.SerializeToString()
     narrow = replace(PYNQ_ROW, control_budget=1)
     with pytest.MonkeyPatch.context() as patched:
         patched.setattr(shell, "shell_row", lambda *_: narrow)
-        with refused(
-            "interface-budget-exceeded", error=KernelOpError, owner="within_control_budget"
-        ):
-            explore_kernel_choices(model, [SizeFifos(margin=1)])
+        with refused("fifos-refused", error=ExploreError, owner="size_fifos") as caught:
+            explore_kernel_choices(model, [SizeFifos(margin=1)], name=CUT_NAME)
+    assert [(each.code, each.owner) for each in caught.finding.causes] == [
+        ("interface-budget-exceeded", "shell.within_control_budget")
+    ]
     assert model.model.SerializeToString() == before
     assert search_record(model)[0] == "current"  # the empty list's, written before
 
@@ -272,9 +286,9 @@ def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:
     assert bus_counts(*netlist.value) == bus_counts_of_abi(point.module.abi) == (0, 0, True)
     assert counts(point.network.member(SHELL)) == Available((0, 0, True))
     write_target(model, ULTRA96)
-    model = model.transform(MakeCutChoices())  # the movers the pynq row offers
-    bound = in_shell(model, model.graph.node, name="chain")
-    assert not bound.row.clk2x
+    model = model.transform(MakeCutChoices(CUT_NAME))  # the movers the pynq row offers
+    bound = core_in_shell(model, model.graph.node, name="chain")
+    assert not shell.body_row(model).clk2x
     rule = f"{member_name(first)}-clock"
     found = Seam().refusals(bound)
     assert list(found) == [SHELL] and [each.owner for each in found[SHELL]] == [rule]
@@ -307,7 +321,7 @@ def test_emission_checks_the_netlists_count_against_the_rules() -> None:
     is refused, naming both counts."""
     model = chain_model(4)
     write_target(model, ULTRA96)
-    model = model.transform(MakeCutChoices())
+    model = model.transform(MakeCutChoices(CUT_NAME))
     point, _ = configured_network(model, "chain")
     assert counts(point.network.member(SHELL)) == Available((2, 0, False))
     with pytest.MonkeyPatch.context() as patched:
@@ -332,12 +346,12 @@ def test_one_class_serves_every_shells_row_and_a_bare_network_has_no_shell() -> 
         resolve_target(board="ZCU104", period_ns=5.0, shell="pynq"),
     ):
         write_target(model, target)
-        bound = in_shell(model, model.graph.node)
+        bound = core_in_shell(model, model.graph.node)
         assert bound.shell == SHELL and SHELL not in bound.members
         classes.add(type(bound.point))
     assert len(classes) == 1
-    bare = network(model, model.graph.node)
-    assert bare.shell is None and SHELL not in bare.composed.names.owners
+    bare = composition(model, model.graph.node)
+    assert bare.shell is None and SHELL not in bare.names.owners
     assert type(bare.point) not in classes
 
 

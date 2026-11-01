@@ -43,9 +43,9 @@ from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.dotp import PackedDotpKernel
+from finn.kernels.explore import CoreComposition
 from finn.kernels.laws import Axis
 from finn.kernels.library import ModuleSpec, library_module
-from finn.kernels.partition import Partition
 from finn.kernels.port import lane_count
 from finn.kernels.port_model import InPort, OutPort
 from finn.kernels.sides import Side
@@ -120,7 +120,7 @@ def tensor(shape: tuple[int, ...], dtype: str) -> Tensor:
 X, Y = tensor((1, 4, 8), "INT4"), tensor((1, 8), "INT8")
 
 
-def placing(kernel: Facts, x_tensor: Tensor = X, y_tensor: Tensor | None = Y) -> Partition:
+def placing(kernel: Facts, x_tensor: Tensor = X, y_tensor: Tensor | None = Y) -> CoreComposition:
     """``kernel`` (``kernel``) between two boundary channels, ``x`` and ``y`` (none without
     ``y_tensor``), of the tensors ``x_tensor`` and ``y_tensor``."""
     members: dict[str, Any] = {
@@ -135,7 +135,9 @@ def placing(kernel: Facts, x_tensor: Tensor = X, y_tensor: Tensor | None = Y) ->
     return by_hand({**members, "kernel": kernel})
 
 
-def pool(x_shape: tuple[int, ...] = (1, 4, 8), y_shape: tuple[int, ...] = (1, 8)) -> Partition:
+def pool(
+    x_shape: tuple[int, ...] = (1, 4, 8), y_shape: tuple[int, ...] = (1, 8)
+) -> CoreComposition:
     x_tensor, y_tensor = tensor(x_shape, "INT4"), tensor(y_shape, "INT8")
     return placing(Facts(Pool, {"x_tensor": x_tensor}), x_tensor, y_tensor)
 

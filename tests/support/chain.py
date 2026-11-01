@@ -23,8 +23,8 @@ from qonnx.core.datatype import DataType
 
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.composer import ChannelDeclaration, Facts, Port, Stated, channel
+from finn.kernels.explore import CoreComposition
 from finn.kernels.matmul import KnownWeights, MatMulKernel, column_range
-from finn.kernels.partition import Partition
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.domains import range_dtype
@@ -76,7 +76,7 @@ HIDDEN_TENSOR = result(W1, X_TENSOR)
 Y_TENSOR = result(W2, LEVELS)
 
 
-def network(hidden: Tensor = HIDDEN_TENSOR) -> Partition:
+def network(hidden: Tensor = HIDDEN_TENSOR) -> CoreComposition:
     """The Chain (``members``), nothing chosen but the thresholding's fixed ``PE``."""
     return choose(by_hand(members(hidden)), {"activate.pe": PE})
 
@@ -138,7 +138,7 @@ LAYERS = (("first", "w1"), ("second", "w2"))
 """Each MatMul of the Chain and its weight channel."""
 
 
-def configure_chain(chain: Partition, **choices: object) -> Partition:
+def configure_chain(chain: CoreComposition, **choices: object) -> CoreComposition:
     """``chain`` (the Chain) with ``choices`` and each MatMul's packed core configured,
     then its channels' open choices by their first valid values, as the cut sets them
     (``with_channel_defaults``: each transport direct, each adapter's memory), and each
@@ -172,6 +172,6 @@ ACTIVATE = {
 }
 
 
-def chain() -> Partition:
+def chain() -> CoreComposition:
     """The Chain, configured."""
     return configure_chain(network(), **ACTIVATE)

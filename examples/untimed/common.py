@@ -33,10 +33,11 @@ from finn.dataflow.steps import Steps
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.build import emit_module
-from finn.kernels.artifacts.module import ProducerIdentity
-from finn.kernels.composer import PartitionDeclaration
+from finn.kernels.artifacts.module import Composed, ProducerIdentity
+from finn.kernels.composer import DataflowCoreDeclaration, compose
+from finn.kernels.dataflow_core import core_module
+from finn.kernels.explore import CoreComposition
 from finn.kernels.fifo import FifoKernel
-from finn.kernels.partition import Partition, partition
 from finn.kernels.sides import Side, SideKind
 from finn.platform.capabilities import DspBlock, Fabric, Platform
 from finn.resources import finnlib_root
@@ -52,16 +53,16 @@ PLATFORM = Platform(
 # This is a required physical clock target, not a cycle estimate or achieved frequency.
 
 
-def configured(declaration: PartitionDeclaration, choices: dict[Key, object]) -> Partition:
+def configured(declaration: DataflowCoreDeclaration, choices: dict[Key, object]) -> CoreComposition:
     """Commit explicit physical choices; apply existing policies only to channels."""
-    network = partition(declaration).with_choices(choices)
+    network = CoreComposition(compose(declaration)).with_choices(choices)
     done = network.defaulted(members=network.channels)
     if done.unset or done.refused or done.fallbacks:
         raise ValueError(f"channel policy did not resolve cleanly: {done}")
-    return network.at(done.point)
+    return network.made(done.point)
 
 
-def logical_plan(network: Partition) -> LogicalPlan:
+def logical_plan(network: CoreComposition) -> LogicalPlan:
     """Per-channel topology from real streams, with distinct source identities."""
     nodes: dict[str, Node] = {}
     ports: list[Port] = []
@@ -93,7 +94,7 @@ def logical_plan(network: Partition) -> LogicalPlan:
     return LogicalPlan("example", tuple(nodes.values()), tuple(ports), tuple(edges), tuple(sources))
 
 
-def emit(network: Partition, name: str) -> None:
+def emit(network: CoreComposition, name: str) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, default=Path("/tmp") / f"finn-untimed-{name}")
     args = parser.parse_args()
@@ -112,8 +113,11 @@ def emit(network: Partition, name: str) -> None:
     ]
     if waiting or unsettled:
         raise ValueError(f"unresolved design: {waiting}, {unsettled}")
-    found = network.module(ProducerIdentity("example.untimed", "1"), f"finn_{name}")
-    if not isinstance(found, Available):
+    netlist = network.netlist()
+    if not isinstance(netlist, Available):
+        raise ValueError(f"module refused or unresolved: {netlist}")
+    found = core_module(ProducerIdentity("example.untimed", "1"), f"finn_{name}", *netlist.value)
+    if not isinstance(found, Composed):
         raise ValueError(f"module refused or unresolved: {found}")
     plan = logical_plan(network)
     requirements = {}
@@ -139,7 +143,7 @@ def emit(network: Partition, name: str) -> None:
         packed_port = packing(plan, port.id)
         assert isinstance(packed_port, LogicalAvailable)
         packed[port.id] = asdict(packed_port.value)
-    emitted = emit_module(found.value, args.out / "rtl", roots={"finnlib": Path(finnlib_root())})
+    emitted = emit_module(found, args.out / "rtl", roots={"finnlib": Path(finnlib_root())})
     (args.out / "logical-plan.json").write_bytes(dump(plan))
     native_capacities = {
         member: {

@@ -16,6 +16,7 @@ from pathlib import Path
 
 import numpy as np
 from support import chain
+from support.configure import composition
 from support.measure_cycles import schedule_of
 from support.models import configure_partition, kernel_model
 from support.xsim import requires_xsim
@@ -23,7 +24,6 @@ from support.xsim import requires_xsim
 from finn.builder.build_dataflow_testbench import boundary_words
 from finn.core.onnx_exec import execute_onnx
 from finn.core.rtlsim_bench import measure
-from finn.custom_op.kernels.network import network
 from finn.custom_op.kernels.shell import configured_network
 from finn.kernels.composer import member_name
 from finn.toolchain.launcher import host_toolchain
@@ -35,7 +35,7 @@ def test_the_chain_leaves_a_frame_per_bottleneck_beat_count(tmp_path: Path) -> N
     configure_partition(model)
     feed = {"x": np.array(chain.X, dtype=np.float32)}
     context = execute_onnx(model, feed, return_full_exec_context=True)
-    bound = network(model, model.graph.node, name="chain")
+    bound = composition(model, model.graph.node, name="chain")
     point, boundary = configured_network(model, "chain")
     inputs, outputs = boundary_words(model, point, boundary, context, "chain")
     beats = {node.name: schedule_of(bound, node).iterations for node in model.graph.node}

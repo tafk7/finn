@@ -1,10 +1,13 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""A stream port for the tests of a kernel's module assembly."""
+"""A stream port for the tests of a kernel's module assembly, and a channel's outer port's
+pins."""
 
 from finn.core.space import constraint
+from finn.kernels.channels import Channel
 from finn.kernels.port_model import InPort, OutPort
+from finn.kernels.transport import StreamPins
 
 
 class UncheckedInPort(InPort):
@@ -27,4 +30,11 @@ class UncheckedOutPort(OutPort):
         return True
 
 
-__all__ = ["UncheckedInPort", "UncheckedOutPort"]
+def outer(channel: Channel) -> StreamPins:
+    """The stream pins of the outer port ``channel``, a design point, places: its outer
+    input's where its producer side is the boundary, else its outer output's."""
+    port = channel.outer_in if channel.entering else channel.outer_out
+    return port.stream_pins.pins
+
+
+__all__ = ["UncheckedInPort", "UncheckedOutPort", "outer"]

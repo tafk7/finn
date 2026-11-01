@@ -23,6 +23,7 @@ from support.helpers import (
     with_adapter_memories,
     with_direct_transports,
 )
+from support.ports import outer
 
 from finn.core.space import (
     Available,
@@ -50,16 +51,16 @@ from finn.dataflow.traversal import (
     vector_major,
 )
 from finn.kernels.adapters import StreamAdapter
-from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.abi import Direction, Endpoint
 from finn.kernels.base import Kernel
-from finn.kernels.channels import Channel, ChannelFifo, boundary_pins, stated_by, stated_form
+from finn.kernels.channels import Channel, ChannelFifo, stated_by, stated_form
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.configure import commit
+from finn.kernels.explore import CoreComposition
 from finn.kernels.laws import AXIS_CLOCKING, Axis
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.movers import IODMA_HLS, IodmaMover, iodma_hls
-from finn.kernels.partition import Partition
-from finn.kernels.port_model import InPort
+from finn.kernels.port_model import InPort, StreamPort
 from finn.kernels.sides import BUILD, ROW_MAJOR, Outside, Side, Steady
 from finn.kernels.transport import AxisBeat, StreamPins
 from finn.kernels.values.semantics import IntegerTensorValue
@@ -81,7 +82,7 @@ def source(contents: tuple[int, ...], tensor: Tensor) -> Facts:
     )
 
 
-def unconfigured(first: Tensor = VECTOR, second: Tensor = VECTOR) -> Partition:
+def unconfigured(first: Tensor = VECTOR, second: Tensor = VECTOR) -> CoreComposition:
     """Two constant vectors streamed to two outputs; each channel's tensor is given. Each
     channel has only its producer: it is a boundary, named by its port."""
     network = by_hand(
@@ -105,7 +106,7 @@ def unconfigured(first: Tensor = VECTOR, second: Tensor = VECTOR) -> Partition:
     return with_direct_transports(network)
 
 
-def constants(first: Tensor = VECTOR, second: Tensor = VECTOR) -> Partition:
+def constants(first: Tensor = VECTOR, second: Tensor = VECTOR) -> CoreComposition:
     return choose(
         unconfigured(first, second),
         {
@@ -169,21 +170,35 @@ def test_a_channel_waits_for_its_own_sides_only():
     first = point.member("first")
     produced = point.member("first_source")
     assert first.producer == Side.kernel(
-        produced.output.stream, "first_source.output", produced.output.width
+        Direction.OUT, produced.output.stream, "first_source.output", produced.output.width
     )
     assert first.producer.width == 8
     assert first.consumer == Side.boundary("out0_V")
     sides = first.sides
     assert (sides.source_owner, sides.sink_owner) == ("first_source.output", "out0_V")
     assert sides.owners == ("first_source.output", None)
-    assert first.boundary.transport.name == "out0_V"
-    assert sides.sink == Stream(first.boundary.element, first.boundary.sequence)
+    assert outer(first).transport.name == "out0_V"
+    assert sides.sink == Stream(outer(first).element, outer(first).sequence)
 
 
-def test_boundary_ports_are_axis_and_byte_aligned():
-    contract = boundary_pins("in0_V", INT4, BeatSequence(vector_major((3,), 3)), Endpoint.TARGET)
-    assert contract.transport.data_width == 16
-    assert contract.payload_bits == 12
+def test_an_outer_port_is_axis_and_byte_aligned():
+    """A boundary's outer port presents its stream on the AXIS bus its side's label names,
+    its word padded to bytes: three INT4 lanes, 12 bits, on 16."""
+    read = Side.kernel(Direction.IN, Stream(INT4, BeatSequence(vector_major((3,), 3))), "reader.x")
+    point = design_space(
+        Channel(
+            tensor=Tensor((3,), INT4),
+            producer=Side.boundary("in0_V"),
+            consumer=read,
+            platform=FULL_DSP48E2,
+        )
+    )
+    found = point.outer_in.stream_pins
+    assert found.label == "outer_in" and found.pins.transport.name == "in0_V"
+    assert found.pins.transport.endpoint is Endpoint.TARGET
+    assert found.pins.transport.data_width == 16
+    assert found.pins.payload_bits == 12
+    assert not point.present(Channel.outer_out)
 
 
 def replaying() -> StreamPins:
@@ -229,7 +244,7 @@ def test_a_boundary_presents_its_free_side_without_the_replay_the_receiver_reali
     assert sides.producer == Side.boundary("in0_V") and sides.sink_owner == "reader.port"
     # Each row once, no marker: the replay and the frame are the receiver's to realize.
     assert sides.source == Stream(INT4, BeatSequence(vector_major((2, 4), 2)))
-    assert edge.boundary.transport.name == "in0_V" and not edge.boundary.rules
+    assert outer(edge).transport.name == "in0_V" and not outer(edge).rules
     assert sides.sink.sequence.form == vector_major((2, 4), 2).replayed(3, inner_beats=2)
 
 
@@ -283,12 +298,14 @@ def stated(**fields: Any) -> Outside:
 
 def reader(form: Traversal) -> Side:
     """An input port reading ``MATRIX`` in ``form``."""
-    return Side.kernel(Stream(INT3, BeatSequence(form)), "reader.x")
+    return Side.kernel(Direction.IN, Stream(INT3, BeatSequence(form)), "reader.x")
 
 
 def writer(form: Traversal) -> Side:
     """An output port writing ``MATRIX`` in ``form``, its word its lanes padded to bytes."""
-    return Side.kernel(Stream(INT3, BeatSequence(form)), "writer.y", ceil(3 * form.lanes / 8) * 8)
+    return Side.kernel(
+        Direction.OUT, Stream(INT3, BeatSequence(form)), "writer.y", ceil(3 * form.lanes / 8) * 8
+    )
 
 
 def edge(producer: Side, consumer: Side) -> Any:
@@ -325,12 +342,12 @@ def test_a_stated_input_s_lanes_place_a_vpc_before_the_transport_and_widen_the_p
     AXIS word the stated one's (18 bits, padded to 24), and a width step (``vpc``) is
     placed before the transport. Unstated, the edge presents the reader's three lanes."""
     unstated = edge(Side.boundary("s_axis_0"), reader(ROWS))
-    assert unstated.boundary.form == ROWS and unstated.boundary.transport.data_width == 16
+    assert outer(unstated).form == ROWS and outer(unstated).transport.data_width == 16
     assert not unstated.output_adapting
     wide = edge(Side.boundary("s_axis_0", outside=stated(lanes=6)), reader(ROWS))
-    assert (wide.boundary.form.lanes, wide.boundary.form.beats) == (6, 4)
-    assert wide.boundary.transport.data_width == 24
-    assert wide.boundary_bus == (wide.boundary.transport.axis_bus(),)
+    assert (outer(wide).form.lanes, outer(wide).form.beats) == (6, 4)
+    assert outer(wide).transport.data_width == 24
+    assert wide.outer_in.physical_pins == (outer(wide).transport.axis_bus(),)
     assert wide.steps.describe() == "width_conversion" and wide.output_adapting
     assert [stage.kind for stage in wide.output_adapter.chain] == ["vpc"]
     assert wide.input_chain == "none"
@@ -338,10 +355,10 @@ def test_a_stated_input_s_lanes_place_a_vpc_before_the_transport_and_widen_the_p
 
 def test_a_stated_output_s_lanes_place_a_vpc_before_the_transport_and_widen_the_port():
     leaving = edge(writer(vector_major((4, 6), 2)), Side.boundary("m_axis_0"))
-    assert leaving.boundary.transport.data_width == 8 and not leaving.output_adapting
+    assert outer(leaving).transport.data_width == 8 and not leaving.output_adapting
     wide = edge(writer(vector_major((4, 6), 2)), Side.boundary("m_axis_0", outside=stated(lanes=4)))
-    assert (wide.boundary.form.lanes, wide.boundary.transport.data_width) == (4, 16)
-    assert wide.boundary.transport.endpoint is Endpoint.INITIATOR
+    assert (outer(wide).form.lanes, outer(wide).transport.data_width) == (4, 16)
+    assert outer(wide).transport.endpoint is Endpoint.INITIATOR
     assert [stage.kind for stage in wide.output_adapter.chain] == ["vpc"]
     assert wide.input_chain == "none"
     assert inspection.validity(with_direct(wide)).status == "valid"
@@ -354,11 +371,11 @@ def test_a_stated_one_pass_input_is_replayed_by_an_input_gen_its_buffer_the_pass
     replays it."""
     thrice = ROWS.repeated(3)
     unstated = edge(Side.boundary("s_axis_0"), reader(thrice))
-    assert unstated.boundary.form == thrice and unstated.input_chain == "none"
+    assert outer(unstated).form == thrice and unstated.input_chain == "none"
     once = edge(
         Side.boundary("s_axis_0", outside=stated(order=ROW_MAJOR, passes=1)), reader(thrice)
     )
-    assert once.boundary.form == ROWS and once.boundary.form.beats == 8
+    assert outer(once).form == ROWS and outer(once).form.beats == 8
     assert not once.output_adapting and once.input_chain == "input_gen"
     assert once.adapter.frame_bits == 4 * 6 * 3  # the pass it holds
     assert inspection.validity(with_direct(once)).status == "valid"
@@ -369,10 +386,10 @@ def test_a_stated_row_major_side_is_reordered_by_an_input_gen():
     rows, and an ``input_gen`` reorders them; the same for an output stated row-major whose
     writer presents the column folds. Unstated, each edge presents its port's order."""
     entering = edge(Side.boundary("s_axis_0", outside=stated(order=ROW_MAJOR)), reader(COLUMNS))
-    assert entering.boundary.form == ROWS and entering.input_chain == "input_gen"
-    assert edge(Side.boundary("s_axis_0"), reader(COLUMNS)).boundary.form == COLUMNS
+    assert outer(entering).form == ROWS and entering.input_chain == "input_gen"
+    assert outer(edge(Side.boundary("s_axis_0"), reader(COLUMNS))).form == COLUMNS
     leaving = edge(writer(COLUMNS), Side.boundary("m_axis_0", outside=stated(order=ROW_MAJOR)))
-    assert leaving.boundary.form == ROWS and leaving.input_chain == "input_gen"
+    assert outer(leaving).form == ROWS and leaving.input_chain == "input_gen"
     assert edge(writer(COLUMNS), Side.boundary("m_axis_0")).input_chain == "none"
     assert inspection.validity(with_direct(entering)).status == "valid"
 
@@ -453,13 +470,13 @@ def test_a_stated_side_is_regrouped_and_one_nothing_bridges_is_refused_by_channe
     writer's two rows."""
     assert edge(Side.boundary("s_axis_0"), reader(TILES)).input_chain == "none"
     entering = edge(Side.boundary("s_axis_0", outside=stated(order=ROW_MAJOR)), reader(TILES))
-    assert entering.boundary.form == SIX and entering.boundary.transport.data_width == 24
+    assert outer(entering).form == SIX and outer(entering).transport.data_width == 24
     regroups_rows_into_tiles(entering)
     unstated = edge(writer(HALF), Side.boundary("m_axis_0"))
-    assert unstated.boundary.form == HALF and not unstated.steps
+    assert outer(unstated).form == HALF and not unstated.steps
     refused = edge(writer(HALF), Side.boundary("m_axis_0", outside=stated(order=ROW_MAJOR)))
     assert sorted(int(offset) for offset in offsets(HALF)) == [*range(6), *range(12, 18)]
-    assert refused.boundary.form == SIX
+    assert outer(refused).form == SIX
     assert findings(refused.query(Channel.steps)) == [
         (
             "channel-steps",
@@ -527,7 +544,7 @@ def test_stated_lanes_a_tiled_order_cannot_regroup_to_are_refused_by_channel_bou
             )
         ]
         rows = edge(Side.boundary("s_axis_0", outside=stated(lanes=lanes)), reader(ROWS))
-        assert rows.boundary.form.lanes == lanes
+        assert outer(rows).form.lanes == lanes
 
 
 def test_a_statement_of_nothing_the_inside_does_not_present_answers_as_unstated():
@@ -542,15 +559,16 @@ def test_a_statement_of_nothing_the_inside_does_not_present_answers_as_unstated(
         for outside in (None, stated()):
             side = Side.boundary(port, outside=outside)
             point = edge(producer or side, consumer or side)
-            answers.append((point.boundary, point.steps, point.input_chain, point.output_adapting))
+            answers.append((outer(point), point.steps, point.input_chain, point.output_adapting))
         assert answers[0] == answers[1]
 
 
 def test_every_member_of_a_channel_but_its_transport_counts_by_exactly_one_kind():
     """The by-kind count holds while each kind declares ``cycles`` itself (``Members``
     reads the class declaring the member; a kind relying on the base's would range over
-    the transport again) and every placed class but the FIFO is one kind's: a new member,
-    or a kind losing its own ``cycles``, fails here by name."""
+    the transport again) and every placed class but the FIFO and its outer ports (stream
+    ports, no members counting cycles) is one kind's: a new member, or a kind losing its
+    own ``cycles``, fails here by name."""
     kinds = (MemStreamKernel, StreamAdapter, IodmaMover)
     for kind in kinds:
         assert "frame_cycles" in vars(kind), kind
@@ -561,7 +579,9 @@ def test_every_member_of_a_channel_but_its_transport_counts_by_exactly_one_kind(
             placed[name] = [
                 case.space_type for case in declaration.candidates.values() if case is not None
             ]
-        elif isinstance(declaration, NodeDecl):
+        elif isinstance(declaration, NodeDecl) and not issubclass(
+            declaration.space_type, StreamPort
+        ):
             placed[name] = [declaration.space_type]
     assert set(placed) == {"source", "mover", "output_adapter", "transport", "adapter"}
     assert placed.pop("transport") == [ChannelFifo]

@@ -35,13 +35,13 @@ answer.
 
 **What it costs.** An answer that read a value with no key is never kept: it is evaluated
 again in every design space that asks it. Every value FINN's kernels hold is keyed: the
-enums (``Form``, a beat sequence's repetition, a channel's steps, a channel side's kind, a
-transport's endpoint and marker kinds, and the platform's DSP block and fabric, which mix in
-``str``), the QONNX datatypes, alone and inside a ``Tensor``, a channel's side (a port's
-stream inside it) and a stream contract, and the integer tensors, both also inside MatMul's
-known weights (``KnownWeights``). A partition, composed as one Space
-(``finn.kernels.composer``), holds its members' facts as root Params (each a value above)
-and stores only str, int and bool choices.
+enums (``Form``, a beat sequence's repetition, a channel's steps, a channel side's kind and
+direction, a transport's endpoint and marker kinds, and the platform's DSP block and
+fabric, which mix in ``str``), the QONNX datatypes, alone and inside a ``Tensor``, a
+channel's side (a port's stream inside it) and a stream contract, and the integer tensors,
+both also inside MatMul's known weights (``KnownWeights``). A partition, composed as one
+Space (``finn.kernels.composer``), holds its members' facts as root Params (each a value
+above) and stores only str, int and bool choices.
 """
 
 from __future__ import annotations
@@ -94,12 +94,11 @@ from finn.dataflow.steps import Hop, Step, Steps
 from finn.dataflow.streams import Stream
 from finn.dataflow.traversal import LevelEnd, Repetition
 from finn.kernels import composer
-from finn.kernels.artifacts.abi import Clocking, Endpoint
-from finn.kernels.channels import boundary_pins
-from finn.kernels.laws import NATIVE, Axis, AxisSpelling, Interval, Native, Standing
+from finn.kernels.artifacts.abi import Clocking, Direction, Endpoint
+from finn.kernels.laws import AXIS_CLOCKING, NATIVE, Axis, AxisSpelling, Interval, Native, Standing
 from finn.kernels.matmul import KnownWeights
 from finn.kernels.movers import MoverOffer, iodma_hls
-from finn.kernels.port import LoopEnds
+from finn.kernels.port import LoopEnds, PhysicalPort, stream_pins
 from finn.kernels.sides import Side, SideKind
 from finn.kernels.transport import MarkerKind
 from finn.kernels.values.domains import Integer
@@ -296,7 +295,7 @@ def made() -> dict[str, tuple[object, ...]]:
             Side.boundary("s_axis_0", (iodma_hls(64),), iodma_hls(64).states()),
             Side.boundary("s_axis_0", (iodma_hls(64),), iodma_hls(64).states()),
             Side.source(),
-            Side.neighbour(Stream(eight.element, in_order(eight)), "a.y", 8),
+            Side.neighbour(Direction.OUT, Stream(eight.element, in_order(eight)), "a.y", 8),
         ),
         "Platform": (full_platform(DspBlock.DSP58),),
         "BaseDataType": (DataType["INT8"], DataType["UINT2"], DataType["INT8"]),
@@ -319,7 +318,7 @@ def samples() -> dict[str, list[object]]:
     """Each name's samples: the configured Chain's facts and stored choices (each by its
     member's type), its channels' sides (a kernel's, which the channel is given from it), a
     copy of its first side, the stream contracts the streams of its sides make as a
-    channel's free side (a mover's side), and the values ``made`` here."""
+    channel's outer port presents them (a mover's side), and the values ``made`` here."""
     found: dict[str, list[object]] = {}
     network = chain()
     current = held(network.point).ds
@@ -336,7 +335,7 @@ def samples() -> dict[str, list[object]]:
     sides.append(dataclasses.replace(sides[0]))  # an equal one, another object
     streams = [side.stream for side in sides if side.stream is not None]
     found["StreamPins"] = [
-        boundary_pins("stream", stream.element, stream.sequence, endpoint)
+        stream_pins(PhysicalPort("stream", endpoint, Axis(bus="stream")), stream, AXIS_CLOCKING)
         for stream in streams
         for endpoint in Endpoint
     ]
@@ -422,6 +421,7 @@ ENUMS: tuple[type[Enum], ...] = (
     Repetition,
     Step,
     SideKind,
+    Direction,
     Endpoint,
     MarkerKind,
     DspBlock,

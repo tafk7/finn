@@ -45,12 +45,13 @@ from finn.transformation.kernels import PackagePartition
 NO_VIVADO = {"XILINX_VIVADO": str(Path(__file__).parent)}
 
 
-def verified(model: ModelWrapper, label: str = "the partition") -> ModelWrapper:
-    """``model``, a partition's body, verified as the build verifies it before emission
+def verified(model: ModelWrapper, name: str) -> ModelWrapper:
+    """``model``, a partition's body, its module named ``name`` (its node's), verified as
+    the build verifies it before emission
     (``verify_partition``, not the build's step: its FIFOs checked, the design it verified
     recorded on it), so that packaging, the shell's integration and the testbench take it;
     the model itself. A test that changes the body after it verifies it again."""
-    verify_partition(model, label)
+    verify_partition(model, name)
     return model
 
 
@@ -167,7 +168,7 @@ PLACED_HIERARCHY = (
     + _placed_row("  top_i", 1000, 2000, 2, 1, 0, 4)
     + _placed_row("    smartconnect_0", 300, 500, 0, 0, 0, 0)
     + _placed_row("      inst", 300, 500, 0, 0, 0, 0)
-    + _placed_row("    partition", 400, 800, 1, 1, 0, 4)
+    + _placed_row("    DataflowCore_0", 400, 800, 1, 1, 0, 4)
     + _placed_row("    axi_interconnect_0", 100, 200, 0, 0, 0, 0)
     + _placed_row("    idma0", 100, 250, 1, 0, 0, 0)
     + _placed_row("    odma0", 90, 240, 0, 0, 0, 0)
@@ -225,7 +226,7 @@ class FakeVivado:
         ]
         synthesized = [
             runs / f"top_{name}_0_synth_1" / f"top_{name}_0_utilization_synth.rpt"
-            for name in ("idma0", "partition", "smartconnect_0")
+            for name in ("idma0", "DataflowCore_0", "smartconnect_0")
         ]
         for path in made + synthesized:
             path.parent.mkdir(parents=True, exist_ok=True)

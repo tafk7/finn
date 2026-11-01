@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from support.configure import configured, write_raw
+from support.configure import configured, core_in_shell, write_raw
 from support.explore_models import kernel_model as converted_model
 from support.models import choose_memories, configure_partition, kernel_model
 from support.packaging import NoVivado, reaches_vivado
@@ -37,10 +37,10 @@ from finn.core.graph.annotations.outputs import (
     OUTPUT_VLNV,
 )
 from finn.core.graph.errors import KernelOpError
-from finn.core.graph.partition import design_digest
+from finn.core.graph.partition import CUT_NAME, design_digest
 from finn.core.space import inspection
 from finn.custom_op.kernels.network import persist
-from finn.custom_op.kernels.shell import configured_network, in_shell
+from finn.custom_op.kernels.shell import configured_network
 from finn.kernels.artifacts import build
 from finn.toolchain.launcher import (
     Selection,
@@ -62,9 +62,9 @@ from finn.transformation.kernels.package import (
 def test_the_partition_packages_its_nodes_choices() -> None:
     configure_partition(model := kernel_model())
     module = configured_network(model, "sdp_1")[0].module
-    reference = configured_network(model, "partition")[0].module
+    reference = configured_network(model, "DataflowCore_0")[0].module
     assert (module.fragment, module.abi) == (reference.fragment, reference.abi)
-    assert module.stem == "finn_partition"
+    assert module.stem == "finn_sdp_1"
     assert [port.name for port in module.abi.pins] == [
         "ap_clk",
         "ap_rst_n",
@@ -90,8 +90,8 @@ def test_a_choice_never_created_refuses_packaging_and_is_named() -> None:
     channels = {"x", "w1", "hidden", "levels", "w2", "y"}
     keys = cast(KernelOpError, left.error).keys
     assert keys and {key.split(".")[0] for key in keys} <= channels
-    module = configured_network(model.transform(MakeCutChoices()), "sdp_1")[0].module
-    assert module.stem == "finn_partition"
+    module = configured_network(model.transform(MakeCutChoices(CUT_NAME)), "sdp_1")[0].module
+    assert module.stem == "finn_sdp_1"
 
 
 def test_a_choice_waiting_on_an_open_one_is_saved_and_emission_names_the_open_one() -> None:
@@ -103,12 +103,12 @@ def test_a_choice_waiting_on_an_open_one_is_saved_and_emission_names_the_open_on
     model = kernel_model()
     choose_memories(model)
     write_raw(model, "activate", "ram_style", None)
-    bound = in_shell(model, model.graph.node)
+    bound = core_in_shell(model, model.graph.node)
     waiting = inspection.Waiting(0, ("ram_style",))
     assert dict(bound.states(["activate"]))[("activate", "block_stages")] == waiting
     assert [key for key in bound.undecided() if key[0] == "activate"] == [("activate", "ram_style")]
-    assert persist(model, bound)["activate"]["block_stages"] == 0
-    again = in_shell(model, model.graph.node)
+    assert persist(model, bound.point)["activate"]["block_stages"] == 0
+    again = core_in_shell(model, model.graph.node)
     assert dict(again.states(["activate"]))[("activate", "block_stages")] == waiting
     with refused(
         "choices-open",
@@ -126,7 +126,7 @@ def test_an_open_required_choice_refuses_packaging_and_is_named() -> None:
     # required, and no strategy set it.
     configure_partition(model := kernel_model())
     configured(model, {"levels": {"transport": "fifo"}})
-    model = model.transform(MakeCutChoices())
+    model = model.transform(MakeCutChoices(CUT_NAME))
     with refused(
         "choices-open",
         error=KernelOpError,
@@ -162,7 +162,7 @@ def test_the_chains_emitted_top_elaborates_before_vivado(
         reaches_vivado(model, "sdp_1", tmp_path / "project")
     # The check logs that it ran, what it checked, and its time.
     (line,) = [record.getMessage() for record in caplog.records if record.name == logger]
-    assert line.startswith("sdp_1: slang elaborated finn_partition")
+    assert line.startswith("sdp_1: slang elaborated finn_sdp_1")
     assert "its 4 ports agree with the pins (" in line and line.endswith(" s)")
 
 
@@ -255,7 +255,7 @@ def test_the_chain_packages_as_the_shells_ip(tmp_path: Path) -> None:
     files = {path.name for path in (project / "ip" / "src").iterdir()}
     for memory in ("memstream_", "thresholds_"):
         assert any(name.startswith(memory) and name.endswith(".dat") for name in files)
-    assert any(name.startswith("finn_partition__") for name in files)
+    assert any(name.startswith("finn_sdp_1__") for name in files)
     # Movable: every path the IP names is its own, relative.
     assert str(tmp_path) not in (project / "ip" / "component.xml").read_text()
     second = tmp_path / "second"
@@ -368,7 +368,7 @@ def test_elaboration_without_vivado_is_unavailable(tmp_path: Path) -> None:
     configure_partition(model := kernel_model())
     toolchain = _tools(tmp_path, {}, vivado=False)
     with pytest.raises(ToolUnavailable, match="XILINX_VIVADO") as missing:
-        model.transform(ElaboratePartition(directory=tmp_path / "e", toolchain=toolchain))
+        model.transform(ElaboratePartition(CUT_NAME, directory=tmp_path / "e", toolchain=toolchain))
     assert missing.value.tool == "vivado"
 
 
@@ -382,7 +382,7 @@ def test_elaboration_that_fails_is_the_simulators_failure_naming_its_log(
     directory = tmp_path / "e"
     with pytest.raises(ToolFailed, match="does not") as failed:
         model.transform(
-            ElaboratePartition(directory=directory, toolchain=_tools(tmp_path, scripts))
+            ElaboratePartition(CUT_NAME, directory=directory, toolchain=_tools(tmp_path, scripts))
         )
     assert (failed.value.tool, failed.value.status) == (tool, 2)
     assert failed.value.transcript == directory.resolve() / log

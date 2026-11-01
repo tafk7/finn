@@ -1,33 +1,37 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""A partition in its shell (``InShell``, bound by ``in_shell``): the partition of its
-KernelOps (``finn.custom_op.kernels.network``) with the movers the row of the model's
-target's shell offers (``finn.platform.shells.shell_row``) on its boundary channels and
-the row's budgets as rules of its own, and the shell as functions over it, over its netlist
-(``Partition.netlist``: the module's buses counted without building the module,
-``finn.platform.shells.bus_counts``) and its channels' mover contracts.
+"""A DataflowCore's core in its shell (``core_point``): the core of its body's KernelOps
+(``finn.custom_op.kernels.network``) with the movers the row of the model's target's shell
+offers (``finn.platform.shells.shell_row``, ``body_row``) on its boundary channels and the
+row's budgets as rules of its own: the node's point (``finn.custom_op.partition.DataflowCore``),
+which a step holding only the body reads by the node's name; and the shell as functions over
+it, over its netlist (``Kernel.netlist`` and its edge, ``DataflowCoreKernel.edge_buses``: the
+module's buses counted without building the module, ``finn.platform.shells.bus_counts``) and
+its channels' mover contracts. Until the shell's own design pass places the movers and the
+budgets, they stay here.
 
-- **budgets**, rules of the partition (its shell member, ``finn.kernels.budgets``, given
-  the row's facts, ``row_facts``): the AXI-Lite buses its kernels present and its movers
+- **budgets**, rules of the core (its shell member, ``finn.kernels.budgets``, given the
+  row's facts, ``row_facts``): the AXI-Lite buses its kernels present and its movers
   present within the row's ``control_budget``, and the memory ports its kernels initiate
   within its ``memory_ports``, each refused as ``interface-budget-exceeded``; a member
   that takes the doubled clock needs a row that supplies one (``clk2x``), refused as
   ``clock-unavailable``. The ``ip`` row bounds neither count. Each reads the members'
-  derived values, so a value that breaks one is refused in the partition, where the seam,
+  derived values, so a value that breaks one is refused in the core, where the seam,
   the cut and emission read it. Emission checks the netlist's count (``bus_counts``, and
   the movers' contracts, ``Channel.mover_contracts``) against the rules'
   (``finn.kernels.budgets.counts``): a difference is an error naming both
   (``shell-counts-differ``);
-- **resources** (``shell_resources``; ``InShell.own_resources``, which the seam reads):
-  the sum of its members' own statements (``Partition.own_resources``), each mover's (its
-  contract's) and its row's static region's, at the memory ports and AXI-Lite buses it
-  connects (the module's and its movers'). The movers' and the static region's are out of context
-  (``SHELL_CHARACTERISED``), which overstates the placed shell. The ``ip`` shell has
-  neither, so its resources are its members'.
+- **resources** (``shell_resources``; the seam reads them of the core's composition in its
+  shell, ``shell_composition``, as its own): the sum of its members' own statements
+  (``Kernel.resources``), each mover's (its contract's) and its row's static region's, at
+  the memory ports and AXI-Lite buses it connects (the module's and its movers'). The
+  movers' and the static region's are out of context (``SHELL_CHARACTERISED``), which
+  overstates the placed shell. The ``ip`` shell has neither, so its resources are its
+  members'.
 
-``configured_network`` is a partition as emission builds it (``Configured``: the
-partition, its module and its cycles a frame), bound only: a stored choice it dropped as
+``configured_network`` is a core as emission builds it (``Configured``: its composition in
+its shell, its module, and its cycles a frame), bound only: a stored choice it dropped as
 stale, a rule its stored choices break (a member's, or a budget of its shell's), a choice
 left open, refuse it, named.
 ``verify_partition`` is the one
@@ -35,9 +39,10 @@ check of its FIFOs against their streams before emission (a strategy may call th
 check too, ``Seam.check_fifos``), and records the design it verified on the body; emission
 (packaging, the shell's integration, the testbench) compares it (``refuse_unverified``),
 and refuses a design never verified or changed since. Simulation and elaboration only
-bind. The cut makes a body's channel choices (``make_cut_choices``) on its partition in
-its shell, which alone holds both sides of a boundary channel, by the channel's policies
-(``Channel.policies``), and writes them with ``persist``.
+bind. The cut makes a body's channel choices (``make_cut_choices``) on its core in its
+shell, which alone holds both sides of a boundary channel, by the channel's policies
+(``Channel.policies``), and writes them with ``persist``. Each is given the core's name,
+its node's (``finn.custom_op.partition.DataflowCore``): its module's name.
 """
 
 from __future__ import annotations
@@ -47,24 +52,29 @@ from dataclasses import dataclass, field
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
-from onnx import NodeProto
-
 from finn.core.graph.annotations.outputs import OUTPUT_VERIFIED
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import design_digest, search_record
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.search import Key, dotted
-from finn.core.space import Available, Inapplicable, QueryResult, Rejected, inspection
-from finn.custom_op.kernels.network import PARTITION, PRODUCER, _network, persist, stale_text
+from finn.core.space import (
+    Available,
+    Inapplicable,
+    QueryResult,
+    Rejected,
+    Unresolved,
+    inspection,
+)
+from finn.custom_op.kernels.network import core, network, persist, stale_text
 from finn.kernels.artifacts.module import Composed
 from finn.kernels.base import Kernel
 from finn.kernels.budgets import SHELL, counts
 from finn.kernels.channels import Channel
 from finn.kernels.configure import refusal
-from finn.kernels.explore import FifoCheck, Seam
+from finn.kernels.dataflow_core import Bound, DataflowCoreKernel
+from finn.kernels.explore import CoreComposition, FifoCheck, Seam
 from finn.kernels.movers import MoverContract
-from finn.kernels.partition import Partition, _together
 from finn.kernels.policies import Required, policy
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
@@ -90,29 +100,6 @@ class ShellResources:
         return total((self.partition, *(used for _, used in self.movers + self.static_region)))
 
 
-class InShell(Partition):
-    """A partition in its shell (``in_shell``): its shell's ``row``, whose movers its
-    boundary channels were offered and whose budgets are its shell member's rules (its
-    facts, ``row_facts``). What it uses (``own_resources``, which the seam reads)
-    is the shell's: its members', its movers' and its static region's sum
-    (``shell_resources``). Immutable, as a partition: a change returns another, which keeps
-    its row."""
-
-    __slots__ = ("row",)
-
-    row: ShellRow
-
-    def __init__(self, *args: Any, row: ShellRow, **given: Any) -> None:
-        super().__init__(*args, **given)
-        self.row = row
-
-    def own_resources(self) -> QueryResult[Resources]:
-        """What the shell uses: its members', its movers' and its static region's sum
-        (``shell_resources``)."""
-        found = _resources(self)
-        return Available(found.value.total) if isinstance(found, Available) else _together([found])
-
-
 def row_facts(row: ShellRow) -> dict[str, object]:
     """The facts of ``row`` a partition in its shell holds (``finn.kernels.budgets.ShellBudgets``):
     the shell's name and its budgets, as the row states them."""
@@ -124,21 +111,60 @@ def row_facts(row: ShellRow) -> dict[str, object]:
     }
 
 
-def in_shell(model: ModelWrapper, nodes: Iterable[NodeProto], *, name: str = PARTITION) -> InShell:
-    """The partition of ``nodes``, KernelOp nodes of ``model`` (``network``), in the shell of
-    the model's target: its row (``shell_row``) offers its movers on the boundary channels,
-    and its budgets are the partition's rules (``row_facts``)."""
+def body_row(model: ModelWrapper) -> ShellRow:
+    """The row of the shell of ``model``'s target (``shell_row``)."""
     target = read_target(model)
-    row = shell_row(target.shell, target.board)
-    return _network(model, list(nodes), name, row.movers, partial(InShell, row=row), row_facts(row))
+    return shell_row(target.shell, target.board)
 
 
-# -- the shell, as functions over the partition --------------------------------------------
+def core_point(model: ModelWrapper, name: str) -> Bound:
+    """The core of ``model``'s KernelOps, a DataflowCore's body (``network``), its module
+    named ``name`` (the node's), in the shell of the model's target: its row
+    (``body_row``) offers its movers on the boundary channels, and its budgets are the
+    core's rules (``row_facts``); its stored choices bound. The node's point
+    (``finn.custom_op.partition.DataflowCore.point``)."""
+    row = body_row(model)
+    return network(model, model.graph.node, name=name, movers=row.movers, shell=row_facts(row))
 
 
-def _buses(network: Partition) -> QueryResult[tuple[int, int, bool]]:
-    """``bus_counts`` of its netlist and boundary buses (``Partition.netlist``), its top's
-    pins counted without building it; or what its netlist waits on, or why it is
+def core_space(model: ModelWrapper, name: str) -> DataflowCoreKernel:
+    """The core of ``model``'s KernelOps in the shell of its target, as ``core_point`` makes
+    it, its design space with nothing chosen (``network.core``): the node's
+    (``finn.custom_op.partition.DataflowCore.bound``)."""
+    row = body_row(model)
+    return core(model, model.graph.node, name=name, movers=row.movers, shell=row_facts(row))
+
+
+def shell_composition(point: DataflowCoreKernel, row: ShellRow) -> CoreComposition:
+    """The composition of ``point``, a core in the shell of ``row`` (``core_point``), as the
+    seam explores it: what it uses is the shell's, its members', its movers' and its static
+    region's (``shell_resources``)."""
+    return CoreComposition(point, shell_use=partial(_used, row=row))
+
+
+def _used(network: CoreComposition, *, row: ShellRow) -> QueryResult[Resources]:
+    """What the shell of ``row`` uses over ``network``: the sum of ``shell_resources``."""
+    found = _resources(network, row)
+    return Available(found.value.total) if isinstance(found, Available) else _together([found])
+
+
+def _together(results: Iterable[QueryResult[Any]]) -> Rejected | Unresolved:
+    """Results that are not available, as one: refused where one is, else waiting."""
+    held = list(results)
+    findings = tuple(
+        dict.fromkeys(finding for each in held for finding in getattr(each, "findings", ()))
+    )
+    if any(isinstance(each, Rejected) for each in held):
+        return Rejected(findings)
+    return Unresolved(findings)
+
+
+# -- the shell, as functions over the core -------------------------------------------------
+
+
+def _buses(network: CoreComposition) -> QueryResult[tuple[int, int, bool]]:
+    """``bus_counts`` of its netlist and its edge's buses (``CoreComposition.netlist``), its
+    top's pins counted without building it; or what its netlist waits on, or why it is
     refused."""
     found = network.netlist()
     if not isinstance(found, Available):
@@ -146,7 +172,9 @@ def _buses(network: Partition) -> QueryResult[tuple[int, int, bool]]:
     return Available(bus_counts(*found.value))
 
 
-def _mover_contracts(network: InShell) -> QueryResult[tuple[tuple[str, MoverContract], ...]]:
+def _mover_contracts(
+    network: CoreComposition,
+) -> QueryResult[tuple[tuple[str, MoverContract], ...]]:
     """Each mover its boundary channels place, by its channel: none on the ``ip`` shell."""
     found: list[tuple[str, MoverContract]] = []
     waiting: list[QueryResult[object]] = []
@@ -161,7 +189,7 @@ def _mover_contracts(network: InShell) -> QueryResult[tuple[tuple[str, MoverCont
     return Available(tuple(found))
 
 
-def _counts_agree(network: InShell, label: str) -> None:
+def _counts_agree(network: CoreComposition, label: str) -> None:
     """Refuse ``network``, decided, whose netlist's count (``bus_counts``, its movers'
     AXI-Lite buses added from their contracts) is not its shell member's
     (``finn.kernels.budgets.counts``): (AXI-Lite buses, memory ports, doubled clock), the
@@ -186,11 +214,11 @@ def _counts_agree(network: InShell, label: str) -> None:
         )
 
 
-def _resources(network: InShell) -> QueryResult[ShellResources]:
-    """``shell_resources``, as a query's result, read once of a network."""
+def _resources(network: CoreComposition, row: ShellRow) -> QueryResult[ShellResources]:
+    """``shell_resources``, as a query's result, read once of a composition."""
 
     def read() -> QueryResult[ShellResources]:
-        members = Partition.own_resources(network)
+        members = network.answer(Kernel.resources)
         if not isinstance(members, Available):
             return _together([members])
         partition = members.value
@@ -200,7 +228,6 @@ def _resources(network: InShell) -> QueryResult[ShellResources]:
         movers = tuple(
             (network.node(name), contract.resources) for name, contract in contracts.value
         )
-        row = network.row
         region = row.static_region
         if region is None:
             return Available(ShellResources(partition, movers, ()))
@@ -222,7 +249,7 @@ def _resources(network: InShell) -> QueryResult[ShellResources]:
         static = region.resources(masters=masters, slaves=slaves)
         return Available(ShellResources(partition, movers, static))
 
-    found: QueryResult[ShellResources] = network._read("resources", read)
+    found: QueryResult[ShellResources] = network._read(f"resources {row.shell}", read)
     return found
 
 
@@ -235,38 +262,28 @@ class Configured:
     readout remains an explicit, separate request until timing consumers migrate.
     """
 
-    network: InShell
+    network: CoreComposition
     module: Composed
+    row: ShellRow
 
     @property
     def cycles(self) -> int:
         """Request the existing cycle readout; never infer it from logical configuration.
 
-        A missing or refused member estimate fails this request, not configuration or
-        emission. This preserves the held timing consumers' contract without making
-        them a prerequisite of the untimed build bridge.
+        Its core's class answers it (``Kernel.frame_cycles``: the most any member takes). A
+        missing or refused member estimate fails this request, not configuration or
+        emission. This preserves the held timing consumers' contract without making them a
+        prerequisite of the untimed build bridge.
         """
-        cycles = {
-            name: self.network.query(name, Kernel.frame_cycles) for name in self.network.members
-        }
-        found = tuple(
-            self.network.located(name, finding)
-            for name, each in cycles.items()
-            if not isinstance(each, Available)
-            for finding in each.findings
-        )
-        if found or not cycles or not all(isinstance(each, Available) for each in cycles.values()):
+        cycles = self.network.answer(Kernel.frame_cycles)
+        if not isinstance(cycles, Available):
+            found = getattr(cycles, "findings", ())
             raise KernelOpError(
                 "cycle characterization unavailable: "
                 + "; ".join(map(Finding.subject_line, found)),
                 findings=found,
             )
-        return max(each.value for each in cycles.values() if isinstance(each, Available))
-
-    @property
-    def row(self) -> ShellRow:
-        """Its shell's row."""
-        return self.network.row
+        return cycles.value
 
     def channel(self, tensor: str) -> Any:
         """The channel carrying ``tensor``: its point."""
@@ -277,18 +294,22 @@ class Configured:
         return self.network.node(name)
 
 
-def shell_resources(subject: InShell | Configured) -> ShellResources | tuple[Finding, ...]:
-    """The resources of a partition's network (or of its configured one) by member and
-    their total (``ShellResources``); or why it states none, its findings: a member that
-    states none, or the open choices they wait on (each ``decision-unassigned``)."""
-    found = _resources(subject.network if isinstance(subject, Configured) else subject)
+def shell_resources(
+    point: DataflowCoreKernel, row: ShellRow
+) -> ShellResources | tuple[Finding, ...]:
+    """The resources of ``point``, a core in the shell of ``row`` (``core_point``), by
+    member and their total (``ShellResources``); or why it states none, its findings: a
+    member that states none, or the open choices they wait on (each
+    ``decision-unassigned``)."""
+    found = _resources(CoreComposition(point), row)
     return found.value if isinstance(found, Available) else found.findings
 
 
 def configured_network(
-    model: ModelWrapper, label: str
+    model: ModelWrapper, name: str
 ) -> tuple[Configured, tuple[tuple[str, str], ...]]:
-    """A partition model's partition in the shell of its target (``in_shell``), bound with
+    """A DataflowCore's body's core, its module named ``name`` (the node's), in the shell of
+    its target (``core_point``), bound with
     its nodes' and its tensors' channel choices, as emission builds it (``Configured``),
     and its boundary (tensor, port). Every choice is stored where it is created (a
     KernelOp's at conversion, a channel's at the cut) and replaced by the strategies, so
@@ -299,19 +320,22 @@ def configured_network(
     debug_placeholder to step_explore's strategies"), any other one never set ("not set: the cut,
     MakeCutChoices, or a strategy sets it"; one finding, ``choices-open``); a partition
     over the shell's budgets (its shell member's validity: "refused by the <shell> shell",
-    each broken budget a finding), or whose module its members refuse, or a
-    member's validity refuses (a rule its stored choices break, which the bind binds:
-    "refused by its members", each finding naming its member); or graph inputs and outputs
+    each broken budget a finding), or whose module is refused (by a member, or by a rule of
+    the partition's own), or a member's validity refuses (a rule its stored choices break,
+    which the bind binds: "refused", each finding naming its member, where it is one's); or
+    graph inputs and outputs
     out of port order refuse, named. Its netlist's count (``bus_counts`` and its movers')
     must be its shell's rules' (``shell-counts-differ``, naming both, otherwise). A dormant
     choice (stored under a case not selected) is not open, and refuses nothing. It only
     binds: it does not check the FIFOs against their streams (``verify_partition`` does), so
     a simulation can run a FIFO the model calls too small."""
-    bound = in_shell(model, model.graph.node)
-    if bound.stale:
-        keys = tuple(bound.stale)
+    label = name
+    row = body_row(model)
+    held = core_point(model, name)
+    if held.stale:
+        keys = tuple(held.stale)
         message = f"{label}: stale choices, refused by the partition: " + "; ".join(
-            stale_text(key, found) for key, found in bound.stale.items()
+            stale_text(key, found) for key, found in held.stale.items()
         )
         raise KernelOpError(
             message,
@@ -323,10 +347,11 @@ def configured_network(
                     "configured_network",
                     message,
                     (("keys", keys), ("node", label)),
-                    tuple(finding for found in bound.stale.values() for finding in found),
+                    tuple(finding for found in held.stale.values() for finding in found),
                 ),
             ),
         )
+    bound = shell_composition(held.point, row)
     open_keys = bound.undecided()
     if open_keys:
         required = {
@@ -368,11 +393,10 @@ def configured_network(
     over_budget = refusal(bound.validity(SHELL))
     if over_budget:
         raise KernelOpError(
-            f"{label}: refused by the {bound.row.shell!r} shell: "
-            + "; ".join(map(str, over_budget)),
+            f"{label}: refused by the {row.shell!r} shell: " + "; ".join(map(str, over_budget)),
             findings=over_budget,
         )
-    module = bound.module_of(PRODUCER)
+    module = bound.answer(DataflowCoreKernel.module)
     found = [] if isinstance(module, Available) else list(module.findings)
     if not found and isinstance(module, Available):
         _counts_agree(bound, label)
@@ -385,7 +409,7 @@ def configured_network(
     if found or not isinstance(module, Available):
         refused = tuple(dict.fromkeys(found))
         raise KernelOpError(
-            f"{label}: refused by its members: " + "; ".join(map(Finding.subject_line, refused)),
+            f"{label}: refused: " + "; ".join(map(Finding.subject_line, refused)),
             findings=refused,
         )
     # Computable readouts do not prove that arbitrary rules or presence resolved.
@@ -448,11 +472,11 @@ def configured_network(
             f" outputs in order {expected}",
             node=label,
         )
-    return Configured(bound, module.value), bound.boundary
+    return Configured(bound, module.value, row), bound.boundary
 
 
 def _impossible(
-    bound: Partition, key: Key, values: tuple[inspection.Possible | inspection.Refused, ...]
+    bound: CoreComposition, key: Key, values: tuple[inspection.Possible | inspection.Refused, ...]
 ) -> Finding:
     """Why open choice ``key`` of ``bound`` can take no value (``choice-no-valid-value``,
     owned by its dotted key): each listed value with the rules it breaks (each by its key in
@@ -482,14 +506,14 @@ def _impossible(
     )
 
 
-def _held_values(network: Partition, held: Mapping[str, Sequence[str]]) -> dict[Key, object]:
+def _held_values(network: CoreComposition, held: Mapping[str, Sequence[str]]) -> dict[Key, object]:
     """The values of the keys the search's record holds (``held``, by owner), the ones
     ``network`` states. A held key is the user's exact value, so one the network does not
     take is refused, by name, never dropped: an owner that is no member of the network
-    (``held-owner-unknown``), or a key the bound network states no value for, because the
-    bind dropped the stored one or it is gone (``held-not-taken``; the bind's findings are
-    its causes). A key stored out of play (dormant) or waiting is stated, by its stored
-    value."""
+    (``held-owner-unknown``), or a key the bound network states no value for, because it is
+    gone (``held-not-taken``; a stored one the bind dropped refuses the network before,
+    ``configured_network``). A key stored out of play (dormant) or waiting is stated, by its
+    stored value."""
     members = set(network.members)
     kernels = set(network.kernels)
     saved = network.chosen()
@@ -516,7 +540,6 @@ def _held_values(network: Partition, held: Mapping[str, Sequence[str]]) -> dict[
                     f"{dotted((owner, key))}: held by the search's record, but {reason}; the "
                     "held value was not taken, and nothing takes its place",
                     (("keys", (key,)), *subject),
-                    causes=network.dropped.get((owner, key), ()),
                 )
             )
     if lost:
@@ -528,8 +551,9 @@ def _held_values(network: Partition, held: Mapping[str, Sequence[str]]) -> dict[
     return values
 
 
-def verify_partition(model: ModelWrapper, label: str) -> tuple[Configured, FifoCheck]:
-    """A partition model's configured network (``configured_network``, whose refusals it
+def verify_partition(model: ModelWrapper, name: str) -> tuple[Configured, FifoCheck]:
+    """A DataflowCore's body's configured network, its module named ``name``
+    (``configured_network``, whose refusals it
     keeps) with its FIFOs checked against their streams at its bottleneck period
     (``Seam.check_fifos``: sizing's own model, whatever changed since a FIFO was sized, an
     edit by hand included), and what the check found; the design it verified recorded on
@@ -544,7 +568,8 @@ def verify_partition(model: ModelWrapper, label: str) -> tuple[Configured, FifoC
     held timed path explicitly requests cycles first; unavailable/refused estimates
     leave the verification marker unchanged. The model is changed only by the record;
     its caller saves it."""
-    point, _ = configured_network(model, label)
+    label = name
+    point, _ = configured_network(model, name)
     # This held consumer performs a timed FIFO check. Retain its former eager
     # cycle-refusal precondition explicitly: FifoCheck(None) is not verification.
     _ = point.cycles
@@ -623,11 +648,12 @@ def _late(key: str, value: object) -> Finding:
     )
 
 
-def make_cut_choices(model: ModelWrapper) -> CutChoices:
-    """The cut's choices of a partition's body, ``model``, persisted, each owner's whole
-    (``persist``), on the partition of its KernelOps bound in its shell (``in_shell``),
-    their stored choices bound (a value outside its domain dropped as stale), the policies
-    of its members applied once over its design space (``Partition.defaulted``): one pass
+def make_cut_choices(model: ModelWrapper, name: str) -> CutChoices:
+    """The cut's choices of a DataflowCore's body, ``model``, persisted, each owner's whole
+    (``persist``), on the core of its KernelOps, its module named ``name`` (the node's), in
+    its shell (``core_point``), their stored choices bound (a value outside its domain
+    dropped as stale), the policies of its members applied once over its design space
+    (``CoreComposition.defaulted``): one pass
     in the root's flow order, which interleaves the members, each choice's policy read from
     its member's owner (a kernel's its KernelOp, a channel's the cut), each value first
     valid where setting it is accepted (no rule of the partition newly false):
@@ -646,10 +672,11 @@ def make_cut_choices(model: ModelWrapper) -> CutChoices:
     for is left open and the pass goes on (``CutChoices.unset``). Returns what it dropped,
     set late, could not set, and set in listed order where a ranking could not be read
     (``CutChoices``)."""
-    bound = in_shell(model, model.graph.node)
-    stale = dict(bound.stale)
-    done = bound.defaulted(kept=[key for key in bound.dropped if key[0] in bound.kernels])
-    names = bound.composed.names
+    held = core_point(model, name)
+    stale = dict(held.stale)
+    bound = CoreComposition(held.point)
+    done = bound.defaulted(kept=[key for key in held.dropped if key[0] in bound.kernels])
+    names = bound.names
 
     def keyed(finding: Finding) -> tuple[str, Finding]:
         key = names.pair(finding.owner)
@@ -657,14 +684,14 @@ def make_cut_choices(model: ModelWrapper) -> CutChoices:
 
     unset = {each: (finding,) for each, finding in map(keyed, done.unset)}
     fallbacks = {each: (finding,) for each, finding in map(keyed, done.fallbacks)}
-    after = bound.at(done.point)
+    after = bound.made(done.point)
     before = bound.chosen()
     late = {
         key: value
         for key, value in after.chosen().items()
         if key not in before and key[0] in bound.kernels
     }
-    persist(model, after)
+    persist(model, after.point)
     return CutChoices(
         stale,
         {dotted(key): (_late(dotted(key), value),) for key, value in late.items()},
@@ -676,13 +703,15 @@ def make_cut_choices(model: ModelWrapper) -> CutChoices:
 __all__ = [
     "Configured",
     "CutChoices",
-    "InShell",
     "ShellResources",
+    "body_row",
     "make_cut_choices",
     "configured_network",
-    "in_shell",
+    "core_point",
+    "core_space",
     "refuse_unverified",
     "row_facts",
+    "shell_composition",
     "shell_resources",
     "verify_partition",
 ]

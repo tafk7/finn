@@ -3,12 +3,20 @@
 
 """Choices set on a model, or on a network, the way the compiler sets them.
 
-``configured(model, {graph name: {key: value}})``: the KernelOps' partition of ``model`` bound
-in the shell of its target (as exploration binds a partition's body), the values set through
-the seam as a strategy sets them (``Seam.set``, one batch, as ``Hold`` does), then each
-channel's open choices that are not required set by the channel's policies, as the cut sets
-them (``Partition.defaulted``, once over the channels; a FIFO's depth stays open), and the result
-persisted (``finn.custom_op.kernels.network.persist``, the one writer of choices). What the
+``composition(model)``: the core of ``model``'s KernelOps, its stored choices bound, read
+by key. ``bound_in_shell(model)`` and ``core_in_shell(model)``: the core of ``model``'s KernelOps
+in the shell of its target, as exploration binds a partition's body
+(``finn.custom_op.kernels.shell.core_point``, ``shell_composition``), its module named as
+the cut names its node (``CUT_NAME``) unless a test names it: its stored choices bound
+(``Bound``), or its composition, as the seam reads it.
+
+``configured(model, {graph name: {key: value}})``: the KernelOps' core of ``model`` bound in
+the shell of its target (``bound_in_shell``), the values set through the seam as a strategy
+sets them (``Seam.set``, one batch, as ``Hold`` does), then each channel's open choices that
+are not required set by the channel's policies, as the cut sets them
+(``CoreComposition.defaulted``, once over the channels; a FIFO's depth stays open), and the
+result persisted (``finn.custom_op.kernels.network.persist``, the one writer of choices).
+What the
 seam refuses is refused, by its findings (the seam's own codes, ``not-a-decision``,
 ``held``, or the engine's: a value outside its domain, ``domain-membership``, or each rule
 the batch would break) at the top of the ``Refusal``, so a test asserts it by code
@@ -33,19 +41,50 @@ A test helper, imported as ``support.configure``.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 
-from onnx import helper
+from onnx import NodeProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.core.graph.annotations.platform import read_target
-from finn.core.graph.partition import KERNEL_OPS_DOMAIN
+from finn.core.graph.partition import CUT_NAME, KERNEL_OPS_DOMAIN
 from finn.core.reporting.findings import Refusal
 from finn.core.search import Accepted, Key, Refused
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.network import persist
-from finn.custom_op.kernels.shell import in_shell
-from finn.kernels.explore import Seam
+from finn.custom_op.kernels.network import network, persist
+from finn.custom_op.kernels.shell import body_row, row_facts, shell_composition
+from finn.kernels.dataflow_core import Bound
+from finn.kernels.explore import CoreComposition, Seam
+
+
+def composition(
+    model: ModelWrapper, nodes: Iterable[NodeProto] | None = None, *, name: str = CUT_NAME
+) -> CoreComposition:
+    """The core of ``nodes`` (every node of ``model`` where None), KernelOp nodes of
+    ``model``, outside any shell (``finn.custom_op.kernels.network.network``), its module
+    named ``name``, its stored choices bound, read by key."""
+    selected = model.graph.node if nodes is None else nodes
+    return CoreComposition(network(model, selected, name=name).point)
+
+
+def bound_in_shell(
+    model: ModelWrapper, nodes: Iterable[NodeProto] | None = None, *, name: str = CUT_NAME
+) -> Bound:
+    """The core of ``nodes`` (every node of ``model`` where None), KernelOp nodes of
+    ``model``, in the shell of its target (``finn.custom_op.kernels.shell.core_point``:
+    its row offers its movers, its budgets the core's rules), its module named ``name``,
+    its stored choices bound."""
+    row = body_row(model)
+    selected = model.graph.node if nodes is None else nodes
+    return network(model, selected, name=name, movers=row.movers, shell=row_facts(row))
+
+
+def core_in_shell(
+    model: ModelWrapper, nodes: Iterable[NodeProto] | None = None, *, name: str = CUT_NAME
+) -> CoreComposition:
+    """``bound_in_shell``'s design space, read as the seam reads it in its shell
+    (``shell_composition``: what it uses is the shell's)."""
+    return shell_composition(bound_in_shell(model, nodes, name=name).point, body_row(model))
 
 
 def configured(model: ModelWrapper, choices: Mapping[str, Mapping[str, object]]) -> ModelWrapper:
@@ -56,32 +95,32 @@ def configured(model: ModelWrapper, choices: Mapping[str, Mapping[str, object]])
     the result persisted (``persist``); a value the seam refuses is refused, by its code.
     ``model`` is changed in place and returned."""
     nodes = [node for node in model.graph.node if node.domain == KERNEL_OPS_DOMAIN]
-    bound = in_shell(model, nodes)
+    bound = core_in_shell(model, nodes)
     seam = Seam(read_target(model).platform)
     batch = seam.keyed(bound, choices, "configured")
     outcome = seam.set(bound, batch)
     if isinstance(outcome, Refused):
         raise Refusal(dict.fromkeys(finding for found in outcome.why.values() for finding in found))
-    network = outcome.network
-    if len(nodes) < len(model.graph.node) and all(owner in network.kernels for owner, _ in batch):
+    core = outcome.network
+    if len(nodes) < len(model.graph.node) and all(owner in core.kernels for owner, _ in batch):
         # Not a partition's body (nodes on the host): no channel's choices are made, and
         # only the kernels' are written, each on its node.
         for node in nodes:
             op = kernel_op(model, node)
-            held = {key: value for (_, key), value in network.chosen([node.name]).items()}
+            held = {key: value for (_, key), value in core.chosen([node.name]).items()}
             op._write(op._saved(held))
         return model
-    done = network.defaulted(members=network.channels)  # one pass: what emission names stays open
-    before = network.chosen()
+    done = core.defaulted(members=core.channels)  # one pass: what emission names stays open
+    before = core.chosen()
     made: dict[str, dict[Key, object]] = {}
-    for key, value in network.at(done.point).chosen(network.channels).items():
+    for key, value in core.made(done.point).chosen(core.channels).items():
         if key not in before:
             made.setdefault(key[0], {})[key] = value
     for values in made.values():
-        step = seam.set(network, values)
+        step = seam.set(core, values)
         if isinstance(step, Accepted):
-            network = step.network
-    persist(model, network)
+            core = step.network
+    persist(model, core.point)
     return model
 
 
@@ -97,4 +136,4 @@ def write_raw(model: ModelWrapper, node_name: str, key: str, value: int | str | 
     node.attribute.extend(kept)
 
 
-__all__ = ["configured", "write_raw"]
+__all__ = ["bound_in_shell", "composition", "configured", "core_in_shell", "write_raw"]

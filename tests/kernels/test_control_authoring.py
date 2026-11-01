@@ -365,6 +365,7 @@ def test_a_served_port_is_read_at_its_kernel_s_occurrence() -> None:
         left = Channel(
             tensor=TENSOR,
             producer=Side.kernel(
+                Direction.OUT,
                 Stream(TENSOR.element, BeatSequence(vector_major(TENSOR.shape, 1))),
                 "source.output",
                 8,

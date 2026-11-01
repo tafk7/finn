@@ -37,11 +37,13 @@ from support.refusals import refused
 from finn.core.graph.annotations.channel import CHANNEL_KEYS, channel_choices
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
+from finn.core.graph.partition import CUT_NAME
 from finn.core.space import inspection
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import network, persist
 from finn.custom_op.kernels.shell import configured_network
-from finn.kernels.partition import Partition
+from finn.kernels.dataflow_core import Bound
+from finn.kernels.explore import CoreComposition
 from finn.platform.target import Target
 from finn.transformation.kernels import InferKernelTensors, kernel_choices_config
 
@@ -65,9 +67,10 @@ VERSAL = Target(part="a part with UltraRAM it initializes", platform=FULL_DSP58,
 """A target with UltraRAM, on which a MatMul's ``compute`` has two possible values."""
 
 
-def bound(model: ModelWrapper) -> Partition:
-    """The network of ``model``'s nodes, bound from the graph."""
-    return network(model, model.graph.node)
+def bound(model: ModelWrapper) -> tuple[CoreComposition, Bound]:
+    """The network of ``model``'s nodes, bound from the graph, and the bind."""
+    found = network(model, model.graph.node, name=CUT_NAME)
+    return CoreComposition(found.point), found
 
 
 def node(model: ModelWrapper) -> NodeProto:
@@ -77,15 +80,15 @@ def node(model: ModelWrapper) -> NodeProto:
     return first
 
 
-def stale(network_: Partition) -> dict[str, list[tuple[str, str, dict[str, object]]]]:
+def stale(found: Bound) -> dict[str, list[tuple[str, str, dict[str, object]]]]:
     """The network's stale choices by key, each finding's code, owner and details."""
     return {
         key: [(found.code, found.owner, dict(found.details)) for found in findings]
-        for key, findings in network_.stale.items()
+        for key, findings in found.stale.items()
     }
 
 
-def holding(network_: Partition, tensor: str) -> dict[str, object]:
+def holding(network_: CoreComposition, tensor: str) -> dict[str, object]:
     """What channel ``tensor`` stores, having checked that it is open, waiting on the
     MatMul's open ``compute`` (its findings the MatMul's, naming it)."""
     validity = network_.validity(tensor)
@@ -116,11 +119,11 @@ def test_a_node_choice_under_a_case_not_selected_is_kept_out_of_play_and_saved()
     write_raw(model, "first", PUMPING, True)
     point = kernel_op(model, node(model)).point()
     assert dict(inspection.states(point))[PUMPING] == inspection.Dormant(True)
-    first = bound(model)
-    assert not first.stale and first.member("first").compute.pe == 2
-    assert persist(model, first)["first"] == {**FOLDING, PUMPING: True}
-    again = bound(model)
-    assert not again.stale and again.chosen() == first.chosen()
+    first, first_bind = bound(model)
+    assert not first_bind.stale and first.member("first").compute.pe == 2
+    assert persist(model, first.point)["first"] == {**FOLDING, PUMPING: True}
+    again, again_bind = bound(model)
+    assert not again_bind.stale and again.chosen() == first.chosen()
 
 
 def test_a_channel_choice_under_no_input_adapter_is_kept_out_of_play_and_saved() -> None:
@@ -131,15 +134,15 @@ def test_a_channel_choice_under_no_input_adapter_is_kept_out_of_play_and_saved()
     model = kernel_model()
     key = "adapter_ram_style"
     model.set(CHANNEL_KEYS[key], "auto", tensor="hidden")
-    first = bound(model)
-    assert not first.stale
+    first, first_bind = bound(model)
+    assert not first_bind.stale
     assert first.member("hidden").input_chain == "none"
     assert dict(first.states(["hidden"]))[("hidden", key)] == inspection.Dormant("auto")
     held = {name: value for (_, name), value in first.chosen(["hidden"]).items()}
-    assert held[key] == "auto" and persist(model, first)["hidden"] == held
+    assert held[key] == "auto" and persist(model, first.point)["hidden"] == held
     assert channel_choices(model, "hidden")[key] == "auto"
-    again = bound(model)
-    assert not again.stale and again.chosen() == first.chosen()
+    again, again_bind = bound(model)
+    assert not again_bind.stale and again.chosen() == first.chosen()
 
 
 # -- a fact changed: the choice outside its domain -------------------------------------------
@@ -154,17 +157,17 @@ def test_a_node_choice_a_changed_fact_refuses_is_dropped_with_candidates_and_cle
     widened = np.concatenate([WEIGHTS, WEIGHTS[:, :2]], axis=1).astype(np.float32)
     model.set_initializer("w", widened)
     model = model.transform(InferKernelTensors())
-    first = bound(model)
-    ((key, (own,)),) = first.stale.items()
+    first, first_bind = bound(model)
+    ((key, (own,)),) = first_bind.stale.items()
     assert key == "first.pe"
     assert (own.code, own.owner) == ("domain-membership", "pe")
     assert dict(own.details) == {"value": 4, "candidates": (1, 2, 3, 6)}
     assert own.message == "not one of 1, 2, 3, 6"
     kept = {name: value for name, value in FOLDING.items() if name != "pe"}
-    assert persist(model, first)["first"] == kept
+    assert persist(model, first.point)["first"] == kept
     assert "pe" not in kernel_choices_config(model)["first"]
-    again = bound(model)
-    assert not again.stale
+    again, again_bind = bound(model)
+    assert not again_bind.stale
     assert ("first", "pe") in again.undecided()
     assert again.chosen(["first"]) == {("first", name): value for name, value in kept.items()}
 
@@ -183,8 +186,8 @@ def test_a_channel_choice_a_rule_a_changed_fact_makes_false_binds_and_reads_refu
     configured(model, {"first": FOLDING, "w": {**WEIGHT_SOURCE, "source.ram_style": "ultra"}})
     assert channel_choices(model, "w")["source.ram_style"] == "ultra"
     model = retarget(model, TARGET)
-    partition = bound(model)
-    assert not partition.stale
+    partition, partition_bind = bound(model)
+    assert not partition_bind.stale
     assert partition.chosen(["w"])[("w", "source.ram_style")] == "ultra"
     validity = partition.validity("w")
     assert validity.status == "refused"
@@ -200,7 +203,7 @@ def test_a_channel_choice_a_rule_a_changed_fact_makes_false_binds_and_reads_refu
         message="the platform has no UltraRAM",
     ) as caught:
         configured_network(model, "matmul")
-    assert str(caught.error).startswith("matmul: refused by its members: ")
+    assert str(caught.error).startswith("matmul: refused: ")
     assert {(f.code, f.owner, dict(f.details)["tensor"]) for f in caught.error.findings} >= {
         ("uram-absent", "source.uram_present", "w"),
         ("uram-init", "source.uram_init_taken", "w"),
@@ -222,17 +225,17 @@ def test_a_channel_whose_contracts_wait_on_a_core_not_stated_holds_its_choices()
     x, w = channel_choices(model, "x"), channel_choices(model, "w")
     model = retarget(model, VERSAL)
     write_raw(model, "first", "compute", None)
-    first = bound(model)
-    assert not first.stale
+    first, first_bind = bound(model)
+    assert not first_bind.stale
     assert (holding(first, "x"), holding(first, "w")) == (x, w)
     # The input's adapter memory, which the core's port decides, waits on it.
     waiting = dict(first.states(["x"]))[("x", "adapter_ram_style")]
     assert waiting == inspection.Waiting(x["adapter_ram_style"], ("first.compute",))
     assert first.undecided() == (("first", "compute"),)
-    written = persist(model, first)
+    written = persist(model, first.point)
     assert (written["x"], written["w"]) == (x, w)
-    again = bound(model)
-    assert not again.stale
+    again, again_bind = bound(model)
+    assert not again_bind.stale
     assert (holding(again, "x"), holding(again, "w")) == (x, w)
     assert again.chosen(["x", "w"]) == first.chosen(["x", "w"])
 
@@ -256,7 +259,7 @@ def test_a_node_attribute_no_choice_declares_refuses_the_bind_by_name() -> None:
     ):
         bound(model)
     write_raw(model, "first", "compute.packed.typo", None)
-    again = bound(model)
-    assert not again.stale and again.chosen(["first"]) == {
+    again, again_bind = bound(model)
+    assert not again_bind.stale and again.chosen(["first"]) == {
         ("first", key): value for key, value in FOLDING.items()
     }

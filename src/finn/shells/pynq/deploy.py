@@ -45,7 +45,8 @@ _OUTPUT = "deployment_package"
 
 def host_model(model: ModelWrapper, directory: Path) -> Path:
     """Write the parent graph ``model`` into ``directory`` as the deployment ships it:
-    parent.onnx (the host's nodes and the partition node) and partition.onnx beside it.
+    parent.onnx (the host's nodes and the DataflowCore node) and its body beside it, named
+    for the node (DataflowCore_0.onnx).
     The node refers to its body by a relative path, and neither model keeps a path on
     the build machine (``MACHINE_PATHS``). Returns the path of parent.onnx."""
     directory.mkdir(parents=True, exist_ok=True)
@@ -56,8 +57,8 @@ def host_model(model: ModelWrapper, directory: Path) -> Path:
         for key in MACHINE_PATHS:
             each.delete(key)
     (shipped_node,) = [each for each in shipped.graph.node if each.name == node.name]
-    getCustomOp(shipped_node).set_nodeattr("model", "partition.onnx")
-    shipped_body.save(str(directory / "partition.onnx"))
+    getCustomOp(shipped_node).set_nodeattr("model", f"{node.name}.onnx")
+    shipped_body.save(str(directory / f"{node.name}.onnx"))
     shipped.save(str(directory / "parent.onnx"))
     return directory / "parent.onnx"
 

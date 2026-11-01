@@ -3,7 +3,7 @@
 
 """The movers a shell offers on its boundary channels (``finn.kernels.movers``).
 
-A partition's network in its shell (``in_shell``) reads its target's shell row
+A partition's network in its shell (``core_in_shell``) reads its target's shell row
 (``finn.platform.shells``), whose offer places an ``IODMA_hls`` mover on each free side that
 meets the host, and states that side (row-major, one pass a frame), which the edge channel
 joins to its reader: placed by the channel where the shell offers one, no choice, so nothing
@@ -26,8 +26,8 @@ from typing import Any
 import pytest
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
-from support.configure import configured
-from support.helpers import FULL_DSP48E2, with_adapter_memories
+from support.configure import bound_in_shell, configured, core_in_shell
+from support.helpers import FULL_DSP48E2, beside, with_adapter_memories
 from support.helpers import built as module_built
 from support.models import (
     ROW_MAJOR_W2,
@@ -36,19 +36,19 @@ from support.models import (
     configure_partition,
     kernel_model,
 )
+from support.ports import outer
 from support.tfc import ULTRA96
 from support.xsim import requires_xsim
 
 import finn.custom_op.kernels.shell as shell
 from finn.core.graph.annotations.platform import read_target, write_target
-from finn.core.graph.partition import partition_body
+from finn.core.graph.partition import CUT_NAME, partition_body
 from finn.core.space import Available, Rejected, design_space, inspection
 from finn.custom_op.kernels.network import network, persist
 from finn.custom_op.kernels.shell import (
-    InShell,
     ShellResources,
+    body_row,
     configured_network,
-    in_shell,
     shell_resources,
 )
 from finn.dataflow.steps import Hop
@@ -65,11 +65,12 @@ from finn.dataflow.traversal import (
 )
 from finn.harness.ops import check_parity
 from finn.kernels.adapters import Convert
+from finn.kernels.artifacts.abi import Direction
 from finn.kernels.artifacts.module import module_name
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
-from finn.kernels.explore import KernelExplorer, SizeFifos, TargetThroughput
+from finn.kernels.explore import CoreComposition, KernelExplorer, SizeFifos, TargetThroughput
 from finn.kernels.fifo_sizing import NotModelled, Pattern, sides
 from finn.kernels.input_generator import Generate
 from finn.kernels.movers import (
@@ -193,7 +194,7 @@ def iodma_edge(form: Traversal, *, adaptable: bool = True) -> Any:
     128-bit port states (``MoverOffer.states``) and whose reader takes UINT8 lanes in
     ``form``; admitting adapters unless not ``adaptable``."""
     offer = iodma_hls(128)
-    reader = Side.kernel(Stream(UINT8, BeatSequence(form)), "reader.x")
+    reader = Side.kernel(Direction.IN, Stream(UINT8, BeatSequence(form)), "reader.x")
     return design_space(
         Channel(
             tensor=Tensor(form.shape, UINT8),
@@ -209,7 +210,9 @@ def iodma_exit(form: Traversal) -> Any:
     """An output's edge channel, alone, whose boundary side the ``IODMA_hls`` offer at a
     128-bit port states and whose writer presents UINT8 lanes in ``form``."""
     offer = iodma_hls(128)
-    writer = Side.kernel(Stream(UINT8, BeatSequence(form)), "writer.y", 8 * form.lanes)
+    writer = Side.kernel(
+        Direction.OUT, Stream(UINT8, BeatSequence(form)), "writer.y", 8 * form.lanes
+    )
     return design_space(
         Channel(
             tensor=Tensor(form.shape, UINT8),
@@ -254,12 +257,12 @@ def test_an_iodma_s_side_read_again_or_reordered_is_joined_by_an_input_gen_at_th
     the mover moves the one pass, 8 beats, not 24."""
     for form in (vector_major((4, 6), 3), vector_major((1, 784), 4), tile(4, 6, 1, 6)):
         moved = iodma_edge(form)
-        assert moved.boundary.form == form and moved.input_chain == "none" and valid(moved)
+        assert outer(moved).form == form and moved.input_chain == "none" and valid(moved)
     rows = vector_major((4, 6), 3)
     columns = Traversal.over((4, 6), ((1, 2, 3), (0, 4, 1)), ((1, 3, 1),))
     for form in (rows.repeated(3), columns):
         joined = iodma_edge(form)
-        assert joined.boundary.form == rows and joined.input_chain == "input_gen"
+        assert outer(joined).form == rows and joined.input_chain == "input_gen"
         assert joined.adapter.frame_bits == 4 * 6 * 8 and valid(joined)
         assert (joined.mover_contract.beats, joined.mover_contract.tdata) == (8, 24)
 
@@ -276,7 +279,7 @@ def test_an_iodma_s_side_read_in_tiles_is_regrouped_by_a_vpc_and_an_input_gen() 
     six, three = vector_major((4, 6), 6), vector_major((4, 6), 3)
     halves = Traversal((4, 6), (Loop(2, 12), Loop(2, 3), Loop(2, 6)), (Loop(3, 1),))
     joined = iodma_edge(tiles)
-    assert joined.boundary.form == six and joined.boundary.transport.data_width == 48
+    assert outer(joined).form == six and outer(joined).transport.data_width == 48
     hops = joined.steps.hops
     assert joined.steps.describe() == "width_conversion -> reorder -> width_conversion"
     assert [hop.source.form for hop in hops] == [six, three, halves]
@@ -316,7 +319,7 @@ def test_an_iodma_s_side_nothing_joins_is_refused_by_channel_steps_naming_the_mo
     half = Traversal.over((4, 6), ((0, 2, 2),), ((1, 6, 1),))
     assert sorted(int(offset) for offset in offsets(half)) == [*range(6), *range(12, 18)]
     refused = iodma_exit(half)
-    assert refused.boundary.form == vector_major((4, 6), 6)
+    assert outer(refused).form == vector_major((4, 6), 6)
     found = refused.query(Channel.steps)
     assert isinstance(found, Rejected)
     assert [(finding.code, finding.message) for finding in found.findings] == [
@@ -332,27 +335,32 @@ def test_an_iodma_s_side_nothing_joins_is_refused_by_channel_steps_naming_the_mo
 # -- on the Chain --------------------------------------------------------------------------
 
 
-def chain_network(target: Target = ULTRA96, *, model: ModelWrapper | None = None) -> InShell:
+def chain_network(
+    target: Target = ULTRA96, *, model: ModelWrapper | None = None
+) -> CoreComposition:
     """The Chain's network in the shell of ``target`` (its model's target, restated)."""
     model = kernel_model() if model is None else model
     write_target(model, target)
-    return in_shell(model, model.graph.node, name="chain")
+    return core_in_shell(model, model.graph.node, name="chain")
 
 
-def cut_network(target: Target = ULTRA96, *, model: ModelWrapper | None = None) -> InShell:
+def cut_network(target: Target = ULTRA96, *, model: ModelWrapper | None = None) -> CoreComposition:
     """The Chain's network in the shell of ``target``, its channels' choices made there as
     the cut makes them (``MakeCutChoices``: the channel's policies; the movers the shell
     offers are placed, no choice)."""
     model = kernel_model() if model is None else model
     write_target(model, target)
-    model = model.transform(MakeCutChoices())
-    return in_shell(model, model.graph.node, name="chain")
+    model = model.transform(MakeCutChoices(CUT_NAME))
+    return core_in_shell(model, model.graph.node, name="chain")
 
 
 def test_the_network_in_its_shell_reads_its_targets_shell_row() -> None:
-    bound = chain_network()
-    assert bound.row == shell_row("pynq", "Ultra96") and bound.row.movers == (iodma_hls(128),)
-    assert chain_network(TARGET).row == IP_ROW
+    model = kernel_model()
+    chain_network(model=model)
+    row = body_row(model)
+    assert row == shell_row("pynq", "Ultra96") and row.movers == (iodma_hls(128),)
+    chain_network(TARGET, model=model)
+    assert body_row(model) == IP_ROW
 
 
 def test_the_network_takes_the_movers_it_is_offered_and_states_its_members_resources() -> None:
@@ -361,14 +369,16 @@ def test_the_network_takes_the_movers_it_is_offered_and_states_its_members_resou
     model = kernel_model()
     configure_partition(model)
     write_target(model, ULTRA96)
-    model = model.transform(MakeCutChoices())
-    plain = network(model, model.graph.node, name="chain")
+    model = model.transform(MakeCutChoices(CUT_NAME))
+    plain = CoreComposition(network(model, model.graph.node, name="chain").point)
     assert plain.movers == () and not plain.member("x").offered
-    offered = network(model, model.graph.node, name="chain", movers=(iodma_hls(128),))
-    shelled = in_shell(model, model.graph.node, name="chain")
+    offered = CoreComposition(
+        network(model, model.graph.node, name="chain", movers=(iodma_hls(128),)).point
+    )
+    shelled = core_in_shell(model, model.graph.node, name="chain")
     assert offered.movers == shelled.movers == ("x", "y")
     assert offered.chosen() == shelled.chosen()
-    split = shell_resources(shelled)
+    split = shell_resources(shelled.point, body_row(model))
     assert isinstance(split, ShellResources) and split.movers and split.static_region
     assert offered.own_resources() == Available(split.partition)
     assert shelled.own_resources() == Available(split.total)
@@ -401,7 +411,7 @@ def test_each_boundary_side_is_stated_by_the_mover_its_shell_offers() -> None:
     assert x.producer.outside == y.consumer.outside == iodma_hls(128).states()
     ip = chain_network(TARGET)
     assert ip.member("x").producer.outside is None and ip.member("y").consumer.outside is None
-    assert x.boundary == ip.member("x").boundary and y.boundary == ip.member("y").boundary
+    assert outer(x) == outer(ip.member("x")) and outer(y) == outer(ip.member("y"))
 
 
 def test_the_shell_s_resources_are_its_partition_s_its_movers_and_its_static_region_s() -> None:
@@ -411,7 +421,7 @@ def test_the_shell_s_resources_are_its_partition_s_its_movers_and_its_static_reg
     model = kernel_model()
     configure_partition(model)
     bound = cut_network(model=model)
-    split = shell_resources(bound)
+    split = shell_resources(bound.point, body_row(model))
     assert isinstance(split, ShellResources)
     x, y = bound.member("x").mover_contract, bound.member("y").mover_contract
     assert split.movers == (
@@ -430,19 +440,21 @@ def test_the_shell_s_resources_are_its_partition_s_its_movers_and_its_static_reg
         )
     )
     ip = chain_network(TARGET, model=model)
-    assert shell_resources(ip) == ShellResources(split.partition, (), ())
+    assert shell_resources(ip.point, body_row(model)) == ShellResources(split.partition, (), ())
     assert ip.own_resources() == Available(split.partition)
 
 
 def test_a_network_waits_for_its_members_resources() -> None:
     # Its movers are placed, no choice: before the cut nothing is open, and its resources
     # answer.
-    bound = chain_network()
+    model = kernel_model()
+    bound = chain_network(model=model)
+    row = body_row(model)
     assert bound.undecided() == ()
-    assert isinstance(shell_resources(bound), ShellResources)
+    assert isinstance(shell_resources(bound.point, row), ShellResources)
     # A weight's memory style cleared: it waits on that open choice, owned by its member.
     opened = bound.trial({}, clear=[("w1", "source.ram_style")]).network
-    waiting = shell_resources(opened)
+    waiting = shell_resources(opened.point, row)
     assert isinstance(waiting, tuple)
     assert {(finding.code, finding.owner) for finding in waiting} == {
         ("decision-unassigned", "source.ram_style")
@@ -467,13 +479,13 @@ def test_a_mover_binds_no_rtl() -> None:
 def test_a_network_with_movers_persists_and_replays_as_itself() -> None:
     model = kernel_model()
     write_target(model, ULTRA96)
-    model = model.transform(MakeCutChoices())
+    model = model.transform(MakeCutChoices(CUT_NAME))
     bound = chain_network(ULTRA96, model=model)
-    held = persist(model, bound)
+    held = persist(model, bound.point)
     # Its movers are placed, not stored.
     assert not [name for name, values in held.items() if "mover" in values]
-    again = chain_network(ULTRA96, model=model)
-    assert again.chosen() == bound.chosen() and not again.stale
+    again = bound_in_shell(model, model.graph.node, name="chain")
+    assert CoreComposition(again.point).chosen() == bound.chosen() and not again.stale
 
 
 def test_a_row_offering_an_unknown_or_repeated_kind_is_refused() -> None:
@@ -487,14 +499,14 @@ def test_a_row_offering_an_unknown_or_repeated_kind_is_refused() -> None:
 def test_sizing_reads_a_free_side_its_mover_paces() -> None:
     bound = cut_network()
     x = bound.member("x").mover_contract
-    supply, _ = sides(bound.member("x"), bound.neighbours("x"))
+    supply, _ = sides(bound.member("x"), beside(bound, "x"))
     assert supply == Pattern(x.times, x.cycles)
     y = bound.member("y").mover_contract
-    _, accept = sides(bound.member("y"), bound.neighbours("y"))
+    _, accept = sides(bound.member("y"), beside(bound, "y"))
     assert accept == Pattern(y.times, y.cycles)
     chain = chain_network(TARGET)
     with pytest.raises(NotModelled, match="a boundary: not modelled"):
-        sides(chain.member("x"), chain.neighbours("x"))
+        sides(chain.member("x"), beside(chain, "x"))
 
 
 @requires_xsim
@@ -509,9 +521,9 @@ def test_a_pass_its_mover_moves_once_replayed_at_the_edge_computes_what_onnx_com
     model = kernel_model(second_weights=False)
     configured(model, {"second": ROW_MAJOR_W2})
     write_target(model, ULTRA96)
-    model = model.transform(MakeCutChoices())
+    model = model.transform(MakeCutChoices(CUT_NAME))
     w2 = choose_memories(model).member("w2")
-    assert (w2.input_chain, w2.boundary.form.beats) == ("input_gen", 4)
+    assert (w2.input_chain, outer(w2).form.beats) == ("input_gen", 4)
     check_parity(model, tmp_path, inputs=boundary_inputs(model, 4), label="replayed")
 
 
@@ -530,7 +542,7 @@ def explored(
     model = ModelWrapper(tfc.model.__deepcopy__())
     write_target(model, target)
     strategies: list[KernelExplorer] = [TargetThroughput(fps), *([SizeFifos()] if sizing else [])]
-    return model, dict(explore_kernel_choices(model, strategies).report)
+    return model, dict(explore_kernel_choices(model, strategies, name=CUT_NAME).report)
 
 
 def pumping(name: str) -> dict[str, object]:
@@ -707,5 +719,5 @@ def test_tfc_on_the_default_ip_shell_is_tfc_in_the_zynq_shell_without_its_movers
     # The module TFC in the Zynq shell was packaged as before the shells had rows (its
     # thresholds a data file, THRESHOLDS_FILE; its MatMuls after the first INT7, reading each
     # thresholding's range).
-    assert module_of(ip_model, tmp_path / "ip") == "finn_partition__5d21df0e45b5df72"
-    assert module_of(zynq_model, tmp_path / "zynq") == "finn_partition__5d21df0e45b5df72"
+    assert module_of(ip_model, tmp_path / "ip") == "finn_dataflowcore_0__bbdc1424bf7716b3"
+    assert module_of(zynq_model, tmp_path / "zynq") == "finn_dataflowcore_0__bbdc1424bf7716b3"

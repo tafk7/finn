@@ -4,7 +4,7 @@
 """A channel's netlist: its stages below it, and each checked hop resolved into wires.
 
 A channel wires the hops between its own ends; its partition wires the hops to the ports
-beside it (``Partition.hops``) and places them around the channel's links, in the
+beside it (``CoreComposition.hops``) and places them around the channel's links, in the
 partition's netlist. A link's end belongs to the kernel whose port it is, beside the
 channel (``^compute``, ``compute`` in the partition); a stage sits at its label below the channel
 (``adapter.input_gen.input_gen``, ``transport.fifo.buffer``); a link's end on the
@@ -29,11 +29,11 @@ from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.module import Fragment, Leaf
 from finn.kernels.base import Kernel, PortPins
-from finn.kernels.channels import Channel
+from finn.kernels.channels import Channel, OuterHops
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.dotp import PackedDotpKernel
+from finn.kernels.explore import CoreComposition
 from finn.kernels.laws import AXIS_CLOCKING, Axis
-from finn.kernels.partition import Partition
 from finn.kernels.port_model import InPort
 from finn.kernels.sides import Side
 from finn.kernels.transport import AxisBeat, StreamPins
@@ -44,7 +44,7 @@ W = Tensor((4, 4), ScalarEncoding(INT3))
 Y = Tensor((3, 4), ScalarEncoding(INT8))
 
 
-def placing() -> Partition:
+def placing() -> CoreComposition:
     """dotp between boundary channels: three rows of four, four outputs, PE = SIMD = 2."""
     return by_hand(
         {
@@ -79,12 +79,12 @@ FOLDING = {
 }
 
 
-def placed(**transport: object) -> Partition:
+def placed(**transport: object) -> CoreComposition:
     folded = choose(placing(), FOLDING)
     return with_channel_defaults(with_direct_transports(choose(folded, transport)))
 
 
-def links(point: Partition) -> list[tuple[str | None, str | None]]:
+def links(point: CoreComposition) -> list[tuple[str | None, str | None]]:
     """The ends of each link of ``point``'s netlist, in order."""
     found = point.netlist()
     assert isinstance(found, Available)
@@ -98,22 +98,23 @@ def test_an_adapted_channel_places_its_stage_and_wires_each_hop() -> None:
     ((label, leaf),) = fragment.instances
     assert label == "adapter.input_gen.input_gen"
     assert isinstance(leaf, Leaf) and leaf.name == "input_gen"
-    # Its own hop, from its boundary to its stage; the hop to compute's port is the
+    # Its own hop, from its outer input to its stage; the hop to compute's port is the
     # partition's, placed after it.
     (into,) = fragment.links
     assert (into.source.instance, into.sink.instance) == (None, label)
     assert (into.source.data, into.sink.data) == ("in0_V_tdata", "idat")
     hops = point.hops("x")
-    assert not isinstance(hops, Rejected) and hops.producer is None and hops.consumer
+    assert isinstance(hops, OuterHops) and hops.producer is None and hops.consumer
     out = hops.consumer
     assert (out.source.instance, out.sink.instance) == (label, "^compute")
     assert out.sink.data == "s_axis_input_tdata" and out.lanes == (0, 1) and out.lane_bits == 3
     # The frame marker: the input_gen's olst bit closing each reduction drives TLAST.
     assert out.markers == (("olst", 1, "s_axis_input_tlast", None),)
-    # A direct channel is one hop, the partition's, and only a boundary channel presents
-    # a bus. The partition's netlist: each channel's hops in the order the stream runs.
+    # A direct channel is one hop, the partition's, and only a boundary channel's outer
+    # port presents a bus. The partition's netlist: each channel's hops in the order the
+    # stream runs.
     assert point.member("y").netlist.links == ()
-    assert [bus.name for bus in point.member("y").boundary_bus] == ["out0_V"]
+    assert [bus.name for bus in point.member("y").outer_out.physical_pins] == ["out0_V"]
     staged = f"x.{label}"
     assert links(point) == [
         (None, staged),

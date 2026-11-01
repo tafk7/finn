@@ -56,7 +56,7 @@ from qonnx.custom_op.registry import getCustomOp
 for name in sys.argv[1:]:
     importlib.import_module(name)
 for domain, op_type in (
-    ("finn.custom_op.partition", "StreamingDataflowPartition"),
+    ("finn.custom_op.partition", "DataflowCore"),
     ("finn.shells.pynq.iodma", "IODMA_hls"),
 ):
     getCustomOp(helper.make_node(op_type, [], [], domain=domain))

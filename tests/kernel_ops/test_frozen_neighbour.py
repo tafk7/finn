@@ -4,43 +4,48 @@
 """A slice's frozen neighbours: an edge of a selection whose node beyond it is a KernelOp.
 
 The edge channel's side there is the neighbour's port's side at its stored choices, given
-as a fact (``Side.neighbour``): an upstream neighbour's stream, label and word width, a
-downstream one's stream and label. Only an accepted value is a fact, so a neighbour whose
-stored choices or kernel are refused, or whose side is not known at them, is refused by
-name (``neighbour-unaccepted``). The edge channel is the slice's: its adapters, its hops to
-the neighbour, its sizing (the neighbour's pace) and its resources derive as the whole
-partition's do; its netlist and module are refused (``slice-not-emitted``): a slice is not
-emitted."""
+as a fact (``Side.neighbour``): an upstream neighbour's output side, its stream, label and
+word width, a downstream one's input side, its stream and label. Only an accepted value is
+a fact, so a neighbour whose stored choices or kernel are refused, or whose side is not
+known at them, is refused by name (``neighbour-unaccepted``). The edge channel is the
+slice's: its adapters, its hops to the neighbour, its sizing (the neighbour's pace) and its
+resources derive as the whole partition's do; its netlist and module are refused
+(``slice-not-emitted``): a slice is not emitted."""
 
 from __future__ import annotations
 
 import copy
 import re
+from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any, cast
 
 from qonnx.core.modelwrapper import ModelWrapper
-from support.configure import write_raw
+from support.configure import composition, write_raw
+from support.helpers import beside, root_facts
 from support.models import TARGET, chain_model, fan_out_source, kernel_model
 from support.refusals import refused
 
 from finn.core.graph.errors import KernelOpError
+from finn.core.graph.partition import CUT_NAME
 from finn.core.space import Available, Rejected, inspection
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.network import PRODUCER, declaration, network
+from finn.custom_op.kernels.network import declaration
 from finn.kernels import fifo_sizing
+from finn.kernels.artifacts.abi import Direction
 from finn.kernels.base import Kernel
-from finn.kernels.channels import Channel, OuterHops
-from finn.kernels.composer import ChannelDeclaration, PartitionDeclaration
-from finn.kernels.partition import Partition, partition
+from finn.kernels.channels import Channel, Neighbours, OuterHops
+from finn.kernels.composer import ChannelDeclaration, DataflowCoreDeclaration, compose
+from finn.kernels.dataflow_core import DataflowCoreKernel, bound
+from finn.kernels.explore import CoreComposition
 from finn.kernels.port import stream_port
 from finn.kernels.sides import Side, SideKind
 from finn.transformation.kernels import ToKernelOps
 
 
-def _slice(model: ModelWrapper, *names: str) -> Partition:
+def _slice(model: ModelWrapper, *names: str) -> CoreComposition:
     """The partition of the nodes ``names`` of ``model``, in graph order."""
-    return network(model, [node for node in model.graph.node if node.name in names])
+    return composition(model, [node for node in model.graph.node if node.name in names])
 
 
 def _side(point: Kernel, port: str) -> Side:
@@ -53,15 +58,15 @@ def _side(point: Kernel, port: str) -> Side:
 def _frozen(point: Kernel, port: str, label: str) -> Side:
     """The actual port side as a frozen neighbour's, labelled ``label``."""
     found = _side(point, port)
-    assert found.stream is not None
-    return Side.neighbour(found.stream, label, found.width)
+    assert found.stream is not None and found.direction is not None
+    return Side.neighbour(found.direction, found.stream, label, found.width)
 
 
-def test_an_upstream_neighbour_gives_its_width_and_a_downstream_one_none() -> None:
+def test_an_upstream_neighbour_gives_an_output_side_and_a_downstream_one_an_input_side() -> None:
     """``activate`` alone: ``first`` produces hidden, ``second`` reads levels. Each edge's
     side is the neighbour's port's at its stored choices, labelled below it: hidden's
-    producer an output port's (a width), levels' consumer an input port's (none). No edge
-    is a port of the slice, and both channels read valid."""
+    producer an output port's (with its width), levels' consumer an input port's (none).
+    No edge is a port of the slice, and both channels read valid."""
     model = kernel_model()
     alone = _slice(model, "activate")
     assert alone.boundary == ()
@@ -70,32 +75,56 @@ def test_an_upstream_neighbour_gives_its_width_and_a_downstream_one_none() -> No
     second = kernel_op(model, nodes["second"]).point()
     hidden, levels = alone.member("hidden"), alone.member("levels")
     assert hidden.producer == _frozen(first, "y", "first.y")
-    assert hidden.producer.width is not None
+    assert hidden.producer.direction is Direction.OUT and hidden.producer.width is not None
     assert levels.consumer == _frozen(second, "x", "second.x")
-    assert levels.consumer.width is None
+    assert levels.consumer.direction is Direction.IN and levels.consumer.width is None
     assert hidden.consumer.kind is levels.producer.kind is SideKind.KERNEL
     assert inspection.validity(hidden).status == inspection.validity(levels).status == "valid"
 
 
-def _flipped(model: ModelWrapper, tensor: str, side: str) -> Partition:
+def _flipped(model: ModelWrapper, tensor: str, side: str) -> CoreComposition:
     """``activate`` alone, declared with ``tensor``'s ``side`` (a neighbour's) given the
-    other direction: a width dropped from an output port's, one added to an input's; its
-    stored choices bound."""
+    other direction, its width dropped (an input side states none); its stored choices
+    bound."""
     stored = _slice(model, "activate").chosen()
-    declared = declaration(model, [node for node in model.graph.node if node.name == "activate"])
+    declared = declaration(
+        model, [node for node in model.graph.node if node.name == "activate"], name=CUT_NAME
+    )
     each = declared.channels[tensor]
     given = getattr(each, side)
     assert isinstance(given, Side) and given.kind is SideKind.NEIGHBOUR
-    turned = replace(given, width=None if given.width is not None else 8)
+    other = Direction.IN if given.direction is Direction.OUT else Direction.OUT
+    turned = replace(given, direction=other, width=None)
     sides = {"producer": each.producer, "consumer": each.consumer, side: turned}
     channels = dict(declared.channels)
     channels[tensor] = ChannelDeclaration(sides["producer"], sides["consumer"], each.facts)
-    return partition(PartitionDeclaration(declared.kernels, channels, declared.shell), stored)
+    return _redeclared(declared, channels, declared.frozen, stored)
+
+
+def _redeclared(
+    declared: DataflowCoreDeclaration,
+    channels: dict[str, ChannelDeclaration],
+    frozen: Mapping[str, Neighbours],
+    stored: Mapping[tuple[str, str], object],
+) -> CoreComposition:
+    """``declared`` with ``channels`` and ``frozen`` in place of its own, composed and its
+    ``stored`` choices bound."""
+    changed = DataflowCoreDeclaration(
+        declared.kernels,
+        channels,
+        declared.shell,
+        name=declared.name,
+        order=declared.order,
+        owners=declared.owners,
+        frozen=frozen,
+    )
+    return CoreComposition(bound(compose(changed), stored).point)
 
 
 def test_a_neighbour_s_side_in_the_other_direction_is_refused_each_way() -> None:
-    """A stated side's direction is its width: an upstream neighbour without one is an
-    input port's, and a downstream one with one an output port's (``channel-users``)."""
+    """A stated side's direction is its port's kind, read by the channel: an upstream
+    neighbour's input side, and a downstream neighbour's output side, are refused
+    (``channel-users``)."""
     model = kernel_model()
     for tensor, side, message in (
         (
@@ -188,15 +217,18 @@ def test_a_tensor_read_inside_and_by_a_kernel_op_outside_is_refused_as_the_whole
             _slice(model, *names)
 
 
-def _open(model: ModelWrapper, names: tuple[str, ...], tensor: str) -> Partition:
+def _open(model: ModelWrapper, names: tuple[str, ...], tensor: str) -> CoreComposition:
     """The slice of ``names``, its edge ``tensor``'s consumer the boundary, unstated (as an
     edge was before a frozen neighbour), its stored choices bound."""
     stored = _slice(model, *names).chosen()
-    declared = declaration(model, [node for node in model.graph.node if node.name in names])
+    declared = declaration(
+        model, [node for node in model.graph.node if node.name in names], name=CUT_NAME
+    )
     each = declared.channels[tensor]
     channels = dict(declared.channels)
     channels[tensor] = ChannelDeclaration(each.producer, Side.boundary("m_axis_0"), each.facts)
-    return partition(PartitionDeclaration(declared.kernels, channels, declared.shell), stored)
+    frozen = {name: each for name, each in declared.frozen.items() if name != tensor}
+    return _redeclared(declared, channels, frozen, stored)
 
 
 def test_a_downstream_neighbour_brings_the_input_chain_it_needs_into_the_slice() -> None:
@@ -205,7 +237,7 @@ def test_a_downstream_neighbour_brings_the_input_chain_it_needs_into_the_slice()
     ``mt1`` sends (no chain). The edge channel's hops reach ``mm2`` from that chain's
     stage; they, its sizing and its resources are the whole partition's."""
     model = chain_model(4)
-    whole = network(model, model.graph.node)
+    whole = composition(model, model.graph.node)
     part = _slice(model, "mm1", "mt1")
     assert part.boundary == ()
     assert _open(model, ("mm1", "mt1"), "a1").member("a1").query(Channel.input_chain) == (
@@ -213,18 +245,18 @@ def test_a_downstream_neighbour_brings_the_input_chain_it_needs_into_the_slice()
     )
     for name in ("a0", "a1"):
         assert part.member(name).query(Channel.input_chain) == Available("input_gen")
-        assert part.neighbours(name) == whole.neighbours(name)
+        assert beside(part, name) == beside(whole, name)
         assert part.hops(name) == whole.hops(name)
         assert part.query(name, Kernel.resources) == whole.query(name, Kernel.resources)
-        assert fifo_sizing.size(part.member(name), part.neighbours(name), 1024) == (
-            fifo_sizing.size(whole.member(name), whole.neighbours(name), 1024)
+        assert fifo_sizing.size(part.member(name), beside(part, name), 1024) == (
+            fifo_sizing.size(whole.member(name), beside(whole, name), 1024)
         )
     hops = part.hops("a1")
     assert isinstance(hops, OuterHops) and hops.consumer is not None
     stage = hops.consumer.source.instance
     assert stage is not None and stage.startswith("adapter.input_gen")
     assert hops.consumer.sink.instance == "^mm2.compute.packed"
-    consumer = part.neighbours("a1").consumer
+    consumer = beside(part, "a1").consumer
     assert consumer is not None and consumer.label == "mm2.x"
 
 
@@ -234,7 +266,7 @@ def test_a_slice_s_netlist_and_module_are_refused_by_their_code() -> None:
     bare error."""
     model = chain_model(4)
     part = _slice(model, "mm1", "mt1")
-    netlist, module = part.netlist(), part.module_of(PRODUCER)
+    netlist, module = part.netlist(), part.answer(DataflowCoreKernel.module)
     assert isinstance(netlist, Rejected) and isinstance(module, Rejected)
     for found in (netlist, module):
         assert [(f.code, f.owner, dict(f.details)["tensor"]) for f in found.findings] == [
@@ -249,10 +281,19 @@ def test_a_slice_s_netlist_and_module_are_refused_by_their_code() -> None:
 
 
 def test_another_neighbour_is_another_design_space_of_the_same_class() -> None:
-    """``mm2`` at another simd reads another stream: a1's fact changes, its class does not."""
+    """``mm2`` at another simd reads another stream: a1's fact changes, its class does not.
+    The fact is the port beside a1 at ``mm2`` and its pace (``a1-frozen``), and a1's
+    neighbours, which FIFO sizing reads, follow it."""
     model = chain_model(4)
     part = _slice(model, "mm1", "mt1")
     write_raw(model, "mm2", "simd", 2)
     other = _slice(model, "mm1", "mt1")
     assert type(other.point) is type(part.point)
     assert other.member("a1").consumer != part.member("a1").consumer
+    before, after = root_facts(part.point)["a1-frozen"], root_facts(other.point)["a1-frozen"]
+    assert isinstance(before, Neighbours) and isinstance(after, Neighbours)
+    assert after.consumer != before.consumer
+    assert after.consumer_pace != before.consumer_pace
+    for network, given in ((part, before), (other, after)):
+        found = beside(network, "a1")
+        assert (found.consumer, found.consumer_pace) == (given.consumer, given.consumer_pace)

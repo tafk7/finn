@@ -4,7 +4,7 @@
 """Packaging: a partition of KernelOps as the IP every shell reads (the stitched-IP contract).
 
 ``PackagePartition`` takes a partition model, a model of KernelOps (the body of
-a ``StreamingDataflowPartition``), and writes what CreateStitchedIP writes for
+a ``DataflowCore``), and writes what CreateStitchedIP writes for
 the shells (MakeZYNQProject; CreateVitisXO and VitisLink; SlashLink):
 
 - an IP at ``<vivado_stitch_proj>/ip``, self-contained (its sources and data
@@ -264,20 +264,19 @@ def partition_utilization_report(project: Path) -> Path:
     return reports[0]
 
 
-def ooc_member_resources(model: ModelWrapper, project: Path) -> dict[str, Any]:
-    """The out-of-context resources of a partition packaged with ``run_synth`` in
-    ``project``, per member of its network: the top's ``total``, and each member's
-    instances summed (``members``, by graph name). The instances are the module's that
-    PackagePartition packaged (``configured_network``). An instance is its member's by its
-    label (``instance_name``), below the member's node in the module; an instance no
-    member claims is stated under its netlist name.
-    Synthesis flattens small instances into the top: what no reported instance holds is
-    ``unattributed`` (the total less the members'), and the module's instances with no
-    row are ``unreported_instances``. Every count is Vivado's synthesis estimate out of
-    context, not placed."""
+def ooc_member_resources(model: ModelWrapper, name: str, project: Path) -> dict[str, Any]:
+    """The out-of-context resources of a partition packaged as ``name`` (its node's name, its
+    module's) with ``run_synth`` in ``project``, per member of its network: the top's ``total``,
+    and each member's instances summed (``members``, by graph name). The instances are the
+    module's that PackagePartition packaged (``configured_network``). An instance is its
+    member's by its label (``instance_name``), below the member's node in the module; an
+    instance no member claims is stated under its netlist name. Synthesis flattens small
+    instances into the top: what no reported instance holds is ``unattributed`` (the total less
+    the members'), and the module's instances with no row are ``unreported_instances``. Every
+    count is Vivado's synthesis estimate out of context, not placed."""
     report = partition_utilization_report(project)
-    point, _ = configured_network(model, "the packaged partition")
-    owners = {point.node(name): name for name in point.network.members}
+    point, _ = configured_network(model, name)
+    owners = {point.node(member): member for member in point.network.members}
     labels = {instance_name(label): label for label, _ in point.module.fragment.instances}
     rows = vivado.hierarchical_utilization(report.read_text())
     members: dict[str, Resources] = {}
@@ -385,7 +384,8 @@ class PackagePartition(Transformation):
     """Package a partition model of KernelOps as the shells' IP, the design its check
     verified (``refuse_unverified``); see the module docstring.
 
-    ``ip_name`` is the partition node's name; the part and the clock one_pass are the
+    ``ip_name`` is the partition node's name, its module's and its IP's; the part and the
+    clock one_pass are the
     model's target. ``directory`` is the packaging project, whose ``ip`` the IP is, a new
     build directory by default: the stored project is copied there, replacing what it
     holds of the same names; ``toolchain`` the prepared toolchain Vivado and HLS run
@@ -437,9 +437,10 @@ class PackagePartition(Transformation):
 
 
 class ElaboratePartition(Transformation):
-    """Compile and elaborate a partition model's emitted RTL in XSim; the model is
-    unchanged. See the module docstring for what it checks. It only binds
-    (``configured_network``): no verified design is asked for.
+    """Compile and elaborate a partition model's emitted RTL in XSim, its module named
+    ``name`` (the partition node's); the model is unchanged. See the module docstring for
+    what it checks. It only binds (``configured_network``): no verified design is asked
+    for.
 
     ``directory`` holds the emitted sources and the simulator's logs (``xvlog.log``,
     ``xelab.log``), a new build directory by default; ``toolchain`` is the
@@ -451,16 +452,18 @@ class ElaboratePartition(Transformation):
 
     def __init__(
         self,
+        name: str,
         *,
         directory: Path | None = None,
         toolchain: Toolchain | None = None,
     ):
         super().__init__()
+        self.name = name
         self.directory = directory
         self.toolchain = host_toolchain() if toolchain is None else toolchain
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
-        point, _ = configured_network(model, "the partition")
+        point, _ = configured_network(model, self.name)
         directory = Path(
             self.directory or make_build_dir(prefix="elaborate_partition_")  # type: ignore[no-untyped-call]
         ).resolve()

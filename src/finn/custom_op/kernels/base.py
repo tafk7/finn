@@ -57,7 +57,7 @@ the node stores or refuses it as absent, and ``set_nodeattr`` of one is refused.
   Decisions take them), ``point`` (the kernel with them committed), ``verify_node`` and
   every bind of a network. They never write: a stored choice the facts refuse is
   refused by name (``point``, ``verify_node``) or dropped as stale where a network is
-  bound (``Partition.stale``).
+  bound (``Bound.stale``).
 - *The guard*: ``get_nodeattr`` and ``set_nodeattr`` of a KernelOp, the way qonnx's
   transformations reach an attribute. They guard the choice keys only: reading an absent
   choice is refused (``choice-absent``), setting one is refused (``choice-set-refused``),

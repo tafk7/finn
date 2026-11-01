@@ -187,7 +187,7 @@ def machine(monkeypatch):
     "make",
     [
         lambda tmp_path, **given: PackagePartition("p", **given),
-        lambda tmp_path, **given: ElaboratePartition(**given),
+        lambda tmp_path, **given: ElaboratePartition("p", **given),
         lambda tmp_path, **given: XSim(**given),
         lambda tmp_path, **given: BuildPynqBitfile(tmp_path, **given),
     ],

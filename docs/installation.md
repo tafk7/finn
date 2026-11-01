@@ -795,7 +795,7 @@ returns the graph comparison's result (`finn.analysis.comparison`: the runs, and
 with `finn.builder.build_dataflow_testbench.run_testbench` on its directory
 (`stitched_ip/testbench` in the output directory), which raises `SimulationFailed` on a
 mismatch. The partition's RTL compiles and elaborates in XSim when its body
-(`partition/partition.onnx` in the output directory) is transformed by
+(`DataflowCore_0/DataflowCore_0.onnx` in the output directory) is transformed by
 `finn.transformation.kernels.package.ElaboratePartition`.
 
 Explicit selections, and a build's configuration, name the frontend

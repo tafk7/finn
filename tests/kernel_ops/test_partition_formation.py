@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """The kernel path's cut (``CutKernelPartition``) between host ops: its KernelOps one
-StreamingDataflowPartition of the partition domain, its body a model of KernelOps, the
+DataflowCore of the partition domain, its body a model of KernelOps, the
 graph's other ops left on the host.
 
 The Chain (``support.chain``) as KernelOps, its kernels' choices saved on its nodes,
@@ -17,11 +17,12 @@ import warnings
 from pathlib import Path
 
 import numpy as np
+import pytest
 from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from support import chain
-from support.configure import configured
+from support.configure import composition, configured, core_in_shell
 from support.models import configure_partition, kernel_model
 from support.refusals import refused
 
@@ -30,8 +31,9 @@ from finn.core.graph.annotations.channel import CHANNEL, channel_choices
 from finn.core.graph.errors import KernelOpError
 from finn.core.onnx_exec import execute_onnx
 from finn.core.space import Available
-from finn.custom_op.kernels.network import PRODUCER, network
 from finn.custom_op.kernels.shell import configured_network
+from finn.kernels.dataflow_core import DataflowCoreKernel
+from finn.kernels.explore import CoreComposition
 from finn.transformation.kernels.cut import CutKernelPartition
 
 
@@ -98,7 +100,7 @@ def test_the_kernel_ops_become_one_partition_between_the_host_ops(tmp_path: Path
     source, parent, _ = partitioned(tmp_path)
     assert [(node.op_type, node.name) for node in parent.graph.node] == [
         ("Identity", "flatten"),
-        ("StreamingDataflowPartition", "partition"),
+        ("DataflowCore", "DataflowCore_0"),
         ("Identity", "select"),
     ]
     sdp = getCustomOp(parent.graph.node[1])
@@ -114,7 +116,7 @@ def test_the_kernel_ops_become_one_partition_between_the_host_ops(tmp_path: Path
 
 
 def test_the_parent_graph_imports_its_partition_nodes_domain(tmp_path: Path) -> None:
-    """The parent graph states the domain of its StreamingDataflowPartition, so reading
+    """The parent graph states the domain of its DataflowCore, so reading
     the node warns of no fallback version (TFC's one build-log warning, observation 37).
     The domain is the kernel path's own, the package that registers the node."""
     _, parent, _ = partitioned(tmp_path)
@@ -123,8 +125,35 @@ def test_the_parent_graph_imports_its_partition_nodes_domain(tmp_path: Path) -> 
     assert parent.graph.node[1].domain == partition_domain.__name__
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        (node,) = parent.get_nodes_by_op_type("StreamingDataflowPartition")
+        (node,) = parent.get_nodes_by_op_type("DataflowCore")
         getCustomOp(node).get_nodeattr("model")
+
+
+def test_the_node_reads_binds_changes_and_writes_its_core(tmp_path: Path) -> None:
+    """The DataflowCore reads its core as a KernelOp reads its kernel, each reading a
+    function of its body, its module named by the node: its design space, nothing chosen
+    (``bound``), its body's stored choices bound (``point``) and a change of them
+    (``point(extra)``, a refused one a ``ValueError``); ``persist`` writes a design space's
+    choices onto its body, and ``configured`` is what emission reads."""
+    _, parent, _ = partitioned(tmp_path)
+    node = parent.graph.node[1]
+    core = getCustomOp(node)
+    body = core.body()
+    assert [each.name for each in body.graph.node] == ["first", "activate", "second"]
+    empty, held = core.bound(), core.point()
+    assert type(empty) is type(held.point) and empty.name == held.point.name == node.name
+    assert not held.stale and CoreComposition(empty).chosen() == {}
+    stored = core_in_shell(body, name=node.name).chosen()
+    assert CoreComposition(held.point).chosen() == stored and stored[("first", "simd")] == 2
+    changed = core.point({("first", "simd"): 4})
+    assert CoreComposition(changed.point).chosen() == {**stored, ("first", "simd"): 4}
+    with pytest.raises(ValueError, match="simd"):
+        core.point({("first", "simd"): 3})
+    assert CoreComposition(core.point().point).chosen() == stored  # nothing written
+    core.persist(changed.point)
+    assert CoreComposition(core.point().point).chosen()[("first", "simd")] == 4
+    expected, _ = configured_network(core.body(), node.name)
+    assert core.configured().module == expected.module
 
 
 def test_the_body_is_the_partition_packaging_takes(tmp_path: Path) -> None:
@@ -137,8 +166,8 @@ def test_the_body_is_the_partition_packaging_takes(tmp_path: Path) -> None:
     stated = {
         (tensor, key): value for tensor, held in channels.items() for key, value in held.items()
     }
-    bound = network(source, kernel_ops, name=parent.graph.node[1].name)
-    built = bound.with_choices(stated).module_of(PRODUCER)
+    bound = composition(source, kernel_ops, name=parent.graph.node[1].name)
+    built = bound.with_choices(stated).answer(DataflowCoreKernel.module)
     assert isinstance(built, Available)
     reference = built.value
     assert (module.fragment, module.abi) == (reference.fragment, reference.abi)

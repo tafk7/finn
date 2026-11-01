@@ -45,8 +45,9 @@ from finn.kernels.configure import commit
 from finn.kernels.port import axis
 from finn.kernels.transport import AxisBeat
 from finn.kernels.artifacts.module import ProducerIdentity
-from finn.kernels.composer import Facts, PartitionDeclaration, Port, Stated, channel
-from finn.kernels.partition import partition
+from finn.kernels.composer import Facts, DataflowCoreDeclaration, Port, Stated, channel, compose
+from finn.kernels.dataflow_core import core_module
+from finn.kernels.explore import CoreComposition
 from finn.kernels.sides import Side
 from qonnx.core.datatype import DataType
 
@@ -104,8 +105,8 @@ for memory in ("none", "memstream"):
     stored = memory == "memstream"
     if stored:
         weight["contents"] = Stated("matmul", "stored_weights")
-    network = partition(
-        PartitionDeclaration(
+    network = CoreComposition(compose(
+        DataflowCoreDeclaration(
             {"matmul": Facts(MatMulKernel, {**facts, "x_tensor": x_tensor, **weights})},
             {
                 "x": channel(
@@ -120,9 +121,8 @@ for memory in ("none", "memstream"):
                     Port("matmul", "y"), Side.boundary("out0_V"), tensor=y_tensor, platform=PLATFORM
                 ),
             },
-        ),
-        order=("x", "w", "y", "matmul"),
-    )
+            order=("x", "w", "y", "matmul"), name="partition"),
+    ))
     network = network.with_choices({
         ("matmul", "compute"): "packed",
         ("matmul", "pe"): 2,
@@ -143,8 +143,8 @@ for memory in ("none", "memstream"):
         }
     network = network.with_choices(choices)
     assert network.member("matmul").result_type == result.dtype
-    module = network.module(TEST, "finn_placed")
-    assert isinstance(module.value, Composed) and module.value.fragment.instances
+    module = core_module(TEST, "finn_placed", *network.netlist().value)
+    assert isinstance(module, Composed) and module.fragment.instances
 """
     result = subprocess.run([sys.executable, "-c", script], text=True, capture_output=True)
     assert result.returncode == 0, result.stdout + result.stderr

@@ -4,9 +4,9 @@
 
 from __future__ import annotations
 
-from copy import copy
-
 import pytest
+from support.configure import core_in_shell
+from support.helpers import root_facts
 from support.models import configure_partition, kernel_model
 from support.refusals import refused
 
@@ -17,17 +17,18 @@ from finn.core.space import (
     Available,
     Param,
     QueryResult,
+    Rejected,
     Space,
     Unresolved,
     constraint,
     derived,
+    design_space,
     inspection,
     occurrence,
     reject,
 )
-from finn.custom_op.kernels.network import PRODUCER
 from finn.kernels.base import Kernel
-from finn.kernels.composer import Composed
+from finn.kernels.dataflow_core import Bound, DataflowCoreKernel
 
 
 @pytest.mark.parametrize("condition", ("open-rule", "refused-rule", "open-presence", "absent"))
@@ -36,7 +37,7 @@ def test_real_netlist_does_not_certify_unrelated_rule_or_presence(
 ) -> None:
     model = kernel_model()
     configure_partition(model)
-    original = shell.in_shell(model, model.graph.node)
+    original = core_in_shell(model)
 
     class Optional(Space):
         value: int = Param(default=1)
@@ -70,30 +71,40 @@ def test_real_netlist_does_not_certify_unrelated_rule_or_presence(
             "optional": Optional(when=enabled),
         },
     )
-    composed = Composed(expanded, original.composed.names, original.composed.facts)
     choices = {
         key: state.value
         for key, state in inspection.states(original.point)
         if isinstance(state, (inspection.Set, inspection.Waiting, inspection.Dormant))
     }
-    point = composed.design_space()
+    point = design_space(expanded(**root_facts(original.point), name=original.name))
     refs = {item.key: item.reference for item in inspection.decisions(point)}
     report = occurrence.bind(point, {refs[key]: value for key, value in choices.items()})
     assert not any(outcome.status == "dropped" for outcome in report.outcomes)
-    bound = copy(original)
-    # Preserve the real graph, members, bindings and saved choices; add only a root rule.
-    bound._composed = composed
-    bound._point = report.instance
-    bound._memo = {}
-    assert isinstance(bound.module_of(PRODUCER), Available)
+    # The real graph, members, bindings and saved choices; only a root rule added.
+    bound = shell.shell_composition(report.instance, shell.body_row(model))
+    module = bound.answer(DataflowCoreKernel.module)
+    if condition == "refused-rule":
+        # A partition a rule refuses has no channel's hops (no view of a refused design point
+        # answers), so no module: refused once, by the rule. Its members' own views answer.
+        assert isinstance(module, Rejected)
+        assert [(each.code, each.owner) for each in module.findings] == [
+            ("unrelated-rule", "unrelated")
+        ]
+    else:
+        assert isinstance(module, Available)
     assert all(
         isinstance(bound.query(name, Kernel.frame_cycles), Available) for name in bound.members
     )
     assert not bound.undecided()
-    monkeypatch.setattr(shell, "in_shell", lambda *_: bound)
+    monkeypatch.setattr(shell, "core_point", lambda *_: Bound(bound.point, {}, {}))
     if condition == "absent":
         configured, _ = shell.configured_network(model, "independent")
-        assert configured.network is bound
+        assert configured.network.point is bound.point
+    elif condition == "refused-rule":
+        with refused("unrelated-rule", error=KernelOpError, owner="unrelated") as caught:
+            shell.configured_network(model, "independent")
+        # A rule of the partition's own, no member's.
+        assert str(caught.error).startswith("independent: refused: ")
     else:
         with refused("design-incomplete", error=KernelOpError, node="independent"):
             shell.configured_network(model, "independent")

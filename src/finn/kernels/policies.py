@@ -365,7 +365,7 @@ class Placed(Protocol):
     is made of, each choice's member (by the choice's key in the root), each member's owner
     of policies (``Owner``) and why a member is refused on its own facts, read of the root as
     it stands. A kernel alone is one member (``Alone``); a partition's are its kernels and
-    channels (``finn.kernels.partition.Partition.defaulted``)."""
+    channels (``finn.kernels.explore.CoreComposition.defaulted``)."""
 
     @property
     def members(self) -> tuple[str, ...]: ...

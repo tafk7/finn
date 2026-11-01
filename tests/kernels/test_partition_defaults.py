@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""A partition's policies applied once (``Partition.defaulted``), on the Chain
+"""A core's policies applied once (``CoreComposition.defaulted``), on the Chain
 (``support.chain``): one pass over the partition's design space in its flow order, each
 choice's policy read from its member's owner (a kernel's its KernelOp, a channel's its
 channel class's, ``Channel.policies``); a member refused on its own skipped whole; a
@@ -20,13 +20,21 @@ from collections.abc import Mapping
 from typing import Any, ClassVar
 
 from support import chain
-from support.helpers import FULL_DSP48E2, keyed
+from support.helpers import FULL_DSP48E2, TEST_CORE, keyed
 
 from finn.kernels.channels import Channel
-from finn.kernels.composer import ChannelDeclaration, Facts, PartitionDeclaration, Port, channel
+from finn.kernels.composer import (
+    ChannelDeclaration,
+    DataflowCoreDeclaration,
+    Facts,
+    Port,
+    channel,
+    compose,
+)
+from finn.kernels.dataflow_core import bound
 from finn.kernels.dotp import PackedDotpKernel
+from finn.kernels.explore import CoreComposition
 from finn.kernels.matmul import MatMulKernel
-from finn.kernels.partition import Partition, partition
 from finn.kernels.policies import Fixed, Policy, stated
 
 
@@ -48,7 +56,7 @@ def chained(
     stored: Mapping[str, object] | None = None,
     *,
     adaptable: bool = True,
-) -> Partition:
+) -> CoreComposition:
     """The Chain, its thresholding's PE stored, ``stored`` besides (``member.key``), each
     kernel under its owner in ``owners`` (by name: none stated where missing), its hidden
     channel admitting an adapter unless not ``adaptable``."""
@@ -61,14 +69,15 @@ def chained(
             platform=FULL_DSP48E2,
             adaptable=False,
         )
-    return partition(
-        PartitionDeclaration(
-            {name: each for name, each in members.items() if isinstance(each, Facts)},
-            {name: each for name, each in members.items() if isinstance(each, ChannelDeclaration)},
-        ),
-        keyed({"activate.pe": chain.PE, **(stored or {})}),
+    declared = DataflowCoreDeclaration(
+        {name: each for name, each in members.items() if isinstance(each, Facts)},
+        {name: each for name, each in members.items() if isinstance(each, ChannelDeclaration)},
+        name=TEST_CORE,
         order=tuple(members),
         owners=owners,
+    )
+    return CoreComposition(
+        bound(compose(declared), keyed({"activate.pe": chain.PE, **(stored or {})})).point
     )
 
 
@@ -79,7 +88,7 @@ def test_the_pass_sets_every_member_by_its_owner_s_policy_once() -> None:
     held = chained()
     done = held.defaulted()
     assert done.unset == () and done.refused == {} and done.fallbacks == ()
-    after = held.at(done.point)
+    after = held.made(done.point)
     assert after.undecided() == ()
     chosen = after.chosen()
     assert chosen[("first", "compute")] == "packed"
@@ -101,7 +110,7 @@ def test_a_kernel_class_bound_by_two_owners_takes_each_owner_s_policies_at_its_o
     core's reducer to the compressor, the second's states none (first valid: the tree)."""
     fixing = owner_of({PackedDotpKernel.reducer: Fixed("compressor")})
     held = chained({"first": fixing, "second": owner_of({})})
-    chosen = held.at(held.defaulted().point).chosen()
+    chosen = held.made(held.defaulted().point).chosen()
     assert chosen[("first", "compute.packed.reducer")] == "compressor"
     assert chosen[("second", "compute.packed.reducer")] == "tree"
 
@@ -117,7 +126,7 @@ def test_a_member_refused_on_its_own_is_skipped_and_the_others_are_set() -> None
     assert held.validity("hidden").status == "refused"
     done = held.defaulted()
     assert list(done.refused) == ["hidden"] and done.unset == ()
-    after = held.at(done.point)
+    after = held.made(done.point)
     assert ("hidden", "transport") in after.undecided()
     assert after.chosen()[("x", "transport")] == "direct"
     assert after.chosen()[("second", "compute")] == "packed"
@@ -142,7 +151,7 @@ def test_a_choice_no_value_can_be_set_for_is_left_open_and_the_pass_goes_on() ->
     (finding,) = done.unset
     assert (finding.code, finding.owner) == ("choice-no-valid-value", "first.pe")
     assert dict(finding.details) == {"policy": "fixed"}
-    after = held.at(done.point)
+    after = held.made(done.point)
     assert after.undecided() == (("first", "pe"),)
     assert after.chosen()[("first", "compute.packed.reducer")] == "tree"
     assert after.chosen()[("hidden", "transport")] == "direct"
@@ -152,6 +161,6 @@ def test_the_pass_over_some_members_leaves_the_others_open() -> None:
     """``members`` restricts the pass to the choices of those members (the test helpers'
     pass over the channels): the kernels' stay open, every channel's is set."""
     held = chained()
-    after = held.at(held.defaulted(members=held.channels).point)
+    after = held.made(held.defaulted(members=held.channels).point)
     assert {key[0] for key in after.undecided()} == set(KERNELS)
     assert after.chosen()[("hidden", "transport")] == "direct"

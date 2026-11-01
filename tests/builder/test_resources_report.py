@@ -18,7 +18,7 @@ from support.packaging import PLACED_HIERARCHY, UTILIZATION_SYNTH
 
 from finn.builder.build_dataflow_resources import shell_resources_report
 from finn.core.graph.annotations.platform import write_target
-from finn.core.graph.partition import partition_body
+from finn.core.graph.partition import CUT_NAME, partition_body
 from finn.custom_op.kernels.shell import ShellResources, configured_network, shell_resources
 from finn.kernels.utilization import SHELL_CHARACTERISED
 from finn.platform.capabilities import Resources
@@ -44,7 +44,7 @@ def test_the_placed_hierarchy_is_read_by_depth() -> None:
         (1, "top_i"),
         (2, "smartconnect_0"),
         (3, "inst"),
-        (2, "partition"),
+        (2, "DataflowCore_0"),
         (2, "axi_interconnect_0"),
         (2, "idma0"),
         (2, "odma0"),
@@ -59,13 +59,13 @@ def test_a_partition_on_the_ip_shell_states_its_model_alone(tmp_path: Path) -> N
     parent = kernel_model().transform(CutKernelPartition(tmp_path))
     node, body, _ = partition_body(parent)
     point, _ = configured_network(body, node.name)
-    modelled = shell_resources(point)
+    modelled = shell_resources(point.network.point, point.row)
     assert isinstance(modelled, ShellResources)
     stated = shell_resources_report(parent, {})
     assert (stated["shell"], stated["caveat"]) == ("ip", None)
     assert stated["members"] == {
         "partition": {
-            "instance": "partition",
+            "instance": "DataflowCore_0",
             "model": asdict(modelled.partition),
             "out_of_context": None,
             "placed": None,
@@ -98,7 +98,7 @@ def test_off_the_board_the_shell_was_timed_on_both_reports_name_the_caveat(
     model = kernel_model()
     write_target(model, resolve_target(board=board, period_ns=5.0, shell="pynq"))
     configure_partition(model)
-    exact = explore_kernel_choices(model).report["resources"]["exact"]
+    exact = explore_kernel_choices(model, name=CUT_NAME).report["resources"]["exact"]
     # Every memory is counted in the target's fabric's table; a FIFO's shallow hi space
     # is Vivado's, a model; any other memory in auto is Vivado's, not stated.
     assert "every memory's block RAM, UltraRAM and LUTRAM storage" in exact

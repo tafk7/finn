@@ -105,8 +105,8 @@ def check_parity(
     ``directory``; see the module docstring. Raises ``WordsDiffer`` (an output word the
     hardware computed otherwise), ``SimulationFailed`` or ``Disagreement``."""
     parent = model.transform(CutKernelPartition(directory))
-    _, body, _ = partition_body(parent)
-    point, boundary = configured_network(body, label)
+    node, body, _ = partition_body(parent)
+    point, boundary = configured_network(body, node.name)
     expected = dict(execute_onnx(model, inputs) if reference is None else reference(inputs))
     outputs = {item.name for item in model.graph.output}
     if set(expected) != outputs:

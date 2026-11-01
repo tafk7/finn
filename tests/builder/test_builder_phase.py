@@ -100,6 +100,7 @@ from finn.core.graph.annotations.outputs import (
 from finn.core.graph.annotations.platform import read_target, write_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import (
+    CUT_NAME,
     KERNEL_OPS_DOMAIN,
     design_digest,
     partition_body,
@@ -183,7 +184,7 @@ def explore_body(model: ModelWrapper, strategies: Sequence[KernelExplorer]) -> E
     """What a user's own step does: the partition's body of the parent graph ``model``
     explored by ``strategies`` (one search) and saved in its file."""
     _, body, body_file = partition_body(model)
-    explored = explore_kernel_choices(body, strategies)
+    explored = explore_kernel_choices(body, strategies, name=CUT_NAME)
     body.save(body_file)
     return explored
 
@@ -308,17 +309,17 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     ]
     assert sum(map(len, created.values())) == 44
     # Cut once, before the exploration: the build's model is the parent graph, the input
-    # flatten and the label select on the host around one partition, named partition,
+    # flatten and the label select on the host around one partition, the DataflowCore_0,
     # whose body is its file; the exploration reads and saves the body.
     parent = seen["step_create_dataflow_partition"]
     assert [(node.op_type, node.name) for node in parent.graph.node] == [
         ("Reshape", "Reshape_0"),
-        ("StreamingDataflowPartition", "partition"),
+        ("DataflowCore", "DataflowCore_0"),
         ("TopK", "TopK_0"),
     ]
     _, built, body_file = partition_body(parent)
-    assert body_file == str(Path(cfg.output_dir) / "partition" / "partition.onnx")
-    assert seen["step_verify_partition"].graph.node[1].name == "partition"
+    assert body_file == str(Path(cfg.output_dir) / "DataflowCore_0" / "DataflowCore_0.onnx")
+    assert seen["step_verify_partition"].graph.node[1].name == "DataflowCore_0"
     # The partition's body: the one tfc.py makes by hand, every choice it left open saved
     # by its policy and its FIFOs sized (the default strategy, size_fifos: it
     # stores every value, and the partition is built from them).
@@ -333,8 +334,8 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     assert read_target(built) == read_target(parent) == ULTRA96
     # The body's boundary, read from its configured network: the pynq shell's IODMA_hls on
     # both.
-    point, boundary = configured_network(built, "partition")
-    inputs, outputs = boundary_facts(built, point, boundary, "partition")
+    point, boundary = configured_network(built, "DataflowCore_0")
+    inputs, outputs = boundary_facts(built, point, boundary, "DataflowCore_0")
     assert [(port["tensor"], port["mover"]["kind"]) for port in inputs + outputs] == [
         ("Reshape_0_out0", "iodma_hls"),
         ("MatMul_3_out0", "iodma_hls"),
@@ -533,7 +534,7 @@ def test_a_fifo_a_users_folding_step_leaves_too_small_is_refused_at_verification
             "kind": "refusal",
         }
         assert outcome["error"]["message"].startswith(
-            "partition: FIFOs too small for their streams, refused at verification (add "
+            "DataflowCore_0: FIFOs too small for their streams, refused at verification (add "
             "size_fifos to step_explore's strategies): levels: "
             "levels.transport.fifo.depth: fifo-stale: depth 5 "
             "(5 words) no longer keeps its producer"
@@ -586,7 +587,7 @@ def test_the_verification_notes_what_its_check_finds_and_records_the_design(
     found = {(finding["code"], finding["owner"]) for finding in check["findings"]}
     assert ("fifo-held-stale", "levels.transport.fifo.depth") in found
     assert {code for code, _ in found} == {"fifo-held-stale", "direct-throttles"}
-    body = ModelWrapper(str(output / "partition" / "partition.onnx"))
+    body = ModelWrapper(str(output / "DataflowCore_0" / "DataflowCore_0.onnx"))
     assert body.get(OUTPUT_VERIFIED) == design_digest(body)
 
 
@@ -791,7 +792,7 @@ def test_step_explore_reports_each_entry_in_one_file(tmp_path: Path) -> None:
         {"size_fifos": {"margin": 2, "ram_style": None}},
         "debug_placeholder",
     ]
-    body = ModelWrapper(str(output / "partition" / "partition.onnx"))
+    body = ModelWrapper(str(output / "DataflowCore_0" / "DataflowCore_0.onnx"))
     written = json.loads((output / "report" / "kernel_choices.json").read_text())
     assert written == kernel_choices_config(body)
 
@@ -914,7 +915,7 @@ def test_an_output_is_listed_after_the_outputs_it_is_made_from(tmp_path: Path) -
         assert failed_checks(config(tmp_path, steps=steps)) == {}
     model = kernel_model()
     write_target(model, ULTRA96)
-    model = model.transform(MakeCutChoices())  # its movers, as the cut makes them
+    model = model.transform(MakeCutChoices(CUT_NAME))  # its movers, as the cut makes them
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)
@@ -940,7 +941,7 @@ def test_a_deployment_ships_only_the_bitfile_and_driver_its_build_made(tmp_path:
     code."""
     model = kernel_model()
     write_target(model, ULTRA96)
-    model = model.transform(MakeCutChoices())  # its movers, as the cut makes them
+    model = model.transform(MakeCutChoices(CUT_NAME))  # its movers, as the cut makes them
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)
@@ -1026,7 +1027,7 @@ def cut_parent(directory: Path) -> ModelWrapper:
     """The Chain's parent graph in the Zynq shell, cut into a partition, its choices saved."""
     model = kernel_model()
     write_target(model, ULTRA96)
-    model = model.transform(MakeCutChoices())  # its movers, as the cut makes them
+    model = model.transform(MakeCutChoices(CUT_NAME))  # its movers, as the cut makes them
     configure_partition(model)
     return model.transform(CutKernelPartition(directory))
 
@@ -1100,7 +1101,7 @@ def test_the_bitfiles_clock_findings_are_noted(
     monkeypatch.setattr(ObjectiveSeen, "seen", [])
     model = kernel_model()
     write_target(model, ULTRA96)
-    model = model.transform(MakeCutChoices())  # its movers, as the cut makes them
+    model = model.transform(MakeCutChoices(CUT_NAME))  # its movers, as the cut makes them
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)
@@ -1401,14 +1402,14 @@ def test_the_delivered_clock_is_reported_beside_the_one_asked(tmp_path: Path) ->
 
 def test_a_partitions_bottleneck_is_read_from_its_saved_choices() -> None:
     model = kernel_model()
-    explored = explore_kernel_choices(model, [Ranked(Lanes(2))])
-    assert shell_bottleneck(model) == explored.cost.bottleneck
-    assert shell_bottleneck(model) is not None
+    explored = explore_kernel_choices(model, [Ranked(Lanes(2))], name=CUT_NAME)
+    assert shell_bottleneck(model, CUT_NAME) == explored.cost.bottleneck
+    assert shell_bottleneck(model, CUT_NAME) is not None
     # On a body made by hand, once its choices are created, it is the bottleneck of the
     # point as it is built.
     made = kernel_model()
-    expected = explore_kernel_choices(kernel_model()).cost.bottleneck
-    assert shell_bottleneck(made.transform(MakeCutChoices())) == expected
+    expected = explore_kernel_choices(kernel_model(), name=CUT_NAME).cost.bottleneck
+    assert shell_bottleneck(made.transform(MakeCutChoices(CUT_NAME)), CUT_NAME) == expected
 
 
 #: Z0's strategies: the Zynq landing's baseline build explored TFC so.
@@ -1419,10 +1420,10 @@ Z0_CHAIN = [TFC_FPS, "size_fifos"]
 ZYNQ_BUILD = capture("tfc_zynq_build")
 
 #: The oracle's partition names, by the build's instance names: its movers' instances,
-#: and ``partition`` for the partition between them.
+#: and ``DataflowCore_0`` for the partition between them.
 INSTANCES = {
     partition["name"]: (
-        "partition" if partition["instance"] == partition["name"] else partition["instance"]
+        "DataflowCore_0" if partition["instance"] == partition["name"] else partition["instance"]
     )
     for partition in ZYNQ_BUILD["partitions"]
 }
@@ -1485,12 +1486,12 @@ def test_the_export_of_tfc_on_pynq_names_both_movers_iodmas_and_every_connection
     ]
     clocked = [
         Connection(kind, f"smartconnect_0/{source}", f"{instance}/{pin}")
-        for instance in ("idma0", "partition", "odma0")
+        for instance in ("idma0", "DataflowCore_0", "odma0")
         for kind, source, pin in (("clock", "aclk", "ap_clk"), ("reset", "aresetn", "ap_rst_n"))
     ]
     assert export.connections == (
-        Connection("axis", "idma0/m_axis_0", "partition/s_axis_0"),
-        Connection("axis", "partition/m_axis_0", "odma0/s_axis_0"),
+        Connection("axis", "idma0/m_axis_0", "DataflowCore_0/s_axis_0"),
+        Connection("axis", "DataflowCore_0/m_axis_0", "odma0/s_axis_0"),
         Connection("aximm", "idma0/m_axi_gmem0", "smartconnect_0/S00_AXI"),
         Connection("aximm", "odma0/m_axi_gmem0", "smartconnect_0/S01_AXI"),
         Connection("axilite", "axi_interconnect_0/M00_AXI", "idma0/s_axi_control_0"),
@@ -1501,13 +1502,13 @@ def test_the_export_of_tfc_on_pynq_names_both_movers_iodmas_and_every_connection
         Address("idma0/s_axi_control_0", 0xA000_0000, 4096),
         Address("odma0/s_axi_control_0", 0xA000_1000, 4096),
     )
-    assert (export.period_ns, export.vlnv) == (5.0, "xilinx_finn:finn:partition:1.0")
+    assert (export.period_ns, export.vlnv) == (5.0, "xilinx_finn:finn:DataflowCore_0:1.0")
     # Z0's module, its memories in their explicit baseline styles, its thresholds a data
     # file (THRESHOLDS_FILE), and choices; its MatMuls after the first INT7, reading each
     # thresholding's range.
     node, body, _ = partition_body(parent)
     point, _ = configured_network(body, node.name)
-    assert module_name(point.module) == "finn_partition__5d21df0e45b5df72"
+    assert module_name(point.module) == "finn_dataflowcore_0__bbdc1424bf7716b3"
     persisted = json.loads((output / "report" / "kernel_choices.json").read_text())
     assert persisted == kernel_choices_config(body)
     assert persisted == TFC_STORED
@@ -1529,10 +1530,10 @@ connect_bd_net [get_bd_pins idma0/ap_clk] [get_bd_pins smartconnect_0/aclk]
 connect_bd_net [get_bd_pins idma0/ap_rst_n] [get_bd_pins smartconnect_0/aresetn]
 set_property ip_repo_paths [concat [get_property ip_repo_paths [current_project]] [list "$BUILD/vivado_stitch_proj_XXXXXXXX/ip"]] [current_project]
 update_ip_catalog -rebuild -scan_changes
-create_bd_cell -type ip -vlnv xilinx_finn:finn:partition:1.0 partition
-connect_bd_net [get_bd_pins partition/ap_clk] [get_bd_pins smartconnect_0/aclk]
-connect_bd_net [get_bd_pins partition/ap_rst_n] [get_bd_pins smartconnect_0/aresetn]
-connect_bd_intf_net [get_bd_intf_pins partition/s_axis_0] [get_bd_intf_pins idma0/m_axis_0]
+create_bd_cell -type ip -vlnv xilinx_finn:finn:DataflowCore_0:1.0 DataflowCore_0
+connect_bd_net [get_bd_pins DataflowCore_0/ap_clk] [get_bd_pins smartconnect_0/aclk]
+connect_bd_net [get_bd_pins DataflowCore_0/ap_rst_n] [get_bd_pins smartconnect_0/aresetn]
+connect_bd_intf_net [get_bd_intf_pins DataflowCore_0/s_axis_0] [get_bd_intf_pins idma0/m_axis_0]
 set_property ip_repo_paths [concat [get_property ip_repo_paths [current_project]] [list "$BUILD/code_gen_ipgen_odma0_IODMA_hls_0_XXXXXXXX/project_odma0_IODMA_hls_0/sol1/impl/ip" "$BUILD/vivado_stitch_proj_XXXXXXXX/ip"]] [current_project]
 update_ip_catalog -rebuild -scan_changes
 create_bd_cell -type ip -vlnv xilinx_finn:finn:odma0:1.0 odma0
@@ -1541,7 +1542,7 @@ connect_bd_intf_net [get_bd_intf_pins odma0/s_axi_control_0] [get_bd_intf_pins a
 assign_axi_addr_proc odma0/s_axi_control_0
 connect_bd_net [get_bd_pins odma0/ap_clk] [get_bd_pins smartconnect_0/aclk]
 connect_bd_net [get_bd_pins odma0/ap_rst_n] [get_bd_pins smartconnect_0/aresetn]
-connect_bd_intf_net [get_bd_intf_pins odma0/s_axis_0] [get_bd_intf_pins partition/m_axis_0]
+connect_bd_intf_net [get_bd_intf_pins odma0/s_axis_0] [get_bd_intf_pins DataflowCore_0/m_axis_0]
 """  # noqa: E501
 
 #: The IODMAs' generated HLS code at Z0's choices (PrepareIP's top_<node>.cpp), by
@@ -1565,7 +1566,7 @@ def test_the_z0_literal_is_the_oracles_block_design_but_for_the_partitions_ip() 
     assert len(oracle) == len(z0)
     differing = [index for index, (ours, theirs) in enumerate(zip(z0, oracle)) if ours != theirs]
     assert [z0[index + 2] for index in differing] == [
-        "create_bd_cell -type ip -vlnv xilinx_finn:finn:partition:1.0 partition"
+        "create_bd_cell -type ip -vlnv xilinx_finn:finn:DataflowCore_0:1.0 DataflowCore_0"
     ]
     (index,) = differing
 
@@ -1578,7 +1579,7 @@ def test_the_z0_literal_is_the_oracles_block_design_but_for_the_partitions_ip() 
     assert repositories(z0[index]) == [stitched]
     *layers, memstream = repositories(oracle[index])
     assert (layers[-1], memstream) == (stitched, "$::env(FINN_ROOT)/finn-rtllib/memstream")
-    assert len(layers[:-1]) == 13 and all("_partition_" in path for path in layers[:-1])
+    assert len(layers[:-1]) == 13 and all("_DataflowCore_0_" in path for path in layers[:-1])
 
 
 @pytest.mark.slow
@@ -1599,7 +1600,7 @@ def test_the_runner_writes_z0s_block_design_for_tfc(z0_tfc: ModelWrapper) -> Non
         )
         for instance in ("idma0", "odma0")
     }
-    ips["partition"] = InstanceIP("xilinx_finn:finn:partition:1.0", (stitched,))
+    ips["DataflowCore_0"] = InstanceIP("xilinx_finn:finn:DataflowCore_0:1.0", (stitched,))
     export = integration(z0_tfc)
     design = block_design(export, ips)
     assert design == Z0_BLOCK_DESIGN.replace("$BUILD", "/BUILD")
@@ -1737,7 +1738,7 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
     outputs = replace(cfg, steps=["phase_generate_outputs"], settings={})
     for step in build_plan(outputs).steps:
         parent = step.function(parent, cfg, **step.settings)
-    assert [node.name for node in parent.graph.node] == ["Reshape_0", "partition", "TopK_0"]
+    assert [node.name for node in parent.graph.node] == ["Reshape_0", "DataflowCore_0", "TopK_0"]
     ((_, _, script),) = vivado.runs
     assert "create_bd_cell -type ip -vlnv xilinx_finn:finn:odma0:1.0 odma0\n" in script
     saved = tmp_path / "parent.onnx"
@@ -1759,9 +1760,10 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
     assert (output / "bitfile" / "finn-accel.hwh").read_text() == "top.hwh"
     assert (report / "placed_utilization.xml").read_text() == PLACED_HIERARCHY
     assert sorted(path.name for path in (report / "out_of_context").iterdir()) == [
-        f"top_{name}_0_utilization_synth.rpt" for name in ("idma0", "partition", "smartconnect_0")
+        f"top_{name}_0_utilization_synth.rpt"
+        for name in ("DataflowCore_0", "idma0", "smartconnect_0")
     ]
-    assert body.get(OUTPUT_VLNV) == "xilinx_finn:finn:partition:1.0"
+    assert body.get(OUTPUT_VLNV) == "xilinx_finn:finn:DataflowCore_0:1.0"
     assert body.get(OUTPUT_IP_KEY) == IP_KEY
     for model in (reread, body):
         assert list(model.model.metadata_props) == []
@@ -1770,7 +1772,7 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
     # The delivered clock against the one asked, the bottleneck the partition's network's,
     # its movers included: the input mover.
     clock = json.loads((report / "delivered_clock.json").read_text())
-    bottleneck = shell_bottleneck(body)
+    bottleneck = shell_bottleneck(body, CUT_NAME)
     assert bottleneck is not None
     assert (clock["delivered_mhz"], clock["bottleneck_cycles"]) == (187.512, bottleneck.cycles)
     assert (bottleneck.members, bottleneck.cycles) == (("Reshape_0_out0",), TFC_BOTTLENECK)
@@ -1788,7 +1790,7 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
         **{f"static_region.{key}": row for key, row in members["static_region"].items()},
     }
     assert {key: row["instance"] for key, row in rows.items()} == {
-        "partition": "partition",
+        "partition": "DataflowCore_0",
         "movers.Reshape_0_out0": "idma0",
         "movers.MatMul_3_out0": "odma0",
         "static_region.zynq_ultra_ps_e": "zynq_ps",
@@ -1873,9 +1875,9 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
             deploy / "bitfile" / "finn-accel.bit"
         )
     shipped = ModelWrapper(str(deploy / "model" / "parent.onnx"))
-    (node,) = [node for node in shipped.graph.node if node.name == "partition"]
-    assert getCustomOp(node).get_nodeattr("model") == "partition.onnx"
-    shipped_body = ModelWrapper(str(deploy / "model" / "partition.onnx"))
+    (node,) = [node for node in shipped.graph.node if node.name == "DataflowCore_0"]
+    assert getCustomOp(node).get_nodeattr("model") == "DataflowCore_0.onnx"
+    shipped_body = ModelWrapper(str(deploy / "model" / "DataflowCore_0.onnx"))
     for model in (shipped, shipped_body):
         assert set(model.namespace(OUTPUTS)) <= {
             "verified",
@@ -1905,7 +1907,7 @@ def test_a_driver_without_its_bitfile_or_its_clock_is_refused(tmp_path: Path) ->
     so is a parent graph that states no bitfile."""
     model = kernel_model()
     write_target(model, ULTRA96)
-    model = model.transform(MakeCutChoices())  # its movers, as the cut makes them
+    model = model.transform(MakeCutChoices(CUT_NAME))  # its movers, as the cut makes them
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)
@@ -1955,7 +1957,7 @@ def test_a_bitfile_built_from_another_design_or_ip_is_refused_by_name(
     bitfile, the partition and both designs or keys, before anything is written."""
     model = kernel_model()
     write_target(model, ULTRA96)
-    model = model.transform(MakeCutChoices())  # its movers, as the cut makes them
+    model = model.transform(MakeCutChoices(CUT_NAME))  # its movers, as the cut makes them
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)

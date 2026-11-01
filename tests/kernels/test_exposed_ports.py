@@ -40,9 +40,9 @@ from finn.core.space import (
 from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import Tensor
 from finn.kernels.base import Kernel
+from finn.kernels.explore import CoreComposition
 from finn.kernels.matmul import KnownWeights, MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.partition import Partition
 from finn.kernels.port import exposed_name, port_direction
 from finn.kernels.port_model import exposed_ports
 from finn.kernels.values.semantics import IntegerTensorValue
@@ -97,7 +97,7 @@ class WrappedMatMul(Kernel):
         return found
 
 
-def assembled(space_type: type[Kernel], at: str, pumped: bool = False) -> Partition:
+def assembled(space_type: type[Kernel], at: str, pumped: bool = False) -> CoreComposition:
     """MatMul (or its wrapper, its MatMul ``at`` below it) on its partition's channels,
     its packed core chosen, the channels connected directly."""
     network = matmul_network(cast(type[MatMulKernel], space_type), **FACTS)

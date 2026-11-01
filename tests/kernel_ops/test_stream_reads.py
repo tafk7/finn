@@ -6,7 +6,7 @@ its tensor, each with the guards that decide whether it exists.
 A port is a child of its kernel (``finn.kernels.port_model.StreamPort``), its members its
 ``element``, ``stream`` and ``access``; a kernel with children serves its child's port,
 lowered into members of its own (``<p>_side``). For every kernel of a partition, one Space
-as the graph layer binds it in its shell (``in_shell``: stage 7's chain of eight kernels,
+as the graph layer binds it in its shell (``core_in_shell``: stage 7's chain of eight kernels,
 and TFC's partition from its cut body), every such member at any depth below it, and each
 of its existence guards (``_scopes.existence``): the reads the engine infers
 (``_reads.infer``: a method's, the model's reads, not its source) and each member's own
@@ -33,6 +33,7 @@ import pytest
 from core.space._line_reads import line_scopes
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
+from support.configure import core_in_shell
 from support.models import chain_model
 
 from finn.core.space import (
@@ -49,7 +50,6 @@ from finn.core.space import (
 )
 from finn.core.space._reads import ModelReads, infer
 from finn.core.space._scopes import Address, Scopes, existence
-from finn.custom_op.kernels.shell import in_shell
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
@@ -155,7 +155,7 @@ def _checked(whole: type[Space]) -> tuple[dict[str, int], list[str]]:
 
 def test_stage_7s_chain_s_ports_read_only_their_own_kernels() -> None:
     model = chain_model(4)
-    checked, failures = _checked(in_shell(model, model.graph.node).composed.space_type)
+    checked, failures = _checked(type(core_in_shell(model, model.graph.node).point))
     assert not failures, "\n".join(failures)
     # Each MatMul's two cores' three ports each, which it exposes (element, stream, access
     # where it binds); each thresholding's three ports.
@@ -164,7 +164,7 @@ def test_stage_7s_chain_s_ports_read_only_their_own_kernels() -> None:
 
 
 def test_tfc_s_partition_s_ports_read_only_their_own_kernels(tfc: ModelWrapper) -> None:
-    checked, failures = _checked(in_shell(tfc, tfc.graph.node).composed.space_type)
+    checked, failures = _checked(type(core_in_shell(tfc, tfc.graph.node).point))
     assert not failures, "\n".join(failures)
     assert len(checked) == len(tfc.graph.node)
     assert all(count > 0 for count in checked.values()), checked

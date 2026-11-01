@@ -111,7 +111,7 @@ def zynq_model(directory: Path) -> ModelWrapper:
 IPS = {
     "idma0": InstanceIP("xilinx_finn:finn:idma0:1.0", ("/hls/idma0", "/stitch/idma0/ip")),
     "idma1": InstanceIP("xilinx_finn:finn:idma1:1.0", ("/hls/idma1", "/stitch/idma1/ip")),
-    "partition": InstanceIP("xilinx_finn:finn:partition:1.0", ("/packaged/ip",)),
+    "DataflowCore_0": InstanceIP("xilinx_finn:finn:DataflowCore_0:1.0", ("/packaged/ip",)),
     "odma0": InstanceIP("xilinx_finn:finn:odma0:1.0", ("/hls/odma0", "/stitch/odma0/ip")),
 }
 
@@ -157,13 +157,13 @@ def test_the_block_design_instantiates_each_mover_and_the_partition_from_the_exp
         *mover_lines("idma1", IPS["idma1"], 1, 1),
         repositories("/packaged/ip"),
         "update_ip_catalog -rebuild -scan_changes",
-        "create_bd_cell -type ip -vlnv xilinx_finn:finn:partition:1.0 partition",
-        "connect_bd_net [get_bd_pins partition/ap_clk] [get_bd_pins smartconnect_0/aclk]",
-        "connect_bd_net [get_bd_pins partition/ap_rst_n] [get_bd_pins smartconnect_0/aresetn]",
-        stream("partition/s_axis_0", "idma0/m_axis_0"),
-        stream("partition/s_axis_1", "idma1/m_axis_0"),
+        "create_bd_cell -type ip -vlnv xilinx_finn:finn:DataflowCore_0:1.0 DataflowCore_0",
+        "connect_bd_net [get_bd_pins DataflowCore_0/ap_clk] [get_bd_pins smartconnect_0/aclk]",
+        "connect_bd_net [get_bd_pins DataflowCore_0/ap_rst_n] [get_bd_pins smartconnect_0/aresetn]",
+        stream("DataflowCore_0/s_axis_0", "idma0/m_axis_0"),
+        stream("DataflowCore_0/s_axis_1", "idma1/m_axis_0"),
         *mover_lines("odma0", IPS["odma0"], 2, 2),
-        stream("odma0/s_axis_0", "partition/m_axis_0"),
+        stream("odma0/s_axis_0", "DataflowCore_0/m_axis_0"),
     ]
 
 
@@ -175,7 +175,7 @@ def test_the_debug_option_probes_every_mover_stream_and_the_memory_port(tmp_path
     plain = block_design(export, IPS).splitlines()
     debug = block_design(export, IPS, hw_debug=True).splitlines()
     assert debug[: len(plain)] == plain
-    nets = ["idma0_m_axis_0", "idma1_m_axis_0", "partition_m_axis_0", "smartconnect_0_M00_AXI"]
+    nets = ["idma0_m_axis_0", "idma1_m_axis_0", "DataflowCore_0_m_axis_0", "smartconnect_0_M00_AXI"]
     assert debug[len(plain) : len(plain) + 4] == [
         f"set_property HDL_ATTRIBUTE.DEBUG true [get_bd_intf_nets {{{net}}}]" for net in nets
     ]
@@ -240,8 +240,10 @@ def built_ips(directory: Path) -> dict[str, InstanceIP]:
         )
         for instance in ("idma0", "idma1", "odma0")
     }
-    packaged = InstanceIP("xilinx_finn:finn:partition:1.0", (str(directory / "packaged" / "ip"),))
-    return {**movers, "partition": packaged}
+    packaged = InstanceIP(
+        "xilinx_finn:finn:DataflowCore_0:1.0", (str(directory / "packaged" / "ip"),)
+    )
+    return {**movers, "DataflowCore_0": packaged}
 
 
 def recorded_tools(
@@ -312,7 +314,7 @@ def recorded_build(
     if packaged is not None:
         node, body, body_file = partition_body(parent)
         body.set(OUTPUT_IP, str(packaged))
-        body.set(OUTPUT_VLNV, "xilinx_finn:finn:partition:1.0")
+        body.set(OUTPUT_VLNV, "xilinx_finn:finn:DataflowCore_0:1.0")
         key = ip_key(body, node.name, run_synth=False, toolchain=cast(Toolchain, toolchain))
         body.set(OUTPUT_IP_KEY, key)
         body.set(OUTPUT_IP_OPTIONS, {"run_synth": False})
@@ -366,7 +368,7 @@ def test_a_build_generates_each_movers_ip_packages_the_partition_and_runs_vivado
     # The partition's body, saved, states its IP typed, with its key, and no flat key;
     # the build states that key and the body's design.
     _, body, _ = partition_body(parent)
-    assert body.get(OUTPUT_VLNV) == "xilinx_finn:finn:partition:1.0"
+    assert body.get(OUTPUT_VLNV) == "xilinx_finn:finn:DataflowCore_0:1.0"
     assert body.get(OUTPUT_IP_KEY) == PACKAGED_KEY == built.ip_key
     assert built.made_from == design_digest(body)
     assert list(body.model.metadata_props) == []
@@ -381,8 +383,8 @@ def test_a_build_generates_each_movers_ip_packages_the_partition_and_runs_vivado
     assert Path(built.timing).name == "top_wrapper_timing_summary_routed.rpt"
     assert Path(built.placed) == project / "synth_report.xml"
     assert sorted(built.out_of_context) == [
+        "top_DataflowCore_0_0",
         "top_idma0_0",
-        "top_partition_0",
         "top_smartconnect_0_0",
     ]
 
@@ -401,7 +403,7 @@ def test_a_partition_packaged_earlier_in_the_build_is_not_packaged_again(
     assert built.made_from == design_digest(body)
     ips = {
         **built_ips(tmp_path),
-        "partition": InstanceIP("xilinx_finn:finn:partition:1.0", (str(earlier),)),
+        "DataflowCore_0": InstanceIP("xilinx_finn:finn:DataflowCore_0:1.0", (str(earlier),)),
     }
     ((_, _, script),) = vivado.runs
     assert block_design(export, ips) in script
@@ -449,7 +451,7 @@ def test_an_ip_of_another_key_is_packaged_again(
     assert built.made_from == design_digest(body)
     ((_, _, script),) = vivado.runs
     assert block_design(export, built_ips(tmp_path)) in script
-    assert f"partition: its IP ({earlier}) has the key " in caplog.text
+    assert f"DataflowCore_0: its IP ({earlier}) has the key " in caplog.text
 
 
 def test_the_debug_option_reaches_the_block_design(

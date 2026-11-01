@@ -143,23 +143,23 @@ def write_testbench(
     frame: Mapping[str, NDArray[Any]],
     *,
     toolchain: Toolchain,
-    label: str = "the partition",
+    name: str,
 ) -> None:
-    """Write the XSim testbench of the partition ``body`` into ``directory`` (see the
-    module docstring). It streams ``frame`` (the inputs by tensor name) and expects the
-    body's outputs for it, executed in Python. Like PackagePartition, it writes only the
-    design step_verify_partition verified: a body that records none, or whose design changed
-    since, is refused (``refuse_unverified``) before anything is written. The module is the
-    one PackagePartition packages (``configured_network``), and the watchdog allows the
-    cycles the network states. Nothing is simulated here (``run_testbench`` does that);
-    ``toolchain`` synthesizes any HLS leaf first, unless the HLS cache holds it
-    (``finn.core.rtlsim_bench.materialize``)."""
-    refuse_unverified(body, label)
-    point, boundary = configured_network(body, label)
+    """Write the XSim testbench of the partition ``body``, its module named ``name`` (the
+    partition node's), into ``directory`` (see the module docstring). It streams ``frame`` (the
+    inputs by tensor name) and expects the body's outputs for it, executed in Python. Like
+    PackagePartition, it writes only the design step_verify_partition verified: a body that
+    records none, or whose design changed since, is refused (``refuse_unverified``) before
+    anything is written. The module is the one PackagePartition packages
+    (``configured_network``), and the watchdog allows the cycles the network states. Nothing is
+    simulated here (``run_testbench`` does that); ``toolchain`` synthesizes any HLS leaf first,
+    unless the HLS cache holds it (``finn.core.rtlsim_bench.materialize``)."""
+    refuse_unverified(body, name)
+    point, boundary = configured_network(body, name)
     # Keep this held timed path's refusal before reference execution or file setup.
     cycles = int(point.cycles)
     context = execute_onnx(body, dict(frame), return_full_exec_context=True)
-    inputs, outputs = boundary_words(body, point, boundary, context, label)
+    inputs, outputs = boundary_words(body, point, boundary, context, name)
     directory.mkdir(parents=True, exist_ok=True)
     bench = stream_bench(
         point.module,
