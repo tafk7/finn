@@ -33,6 +33,8 @@ from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
 from qonnx.transformation.infer_shapes import InferShapes
 from support.configure import configured, write_raw
+from support.example_platform import BASE, DESCRIPTION, OPERATIONS
+from support.example_platform import DIRECTORY as EXAMPLE
 from support.explore_models import kernel_model as open_model
 from support.helpers import Lanes
 from support.models import (
@@ -49,8 +51,6 @@ from support.packaging import (
     PackagedByStub,
     bitfile_default,
 )
-from support.example_platform import BASE, DESCRIPTION, OPERATIONS
-from support.example_platform import DIRECTORY as EXAMPLE
 from support.refusals import refused
 from support.tfc import EXPORT, SHAPE, ULTRA96, built, io_settings, partition, run_steps
 from support.tfc_built import SET_FOLDING, TFC_BUILT, TFC_MODULE, TFC_STORED
