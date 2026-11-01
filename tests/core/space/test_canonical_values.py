@@ -380,9 +380,12 @@ def test_a_value_equal_to_one_met_before_keeps_its_own_type() -> None:
 
 
 def same(value: object, other: object) -> bool:
-    """Of one type, item by item, and equal by ``==``."""
-    if isinstance(value, (tuple, frozenset)) and type(value) is type(other):
-        mine = sorted(value, key=repr) if isinstance(value, frozenset) else value
-        theirs = sorted(other, key=repr) if isinstance(other, frozenset) else other  # type: ignore[arg-type]
-        return len(mine) == len(theirs) and all(map(same, mine, theirs))
-    return type(value) is type(other) and value == other
+    """Of one type, item by item (a frozen set's members in ``repr`` order), and equal by
+    ``==``."""
+    if type(value) is not type(other):
+        return False
+    if isinstance(value, frozenset) and isinstance(other, frozenset):
+        return same(tuple(sorted(value, key=repr)), tuple(sorted(other, key=repr)))
+    if isinstance(value, tuple) and isinstance(other, tuple):
+        return len(value) == len(other) and all(map(same, value, other))
+    return value == other
