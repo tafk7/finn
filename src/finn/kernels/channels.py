@@ -43,7 +43,8 @@ A channel with a boundary side places its outer port there, a stream port of its
 outer input (``outer_in``, an ``InPort``) where its producer side is the boundary, its
 outer output (``outer_out``, an ``OutPort``) where its consumer side is; a channel between
 two ports places neither. The port is the module's AXIS port the side's label names: it
-presents a given sequence on that bus (``s_axis_0``), its advance stepped, with no pace.
+presents a given sequence on that bus (``s_axis_0``) and follows its other side, passing
+its beats through as a stage's side does, with no pace.
 Unstated (the side's ``outside`` None), the boundary presents what its other side presents,
 by one rule: an input without the replay or window its receiver realizes (``unreplayed``),
 an output as produced, neither with markers. Stated (``finn.kernels.sides.Outside``), it
@@ -629,8 +630,9 @@ class Channel(Kernel):
 
     # Its outer ports, each placed where its side is the boundary, presenting the boundary
     # side's stream (``outer_sequence``) on the module's AXIS port (``outer_transport``):
-    # stepped, as a stage's side, with no pace. The outside's beat times stay a fact of the
-    # side (``Outside.pace``), which its cycles and FIFO sizing read.
+    # following, passing beats through as a stage's side does, with no pace. The outside's
+    # beat times stay a fact of the side (``Outside.pace``), which its cycles and FIFO sizing
+    # read.
     outer_in = InPort(
         when=entering,
         tensor=tensor,

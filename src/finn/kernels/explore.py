@@ -675,8 +675,8 @@ class CoreComposition:
     def neighbours(self, name: str) -> Neighbours | Rejected | Unresolved:
         """The ports beside channel ``name``, as its class answers them
         (``finn.kernels.base.neighbours``: each kernel's port's stream pins, labelled below
-        its member's node, and its pace at its kernel's interval, a scheduled port's; a
-        frozen neighbour's, outside a slice, as its class's fact gives it at the neighbour's
+        its member's node, and its pace at its kernel's interval, where it owns its pacing;
+        a frozen neighbour's, outside a slice, as its class's fact gives it at the neighbour's
         stored choices). FIFO sizing reads their paces (``finn.kernels.fifo_sizing``), and
         the netlist its hops to them (``hops``). Refused where a rule refuses the core
         (``refused``): its class answers them only where every rule accepts it; and where

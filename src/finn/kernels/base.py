@@ -1101,7 +1101,7 @@ def _install(
 #
 # And it installs, for each channel, three private views of its own: the ports beside it
 # (``finn.kernels.channels.Neighbours``: each port's stream pins as its member presents them,
-# labelled below the member, and its pace in cycles where it is a scheduled port's; a side
+# labelled below the member, and its pace in cycles where it owns its pacing; a side
 # given as a value has none, but where its holder states that side's reading, ``-<channel>-
 # <role>``: a slice's frozen neighbour's port, given as a fact), which
 # ``neighbours`` names and FIFO sizing reads; the channel's own ends its hops meet (its
@@ -1320,7 +1320,7 @@ def _leaves(
     cls: type[Kernel], member: str, port: str
 ) -> tuple[str | None, str | None, dict[str, tuple[str, bool]]]:
     """Where member ``member``'s port ``port`` has its pins, relative to the member, and
-    whether it is a scheduled port there (it presents its kernel's schedule: it has a pace in
+    whether it owns its pacing there (it presents its kernel's schedule: it has a pace in
     cycles, ``timed_pace``). An exposed port's are on its leaf, the node its alias reaches,
     each holder where it places it (``Kernel.placed_at``) and a selector's case by its key
     (``compute.packed``), as ``finn.kernels.port.exposed_pins`` finds them of a design space.
@@ -1441,7 +1441,7 @@ def _beside_case(
     member: str, port: str, case: str, leaves: Mapping[str, tuple[str, bool]], present: str
 ) -> Callable[[Kernel], tuple[Any, Any]]:
     """``_beside`` of a port its member exposes through a selector: its leaf and whether it
-    is scheduled are its selected case's (``case``, the member answering it)."""
+    owns its pacing are its selected case's (``case``, the member answering it)."""
 
     def beside(self: Kernel) -> tuple[Any, Any]:
         if not getattr(self, present)():
