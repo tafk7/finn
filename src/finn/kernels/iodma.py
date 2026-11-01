@@ -91,8 +91,8 @@ IODMA_DIRECTIVES = (
 IODMA_CONTROL_ADDRESS = 6
 
 _IODMA_RATE = (
-    "IODMA_hls in XSim against a memory model: a beat or a memory word a cycle, and each "
-    "call's constant (4 cycles with a width converter, 13 without)"
+    "IODMA_hls simulated against a memory model: a beat or a memory word a cycle, and "
+    "each call's constant (4 cycles with a width converter, 13 without)"
 )
 
 

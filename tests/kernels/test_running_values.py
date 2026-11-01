@@ -172,6 +172,7 @@ VERDICTS: dict[str, Verdict] = {
         "datatype, a value type, and a beat sequence; its width an int or None; its offers "
         "value classes of a str and ints",
     ),
+    "MoverOffer": Verdict("always", "a value class of a str and ints"),
     "BaseDataType": Verdict("always", "a value type, the one instance of its name"),
     "IntegerTensorValue": Verdict("always", "a value type, equal by its digest"),
     "Tensor | KnownWeights": Verdict(
@@ -297,6 +298,7 @@ def made() -> dict[str, tuple[object, ...]]:
             Side.source(),
             Side.neighbour(Direction.OUT, Stream(eight.element, in_order(eight)), "a.y", 8),
         ),
+        "MoverOffer": (iodma_hls(64), iodma_hls(32), iodma_hls(64)),
         "Platform": (full_platform(DspBlock.DSP58),),
         "BaseDataType": (DataType["INT8"], DataType["UINT2"], DataType["INT8"]),
         "Tensor | KnownWeights": (

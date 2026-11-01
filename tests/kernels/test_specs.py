@@ -11,7 +11,8 @@
 - what it gathers is there: its conformance cases (one spec each), the sweeps' case
   lists it names, its unit tests; its reference is the oracle or test-side;
 - every kernel of ``finn.kernels`` that binds a library module is a spec's, so its
-  covering points build its module, checking that its sources provide it;
+  covering points build its module, checking that its sources provide it; but the memory
+  movers, whose memory port no conformance case drives (``MEMORY_MOVERS``);
 - every stream port of every member of every conformance case, at each of the case's
   covering points, states its contract's label (``x.label``) and the side it gives a
   channel (``x.side``: its stream, that label and, an output's, its word width), so the
@@ -52,6 +53,7 @@ from finn.kernels.artifacts.abi import Direction, Endpoint
 from finn.kernels.base import Kernel, PortPins
 from finn.kernels.configure import undecided
 from finn.kernels.explore import CoreComposition
+from finn.kernels.iodma import IodmaIn, IodmaOut
 from finn.kernels.laws import Pacing
 from finn.kernels.library import ModuleSpec
 from finn.kernels.memstream import MemStreamKernel
@@ -179,13 +181,21 @@ def _binding_a_module() -> set[type[Kernel]]:
     return found
 
 
+#: The memory movers bind an HLS module with a memory port, which no conformance case
+#: drives (its harness streams through AXIS alone): their sources are staged against the
+#: headers they read in ``tests/kernel_ops/test_movers.py``.
+MEMORY_MOVERS = {IodmaIn, IodmaOut}
+
+
 def test_every_kernel_binding_a_module_is_a_spec_s_so_its_module_is_built() -> None:
     kernels = _binding_a_module()
     assert {
         BY_NAME[name].kernel for name in ("FifoKernel", "InputGeneratorKernel", "VpcKernel")
     } <= kernels
     assert len(kernels) >= 11
-    assert kernels <= {spec.kernel for spec in SPECS}, kernels - {spec.kernel for spec in SPECS}
+    assert MEMORY_MOVERS <= kernels
+    specified = kernels - MEMORY_MOVERS
+    assert specified <= {spec.kernel for spec in SPECS}, specified - {spec.kernel for spec in SPECS}
 
 
 def test_the_base_assembles_every_library_module_s_netlist() -> None:
