@@ -258,6 +258,31 @@ def test_an_endpoint_before_its_unit_or_of_no_byte_is_refused(
         )
 
 
+@pytest.mark.parametrize(
+    ("unit", "message"),
+    [
+        ("DataflowCore_0", "its unit has no control window to place it in"),
+        ("in9", "no unit of that name"),
+    ],
+    ids=["windowless", "unknown"],
+)
+def test_an_endpoint_no_unit_s_window_holds_is_refused(
+    tmp_path: Path, unit: str, message: str
+) -> None:
+    """An endpoint is placed in its unit's control window: one of a unit with none (the
+    Chain's core, presenting no bus) or of no unit is refused when the description is made,
+    before a linker places what it can and leaves it out."""
+    described = describe(zynq_parent(tmp_path))
+    endpoint = Endpoint(unit=unit, bus="cfg", offset=0, range=4096)
+    with refused(
+        "endpoint-unplaced",
+        error=IntegrationError,
+        owner="describe",
+        message=f"^{unit}/cfg: {message}$",
+    ):
+        replace(described, endpoints=(*described.endpoints, endpoint))
+
+
 def test_a_core_named_as_a_movers_unit_is_refused(tmp_path: Path) -> None:
     """Each unit is named once: its shell refuses a core whose node is named ``in0``, as a
     mover's unit is, before it is described."""

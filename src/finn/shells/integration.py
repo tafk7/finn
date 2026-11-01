@@ -195,7 +195,10 @@ class ClockPin:
 @dataclass(frozen=True, kw_only=True)
 class Integration:
     """The integration description of a build's cores in their shell (see the module
-    docstring)."""
+    docstring). Each endpoint is in its unit's control window: one at a negative offset or
+    of no byte (``endpoint-invalid``), of no unit or of a unit with no window
+    (``endpoint-unplaced``), or reaching past its unit's window (``endpoint-outside-unit``)
+    is refused."""
 
     row: tuple[str, str | None]
     linker: str
@@ -219,7 +222,18 @@ class Integration:
                     f"{each.unit}/{each.bus}: {each.range} bytes at offset {each.offset}; an "
                     "endpoint takes a byte at least, at an offset of zero or more",
                 )
-            window = windows.get(each.unit)
+            if each.unit not in windows or windows[each.unit] is None:
+                raise IntegrationError(
+                    "endpoint-unplaced",
+                    "describe",
+                    f"{each.unit}/{each.bus}: "
+                    + (
+                        "no unit of that name"
+                        if each.unit not in windows
+                        else "its unit has no control window to place it in"
+                    ),
+                )
+            window = windows[each.unit]
             if window is not None and each.offset + each.range > window:
                 raise IntegrationError(
                     "endpoint-outside-unit",

@@ -146,24 +146,16 @@ def linked_row(integration: Integration) -> ShellRow:
 
 def wiring(integration: Integration, row: ShellRow) -> tuple[Wire, ...]:
     """The block design's wires of ``integration`` in ``row`` (see the module docstring),
-    each mover first checked to be one it wires (``wire_one_bus_each``), and each range it
-    assigns, a unit's window or an endpoint of a unit without one, to be the row's least
-    window at least (``range-below-least``), which its linker assigns at least (its
-    ``least_range``, by the row's declaration)."""
+    each mover first checked to be one it wires (``wire_one_bus_each``), and each unit's
+    window, the range it assigns, to be the row's least window at least
+    (``range-below-least``), which its linker assigns at least (its ``least_range``, by the
+    row's declaration). Every endpoint is in a unit's window (``Integration``)."""
     assert row.fixed is not None and row.control is not None
     for edge in integration.edges:
         wire_one_bus_each(edge.contract, f"{edge.tensor} ({edge.port})")
     least = row.control.least_window
-    windows = {unit.name: unit.window for unit in integration.units}
-    assigned = [
-        *((name, window) for name, window in windows.items() if window is not None),
-        *(
-            (f"{each.unit}/{each.bus}", each.range)
-            for each in integration.endpoints
-            if windows.get(each.unit) is None
-        ),
-    ]
-    for name, size in assigned:
+    for name, size in ((unit.name, unit.window) for unit in placed_units(integration)):
+        assert size is not None
         if size < least:
             raise LinkerRefused(
                 "range-below-least",
