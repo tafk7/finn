@@ -17,6 +17,7 @@ import zipfile
 from dataclasses import replace
 from email.parser import BytesParser
 from importlib.metadata import distribution, version
+from importlib.resources import files
 from pathlib import Path
 
 import pytest
@@ -97,9 +98,10 @@ def test_missing_profiles_leave_logical_queries_available() -> None:
 
 def test_installed_dependency_and_typing_marker() -> None:
     assert version("islpy") == "2026.2.2"
-    info = distribution("finn")
-    assert "islpy==2026.2.2" in (info.requires or [])
-    assert Path(str(info.locate_file("finn/dataflow/py.typed"))).is_file()
+    assert "islpy==2026.2.2" in (distribution("finn").requires or [])
+    # The marker beside the package as imported, where a type checker looks for it:
+    # an editable install's metadata directory holds none of the package's files.
+    assert files("finn.dataflow").joinpath("py.typed").is_file()
 
 
 def test_wheel_and_sdist_metadata_and_markers() -> None:
