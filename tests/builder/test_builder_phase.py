@@ -42,6 +42,7 @@ from support.models import (
     host_between_source,
     kernel_model,
 )
+from support.module_names import fixed_name, live_name
 from support.packaging import (
     PLACED_HIERARCHY,
     TIMING_REPORT,
@@ -115,7 +116,7 @@ from finn.core.space import Available
 from finn.custom_op.kernels.shell import configured_network, mover_contracts
 from finn.kernels.artifacts.contributions import HlsSource
 from finn.kernels.artifacts.hls import stage_hls
-from finn.kernels.artifacts.module import Leaf, module_name
+from finn.kernels.artifacts.module import Leaf
 from finn.kernels.channels import Channel, Neighbours
 from finn.kernels.explore import KernelExplorer, TargetThroughput
 from finn.kernels.fifo_sizing import Sized
@@ -146,7 +147,7 @@ from finn.transformation.kernels import (
 )
 from finn.transformation.kernels.cut import CutKernelPartition, MakeCutChoices
 from finn.transformation.kernels.hls import hls_requests
-from finn.transformation.kernels.package import boundary_facts, source_roots
+from finn.transformation.kernels.package import boundary_facts
 
 # TFC is built from the trained network once for the module (about ten seconds), and each
 # test that runs the phases' steps on it takes about ten seconds more.
@@ -1535,16 +1536,15 @@ def test_tfc_on_pynq_is_linked_as_z0s_movers_iodmas_and_wires(
         Address("in0/s_axi_control", 0xA000_0000, 4096),
         Address("out0/s_axi_control", 0xA000_1000, 4096),
     )
+    # The core's IP is the one packaging gives it: none before.
     (core,) = described.cores
-    core_ip = described.unit(core.name).ip
-    assert core_ip is not None
-    assert (described.period_ns, core_ip.vlnv) == (5.0, f"xilinx_finn:finn:{TFC_MODULE}:1.0")
+    assert (described.period_ns, described.unit(core.name).ip) == (5.0, None)
     # Z0's module, its memories in their explicit baseline styles, its thresholds a data
     # file (THRESHOLDS_FILE), and choices; its MatMuls after the first INT7, reading each
     # thresholding's range.
     node, body, _ = partition_body(parent)
     point, _ = configured_network(body, node.name)
-    assert module_name(point.module, source_roots()) == TFC_MODULE
+    assert fixed_name(point.module) == TFC_MODULE
     persisted = json.loads((output / "report" / "kernel_choices.json").read_text())
     assert persisted == kernel_choices_config(body)
     assert persisted == TFC_STORED
@@ -1690,9 +1690,8 @@ def test_the_runner_writes_z0s_block_design_for_tfc(z0_tfc: ModelWrapper) -> Non
         for unit, top in TFC_MOVERS.items()
     }
     described = describe(z0_tfc)
-    core_ip = described.unit("DataflowCore_0").ip
-    assert core_ip is not None
-    ips["DataflowCore_0"] = IpRef(core_ip.vlnv, (stitched,))
+    # The core's IP as packaged, under its module's name.
+    ips["DataflowCore_0"] = IpRef(f"xilinx_finn:finn:{TFC_MODULE}:1.0", (stitched,))
     design = block_design(described.packaged(ips), linked_row(described))
     assert design == BLOCK_DESIGN.replace("$BUILD", "/BUILD").replace("$HLS", "/HLS")
     differing = [
@@ -1804,7 +1803,7 @@ def tool_recorders(tmp_path: Path) -> dict[str, object]:
 
         def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
             model.set(OUTPUT_IP, str(tmp_path / "packaged" / "ip"))
-            top = module_name(configured_network(model, self.name)[0].module, source_roots())
+            top = live_name(configured_network(model, self.name)[0].module)
             model.set(OUTPUT_VLNV, f"xilinx_finn:finn:{top}:1.0")
             model.set(OUTPUT_INTERFACES, {"axilite": []})
             model.set(OUTPUT_IP_KEY, IP_KEY)
@@ -1887,11 +1886,16 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
         f"top_{name}_0_utilization_synth.rpt"
         for name in ("DataflowCore_0", "in0", "smartconnect_0")
     ]
-    assert body.get(OUTPUT_VLNV) == f"xilinx_finn:finn:{TFC_MODULE}:1.0"
+    packaged = (
+        f"xilinx_finn:finn:{live_name(configured_network(body, 'DataflowCore_0')[0].module)}:1.0"
+    )
+    assert body.get(OUTPUT_VLNV) == packaged
     assert body.get(OUTPUT_IP_KEY) == IP_KEY
     for model in (reread, body):
         assert list(model.model.metadata_props) == []
     integrated = json.loads((report / "integration.json").read_text())
+    (core_unit,) = (unit for unit in integrated["units"] if unit["name"] == "DataflowCore_0")
+    assert core_unit["ip"]["vlnv"] == packaged
     assert integrated["block_design"]["wires"][0] == {
         "kind": "axis",
         "source": "in0/out0_V",

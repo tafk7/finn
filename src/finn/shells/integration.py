@@ -32,7 +32,9 @@ Every port is its unit's own pin: a core's edge ports and buses its module's, a 
 stream, memory port and control bus its module's (``mover_pins``). Where each unit is
 placed and what its cell is called are the linker's (``Linker``):
 ``finn.shells.pynq.linker`` for the ``pynq`` shell. A mover's IP is its module, built by
-the shell's runner (its unit's ``ip`` is ``None`` until then).
+the shell's runner (its unit's ``ip`` is ``None`` until then). A core's is the one its
+packaging gave it (its body's ``finn.outputs`` ``vlnv`` and ``ip``): nothing predicts it,
+and before packaging there is none.
 
 Each mover binds the row's first memory target. Until the core unit has a control
 grouper, a core's unit has no window of its own (``Unit.window`` is ``None``) and each of
@@ -52,6 +54,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
+from finn.core.graph.annotations.outputs import OUTPUT_IP, OUTPUT_VLNV
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.facts import known_shape
 from finn.core.graph.partition import partition_body
@@ -60,12 +63,10 @@ from finn.core.space import Available
 from finn.custom_op.kernels.shell import configured_network, mover_contracts, refuse_unverified
 from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.artifacts.abi import Bus, StandardProtocol, bus_window
-from finn.kernels.artifacts.ipxact import vlnv
-from finn.kernels.artifacts.module import Leaf, module_name
+from finn.kernels.artifacts.module import Leaf
 from finn.kernels.library import library_module
 from finn.kernels.movers import MoverContract
 from finn.platform.shells import placed_offer
-from finn.transformation.kernels.package import source_roots
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
@@ -84,8 +85,7 @@ CLOCK, RESET = "ap_clk", "ap_rst_n"
 
 @dataclass(frozen=True)
 class IpRef:
-    """A unit's IP: its ``vlnv`` and the IP ``repositories`` a tool adds to find it, none
-    until it is packaged."""
+    """A unit's IP: its ``vlnv`` and the IP ``repositories`` a tool adds to find it."""
 
     vlnv: str
     repositories: tuple[str, ...]
@@ -94,7 +94,8 @@ class IpRef:
 @dataclass(frozen=True, kw_only=True)
 class Unit:
     """What the platform places: its ``name``, its ``kind`` (``core``, or a mover's kind),
-    its ``ip`` (``None`` until the shell's runner builds it) and the bytes of its control
+    its ``ip`` (``None`` until it is built: a core's by its packaging, a mover's by the
+    shell's runner) and the bytes of its control
     ``window`` (``None``: none of its own)."""
 
     name: str
@@ -399,7 +400,8 @@ def describe(model: ModelWrapper) -> Integration:
         for pin in point.module.abi.pins
         if isinstance(pin, Bus) and pin.protocol is StandardProtocol.AXILITE
     ]
-    ip = IpRef(vlnv(module_name(point.module, source_roots())), ())
+    packaged, packaged_ip = body.get(OUTPUT_VLNV), body.get(OUTPUT_IP)
+    ip = None if packaged is None or packaged_ip is None else IpRef(packaged, (packaged_ip,))
     units = (
         *(Unit(name=each.unit, kind=each.contract.kind, ip=None, window=least) for each in inputs),
         Unit(name=core.name, kind=CORE, ip=ip, window=None),

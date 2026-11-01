@@ -99,8 +99,8 @@ class PynqBuilt:
     template's ``impl_1`` hierarchical utilization report (``placed``), each IP's
     out-of-context synthesis utilization report by its run (``out_of_context``,
     ``top_<cell>_0`` for the cells), the digest of the partition's design
-    (``made_from``, ``design_digest``) and the key of the partition's IP
-    (``ip_key``)."""
+    (``made_from``, ``design_digest``), the key of the partition's IP (``ip_key``) and
+    the description it linked, each unit given the IP it was built as (``integration``)."""
 
     project: str
     bitfile: str
@@ -109,6 +109,7 @@ class PynqBuilt:
     placed: str
     made_from: str
     ip_key: str
+    integration: Integration
     out_of_context: dict[str, str] = field(default_factory=dict)
 
 
@@ -190,8 +191,9 @@ def build_pynq(
     assert packaged_key is not None  # the core is one of the units
     row = shell_row(*integration.row)
     scratch: Path = resources.scratch()  # type: ignore[no-untyped-call]
+    built = integration.packaged(ips)
     linked = linker.BlockDesignLinker(jobs=jobs, hw_debug=options.hw_debug).link(
-        integration.packaged(ips), row.board_facts, scratch, toolchain
+        built, row.board_facts, scratch, toolchain
     )
     reports = linked.reports
     return PynqBuilt(
@@ -202,6 +204,7 @@ def build_pynq(
         placed=str(reports["placed"]),
         made_from=design_digest(body),
         ip_key=packaged_key,
+        integration=built,
         out_of_context={
             name.removeprefix("out_of_context/"): str(path)
             for name, path in reports.items()
@@ -393,7 +396,6 @@ class BuildPynqBitfile(Transformation):
         hwh = self.directory / HWH
         for directory in (reports["integration"].parent, self.bitfile.parent):
             directory.mkdir(parents=True, exist_ok=True)
-        reports["integration"].write_text(json.dumps(integration_report(described), indent=2))
         toolchain = self.toolchain
         built = build_pynq(
             model,
@@ -401,6 +403,10 @@ class BuildPynqBitfile(Transformation):
             toolchain=toolchain,
             jobs=toolchain.selection.vivado_jobs,
             options=self.options,
+        )
+        # Each unit's IP is the one the build made: the core's, the one its packaging gave it.
+        reports["integration"].write_text(
+            json.dumps(integration_report(built.integration), indent=2)
         )
         shutil.copy(built.bitfile, self.bitfile)
         shutil.copy(built.hwh, hwh)

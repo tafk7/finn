@@ -27,6 +27,7 @@ from support.models import (
     kernel_model,
     streamed_w2_model,
 )
+from support.module_names import live_name
 from support.packaging import NO_VIVADO, verified
 from support.ports import outer
 from support.refusals import refused
@@ -48,7 +49,6 @@ from finn.core.space import Available
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import configured_network, mover_contracts
 from finn.dataflow.traversal import Loop, Reorder, Traversal, offsets
-from finn.kernels.artifacts.module import module_name
 from finn.kernels.explore import CoreComposition
 from finn.platform.resolve import resolve_target
 from finn.transformation.kernels import (
@@ -58,7 +58,7 @@ from finn.transformation.kernels import (
     kernel_choices_config,
 )
 from finn.transformation.kernels.cut import CutKernelPartition, MakeCutChoices
-from finn.transformation.kernels.package import boundary_facts, ip_key, source_roots
+from finn.transformation.kernels.package import boundary_facts, ip_key
 
 #: Ultra96 in the Zynq shell: its rows offer an IODMA_hls mover at a 128-bit port.
 ZYNQ = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
@@ -416,7 +416,7 @@ def test_packaging_states_its_ip_typed_and_writes_no_flat_key(tmp_path: Path) ->
         PackagePartition("DataflowCore_0", directory=project, toolchain=toolchain)
     )
     assert packaged.get(OUTPUT_IP) == str(project / "ip")
-    top = module_name(configured_network(body, "DataflowCore_0")[0].module, source_roots())
+    top = live_name(configured_network(body, "DataflowCore_0")[0].module)
     assert top.startswith("finn_dataflowcore_")
     assert packaged.get(OUTPUT_VLNV) == f"xilinx_finn:finn:{top}:1.0"
     interfaces = packaged.get(OUTPUT_INTERFACES)

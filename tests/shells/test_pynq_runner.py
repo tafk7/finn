@@ -528,8 +528,17 @@ def test_the_bitfile_build_is_a_transformation_of_the_parent_graph(
     assert (output / BITFILE).read_text() == "top_wrapper.bit"
     assert (output / HWH).read_text() == "top.hwh"
     assert len(list((report / "out_of_context").iterdir())) == 3
+    # The description as built: each unit's IP the one the build made, the core's the one
+    # its packaging gave it.
     integrated = json.loads((report / "integration.json").read_text())
-    assert integrated == integration_report(describe(parent))
+    ips = {unit["name"]: unit["ip"] for unit in integrated["units"]}
+    assert ips["DataflowCore_0"] == {
+        "vlnv": body.get(OUTPUT_VLNV),
+        "repositories": [body.get(OUTPUT_IP)],
+    }
+    assert None not in ips.values()
+    built_ips = {name: IpRef(ip["vlnv"], tuple(ip["repositories"])) for name, ip in ips.items()}
+    assert integrated == integration_report(describe(parent).packaged(built_ips))
     # Its layout stated, which the integration export's report did not.
     assert integrated["schema"] == REPORT_SCHEMA == 0
     clock = json.loads((output / DELIVERED_CLOCK).read_text())

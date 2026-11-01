@@ -18,6 +18,7 @@ enters at synthesis and in the synthesis key.
 
 from __future__ import annotations
 
+import posixpath
 import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -32,8 +33,12 @@ class ContributionError(ArtifactError):
 
 
 def _relative(path: str, label: str) -> None:
+    """Refuse a ``path`` that is not relative to ``label``, or not in its one spelling (no
+    ``.`` part, empty part or trailing ``/``), so that one file has one name."""
     if not path or path.startswith("/") or ".." in path.split("/"):
         raise ContributionError(f"{path!r} is not a name relative to {label}")
+    if posixpath.normpath(path) != path:
+        raise ContributionError(f"{path!r} is not a canonical name: {posixpath.normpath(path)!r}")
 
 
 @dataclass(frozen=True)

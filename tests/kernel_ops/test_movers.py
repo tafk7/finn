@@ -38,6 +38,7 @@ from support.models import (
     configure_partition,
     kernel_model,
 )
+from support.module_names import fixed_name
 from support.ports import outer
 from support.tfc import ULTRA96
 from support.tfc_built import TFC_MODULE
@@ -74,7 +75,7 @@ from finn.kernels.adapters import Convert
 from finn.kernels.artifacts.abi import Bus, Direction, Endpoint, StandardProtocol
 from finn.kernels.artifacts.contributions import HlsSource
 from finn.kernels.artifacts.hls import SCRIPT, stage_hls
-from finn.kernels.artifacts.module import RegisterMap, module_name
+from finn.kernels.artifacts.module import RegisterMap
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
@@ -116,7 +117,6 @@ from finn.transformation.kernels import (
     kernel_choices_config,
 )
 from finn.transformation.kernels.cut import CutKernelPartition, MakeCutChoices
-from finn.transformation.kernels.package import source_roots
 from finn.util.draws import boundary_inputs
 
 # -- a mover's arithmetic -----------------------------------------------------------------
@@ -876,11 +876,11 @@ def test_at_3e6_fps_a_64_bit_memory_port_binds_and_128_bits_do_not(
 
 def module_of(model: ModelWrapper, directory: Path) -> str:
     """The name of the module the explored ``model``'s partition is packaged as, cut once
-    as the kernel path cuts it."""
+    as the kernel path cuts it, over fixed source bytes (``fixed_name``): its value's."""
     parent = model.transform(CutKernelPartition(directory))
     node, body, _ = partition_body(parent)
     point, _ = configured_network(body, node.name)
-    return module_name(point.module, source_roots())
+    return fixed_name(point.module)
 
 
 @pytest.mark.slow

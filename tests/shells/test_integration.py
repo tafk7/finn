@@ -17,10 +17,8 @@ from support.models import choose_memories, kernel_model, zynq_parent
 from support.packaging import verified_parent
 from support.refusals import refused
 
+from finn.core.graph.annotations.outputs import OUTPUT_IP, OUTPUT_VLNV
 from finn.core.graph.partition import partition_body
-from finn.custom_op.kernels.shell import configured_network
-from finn.kernels.artifacts.ipxact import vlnv
-from finn.kernels.artifacts.module import module_name
 from finn.shells.integration import (
     CORE,
     MAIN,
@@ -38,7 +36,6 @@ from finn.shells.integration import (
     mover_pins,
 )
 from finn.transformation.kernels.cut import CutKernelPartition
-from finn.transformation.kernels.package import source_roots
 
 
 def test_the_chain_is_described_by_its_core_units_and_wiring(tmp_path: Path) -> None:
@@ -75,13 +72,11 @@ def test_the_chain_is_described_by_its_core_units_and_wiring(tmp_path: Path) -> 
     modules = [each.module.name for each in described.edges]
     assert all(name.startswith("finn_iodma_") for name in modules)
     assert len(set(modules)) == 3
-    # The core's IP named as its module, its repositories none until it is packaged.
-    _, body, _ = partition_body(parent)
-    module = module_name(configured_network(body, core.name)[0].module, source_roots())
+    # No unit has an IP before it is built: the core's none until it is packaged.
     assert described.units == (
         Unit(name="in0", kind="iodma_hls", ip=None, window=4096),
         Unit(name="in1", kind="iodma_hls", ip=None, window=4096),
-        Unit(name="DataflowCore_0", kind=CORE, ip=IpRef(vlnv(module), ()), window=None),
+        Unit(name="DataflowCore_0", kind=CORE, ip=None, window=None),
         Unit(name="out0", kind="iodma_hls", ip=None, window=4096),
     )
     assert described.connections == (
@@ -138,6 +133,19 @@ def test_the_description_names_nothing_of_a_platform(tmp_path: Path) -> None:
     for name in ('"idma', '"odma', "/idma", "/odma", "smartconnect", "axi_interconnect"):
         assert name not in text
     assert "_AXI" not in text and "s_axi_control_0" not in text and "0xa000" not in text
+
+
+def test_the_core_unit_is_the_ip_its_packaging_gave_it(tmp_path: Path) -> None:
+    """A core's IP is the one its body states packaged (``finn.outputs``): its VLNV and its
+    repository, read, not predicted."""
+    parent = zynq_parent(tmp_path)
+    _, body, body_file = partition_body(parent)
+    packaged = "xilinx_finn:finn:finn_dataflowcore_packaged:1.0"
+    body.set(OUTPUT_VLNV, packaged)
+    body.set(OUTPUT_IP, str(tmp_path / "ip"))
+    body.save(body_file)
+    core = describe(parent).unit("DataflowCore_0")
+    assert core.ip == IpRef(packaged, (str(tmp_path / "ip"),))
 
 
 def test_a_shell_without_a_linker_has_no_description(tmp_path: Path) -> None:
