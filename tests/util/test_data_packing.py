@@ -95,7 +95,7 @@ def test_fixed_pack_unpack_all_widths(bitwidth, reverse_inner, reverse_endian, s
     dtype = DataType[f"FIXED<{bitwidth},{bitwidth // 2}>"]
     scale = dtype.scale_factor()
     maximum = np.float32(dtype.max())
-    if bitwidth > 24:
+    if bitwidth > 25:
         # The mathematical maximum rounds out of range in a float32 container.
         maximum = np.nextafter(maximum, np.float32(-np.inf))
     values = np.array([dtype.min(), -scale, 0, scale, maximum, dtype.min() / 2], dtype=np.float32)
