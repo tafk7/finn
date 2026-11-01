@@ -396,7 +396,7 @@ def test_a_partition_packaged_earlier_in_the_build_is_not_packaged_again(
     """A body that states an IP of the key it has now (STITCHED_IP or OOC_SYNTH packaged
     it) is instantiated as it is: the partition is packaged once in a build."""
     vivado = FakeVivado()
-    earlier = tmp_path / "stitched_ip" / "ip"
+    earlier = tmp_path / "DataflowCore_0" / "ip" / "ip"
     parent, export, built, seen = recorded_build(monkeypatch, tmp_path, vivado, packaged=earlier)
     assert "PackagePartition" not in [name for name, _, _ in seen]
     _, body, _ = partition_body(parent)
@@ -440,7 +440,7 @@ def test_an_ip_of_another_key_is_packaged_again(
     none, is packaged again, and the build says so: the block design instantiates the new
     IP, and the body states it, with its key."""
     vivado = FakeVivado()
-    earlier = tmp_path / "stitched_ip" / "ip"
+    earlier = tmp_path / "DataflowCore_0" / "ip" / "ip"
     with caplog.at_level(logging.INFO, logger="finn.shells.pynq.runner"):
         parent, export, built, seen = recorded_build(
             monkeypatch, tmp_path, vivado, packaged=earlier, since=since

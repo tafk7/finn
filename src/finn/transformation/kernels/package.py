@@ -418,7 +418,7 @@ class PackagePartition(Transformation):
         point, boundary = configured_network(model, self.name)
         top = module_name(point.module)
         project = Path(
-            self.directory or make_build_dir(prefix="vivado_stitch_proj_")  # type: ignore[no-untyped-call]
+            self.directory or make_build_dir(prefix="package_")  # type: ignore[no-untyped-call]
         ).resolve()
         project.mkdir(parents=True, exist_ok=True)
         # An earlier packaging's synthesis report is not this IP's.

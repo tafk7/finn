@@ -278,7 +278,7 @@ def test_the_resources_report_reads_the_synthesis_of_the_ip_the_body_states(
     assert "ooc_synth" not in built_reports(parent, toolchain=stub)
     node, body, body_file = partition_body(parent)
     verified(body, node.name)
-    project = tmp_path / "stitched_ip"
+    project = tmp_path / "DataflowCore_0" / "ip"
     packaged = body.transform(PackagePartition(node.name, directory=project, toolchain=stub))
     packaged.save(body_file)
     assert "ooc_synth" not in built_reports(parent, toolchain=stub)
@@ -307,7 +307,7 @@ def test_the_testbench_is_an_output_the_build_does_not_run(tmp_path: Path) -> No
     )
     cfg.prepared_toolchain = cast(Toolchain, PackagedByStub())
     step_package_partition(parent, cfg)
-    testbench = output / "stitched_ip" / TESTBENCH_DIR
+    testbench = output / "DataflowCore_0" / TESTBENCH_DIR
     assert (testbench / "check.sv").read_text().startswith("`timescale 1ns/1ps\n")
     assert (testbench / RUN_SCRIPT).is_file()
     assert not (testbench / "xsim.log").exists()
@@ -549,8 +549,8 @@ def test_a_steps_tools_write_their_transcripts_into_its_log_directory(tmp_path: 
         "package.sh.stdout.log",
     ]
     assert (logs / "package.sh.stdout.log").read_text() == "INFO: [IP_Flow 19-234] packaging\n"
-    assert (output / "stitched_ip" / "package.sh").is_file()
-    assert not (output / "stitched_ip" / "package.sh.stdout.log").exists()
+    assert (output / "DataflowCore_0" / "ip" / "package.sh").is_file()
+    assert not (output / "DataflowCore_0" / "ip" / "package.sh.stdout.log").exists()
     # The build's own toolchain is unchanged: each step states its directory.
     assert cfg.prepared_toolchain.transcripts is None
 
@@ -625,20 +625,20 @@ def test_tfc_on_the_ip_shell_packages_and_its_testbench_passes_on_its_own(
     (packaged,) = [each for each in manifest["steps"] if each["name"] == "step_package_partition"]
     tools = {Path(run["transcript"]).name: run["status"] for run in packaged["tools"]}
     assert tools["package.sh.stdout.log"] == "completed"
-    ip = output / "stitched_ip"
-    ran_by_utility = run_testbench(ip / TESTBENCH_DIR, toolchain=host_toolchain())
+    core = output / "DataflowCore_0"
+    ran_by_utility = run_testbench(core / TESTBENCH_DIR, toolchain=host_toolchain())
     assert ran_by_utility.splitlines()[-1] == "PASS"
-    assert (ip / "ip" / "component.xml").is_file()
+    assert (core / "ip" / "ip" / "component.xml").is_file()
     # The partition the build packaged, opened through the parent graph the step saved.
     parent = ModelWrapper(str(output / "intermediate_models" / "step_package_partition.onnx"))
     _, body, _ = partition_body(parent)
     point, _ = configured_network(body, "DataflowCore_0")
-    described = json.loads((ip / "interface.json").read_text())
+    described = json.loads((core / "ip" / "interface.json").read_text())
     read_back(described, point.module.abi.pins, 5.0)
     # The IP is the partition's, named as its module and shown as its node; the body states it.
     assert described["ip"]["name"] == module_name(point.module)
     assert described["ip"]["display_name"] == "DataflowCore_0"
-    assert body.get(OUTPUT_IP) == str(ip / "ip")
+    assert body.get(OUTPUT_IP) == str(core / "ip" / "ip")
     # The exploration folds the input's thresholds at 4 lanes and the last layer at 1
     # (Z0's choices), not test_tfc's 16 lanes by hand.
     assert [(s["name"], s["tdata"], s["element"]) for s in described["streams"]] == [
@@ -647,7 +647,7 @@ def test_tfc_on_the_ip_shell_packages_and_its_testbench_passes_on_its_own(
     ]
     # The testbench runs from its own directory with Vivado's tools on PATH and
     # XILINX_VIVADO set, nothing else of the machine.
-    testbench = ip / TESTBENCH_DIR
+    testbench = core / TESTBENCH_DIR
     assert str(tmp_path) not in (testbench / "run.sh").read_text()
     environment = dict(host_toolchain().environment)
     vivado = environment["XILINX_VIVADO"]

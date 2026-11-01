@@ -618,12 +618,13 @@ and a statement there is refused before the first step:
 ```
 
 A build makes what its list's steps make: each output is a step, and listing it makes
-the output. `step_package_partition` packages the partition, on any shell, into
-`stitched_ip/`: the IP, its interface description `interface.json` (the part and
-period, each clock's `FREQ_HZ`, each AXI-Stream port with its element type, lanes,
-beats and frame shape, each AXI-Lite bus with its register map) and an XSim testbench
-(`testbench/run.sh`, one frame drawn from the partition's input datatypes, checked
-against the partition in Python; the build does not run it); its setting `ooc_synth`
+the output. `step_package_partition` packages the partition, on any shell, into its
+directory, `DataflowCore_0/` beside its body: into `ip/` the IP and its interface
+description `interface.json` (the part and period, each clock's `FREQ_HZ`, each
+AXI-Stream port with its element type, lanes, beats and frame shape, each AXI-Lite bus
+with its register map), and into `testbench/` an XSim testbench (`run.sh`, one frame
+drawn from the partition's input datatypes, checked against the partition in Python;
+the build does not run it); its setting `ooc_synth`
 (default false) synthesizes the IP out of context. `step_build_bitfile` builds the
 shell around the partition to a bitfile (packaging the partition itself unless
 `step_package_partition` packaged it), `step_make_driver` writes the PYNQ driver for
@@ -793,7 +794,7 @@ file (one input a row), and compares the partition's outputs value for value; it
 returns the graph comparison's result (`finn.analysis.comparison`: the runs, and a
 `values-differ` finding for each output that differs). The packaged IP's testbench runs
 with `finn.builder.build_dataflow_testbench.run_testbench` on its directory
-(`stitched_ip/testbench` in the output directory), which raises `SimulationFailed` on a
+(`DataflowCore_0/testbench` in the output directory), which raises `SimulationFailed` on a
 mismatch. The partition's RTL compiles and elaborates in XSim when its body
 (`DataflowCore_0/DataflowCore_0.onnx` in the output directory) is transformed by
 `finn.transformation.kernels.package.ElaboratePartition`.

@@ -178,7 +178,7 @@ def write_testbench(
 
 def run_testbench(directory: Path, *, toolchain: Toolchain) -> str:
     """Run the testbench ``write_testbench`` wrote into ``directory`` (a build's is
-    ``stitched_ip/testbench`` in its output directory): its ``run.sh``, in
+    ``DataflowCore_0/testbench`` in its output directory): its ``run.sh``, in
     ``toolchain``'s environment with the selected command directory first on ``PATH``.
     Its output goes to a transcript as it runs: in the toolchain's log directory if it
     has one (``Toolchain.transcript``), else beside ``run.sh`` (``run.sh.stdout.log``,
