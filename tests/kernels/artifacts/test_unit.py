@@ -19,6 +19,7 @@ from finn.kernels.artifacts.abi import (
     Member,
     StandardProtocol,
 )
+from finn.kernels.artifacts.ipxact import package_tcl
 from finn.kernels.artifacts.module import Abi, BuildError
 from finn.kernels.artifacts.top import top_bus
 from finn.kernels.artifacts.unit import (
@@ -293,6 +294,25 @@ def test_the_unit_is_named_as_its_content(tmp_path: Path) -> None:
     assert (emitted.directory / f"{name}.sv").read_text() == found.text(name)
     alone = emit_unit(unit(6), tmp_path / "alone", roots={})
     assert alone.sources == (f"{alone.entry_point}.sv",)
+
+
+def test_the_unit_is_packaged_at_its_window(tmp_path: Path) -> None:
+    """The unit's one register block is its window, the grouper's, whatever it is: at a
+    least window of 128 bytes, two 64-byte buses take 128, which its placement assigns."""
+    found = CoreUnit(CORE, SUBCORE, core_abi(axilite("a", 6), axilite("b", 6)), (0, 64), 128)
+    decoder = tmp_path / "finnlib" / DECODER_SOURCE.path
+    decoder.parent.mkdir(parents=True)
+    decoder.write_bytes(b"decoder")
+    emitted = emit_unit(found, tmp_path / "unit", roots={"finnlib": tmp_path / "finnlib"})
+    script = package_tcl(
+        emitted,
+        found.abi.pins,
+        part="xczu3eg-sbva484-1-e",
+        clock_ns=5.0,
+        display_name="unit",
+        run_synth=False,
+    )
+    assert "set_property range 128 $block" in script.splitlines()
 
 
 @pytest.mark.parametrize(

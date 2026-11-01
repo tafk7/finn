@@ -73,7 +73,8 @@ def test_the_interfaces_are_declared_from_the_abi_and_none_inferred() -> None:
     assert control.parameters["PROTOCOL"] == "AXI4LITE"
     assert control.memory_map is not None
     [block] = control.memory_map.blocks
-    assert (block.name, block.range, block.usage) == ("Reg0", 4096, "register")
+    # Its address space (5 bits): the range a linker assigns it is the linker's.
+    assert (block.name, block.range, block.usage) == ("Reg0", 32, "register")
     assert control.memory_map_ref == "s_axilite"
     # Order is the fact: the last statement makes every parameter above it the user's.
     assert tcl[-1].startswith("set_property value_resolve_type user")

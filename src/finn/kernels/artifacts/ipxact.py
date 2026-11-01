@@ -78,9 +78,10 @@ def address_width(bus: Bus) -> int:
 
 
 def register_window(bus: Bus) -> int:
-    """The range of an AXI-Lite bus's one register block, ``Reg0``: its address space,
-    at least 4 KiB (the smallest window Vivado's address editor assigns)."""
-    return max(1 << address_width(bus), 4096)
+    """The range of an AXI-Lite bus's one register block, ``Reg0``: its address space, a
+    core unit's its window. The range a platform assigns it is its linker's, at least the
+    least it assigns (``least_range``), which its placement reads."""
+    return 1 << address_width(bus)
 
 
 def interface_tcl(pins: Sequence[Pin], clock_ns: float) -> list[str]:
