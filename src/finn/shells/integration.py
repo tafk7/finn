@@ -28,20 +28,24 @@ shell's row. It states (``Integration``):
   and its range;
 - the clocks (``ClockPin``): each unit's clock and reset pins, on a clock the row names.
 
-Every port is its unit's own pin: a core's edge ports and buses its module's, a mover's
-stream, memory port and control bus its module's (``mover_pins``). Where each unit is
-placed and what its cell is called are the linker's (``Linker``):
-``finn.shells.pynq.linker`` for the ``pynq`` shell. A mover's IP is its module, built by
-the shell's runner (its unit's ``ip`` is ``None`` until then). A core's is the one its
-packaging gave it (its body's ``finn.outputs`` ``vlnv`` and ``ip``): nothing predicts it,
-and before packaging there is none.
+Every port is its unit's own pin: a core's edge ports its module's, a mover's stream,
+memory port and control bus its module's (``mover_pins``); a unit with a window is reached
+by one control port, ``s_axi_control`` (``finn.kernels.artifacts.unit.CONTROL``), a mover's
+its control bus. Where each unit is placed and what its cell is called are the linker's
+(``Linker``): ``finn.shells.pynq.linker`` for the ``pynq`` shell. A mover's IP is its
+module, built by the shell's runner (its unit's ``ip`` is ``None`` until then). A core
+presenting no control bus is its unit, its IP the one its packaging gave it (its body's
+``finn.outputs`` ``vlnv`` and ``ip``): nothing predicts it, and before packaging there is
+none. A core presenting buses is placed as its core unit (``finn.kernels.artifacts.unit``):
+the core and its grouper (``core_grouping``), its window the grouper's, its IP built by the
+runner from the core's (``None`` until then); each of its buses an endpoint at its offset in
+the grouper's map, of its own range, ``2**awaddr`` bytes. A bus the grouper cannot take, a
+32-bit AXI-Lite target's members, is refused (``grouper-bus-unsupported``), naming it.
 
-Each mover binds the row's first memory target. Until the core unit has a control
-grouper, a core's unit has no window of its own (``Unit.window`` is ``None``) and each of
-its kernels' control buses is an endpoint at offset 0 with its own range: ``2**awaddr``
-bytes, and the row's least window at least; a mover's control bus is one, of its own
-range, its unit's window that range. Every endpoint takes a byte at least, at an offset of
-zero or more (``endpoint-invalid``), and lies in its unit's window, where its unit has one
+Each mover binds the row's first memory target. A mover's control bus is its one endpoint,
+at offset 0, of its own range and the row's least window at least, its unit's window that
+range. Every endpoint takes a byte at least, at an offset of zero or more
+(``endpoint-invalid``), and lies in its unit's window, where its unit has one
 (``endpoint-outside-unit``).
 
 It is a function of a configured point: the description is a build's, needed once a build
@@ -62,10 +66,16 @@ from finn.core.graph.facts import known_shape
 from finn.core.graph.partition import partition_body
 from finn.core.reporting.findings import Finding, FindingKind, Refusal
 from finn.core.space import Available
-from finn.custom_op.kernels.shell import configured_network, mover_contracts, refuse_unverified
+from finn.custom_op.kernels.shell import (
+    configured_network,
+    core_grouping,
+    mover_contracts,
+    refuse_unverified,
+)
 from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.artifacts.abi import Bus, StandardProtocol, bus_window
 from finn.kernels.artifacts.module import Leaf
+from finn.kernels.artifacts.unit import CONTROL, unsupported
 from finn.kernels.library import library_module
 from finn.kernels.movers import MoverContract
 from finn.platform.shells import placed_offer
@@ -346,8 +356,9 @@ MOVER_ROLES = {
 
 def mover_pins(unit: str, module: Leaf) -> dict[str, Bus]:
     """The pins of the mover ``unit``'s ``module`` by role (``MOVER_ROLES``): one stream,
-    one memory port and one control bus, each a bus of its module's. A module of other
-    pins is refused (``mover-pins-unsupported``), naming the unit."""
+    one memory port and one control bus, each a bus of its module's, the control bus its
+    unit's port (``CONTROL``). A module of other pins is refused
+    (``mover-pins-unsupported``), naming the unit."""
     found: dict[str, list[Bus]] = {role: [] for role in MOVER_ROLES.values()}
     for pin in module.abi.pins:
         if isinstance(pin, Bus) and isinstance(pin.protocol, StandardProtocol):
@@ -359,6 +370,13 @@ def mover_pins(unit: str, module: Leaf) -> dict[str, Bus]:
             "describe",
             f"{unit}: its module {module.name} presents {counts} buses; the description "
             "connects one stream, one memory port and one control bus a mover",
+        )
+    if found["control"][0].name != CONTROL:
+        raise IntegrationError(
+            "mover-pins-unsupported",
+            "describe",
+            f"{unit}: its module {module.name}'s control bus is {found['control'][0].name}, "
+            f"not its unit's port, {CONTROL}",
         )
     return {role: buses[0] for role, buses in found.items()}
 
@@ -421,6 +439,15 @@ def describe(model: ModelWrapper) -> Integration:
         for pin in point.module.abi.pins
         if isinstance(pin, Bus) and pin.protocol is StandardProtocol.AXILITE
     ]
+    grouping = core_grouping(point.network)
+    for bus in buses if grouping is not None else ():
+        reason = unsupported(bus)
+        if reason is not None:
+            raise IntegrationError(
+                "grouper-bus-unsupported",
+                "describe",
+                f"{core.name}: {reason}; its unit's grouper takes 32-bit AXI-Lite targets",
+            )
     packaged, packaged_ip = body.get(OUTPUT_VLNV), body.get(OUTPUT_IP)
     ip = None if packaged is None or packaged_ip is None else IpRef(packaged, (packaged_ip,))
     pins = {each.unit: mover_pins(each.unit, each.module) for each in (*inputs, *outputs)}
@@ -429,11 +456,12 @@ def describe(model: ModelWrapper) -> Integration:
         window = _range(pins[edge.unit]["control"], least)
         return Unit(name=edge.unit, kind=edge.contract.kind, ip=None, window=window)
 
-    units = (
-        *map(mover, inputs),
-        Unit(name=core.name, kind=CORE, ip=ip, window=None),
-        *map(mover, outputs),
+    placed_core = (
+        Unit(name=core.name, kind=CORE, ip=ip, window=None)
+        if grouping is None
+        else Unit(name=core.name, kind=CORE, ip=None, window=grouping[1])
     )
+    units = (*map(mover, inputs), placed_core, *map(mover, outputs))
     connections = (
         *(
             Connection(
@@ -454,11 +482,16 @@ def describe(model: ModelWrapper) -> Integration:
     )
     endpoints: list[Endpoint] = []
     for placed in units:
-        controls = buses if placed.kind == CORE else [pins[placed.name]["control"]]
-        endpoints += [
-            Endpoint(unit=placed.name, bus=bus.name, offset=0, range=_range(bus, least))
-            for bus in controls
-        ]
+        if placed.kind != CORE:
+            control = pins[placed.name]["control"]
+            endpoints.append(
+                Endpoint(unit=placed.name, bus=control.name, offset=0, range=_range(control, least))
+            )
+        elif grouping is not None:
+            endpoints += [
+                Endpoint(unit=placed.name, bus=bus.name, offset=offset, range=_range(bus, 1))
+                for bus, offset in zip(buses, grouping[0], strict=True)
+            ]
     target = read_target(body)
     return Integration(
         row=(row.shell, row.board),

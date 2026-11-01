@@ -572,16 +572,20 @@ def test_the_bitfile_build_refuses_a_shell_without_it(tmp_path: Path) -> None:
 def test_a_description_the_block_design_cannot_wire_is_refused_before_any_tool_runs(
     tmp_path: Path,
 ) -> None:
-    """More AXI-Lite buses than the block design's control interconnect takes: refused by
-    the linker before any mover's HLS, the partition's packaging or Vivado runs."""
+    """More units with a control window than the block design's control interconnect takes
+    buses: refused by the linker before any mover's HLS, the partition's packaging or Vivado
+    runs."""
     parent = zynq_parent(tmp_path)
     described = describe(parent)
-    endpoint = described.endpoints[0]
+    unit, endpoint = described.units[0], described.endpoints[0]
+    names = [f"{unit.name}_{index}" for index in range(CONTROL_SLAVES + 1)]
     many = replace(
         described,
-        endpoints=tuple(
-            replace(endpoint, bus=f"s_axi_{index}") for index in range(CONTROL_SLAVES + 1)
+        units=(
+            *(replace(unit, name=name) for name in names),
+            *(each for each in described.units if each.window is None),
         ),
+        endpoints=tuple(replace(endpoint, unit=name) for name in names),
     )
     vivado = FakeVivado()
     with refused("control-slaves-exceeded", error=LinkerRefused):

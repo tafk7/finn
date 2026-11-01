@@ -28,21 +28,15 @@ buses built directly, a boundary initiator beside the streams standing for a mem
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Any
 
 import pytest
-from qonnx.core.datatype import DataType
 from support.configure import composition, configured, core_in_shell
 from support.helpers import (
     built,
-    by_hand,
-    choose,
     root_facts,
-    with_adapter_memories,
-    with_channel_defaults,
-    with_direct_transports,
 )
 from support.models import MATMUL, chain_model, configure_partition, kernel_model
+from support.presenting import thresholdings
 from support.refusals import refused
 from support.tfc import ULTRA96
 from support.top_pins import netlist_counts_of_abi
@@ -57,11 +51,8 @@ from finn.custom_op.kernels.shell import (
     ShellResources,
     configured_network,
     mover_contracts,
-    row_facts,
-    row_offer,
     shell_resources,
 )
-from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import (
     Bus,
     Clock,
@@ -79,15 +70,12 @@ from finn.kernels.artifacts.ipxact import address_width
 from finn.kernels.artifacts.module import Abi, BusExport, Fragment, Leaf
 from finn.kernels.artifacts.top import module_abi
 from finn.kernels.base import Kernel
-from finn.kernels.composer import Facts, Port, channel, member_name
+from finn.kernels.composer import member_name
 from finn.kernels.explore import CoreComposition, Seam, SizeFifos
 from finn.kernels.grouper import DECODER
 from finn.kernels.movers import MoverContract
 from finn.kernels.shell import grouper_name
 from finn.kernels.shell_rules import SHELL, counts, netlist_counts
-from finn.kernels.sides import Side
-from finn.kernels.thresholding import ThresholdingKernel
-from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.resolve import resolve_target
 from finn.platform.shells import ShellRow, shell_row
 from finn.transformation.kernels import explore_kernel_choices
@@ -111,58 +99,6 @@ def narrowed(
     if units is not None:
         row = replace(row, units=units)
     return row
-
-
-UINT2 = DataType["UINT2"]
-TENSOR = Tensor((3, 2), ScalarEncoding(UINT2))
-"""Each channel's tensor: three rows of two UINT2 channels."""
-TABLE = IntegerTensorValue.of((((0, 1, 2), (0, 1, 2)),))
-"""Each thresholding's table: two channels of three thresholds over UINT2, to UINT2."""
-
-
-def thresholdings(count: int, row: ShellRow, presenting: int | None = None) -> CoreComposition:
-    """A partition declared by hand in the shell of ``row``, of ``count`` AXI-Lite
-    thresholdings in a row, the first ``presenting`` (every one by default) presenting
-    its bus (``t<i>_s_axilite``) and the others not, configured: at its baseline otherwise,
-    every transport direct."""
-    platform = ULTRA96.platform
-    # Each channel is on the ports of the thresholdings on either side of it; the first's
-    # and the last's other side the boundary, offered the row's movers and stated by them.
-    names = ["x", *(f"c{index}" for index in range(count - 1)), "y"]
-    offer = row_offer(row)
-    stated = offer.states() if offer is not None else None
-    channels: dict[str, Any] = {}
-    for index, name in enumerate(names):
-        producer = (
-            Port(f"t{index - 1}", "output") if index > 0 else Side.boundary("s_axis_0", stated)
-        )
-        consumer = (
-            Port(f"t{index}", "input") if index < count else Side.boundary("m_axis_0", stated)
-        )
-        channels[name] = channel(producer, consumer, tensor=TENSOR, platform=platform)
-    members: dict[str, Any] = {name: channels[name] for name in names[:-1]}
-    for index in range(count):
-        members[f"t{index}"] = Facts(
-            ThresholdingKernel,
-            {
-                "threshold_dtype": UINT2,
-                "thresholds": TABLE,
-                "bias": 0,
-                "input_tensor": TENSOR,
-                "control": f"t{index}_s_axilite",
-                "platform": platform,
-            },
-        )
-    members["y"] = channels["y"]
-    presented = count if presenting is None else presenting
-    choices: dict[str, object] = {}
-    for index in range(count):
-        held = {"pe": 1, "deep_pipeline": False, "ram_style": "auto", "ultra_stages": 0}
-        held["use_axilite"] = index < presented
-        choices |= {f"t{index}.{key}": value for key, value in held.items()}
-    point = by_hand(members, shell=row_facts(row), offer=offer)
-    point = with_direct_transports(choose(point, choices))
-    return with_channel_defaults(with_adapter_memories(point))
 
 
 def movers_of(point: CoreComposition) -> tuple[MoverContract, ...]:

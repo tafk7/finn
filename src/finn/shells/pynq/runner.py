@@ -17,7 +17,9 @@ The runner (``build_pynq``):
     has now with the options it was packaged with (``ip_key``: the packaging step
     packaged it earlier in the build, and the partition is packaged once); an IP of
     another key (a choice, a fact or a weight changed since, or FinnLib, FINN's emitter or
-    Vivado) is packaged again, into a new directory, and the build says so;
+    Vivado) is packaged again, into a new directory, and the build says so; where the core
+    presents control buses (its unit has a window), its unit's IP, the core's held as a
+    subcore (``PackageUnit``), not stated on the body, is the cell's;
 - links the description, every unit's IP given (``linker.BlockDesignLinker``), in FINN's
   build directory (``finn.resources.scratch``), and collects what it made (``PynqBuilt``):
   the bitfile, its hardware handoff, the routed timing report, the template's ``impl_1``
@@ -78,7 +80,7 @@ from finn.toolchain.launcher import Toolchain, ToolFailed, host_toolchain, trans
 from finn.toolchain.vivado import PL_CLOCKS, delivered_clock
 from finn.transformation.kernels.choose import shell_bottleneck
 from finn.transformation.kernels.hls import hls_products
-from finn.transformation.kernels.package import PackagePartition, ip_key
+from finn.transformation.kernels.package import PackagePartition, PackageUnit, ip_key
 
 _LOG = logging.getLogger(__name__)
 
@@ -186,6 +188,11 @@ def build_pynq(
             if vlnv is None or ip is None or packaged_key is None:
                 raise RuntimeError(f"{node.name}: its body states no packaged IP")
             ips[unit.name] = IpRef(vlnv, (ip,))
+            if unit.window is not None:
+                grouped = PackageUnit(node.name, toolchain=toolchain)
+                body.transform(grouped)
+                assert grouped.vlnv is not None  # it packaged the unit
+                ips[unit.name] = IpRef(grouped.vlnv, grouped.repositories)
         else:
             ips[unit.name] = mover_ip(edges[unit.name], integration.part, toolchain=toolchain)
     assert packaged_key is not None  # the core is one of the units

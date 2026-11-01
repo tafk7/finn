@@ -10,14 +10,17 @@ It takes every name the platform gives and places every control bus:
   ``out<j>``), its pins the description's, which are its IP's own; the fixed shell's are
   the template's (``STATIC_INSTANCES``);
 - the wires (``wiring``): each stream from its source pin to its sink pin; each memory port
-  to the memory interconnect's next slave port (``S<nn>_AXI``); each control bus, in the
-  description's order (the input movers, the core, the output movers), from the control
-  interconnect's next master port (``M<nn>_AXI``); every cell's clock and reset from the
-  memory interconnect's;
-- the placement (``placement``): each control bus from the fixed shell's ``control_base``,
-  in that order, aligned to its range (``finn.kernels.shell_rules.placed_windows``, by which
-  the shell's control window rule admitted them); the block design assigns each its address
-  from it, so the placement it returns is the one Vivado was given;
+  to the memory interconnect's next slave port (``S<nn>_AXI``); each unit's control port
+  (``s_axi_control``), in the description's order (the input movers, the core, the output
+  movers), from the control interconnect's next master port (``M<nn>_AXI``): one a unit
+  with a window, a core unit's buses behind its grouper; every cell's clock and reset from
+  the memory interconnect's;
+- the placement (``placement``): each unit's window from the fixed shell's
+  ``control_base``, in that order, aligned to itself
+  (``finn.kernels.shell_rules.placed_windows``, by which the shell's control window rule
+  admitted them); the block design assigns each unit's port its address from it, and each
+  endpoint is its unit's base and its offset (``Linked.placement``), so the placement it
+  returns is the one Vivado was given;
 - the board (``project_script``): its board part, the board's declared fact
   (``board_part``), and its processor's family, the fixed shell's processor's
   (``PROCESSORS``).
@@ -25,8 +28,9 @@ It takes every name the platform gives and places every control bus:
 It wires one AXI-Lite bus and one memory port a mover: a mover whose contract states other
 counts is refused, by name (``wire_one_bus_each``), as is a control window below the row's
 least window (``range-below-least``). Its template's control interconnect
-takes ``CONTROL_SLAVES`` AXI-Lite buses: a description with more is refused before any tool
-runs (``control-slaves-exceeded``), where the shell's rules no longer bound them. Its
+takes ``CONTROL_SLAVES`` AXI-Lite buses: a description placing more units with a window is
+refused before any tool runs (``control-slaves-exceeded``), where the shell's rules no
+longer bound them. Its
 template wires the memory
 interconnect into the processor's ``HP0`` port and runs every cell on the row's main clock:
 a memory port bound to another target, a unit on another clock and a description with no
@@ -52,10 +56,11 @@ from typing import Any
 
 from finn import resources
 from finn.core.reporting.findings import Finding, FindingKind, Refusal
+from finn.kernels.artifacts.unit import CONTROL
 from finn.kernels.movers import MoverContract
 from finn.kernels.shell_rules import placed_windows
 from finn.platform.shells import VIVADO_BLOCK_DESIGN, ShellRow, shell_row
-from finn.shells.integration import MAIN, Integration, IntegrationError, Linked
+from finn.shells.integration import MAIN, Integration, IntegrationError, Linked, Unit
 from finn.shells.pynq import templates
 from finn.toolchain.launcher import StrPath, Toolchain, ToolFailed
 from finn.toolchain.vivado import tcl_quote, vivado_jobs
@@ -177,10 +182,11 @@ def wiring(integration: Integration, row: ShellRow) -> tuple[Wire, ...]:
                 f"{binding.port}: bound to {binding.target!r}; the block design wires "
                 f"memory into {MEMORY_TARGET!r} alone",
             )
-    if len(integration.endpoints) > CONTROL_SLAVES:
+    controlled = placed_units(integration)
+    if len(controlled) > CONTROL_SLAVES:
         raise LinkerRefused(
             "control-slaves-exceeded",
-            f"the description places {len(integration.endpoints)} AXI-Lite buses; the "
+            f"the description places {len(controlled)} units with a control window; the "
             f"block design's control interconnect takes {CONTROL_SLAVES}",
         )
     for clock in integration.clocks:
@@ -198,8 +204,8 @@ def wiring(integration: Integration, row: ShellRow) -> tuple[Wire, ...]:
         for index, each in enumerate(integration.bindings)
     ]
     wires += [
-        Wire("axilite", f"{control}/M{index:02d}_AXI", f"{each.unit}/{each.bus}")
-        for index, each in enumerate(integration.endpoints)
+        Wire("axilite", f"{control}/M{index:02d}_AXI", f"{unit.name}/{CONTROL}")
+        for index, unit in enumerate(controlled)
     ]
     for clock in integration.clocks:
         wires.append(Wire("clock", f"{memory}/aclk", f"{clock.unit}/{clock.pin}"))
@@ -207,17 +213,35 @@ def wiring(integration: Integration, row: ShellRow) -> tuple[Wire, ...]:
     return tuple(wires)
 
 
+def placed_units(integration: Integration) -> tuple[Unit, ...]:
+    """The units of ``integration`` with a control window, in its order: one control port
+    each."""
+    return tuple(unit for unit in integration.units if unit.window is not None)
+
+
 def placement(integration: Integration, row: ShellRow) -> tuple[Address, ...]:
-    """Each control bus of ``integration``, in its order, from the fixed shell's
-    ``control_base``, aligned to its range (``placed_windows``), at its offset in its
-    unit."""
+    """Each control port of ``integration``'s units with a window (``placed_units``), in
+    its order, from the fixed shell's ``control_base``, aligned to its window
+    (``placed_windows``)."""
     assert row.fixed is not None
-    endpoints = integration.endpoints
-    offsets = placed_windows([each.range for each in endpoints], row.fixed.control_base)
+    units = placed_units(integration)
+    windows = [unit.window for unit in units if unit.window is not None]
+    bases = placed_windows(windows, row.fixed.control_base)
     return tuple(
-        Address(f"{each.unit}/{each.bus}", offset + each.offset, each.range)
-        for each, offset in zip(endpoints, offsets, strict=True)
+        Address(f"{unit.name}/{CONTROL}", base, window)
+        for unit, base, window in zip(units, bases, windows, strict=True)
     )
+
+
+def endpoint_addresses(integration: Integration, row: ShellRow) -> dict[str, int]:
+    """Each endpoint of ``integration``, ``<unit>/<bus>``, at its address: its unit's base
+    (``placement``) and its offset in the unit."""
+    bases = {
+        address.interface.split("/")[0]: address.offset for address in placement(integration, row)
+    }
+    return {
+        f"{each.unit}/{each.bus}": bases[each.unit] + each.offset for each in integration.endpoints
+    }
 
 
 def report(integration: Integration) -> dict[str, Any]:
@@ -272,8 +296,8 @@ def debug_lines(wires: tuple[Wire, ...], row: ShellRow) -> list[str]:
 def block_design(integration: Integration, row: ShellRow, hw_debug: bool = False) -> str:
     """The block design's cells and wires, as the template's custom section takes them: for
     each unit in the description's order, its IP repositories and cell, then each wire of
-    one of its pins, its own pin first: its memory port to the memory interconnect, each
-    control bus from the control interconnect with its address (``placement``'s, its
+    one of its pins, its own pin first: its memory port to the memory interconnect, its
+    control port from the control interconnect with its address (``placement``'s, its
     offset and range), its clock and reset, and each stream it takes. Each unit's IP is
     packaged first (``unit-unpackaged`` otherwise); with ``hw_debug``, ``debug_lines``
     follow."""
@@ -328,10 +352,11 @@ def project_script(
 ) -> str:
     """The project's Tcl (``ip_config.tcl``): ``templates.custom_zynq_shell_template``
     filled with the description's clock (the period asked, in whole MHz as the template
-    takes it), its control buses and memory ports, board and part, the board's part
-    (``board``'s ``board_part``) and the processor's family (``PROCESSORS``, by the fixed
-    shell's processor), the block design ``design``, and the runs Vivado launches at once
-    (``jobs``, by default the machine's cores, capped: ``finn.toolchain.vivado.vivado_jobs``).
+    takes it), its control ports (one a unit with a window) and memory ports, board and
+    part, the board's part (``board``'s ``board_part``) and the processor's family
+    (``PROCESSORS``, by the fixed shell's processor), the block design ``design``, and the
+    runs Vivado launches at once (``jobs``, by default the machine's cores, capped:
+    ``finn.toolchain.vivado.vivado_jobs``).
     A board with no board part (``board-part-unstated``) or a processor the template does
     not instantiate (``processor-unsupported``) is refused. The template's debug block
     stays off: its nets are the HWCustomOp flow's (``debug_lines``)."""
@@ -356,7 +381,7 @@ def project_script(
     )
     return template % (
         int(1 / (integration.period_ns * 0.001)),
-        len(integration.endpoints),
+        len(placed_units(integration)),
         len(integration.bindings),
         integration.row[1],
         integration.part,
@@ -405,15 +430,7 @@ def collect(
             for path in sorted(runs.glob("*_synth_1/*_utilization_synth.rpt"))
         }
     )
-    places = placement(integration, row)
-    return Linked(
-        image=bitfile,
-        placement={
-            f"{each.unit}/{each.bus}": address.offset
-            for each, address in zip(integration.endpoints, places)
-        },
-        reports=reports,
-    )
+    return Linked(image=bitfile, placement=endpoint_addresses(integration, row), reports=reports)
 
 
 class BlockDesignLinker:
@@ -466,7 +483,9 @@ __all__ = [
     "block_design",
     "collect",
     "debug_lines",
+    "endpoint_addresses",
     "linked_row",
+    "placed_units",
     "placement",
     "project_script",
     "report",

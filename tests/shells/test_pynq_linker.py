@@ -20,7 +20,7 @@ from support.refusals import refused
 
 from finn.kernels.shell_rules import placed_windows
 from finn.platform.shells import shell_row
-from finn.shells.integration import Integration, IntegrationError, IpRef, describe
+from finn.shells.integration import Endpoint, Integration, IntegrationError, IpRef, describe
 from finn.shells.pynq.linker import (
     CONTROL_SLAVES,
     Address,
@@ -28,6 +28,7 @@ from finn.shells.pynq.linker import (
     LinkerRefused,
     Wire,
     block_design,
+    endpoint_addresses,
     linked_row,
     placement,
     project_script,
@@ -96,6 +97,60 @@ def test_each_control_bus_is_placed_from_the_processors_window(
         "offset": "0xa0002000",
         "range": 4096,
     }
+
+
+def grouped(described: Integration, offsets: Iterable[int]) -> Integration:
+    """``described``, its core one unit of a 4 KiB window presenting a 32-byte bus at each
+    of ``offsets`` (``t<i>_s_axilite``), as a core is placed behind its grouper."""
+    (core,) = (unit for unit in described.units if unit.window is None)
+    buses = (
+        Endpoint(unit=core.name, bus=f"t{index}_s_axilite", offset=offset, range=32)
+        for index, offset in enumerate(offsets)
+    )
+    return replace(
+        described,
+        units=tuple(
+            replace(each, window=4096) if each == core else each for each in described.units
+        ),
+        endpoints=(*described.endpoints, *buses),
+    )
+
+
+def test_a_core_unit_is_one_control_port_its_buses_at_their_offsets(
+    described: Integration,
+) -> None:
+    """A core presenting buses is one unit: wired by its one control port in the units'
+    order, its window placed once, as a mover's; each bus at its unit's base and its offset
+    in the unit's window, as the grouper maps it."""
+    core = grouped(described, (0, 32, 64))
+    row = linked_row(core)
+    assert [each for each in wiring(core, row) if each.kind == "axilite"] == [
+        Wire("axilite", f"axi_interconnect_0/M{index:02}_AXI", f"{unit}/s_axi_control")
+        for index, unit in enumerate(("in0", "in1", "DataflowCore_0", "out0"))
+    ]
+    assert placement(core, row) == (
+        Address("in0/s_axi_control", 0xA000_0000, 4096),
+        Address("in1/s_axi_control", 0xA000_1000, 4096),
+        Address("DataflowCore_0/s_axi_control", 0xA000_2000, 4096),
+        Address("out0/s_axi_control", 0xA000_3000, 4096),
+    )
+    assert endpoint_addresses(core, row) == {
+        "in0/s_axi_control": 0xA000_0000,
+        "in1/s_axi_control": 0xA000_1000,
+        "out0/s_axi_control": 0xA000_3000,
+        "DataflowCore_0/t0_s_axilite": 0xA000_2000,
+        "DataflowCore_0/t1_s_axilite": 0xA000_2020,
+        "DataflowCore_0/t2_s_axilite": 0xA000_2040,
+    }
+    assigned = [
+        line
+        for line in block_design(packaged(core), row).splitlines()
+        if line.startswith("assign_bd") and "DataflowCore_0" in line
+    ]
+    assert assigned == [
+        "assign_bd_address [get_bd_addr_segs DataflowCore_0/s_axi_control/Reg*] "
+        "-offset 0xa0002000 -range 4096"
+    ]
 
 
 def test_a_mover_the_block_design_cannot_wire_is_refused_by_name(
@@ -208,24 +263,32 @@ def test_a_control_window_below_the_row_s_least_window_is_refused(described: Int
 def test_more_control_buses_than_its_interconnect_takes_are_refused(
     described: Integration,
 ) -> None:
-    """The block design's control interconnect takes nine AXI-Lite buses: a description
-    placing ten is refused by the linker, before any tool runs."""
-    endpoint = described.endpoints[0]
+    """The block design's control interconnect takes nine AXI-Lite buses, one a unit with a
+    control window: a description placing ten such units is refused by the linker, before
+    any tool runs."""
+    unit, endpoint = described.units[0], described.endpoints[0]
+    names = [f"{unit.name}_{index}" for index in range(CONTROL_SLAVES + 1)]
     many = replace(
         described,
-        endpoints=tuple(
-            replace(endpoint, bus=f"s_axi_{index}") for index in range(CONTROL_SLAVES + 1)
+        units=(
+            *(replace(unit, name=name) for name in names),
+            *(each for each in described.units if each.window is None),
         ),
+        endpoints=tuple(replace(endpoint, unit=name) for name in names),
     )
     with refused(
         "control-slaves-exceeded",
         error=LinkerRefused,
         owner="vivado-block-design",
-        message="the description places 10 AXI-Lite buses; the block design's control "
-        "interconnect takes 9",
+        message="the description places 10 units with a control window; the block design's "
+        "control interconnect takes 9",
     ):
         wiring(many, linked_row(many))
-    nine = replace(many, endpoints=many.endpoints[:CONTROL_SLAVES])
+    nine = replace(
+        many,
+        units=many.units[:CONTROL_SLAVES] + many.units[CONTROL_SLAVES + 1 :],
+        endpoints=many.endpoints[:CONTROL_SLAVES],
+    )
     assert len([each for each in wiring(nine, linked_row(nine)) if each.kind == "axilite"]) == 9
 
 

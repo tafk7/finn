@@ -217,14 +217,22 @@ def package_tcl(
     clock_ns: float,
     display_name: str,
     run_synth: bool,
+    subcores: Sequence[tuple[str, str]] = (),
 ) -> str:
     """The Vivado batch script that packages ``emitted`` in ``emitted.directory``'s parent,
     as an IP named as its module (its entry point), shown as ``display_name``.
+
+    ``subcores`` are the IPs it holds unchanged, each its VLNV and its repository's
+    directory in the project: found in the IP catalog while it is packaged, and named in its
+    synthesis and simulation file groups, whose files each brings where the IP is used; an
+    IP packaged from its checkpoint (``run_synth``) holds none (``IpxactError``).
 
     With ``run_synth``, its out-of-context constraints give the module's one free clock
     pin ``clock_ns`` and each derived clock that period over its ratio; ``IpxactError``
     unless the pins have exactly one free clock and every derived clock is derived from
     it."""
+    if run_synth and subcores:
+        raise IpxactError("an IP packaged from its checkpoint holds no subcore")
     top = emitted.entry_point
     # A header is found where its includers read it from.
     includes = " ".join(f"$project/src/{d}" for d in include_directories(emitted.sources))
@@ -237,6 +245,12 @@ def package_tcl(
         f"set_property top {top} [current_fileset]",
         "update_compile_order -fileset sources_1",
     ]
+    if subcores:
+        repositories = " ".join(f"$project/{directory}" for _, directory in subcores)
+        tcl += [
+            f"set_property ip_repo_paths [list {repositories}] [current_project]",
+            "update_ip_catalog",
+        ]
     if run_synth:
         rates = {
             pin.name: pin.role.rate
@@ -294,6 +308,11 @@ def package_tcl(
         f"set_property version {VERSION} $core",
         "set_property core_revision 1 $core",
         "set_property ipi_drc {ignore_freq_hz true} $core",
+        *(
+            f"ipx::add_subcore {each} [ipx::get_file_groups {group} -of_objects $core]"
+            for each, _ in subcores
+            for group in ("xilinx_anylanguagesynthesis", "xilinx_anylanguagebehavioralsimulation")
+        ),
     ]
     if run_synth:
         tcl += [

@@ -314,6 +314,27 @@ class Configured:
         return self.network.node(name)
 
 
+def core_grouping(network: CoreComposition) -> tuple[tuple[int, ...], int] | None:
+    """Where the grouper of ``network``'s core places its control buses in its unit
+    (``GrouperKernel.map``) and the unit's window; None where its shell places no grouper
+    (the ``ip`` shell) or its core presents no bus (its unit is the core). A
+    ``KernelOpError`` with the findings of a grouper answering neither."""
+    core = network.names.core
+    name = None if core is None else network.placed(grouper_name(core))
+    if name is None or name not in network.names.placed:
+        return None
+    mapped = network.query(name, GrouperKernel.map)
+    window = network.query(name, GrouperKernel.window)
+    if not isinstance(mapped, Available) or not isinstance(window, Available):
+        found = _together(each for each in (mapped, window) if not isinstance(each, Available))
+        raise KernelOpError(
+            f"{core}: its grouper places no control bus: "
+            + "; ".join(map(Finding.subject_line, found.findings)),
+            findings=found.findings,
+        )
+    return (mapped.value, window.value[0]) if window.value else None
+
+
 def shell_resources(network: CoreComposition) -> ShellResources | tuple[Finding, ...]:
     """The resources of ``network``, a core in its shell (``shell_point``), by member and
     their total (``ShellResources``); or why it states none, its findings: a member that
@@ -724,6 +745,7 @@ __all__ = [
     "ShellResources",
     "body_row",
     "configured_network",
+    "core_grouping",
     "make_cut_choices",
     "mover_contracts",
     "refuse_unverified",
