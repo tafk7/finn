@@ -20,7 +20,7 @@ from finn.kernels.artifacts.contributions import (
     HlsSource,
 )
 from finn.kernels.artifacts.hls import SCRIPT, TOOL_HEADERS, TOP, quoted_includes, stage_hls
-from finn.kernels.artifacts.module import Abi, BuildError, Composed, Fragment, Leaf
+from finn.kernels.artifacts.module import Abi, BuildError, Composed, Fragment, Leaf, module_name
 
 HEADERS = (
     CopiedSource("fixture", "hls/nonlin/core.hpp"),
@@ -227,6 +227,17 @@ def test_emission_refuses_a_missing_or_foreign_product(tmp_path: Path) -> None:
         emit_module(_leaf(request), tmp_path / "out", roots={}, built={request.function: product})
 
 
+def test_a_composed_module_s_name_covers_its_requests_headers(tmp_path: Path) -> None:
+    """A header an HLS request copies is the composed module's content, one it includes
+    among them (``util.hpp``, which ``core.hpp`` includes): another header at the same path
+    renames the module."""
+    module = Composed("test.hls.one", "1", "one", Abi(PINS), Fragment((("a", _leaf(_top())),)))
+    roots = {"fixture": _fixture(tmp_path / "finnlib")}
+    name = module_name(module, roots)
+    (tmp_path / "finnlib/hls/util/util.hpp").write_text("#define CHANGED 1\n")
+    assert module_name(module, roots) != name
+
+
 def test_two_configurations_compose_without_sharing_a_file(tmp_path: Path) -> None:
     first, second = _top(3), _top(4)
     products = {
@@ -240,7 +251,9 @@ def test_two_configurations_compose_without_sharing_a_file(tmp_path: Path) -> No
         Abi(PINS),
         Fragment((("a", _leaf(first)), ("b", _leaf(second)))),
     )
-    emitted = emit_module(module, tmp_path / "out", roots={}, built=products)
+    # The module's name covers its requests' headers, read from their root.
+    roots = {"fixture": _fixture(tmp_path / "finnlib")}
+    emitted = emit_module(module, tmp_path / "out", roots=roots, built=products)
     staged = [path for path in emitted.sources if path.endswith(".v")]
     assert len(staged) == 4 and len(set(staged)) == 4
     assert len(emitted.data) == 2

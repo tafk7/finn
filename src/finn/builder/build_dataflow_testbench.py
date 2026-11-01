@@ -53,7 +53,7 @@ from finn.kernels.artifacts.module import module_name
 from finn.kernels.artifacts.sources import include_directories, is_header
 from finn.toolchain import xsim
 from finn.toolchain.launcher import Toolchain, ToolFailed, ToolUnavailable, run_process
-from finn.transformation.kernels.package import boundary_facts, free_side
+from finn.transformation.kernels.package import boundary_facts, free_side, source_roots
 from finn.util.draws import graph_inputs
 
 #: The directory of the testbench, beside the packaged IP.
@@ -172,7 +172,7 @@ def write_testbench(
     (directory / "check.sv").write_text("`timescale 1ns/1ps\n" + bench.text)
     relative = [str(Path(source).relative_to(directory)) for source in bench.sources]
     script = directory / RUN_SCRIPT
-    script.write_text(_run_script(module_name(point.module), relative))
+    script.write_text(_run_script(module_name(point.module, source_roots()), relative))
     script.chmod(0o755)
 
 

@@ -32,7 +32,7 @@ from support.chain import (
     Y_TENSOR,
     W,
 )
-from support.helpers import FULL_DSP48E2, TEST_CORE, root_facts, set_indices
+from support.helpers import FULL_DSP48E2, TEST_CORE, by_hand, choose, root_facts, set_indices
 from support.refusals import refused
 
 from finn.core.space import (
@@ -55,7 +55,7 @@ from finn.dataflow.gemm import Form, Window
 from finn.dataflow.schedule import Index
 from finn.kernels import composer
 from finn.kernels.artifacts.abi import Direction
-from finn.kernels.artifacts.module import Link, LinkEnd
+from finn.kernels.artifacts.module import Link, LinkEnd, module_name
 from finn.kernels.base import Kernel, extent_of, hops, neighbours, own_ends
 from finn.kernels.channels import Channel, OuterHops
 from finn.kernels.composer import (
@@ -85,6 +85,7 @@ from finn.kernels.port import exposed_pins, port_direction
 from finn.kernels.sides import BUILD, Outside, Side, SideKind, Steady
 from finn.kernels.thresholding import ThresholdingKernel
 from finn.kernels.values.semantics import IntegerTensorValue
+from finn.resources import finnlib_root
 
 
 def _matmul(weights: object, x_tensor: object) -> Facts:
@@ -1023,20 +1024,29 @@ def test_the_class_is_a_sealed_dataflow_core_whose_edge_ports_are_its_channels_o
         assert exposed.pins.transport.name == edge
 
 
-def test_the_declaration_s_name_and_order_are_facts_of_the_class(cache: None) -> None:
-    """A declaration's module name is a fact of its class (``DataflowCoreKernel.name``, given
-    where its design space is opened: another name is the same class), and its instance
-    order a class fact (``Kernel.instance_order``, by member name: another order is another
-    class); the kernels, then the channels, as declared, by default. An order that does not
-    name each member once is refused."""
-    composed = compose(DataflowCoreDeclaration(kernels(), channels(), name="DataflowCore_0"))
-    point = composed
-    assert isinstance(point, DataflowCoreKernel) and point.name == "DataflowCore_0"
+def test_the_declaration_s_order_is_a_fact_of_the_class_and_its_name_is_none(
+    cache: None,
+) -> None:
+    """A declaration's name is no fact of its core: two declarations alike but for their
+    names are one class, and one module of one name. Its instance order is a class fact
+    (``Kernel.instance_order``, by member name: another order is another class); the
+    kernels, then the channels, as declared, by default. An order that does not name each
+    member once is refused."""
+    point = compose(DataflowCoreDeclaration(kernels(), channels(), name="DataflowCore_0"))
+    assert isinstance(point, DataflowCoreKernel) and not hasattr(point, "name")
     space_type = type(point)
     assert space_type.instance_order == (*kernels(), *channels())
-    renamed = compose(DataflowCoreDeclaration(kernels(), channels(), name="other"))
+    renamed = compose(DataflowCoreDeclaration(kernels(), channels(), name="DataflowCore_1"))
     assert type(renamed) is space_type
-    assert getattr(renamed, "name") == "other"
+    fixed = {"Thresholding_0.pe": chain.PE}
+    configured = [
+        chain.configure_chain(choose(by_hand(chain.members(), name=name), fixed), **chain.ACTIVATE)
+        for name in ("DataflowCore_0", "DataflowCore_1")
+    ]
+    module, other = (each.answer(DataflowCoreKernel.module) for each in configured)
+    assert isinstance(module, Available) and other == module
+    roots = {"finnlib": finnlib_root()}
+    assert module_name(other.value, roots) == module_name(module.value, roots)
     order = (
         "x",
         *kernels(),
@@ -1184,7 +1194,6 @@ def test_a_sealed_core_s_placed_outer_port_without_an_edge_port_is_refused_by_it
             Core(
                 x_producer=Side.boundary("s_axis_0"),
                 y_consumer=Side.boundary("m_axis_0"),
-                name="hand",
             )
         ),
         {

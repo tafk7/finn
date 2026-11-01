@@ -91,7 +91,7 @@ def _partition(
     stored = {bound.path(key): value for key, value in bound.chosen().items()}
 
     def make() -> Space:
-        opened: Space = design_space(made(**facts, name=point.name))
+        opened: Space = design_space(made(**facts))
         return commit(opened, stored)
 
     viable: Sequence[str] | None = forms.ALL

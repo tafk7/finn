@@ -122,7 +122,7 @@ def test_a_structure_changed_is_another_class() -> None:
 
 def test_names_are_the_class_s_structure() -> None:
     """The node's and the tensors' names are its members' names: a renamed node is
-    another class; the partition's own name is no member's, and names its module only."""
+    another class; the partition's own name is no member's and no fact of its class."""
     model = matmul_model()
     first = composition(model, model.graph.node)
     renamed = matmul_model()
@@ -131,7 +131,6 @@ def test_names_are_the_class_s_structure() -> None:
     assert type(other.point) is not type(first.point)
     named = composition(model, model.graph.node, name="another")
     assert type(named.point) is type(first.point)
-    assert (named.name, first.name) == ("another", CUT_NAME)
 
 
 def test_a_tensor_read_more_than_once_is_refused_before_any_composition() -> None:

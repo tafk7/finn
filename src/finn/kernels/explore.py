@@ -238,11 +238,6 @@ class CoreComposition:
         return self.names.shell
 
     @property
-    def name(self) -> str:
-        """Its name, its node's (``DataflowCoreKernel.name``, a fact of its class)."""
-        return self._point.name
-
-    @property
     def order(self) -> tuple[str, ...]:
         """Every member in its module's instance order (``Kernel.instance_order``, a fact
         of its class)."""

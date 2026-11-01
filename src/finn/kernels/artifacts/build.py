@@ -159,7 +159,7 @@ def emit_module(
             drafts.append((file, content))
         for datum in leaf.data:
             add_data(datum.path, datum.data)
-    name = module_name(module)
+    name = module_name(module, roots)
     if isinstance(module, Composed):
         text = netlist(module, name).encode()
         drafts.append((SourceFile(f"{name}.sv", content_digest(text), (f"module:{name}",)), text))

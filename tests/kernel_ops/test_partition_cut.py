@@ -56,7 +56,7 @@ from finn.transformation.kernels import (
     kernel_choices_config,
 )
 from finn.transformation.kernels.cut import CutKernelPartition, MakeCutChoices
-from finn.transformation.kernels.package import boundary_facts, ip_key
+from finn.transformation.kernels.package import boundary_facts, ip_key, source_roots
 
 #: Ultra96 in the Zynq shell: its rows offer an IODMA_hls mover at a 128-bit port.
 ZYNQ = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
@@ -396,7 +396,7 @@ def test_packaging_states_its_ip_typed_and_writes_no_flat_key(tmp_path: Path) ->
         PackagePartition("DataflowCore_0", directory=project, toolchain=toolchain)
     )
     assert packaged.get(OUTPUT_IP) == str(project / "ip")
-    top = module_name(configured_network(body, "DataflowCore_0")[0].module)
+    top = module_name(configured_network(body, "DataflowCore_0")[0].module, source_roots())
     assert top.startswith("finn_dataflowcore_")
     assert packaged.get(OUTPUT_VLNV) == f"xilinx_finn:finn:{top}:1.0"
     interfaces = packaged.get(OUTPUT_INTERFACES)

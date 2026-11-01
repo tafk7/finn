@@ -130,18 +130,17 @@ def test_the_parent_graph_imports_its_partition_nodes_domain(tmp_path: Path) -> 
 
 
 def test_the_node_reads_binds_changes_and_writes_its_core(tmp_path: Path) -> None:
-    """The DataflowCore reads its core as a KernelOp reads its kernel, each reading a
-    function of its body, its module named by the node: its design space, nothing chosen
-    (``bound``), its body's stored choices bound (``point``) and a change of them
-    (``point(extra)``, a refused one a ``ValueError``); ``persist`` writes a design space's
-    choices onto its body, and ``configured`` is what emission reads."""
+    """The DataflowCore reads its core as a KernelOp reads its kernel, each reading a function of
+    its body: its design space, nothing chosen (``bound``), its body's stored choices bound
+    (``point``) and a change of them (``point(extra)``, a refused one a ``ValueError``); ``persist``
+    writes a design space's choices onto its body, and ``configured`` is what emission reads."""
     _, parent, _ = partitioned(tmp_path)
     node = parent.graph.node[1]
     core = getCustomOp(node)
     body = core.body()
     assert [each.name for each in body.graph.node] == ["MatMul_0", "Thresholding_0", "MatMul_1"]
     empty, held = core.bound(), core.point()
-    assert type(empty) is type(held.point) and empty.name == held.point.name == node.name
+    assert type(empty) is type(held.point)
     assert not held.stale and CoreComposition(empty).chosen() == {}
     stored = core_in_shell(body, name=node.name).chosen()
     assert CoreComposition(held.point).chosen() == stored and stored[("MatMul_0", "simd")] == 2

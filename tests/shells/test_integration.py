@@ -38,6 +38,7 @@ from finn.shells.integration import (
     describe,
 )
 from finn.transformation.kernels.cut import CutKernelPartition
+from finn.transformation.kernels.package import source_roots
 
 
 def test_the_chain_is_described_by_its_core_units_and_wiring(tmp_path: Path) -> None:
@@ -71,7 +72,7 @@ def test_the_chain_is_described_by_its_core_units_and_wiring(tmp_path: Path) -> 
     assert all(each.element == each.contract.element for each in described.edges)
     # The core's IP named as its module, its repositories none until it is packaged.
     _, body, _ = partition_body(parent)
-    module = module_name(configured_network(body, core.name)[0].module)
+    module = module_name(configured_network(body, core.name)[0].module, source_roots())
     assert described.units == (
         Unit(name="in0", kind="iodma_hls", ip=None, window=4096),
         Unit(name="in1", kind="iodma_hls", ip=None, window=4096),

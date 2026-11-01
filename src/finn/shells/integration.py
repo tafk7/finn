@@ -61,6 +61,7 @@ from finn.kernels.artifacts.ipxact import vlnv
 from finn.kernels.artifacts.module import module_name
 from finn.kernels.movers import MoverContract
 from finn.platform.shells import placed_offer
+from finn.transformation.kernels.package import source_roots
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
@@ -375,7 +376,7 @@ def describe(model: ModelWrapper) -> Integration:
         for pin in point.module.abi.pins
         if isinstance(pin, Bus) and pin.protocol is StandardProtocol.AXILITE
     ]
-    ip = IpRef(vlnv(module_name(point.module)), ())
+    ip = IpRef(vlnv(module_name(point.module, source_roots())), ())
     units = (
         *(Unit(name=each.unit, kind=each.contract.kind, ip=None, window=least) for each in inputs),
         Unit(name=core.name, kind=CORE, ip=ip, window=None),
