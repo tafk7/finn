@@ -14,8 +14,8 @@ refused as a value type where it is annotated, and as a value where it enters. T
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
-from dataclasses import dataclass, field
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass, field, make_dataclass
 from typing import Any, NamedTuple, cast
 
 import pytest
@@ -31,6 +31,7 @@ from finn.core.space import (
     design_space,
 )
 from finn.core.space.occurrence import held
+from finn.core.space.semantics import compared_fields, identity, value_class
 
 NAN = float("nan")
 
@@ -389,3 +390,98 @@ def same(value: object, other: object) -> bool:
     if isinstance(value, tuple) and isinstance(other, tuple):
         return len(value) == len(other) and all(map(same, value, other))
     return value == other
+
+
+# -- What the review found: inherited equality, a tuple's storage, authored code, a hash ---
+
+
+class Inherited(Box):
+    """A subclass of a value class not decorated: the base's generated ``==`` and hash."""
+
+    __slots__ = ()
+
+
+@dataclass(frozen=True, eq=False)
+class Annotated(Box):
+    """A subclass decorated ``eq=False``: the base's ``==``, which compares ``inner`` alone."""
+
+    note: str = ""
+
+
+class Picked(Space):
+    rate: float = Param()
+    box: Box = Decision(domain=(Inherited(1), Inherited(2)))
+
+
+def test_an_inherited_generated_eq_compares_the_fields_it_reads_each_of_one_type() -> None:
+    """A frozen dataclass's subclass inheriting its generated ``==`` (not decorated, or
+    decorated ``eq=False``) is a value class of its own type, compared by the fields that
+    ``==`` reads, each of one type: ``Inherited(1)`` is not ``Inherited(1.0)``, nor
+    ``Box(1)``, alive or not, as a fact, a change or a domain's listed value."""
+    for kind in (Inherited, Annotated):
+        assert compared_fields(kind) == ("inner",)
+        first = design_space(Meter(rate=1.0, box=kind(1)))
+        second = design_space(Meter(rate=1.0, box=kind(1.0)))
+        assert first.box is not None and type(first.box.inner) is int
+        assert second.box is not None and type(second.box.inner) is float
+        assert held(first).ds.layer is not held(second).ds.layer
+        assert first.with_facts({Meter.box: kind(1.0)}) is not first
+        assert identity(kind(1)) != identity(Box(1)) and identity(kind(1)) == identity(kind(1))
+    picked = design_space(Picked(rate=1.0))
+    assert picked.try_with_choices({Picked.box: Inherited(1)}).accepted
+    assert not picked.try_with_choices({Picked.box: Inherited(1.0)}).accepted
+
+
+def test_an_eq_written_by_hand_is_its_authors_wherever_it_was_compiled() -> None:
+    """A dataclass's ``__eq__`` is generated only where its code is the code ``dataclasses``
+    generates for its fields: one written by hand and compiled from a string (as
+    ``dataclasses`` compiles its own) is its author's, and the class no value class."""
+    namespace: dict[str, Any] = {}
+    exec("def __eq__(self, other):\n    return self is other\n", namespace)
+    authored: Any = make_dataclass(
+        "Authored", [("inner", int)], frozen=True, namespace={"__eq__": namespace["__eq__"]}
+    )
+    assert authored.__eq__.__code__.co_filename == Box.__eq__.__code__.co_filename
+    assert not value_class(authored) and value_class(Box)
+    left, right = authored(1), authored(1)
+    first = design_space(Meter(rate=1.0, box=Box(left)))
+    second = design_space(Meter(rate=1.0, box=Box(right)))
+    assert second.box is not None and second.box.inner is right
+    assert held(first).ds != held(second).ds
+
+
+class Hidden(tuple[int, ...]):
+    """A tuple whose iteration hides its items: its ``==`` and hash read what it stores."""
+
+    __slots__ = ()
+
+    def __iter__(self) -> Iterator[int]:
+        return iter(())
+
+
+@dataclass(frozen=True)
+class Unhashable:
+    inner: int
+
+    __hash__ = None  # type: ignore[assignment]
+
+
+@dataclass(frozen=True)
+class HashExcluded:
+    inner: Unhashable = field(hash=False)
+
+
+def test_a_tuple_is_walked_as_it_stores_its_items_and_a_set_whatever_its_members_hash() -> None:
+    """A tuple subclass comparing as a tuple is walked by what it stores, whatever its
+    ``__iter__`` says: ``Hidden((1,))`` is not ``Hidden((2,))``. A frozen set holding a value
+    whose hash leaves out an unhashable field is a value too: the same as an equal set, its
+    design space made without being interned."""
+    first = design_space(Meter(rate=1.0, box=Box(Hidden((1,)))))
+    second = design_space(Meter(rate=1.0, box=Box(Hidden((2,)))))
+    assert held(first).ds != held(second).ds
+    assert second.box is not None and cast(Hidden, second.box.inner)[0] == 2
+    members = frozenset({HashExcluded(Unhashable(1))})
+    one = design_space(Meter(rate=1.0, box=Box(members)))
+    other = design_space(Meter(rate=1.0, box=Box(frozenset({HashExcluded(Unhashable(1))}))))
+    assert held(one).ds == held(other).ds
+    assert held(one).ds != held(design_space(Meter(rate=1.0, box=Box(frozenset())))).ds

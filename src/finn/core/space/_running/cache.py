@@ -84,14 +84,13 @@ public layer takes around each question (``occurrence.ask``).
 
 from __future__ import annotations
 
-import dataclasses
 import random
 import weakref
 from enum import Enum
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 from .._value_types import is_value_type
-from ..semantics import value_class
+from ..semantics import compared_fields, value_class
 from .value import hashkey
 
 if TYPE_CHECKING:
@@ -144,12 +143,9 @@ def key(value: object) -> object:
         if any(part is None for part in parts):
             return None
         return (kind, tuple(parts) if kind is tuple else frozenset(parts))
-    if value_class(kind):
-        fields = [
-            key(getattr(value, item.name))
-            for item in dataclasses.fields(cast(Any, kind))
-            if item.compare
-        ]
+    names = compared_fields(kind)
+    if names is not None:
+        fields = [key(getattr(value, name)) for name in names]
         if any(part is None for part in fields):
             return None
         return (kind, tuple(fields))

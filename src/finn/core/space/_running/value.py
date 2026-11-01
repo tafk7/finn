@@ -42,9 +42,10 @@ def _frozen(mapping: Mapping[Address, object]) -> Mapping[Address, object]:
 def hashkey(value: object) -> object:
     """``value`` as a dictionary key equal exactly where two values are the same
     (``semantics.identity``: ``True`` is not ``1``, nor ``Box(3)`` ``Box(3.0)``, inside a
-    tuple, a frozen set or a value class too); ``None`` where it cannot be hashed."""
-    found = identity(value)
+    tuple, a frozen set or a value class too); ``None`` where it cannot be hashed, or a part
+    of it cannot (a field a value class's hash leaves out, holding an unhashable value)."""
     try:
+        found = identity(value)
         hash(found)
     except TypeError:
         return None

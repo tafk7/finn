@@ -1637,7 +1637,8 @@ class Identity:
 
 
 class Inherits(Spec):
-    """A plain subclass of a value class: not one itself."""
+    """A plain subclass of a value class: one itself, by the fields its inherited ``==``
+    compares, keyed as its own type."""
 
 
 @dataclass(frozen=True)
@@ -1802,7 +1803,6 @@ NOT_VALUE_CLASSES: dict[str, tuple[type, object]] = {
     "a hand-written ==": (HandWritten, HandWritten(1, 8)),
     "equal by identity": (Identity, Identity(1)),
     "mutable": (Bag, Bag([1])),
-    "a plain subclass": (Inherits, Inherits(True, 1)),
 }
 """Classes the rule does not key, each with a value."""
 
@@ -1900,8 +1900,9 @@ def test_the_cache_keys_the_types_this_test_checks_and_value_classes_by_their_ru
     """Every plain type the cache keys by ``==`` (``cache.PLAIN``), tuples and frozen sets
     are types this test checks, and so are the harness's. The rule (``cache.value_class``)
     holds for each sample value class, and for none of the classes it must not key: a
-    hand-written ``==``, equality by identity, a mutable dataclass, a plain subclass of a
-    value class. A value class holding a value with no key has none."""
+    hand-written ``==``, equality by identity, a mutable dataclass. A plain subclass of a
+    value class is one, keyed as its own type. A value class holding a value with no key has
+    none."""
     checked = {semantics.type_token for semantics, _ in VALUE_TYPES.values()}
     assert {*PLAIN, tuple, frozenset, *HARNESS} <= checked
     assert set(VALUE_CLASSES) <= checked
@@ -1911,6 +1912,8 @@ def test_the_cache_keys_the_types_this_test_checks_and_value_classes_by_their_ru
         assert plain_key(value) is None, name
         assert plain_key((1, value)) is None, name
     assert value_class(HoldsList) and plain_key(HoldsList([1])) is None
+    assert value_class(Inherits) and plain_key(Inherits(True, 1)) is not None
+    assert plain_key(Inherits(True, 1)) != plain_key(Spec(True, 1))
     assert plain_key((1, "a", frozenset({2.0}), Spec(True, 2))) is not None
     assert plain_key((Mode.SLOW, Moded(Mode.FAST, 1))) is not None
     assert plain_key(Mode.FAST) == plain_key(Mode.QUICK) == enum_key(Mode.FAST) == (Mode, "FAST")
