@@ -67,9 +67,9 @@ from finn.kernels.shell import grouper_name
 from finn.kernels.utilization import SHELL_CHARACTERISED
 from finn.platform.capabilities import Resources
 from finn.platform.shells import shell_row
+from finn.shells.build import REPORT_DIR, bitfile_directory
 from finn.shells.integration import describe
-from finn.shells.pynq.linker import STATIC_INSTANCES
-from finn.shells.pynq.runner import REPORTS, bitfile_directory
+from finn.shells.pynq.linker import OUT_OF_CONTEXT, PLACED, STATIC_INSTANCES
 from finn.toolchain import vivado
 from finn.toolchain.launcher import Toolchain, ToolFailed
 from finn.transformation.kernels.package import (
@@ -161,15 +161,20 @@ def _members(split: Mapping[str, Any]) -> dict[str, Any]:
 
 def built_reports(parent: ModelWrapper, *, toolchain: Toolchain) -> dict[str, Path]:
     """The reports the build made that ``shell_resources_report`` reads, by name: those
-    collected beside the bitfile the parent graph ``parent`` states (``placed``,
-    ``out_of_context``; none without a bitfile), and the utilization report of the IP
+    the ``vivado-block-design`` linker collected beside the bitfile the parent graph
+    ``parent`` states (``placed``, ``out_of_context``, by its report names; none without a
+    bitfile, or where another linker collected none of those names), and the utilization
+    report of the IP
     its partition's body states, packaged with ``ooc_synth`` and of the key the body has
     now (``ip_key``, staged in ``toolchain``) (``ooc_synth``; none when the body states
     no such IP)."""
     reports: dict[str, Path] = {}
     built = bitfile_directory(parent)
     if built is not None:
-        reports.update({name: built / REPORTS[name] for name in ("placed", "out_of_context")})
+        named = {"placed": PLACED, "out_of_context": OUT_OF_CONTEXT}
+        for name, report in named.items():
+            if (built / REPORT_DIR / report).exists():
+                reports[name] = built / REPORT_DIR / report
     node, body, _ = partition_body(parent)
     ip, packaging = body.get(OUTPUT_IP), body.get(OUTPUT_IP_OPTIONS)
     if ip is None or packaging is None or not packaging["run_synth"]:
@@ -185,7 +190,7 @@ def built_reports(parent: ModelWrapper, *, toolchain: Toolchain) -> dict[str, Pa
 def shell_resources_report(parent: ModelWrapper, reports: Mapping[str, Path]) -> dict[str, Any]:
     """``report/resources.json`` for the parent graph ``parent`` (see the module
     docstring), from the ``reports`` the build made, by name: the shell integration's
-    ``out_of_context`` (a directory) and ``placed`` (``finn.shells.pynq.runner.REPORTS``),
+    ``out_of_context`` (a directory) and ``placed`` (``finn.shells.pynq.linker``'s reports),
     and the packaged partition's ``ooc_synth``. A column whose report is not given is
     absent."""
     node, body, _ = partition_body(parent)

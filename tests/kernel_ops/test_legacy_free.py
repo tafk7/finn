@@ -44,8 +44,9 @@ BUILD = (
     "finn.kernels",
     "finn.platform",
     "finn.transformation.kernels.cut",
-    "finn.shells.pynq.runner",
-    "finn.shells.pynq.driver",
+    "finn.shells.build",
+    "finn.shells.pynq.linker",
+    "finn.shells.pynq.runtime",
 )
 
 #: Imports the modules its arguments name, resolves the build's own nodes, and

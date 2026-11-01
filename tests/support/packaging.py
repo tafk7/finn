@@ -195,7 +195,7 @@ clk_pl_0  {0.000 2.667}        5.333           187.512
 
 
 class FakeVivado:
-    """A toolchain double for the pynq shell's runner (``finn.shells.pynq.runner``): its
+    """A toolchain double for the pynq shell's linker (``finn.shells.pynq.linker``): its
     Vivado run keeps the project's Tcl and makes what the template's project makes
     (unless ``makes`` is False), each file naming itself, the routed timing summary
     ``timing`` if given. ``selection`` is the toolchain's (``Selection.vivado_jobs``)."""

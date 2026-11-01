@@ -42,16 +42,22 @@ a memory port bound to another target, a unit on another clock and a description
 memory port are refused, each by name (``wiring``), as is a processor or board it cannot
 select (``project_script``).
 
-``BlockDesignLinker.link`` writes the block design (``block_design``) into
+``BlockDesignLinker`` is the declared code. Its ``check`` refuses what the block design does
+not wire, and a board or processor the project cannot select, before any tool runs.
+``link`` writes the block design (``block_design``) into
 ``templates.custom_zynq_shell_template`` (``project_script``) in a new project under the
 directory it is given, runs Vivado on it and collects what it made (``collect``): the
-bitfile, the main clock as the routed design delivers it, its hardware handoff, the routed
-timing report, the template's ``impl_1`` hierarchical utilization report and each IP's
-out-of-context synthesis report. Every unit's IP is packaged before it links.
+bitfile, its hardware handoff beside it, the main clock as the routed design delivers it,
+and the reports, each by its path under a build's ``report/``: the routed timing report
+(``TIMING``), the template's ``impl_1`` hierarchical utilization report (``PLACED``), each
+IP's out-of-context synthesis report (under ``OUT_OF_CONTEXT``), and what it named and
+placed (``BLOCK_DESIGN``, ``report``). Every unit's IP is packaged before it links.
 """
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 import tempfile
 from collections.abc import Mapping
@@ -70,8 +76,19 @@ from finn.shells.pynq import templates
 from finn.toolchain.launcher import StrPath, Toolchain, ToolFailed
 from finn.toolchain.vivado import delivered_clock, tcl_quote, vivado_jobs
 
+_LOG = logging.getLogger(__name__)
+
 #: The project the template creates (``create_project finn_zynq_link``).
 PROJECT = "finn_zynq_link"
+
+#: The linker's reports, by their paths under a build's ``report/`` (``Linked.reports``):
+#: the routed timing summary, the template's ``impl_1`` hierarchical utilization, the
+#: directory of each IP's out-of-context synthesis utilization, and what it named and
+#: placed (``report``).
+TIMING = "post_route_timing.rpt"
+PLACED = "placed_utilization.xml"
+OUT_OF_CONTEXT = "out_of_context"
+BLOCK_DESIGN = "block_design.json"
 
 #: The block design's instance of each part of the fixed shell, by its role
 #: (``FixedShell.resources``); the control interconnect's is its tree's instances' prefix
@@ -436,13 +453,7 @@ def project_script(
     A board with no board part (``board-part-unstated``) or a processor the template does
     not instantiate (``processor-unsupported``) is refused. The template's debug block
     stays off: its nets are the HWCustomOp flow's (``debug_lines``)."""
-    assert row.fixed is not None
-    board_part = board.get("board_part")
-    if not board_part:
-        raise LinkerRefused(
-            "board-part-unstated",
-            f"the board {integration.row[1]!r} states no board_part, which the project selects",
-        )
+    board_part = selected_board(integration, board)
     processor = family(row)
     boards = " ".join(tcl_quote(path) for path in resources.paths("vivado-boards"))
     # Every board repository; the template is %-formatted next.
@@ -462,19 +473,29 @@ def project_script(
     )
 
 
+def selected_board(integration: Integration, board: Mapping[str, str]) -> str:
+    """The board part the project selects, ``board``'s ``board_part``; a board with none is
+    refused (``board-part-unstated``)."""
+    board_part = board.get("board_part")
+    if not board_part:
+        raise LinkerRefused(
+            "board-part-unstated",
+            f"the board {integration.row[1]!r} states no board_part, which the project selects",
+        )
+    return board_part
+
+
 def collect(
     project: str, integration: Integration, row: ShellRow, transcript: StrPath | None = None
 ) -> Linked:
     """What Vivado made in ``project`` (the template's project) of ``integration``: the
-    bitfile (``image``), each unit's base (``unit_bases``), the row's main clock as the
-    routed design delivers it (none where there is no timing report, or it names no PL
-    clock), and the
-    reports: the hardware handoff (``hwh``), the routed timing summary (``timing``), the
-    template's ``impl_1`` hierarchical utilization (``placed``), the project itself
-    (``project``) and each IP's out-of-context synthesis utilization by its run
-    (``out_of_context/<run>``). A bitfile or hardware handoff not there is Vivado's failure
-    (``ToolFailed``, its errors read from the run's ``transcript``, pointing at the
-    project's logs): it exits cleanly when its implementation fails."""
+    bitfile (``image``) and its hardware handoff beside it, each unit's base
+    (``unit_bases``), the row's main clock as the routed design delivers it (none where
+    there is no timing report, or it names no PL clock), and the reports by their paths
+    under a build's ``report/`` (the module docstring), ``BLOCK_DESIGN`` written into the
+    project. A bitfile or hardware handoff not there is Vivado's failure (``ToolFailed``,
+    its errors read from the run's ``transcript``, pointing at the project's logs): it
+    exits cleanly when its implementation fails."""
     root = Path(project)
     runs = root / f"{PROJECT}.runs"
     bitfile = runs / "impl_1" / "top_wrapper.bit"
@@ -489,36 +510,46 @@ def collect(
             transcript=transcript,
             what=f"it made no bitfile or hardware handoff: check the logs under {project}",
         )
+    designed = root / BLOCK_DESIGN
+    designed.write_text(json.dumps(report(integration), indent=2))
     reports = {
-        "hwh": hwh,
-        "timing": runs / "impl_1" / "top_wrapper_timing_summary_routed.rpt",
-        "placed": root / "synth_report.xml",
-        "project": root,
+        TIMING: runs / "impl_1" / "top_wrapper_timing_summary_routed.rpt",
+        PLACED: root / "synth_report.xml",
+        BLOCK_DESIGN: designed,
     }
     reports.update(
         {
-            f"out_of_context/{path.name[: -len('_utilization_synth.rpt')]}": path
+            f"{OUT_OF_CONTEXT}/{path.name}": path
             for path in sorted(runs.glob("*_synth_1/*_utilization_synth.rpt"))
         }
     )
-    timing = reports["timing"]
+    timing = reports[TIMING]
     clock = delivered_clock(str(timing), integration.period_ns) if timing.is_file() else {}
     return Linked(
         image=bitfile,
         placement=unit_bases(integration, row),
         clocks_mhz={MAIN: clock["delivered_mhz"]} if "delivered_mhz" in clock else {},
         reports=reports,
+        beside=(hwh,),
     )
 
 
 class BlockDesignLinker:
-    """The ``vivado-block-design`` linker (see the module docstring): Vivado launches
-    ``jobs`` runs at once (``vivado_jobs``); ``hw_debug`` inserts integrated logic analyzers
-    on the movers' streams and on the memory interconnect's port to the processor."""
+    """The ``vivado-block-design`` linker (see the module docstring): ``debug`` inserts
+    integrated logic analyzers on the movers' streams and on the memory interconnect's
+    port to the processor; Vivado launches as many runs at once as the toolchain's
+    selection says (``vivado_jobs``)."""
 
-    def __init__(self, *, jobs: int | None = None, hw_debug: bool = False) -> None:
-        self.jobs = jobs
-        self.hw_debug = hw_debug
+    def __init__(self, *, debug: bool = False) -> None:
+        self.debug = debug
+
+    def check(self, integration: Integration, board: Mapping[str, str]) -> None:
+        """Refuse what the block design does not wire (``wiring``), a board with no board
+        part and a processor the template does not instantiate, before any tool runs."""
+        row = linked_row(integration)
+        wiring(integration, row)
+        selected_board(integration, board)
+        family(row)
 
     def link(
         self,
@@ -532,8 +563,8 @@ class BlockDesignLinker:
         template, Vivado run on it through ``tools``, and what it made collected. What the
         linker refuses is refused before Vivado runs."""
         row = linked_row(integration)
-        design = block_design(integration, row, self.hw_debug)
-        text = project_script(integration, design, board, row, self.jobs)
+        design = block_design(integration, row, self.debug)
+        text = project_script(integration, design, board, row, tools.selection.vivado_jobs)
         Path(directory).mkdir(parents=True, exist_ok=True)
         project = tempfile.mkdtemp(prefix="vivado_zynq_proj_", dir=directory)
         os.chmod(project, 0o755)
@@ -546,12 +577,17 @@ class BlockDesignLinker:
             cwd=project,
             replay=project + "/synth_project.sh",
         )
+        _LOG.info(f"Vivado's project: {project}")
         return collect(project, integration, row, getattr(ran, "transcript", None))
 
 
 __all__ = [
+    "BLOCK_DESIGN",
+    "OUT_OF_CONTEXT",
+    "PLACED",
     "PROJECT",
     "STATIC_INSTANCES",
+    "TIMING",
     "Address",
     "BlockDesignLinker",
     "CONTROL_IP",
@@ -571,6 +607,7 @@ __all__ = [
     "placement",
     "project_script",
     "report",
+    "selected_board",
     "unit_bases",
     "wire_one_bus_each",
     "wiring",

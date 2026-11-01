@@ -51,7 +51,7 @@ def test_every_row_is_checked_by_a_tree() -> None:
         ("finn.core.graph.walk.between", "graph"),
         ("finn.custom_op.partition.DataflowCore", "custom_op.partition"),
         ("finn.builder.build_dataflow_steps", "flow"),
-        ("finn.shells.pynq.runner.build_pynq", "shells"),
+        ("finn.shells.build.BuildBitfile", "shells"),
         ("finn.util.basic", "util"),
         ("finn.xsi.setup", "util"),
         ("finn.toolchain.host", "toolchain"),
@@ -80,7 +80,7 @@ def test_a_name_outside_every_prefix_is_third_party(name: str) -> None:
     ("layer", "name"),
     [
         # Kernels importing above their layer: the flow, util, qonnx, KernelOps.
-        ("kernels", "finn.shells.pynq.runner.build_pynq"),
+        ("kernels", "finn.shells.build.BuildBitfile"),
         ("kernels", "finn.util.basic.make_build_dir"),
         ("kernels", "finn.builder.build_dataflow"),
         ("kernels", "qonnx.core.modelwrapper.ModelWrapper"),
@@ -97,7 +97,7 @@ def test_a_name_outside_every_prefix_is_third_party(name: str) -> None:
         ("toolchain", "finn.kernels.base"),
         # The shells below the flow: the builder runs them, never the other way.
         ("shells", "finn.builder.build_dataflow_steps"),
-        ("transformation.kernels", "finn.shells.pynq.runner"),
+        ("transformation.kernels", "finn.shells.build"),
         ("util", "finn.core.onnx_exec.execute_onnx"),
         # What is read of a partition reads qonnx and the findings only, below the kernel
         # stack, the executors and the flow; the partition node runs its body with the
@@ -198,7 +198,7 @@ def test_the_table_rejects_an_import_across_its_order(layer: str, name: str) -> 
         ("custom_op.partition", "finn.core.onnx_exec.running"),
         ("executors", "finn.core.onnx_exec.running"),
         ("executors", "finn.core.graph.partition.kernel_partition_body"),
-        ("flow", "finn.shells.pynq.runner.build_pynq"),
+        ("flow", "finn.shells.build.BuildBitfile"),
         ("shells", "finn.shells.integration.describe"),
         ("shells", "finn.core.graph.partition.partition_body"),
     ],

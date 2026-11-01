@@ -122,8 +122,9 @@ from finn.kernels.iodma import IodmaIn, IodmaOut
 from finn.platform.refusal import TargetRefused
 from finn.platform.request import TargetRequest
 from finn.platform.resolve import resolve_target
-from finn.shells.integration import IpRef, describe
-from finn.shells.pynq import runner as pynq_runner
+from finn.shells import build as shell_build
+from finn.shells.build import RUNTIME_FILE, ShellRefused, delivered_clock_findings
+from finn.shells.integration import IpRef, Linked, describe
 from finn.shells.pynq.linker import (
     Address,
     Wire,
@@ -133,7 +134,6 @@ from finn.shells.pynq.linker import (
     project_script,
     wiring,
 )
-from finn.shells.pynq.runner import DELIVERED_CLOCK, PynqRefused, delivered_clock_findings
 from finn.toolchain.hls import HlsProduct
 from finn.toolchain.launcher import Selection, Toolchain
 from finn.toolchain.vivado import delivered_clock
@@ -928,7 +928,7 @@ IP_KEY, OTHER_IP_KEY = "sha256:" + "1" * 64, "sha256:" + "2" * 64
 
 
 def test_an_output_is_listed_after_the_outputs_it_is_made_from(tmp_path: Path) -> None:
-    """The driver sets the clock its bitfile delivers, and the deployment ships the bitfile
+    """The driver runs the bitfile the build ships, and the deployment ships the bitfile
     and the driver: listed without them before, each passes the checks and is refused
     when it runs, naming the steps to list before it."""
     for steps in (["step_make_driver"], ["step_deployment_package", "step_build_bitfile"]):
@@ -939,12 +939,12 @@ def test_an_output_is_listed_after_the_outputs_it_is_made_from(tmp_path: Path) -
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)
-    with pytest.raises(PynqRefused) as refused:
+    with pytest.raises(ShellRefused) as refused:
         step_make_driver(parent, cfg)
     ((code, message),) = [(each.code, each.message) for each in refused.value.findings]
-    assert code == "clock-absent"
+    assert code == "bitfile-absent"
     assert message.endswith("; list step_build_bitfile before step_make_driver")
-    with pytest.raises(PynqRefused) as refused:
+    with pytest.raises(ShellRefused) as refused:
         step_deployment_package(parent, cfg)
     ((code, message),) = [(each.code, each.message) for each in refused.value.findings]
     assert code == "bitfile-absent"
@@ -970,7 +970,7 @@ def test_a_deployment_ships_only_the_bitfile_and_driver_its_build_made(tmp_path:
     (output / "driver" / "driver.py").write_text("an earlier build's driver")
     found = []
     with refused(
-        "bitfile-absent", error=PynqRefused, message="the model states no bitfile"
+        "bitfile-absent", error=ShellRefused, message="the model states no bitfile"
     ) as caught:
         step_deployment_package(parent, cfg)
     found.append(caught.error.findings)
@@ -978,14 +978,14 @@ def test_a_deployment_ships_only_the_bitfile_and_driver_its_build_made(tmp_path:
     parent.set(OUTPUT_BITFILE, str(elsewhere))
     with refused(
         "bitfile-foreign",
-        error=PynqRefused,
-        message="the model's bitfile is .*elsewhere.*, not this ",
+        error=ShellRefused,
+        message="the model's bitfile is .*elsewhere.*, not one of this ",
     ) as caught:
         step_deployment_package(parent, cfg)
     found.append(caught.error.findings)
     parent.set(OUTPUT_BITFILE, str(output / "bitfile" / "finn-accel.bit"))
     with refused(
-        "driver-absent", error=PynqRefused, message="no driver in this output directory"
+        "driver-absent", error=ShellRefused, message="no driver in this output directory"
     ) as caught:
         step_deployment_package(parent, cfg)
     found.append(caught.error.findings)
@@ -998,10 +998,10 @@ def test_a_deployment_ships_only_the_bitfile_and_driver_its_build_made(tmp_path:
     (output / "report").mkdir()
     described = {"made_from": earlier, "ip_key": IP_KEY}
     (output / "report" / "driver.json").write_text(json.dumps(described))
-    with pytest.raises(PynqRefused) as raised:
+    with pytest.raises(ShellRefused) as raised:
         step_deployment_package(parent, cfg)
     assert str(raised.value) == (
-        f"MakePynqDeployment: driver-stale: the driver in this output directory "
+        f"MakeDeployment: driver-stale: the driver in this output directory "
         f"({output / 'driver'}) was "
         f"made from the design {earlier}, and the partition's design is now "
         f"{design_digest(body)}; make the driver again (step_make_driver)"
@@ -1009,25 +1009,25 @@ def test_a_deployment_ships_only_the_bitfile_and_driver_its_build_made(tmp_path:
     found.append(raised.value.findings)
     described = {"made_from": design_digest(body), "ip_key": OTHER_IP_KEY}
     (output / "report" / "driver.json").write_text(json.dumps(described))
-    with pytest.raises(PynqRefused) as raised:
+    with pytest.raises(ShellRefused) as raised:
         step_deployment_package(parent, cfg)
     assert str(raised.value) == (
-        f"MakePynqDeployment: driver-ip-stale: the driver in this output directory "
+        f"MakeDeployment: driver-ip-stale: the driver in this output directory "
         f"({output / 'driver'}) was made for the IP of the key {OTHER_IP_KEY}, and the "
         f"partition's IP is now {IP_KEY}; make the driver again (step_make_driver)"
     )
     found.append(raised.value.findings)
     codes = ("bitfile-absent", "bitfile-foreign", "driver-absent", "driver-stale")
     assert [(each.code, each.owner, each.kind, dict(each.details)) for (each,) in found] == [
-        (code, "MakePynqDeployment", FindingKind.REJECTION, {"output": "deployment_package"})
+        (code, "MakeDeployment", FindingKind.REJECTION, {"output": "deployment_package"})
         for code in (*codes, "driver-ip-stale")
     ]
     assert not (output / "deploy").exists()
 
 
 class ObjectiveSeen(Transformation):
-    """Stands in for the bitfile's build (BuildPynqBitfile): keeps the objective it is
-    given, and builds nothing."""
+    """Stands in for the bitfile's build (BuildBitfile): keeps the objective it is given,
+    and builds nothing."""
 
     seen: list[float | None] = []
 
@@ -1037,6 +1037,7 @@ class ObjectiveSeen(Transformation):
         super().__init__()
         ObjectiveSeen.seen.append(objective_fps)
         self.findings: tuple[Finding, ...] = ()
+        self.reports: list[Path] = []
         self.bitfile = directory / "bitfile" / "finn-accel.bit"
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
@@ -1060,7 +1061,7 @@ def test_the_bitfiles_objective_is_the_target_its_partition_records(
     none where none did, though an earlier build left its report in the output directory; a
     build resumed from the saved model reads the same; and none where the record is stale
     (the body's design changed after the search)."""
-    monkeypatch.setattr(build_dataflow_steps, "BuildPynqBitfile", ObjectiveSeen)
+    monkeypatch.setattr(build_dataflow_steps, "BuildBitfile", ObjectiveSeen)
     monkeypatch.setattr(ObjectiveSeen, "seen", [])
     parent = cut_parent(tmp_path / "cut")
     cfg = config(tmp_path)
@@ -1117,7 +1118,7 @@ def test_the_bitfiles_clock_findings_are_noted(
 ) -> None:
     """A finding of the bitfile's build is noted once: one warning on the records logger,
     its line the finding's, the finding attached for the manifest."""
-    monkeypatch.setattr(build_dataflow_steps, "BuildPynqBitfile", ClockShort)
+    monkeypatch.setattr(build_dataflow_steps, "BuildBitfile", ClockShort)
     monkeypatch.setattr(ObjectiveSeen, "seen", [])
     model = kernel_model()
     write_target(model, ULTRA96)
@@ -1180,7 +1181,7 @@ def test_a_step_that_moves_the_target_s_folding_leaves_the_bitfile_no_objective(
     shell the movers bound the period at 16 cycles a frame: the target's folding is already
     the fastest within it, so the maximum throughput changes nothing there, while the hold
     and the baselines move it."""
-    monkeypatch.setattr(build_dataflow_steps, "BuildPynqBitfile", ObjectiveSeen)
+    monkeypatch.setattr(build_dataflow_steps, "BuildBitfile", ObjectiveSeen)
     monkeypatch.setattr(ObjectiveSeen, "seen", [])
     parent = cut_parent(tmp_path / "cut")
     cfg = config(tmp_path)
@@ -1385,12 +1386,21 @@ def test_sizing_fifos_on_tfc_places_none_and_changes_no_choice(
 def test_the_delivered_clock_is_reported_beside_the_one_asked(tmp_path: Path) -> None:
     """TFC's case: 196 cycles a frame at the 187.512 MHz the shell delivers for 5 ns asked
     give 956,694 frames a second, against the 1e6 its exploration asked: a limitation
-    with both numbers (a finding, never a Python warning)."""
+    with both numbers (a finding, never a Python warning). The main clock is the one the
+    linker states as delivered; the ``pynq`` linker reads it from the routed design's
+    timing summary, its PL clock."""
     report = tmp_path / "timing.rpt"
     report.write_text(TIMING_REPORT)
-    clock = delivered_clock(str(report), 5.0, 196, 1_000_000)
-    assert clock == {
+    assert delivered_clock(str(report), 5.0) == {
         "clock": "clk_pl_0",
+        "target_period_ns": 5.0,
+        "delivered_period_ns": 5.333,
+        "delivered_mhz": 187.512,
+    }
+    linked = Linked(tmp_path / "image", placement={}, clocks_mhz={"main": 187.512}, reports={})
+    clock = shell_build.delivered_clock(linked, 5.0, 196, 1_000_000)
+    assert clock == {
+        "clock": "main",
         "target_period_ns": 5.0,
         "delivered_period_ns": 5.333,
         "delivered_mhz": 187.512,
@@ -1399,27 +1409,31 @@ def test_the_delivered_clock_is_reported_beside_the_one_asked(tmp_path: Path) ->
         "fps_at_delivered": 956693.9,
         "objective_fps": 1_000_000,
     }
-    (below,) = delivered_clock_findings(clock, str(report))
+    (below,) = delivered_clock_findings(clock)
     assert (below.kind, below.code) == (FindingKind.LIMITATION, "clock-below-asked")
     assert below.message == (
-        "the shell delivers clk_pl_0 at 5.333 ns (187.512 MHz), not the 5.0 ns asked: "
+        "the shell delivers its main clock at 5.333 ns (187.512 MHz), not the 5.0 ns asked: "
         "196 cycles a frame give 956,694 fps at it, 1,020,408 at the clock asked; "
         "the objective is 1,000,000 fps"
     )
     assert dict(below.details) == {"asked_period_ns": 5.0, "delivered_period_ns": 5.333}
     # The clock asked, delivered: nothing to state; without a partition, the clock alone.
-    assert delivered_clock_findings(delivered_clock(str(report), 5.333, 196), str(report)) == ()
-    alone = delivered_clock(str(report), 5.0)
+    delivered = shell_build.delivered_clock(linked, 5.333, 196, None)
+    assert delivered_clock_findings(delivered) == ()
+    alone = shell_build.delivered_clock(linked, 5.0, None, None)
     assert set(alone) == {"clock", "target_period_ns", "delivered_period_ns", "delivered_mhz"}
-    (below,) = delivered_clock_findings(alone, str(report))
+    (below,) = delivered_clock_findings(alone)
     assert below.message.endswith("not the 5.0 ns asked")
-    (above,) = delivered_clock_findings(delivered_clock(str(report), 6.0), str(report))
+    (above,) = delivered_clock_findings(shell_build.delivered_clock(linked, 6.0, None, None))
     assert above.code == "clock-above-asked"
+    # A routed design whose timing summary names no PL clock: the linker states no main
+    # clock, and the period asked is not confirmed.
     report.write_text("no clock summary")
-    unknown = delivered_clock(str(report), 5.0)
-    assert unknown == {"target_period_ns": 5.0, "clocks": []}
-    (found,) = delivered_clock_findings(unknown, str(report))
-    assert found.code == "clock-unknown" and "no PL clock" in found.message
+    assert delivered_clock(str(report), 5.0) == {"target_period_ns": 5.0, "clocks": []}
+    unknown = shell_build.delivered_clock(replace(linked, clocks_mhz={}), 5.0, 196, None)
+    assert unknown == {"clock": "main", "target_period_ns": 5.0}
+    (found,) = delivered_clock_findings(unknown)
+    assert found.code == "clock-unknown" and "states no main clock" in found.message
 
 
 def test_a_partitions_bottleneck_is_read_from_its_saved_choices() -> None:
@@ -1801,7 +1815,7 @@ TFC_EDGES = [
 
 
 def tool_recorders(tmp_path: Path) -> dict[str, object]:
-    """The runner's tool steps, each replaced by one that states what the tool would
+    """The bitfile build's tool steps, each replaced by one that states what the tool would
     have made, in ``tmp_path``: hls_products a mover's HLS export, named as its top,
     PackagePartition the partition's IP, named as its module."""
 
@@ -1835,16 +1849,16 @@ def tool_recorders(tmp_path: Path) -> dict[str, object]:
 def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
     source: ModelWrapper, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """TFC on pynq through the build and its shell's outputs, the runner's tools
+    """TFC on pynq through the build and its shell's outputs, the bitfile build's tools
     faked (its tool steps state what they would make; Vivado makes its project's files,
     the timing summary a PS that gives 187.512 MHz for the 200 asked).
 
     - The parent graph stays the build's model and states what a later step consumes,
-      typed, and no flat key: the bitfile and its handoff, no report; the reports are
-      collected beside them, the delivered clock's with the partition's network's
-      bottleneck, movers included.
+      typed, and no flat key: the bitfile, no report; its hardware handoff is beside it,
+      and the reports are collected beside them, the delivered clock's with the
+      partition's network's bottleneck, movers included.
     - The driver's runtime file is the build's report of it, its edges the I/O the
-      build's driver read before the runner, the logits INT7, its main clock the
+      build's driver read before the shared driver, the logits INT7, its main clock the
       delivered one; report/driver.json states the bitfile, the runtime and what the
       driver was made from.
     - report/resources.json states each member of the shell by the model, out of
@@ -1854,7 +1868,7 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
       part of the parent graph, whose partition node reads its body by a relative path:
       executed from there, it gives the build's labels."""
     for name, recorded in tool_recorders(tmp_path).items():
-        monkeypatch.setattr(pynq_runner, name, recorded)
+        monkeypatch.setattr(shell_build, name, recorded)
     monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "build"))
     cfg = config(tmp_path)
     vivado = FakeVivado(timing=TIMING_REPORT)
@@ -1888,7 +1902,6 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
         "bitfile_made_from": design_digest(body),
         "bitfile_ip_key": IP_KEY,
         "bitfile_options": {"hw_debug": False},
-        "hwh": str(output / "bitfile" / "finn-accel.hwh"),
     }
     assert (output / "bitfile" / "finn-accel.hwh").read_text() == "top.hwh"
     assert (report / "placed_utilization.xml").read_text() == PLACED_HIERARCHY
@@ -2051,39 +2064,30 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
     assert np.array_equal(labels[shipped.graph.output[0].name], expected)
 
 
-def test_a_driver_without_its_bitfile_or_its_clock_is_refused(tmp_path: Path) -> None:
-    """The driver sets the clock its bitfile delivers and runs the bitfile the build
-    ships: an output directory with no delivered-clock report (the bitfile's build
-    writes it there) is refused, so is one whose routed design states no PL clock, and
-    so is a parent graph that states no bitfile."""
+def test_a_driver_without_its_bitfile_or_its_runtime_file_is_refused(tmp_path: Path) -> None:
+    """The driver runs the bitfile the build ships and reaches each unit where its build
+    placed it: a parent graph that states no bitfile is refused, and so is an output
+    directory with no runtime file (the bitfile's build writes it there)."""
     model = kernel_model()
     write_target(model, ULTRA96)
     model = model.transform(MakeCutChoices(CUT_NAME))  # its movers, as the cut makes them
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)
-    report = Path(cfg.output_dir) / DELIVERED_CLOCK
-    with refused(
-        "clock-absent",
-        error=PynqRefused,
-        owner="MakePynqDriver",
-        message=re.escape(f"no delivered clock ({report})"),
-    ):
+    with refused("bitfile-absent", error=ShellRefused, owner="MakeDriver"):
         step_make_driver(parent, cfg)
-    report.parent.mkdir(parents=True)
-    unknown = Finding(
-        FindingKind.LIMITATION, "clock-unknown", "delivered_clock", "no PL clock in it"
-    ).record()
-    report.write_text(json.dumps({"target_period_ns": 5.0, "clocks": [], "findings": [unknown]}))
+    _, body, body_file = partition_body(parent)
+    body.set(OUTPUT_IP_KEY, IP_KEY)
+    body.save(body_file)
+    parent.set(OUTPUT_BITFILE, str(Path(cfg.output_dir) / "bitfile" / "finn-accel.bit"))
+    parent.set(OUTPUT_BITFILE_MADE_FROM, design_digest(body))
+    parent.set(OUTPUT_BITFILE_IP_KEY, IP_KEY)
     with refused(
-        "clock-unknown",
-        error=PynqRefused,
-        owner="MakePynqDriver",
-        message="the bitfile's clock is not known: no PL clock in it",
+        "integration-absent",
+        error=ShellRefused,
+        owner="MakeDriver",
+        message=re.escape(f"no runtime file ({Path(cfg.output_dir) / RUNTIME_FILE})"),
     ):
-        step_make_driver(parent, cfg)
-    report.write_text(json.dumps({"target_period_ns": 5.0, "delivered_mhz": 187.512}))
-    with refused("bitfile-absent", error=PynqRefused, owner="MakePynqDriver"):
         step_make_driver(parent, cfg)
     assert not (Path(cfg.output_dir) / "driver").exists()
 
@@ -2091,8 +2095,8 @@ def test_a_driver_without_its_bitfile_or_its_clock_is_refused(tmp_path: Path) ->
 @pytest.mark.parametrize(
     "step, output, maker",
     [
-        (step_make_driver, "pynq_driver", "MakePynqDriver"),
-        (step_deployment_package, "deployment_package", "MakePynqDeployment"),
+        (step_make_driver, "driver", "MakeDriver"),
+        (step_deployment_package, "deployment_package", "MakeDeployment"),
     ],
 )
 def test_a_bitfile_built_from_another_design_or_ip_is_refused_by_name(
@@ -2113,15 +2117,13 @@ def test_a_bitfile_built_from_another_design_or_ip_is_refused_by_name(
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)
     output_dir = Path(cfg.output_dir)
-    clock = output_dir / DELIVERED_CLOCK
-    clock.parent.mkdir(parents=True)
-    clock.write_text(json.dumps({"target_period_ns": 5.0, "delivered_mhz": 187.512}))
+    (output_dir / "report").mkdir(parents=True)
     bitfile = output_dir / "bitfile" / "finn-accel.bit"
     parent.set(OUTPUT_BITFILE, str(bitfile))
     (output_dir / "report" / "driver.json").write_text(json.dumps({"made_from": None}))
     with refused(
         "bitfile-unmade",
-        error=PynqRefused,
+        error=ShellRefused,
         owner=maker,
         output=output,
         message=r"the model's bitfile \(.*\) states no design",
@@ -2134,7 +2136,7 @@ def test_a_bitfile_built_from_another_design_or_ip_is_refused_by_name(
     body.save(body_file)
     now = design_digest(body)
     assert now != built_from
-    with pytest.raises(PynqRefused) as raised:
+    with pytest.raises(ShellRefused) as raised:
         step(parent, cfg)
     assert [each.code for each in raised.value.findings] == ["bitfile-stale"]
     assert str(raised.value) == (
@@ -2147,7 +2149,7 @@ def test_a_bitfile_built_from_another_design_or_ip_is_refused_by_name(
     parent.set(OUTPUT_BITFILE_IP_KEY, OTHER_IP_KEY)
     body.set(OUTPUT_IP_KEY, IP_KEY)
     body.save(body_file)
-    with pytest.raises(PynqRefused) as raised:
+    with pytest.raises(ShellRefused) as raised:
         step(parent, cfg)
     assert [each.code for each in raised.value.findings] == ["bitfile-ip-stale"]
     assert str(raised.value) == (

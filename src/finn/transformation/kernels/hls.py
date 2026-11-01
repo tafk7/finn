@@ -17,8 +17,8 @@ declaration stays the ABI, and a product that contradicts it is refused
 (``HlsAbiRefused``), as is one the checker cannot read. What it returns is what
 ``emit_module`` takes as ``built``: each request's exported Verilog by its top's name.
 ``hls_products`` returns the products themselves, by the same names: a request that exports
-its IP holds it there (``HlsProduct.ip``), which a shell's runner instantiates (a mover's,
-``finn.shells.pynq.runner``).
+its IP holds it there (``HlsProduct.ip``), which a shell's linker instantiates (a mover's,
+``finn.shells.build.mover_ip``).
 
 Every caller that emits a module calls it first: ``PackagePartition`` and
 ``ElaboratePartition`` with the partition's part, the harness with the part it

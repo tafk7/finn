@@ -1,14 +1,15 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The pynq shell's build (``finn.shells.pynq``) over the kernel path's parent graph: the
-movers' IPs its runner builds, the block design its linker writes from the integration
-description, the project, what it collects, its options, and its driver.
+"""A build's bitfile and driver through the declarations (``finn.shells.build``), on the
+``pynq`` shell (``finn.shells.pynq``), over the kernel path's parent graph: the movers'
+IPs the build makes, the block design the ``pynq`` linker writes from the integration
+description, the project, what it collects, its options, and the driver.
 
 The Chain (``support.chain``), its second weights streamed (two inputs, ``in0`` and
 ``in1``, and ``out0``), its choices saved, stated for Ultra96 in the Zynq shell and cut
 once. No Vivado and no Vitis HLS runs: the tools are recorded, or faked where the test
-says so. TFC's runner (Z0's block design, movers and driver) is in test_builder_phase.
+says so. TFC's build (Z0's block design, movers and driver) is in test_builder_phase.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ import logging
 import os
 import sys
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -52,38 +53,44 @@ from finn.core.reporting.manifest import RECORDS, STORED
 from finn.kernels.artifacts.ipxact import vlnv
 from finn.kernels.artifacts.module import Leaf
 from finn.platform.resolve import resolve_target
+from finn.shells import build as shell_build
+from finn.shells.build import (
+    BITFILE_DIR,
+    DELIVERED_CLOCK,
+    DRIVER_DIR,
+    DRIVER_REPORT,
+    RUNTIME_FILE,
+    BuildBitfile,
+    MakeDriver,
+    ShellRefused,
+    bitfile_directory,
+    exported_vlnv,
+    mover_ip,
+    unit_ips,
+)
 from finn.shells.integration import (
     MAIN,
     RUNTIME_SCHEMA,
     Integration,
+    IntegrationError,
     IpRef,
     Linked,
     describe,
     runtime_text,
 )
 from finn.shells.pynq import linker as pynq_linker
-from finn.shells.pynq import runner as pynq_runner
-from finn.shells.pynq.driver import DRIVER_DIR, DRIVER_REPORT, MakePynqDriver
 from finn.shells.pynq.linker import (
+    BLOCK_DESIGN,
+    OUT_OF_CONTEXT,
+    PLACED,
+    TIMING,
+    BlockDesignLinker,
     LinkerRefused,
     block_design,
     collect,
     linked_row,
     project_script,
     unit_bases,
-)
-from finn.shells.pynq.runner import (
-    BITFILE,
-    DELIVERED_CLOCK,
-    HWH,
-    REPORTS,
-    BuildPynqBitfile,
-    PynqOptions,
-    PynqRefused,
-    bitfile_directory,
-    build_pynq,
-    exported_vlnv,
-    mover_ip,
 )
 from finn.shells.pynq.templates import custom_zynq_shell_template
 from finn.toolchain import hls, launcher
@@ -97,6 +104,9 @@ from finn.transformation.kernels.package import ip_key
 ZYNQ = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
 #: The facts the ``pynq`` shell declares of Ultra96 for its linker.
 BOARD_FACTS = {"board_part": "avnet.com:ultra96v1:part0:1.2"}
+
+#: The bitfile a build collects, under its output directory.
+BITFILE = BITFILE_DIR / "finn-accel.bit"
 
 #: The key of the IP a recorded packaging states (``recorded_tools``).
 PACKAGED_KEY = "sha256:" + "1" * 64
@@ -286,7 +296,7 @@ def recorded_tools(
     tmp_path: Path,
     replaced: tuple[str, ...] = TOOL_STEPS,
 ) -> list[tuple[str, object, tuple[object, ...]]]:
-    """The runner's ``replaced`` steps replaced by recorders of what each is given, its
+    """The build's ``replaced`` steps replaced by recorders of what each is given, its
     build directory under ``tmp_path``: each recorded step's name, toolchain and
     arguments, in order, as the build runs them. A recorded HLS synthesis exports its
     module's IP under ``tmp_path/hls``."""
@@ -326,9 +336,41 @@ def recorded_tools(
         "hls_products": products,
     }
     for name in replaced:
-        monkeypatch.setattr(pynq_runner, name, recorders[name])
+        monkeypatch.setattr(shell_build, name, recorders[name])
     monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "build"))
     return seen
+
+
+@dataclass(frozen=True)
+class Built:
+    """What a build linked: the description, each unit given the IP it was built as
+    (``integration``), what the linker made of it (``linked``), the key of the partition's
+    IP (``ip_key``) and the digest of its design (``made_from``)."""
+
+    integration: Integration
+    linked: Linked
+    ip_key: str
+    made_from: str
+
+    @property
+    def project(self) -> Path:
+        """Vivado's project: the bitfile is in its ``impl_1`` run."""
+        return self.linked.image.parents[2]
+
+
+def linked_build(
+    parent: ModelWrapper, described: Integration, toolchain: Toolchain, debug: bool = False
+) -> Built:
+    """``described``, the description of the parent graph ``parent``, built as
+    ``BuildBitfile`` builds it on the ``pynq`` shell: the linker's check, each unit's IP
+    (``unit_ips``), and the description linked, every tool run by ``toolchain``."""
+    linker = BlockDesignLinker(debug=debug)
+    linker.check(described, BOARD_FACTS)
+    ips, key = unit_ips(parent, described, toolchain=toolchain)
+    built = described.packaged(ips)
+    linked = linker.link(built, BOARD_FACTS, Path(os.environ["FINN_BUILD_DIR"]), toolchain)
+    _, body, _ = partition_body(parent)
+    return Built(built, linked, key, design_digest(body))
 
 
 def recorded_build(
@@ -336,17 +378,17 @@ def recorded_build(
     tmp_path: Path,
     toolchain: object,
     replaced: tuple[str, ...] = TOOL_STEPS,
-    options: PynqOptions = PynqOptions(),
+    debug: bool = False,
     packaged: Path | None = None,
     since: Callable[[ModelWrapper], None] | None = None,
     presenting: bool = False,
-) -> tuple[ModelWrapper, Integration, Any, list[tuple[str, object, tuple[object, ...]]]]:
-    """build_pynq over the Chain, the ``replaced`` steps recorded (``recorded_tools``):
-    the parent graph, its integration description, what the runner collected, and each
-    recorded step's name, toolchain and arguments, in order. With ``packaged``, the body
-    already states that IP, of the key it has (``ip_key``), as STITCHED_IP leaves it; then
-    ``since`` changes the body after it was packaged. ``presenting``: its thresholds
-    runtime-writable (``zynq_parent``)."""
+) -> tuple[ModelWrapper, Integration, Built, list[tuple[str, object, tuple[object, ...]]]]:
+    """The Chain built (``linked_build``), the ``replaced`` steps recorded
+    (``recorded_tools``): the parent graph, its integration description, what the build
+    linked, and each recorded step's name, toolchain and arguments, in order. With
+    ``packaged``, the body already states that IP, of the key it has (``ip_key``), as
+    STITCHED_IP leaves it; then ``since`` changes the body after it was packaged.
+    ``presenting``: its thresholds runtime-writable (``zynq_parent``)."""
     seen = recorded_tools(monkeypatch, tmp_path, replaced)
     parent = zynq_parent(tmp_path, presenting=presenting)
     if packaged is not None:
@@ -361,7 +403,7 @@ def recorded_build(
             verified(body, node.name)
         body.save(body_file)
     described = describe(parent)
-    built = build_pynq(parent, described, toolchain=cast(Toolchain, toolchain), options=options)
+    built = linked_build(parent, described, cast(Toolchain, toolchain), debug)
     return parent, described, built, seen
 
 
@@ -391,23 +433,26 @@ def test_a_build_generates_each_movers_ip_packages_the_partition_and_runs_vivado
     ((tool, args, script),) = vivado.runs
     assert (tool, args[:3]) == ("vivado", ["-mode", "batch", "-source"])
     assert design(described, built_ips(tmp_path, described)) in script
-    project = Path(built.project)
+    project = built.project
     assert args[3] == str(project / "ip_config.tcl")
-    assert Path(built.bitfile).read_text() == "top_wrapper.bit"
-    assert Path(built.hwh).read_text() == "top.hwh"
-    assert Path(built.timing).name == "top_wrapper_timing_summary_routed.rpt"
-    assert Path(built.placed) == project / "synth_report.xml"
-    assert sorted(built.out_of_context) == [
-        "top_DataflowCore_0_0",
-        "top_in0_0",
-        "top_smartconnect_0_0",
+    # The bitfile, its hardware handoff beside it, and the reports by their paths under a
+    # build's report/.
+    linked = built.linked
+    assert linked.image.read_text() == "top_wrapper.bit"
+    assert [path.read_text() for path in linked.beside] == ["top.hwh"]
+    assert linked.reports[TIMING].name == "top_wrapper_timing_summary_routed.rpt"
+    assert linked.reports[PLACED] == project / "synth_report.xml"
+    assert linked.reports[BLOCK_DESIGN] == project / BLOCK_DESIGN
+    assert sorted(name for name in linked.reports if name.startswith(OUT_OF_CONTEXT)) == [
+        f"{OUT_OF_CONTEXT}/top_{run}_0_utilization_synth.rpt"
+        for run in ("DataflowCore_0", "in0", "smartconnect_0")
     ]
 
 
 def test_a_core_presenting_a_bus_is_placed_as_its_unit(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The Chain, its thresholds runtime-writable: after the partition's IP, the runner
+    """The Chain, its thresholds runtime-writable: after the partition's IP, the build
     packages its core's unit (``PackageUnit``, in the build's toolchain), and the block
     design instantiates the unit as the core's cell, its repositories the unit's and the
     core's, its one control port at one window; the integration report names the unit's
@@ -480,7 +525,7 @@ def test_an_ip_of_another_key_is_packaged_again(
     IP, and the body states it, with its key."""
     vivado = FakeVivado()
     earlier = tmp_path / "DataflowCore_0" / "ip" / "ip"
-    with caplog.at_level(logging.INFO, logger="finn.shells.pynq.runner"):
+    with caplog.at_level(logging.INFO, logger="finn.shells.build"):
         parent, described, built, seen = recorded_build(
             monkeypatch, tmp_path, vivado, packaged=earlier, since=since
         )
@@ -498,7 +543,7 @@ def test_the_debug_option_reaches_the_block_design(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     vivado = FakeVivado()
-    recorded_build(monkeypatch, tmp_path, vivado, options=PynqOptions(hw_debug=True))
+    recorded_build(monkeypatch, tmp_path, vivado, debug=True)
     ((_, _, script),) = vivado.runs
     assert "set_property HDL_ATTRIBUTE.DEBUG true [get_bd_intf_nets {in1_out0_V}]" in script
     # The template's own block, on its constant nets, stays off.
@@ -525,17 +570,17 @@ def test_a_build_vivado_made_nothing_of_is_vivados_failure(
 def test_the_bitfile_build_prepares_its_default_toolchain_once_when_made(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """BuildPynqBitfile, made without a toolchain, prepares the machine's once and runs
-    every tool of its build by it; ``build_pynq`` takes the one it is given."""
+    """BuildBitfile, made without a toolchain, prepares the machine's once and runs every
+    tool of its build by it."""
     prepared: list[FakeVivado] = []
 
     def host_toolchain() -> FakeVivado:
         prepared.append(FakeVivado(timing=TIMING_REPORT))
         return prepared[-1]
 
-    monkeypatch.setattr(pynq_runner, "host_toolchain", host_toolchain)
+    monkeypatch.setattr(shell_build, "host_toolchain", host_toolchain)
     seen = recorded_tools(monkeypatch, tmp_path)
-    building = BuildPynqBitfile(tmp_path / "output")
+    building = BuildBitfile(tmp_path / "output")
     assert len(prepared) == 1 and building.toolchain is cast(Toolchain, prepared[0])
     zynq_parent(tmp_path).transform(building)
     assert len(prepared) == 1
@@ -546,17 +591,17 @@ def test_the_bitfile_build_prepares_its_default_toolchain_once_when_made(
 def test_the_bitfile_build_is_a_transformation_of_the_parent_graph(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """BuildPynqBitfile reads the shell, board, part and clock from the target the
-    partition's body states, runs the build and collects what Vivado made into the output
-    directory it is given; the
-    delivered clock's report states the throughput asked, the objective it is given. The
-    parent graph states the bitfile, its handoff and reports, what it was made from and
-    the options it was built with."""
+    """BuildBitfile reads the shell, board, part and clock from the target the partition's
+    body states, links through the shell's declared linker and collects what it made into
+    the output directory it is given: the bitfile with its hardware handoff beside it, each
+    report by its path under report/, the runtime file and the delivered clock, whose
+    report states the throughput asked, the objective it is given. The parent graph states
+    the bitfile, what it was made from and the options it was built with."""
     recorded_tools(monkeypatch, tmp_path)
     parent = zynq_parent(tmp_path)
     output = tmp_path / "output"
     vivado = FakeVivado(timing=TIMING_REPORT)
-    building = BuildPynqBitfile(
+    building = BuildBitfile(
         output, toolchain=cast(Toolchain, vivado), hw_debug=True, objective_fps=1000
     )
     built = parent.transform(building)
@@ -565,27 +610,31 @@ def test_the_bitfile_build_is_a_transformation_of_the_parent_graph(
     assert "set_property HDL_ATTRIBUTE.DEBUG true" in script
     _, body, _ = partition_body(built)
     report = output / "report"
-    # The model states what a later step consumes: the bitfile, its hardware handoff and
-    # what it was made from; its reports are beside it, by the output directory's
-    # convention (REPORTS).
+    # The model states what a later step consumes: the bitfile and what it was made from;
+    # the files it loads with and its reports are beside it, by the output directory's
+    # convention.
     assert built.namespace(OUTPUTS) == {
         "bitfile": str(output / "bitfile" / "finn-accel.bit"),
         "bitfile_made_from": design_digest(body),
         "bitfile_ip_key": PACKAGED_KEY,
         "bitfile_options": {"hw_debug": True},
-        "hwh": str(output / "bitfile" / "finn-accel.hwh"),
     }
     assert bitfile_directory(built) == output
-    assert {name: (output / path).exists() for name, path in REPORTS.items()} == {
-        name: True for name in REPORTS
-    }
     assert building.bitfile == output / BITFILE
+    assert sorted(path.name for path in (output / BITFILE_DIR).iterdir()) == [
+        "finn-accel.bit",
+        "finn-accel.hwh",
+    ]
     assert (output / BITFILE).read_text() == "top_wrapper.bit"
-    assert (output / HWH).read_text() == "top.hwh"
-    assert len(list((report / "out_of_context").iterdir())) == 3
+    assert (output / BITFILE_DIR / "finn-accel.hwh").read_text() == "top.hwh"
+    assert sorted(path.name for path in report.iterdir()) == sorted(
+        [TIMING, PLACED, OUT_OF_CONTEXT, BLOCK_DESIGN, "integration.json", "delivered_clock.json"]
+    )
+    assert sorted(building.reports) == sorted(path for path in report.rglob("*") if path.is_file())
+    assert len(list((report / OUT_OF_CONTEXT).iterdir())) == 3
     # The block design as built: each unit's IP the one the build made, the core's the one
     # its packaging gave it.
-    designed = json.loads((report / "block_design.json").read_text())
+    designed = json.loads((report / BLOCK_DESIGN).read_text())
     ips = {unit["name"]: unit["ip"] for unit in designed["units"]}
     assert ips["DataflowCore_0"] == {
         "vlnv": body.get(OUTPUT_VLNV),
@@ -597,7 +646,7 @@ def test_the_bitfile_build_is_a_transformation_of_the_parent_graph(
     assert designed == pynq_linker.report(described.packaged(built_ips))
     # The runtime file: its layout, the description as a runtime reads it (no unit's IP),
     # each placed unit's base and the main clock as the routed design delivers it.
-    integrated = json.loads((report / "integration.json").read_text())
+    integrated = json.loads((output / RUNTIME_FILE).read_text())
     assert integrated == {
         "schema": RUNTIME_SCHEMA,
         **described.report(),
@@ -621,10 +670,10 @@ def test_the_bitfile_build_refuses_a_shell_without_it(tmp_path: Path) -> None:
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     vivado = FakeVivado()
-    building = BuildPynqBitfile(tmp_path / "output", toolchain=cast(Toolchain, vivado))
+    building = BuildBitfile(tmp_path / "output", toolchain=cast(Toolchain, vivado))
     with refused(
         "shell-integrates-nothing",
-        error=PynqRefused,
+        error=ShellRefused,
         owner="configuration.target.shell",
         message="the 'ip' shell does not integrate the partition",
         output="bitfile",
@@ -634,10 +683,12 @@ def test_the_bitfile_build_refuses_a_shell_without_it(tmp_path: Path) -> None:
 
 
 def test_a_description_the_block_design_cannot_wire_is_refused_before_any_tool_runs(
-    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """A unit whose control window is less than the row's least window: refused by the
-    linker before any mover's HLS, the partition's packaging or Vivado runs."""
+    linker's check, which the bitfile's build runs before any mover's HLS, the partition's
+    packaging or Vivado."""
+    seen = recorded_tools(monkeypatch, tmp_path)
     parent = zynq_parent(tmp_path)
     described = describe(parent)
     narrow = replace(
@@ -648,10 +699,14 @@ def test_a_description_the_block_design_cannot_wire_is_refused_before_any_tool_r
         ),
         endpoints=tuple(replace(each, range=64) for each in described.endpoints),
     )
+    with refused("range-below-least", error=LinkerRefused):
+        BlockDesignLinker().check(narrow, BOARD_FACTS)
+    monkeypatch.setattr(shell_build, "describe", lambda model, runtime=None: narrow)
     vivado = FakeVivado()
     with refused("range-below-least", error=LinkerRefused):
-        build_pynq(parent, narrow, toolchain=cast(Toolchain, vivado))
-    assert vivado.runs == []
+        parent.transform(BuildBitfile(tmp_path / "output", toolchain=cast(Toolchain, vivado)))
+    assert vivado.runs == [] and seen == []
+    assert not (tmp_path / "output").exists()
 
 
 #: A Vitis HLS that reports 2024.2 and, given a request, makes the solution's exported
@@ -717,7 +772,7 @@ def test_hls_synthesis_runs_in_the_builds_toolchain(
         {"PATH": f"{tools}:{os.defpath}", "XILINX_HLS": str(tmp_path / "hls")},
     )
     vivado = FakeVivado()
-    monkeypatch.setattr(pynq_runner, "host_toolchain", machine_refused)
+    monkeypatch.setattr(shell_build, "host_toolchain", machine_refused)
     # HLS reads the launcher's (finn.toolchain.hls imports the module).
     monkeypatch.setattr(launcher, "host_toolchain", machine_refused)
     seen = recorded_tools(monkeypatch, tmp_path, replaced=("PackagePartition",))
@@ -732,7 +787,7 @@ def test_hls_synthesis_runs_in_the_builds_toolchain(
                 return vivado.run(tool, list(args), **options)
             return toolchain.run(tool, args, **options)
 
-    build_pynq(parent, described, toolchain=Both(toolchain.selection, toolchain.environment))
+    linked_build(parent, described, Both(toolchain.selection, toolchain.environment))
     assert [name for name, _, _ in seen] == ["PackagePartition"]
     ((_, _, script),) = vivado.runs
     for edge in described.edges:
@@ -814,15 +869,16 @@ def test_an_exported_ip_states_its_vlnv_in_ip_xact(tmp_path: Path) -> None:
 
 
 def test_the_driver_is_a_transformation_of_the_parent_graph(tmp_path: Path) -> None:
-    """MakePynqDriver writes the ``pynq`` runtime's driver afresh into driver/ under the
-    output directory it is given and its description into report/driver.json: its shell
-    the target the partition's body states; its runtime file the build's report of it,
-    byte for byte, each edge as its mover moves it (the frame in beats of lanes, a beat's
-    bits); PL0 the clock the delivered-clock report states; the bitfile the parent graph
-    states its default. The description states the bitfile, the runtime, the design the
-    driver was made from and the IP its bitfile holds, and the parent graph is left as it
-    was. Without the delivered clock or the build's runtime file, or with one of another
-    schema, or on the ip shell, it is refused before anything is written."""
+    """MakeDriver writes the driver of the runtime it is given (``pynq``'s) afresh into
+    driver/ under the output directory it is given, and its description into
+    report/driver.json: its shell the target the partition's body states; its runtime file
+    the build's, byte for byte, each edge as its mover moves it (the frame in beats of
+    lanes, a beat's bits), the main clock as delivered; the bitfile the parent graph states
+    its default. The description states the bitfile, the runtime, the design the driver was
+    made from and the IP its bitfile holds, and the parent graph is left as it was. Without
+    the build's runtime file, or with one of another schema, without a runtime, with one
+    the shell does not offer, or on the ip shell, it is refused before anything is
+    written."""
     parent = zynq_parent(tmp_path)
     output = tmp_path / "output"
     _, body, body_file = partition_body(parent)
@@ -832,22 +888,18 @@ def test_the_driver_is_a_transformation_of_the_parent_graph(tmp_path: Path) -> N
     parent.set(OUTPUT_BITFILE_MADE_FROM, design_digest(body))
     parent.set(OUTPUT_BITFILE_IP_KEY, PACKAGED_KEY)
     with refused(
-        "clock-absent",
-        error=PynqRefused,
-        owner="MakePynqDriver",
-        message="no delivered clock",
-        output="pynq_driver",
+        "integration-absent",
+        error=ShellRefused,
+        owner="MakeDriver",
+        message="no runtime file",
+        output="driver",
     ):
-        parent.transform(MakePynqDriver(output))
+        parent.transform(MakeDriver(output, "pynq"))
     assert not output.exists()
-    (output / DELIVERED_CLOCK).parent.mkdir(parents=True)
-    (output / DELIVERED_CLOCK).write_text(json.dumps({"delivered_mhz": 187.512}))
-    with refused("integration-absent", error=PynqRefused, owner="MakePynqDriver"):
-        parent.transform(MakePynqDriver(output))
-    (output / REPORTS["integration"]).write_text(json.dumps({"schema": 0}))
-    with refused("integration-schema", error=PynqRefused, owner="MakePynqDriver"):
-        parent.transform(MakePynqDriver(output))
-    assert not (output / DRIVER_DIR).exists()
+    (output / RUNTIME_FILE).parent.mkdir(parents=True)
+    (output / RUNTIME_FILE).write_text(json.dumps({"schema": 0}))
+    with refused("integration-schema", error=ShellRefused, owner="MakeDriver"):
+        parent.transform(MakeDriver(output, "pynq"))
     described = describe(parent)
     linked = Linked(
         image=output / BITFILE,
@@ -855,10 +907,23 @@ def test_the_driver_is_a_transformation_of_the_parent_graph(tmp_path: Path) -> N
         clocks_mhz={MAIN: 187.512},
         reports={},
     )
-    (output / REPORTS["integration"]).write_text(runtime_text(described, linked))
+    (output / RUNTIME_FILE).write_text(runtime_text(described, linked))
+    with refused(
+        "runtime-absent",
+        error=ShellRefused,
+        owner="configuration.target.runtime",
+        message="the 'pynq' shell offers no runtime",
+        output="driver",
+    ):
+        parent.transform(MakeDriver(output, None))
+    with refused(
+        "runtime-not-offered", error=IntegrationError, owner="configuration.target.runtime"
+    ):
+        parent.transform(MakeDriver(output, "vrt"))
+    assert not (output / DRIVER_DIR).exists() and not (output / DRIVER_REPORT).exists()
     (output / DRIVER_DIR).mkdir()
     (output / DRIVER_DIR / "stale.py").write_text("an earlier build's")
-    making = MakePynqDriver(output)
+    making = MakeDriver(output, "pynq")
     made = parent.transform(making)
     assert sorted(path.name for path in (output / DRIVER_DIR).iterdir()) == [
         "driver.py",
@@ -867,7 +932,7 @@ def test_the_driver_is_a_transformation_of_the_parent_graph(tmp_path: Path) -> N
         "validate.py",
     ]
     shipped = (output / DRIVER_DIR / "integration.json").read_text()
-    assert shipped == (output / REPORTS["integration"]).read_text()
+    assert shipped == (output / RUNTIME_FILE).read_text()
     # Two and four INT3 lanes in one and two bytes a beat; four INT7 lanes in four.
     assert [
         (edge["unit"], edge["element"], edge["shape"], edge["beats"], edge["lanes"], edge["bits"])
@@ -898,9 +963,9 @@ def test_the_driver_is_a_transformation_of_the_parent_graph(tmp_path: Path) -> N
     on_ip = model.transform(CutKernelPartition(tmp_path / "ip"))
     with refused(
         "shell-integrates-nothing",
-        error=PynqRefused,
+        error=ShellRefused,
         owner="configuration.target.shell",
-        output="pynq_driver",
+        output="driver",
     ):
-        on_ip.transform(MakePynqDriver(tmp_path / "ip_output"))
+        on_ip.transform(MakeDriver(tmp_path / "ip_output", None))
     assert not (tmp_path / "ip_output").exists()

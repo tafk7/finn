@@ -35,9 +35,9 @@ from support.refusals import refused
 from support.tfc import partition
 
 from finn.dataflow.tensor import ScalarEncoding
+from finn.shells.build import ShellRefused
 from finn.shells.integration import MAIN, Linked, describe, runtime_file
 from finn.shells.pynq.linker import linked_row, unit_bases
-from finn.shells.pynq.runner import PynqRefused
 from finn.shells.pynq.runtime import PynqRuntime, shipped
 from finn.shells.runtime import Description, Driver, Refused, cli, read, validate
 from finn.shells.runtime.movers import DONE, IDLE
@@ -500,7 +500,7 @@ def test_the_pynq_runtime_refuses_an_edge_the_shared_driver_cannot_drive(
     pushed = replace(edge, contract=replace(edge.contract, kind="pushed_adapter"))
     for changed, code in ((floated, "element-unsupported"), (pushed, "mover-unknown")):
         changed_core = replace(core, inputs=(changed,))
-        with refused(code, error=PynqRefused, owner="PynqRuntime", message="^in0: "):
+        with refused(code, error=ShellRefused, owner="PynqRuntime", message="^in0: "):
             PynqRuntime().emit(replace(described, cores=(changed_core,)), linked, tmp_path / "d")
         assert not (tmp_path / "d").exists()
 

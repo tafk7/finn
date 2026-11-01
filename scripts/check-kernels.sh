@@ -69,8 +69,8 @@ gate_ruff src/finn/kernels tests/kernels tests/support src/finn/platform src/fin
 # finn.shells.pynq.linker: the pynq shell's linker.
 # finn.shells.runtime: the shared driver a build ships to its board; finn.shells.pynq.device
 # and .runtime: the pynq runtime's device and the driver it writes.
-# finn.shells.pynq's runner, driver and deployment package; its IODMA and IP generation
-# are annotated, not strictly checked: frozen extractions of the HWCustomOp flow's.
+# finn.shells.build: the bitfile, the driver and the deployment package through the
+# declarations.
 # finn.builder: its configuration, its plan, its checks
 # and steps, the ip shell's testbench, the partition's Python verification and the
 # resources per shell member.
@@ -81,7 +81,7 @@ gate_mypy -p finn.kernels -p finn.platform -p finn.core.graph -p finn.custom_op.
     -m finn.core.executor -m finn.core.rtlsim_bench -m finn.core.rtlsim_exec \
     -m finn.core.rtlsim_pacing -m finn.core.onnx_exec \
     -m finn.shells.integration -m finn.shells.pynq.linker \
-    -m finn.shells.pynq.runner -m finn.shells.pynq.driver -m finn.shells.pynq.deploy \
+    -m finn.shells.build \
     -m finn.shells.pynq.device -m finn.shells.pynq.runtime -p finn.shells.runtime \
     -m finn.toolchain.launcher -m finn.toolchain.ip \
     -m finn.toolchain.xsim \

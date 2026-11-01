@@ -290,8 +290,9 @@ where.
 FINN's own sources in the wheel are the XSI bridge's, in `finn/xsi/src`; the kernels'
 RTL and HLS are FinnLib's (the `finnlib` resource). Look them up by resource name,
 not location: `finn.resources.path("xsi")`; inside FINN,
-`finn.xsi.paths.resource_path(family, *parts)` does the same. The pynq shell's
-data (its PYNQ driver files and design description) is in `finn/shells/pynq/data`.
+`finn.xsi.paths.resource_path(family, *parts)` does the same. The driver a build
+ships is FINN's shared driver, `finn/shells/runtime`, copied beside its runtime's device
+(`finn/shells/pynq/device.py` on pynq).
 The Python XSI driver lives at `src/finn_xsi/`.
 Editable installations observe changes to these directly. Generated RTL, driver
 files and compiled XSI extensions belong in writable build storage, never in the
@@ -544,8 +545,9 @@ reach it as records of one logger, `finn.core.reporting.manifest`, whose level
 the build sets: a caller that quiets another of FINN's loggers keeps them. The model
 records only what a later step consumes, in `finn.outputs`: the packaged IP (`ip`,
 `vlnv`, `interfaces`, `ip_key`, `ip_options`) on the partition's body, the bitfile
-(`bitfile`, `hwh`, `bitfile_made_from`, `bitfile_ip_key`, `bitfile_options`) on the
-parent graph; the bitfile's reports are beside it under `report/`.
+(`bitfile`, `bitfile_made_from`, `bitfile_ip_key`, `bitfile_options`) on the parent
+graph; the files the bitfile loads with are beside it in `bitfile/`, and its reports under
+`report/`.
 
 What a build logs, at which level, and what reaches the console
 (`finn.core.reporting.log`):
@@ -576,7 +578,7 @@ Vendor commands execute with argv, child env and cwd. Probes use the identical
 route and a bounded timeout. Every function that runs a tool requires a
 prepared toolchain (`toolchain=`). Only the entry points a user calls default to
 one: `PackagePartition`, `ElaboratePartition` and the XSim executor when they are
-made, the pynq shell's `BuildPynqBitfile`, and the command lines
+made, the bitfile's build `finn.shells.build.BuildBitfile`, and the command lines
 (`python -m finn.platform.generate`, `python -m finn.xsi.setup`). Each prepares the
 machine's once and passes it down,
 `finn.toolchain.launcher.host_toolchain()`: the environment as configured (no
@@ -661,8 +663,9 @@ drawn from the partition's input datatypes, checked against the partition in Pyt
 the build does not run it); its setting `ooc_synth`
 (default false) synthesizes the IP out of context. `step_build_bitfile` builds the
 shell around the partition to a bitfile (packaging the partition itself unless
-`step_package_partition` packaged it), `step_make_driver` writes the PYNQ driver for
-that bitfile, and `step_deployment_package` packages both for the board, in
+`step_package_partition` packaged it) through its shell's declared linker,
+`step_make_driver` writes the driver of the build's runtime (`pynq` on pynq) for that
+bitfile, and `step_deployment_package` packages both for the board, in
 `deploy/`. These three need a shell with a bitfile build (`pynq`), and each is refused
 at its turn on another, such as `ip`. An output made from another is listed after it:
 the driver after the bitfile, the deployment after both; a step whose input is missing

@@ -4,15 +4,15 @@
 """The integration description: what a shell's linker builds around a build's cores, with no
 platform's names in it, and what a linker gives back.
 
-``describe(model)`` takes the build's parent graph (its one partition node,
+``describe(model, runtime)`` takes the build's parent graph (its one partition node,
 ``finn.core.graph.partition.partition_body``), refuses a body whose design its check did not
 verify as it is now (``refuse_unverified``), configures the partition's network as hardware
 generation does (``configured_network``), and reads the movers its shell places
 (``finn.kernels.shell``, each its contract, ``IodmaKernel.contract``, and its module) and its
 shell's row. It states (``Integration``):
 
-- the row it was made for, its linker, its runtime (the row's first), the part and the
-  period asked;
+- the row it was made for, its linker, its runtime (the build's, of those the row offers:
+  the row's first unless named; ``runtime-not-offered``), the part and the period asked;
 - each core (``Core``): its node's name, and per edge port its supply (``Supply``) or
   delivery (``Delivery``): the tensor, its shape and element, the offer's kind, the mover's
   unit, the memory target it binds, the mover's facts (``MoverContract``) and its module,
@@ -34,12 +34,13 @@ memory port and control bus its module's (``mover_pins``); a unit with a window 
 by one control port, ``s_axi_control`` (``finn.kernels.artifacts.unit.CONTROL``), a mover's
 its control bus. Where each unit is placed and what its cell is called are the linker's
 (``Linker``): ``finn.shells.pynq.linker`` for the ``pynq`` shell. A mover's IP is its
-module, built by the shell's runner (its unit's ``ip`` is ``None`` until then). A core
+module, built by the build of the bitfile (``finn.shells.build``; its unit's ``ip`` is
+``None`` until then). A core
 presenting no control bus is its unit, its IP the one its packaging gave it (its body's
 ``finn.outputs`` ``vlnv`` and ``ip``): nothing predicts it, and before packaging there is
 none. A core presenting buses is placed as its core unit (``finn.kernels.artifacts.unit``):
 the core and its grouper (``core_grouping``), its window the grouper's, its IP built by the
-runner from the core's (``None`` until then); each of its buses an endpoint at its offset in
+build from the core's (``None`` until then); each of its buses an endpoint at its offset in
 the grouper's map, of its own range, ``2**awaddr`` bytes. A bus the grouper cannot take, a
 32-bit AXI-Lite target's members, is refused (``grouper-bus-unsupported``), naming it.
 
@@ -56,8 +57,9 @@ description: its user links the core.
 The runtime file (``runtime_file``, written as ``runtime_text``, ``integration.json``,
 ``RUNTIME_SCHEMA``) is the description as every runtime reads it (``Integration.report``: no
 unit's IP, which is the build's), with what its linker made of it (``Linked``): each placed
-unit's base, where the platform has no name lookup, and each clock as delivered. A declared
-runtime's code (``Runtime``) writes the driver that reads it on the board.
+unit's base, where the platform has no name lookup, each clock as delivered, and the
+files the image loads with. A declared runtime's code (``Runtime``) writes the driver that
+reads it on the board.
 """
 
 from __future__ import annotations
@@ -121,7 +123,7 @@ class IpRef:
 class Unit:
     """What the platform places: its ``name``, its ``kind`` (``core``, or a mover's kind),
     its ``ip`` (``None`` until it is built: a core's by its packaging, a mover's by the
-    shell's runner) and the bytes of its control
+    bitfile's build) and the bytes of its control
     ``window`` (``None``: none of its own)."""
 
     name: str
@@ -343,13 +345,16 @@ class Linked:
     """What a linker made of a description: the ``image`` the platform loads, the
     ``placement`` (each unit with a control window to its base address, where the platform
     has no name lookup; an endpoint is at its unit's base and its offset), each of the row's
-    clocks as it delivers it, in MHz (``clocks_mhz``: none it does not know), and its
-    ``reports`` by name."""
+    clocks as it delivers it, in MHz (``clocks_mhz``: none it does not know), its
+    ``reports``, each by its path under a build's ``report/`` (a file, or a directory of
+    them), and the files the image loads with (``beside``: PYNQ's hardware handoff beside
+    its bitfile)."""
 
     image: Path
     placement: Mapping[str, int]
     clocks_mhz: Mapping[str, float]
     reports: Mapping[str, Path]
+    beside: tuple[Path, ...] = ()
 
 
 def runtime_file(integration: Integration, linked: Linked) -> dict[str, Any]:
@@ -372,9 +377,13 @@ def runtime_text(integration: Integration, linked: Linked) -> str:
 
 
 class Linker(Protocol):
-    """A declared linker's code: it links a description on a board (the board facts its
-    declaration names, ``board_keys``) into ``directory``, every tool run through
-    ``tools``."""
+    """A declared linker's code, made with the build's ``debug`` option (its debug
+    instrumentation, where it has any): it refuses a description it cannot link on a board
+    (the board facts its declaration names, ``board_keys``) before any tool runs
+    (``check``), and links one, every unit's IP given, into ``directory``, every tool run
+    through ``tools`` (its parallel runs the toolchain's selection's)."""
+
+    def check(self, integration: Integration, board: Mapping[str, str]) -> None: ...
 
     def link(
         self,
@@ -450,12 +459,14 @@ def mover_pins(unit: str, module: Leaf) -> dict[str, Bus]:
     return {role: buses[0] for role, buses in found.items()}
 
 
-def describe(model: ModelWrapper) -> Integration:
+def describe(model: ModelWrapper, runtime: str | None = None) -> Integration:
     """The integration description of the build's parent graph ``model``: every
     DataflowCore of it (``core_bodies``), in its order, each the design its check verified
     (``refuse_unverified``), its network as emission builds it (``configured_network``),
     all in the build's shell (``build_shell``: its movers named across the cores, its rules
-    over every unit), in its shell (see the module docstring)."""
+    over every unit), in its shell, for the build's ``runtime`` (the row's first unless
+    named; one the row does not offer refused, ``runtime-not-offered``; see the module
+    docstring)."""
     configured = []
     for node, body, _ in core_bodies(model):
         refuse_unverified(body, node.name)
@@ -466,6 +477,15 @@ def describe(model: ModelWrapper) -> Integration:
             "integration-unexported",
             "configuration.target.shell",
             f"the {row.shell!r} shell has no linker: its user links the core",
+        )
+    if runtime is None:
+        runtime = row.runtimes[0] if row.runtimes else None
+    elif runtime not in row.runtimes:
+        raise IntegrationError(
+            "runtime-not-offered",
+            "configuration.target.runtime",
+            f"the {row.shell!r} shell does not offer the runtime {runtime!r} "
+            f"(it offers {list(row.runtimes)})",
         )
     least = 1 if row.control is None else row.control.least_window
     offer = placed_offer(row)
@@ -488,7 +508,7 @@ def describe(model: ModelWrapper) -> Integration:
     return Integration(
         row=(row.shell, row.board),
         linker=row.linker,
-        runtime=row.runtimes[0] if row.runtimes else None,
+        runtime=runtime,
         part=target.part,
         period_ns=target.platform.period_ns,
         cores=tuple(cores),

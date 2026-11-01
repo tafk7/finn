@@ -68,10 +68,14 @@ from finn.custom_op.kernels.shell import verify_partition
 from finn.kernels.explore import FIFOS_BY_MODEL
 from finn.kernels.sides import BeatTimes, Outside
 from finn.platform.resolve import refuse_drift
-from finn.platform.shells import VIVADO_BLOCK_DESIGN, shell_row
-from finn.shells.pynq.deploy import MakePynqDeployment
-from finn.shells.pynq.driver import DRIVER_DIR, DRIVER_REPORT, MakePynqDriver
-from finn.shells.pynq.runner import REPORTS, BuildPynqBitfile
+from finn.platform.shells import shell_row
+from finn.shells.build import (
+    DRIVER_DIR,
+    DRIVER_REPORT,
+    BuildBitfile,
+    MakeDeployment,
+    MakeDriver,
+)
 from finn.transformation.kernels import (
     ToKernelOps,
     exploration_summary,
@@ -434,10 +438,10 @@ def _refuse_drift(model: ModelWrapper, cfg: DataflowBuildConfig, output: str) ->
 
 
 def _refuse_shell(cfg: DataflowBuildConfig, step: str) -> None:
-    """Refuse ``step`` where the target's shell has no bitfile build: the bitfile, the
-    driver and the deployment are that build's."""
+    """Refuse ``step`` where the target's shell has no linker, so no bitfile build: the
+    bitfile, the driver and the deployment are that build's."""
     target = cfg.resolved_target
-    if shell_row(target.shell, target.board).linker == VIVADO_BLOCK_DESIGN:
+    if shell_row(target.shell, target.board).linker is not None:
         return
     message = (
         f"the {target.shell!r} shell has no bitfile build, which {step} needs; state a "
@@ -494,18 +498,20 @@ def step_build_bitfile(
     hw_debug: bool = False,
 ) -> ModelWrapper:
     """Build the target's shell around the partition to a bitfile in the output
-    directory; only the pynq shell has a bitfile build, and on another this step is
-    refused. The shell's build packages the partition itself unless the IP
-    step_package_partition packaged has the key the partition has now (its sources and
-    package.tcl, Vivado and run_synth; package.ip_key). Refuses a partition built for
-    another target than the configuration's. The model records the bitfile and its
-    hardware handoff, what it was built from (the design and the IP) and with which
-    options; the build's reports are collected under report/. A shortfall of the
-    delivered clock is noted as a warning, against the throughput a target_throughput
-    entry of step_explore folded to, where the search's record of the partition's body is
-    its own and states one.
+    directory, through the shell's declared linker (``finn.shells.build.BuildBitfile``);
+    a shell with no linker (``ip``) has no bitfile build, and there this step is refused.
+    The build packages the partition itself unless the IP step_package_partition packaged
+    has the key the partition has now (its sources and package.tcl, Vivado and run_synth;
+    package.ip_key). Refuses a partition built for another target than the
+    configuration's. The model records the bitfile, what it was built from (the design and
+    the IP) and with which options; the files the bitfile loads with are beside it, and
+    the linker's reports are collected under report/. A shortfall of the delivered clock
+    is noted as a warning, against the throughput a target_throughput entry of
+    step_explore folded to, where the search's record of the partition's body is its own
+    and states one.
 
-    ``hw_debug``: insert integrated logic analyzers on the movers' streams."""
+    ``hw_debug``: the linker's debug instrumentation (on ``pynq``, integrated logic
+    analyzers on the movers' streams)."""
     _refuse_shell(cfg, "step_build_bitfile")
     _refuse_drift(model, cfg, "bitfile")
     _, body, _ = partition_body(model)
@@ -515,32 +521,34 @@ def step_build_bitfile(
         _LOG.info(
             f"no current objective recorded (search record: {state}): the delivered clock alone"
         )
-    building = BuildPynqBitfile(
+    building = BuildBitfile(
         Path(cfg.output_dir),
         toolchain=cfg.step_toolchain("step_build_bitfile"),
         hw_debug=hw_debug,
         objective_fps=objective,
     )
     model = model.transform(building)
-    for report in REPORTS.values():
-        reported(Path(cfg.output_dir) / report)
+    for report in building.reports:
+        reported(report)
     for finding in building.findings:
         note(finding)
+    assert building.bitfile is not None
     _LOG.info(f"Bitfile written into {building.bitfile.parent}")
     return model
 
 
 def step_make_driver(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """Write the driver into driver/, the runtime file beside it, and its description into
-    report/driver.json. The driver sets PL0 to the clock the bitfile delivers, reaches each
-    unit where the bitfile's build placed it, and loads the build's bitfile by default:
-    step_build_bitfile comes before it. Refuses a shell without a bitfile build, a missing
-    bitfile, one built from another design than the current partition or from another IP
-    than its body states, and a partition built for another target than the
-    configuration's."""
+    """Write the driver the build's runtime writes (the configuration's target's, the
+    shell's first unless named; ``finn.shells.build.MakeDriver``) into driver/, the
+    runtime file beside it, and its description into report/driver.json. The driver
+    reaches each unit where the bitfile's build placed it, runs each clock as the build
+    delivered it, and loads the build's bitfile by default: step_build_bitfile comes before
+    it. Refuses a shell without a bitfile build or a runtime, a missing bitfile, one built
+    from another design than the current partition or from another IP than its body
+    states, and a partition built for another target than the configuration's."""
     _refuse_shell(cfg, "step_make_driver")
-    _refuse_drift(model, cfg, "pynq_driver")
-    making = MakePynqDriver(Path(cfg.output_dir))
+    _refuse_drift(model, cfg, "driver")
+    making = MakeDriver(Path(cfg.output_dir), cfg.resolved_runtime)
     model = model.transform(making)
     reported(Path(cfg.output_dir) / DRIVER_REPORT)
     assert making.integration is not None
@@ -566,7 +574,7 @@ def step_deployment_package(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
     built for another target than the configuration's."""
     _refuse_shell(cfg, "step_deployment_package")
     _refuse_drift(model, cfg, "deployment_package")
-    return model.transform(MakePynqDeployment(Path(cfg.output_dir)))
+    return model.transform(MakeDeployment(Path(cfg.output_dir)))
 
 
 def step_resources_report(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:

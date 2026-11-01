@@ -17,7 +17,7 @@ written beside its runtime file.
 Both scripts run the device image the linker made unless told another, by its path relative
 to the driver's directory, from wherever they are run. An edge whose element the shared
 driver cannot pack, or whose mover kind it has no protocol for, is refused before anything
-is written (``PynqRefused``: ``element-unsupported``, ``mover-unknown``).
+is written (``ShellRefused``: ``element-unsupported``, ``mover-unknown``).
 """
 
 from __future__ import annotations
@@ -27,9 +27,9 @@ import shutil
 from pathlib import Path, PurePosixPath
 
 from finn.shells import runtime as shared
+from finn.shells.build import ShellRefused
 from finn.shells.integration import Integration, Linked, runtime_text
 from finn.shells.pynq import device
-from finn.shells.pynq.runner import PynqRefused
 from finn.shells.runtime.errors import Refused
 from finn.shells.runtime.movers import PROTOCOLS
 from finn.shells.runtime.packing import Element
@@ -70,20 +70,20 @@ def shipped() -> dict[PurePosixPath, Path]:
 
 def refuse_undriven(integration: Integration) -> None:
     """Refuse an edge of ``integration`` the shared driver cannot drive: its element not one
-    it packs, or its mover kind not one it has a protocol for (``PynqRefused``)."""
+    it packs, or its mover kind not one it has a protocol for (``ShellRefused``)."""
     for edge in integration.edges:
         try:
             Element.named(edge.element.dtype.name)
         except Refused as refused:
-            raise PynqRefused(
-                "pynq_driver",
+            raise ShellRefused(
+                "driver",
                 refused.code,
                 f"{edge.unit}: {refused.message}",
                 owner="PynqRuntime",
             ) from refused
         if edge.contract.kind not in PROTOCOLS:
-            raise PynqRefused(
-                "pynq_driver",
+            raise ShellRefused(
+                "driver",
                 "mover-unknown",
                 f"{edge.unit}: its mover kind {edge.contract.kind!r} has no protocol in the "
                 f"shared driver (the kinds: {sorted(PROTOCOLS)})",
