@@ -140,20 +140,21 @@ In containers:
 
 ## Parts and custom devices
 
-A build names its part (or a board, which names one), and FINN reads
-the part's facts from its part catalog, `finn.platform.catalog`: every part of
-Zynq-7000, UltraScale, UltraScale+ and Versal that Vivado 2025.2 installs, its
-device, and the device's LUTs, flip-flops, RAMB18s, UltraRAMs and DSPs per SLR.
-Devices with identical resources share one record, and each device states the
-others it shares with. A device sold on a larger die (an XCZU2EG on the XCZU3EG's)
-states its own totals. Where it spans several SLRs, Vivado does not say how they
-split: each SLR states its site capacity, an upper bound for that SLR alone, and the
-device's totals cap their sum (`capped`), so not every SLR can be full at once.
-Which of those caps Vivado was seen to enforce, and which are inferred, is the
-device's `cap_evidence`. What FINN builds on a device (its fabric, DSP block and
-whether an UltraRAM takes initial contents) is the rule for Vivado's
-`(ARCHITECTURE, FAMILY)` pair, `finn.platform.architectures`. A part the catalog
-does not have is refused, `unknown-part`, with close names and none chosen.
+A build names its part (or a board, which names one), and FINN reads the part's
+facts from its part catalog, `finn.platform.catalog`: every part of the 7 Series
+(Artix-7, Kintex-7, Virtex-7, Spartan-7), Zynq-7000, UltraScale, UltraScale+ and
+Versal that Vivado 2025.2 installs, its device, and the device's LUTs, flip-flops,
+RAMB18s, UltraRAMs and DSPs per SLR. Devices with identical resources share one
+record, and each device states the others it shares with. A device sold on a larger
+die (an XCZU2EG on the XCZU3EG's) states its own totals. Where it spans several
+SLRs, Vivado does not say how they split: each SLR states its site capacity, an
+upper bound for that SLR alone, and the device's totals cap their sum (`capped`), so
+not every SLR can be full at once. Which of those caps Vivado was seen to enforce,
+and which are inferred, is the device's `cap_evidence`. What FINN builds on a device
+(its fabric, DSP block and whether an UltraRAM takes initial contents) is the rule
+for Vivado's `(ARCHITECTURE, FAMILY)` pair, `finn.platform.architectures`. A part
+the catalog does not have is refused, `unknown-part`, with close names and none
+chosen.
 
 ```python
 from finn.platform.catalog import device, part

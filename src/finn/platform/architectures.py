@@ -36,8 +36,9 @@ from dataclasses import dataclass
 
 from finn.platform.capabilities import RESOURCE_NAMES, DspBlock, Fabric
 
-ZYNQ7, ULTRASCALE, ULTRASCALE_PLUS, VERSAL = "Zynq-7000", "UltraScale", "UltraScale+", "Versal"
-SERIES = (ZYNQ7, ULTRASCALE, ULTRASCALE_PLUS, VERSAL)
+SEVEN_SERIES, ZYNQ7 = "7 Series", "Zynq-7000"
+ULTRASCALE, ULTRASCALE_PLUS, VERSAL = "UltraScale", "UltraScale+", "Versal"
+SERIES = (SEVEN_SERIES, ZYNQ7, ULTRASCALE, ULTRASCALE_PLUS, VERSAL)
 """The device series the catalog covers, as AMD names them."""
 
 
@@ -130,6 +131,45 @@ _S7, _US, _V = Fabric.SERIES7, Fabric.ULTRASCALE, Fabric.VERSAL
 _E1, _E2, _58 = DspBlock.DSP48E1, DspBlock.DSP48E2, DspBlock.DSP58
 
 RULES: dict[tuple[str, str], Rule] = {
+    **_rules(
+        SEVEN_SERIES,
+        "artix7",
+        _S7,
+        _E1,
+        {
+            "artix7": "xc7a35tcpg236-1",
+            "artix7l": "xc7a100tlcsg324-2L",
+            "aartix7": "xa7a100tcsg324-1I",
+            "qartix7": "xq7a100tcs324-1I",
+        },
+    ),
+    **_rules(
+        SEVEN_SERIES,
+        "kintex7",
+        _S7,
+        _E1,
+        {
+            "kintex7": "xc7k325tffg900-2",
+            "kintex7l": "xc7k160tlfbg484-2L",
+            "akintex7": "xa7k160tffg676-1Q",
+            "qkintex7": "xq7k325trf676-1I",
+            "qkintex7l": "xq7k325tlrf676-2L",
+        },
+    ),
+    **_rules(
+        SEVEN_SERIES,
+        "virtex7",
+        _S7,
+        _E1,
+        {"virtex7": "xc7vx485tffg1761-2", "qvirtex7": "xq7v585trf1157-1I"},
+    ),
+    **_rules(
+        SEVEN_SERIES,
+        "spartan7",
+        _S7,
+        _E1,
+        {"spartan7": "xc7s50csga324-1", "aspartan7": "xa7s100fgga484-1I"},
+    ),
     **_rules(
         ZYNQ7,
         "zynq",
@@ -272,6 +312,21 @@ def _derived(device: str, base: str) -> CapEvidence:
     )
 
 
+def _unfilled(
+    device: str, slrs: int, sites: tuple[int, int], stated: tuple[int, int]
+) -> CapEvidence:
+    """A reduced die no fill ran on, whose sites exceed its totals in LUTs and FFs only."""
+    return CapEvidence(
+        device=device,
+        proven=frozenset(),
+        evidence=f"No fill ran on {device}: its {slrs} SLRs' slice sites hold {sites[0]:,} LUTs "
+        f"and {sites[1]:,} FFs, above the {stated[0]:,} LUT_ELEMENTS and {stated[1]:,} "
+        "FLIPFLOPS Vivado 2025.2 states for it (get_property of the part), while its RAMB18 "
+        "and DSP sites equal its totals; its LUT and FF caps are those stated totals, "
+        "inferred.",
+    )
+
+
 CAP_EVIDENCE: dict[str, CapEvidence] = {
     each.device: each
     for each in (
@@ -315,6 +370,9 @@ CAP_EVIDENCE: dict[str, CapEvidence] = {
         _derived("xcku085_CIV", "xcku085"),
         _derived("xcvu160_CIV", "xcvu160"),
         _derived("xcvu5p_CIV", "xcvu5p"),
+        _unfilled("xc7vh580t", 3, (437_600, 875_200), (362_800, 725_600)),
+        _unfilled("xc7vh870t", 5, (656_400, 1_312_800), (547_600, 1_095_200)),
+        _unfilled("xc7vx1140t", 4, (875_200, 1_750_400), (712_000, 1_424_000)),
     )
 }
 """Each reduced die of several SLRs, by device name: which of its caps a fill proved

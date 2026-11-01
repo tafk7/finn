@@ -500,7 +500,13 @@ def test_the_manifest_counts_the_data_and_names_the_rules_the_probe_checked(
         "resources": len({each.digest for each in committed.devices.values()}),
         "pairs": len({(d.architecture, d.family) for d in committed.devices.values()}),
     }
-    assert set(manifest["series"]) == {"Zynq-7000", "UltraScale", "UltraScale+", "Versal"}
+    assert set(manifest["series"]) == {
+        "7 Series",
+        "Zynq-7000",
+        "UltraScale",
+        "UltraScale+",
+        "Versal",
+    }
     # A rule the probe checks changed without a new catalog: run the generator.
     assert manifest["rules"] == rules_digest()
     assert {(d.architecture, d.family) for d in committed.devices.values()} == set(RULES)
@@ -508,9 +514,15 @@ def test_the_manifest_counts_the_data_and_names_the_rules_the_probe_checked(
 
 def test_the_catalog_has_every_installed_part_of_the_supported_series(committed: Catalog) -> None:
     devices = committed.devices.values()
-    assert (len(committed.by_name), len(devices)) == (4_725, 261)
+    assert (len(committed.by_name), len(devices)) == (5_601, 351)
     series = Counter(RULES[(d.architecture, d.family)].series for d in devices)
-    assert series == {"Zynq-7000": 24, "UltraScale": 30, "UltraScale+": 137, "Versal": 70}
+    assert series == {
+        "7 Series": 90,
+        "Zynq-7000": 24,
+        "UltraScale": 30,
+        "UltraScale+": 137,
+        "Versal": 70,
+    }
 
 
 def test_every_part_resolves_or_is_refused_by_name(committed: Catalog) -> None:
@@ -527,7 +539,10 @@ def test_every_part_resolves_or_is_refused_by_name(committed: Catalog) -> None:
     assert refused == {}  # every pair of the installed series is confirmed by the probe
 
 
-CAPPED = ["xcku085", "xcku085_CIV", "xcvu160", "xcvu160_CIV", "xcvu27p", "xcvu5p", "xcvu5p_CIV"]
+CAPPED = sorted(
+    ["xcku085", "xcku085_CIV", "xcvu160", "xcvu160_CIV", "xcvu27p", "xcvu5p", "xcvu5p_CIV"]
+    + ["xc7vh580t", "xc7vh870t", "xc7vx1140t"]
+)
 """The reduced dies of several SLRs Vivado 2025.2 installs."""
 
 
@@ -583,6 +598,9 @@ def test_the_cap_evidence_covers_every_capped_device(committed: Catalog) -> None
         "xcku085_CIV": [],
         "xcvu160_CIV": [],
         "xcvu5p_CIV": [],
+        "xc7vh580t": [],
+        "xc7vh870t": [],
+        "xc7vx1140t": [],
     }
     for name, each in CAP_EVIDENCE.items():
         device = committed.device(name)
@@ -590,6 +608,14 @@ def test_the_cap_evidence_covers_every_capped_device(committed: Catalog) -> None
         assert {"lut", "ff"} <= set(device.capped) - each.proven  # never filled
         assert name in each.evidence and "Vivado 2025.2" in each.evidence
     assert "dsp" not in CAP_EVIDENCE["xcvu27p"].proven  # its DSP fills did not complete
+    # Three Virtex-7 dies of several SLRs hold more slices than their totals state, and
+    # their memories and DSPs match: their LUT and FF caps are the totals, no fill ran.
+    for name in ("xc7vh580t", "xc7vh870t", "xc7vx1140t"):
+        assert committed.device(name).capped == ("lut", "ff")
+        assert CAP_EVIDENCE[name].evidence.startswith(f"No fill ran on {name}")
+    assert committed.device("xc7vx1140t").resources == Resources(
+        lut=712_000, ff=1_424_000, bram18=3_760, uram=0, dsp=3_360
+    )
 
 
 def reduced_vu5p() -> dict[str, Any]:
