@@ -341,7 +341,7 @@ def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:
     first = model.graph.node[0].name
     configured(model, {first: pumped})
     configure_partition(model)
-    point, _ = configured_network(model, "chain")
+    point = configured_network(model, "chain")
     assert point.row is IP_ROW and IP_ROW.clk2x
     assert point.module.abi.clock_alignments
     netlist = point.network.netlist()
@@ -385,7 +385,7 @@ def test_emission_checks_the_netlists_count_against_the_rules() -> None:
     model = chain_model(4)
     write_target(model, ULTRA96)
     model = model.transform(MakeCutChoices(CUT_NAME))
-    point, _ = configured_network(model, "chain")
+    point = configured_network(model, "chain")
     assert counts(point.network.member(SHELL)) == Available((2, 0, False))
     with pytest.MonkeyPatch.context() as patched:
         patched.setattr(shell, "bus_counts", lambda *_: (1, 0, True))

@@ -272,7 +272,8 @@ def boundary(body: ModelWrapper, node: NodeProto) -> tuple[Configured, tuple[Str
     """The body's configured network (``configured_network``) and its boundary ports,
     each with the tensor it carries in the parent graph: the partition node's inputs and
     outputs, by position, are its body's graph inputs and outputs."""
-    point, ports = configured_network(body, node.name)
+    point = configured_network(body, node.name)
+    ports = point.network.boundary
     # As the partition op maps them: its i-th input is its body's i-th graph input.
     outer = {body.graph.input[index].name: name for index, name in enumerate(node.input)}
     outputs = {item.name for item in body.graph.output}

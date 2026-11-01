@@ -61,8 +61,8 @@ from finn.transformation.kernels.package import (
 
 def test_the_partition_packages_its_nodes_choices() -> None:
     configure_partition(model := kernel_model())
-    module = configured_network(model, "sdp_1")[0].module
-    reference = configured_network(model, "DataflowCore_0")[0].module
+    module = configured_network(model, "sdp_1").module
+    reference = configured_network(model, "DataflowCore_0").module
     assert (module.fragment, module.abi) == (reference.fragment, reference.abi)
     assert module.stem == "finn_sdp_1"
     assert [port.name for port in module.abi.pins] == [
@@ -90,7 +90,7 @@ def test_a_choice_never_created_refuses_packaging_and_is_named() -> None:
     channels = {"x", "w1", "hidden", "levels", "w2", "y"}
     keys = cast(KernelOpError, left.error).keys
     assert keys and {key.split(".")[0] for key in keys} <= channels
-    module = configured_network(model.transform(MakeCutChoices(CUT_NAME)), "sdp_1")[0].module
+    module = configured_network(model.transform(MakeCutChoices(CUT_NAME)), "sdp_1").module
     assert module.stem == "finn_sdp_1"
 
 
@@ -140,7 +140,7 @@ def test_an_open_required_choice_refuses_packaging_and_is_named() -> None:
 def test_the_graphs_input_order_is_the_port_order() -> None:
     model = kernel_model(second_weights=False)
     configure_partition(model)
-    pins = configured_network(model, "sdp_1")[0].module.abi.pins
+    pins = configured_network(model, "sdp_1").module.abi.pins
     assert {port.name for port in pins} >= {"s_axis_0", "s_axis_1"}
     model.graph.input.reverse()  # w2 first: the shells would feed it to s_axis_0
     with refused(

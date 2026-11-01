@@ -153,7 +153,8 @@ def test_the_node_reads_binds_changes_and_writes_its_core(tmp_path: Path) -> Non
     assert CoreComposition(core.point().point).chosen() == stored  # nothing written
     core.persist(changed.point)
     assert CoreComposition(core.point().point).chosen()[("first", "simd")] == 4
-    expected, boundary = configured_network(core.body(), node.name)
+    expected = configured_network(core.body(), node.name)
+    boundary = expected.network.boundary
     configured = core.configured()
     assert configured.module == expected.module
     assert configured.network.boundary == boundary
@@ -163,7 +164,7 @@ def test_the_node_reads_binds_changes_and_writes_its_core(tmp_path: Path) -> Non
 def test_the_body_is_the_partition_packaging_takes(tmp_path: Path) -> None:
     source, parent, channels = partitioned(tmp_path)
     body = ModelWrapper(getCustomOp(parent.graph.node[1]).get_nodeattr("model"))
-    module = configured_network(body, parent.graph.node[1].name)[0].module
+    module = configured_network(body, parent.graph.node[1].name).module
     # The same module as the network of the KernelOps where they stood, with the channel
     # choices the body states.
     kernel_ops = [node for node in source.graph.node if node.domain == "finn.custom_op.kernels"]

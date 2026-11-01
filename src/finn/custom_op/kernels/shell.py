@@ -305,17 +305,16 @@ def shell_resources(
     return found.value if isinstance(found, Available) else found.findings
 
 
-def configured_network(
-    model: ModelWrapper, name: str
-) -> tuple[Configured, tuple[tuple[str, str], ...]]:
+def configured_network(model: ModelWrapper, name: str) -> Configured:
     """A DataflowCore's body's core, its module named ``name`` (the node's), in the shell of
     its target (``core_point``), bound with
-    its nodes' and its tensors' channel choices, as emission builds it (``Configured``),
-    and its boundary (tensor, port). Every choice is stored where it is created (a
-    KernelOp's at conversion, a channel's at the cut) and replaced by the strategies, so
-    nothing is completed here. A stale choice; an open choice in play, each by name: one no
-    value of which is possible (each refused value's rules; a ``choice-no-valid-value``
-    cause each, owned by the key, the rules' findings its causes, as the cut reports it), a
+    its nodes' and its tensors' channel choices, as emission builds it (``Configured``; its
+    boundary, each edge tensor and its port, is its composition's, ``network.boundary``).
+    Every choice is stored where it is created (a KernelOp's at conversion, a channel's at
+    the cut) and replaced by the strategies, so nothing is completed here. A stale choice;
+    an open choice in play, each by name: one no value of which is possible (each refused
+    value's rules; a ``choice-no-valid-value`` cause each, owned by the key, the rules'
+    findings its causes, as the cut reports it), a
     required one no strategy set ("required: add size_fifos or
     debug_placeholder to step_explore's strategies"), any other one never set ("not set: the cut,
     MakeCutChoices, or a strategy sets it"; one finding, ``choices-open``); a partition
@@ -467,7 +466,7 @@ def configured_network(
             f" outputs in order {expected}",
             node=label,
         )
-    return Configured(bound, module.value, row), bound.boundary
+    return Configured(bound, module.value, row)
 
 
 def impossible_choices(bound: CoreComposition, keys: Iterable[Key]) -> dict[Key, Finding]:
@@ -577,7 +576,7 @@ def verify_partition(model: ModelWrapper, name: str) -> tuple[Configured, FifoCh
     leave the verification marker unchanged. The model is changed only by the record;
     its caller saves it."""
     label = name
-    point, _ = configured_network(model, name)
+    point = configured_network(model, name)
     # This held consumer performs a timed FIFO check. Retain its former eager
     # cycle-refusal precondition explicitly: FifoCheck(None) is not verification.
     _ = point.cycles

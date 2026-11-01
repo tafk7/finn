@@ -88,7 +88,8 @@ def chain(shell: str = "ip") -> ModelWrapper:
 def facts(model: ModelWrapper) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """The boundary facts of ``model``'s configured network, as the interface description
     and the testbench read them."""
-    point, boundary = configured_network(model, "DataflowCore_0")
+    point = configured_network(model, "DataflowCore_0")
+    boundary = point.network.boundary
     return boundary_facts(model, point, boundary, "DataflowCore_0")
 
 
@@ -380,7 +381,8 @@ def test_a_tiled_w2_is_regrouped_after_its_mover_by_a_vpc_and_an_input_gen(case:
     mover = w2.mover_contract
     assert (mover.beats, mover.tdata, mover.memory_width, mover.words) == (4, 16, 64, 1)
     choose_memories(model)
-    configured, boundary = configured_network(model, "DataflowCore_0")
+    configured = configured_network(model, "DataflowCore_0")
+    boundary = configured.network.boundary
     assert boundary == (("x", "s_axis_0"), ("w2", "s_axis_1"), ("y", "m_axis_0"))
     stages = {
         name: (leaf.implementation_id, dict(leaf.parameters))

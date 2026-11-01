@@ -174,7 +174,7 @@ def shell_resources_report(parent: ModelWrapper, reports: Mapping[str, Path]) ->
     absent."""
     node, body, _ = partition_body(parent)
     target = read_target(body)
-    point, _ = configured_network(body, node.name)
+    point = configured_network(body, node.name)
     modelled = shell_resources(point.network.point, point.row)
     instances = _member_instances(parent)
     columns: dict[str, dict[str, Resources | None]] = {key: {} for key in instances}

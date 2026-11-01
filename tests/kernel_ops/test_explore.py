@@ -255,7 +255,7 @@ def test_exploring_with_no_strategy_sets_nothing_and_every_value_is_saved() -> N
         for node, held in report["choices"].items()
         for attribute, entry in held.items()
     } == values
-    point, _ = configured_network(model, "the chain")
+    point = configured_network(model, "the chain")
     assert {
         f"{node}.{attribute}": value for (node, attribute), value in point.network.chosen().items()
     } == values
@@ -1012,7 +1012,7 @@ def test_tfc_at_a_million_frames_a_second_is_saved_as_the_57_values_it_is_built_
     assert (sizing["reopened"], sizing["changed"], sizing["fifo_bits"]) == (13, {}, 0)
     assert report["open"] == []
     # Emission replays the saved choices: the configured network is the explored one.
-    point, _ = configured_network(model, "the partition")
+    point = configured_network(model, "the partition")
     assert point.network.undecided() == () and len(point.network.decisions()) > 79
 
 

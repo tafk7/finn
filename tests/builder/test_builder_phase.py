@@ -334,7 +334,8 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     assert read_target(built) == read_target(parent) == ULTRA96
     # The body's boundary, read from its configured network: the pynq shell's IODMA_hls on
     # both.
-    point, boundary = configured_network(built, "DataflowCore_0")
+    point = configured_network(built, "DataflowCore_0")
+    boundary = point.network.boundary
     inputs, outputs = boundary_facts(built, point, boundary, "DataflowCore_0")
     assert [(port["tensor"], port["mover"]["kind"]) for port in inputs + outputs] == [
         ("Reshape_0_out0", "iodma_hls"),
@@ -1507,7 +1508,7 @@ def test_the_export_of_tfc_on_pynq_names_both_movers_iodmas_and_every_connection
     # file (THRESHOLDS_FILE), and choices; its MatMuls after the first INT7, reading each
     # thresholding's range.
     node, body, _ = partition_body(parent)
-    point, _ = configured_network(body, node.name)
+    point = configured_network(body, node.name)
     assert module_name(point.module) == "finn_dataflowcore_0__bbdc1424bf7716b3"
     persisted = json.loads((output / "report" / "kernel_choices.json").read_text())
     assert persisted == kernel_choices_config(body)

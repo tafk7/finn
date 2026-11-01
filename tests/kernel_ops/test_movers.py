@@ -666,7 +666,7 @@ def module_of(model: ModelWrapper, directory: Path) -> str:
     as the kernel path cuts it."""
     parent = model.transform(CutKernelPartition(directory))
     node, body, _ = partition_body(parent)
-    point, _ = configured_network(body, node.name)
+    point = configured_network(body, node.name)
     return module_name(point.module)
 
 

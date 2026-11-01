@@ -108,7 +108,7 @@ def test_the_image_enters_once_and_its_channel_reads_the_windows(
 ) -> None:
     body = folded(name, simd, pe, tmp_path)
     (node,) = body.graph.node
-    point, _ = configured_network(body, name)
+    point = configured_network(body, name)
     channel = point.channel(node.input[0])
     streams = channel.streams
     assert streams.source.sequence.form == vector_major(channel.tensor.shape, simd)
@@ -178,9 +178,7 @@ def test_a_window_inside_the_partition_is_its_edges_reorder(
     pe: int, simd: int, steps: tuple[str, ...]
 ) -> None:
     # Converted, not cut: its channels' choices created as the cut creates them.
-    point, _ = configured_network(
-        thresholded(pe, simd).transform(MakeCutChoices(CUT_NAME)), "inside"
-    )
+    point = configured_network(thresholded(pe, simd).transform(MakeCutChoices(CUT_NAME)), "inside")
     assert tuple(hop.step.value for hop in point.channel("a").steps.hops) == steps
     labels = [label for label, _ in point.module.fragment.instances if label.startswith("a.")]
     assert "a.adapter.input_gen.input_gen" in labels

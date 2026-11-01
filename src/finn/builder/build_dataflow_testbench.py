@@ -155,7 +155,8 @@ def write_testbench(
     simulated here (``run_testbench`` does that); ``toolchain`` synthesizes any HLS leaf first,
     unless the HLS cache holds it (``finn.core.rtlsim_bench.materialize``)."""
     refuse_unverified(body, name)
-    point, boundary = configured_network(body, name)
+    point = configured_network(body, name)
+    boundary = point.network.boundary
     # Keep this held timed path's refusal before reference execution or file setup.
     cycles = int(point.cycles)
     context = execute_onnx(body, dict(frame), return_full_exec_context=True)
