@@ -45,7 +45,7 @@ def registers(offset: int, table: tuple[tuple[int, ...], ...]) -> list[tuple[int
     ]
 
 
-def testbench(name: str, unit: CoreUnit, offsets: tuple[int, ...], hole: int) -> str:
+def bench_text(name: str, unit: CoreUnit, offsets: tuple[int, ...], hole: int) -> str:
     """A testbench ``check`` of the unit ``name``, its buses' initial tables ``TABLES``:
     after reset, each bus's registers read through the unit's port at its offset, each its
     initial value (so each offset reaches its own bus), then each written its value plus one
@@ -167,7 +167,7 @@ def test_each_bus_is_written_and_read_at_its_offset_through_the_unit_s_port(
     unit_sources = [emitted.directory / path for path in emitted.sources]
     output = simulate(
         [*sources, *unit_sources],
-        testbench(emitted.entry_point, unit, offsets, offsets[-1] + 32),
+        bench_text(emitted.entry_point, unit, offsets, offsets[-1] + 32),
         run,
         toolchain=toolchain,
     )
