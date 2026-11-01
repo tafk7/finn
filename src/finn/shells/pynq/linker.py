@@ -23,7 +23,8 @@ It takes every name the platform gives and places every control bus:
   (``PROCESSORS``).
 
 It wires one AXI-Lite bus and one memory port a mover: a mover whose contract states other
-counts is refused, by name (``wire_one_bus_each``). Its template's control interconnect
+counts is refused, by name (``wire_one_bus_each``), as is a control window below the row's
+least window (``range-below-least``). Its template's control interconnect
 takes ``CONTROL_SLAVES`` AXI-Lite buses: a description with more is refused before any tool
 runs (``control-slaves-exceeded``), where the shell's rules no longer bound them. Its
 template wires the memory
@@ -140,10 +141,29 @@ def linked_row(integration: Integration) -> ShellRow:
 
 def wiring(integration: Integration, row: ShellRow) -> tuple[Wire, ...]:
     """The block design's wires of ``integration`` in ``row`` (see the module docstring),
-    each mover first checked to be one it wires (``wire_one_bus_each``)."""
-    assert row.fixed is not None
+    each mover first checked to be one it wires (``wire_one_bus_each``), and each range it
+    assigns, a unit's window or an endpoint of a unit without one, to be the row's least
+    window at least (``range-below-least``), which its linker assigns at least (its
+    ``least_range``, by the row's declaration)."""
+    assert row.fixed is not None and row.control is not None
     for edge in integration.edges:
         wire_one_bus_each(edge.contract, f"{edge.tensor} ({edge.port})")
+    least = row.control.least_window
+    windows = {unit.name: unit.window for unit in integration.units}
+    assigned = [
+        *((name, window) for name, window in windows.items() if window is not None),
+        *(
+            (f"{each.unit}/{each.bus}", each.range)
+            for each in integration.endpoints
+            if windows.get(each.unit) is None
+        ),
+    ]
+    for name, size in assigned:
+        if size < least:
+            raise LinkerRefused(
+                "range-below-least",
+                f"{name}: {size} bytes; the row assigns a control window {least} at least",
+            )
     if not integration.bindings:
         raise LinkerRefused(
             "memory-unbound",

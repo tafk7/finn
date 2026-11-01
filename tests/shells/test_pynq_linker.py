@@ -190,6 +190,21 @@ def test_the_block_design_places_each_window_as_the_shell_s_rules_do(
     assert tuple(offsets) == placed_windows(ranges, row.fixed.control_base)
 
 
+def test_a_control_window_below_the_row_s_least_window_is_refused(described: Integration) -> None:
+    """A description built by hand whose unit takes a control window less than the row's
+    least window (4096 bytes on ``pynq``, its linker's least range 128 at most) is refused
+    before any tool runs, as the row's declaration refuses a least window below its
+    linker's."""
+    narrow = ranged(described, [64] * len(described.endpoints))
+    with refused(
+        "range-below-least",
+        error=LinkerRefused,
+        owner="vivado-block-design",
+        message="^in0: 64 bytes; the row assigns a control window 4096 at least$",
+    ):
+        wiring(narrow, linked_row(narrow))
+
+
 def test_more_control_buses_than_its_interconnect_takes_are_refused(
     described: Integration,
 ) -> None:

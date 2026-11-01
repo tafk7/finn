@@ -216,6 +216,28 @@ def test_a_movers_window_is_its_control_bus_s_range_holding_its_endpoint(
         )
 
 
+@pytest.mark.parametrize(
+    ("offset", "size"), [(-4096, 4096), (0, 0)], ids=["negative-offset", "empty-range"]
+)
+def test_an_endpoint_before_its_unit_or_of_no_byte_is_refused(
+    tmp_path: Path, offset: int, size: int
+) -> None:
+    """An endpoint takes a byte at least, at an offset of zero or more in its unit: one
+    at a negative offset, or of no byte, is refused, whatever its unit's window."""
+    described = describe(zynq_parent(tmp_path))
+    endpoint = described.endpoints[0]
+    with refused(
+        "endpoint-invalid",
+        error=IntegrationError,
+        owner="describe",
+        message=f"^in0/s_axi_control: {size} bytes at offset {offset}; an endpoint takes",
+    ):
+        replace(
+            described,
+            endpoints=(replace(endpoint, offset=offset, range=size), *described.endpoints[1:]),
+        )
+
+
 def test_a_core_named_as_a_movers_unit_is_refused(tmp_path: Path) -> None:
     """Each unit is named once: its shell refuses a core whose node is named ``in0``, as a
     mover's unit is, before it is described."""

@@ -40,8 +40,9 @@ Each mover binds the row's first memory target. Until the core unit has a contro
 grouper, a core's unit has no window of its own (``Unit.window`` is ``None``) and each of
 its kernels' control buses is an endpoint at offset 0 with its own range: ``2**awaddr``
 bytes, and the row's least window at least; a mover's control bus is one, of its own
-range, its unit's window that range. Every endpoint lies in its unit's window, where its
-unit has one (``endpoint-outside-unit``).
+range, its unit's window that range. Every endpoint takes a byte at least, at an offset of
+zero or more (``endpoint-invalid``), and lies in its unit's window, where its unit has one
+(``endpoint-outside-unit``).
 
 It is a function of a configured point: the description is a build's, needed once a build
 and not at every point an exploration costs. A shell without a linker (``ip``) has no
@@ -201,6 +202,13 @@ class Integration:
     def __post_init__(self) -> None:
         windows = {unit.name: unit.window for unit in self.units}
         for each in self.endpoints:
+            if each.offset < 0 or each.range < 1:
+                raise IntegrationError(
+                    "endpoint-invalid",
+                    "describe",
+                    f"{each.unit}/{each.bus}: {each.range} bytes at offset {each.offset}; an "
+                    "endpoint takes a byte at least, at an offset of zero or more",
+                )
             window = windows.get(each.unit)
             if window is not None and each.offset + each.range > window:
                 raise IntegrationError(
