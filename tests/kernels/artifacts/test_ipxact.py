@@ -200,6 +200,25 @@ def associated_clock(declared: dict[str, BusInterface], bus: str) -> str:
     return clock
 
 
+def test_a_memory_port_is_declared_an_axi4_master_with_no_memory_map() -> None:
+    memory = Bus(
+        "m_axi_gmem",
+        StandardProtocol.AXIMM,
+        [Member("araddr", "m_axi_gmem_ARADDR", 64), Member("rdata", "m_axi_gmem_RDATA", 128)],
+        Endpoint.INITIATOR,
+        associated_clock="ap_clk",
+        associated_reset="ap_rst_n",
+    )
+    pins = (PORTS[0], PORTS[2], memory)
+    port = interfaces(interface_tcl(pins, 5.0))["m_axi_gmem"]
+    assert (port.bus_type, port.mode) == ("xilinx.com:interface:aximm:1.0", "master")
+    assert port.port_maps == {"ARADDR": "m_axi_gmem_ARADDR", "RDATA": "m_axi_gmem_RDATA"}
+    assert port.parameters == {"PROTOCOL": "AXI4"}
+    assert port.memory_map is None
+    assert interface_names(pins)["aximm"] == ["m_axi_gmem"]
+    assert interface_names(pins)["axilite"] == []
+
+
 def test_the_interface_names_are_the_stitched_ip_metadata() -> None:
     assert interface_names(PORTS) == {
         "clk": ["ap_clk"],

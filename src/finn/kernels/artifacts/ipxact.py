@@ -46,6 +46,10 @@ _INTERFACES = {
         "xilinx.com:interface:aximm:1.0",
         "xilinx.com:interface:aximm_rtl:1.0",
     ),
+    StandardProtocol.AXIMM: (
+        "xilinx.com:interface:aximm:1.0",
+        "xilinx.com:interface:aximm_rtl:1.0",
+    ),
 }
 
 
@@ -155,6 +159,8 @@ def interface_tcl(pins: Sequence[Pin], clock_ns: float) -> list[str]:
                 tcl.append(
                     f"set_property value {data_bytes} [ipx::add_bus_parameter TDATA_NUM_BYTES $bus]"
                 )
+            elif pin.protocol is StandardProtocol.AXIMM:
+                tcl.append("set_property value AXI4 [ipx::add_bus_parameter PROTOCOL $bus]")
             else:
                 window = register_window(pin)
                 tcl += [
@@ -197,7 +203,7 @@ def interface_names(pins: Sequence[Pin]) -> dict[str, list[Any]]:
             key = "s_axis" if pin.endpoint is Endpoint.TARGET else "m_axis"
             names[key].append([pin.name, _width(pin, "tdata")])
         elif isinstance(pin, Bus):
-            names["axilite"].append(pin.name)
+            names["aximm" if pin.protocol is StandardProtocol.AXIMM else "axilite"].append(pin.name)
         else:
             raise IpxactError(f"{pin.name}: a pin outside every bus interface")
     return names

@@ -167,6 +167,30 @@ def test_a_target_reuses_the_initiator_signature_flipped() -> None:
         assert flip(flip(direction)) is direction
 
 
+def test_a_memory_port_is_an_initiators_axi4_bus_and_a_target_its_flip() -> None:
+    members = [
+        Member(logical, f"m_axi_gmem_{logical.upper()}", width)
+        for logical, width in (("araddr", 64), ("arlen", 8), ("rdata", 128), ("rlast", 1))
+    ]
+    members += [Member(logical, f"m_axi_gmem_{logical.upper()}") for logical in ("arid", "wid")]
+    initiator = dict(
+        Bus("m_axi_gmem", StandardProtocol.AXIMM, members, Endpoint.INITIATOR).member_directions()
+    )
+    assert [initiator[f"m_axi_gmem_{name}"] for name in ("ARADDR", "ARLEN", "ARID", "WID")] == [
+        Direction.OUT
+    ] * 4
+    assert (initiator["m_axi_gmem_RDATA"], initiator["m_axi_gmem_RLAST"]) == (
+        Direction.IN,
+        Direction.IN,
+    )
+    target = dict(Bus("s_axi", StandardProtocol.AXIMM, members).member_directions())
+    assert target["m_axi_gmem_ARADDR"] is Direction.IN
+    assert target["m_axi_gmem_RDATA"] is Direction.OUT
+    # AXI-Lite has no bursts: a burst's length is the memory port's alone.
+    with pytest.raises(AbiError, match="no member for"):
+        Bus("s_axilite", StandardProtocol.AXILITE, members)
+
+
 def test_a_bus_takes_only_its_protocols_members_and_at_least_one() -> None:
     with pytest.raises(AbiError, match="no member for"):
         Bus("s", StandardProtocol.AXIS, (Member("tdata", "a"), Member("nonsense", "b")))

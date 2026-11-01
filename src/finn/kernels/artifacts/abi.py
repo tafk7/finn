@@ -124,6 +124,7 @@ Role = Union[Data, Clock, Reset]
 class StandardProtocol(Enum):
     AXIS = "amba.axis"
     AXILITE = "amba.axilite"
+    AXIMM = "amba.aximm"
 
 
 #: Member directions **for the initiator**.  The target's are these flipped.
@@ -152,6 +153,48 @@ SIGNATURES: Mapping[StandardProtocol, Mapping[str, Direction]] = {
         "arready": Direction.IN,
         "rdata": Direction.IN,
         "rresp": Direction.IN,
+        "rvalid": Direction.IN,
+        "rready": Direction.OUT,
+    },
+    # AXI4 (full): an initiator's memory port, with bursts, IDs and user signals.
+    StandardProtocol.AXIMM: {
+        **{
+            f"{channel}{member}": Direction.OUT
+            for channel in ("aw", "ar")
+            for member in (
+                "addr",
+                "id",
+                "len",
+                "size",
+                "burst",
+                "lock",
+                "cache",
+                "prot",
+                "qos",
+                "region",
+                "user",
+                "valid",
+            )
+        },
+        "awready": Direction.IN,
+        "arready": Direction.IN,
+        "wdata": Direction.OUT,
+        "wstrb": Direction.OUT,
+        "wlast": Direction.OUT,
+        "wid": Direction.OUT,
+        "wuser": Direction.OUT,
+        "wvalid": Direction.OUT,
+        "wready": Direction.IN,
+        "bresp": Direction.IN,
+        "bid": Direction.IN,
+        "buser": Direction.IN,
+        "bvalid": Direction.IN,
+        "bready": Direction.OUT,
+        "rdata": Direction.IN,
+        "rresp": Direction.IN,
+        "rlast": Direction.IN,
+        "rid": Direction.IN,
+        "ruser": Direction.IN,
         "rvalid": Direction.IN,
         "rready": Direction.OUT,
     },
