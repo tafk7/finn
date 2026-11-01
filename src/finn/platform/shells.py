@@ -283,13 +283,21 @@ def _clocks(stated: object, where: str) -> Clocks:
 
 
 def _control(stated: object, where: str) -> Control:
+    """A shell's control: a unit's least window and the host's aperture, each a power of
+    two of bytes (a window is aligned to itself), the aperture holding one window at least."""
     table = valid.expect(stated, where, {"one_port_per_unit", "least_window", "aperture"}, set())
+    least = valid.power_of_two(table["least_window"], f"{where}.least_window")
+    aperture = valid.power_of_two(table["aperture"], f"{where}.aperture")
+    if aperture < least:
+        raise valid.Invalid(
+            f"{where}.aperture: {aperture} bytes hold no window of the least {least}"
+        )
     return Control(
         one_port_per_unit=valid.typed(
             table["one_port_per_unit"], bool, f"{where}.one_port_per_unit"
         ),
-        least_window=valid.count(table["least_window"], f"{where}.least_window", least=1),
-        aperture=valid.count(table["aperture"], f"{where}.aperture", least=1),
+        least_window=least,
+        aperture=aperture,
     )
 
 

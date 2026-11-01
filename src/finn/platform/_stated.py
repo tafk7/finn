@@ -80,6 +80,14 @@ def positive(value: object, where: str) -> float:
     return found
 
 
+def power_of_two(value: object, where: str, *, least: int = 1) -> int:
+    """``value``, a power of two of at least ``least``."""
+    found = count(value, where, least=least)
+    if found & (found - 1):
+        raise Invalid(f"{where} is a power of two, not {found}")
+    return found
+
+
 def text(value: object, where: str) -> str:
     """``value``, a non-empty string."""
     if not isinstance(value, str) or not value:

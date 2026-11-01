@@ -347,6 +347,14 @@ def test_a_shell_based_on_another_replaces_each_key_it_states(tmp_path: Path) ->
             'clocks = { main = "c", set_at = "build", doubled = false, default_mhz = inf }',
             "default_mhz is a finite number above zero",
         ),
+        (
+            "control = { one_port_per_unit = false, least_window = 4097, aperture = 268435456 }",
+            "control.least_window is a power of two, not 4097",
+        ),
+        (
+            "control = { one_port_per_unit = false, least_window = 4096, aperture = 1 }",
+            "control.aperture: 1 bytes hold no window of the least 4096",
+        ),
         ('memory = [{ name = "", width = 64 }]', "memory[0].name is a non-empty"),
         ('memory = [{ name = "m", width = 9 }]', "memory[0].width: 9 bits is no whole bytes"),
     ],
@@ -357,6 +365,8 @@ def test_a_shell_based_on_another_replaces_each_key_it_states(tmp_path: Path) ->
         "a clock with no name",
         "a negative frequency",
         "an infinite frequency",
+        "a least window not a power of two",
+        "an aperture below the least window",
         "a memory target with no name",
         "a memory width of no whole bytes",
     ],
