@@ -201,6 +201,31 @@ def test_a_composed_module_s_name_covers_its_hls_products(tmp_path: Path) -> Non
     (tmp_path / "finnlib/hls/util/util.hpp").write_text("#define CHANGED 1\n")
     built = {request.function: tmp_path / "as built"}
     assert module_name(module, capture(module, roots=roots, built=built)) == names["as built"]
+    # What a header provides is no part of what is staged, the request's product: the same.
+    marked = replace(request, headers=tuple(replace(h, provides=("x",)) for h in HEADERS))
+    assert marked.function == request.function and marked != request
+    other = replace(module, fragment=Fragment((("a", _leaf(marked)),)))
+    assert module_name(other, capture(other, roots=roots, built=built)) == names["as built"]
+
+
+def test_a_copied_source_is_not_staged_among_an_hls_product(tmp_path: Path) -> None:
+    request = _top()
+    beside = Leaf(
+        "test.beside",
+        "beside",
+        (),
+        Abi(PINS),
+        (CopiedSource("fixture", f"{request.function}/beside.sv", provides=("module:beside",)),),
+    )
+    module = Composed(
+        "test.hls.beside",
+        "1",
+        "beside",
+        Abi(PINS),
+        Fragment((("a", _leaf(request)), ("b", beside))),
+    )
+    with pytest.raises(BuildError, match="among the HLS product of"):
+        emit_module(module, tmp_path / "out", roots={})
 
 
 def test_two_configurations_compose_without_sharing_a_file(tmp_path: Path) -> None:

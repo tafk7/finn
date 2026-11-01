@@ -92,7 +92,13 @@ def typed_canonical(value: object) -> object:
     its type); ``fingerprint`` alone reads it, and ``digest`` projects its result.
     Folding the two would change every module digest, and so every emitted module
     name.
+
+    An HLS request is its top's name alone: what emission stages of it is its product, under
+    that name, whose bytes ``fingerprint`` digests (``source_digests``), not the request's
+    text, headers or settings, which the top's name digests already.
     """
+    if isinstance(value, HlsSource):
+        return _tagged(value, tuple(item.name for item in fields(value) if item.name != "function"))
     if isinstance(value, Enum):
         return (f"enum:{type(value).__module__}.{type(value).__qualname__}", value.name)
     if is_dataclass(value) and not isinstance(value, type):
@@ -594,7 +600,9 @@ def fingerprint(module: Module, snapshot: Snapshot) -> str:
     file it stages from outside it (``source_digests``, read from ``snapshot``): a composed
     module's stem is left out (as an HLS top's name is, ``contributions.NAME_PLACEHOLDER``), so
     equal netlists of equal files share it, whatever their callers name them, and a copied
-    source or an HLS product whose bytes change changes it; a leaf's name is its content."""
+    source or an HLS product whose bytes change changes it; a leaf's name is its content. An HLS
+    request enters by its top's name alone (``typed_canonical``): its product is what is
+    staged."""
     sources = source_digests(module, snapshot)
     if isinstance(module, Leaf):
         return digest(("module-v2", typed_canonical(module), sources))

@@ -120,7 +120,30 @@ def capture(
     """Read every file the module's leaves stage from outside it, each once: each copied
     source from its root, ``roots`` resolving it by name, and each HLS request's product from
     the directory ``built`` names for its top. The module's name (``module_name``) and its
-    emitted files are both this snapshot's."""
+    emitted files are both this snapshot's. Before anything is read, a ``BuildError`` where two
+    copied sources would be staged as one path (from two roots), or one under an HLS product's
+    directory (its top's name): one staged file is one file read."""
+    staged: dict[str, tuple[str, str]] = {}
+    tops = {
+        item.function
+        for leaf in _leaves(module)
+        for item in leaf.sources
+        if isinstance(item, HlsSource)
+    }
+    for leaf in _leaves(module):
+        for item in leaf.sources:
+            if isinstance(item, HlsSource):
+                continue
+            other = staged.setdefault(item.path, (item.root, item.path))
+            if other != (item.root, item.path):
+                raise BuildError(
+                    f"two sources are staged as {item.path}: {other[0]!r}'s and {item.root!r}'s"
+                )
+            if item.path.split("/")[0] in tops:
+                raise BuildError(
+                    f"{item.path} of {item.root!r} would be staged among the HLS product of "
+                    f"{item.path.split('/')[0]}"
+                )
     copied: dict[tuple[str, str], bytes] = {}
     products: dict[str, tuple[tuple[str, bytes], ...]] = {}
     for leaf in _leaves(module):

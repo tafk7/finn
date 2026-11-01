@@ -30,6 +30,7 @@ from finn.transformation.kernels import (
     kernel_ops_summary,
     refuse_host_between,
 )
+from finn.transformation.kernels.convert import name_kernel_ops
 
 
 def codes(outcome: Outcome) -> list[tuple[str, str, str]]:
@@ -316,6 +317,38 @@ def test_a_subgraph_reading_a_tensor_that_keeps_its_name_is_converted() -> None:
     assert [outcome.name for outcome in conversion.outcomes] == ["MatMul_0", None, None]
 
 
+def test_a_subgraph_reading_a_tensor_the_cleanup_orders_after_it_is_refused() -> None:
+    """qonnx's cleanup orders a node by its inputs alone, so an ``If`` whose condition is a
+    graph input comes before a tensor its branches read that a later node makes: refused by
+    the node and the tensor, whatever the tensor's name, rather than returned out of order."""
+    source = graph(
+        [
+            helper.make_node("Relu", ["x"], ["r"], name="upstream"),
+            helper.make_node("MatMul", ["r", "w"], ["MatMul_0_out0"], name="a"),
+            helper.make_node(
+                "If",
+                ["condition"],
+                ["y"],
+                name="branches",
+                then_branch=branch("then", "MatMul_0_out0"),
+                else_branch=branch("else", "MatMul_0_out0"),
+            ),
+        ],
+        ["y"],
+    )
+    source.graph.input.append(helper.make_tensor_value_info("condition", TensorProto.BOOL, []))
+    with refused(
+        "cleanup-reorders-capture",
+        error=KernelOpError,
+        owner="ToKernelOps",
+        node="branches",
+        tensor="MatMul_0_out0",
+        message="branches: its subgraph reads MatMul_0_out0, which a makes, and the "
+        "cleanup after conversion, which orders a node by its inputs alone, would put it first",
+    ):
+        convert(source)
+
+
 def test_an_annotation_naming_a_renamed_tensor_under_another_key_is_refused() -> None:
     """A quantization annotation's entry under a key that is neither ONNX's scale or zero
     point nor qonnx's nor namespaced may name a tensor, which a rename would leave behind:
@@ -342,6 +375,24 @@ def test_an_annotation_naming_a_renamed_tensor_under_another_key_is_refused() ->
         convert(source)
     with refused("graph-name-unmapped", error=KernelOpError, tensor="w"):
         convert(branching("x", ("z", "BLOCK_SCALE_TENSOR", "w"), output="h0"))
+    # A '/' alone does not make a key typed metadata: its namespace states no version.
+    annotation.quant_parameter_tensor_names[0].key = "vendor/BLOCK_SCALE_TENSOR"
+    with refused(
+        "graph-name-unmapped",
+        error=KernelOpError,
+        tensor="w",
+        message="h: its quantization annotation's vendor/BLOCK_SCALE_TENSOR names w, which",
+    ):
+        convert(source)
+    annotation.quant_parameter_tensor_names.add(key="vendor/@version", value="1")
+    model, _ = convert(source)
+    (kept,) = [
+        {entry.key: entry.value for entry in each.quant_parameter_tensor_names}
+        for each in model.graph.quantization_annotation
+        if each.tensor_name == "MatMul_0_out0"
+    ]
+    assert kept["vendor/BLOCK_SCALE_TENSOR"] == "w"
+    annotation.quant_parameter_tensor_names[0].key = "BLOCK_SCALE_TENSOR"
     annotation.quant_parameter_tensor_names[0].value = "x"
     model, _ = convert(source)
     (kept,) = [
@@ -375,7 +426,41 @@ def test_a_sparse_initializer_holds_its_name() -> None:
     onnx.checker.check_model(model.model)
     assert wiring(model)[0] == ("MatMul_0", ["x", "MatMul_0_param0"], ["MatMul_0_out0"])
     assert [item.values.name for item in model.graph.sparse_initializer] == ["finn.renaming/0"]
-    assert [item.values.name for item in model.graph.sparse_initializer] == ["finn.renaming/0"]
+
+
+def test_a_node_the_cleanup_would_drop_is_refused() -> None:
+    """qonnx's cleanup keeps a node that reads a graph input, a dense initializer or another
+    node's output, or that a node it keeps reads. A node that reads only a sparse initializer
+    and makes a graph output would be dropped, the output left with no producer: refused by
+    the node and the initializer, through ``ToKernelOps`` and ``name_kernel_ops`` alike."""
+    source = graph(
+        [
+            helper.make_node("Identity", ["s"], ["h"], name="sparse_reader"),
+            helper.make_node("Relu", ["x"], ["y"], name="other"),
+        ],
+        ["h", "y"],
+    )
+    values = helper.make_tensor("s", TensorProto.FLOAT, [1], [1.0])
+    indices = helper.make_tensor("s.indices", TensorProto.INT64, [1], [0])
+    source.graph.sparse_initializer.append(helper.make_sparse_tensor(values, indices, [4, 4]))
+    source.graph.value_info.append(helper.make_tensor_value_info("s", TensorProto.FLOAT, [4, 4]))
+    source.set_tensor_datatype("s", DataType["INT4"])
+    message = (
+        "sparse_reader: it reads the sparse initializer s, which qonnx's cleanup does not count "
+        "as held, so the cleanup after conversion would drop it, and h with it: store s as a "
+        "dense initializer"
+    )
+    with refused(
+        "cleanup-drops-node",
+        error=KernelOpError,
+        owner="ToKernelOps",
+        node="sparse_reader",
+        tensor="s",
+        message=message,
+    ):
+        convert(source)
+    with refused("cleanup-drops-node", error=KernelOpError, node="sparse_reader", tensor="s"):
+        name_kernel_ops(source)
 
 
 def test_a_host_node_between_kernel_ops_is_named_one_beside_them_is_not() -> None:

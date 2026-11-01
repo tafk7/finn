@@ -45,7 +45,10 @@ as it is, converted. Host nodes, the graph's inputs and outputs and the tensors 
 make keep their names; a name the rule gives that one of them already has refuses the
 conversion (``graph-name-taken``), and so do a renamed tensor a node's subgraph reads
 (``graph-name-captured``) and a quantization annotation's entry that names a renamed tensor
-under a key conversion does not map (``graph-name-unmapped``). The names are given once, here:
+under a key conversion does not map (``graph-name-unmapped``). So does a graph that order
+would break: a node the cleanup drops though the graph needs it, such as one that reads only a
+sparse initializer (``cleanup-drops-node``), and a node whose subgraph reads a tensor made after
+it (``cleanup-reorders-capture``). The names are given once, here:
 what is stored by graph name after conversion (a node's choices, a channel's on its tensor, a
 hold) is stored under them.
 
@@ -65,7 +68,7 @@ from itertools import count
 from typing import Any
 
 from onnx import GraphProto, NodeProto, TensorProto, helper
-from qonnx.core.metadata import SEPARATOR
+from qonnx.core.metadata import SEPARATOR, VERSION
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.base import Transformation
 from qonnx.transformation.general import GiveUniqueParameterTensors, SortGraph
@@ -220,8 +223,9 @@ _RENAMING = "finn.renaming/{}"
 #: The quantization annotation's keys whose value is a tensor's name, which a rename maps
 #: (ONNX's scale and zero point).
 _TENSOR_REFERENCES = ("SCALE_TENSOR", "ZERO_POINT_TENSOR")
-#: The quantization annotation's keys whose value is no tensor's name (qonnx's); a namespaced
-#: key (``<namespace>/<key>``, ``qonnx.core.metadata``) holds a typed value too.
+#: The quantization annotation's keys whose value is no tensor's name (qonnx's); a key of a
+#: typed namespace (``<namespace>/<key>`` beside ``<namespace>/@version``,
+#: ``qonnx.core.metadata``) holds a typed value too.
 _ANNOTATION_VALUES = ("finn_datatype", "tensor_layout", "tensor_sparsity")
 
 
@@ -247,9 +251,13 @@ def name_kernel_ops(model: ModelWrapper) -> tuple[int, ...]:
     (``graph-name-taken``); a renamed tensor a node's subgraph reads from the graph, by a
     node's input or an annotation (``graph-name-captured``); and a renamed tensor an
     annotation's entry names under any other key (``graph-name-unmapped``), unless the key is
-    qonnx's or namespaced, whose values name no tensor. A tensor that already has its graph
-    name is not renamed, so nothing that reads it is refused."""
+    qonnx's or a typed namespace's, whose values name no tensor. A tensor that already has its
+    graph name is not renamed, so nothing that reads it is refused for its name. Refused before
+    them, what the order would break (``_refuse_unsorted``): a node the cleanup drops that the
+    graph needs (``cleanup-drops-node``), and a node whose subgraph reads a tensor the order
+    makes after it (``cleanup-reorders-capture``)."""
     order = _cleanup_order(model)
+    _refuse_unsorted(model.graph, order)
     nodes_in_order = [model.graph.node[index] for index in order]
     del model.graph.node[:]
     model.graph.node.extend(nodes_in_order)
@@ -351,6 +359,59 @@ def _cleanup_order(model: ModelWrapper) -> tuple[int, ...]:
     return tuple(int(node.name) for node in sorted_shape.graph.node)
 
 
+def _refuse_unsorted(graph: GraphProto, order: tuple[int, ...]) -> None:
+    """Refuse a graph that ``order``, qonnx's cleanup's (``_cleanup_order``), would break.
+
+    The cleanup orders a node by its inputs alone, and keeps one only if it reads a graph
+    input, a dense initializer or another node's output, or if a node it keeps reads it. So
+    a node it drops that the graph needs, its output a graph output or read by a subgraph
+    (``cleanup-drops-node``), a sparse initializer's reader among them, and a node whose
+    subgraph reads a tensor the order makes after it (``cleanup-reorders-capture``) are
+    refused, each by the node and the tensor."""
+    position = {index: at for at, index in enumerate(order)}
+    maker = {name: index for index, node in enumerate(graph.node) for name in node.output if name}
+    needed = {item.name for item in graph.output}
+    needed |= {name for index in order for name in _captures(graph.node[index])}
+    dropped = [index for index in range(len(graph.node)) if index not in position]
+    lost: set[int] = set()
+    while grown := {i for i in dropped if i not in lost and needed & set(graph.node[i].output)}:
+        lost |= grown
+        needed |= {name for i in grown for name in graph.node[i].input}
+    sparse = {item.values.name for item in graph.sparse_initializer}
+    for index in sorted(lost):
+        node = graph.node[index]
+        read = next((name for name in node.input if name in sparse), None)
+        made = next(name for name in node.output if name in needed)
+        reads = (
+            f"it reads the sparse initializer {read}, which qonnx's cleanup does not count as held"
+            if read is not None
+            else "it reads nothing qonnx's cleanup counts as held"
+        )
+        raise KernelOpError.refused(
+            "cleanup-drops-node",
+            ToKernelOps.__name__,
+            f"{_label(node)}: {reads}, so the cleanup after conversion would drop it, and "
+            f"{made} with it"
+            + (f": store {read} as a dense initializer" if read is not None else ""),
+            node=_label(node),
+            tensor=read if read is not None else made,
+        )
+    for index in order:
+        node = graph.node[index]
+        for tensor in sorted(_captures(node)):
+            producer = maker.get(tensor)
+            if producer is not None and position[producer] > position[index]:
+                raise KernelOpError.refused(
+                    "cleanup-reorders-capture",
+                    ToKernelOps.__name__,
+                    f"{_label(node)}: its subgraph reads {tensor}, which "
+                    f"{_label(graph.node[producer])} makes, and the cleanup after conversion, "
+                    "which orders a node by its inputs alone, would put it first",
+                    node=_label(node),
+                    tensor=tensor,
+                )
+
+
 def _held(graph: GraphProto) -> Iterator[str]:
     """The names ``graph``'s initializers hold, its sparse initializers' among them."""
     yield from (item.name for item in graph.initializer)
@@ -395,12 +456,20 @@ def _captures(node: NodeProto) -> set[str]:
 def _unregistered(graph: GraphProto) -> Iterator[tuple[str, str, str]]:
     """Each entry of ``graph``'s quantization annotations, and of its nodes' subgraphs', whose
     key is neither a tensor reference (``_TENSOR_REFERENCES``) nor a value
-    (``_ANNOTATION_VALUES``, or namespaced): the tensor annotated, the key and its value. A
-    subgraph's only where the value is not the subgraph's own tensor."""
+    (``_ANNOTATION_VALUES``, or a key of a namespace the entries state a version of,
+    ``<namespace>/@version``: typed metadata): the tensor annotated, the key and its value. A
+    key with a ``/`` but no such version is an unknown key like any other. A subgraph's only
+    where the value is not the subgraph's own tensor."""
+    known = (*_TENSOR_REFERENCES, *_ANNOTATION_VALUES)
     for annotation in graph.quantization_annotation:
-        for entry in annotation.quant_parameter_tensor_names:
-            known = (*_TENSOR_REFERENCES, *_ANNOTATION_VALUES)
-            if entry.key not in known and SEPARATOR not in entry.key:
+        entries = [
+            entry.key.partition(SEPARATOR) for entry in annotation.quant_parameter_tensor_names
+        ]
+        typed = {namespace for namespace, _, key in entries if key == VERSION}
+        for entry, (namespace, separator, _) in zip(
+            annotation.quant_parameter_tensor_names, entries, strict=True
+        ):
+            if entry.key not in known and not (separator and namespace in typed):
                 yield annotation.tensor_name, entry.key, entry.value
     for node in graph.node:
         for inner in _subgraphs(node):
