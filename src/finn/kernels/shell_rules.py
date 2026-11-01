@@ -508,18 +508,23 @@ def netlist_counts(
 ) -> tuple[tuple[int | None, ...], int, bool]:
     """What the top of ``fragment`` and its ``boundary`` buses asks of a shell, read from
     the pins it would have (``finn.kernels.artifacts.top``) without building it: the window
-    each AXI-Lite bus it presents takes (``2**awaddr``), the AXI4 memory ports it initiates,
-    and whether it takes an aligned doubled clock (an instance's doubled clock,
-    ``doubled``). Emission checks it against the shell's rules' (``counts``)."""
-    buses = top_buses(fragment, boundary)
+    each AXI-Lite bus it presents takes (``2**awaddr``), the AXI4 memory ports its boundary
+    and its instances initiate (an instance's presented at the top or not: one not presented
+    is counted too, never taken for none), and whether it takes an aligned doubled clock (an
+    instance's doubled clock, ``doubled``). Emission checks it against the shell's rules'
+    (``counts``)."""
+    buses = tuple(boundary)
     windows = tuple(
         bus_window(bus)
-        for bus in buses
+        for bus in top_buses(fragment, buses)
         if bus.protocol is StandardProtocol.AXILITE and bus.endpoint is Endpoint.TARGET
     )
+    pins = (*buses, *(pin for _, leaf in fragment.instances for pin in leaf.abi.pins))
     memory = sum(
-        bus.protocol is StandardProtocol.AXIMM and bus.endpoint is Endpoint.INITIATOR
-        for bus in buses
+        isinstance(pin, Bus)
+        and pin.protocol is StandardProtocol.AXIMM
+        and pin.endpoint is Endpoint.INITIATOR
+        for pin in pins
     )
     return windows, memory, doubled(fragment)
 

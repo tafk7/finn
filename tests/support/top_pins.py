@@ -10,8 +10,9 @@ without building its top. The oracle reads the same from the top's pins
 ``_top_pins`` checks the two equal on every netlist a core's composition reads
 (``CoreComposition.netlist``, which a test's module, ``support.helpers.module_of``, and the
 shell's counts read: a graph's and one built by hand) while a test runs, and fails the
-test at its end where one differs. A netlist whose top's pins cannot be formed has no
-oracle, and is passed by. A conftest imports the fixture; every conftest that a gate's
+test at its end where one differs. A netlist whose top cannot be formed (its pins, or a pin
+of an instance nothing drives: a memory port no top presents) has no oracle, and is passed
+by: emission refuses it. A conftest imports the fixture; every conftest that a gate's
 ``--confcutdir`` stops at does so itself."""
 
 from __future__ import annotations
@@ -23,8 +24,8 @@ import pytest
 from finn.core.space import Available
 from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
-from finn.kernels.artifacts.module import Abi, Fragment
-from finn.kernels.artifacts.top import module_abi
+from finn.kernels.artifacts.module import Abi, Fragment, ProducerIdentity
+from finn.kernels.artifacts.top import compose
 from finn.kernels.explore import CoreComposition
 from finn.kernels.shell_rules import netlist_counts
 
@@ -49,11 +50,11 @@ def netlist_counts_of_abi(abi: Abi) -> tuple[tuple[int | None, ...], int, bool]:
 
 def mismatch(fragment: Fragment, boundary: Iterable[Bus]) -> str | None:
     """How ``netlist_counts`` of ``fragment`` and ``boundary`` differs from its top's pins'
-    (``netlist_counts_of_abi``); None where they agree, or where the top's pins cannot be
+    (``netlist_counts_of_abi``); None where they agree, or where its top cannot be
     formed."""
     buses = tuple(boundary)
     try:
-        abi = module_abi(fragment, buses)
+        abi = compose(ProducerIdentity("test", "1"), "top", fragment, buses).abi
     except ArtifactError:
         return None
     counted, expected = netlist_counts(fragment, buses), netlist_counts_of_abi(abi)

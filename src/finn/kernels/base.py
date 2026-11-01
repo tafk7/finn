@@ -17,8 +17,9 @@ which a kernel's facts hold and the engine admits only registered. No setter, re
 or flat callback table is installed on a kernel. Three things are installed when its class
 is made, each a function reading by names its closure fixes, so that its source states its
 reads: on a kernel with a module, one helper a part of its module; on a kernel with
-members that may take the doubled clock or present a control bus, what it takes and
-presents of theirs, ``takes_doubled_clock`` and ``control_buses``; on a kernel declaring a
+members that may take the doubled clock, initiate a memory port or present a control bus,
+what it takes, initiates and presents of theirs, ``takes_doubled_clock``,
+``memory_initiators`` and ``control_buses``; on a kernel declaring a
 control bus (``ControlModel``), what is read of it, ``declares_bus`` and ``bus_control``. A
 kernel with children exposes a member's port by a node alias (``x = compute.x``), for
 which nothing is installed.
@@ -928,7 +929,7 @@ def _derive_control(cls: type[Kernel]) -> None:
 # parts, each member is read by its own helper, ``-<prefix>-<i>``, so that each read names
 # its member.
 
-_DOUBLED, _BUSES, _WINDOWS = "doubled", "buses", "windows"
+_DOUBLED, _BUSES, _WINDOWS, _INITIATORS = "doubled", "buses", "windows", "initiators"
 _AGGREGATED = "_finn_aggregated"
 
 
@@ -958,6 +959,16 @@ def _may_double(space_type: type[Any]) -> bool:
         isinstance(space_type, type)
         and issubclass(space_type, Kernel)
         and (_declared(space_type, "clocking") or _declared(space_type, "takes_doubled_clock"))
+    )
+
+
+def _may_initiate(space_type: type[Any]) -> bool:
+    """Whether a kernel of ``space_type`` may initiate a memory port: it states (or the base
+    derives) its ``memory_initiators``."""
+    return (
+        isinstance(space_type, type)
+        and issubclass(space_type, Kernel)
+        and _declared(space_type, "memory_initiators")
     )
 
 
@@ -1027,6 +1038,19 @@ def _windows_from(
     return windows_from
 
 
+def _initiators_from(
+    guard: str | None, member: str, following: str
+) -> Callable[[Kernel], tuple[int, ...]]:
+    def initiators_from(self: Kernel) -> tuple[int, ...]:
+        found: tuple[int, ...] = ()
+        if guard is None or getattr(self, guard):
+            found = (getattr(self, member).memory_initiators,)
+        following_: tuple[int, ...] = getattr(self, following)()
+        return (*found, *following_)
+
+    return initiators_from
+
+
 def _case_member(cls: type[Kernel], member: str, item: object) -> str | None:
     """The name of ``cls``'s private member answering a selector member's case
     (``-<member>-case``), installed where it is not yet; None for a child."""
@@ -1041,9 +1065,10 @@ def _case_member(cls: type[Kernel], member: str, item: object) -> str | None:
 
 
 def _derive_doubled(cls: type[Kernel]) -> None:
-    """Derive ``cls``'s ``takes_doubled_clock``, ``control_buses`` and ``control_windows``
-    from the members that may require them (above), where it has any and does not state its
-    own."""
+    """Derive ``cls``'s ``takes_doubled_clock``, ``memory_initiators``, ``control_buses`` and
+    ``control_windows`` from the members that may require them (above), where it has any and
+    does not state its own: its control buses in its instance order (``instance_order``), as
+    its netlist exports them."""
     members = [
         (name, item)
         for name, item in _members(cls).items()
@@ -1066,11 +1091,30 @@ def _derive_doubled(cls: type[Kernel]) -> None:
 
         takes_doubled_clock.__doc__ = vars(Kernel)["takes_doubled_clock"].function.__doc__
         _set_aggregated(cls, "takes_doubled_clock", takes_doubled_clock, bool)
-    presenting = [
-        (name, item)
-        for name, item in members
-        if any(may_present_bus(each) for each in _member_types(item))
+    initiating = [
+        (name, item) for name, item in members if any(map(_may_initiate, _member_types(item)))
     ]
+    if initiating and not _aggregated(cls, "memory_initiators"):
+        _install_reading(
+            cls,
+            _INITIATORS,
+            [(partial(_initiators_from, _guarded(cls, item)), name) for name, item in initiating],
+        )
+
+        def memory_initiators(self: Kernel) -> int:
+            return sum(getattr(self, "-initiators-0")())
+
+        memory_initiators.__doc__ = vars(Kernel)["memory_initiators"].function.__doc__
+        _set_aggregated(cls, "memory_initiators", memory_initiators, int)
+    rank = {name: index for index, name in enumerate(cls.instance_order)}
+    presenting = sorted(
+        (
+            (name, item)
+            for name, item in members
+            if any(may_present_bus(each) for each in _member_types(item))
+        ),
+        key=lambda each: rank.get(each[0], len(rank)),
+    )
     cls._presents_buses = cls._presents_buses or bool(presenting)
     if presenting:
         _install_reading(
@@ -1894,10 +1938,12 @@ class Kernel(Space):
 
     @derived
     def memory_initiators(self) -> int:
-        """The memory ports it initiates itself (a memory-mapped bus it is the initiator
-        of, ``finn.kernels.port_model.MemoryPort``): none here. A kernel that declares one
-        states its own (a memory mover's, ``finn.kernels.iodma``); a shell's memory rules
-        count them (``finn.kernels.shell_rules``)."""
+        """The memory ports it initiates (a memory-mapped bus it is the initiator of,
+        ``finn.kernels.port_model.MemoryPort``): none here. A kernel that declares one states
+        its own (a memory mover's, ``finn.kernels.iodma``); the base derives a kernel's with
+        members that may initiate one when its class is made, the sum of its present
+        members' (``_derive_doubled``). A shell's memory rules count them
+        (``finn.kernels.shell_rules``)."""
         return 0
 
     # -- its schedule ----------------------------------------------------------------------
