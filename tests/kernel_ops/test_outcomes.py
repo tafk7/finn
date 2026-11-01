@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
+import onnx
 import pytest
 from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
@@ -186,9 +187,15 @@ def test_the_graph_is_named_in_the_order_cleanup_leaves_and_named_again_alike() 
         (("c",), "MatMul_1"),
         (("b",), "MatMul_2"),
     ]
-    again, _ = convert(model)
+    again, repeated = convert(model)
     assert wiring(again) == named
     assert design_digest(again) == design_digest(model)
+    # The second conversion keeps each KernelOp it finds, converted, under its name.
+    assert [(o.nodes, o.op, o.name, o.findings) for o in repeated.outcomes] == [
+        ((name,), "MatMul", name, ()) for name, _, _ in named
+    ]
+    report = kernel_ops_report(again, repeated.outcomes)
+    assert (report["converted"], report["on_host"]) == ({"MatMul": 3}, [])
 
 
 def test_a_quantization_annotation_follows_the_tensors_it_names() -> None:
@@ -213,38 +220,162 @@ def test_a_quantization_annotation_follows_the_tensors_it_names() -> None:
     assert found["SCALE_TENSOR"] == "MatMul_0_param0" and found["ZERO_POINT_TENSOR"] == "x"
 
 
-def test_a_renamed_tensor_a_subgraph_reads_is_refused() -> None:
-    """A host node's subgraph that reads a tensor conversion renames is refused by name
-    before anything is renamed: a subgraph is not renamed."""
+def branch(name: str, reads: str, *annotations: tuple[str, str, str]) -> Any:
+    """An ``If`` branch: ``Identity(reads) -> z``, and each ``(tensor, key, value)`` an entry of
+    its quantization annotation of ``tensor``."""
+    out = helper.make_tensor_value_info("z", TensorProto.FLOAT, [4, 4])
+    made = helper.make_graph([helper.make_node("Identity", [reads], ["z"])], name, [], [out])
+    for tensor, key, value in annotations:
+        entry = made.quantization_annotation.add(tensor_name=tensor)
+        entry.quant_parameter_tensor_names.add(key=key, value=value)
+    return made
 
-    def branch(name: str) -> Any:
-        out = helper.make_tensor_value_info("z", TensorProto.FLOAT, [4, 4])
-        return helper.make_graph([helper.make_node("Identity", ["h"], ["z"])], name, [], [out])
 
+def branching(reads: str, *annotations: tuple[str, str, str], output: str = "h") -> ModelWrapper:
+    """``MatMul(x, w) -> output`` and a host ``If`` whose branches each read ``reads``
+    (``branch``)."""
     source = graph(
         [
-            helper.make_node("MatMul", ["x", "w"], ["h"], name="a"),
+            helper.make_node("MatMul", ["x", "w"], [output], name="a"),
             helper.make_node(
                 "If",
                 ["condition"],
                 ["y"],
                 name="host",
-                then_branch=branch("then"),
-                else_branch=branch("else"),
+                then_branch=branch("then", reads, *annotations),
+                else_branch=branch("else", reads, *annotations),
             ),
         ],
-        ["y"],
+        ["y", output],
     )
     source.graph.input.append(helper.make_tensor_value_info("condition", TensorProto.BOOL, []))
+    return source
+
+
+def test_a_renamed_tensor_a_subgraph_reads_is_refused() -> None:
+    """A host node's subgraph that reads a tensor conversion renames, by a node's input or by
+    its annotation's scale, is refused by name before anything is renamed: a subgraph is not
+    renamed. The remedy names the tensor beforehand, which works for any node (an ``If``
+    takes one input)."""
+    renamed = graph(
+        [
+            helper.make_node("MatMul", ["x", "w"], ["h"], name="a"),
+            helper.make_node("Relu", ["h"], ["r"], name="host"),
+            helper.make_node(
+                "If",
+                ["condition"],
+                ["y"],
+                name="branches",
+                then_branch=branch("then", "h"),
+                else_branch=branch("else", "h"),
+            ),
+        ],
+        ["y", "r"],
+    )
+    renamed.graph.input.append(helper.make_tensor_value_info("condition", TensorProto.BOOL, []))
     with refused(
         "graph-name-captured",
         error=KernelOpError,
         owner="ToKernelOps",
-        node="host",
+        node="branches",
         tensor="h",
-        message="its subgraph reads h, which conversion names MatMul_0_out0",
+        message="its subgraph reads h, which conversion renames MatMul_0_out0, and a subgraph "
+        "is not renamed: give h its graph name, MatMul_0_out0, before conversion",
+    ):
+        convert(renamed)
+    with refused("graph-name-captured", error=KernelOpError, node="host", tensor="w"):
+        convert(branching("x", ("z", "SCALE_TENSOR", "w"), output="h0"))
+    # A branch's own tensor is no capture, however it is named.
+    model, _ = convert(branching("x", ("z", "SCALE_TENSOR", "z"), output="h0"))
+    assert [node.name for node in model.graph.node] == ["MatMul_0", "host"]
+
+
+def test_a_subgraph_reading_a_tensor_that_keeps_its_name_is_converted() -> None:
+    """A tensor that already has its graph name is not renamed, so a subgraph may read it."""
+    source = graph(
+        [
+            helper.make_node("MatMul", ["x", "MatMul_0_param0"], ["MatMul_0_out0"], name="a"),
+            helper.make_node("Relu", ["MatMul_0_out0"], ["r"], name="host"),
+            helper.make_node(
+                "If",
+                ["condition"],
+                ["y"],
+                name="branches",
+                then_branch=branch("then", "MatMul_0_out0"),
+                else_branch=branch("else", "MatMul_0_out0"),
+            ),
+        ],
+        ["y", "r"],
+    )
+    source.graph.input.append(helper.make_tensor_value_info("condition", TensorProto.BOOL, []))
+    source.set_initializer("MatMul_0_param0", np.eye(4, dtype=np.float32))
+    source.set_tensor_datatype("MatMul_0_param0", DataType["INT4"])
+    source.graph.initializer.remove(source.graph.initializer[0])  # w, which nothing reads
+    model, conversion = convert(source)
+    assert wiring(model)[0] == ("MatMul_0", ["x", "MatMul_0_param0"], ["MatMul_0_out0"])
+    assert [outcome.name for outcome in conversion.outcomes] == ["MatMul_0", None, None]
+
+
+def test_an_annotation_naming_a_renamed_tensor_under_another_key_is_refused() -> None:
+    """A quantization annotation's entry under a key that is neither ONNX's scale or zero
+    point nor qonnx's nor namespaced may name a tensor, which a rename would leave behind:
+    refused where it names a renamed one, in the graph or a subgraph, and kept where it names
+    none."""
+    source = graph(
+        [
+            helper.make_node("MatMul", ["x", "w"], ["h"], name="a"),
+            helper.make_node("Relu", ["h"], ["y"], name="host"),
+        ],
+        ["y"],
+    )
+    annotation = source.graph.quantization_annotation.add(tensor_name="h")
+    annotation.quant_parameter_tensor_names.add(key="BLOCK_SCALE_TENSOR", value="w")
+    with refused(
+        "graph-name-unmapped",
+        error=KernelOpError,
+        owner="ToKernelOps",
+        tensor="w",
+        message="h: its quantization annotation's BLOCK_SCALE_TENSOR names w, which conversion "
+        "renames MatMul_0_param0, and a rename maps only SCALE_TENSOR, ZERO_POINT_TENSOR: give w "
+        "its graph name, MatMul_0_param0, before conversion",
     ):
         convert(source)
+    with refused("graph-name-unmapped", error=KernelOpError, tensor="w"):
+        convert(branching("x", ("z", "BLOCK_SCALE_TENSOR", "w"), output="h0"))
+    annotation.quant_parameter_tensor_names[0].value = "x"
+    model, _ = convert(source)
+    (kept,) = [
+        {entry.key: entry.value for entry in each.quant_parameter_tensor_names}
+        for each in model.graph.quantization_annotation
+        if each.tensor_name == "MatMul_0_out0"
+    ]
+    assert kept["BLOCK_SCALE_TENSOR"] == "x"
+
+
+def test_a_sparse_initializer_holds_its_name() -> None:
+    """A sparse initializer holds its name, read or not: a graph name by position it holds is
+    refused, and a temporary name passes it by, so the graph returned stays valid."""
+
+    def holding(name: str) -> ModelWrapper:
+        source = graph(
+            [
+                helper.make_node("MatMul", ["x", "w"], ["h"], name="a"),
+                helper.make_node("Relu", ["h"], ["y"], name="host"),
+            ],
+            ["y"],
+        )
+        values = helper.make_tensor(name, TensorProto.FLOAT, [1], [1.0])
+        indices = helper.make_tensor(f"{name}.indices", TensorProto.INT64, [1], [0])
+        source.graph.sparse_initializer.append(helper.make_sparse_tensor(values, indices, [4]))
+        return source
+
+    with refused("graph-name-taken", error=KernelOpError, tensor="w"):
+        convert(holding("MatMul_0_param0"))
+    model, _ = convert(holding("finn.renaming/0"))
+    onnx.checker.check_model(model.model)
+    assert wiring(model)[0] == ("MatMul_0", ["x", "MatMul_0_param0"], ["MatMul_0_out0"])
+    assert [item.values.name for item in model.graph.sparse_initializer] == ["finn.renaming/0"]
+    assert [item.values.name for item in model.graph.sparse_initializer] == ["finn.renaming/0"]
 
 
 def test_a_host_node_between_kernel_ops_is_named_one_beside_them_is_not() -> None:
