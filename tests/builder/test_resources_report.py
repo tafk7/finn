@@ -45,7 +45,7 @@ def test_the_placed_hierarchy_is_read_by_depth() -> None:
         (2, "smartconnect_0"),
         (3, "inst"),
         (2, "DataflowCore_0"),
-        (2, "axi_interconnect_0"),
+        (2, "control_0_0"),
         (2, "in0"),
         (2, "out0"),
     ]

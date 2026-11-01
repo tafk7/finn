@@ -32,7 +32,7 @@ from finn.platform.request import TargetRequest
 from finn.platform.resolve import refuse_drift, resolve_target
 from finn.platform.shells import MOVED, MoverKind, Offer, shell_row, shell_rows
 from finn.platform.target import Target
-from finn.shells.pynq.linker import CONTROL_SLAVES, PROCESSORS
+from finn.shells.pynq.linker import PROCESSORS
 from finn.shells.pynq.templates import custom_zynq_shell_template
 
 #: Each PYNQ board's part, DSP block and native AXI port width, as the deleted HWCustomOp
@@ -334,10 +334,10 @@ def test_the_pynq_row_states_its_movers_limits_linker_and_fixed_shell() -> None:
     assert row.fixed is not None and row.fixed.control_base == 0xA000_0000
     assert row.control is not None
     assert (row.control.least_window, row.control.aperture) == (4096, 0x1000_0000)
-    # The linker refuses what its template's AXI-Lite interconnect does not take: nine
-    # buses, before any tool runs.
-    limit = re.search(r"if \{\$NUM_AXILITE > (\d+)\}", custom_zynq_shell_template)
-    assert limit is not None and int(limit.group(1)) == CONTROL_SLAVES
+    # No count of control buses is the template's: the linker builds its control tree, 16
+    # ports a SmartConnect, and the processor's window bounds the units.
+    assert "NUM_AXILITE" not in custom_zynq_shell_template
+    assert row.fixed.control_fanout == 16
     target = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
     assert (target.shell, target.board) == ("pynq", "Ultra96")
     # The row owns the doubled clock; the target's platform is the part's and the
@@ -346,26 +346,28 @@ def test_the_pynq_row_states_its_movers_limits_linker_and_fixed_shell() -> None:
 
 
 def test_the_zynq_fixed_shell_states_its_resources_by_masters_and_slaves() -> None:
-    """Out of context on xczu3eg and xczu7ev: the PS 264 LUT and its reset 19; the
-    SmartConnect 5 346 LUT at 2 masters and about 2 200 a master more; the AXI
-    interconnect 1 277 LUT, and its crossbar none at 1 slave, then 131, 184 and 361 at
-    2, 4 and 9."""
+    """Out of context on xczu3eg and xczu7ev, by role: the PS 264 LUT and its reset 19;
+    the memory SmartConnect 5 346 LUT at 2 masters and about 2 200 a master more; the
+    control tree of SmartConnects, each 797.5 + 81.29 LUT a port it gives (M2), 16 at
+    most: one instance to 16 buses, then a root of two and two more at 17."""
     fixed = shell_row("pynq", "Ultra96").fixed
     assert fixed is not None
+    assert (fixed.memory_interconnect, fixed.control_interconnect) == ("smartconnect",) * 2
     region = dict(fixed.resources(masters=2, slaves=1))
-    assert list(region) == ["zynq_ultra_ps_e", "proc_sys_reset", "smartconnect", "axi_interconnect"]
-    assert (region["zynq_ultra_ps_e"].lut, region["proc_sys_reset"].lut) == (264, 19)
-    assert (region["smartconnect"].lut, region["axi_interconnect"].lut) == (5364, 1277)
-    smartconnect = [
-        dict(fixed.resources(masters=masters, slaves=1))["smartconnect"].lut
+    assert list(region) == ["processor", "reset", "memory_interconnect", "control_interconnect"]
+    assert (region["processor"].lut, region["reset"].lut) == (264, 19)
+    assert (region["memory_interconnect"].lut, region["control_interconnect"].lut) == (5364, 879)
+    memory = [
+        dict(fixed.resources(masters=masters, slaves=1))["memory_interconnect"].lut
         for masters in (2, 3, 4)
     ]
-    assert smartconnect == [5364, 7579, 9795]
-    crossbar = [
-        dict(fixed.resources(masters=2, slaves=slaves))["axi_interconnect"].lut - 1277
-        for slaves in (1, 2, 4, 9)
+    assert memory == [5364, 7579, 9795]
+    control = [
+        dict(fixed.resources(masters=2, slaves=slaves))["control_interconnect"].lut
+        for slaves in (1, 2, 3, 16, 17)
     ]
-    assert crossbar == [0, 125, 192, 359]
+    # 17: the root's 2 ports (960), one of 16 (2 098) and one of 1 (879).
+    assert control == [879, 960, 1041, 2098, 3937]
     with pytest.raises(ValueError, match="at least one memory port"):
         fixed.resources(masters=0, slaves=1)
 

@@ -65,7 +65,6 @@ from finn.shells.pynq.driver import (
     write_driver,
 )
 from finn.shells.pynq.linker import (
-    CONTROL_SLAVES,
     LinkerRefused,
     block_design,
     collect,
@@ -143,11 +142,25 @@ def mover_lines(instance: str, ip: IpRef, memory: int, control: int) -> list[str
         f"connect_bd_intf_net [get_bd_intf_pins {instance}/m_axi_gmem] "
         f"[get_bd_intf_pins smartconnect_0/S{memory:02d}_AXI]",
         f"connect_bd_intf_net [get_bd_intf_pins {instance}/s_axi_control] "
-        f"[get_bd_intf_pins axi_interconnect_0/M{control:02d}_AXI]",
+        f"[get_bd_intf_pins control_0_0/M{control:02d}_AXI]",
         f"assign_bd_address [get_bd_addr_segs {instance}/s_axi_control/Reg*] "
         f"-offset {0xA000_0000 + 0x1000 * control:#010x} -range 4096",
         f"connect_bd_net [get_bd_pins {instance}/ap_clk] [get_bd_pins smartconnect_0/aclk]",
         f"connect_bd_net [get_bd_pins {instance}/ap_rst_n] [get_bd_pins smartconnect_0/aresetn]",
+    ]
+
+
+def tree_lines(ports: int) -> list[str]:
+    """The control tree of one SmartConnect giving ``ports`` control ports: its cell, the
+    processor's control master into it, its clock and reset."""
+    return [
+        "create_bd_cell -type ip -vlnv $smartconnect_vlnv control_0_0",
+        f"set_property -dict [list CONFIG.NUM_SI 1 CONFIG.NUM_MI {ports} "
+        "CONFIG.STRATEGY LOW_AREA] [get_bd_cells control_0_0]",
+        "connect_bd_intf_net [get_bd_intf_pins control_0_0/S00_AXI] "
+        "[get_bd_intf_pins zynq_ps/M_AXI_HPM0_FPD]",
+        "connect_bd_net [get_bd_pins control_0_0/aclk] [get_bd_pins zynq_ps/pl_clk0]",
+        "connect_bd_net [get_bd_pins control_0_0/aresetn] [get_bd_pins rst_ps/peripheral_aresetn]",
     ]
 
 
@@ -158,11 +171,12 @@ def stream(sink: str, source: str) -> str:
 def test_the_block_design_instantiates_each_mover_and_the_partition_from_the_description(
     tmp_path: Path,
 ) -> None:
-    """In the block design's order (input movers, the partition, output movers), each
-    unit's IP and cell, then its wires from the description, its own pin first: as
-    MakeZYNQProject writes the HWCustomOp flow's link graph."""
+    """The control tree, then in the block design's order (input movers, the partition,
+    output movers) each unit's IP and cell, then its wires from the description, its own
+    pin first: as MakeZYNQProject writes the HWCustomOp flow's link graph."""
     described = describe(zynq_parent(tmp_path))
     assert design(described).splitlines() == [
+        *tree_lines(3),
         *mover_lines("in0", IPS["in0"], 0, 0),
         *mover_lines("in1", IPS["in1"], 1, 1),
         repositories("/packaged/ip"),
@@ -199,16 +213,15 @@ def test_the_debug_option_probes_every_mover_stream_and_the_memory_port(tmp_path
 
 
 def test_the_project_is_the_template_filled_from_the_description(tmp_path: Path) -> None:
-    """The template, unchanged: the period asked in whole MHz, the description's control
-    endpoints and memory bindings counted, its board and part, the block design, the
-    template's own debug block off, and the runs Vivado launches at once."""
+    """The template, unchanged: the period asked in whole MHz, the description's memory
+    bindings counted, its board and part, the block design, the template's own debug
+    block off, and the runs Vivado launches at once. No count of control buses: the
+    block design's control tree takes them."""
     described = describe(zynq_parent(tmp_path))
     linked = design(described)
     script = project_script(described, linked, BOARD_FACTS, linked_row(described), jobs=3)
     assert script.startswith(
-        "\nset FREQ_MHZ 200\nset NUM_AXILITE 3\nif {$NUM_AXILITE > 9} {\n"
-        '    error "Maximum 10 AXI-Lite interfaces supported"\n}\nset NUM_AXIMM 3\n'
-        f"set BOARD Ultra96\nset FPGA_PART {ZYNQ.part}\n"
+        f"\nset FREQ_MHZ 200\nset NUM_AXIMM 3\nset BOARD Ultra96\nset FPGA_PART {ZYNQ.part}\n"
     )
     # The board's part as its declaration states it, the processor's family the fixed
     # shell's processor's.
@@ -615,24 +628,21 @@ def test_the_bitfile_build_refuses_a_shell_without_it(tmp_path: Path) -> None:
 def test_a_description_the_block_design_cannot_wire_is_refused_before_any_tool_runs(
     tmp_path: Path,
 ) -> None:
-    """More units with a control window than the block design's control interconnect takes
-    buses: refused by the linker before any mover's HLS, the partition's packaging or Vivado
-    runs."""
+    """A unit whose control window is less than the row's least window: refused by the
+    linker before any mover's HLS, the partition's packaging or Vivado runs."""
     parent = zynq_parent(tmp_path)
     described = describe(parent)
-    unit, endpoint = described.units[0], described.endpoints[0]
-    names = [f"{unit.name}_{index}" for index in range(CONTROL_SLAVES + 1)]
-    many = replace(
+    narrow = replace(
         described,
-        units=(
-            *(replace(unit, name=name) for name in names),
-            *(each for each in described.units if each.window is None),
+        units=tuple(
+            replace(each, window=64) if each.window is not None else each
+            for each in described.units
         ),
-        endpoints=tuple(replace(endpoint, unit=name) for name in names),
+        endpoints=tuple(replace(each, range=64) for each in described.endpoints),
     )
     vivado = FakeVivado()
-    with refused("control-slaves-exceeded", error=LinkerRefused):
-        build_pynq(parent, many, toolchain=cast(Toolchain, vivado))
+    with refused("range-below-least", error=LinkerRefused):
+        build_pynq(parent, narrow, toolchain=cast(Toolchain, vivado))
     assert vivado.runs == []
 
 

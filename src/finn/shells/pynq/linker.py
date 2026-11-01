@@ -12,9 +12,16 @@ It takes every name the platform gives and places every control bus:
 - the wires (``wiring``): each stream from its source pin to its sink pin; each memory port
   to the memory interconnect's next slave port (``S<nn>_AXI``); each unit's control port
   (``s_axi_control``), in the description's order (the input movers, the core, the output
-  movers), from the control interconnect's next master port (``M<nn>_AXI``): one a unit
-  with a window, a core unit's buses behind its grouper; every cell's clock and reset from
-  the memory interconnect's;
+  movers), from the control tree's next master port (``M<nn>_AXI``): one a unit with a
+  window, a core unit's buses behind its grouper; every cell's clock and reset from the
+  memory interconnect's;
+- the control tree (``control_tree``): SmartConnects (``LOW_AREA``, one slave port), each
+  giving the fixed shell's ``control_fanout`` ports at most
+  (``finn.kernels.shell_rules.interconnect_tree``, by which the static region is costed),
+  named ``control_<level>_<index>``, the root's slave port the processor's control master
+  (``CONTROL_MASTERS``), each level's ports the next level's slave ports, filled in order,
+  the last level's the units'; each on the row's main clock and the template's reset
+  (``rst_ps``, wired by hand: SmartConnect takes no clock automation);
 - the placement (``placement``): each unit's window from the fixed shell's
   ``control_base``, in that order, aligned to itself
   (``finn.kernels.shell_rules.placed_windows``, by which the shell's control window rule
@@ -27,11 +34,9 @@ It takes every name the platform gives and places every control bus:
 
 It wires one AXI-Lite bus and one memory port a mover: a mover whose contract states other
 counts is refused, by name (``wire_one_bus_each``), as is a control window below the row's
-least window (``range-below-least``). Its template's control interconnect
-takes ``CONTROL_SLAVES`` AXI-Lite buses: a description placing more units with a window is
-refused before any tool runs (``control-slaves-exceeded``), where the shell's rules no
-longer bound them. Its
-template wires the memory
+least window (``range-below-least``), and a control interconnect other than SmartConnect
+(``control-interconnect-unsupported``). The control tree takes any number of units: the
+shell's rules bound them by the processor's window. Its template wires the memory
 interconnect into the processor's ``HP0`` port and runs every cell on the row's main clock:
 a memory port bound to another target, a unit on another clock and a description with no
 memory port are refused, each by name (``wiring``), as is a processor or board it cannot
@@ -58,7 +63,7 @@ from finn import resources
 from finn.core.reporting.findings import Finding, FindingKind, Refusal
 from finn.kernels.artifacts.unit import CONTROL
 from finn.kernels.movers import MoverContract
-from finn.kernels.shell_rules import placed_windows
+from finn.kernels.shell_rules import interconnect_tree, placed_windows
 from finn.platform.shells import VIVADO_BLOCK_DESIGN, ShellRow, shell_row
 from finn.shells.integration import MAIN, Integration, IntegrationError, Linked, Unit
 from finn.shells.pynq import templates
@@ -68,25 +73,28 @@ from finn.toolchain.vivado import tcl_quote, vivado_jobs
 #: The project the template creates (``create_project finn_zynq_link``).
 PROJECT = "finn_zynq_link"
 
-#: The template's instance of each part of the fixed shell (``FixedShell``'s fields); the
-#: reset's is a prefix, as Vivado's clock automation names it after the processor's clock
-#: (``rst_zynq_ps_187M``).
+#: The block design's instance of each part of the fixed shell, by its role
+#: (``FixedShell.resources``); the control interconnect's is its tree's instances' prefix
+#: (``control_<level>_<index>``).
 STATIC_INSTANCES = {
     "processor": "zynq_ps",
-    "reset": "rst_zynq_ps_",
+    "reset": "rst_ps",
     "memory_interconnect": "smartconnect_0",
-    "control_interconnect": "axi_interconnect_0",
+    "control_interconnect": "control_",
 }
+
+CONTROL_IP = "smartconnect"
+"""The control tree's IP: the template's ``$smartconnect_vlnv``."""
 
 MEMORY_TARGET = "HP0"
 """The memory target the template wires the memory interconnect into: the processor's
 ``HP0`` port."""
 
-CONTROL_SLAVES = 9
-"""The AXI-Lite buses the template's control interconnect takes (its ``NUM_AXILITE``)."""
-
 PROCESSORS = {"zynq_ultra_ps_e": "zynq_us+", "processing_system7": "zynq_7000"}
 """The template's processor family (its ``ZYNQ_TYPE``) by the fixed shell's processor IP."""
+
+CONTROL_MASTERS = {"zynq_us+": "M_AXI_HPM0_FPD", "zynq_7000": "M_AXI_GP0"}
+"""The processor's control master, which the control tree's root takes, by its family."""
 
 
 @dataclass(frozen=True)
@@ -144,6 +152,33 @@ def linked_row(integration: Integration) -> ShellRow:
     return row
 
 
+def family(row: ShellRow) -> str:
+    """The template's processor family of ``row``'s fixed shell (``PROCESSORS``), refused
+    where the block design instantiates no such processor (``processor-unsupported``)."""
+    assert row.fixed is not None
+    found = PROCESSORS.get(row.fixed.processor)
+    if found is None:
+        raise LinkerRefused(
+            "processor-unsupported",
+            f"the processor {row.fixed.processor!r} is none the block design instantiates "
+            f"({', '.join(PROCESSORS)})",
+        )
+    return found
+
+
+def control_instance(level: int, index: int) -> str:
+    """The control tree's instance ``index`` of its level ``level``, the root's 0."""
+    return f"control_{level}_{index}"
+
+
+def control_tree(integration: Integration, row: ShellRow) -> tuple[tuple[int, ...], ...]:
+    """The control tree of ``integration``'s units with a window (``placed_units``): each
+    level's instances' ports, from the root (``interconnect_tree``, at the fixed shell's
+    ``control_fanout``)."""
+    assert row.fixed is not None
+    return interconnect_tree(len(placed_units(integration)), row.fixed.control_fanout)
+
+
 def wiring(integration: Integration, row: ShellRow) -> tuple[Wire, ...]:
     """The block design's wires of ``integration`` in ``row`` (see the module docstring),
     each mover first checked to be one it wires (``wire_one_bus_each``), and each unit's
@@ -174,13 +209,13 @@ def wiring(integration: Integration, row: ShellRow) -> tuple[Wire, ...]:
                 f"{binding.port}: bound to {binding.target!r}; the block design wires "
                 f"memory into {MEMORY_TARGET!r} alone",
             )
-    controlled = placed_units(integration)
-    if len(controlled) > CONTROL_SLAVES:
+    if row.fixed.control_interconnect != CONTROL_IP:
         raise LinkerRefused(
-            "control-slaves-exceeded",
-            f"the description places {len(controlled)} units with a control window; the "
-            f"block design's control interconnect takes {CONTROL_SLAVES}",
+            "control-interconnect-unsupported",
+            f"the control interconnect {row.fixed.control_interconnect!r}; the block design "
+            f"builds its control tree of {CONTROL_IP!r}",
         )
+    master = CONTROL_MASTERS[family(row)]
     for clock in integration.clocks:
         if clock.clock != MAIN:
             raise LinkerRefused(
@@ -188,17 +223,39 @@ def wiring(integration: Integration, row: ShellRow) -> tuple[Wire, ...]:
                 f"{clock.unit}/{clock.pin}: on the clock {clock.clock!r}; the block design "
                 f"runs every cell on the row's {MAIN!r} clock",
             )
-    memory = f"{row.fixed.memory_interconnect}_0"
-    control = f"{row.fixed.control_interconnect}_0"
+    memory = STATIC_INSTANCES["memory_interconnect"]
+    processor, reset = STATIC_INSTANCES["processor"], STATIC_INSTANCES["reset"]
     wires = [Wire("axis", each.source, each.sink) for each in integration.connections]
     wires += [
         Wire("aximm", each.port, f"{memory}/S{index:02d}_AXI")
         for index, each in enumerate(integration.bindings)
     ]
-    wires += [
-        Wire("axilite", f"{control}/M{index:02d}_AXI", f"{unit.name}/{CONTROL}")
-        for index, unit in enumerate(controlled)
+    tree = control_tree(integration, row)
+    instances = [
+        control_instance(depth, index)
+        for depth, level in enumerate(tree)
+        for index, _ in enumerate(level)
     ]
+    if tree:
+        wires.append(Wire("axilite", f"{processor}/{master}", f"{control_instance(0, 0)}/S00_AXI"))
+    for depth, level in enumerate(tree):
+        below = (
+            [
+                f"{control_instance(depth + 1, index)}/S00_AXI"
+                for index in range(len(tree[depth + 1]))
+            ]
+            if depth + 1 < len(tree)
+            else [f"{unit.name}/{CONTROL}" for unit in placed_units(integration)]
+        )
+        ports = [
+            f"{control_instance(depth, index)}/M{port:02d}_AXI"
+            for index, count in enumerate(level)
+            for port in range(count)
+        ]
+        wires += [Wire("axilite", port, sink) for port, sink in zip(ports, below, strict=True)]
+    for instance in instances:
+        wires.append(Wire("clock", f"{processor}/{row.clocks.main}", f"{instance}/aclk"))
+        wires.append(Wire("reset", f"{reset}/peripheral_aresetn", f"{instance}/aresetn"))
     for clock in integration.clocks:
         wires.append(Wire("clock", f"{memory}/aclk", f"{clock.unit}/{clock.pin}"))
         wires.append(Wire("reset", f"{memory}/aresetn", f"{clock.unit}/{clock.reset}"))
@@ -286,8 +343,9 @@ def debug_lines(wires: tuple[Wire, ...], row: ShellRow) -> list[str]:
 
 
 def block_design(integration: Integration, row: ShellRow, hw_debug: bool = False) -> str:
-    """The block design's cells and wires, as the template's custom section takes them: for
-    each unit in the description's order, its IP repositories and cell, then each wire of
+    """The block design's cells and wires, as the template's custom section takes them: the
+    control tree's instances (``control_tree``), their ports and their clocks and resets;
+    then for each unit in the description's order, its IP repositories and cell, then each wire of
     one of its pins, its own pin first: its memory port to the memory interconnect, its
     control port from the control interconnect with its address (``placement``'s, its
     offset and range), its clock and reset, and each stream it takes. Each unit's IP is
@@ -296,6 +354,26 @@ def block_design(integration: Integration, row: ShellRow, hw_debug: bool = False
     wires = wiring(integration, row)
     addresses = {address.interface: address for address in placement(integration, row)}
     lines = []
+    tree = control_tree(integration, row)
+    instances = {
+        control_instance(depth, index): count
+        for depth, level in enumerate(tree)
+        for index, count in enumerate(level)
+    }
+    for instance, count in instances.items():
+        lines.append(f"create_bd_cell -type ip -vlnv $smartconnect_vlnv {instance}")
+        lines.append(
+            f"set_property -dict [list CONFIG.NUM_SI 1 CONFIG.NUM_MI {count} "
+            f"CONFIG.STRATEGY LOW_AREA] [get_bd_cells {instance}]"
+        )
+    for wire in wires:
+        if _owner(wire.sink) in instances:
+            if wire.kind == "axilite":
+                lines.append(_interface(wire.sink, wire.source))
+            else:
+                lines.append(
+                    f"connect_bd_net [get_bd_pins {wire.sink}] [get_bd_pins {wire.source}]"
+                )
     for unit in integration.units:
         if unit.ip is None or not unit.ip.repositories:
             raise LinkerRefused(
@@ -344,7 +422,7 @@ def project_script(
 ) -> str:
     """The project's Tcl (``ip_config.tcl``): ``templates.custom_zynq_shell_template``
     filled with the description's clock (the period asked, in whole MHz as the template
-    takes it), its control ports (one a unit with a window) and memory ports, board and
+    takes it), its memory ports, board and
     part, the board's part (``board``'s ``board_part``) and the processor's family
     (``PROCESSORS``, by the fixed shell's processor), the block design ``design``, and the
     runs Vivado launches at once (``jobs``, by default the machine's cores, capped:
@@ -359,13 +437,7 @@ def project_script(
             "board-part-unstated",
             f"the board {integration.row[1]!r} states no board_part, which the project selects",
         )
-    family = PROCESSORS.get(row.fixed.processor)
-    if family is None:
-        raise LinkerRefused(
-            "processor-unsupported",
-            f"the processor {row.fixed.processor!r} is none the block design instantiates "
-            f"({', '.join(PROCESSORS)})",
-        )
+    processor = family(row)
     boards = " ".join(tcl_quote(path) for path in resources.paths("vivado-boards"))
     # Every board repository; the template is %-formatted next.
     template = templates.custom_zynq_shell_template.replace(
@@ -373,12 +445,11 @@ def project_script(
     )
     return template % (
         int(1 / (integration.period_ns * 0.001)),
-        len(placed_units(integration)),
         len(integration.bindings),
         integration.row[1],
         integration.part,
         board_part,
-        family,
+        processor,
         design,
         0,
         vivado_jobs(jobs),
@@ -468,14 +539,19 @@ __all__ = [
     "STATIC_INSTANCES",
     "Address",
     "BlockDesignLinker",
+    "CONTROL_IP",
+    "CONTROL_MASTERS",
     "LinkerRefused",
     "MEMORY_TARGET",
     "PROCESSORS",
     "Wire",
     "block_design",
     "collect",
+    "control_instance",
+    "control_tree",
     "debug_lines",
     "endpoint_addresses",
+    "family",
     "linked_row",
     "placed_units",
     "placement",

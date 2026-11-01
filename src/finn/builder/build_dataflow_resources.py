@@ -100,7 +100,8 @@ def _less(total: Resources, parts: list[Resources]) -> dict[str, int]:
 
 def _instance_of(name: str, instances: Mapping[str, str | None]) -> str | None:
     """The member whose instance is ``name``, or a prefix of it (an IP's own runs and
-    sub-instances, such as ``axi_interconnect_0_imp_auto_ds``); the longest match wins."""
+    sub-instances, such as ``smartconnect_0_imp_auto_ds``, or the control tree's
+    instances, ``control_0_0``); the longest match wins."""
     found = [
         (len(instance), key)
         for key, instance in instances.items()
@@ -112,8 +113,8 @@ def _instance_of(name: str, instances: Mapping[str, str | None]) -> str | None:
 
 def _member_instances(parent: ModelWrapper) -> dict[str, str | None]:
     """Each member of the shell's block design by its report key (``partition``,
-    ``movers.<mover>``, ``groupers.<grouper>``, ``static_region.<ip>``), with its instance
-    name, or the prefix of a name Vivado chooses (the reset's, after its clock); a grouper's
+    ``movers.<mover>``, ``groupers.<grouper>``, ``static_region.<role>``), with its instance
+    name, or the prefix of its instances' names (the control tree's); a grouper's
     the decoder's in its unit, None for none. A shell without an integration has the
     partition alone, by its node's name."""
     node, body, _ = partition_body(parent)
@@ -129,20 +130,16 @@ def _member_instances(parent: ModelWrapper) -> dict[str, str | None]:
         buses = [each for each in described.endpoints if each.unit == core.name]
         decoder = f"{core.name}/{GROUPER}" if len(buses) > 1 else None
         instances[f"groupers.{grouper_name(core.name)}"] = decoder
-    static = row.fixed
-    if static is not None:
+    if row.fixed is not None:
         instances.update(
-            {
-                f"static_region.{getattr(static, role)}": instance
-                for role, instance in STATIC_INSTANCES.items()
-            }
+            {f"static_region.{role}": instance for role, instance in STATIC_INSTANCES.items()}
         )
     return instances
 
 
 def _members(split: Mapping[str, Any]) -> dict[str, Any]:
     """The report's members, ``partition``, ``movers`` and ``groupers`` by name and
-    ``static_region`` by IP, each with its columns (``model``, ``out_of_context``,
+    ``static_region`` by role, each with its columns (``model``, ``out_of_context``,
     ``placed``)."""
     return {
         "partition": split["partition"],

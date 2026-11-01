@@ -201,7 +201,7 @@ def test_where_nothing_fits_the_search_states_it_and_keeps_the_least_parallelism
     _, searched, sized = report["strategies"]
     (budget,) = searched["findings"]
     assert (budget["kind"], budget["code"]) == ("limitation", "resource-budget")
-    assert "most of lut: lut 9882 of 7056" in budget["message"]
+    assert "most of lut: lut 9440 of 7056" in budget["message"]
     assert budget["details"] == {"binding": "lut", "over": ("lut",)}
     # Before sizing, the output's direct throttles its producer: no exploration checks it,
     # and the build's verification names it.
@@ -217,21 +217,21 @@ def test_where_nothing_fits_the_search_states_it_and_keeps_the_least_parallelism
     assert searched["fits"] is False and searched["binding"] == "lut"
     assert report["bottleneck"]["cycles"] == 48 and searched["bottleneck"]["cycles"] == 48
     assert not searched["monotone"]
-    assert searched["departures"] == ["no budget uses more than budget 1: lut 9882 > 9838"]
+    assert searched["departures"] == ["no budget uses more than budget 1: lut 9440 > 9396"]
     # The least parallelism is every MatMul's default: nothing changed, every value saved.
     assert kernel_choices_config(model) and searched["committed"] == 0
     assert sized["fifo_bits"] > 0
-    assert report["resources"]["used"]["lut"] > searched["used"]["lut"] == 9882
+    assert report["resources"]["used"]["lut"] > searched["used"]["lut"] == 9440
 
 
 @pytest.mark.slow
 def test_tfc_in_the_zynq_shell_searches_to_the_least_budget_that_fits(tfc: ModelWrapper) -> None:
-    """15.57 % of the part's LUTs (10 986), between the least parallelism's shell total,
-    10 913, and the 11 077 of 2 048 cycles: 3 136 cycles at 10 978, the movers and the
+    """14.94 % of the part's LUTs (10 541), between the least parallelism's shell total,
+    10 471, and the 10 635 of 2 048 cycles: 3 136 cycles at 10 536, the movers and the
     static region beside the partition."""
-    searched, report = searched_tfc(tfc, "pynq", 0.1557, 10986, 3136)
+    searched, report = searched_tfc(tfc, "pynq", 0.1494, 10541, 3136)
     resources = report["resources"]
-    assert resources["used"]["lut"] == 10978 > resources["shell"]["partition"]["lut"] + 9000
+    assert resources["used"]["lut"] == 10536 > resources["shell"]["partition"]["lut"] + 9000
     # The input mover bounds the shell: the fastest fold, relaxed to 53, reaches 62 at
     # the mover, a departure stated and not corrected.
     tried = searched["tried"]

@@ -22,7 +22,6 @@ from finn.kernels.shell_rules import placed_windows
 from finn.platform.shells import shell_row
 from finn.shells.integration import Endpoint, Integration, IntegrationError, IpRef, describe
 from finn.shells.pynq.linker import (
-    CONTROL_SLAVES,
     Address,
     BlockDesignLinker,
     LinkerRefused,
@@ -54,9 +53,10 @@ def described(tmp_path: Path) -> Integration:
 
 
 def test_the_chain_is_wired_as_its_block_design(described: Integration) -> None:
-    """The streams, each memory port to the memory interconnect's next slave port, each
-    control bus from the control interconnect's next master port (input movers, the core,
-    output movers), and every cell's clock and reset: each cell its unit's name, each pin
+    """The streams, each memory port to the memory interconnect's next slave port, the
+    processor's control master into the control tree's one SmartConnect, each control bus
+    from its next master port (input movers, the core, output movers), the SmartConnect's
+    clock and reset, and every cell's clock and reset: each cell its unit's name, each pin
     the description's, its IP's own."""
     row = linked_row(described)
     assert wiring(described, row) == (
@@ -66,9 +66,12 @@ def test_the_chain_is_wired_as_its_block_design(described: Integration) -> None:
         Wire("aximm", "in0/m_axi_gmem", "smartconnect_0/S00_AXI"),
         Wire("aximm", "in1/m_axi_gmem", "smartconnect_0/S01_AXI"),
         Wire("aximm", "out0/m_axi_gmem", "smartconnect_0/S02_AXI"),
-        Wire("axilite", "axi_interconnect_0/M00_AXI", "in0/s_axi_control"),
-        Wire("axilite", "axi_interconnect_0/M01_AXI", "in1/s_axi_control"),
-        Wire("axilite", "axi_interconnect_0/M02_AXI", "out0/s_axi_control"),
+        Wire("axilite", "zynq_ps/M_AXI_HPM0_FPD", "control_0_0/S00_AXI"),
+        Wire("axilite", "control_0_0/M00_AXI", "in0/s_axi_control"),
+        Wire("axilite", "control_0_0/M01_AXI", "in1/s_axi_control"),
+        Wire("axilite", "control_0_0/M02_AXI", "out0/s_axi_control"),
+        Wire("clock", "zynq_ps/pl_clk0", "control_0_0/aclk"),
+        Wire("reset", "rst_ps/peripheral_aresetn", "control_0_0/aresetn"),
         *(
             Wire(kind, f"smartconnect_0/{source}", f"{instance}/{pin}")
             for instance in ("in0", "in1", "DataflowCore_0", "out0")
@@ -125,8 +128,11 @@ def test_a_core_unit_is_one_control_port_its_buses_at_their_offsets(
     core = grouped(described, (0, 32, 64))
     row = linked_row(core)
     assert [each for each in wiring(core, row) if each.kind == "axilite"] == [
-        Wire("axilite", f"axi_interconnect_0/M{index:02}_AXI", f"{unit}/s_axi_control")
-        for index, unit in enumerate(("in0", "in1", "DataflowCore_0", "out0"))
+        Wire("axilite", "zynq_ps/M_AXI_HPM0_FPD", "control_0_0/S00_AXI"),
+        *(
+            Wire("axilite", f"control_0_0/M{index:02}_AXI", f"{unit}/s_axi_control")
+            for index, unit in enumerate(("in0", "in1", "DataflowCore_0", "out0"))
+        ),
     ]
     assert placement(core, row) == (
         Address("in0/s_axi_control", 0xA000_0000, 4096),
@@ -260,15 +266,12 @@ def test_a_control_window_below_the_row_s_least_window_is_refused(described: Int
         wiring(narrow, linked_row(narrow))
 
 
-def test_more_control_buses_than_its_interconnect_takes_are_refused(
-    described: Integration,
-) -> None:
-    """The block design's control interconnect takes nine AXI-Lite buses, one a unit with a
-    control window: a description placing ten such units is refused by the linker, before
-    any tool runs."""
+def many(described: Integration, count: int) -> Integration:
+    """``described``, its first mover repeated as ``count`` units of their own, each with
+    its control bus, beside the core."""
     unit, endpoint = described.units[0], described.endpoints[0]
-    names = [f"{unit.name}_{index}" for index in range(CONTROL_SLAVES + 1)]
-    many = replace(
+    names = [f"{unit.name}_{index}" for index in range(count)]
+    return replace(
         described,
         units=(
             *(replace(unit, name=name) for name in names),
@@ -276,20 +279,61 @@ def test_more_control_buses_than_its_interconnect_takes_are_refused(
         ),
         endpoints=tuple(replace(endpoint, unit=name) for name in names),
     )
-    with refused(
-        "control-slaves-exceeded",
-        error=LinkerRefused,
-        owner="vivado-block-design",
-        message="the description places 10 units with a control window; the block design's "
-        "control interconnect takes 9",
-    ):
-        wiring(many, linked_row(many))
-    nine = replace(
-        many,
-        units=many.units[:CONTROL_SLAVES] + many.units[CONTROL_SLAVES + 1 :],
-        endpoints=many.endpoints[:CONTROL_SLAVES],
-    )
-    assert len([each for each in wiring(nine, linked_row(nine)) if each.kind == "axilite"]) == 9
+
+
+def test_more_units_than_a_smartconnect_takes_are_a_tree_of_them(
+    described: Integration,
+) -> None:
+    """Sixteen units take one SmartConnect; eighteen a tree: the root's two ports into two
+    SmartConnects, the first giving sixteen units their control ports and the second two,
+    in the units' order, each on the row's clock and the template's reset, each made
+    LOW_AREA with its own count of ports. No count is refused."""
+    sixteen = many(described, 16)
+    row = linked_row(sixteen)
+    control = [each for each in wiring(sixteen, row) if each.kind == "axilite"]
+    assert control[0] == Wire("axilite", "zynq_ps/M_AXI_HPM0_FPD", "control_0_0/S00_AXI")
+    assert {each.source.split("/")[0] for each in control[1:]} == {"control_0_0"}
+    eighteen = packaged(many(described, 18))
+    names = [unit.name for unit in eighteen.units if unit.window is not None]
+    wires = wiring(eighteen, row)
+    assert [each for each in wires if each.kind == "axilite"] == [
+        Wire("axilite", "zynq_ps/M_AXI_HPM0_FPD", "control_0_0/S00_AXI"),
+        Wire("axilite", "control_0_0/M00_AXI", "control_1_0/S00_AXI"),
+        Wire("axilite", "control_0_0/M01_AXI", "control_1_1/S00_AXI"),
+        *(
+            Wire(
+                "axilite", f"control_1_{index // 16}/M{index % 16:02}_AXI", f"{name}/s_axi_control"
+            )
+            for index, name in enumerate(names)
+        ),
+    ]
+    tree = block_design(eighteen, row).split("\nset_property ip_repo_paths")[0]
+    assert tree.splitlines() == [
+        "create_bd_cell -type ip -vlnv $smartconnect_vlnv control_0_0",
+        "set_property -dict [list CONFIG.NUM_SI 1 CONFIG.NUM_MI 2 CONFIG.STRATEGY LOW_AREA] "
+        "[get_bd_cells control_0_0]",
+        "create_bd_cell -type ip -vlnv $smartconnect_vlnv control_1_0",
+        "set_property -dict [list CONFIG.NUM_SI 1 CONFIG.NUM_MI 16 CONFIG.STRATEGY LOW_AREA] "
+        "[get_bd_cells control_1_0]",
+        "create_bd_cell -type ip -vlnv $smartconnect_vlnv control_1_1",
+        "set_property -dict [list CONFIG.NUM_SI 1 CONFIG.NUM_MI 2 CONFIG.STRATEGY LOW_AREA] "
+        "[get_bd_cells control_1_1]",
+        "connect_bd_intf_net [get_bd_intf_pins control_0_0/S00_AXI] "
+        "[get_bd_intf_pins zynq_ps/M_AXI_HPM0_FPD]",
+        "connect_bd_intf_net [get_bd_intf_pins control_1_0/S00_AXI] "
+        "[get_bd_intf_pins control_0_0/M00_AXI]",
+        "connect_bd_intf_net [get_bd_intf_pins control_1_1/S00_AXI] "
+        "[get_bd_intf_pins control_0_0/M01_AXI]",
+        *(
+            line
+            for instance in ("control_0_0", "control_1_0", "control_1_1")
+            for line in (
+                f"connect_bd_net [get_bd_pins {instance}/aclk] [get_bd_pins zynq_ps/pl_clk0]",
+                f"connect_bd_net [get_bd_pins {instance}/aresetn] "
+                "[get_bd_pins rst_ps/peripheral_aresetn]",
+            )
+        ),
+    ]
 
 
 def test_a_selection_the_block_design_does_not_wire_is_refused_by_name(

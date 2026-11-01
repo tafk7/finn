@@ -924,10 +924,10 @@ def test_tfc_on_the_default_ip_shell_is_tfc_in_the_zynq_shell_without_its_movers
     assert in_zynq_shell["partition"] == on_ip["used"]
     assert list(in_zynq_shell["movers"]) == ["in0", "out0"]
     assert list(in_zynq_shell["static_region"]) == [
-        "zynq_ultra_ps_e",
-        "proc_sys_reset",
-        "smartconnect",
-        "axi_interconnect",
+        "processor",
+        "reset",
+        "memory_interconnect",
+        "control_interconnect",
     ]
     summed = [
         in_zynq_shell["partition"],

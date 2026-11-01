@@ -169,7 +169,7 @@ PLACED_HIERARCHY = (
     + _placed_row("    smartconnect_0", 300, 500, 0, 0, 0, 0)
     + _placed_row("      inst", 300, 500, 0, 0, 0, 0)
     + _placed_row("    DataflowCore_0", 400, 800, 1, 1, 0, 4)
-    + _placed_row("    axi_interconnect_0", 100, 200, 0, 0, 0, 0)
+    + _placed_row("    control_0_0", 100, 200, 0, 0, 0, 0)
     + _placed_row("    in0", 100, 250, 1, 0, 0, 0)
     + _placed_row("    out0", 90, 240, 0, 0, 0, 0)
     + "</table></section></RptDoc>"

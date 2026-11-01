@@ -96,8 +96,9 @@ class ShellResources:
     kernels and channels, the boundary channels' stages included); ``movers``, each mover
     by its name in the shell (``in0``); ``groupers``, the grouper of each core presenting a
     control bus, by its name in the shell (``DataflowCore_0_grouper``; a core presenting
-    none has none in hardware); ``static_region``, each of its row's static IPs by its
-    Vivado IP. ``total`` is their sum, the shell's ``Kernel.resources``."""
+    none has none in hardware); ``static_region``, each part of its row's static region by
+    its role (``FixedShell.resources``). ``total`` is their sum, the shell's
+    ``Kernel.resources``."""
 
     partition: Resources
     movers: tuple[tuple[str, Resources], ...]

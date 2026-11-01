@@ -29,11 +29,14 @@
 # flake8: noqa
 
 """The pynq shell's text templates, copied from the HWCustomOp flow (deleted; its last
-commit is 1b02563de) as the shell's frozen extraction:
+commit is 1b02563de) as the shell's extraction:
 
 - ``custom_zynq_shell_template``: the Zynq block design's project
   (finn.transformation.fpgadataflow.templates), filled by ``linker.project_script``, its
-  board part and processor family given in place of its table of board names;
+  board part and processor family given in place of its table of board names. Its fixed
+  shell is the processor, the memory SmartConnect into HP0 and a reset of its own
+  (``rst_ps``, wired by hand: SmartConnect takes no clock automation); the control
+  interconnect is the linker's tree, in the custom section;
 - ``pynq_driver_template``: the PYNQ driver
   (finn.transformation.fpgadataflow.template_driver), filled by
   ``driver.pynq_driver_text``.
@@ -42,10 +45,6 @@ commit is 1b02563de) as the shell's frozen extraction:
 # template for the Zynq block design's project (ip_config.tcl)
 custom_zynq_shell_template = """
 set FREQ_MHZ %s
-set NUM_AXILITE %d
-if {$NUM_AXILITE > 9} {
-    error "Maximum 10 AXI-Lite interfaces supported"
-}
 set NUM_AXIMM %d
 set BOARD %s
 set FPGA_PART %s
@@ -88,72 +87,33 @@ if {$ZYNQ_TYPE == "zynq_us+"} {
     puts "Unrecognized Zynq type"
 }
 
-#instantiate axi interconnect, axi smartconnect
-set interconnect_vlnv [get_property VLNV [get_ipdefs -all "xilinx.com:ip:axi_interconnect:*" -filter design_tool_contexts=~*IPI*]]
+#instantiate the memory smartconnect and the reset
 set smartconnect_vlnv [get_property VLNV [get_ipdefs "xilinx.com:ip:smartconnect:*"]]
-create_bd_cell -type ip -vlnv $interconnect_vlnv axi_interconnect_0
+set reset_vlnv [get_property VLNV [get_ipdefs "xilinx.com:ip:proc_sys_reset:*"]]
 create_bd_cell -type ip -vlnv $smartconnect_vlnv smartconnect_0
-#set number of axilite interfaces, and number of axi master interfaces
 set_property -dict [list CONFIG.NUM_SI $NUM_AXIMM] [get_bd_cells smartconnect_0]
-set_property -dict [list CONFIG.NUM_MI $NUM_AXILITE] [get_bd_cells axi_interconnect_0]
+create_bd_cell -type ip -vlnv $reset_vlnv rst_ps
 
-#create reset controller and connect interconnects to PS
+#connect the memory smartconnect to the PS, the reset to its clock (smartconnect takes no clkrst automation)
 if {$ZYNQ_TYPE == "zynq_us+"} {
-    set axi_peripheral_base 0xA0000000
     connect_bd_intf_net [get_bd_intf_pins smartconnect_0/M00_AXI] [get_bd_intf_pins zynq_ps/S_AXI_HP0_FPD]
-    connect_bd_intf_net [get_bd_intf_pins zynq_ps/M_AXI_HPM0_FPD] -boundary_type upper [get_bd_intf_pins axi_interconnect_0/S00_AXI]
-    #connect interconnect clocks and resets
-    apply_bd_automation -rule xilinx.com:bd_rule:clkrst -config { Clk {/zynq_ps/pl_clk0} Freq {} Ref_Clk0 {} Ref_Clk1 {} Ref_Clk2 {}}  [get_bd_pins axi_interconnect_0/ACLK]
-    apply_bd_automation -rule xilinx.com:bd_rule:clkrst -config { Clk {/zynq_ps/pl_clk0} Freq {} Ref_Clk0 {} Ref_Clk1 {} Ref_Clk2 {}}  [get_bd_pins axi_interconnect_0/S00_ACLK]
+    connect_bd_net [get_bd_pins zynq_ps/pl_clk0] [get_bd_pins rst_ps/slowest_sync_clk]
+    connect_bd_net [get_bd_pins zynq_ps/pl_resetn0] [get_bd_pins rst_ps/ext_reset_in]
     apply_bd_automation -rule xilinx.com:bd_rule:clkrst -config { Clk {/zynq_ps/pl_clk0} Freq {} Ref_Clk0 {} Ref_Clk1 {} Ref_Clk2 {}}  [get_bd_pins zynq_ps/saxihp0_fpd_aclk]
+    catch {connect_bd_net [get_bd_pins smartconnect_0/aclk] [get_bd_pins zynq_ps/pl_clk0]}
+    catch {connect_bd_net [get_bd_pins zynq_ps/maxihpm0_fpd_aclk] [get_bd_pins zynq_ps/pl_clk0]}
 } elseif {$ZYNQ_TYPE == "zynq_7000"} {
-    set axi_peripheral_base 0x40000000
-    connect_bd_intf_net -boundary_type upper [get_bd_intf_pins zynq_ps/M_AXI_GP0] [get_bd_intf_pins axi_interconnect_0/S00_AXI]
     connect_bd_intf_net [get_bd_intf_pins smartconnect_0/M00_AXI] [get_bd_intf_pins zynq_ps/S_AXI_HP0]
-    apply_bd_automation -rule xilinx.com:bd_rule:clkrst -config { Clk {/zynq_ps/FCLK_CLK0} Freq {} Ref_Clk0 {} Ref_Clk1 {} Ref_Clk2 {}}  [get_bd_pins axi_interconnect_0/ACLK]
-    apply_bd_automation -rule xilinx.com:bd_rule:clkrst -config { Clk {/zynq_ps/FCLK_CLK0} Freq {} Ref_Clk0 {} Ref_Clk1 {} Ref_Clk2 {}}  [get_bd_pins axi_interconnect_0/S00_ACLK]
+    connect_bd_net [get_bd_pins zynq_ps/FCLK_CLK0] [get_bd_pins rst_ps/slowest_sync_clk]
+    connect_bd_net [get_bd_pins zynq_ps/FCLK_RESET0_N] [get_bd_pins rst_ps/ext_reset_in]
     apply_bd_automation -rule xilinx.com:bd_rule:clkrst -config { Clk {/zynq_ps/FCLK_CLK0} Freq {} Ref_Clk0 {} Ref_Clk1 {} Ref_Clk2 {}}  [get_bd_pins zynq_ps/S_AXI_HP0_ACLK]
+    catch {connect_bd_net [get_bd_pins smartconnect_0/aclk] [get_bd_pins zynq_ps/FCLK_CLK0]}
+    catch {connect_bd_net [get_bd_pins zynq_ps/M_AXI_GP0_ACLK] [get_bd_pins zynq_ps/FCLK_CLK0]}
 }
-connect_bd_net [get_bd_pins axi_interconnect_0/ARESETN] [get_bd_pins smartconnect_0/aresetn]
-
-#procedure used by below IP instantiations to map BD address segments based on the axi interface aperture
-proc assign_axi_addr_proc {axi_intf_path} {
-    #global variable holds current base address
-    global axi_peripheral_base
-    #infer range
-    set range [expr 2**[get_property CONFIG.ADDR_WIDTH [get_bd_intf_pins $axi_intf_path]]]
-    set range [expr $range < 4096 ? 4096 : $range]
-    #align base address to range
-    set offset [expr ($axi_peripheral_base + ($range-1)) & ~($range-1)]
-    #perform assignment
-    assign_bd_address [get_bd_addr_segs $axi_intf_path/Reg*] -offset $offset -range $range
-    #advance base address
-    set axi_peripheral_base [expr $offset + $range]
-}
+connect_bd_net [get_bd_pins rst_ps/peripheral_aresetn] [get_bd_pins smartconnect_0/aresetn]
 
 #custom IP instantiations/connections start here
 %s
-
-#MLO (Multi-Layer Offload) weight streaming
-if {$ZYNQ_TYPE == "zynq_us+"} {
-    set mlo_mm_pins [get_bd_intf_pins -quiet -of_objects [get_bd_cells] \
-        -filter {MODE == Master && (NAME == m_axi_intermediate_frame || NAME =~ m_axi_MVAU_*)}]
-    if {[llength $mlo_mm_pins] > 0} {
-        set_property -dict [list CONFIG.PSU__USE__S_AXI_GP3 {1}] [get_bd_cells zynq_ps]
-        create_bd_cell -type ip -vlnv $smartconnect_vlnv smartconnect_mlo
-        set_property -dict [list CONFIG.NUM_SI [llength $mlo_mm_pins]] [get_bd_cells smartconnect_mlo]
-        connect_bd_intf_net [get_bd_intf_pins smartconnect_mlo/M00_AXI] [get_bd_intf_pins zynq_ps/S_AXI_HP1_FPD]
-        set mlo_si_idx 0
-        foreach mlo_mm_pin $mlo_mm_pins {
-            set mlo_si_name [format "S%%02d_AXI" $mlo_si_idx]
-            connect_bd_intf_net $mlo_mm_pin [get_bd_intf_pins smartconnect_mlo/$mlo_si_name]
-            incr mlo_si_idx
-        }
-        connect_bd_net [get_bd_pins smartconnect_mlo/aclk] [get_bd_pins zynq_ps/pl_clk0]
-        connect_bd_net [get_bd_pins zynq_ps/saxihp1_fpd_aclk] [get_bd_pins zynq_ps/pl_clk0]
-        connect_bd_net [get_bd_pins smartconnect_mlo/aresetn] [get_bd_pins axi_interconnect_0/ARESETN]
-    }
-}
 
 # set up debug
 if {%d == 1} {
@@ -165,13 +125,6 @@ if {%d == 1} {
                                                               [get_bd_intf_nets idma0_m_axis_0] {AXIS_SIGNALS "Data and Trigger" CLK_SRC "/zynq_ps/FCLK_CLK0" SYSTEM_ILA "Auto" APC_EN "0" } \
                                                               [get_bd_intf_nets DataflowCore_0_m_axis_0] {AXIS_SIGNALS "Data and Trigger" CLK_SRC "/zynq_ps/FCLK_CLK0" SYSTEM_ILA "Auto" APC_EN "0" } \
                                                              ]
-}
-
-#finalize clock and reset connections for interconnects
-if {$ZYNQ_TYPE == "zynq_us+"} {
-    apply_bd_automation -rule xilinx.com:bd_rule:clkrst -config { Clk {/zynq_ps/pl_clk0} }  [get_bd_pins axi_interconnect_0/M*_ACLK]
-} elseif {$ZYNQ_TYPE == "zynq_7000"} {
-    apply_bd_automation -rule xilinx.com:bd_rule:clkrst -config { Clk {/zynq_ps/FCLK_CLK0} }  [get_bd_pins axi_interconnect_0/M*_ACLK]
 }
 
 save_bd_design

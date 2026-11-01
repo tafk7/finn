@@ -1528,8 +1528,11 @@ def test_tfc_on_pynq_is_linked_as_z0s_movers_iodmas_and_wires(
         Wire("axis", "DataflowCore_0/m_axis_0", "out0/in0_V"),
         Wire("aximm", "in0/m_axi_gmem", "smartconnect_0/S00_AXI"),
         Wire("aximm", "out0/m_axi_gmem", "smartconnect_0/S01_AXI"),
-        Wire("axilite", "axi_interconnect_0/M00_AXI", "in0/s_axi_control"),
-        Wire("axilite", "axi_interconnect_0/M01_AXI", "out0/s_axi_control"),
+        Wire("axilite", "zynq_ps/M_AXI_HPM0_FPD", "control_0_0/S00_AXI"),
+        Wire("axilite", "control_0_0/M00_AXI", "in0/s_axi_control"),
+        Wire("axilite", "control_0_0/M01_AXI", "out0/s_axi_control"),
+        Wire("clock", "zynq_ps/pl_clk0", "control_0_0/aclk"),
+        Wire("reset", "rst_ps/peripheral_aresetn", "control_0_0/aresetn"),
         *clocked,
     )
     assert placement(described, row) == (
@@ -1622,8 +1625,24 @@ def as_kernels(design: str) -> str:
     return design
 
 
-#: The block design the build writes for TFC: Z0's, its movers kernels (``as_kernels``).
-BLOCK_DESIGN = as_kernels(Z0_BLOCK_DESIGN)
+#: The control tree the build's block design opens with for TFC's two control buses: one
+#: SmartConnect, the processor's control master into it, on the processor's clock and the
+#: template's reset. Z0's AXI interconnect was the template's.
+CONTROL_TREE = """\
+create_bd_cell -type ip -vlnv $smartconnect_vlnv control_0_0
+set_property -dict [list CONFIG.NUM_SI 1 CONFIG.NUM_MI 2 CONFIG.STRATEGY LOW_AREA] [get_bd_cells control_0_0]
+connect_bd_intf_net [get_bd_intf_pins control_0_0/S00_AXI] [get_bd_intf_pins zynq_ps/M_AXI_HPM0_FPD]
+connect_bd_net [get_bd_pins control_0_0/aclk] [get_bd_pins zynq_ps/pl_clk0]
+connect_bd_net [get_bd_pins control_0_0/aresetn] [get_bd_pins rst_ps/peripheral_aresetn]
+"""  # noqa: E501
+
+
+#: The block design the build writes for TFC: the control tree, then Z0's, its movers
+#: kernels (``as_kernels``), each control bus from the tree's master ports in place of the
+#: AXI interconnect's.
+BLOCK_DESIGN = CONTROL_TREE + as_kernels(Z0_BLOCK_DESIGN).replace(
+    "axi_interconnect_0/", "control_0_0/"
+)
 
 
 #: The IODMAs' generated HLS code at Z0's choices (PrepareIP's top_<node>.cpp), by
@@ -1681,9 +1700,9 @@ def test_the_z0_literal_is_the_oracles_block_design_but_for_the_partitions_ip() 
 def test_the_runner_writes_z0s_block_design_for_tfc(z0_tfc: ModelWrapper) -> None:
     """The block design the linker writes from TFC's description, the core's IP where Z0's
     build made it (the normalized build directory, a Tcl variable there, as a path here)
-    and each mover's where its HLS product holds it, is Z0's with its movers kernels
-    (``BLOCK_DESIGN``), line for line: Z0's but for each mover's cell, IP, repository and
-    pins."""
+    and each mover's where its HLS product holds it, is ``BLOCK_DESIGN`` line for line:
+    the control tree, then Z0's but for each mover's cell, IP, repository and pins and its
+    control bus's master port, the tree's."""
     stitched = "/BUILD/vivado_stitch_proj_XXXXXXXX/ip"
     ips = {
         unit: IpRef(f"xilinx_finn:finn:{top}:1.0", (f"/HLS/{top}/ip",))
@@ -1694,9 +1713,10 @@ def test_the_runner_writes_z0s_block_design_for_tfc(z0_tfc: ModelWrapper) -> Non
     ips["DataflowCore_0"] = IpRef(f"xilinx_finn:finn:{TFC_MODULE}:1.0", (stitched,))
     design = block_design(described.packaged(ips), linked_row(described))
     assert design == BLOCK_DESIGN.replace("$BUILD", "/BUILD").replace("$HLS", "/HLS")
+    tree = len(CONTROL_TREE.splitlines())
     differing = [
         (z0, ours)
-        for z0, ours in zip(Z0_BLOCK_DESIGN.splitlines(), BLOCK_DESIGN.splitlines())
+        for z0, ours in zip(Z0_BLOCK_DESIGN.splitlines(), BLOCK_DESIGN.splitlines()[tree:])
         if z0 != ours
     ]
     assert len(differing) == 16
@@ -1708,8 +1728,10 @@ def test_the_runner_writes_z0s_block_design_for_tfc(z0_tfc: ModelWrapper) -> Non
         linked_row(described),
         16,
     )
-    assert "set FREQ_MHZ 200\nset NUM_AXILITE 2\n" in script
-    assert "set NUM_AXIMM 2\nset BOARD Ultra96\nset FPGA_PART xczu3eg-sbva484-1-e\n" in script
+    assert (
+        "set FREQ_MHZ 200\nset NUM_AXIMM 2\nset BOARD Ultra96\nset FPGA_PART xczu3eg-sbva484-1-e\n"
+        in script
+    )
 
 
 @pytest.mark.slow
@@ -1925,10 +1947,10 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
         "partition": "DataflowCore_0",
         "movers.in0": "in0",
         "movers.out0": "out0",
-        "static_region.zynq_ultra_ps_e": "zynq_ps",
-        "static_region.proc_sys_reset": "rst_zynq_ps_",
-        "static_region.smartconnect": "smartconnect_0",
-        "static_region.axi_interconnect": "axi_interconnect_0",
+        "static_region.processor": "zynq_ps",
+        "static_region.reset": "rst_ps",
+        "static_region.memory_interconnect": "smartconnect_0",
+        "static_region.control_interconnect": "control_",
     }
 
     def counts(lut: int, ff: int, bram18: int = 0, dsp: int = 0) -> dict[str, int]:
@@ -1938,16 +1960,16 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
         "partition": counts(5270, 7077, 19, 100),
         "movers.in0": counts(1305, 2279, 4),
         "movers.out0": counts(1390, 2069),
-        "static_region.zynq_ultra_ps_e": counts(264, 0),
-        "static_region.proc_sys_reset": counts(19, 40),
-        "static_region.smartconnect": counts(5364, 8530),
-        "static_region.axi_interconnect": counts(1402, 1535),
+        "static_region.processor": counts(264, 0),
+        "static_region.reset": counts(19, 40),
+        "static_region.memory_interconnect": counts(5364, 8530),
+        "static_region.control_interconnect": counts(960, 1149),
     }
     # FakeVivado's runs: in0, the partition and the SmartConnect, each its own LUTs.
     synthesized = {
         "partition": 200,
         "movers.in0": 100,
-        "static_region.smartconnect": 300,
+        "static_region.memory_interconnect": 300,
     }
     assert {key: row["out_of_context"] for key, row in rows.items()} == {
         key: counts(synthesized[key], 10, 5, 3) if key in synthesized else None for key in rows
@@ -1957,13 +1979,13 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
         "partition": counts(400, 800, 3, 4),
         "movers.in0": counts(100, 250, 2),
         "movers.out0": counts(90, 240),
-        "static_region.zynq_ultra_ps_e": None,
-        "static_region.proc_sys_reset": None,
-        "static_region.smartconnect": counts(300, 500),
-        "static_region.axi_interconnect": counts(100, 200),
+        "static_region.processor": None,
+        "static_region.reset": None,
+        "static_region.memory_interconnect": counts(300, 500),
+        "static_region.control_interconnect": counts(100, 200),
     }
     assert stated["total"] == {
-        "model": counts(15014, 21530, 23, 100),
+        "model": counts(14572, 21144, 23, 100),
         "out_of_context": counts(600, 30, 15, 9),
         "placed": counts(1000, 2000, 5, 4),
     }

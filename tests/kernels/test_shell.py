@@ -27,7 +27,7 @@ from finn.kernels.grouper import GrouperKernel
 from finn.kernels.iodma import IodmaIn, IodmaKernel, IodmaOut
 from finn.kernels.movers import iodma_hls
 from finn.kernels.shell import Connection, ShellKernel, grouper_name, shell
-from finn.kernels.shell_rules import SHELL, FixedShell, Scaled, ShellRules
+from finn.kernels.shell_rules import SHELL, FixedShell, Scaled, ShellRules, interconnect_tree
 from finn.kernels.sides import Outside, Side
 from finn.kernels.utilization import Fit, total
 from finn.platform.capabilities import Resources
@@ -307,6 +307,42 @@ def test_its_resources_are_its_core_s_its_movers_and_its_static_region_s() -> No
         )
     )
     assert point.own_resources() == Available(expected)
+
+
+@pytest.mark.parametrize(
+    ("count", "levels"),
+    [
+        (1, ((1,),)),
+        (2, ((2,),)),
+        (16, ((16,),)),
+        (17, ((2,), (16, 1))),
+        (256, ((16,), (16,) * 16)),
+        (257, ((2,), (16, 1), (16,) * 16 + (1,))),
+        (0, ()),
+    ],
+)
+def test_an_interconnect_tree_fills_each_instance_in_order(
+    count: int, levels: tuple[tuple[int, ...], ...]
+) -> None:
+    """At most 16 masters an instance: each level's instances, from the root, each full but
+    the last, as few levels as the slaves need."""
+    assert interconnect_tree(count, 16) == levels
+
+
+def test_an_interconnect_without_a_fanout_is_one_instance() -> None:
+    assert interconnect_tree(40, None) == ((40,),)
+    with pytest.raises(ValueError, match="2 masters an instance at least"):
+        interconnect_tree(3, 1)
+
+
+def test_a_tree_s_resources_are_its_instances_each_by_its_own_masters() -> None:
+    """Five buses at four an instance: a root of two, leaves of four and one; each instance
+    costs its own count (``REGION``'s control: 200 LUT, 10 + 5 FF a master)."""
+    region = dict(replace(REGION, control_fanout=4).resources(masters=2, slaves=5))
+    assert region["control_interconnect"] == Resources(lut=600, ff=3 * 10 + 5 * (2 + 4 + 1))
+    assert dict(REGION.resources(masters=2, slaves=5))["control_interconnect"] == Resources(
+        lut=200, ff=10 + 5 * 5
+    )
 
 
 def test_a_static_region_is_refused_where_nothing_connects_to_it() -> None:

@@ -94,7 +94,7 @@ clocks = { main = "ap_clk", set_at = "build", doubled = true }
 
 [shells.pynq]
 # The Zynq block design: the processing system, a reset, a SmartConnect into HP0 for the
-# movers' memory ports and an AXI interconnect from HPM0_FPD for the control buses.
+# movers' memory ports and a tree of SmartConnects from HPM0_FPD for the control buses.
 linker = "vivado-block-design"
 runtimes = ["pynq"]
 clocks = { main = "pl_clk0", set_at = "build", doubled = false }
@@ -109,13 +109,16 @@ timed = ["Ultra96"]
 caveat = "the 'pynq' shell was built and timed on Ultra96 only, and its movers and static region characterised out of context, Vivado 2025.2, xczu3eg/xczu7ev: on {board} ({part}) its cost is carried over, not measured"
 
 # Fitted from out-of-context synthesis of the Zynq template on xczu3eg and xczu7ev, which
-# agree. Other boards' parts were not synthesized.
+# agree. Other boards' parts were not synthesized. The control interconnect is a tree of
+# SmartConnects (LOW_AREA, 1 slave port), each giving 16 control ports at most, each
+# instance fitted by its own (1 to 16 ports, the template with it in place of the AXI
+# interconnect).
 [shells.pynq.fixed]
 control_base = 0xA000_0000
 processor = { ip = "zynq_ultra_ps_e", lut = 264 }
 reset = { ip = "proc_sys_reset", lut = 19, ff = 40 }
 memory_interconnect = { ip = "smartconnect", lut = [932.8, 2215.5], ff = [2171.7, 3179.0] }
-control_interconnect = { ip = "axi_interconnect", fixed = { lut = 1277, ff = 1397 }, lut = [58.6, 33.35], ff = [135.7, 1.27], scales_from = 2 }
+control_interconnect = { ip = "smartconnect", lut = [797.5, 81.29], ff = [1002.7, 73.13], fanout = 16 }
 
 [shells.pynq.boards.Ultra96]
 board_part = "avnet.com:ultra96v1:part0:1.2"

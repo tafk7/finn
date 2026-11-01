@@ -316,6 +316,15 @@ def _scaled(stated: object, where: str) -> tuple[str, Scaled]:
     )
 
 
+def _tree(stated: object, where: str) -> tuple[str, Scaled, int | None]:
+    """An interconnect stated as ``_scaled`` states one, and the masters an instance gives
+    at most where it is a tree (``fanout``, 2 at least), None where it is one instance."""
+    table = valid.expect(stated, where, {"ip"}, {"fixed", "lut", "ff", "scales_from", "fanout"})
+    fanout = valid.count(table["fanout"], f"{where}.fanout", least=2) if "fanout" in table else None
+    ip, use = _scaled({key: value for key, value in table.items() if key != "fanout"}, where)
+    return ip, use, fanout
+
+
 def _fixed(stated: object, where: str) -> FixedShell:
     table = valid.expect(
         stated,
@@ -326,7 +335,9 @@ def _fixed(stated: object, where: str) -> FixedShell:
     processor, processor_use = _use(table["processor"], f"{where}.processor")
     reset, reset_use = _use(table["reset"], f"{where}.reset")
     memory, memory_use = _scaled(table["memory_interconnect"], f"{where}.memory_interconnect")
-    control, control_use = _scaled(table["control_interconnect"], f"{where}.control_interconnect")
+    control, control_use, fanout = _tree(
+        table["control_interconnect"], f"{where}.control_interconnect"
+    )
     return FixedShell(
         processor=processor,
         reset=reset,
@@ -337,6 +348,7 @@ def _fixed(stated: object, where: str) -> FixedShell:
         reset_use=reset_use,
         memory_interconnect_use=memory_use,
         control_interconnect_use=control_use,
+        control_fanout=fanout,
     )
 
 

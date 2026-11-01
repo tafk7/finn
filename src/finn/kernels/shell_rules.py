@@ -113,13 +113,35 @@ class Scaled:
         return self.fixed + Resources(lut=self.lut.at(count), ff=self.ff.at(count))
 
 
+def interconnect_tree(count: int, fanout: int | None) -> tuple[tuple[int, ...], ...]:
+    """The instances of an interconnect giving ``count`` slaves, each giving ``fanout`` at
+    most (``None``: one instance, any number): each level's, from the root, each instance's
+    masters. A level's instances are filled in order, each feeding the next level's, the
+    last level's the slaves: 17 slaves at 16 are ``((2,), (16, 1))``; none for none."""
+    if count < 1:
+        return ()
+    if fanout is None:
+        return ((count,),)
+    if fanout < 2:
+        raise ValueError(f"an interconnect tree gives 2 masters an instance at least, not {fanout}")
+    levels: list[tuple[int, ...]] = []
+    while True:
+        level = tuple(min(fanout, count - start) for start in range(0, count, fanout))
+        levels.append(level)
+        if len(level) == 1:
+            return tuple(reversed(levels))
+        count = len(level)
+
+
 @dataclass(frozen=True, kw_only=True)
 class FixedShell:
     """A shell's own logic beside the partition and its movers, each IP with its
     resources out of context. The memory interconnect takes one master per memory
-    port, and the control interconnect gives one slave per AXI-Lite bus. The processor
-    addresses the AXI-Lite buses from ``control_base``, in connection order, each
-    aligned to its window, at least the row's ``Control.least_window``
+    port, and the control interconnect gives one slave per AXI-Lite bus: a tree of its
+    IP, each instance giving ``control_fanout`` at most (``interconnect_tree``; one
+    instance where it is ``None``), each instance's resources by its own masters. The
+    processor addresses the AXI-Lite buses from ``control_base``, in connection order,
+    each aligned to its window, at least the row's ``Control.least_window``
     (``placed_windows``; ``finn.platform.shells.ShellRow.fixed``)."""
 
     processor: str
@@ -131,20 +153,28 @@ class FixedShell:
     reset_use: Resources
     memory_interconnect_use: Scaled
     control_interconnect_use: Scaled
+    control_fanout: int | None = None
 
     def resources(self, *, masters: int, slaves: int) -> tuple[tuple[str, Resources], ...]:
-        """What each IP uses, by its Vivado IP name, with ``masters`` memory ports and
-        ``slaves`` AXI-Lite buses connected. The template connects at least one of each."""
+        """What each part uses, by its role (``processor``, ``reset``,
+        ``memory_interconnect``, ``control_interconnect``: two may be one IP), with
+        ``masters`` memory ports and ``slaves`` AXI-Lite buses connected, the control
+        interconnect's instances summed. The template connects at least one of each."""
         if masters < 1 or slaves < 1:
             raise ValueError(
                 f"a fixed shell connects at least one memory port and one AXI-Lite bus, "
                 f"not {masters} and {slaves}"
             )
+        tree = interconnect_tree(slaves, self.control_fanout)
+        control = sum(
+            (self.control_interconnect_use.at(each) for level in tree for each in level),
+            Resources(),
+        )
         return (
-            (self.processor, self.processor_use),
-            (self.reset, self.reset_use),
-            (self.memory_interconnect, self.memory_interconnect_use.at(masters)),
-            (self.control_interconnect, self.control_interconnect_use.at(slaves)),
+            ("processor", self.processor_use),
+            ("reset", self.reset_use),
+            ("memory_interconnect", self.memory_interconnect_use.at(masters)),
+            ("control_interconnect", control),
         )
 
 
@@ -290,7 +320,7 @@ class ShellRules(Space):
 
     @view
     def static_region(self) -> tuple[tuple[str, Resources], ...] | Rejected:
-        """Each IP of its static region by its Vivado IP name, with what it uses out of
+        """Each part of its static region by its role, with what it uses out of
         context (``FixedShell.resources``) at the memory ports the cores and the movers
         initiate (its memory interconnect's masters) and the AXI-Lite buses they present
         (its control interconnect's slaves); none without one. Refused where either is
@@ -546,6 +576,7 @@ __all__ = [
     "ShellRules",
     "contributor",
     "counts",
+    "interconnect_tree",
     "netlist_counts",
     "placed_windows",
     "shell_members",
