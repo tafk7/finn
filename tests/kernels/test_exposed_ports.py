@@ -158,6 +158,52 @@ def test_on_its_channels_the_wrapper_is_matmul_one_name_deeper() -> None:
     assert point.query(Kernel.intake) == plain.member("matmul").query(Kernel.intake)
 
 
+@pytest.mark.parametrize("left", ["x", "w", "y"])
+def test_a_member_s_port_the_wrapper_neither_exposes_nor_connects_is_refused(left: str) -> None:
+    """A member's port is connected inside its holder, by a channel, or presented outside it,
+    by an alias, and no holder ties a port off: a wrapper holding no channel that leaves one
+    of MatMul's ports unexposed, an input or an output, is refused when its class is made,
+    the port named (``port-unconnected``)."""
+
+    def partial() -> type[Kernel]:
+        class Partial(Kernel):
+            id = "test.partial_matmul"
+            platform: Platform = Param()
+            x_tensor: Tensor = Param()
+            weights: Tensor | KnownWeights = Param()
+
+            mm = MatMulKernel(platform=platform, x_tensor=x_tensor, weights=weights)
+            if left != "x":
+                x = mm.x
+            if left != "w":
+                w = mm.w
+            if left != "y":
+                y = mm.y
+
+        return Partial
+
+    with refused("port-unconnected", error=DefinitionError, member="mm", port=left):
+        partial()
+
+
+def test_a_port_of_a_selector_s_case_its_holder_does_not_expose_is_refused() -> None:
+    """A selector's member ports are each case's: MatMul without its alias of its core's
+    weights (``w = compute.w``) leaves every core's ``w`` open, each refused by its case."""
+    with pytest.raises(DefinitionError) as raised:
+
+        class Unweighted(MatMulKernel):
+            id = "test.unweighted_matmul"
+            w = None  # type: ignore[assignment]
+
+    assert [
+        (each.code, dict(each.details)["member"], dict(each.details)["port"])
+        for each in raised.value.findings
+    ] == [
+        ("port-unconnected", "compute", "packed.w"),
+        ("port-unconnected", "compute", "int8_dsp58.w"),
+    ]
+
+
 @pytest.mark.parametrize("pumped", [False, True])
 def test_the_wrapper_takes_the_doubled_clock_its_core_takes(pumped: bool) -> None:
     point = assembled(WrappedMatMul, "mm.", pumped=pumped).member("matmul")
@@ -175,6 +221,7 @@ def test_a_member_s_guard_is_read_only_where_it_is_its_holder_s_own_member() -> 
         id = "test.exposed.guard.own"
         flag: bool = Param(default=True)
         memory = MemStreamKernel(when=flag)
+        output = memory.output
 
     # Its own flag is read: it derives whether it takes the doubled clock from the memory's.
     assert "takes_doubled_clock" in vars(Own)

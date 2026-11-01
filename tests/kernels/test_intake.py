@@ -222,12 +222,15 @@ class Idling(StatedStage):
 
 
 class Chain(Kernel):
-    """Two stated stages, the first's input exposed as its own ``x``."""
+    """Two stated stages, their ports exposed as its own, the first's input as ``x``."""
 
     id = "test.intake.chain"
     core = Select(one=StatedStage, other=OtherStage, input_tensor=TENSOR, arriving=ARRIVING)
     kept = StatedStage(input_tensor=TENSOR, arriving=ARRIVING)
     x = core.input
+    y = core.output
+    kept_x = kept.input
+    kept_y = kept.output
 
 
 class Holding(Kernel):
@@ -236,6 +239,10 @@ class Holding(Kernel):
     id = "test.intake.holding"
     first = StatedStage(input_tensor=TENSOR, arriving=ARRIVING)
     second = Stage(input_tensor=TENSOR, arriving=ARRIVING)
+    first_x = first.input
+    first_y = first.output
+    second_x = second.input
+    second_y = second.output
 
 
 def test_a_kernel_stating_no_intake_answers_it_unstated_by_name_and_stays_valid() -> None:
@@ -249,8 +256,8 @@ def test_a_kernel_stating_no_intake_answers_it_unstated_by_name_and_stays_valid(
 
 def test_a_kernel_with_children_derives_its_intake_from_its_members() -> None:
     point = design_space(Chain()).with_choices({Chain.core: "other"})
-    # The exposed port by its name; the member's own below the member.
-    assert point.intake == Intake((_intake("x", 5, 7), _intake("kept.input")))
+    # Each exposed port by its name.
+    assert point.intake == Intake((_intake("x", 5, 7), _intake("kept_x")))
     # A member that states none leaves its parent's unstated, by its name.
     holding = design_space(Holding()).query(Kernel.intake)
     assert isinstance(holding, Rejected) and codes(holding) == {INTAKE_UNSTATED}
@@ -285,8 +292,10 @@ def test_a_kernel_with_children_renames_its_members_coupling() -> None:
         id = "test.intake.holder"
         inner = Coupled(input_tensor=TENSOR, arriving=ARRIVING)
         x = inner.input
+        z = inner.side
+        y = inner.output
 
-    assert design_space(Holder()).intake.joined == (("x", "inner.side"),)
+    assert design_space(Holder()).intake.joined == (("x", "z"),)
 
 
 def test_a_kernel_with_children_names_a_port_it_exposes_by_its_node() -> None:
@@ -298,25 +307,37 @@ def test_a_kernel_with_children_names_a_port_it_exposes_by_its_node() -> None:
         id = "test.intake.middle"
         inner = Coupled(input_tensor=TENSOR, arriving=ARRIVING)
         x = inner.input
+        z = inner.side
+        y = inner.output
 
     class ByAlias(Kernel):
         id = "test.intake.by_alias"
         mid = Middle()
         chain = Chain()
         x = mid.x
+        z = mid.z
+        mid_y = mid.y
         y = chain.x
+        chain_y = chain.y
+        kept_x = chain.kept_x
+        kept_y = chain.kept_y
 
     class ByPath(Kernel):
         id = "test.intake.by_path"
         mid = Middle()
         chain = Chain()
         x = mid.inner.input
+        z = mid.inner.side
+        mid_y = mid.inner.output
         y = chain.core.input
+        chain_y = chain.core.output
+        kept_x = chain.kept.input
+        kept_y = chain.kept.output
 
     for holder in (ByAlias, ByPath):
         point = design_space(holder()).with_choices({holder.chain.core: "other"})
-        assert point.intake.names == ("x", "mid.inner.side", "y", "chain.kept.input"), holder
-        assert point.intake.joined == (("x", "mid.inner.side"),), holder
+        assert point.intake.names == ("x", "z", "y", "kept_x"), holder
+        assert point.intake.joined == (("x", "z"),), holder
 
 
 def test_a_kernel_with_no_module_and_no_member_takes_nothing_ahead() -> None:

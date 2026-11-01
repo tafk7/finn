@@ -146,11 +146,13 @@ class Stage(Kernel):
 
 
 class Pair(Kernel):
-    """Two stages, no module of its own."""
+    """Two stages, no module of its own, their inputs exposed as its own."""
 
     id = "test.kernel_space.pair"
     first = Stage(input_tensor=TENSOR, arriving=ARRIVING)
     second = Stage(input_tensor=TENSOR, arriving=ARRIVING)
+    x = first.input
+    z = second.input
 
 
 class Empty(Kernel):
@@ -185,6 +187,7 @@ class Uncounted(Kernel):
 
     id = "test.kernel_space.uncounted"
     stage = Stage(input_tensor=TENSOR, arriving=ARRIVING)
+    x = stage.input
 
     @view
     def frame_cycles(self) -> int | Inapplicable:
@@ -197,6 +200,8 @@ class Beside(Kernel):
     id = "test.kernel_space.beside"
     first = Stage(input_tensor=TENSOR, arriving=ARRIVING)
     held = Uncounted()
+    x = first.input
+    z = held.x
 
 
 def test_a_kernel_counting_no_cycles_is_left_out_of_its_parent_s_cycles() -> None:
@@ -346,6 +351,7 @@ def test_a_kernel_with_a_module_states_its_ports_and_resources_and_places_no_ker
     kernel("Complete", input=port, resource_use=view(resource_use))
     with refused("module-ports-unplaced", error=DefinitionError, message="Portless declares no"):
         kernel("Portless", resource_use=view(resource_use))
+    inner = Stage(input_tensor=TENSOR, arriving=ARRIVING)
     with refused(
         "module-places-kernels",
         error=DefinitionError,
@@ -361,7 +367,8 @@ def test_a_kernel_with_a_module_states_its_ports_and_resources_and_places_no_ker
                 clocking=NATIVE_CLOCKING,
             ),
             resource_use=view(resource_use),
-            inner=Stage(input_tensor=TENSOR, arriving=ARRIVING),
+            inner=inner,
+            x=inner.input,
         )
     with refused("module-resources-unstated", error=DefinitionError, message="states no"):
         kernel(

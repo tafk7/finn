@@ -196,6 +196,10 @@ def test_unknown_keys_and_real_space_crossing_remain_rejected(key: str) -> None:
     class Parent(Host):
         id = "test.group-port-no-crossing"
         child = Host()
+        # The child's ports, exposed under names of the parent's own.
+        child_receive = child.group.receive.native
+        child_send = child.group.send.native
+        child_native = child.native
 
     assert key not in stream_ports(Parent)
     assert port_direction(Parent, key) is None

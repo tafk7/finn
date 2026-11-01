@@ -70,6 +70,7 @@ from finn.core.space.declarations import (
     Declaration,
     Derived,
     MemberRef,
+    View,
     unmet_required,
 )
 from finn.dataflow.schedule import (
@@ -1067,9 +1068,10 @@ def _install(
 # what is given as a value (its boundary, its source, a frozen neighbour). A channel side
 # names a member's port by its binding: the port's ``side``, bound directly or through a
 # derived value reading it (the composer's, which labels it below its member), and a side
-# given as a value names none. When its class is made, the base reads which member port each
-# side names (``Kernel.connections``), and refuses, each finding naming the port (a side's,
-# its channel and role):
+# given as a value names none. When the class of a kernel with members is made, with
+# channels among them or not, the base reads which member port each side names
+# (``Kernel.connections``), and refuses, each finding naming the port (a side's, its channel
+# and role):
 #
 # - a channel side whose binding reads more than one member's port (``channel-side-ports``):
 #   a side names one port at most;
@@ -1088,7 +1090,11 @@ def _install(
 #   ``set``, its source's, without an ``index_tensor``), is idle by its member's structure,
 #   held idle by its member, and needs neither. No other port is exempt: a port its
 #   structure may place, by any other fact, is connected or refused, so no port is left
-#   dangling silently (an output nothing reads is refused like any other).
+#   dangling silently (an output nothing reads is refused like any other). A selector's
+#   member ports are each case's (``compute.packed.w``), exposed where an alias names the
+#   port of every case (``w = compute.w``). A kernel that states its ``stages`` (a view: a
+#   channel, its adapter chains, its FIFO's wrapper) wires its members' ports itself, hop by
+#   hop, or presents them so to the channel that does: they need neither.
 #
 # And it installs, for each channel, three private views of its own: the ports beside it
 # (``finn.kernels.channels.Neighbours``: each port's stream pins as its member presents them,
@@ -1145,7 +1151,8 @@ def _member_ports(cls: type[Kernel]) -> dict[object, MemberPort]:
 
     found: dict[object, MemberPort] = {}
     for name, item in _members(cls).items():
-        if node_record(item) is None:
+        record = node_record(item)
+        if record is None or not issubclass(record.space_type, Space):
             continue
         node = getattr(cls, name)
         for port in exposed_ports(_member_type(cls, name)):
@@ -1180,17 +1187,32 @@ def _optional(kind: type[Space], bound: object) -> Param[object] | None:
     return formal
 
 
-def _idle_by_structure(cls: type[Kernel], member: str, port: str) -> bool:
-    """Whether member ``member``'s port ``port`` takes its tensor from an optional fact the
-    member is not given (left out, or given None): idle by its structure, whatever its other
-    facts (above). A port it exposes (``set = source.set``) is its leaf's, reached through
-    children (no selector), each binding the fact below it to an optional fact of its own
-    (``set_tensor=index_tensor``) or leaving it out."""
+def _held_ports(cls: type[Kernel]) -> Iterator[tuple[MemberPort, NodeDecl, str]]:
+    """Each stream port a member of ``cls`` presents (``_member_ports``), with the node
+    declaration placing it and its name there: a child's, and each case's of a selector, the
+    port named below its case (``compute.packed.w``)."""
+    from finn.kernels.port_model import exposed_ports  # noqa: PLC0415 - base/port cycle
+
+    for name, member in space_members(cls).items():
+        cases = {"": member} if isinstance(member, NodeDecl) else {}
+        if isinstance(member, NodeDecision):
+            cases = {f"{key}.": case for key, case in member.candidates.items() if case is not None}
+        for case, held in cases.items():
+            if not issubclass(held.space_type, Space):
+                continue
+            for port in exposed_ports(cast("type[Space]", held.space_type)):
+                yield MemberPort(name, case + port), held, port
+
+
+def _idle_by_structure(member: NodeDecl, port: str) -> bool:
+    """Whether the port ``port`` of the member ``member`` declares takes its tensor from an
+    optional fact the member is not given (left out, or given None): idle by its structure,
+    whatever its other facts (above). A port it exposes (``set = source.set``) is its leaf's,
+    reached through children (no selector), each binding the fact below it to an optional
+    fact of its own (``set_tensor=index_tensor``) or leaving it out."""
     from finn.kernels.port import stream_port  # noqa: PLC0415 - base/port cycle
 
-    record = node_record(_members(cls)[member])
-    assert record is not None
-    kind = _member_type(cls, member)
+    kind = cast("type[Space]", member.space_type)
     holders: list[tuple[type[Space], NodeDecl]] = []
     leaf, name = kind, port
     entry = alias_table(kind).get(port)
@@ -1213,7 +1235,7 @@ def _idle_by_structure(cls: type[Kernel], member: str, port: str) -> bool:
         if bound is None:
             return True
         formal = _optional(holder, bound)
-    return formal is not None and record.bindings.get(str(formal.name)) is None
+    return formal is not None and member.bindings.get(str(formal.name)) is None
 
 
 def _connected(cls: type[Kernel]) -> dict[str, tuple[MemberPort | None, MemberPort | None]]:
@@ -1264,7 +1286,8 @@ def _connected(cls: type[Kernel]) -> dict[str, tuple[MemberPort | None, MemberPo
                 )
             )
     exposed = cls._exposed_names
-    for port in dict.fromkeys(ports.values()):
+    wired = isinstance(_members(cls).get("stages"), View)
+    for port, held, name in () if wired else _held_ports(cls):
         if port in channels or port in unnamed:
             continue
         if _connects(_members(cls)[port.member]) and port.port in _OUTER:
@@ -1272,7 +1295,7 @@ def _connected(cls: type[Kernel]) -> dict[str, tuple[MemberPort | None, MemberPo
         paths = _node_paths(cls, (port.member, *port.port.split(".")), ())
         if any(path in exposed for path in paths):
             continue
-        if _idle_by_structure(cls, port.member, port.port):
+        if _idle_by_structure(held, name):
             continue
         findings.append(
             _connection_finding(
@@ -1538,15 +1561,16 @@ _HOPS = "hops"
 
 
 def _connect(cls: type[Kernel]) -> None:
-    """Record, for a kernel with member channels, the member port each channel side names
-    (``Kernel.connections``), refused by the connection rules; and install each channel's
-    neighbours and hops, and the reading of its hops its netlist makes (above)."""
-    if not any(_connects(item) for item in _members(cls).values()):
+    """Refuse a kernel's class by the connection rules; and record, for a kernel with member
+    channels, the member port each channel side names (``Kernel.connections``), and install
+    each channel's neighbours and hops, and the reading of its hops its netlist makes
+    (above)."""
+    connections = _connected(cls)
+    if not connections:
         return
     from finn.kernels.channels import Neighbours, OuterHops, outer_hops  # noqa: PLC0415
     from finn.kernels.port import exposed_name  # noqa: PLC0415 - base/port cycle
 
-    connections = _connected(cls)
     readers: list[tuple[Callable[[str, str], Callable[[Kernel], Any]], str]] = []
     for name, sides in connections.items():
         helpers: list[str] = []
