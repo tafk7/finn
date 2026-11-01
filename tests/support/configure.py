@@ -82,7 +82,7 @@ def bound_in_shell(
     selected = model.graph.node if nodes is None else nodes
 
     def made(declared: DataflowCoreDeclaration) -> ShellKernel:
-        return shell(declared, row=facts, offer=offer)
+        return shell((declared,), row=facts, offer=offer)
 
     return bound_from(model, selected, name=name, made=made, offer=offer)
 

@@ -412,13 +412,13 @@ def test_an_offer_places_a_mover_on_each_edge() -> None:
     assert bound.movers == ("in0", "out0")
     assert (bound.mover("x"), bound.mover("y")) == ("in0", "out0")
     assert not [key for key in bound.chosen() if key[0] in bound.movers]
-    x, y = bound.member("in0").contract, bound.member("out0").contract
+    x, y = bound.member("shell.in0").contract, bound.member("shell.out0").contract
     # x: two INT3 lanes padded to a byte, 6 beats; 48 bits a frame share 16 with 128.
     assert (x.direction, x.port, x.tdata, x.beats, x.lanes) == ("in", "s_axis_0", 8, 6, 2)
     assert (x.element.dtype.name, x.memory_width, x.words, x.converter) == ("INT3", 16, 3, True)
     assert (y.direction, y.port, y.memory_width, y.words) == ("out", "m_axis_0", 32, 3)
-    assert bound.member("out0").frame_cycles == y.cycles == 6 + 4
-    assert bound.member("in0").frame_cycles == x.cycles
+    assert bound.member("shell.out0").frame_cycles == y.cycles == 6 + 4
+    assert bound.member("shell.in0").frame_cycles == x.cycles
     # The edge channels' cycles are their stages': y has none.
     assert bound.member("y").frame_cycles == 0 and bound.member("x").frame_cycles == 12
 
@@ -445,7 +445,7 @@ def test_the_shell_s_resources_are_its_partition_s_its_movers_and_its_static_reg
     bound = cut_network(model=model)
     split = shell_resources(bound)
     assert isinstance(split, ShellResources)
-    x, y = bound.member("in0").contract, bound.member("out0").contract
+    x, y = bound.member("shell.in0").contract, bound.member("shell.out0").contract
     assert split.movers == (
         ("in0", iodma_hls_resources(direction="in", intf_width=16, stream_width=8)),
         ("out0", iodma_hls_resources(direction="out", intf_width=32, stream_width=y.tdata)),
@@ -512,10 +512,10 @@ def test_a_network_with_movers_persists_and_replays_as_itself() -> None:
 
 def test_sizing_reads_a_free_side_its_mover_paces() -> None:
     bound = cut_network()
-    x = bound.member("in0").contract
+    x = bound.member("shell.in0").contract
     supply, _ = sides(bound.member("x"), beside(bound, "x"))
     assert supply == Pattern(x.times, x.cycles)
-    y = bound.member("out0").contract
+    y = bound.member("shell.out0").contract
     _, accept = sides(bound.member("y"), beside(bound, "y"))
     assert accept == Pattern(y.times, y.cycles)
     chain = chain_network(TARGET)
@@ -548,7 +548,7 @@ def iodma_kernels(bound: CoreComposition) -> dict[str, IodmaKernel]:
     """The ``IODMA_hls`` kernel its shell places on each of ``bound``'s edges, by name."""
     found: dict[str, IodmaKernel] = {}
     for name in bound.movers:
-        placed = bound.member(name)
+        placed = bound.member(bound.placed(name))
         assert isinstance(placed, IodmaKernel)
         found[name] = placed
     return found
@@ -818,7 +818,7 @@ def test_tfc_with_ultra96_s_movers_at_1e6_fps_names_its_input_mover(tfc: ModelWr
         16,
     )
     assert report["memory_latency"] == MEMORY_LATENCY
-    assert report["bottleneck"] == {"members": ["in0"], "cycles": 200}
+    assert report["bottleneck"] == {"members": ["shell.in0"], "cycles": 200}
     target, sizing = report["strategies"]
     assert (target["cycles"], target["relaxed_to"]) == (200, None)
     # SizeFifos reads both boundaries through their movers, at the period they set.
@@ -866,12 +866,12 @@ def test_at_3e6_fps_a_64_bit_memory_port_binds_and_128_bits_do_not(
     assert (mover["converter"], mover["call_cycles"], mover["cycles"]) == (False, 13, 111)
     (target,) = narrow["strategies"]
     assert (target["cycles"], target["relaxed_to"]) == (66, 102)
-    assert narrow["bottleneck"] == {"members": ["in0"], "cycles": 111}
+    assert narrow["bottleneck"] == {"members": ["shell.in0"], "cycles": 111}
     mover = wide["movers"]["in0"]
     assert (mover["memory_width"], mover["words"], mover["cycles"]) == (128, 49, 60)
     bottleneck = wide["bottleneck"]
     assert bottleneck["cycles"] == 64 and "MatMul_3" in bottleneck["members"]
-    assert "in0" not in bottleneck["members"]
+    assert "shell.in0" not in bottleneck["members"]
 
 
 def module_of(model: ModelWrapper, directory: Path) -> str:

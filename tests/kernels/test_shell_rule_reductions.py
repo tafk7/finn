@@ -43,13 +43,13 @@ ROW: Mapping[str, object] = {
 def shell_type(
     *,
     windows: Sequence[str] = (),
-    core: str | None = None,
+    cores: Sequence[str] = (),
     movers: Sequence[str] = (),
     initiators: Sequence[str] = (),
     doubled: Sequence[str] = (),
 ) -> type[ShellRules]:
     members, annotations = shell_members(
-        windows=windows, core=core, movers=movers, initiators=initiators, doubled=doubled
+        windows=windows, cores=cores, movers=movers, initiators=initiators, doubled=doubled
     )
     return composite("FiniteShell", members, annotations=annotations, base=ShellRules)
 
@@ -77,9 +77,9 @@ def test_actual_shell_counts_match_independent_arithmetic(size: int) -> None:
         )
         for name, value in zip(names, items)
     }
-    core = names[0] if names else None
+    cores = names[:1]
     point = shell_point(
-        shell_type(windows=names, core=core, movers=names, initiators=names, doubled=names),
+        shell_type(windows=names, cores=cores, movers=names, initiators=names, doubled=names),
         **values,
     )
     # These expected counts use supplied numbers, independently of Group outputs.
@@ -103,7 +103,7 @@ def test_limits_and_their_labels(
     limit: int | None, contributions: tuple[tuple[int, ...], int, int]
 ) -> None:
     windows, initiators, memory = contributions
-    kind = shell_type(windows=("k0",), core="k0", movers=("m0",), initiators=("k0",))
+    kind = shell_type(windows=("k0",), cores=("k0",), movers=("m0",), initiators=("k0",))
     point = shell_point(
         kind,
         **{"k0-windows": windows, "k0-initiators": initiators, "m0-memory": memory},
@@ -130,7 +130,7 @@ def test_limits_and_their_labels(
             ShellRules.core_stream_only,
             "core-memory-port",
             initiators > 0,
-            "the partition's core initiates 3 memory ports",
+            "the partition's cores initiate 3 memory ports",
         ),
     ):
         result = cast(QueryResult[bool], point.query(reference))
@@ -145,7 +145,7 @@ def test_limits_and_their_labels(
 
 
 def test_limits_of_none_exit_before_open_counts() -> None:
-    kind = shell_type(windows=("open",), core="open", movers=("open",))
+    kind = shell_type(windows=("open",), cores=("open",), movers=("open",))
     host = bound_shell(
         kind, {"open-windows": Inputs.first_windows, "open-memory": Inputs.first_int}
     )
@@ -348,8 +348,8 @@ def test_fresh_model_placements_preserve_counts_and_have_no_choices(
 ) -> None:
     monkeypatch.setenv("FINN_SPACE_PERMUTE", str(int(permuted)))
     monkeypatch.setenv("FINN_SPACE_EAGER", str(int(eager)))
-    left = shell_type(windows=("k",), core="k", doubled=("k",))
-    right = shell_type(windows=("k",), core="k", doubled=("k",))
+    left = shell_type(windows=("k",), cores=("k",), doubled=("k",))
+    right = shell_type(windows=("k",), cores=("k",), doubled=("k",))
     assert left is not right
     point = shell_point(left, **{"k-windows": (4096,), "k-doubled": False})
     other = shell_point(right, **{"k-windows": (), "k-doubled": True})

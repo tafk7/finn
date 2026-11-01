@@ -1,16 +1,17 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""A partition's core in its shell (``finn.kernels.shell``): the core, a mover on each edge
+"""A build's cores in their shell (``finn.kernels.shell``): each core, a mover on each edge
 its row offers one on, a connection joining each, and the shell's rules, as one design
 space. On the Chain (``support.chain``), declared by hand: its edges stated by the
 ``IODMA_hls`` offer at a 128-bit port where a mover is placed, unstated on the ``ip``
-shell's, which places none.
+shell's, which places none. A graph's names and the shell's are two namespaces.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -19,12 +20,12 @@ from support.helpers import TEST_CORE, by_hand, choose, declared_by_hand
 
 from finn.core.space import Available, Inapplicable, Rejected, design_space
 from finn.kernels.base import Kernel
-from finn.kernels.composer import ChannelDeclaration, DataflowCoreRefused, Facts
+from finn.kernels.composer import ChannelDeclaration, DataflowCoreRefused, Facts, Port, Stated
 from finn.kernels.dataflow_core import DataflowCoreKernel
 from finn.kernels.explore import CoreComposition, Seam
 from finn.kernels.iodma import IodmaIn, IodmaKernel, IodmaOut
 from finn.kernels.movers import iodma_hls
-from finn.kernels.shell import CORE, Connection, ShellKernel, shell
+from finn.kernels.shell import Connection, ShellKernel, shell
 from finn.kernels.shell_rules import SHELL, FixedShell, Scaled, ShellRules
 from finn.kernels.sides import Outside, Side
 from finn.kernels.utilization import Fit, total
@@ -74,6 +75,28 @@ def stated(outside: Outside | None) -> dict[str, Facts | ChannelDeclaration]:
     return members
 
 
+def suffixed(
+    members: Mapping[str, Facts | ChannelDeclaration], suffix: str
+) -> dict[str, Facts | ChannelDeclaration]:
+    """``members``, each graph name and each reference to one suffixed by ``suffix``: a
+    core of other names."""
+
+    def named(value: Any) -> Any:
+        return (
+            replace(value, member=value.member + suffix)
+            if isinstance(value, (Port, Stated))
+            else value
+        )
+
+    found: dict[str, Facts | ChannelDeclaration] = {}
+    for name, each in members.items():
+        if isinstance(each, ChannelDeclaration):
+            facts = {fact: named(value) for fact, value in each.facts.items()}
+            each = ChannelDeclaration(named(each.producer), named(each.consumer), facts)
+        found[name + suffix] = each
+    return found
+
+
 def configured(network: CoreComposition) -> CoreComposition:
     """The Chain ``network``, configured (``chain.chain``)."""
     folded = choose(network, {"Thresholding_0.pe": chain.PE})
@@ -86,27 +109,71 @@ def in_pynq() -> CoreComposition:
 
 
 def test_a_shell_places_a_mover_on_each_edge_joined_by_a_connection() -> None:
-    point = shell(declared_by_hand(stated(OFFER.states())), row=row(), offer=OFFER)
+    point = shell((declared_by_hand(stated(OFFER.states())),), row=row(), offer=OFFER)
     assert isinstance(point, ShellKernel)
     kind: Any = type(point)
-    assert dict(kind.movers) == {"in0": "s_axis_0", "out0": "m_axis_0"}
+    assert dict(kind.movers) == {"in0": (TEST_CORE, "s_axis_0"), "out0": (TEST_CORE, "m_axis_0")}
     names = kind.names
-    assert (names.core, names.shell) == (CORE, SHELL)
-    assert names.beside == ("in0", "out0", f"{CORE}_s_axis_0", f"{CORE}_m_axis_0")
-    assert isinstance(getattr(point, CORE), DataflowCoreKernel)
+    assert (names.core, names.shell) == (TEST_CORE, SHELL)
+    joined = (f"{TEST_CORE}_s_axis_0", f"{TEST_CORE}_m_axis_0")
+    assert dict(names.placed) == {f"shell.{member}": member for member in ("in0", "out0", *joined)}
+    assert isinstance(getattr(point, TEST_CORE), DataflowCoreKernel)
     assert isinstance(point.in0, IodmaIn) and isinstance(point.out0, IodmaOut)  # type: ignore[attr-defined]
-    assert isinstance(getattr(point, f"{CORE}_s_axis_0"), Connection)
+    assert isinstance(getattr(point, joined[0]), Connection)
     assert isinstance(getattr(point, SHELL), ShellRules)
     # Its movers take the offer; the core's class is its own, as outside a shell.
     assert point.in0.offer == point.out0.offer == OFFER  # type: ignore[attr-defined]
     core = by_hand(stated(OFFER.states()))
-    assert type(getattr(point, CORE)) is type(core.point)
+    assert type(getattr(point, TEST_CORE)) is type(core.point)
+
+
+def test_the_cores_are_members_by_name_their_movers_numbered_across_the_shell() -> None:
+    """Each core under its node's name, its kernels and channels below it; the movers
+    numbered across the shell, the cores in order; each unit's windows, its core's after
+    its input movers' and before its output movers', the cores in order."""
+    first = declared_by_hand(stated(OFFER.states()), name="DataflowCore_0")
+    second = declared_by_hand(suffixed(stated(OFFER.states()), "_1"), name="DataflowCore_1")
+    point = shell((first, second), row=row(), offer=OFFER)
+    kind: Any = type(point)
+    assert dict(kind.movers) == {
+        "in0": ("DataflowCore_0", "s_axis_0"),
+        "out0": ("DataflowCore_0", "m_axis_0"),
+        "in1": ("DataflowCore_1", "s_axis_0"),
+        "out1": ("DataflowCore_1", "m_axis_0"),
+    }
+    names = kind.names
+    assert names.cores == ("DataflowCore_0", "DataflowCore_1")
+    assert names.path(("x_1", "")) == f"DataflowCore_1.{names.members['x_1']}"
+    with pytest.raises(ValueError, match="no one core"):
+        _ = names.core
+    windows = [
+        name.removesuffix("-windows")
+        for name in vars(type(point.shell))  # type: ignore[attr-defined]
+        if name.endswith("-windows")
+    ]
+    assert windows == ["in0", "DataflowCore_0", "out0", "in1", "DataflowCore_1", "out1"]
+    assert point.shell.placed == 6  # type: ignore[attr-defined]
+
+
+def test_a_graph_name_beside_a_placed_member_s_binds_in_its_core() -> None:
+    """A tensor named as a mover or a connection is its core's member, named by its graph
+    name; the mover is the shell's, named below the shell member."""
+    members = stated(OFFER.states())
+    joined = f"{TEST_CORE}_s_axis_0"
+    renamed = {{"x": "in0", "y": joined}.get(name, name): each for name, each in members.items()}
+    point = shell((declared_by_hand(renamed),), row=row(), offer=OFFER)
+    composed = CoreComposition(point)
+    assert isinstance(composed.member("in0").producer, Side)
+    assert isinstance(composed.member("shell.in0"), IodmaIn)
+    assert isinstance(composed.member(joined), type(composed.member("in0")))
+    assert isinstance(composed.member(f"shell.{joined}"), Connection)
+    assert composed.mover("in0") == "in0"
 
 
 def test_the_ip_shell_places_no_mover_and_presents_its_core_s_edges() -> None:
-    point = shell(declared_by_hand(stated(None)), row=IP)
+    point = shell((declared_by_hand(stated(None)),), row=IP)
     kind: Any = type(point)
-    assert dict(kind.movers) == {} and kind.names.beside == ()
+    assert dict(kind.movers) == {} and dict(kind.names.placed) == {}
     composed = CoreComposition(point)
     assert composed.movers == () and composed.mover("x") is None
     assert composed.boundary == (("x", "s_axis_0"), ("y", "m_axis_0"))
@@ -115,41 +182,65 @@ def test_the_ip_shell_places_no_mover_and_presents_its_core_s_edges() -> None:
 def test_one_class_serves_every_row_of_a_structure() -> None:
     """A row's values are facts: two rows of the same structure share a class; a shell
     placing no mover is another."""
-    declared = declared_by_hand(stated(OFFER.states()))
+    declared = (declared_by_hand(stated(OFFER.states())),)
     first = shell(declared, row=row(), offer=OFFER)
     second = shell(declared, row=row(aperture=0x2000, fixed=None), offer=OFFER)
-    bare = shell(declared_by_hand(stated(None)), row=IP)
+    bare = shell((declared_by_hand(stated(None)),), row=IP)
     assert type(first) is type(second) and type(bare) is not type(first)
 
 
 def test_an_edge_the_offer_does_not_state_is_no_shell_s() -> None:
     with pytest.raises(ValueError, match="s_axis_0 is offered iodma_hls"):
-        shell(declared_by_hand(stated(None)), row=row(), offer=OFFER)
+        shell((declared_by_hand(stated(None)),), row=row(), offer=OFFER)
 
 
 def test_a_row_states_every_fact() -> None:
     with pytest.raises(ValueError, match="a shell's row states"):
-        shell(declared_by_hand(stated(None)), row={**IP, "unknown": 1})
+        shell((declared_by_hand(stated(None)),), row={**IP, "unknown": 1})
 
 
-def test_a_core_member_named_as_a_mover_or_a_connection_is_refused() -> None:
+def test_a_name_the_shell_takes_twice_is_refused() -> None:
+    """The shell's own namespace: a core named as a mover, two cores of one name, and a graph
+    name that is a placed member's surface name, each refused by name."""
     members = stated(OFFER.states())
-    renamed = {("in0" if name == "x" else name): each for name, each in members.items()}
     with pytest.raises(DataflowCoreRefused) as caught:
-        shell(declared_by_hand(renamed, name=TEST_CORE), row=row(), offer=OFFER)
+        shell((declared_by_hand(members, name="in0"),), row=row(), offer=OFFER)
     assert [(each.code, each.owner) for each in caught.value.findings] == [("name-reserved", "in0")]
+    twice = (declared_by_hand(members, name="core"), declared_by_hand(members, name="core"))
+    with pytest.raises(DataflowCoreRefused, match="more than one member"):
+        shell(twice, row=row(), offer=OFFER)
+    renamed = {("shell.in0" if name == "x" else name): each for name, each in members.items()}
+    with pytest.raises(DataflowCoreRefused) as caught:
+        shell((declared_by_hand(renamed),), row=row(), offer=OFFER)
+    assert [(each.code, each.owner) for each in caught.value.findings] == [
+        ("name-reserved", "shell.in0")
+    ]
+
+
+@pytest.mark.parametrize("label", ["movers", "regions", TEST_CORE])
+def test_an_edge_the_ip_shell_presents_named_as_its_own_is_refused(label: str) -> None:
+    """An edge port the ``ip`` shell presents as its own, named as a name its class declares,
+    or its core, is refused by name, before its class is made (its rules' name the composer
+    refuses)."""
+    members = stated(None)
+    x = members["x"]
+    assert isinstance(x, ChannelDeclaration)
+    members["x"] = ChannelDeclaration(Side.boundary(label, None), x.consumer, x.facts)
+    with pytest.raises(DataflowCoreRefused) as caught:
+        shell((declared_by_hand(members),), row=IP)
+    assert [(each.code, each.owner) for each in caught.value.findings] == [("name-reserved", label)]
 
 
 def test_its_cycles_are_its_slowest_member_s_its_movers_among_them() -> None:
     point = in_pynq()
-    movers = {name: point.query(name, Kernel.frame_cycles) for name in point.movers}
+    movers = {name: point.query(point.placed(name), Kernel.frame_cycles) for name in point.movers}
     core = point.core_answer(Kernel.frame_cycles)
     assert isinstance(core, Available)
     assert all(isinstance(each, Available) for each in movers.values())
     slowest = max(core.value, *(each.value for each in movers.values()))  # type: ignore[union-attr]
     assert point.answer(Kernel.frame_cycles) == Available(slowest)
     # The edge channel's pace is its mover's (``CoreComposition.neighbours``).
-    rate = point.query("in0", IodmaKernel.stated_rate)
+    rate = point.query("shell.in0", IodmaKernel.stated_rate)
     assert isinstance(rate, Available)
     neighbours = point.neighbours("x")
     assert not isinstance(neighbours, Exception)
@@ -160,7 +251,7 @@ def test_its_cycles_are_its_slowest_member_s_its_movers_among_them() -> None:
 def test_its_resources_are_its_core_s_its_movers_and_its_static_region_s() -> None:
     point = in_pynq()
     core = point.core_answer(Kernel.resources)
-    movers = [point.query(name, Kernel.resources) for name in point.movers]
+    movers = [point.query(point.placed(name), Kernel.resources) for name in point.movers]
     region = point.query(SHELL, ShellRules.static_region)
     assert isinstance(core, Available) and isinstance(region, Available)
     assert all(isinstance(each, Available) for each in movers)
@@ -188,9 +279,10 @@ def test_a_static_region_is_refused_where_nothing_connects_to_it() -> None:
 
 def test_a_connection_joins_one_stream_and_refuses_two() -> None:
     point = in_pynq()
-    entering, leaving = point.member(f"{CORE}_s_axis_0"), point.member(f"{CORE}_m_axis_0")
-    assert point.validity(f"{CORE}_s_axis_0").status == "valid"
-    assert point.query(f"{CORE}_s_axis_0", Kernel.frame_cycles) == Inapplicable()
+    entering = point.member(f"shell.{TEST_CORE}_s_axis_0")
+    leaving = point.member(f"shell.{TEST_CORE}_m_axis_0")
+    assert point.validity(f"shell.{TEST_CORE}_s_axis_0").status == "valid"
+    assert point.query(f"shell.{TEST_CORE}_s_axis_0", Kernel.frame_cycles) == Inapplicable()
     crossed = design_space(Connection(producer=entering.producer, consumer=leaving.consumer))
     refusal = crossed.query(Connection.streams_meet)
     assert isinstance(refusal, Rejected)

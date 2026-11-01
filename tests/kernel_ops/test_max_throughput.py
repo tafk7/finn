@@ -174,7 +174,7 @@ def test_in_the_zynq_shell_the_search_costs_the_shell_s_total() -> None:
     assert [(row["cycles"], row["relaxed_to"], row["fits"]) for row in searched["tried"]] == [
         (1, 16, True)
     ]
-    assert report["bottleneck"] == {"members": ["in0", "out0"], "cycles": 16}
+    assert report["bottleneck"] == {"members": ["shell.in0", "shell.out0"], "cycles": 16}
     shell = report["resources"]["shell"]
     parts = [shell["partition"], *shell["movers"].values(), *shell["static_region"].values()]
     summed = total(Resources(**part) for part in parts)

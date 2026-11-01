@@ -201,7 +201,7 @@ def bound_by_hand(
     (``finn.kernels.dataflow_core.bound``: what it dropped as stale kept)."""
     declared = declared_by_hand(members, name=name)
     point: Kernel = (
-        compose(declared) if shell is None else in_shell(declared, row=shell, offer=offer)
+        compose(declared) if shell is None else in_shell((declared,), row=shell, offer=offer)
     )
     return bound(point, stored)
 

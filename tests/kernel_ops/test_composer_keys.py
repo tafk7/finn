@@ -39,7 +39,7 @@ def _round_trip(model: ModelWrapper) -> tuple[ShellKernel, int]:
     row = shell_row(target.shell, target.board)
     offer = row_offer(row)
     composed = shell(
-        declaration(model, nodes, name=CUT_NAME, offer=offer), row=row_facts(row), offer=offer
+        (declaration(model, nodes, name=CUT_NAME, offer=offer),), row=row_facts(row), offer=offer
     )
     names = names_of(composed)
     network = core_in_shell(model, nodes)

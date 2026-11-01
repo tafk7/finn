@@ -115,7 +115,13 @@ from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.module import Fragment
 from finn.kernels.base import Kernel, hops, neighbours
 from finn.kernels.channels import Channel, ChannelFifo, Neighbours, OuterHops
-from finn.kernels.dataflow_core import DataflowCoreKernel, Names, _not_a_decision, names_of
+from finn.kernels.dataflow_core import (
+    DataflowCoreKernel,
+    Names,
+    _not_a_decision,
+    names_of,
+    placed_name,
+)
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.fifo_sizing import FRAMES, NotModelled, Sized, holds, size
 from finn.kernels.iodma import IodmaKernel
@@ -171,9 +177,10 @@ class CoreComposition:
     shell, the shell's, its movers' cycles and resources and its static region's among
     them) and its core's (``core_answer``: its netlist, its module); the owner of each
     member's policies (``owner``); and in a shell, its movers (``movers``: no members, but
-    their cycles are costed beside the members' and their validity read by name), its
-    connections and its shell member's name (``shell``: its validity read by its name, the
-    shell's rules).
+    their cycles are costed beside the members' and their validity read by their surface
+    names, ``placed``), its connections and its shell member's name (``shell``: its validity
+    read by its name, the shell's rules). A shell's members beside its core are named below
+    the shell member (``shell.in0``, ``Names.placed``), never as a graph's members are.
 
     A member's answers are read as its own space's were: its keys, and the owners of its
     findings, relative to it (``pe``, ``transport.fifo.depth``); a finding of another member
@@ -282,15 +289,26 @@ class CoreComposition:
 
     @property
     def movers(self) -> tuple[str, ...]:
-        """Its shell's movers, by name (``in0``, ``out0``; ``finn.kernels.shell``): none
-        outside a shell, or where its row offers none."""
+        """Its shell's movers, by their names in the shell (``in0``, ``out0``;
+        ``finn.kernels.shell``): none outside a shell, or where its row offers none."""
         return tuple(getattr(type(self._point), "movers", {}))
 
+    def placed(self, name: str) -> str:
+        """The surface name of ``name``, a member its shell places beside its core (a mover,
+        a connection): what ``member``, ``query`` and ``validity`` read it by
+        (``shell.in0``)."""
+        return placed_name(self.names.shell, name)
+
     def mover(self, tensor: str) -> str | None:
-        """The mover its shell places on boundary channel ``tensor``'s edge, by name; None
-        where none is."""
-        placed = {port: unit for unit, port in getattr(type(self._point), "movers", {}).items()}
-        return next((placed.get(port) for each, port in self.boundary if each == tensor), None)
+        """The mover its shell places on boundary channel ``tensor``'s edge, by its name in
+        the shell; None where none is."""
+        movers: Mapping[str, tuple[str, str]] = getattr(type(self._point), "movers", {})
+        placed = {edge: unit for unit, edge in movers.items()}
+        core = self.names.core
+        if core is None:
+            return None
+        ports = [port for each, port in self.boundary if each == tensor]
+        return placed.get((core, ports[0])) if ports else None
 
     def node(self, name: str) -> str:
         """Member ``name``'s node in the module, its member name: the prefix of its
@@ -308,11 +326,14 @@ class CoreComposition:
         return self.names.pair(key)
 
     def member(self, name: str) -> Any:
-        """Member ``name``'s Space inside the design space; in a shell, a mover's, a
-        connection's and the shell member's by its name (``shell``)."""
+        """Member ``name``'s Space inside the design space; in a shell, the shell member's by
+        its name (``shell``), a mover's and a connection's by its surface name
+        (``placed``)."""
         names = self.names
-        if name == names.shell or name in names.beside:
+        if name == names.shell:
             return getattr(self._point, name)
+        if name in names.placed:
+            return getattr(self._point, names.placed[name])
         member = names.members.get(name)
         if member is None:
             raise ValueError(f"{name} is no member of the partition")
@@ -335,7 +356,7 @@ class CoreComposition:
         ``tensor``, a kernel as its ``node``. The shell member's is no node or tensor of the
         graph, and neither is a mover or a connection: their findings are kept as they are
         (each message names its member)."""
-        if name == self.names.shell or name in self.names.beside:
+        if name == self.names.shell or name in self.names.placed:
             return finding
         return finding.about(**{"tensor" if name in self.names.channels else "node": name})
 
@@ -714,7 +735,7 @@ class CoreComposition:
         mover = self.mover(name)
         if mover is None:
             return beside
-        rate = self.query(mover, IodmaKernel.stated_rate)
+        rate = self.query(self.placed(mover), IodmaKernel.stated_rate)
         if isinstance(rate, (Rejected, Unresolved)):
             return type(rate)(rate.findings)
         assert isinstance(rate, Available)  # a mover states its rate
@@ -818,7 +839,7 @@ class KernelHook:
         network = _kernel(composition)
         if network.shell is None:
             return tuple(network.members)
-        return (*network.members, *network.names.beside, network.shell)
+        return (*network.members, *network.names.placed, network.shell)
 
 
 #: FINN's hook, the one every FINN seam is made with.
@@ -1092,7 +1113,9 @@ class Seam(search.Seam):
         resources: dict[str, Resources] = {}
         unstated: dict[str, tuple[Finding, ...]] = {}
         assumed: dict[str, tuple[str, ...]] = {}
-        named = (*network.members, *network.movers) if members is None else members
+        named = (
+            (*network.members, *map(network.placed, network.movers)) if members is None else members
+        )
         for name in named:
             held = network.query(name, Kernel.buffering)
             if isinstance(held, Available):

@@ -90,7 +90,7 @@ def test_a_doubled_clock_is_the_shells_not_the_platforms() -> None:
     assert folded(model).member("w").source.pumped_memory is True
     zynq = targeted(matmul_model(), ZYNQ)
     configured(zynq, {"first": MATMUL})
-    with refused("clock-unavailable", owner="w-clock"):
+    with refused("clock-unavailable", owner="DataflowCore_0-w-clock"):
         configured(zynq, {"w": {"source.pumped_memory": True}})
     assert folded(zynq).member("w").source.pumped_memory is False
 

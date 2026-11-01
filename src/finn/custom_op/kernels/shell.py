@@ -148,7 +148,7 @@ def _in_shell(
     facts = row_facts(row)
 
     def made(declared: DataflowCoreDeclaration) -> ShellKernel:
-        return shell(declared, row=facts, offer=offer)
+        return shell((declared,), row=facts, offer=offer)
 
     return made
 
@@ -205,7 +205,7 @@ def mover_contracts(network: CoreComposition) -> QueryResult[tuple[tuple[str, Mo
     found: list[tuple[str, MoverContract]] = []
     waiting: list[QueryResult[object]] = []
     for name in network.movers:
-        placed = network.query(name, IodmaKernel.contract)
+        placed = network.query(network.placed(name), IodmaKernel.contract)
         if isinstance(placed, Available):
             found.append((name, placed.value))
         else:
@@ -238,7 +238,9 @@ def _resources(network: CoreComposition) -> QueryResult[ShellResources]:
     """``shell_resources``, as a query's result: its core's, each mover's and its static
     region's, each its own statement."""
     partition = network.core_answer(Kernel.resources)
-    movers = [(name, network.query(name, Kernel.resources)) for name in network.movers]
+    movers = [
+        (name, network.query(network.placed(name), Kernel.resources)) for name in network.movers
+    ]
     region = network.query(SHELL, ShellRules.static_region)
     found = [partition, *(used for _, used in movers), region]
     if not all(isinstance(each, Available) for each in found):
@@ -402,7 +404,7 @@ def configured_network(
         # A rule a member's stored choices break that its module does not read.
         found = [
             bound.located(name, finding)
-            for name in (*bound.members, *bound.names.beside)
+            for name in (*bound.members, *bound.names.placed)
             for finding in refusal(bound.validity(name))
         ]
     if found or not isinstance(module, Available):

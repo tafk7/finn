@@ -294,7 +294,7 @@ def test_a_tiled_w2_is_regrouped_after_its_mover_by_a_vpc_and_an_input_gen(case:
     assert w2.output_adapting and w2.input_chain == "input_gen_vpc"
     assert w2.adapter.frame_bits == 16 * 3
     assert bound.mover("w2") == "in1"
-    mover = bound.member("in1").contract
+    mover = bound.member(bound.placed("in1")).contract
     assert (mover.beats, mover.tdata, mover.memory_width, mover.words) == (4, 16, 64, 1)
     choose_memories(model)
     configured, boundary = configured_network(model, "DataflowCore_0")
@@ -364,7 +364,7 @@ def test_a_row_major_w2_on_three_rows_is_replayed_by_an_input_gen_after_its_move
     assert w2.input_chain == "input_gen" and w2.adapter.frame_bits == 16 * 3
     assert ("w2", "adapter_ram_style") in bound.chosen()
     assert bound.mover("w2") == "in1"
-    mover = bound.member("in1").contract
+    mover = bound.member(bound.placed("in1")).contract
     assert (mover.beats, mover.tdata, mover.memory_width, mover.words) == (4, 16, 64, 1)
     choose_memories(model)
     configured_network(model, "DataflowCore_0")
@@ -383,7 +383,7 @@ def test_x_read_twice_on_one_row_is_replayed_by_an_input_gen_after_its_mover() -
     bound = core_in_shell(model, model.graph.node)
     x = bound.member("x")
     assert bound.validity("x").status == "valid"
-    assert (outer(x).form.beats, bound.member("in0").contract.beats) == (2, 2)
+    assert (outer(x).form.beats, bound.member("shell.in0").contract.beats) == (2, 2)
     assert x.input_chain == "input_gen" and x.adapter.frame_bits == 4 * 3
     assert x.input_steps.describe() == "reorder -> markers"
     assert ("x", "adapter_ram_style") in bound.chosen()

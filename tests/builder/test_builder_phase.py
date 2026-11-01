@@ -1319,7 +1319,7 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
     # The Zynq shell's input mover binds: 196 beats and a call's 4 cycles (a
     # frame a call), within the budget of 200; the slowest of the other members, the
     # first layer's activations, weights, thresholds and MatMul, tie at 196.
-    assert report["bottleneck"] == {"members": ["in0"], "cycles": 200}
+    assert report["bottleneck"] == {"members": ["shell.in0"], "cycles": 200}
     members = {name: row["cycles"] for name, row in report["members"].items()}
     assert [name for name, cycles in members.items() if cycles == 196] == [
         "Thresholding_0",
@@ -1752,7 +1752,7 @@ def test_z0s_movers_as_kernels_state_their_channels_movers_and_generate_z0s_iodm
     network = configured_network(body, core.name)[0].network
     cycles: dict[str, int] = {}
     for edge in described.edges:
-        point = network.member(edge.unit)
+        point = network.member(network.placed(edge.unit))
         kind = IodmaIn if edge.contract.direction == "in" else IodmaOut
         assert isinstance(point, kind) and network.mover(edge.tensor) == edge.unit
         assert point.contract == edge.contract
@@ -1907,7 +1907,7 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
     bottleneck = shell_bottleneck(body, CUT_NAME)
     assert bottleneck is not None
     assert (clock["delivered_mhz"], clock["bottleneck_cycles"]) == (187.512, bottleneck.cycles)
-    assert (bottleneck.members, bottleneck.cycles) == (("in0",), TFC_BOTTLENECK)
+    assert (bottleneck.members, bottleneck.cycles) == (("shell.in0",), TFC_BOTTLENECK)
     assert clock["objective_fps"] == 1_000_000
     assert [finding["code"] for finding in clock["findings"]] == ["clock-below-asked"]
     # The resources per member: Z7's model of TFC (the thresholdings read INT7 sums); the

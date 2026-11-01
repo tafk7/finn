@@ -1,11 +1,11 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The shell's rules: the typed limits of a partition in its shell.
+"""The shell's rules: the typed limits of a build's cores in their shell.
 
-A partition's core in its shell (``finn.kernels.shell.ShellKernel``) has one member beside
-its core and its movers, ``shell`` (``SHELL``): a Space of the shell's row and of what the
-core and each mover give the shell to place. Its owner is the shell, and its validity is a
+A build's cores in their shell (``finn.kernels.shell.ShellKernel``) have one member beside
+the cores and their movers, ``shell`` (``SHELL``): a Space of the shell's row and of what
+each core and each mover give the shell to place. Its owner is the shell, and its validity is a
 member's: a value that breaks a limit is refused in the shell, where the seam, a policy and
 emission read every member's rules.
 
@@ -15,22 +15,24 @@ the host addresses (its control), its memory ``targets`` (each a name and the mo
 ports it takes, ``masters``), whether it gives an aligned doubled clock (``doubled``) and
 its static region (``fixed``); each a fact of the shell, at its root, ``None`` where the
 row states none. And each contributor's derived value, a Param bound to it as a channel's
-side is bound to its kernel's port (``contributor`` names each, by the member's name in the
-core, or the mover's or the core's in the shell):
+side is bound to its kernel's port (``contributor`` names each, by the mover's or the
+core's name in the shell, or by a core's member's, after its core's,
+``DataflowCore_0-mm0``):
 
-- each mover and the core: the window each control bus it presents takes
+- each mover and each core: the window each control bus it presents takes
   (``<unit>-windows``, its ``control_windows``, ``finn.kernels.base.Kernel``), in the order
-  the integration places them: the input movers', the core's, the output movers';
+  the integration places them: the cores in order, each core's after its input movers' and
+  before its output movers';
 - each mover: the memory ports it initiates (``<mover>-memory``, its ``memory_initiators``,
   ``finn.kernels.iodma``);
-- each of the core's kernels: the memory ports it initiates itself
+- each of the cores' kernels: the memory ports it initiates itself
   (``<member>-initiators``, its ``memory_initiators``);
-- each of the core's kernels, and each channel with a known value (its source): whether it
+- each of the cores' kernels, and each channel with a known value (its source): whether it
   takes the doubled clock (``<member>-doubled``, its ``takes_doubled_clock``).
 
-Its rules read those values only, never the core's netlist (a view of the core):
+Its rules read those values only, never a core's netlist (a view of the core):
 
-- ``within_units``: the units it places, the core and each mover, within ``units``
+- ``within_units``: the units it places, the cores and each mover, within ``units``
   (``units-exceeded``);
 - ``within_control_window``: the control windows, each at least ``least_window``, placed
   in order from the static region's ``control_base``, each aligned to itself
@@ -39,7 +41,7 @@ Its rules read those values only, never the core's netlist (a view of the core):
 - ``within_memory_masters``: the movers' memory ports, each bound to the first target (as
   the integration binds them), within its ``masters`` (``memory-masters-exceeded``, naming
   the target);
-- ``core_stream_only``: the core's kernels initiate no memory port: the core is
+- ``core_stream_only``: the cores' kernels initiate no memory port: a core is
   stream-only, and its movers reach memory (``core-memory-port``);
 - ``<member>-clock``, one per contributor of a doubled clock: a member that takes it needs a
   row that gives it (``doubled``; ``clock-unavailable``). One rule per member, so a value
@@ -47,10 +49,11 @@ Its rules read those values only, never the core's netlist (a view of the core):
 
 A limit of None bounds nothing (the ``ip`` shell's: no units, no control, no memory).
 ``core_stream_only`` holds on every row. Its counts (``core_windows``,
-``core_initiators``, ``doubled_clock``, read by ``counts``) are what emission checks the
-core's netlist against, and with the movers' memory ports and every window what the
-shell's static region is sized by (``static_region``: each of its IPs' resources, out of
-context, at the memory ports and the AXI-Lite buses the core and its movers connect,
+``core_initiators``, ``doubled_clock``, read by ``counts``: over every core, the cores in
+order) are what emission checks the cores' netlists against, and with the movers' memory
+ports and every window what the shell's static region is sized by (``static_region``: each
+of its IPs' resources, out of context, at the memory ports and the AXI-Lite buses the cores
+and their movers connect,
 ``FixedShell.resources``; none on a row without one, the ``ip`` shell's). The shell's
 composer makes the class per structure (``shell_members``): which members contribute is the
 structure, the row's values are facts, so every row shares one class.
@@ -159,9 +162,9 @@ def placed_windows(windows: Sequence[int], base: int = 0) -> tuple[int, ...]:
 
 
 def contributor(member: str, kind: str) -> str:
-    """The name of member ``member``'s Param of ``kind`` (``mm0-doubled``), or of its rule
-    (``mm0-clock``), in the shell member: a member's name holds no ``-``, so no two meet,
-    and the shell refuses a mover named as a member of its core."""
+    """The name of member ``member``'s Param of ``kind`` (``in0-memory``), or of its rule
+    (``DataflowCore_0-mm0-clock``), in the shell member: a member's name holds no ``-``, so
+    no two meet, a core's member's named after its core's."""
     return f"{member}-{kind}"
 
 
@@ -179,23 +182,24 @@ class ShellRules(Space):
     doubled: bool = Param()
     # Its static region: None on a row without one.
     fixed: FixedShell | None = Param()
-    # The units it places: its core and its movers, a structure's.
+    # The units it places: its cores and their movers, a structure's.
     placed: int = Param(default=1)
 
     @derived
     def windows(self) -> tuple[int, ...]:
         """The window each control bus its units present takes, in the integration's
-        order: the input movers', the core's, the output movers'."""
+        order: the cores in order, each core's after its input movers' and before its
+        output movers'."""
         return ()
 
     @derived
     def core_windows(self) -> tuple[int, ...]:
-        """The window each control bus its core presents takes."""
+        """The window each control bus its cores present takes, the cores in order."""
         return ()
 
     @derived
     def core_initiators(self) -> int:
-        """The memory ports its core's kernels initiate."""
+        """The memory ports its cores' kernels initiate."""
         return 0
 
     @derived
@@ -210,7 +214,7 @@ class ShellRules(Space):
 
     @constraint
     def within_units(self) -> bool | Rejected:
-        """The units it places, its core and its movers, within ``units``."""
+        """The units it places, its cores and their movers, within ``units``."""
         units = self.units
         if units is None:
             return True
@@ -219,7 +223,7 @@ class ShellRules(Space):
             return reject(
                 "units-exceeded",
                 f"the {self.shell!r} shell places {units} units; the partition takes "
-                f"{placed}, its core and {placed - 1} movers",
+                f"{placed}, its cores and their movers",
             )
         return True
 
@@ -273,13 +277,13 @@ class ShellRules(Space):
 
     @constraint
     def core_stream_only(self) -> bool | Rejected:
-        """The core's kernels initiate no memory port: the core is stream-only, and its
+        """The cores' kernels initiate no memory port: a core is stream-only, and its
         movers reach memory (a sum, as ``within_control_window``)."""
         ports = self.core_initiators
         if ports > 0:
             return reject(
                 "core-memory-port",
-                f"the partition's core initiates {ports} memory ports; a core is "
+                f"the partition's cores initiate {ports} memory ports; a core is "
                 f"stream-only in the {self.shell!r} shell, its movers reaching memory",
             )
         return True
@@ -287,7 +291,7 @@ class ShellRules(Space):
     @view
     def static_region(self) -> tuple[tuple[str, Resources], ...] | Rejected:
         """Each IP of its static region by its Vivado IP name, with what it uses out of
-        context (``FixedShell.resources``) at the memory ports the core and the movers
+        context (``FixedShell.resources``) at the memory ports the cores and the movers
         initiate (its memory interconnect's masters) and the AXI-Lite buses they present
         (its control interconnect's slaves); none without one. Refused where either is
         none (``shell-resources``): the region connects at least one of each."""
@@ -383,14 +387,14 @@ def _sum(members: dict[str, object], names: Sequence[str], kind: str) -> object:
     return derived(result=tail)(_integer)
 
 
-def _concatenated(members: dict[str, object], names: Sequence[str]) -> object:
+def _concatenated(members: dict[str, object], names: Sequence[str], kind: str) -> object:
     """The windows of ``names``' contributors, in order (``_sum``'s, concatenating)."""
     if not names:
         return derived(_none)
     tail: tuple[int, ...] = ()
     for index in reversed(range(len(names))):
         part = _Windows(head=cast(tuple[int, ...], members[names[index]]), tail=tail)
-        members[f"_windows_{index}"] = part
+        members[f"_windows_{kind}_{index}"] = part
         tail = part.result
     return derived(result=tail)(_windows)
 
@@ -423,7 +427,7 @@ def _clock(*, missing_from: str | None) -> bool | Rejected:
 def shell_members(
     *,
     windows: Sequence[str] = (),
-    core: str | None = None,
+    cores: Sequence[str] = (),
     movers: Sequence[str] = (),
     initiators: Sequence[str] = (),
     doubled: Sequence[str] = (),
@@ -431,9 +435,9 @@ def shell_members(
     """The members of the shell member's class for a structure, with their annotations,
     which the shell's composer makes on ``ShellRules`` (``composite``): a Param per
     contributor (by its name: each unit presenting control windows, in the integration's
-    order, ``core`` among them; the movers' memory ports; the core's kernels initiating
-    memory ports; the core's members taking the doubled clock), the counts over them, and a
-    clock rule per member taking the doubled clock (the module docstring)."""
+    order, each of ``cores`` among them; the movers' memory ports; the cores' kernels
+    initiating memory ports; the cores' members taking the doubled clock), the counts over
+    them, and a clock rule per member taking the doubled clock (the module docstring)."""
     members: dict[str, object] = {}
     annotations: dict[str, object] = {}
     for kind, owners, annotation in (
@@ -445,11 +449,11 @@ def shell_members(
         for member in owners:
             members[contributor(member, kind)] = Param()
             annotations[contributor(member, kind)] = annotation
-    members["windows"] = _concatenated(members, [contributor(each, WINDOWS) for each in windows])
-    members["core_windows"] = (
-        derived(result=members[contributor(core, WINDOWS)])(_windows)
-        if core is not None and core in windows
-        else derived(_none)
+    members["windows"] = _concatenated(
+        members, [contributor(each, WINDOWS) for each in windows], "units"
+    )
+    members["core_windows"] = _concatenated(
+        members, [contributor(each, WINDOWS) for each in cores], "core"
     )
     members["mover_memory"] = _sum(
         members, [contributor(member, MEMORY) for member in movers], MEMORY
@@ -479,9 +483,10 @@ def shell_members(
 
 
 def counts(point: Space) -> QueryResult[tuple[tuple[int, ...], int, bool]]:
-    """What the shell member ``point`` counts of its partition's core: the window each
-    control bus it presents takes, the memory ports its kernels initiate, and whether a
-    member takes the doubled clock; or what they wait on, or why one is refused."""
+    """What the shell member ``point`` counts of its partition's cores: the window each
+    control bus they present takes, the cores in order, the memory ports their kernels
+    initiate, and whether a member takes the doubled clock; or what they wait on, or why
+    one is refused."""
     found = [
         point.query(getattr(type(point), name))
         for name in ("core_windows", "core_initiators", "doubled_clock")

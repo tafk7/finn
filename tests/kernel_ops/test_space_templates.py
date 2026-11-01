@@ -179,10 +179,12 @@ def test_stage_7s_chain_of_eight_kernels_reads_alike_in_any_order_its_scopes_are
     # (26 of the 296). The ip shell places no mover: no sum of movers' buses (2 fewer groups
     # than when its two boundary channels each counted the movers they placed). The shell's
     # windows are each unit's, the core one unit: one concatenation where a sum stood for
-    # each of the four thresholdings' buses (3 fewer groups than when it summed them).
+    # each of the four thresholdings' buses (3 fewer groups than when it summed them). The
+    # cores' windows are a concatenation too, over the one core (1 more group than when the
+    # core's were read alone).
     assert len(_real_nonport_scopes(records)) == 214
     assert len(ports) == 296
-    assert len(_group_scopes(records)) == 50
+    assert len(_group_scopes(records)) == 51
 
 
 def _through_a_node_alias(key: str, reads: list[str]) -> bool:

@@ -156,7 +156,7 @@ NARROW = row(least_window=8192, aperture=4096)
 
 CASES = [
     (Presenting, NARROW, "within_control_window", "control-window-exceeded"),
-    (Pumping, row(), "k0-clock", "clock-unavailable"),
+    (Pumping, row(), "partition-k0-clock", "clock-unavailable"),
 ]
 
 
@@ -225,7 +225,7 @@ def test_a_partition_breaking_two_rules_reports_each() -> None:
     findings = network.validity(SHELL).result
     assert {(each.code, each.owner) for each in getattr(findings, "findings", ())} == {
         ("control-window-exceeded", "within_control_window"),
-        ("clock-unavailable", "k1-clock"),
+        ("clock-unavailable", "partition-k1-clock"),
     }
     assert sorted(each.code for each in Seam().refusals(network)[SHELL]) == [
         "clock-unavailable",
@@ -300,7 +300,7 @@ def test_the_shell_member_is_no_kernel_or_channel() -> None:
     assert {owner for owner, _ in network.decisions()} == {"k0", "k1"}
     names = network.names
     assert names.owners[SHELL] == SHELL and SHELL not in names.members
-    assert names.pair("shell.k1-clock") == (SHELL, "k1-clock")
+    assert names.pair("shell.partition-k1-clock") == (SHELL, "partition-k1-clock")
     assert {root for root, (owner, _) in names.roots.items() if owner == SHELL} == {
         "shell-shell",
         "shell-units",

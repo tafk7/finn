@@ -249,7 +249,7 @@ NARROWED = [
         2,
         "within_units",
         "units-exceeded",
-        "places 2 units; the partition takes 3, its core and 2 movers",
+        "places 2 units; the partition takes 3, its cores and their movers",
     ),
 ]
 
@@ -343,7 +343,7 @@ def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:
     model = model.transform(MakeCutChoices(CUT_NAME))  # the movers the pynq row offers
     bound = core_in_shell(model, model.graph.node, name="chain")
     assert not shell.body_row(model).clocks.doubled
-    rule = f"{member_name(first)}-clock"
+    rule = f"chain-{member_name(first)}-clock"
     found = Seam().refusals(bound)
     assert list(found) == [SHELL] and [each.owner for each in found[SHELL]] == [rule]
     unpumped = Seam().set(bound, {(first, "compute.packed.compute_pumping"): False})
@@ -437,7 +437,7 @@ def test_each_bus_presented_takes_the_window_its_module_states() -> None:
     assert [bus.name for bus in buses] == ["t0_s_axilite", "t1_s_axilite"]
     assert point.core.control_buses == ("t0", "t1")
     assert point.core.control_windows == tuple(1 << address_width(bus) for bus in buses)
-    assert [point.query(name, Kernel.control_windows) for name in point.movers] == [
+    assert [point.query(point.placed(name), Kernel.control_windows) for name in point.movers] == [
         Available((64,)),
         Available((64,)),
     ]

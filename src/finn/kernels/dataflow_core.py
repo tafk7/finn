@@ -110,6 +110,14 @@ FROZEN = "frozen"
 (``<channel>-frozen``, the module docstring)."""
 
 
+def placed_name(shell: str | None, member: str) -> str:
+    """The name at FINN's surface of ``member``, a member a shell places beside its cores (a
+    mover, a connection): below the shell member's (``shell.in0``), never a graph name."""
+    if shell is None:
+        raise ValueError(f"{member}: a member placed beside a core is a shell's")
+    return f"{shell}.{member}"
+
+
 def root_name(member: str, fact: str) -> str:
     """The name of the root member holding member ``member``'s ``fact``: a Param, or a
     channel's side (``mm0-x_tensor``, ``h0-producer``)."""
@@ -124,10 +132,12 @@ class Names:
     """A core's names, a fact of its class (``DataflowCoreKernel.names``): each graph name's
     member name (``members``, kernels then channels, ranked), its channels' graph names
     (``channels``), and each root member's owner and fact (``roots``: a Param's, a side's),
-    by its name. A shell's (``finn.kernels.shell.ShellKernel.names``) are its core's, below
-    the core's member (``core``: ``DataflowCore_0``; None for a core's own), with its shell
-    member's (``shell``: its own owner) and its other members' at its root (``beside``: its
-    movers and its connections, each its own owner).
+    by its name. A shell's (``finn.kernels.shell.ShellKernel.names``) are its cores', each
+    graph name below its core's member (``in_core``; ``cores``, the cores' members in order;
+    none for a core's own), with its shell member's (``shell``: its own owner) and the members
+    it places beside its cores (``placed``: its movers, its connections), each named at FINN's
+    surface below the shell member (``shell.in0``), never as a graph name: a graph's names
+    and the shell's are two namespaces.
 
     Inside the class a key is a path (``mm0.compute.packed.pe``, in a shell
     ``DataflowCore_0.mm0.compute.packed.pe``); at FINN's surface it is the pair (owner, key),
@@ -140,8 +150,9 @@ class Names:
     roots: Mapping[str, Key]
     shell: str | None
     channels: frozenset[str]
-    core: str | None
-    beside: tuple[str, ...]
+    in_core: Mapping[str, str]
+    cores: tuple[str, ...]
+    placed: Mapping[str, str]
 
     def __init__(
         self,
@@ -150,15 +161,16 @@ class Names:
         shell: str | None = None,
         *,
         channels: Iterable[str] = (),
-        core: str | None = None,
-        beside: Iterable[str] = (),
+        in_core: Mapping[str, str] | None = None,
+        placed: Iterable[str] = (),
     ) -> None:
         self.members = MappingProxyType(dict(members))
         self.roots = MappingProxyType(dict(roots))
         self.shell = shell
         self.channels = frozenset(channels)
-        self.core = core
-        self.beside = tuple(beside)
+        self.in_core = MappingProxyType(dict(in_core or {}))
+        self.cores = tuple(dict.fromkeys(self.in_core.values()))
+        self.placed = MappingProxyType({placed_name(shell, member): member for member in placed})
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Names):
@@ -168,15 +180,15 @@ class Names:
             dict(self.roots),
             self.shell,
             self.channels,
-            self.core,
-            self.beside,
+            dict(self.in_core),
+            dict(self.placed),
         ) == (
             dict(other.members),
             dict(other.roots),
             other.shell,
             other.channels,
-            other.core,
-            other.beside,
+            dict(other.in_core),
+            dict(other.placed),
         )
 
     __hash__ = None  # type: ignore[assignment]
@@ -184,27 +196,40 @@ class Names:
     def __repr__(self) -> str:
         return f"Names({dict(self.members)!r})"
 
+    @property
+    def core(self) -> str | None:
+        """The member of its one core, in a shell; None for a core's own. A shell of several
+        cores has none (a ``ValueError``): what reads one core reads one of them by name."""
+        if len(self.cores) > 1:
+            raise ValueError(f"a shell of the cores {list(self.cores)} has no one core")
+        return self.cores[0] if self.cores else None
+
     @cached_property
     def owners(self) -> dict[str, str]:
-        """Each member's path's graph name (a core's member's below the core, in a shell),
-        the shell member's and each member beside the core its own name."""
-        found = {self._below_core(member): owner for owner, member in self.members.items()}
-        for own in (*([] if self.shell is None else [self.shell]), *self.beside):
-            found[own] = own
+        """Each member's path's owner: a graph name (a core's member's below its core, in a
+        shell), the shell member's its own name, a placed member's its surface name."""
+        found = {self._below_core(owner): owner for owner in self.members}
+        if self.shell is not None:
+            found[self.shell] = self.shell
+        found.update({member: name for name, member in self.placed.items()})
         return found
 
-    def _below_core(self, member: str) -> str:
-        return member if self.core is None else f"{self.core}.{member}"
+    def _below_core(self, owner: str) -> str:
+        member = self.members[owner]
+        core = self.in_core.get(owner)
+        return member if core is None else f"{core}.{member}"
 
     def _member(self, owner: str) -> str:
-        if owner == self.shell or owner in self.beside:
+        if owner in self.members:
+            return self._below_core(owner)
+        if owner == self.shell:
             return owner
-        return self._below_core(self.members[owner])
+        return self.placed[owner]
 
     def _split(self, path: str) -> tuple[str, str]:
         """``path`` as the path of the member it is below and its key there."""
         member, _, below = path.partition(".")
-        if self.core is not None and member == self.core:
+        if member in self.cores:
             inner, _, below = below.partition(".")
             member = f"{member}.{inner}"
         return member, below
@@ -223,12 +248,13 @@ class Names:
 
     def root(self, owner: str, fact: str) -> str:
         """The root member holding ``owner``'s ``fact``: a core's own (``mm0-x_tensor``), in
-        a shell lifted below the core's member (``DataflowCore_0-mm0-x_tensor``); the shell
-        member's and a member's beside the core its own (``shell-doubled``, ``in0-offer``)."""
-        if owner == self.shell or owner in self.beside:
-            return root_name(owner, fact)
-        found = root_name(self.members[owner], fact)
-        return found if self.core is None else root_name(self.core, found)
+        a shell lifted below its core's member (``DataflowCore_0-mm0-x_tensor``); the shell
+        member's and a placed member's its own (``shell-doubled``, ``in0-offer``)."""
+        if owner in self.members:
+            found = root_name(self.members[owner], fact)
+            core = self.in_core.get(owner)
+            return found if core is None else root_name(core, found)
+        return root_name(self._member(owner), fact)
 
     def below(self, path: str) -> Key | None:
         """The member a path is below, by graph name, and its key there; None for a root
@@ -654,6 +680,7 @@ __all__ = [
     "bound",
     "core_module",
     "names_of",
+    "placed_name",
     "root_name",
     "top_markers",
 ]
