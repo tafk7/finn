@@ -40,7 +40,8 @@ Each mover binds the row's first memory target. Until the core unit has a contro
 grouper, a core's unit has no window of its own (``Unit.window`` is ``None``) and each of
 its kernels' control buses is an endpoint at offset 0 with its own range: ``2**awaddr``
 bytes, and the row's least window at least; a mover's control bus is one, of its own
-range, in its unit's window.
+range, its unit's window that range. Every endpoint lies in its unit's window, where its
+unit has one (``endpoint-outside-unit``).
 
 It is a function of a configured point: the description is a build's, needed once a build
 and not at every point an exploration costs. A shell without a linker (``ip``) has no
@@ -196,6 +197,18 @@ class Integration:
     bindings: tuple[Binding, ...]
     endpoints: tuple[Endpoint, ...]
     clocks: tuple[ClockPin, ...]
+
+    def __post_init__(self) -> None:
+        windows = {unit.name: unit.window for unit in self.units}
+        for each in self.endpoints:
+            window = windows.get(each.unit)
+            if window is not None and each.offset + each.range > window:
+                raise IntegrationError(
+                    "endpoint-outside-unit",
+                    "describe",
+                    f"{each.unit}/{each.bus}: {each.range} bytes at offset {each.offset} lie "
+                    f"outside its unit's window of {window}",
+                )
 
     def unit(self, name: str) -> Unit:
         """The unit named ``name``."""
@@ -402,12 +415,17 @@ def describe(model: ModelWrapper) -> Integration:
     ]
     packaged, packaged_ip = body.get(OUTPUT_VLNV), body.get(OUTPUT_IP)
     ip = None if packaged is None or packaged_ip is None else IpRef(packaged, (packaged_ip,))
-    units = (
-        *(Unit(name=each.unit, kind=each.contract.kind, ip=None, window=least) for each in inputs),
-        Unit(name=core.name, kind=CORE, ip=ip, window=None),
-        *(Unit(name=each.unit, kind=each.contract.kind, ip=None, window=least) for each in outputs),
-    )
     pins = {each.unit: mover_pins(each.unit, each.module) for each in (*inputs, *outputs)}
+
+    def mover(edge: Edge) -> Unit:
+        window = _range(pins[edge.unit]["control"], least)
+        return Unit(name=edge.unit, kind=edge.contract.kind, ip=None, window=window)
+
+    units = (
+        *map(mover, inputs),
+        Unit(name=core.name, kind=CORE, ip=ip, window=None),
+        *map(mover, outputs),
+    )
     connections = (
         *(
             Connection(

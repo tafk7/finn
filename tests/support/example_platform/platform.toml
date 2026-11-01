@@ -14,6 +14,7 @@ code = "support.example_platform:link"
 tool = "example-tool"
 board_keys = ["slot"]
 image = "example-image"
+least_range = 4096
 
 [runtimes.example-run]
 # Records the operations it is asked for.

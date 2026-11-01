@@ -9,7 +9,8 @@ Five kinds of thing are declared, each stating only its own facts:
 - a **board** (``[boards.<name>]``): its ``part``, nothing about any flow;
 - a **linker** (``[linkers.<name>]``): its ``code``, the ``tool`` it runs and the
   releases it runs on (``versions``, optional), what it needs of each board a shell
-  offers it on (``board_keys``), and the ``image`` it produces;
+  offers it on (``board_keys``), the ``image`` it produces, and the least address range
+  it assigns a control bus (``least_range``, bytes, a power of two);
 - a **runtime** (``[runtimes.<name>]``): its ``code``, the ``images`` it loads, the
   mover kinds it drives (``movers``), the supply and delivery kinds it serves
   (``kinds``) and the description schemas it reads (``schemas``);
@@ -110,7 +111,9 @@ class Origin:
 class Linker:
     """A linker's declaration: its ``code`` (``module:attr``), the ``tool`` it runs and
     its releases (``versions``: a release range, ``None``: any), the keys it needs of each
-    board a shell offers it on (``board_keys``), and the ``image`` it produces."""
+    board a shell offers it on (``board_keys``), the ``image`` it produces, and the least
+    address range it assigns a control bus (``least_range``, bytes): a shell it links
+    takes that window of a unit at least (``finn.platform.shells.Control.least_window``)."""
 
     name: str
     code: str
@@ -118,6 +121,7 @@ class Linker:
     versions: str | None
     board_keys: tuple[str, ...]
     image: str
+    least_range: int
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -228,7 +232,7 @@ def _board(name: str, table: dict[str, Any]) -> Board:
 
 def _linker(name: str, table: dict[str, Any]) -> Linker:
     where = f"linkers.{name}"
-    valid.keys(table, where, {"code", "tool", "board_keys", "image"}, {"versions"})
+    valid.keys(table, where, {"code", "tool", "board_keys", "image", "least_range"}, {"versions"})
     versions = table.get("versions")
     return Linker(
         name=name,
@@ -237,6 +241,7 @@ def _linker(name: str, table: dict[str, Any]) -> Linker:
         versions=None if versions is None else valid.releases(versions, f"{where}.versions"),
         board_keys=valid.texts(table["board_keys"], f"{where}.board_keys"),
         image=valid.text(table["image"], f"{where}.image"),
+        least_range=valid.power_of_two(table["least_range"], f"{where}.least_range"),
     )
 
 

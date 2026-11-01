@@ -11,7 +11,8 @@ states in their place. The facts:
 - ``clocks`` (``Clocks``): the clock it gives ``ap_clk``, who sets its frequency, and
   whether it gives an aligned doubled clock (``ap_clk2x``);
 - ``control`` (``Control``): how the platform reaches a unit's control port, the least
-  window a unit takes and the aperture all units share (``None``: nothing is addressed);
+  window a unit takes (no less than its linker assigns a control bus, its
+  ``least_range``) and the aperture all units share (``None``: nothing is addressed);
 - ``memory``: the memory targets a mover may bind (``MemoryTarget``);
 - ``units``: the most units the integration may place (``None``: no bound);
 - ``supply`` and ``delivery``: the kinds offered on input and output edge ports, each
@@ -422,6 +423,12 @@ def _row(shell: Shell, board: str | None, declared: Declarations) -> ShellRow:
     if "clocks" not in facts:
         raise valid.Invalid(f"{where} states no clocks")
     _bound(facts, where)
+    control = facts.get("control")
+    if linker is not None and control is not None and control.least_window < linker.least_range:
+        raise valid.Invalid(
+            f"{where}.control.least_window: {control.least_window} bytes is less than its "
+            f"linker {linker.name!r} assigns a control bus ({linker.least_range})"
+        )
     specs = [each for each in (None if linker is None else linker.versions, narrowed) if each]
     versions = None
     if linker is not None and specs:

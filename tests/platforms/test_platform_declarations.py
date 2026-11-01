@@ -275,9 +275,15 @@ def test_an_installed_packages_declarations_are_read_without_running_its_code(
         ),
         (
             '[linkers.l]\ncode = "a:b"\ntool = "vivado"\nboard_keys = []\nimage = "bit"\n'
-            'versions = "next Tuesday"\n',
+            'least_range = 128\nversions = "next Tuesday"\n',
             "linkers.l",
             "^linkers.l.versions: 'next Tuesday' is no release comparison",
+        ),
+        (
+            '[linkers.l]\ncode = "a:b"\ntool = "vivado"\nboard_keys = []\nimage = "bit"\n'
+            "least_range = 100\n",
+            "linkers.l",
+            "^linkers.l.least_range is a power of two, not 100",
         ),
         ("[shells.s]\nclocks = {}\n", "shells.s", "states no boards"),
         (
@@ -296,6 +302,7 @@ def test_an_installed_packages_declarations_are_read_without_running_its_code(
         "code not module:attr",
         "a schema 0",
         "an unused linker's release range not one",
+        "a linker's least range not a power of two",
         "a shell with no boards",
         "boards with no linker",
         "no board",
@@ -363,6 +370,11 @@ def test_a_shell_based_on_another_replaces_each_key_it_states(tmp_path: Path) ->
             "control = { one_port_per_unit = false, least_window = 4096, aperture = 1 }",
             "control.aperture: 1 bytes hold no window of the least 4096",
         ),
+        (
+            "control = { one_port_per_unit = false, least_window = 64, aperture = 256 }",
+            "control.least_window: 64 bytes is less than its linker 'vivado-block-design' "
+            "assigns a control bus (128)",
+        ),
         ('memory = [{ name = "", width = 64 }]', "memory[0].name is a non-empty"),
         ('memory = [{ name = "m", width = 9 }]', "memory[0].width: 9 bits is no AXI data width"),
         (
@@ -398,6 +410,7 @@ def test_a_shell_based_on_another_replaces_each_key_it_states(tmp_path: Path) ->
         "an infinite frequency",
         "a least window not a power of two",
         "an aperture below the least window",
+        "a least window below its linker's least range",
         "a memory target with no name",
         "a memory width of no whole bytes",
         "a memory width of whole bytes but no AXI width",
@@ -553,6 +566,7 @@ code = "support.no_such_module:link"
 tool = "vivado"
 board_keys = []
 image = "rom"
+least_range = 4096
 
 [runtimes.idle]
 code = "support.example_platform:IMAGE"

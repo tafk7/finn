@@ -13,7 +13,8 @@ prints them.
 - ``board-undeclared``: a shell supports a board nothing declares;
 - ``declaration-invalid``: a fact a shell states does not read, whatever boards it
   supports, or its row on one of its boards does not (a fact not of its type, a board
-  entry without a key its linker needs, or no board for a linker that needs one);
+  entry without a key its linker needs, no board for a linker that needs one, or a least
+  window less than its linker assigns a control bus);
 - ``image-unloaded``: a runtime a shell offers does not load its linker's image;
 - ``mover-undriven``: a runtime a shell offers does not drive a mover kind the shell offers;
 - ``kind-unserved``: a runtime a shell offers, or a mover kind it offers for a kind, does

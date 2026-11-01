@@ -69,6 +69,8 @@ code = "finn.shells.pynq.linker:BlockDesignLinker"
 tool = "vivado"
 board_keys = ["board_part"]
 image = "bit"
+# Vivado assigns an AXI-Lite target behind the interconnect 128 bytes at least (BD 41-1075).
+least_range = 128
 
 [runtimes.pynq]
 # The PYNQ driver, over the board's Overlay, allocate and MMIO.

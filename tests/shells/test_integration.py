@@ -11,7 +11,9 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
 from qonnx.core.datatype import DataType
+from qonnx.core.modelwrapper import ModelWrapper
 from support.ipxact_ports import AXILITE
 from support.models import choose_memories, kernel_model, zynq_parent
 from support.packaging import verified_parent
@@ -19,6 +21,8 @@ from support.refusals import refused
 
 from finn.core.graph.annotations.outputs import OUTPUT_IP, OUTPUT_VLNV
 from finn.core.graph.partition import partition_body
+from finn.custom_op.kernels.shell import Configured, configured_network
+from finn.shells import integration
 from finn.shells.integration import (
     CORE,
     MAIN,
@@ -173,6 +177,43 @@ def test_a_control_bus_takes_its_aperture_and_the_least_window_at_least() -> Non
         message="s_axilite: an AXI-Lite bus with no awaddr",
     ):
         _range(bare, 4096)
+
+
+def test_a_movers_window_is_its_control_bus_s_range_holding_its_endpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On a row whose least window (16 bytes) is less than a mover's control bus takes (64),
+    each mover's window is its bus's range, as its endpoint's; a description placing an
+    endpoint outside its unit's window is refused."""
+
+    def narrowed(model: ModelWrapper, name: str) -> tuple[Configured, tuple[tuple[str, str], ...]]:
+        point, boundary = configured_network(model, name)
+        assert point.row.control is not None
+        control = replace(point.row.control, least_window=16)
+        return replace(point, row=replace(point.row, control=control)), boundary
+
+    monkeypatch.setattr(integration, "configured_network", narrowed)
+    described = describe(zynq_parent(tmp_path))
+    assert [(unit.name, unit.window) for unit in described.units] == [
+        ("in0", 64),
+        ("in1", 64),
+        ("DataflowCore_0", None),
+        ("out0", 64),
+    ]
+    assert all(each.range == described.unit(each.unit).window for each in described.endpoints)
+    with refused(
+        "endpoint-outside-unit",
+        error=IntegrationError,
+        owner="describe",
+        message="^in0/s_axi_control: 64 bytes at offset 0 lie outside its unit's window of 16$",
+    ):
+        replace(
+            described,
+            units=tuple(
+                unit if unit.window is None else replace(unit, window=16)
+                for unit in described.units
+            ),
+        )
 
 
 def test_a_core_named_as_a_movers_unit_is_refused(tmp_path: Path) -> None:

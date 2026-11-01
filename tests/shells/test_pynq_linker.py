@@ -8,6 +8,7 @@ No Vivado runs: the runner's tests link through a fake (``test_pynq_runner``).""
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
@@ -139,16 +140,25 @@ def test_a_row_without_a_fixed_shell_is_not_linked(described: Integration) -> No
         linked_row(replace(described, row=("ip", "Ultra96")))
 
 
+def ranged(described: Integration, ranges: Iterable[int]) -> Integration:
+    """``described``, its endpoints of ``ranges`` in order, each mover's window its control
+    bus's range."""
+    endpoints = tuple(replace(each, range=size) for each, size in zip(described.endpoints, ranges))
+    sizes = {each.unit: each.range for each in endpoints}
+    units = tuple(
+        unit if unit.window is None else replace(unit, window=sizes[unit.name])
+        for unit in described.units
+    )
+    return replace(described, units=units, endpoints=endpoints)
+
+
 def test_the_block_design_assigns_each_control_bus_the_address_it_returns(
     described: Integration,
 ) -> None:
     """One map: the block design assigns each control bus the offset and range ``placement``
     gives, which the link returns, whatever the window: here 64 KiB a bus, which the
     template's own procedure would have placed 4 KiB apart."""
-    wide = replace(
-        packaged(described),
-        endpoints=tuple(replace(each, range=0x1_0000) for each in described.endpoints),
-    )
+    wide = ranged(packaged(described), [0x1_0000] * len(described.endpoints))
     row = linked_row(wide)
     assigned = [
         line for line in block_design(wide, row).splitlines() if line.startswith("assign_bd")
@@ -172,12 +182,7 @@ def test_the_block_design_places_each_window_as_the_shell_s_rules_do(
     itself, at the offsets the shell's rules span (``placed_windows``), the one function
     both read."""
     ranges = (0x1000, 0x1_0000, 0x1000)
-    mixed = replace(
-        described,
-        endpoints=tuple(
-            replace(each, range=size) for each, size in zip(described.endpoints, ranges)
-        ),
-    )
+    mixed = ranged(described, ranges)
     row = linked_row(mixed)
     assert row.fixed is not None
     offsets = [each.offset for each in placement(mixed, row)]
