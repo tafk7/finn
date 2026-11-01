@@ -37,6 +37,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from string import Formatter
 from typing import Any
 
 from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
@@ -333,7 +334,7 @@ def _offers(
         if kind in (offer.kind for offer in offers):
             raise valid.Invalid(f"{here}: {where} offers the {kind} kind once")
         movers = []
-        for name in valid.typed(table["movers"], list, f"{here}.movers"):
+        for name in valid.texts(table["movers"], f"{here}.movers"):
             if name not in declared.movers:
                 raise valid.Invalid(
                     f"{here}.movers: {name!r} is not a declared mover kind "
@@ -410,6 +411,19 @@ def _optional_text(facts: Mapping[str, Any], key: str, where: str) -> str | None
     return None if key not in facts else valid.text(facts[key], f"{where}.{key}")
 
 
+def _caveat(facts: Mapping[str, Any], where: str) -> str | None:
+    """A shell's ``caveat``: a template naming its board (``{board}``) and its part
+    (``{part}``), and nothing else."""
+    template = _optional_text(facts, "caveat", where)
+    for _, name, spec, conversion in Formatter().parse(template or ""):
+        if name is not None and (name not in ("board", "part") or spec or conversion):
+            raise valid.Invalid(
+                f"{where}.caveat names {{board}} and {{part}} only, not {{{name}}} "
+                f"in {template!r}"
+            )
+    return template
+
+
 def _row(shell: Shell, board: str | None, declared: Declarations) -> ShellRow:
     """The row of ``shell`` on ``board`` (``None`` on a shell of any part), its board
     entry's facts in place of the shell's."""
@@ -439,12 +453,11 @@ def _row(shell: Shell, board: str | None, declared: Declarations) -> ShellRow:
         assert linker is not None
         versions = Versions(tool=linker.tool, spec=",".join(specs))
         _clauses(versions.spec)
-    timed = facts.get("timed", [])
+    timed = valid.texts(facts.get("timed", []), f"{where}.timed")
+    template = _caveat(facts, where)
     caveat = None
-    if board is not None and board not in valid.typed(timed, list, f"{where}.timed"):
-        template = _optional_text(facts, "caveat", where)
-        part = declared.board(board).part
-        caveat = None if template is None else template.format(board=board, part=part)
+    if board is not None and board not in timed and template is not None:
+        caveat = template.format(board=board, part=declared.board(board).part)
     return ShellRow(
         shell=shell.name,
         board=board,

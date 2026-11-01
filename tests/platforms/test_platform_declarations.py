@@ -309,18 +309,49 @@ def test_a_shell_based_on_another_replaces_each_key_it_states(tmp_path: Path) ->
     assert found.shell("narrow").based_on == "pynq"
 
 
-def test_a_fact_not_of_its_type_is_refused_when_its_row_is_read(tmp_path: Path) -> None:
-    path = declared(
-        tmp_path,
-        '[shells.broken]\nbased_on = "pynq"\ncontrol_budget = "nine"\n',
-    )
+@pytest.mark.parametrize(
+    "fact, named",
+    [
+        ('control_budget = "nine"', "control_budget is a whole number"),
+        ('supply = [{ kind = "moved", movers = [{}] }]', "supply[0].movers[0] is a non-empty"),
+        ('caveat = "on {board.missing}"', "caveat names {board} and {part} only"),
+    ],
+    ids=["a count not a number", "a mover kind not a name", "a caveat naming another field"],
+)
+def test_a_fact_not_of_its_type_is_refused_when_its_row_is_read(
+    tmp_path: Path, fact: str, named: str
+) -> None:
+    path = declared(tmp_path, f'[shells.broken]\nbased_on = "pynq"\n{fact}\n')
     found = load([path], environ=FINN_ONLY)
     with refused(
         "declaration-invalid", error=TargetRefused, owner=f"{path}: shells.broken"
     ) as caught:
         shell_row("broken", "Ultra96", found)
-    assert "control_budget" in str(caught.error)
+    assert named in str(caught.error)
     assert ("declaration-invalid", "shells.broken") in findings(found)
+
+
+def test_checking_goes_on_past_a_malformed_shell_and_code_that_fails_to_import(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each malformed declaration is a finding owned by it, and code whose module raises
+    as it is imported is ``code-unimportable``, whatever it raises: the rest is checked."""
+    (tmp_path / "failing_platform_code.py").write_text('raise RuntimeError("it fails")\n')
+    monkeypatch.syspath_prepend(str(tmp_path))
+    path = declared(
+        tmp_path,
+        '[movers.failing]\ncode = "failing_platform_code:Mover"\nkinds = ["moved"]\n'
+        '[shells.unhashable]\nbased_on = "pynq"\nsupply = [{ kind = "moved", movers = [{}] }]\n'
+        '[shells.misspelt]\nbased_on = "pynq"\ncaveat = "on {board.missing}"\n',
+    )
+    found = findings(load([path], environ=FINN_ONLY))
+    assert {
+        ("code-unimportable", "movers.failing"),
+        ("declaration-invalid", "shells.unhashable"),
+        ("declaration-invalid", "shells.misspelt"),
+    } == set(found)
+    with refused("code-unimportable", error=TargetRefused, message="it fails"):
+        code("failing_platform_code:Mover")
 
 
 # -- resolving through the declarations --------------------------------------------------

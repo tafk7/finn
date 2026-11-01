@@ -507,13 +507,13 @@ def declarations() -> Declarations:
 
 def code(reference: str) -> object:
     """The object a declaration's ``code`` names (``module:attr``), imported now;
-    refused if it does not import (``code-unimportable``)."""
+    refused if it does not import, whatever its module raises (``code-unimportable``)."""
     module, _, attribute = reference.partition(":")
     try:
         found: object = importlib.import_module(module)
         for part in attribute.split("."):
             found = getattr(found, part)
-    except (ImportError, AttributeError) as error:
+    except Exception as error:  # importing runs the module, which may raise anything
         raise TargetRefused(
             "code-unimportable", reference, f"{reference} does not import: {error}"
         ) from None
