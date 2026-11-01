@@ -34,7 +34,7 @@ from finn.kernels.laws import Axis
 from finn.kernels.library import library_module
 from finn.kernels.port_model import InPort
 from finn.kernels.sides import Side
-from finn.kernels.thresholding import ThresholdingAxiKernel, c
+from finn.kernels.thresholding import ThresholdingKernel, c
 from finn.kernels.values.domains import Integer
 from finn.kernels.values.semantics import IntegerTensor, IntegerTensorValue, integer_shape
 
@@ -51,7 +51,7 @@ def threshold(
     memory: dict[str, object] | None = None,
     axilite: bool = False,
     deep: bool = False,
-) -> ThresholdingAxiKernel:
+) -> ThresholdingKernel:
     """On one row of channels, the table's rows (with one row shared, PE of them); with
     several sets, given their set indices, one an input beat. PE is committed as a choice;
     ``None`` leaves it open."""
@@ -85,7 +85,7 @@ def threshold(
         if set_tensor is not None:
             facts["set_tensor"] = set_tensor
         return controlled(
-            ThresholdingAxiKernel, facts, use_axilite=True, deep_pipeline=deep, **factors
+            ThresholdingKernel, facts, use_axilite=True, deep_pipeline=deep, **factors
         )
     report = base.try_with_choices(use_axilite=axilite, deep_pipeline=deep, **factors)
     assert report.accepted
@@ -108,7 +108,7 @@ def test_threshold_states_its_result_type_initial_table_and_configuration() -> N
     assert threshold(bias=-4).result_dtype.name == "INT3"
     narrow_negative = threshold(bias=-5)
     assert narrow_negative.result_dtype.name == "INT33"
-    assert isinstance(narrow_negative.inspect(ThresholdingAxiKernel.netlist).result, Rejected)
+    assert isinstance(narrow_negative.inspect(ThresholdingKernel.netlist).result, Rejected)
     assert inspection.validity(narrow_negative).status == "refused"
     enabled = library_module(threshold(axilite=True, deep=True))
     assert dict(enabled.parameters)["USE_AXILITE"] == 1
@@ -178,7 +178,7 @@ def test_several_sets_without_their_indices_refuse_the_set_port_s_order() -> Non
     # Its rule refuses such a thresholding (``sets_indexed``); the set port's order reads the
     # indices, and refuses the same way rather than read what is not given.
     two_sets = (((-2, 0, 3), (-1, 1, 4)), ((-3, 0, 5), (-2, 0, 6)))
-    answer = threshold_base(table=two_sets).query(ThresholdingAxiKernel.set_sequence)
+    answer = threshold_base(table=two_sets).query(ThresholdingKernel.set_sequence)
     assert isinstance(answer, Rejected)
     assert [(finding.code, finding.owner) for finding in answer.findings] == [
         ("threshold-set-channel", "set_sequence")
@@ -188,22 +188,22 @@ def test_several_sets_without_their_indices_refuse_the_set_port_s_order() -> Non
 def test_a_single_set_refuses_its_idle_set_port_s_order() -> None:
     # One set takes no set channel: its set port is idle, and the port's order is refused
     # with the kernel's set-channel code, not marked inapplicable.
-    answer = threshold_base().query(ThresholdingAxiKernel.set_sequence)
+    answer = threshold_base().query(ThresholdingKernel.set_sequence)
     assert isinstance(answer, Rejected)
     assert [(finding.code, finding.owner, finding.message) for finding in answer.findings] == [
         ("threshold-set-channel", "set_sequence", "a single threshold set takes no set channel")
     ]
 
 
-class Reselected(ThresholdingAxiKernel):
+class Reselected(ThresholdingKernel):
     """A thresholding redeclaring its set port as the library declares it; the input port
     it governs is inherited."""
 
     set = InPort(
-        tensor=ThresholdingAxiKernel.set_tensor,
-        sequence=ThresholdingAxiKernel.set_sequence,
+        tensor=ThresholdingKernel.set_tensor,
+        sequence=ThresholdingKernel.set_sequence,
         governs="input",
-        dtype=ThresholdingAxiKernel.selector_dtype,
+        dtype=ThresholdingKernel.selector_dtype,
     )
 
 
@@ -221,7 +221,7 @@ def test_a_subclass_redeclaring_a_selector_groups_it_by_the_inherited_port_it_go
     )
     choices = dict(use_axilite=False, deep_pipeline=False, pe=1, **AUTO_MEMORY)
     points = []
-    for cls in (ThresholdingAxiKernel, Reselected):
+    for cls in (ThresholdingKernel, Reselected):
         report = design_space(cls(**facts)).try_with_choices(**choices)
         assert report.accepted, report.broken
         assert inspection.validity(report.instance).status == "valid"
@@ -235,8 +235,8 @@ def test_a_subclass_redeclaring_a_selector_groups_it_by_the_inherited_port_it_go
 def test_threshold_partial_dtype_query_does_not_adopt_implementation_decisions() -> None:
     base = threshold_base()
     assert base.result_dtype.name == "INT3"
-    assert isinstance(base.query(ThresholdingAxiKernel.deep_pipeline), Unresolved)
-    assert isinstance(base.inspect(ThresholdingAxiKernel.netlist).result, Unresolved)
+    assert isinstance(base.query(ThresholdingKernel.deep_pipeline), Unresolved)
+    assert isinstance(base.inspect(ThresholdingKernel.netlist).result, Unresolved)
 
 
 def test_threshold_rejects_unsupported_profiles_and_malformed_tables() -> None:
@@ -247,8 +247,7 @@ def test_threshold_rejects_unsupported_profiles_and_malformed_tables() -> None:
         threshold(bias=-10),
     )
     assert all(
-        isinstance(point.inspect(ThresholdingAxiKernel.netlist).result, Rejected)
-        for point in profiles
+        isinstance(point.inspect(ThresholdingKernel.netlist).result, Rejected) for point in profiles
     )
     assert all(inspection.validity(point).status == "refused" for point in profiles)
     # A table with no sets axis is refused on its facts, before any choice is set.
@@ -273,7 +272,7 @@ def test_threshold_rejects_unsupported_profiles_and_malformed_tables() -> None:
         platform=FULL_DSP48E2,
     )
     with refused("literal-unrecognized", error=DefinitionError, message="IntegerTensorValue"):
-        ThresholdingAxiKernel(**facts, thresholds=(((-2, 0, 3), (-1, 1, 4)),))
+        ThresholdingKernel(**facts, thresholds=(((-2, 0, 3), (-1, 1, 4)),))
     for malformed in ((), (((0,), (0, 1)),), (([-2, 0, 3],),)):
         with pytest.raises(TypeError, match="integer tensor"):
             IntegerTensorValue.of(malformed)
@@ -284,15 +283,15 @@ def test_threshold_rejects_unsupported_profiles_and_malformed_tables() -> None:
     assert threshold_base().try_with_choices(pe=2).accepted
 
 
-class NarrowInput(ThresholdingAxiKernel):
+class NarrowInput(ThresholdingKernel):
     """A thresholding whose input port takes only elements of up to 4 bits."""
 
     input = InPort(
         label="input",
         transport=Axis(bus="s_axis"),
-        tensor=ThresholdingAxiKernel.input_tensor,
-        schedule=ThresholdingAxiKernel.schedule,
-        index=ThresholdingAxiKernel.indices,
+        tensor=ThresholdingKernel.input_tensor,
+        schedule=ThresholdingKernel.schedule,
+        index=ThresholdingKernel.indices,
         lanes=(c,),
         admits=Integer(max_bits=4),
     )
@@ -317,7 +316,7 @@ def test_a_refused_input_port_leaves_its_kernels_domains_and_refuses_its_product
     taken = narrow("INT4")
     assert inspection.validity(taken).status != "refused"
     point = narrow("INT8")
-    assert point.field(ThresholdingAxiKernel.pe).candidates() == Available((1, 2))
+    assert point.field(ThresholdingKernel.pe).candidates() == Available((1, 2))
     validity = inspection.validity(point)
     assert validity.status == "refused"
     assert [piece.owner for piece in validity.pieces] == ["input.element_taken"]
@@ -327,11 +326,11 @@ def test_a_refused_input_port_leaves_its_kernels_domains_and_refuses_its_product
     assert [piece.owner for piece in inspection.validity(committed.instance).pieces] == [
         "input.element_taken"
     ]
-    assert isinstance(committed.instance.query(ThresholdingAxiKernel.netlist), Rejected)
-    assert isinstance(committed.instance.query(ThresholdingAxiKernel.frame_cycles), Rejected)
+    assert isinstance(committed.instance.query(ThresholdingKernel.netlist), Rejected)
+    assert isinstance(committed.instance.query(ThresholdingKernel.frame_cycles), Rejected)
 
 
-def placed_on(channels: int, table: IntegerTensor) -> ThresholdingAxiKernel:
+def placed_on(channels: int, table: IntegerTensor) -> ThresholdingKernel:
     """The kernel between two boundary channels of three rows of ``channels``, PE open."""
     shape = (3, channels)
 
@@ -353,7 +352,7 @@ def placed_on(channels: int, table: IntegerTensor) -> ThresholdingAxiKernel:
                 platform=FULL_DSP48E2,
             ),
             "activate": Facts(
-                ThresholdingAxiKernel,
+                ThresholdingKernel,
                 {
                     "threshold_dtype": DataType["INT5"],
                     "thresholds": integer_tensor(table),
@@ -364,7 +363,7 @@ def placed_on(channels: int, table: IntegerTensor) -> ThresholdingAxiKernel:
             ),
         }
     )
-    kernel: ThresholdingAxiKernel = network.member("activate")
+    kernel: ThresholdingKernel = network.member("activate")
     return kernel
 
 
@@ -374,12 +373,12 @@ def test_a_placed_table_has_one_row_or_a_row_a_channel() -> None:
     row = (-2, 0, 3)
     for table in (((row,),), (tuple(row for _ in range(6)),)):
         point = placed_on(6, table)
-        assert point.field(ThresholdingAxiKernel.pe).candidates() == Available((1, 2, 3, 6))
+        assert point.field(ThresholdingKernel.pe).candidates() == Available((1, 2, 3, 6))
         chosen = point.try_with_choices(pe=3, use_axilite=False, deep_pipeline=False, **AUTO_MEMORY)
         assert chosen.accepted
         assert dict(library_module(chosen.instance).parameters)["C"] == len(table[0])
     other = placed_on(6, ((row, row),)).try_with_choices(pe=1).instance
-    found = other.query(ThresholdingAxiKernel.schedule)
+    found = other.query(ThresholdingKernel.schedule)
     assert isinstance(found, Rejected)
     assert {finding.code for finding in found.findings} == {"threshold-rows"}
 
@@ -433,8 +432,8 @@ def test_a_writable_table_holds_thresholds_of_another_signedness_than_the_input(
         bias=0,
         platform=FULL_DSP48E2,
     )
-    space = controlled(ThresholdingAxiKernel, facts)
-    (viable,) = inspection.viable(space, [ThresholdingAxiKernel.use_axilite])
+    space = controlled(ThresholdingKernel, facts)
+    (viable,) = inspection.viable(space, [ThresholdingKernel.use_axilite])
     assert viable.cases == (True,)
     (refused_value,) = [
         item for item in viable.values or () if isinstance(item, inspection.Refused)

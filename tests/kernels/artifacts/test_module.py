@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -35,6 +36,8 @@ from finn.kernels.artifacts.module import (
     LinkEnd,
     RegisterMap,
     fingerprint,
+    instance_collisions,
+    instance_name,
     merge,
     module_name,
 )
@@ -91,7 +94,7 @@ def link(source: str | None, sink: str | None, *, width: int = 8) -> Link:
 def test_a_leaf_spells_its_parameters_and_holds_only_its_own_pins() -> None:
     leaf = stage()
     assert leaf.parameters == (("FLAG", True), ("WIDTH", 8))
-    assert module_name(leaf) == "stage"
+    assert module_name(leaf, {}) == "stage"
     with pytest.raises(BuildError, match="canonical RTL spellings"):
         replace(leaf, abi=replace(leaf.abi, parameters=(("FLAG", "True"), ("WIDTH", "8"))))
     with pytest.raises(BuildError, match="none of its inputs"):
@@ -191,15 +194,62 @@ def composed(*, data: bytes = b"00\n", stem: str = "top") -> Composed:
     return Composed("test.top", "1", stem, ROOT, fragment)
 
 
-def test_a_composed_module_is_named_by_its_stem_and_fingerprint() -> None:
+@pytest.fixture(name="roots")
+def _roots(tmp_path: Path) -> dict[str, Path]:
+    """The ``fixture`` root, holding the stage's source."""
+    (tmp_path / "stage.sv").write_text("module stage; endmodule\n")
+    return {"fixture": tmp_path}
+
+
+def test_a_composed_module_is_named_by_its_stem_and_fingerprint(roots: dict[str, Path]) -> None:
     module = composed()
-    name = module_name(module)
-    assert name.startswith("top__") and len(name) == len("top__") + 16
+    name = module_name(module, roots)
+    assert name == f"top_{fingerprint(module, roots)[:16]}"
     # Equal values, equal fingerprints; any change, a data file's bytes among them, renames.
-    assert fingerprint(composed()) == fingerprint(module) and module_name(composed()) == name
-    assert module_name(composed(data=b"01\n")) != name
-    assert module_name(composed(stem="other")).startswith("other__")
-    assert fingerprint(stage()) != fingerprint(stage(width=4))
+    assert fingerprint(composed(), roots) == fingerprint(module, roots)
+    assert module_name(composed(), roots) == name
+    assert module_name(composed(data=b"01\n"), roots) != name
+    assert fingerprint(stage(), roots) != fingerprint(stage(width=4), roots)
+
+
+def test_a_composed_module_s_digest_leaves_its_name_out(roots: dict[str, Path]) -> None:
+    # One netlist under two stems: one digest, two names, each its stem's.
+    other = composed(stem="other")
+    assert fingerprint(other, roots) == fingerprint(composed(), roots)
+    assert module_name(other, roots) == f"other_{fingerprint(composed(), roots)[:16]}"
+
+
+def test_a_module_s_name_covers_its_sources_bytes_not_where_they_are(tmp_path: Path) -> None:
+    """A source's bytes are the module's content: another file at the same path under its
+    root renames the module; the same bytes under another directory do not."""
+    names = {}
+    for case, text in (("a", "assign o = i;"), ("b", "assign o = ~i;"), ("c", "assign o = i;")):
+        (tmp_path / case).mkdir()
+        (tmp_path / case / "stage.sv").write_text(f"module stage; {text} endmodule\n")
+        names[case] = module_name(composed(), {"fixture": tmp_path / case})
+    assert names["a"] != names["b"] and names["a"] == names["c"]
+    with pytest.raises(BuildError, match="no source root resolves 'fixture'"):
+        module_name(composed(), {})
+
+
+def test_an_instance_is_its_label_a_repeated_segment_dropped() -> None:
+    assert instance_name("MatMul_0.compute.packed") == "u_MatMul_0_compute_packed"
+    # A stage named for its module, and the module in it: said once.
+    assert instance_name("x_out0.output_adapter.vpc.vpc") == "u_x_out0_output_adapter_vpc"
+    assert instance_name("x_out0.adapter.input_gen.input_gen") == "u_x_out0_adapter_input_gen"
+    # Only a segment that repeats the one before it.
+    assert instance_name("a.b.a") == "u_a_b_a" and instance_name("a.a.a") == "u_a"
+
+
+def test_two_labels_of_one_instance_name_make_no_module() -> None:
+    # A channel's member and a kernel's member a segment apart, and a repeat dropped.
+    labels = ("MatMul_0_param0.source", "MatMul_0.param0.source", "x.vpc.vpc", "x.vpc", "y")
+    assert instance_collisions(labels) == {
+        "u_MatMul_0_param0_source": ("MatMul_0_param0.source", "MatMul_0.param0.source"),
+        "u_x_vpc": ("x.vpc.vpc", "x.vpc"),
+    }
+    with pytest.raises(BuildError, match=r"\['a.b', 'a_b'\] each u_a_b"):
+        Composed("test.top", "1", "top", ROOT, Fragment((("a.b", stage()), ("a_b", stage()))))
 
 
 def test_a_composed_module_links_only_pins_that_exist() -> None:

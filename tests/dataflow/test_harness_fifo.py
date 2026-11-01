@@ -775,10 +775,20 @@ def test_the_recorder_keeps_a_strategys_whole_partition_with_each_channels_answe
     with FifoRecorder() as recorder:
         SizeFifos().explore(explorer, point)
     calls = {call.channel: call for call, _ in recorder.recorded()}
-    assert set(calls) == {"x", "w1", "hidden", "levels", "w2", "y"}
+    assert set(calls) == {
+        "x",
+        "MatMul_0_param0",
+        "MatMul_0_out0",
+        "Thresholding_0_out0",
+        "MatMul_1_param0",
+        "y",
+    }
     assert {call.line.kind for call in calls.values()} == {DEPTH, NOT_MODELLED}
-    assert calls["hidden"].line == calls["levels"].line == Line(DEPTH, 0)
-    assert calls["levels"].accept is not None and calls["hidden"].accept is not None
+    assert calls["MatMul_0_out0"].line == calls["Thresholding_0_out0"].line == Line(DEPTH, 0)
+    assert (
+        calls["Thresholding_0_out0"].accept is not None
+        and calls["MatMul_0_out0"].accept is not None
+    )
     partitions = {call.partition for call in calls.values()}
     assert len(partitions) == 1 and None not in partitions
     (partition,) = partitions
@@ -810,9 +820,16 @@ def test_a_call_made_while_least_depth_is_a_test_stand_in_is_stubbed_and_never_c
         patch.setattr(fifo_sizing, "least_depth", lambda supply, accept, period: 300)
         SizeFifos().explore(explorer, point)
     calls = {call.channel: call for call, _ in recorder.recorded()}
-    assert set(calls) == {"x", "w1", "hidden", "levels", "w2", "y"}
-    assert calls["hidden"].line.kind == calls["levels"].line.kind == STUBBED
-    assert "least_depth stubbed in the line's test" in calls["hidden"].line.reason
+    assert set(calls) == {
+        "x",
+        "MatMul_0_param0",
+        "MatMul_0_out0",
+        "Thresholding_0_out0",
+        "MatMul_1_param0",
+        "y",
+    }
+    assert calls["MatMul_0_out0"].line.kind == calls["Thresholding_0_out0"].line.kind == STUBBED
+    assert "least_depth stubbed in the line's test" in calls["MatMul_0_out0"].line.reason
     assert not any(call.line == Line(DEPTH, 300) for call in calls.values())
     table = fifo.table(recorder.recorded())
     assert table.counts["stubbed"] == 2 and table.counts["not_modelled"] == 4
@@ -822,7 +839,9 @@ def test_a_call_made_while_least_depth_is_a_test_stand_in_is_stubbed_and_never_c
     # With the stand-in gone, the same calls are the line's again.
     with FifoRecorder() as again:
         SizeFifos().explore(explorer, point)
-    assert {call.channel: call.line for call, _ in again.recorded()}["hidden"] == Line(DEPTH, 0)
+    assert {call.channel: call.line for call, _ in again.recorded()}["MatMul_0_out0"] == Line(
+        DEPTH, 0
+    )
 
 
 @pytest.mark.parametrize("name", ["least_depth", "sides", "keeps", "simulate", "within"])

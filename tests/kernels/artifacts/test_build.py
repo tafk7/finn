@@ -81,10 +81,10 @@ def test_a_composed_module_is_named_from_what_it_is_built_from(tmp_path: Path) -
     roots = {"fixture": root}
     emitted = emit_module(_composed(), tmp_path / "a", roots=roots)
     name = emitted.entry_point
-    assert name.startswith("generated_top__")
+    assert name.startswith("generated_top_")
     assert emitted.sources == ("helper.sv", "core.sv", name + ".sv")
     # The emitted file declares the module of that name, elaborating as the top.
-    assert read(_composed(), (emitted.directory / (name + ".sv")).read_text()).top == name
+    assert read(_composed(), (emitted.directory / (name + ".sv")).read_text(), name).top == name
     # Equal modules, equal names; a changed data file, reset domain or alignment renames.
     assert emit_module(_composed(), tmp_path / "b", roots=roots).entry_point == name
     assert emit_module(_composed(data=b"02\n"), tmp_path / "c", roots=roots).entry_point != name

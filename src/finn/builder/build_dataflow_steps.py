@@ -92,8 +92,10 @@ from finn.transformation.streamline import Streamline
 #: The steps' logger.
 _LOG = logging.getLogger(__name__)
 
-#: Where step_package_partition packages the partition, under the output directory.
-STITCHED_IP_DIR = "stitched_ip"
+#: Where step_package_partition packages a core, in the core's directory: the output
+#: directory's named as its node, which holds its body (``DataflowCore_0/``); its testbench
+#: (``TESTBENCH_DIR``) is beside it.
+IP_DIR = "ip"
 
 
 def _cleaned(model: ModelWrapper, override_inpsize: int | list[int] | None = None) -> ModelWrapper:
@@ -449,18 +451,18 @@ def _refuse_shell(cfg: DataflowBuildConfig, step: str) -> None:
 def step_package_partition(
     model: ModelWrapper, cfg: DataflowBuildConfig, *, ooc_synth: bool = False
 ) -> ModelWrapper:
-    """Package the partition as an IP named ``partition`` into ``stitched_ip/``, with its
-    interface description (``interface.json``) and an XSim testbench in
-    ``stitched_ip/testbench``, which streams a frame of the partition's inputs drawn from
-    their datatypes. The partition's body records the IP, so a shell's integration
-    reuses it.
+    """Package the partition as an IP into ``ip/`` in its directory (``DataflowCore_0/`` in
+    the output directory, beside its body), with its interface description
+    (``interface.json``), and an XSim testbench into ``testbench/`` beside it, which streams
+    a frame of the partition's inputs drawn from their datatypes. The partition's body
+    records the IP, so a shell's integration reuses it.
 
     ``ooc_synth``: synthesize the IP out of context; its utilization report is listed
     under this step, and step_resources_report reads it. An IP the store holds already
     is reused, not packaged again, and its line says so."""
-    directory = Path(cfg.output_dir) / STITCHED_IP_DIR
     toolchain = cfg.step_toolchain("step_package_partition")
     node, body, body_file = partition_body(model)
+    directory = Path(cfg.output_dir) / node.name / IP_DIR
     packaging = PackagePartition(
         node.name,
         run_synth=ooc_synth,
@@ -479,7 +481,7 @@ def step_package_partition(
         )
     if ooc_synth:
         reported(partition_utilization_report(directory))
-    testbench = directory / TESTBENCH_DIR
+    testbench = directory.parent / TESTBENCH_DIR
     write_testbench(body, testbench, generated_frame(body), toolchain=toolchain, name=node.name)
     _LOG.info(f"XSim testbench on a generated frame written into {testbench} (run.sh runs it)")
     return model

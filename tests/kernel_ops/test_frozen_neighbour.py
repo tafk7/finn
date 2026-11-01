@@ -63,32 +63,33 @@ def _frozen(point: Kernel, port: str, label: str) -> Side:
 
 
 def test_an_upstream_neighbour_gives_an_output_side_and_a_downstream_one_an_input_side() -> None:
-    """``activate`` alone: ``first`` produces hidden, ``second`` reads levels. Each edge's
-    side is the neighbour's port's at its stored choices, labelled below it: hidden's
-    producer an output port's (with its width), levels' consumer an input port's (none).
-    No edge is a port of the slice, and both channels read valid."""
+    """``Thresholding_0`` alone: ``MatMul_0`` produces MatMul_0_out0, ``MatMul_1`` reads
+    Thresholding_0_out0. Each edge's side is the neighbour's port's at its stored choices, labelled
+    below it: MatMul_0_out0's producer an output port's (with its width), Thresholding_0_out0's
+    consumer an input port's (none). No edge is a port of the slice, and both channels read
+    valid."""
     model = kernel_model()
-    alone = _slice(model, "activate")
+    alone = _slice(model, "Thresholding_0")
     assert alone.boundary == ()
     nodes = {node.name: node for node in model.graph.node}
-    first = kernel_op(model, nodes["first"]).point()
-    second = kernel_op(model, nodes["second"]).point()
-    hidden, levels = alone.member("hidden"), alone.member("levels")
-    assert hidden.producer == _frozen(first, "y", "first.y")
+    first = kernel_op(model, nodes["MatMul_0"]).point()
+    second = kernel_op(model, nodes["MatMul_1"]).point()
+    hidden, levels = alone.member("MatMul_0_out0"), alone.member("Thresholding_0_out0")
+    assert hidden.producer == _frozen(first, "y", "MatMul_0.y")
     assert hidden.producer.direction is Direction.OUT and hidden.producer.width is not None
-    assert levels.consumer == _frozen(second, "x", "second.x")
+    assert levels.consumer == _frozen(second, "x", "MatMul_1.x")
     assert levels.consumer.direction is Direction.IN and levels.consumer.width is None
     assert hidden.consumer.kind is levels.producer.kind is SideKind.KERNEL
     assert inspection.validity(hidden).status == inspection.validity(levels).status == "valid"
 
 
 def _flipped(model: ModelWrapper, tensor: str, side: str) -> CoreComposition:
-    """``activate`` alone, declared with ``tensor``'s ``side`` (a neighbour's) given the
+    """``Thresholding_0`` alone, declared with ``tensor``'s ``side`` (a neighbour's) given the
     other direction, its width dropped (an input side states none); its stored choices
     bound."""
-    stored = _slice(model, "activate").chosen()
+    stored = _slice(model, "Thresholding_0").chosen()
     declared = declaration(
-        model, [node for node in model.graph.node if node.name == "activate"], name=CUT_NAME
+        model, [node for node in model.graph.node if node.name == "Thresholding_0"], name=CUT_NAME
     )
     each = declared.channels[tensor]
     given = getattr(each, side)
@@ -128,14 +129,14 @@ def test_a_neighbour_s_side_in_the_other_direction_is_refused_each_way() -> None
     model = kernel_model()
     for tensor, side, message in (
         (
-            "hidden",
+            "MatMul_0_out0",
             "producer",
-            "a channel's producer is an output port, and first.y is an input's",
+            "a channel's producer is an output port, and MatMul_0.y is an input's",
         ),
         (
-            "levels",
+            "Thresholding_0_out0",
             "consumer",
-            "a channel's consumer is an input port, and second.x is an output's",
+            "a channel's consumer is an input port, and MatMul_1.x is an output's",
         ),
     ):
         found = _flipped(model, tensor, side).validity(tensor)
@@ -149,70 +150,80 @@ def test_a_neighbour_s_side_in_the_other_direction_is_refused_each_way() -> None
 
 
 def test_a_neighbour_whose_stored_choices_are_refused_is_refused_by_name() -> None:
-    """``mm2``'s simd written raw past its domain: its stored choices are refused, so its
-    side is no fact. The slice {mm1, mt1} is refused, naming the edge, the neighbour, its
-    port and why, the replay's refusal its cause."""
+    """``MatMul_2``'s simd written raw past its domain: its stored choices are refused, so its
+    side is no fact. The slice {MatMul_1, Thresholding_1} is refused, naming the edge, the
+    neighbour, its port and why, the replay's refusal its cause."""
     model = chain_model(4)
-    write_raw(model, "mm2", "simd", 3)
+    write_raw(model, "MatMul_2", "simd", 3)
     with refused(
         "neighbour-unaccepted",
         error=KernelOpError,
-        owner="a1",
-        tensor="a1",
-        node="mm2",
+        owner="Thresholding_1_out0",
+        tensor="Thresholding_1_out0",
+        node="MatMul_2",
         message=re.escape(
-            "a1: its frozen neighbour mm2 (MatMul), at its port x, gives no accepted value: "
-            "its stored choices are refused"
+            "Thresholding_1_out0: its frozen neighbour MatMul_2 (MatMul), at its port x, gives no "
+            "accepted value: its stored choices are refused"
         ),
     ) as found:
-        _slice(model, "mm1", "mt1")
+        _slice(model, "MatMul_1", "Thresholding_1")
     (finding,) = found.error.findings
     assert dict(finding.details)["port"] == "x"
     assert [cause.code for cause in finding.causes] == ["choices-refused"]
 
 
 def test_a_neighbour_whose_side_waits_is_refused_by_name() -> None:
-    """``mt0``'s pe cleared: its output stream waits on it, so it is no fact; and so with
+    """``Thresholding_0``'s pe cleared: its output stream waits on it, so it is no fact; and so with
     no stored choice at all (its kernel bound to its facts, nothing set)."""
     model = chain_model(4)
     cleared = copy.deepcopy(model)
-    write_raw(cleared, "mt0", "pe", None)
+    write_raw(cleared, "Thresholding_0", "pe", None)
     message = re.escape(
-        "a0: its frozen neighbour mt0 (Thresholding), at its port output, gives no accepted "
-        "value: its side waits on an open choice"
+        "Thresholding_0_out0: its frozen neighbour Thresholding_0 (Thresholding), at its port "
+        "output, gives no accepted value: its side waits on an open choice"
     )
-    with refused("neighbour-unaccepted", error=KernelOpError, node="mt0", message=message):
-        _slice(cleared, "mm1", "mt1")
+    with refused(
+        "neighbour-unaccepted", error=KernelOpError, node="Thresholding_0", message=message
+    ):
+        _slice(cleared, "MatMul_1", "Thresholding_1")
     for key in kernel_op(model, model.graph.node[1]).choices():
-        write_raw(model, "mt0", key, None)
+        write_raw(model, "Thresholding_0", key, None)
     assert kernel_op(model, model.graph.node[1]).choices() == {}
-    with refused("neighbour-unaccepted", error=KernelOpError, node="mt0", message=message):
-        _slice(model, "mm1", "mt1")
+    with refused(
+        "neighbour-unaccepted", error=KernelOpError, node="Thresholding_0", message=message
+    ):
+        _slice(model, "MatMul_1", "Thresholding_1")
 
 
 def test_a_neighbour_open_on_a_choice_its_side_does_not_read_is_accepted() -> None:
-    """``mt0``'s memory style cleared: its validity is open, and its output's side, which
+    """``Thresholding_0``'s memory style cleared: its validity is open, and its output's side, which
     does not read it, is known. The side is the fact."""
     model = chain_model(4)
-    write_raw(model, "mt0", "ram_style", None)
+    write_raw(model, "Thresholding_0", "ram_style", None)
     mt0 = kernel_op(model, model.graph.node[1]).point()
     assert inspection.validity(mt0).status == "open"
-    part = _slice(model, "mm1", "mt1")
-    assert part.member("a0").producer == _frozen(mt0, "output", "mt0.output")
+    part = _slice(model, "MatMul_1", "Thresholding_1")
+    assert part.member("Thresholding_0_out0").producer == _frozen(
+        mt0, "output", "Thresholding_0.output"
+    )
 
 
 def test_a_tensor_read_inside_and_by_a_kernel_op_outside_is_refused_as_the_whole_reads_it() -> None:
-    """hidden is read by ``a``, in the slice, and by ``b``, a KernelOp beyond it: two
-    consumers, one a frozen neighbour. The slice reads it as the whole partition does, as
-    fan-out (``tensor-fan-out``), and so does the slice of its producer alone."""
+    """MatMul_0_out0 is read by ``Thresholding_0``, in the slice, and by ``Thresholding_1``, a
+    KernelOp beyond it: two consumers, one a frozen neighbour. The slice reads it as the whole
+    partition does, as fan-out (``tensor-fan-out``), and so does the slice of its producer alone."""
     model = fan_out_source().transform(ToKernelOps(TARGET))
-    for names in (("first", "a", "b"), ("a",), ("first",)):
+    for names in (
+        ("MatMul_0", "Thresholding_0", "Thresholding_1"),
+        ("Thresholding_0",),
+        ("MatMul_0",),
+    ):
         with refused(
             "tensor-fan-out",
             error=KernelOpError,
             owner="fan_out",
-            tensor="hidden",
-            message="hidden is read by a, b",
+            tensor="MatMul_0_out0",
+            message="MatMul_0_out0 is read by Thresholding_0, Thresholding_1",
         ):
             _slice(model, *names)
 
@@ -232,18 +243,19 @@ def _open(model: ModelWrapper, names: tuple[str, ...], tensor: str) -> CoreCompo
 
 
 def test_a_downstream_neighbour_brings_the_input_chain_it_needs_into_the_slice() -> None:
-    """Stage 7's chain, the slice {mm1, mt1}, ``mm2`` frozen: a1 needs the input generator
-    ``mm2`` requires, as in the whole partition, where an open boundary takes whatever
-    ``mt1`` sends (no chain). The edge channel's hops reach ``mm2`` from that chain's
-    stage; they, its sizing and its resources are the whole partition's."""
+    """Stage 7's chain, the slice {MatMul_1, Thresholding_1}, ``MatMul_2`` frozen:
+    Thresholding_1_out0 needs the input generator ``MatMul_2`` requires, as in the whole partition,
+    where an open boundary takes whatever ``Thresholding_1`` sends (no chain). The edge channel's
+    hops reach ``MatMul_2`` from that chain's stage; they, its sizing and its resources are the
+    whole partition's."""
     model = chain_model(4)
     whole = composition(model, model.graph.node)
-    part = _slice(model, "mm1", "mt1")
+    part = _slice(model, "MatMul_1", "Thresholding_1")
     assert part.boundary == ()
-    assert _open(model, ("mm1", "mt1"), "a1").member("a1").query(Channel.input_chain) == (
-        Available("none")
-    )
-    for name in ("a0", "a1"):
+    assert _open(model, ("MatMul_1", "Thresholding_1"), "Thresholding_1_out0").member(
+        "Thresholding_1_out0"
+    ).query(Channel.input_chain) == (Available("none"))
+    for name in ("Thresholding_0_out0", "Thresholding_1_out0"):
         assert part.member(name).query(Channel.input_chain) == Available("input_gen")
         assert beside(part, name) == beside(whole, name)
         assert part.hops(name) == whole.hops(name)
@@ -251,13 +263,13 @@ def test_a_downstream_neighbour_brings_the_input_chain_it_needs_into_the_slice()
         assert fifo_sizing.size(part.member(name), beside(part, name), 1024) == (
             fifo_sizing.size(whole.member(name), beside(whole, name), 1024)
         )
-    hops = part.hops("a1")
+    hops = part.hops("Thresholding_1_out0")
     assert isinstance(hops, OuterHops) and hops.consumer is not None
     stage = hops.consumer.source.instance
     assert stage is not None and stage.startswith("adapter.input_gen")
-    assert hops.consumer.sink.instance == "^mm2.compute.packed"
-    consumer = beside(part, "a1").consumer
-    assert consumer is not None and consumer.label == "mm2.x"
+    assert hops.consumer.sink.instance == "^MatMul_2.compute.packed"
+    consumer = beside(part, "Thresholding_1_out0").consumer
+    assert consumer is not None and consumer.label == "MatMul_2.x"
 
 
 def test_a_slice_s_netlist_and_module_are_refused_by_their_code() -> None:
@@ -265,35 +277,41 @@ def test_a_slice_s_netlist_and_module_are_refused_by_their_code() -> None:
     netlist and module are refused, each edge by name (``slice-not-emitted``), not by a
     bare error."""
     model = chain_model(4)
-    part = _slice(model, "mm1", "mt1")
+    part = _slice(model, "MatMul_1", "Thresholding_1")
     netlist, module = part.netlist(), part.answer(DataflowCoreKernel.module)
     assert isinstance(netlist, Rejected) and isinstance(module, Rejected)
     for found in (netlist, module):
         assert [(f.code, f.owner, dict(f.details)["tensor"]) for f in found.findings] == [
-            ("slice-not-emitted", "a0", "a0"),
-            ("slice-not-emitted", "a1", "a1"),
+            ("slice-not-emitted", "Thresholding_0_out0", "Thresholding_0_out0"),
+            ("slice-not-emitted", "Thresholding_1_out0", "Thresholding_1_out0"),
         ]
     (first, _) = netlist.findings
     assert first.message == (
-        "a slice is not emitted: its edge meets mt0.output, a frozen neighbour's port "
+        "a slice is not emitted: its edge meets Thresholding_0.output, a frozen neighbour's port "
         "outside its module, and no AXIS port of it"
     )
 
 
 def test_another_neighbour_is_another_design_space_of_the_same_class() -> None:
-    """``mm2`` at another simd reads another stream: a1's fact changes, its class does not.
-    The fact is the port beside a1 at ``mm2`` and its pace (``a1-frozen``), and a1's
-    neighbours, which FIFO sizing reads, follow it."""
+    """``MatMul_2`` at another simd reads another stream: Thresholding_1_out0's fact changes, its
+    class does not. The fact is the port beside Thresholding_1_out0 at ``MatMul_2`` and its pace
+    (``Thresholding_1_out0-frozen``), and Thresholding_1_out0's neighbours, which FIFO sizing reads,
+    follow it."""
     model = chain_model(4)
-    part = _slice(model, "mm1", "mt1")
-    write_raw(model, "mm2", "simd", 2)
-    other = _slice(model, "mm1", "mt1")
+    part = _slice(model, "MatMul_1", "Thresholding_1")
+    write_raw(model, "MatMul_2", "simd", 2)
+    other = _slice(model, "MatMul_1", "Thresholding_1")
     assert type(other.point) is type(part.point)
-    assert other.member("a1").consumer != part.member("a1").consumer
-    before, after = root_facts(part.point)["a1-frozen"], root_facts(other.point)["a1-frozen"]
+    assert (
+        other.member("Thresholding_1_out0").consumer != part.member("Thresholding_1_out0").consumer
+    )
+    before, after = (
+        root_facts(part.point)["Thresholding_1_out0-frozen"],
+        root_facts(other.point)["Thresholding_1_out0-frozen"],
+    )
     assert isinstance(before, Neighbours) and isinstance(after, Neighbours)
     assert after.consumer != before.consumer
     assert after.consumer_pace != before.consumer_pace
     for network, given in ((part, before), (other, after)):
-        found = beside(network, "a1")
+        found = beside(network, "Thresholding_1_out0")
         assert (found.consumer, found.consumer_pace) == (given.consumer, given.consumer_pace)

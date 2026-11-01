@@ -248,7 +248,7 @@ def measure_partition(
                 "beats": stitched.per_frame(name),
                 "busy": stitched.busy(name)[-1],
                 "interval": stitched.interval(name),
-                "first": stitched.of(name)[0][0] - stitched.of(next(iter(inputs)))[0][0],
+                "MatMul_0": stitched.of(name)[0][0] - stitched.of(next(iter(inputs)))[0][0],
             }
             for name in stitched.beats
         },
@@ -267,7 +267,7 @@ def table(result: dict[str, Any]) -> str:
         f" layers' beats {result['beats_sum']} (FINN {result['finn_sum']}).",
         "",
         "| layer | op | folding | beats | FINN | stitched span | stitched busy out"
-        " | alone II | alone latency | alone first frame |",
+        " | alone II | alone latency | alone MatMul_0 frame |",
         "|---|---|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for layer in result["layers"]:
@@ -278,13 +278,13 @@ def table(result: dict[str, Any]) -> str:
         )
     lines += [
         "",
-        "| stitched stream | beats/frame | busy | II | first beat |",
+        "| stitched stream | beats/frame | busy | II | MatMul_0 beat |",
         "|---|---:|---:|---:|---:|",
     ]
     for name, stream in result["streams"].items():
         lines.append(
             f"| {name} | {stream['beats']} | {stream['busy']} | {stream['interval']}"
-            f" | {stream['first']} |"
+            f" | {stream['MatMul_0']} |"
         )
     return "\n".join(lines)
 

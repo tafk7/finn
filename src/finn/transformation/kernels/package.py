@@ -7,11 +7,15 @@
 a ``DataflowCore``), and writes what CreateStitchedIP writes for
 the shells (MakeZYNQProject; CreateVitisXO and VitisLink; SlashLink):
 
-- an IP at ``<vivado_stitch_proj>/ip``, self-contained (its sources and data
-  files imported), named after the partition node: Vitis and SLASH take the
-  IP's name as the kernel type. Vivado packages it in the packaged-IP store
-  (``finn.toolchain.ip``), unless the store holds it already, and the stored
-  project is copied into the build's directory;
+- an IP at ``<directory>/ip``, ``directory`` the packaging project (a build's
+  ``DataflowCore_0/ip``, ``step_package_partition``; a ``package_`` build directory by
+  default), its sources and data files imported, named as its module
+  (``finn_dataflowcore_<digest>``, its content's digest, its sources' bytes among it: one
+  content, one VLNV) and shown as the partition node: Vitis and SLASH take the IP's name as
+  the kernel type. Vivado packages it in the packaged-IP store (``finn.toolchain.ip``),
+  unless the store holds it already, and the stored project is copied into ``directory``.
+  The IP names an include directory of the project (``../src/<dir>``), so it does not yet
+  stand outside it;
 - its bus interfaces declared from the module's ABI, none left to Vivado's
   inference: ``ap_clk``, ``ap_clk2x`` when an instance is pumped, ``ap_rst_n``,
   each boundary channel's AXI-Stream ``s_axis_<i>``/``m_axis_<j>``, each presented AXI-Lite
@@ -112,10 +116,10 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import shape
 from finn.custom_op.kernels.shell import Configured, configured_network, refuse_unverified
 from finn.dataflow.traversal import Traversal, one_pass, passes
-from finn.kernels.artifacts.build import EmittedModule, emit_module, instance_name
+from finn.kernels.artifacts.build import EmittedModule, emit_module
 from finn.kernels.artifacts.interface import INTERFACE_FILE, describe_interface
 from finn.kernels.artifacts.ipxact import interface_names, package_tcl, vlnv
-from finn.kernels.artifacts.module import Abi, declared_registers, module_name
+from finn.kernels.artifacts.module import Abi, declared_registers, instance_name, module_name
 from finn.kernels.artifacts.rtl import Declined, check_abi
 from finn.kernels.artifacts.sources import include_directories, is_header
 from finn.kernels.movers import MoverContract
@@ -213,16 +217,18 @@ def interface_description(
     model: ModelWrapper,
     point: Configured,
     boundary: Sequence[tuple[str, str]],
-    ip_name: str,
+    name: str,
 ) -> dict[str, Any]:
     """The interface description of a partition model's IP (``describe_interface``): its
-    name, VLNV and top, then the module's pins with the boundary facts of its streams, at
+    name (its module's), VLNV, top and display name (the partition node's, ``name``), then
+    the module's pins with the boundary facts of its streams, at
     the model's target (part and one_pass), each stream's order its free side's
     (``stream_order``: on a side the outside states, the statement's)."""
     built = read_target(model)
-    inputs, outputs = boundary_facts(model, point, boundary, ip_name)
+    inputs, outputs = boundary_facts(model, point, boundary, name)
+    top = module_name(point.module, source_roots())
     return {
-        "ip": {"name": ip_name, "vlnv": vlnv(ip_name), "top": module_name(point.module)},
+        "ip": {"name": top, "vlnv": vlnv(top), "top": top, "display_name": name},
         **describe_interface(
             point.module.abi.pins,
             {
@@ -247,6 +253,13 @@ def resources_of(counts: Mapping[str, int]) -> Resources:
     return Resources(**found, bram18=bram18)
 
 
+def source_roots() -> dict[str, Path]:
+    """The roots a core's modules copy their sources from, by name: FinnLib's
+    (``finnlib_root``). Emission reads them, and so does a module's name, which covers the
+    sources' bytes (``finn.kernels.artifacts.module.fingerprint``)."""
+    return {"finnlib": finnlib_root()}
+
+
 #: The hierarchical utilization report ``run_synth`` writes in the packaging project.
 UTILIZATION_REPORTS = "*_partition_util.rpt"
 
@@ -265,8 +278,8 @@ def partition_utilization_report(project: Path) -> Path:
 
 
 def ooc_member_resources(model: ModelWrapper, name: str, project: Path) -> dict[str, Any]:
-    """The out-of-context resources of a partition packaged as ``name`` (its node's name, its
-    module's) with ``run_synth`` in ``project``, per member of its network: the top's ``total``,
+    """The out-of-context resources of a partition, its node ``name``, packaged with
+    ``run_synth`` in ``project``, per member of its network: the top's ``total``,
     and each member's instances summed (``members``, by graph name). The instances are the
     module's that PackagePartition packaged (``configured_network``). An instance is its
     member's by its label (``instance_name``), below the member's node in the module; an
@@ -337,13 +350,13 @@ def check_elaborates(emitted: EmittedModule, abi: Abi, label: str) -> None:
 
 @contextmanager
 def staged_project(
-    model: ModelWrapper, point: Configured, ip_name: str, *, run_synth: bool, toolchain: Toolchain
+    model: ModelWrapper, point: Configured, name: str, *, run_synth: bool, toolchain: Toolchain
 ) -> Iterator[Path]:
     """The project Vivado is given to package the configured network ``point`` of the
-    partition model ``model`` as ``ip_name``, in a new directory of the build directory,
-    removed on exit: the module's sources (``src/``, each HLS leaf's product synthesized
-    for the model's part unless cached) checked by slang (``check_elaborates``), and
-    ``package.tcl``."""
+    partition model ``model``, its node ``name``, as an IP named as its module, in a new
+    directory of the build directory, removed on exit: the module's sources (``src/``, each
+    HLS leaf's product synthesized for the model's part unless cached) checked by slang
+    (``check_elaborates``), and ``package.tcl``."""
     built = read_target(model)
     module = point.module
     root: Path = scratch()  # type: ignore[no-untyped-call]
@@ -353,30 +366,30 @@ def staged_project(
         emitted = emit_module(
             module,
             project / "src",
-            roots={"finnlib": finnlib_root()},
+            roots=source_roots(),
             built=built_hls(module, built.part, toolchain=toolchain),
         )
-        check_elaborates(emitted, module.abi, ip_name)
+        check_elaborates(emitted, module.abi, name)
         (project / PACKAGE_SCRIPT).write_text(
             package_tcl(
                 emitted,
                 module.abi.pins,
                 part=built.part,
                 clock_ns=built.platform.period_ns,
-                ip_name=ip_name,
+                display_name=name,
                 run_synth=run_synth,
             )
         )
         yield project
 
 
-def ip_key(model: ModelWrapper, ip_name: str, *, run_synth: bool, toolchain: Toolchain) -> str:
-    """The key ``PackagePartition(ip_name, run_synth=run_synth)`` gives the partition model
+def ip_key(model: ModelWrapper, name: str, *, run_synth: bool, toolchain: Toolchain) -> str:
+    """The key ``PackagePartition(name, run_synth=run_synth)`` gives the partition model
     ``model``'s IP as it is now: its project staged (``staged_project``) and discarded,
     Vivado not run. An HLS leaf's product comes from the HLS cache, or is synthesized. It
     only binds (``configured_network``): its callers compare the verified design first."""
-    point = configured_network(model, ip_name)
-    with staged_project(model, point, ip_name, run_synth=run_synth, toolchain=toolchain) as staged:
+    point = configured_network(model, name)
+    with staged_project(model, point, name, run_synth=run_synth, toolchain=toolchain) as staged:
         return packaging_key(staged, run_synth=run_synth, toolchain=toolchain)
 
 
@@ -384,7 +397,8 @@ class PackagePartition(Transformation):
     """Package a partition model of KernelOps as the shells' IP, the design its check
     verified (``refuse_unverified``); see the module docstring.
 
-    ``ip_name`` is the partition node's name, its module's and its IP's; the part and the
+    ``name`` is the partition node's name, the IP's display name; the IP is named as its
+    module (``module_name``), which leaves the node's name out. The part and the
     clock one_pass are the
     model's target. ``directory`` is the packaging project, whose ``ip`` the IP is, a new
     build directory by default: the stored project is copied there, replacing what it
@@ -396,25 +410,26 @@ class PackagePartition(Transformation):
 
     def __init__(
         self,
-        ip_name: str,
+        name: str,
         *,
         run_synth: bool = False,
         directory: Path | None = None,
         toolchain: Toolchain | None = None,
     ) -> None:
         super().__init__()
-        self.ip_name = ip_name
+        self.name = name
         self.run_synth = run_synth
         self.directory = directory
         self.toolchain = host_toolchain() if toolchain is None else toolchain
         self.packaged: PackagedIp | None = None
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
-        refuse_unverified(model, self.ip_name)
-        point = configured_network(model, self.ip_name)
+        refuse_unverified(model, self.name)
+        point = configured_network(model, self.name)
         boundary = point.network.boundary
+        top = module_name(point.module, source_roots())
         project = Path(
-            self.directory or make_build_dir(prefix="vivado_stitch_proj_")  # type: ignore[no-untyped-call]
+            self.directory or make_build_dir(prefix="package_")  # type: ignore[no-untyped-call]
         ).resolve()
         project.mkdir(parents=True, exist_ok=True)
         # An earlier packaging's synthesis report is not this IP's.
@@ -422,15 +437,15 @@ class PackagePartition(Transformation):
             report.unlink()
         run_synth, toolchain = self.run_synth, self.toolchain
         with staged_project(
-            model, point, self.ip_name, run_synth=run_synth, toolchain=toolchain
+            model, point, self.name, run_synth=run_synth, toolchain=toolchain
         ) as staged:
-            stored = packaged(staged, name=self.ip_name, run_synth=run_synth, toolchain=toolchain)
+            stored = packaged(staged, name=top, run_synth=run_synth, toolchain=toolchain)
         self.packaged = stored
         place(stored.directory, project)
-        described = interface_description(model, point, boundary, self.ip_name)
+        described = interface_description(model, point, boundary, self.name)
         (project / INTERFACE_FILE).write_text(json.dumps(described, indent=2) + "\n")
         model.set(OUTPUT_IP, str(project / "ip"))
-        model.set(OUTPUT_VLNV, vlnv(self.ip_name))
+        model.set(OUTPUT_VLNV, vlnv(top))
         model.set(OUTPUT_INTERFACES, interface_names(point.module.abi.pins))
         model.set(OUTPUT_IP_KEY, stored.key)
         model.set(OUTPUT_IP_OPTIONS, {"run_synth": run_synth})
@@ -438,8 +453,8 @@ class PackagePartition(Transformation):
 
 
 class ElaboratePartition(Transformation):
-    """Compile and elaborate a partition model's emitted RTL in XSim, its module named
-    ``name`` (the partition node's); the model is unchanged. See the module docstring for
+    """Compile and elaborate the emitted RTL of a partition model, its node ``name``, in XSim;
+    the model is unchanged. See the module docstring for
     what it checks. It only binds (``configured_network``): no verified design is asked
     for.
 
@@ -473,7 +488,7 @@ class ElaboratePartition(Transformation):
         emitted = emit_module(
             point.module,
             directory / "src",
-            roots={"finnlib": finnlib_root()},
+            roots=source_roots(),
             built=built_hls(point.module, read_target(model).part, toolchain=toolchain),
         )
         sources = [str(emitted.directory / path) for path in emitted.sources]
@@ -495,6 +510,7 @@ __all__ = [
     "ip_key",
     "ooc_member_resources",
     "partition_utilization_report",
+    "source_roots",
     "resources_of",
     "staged_project",
 ]

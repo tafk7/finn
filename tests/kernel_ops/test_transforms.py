@@ -47,16 +47,16 @@ def inferred(**options: bool) -> ModelWrapper:
 def tensors(model: ModelWrapper) -> dict[str, tuple[object, str]]:
     return {
         name: (model.get_tensor_shape(name), model.get_tensor_datatype(name).name)
-        for name in ("hidden", "levels", "y")
+        for name in ("MatMul_0_out0", "Thresholding_0_out0", "y")
     }
 
 
 def test_conversion_rewrites_the_nodes_and_states_the_target() -> None:
     model = converted()
     assert [(node.op_type, node.domain, node.name) for node in model.graph.node] == [
-        ("MatMul", DOMAIN, "first"),
-        ("Thresholding", DOMAIN, "activate"),
-        ("MatMul", DOMAIN, "second"),
+        ("MatMul", DOMAIN, "MatMul_0"),
+        ("Thresholding", DOMAIN, "Thresholding_0"),
+        ("MatMul", DOMAIN, "MatMul_1"),
     ]
     assert model.get_customop_wrapper(model.graph.node[1]).get_nodeattr("bias") == 0
     assert model.get_opset_imports()[DOMAIN] == 1
@@ -87,14 +87,14 @@ def test_conversion_infers_as_it_goes() -> None:
 
 def test_qonnx_inference_refuses_before_the_ordered_pass() -> None:
     model = converted()
-    model.set_tensor_datatype("hidden", None)  # a KernelOp's input not stated yet
+    model.set_tensor_datatype("MatMul_0_out0", None)  # a KernelOp's input not stated yet
     with refused(
         "fact-unstated",
         error=KernelOpError,
         owner="datatype",
-        node="activate",
-        tensor="hidden",
-        message="hidden has no datatype annotation.*InferKernelTensors",
+        node="Thresholding_0",
+        tensor="MatMul_0_out0",
+        message="MatMul_0_out0 has no datatype annotation.*InferKernelTensors",
     ):
         model.transform(InferShapes())
     assert tensors(model.transform(InferKernelTensors())) == tensors(inferred())
@@ -103,8 +103,8 @@ def test_qonnx_inference_refuses_before_the_ordered_pass() -> None:
 def test_the_ordered_pass_states_the_chains_types_and_qonnx_agrees() -> None:
     model = inferred()
     assert tensors(model) == {
-        "hidden": ([chain.ROWS, chain.HIDDEN], chain.H.name),
-        "levels": ([chain.ROWS, chain.HIDDEN], chain.T.name),
+        "MatMul_0_out0": ([chain.ROWS, chain.HIDDEN], chain.H.name),
+        "Thresholding_0_out0": ([chain.ROWS, chain.HIDDEN], chain.T.name),
         "y": ([chain.ROWS, chain.OUTPUTS], chain.Y.name),
     }
     # Each MatMul's from its weights' columns.
@@ -119,26 +119,26 @@ def test_an_input_that_conflicts_is_refused_an_output_is_stated_again() -> None:
     with refused(
         "fact-unstated",
         error=FactUnstated,
-        node="first",
+        node="MatMul_0",
         tensor="x",
         message="has no datatype annotation",
     ):
         unstated.transform(InferKernelTensors())
     conflicting = converted()
-    conflicting.set_tensor_datatype("w1", DataType["INT2"])
+    conflicting.set_tensor_datatype("MatMul_0_param0", DataType["INT2"])
     with refused(
         "initializer-out-of-datatype",
         error=KernelOpError,
-        node="first",
-        tensor="w1",
+        node="MatMul_0",
+        tensor="MatMul_0_param0",
         message="is annotated INT2 and holds values over",
     ):
         conflicting.transform(InferKernelTensors())
     # An output's annotation is its producer's statement: replaced, narrower or wider.
     for stated in (chain.T, DataType["INT16"]):
         model = converted()
-        model.set_tensor_datatype("hidden", stated)
-        assert tensors(model.transform(InferKernelTensors()))["hidden"][1] == "INT6"
+        model.set_tensor_datatype("MatMul_0_out0", stated)
+        assert tensors(model.transform(InferKernelTensors()))["MatMul_0_out0"][1] == "INT6"
 
 
 def test_a_fact_change_that_widens_a_result_reaches_what_follows() -> None:
@@ -146,12 +146,12 @@ def test_a_fact_change_that_widens_a_result_reaches_what_follows() -> None:
     widens from the columns' range to the datatypes', and inference, run again, states
     the wider type, which the Thresholding that follows reads."""
     model = inferred()
-    lift(model, "w1")
-    model.set_tensor_datatype("w1", chain.W)
+    lift(model, "MatMul_0_param0")
+    model.set_tensor_datatype("MatMul_0_param0", chain.W)
     model = model.transform(InferKernelTensors())
     wide = exact_result_dtype(chain.INPUTS, chain.A, chain.W)
     assert (chain.H.name, wide.name) == ("INT6", "INT8")
-    assert tensors(model)["hidden"] == ([chain.ROWS, chain.HIDDEN], wide.name)
+    assert tensors(model)["MatMul_0_out0"] == ([chain.ROWS, chain.HIDDEN], wide.name)
     activate = kernel_op(model, model.graph.node[1])
     assert activate.input_edges()["x"].element.dtype == wide
     point: Any = activate.point()
@@ -182,9 +182,9 @@ def test_the_export_of_the_choices_round_trips_through_configured() -> None:
     configured(
         model,
         {
-            "first": {"pe": 2},
-            "activate": {"ram_style": "auto"},
-            "w1": {"transport": "direct"},
+            "MatMul_0": {"pe": 2},
+            "Thresholding_0": {"ram_style": "auto"},
+            "MatMul_0_param0": {"transport": "direct"},
         },
     )
     config = kernel_choices_config(model)
@@ -203,10 +203,10 @@ def test_the_export_of_the_choices_round_trips_through_configured() -> None:
     }
     assert config == {
         "x": adapted,
-        "w1": weights,
-        "first": {**matmul, "pe": 2},
-        "hidden": {"transport": "direct"},
-        "activate": {
+        "MatMul_0_param0": weights,
+        "MatMul_0": {**matmul, "pe": 2},
+        "MatMul_0_out0": {"transport": "direct"},
+        "Thresholding_0": {
             "block_stages": 0,
             "deep_pipeline": 0,
             "pe": 1,
@@ -214,9 +214,9 @@ def test_the_export_of_the_choices_round_trips_through_configured() -> None:
             "ultra_stages": 0,
             "use_axilite": 0,
         },
-        "levels": adapted,
-        "w2": weights,
-        "second": matmul,
+        "Thresholding_0_out0": adapted,
+        "MatMul_1_param0": weights,
+        "MatMul_1": matmul,
         "y": {"transport": "direct"},
     }
     blank = inferred()
@@ -329,9 +329,12 @@ def test_the_graph_keeps_the_thresholds_and_the_kernel_holds_them_as_integers(
     source = tfc_input(thresholds, dtype=dtype)
     model = through_the_kernel_path(source)
     # The graph's thresholds as they were: the same values, unannotated.
-    assert np.array_equal(model.get_initializer("thresholds"), source.get_initializer("thresholds"))
-    assert not model.has_tensor_datatype("thresholds")
-    formals = kernel_op(model, model.graph.node[1]).facts().arguments
+    node = model.graph.node[1]
+    assert np.array_equal(
+        model.get_initializer(node.input[1]), source.get_initializer("thresholds")
+    )
+    assert not model.has_tensor_datatype(node.input[1])
+    formals = kernel_op(model, node).facts().arguments
     assert formals["thresholds"] == IntegerTensorValue.of(((tuple(table),),))
     assert formals["threshold_dtype"] == DataType[threshold_dtype]
     # Exact: every value of the input type, in both graphs.
@@ -348,8 +351,9 @@ def test_a_shared_table_is_held_against_each_readers_input_type() -> None:
     node's kernel holds them as integers against its own input's type."""
     source = tfc_input([[-20.5, 3.2, 200.0]], shared=True)
     model = through_the_kernel_path(source)
-    nodes = {node.name: node for node in model.graph.node}
-    expected = {"quantize": ((0, 4, 200), "UINT8"), "again": ((-8, 4, 8), "INT5")}
+    # Each reader by its input: the reshaped x's, and z's.
+    nodes = {node.input[0]: node for node in model.graph.node}
+    expected = {"flat": ((0, 4, 200), "UINT8"), "z": ((-8, 4, 8), "INT5")}
     for name, (table, threshold_dtype) in expected.items():
         assert nodes[name].op_type == "Thresholding"
         thresholds = nodes[name].input[1]

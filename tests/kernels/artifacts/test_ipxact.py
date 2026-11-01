@@ -215,32 +215,50 @@ def test_the_interface_names_are_the_stitched_ip_metadata() -> None:
 
 
 def test_the_script_packages_sources_or_a_checkpoint() -> None:
-    emitted = EmittedModule("top__0", Path("/p/src"), ("a.sv", "top__0.sv"), ("m.dat",))
+    emitted = EmittedModule("top_0", Path("/p/src"), ("a.sv", "top_0.sv"), ("m.dat",))
     plain = package_tcl(
-        emitted, PORTS, part="xczu3eg-sbva484-1-e", clock_ns=5.0, ip_name="sdp_1", run_synth=False
+        emitted,
+        PORTS,
+        part="xczu3eg-sbva484-1-e",
+        clock_ns=5.0,
+        display_name="sdp_1",
+        run_synth=False,
     )
     assert "add_files -norecurse $project/src/m.dat" in plain
-    assert "set_property top top__0 [current_fileset]" in plain
+    assert "set_property top top_0 [current_fileset]" in plain
     assert "-import_files" in plain and "launch_runs" not in plain
-    assert "set_property name sdp_1 $core" in plain
+    # The IP is named as its module, and shown as the node it packages.
+    assert "set_property name top_0 $core" in plain
+    assert "set_property display_name sdp_1 $core" in plain
+    assert "set_property description {FINN DataflowCore sdp_1 (top_0)} $core" in plain
     assert plain.index("ipx::package_project") < plain.index("ipx::remove_bus_interface")
     synthesized = package_tcl(
-        emitted, PORTS, part="xczu3eg-sbva484-1-e", clock_ns=5.0, ip_name="sdp_1", run_synth=True
+        emitted,
+        PORTS,
+        part="xczu3eg-sbva484-1-e",
+        clock_ns=5.0,
+        display_name="sdp_1",
+        run_synth=True,
     )
     assert "-mode out_of_context" in synthesized
     assert "create_clock -period 2.5 -name ap_clk2x" in synthesized
-    assert "ipx::add_file dcp/top__0.dcp [ipx::get_file_groups xilinx_synthesischeckpoint]" in (
+    assert "ipx::add_file dcp/top_0.dcp [ipx::get_file_groups xilinx_synthesischeckpoint]" in (
         synthesized
     )
     assert "set_property sdx_kernel true $core" in synthesized
     assert synthesized.index("write_checkpoint") < synthesized.index("ipx::package_project")
-    assert vlnv("sdp_1") == "xilinx_finn:finn:sdp_1:1.0"
+    assert vlnv("top_0") == "xilinx_finn:finn:top_0:1.0"
 
 
 def _synthesized(pins: tuple[Signal, ...]) -> str:
-    emitted = EmittedModule("top__0", Path("/p/src"), ("top__0.sv",), ())
+    emitted = EmittedModule("top_0", Path("/p/src"), ("top_0.sv",), ())
     return package_tcl(
-        emitted, pins, part="xczu3eg-sbva484-1-e", clock_ns=5.0, ip_name="sdp_1", run_synth=True
+        emitted,
+        pins,
+        part="xczu3eg-sbva484-1-e",
+        clock_ns=5.0,
+        display_name="sdp_1",
+        run_synth=True,
     )
 
 
@@ -296,20 +314,20 @@ def test_a_derived_clock_of_another_clock_than_the_free_one_is_refused() -> None
 
 def test_the_script_searches_the_headers_directories_and_only_with_headers() -> None:
     def script(sources: tuple[str, ...]) -> str:
-        emitted = EmittedModule("top__0", Path("/p/src"), sources, ())
+        emitted = EmittedModule("top_0", Path("/p/src"), sources, ())
         return package_tcl(
             emitted,
             PORTS,
             part="xczu3eg-sbva484-1-e",
             clock_ns=5.0,
-            ip_name="sdp_1",
+            display_name="sdp_1",
             run_synth=False,
         )
 
-    with_headers = script(("arith/s.svh", "arith/a.sv", "top__0.sv"))
+    with_headers = script(("arith/s.svh", "arith/a.sv", "top_0.sv"))
     assert "add_files -norecurse $project/src/arith/s.svh" in with_headers
     assert "set_property include_dirs [list $project/src/arith] [current_fileset]" in with_headers
-    assert "include_dirs" not in script(("a.sv", "top__0.sv"))
+    assert "include_dirs" not in script(("a.sv", "top_0.sv"))
 
 
 def test_a_pin_outside_every_bus_interface_is_refused() -> None:

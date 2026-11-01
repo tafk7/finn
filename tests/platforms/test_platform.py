@@ -27,7 +27,7 @@ from finn.kernels.configure import commit
 from finn.kernels.explore import CoreComposition
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.thresholding import ThresholdingKernel
 from finn.platform.capabilities import DspBlock, Platform
 from finn.platform.resolve import resolve_target
 from finn.platform.target import Target
@@ -100,7 +100,7 @@ def test_runtime_writable_thresholds_need_a_control_bus() -> None:
     # choice's values only False is possible, True refused by ``threshold-control``, which
     # refuses a change setting it.
     model = thresholding_model()
-    (viable,) = inspection.viable(op(model).point(), [ThresholdingAxiKernel.use_axilite])
+    (viable,) = inspection.viable(op(model).point(), [ThresholdingKernel.use_axilite])
     assert viable.cases == (False,)
     ((value, broken),) = [
         (item.value, item.broken)

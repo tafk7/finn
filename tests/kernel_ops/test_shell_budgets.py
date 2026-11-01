@@ -71,7 +71,7 @@ from finn.kernels.budgets import SHELL, counts
 from finn.kernels.composer import Facts, Port, channel, member_name
 from finn.kernels.explore import CoreComposition, Defaults, Seam, SizeFifos, TargetThroughput
 from finn.kernels.sides import Side
-from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.thresholding import ThresholdingKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.resolve import resolve_target
 from finn.platform.shells import IP_ROW, ShellRow, bus_counts, shell_row
@@ -113,7 +113,7 @@ def thresholdings(count: int, row: ShellRow, presenting: int | None = None) -> C
     members: dict[str, Any] = {name: channels[name] for name in names[:-1]}
     for index in range(count):
         members[f"t{index}"] = Facts(
-            ThresholdingAxiKernel,
+            ThresholdingKernel,
             {
                 "threshold_dtype": UINT2,
                 "thresholds": TABLE,

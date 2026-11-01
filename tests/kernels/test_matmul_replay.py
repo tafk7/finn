@@ -129,7 +129,8 @@ def test_one_output_fold_and_one_beat_frames_tie_the_frame_marker_high(tmp_path)
         ((None, None, "s_axis_input_tlast", None),),
     )
     emitted = emit_module(built.module, tmp_path, roots={"finnlib": finnlib_root()})
-    wired = read(built.module, (emitted.directory / f"{emitted.entry_point}.sv").read_text())
+    source = (emitted.directory / f"{emitted.entry_point}.sv").read_text()
+    wired = read(built.module, source, emitted.entry_point)
     assert Drive(Pin("u_matmul_compute_packed", "s_axis_input_tlast"), Const(1, 1)) in set(
         wired.drives
     )

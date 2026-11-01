@@ -73,7 +73,7 @@ class Last:
 
 def test_the_test_policy_folds_to_its_lanes_or_the_largest_factor() -> None:
     policy = Lanes(4)
-    fold = Choice(("first", "pe"), None, (1, 2, 4, 8), True, {}, None)
+    fold = Choice(("MatMul_0", "pe"), None, (1, 2, 4, 8), True, {}, None)
     assert list(policy.rank(fold)) == [4, 8, 2, 1]
     odd = Choice(("x", "simd"), None, (1, 3), True, {}, None)
     assert list(policy.rank(odd)) == [3, 1] and list(Lanes().rank(odd)) == [1, 3]
@@ -90,14 +90,14 @@ def test_the_packed_reducer_is_offered_open_its_adder_tree_first() -> None:
     }
     assert reducers and all(cases == ("tree", "compressor") for cases in reducers.values())
     saved = choices(model)
-    assert saved["first"]["compute.packed.reducer"] == "tree"
+    assert saved["MatMul_0"]["compute.packed.reducer"] == "tree"
 
 
 def test_every_open_choice_is_committed_and_the_model_replays_it(tmp_path: Path) -> None:
     model = explored(kernel_model(), ranked(Lanes(2)))
     saved = choices(model)
-    assert saved["first"]["pe"] == 2
-    assert saved["activate"]["pe"] == 2
+    assert saved["MatMul_0"]["pe"] == 2
+    assert saved["Thresholding_0"]["pe"] == 2
     model.save(tmp_path / "chosen.onnx")
     again = ModelWrapper(str(tmp_path / "chosen.onnx"))
     found = network(again, again.graph.node, name=CUT_NAME)
@@ -106,7 +106,7 @@ def test_every_open_choice_is_committed_and_the_model_replays_it(tmp_path: Path)
     # A second pass reopens every choice and ranks it again: the same policy makes the
     # same choices, another replaces them.
     assert choices(explored(again, ranked(Lanes(2)))) == saved
-    assert choices(explored(again, ranked(Lanes())))["first"]["pe"] == 1
+    assert choices(explored(again, ranked(Lanes())))["MatMul_0"]["pe"] == 1
 
 
 def test_the_policy_is_offered_every_open_choice_its_possible_values_only() -> None:
@@ -121,11 +121,11 @@ def test_the_policy_is_offered_every_open_choice_its_possible_values_only() -> N
     memories = [cases for key, cases in offered.items() if key.endswith("source.ram_style")]
     assert memories and all("ultra" not in cases for cases in memories)
     assert {key: cases for key, cases in offered.items() if key.endswith(".compute")} == {
-        "first.compute": ("packed",),
-        "second.compute": ("packed",),
+        "MatMul_0.compute": ("packed",),
+        "MatMul_1.compute": ("packed",),
     }
     # A weight's source is placed, no choice: never offered.
-    assert "w1.source" not in offered
+    assert "MatMul_0_param0.source" not in offered
     # Stored, each of them, as any choice.
     stored = {key for node in choices(model).values() for key in node}
     assert {"compute", "source.ram_style", "adapter_ram_style", "ultra_stages"} <= stored
@@ -133,9 +133,9 @@ def test_the_policy_is_offered_every_open_choice_its_possible_values_only() -> N
 
 def test_a_refused_case_is_never_picked_even_when_preferred() -> None:
     model = explored(kernel_model(), ranked(Last(memories=True)))
-    assert choices(model)["w1"]["source.ram_style"] not in ("ultra", "auto")
+    assert choices(model)["MatMul_0_param0"]["source.ram_style"] not in ("ultra", "auto")
     uram = explored(kernel_model(URAM), ranked(Last(memories=True)))
-    assert choices(uram)["w1"]["source.ram_style"] == "ultra"
+    assert choices(uram)["MatMul_0_param0"]["source.ram_style"] == "ultra"
 
 
 def test_a_required_choice_left_open_is_refused_by_name_where_it_is_built() -> None:

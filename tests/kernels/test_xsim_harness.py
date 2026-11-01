@@ -66,7 +66,7 @@ from finn.kernels.artifacts.sources import include_directories
 from finn.kernels.dotp import Int8Dsp58DotpKernel
 from finn.kernels.library import library_module
 from finn.kernels.matmul import datatype_range
-from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.thresholding import ThresholdingKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import DspBlock
 from finn.toolchain import xsim
@@ -145,7 +145,7 @@ def _thresholds_alone() -> Any:
         platform=FULL_DSP48E2,
     )
     choices = dict(use_axilite=False, deep_pipeline=False, pe=1, ram_style="auto")
-    return point_for(ThresholdingAxiKernel, facts, ultra_stages=0, **choices)
+    return point_for(ThresholdingKernel, facts, ultra_stages=0, **choices)
 
 
 def test_a_leaf_s_held_inputs_are_driven_to_their_declared_values(tmp_path: Path) -> None:

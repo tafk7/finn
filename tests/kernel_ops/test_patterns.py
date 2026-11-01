@@ -156,11 +156,20 @@ def test_a_negative_graph_stays_on_the_host_with_its_code(case: str) -> None:
 @pytest.mark.parametrize("case", sorted(POSITIVE))
 def test_a_positive_graph_converts_with_its_attributes(case: str) -> None:
     build, op, attributes = POSITIVE[case]
-    (source,) = build().graph.node
+    original = build()
+    (source,) = original.graph.node
     model, conversion = convert(build())
     (node,) = model.graph.node
     assert (node.domain, node.op_type) == ("finn.custom_op.kernels", op)
-    assert (node.name, node.input, node.output) == (source.name, source.input, source.output)
+    # Named by its position, and each initializer it reads with it; its outputs, the graph's,
+    # keep their names.
+    weights = [name for name in source.input if original.get_initializer(name) is not None]
+    renamed = {name: f"{op}_0_param{k}" for k, name in enumerate(weights)}
+    assert (node.name, list(node.input), node.output) == (
+        f"{op}_0",
+        [renamed.get(name, name) for name in source.input],
+        source.output,
+    )
     # Its semantic attributes, the match's; beside them its own choices, each stored at
     # its baseline as it is converted.
     kernel = kernel_op(model, node)
@@ -169,7 +178,7 @@ def test_a_positive_graph_converts_with_its_attributes(case: str) -> None:
         attributes
     )
     assert kernel.choices() and set(kernel.choices()) == set(stated) - set(attributes)
-    assert conversion.outcomes == (Outcome((source.name,), op),)
+    assert conversion.outcomes == (Outcome((source.name,), op, name=f"{op}_0"),)
 
 
 def test_a_refusal_naming_a_lowering_says_which() -> None:

@@ -39,7 +39,7 @@ from finn.kernels.composer import DataflowCoreDeclaration, Facts, Port, Stated, 
 from finn.kernels.explore import CoreComposition, Seam, TargetCycles
 from finn.kernels.matmul import KnownWeights, MatMulKernel
 from finn.kernels.sides import Side
-from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.thresholding import ThresholdingKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import Platform
 from finn.transformation.kernels import explore_kernel_choices
@@ -63,7 +63,7 @@ def declared(*, adaptable: bool) -> DataflowCoreDeclaration:
     return DataflowCoreDeclaration(
         {
             "board": Facts(Board, {}),
-            "first": Facts(
+            "MatMul_0": Facts(
                 MatMulKernel,
                 {
                     "platform": platform,
@@ -71,8 +71,8 @@ def declared(*, adaptable: bool) -> DataflowCoreDeclaration:
                     "weights": KnownWeights(IntegerTensorValue.of(W1), W),
                 },
             ),
-            "activate": Facts(
-                ThresholdingAxiKernel,
+            "Thresholding_0": Facts(
+                ThresholdingKernel,
                 {
                     "threshold_dtype": THRESHOLD_DTYPE,
                     "thresholds": IntegerTensorValue.of(THRESHOLDS),
@@ -84,24 +84,24 @@ def declared(*, adaptable: bool) -> DataflowCoreDeclaration:
         },
         {
             "x": channel(
-                Side.boundary("s_axis_0"), Port("first", "x"), tensor=X_TENSOR, platform=platform
+                Side.boundary("s_axis_0"), Port("MatMul_0", "x"), tensor=X_TENSOR, platform=platform
             ),
-            "w1": channel(
+            "MatMul_0_param0": channel(
                 Side.source(),
-                Port("first", "w"),
-                tensor=Stated("first", "carried_weights"),
-                contents=Stated("first", "stored_weights"),
+                Port("MatMul_0", "w"),
+                tensor=Stated("MatMul_0", "carried_weights"),
+                contents=Stated("MatMul_0", "stored_weights"),
                 platform=platform,
             ),
-            "hidden": channel(
-                Port("first", "y"),
-                Port("activate", "input"),
+            "MatMul_0_out0": channel(
+                Port("MatMul_0", "y"),
+                Port("Thresholding_0", "input"),
                 tensor=chain.HIDDEN_TENSOR,
                 platform=Stated("board", "platform"),
                 adaptable=adaptable,
             ),
-            "levels": channel(
-                Port("activate", "output"),
+            "Thresholding_0_out0": channel(
+                Port("Thresholding_0", "output"),
                 Side.boundary("m_axis_0"),
                 tensor=LEVELS,
                 platform=platform,
@@ -116,10 +116,14 @@ def boarded(
 ) -> CoreComposition:
     """The partition with UltraRAM, the thresholding at the Chain's PE and ``folding``,
     every other choice by its policy, as conversion and the cut leave it; then the hidden
-    channel's ``hidden`` choices."""
+    channel's ``MatMul_0_out0`` choices."""
     empty = CoreComposition(compose(declared(adaptable=adaptable)))
-    chosen = empty.with_choices(keyed({"board.uram": True, "activate.pe": chain.PE, **folding}))
-    return with_defaults(chosen).with_choices(keyed({f"hidden.{k}": v for k, v in hidden.items()}))
+    chosen = empty.with_choices(
+        keyed({"board.uram": True, "Thresholding_0.pe": chain.PE, **folding})
+    )
+    return with_defaults(chosen).with_choices(
+        keyed({f"MatMul_0_out0.{k}": v for k, v in hidden.items()})
+    )
 
 
 #: The hidden channel's FIFO in UltraRAM.
@@ -133,8 +137,8 @@ ULTRA = {
 DEEP = 3 * 2**30 + 10
 
 NO_URAM = keyed({"board.uram": False})
-STYLE = ("hidden", "transport.fifo.buffer.ram_style")
-DEPTH = ("hidden", "transport.fifo.depth")
+STYLE = ("MatMul_0_out0", "transport.fifo.buffer.ram_style")
+DEPTH = ("MatMul_0_out0", "transport.fifo.depth")
 
 
 def test_a_change_a_stored_channel_choice_stands_in_the_way_of_is_made_with_it_cleared() -> None:
@@ -146,7 +150,7 @@ def test_a_change_a_stored_channel_choice_stands_in_the_way_of_is_made_with_it_c
     stays stored. A strategy's run reports the same (``Run.cleared``, ``settled``)."""
     network = boarded(ULTRA)
     asked = network.trial(NO_URAM)
-    rule = ("hidden", "transport.fifo.buffer.uram_present")
+    rule = ("MatMul_0_out0", "transport.fifo.buffer.uram_present")
     assert not asked.accepted and list(asked.refused) == [rule]
     assert [f.code for f in asked.refused[rule]] == ["uram-absent"]
     assert asked.standing == {rule: (STYLE,)}
@@ -157,7 +161,7 @@ def test_a_change_a_stored_channel_choice_stands_in_the_way_of_is_made_with_it_c
         STYLE: ["uram-absent"]
     }
     assert done.settled == {STYLE: "auto"} and done.unsettled == {}
-    states = dict(done.network.states(["hidden"]))
+    states = dict(done.network.states(["MatMul_0_out0"]))
     assert states[STYLE] == inspection.Set("auto")
     assert states[DEPTH] == inspection.Set(16)
     assert done.network.chosen()[("board", "uram")] is False
@@ -179,7 +183,7 @@ def test_a_held_channel_choice_standing_in_the_way_refuses_the_change() -> None:
     done = seam.set(network, NO_URAM)
     assert isinstance(done, Refused) and list(done.why) == [STYLE]
     (found,) = done.why[STYLE]
-    assert (found.code, found.owner) == ("held", "hidden.transport.fifo.buffer.ram_style")
+    assert (found.code, found.owner) == ("held", "MatMul_0_out0.transport.fifo.buffer.ram_style")
     assert found.message.startswith("held to 'ultra', standing in the way of the change: ")
     assert [cause.code for cause in found.causes] == ["uram-absent"]
     with refused("pin-refused", error=ExploreError, message="standing in the way of the change"):
@@ -194,24 +198,24 @@ def test_a_kernel_s_stored_choice_standing_in_the_way_refuses_the_change_naming_
     FIFO's style, which stands in the way of one rule, and makes the change again: still
     refused by the other, naming the neighbour's PE, so the change is refused with that
     second refusal's findings, and nothing is cleared."""
-    folding = {"first.pe": 2, "first.simd": 2}
+    folding = {"MatMul_0.pe": 2, "MatMul_0.simd": 2}
     network = boarded(folding=folding, adaptable=False)
     seam = Seam(FULL_DSP48E2)
-    fold = keyed({"first.pe": 4})
+    fold = keyed({"MatMul_0.pe": 4})
     done = seam.set(network, fold)
     assert isinstance(done, Refused)
-    rules = {("hidden", "realizable"), ("hidden", "compatible")}
+    rules = {("MatMul_0_out0", "realizable"), ("MatMul_0_out0", "compatible")}
     assert set(done.why) == rules
-    assert [f.code for f in done.why[("hidden", "realizable")]] == ["channel-steps"]
-    assert all(("activate", "pe") in done.standing[rule] for rule in rules)
+    assert [f.code for f in done.why[("MatMul_0_out0", "realizable")]] == ["channel-steps"]
+    assert all(("Thresholding_0", "pe") in done.standing[rule] for rule in rules)
     assert not any(key[0] in network.channels for keys in done.standing.values() for key in keys)
     both = boarded(ULTRA, folding=folding, adaptable=False)
     asked = both.trial({**fold, **NO_URAM})
-    assert set(asked.refused) == {*rules, ("hidden", "transport.fifo.buffer.uram_present")}
+    assert set(asked.refused) == {*rules, ("MatMul_0_out0", "transport.fifo.buffer.uram_present")}
     done = seam.set(both, {**fold, **NO_URAM})
     assert isinstance(done, Refused) and set(done.why) == rules
-    assert all(("activate", "pe") in done.standing[rule] for rule in rules)
-    assert dict(both.states(["hidden"]))[STYLE] == inspection.Set("ultra")
+    assert all(("Thresholding_0", "pe") in done.standing[rule] for rule in rules)
+    assert dict(both.states(["MatMul_0_out0"]))[STYLE] == inspection.Set("ultra")
 
 
 def test_a_kernel_choice_beside_a_cleared_channel_choice_refuses_nothing() -> None:
@@ -224,17 +228,17 @@ def test_a_kernel_choice_beside_a_cleared_channel_choice_refuses_nothing() -> No
         {**ULTRA, "transport.fifo.depth": DEEP, "transport.fifo.buffer.ram_style": "auto"}
     )
     asked = network.trial(NO_URAM)
-    rule = ("hidden", "transport.fifo.buffer.planned_storage")
+    rule = ("MatMul_0_out0", "transport.fifo.buffer.planned_storage")
     assert list(asked.refused) == [rule]
     assert [f.code for f in asked.refused[rule]] == ["fifo-capacity"]
-    assert {STYLE, DEPTH, ("activate", "pe")} <= set(asked.standing[rule])
+    assert {STYLE, DEPTH, ("Thresholding_0", "pe")} <= set(asked.standing[rule])
     done = Seam(FULL_DSP48E2).set(network, NO_URAM)
     assert isinstance(done, Accepted)
     assert set(done.cleared) == {STYLE, DEPTH}
     assert done.settled == {STYLE: "auto"}
     ((key, (found,)),) = done.unsettled.items()
     assert key == DEPTH and found.code == "choice-no-valid-value" and "required" in found.message
-    assert dict(done.network.states(["hidden"]))[DEPTH] == inspection.Open(())
+    assert dict(done.network.states(["MatMul_0_out0"]))[DEPTH] == inspection.Open(())
 
 
 def test_a_choice_cleared_twice_in_a_run_is_reported_by_its_first_clearing() -> None:
@@ -258,7 +262,7 @@ def test_a_choice_cleared_twice_in_a_run_is_reported_by_its_first_clearing() -> 
         return opened
 
     found = seam.run(network, (), search, "twice", restore=False)
-    assert dict(found.states(["hidden"]))[STYLE] == inspection.Set("auto")
+    assert dict(found.states(["MatMul_0_out0"]))[STYLE] == inspection.Set("auto")
     (run,) = seam.runs
     assert [f.code for f in run.cleared[STYLE]] == ["uram-absent"]
     assert [f.code for f in run.cleared[DEPTH]] == ["fifo-capacity"]
@@ -293,7 +297,7 @@ def test_a_cleared_choice_the_running_strategy_sets_as_it_finds_it_is_left_to_it
         network = accepted(seam.set(opened, {STYLE: "ultra"})).network
         done = accepted(seam.set(network, NO_URAM))
         assert list(done.cleared) == [STYLE] and done.settled == {}
-        assert dict(done.network.states(["hidden"]))[STYLE] == inspection.Open(())
+        assert dict(done.network.states(["MatMul_0_out0"]))[STYLE] == inspection.Open(())
         network = done.network
         while STYLE in network.undecided():
             (choice,) = seam.choices(network, keys=(STYLE,))
@@ -303,7 +307,7 @@ def test_a_cleared_choice_the_running_strategy_sets_as_it_finds_it_is_left_to_it
         return network
 
     found = seam.run(network, (STYLE,), search, "preferring", restore=False, decides=lambda _: True)
-    assert dict(found.states(["hidden"]))[STYLE] == inspection.Set("distributed")
+    assert dict(found.states(["MatMul_0_out0"]))[STYLE] == inspection.Set("distributed")
     assert found.chosen()[("board", "uram")] is False
 
 
@@ -316,13 +320,13 @@ def test_a_choice_the_restore_brings_into_play_is_set_by_the_fold_rule_not_left_
     is accepted, as for a strategy that decides nothing. (Neither of FINN's strategies
     reaches this: ``Defaults`` restores nothing, and ``Ranked``'s restore touches only
     what its search left open, the choices only a membership rule restricts.)"""
-    four = boarded(folding={"first.pe": 4, "first.simd": 4})
+    four = boarded(folding={"MatMul_0.pe": 4, "MatMul_0.simd": 4})
     style = ("x", "adapter_ram_style")
     assert dict(four.states(["x"]))[style] == inspection.Absent()
-    folded = four.with_choices(keyed({"first.simd": 1}))
+    folded = four.with_choices(keyed({"MatMul_0.simd": 1}))
     assert dict(folded.states(["x"]))[style] == inspection.Open(())
     seam = Seam(FULL_DSP48E2)
-    simd = ("first", "simd")
+    simd = ("MatMul_0", "simd")
 
     def search(opened: CoreComposition, prior: Mapping[tuple[str, str], object]) -> CoreComposition:
         assert prior == {simd: 1}
@@ -341,11 +345,11 @@ def test_a_fifo_newly_in_play_leaves_its_depth_open_and_its_style_set_by_policy(
     seam sets its style by the channel's policy (``auto``) and leaves its depth, required,
     open for ``SizeFifos``; nothing is cleared."""
     network = boarded()
-    done = Seam(FULL_DSP48E2).set(network, keyed({"hidden.transport": "fifo"}))
+    done = Seam(FULL_DSP48E2).set(network, keyed({"MatMul_0_out0.transport": "fifo"}))
     assert isinstance(done, Accepted)
     assert done.cleared == {} and done.settled == {STYLE: "auto"}
     assert list(done.unsettled) == [DEPTH]
-    states = dict(done.network.states(["hidden"]))
+    states = dict(done.network.states(["MatMul_0_out0"]))
     assert states[DEPTH] == inspection.Open(()) and states[STYLE] == inspection.Set("auto")
 
 
@@ -357,16 +361,16 @@ def test_a_channel_choice_a_fold_brings_into_play_is_set_by_the_fold_rule_the_st
     the strategy's run names it (``Run.settled``), and the exploration's report names it
     (``settled``) and gives it to the strategy (``by``)."""
     model = kernel_model()
-    configured(model, {"first": {"pe": 4, "simd": 4}})
+    configured(model, {"MatMul_0": {"pe": 4, "simd": 4}})
     style = ("x", "adapter_ram_style")
     stored = core_in_shell(model, model.graph.node)
     persist(model, stored.trial({}, [style]).network.point)
     bound = core_in_shell(model, model.graph.node)
     assert dict(bound.states(["x"]))[style] == inspection.Absent()
     seam = Seam(read_target(model).platform)
-    seam.held[("activate", "pe")] = chain.PE
+    seam.held[("Thresholding_0", "pe")] = chain.PE
     folded = TargetCycles(48).explore(seam, bound)
-    assert folded.chosen(["first"])[("first", "simd")] == 1
+    assert folded.chosen(["MatMul_0"])[("MatMul_0", "simd")] == 1
     assert dict(folded.states(["x"]))[style] == inspection.Set("distributed")
     (run,) = seam.runs
     assert (run.cleared, run.settled, run.by_policy) == ({}, {style: "distributed"}, {})

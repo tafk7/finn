@@ -49,9 +49,9 @@ _INTERFACES = {
 }
 
 
-def vlnv(ip_name: str) -> str:
-    """The VLNV of the IP ``package_tcl`` packages as ``ip_name``."""
-    return f"{VENDOR}:{LIBRARY}:{ip_name}:{VERSION}"
+def vlnv(name: str) -> str:
+    """The VLNV of the IP named ``name``: ``package_tcl`` names an IP as its module."""
+    return f"{VENDOR}:{LIBRARY}:{name}:{VERSION}"
 
 
 def _width(bus: Bus, logical: str) -> int:
@@ -209,10 +209,11 @@ def package_tcl(
     *,
     part: str,
     clock_ns: float,
-    ip_name: str,
+    display_name: str,
     run_synth: bool,
 ) -> str:
-    """The Vivado batch script that packages ``emitted`` in ``emitted.directory``'s parent.
+    """The Vivado batch script that packages ``emitted`` in ``emitted.directory``'s parent,
+    as an IP named as its module (its entry point), shown as ``display_name``.
 
     With ``run_synth``, its out-of-context constraints give the module's one free clock
     pin ``clock_ns`` and each derived clock that period over its ratio; ``IpxactError``
@@ -281,9 +282,9 @@ def package_tcl(
         f"ipx::package_project -root_dir $project/ip -vendor {VENDOR} -library {LIBRARY}"
         " -taxonomy /UserIP -import_files -set_current true",
         *interface_tcl(pins, clock_ns),
-        f"set_property name {ip_name} $core",
-        f"set_property display_name {ip_name} $core",
-        f"set_property description {{FINN partition {ip_name} ({top})}} $core",
+        f"set_property name {top} $core",
+        f"set_property display_name {display_name} $core",
+        f"set_property description {{FINN DataflowCore {display_name} ({top})}} $core",
         f"set_property version {VERSION} $core",
         "set_property core_revision 1 $core",
         "set_property ipi_drc {ignore_freq_hz true} $core",

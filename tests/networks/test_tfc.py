@@ -43,12 +43,13 @@ from finn.core.search import Ranked, Refused
 from finn.core.space import Available, inspection
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import body_row, configured_network, shell_composition
+from finn.kernels.artifacts.module import module_name
 from finn.kernels.budgets import SHELL, counts
 from finn.kernels.dataflow_core import DataflowCoreKernel
 from finn.kernels.explore import Seam
 from finn.toolchain.launcher import host_toolchain
 from finn.transformation.kernels import PackagePartition
-from finn.transformation.kernels.package import ElaboratePartition, boundary_facts
+from finn.transformation.kernels.package import ElaboratePartition, boundary_facts, source_roots
 
 LOGITS = "MatMul_3_out0"
 FRAMES = 2
@@ -207,7 +208,11 @@ def test_tfc_w2a2_packages_as_the_shells_ip(tfc_streamlined: Path, tmp_path: Pat
     sdp = parent.graph.node[1]
     project = tmp_path / "vivado_stitch_proj"
     body = body.transform(PackagePartition(sdp.name, directory=project))
-    assert body.get(OUTPUT_VLNV) == f"xilinx_finn:finn:{sdp.name}:1.0"
+    # The IP is named as the core's module, by its kind and content; the node's name is its
+    # display name.
+    top = module_name(configured_network(body, sdp.name).module, source_roots())
+    assert top.startswith("finn_dataflowcore_")
+    assert body.get(OUTPUT_VLNV) == f"xilinx_finn:finn:{top}:1.0"
     names = body.get(OUTPUT_INTERFACES)
     assert (names["s_axis"], names["m_axis"]) == ([["s_axis_0", 128]], [["m_axis_0", 72]])
     spirit = "{http://www.spiritconsortium.org/XMLSchema/SPIRIT/1685-2009}"
@@ -227,6 +232,7 @@ def test_tfc_w2a2_packages_as_the_shells_ip(tfc_streamlined: Path, tmp_path: Pat
     # The interface description beside the IP: the module's pins, the boundary facts.
     described = json.loads((project / "interface.json").read_text())
     read_back(described, point.module.abi.pins, 5.0)
+    assert (described["ip"]["name"], described["ip"]["display_name"]) == (top, sdp.name)
     assert [stream["beats"] for stream in described["streams"]] == [49, 1]
 
 

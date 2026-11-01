@@ -3,12 +3,12 @@
 
 """Numeric XSI conformance of thresholding_axi's threshold rows, initial and written.
 
-Each case places ``ThresholdingAxiKernel`` between two boundary channels and
+Each case places ``ThresholdingKernel`` between two boundary channels and
 streams every INT4 value through it, free and stalled. Its table is one row
 shared by every channel (C = 1, PE above it: each lane keeps a copy of the
 row), or a row a channel. With AXI-Lite, the kernel presents its control bus and
 the run first writes a new table through it: the writes the kernel declares for
-that table (its register map, ``ThresholdingAxiKernel.register_map``), into
+that table (its register map, ``ThresholdingKernel.register_map``), into
 hardware built with the initial one. Every output word shows that the write
 reached the lanes reading it: for a shared row, one write reaches every lane.
 With one threshold (N = 1) the wrapper's configuration address is the AXI-Lite
@@ -49,7 +49,7 @@ from finn.kernels.channels import Channel
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.explore import CoreComposition
 from finn.kernels.sides import Side
-from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.thresholding import ThresholdingKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.toolchain.launcher import host_toolchain
 from kernels.sweeps.rtl_transport import drive_observed
@@ -112,7 +112,7 @@ def placed(case: Case) -> CoreComposition:
                 tensor=y,
                 platform=FULL_DSP48E2,
             ),
-            "activate": Facts(ThresholdingAxiKernel, facts),
+            "activate": Facts(ThresholdingKernel, facts),
         }
     )
     chosen = with_direct_transports(

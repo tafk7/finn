@@ -76,7 +76,7 @@ def test_real_netlist_does_not_certify_unrelated_rule_or_presence(
         for key, state in inspection.states(original.point)
         if isinstance(state, (inspection.Set, inspection.Waiting, inspection.Dormant))
     }
-    point = design_space(expanded(**root_facts(original.point), name=original.name))
+    point = design_space(expanded(**root_facts(original.point)))
     refs = {item.key: item.reference for item in inspection.decisions(point)}
     report = occurrence.bind(point, {refs[key]: value for key, value in choices.items()})
     assert not any(outcome.status == "dropped" for outcome in report.outcomes)

@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The Thresholding KernelOp: integer MultiThreshold bound to ``ThresholdingAxiKernel``."""
+"""The Thresholding KernelOp: integer MultiThreshold bound to ``ThresholdingKernel``."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.onnx_exec import execute_onnx
 from finn.custom_op.kernels.thresholding import Thresholding
 from finn.kernels.library import library_module
-from finn.kernels.thresholding import ThresholdingAxiKernel, threshold_table_dtype
+from finn.kernels.thresholding import ThresholdingKernel, threshold_table_dtype
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.transformation.kernels import InferKernelTensors
 
@@ -39,7 +39,7 @@ def op(model: ModelWrapper) -> Thresholding:
 def test_facts_and_the_output() -> None:
     model = thresholding_model(bias=-1)
     facts = op(model).facts()
-    assert facts.space_type is ThresholdingAxiKernel and op(model).owned() == {}
+    assert facts.space_type is ThresholdingKernel and op(model).owned() == {}
     formals = facts.arguments
     assert formals["thresholds"] == IntegerTensorValue.of(
         (tuple(tuple(int(v) for v in row) for row in THRESHOLDS),)
