@@ -315,8 +315,28 @@ def test_a_shell_based_on_another_replaces_each_key_it_states(tmp_path: Path) ->
         ('control_budget = "nine"', "control_budget is a whole number"),
         ('supply = [{ kind = "moved", movers = [{}] }]', "supply[0].movers[0] is a non-empty"),
         ('caveat = "on {board.missing}"', "caveat names {board} and {part} only"),
+        ('clocks = { main = "", set_at = "build", doubled = false }', "main is a non-empty"),
+        (
+            'clocks = { main = "c", set_at = "build", doubled = false, default_mhz = -100.0 }',
+            "default_mhz is a finite number above zero",
+        ),
+        (
+            'clocks = { main = "c", set_at = "build", doubled = false, default_mhz = inf }',
+            "default_mhz is a finite number above zero",
+        ),
+        ('memory = [{ name = "", width = 64 }]', "memory[0].name is a non-empty"),
+        ('memory = [{ name = "m", width = 9 }]', "memory[0].width: 9 bits is no whole bytes"),
     ],
-    ids=["a count not a number", "a mover kind not a name", "a caveat naming another field"],
+    ids=[
+        "a count not a number",
+        "a mover kind not a name",
+        "a caveat naming another field",
+        "a clock with no name",
+        "a negative frequency",
+        "an infinite frequency",
+        "a memory target with no name",
+        "a memory width of no whole bytes",
+    ],
 )
 def test_a_fact_not_of_its_type_is_refused_when_its_row_is_read(
     tmp_path: Path, fact: str, named: str

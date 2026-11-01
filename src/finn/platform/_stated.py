@@ -8,6 +8,7 @@ it raised as ``Invalid`` with where it is and why, which its reader refuses as
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Mapping
 from typing import Any
@@ -67,6 +68,14 @@ def count(value: object, where: str, *, least: int = 0) -> int:
     found: int = typed(value, int, where)
     if found < least:
         raise Invalid(f"{where} is a count of at least {least}, not {found}")
+    return found
+
+
+def positive(value: object, where: str) -> float:
+    """``value``, a finite number above zero."""
+    found = float(typed(value, (int, float), where))
+    if not (math.isfinite(found) and found > 0):
+        raise Invalid(f"{where} is a finite number above zero, not {value!r}")
     return found
 
 

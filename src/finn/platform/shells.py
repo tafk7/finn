@@ -285,9 +285,9 @@ def _clocks(stated: object, where: str) -> Clocks:
         raise valid.Invalid(f"{where}.set_at is {BUILD!r} or {RUNTIME!r}, not {set_at!r}")
     default = table.get("default_mhz")
     return Clocks(
-        main=valid.typed(table["main"], str, f"{where}.main"),
+        main=valid.text(table["main"], f"{where}.main"),
         set_at=set_at,
-        default_mhz=None if default is None else float(valid.typed(default, (int, float), where)),
+        default_mhz=None if default is None else valid.positive(default, f"{where}.default_mhz"),
         doubled=valid.typed(table["doubled"], bool, f"{where}.doubled"),
     )
 
@@ -311,8 +311,8 @@ def _memory(stated: object, where: str) -> tuple[MemoryTarget, ...]:
         masters = table.get("masters")
         targets.append(
             MemoryTarget(
-                name=valid.typed(table["name"], str, f"{here}.name"),
-                width=valid.count(table["width"], f"{here}.width", least=8),
+                name=valid.text(table["name"], f"{here}.name"),
+                width=valid.whole_bytes(table["width"], f"{here}.width"),
                 masters=None
                 if masters is None
                 else valid.count(masters, f"{here}.masters", least=1),
@@ -418,8 +418,7 @@ def _caveat(facts: Mapping[str, Any], where: str) -> str | None:
     for _, name, spec, conversion in Formatter().parse(template or ""):
         if name is not None and (name not in ("board", "part") or spec or conversion):
             raise valid.Invalid(
-                f"{where}.caveat names {{board}} and {{part}} only, not {{{name}}} "
-                f"in {template!r}"
+                f"{where}.caveat names {{board}} and {{part}} only, not {{{name}}} in {template!r}"
             )
     return template
 
