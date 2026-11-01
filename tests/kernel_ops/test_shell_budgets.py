@@ -319,14 +319,14 @@ def test_a_target_names_the_choice_the_budget_leaves_no_value() -> None:
         with refused(
             "choice-no-valid-value",
             error=KernelOpError,
-            owner="activate.use_axilite",
+            owner="Thresholding_0.use_axilite",
             message="no value is possible: False breaks shell.within_control_budget; True "
             "breaks control_for_writes, shell.within_control_budget",
         ) as caught:
             explore_kernel_choices(model, [TargetThroughput(1000.0)], name=CUT_NAME)
     assert isinstance(caught.error, KernelOpError)
-    assert caught.error.keys == ("activate.use_axilite",)
-    assert str(caught.error).startswith("the explored point is refused: activate.use_axilite: ")
+    assert caught.error.keys == ("Thresholding_0.use_axilite",)
+    assert str(caught.error).startswith("the explored point is refused: Thresholding_0.use_axilite: ")
 
 
 def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:
