@@ -9,15 +9,16 @@
 part = "xczu3eg-sbva484-1-e"
 
 [linkers.example-link]
-# Writes the description it is given and a stub image.
-code = "support.example_platform:link"
+# Checks the board states its slot; writes the description it is given, a stub image
+# and its map, each unit at a made-up base, the main clock delivered as asked.
+code = "support.example_platform:ExampleLinker"
 tool = "example-tool"
 board_keys = ["slot"]
 image = "example-image"
 least_range = 4096
 
 [runtimes.example-run]
-# Records the operations it is asked for.
+# Writes the runtime file and the operations its driver would run.
 code = "support.example_platform:RecordingRuntime"
 images = ["example-image"]
 movers = ["iodma_hls", "example_dma"]

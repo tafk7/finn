@@ -18,7 +18,7 @@ import json
 import logging
 import re
 import shutil
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
@@ -49,6 +49,8 @@ from support.packaging import (
     PackagedByStub,
     bitfile_default,
 )
+from support.example_platform import BASE, DESCRIPTION, OPERATIONS
+from support.example_platform import DIRECTORY as EXAMPLE
 from support.refusals import refused
 from support.tfc import EXPORT, SHAPE, ULTRA96, built, io_settings, partition, run_steps
 from support.tfc_built import SET_FOLDING, TFC_BUILT, TFC_MODULE, TFC_STORED
@@ -119,11 +121,18 @@ from finn.kernels.channels import Channel, Neighbours
 from finn.kernels.explore import KernelExplorer, TargetThroughput
 from finn.kernels.fifo_sizing import Sized
 from finn.kernels.iodma import IodmaIn, IodmaOut
+from finn.platform.catalog import catalog
+from finn.platform.declarations import PATH_SETTING, declarations
 from finn.platform.refusal import TargetRefused
 from finn.platform.request import TargetRequest
 from finn.platform.resolve import resolve_target
 from finn.shells import build as shell_build
-from finn.shells.build import RUNTIME_FILE, ShellRefused, delivered_clock_findings
+from finn.shells.build import (
+    DELIVERED_CLOCK,
+    RUNTIME_FILE,
+    ShellRefused,
+    delivered_clock_findings,
+)
 from finn.shells.integration import IpRef, Linked, describe
 from finn.shells.pynq.linker import (
     Address,
@@ -2062,6 +2071,106 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
     monkeypatch.chdir(deploy / "model")
     labels = execute_onnx(shipped, {shipped.graph.input[0].name: image})
     assert np.array_equal(labels[shipped.graph.output[0].name], expected)
+
+
+@pytest.fixture
+def example_platform(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """The made-up platform (``support.example_platform``) on ``FINN_PLATFORM_PATH``, the
+    process's declarations and catalog read again."""
+    monkeypatch.setenv(PATH_SETTING, str(EXAMPLE))
+    declarations.cache_clear()
+    catalog.cache_clear()
+    yield
+    monkeypatch.delenv(PATH_SETTING)
+    declarations.cache_clear()
+    catalog.cache_clear()
+
+
+@pytest.mark.usefixtures("example_platform")
+def test_a_made_up_shell_builds_a_core_to_its_driver_and_deployment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Chain in the ``example`` shell, declared outside FINN (``support.example_platform``),
+    through the outputs' steps with no change to FINN, the movers' and the partition's
+    tools faked and no other run:
+
+    - the bitfile is the image its declared linker made, built with the debug option, the
+      file it loads with beside it, the linker's report under report/, each unit at the
+      base the linker placed it and the main clock delivered as asked;
+    - the driver is the declared runtime's, its runtime file the build's;
+    - the deployment ships both."""
+    for name, recorded in tool_recorders(tmp_path).items():
+        monkeypatch.setattr(shell_build, name, recorded)
+    monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "build"))
+    cfg = config(
+        tmp_path, target=TargetRequest(board="Example-ZU3", period_ns=5.0, shell="example")
+    )
+    tools = FakeVivado()
+    cfg.prepared_toolchain = cast(Toolchain, tools)
+    assert cfg.resolved_runtime == "example-run"
+    model = kernel_model()
+    write_target(model, cfg.resolved_target)
+    model = model.transform(MakeCutChoices(CUT_NAME))  # its movers, as the cut makes them
+    configure_partition(model)
+    parent = model.transform(CutKernelPartition(tmp_path / "cut"))
+    parent = step_build_bitfile(parent, cfg, hw_debug=True)
+    parent = step_make_driver(parent, cfg)
+    parent = step_deployment_package(parent, cfg)
+    assert tools.runs == []
+    output = Path(cfg.output_dir)
+    _, body, _ = partition_body(parent)
+    stated = parent.namespace(OUTPUTS)
+    assert {key: value for key, value in stated.items() if key.startswith("bitfile")} == {
+        "bitfile": str(output / "bitfile" / "finn-accel.example"),
+        "bitfile_made_from": design_digest(body),
+        "bitfile_ip_key": IP_KEY,
+        "bitfile_options": {"hw_debug": True},
+    }
+    assert sorted(path.name for path in (output / "bitfile").iterdir()) == [
+        "finn-accel.example",
+        "finn-accel.map",
+    ]
+    assert (output / "bitfile" / "finn-accel.example").read_bytes() == b"example image\n"
+    # The linker's report: the description it linked, on the board's slot, each unit's IP
+    # the one the build made.
+    linked = json.loads((output / "report" / DESCRIPTION).read_text())
+    assert (linked["slot"], linked["debug"]) == ("B", True)
+    assert None not in linked["ips"].values()
+    # Each unit with a control window at the base the linker placed it, the main clock
+    # delivered as asked: the delivered clock states no limitation.
+    runtime_file = json.loads((output / RUNTIME_FILE).read_text())
+    placement = runtime_file["placement"]
+    windows = {unit.name: unit.window for unit in describe(parent).units if unit.window}
+    assert sorted(placement) == sorted(windows) and placement
+    assert all(base >= BASE and base % windows[unit] == 0 for unit, base in placement.items())
+    assert placement == json.loads((output / "bitfile" / "finn-accel.map").read_text())
+    assert runtime_file["clocks_mhz"] == {"main": 200.0}
+    clock = json.loads((output / DELIVERED_CLOCK).read_text())
+    assert (clock["clock"], clock["delivered_mhz"], clock["findings"]) == ("main", 200.0, [])
+    # The driver: the runtime's, from the runtime file the build wrote.
+    driver = output / "driver"
+    assert sorted(path.name for path in driver.iterdir()) == ["integration.json", OPERATIONS]
+    assert (driver / "integration.json").read_text() == (output / RUNTIME_FILE).read_text()
+    operations = json.loads((driver / OPERATIONS).read_text())
+    assert operations[:2] == [["load", "finn-accel.example"], ["clock", 200.0]]
+    assert operations[2:] and all(
+        kind == "start" and placement[unit] == base for kind, unit, base in operations[2:]
+    )
+    description = json.loads((output / "report" / "driver.json").read_text())
+    assert description == {
+        "bitfile": "bitfile/finn-accel.example",
+        "runtime": "example-run",
+        "made_from": design_digest(body),
+        "ip_key": IP_KEY,
+    }
+    deploy = output / "deploy"
+    assert sorted(path.name for path in deploy.iterdir()) == [
+        "bitfile",
+        "driver",
+        "driver.json",
+        "model",
+    ]
+    assert (deploy / "driver" / OPERATIONS).read_text() == (driver / OPERATIONS).read_text()
 
 
 def test_a_driver_without_its_bitfile_or_its_runtime_file_is_refused(tmp_path: Path) -> None:

@@ -16,12 +16,11 @@ import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import pytest
 from support.configure import core_in_shell
 from support.example_platform import DIRECTORY as EXAMPLE
-from support.example_platform import EXAMPLE_DMA, IMAGE, ExampleDma, RecordingRuntime
+from support.example_platform import EXAMPLE_DMA, ExampleDma, ExampleLinker, RecordingRuntime
 from support.models import kernel_model
 from support.refusals import refused
 
@@ -773,14 +772,14 @@ def test_the_command_reports_each_finding_and_fails(
 
 
 def test_a_made_up_platform_declares_checks_and_resolves_with_no_change_to_finn(
-    example_on_path: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    example_on_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """``support.example_platform`` declares a board, a linker, a runtime, a moved mover
     kind and a shell based on ``pynq``: they check, a build's target resolves on them, a
     core is placed in the shell, its boundary moved by FINN's mover at the shell's cap, and
     the command shows them, each with its origin, and a build on it records where each
-    declaration it stands on comes from. No core is linked or run through it, as FINN
-    calls no linker or runtime through its declarations yet."""
+    declaration it stands on comes from. A core built through it, to its driver and
+    deployment, is in test_builder_phase."""
     found = declarations()
     assert check(found) == []
     origin = f"{PATH_SETTING} {example_on_path}"
@@ -831,14 +830,8 @@ def test_a_made_up_platform_declares_checks_and_resolves_with_no_change_to_finn(
         "the 'example' shell is made up: on Example-ZU3 (xczu3eg-sbva484-1-e) nothing is measured"
     )
     # Its code is a package's own, imported where it is used.
-    linker: Any = code(found.linkers["example-link"].code)
-    image = linker({"shell": "example"}, tmp_path / "linked")
-    assert image.name == IMAGE and image.is_file()
-    made: Any = code(found.runtimes["example-run"].code)
-    runtime = made()
-    assert isinstance(runtime, RecordingRuntime)
-    runtime.load(image)
-    assert runtime.operations == [("load", IMAGE)]
+    assert code(found.linkers["example-link"].code) is ExampleLinker
+    assert code(found.runtimes["example-run"].code) is RecordingRuntime
     assert code(found.movers[EXAMPLE_DMA].code) is ExampleDma
     assert mover_offer(MoverKind(name=EXAMPLE_DMA, code=found.movers[EXAMPLE_DMA].code), 64) == (
         ExampleDma.offer(64)
