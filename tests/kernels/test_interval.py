@@ -1,19 +1,23 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""A kernel's initiation interval (L6): one value, owned where the pace is.
+"""A kernel's rate (L6): its initiation interval, one value owned where the pace is, and the
+rate a frame it states where the derived one cannot express it.
 
 A kernel with a module states its ``interval``: L6's 1 by default, its own, with its
 standing and source, where its hardware differs (Pool's 1, assumed). A composite has none.
 Each port carries its own kernel's, through any alias, with its pace (``timed_pace``). One
 conversion (``finn.kernels.laws.in_cycles``) gives a kernel's cycles a frame and FIFO
-sizing's beat times. A kernel with a module never restates its cycles
-(``kernel-cycles-restated``), not even as the base's own; a port of its body states no
-interval of its own (``port-interval``), and a composite none
-(``kernel-interval-composite``).
+sizing's beat times. A port of its body states no interval of its own (``port-interval``),
+and a composite none (``kernel-interval-composite``). Where its schedule and ports at its
+interval cannot express its rate (a memory mover), a kernel with a module states its rate a
+frame (``StatedRate``): a port's beat times and its span, with its reason, standing and
+source; its cycles a frame are its span. A composite states none
+(``kernel-rate-composite``).
 """
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -25,6 +29,7 @@ from finn.core.space import (
     DefinitionError,
     Inapplicable,
     Param,
+    Rejected,
     derived,
     design_space,
     view,
@@ -44,11 +49,11 @@ from finn.kernels.laws import (
     AxisSpelling,
     Interval,
     Standing,
+    StatedRate,
     TimedPace,
     in_cycles,
 )
 from finn.kernels.library import ModuleSpec
-from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.pool import ELEMENTS, PoolKernel
 from finn.kernels.port_model import InPort, OutPort
 from finn.platform.capabilities import Platform, Resources
@@ -233,36 +238,97 @@ def test_a_stage_s_cycles_are_its_beats_at_its_interval() -> None:
     assert slow.frame_cycles == 8 and slow.input.interval == TWO
 
 
-def test_a_kernel_with_a_module_does_not_restate_its_cycles() -> None:
-    with refused("kernel-cycles-restated", error=DefinitionError):
+#: A memory mover's rate, as such a kernel states it: four beats as their words arrive, two
+#: words a beat, and a call's three cycles after them.
+MOVED = StatedRate(
+    "input",
+    (1, 3, 5, 7),
+    11,
+    Standing.MEASURED,
+    "a test's measurement",
+    "its memory words and each call take cycles its stream does not show",
+)
 
-        class Restating(_Stage):
-            id = "test.interval.restating"
 
-            @view
-            def frame_cycles(self) -> int:
-                return 1
+class _Mover(_Stage):
+    """A stage that states its rate a frame."""
 
-    # Nor the base's private rate law behind them (``_rate_frame_cycles``).
+    id = "test.interval.mover"
+    rate: StatedRate = Param()
+
+    @derived
+    def stated_rate(self) -> StatedRate:
+        stated: StatedRate = self.rate
+        return stated
+
+
+def test_a_stated_rate_times_each_beat_within_its_span_with_its_reason_and_standing() -> None:
+    assert str(MOVED) == "11 cycles a frame, measured: a test's measurement"
+    for given in (
+        dict(port=""),
+        dict(standing=None),
+        dict(source=""),
+        dict(reason=""),
+        dict(span=0),
+        dict(times=()),
+        dict(times=(1, 3, 2, 7)),  # out of order
+        dict(times=(1, 3, 5, 11)),  # past the span
+        dict(times=(-1, 3, 5, 7)),
+    ):
+        with pytest.raises(ValueError):
+            replace(MOVED, **given)
+
+
+def test_a_kernel_with_a_module_may_state_its_rate_in_place_of_the_derived_one() -> None:
+    point = design_space(_Mover(input_tensor=TENSOR, arriving=ARRIVING, rate=MOVED))
+    # Its span, not its four beats at its interval.
+    assert point.frame_cycles == 11
+    assert point.stated_rate == MOVED and point.assumed == ()
+    assumed_rate = replace(MOVED, standing=Standing.ASSUMED)
+    point = design_space(_Mover(input_tensor=TENSOR, arriving=ARRIVING, rate=assumed_rate))
+    assert point.assumed == (f"rate {assumed_rate}",)
+    # Every other kernel states none: its cycles are derived.
+    assert isinstance(pool(PoolKernel).query(PoolKernel.stated_rate), Inapplicable)
+
+
+def test_a_kernel_with_a_schedule_may_state_its_rate_too() -> None:
+    """Its span, in place of its schedule's iterations at its interval."""
+    beats = pool(PoolKernel).output.stream.sequence.form.beats
+
+    class Stalling(PoolKernel):
+        id = "test.interval.stalling"
+
+        @derived
+        def stated_rate(self) -> StatedRate:
+            return replace(MOVED, port="output", times=tuple(range(beats)), span=beats + 5)
+
+    assert pool(Stalling).frame_cycles == beats + 5
+
+
+def test_a_stated_rate_times_a_port_of_its_kernel_each_beat() -> None:
+    for rate, message in (
+        (replace(MOVED, port="output"), "states the rate of 'output', no port of it"),
+        (replace(MOVED, times=(1, 3, 5)), "times 3 beats of input, which carries 4 a frame"),
+    ):
+        point = design_space(_Mover(input_tensor=TENSOR, arriving=ARRIVING, rate=rate))
+        result = point.query(_Mover.frame_cycles)
+        assert isinstance(result, Rejected), result
+        [finding] = result.findings
+        assert (finding.code, finding.message) == ("kernel-rate-port", f"_Mover {message}")
+
+
+def test_a_kernel_with_no_module_states_no_rate() -> None:
+    """A composite's cycles are its members': a member states its own."""
     with refused(
-        "kernel-cycles-restated", error=DefinitionError, message=r"\._rate_frame_cycles: "
+        "kernel-rate-composite", error=DefinitionError, message=r"Composite\.stated_rate: "
     ):
 
-        class Rated(_Stage):
-            id = "test.interval.rated"
+        class Composite(Wrapped):
+            id = "test.interval.composite"
 
-            def _rate_frame_cycles(self) -> int:
-                return 1
-
-    # Nor as the base's own: no library kernel does (MemStream included).
-    own = vars(Kernel)["frame_cycles"].function
-    with refused("kernel-cycles-restated", error=DefinitionError, message=r"\.frame_cycles: "):
-
-        class Same(_Stage):
-            id = "test.interval.same"
-            frame_cycles = view(own)
-
-    assert "frame_cycles" not in vars(MemStreamKernel)
+            @derived
+            def stated_rate(self) -> StatedRate:
+                return MOVED
 
 
 class WrappedPool(Kernel):

@@ -252,8 +252,8 @@ def _ports_checked(point: CoreComposition) -> int:
 
 
 def _rate_checked(point: CoreComposition) -> int:
-    """Each member of ``point`` binding a module, its cycles checked against the rate law
-    (CONTRACT.md L6): its schedule's iterations where it states one, else the most
+    """Each member of ``point`` binding a module, its cycles checked against the derived
+    rate (CONTRACT.md L6): its schedule's iterations where it states one, else the most
     beats a frame a placed port of it carries. How many it checked."""
     checked = 0
     for name in point.members:
@@ -278,7 +278,7 @@ def _rate_checked(point: CoreComposition) -> int:
 
 
 @pytest.mark.parametrize("case", sorted(conformance_cases()))
-def test_every_module_kernel_s_cycles_follow_the_rate_law(case: str) -> None:
+def test_every_module_kernel_s_cycles_are_derived(case: str) -> None:
     base = unchosen(**conformance_cases()[case]())
     for chosen in _covering(base).points or ({},):
         checked = _rate_checked(configured(base, chosen))

@@ -382,8 +382,8 @@ class StreamPort(Space):
 
     def frame_beats(self) -> int | None:
         """Placed, the beats a frame its stream carries; idle, None: what its kernel's
-        cycles read of it where the kernel has no schedule (``Kernel.frame_cycles``, the rate
-        law)."""
+        cycles read of it where the kernel has no schedule (``Kernel.frame_cycles``, derived
+        by default), and of the port whose beats a stated rate times (``Kernel.stated_rate``)."""
         if not self.placed:
             return None
         beats: int = self.stream.sequence.form.beats

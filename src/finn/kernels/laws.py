@@ -32,11 +32,14 @@ when a beat is **consumed** or **issued**, relative to the kernel's other beats 
 ``Follows``); how far input beats are **accepted** ahead of output beats **delivered**, and
 whether one is accepted only with another port's, is its kernel's intake.
 
-And the rate law's one exception, a kernel's initiation interval (``Interval``: L6's 1,
-``RATE_INTERVAL``, unless a kernel states its own, with its standing and source), with the
-one conversion from iterations to clock cycles (``in_cycles``) that a kernel's cycles a
-frame and FIFO sizing both read, and the pace in cycles of a port that owns its pacing
-(``TimedPace``).
+And the terms of the rate (L6), derived by default and stated where the model cannot give
+it: a kernel's initiation interval (``Interval``: L6's 1, ``RATE_INTERVAL``, unless a kernel
+states its own, with its standing and source), with the one conversion from iterations to
+clock cycles (``in_cycles``) that a kernel's cycles a frame and FIFO sizing both read, and
+the pace in cycles of a port that owns its pacing (``TimedPace``); and the rate a frame a
+kernel states where its schedule and ports at its interval cannot express it
+(``StatedRate``: a memory mover, whose memory words and calls take cycles its stream does
+not show), with its reason, standing and source.
 """
 
 from __future__ import annotations
@@ -102,13 +105,15 @@ PACING_READER = Law(
 RATE = Law(
     "L6",
     "rate",
-    "a kernel advances one iteration an interval (a stage, one beat a side an interval) when "
-    "nothing blocks it, and the law's interval is one cycle; so its cycles a frame at full "
-    "rate follow from its pace (its iterations a frame) or, for a stage, its larger beat "
-    "count, at its interval, by one conversion",
+    "by default, a kernel advances one iteration an interval (a stage, one beat a side an "
+    "interval) when nothing blocks it, and the default interval is one cycle; so its cycles "
+    "a frame at full rate are derived from its pace (its iterations a frame) or, for a "
+    "stage, its larger beat count, at its interval, by one conversion",
     "a kernel whose iterations take more than one cycle, or whose one rests on what its RTL "
     "does not show (an HLS kernel's requested pipeline), states its initiation interval, with "
-    "its standing and source",
+    "its standing and source; a kernel whose rate its schedule and ports cannot express (a "
+    "memory mover) states its rate a frame, its port's beat times and its span, with its "
+    "reason, standing and source",
 )
 RESET_LAW = Law(
     "L7",
@@ -411,7 +416,7 @@ INTAKE_UNSTATED = "intake-unstated"
 no refusal of its design point, since no rule reads intake."""
 
 
-# -- the initiation interval (L6) ---------------------------------------------------------
+# -- the rate (L6): the initiation interval, the one conversion, a stated rate -------------
 
 
 @dataclass(frozen=True)
@@ -474,6 +479,48 @@ class TimedPace:
     @property
     def span(self) -> int:
         return in_cycles(self.pace.span, self.interval)
+
+
+@dataclass(frozen=True)
+class StatedRate:
+    """The rate a frame a kernel states where the derived rate cannot express it (L6): the
+    cycles a frame ``span``s and each beat of its ``port`` from the frame's first (``times``,
+    in order, each within the span), with its ``reason`` (why its schedule and ports at its
+    interval cannot give it), its ``standing`` and its ``source``. A memory mover's: its
+    memory side's words and each call's constant take cycles its stream does not show. The
+    base reads its span as the kernel's cycles a frame
+    (``finn.kernels.base.Kernel.stated_rate``); its times and span are the port's pace in
+    cycles, which FIFO sizing reads as it reads a ``TimedPace``'s
+    (``finn.kernels.fifo_sizing.Paced``) where its reader passes it beside a channel. Each is
+    a marker for later work on the schedule and dataflow model, listed where the contract
+    lists the rates stated."""
+
+    port: str
+    times: tuple[int, ...]
+    span: int
+    standing: Standing
+    source: str
+    reason: str
+
+    def __post_init__(self) -> None:
+        if not self.port:
+            raise ValueError("a stated rate names the port whose beats it times")
+        if not isinstance(self.standing, Standing) or not self.source:
+            raise ValueError("a stated rate has a Standing and states where it is read")
+        if not self.reason:
+            raise ValueError("a stated rate gives its reason: why the derived rate cannot give it")
+        if type(self.span) is not int or self.span < 1:
+            raise ValueError(f"a frame spans a positive count of cycles, not {self.span!r}")
+        times = self.times
+        if not times or any(type(time) is not int for time in times):
+            raise ValueError("a stated rate times each beat of a frame, a cycle each")
+        if times[0] < 0 or times[-1] >= self.span or any(a > b for a, b in zip(times, times[1:])):
+            raise ValueError(
+                f"beat times are in order within the frame's {self.span} cycles, not {times}"
+            )
+
+    def __str__(self) -> str:
+        return f"{self.span} cycles a frame, {self.standing.value}: {self.source}"
 
 
 # -- the transports' pin defaults ---------------------------------------------------------
@@ -666,6 +713,7 @@ __all__ = [
     "RATE_INTERVAL",
     "RESET_LAW",
     "Standing",
+    "StatedRate",
     "TimedPace",
     "TransportKind",
     "axis_carrier",

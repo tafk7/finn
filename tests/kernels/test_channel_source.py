@@ -193,7 +193,7 @@ def test_known_weights_give_the_weight_channel_its_source():
 
 
 def test_the_weight_channel_s_cycles_are_its_source_s():
-    """A channel's cycles are its members', each its own by the rate law
+    """A channel's cycles are its members', each its own, derived by default
     (``Kernel.frame_cycles``), read where each is placed: here its source, the one member
     the base's ``member_frame_cycles`` names too."""
     w = configured(base(weights=WEIGHTS), style="block").member("w")

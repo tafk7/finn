@@ -12,8 +12,8 @@ partition's bottleneck period ``P`` (its ``cycles``, which count a boundary's st
 
 - the **supply**: when each word arrives at the transport, unthrottled. The
   producer's beat times, its port's pace in cycles (``StreamPort.timed_pace``,
-  ``TimedPace``: its ``Pace`` at its own kernel's interval, an iteration an interval by
-  the rate law, CONTRACT.md L6, through the one conversion its kernel's cycles read too,
+  ``TimedPace``: its ``Pace`` at its own kernel's interval, an iteration an interval, the
+  rate derived by default, CONTRACT.md L6, through the one conversion its kernel's cycles read too,
   ``finn.kernels.laws.in_cycles``), carried through the output adapter's width
   conversion (a word leaves once its last element arrived, one a cycle), and the
   producer's span, the cycles its kernel takes a frame;
@@ -112,7 +112,8 @@ class Paced(Protocol):
     """What owns a side's beat times over a frame and its span: the pace in cycles of a port that
     owns its pacing (``finn.kernels.laws.TimedPace``, its iterations at its kernel's interval), the
     beat times the outside states (``finn.kernels.sides.BeatTimes``), a mover's contract
-    (``finn.kernels.movers.MoverContract``)."""
+    (``finn.kernels.movers.MoverContract``), a kernel's stated rate
+    (``finn.kernels.laws.StatedRate``)."""
 
     @property
     def times(self) -> tuple[int, ...]: ...
