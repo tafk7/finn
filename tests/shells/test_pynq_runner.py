@@ -106,6 +106,8 @@ PACKAGED_KEY = "sha256:" + "1" * 64
 
 #: The partition's packaged IP as a test states it: named as a core's module.
 CORE_VLNV = "xilinx_finn:finn:finn_dataflowcore_0123456789abcdef:1.0"
+#: A core unit's IP as a recorded packaging states it (``recorded_tools``).
+UNIT_VLNV = "xilinx_finn:finn:finn_coreunit_0123456789abcdef:1.0"
 
 #: Each unit's IP as a test states it: the movers' HLS exports, each named as an HLS top,
 #: the partition's packaged IP.
@@ -233,7 +235,7 @@ def test_vivados_jobs_are_the_builds(
 
 
 #: The steps of a build that run a tool, each given the build's toolchain.
-TOOL_STEPS = ("hls_products", "PackagePartition")
+TOOL_STEPS = ("hls_products", "PackagePartition", "PackageUnit")
 #: The order they run in, the block design's: each input mover's HLS synthesis, the
 #: partition's packaging, the output mover's.
 TOOL_ORDER = ["hls_products", "hls_products", "PackagePartition", "hls_products"]
@@ -292,11 +294,25 @@ def recorded_tools(
             model.set(OUTPUT_IP_OPTIONS, {"run_synth": False})
             return model, False
 
+    class RecordedUnit(Transformation):
+        def __init__(self, name: str, *, toolchain: object = None) -> None:
+            super().__init__()
+            seen.append(("PackageUnit", toolchain, (name,)))
+            self.vlnv = UNIT_VLNV
+            self.repositories = tuple(str(tmp_path / "unit" / each) for each in ("ip", "core/ip"))
+
+        def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
+            return model, False
+
     def products(module: Leaf, part: str, *, toolchain: object) -> dict[str, HlsProduct]:
         seen.append(("hls_products", toolchain, (module, part)))
         return {module.name: export(tmp_path / "hls" / module.name, module.name)}
 
-    recorders = {"PackagePartition": RecordedPackaging, "hls_products": products}
+    recorders = {
+        "PackagePartition": RecordedPackaging,
+        "PackageUnit": RecordedUnit,
+        "hls_products": products,
+    }
     for name in replaced:
         monkeypatch.setattr(pynq_runner, name, recorders[name])
     monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "build"))
@@ -311,14 +327,16 @@ def recorded_build(
     options: PynqOptions = PynqOptions(),
     packaged: Path | None = None,
     since: Callable[[ModelWrapper], None] | None = None,
+    presenting: bool = False,
 ) -> tuple[ModelWrapper, Integration, Any, list[tuple[str, object, tuple[object, ...]]]]:
     """build_pynq over the Chain, the ``replaced`` steps recorded (``recorded_tools``):
     the parent graph, its integration description, what the runner collected, and each
     recorded step's name, toolchain and arguments, in order. With ``packaged``, the body
     already states that IP, of the key it has (``ip_key``), as STITCHED_IP leaves it; then
-    ``since`` changes the body after it was packaged."""
+    ``since`` changes the body after it was packaged. ``presenting``: its thresholds
+    runtime-writable (``zynq_parent``)."""
     seen = recorded_tools(monkeypatch, tmp_path, replaced)
-    parent = zynq_parent(tmp_path)
+    parent = zynq_parent(tmp_path, presenting=presenting)
     if packaged is not None:
         node, body, body_file = partition_body(parent)
         body.set(OUTPUT_IP, str(packaged))
@@ -372,6 +390,31 @@ def test_a_build_generates_each_movers_ip_packages_the_partition_and_runs_vivado
         "top_in0_0",
         "top_smartconnect_0_0",
     ]
+
+
+def test_a_core_presenting_a_bus_is_placed_as_its_unit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The Chain, its thresholds runtime-writable: after the partition's IP, the runner
+    packages its core's unit (``PackageUnit``, in the build's toolchain), and the block
+    design instantiates the unit as the core's cell, its repositories the unit's and the
+    core's, its one control port at one window; the integration report names the unit's
+    IP."""
+    vivado = FakeVivado()
+    _, described, built, seen = recorded_build(monkeypatch, tmp_path, vivado, presenting=True)
+    assert [(name, toolchain) for name, toolchain, _ in seen if name in TOOL_STEPS] == [
+        (name, vivado)
+        for name in ("hls_products", "hls_products", "PackagePartition", "PackageUnit")
+    ] + [("hls_products", vivado)]
+    assert [args for name, _, args in seen if name == "PackageUnit"] == [("DataflowCore_0",)]
+    unit = IpRef(UNIT_VLNV, tuple(str(tmp_path / "unit" / each) for each in ("ip", "core/ip")))
+    ((_, _, script),) = vivado.runs
+    assert design(described, {**built_ips(tmp_path, described), "DataflowCore_0": unit}) in script
+    assert (
+        "assign_bd_address [get_bd_addr_segs DataflowCore_0/s_axi_control/Reg*] "
+        "-offset 0xa0002000 -range 4096"
+    ) in script
+    assert built.integration.unit("DataflowCore_0").ip == unit
 
 
 def test_a_partition_packaged_earlier_in_the_build_is_not_packaged_again(

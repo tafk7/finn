@@ -364,13 +364,16 @@ def choose_memories(model: ModelWrapper) -> CoreComposition:
     return core_in_shell(model, name="chain")
 
 
-def zynq_parent(directory: Path) -> ModelWrapper:
+def zynq_parent(directory: Path, *, presenting: bool = False) -> ModelWrapper:
     """The Chain, x and w2 crossing its boundary (``streamed_w2_model``), stated for Ultra96
     in the Zynq shell at 5 ns, its choices saved, cut once (its body in ``directory/cut``)
     and verified (``verified_parent``): the kernel path's parent graph, as
-    step_verify_partition leaves it."""
+    step_verify_partition leaves it. ``presenting``: its thresholds runtime-writable, so
+    that its core presents the thresholding's AXI-Lite bus."""
     model = streamed_w2_model()
     write_target(model, resolve_target(board="Ultra96", period_ns=5.0, shell="pynq"))
+    if presenting:
+        configured(model, {"Thresholding_0": {"use_axilite": True}})
     choose_memories(model)
     parent: ModelWrapper = model.transform(CutKernelPartition(directory / "cut"))
     return verified_parent(parent)

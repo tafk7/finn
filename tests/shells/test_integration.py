@@ -152,6 +152,26 @@ def test_the_core_unit_is_the_ip_its_packaging_gave_it(tmp_path: Path) -> None:
     assert core.ip == IpRef(packaged, (str(tmp_path / "ip"),))
 
 
+def test_a_core_presenting_a_bus_is_one_unit_of_its_grouper_s_window(tmp_path: Path) -> None:
+    """The Chain, its thresholds runtime-writable: its core presents the thresholding's bus,
+    so its unit is the core behind its grouper, of the grouper's window (the least a unit
+    takes, 4 KiB); the bus an endpoint of the unit at its offset in the map, of its own
+    range. The unit's IP is the runner's to build: packaged, the body still gives none."""
+    parent = zynq_parent(tmp_path, presenting=True)
+    described = describe(parent)
+    assert described.unit("DataflowCore_0") == Unit(
+        name="DataflowCore_0", kind=CORE, ip=None, window=4096
+    )
+    assert [each for each in described.endpoints if each.unit == "DataflowCore_0"] == [
+        Endpoint(unit="DataflowCore_0", bus="Thresholding_0_s_axilite", offset=0, range=64)
+    ]
+    _, body, body_file = partition_body(parent)
+    body.set(OUTPUT_VLNV, "xilinx_finn:finn:finn_dataflowcore_packaged:1.0")
+    body.set(OUTPUT_IP, str(tmp_path / "ip"))
+    body.save(body_file)
+    assert describe(parent).unit("DataflowCore_0").ip is None
+
+
 def test_a_shell_without_a_linker_has_no_description(tmp_path: Path) -> None:
     model = kernel_model(second_weights=False)
     choose_memories(model)

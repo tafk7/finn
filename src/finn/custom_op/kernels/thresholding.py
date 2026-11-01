@@ -17,7 +17,8 @@ value below the smallest threshold, unless the smallest is the input type's mini
 RTL clamps an input wider than the thresholds to their type, and a clamped input must
 not reach the smallest threshold (``threshold-saturation``). That type is the initial
 values', the fact ``threshold_dtype``; with runtime-writable thresholds the kernel sizes
-its table from the input's type instead (``table_dtype``).
+its table from the input's type instead (``table_dtype``). Runtime-writable, it presents
+its AXI-Lite bus at the port named for its node (``control_port``), which its shell takes.
 
 The pattern refuses ``out_scale`` other than 1 (``threshold-scale``) and a non-integer
 ``out_bias`` (``threshold-bias``), both with ``ExtractMultiThresholdScaleBias`` as a
@@ -50,13 +51,21 @@ from finn.dataflow.datatypes import (
     QONNXDataType,
     ordinary_integer_bounds,
 )
-from finn.kernels.composer import Facts
+from finn.kernels.composer import Facts, member_name
 from finn.kernels.thresholding import ThresholdingKernel, threshold_table_dtype
 from finn.kernels.values.semantics import IntegerTensorValue
 
 if TYPE_CHECKING:
     from onnx import NodeProto
     from qonnx.core.modelwrapper import ModelWrapper
+
+
+def control_port(node: str) -> str:
+    """The port the node ``node``'s AXI-Lite bus is presented at when its thresholds are
+    runtime-writable (``use_axilite``): ``<member>_s_axilite``, its member's name in the
+    network (``member_name``), so that each node's is its own."""
+    return f"{member_name(node)}_s_axilite"
+
 
 # The transform that moves a scale and a bias out of a MultiThreshold, named as a hint
 # in refusals.
@@ -194,6 +203,7 @@ class Thresholding(KernelOp):
             thresholds=table,
             bias=self.bias(),
             platform=self.target().platform,
+            control=control_port(label),
         )
         return self.binding(formals)
 
@@ -206,4 +216,4 @@ class Thresholding(KernelOp):
         context[self.onnx_node.output[0]] = (counts + bias).astype(np.asarray(values).dtype)
 
 
-__all__ = ["Thresholding"]
+__all__ = ["Thresholding", "control_port"]

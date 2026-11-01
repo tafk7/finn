@@ -606,9 +606,16 @@ def test_the_shell_s_cycles_and_resources_are_its_members() -> None:
 
 
 @requires_xsim
-def test_the_partition_computes_what_onnx_computes(tmp_path: Path) -> None:
+@pytest.mark.parametrize("writable", [False, True], ids=["held", "writable"])
+def test_the_partition_computes_what_onnx_computes(tmp_path: Path, writable: bool) -> None:
+    """The Chain's partition streams what ONNX computes; with runtime-writable thresholds,
+    its core presents the thresholding's bus, which the testbench writes the thresholds
+    the kernel declares, its initial ones, before it streams."""
     model = kernel_model()
+    if writable:
+        configured(model, {"Thresholding_0": {"use_axilite": True}})
     bound = configure_partition(model)
+    assert bound.core.control_buses == (("Thresholding_0",) if writable else ())
     module = built(bound, "chain")
     cycles = cycles_of(bound)
     assert isinstance(cycles, Available)
