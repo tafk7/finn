@@ -317,7 +317,10 @@ def test_tfc_w2a2s_partition_holds_the_zynq_shells_rules(
     assert isinstance(module, Available)
     assert not any(label.startswith(SHELL) for label, _ in module.value.fragment.instances)
     assert {owner for owner, _ in bound.chosen()} <= set(bound.members)
-    assert set(Seam(ULTRA96.platform).cost(bound).cycles) == {*bound.members, *bound.movers}
+    assert set(Seam(ULTRA96.platform).cost(bound).cycles) == {
+        *bound.members,
+        *map(bound.placed, bound.movers),
+    }
     assert counts(bound.member(SHELL)) == Available(((), 0, False))  # the core's own: none
     assert bound.member(SHELL).windows == (64, 64)  # its two movers'
     configured_network(body, "tfc")  # the netlist's count is the rules'
@@ -342,19 +345,23 @@ def test_tfc_w2a2s_partition_holds_the_zynq_shells_rules(
             if isinstance(item, inspection.Refused)
         }
         selected = cores.get(key, True)
-        assert refusing == ({True: [(SHELL, f"{key[0]}-clock")]} if selected else {}), key
+        assert refusing == (
+            {True: [(SHELL, f"DataflowCore_0-{key[0]}-clock")]} if selected else {}
+        ), key
     first = ("MatMul_0", f"compute.{chosen[('MatMul_0', 'compute')]}.compute_pumping")
     trial = bound.trial({first: True})
     assert [(key, [f.code for f in found]) for key, found in trial.refused.items()] == [
-        ((SHELL, "MatMul_0-clock"), ["clock-unavailable"])
+        ((SHELL, "DataflowCore_0-MatMul_0-clock"), ["clock-unavailable"])
     ]
     changed = Seam(ULTRA96.platform).set(bound, {first: True})
-    assert isinstance(changed, Refused) and list(changed.why) == [(SHELL, "MatMul_0-clock")]
+    assert isinstance(changed, Refused) and list(changed.why) == [
+        (SHELL, "DataflowCore_0-MatMul_0-clock")
+    ]
     write_raw(body, "MatMul_0", first[1], 1)
     pumped = core_in_shell(body, body.graph.node)
     found = Seam(ULTRA96.platform).refusals(pumped)
     assert {name: [f.code for f in why] for name, why in found.items()} == {
         SHELL: ["clock-unavailable"]
     }
-    with refused("clock-unavailable", error=KernelOpError, owner="MatMul_0-clock"):
+    with refused("clock-unavailable", error=KernelOpError, owner="tfc-MatMul_0-clock"):
         configured_network(body, "tfc")

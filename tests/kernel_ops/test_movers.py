@@ -914,7 +914,12 @@ def test_tfc_on_the_default_ip_shell_is_tfc_in_the_zynq_shell_without_its_movers
     # The shell's resources: on ip its partition's alone; the Zynq shell adds its two
     # movers and its static region to the same partition.
     on_ip, on_zynq = ip["resources"], zynq["resources"]
-    assert on_ip["shell"] == {"partition": on_ip["used"], "movers": {}, "static_region": {}}
+    assert on_ip["shell"] == {
+        "partition": on_ip["used"],
+        "movers": {},
+        "groupers": {},
+        "static_region": {},
+    }
     in_zynq_shell = on_zynq["shell"]
     assert in_zynq_shell["partition"] == on_ip["used"]
     assert list(in_zynq_shell["movers"]) == ["in0", "out0"]
