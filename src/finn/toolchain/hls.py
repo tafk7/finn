@@ -29,7 +29,7 @@
 
 """What FINN knows of HLS: its frontends and installation, the command that runs a
 script, and ``synthesize``, which every HLS synthesis goes through: the kernel system's
-HLS leaves and the pynq shell's IODMAs.
+HLS leaves, the pynq shell's movers among them.
 
 A selection names its frontend (``FRONTENDS``; the machine's comes from
 ``host_frontend``), and ``command`` refuses one that does not match its probed release.
@@ -39,24 +39,21 @@ HLS prints messages in the form Vivado's tools use (``SEVERITY: [HLS N-M] text``
 both read them with ``finn.toolchain.vivado.messages``.
 
 ``synthesize`` builds a staged HLS request (a directory holding ``script.tcl`` and the
-files it reads, by relative paths: ``finn.kernels.artifacts.hls`` stages a leaf's, the
-pynq shell's IODMA writes its own) for one part with the toolchain's HLS frontend, and
-caches the product under ``$FINN_HOME/hls`` (``hls_cache``) the way the resource store
-does (``finn.resources``). The script reads the part from the Tcl variable ``part``, and
-each library it reads in place (finn-hlslib, for an IODMA) from a variable of the
-library's name. The product is built in a temporary directory beside the entry, marked
-with its full key and renamed into place under the entry's lock, so a failed or
-concurrent build never publishes a partial product, and a second caller waits for the
-first. The key is the request's content, the part, each library's content (never its
-location) and the HLS installation (``finn.toolchain.launcher.identity`` of the
-frontend); a cache hit runs nothing. A product (``HlsProduct``) holds the exported
-Verilog with its memory images (``verilog/``), the synthesis reports (``report/``), the
-IP a script exports into the IP catalog (``ip/``, ``export_design -format ip_catalog``),
-the request it was built from (``request/``), and the run's replay script with its
-transcript (``synthesize.sh``, ``.stdout.log``, ``.stderr.log``). The transcript stays
-with the product even in a build, since every build shares the product. A failed build
-is kept beside the entry (``<entry>.failed``), and the ``ToolFailed`` it raises names
-its transcript.
+files it reads, by relative paths: ``finn.kernels.artifacts.hls`` stages a leaf's) for one
+part with the toolchain's HLS frontend, and caches the product under ``$FINN_HOME/hls``
+(``hls_cache``) the way the resource store does (``finn.resources``). The script reads the
+part from the Tcl variable ``part``. The product is built in a temporary directory beside
+the entry, marked with its full key and renamed into place under the entry's lock, so a
+failed or concurrent build never publishes a partial product, and a second caller waits
+for the first. The key is the request's content, the part and the HLS installation
+(``finn.toolchain.launcher.identity`` of the frontend); a cache hit runs nothing. A
+product (``HlsProduct``) holds the exported Verilog with its memory images (``verilog/``),
+the synthesis reports (``report/``), the IP a script exports into the IP catalog (``ip/``,
+``export_design -format ip_catalog``), the request it was built from (``request/``), and
+the run's replay script with its transcript (``synthesize.sh``, ``.stdout.log``,
+``.stderr.log``). The transcript stays with the product even in a build, since every build
+shares the product. A failed build is kept beside the entry (``<entry>.failed``), and the
+``ToolFailed`` it raises names its transcript.
 
 It takes a directory, never a kernel value: ``finn.toolchain`` imports no kernel layer.
 """
@@ -185,13 +182,9 @@ def hls_cache() -> Path:
     return home() / "hls"
 
 
-def synthesis_key(
-    request: Path, part: str, identity: str, libraries: Mapping[str, Path] | None = None
-) -> str:
-    """The key of a request's product: its staged content, the part, the HLS tool and
-    each library's content, by its name."""
-    read = [f"{name}={tree_digest(path)}" for name, path in sorted((libraries or {}).items())]
-    preimage = "\0".join(("hls-synthesis-v1", tree_digest(request), part, identity, *read))
+def synthesis_key(request: Path, part: str, identity: str) -> str:
+    """The key of a request's product: its staged content, the part and the HLS tool."""
+    preimage = "\0".join(("hls-synthesis-v1", tree_digest(request), part, identity))
     return hashlib.sha256(preimage.encode()).hexdigest()
 
 
@@ -231,13 +224,11 @@ def synthesize(
     name: str,
     toolchain: Toolchain,
     cache: Path | None = None,
-    libraries: Mapping[str, Path] | None = None,
 ) -> HlsProduct:
     """The product of the staged ``request`` for ``part``, synthesized unless cached.
 
     ``name`` names the entry, ``<name>-<key16>`` under ``cache`` (``hls_cache()`` by
-    default); ``toolchain`` runs the frontend; ``libraries`` are the directories the
-    script reads in place, each by a Tcl variable of its name. The running step's
+    default); ``toolchain`` runs the frontend. The running step's
     manifest lists the entry, built or reused (``finn.core.reporting.manifest.stored``).
     Raises, before anything is looked up or run, ``ValueError`` when ``request`` holds no
     ``script.tcl`` or the selection names no HLS frontend (``selected_frontend``), and
@@ -250,11 +241,10 @@ def synthesize(
     ``ToolFailed`` when the tool does not finish, exits non-zero or
     leaves no exported RTL."""
     cache = hls_cache() if cache is None else cache
-    libraries = dict(libraries or {})
     if not (Path(request) / REQUEST_SCRIPT).is_file():
         raise ValueError(f"{request} holds no {REQUEST_SCRIPT}: it is not a staged request")
     key = synthesis_key(
-        Path(request), part, launcher.identity(toolchain, selected_frontend(toolchain)), libraries
+        Path(request), part, launcher.identity(toolchain, selected_frontend(toolchain))
     )
     entry_name = f"{name}-{key[:16]}"
     with locked(cache, entry_name) as entry:
@@ -264,7 +254,7 @@ def synthesize(
         work = Path(tempfile.mkdtemp(dir=cache, prefix=f".{entry_name}."))
         failed = cache / f"{entry_name}.failed"
         try:
-            _build(Path(request), part, libraries, work, toolchain, kept=failed)
+            _build(Path(request), part, work, toolchain, kept=failed)
         except BaseException:
             shutil.rmtree(failed, ignore_errors=True)
             work.rename(failed)
@@ -277,7 +267,6 @@ def synthesize(
 def _build(
     request: Path,
     part: str,
-    libraries: Mapping[str, Path],
     work: Path,
     toolchain: Toolchain,
     *,
@@ -288,11 +277,7 @@ def _build(
     run = work / "request"
     shutil.copytree(request, run)
     driver = run / "synthesize.tcl"
-    variables = {"part": part, **{name: str(path) for name, path in libraries.items()}}
-    driver.write_text(
-        "".join(f"set {name} {{{value}}}\n" for name, value in variables.items())
-        + f"source {REQUEST_SCRIPT}\n"
-    )
+    driver.write_text(f"set part {{{part}}}\nsource {REQUEST_SCRIPT}\n")
     frontend, args = command(toolchain, driver.name)
     replay = work / "synthesize.sh"
     # The transcript is the product's, beside its replay, in a build too: the product

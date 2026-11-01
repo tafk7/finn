@@ -8,12 +8,10 @@ integration description (``finn.shells.integration``), linked by the ``pynq`` li
 The runner (``build_pynq``):
 
 - packages each unit's IP, in the description's order:
-  - a mover's: an ``IODMA_hls`` IP generated in a scratch model of its one node,
-    configured as the linker states it (``linker.iodma_configuration``), through code
-    generation and Vitis HLS (``ipgen.prepare_ip``, ``ipgen.hls_synth_ip``, through the
-    HLS cache), and packaged as the block design instantiates it
-    (``ipgen.create_stitched_ip``, named as the mover's cell:
-    ``xilinx_finn:finn:<cell>:1.0`` with the pins ``linker.IODMA_PINS`` names);
+  - a mover's: its module, its kernel's HLS top, synthesized through the HLS cache
+    (``finn.transformation.kernels.hls.hls_products``), which exports it into the IP
+    catalog as ``xilinx_finn:finn:<module>:1.0`` (``mover_ip``): the block design
+    instantiates the HLS export's IP as it is, its pins the ones the description names;
   - the core's: the partition packaged (``PackagePartition``: its body states its IP in
     ``finn.outputs``), unless its body already states an IP whose key is the one the body
     has now with the options it was packaged with (``ip_key``: the packaging step
@@ -48,14 +46,13 @@ import dataclasses
 import json
 import logging
 import shutil
+import xml.etree.ElementTree as ElementTree
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.base import Transformation
-from qonnx.util.basic import qonnx_make_model
 
 from finn import resources
 from finn.core.graph.annotations.outputs import (
@@ -72,24 +69,18 @@ from finn.core.graph.annotations.outputs import (
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.partition import design_digest, partition_body
 from finn.core.reporting.findings import Finding, FindingKind, Refusal
+from finn.kernels.artifacts.ipxact import vlnv
 from finn.platform.shells import VIVADO_BLOCK_DESIGN, ShellRow, shell_row
 from finn.shells.integration import Edge, Integration, IpRef, describe
-from finn.shells.pynq import iodma, linker
-from finn.shells.pynq.ipgen import (
-    create_stitched_ip,
-    hls_synth_ip,
-    ip_repositories,
-    prepare_ip,
-)
-from finn.toolchain.launcher import Toolchain, host_toolchain
+from finn.shells.pynq import linker
+from finn.toolchain.ip import COMPONENT
+from finn.toolchain.launcher import Toolchain, ToolFailed, host_toolchain, transcript_files
 from finn.toolchain.vivado import PL_CLOCKS, delivered_clock
 from finn.transformation.kernels.choose import shell_bottleneck
+from finn.transformation.kernels.hls import hls_products
 from finn.transformation.kernels.package import PackagePartition, ip_key
 
 _LOG = logging.getLogger(__name__)
-
-#: The domain of the IODMA_hls node a mover's IP is generated from.
-IODMA_DOMAIN = iodma.__name__
 
 
 @dataclass(frozen=True)
@@ -121,57 +112,39 @@ class PynqBuilt:
     out_of_context: dict[str, str] = field(default_factory=dict)
 
 
-def iodma_model(edge: Edge) -> ModelWrapper:
-    """A scratch model of one ``IODMA_hls`` node, ``<cell>_IODMA_hls_0``, configured as the
-    linker states the mover of ``edge``: from its memory side (``<cell>_memory``) to its
-    boundary tensor, or back, each of the tensor's shape and the mover's element."""
-    instance = linker.cell(edge.unit)
-    shape = list(edge.shape)
-    memory = helper.make_tensor_value_info(f"{instance}_memory", TensorProto.FLOAT, shape)
-    stream = helper.make_tensor_value_info(edge.tensor, TensorProto.FLOAT, shape)
-    source, sink = (memory, stream) if edge.contract.direction == "in" else (stream, memory)
-    node = helper.make_node(
-        "IODMA_hls",
-        [source.name],
-        [sink.name],
-        name=f"{instance}_IODMA_hls_0",
-        domain=IODMA_DOMAIN,
-        **linker.iodma_configuration(edge).attributes,
-    )
-    model = ModelWrapper(
-        qonnx_make_model(
-            helper.make_graph([node], instance, [source], [sink]),
-            opset_imports=[helper.make_opsetid("", 13), helper.make_opsetid(IODMA_DOMAIN, 1)],
+def exported_vlnv(component: Path) -> str | None:
+    """The VLNV an IP-XACT ``component`` (its ``component.xml``) states, ``<vendor>:<library>:
+    <name>:<version>``; None when it states no whole one."""
+    root = ElementTree.parse(component).getroot()
+    fields = {child.tag.rsplit("}", 1)[-1]: (child.text or "").strip() for child in root}
+    parts = [fields.get(name, "") for name in ("vendor", "library", "name", "version")]
+    return ":".join(parts) if all(parts) else None
+
+
+def mover_ip(edge: Edge, part: str, *, toolchain: Toolchain) -> IpRef:
+    """The IP of the mover of ``edge``: its module, its kernel's HLS top, synthesized for
+    ``part`` through the HLS cache (``hls_products``, every tool run through ``toolchain``),
+    which exports it into the IP catalog as ``xilinx_finn:finn:<module>:1.0``; its
+    repository the product's IP (``HlsProduct.ip``). A product that exports no IP of that
+    name is the tool's failure (``ToolFailed``, naming its transcript)."""
+    module = edge.module
+    product = hls_products(module, part, toolchain=toolchain)[module.name]
+    expected = vlnv(module.name)
+    component = product.ip / COMPONENT
+    exported = exported_vlnv(component) if component.is_file() else None
+    if exported != expected:
+        raise ToolFailed.of(
+            "hls",
+            transcript=transcript_files(product.directory / "synthesize.sh")[0],
+            what=f"{edge.unit}: its product ({product.directory}) exports "
+            f"{exported or 'no IP'}, not {expected}",
         )
-    )
-    for each in (source, sink):
-        model.set_tensor_datatype(each.name, edge.element.dtype, edge.element.value_range)
-    return model
-
-
-def generate_mover_ip(
-    edge: Edge, part: str, period_ns: float, directory: Path, toolchain: Toolchain
-) -> IpRef:
-    """The IP of the mover of ``edge``: its scratch model (``iodma_model``, saved in
-    ``directory``) through code generation and Vitis HLS (cached), packaged as its cell
-    (``ipgen``), every tool run through ``toolchain``."""
-    instance = linker.cell(edge.unit)
-    model = iodma_model(edge)
-    model = prepare_ip(model, period_ns)
-    model = hls_synth_ip(model, part, toolchain=toolchain)
-    model = create_stitched_ip(model, part, period_ns, instance, toolchain=toolchain)
-    directory.mkdir(parents=True, exist_ok=True)
-    model.save(str(directory / f"{instance}.onnx"))
-    vlnv = model.get_metadata_prop("vivado_stitch_vlnv")
-    if vlnv is None:
-        raise RuntimeError(f"{instance}: its packaged IP states no VLNV")
-    return IpRef(vlnv, tuple(ip_repositories(model)))
+    return IpRef(expected, (str(product.ip),))
 
 
 def build_pynq(
     model: ModelWrapper,
     integration: Integration,
-    directory: Path,
     *,
     toolchain: Toolchain,
     jobs: int | None = None,
@@ -179,12 +152,11 @@ def build_pynq(
 ) -> PynqBuilt:
     """Build the parent graph ``model`` in the Zynq block design of its integration
     description ``integration`` (see the module docstring): each unit's IP in the
-    description's order, the movers' (their scratch models saved in ``directory``) and the
-    core's (its body saved with its IP stated, or the IP the body states already when its
-    key is the one the body has now), then the description linked in a new project and
-    what Vivado made collected. ``toolchain`` is the prepared toolchain every tool runs
-    through; ``jobs`` the runs Vivado launches at once; ``options`` the shell's build
-    options."""
+    description's order, the movers' (``mover_ip``) and the core's (its body saved with its
+    IP stated, or the IP the body states already when its key is the one the body has
+    now), then the description linked in a new project and what Vivado made collected.
+    ``toolchain`` is the prepared toolchain every tool runs through; ``jobs`` the runs
+    Vivado launches at once; ``options`` the shell's build options."""
     node, body, body_file = partition_body(model)
     ips: dict[str, IpRef] = {}
     packaged_key = None
@@ -212,13 +184,7 @@ def build_pynq(
                 raise RuntimeError(f"{node.name}: its body states no packaged IP")
             ips[unit.name] = IpRef(vlnv, (ip,))
         else:
-            ips[unit.name] = generate_mover_ip(
-                edges[unit.name],
-                integration.part,
-                integration.period_ns,
-                Path(directory),
-                toolchain,
-            )
+            ips[unit.name] = mover_ip(edges[unit.name], integration.part, toolchain=toolchain)
     assert packaged_key is not None  # the core is one of the units
     row = shell_row(*integration.row)
     scratch: Path = resources.scratch()  # type: ignore[no-untyped-call]
@@ -384,8 +350,7 @@ class BuildPynqBitfile(Transformation):
     (``objective_fps``, a target_throughput entry of step_explore's)
     (report/delivered_clock.json), with its limitations (``delivered_clock_findings``, the
     report's ``findings``). The shell, board, part and clock are the target the partition's
-    body states (``pynq_row``); the movers' scratch models are kept in ``movers/`` beside
-    the body's file.
+    body states (``pynq_row``).
 
     The parent graph states the bitfile and its hardware handoff (``finn.outputs``; the
     reports beside them: ``bitfile_directory``), the digest of the partition's design
@@ -419,7 +384,7 @@ class BuildPynqBitfile(Transformation):
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
         pynq_row(model, "bitfile")
-        node, body, body_file = partition_body(model)
+        node, body, _ = partition_body(model)
         bottleneck = shell_bottleneck(body, node.name)
         described = describe(model)
         reports = {name: self.directory / path for name, path in REPORTS.items()}
@@ -431,7 +396,6 @@ class BuildPynqBitfile(Transformation):
         built = build_pynq(
             model,
             described,
-            Path(body_file).parent / "movers",
             toolchain=toolchain,
             jobs=toolchain.selection.vivado_jobs,
             options=self.options,
@@ -511,10 +475,10 @@ __all__ = [
     "bitfile_directory",
     "build_pynq",
     "delivered_clock_findings",
-    "generate_mover_ip",
+    "exported_vlnv",
     "REPORT_SCHEMA",
     "integration_report",
-    "iodma_model",
+    "mover_ip",
     "pynq_row",
     "refuse_stale_bitfile",
 ]

@@ -55,6 +55,7 @@ from support.tfc import EXPORT, SHAPE, ULTRA96, built, io_settings, partition, r
 from support.tfc_built import SET_FOLDING, TFC_BUILT, TFC_MODULE, TFC_STORED
 
 import finn.kernels.explore as explore_module
+from finn import resources
 from finn.builder import build_dataflow_steps
 from finn.builder.build_dataflow import build_dataflow_cfg, build_plan
 from finn.builder.build_dataflow_checks import configuration_findings
@@ -113,7 +114,8 @@ from finn.core.search import ExploreError, Hold, Ranked
 from finn.core.space import Available
 from finn.custom_op.kernels.shell import configured_network, mover_contracts
 from finn.kernels.artifacts.contributions import HlsSource
-from finn.kernels.artifacts.module import module_name
+from finn.kernels.artifacts.hls import stage_hls
+from finn.kernels.artifacts.module import Leaf, module_name
 from finn.kernels.channels import Channel, Neighbours
 from finn.kernels.explore import KernelExplorer, TargetThroughput
 from finn.kernels.fifo_sizing import Sized
@@ -123,24 +125,17 @@ from finn.platform.request import TargetRequest
 from finn.platform.resolve import resolve_target
 from finn.shells.integration import IpRef, describe
 from finn.shells.pynq import runner as pynq_runner
-from finn.shells.pynq.ipgen import prepare_ip
 from finn.shells.pynq.linker import (
     Address,
     Wire,
     block_design,
-    cell,
-    iodma_configuration,
     linked_row,
     placement,
     project_script,
     wiring,
 )
-from finn.shells.pynq.runner import (
-    DELIVERED_CLOCK,
-    PynqRefused,
-    delivered_clock_findings,
-    iodma_model,
-)
+from finn.shells.pynq.runner import DELIVERED_CLOCK, PynqRefused, delivered_clock_findings
+from finn.toolchain.hls import HlsProduct
 from finn.toolchain.launcher import Selection, Toolchain
 from finn.toolchain.vivado import delivered_clock
 from finn.transformation.kernels import (
@@ -150,6 +145,7 @@ from finn.transformation.kernels import (
     shell_bottleneck,
 )
 from finn.transformation.kernels.cut import CutKernelPartition, MakeCutChoices
+from finn.transformation.kernels.hls import hls_requests
 from finn.transformation.kernels.package import boundary_facts, source_roots
 
 # TFC is built from the trained network once for the module (about ten seconds), and each
@@ -1491,21 +1487,30 @@ def test_tfc_on_pynq_is_linked_as_z0s_movers_iodmas_and_wires(
     z0_tfc: ModelWrapper, z0_cut: Path
 ) -> None:
     """Z0's TFC (Ultra96, 5 ns, Z0's chain) on pynq: its description's edge ports are the
-    movers ZynqBuild inserted, the linker configures each mover's IODMA_hls as ZynqBuild
-    did and names the block design's wires as Z0's ip_config.tcl makes them (its partition
-    then named StreamingDataflowPartition_1), and the partition is Z0's module, with Z0's
-    choices."""
+    movers ZynqBuild inserted, each mover's contract the one ZynqBuild configured its
+    IODMA_hls with, its module its kernel's HLS top (``TFC_MOVERS``); the linker names the
+    block design's wires as Z0's ip_config.tcl makes them (its partition then named
+    StreamingDataflowPartition_1) but for each mover's cell, its unit's name, and its pins,
+    its HLS export's own; and the partition is Z0's module, with Z0's choices."""
     parent, output = z0_tfc, z0_cut.parent / "output"
     described = describe(parent)
     row = linked_row(described)
-    assert [(cell(edge.unit), edge.tensor, edge.port) for edge in described.edges] == [
-        ("idma0", "Reshape_0_out0", "s_axis_0"),
-        ("odma0", "MatMul_3_out0", "m_axis_0"),
+    assert [(edge.unit, edge.tensor, edge.port) for edge in described.edges] == [
+        ("in0", "Reshape_0_out0", "s_axis_0"),
+        ("out0", "MatMul_3_out0", "m_axis_0"),
     ]
-    assert [iodma_configuration(edge).attributes for edge in described.edges] == [
-        Z0_IODMAS["in"],
-        Z0_IODMAS["out"],
-    ]
+    assert [
+        {
+            "numInputVectors": [1, edge.contract.beats],
+            "NumChannels": edge.contract.tdata // 8,
+            "dataType": "UINT8",
+            "intfWidth": edge.contract.memory_width,
+            "streamWidth": edge.contract.tdata,
+            "direction": edge.contract.direction,
+        }
+        for edge in described.edges
+    ] == [Z0_IODMAS["in"], Z0_IODMAS["out"]]
+    assert {edge.unit: edge.module.name for edge in described.edges} == TFC_MOVERS
     # The bytes' element is the channel's: the pixels and the logits, INT7 over the last
     # MatMul's range, [-61, 61], read from the activations' [-1, 1].
     assert [str(edge.contract.element) for edge in described.edges] == [
@@ -1514,21 +1519,21 @@ def test_tfc_on_pynq_is_linked_as_z0s_movers_iodmas_and_wires(
     ]
     clocked = [
         Wire(kind, f"smartconnect_0/{source}", f"{instance}/{pin}")
-        for instance in ("idma0", "DataflowCore_0", "odma0")
+        for instance in ("in0", "DataflowCore_0", "out0")
         for kind, source, pin in (("clock", "aclk", "ap_clk"), ("reset", "aresetn", "ap_rst_n"))
     ]
     assert wiring(described, row) == (
-        Wire("axis", "idma0/m_axis_0", "DataflowCore_0/s_axis_0"),
-        Wire("axis", "DataflowCore_0/m_axis_0", "odma0/s_axis_0"),
-        Wire("aximm", "idma0/m_axi_gmem0", "smartconnect_0/S00_AXI"),
-        Wire("aximm", "odma0/m_axi_gmem0", "smartconnect_0/S01_AXI"),
-        Wire("axilite", "axi_interconnect_0/M00_AXI", "idma0/s_axi_control_0"),
-        Wire("axilite", "axi_interconnect_0/M01_AXI", "odma0/s_axi_control_0"),
+        Wire("axis", "in0/out0_V", "DataflowCore_0/s_axis_0"),
+        Wire("axis", "DataflowCore_0/m_axis_0", "out0/in0_V"),
+        Wire("aximm", "in0/m_axi_gmem", "smartconnect_0/S00_AXI"),
+        Wire("aximm", "out0/m_axi_gmem", "smartconnect_0/S01_AXI"),
+        Wire("axilite", "axi_interconnect_0/M00_AXI", "in0/s_axi_control"),
+        Wire("axilite", "axi_interconnect_0/M01_AXI", "out0/s_axi_control"),
         *clocked,
     )
     assert placement(described, row) == (
-        Address("idma0/s_axi_control_0", 0xA000_0000, 4096),
-        Address("odma0/s_axi_control_0", 0xA000_1000, 4096),
+        Address("in0/s_axi_control", 0xA000_0000, 4096),
+        Address("out0/s_axi_control", 0xA000_1000, 4096),
     )
     (core,) = described.cores
     core_ip = described.unit(core.name).ip
@@ -1576,6 +1581,50 @@ connect_bd_net [get_bd_pins odma0/ap_clk] [get_bd_pins smartconnect_0/aclk]
 connect_bd_net [get_bd_pins odma0/ap_rst_n] [get_bd_pins smartconnect_0/aresetn]
 connect_bd_intf_net [get_bd_intf_pins odma0/s_axis_0] [get_bd_intf_pins DataflowCore_0/m_axis_0]
 """  # noqa: E501
+
+#: TFC's movers at Z0's choices, by unit: each its kernel's HLS top, named by its request's
+#: digest, whose IP is the HLS export's, ``xilinx_finn:finn:<top>:1.0``.
+TFC_MOVERS = {
+    "in0": "finn_iodma_14aacd5fc842d1d0",
+    "out0": "finn_iodma_f0a1887e0eb9a5f8",
+}
+
+#: Z0's block design as the build writes it now, each mover a kernel: the HWCustomOp
+#: flow's cell and stitched IP of each mover (``idma0``, ``odma0``) its unit's name and its
+#: kernel's HLS export, that IP's own pins and the HLS product's IP its one repository
+#: (``$HLS/<top>/ip``). Nothing else of Z0's changes.
+AS_KERNELS = (
+    *(
+        (
+            f'[list "$BUILD/code_gen_ipgen_{cell}_IODMA_hls_0_XXXXXXXX/project_{cell}_IODMA_hls_0'
+            '/sol1/impl/ip" "$BUILD/vivado_stitch_proj_XXXXXXXX/ip"]',
+            f'[list "$HLS/{TFC_MOVERS[unit]}/ip"]',
+        )
+        for cell, unit in (("idma0", "in0"), ("odma0", "out0"))
+    ),
+    *(
+        (f"xilinx_finn:finn:{cell}:1.0", f"xilinx_finn:finn:{TFC_MOVERS[unit]}:1.0")
+        for cell, unit in (("idma0", "in0"), ("odma0", "out0"))
+    ),
+    ("idma0/m_axis_0", "in0/out0_V"),
+    ("odma0/s_axis_0", "out0/in0_V"),
+    ("/m_axi_gmem0]", "/m_axi_gmem]"),
+    ("/s_axi_control_0", "/s_axi_control"),
+    ("idma0", "in0"),
+    ("odma0", "out0"),
+)
+
+
+def as_kernels(design: str) -> str:
+    """Z0's block design ``design`` renamed as ``AS_KERNELS`` states, in its order."""
+    for before, after in AS_KERNELS:
+        design = design.replace(before, after)
+    return design
+
+
+#: The block design the build writes for TFC: Z0's, its movers kernels (``as_kernels``).
+BLOCK_DESIGN = as_kernels(Z0_BLOCK_DESIGN)
+
 
 #: The IODMAs' generated HLS code at Z0's choices (PrepareIP's top_<node>.cpp), by
 #: instance: the oracle's, its partitions renamed. (Z0's build generated the same.)
@@ -1630,28 +1679,29 @@ def test_the_z0_literal_is_the_oracles_block_design_but_for_the_partitions_ip() 
 
 @pytest.mark.slow
 def test_the_runner_writes_z0s_block_design_for_tfc(z0_tfc: ModelWrapper) -> None:
-    """The block design the linker writes from TFC's description, each unit's IP where Z0's
-    build made it (the normalized build directory, a Tcl variable there, as a path
-    here), is Z0's, line for line."""
-    build = "/BUILD/{}_XXXXXXXX"
-    stitched = build.format("vivado_stitch_proj") + "/ip"
+    """The block design the linker writes from TFC's description, the core's IP where Z0's
+    build made it (the normalized build directory, a Tcl variable there, as a path here)
+    and each mover's where its HLS product holds it, is Z0's with its movers kernels
+    (``BLOCK_DESIGN``), line for line: Z0's but for each mover's cell, IP, repository and
+    pins."""
+    stitched = "/BUILD/vivado_stitch_proj_XXXXXXXX/ip"
     ips = {
-        unit: IpRef(
-            f"xilinx_finn:finn:{cell(unit)}:1.0",
-            (
-                build.format(f"code_gen_ipgen_{cell(unit)}_IODMA_hls_0")
-                + f"/project_{cell(unit)}_IODMA_hls_0/sol1/impl/ip",
-                stitched,
-            ),
-        )
-        for unit in ("in0", "out0")
+        unit: IpRef(f"xilinx_finn:finn:{top}:1.0", (f"/HLS/{top}/ip",))
+        for unit, top in TFC_MOVERS.items()
     }
     described = describe(z0_tfc)
     core_ip = described.unit("DataflowCore_0").ip
     assert core_ip is not None
     ips["DataflowCore_0"] = IpRef(core_ip.vlnv, (stitched,))
     design = block_design(described.packaged(ips), linked_row(described))
-    assert design == Z0_BLOCK_DESIGN.replace("$BUILD", "/BUILD")
+    assert design == BLOCK_DESIGN.replace("$BUILD", "/BUILD").replace("$HLS", "/HLS")
+    differing = [
+        (z0, ours)
+        for z0, ours in zip(Z0_BLOCK_DESIGN.splitlines(), BLOCK_DESIGN.splitlines())
+        if z0 != ours
+    ]
+    assert len(differing) == 16
+    assert all(any(cell in z0 for cell in ("idma0", "odma0")) for z0, _ in differing)
     script = project_script(
         described,
         design,
@@ -1664,27 +1714,29 @@ def test_the_runner_writes_z0s_block_design_for_tfc(z0_tfc: ModelWrapper) -> Non
 
 
 @pytest.mark.slow
-def test_the_runner_generates_z0s_iodmas_for_tfc(
-    z0_tfc: ModelWrapper, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_each_movers_hls_request_is_z0s_iodma_exported_as_its_top(
+    z0_tfc: ModelWrapper, tmp_path: Path
 ) -> None:
-    """Each mover's IODMA_hls, generated in its scratch model (``prepare_ip``, for real: code
-    generation runs no tool), is Z0's code, text for text, staged as an HLS request whose
-    script names no path of the build and no part: it reads both."""
-    monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path))
-    described = describe(z0_tfc)
-    for edge in described.edges:
-        model = prepare_ip(iodma_model(edge), described.period_ns)
-        (node,) = model.graph.node
-        request = Path(str(getCustomOp(node).get_nodeattr("code_gen_dir_ipgen"))) / "request"
-        assert sorted(path.name for path in request.iterdir()) == [
-            "script.tcl",
-            f"top_{node.name}.cpp",
-        ]
-        assert (request / f"top_{node.name}.cpp").read_text() == Z0_IODMA_CODE[cell(edge.unit)]
-        script = (request / "script.tcl").read_text()
-        assert str(tmp_path) not in script and described.part not in script
-        assert 'set config_proj_part "$part"\n' in script
-        assert 'set config_bnnlibdir "$hlslib"\n' in script
+    """Each mover's module, staged as an HLS request (``stage_hls``: it runs no tool), is
+    Z0's IODMA code under its top's name, over finn-hlslib's headers; its script names no
+    path of the build and no part (it reads the part), and exports the top into the IP
+    catalog as FINN's IP of its own name."""
+    for edge in describe(z0_tfc).edges:
+        ((_, request),) = hls_requests(edge.module)
+        staged = stage_hls(
+            request, tmp_path / edge.unit, roots={"hlslib": Path(resources.path("hlslib"))}
+        )
+        cell = {"in0": "idma0", "out0": "odma0"}[edge.unit]
+        top = (staged.directory / "top.cpp").read_text()
+        assert top == Z0_IODMA_CODE[cell].replace(f"{cell}_IODMA_hls_0", request.function)
+        script = (staged.directory / "script.tcl").read_text()
+        assert str(tmp_path) not in script and "xczu3eg" not in script
+        assert "set_part $part\n" in script
+        assert (
+            "config_export -format ip_catalog -vendor xilinx_finn -library finn "
+            f"-ipname {request.function} -version 1.0\ncsynth_design\n"
+            "export_design -format ip_catalog\n"
+        ) in script
 
 
 @pytest.mark.slow
@@ -1707,9 +1759,8 @@ def test_z0s_movers_as_kernels_state_their_channels_movers_and_generate_z0s_iodm
         assert point.contract == edge.contract
         (request,) = point.module_sources
         assert isinstance(request, HlsSource)
-        assert request.top == Z0_IODMA_CODE[cell(edge.unit)].replace(
-            f"{cell(edge.unit)}_IODMA_hls_0", request.function
-        )
+        cell = {"in0": "idma0", "out0": "odma0"}[edge.unit]
+        assert request.top == Z0_IODMA_CODE[cell].replace(f"{cell}_IODMA_hls_0", request.function)
         cycles[edge.unit] = point.frame_cycles
     assert cycles == {"in0": TFC_BOTTLENECK, "out0": 14}
 
@@ -1731,8 +1782,8 @@ TFC_IO_SHAPES = {
     "oshape_folded": [(1, 10, 1)],
     "ishape_packed": [(1, 196, 4)],
     "oshape_packed": [(1, 10, 1)],
-    "input_dma_name": ["idma0"],
-    "output_dma_name": ["odma0"],
+    "input_dma_name": ["in0"],
+    "output_dma_name": ["out0"],
     "number_of_external_weights": 0,
     "external_weights_input_shapes": {},
     "num_inputs": 1,
@@ -1743,9 +1794,8 @@ TFC_IO_SHAPES = {
 
 def tool_recorders(tmp_path: Path) -> dict[str, object]:
     """The runner's tool steps, each replaced by one that states what the tool would
-    have made, in ``tmp_path``: prepare_ip and hls_synth_ip do nothing,
-    create_stitched_ip states a mover's IP, PackagePartition the partition's, named as its
-    module."""
+    have made, in ``tmp_path``: hls_products a mover's HLS export, named as its top,
+    PackagePartition the partition's IP, named as its module."""
 
     class Packaged(Transformation):
         def __init__(self, name: str, **kwargs: object) -> None:
@@ -1761,26 +1811,16 @@ def tool_recorders(tmp_path: Path) -> dict[str, object]:
             model.set(OUTPUT_IP_OPTIONS, {"run_synth": False})
             return model, False
 
-    def unchanged(model: ModelWrapper, *args: object, **kwargs: object) -> ModelWrapper:
-        return model
+    def products(module: Leaf, part: str, **kwargs: object) -> dict[str, HlsProduct]:
+        product = HlsProduct(tmp_path / "hls" / module.name)
+        product.ip.mkdir(parents=True, exist_ok=True)
+        (product.ip / "component.xml").write_text(
+            "<component><vendor>xilinx_finn</vendor><library>finn</library>"
+            f"<name>{module.name}</name><version>1.0</version></component>"
+        )
+        return {module.name: product}
 
-    def stitched(
-        model: ModelWrapper, part: str, period_ns: float, instance: str, **kwargs: object
-    ) -> ModelWrapper:
-        hls = tmp_path / "hls" / instance
-        hls.mkdir(parents=True, exist_ok=True)
-        for node in model.graph.node:
-            getCustomOp(node).set_nodeattr("ip_path", str(hls))
-        model.set_metadata_prop("vivado_stitch_proj", str(tmp_path / "stitch"))
-        model.set_metadata_prop("vivado_stitch_vlnv", f"xilinx_finn:finn:{instance}:1.0")
-        return model
-
-    return {
-        "prepare_ip": unchanged,
-        "hls_synth_ip": unchanged,
-        "create_stitched_ip": stitched,
-        "PackagePartition": Packaged,
-    }
+    return {"hls_products": products, "PackagePartition": Packaged}
 
 
 @pytest.mark.slow
@@ -1823,7 +1863,8 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
         parent = step.function(parent, cfg, **step.settings)
     assert [node.name for node in parent.graph.node] == ["Reshape_0", "DataflowCore_0", "TopK_0"]
     ((_, _, script),) = vivado.runs
-    assert "create_bd_cell -type ip -vlnv xilinx_finn:finn:odma0:1.0 odma0\n" in script
+    out = TFC_MOVERS["out0"]
+    assert f"create_bd_cell -type ip -vlnv xilinx_finn:finn:{out}:1.0 out0\n" in script
     saved = tmp_path / "parent.onnx"
     parent.save(str(saved))
     reread = ModelWrapper(str(saved))
@@ -1844,14 +1885,18 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
     assert (report / "placed_utilization.xml").read_text() == PLACED_HIERARCHY
     assert sorted(path.name for path in (report / "out_of_context").iterdir()) == [
         f"top_{name}_0_utilization_synth.rpt"
-        for name in ("DataflowCore_0", "idma0", "smartconnect_0")
+        for name in ("DataflowCore_0", "in0", "smartconnect_0")
     ]
     assert body.get(OUTPUT_VLNV) == f"xilinx_finn:finn:{TFC_MODULE}:1.0"
     assert body.get(OUTPUT_IP_KEY) == IP_KEY
     for model in (reread, body):
         assert list(model.model.metadata_props) == []
     integrated = json.loads((report / "integration.json").read_text())
-    assert integrated["block_design"]["iodma"] == {"in0": Z0_IODMAS["in"], "out0": Z0_IODMAS["out"]}
+    assert integrated["block_design"]["wires"][0] == {
+        "kind": "axis",
+        "source": "in0/out0_V",
+        "sink": "DataflowCore_0/s_axis_0",
+    }
     # The delivered clock against the one asked, the bottleneck the partition's network's,
     # its movers included: the input mover.
     clock = json.loads((report / "delivered_clock.json").read_text())
@@ -1874,8 +1919,8 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
     }
     assert {key: row["instance"] for key, row in rows.items()} == {
         "partition": "DataflowCore_0",
-        "movers.in0": "idma0",
-        "movers.out0": "odma0",
+        "movers.in0": "in0",
+        "movers.out0": "out0",
         "static_region.zynq_ultra_ps_e": "zynq_ps",
         "static_region.proc_sys_reset": "rst_zynq_ps_",
         "static_region.smartconnect": "smartconnect_0",
@@ -1894,7 +1939,7 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
         "static_region.smartconnect": counts(5364, 8530),
         "static_region.axi_interconnect": counts(1402, 1535),
     }
-    # FakeVivado's runs: idma0, the partition and the SmartConnect, each its own LUTs.
+    # FakeVivado's runs: in0, the partition and the SmartConnect, each its own LUTs.
     synthesized = {
         "partition": 200,
         "movers.in0": 100,
@@ -1932,10 +1977,8 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
         "host_runtime": "zynq-iodma",
         "bitfile": "bitfile/finn-accel.bit",
         "fclk_mhz": 187.512,
-        "takes": [
-            {"name": "Reshape_0_out0", "element": "UINT8", "shape": [1, 784], "dma": "idma0"}
-        ],
-        "returns": [{"name": "MatMul_3_out0", "element": "INT7", "shape": [1, 10], "dma": "odma0"}],
+        "takes": [{"name": "Reshape_0_out0", "element": "UINT8", "shape": [1, 784], "dma": "in0"}],
+        "returns": [{"name": "MatMul_3_out0", "element": "INT7", "shape": [1, 10], "dma": "out0"}],
         "host": {"before": ["Reshape_0"], "after": ["TopK_0"]},
         "made_from": design_digest(body),
         "ip_key": IP_KEY,

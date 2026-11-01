@@ -25,12 +25,10 @@ from finn.core import rtlsim_bench
 from finn.core.rtlsim_exec import XSim
 from finn.harness.hls import c_simulate
 from finn.platform import generate
-from finn.shells.pynq import ipgen
-from finn.shells.pynq.iodma import IODMA_hls
-from finn.shells.pynq.runner import BuildPynqBitfile, build_pynq
+from finn.shells.pynq.runner import BuildPynqBitfile, build_pynq, mover_ip
 from finn.toolchain import hls, launcher
 from finn.toolchain.launcher import Selection, host_selection, host_toolchain
-from finn.transformation.kernels.hls import built_hls
+from finn.transformation.kernels.hls import built_hls, hls_products
 from finn.transformation.kernels.package import ElaboratePartition, PackagePartition
 from finn.xsi import compile as xsi_compile
 from finn.xsi import load_sim_obj
@@ -109,11 +107,11 @@ def test_hls_synthesis_runs_the_machine_releases_frontend_under_the_site_directo
     site = fake_tools("site", machine=True)
     monkeypatch.setenv("FINN_XILINX_ENV", "")
     monkeypatch.setenv("FINN_XILINX_VERSION", version)
-    request = tmp_path / "iodma"
+    request = tmp_path / "request"
     request.mkdir()
     (request / "script.tcl").write_text("exit\n")
     hls.synthesize(
-        request, "xc7z020clg400-1", name="idma0", toolchain=host_toolchain(), cache=tmp_path / "c"
+        request, "xc7z020clg400-1", name="in0", toolchain=host_toolchain(), cache=tmp_path / "c"
     )
     assert site.calls == HLS_CALLS[version]
 
@@ -129,9 +127,8 @@ DRIVERS = [
     rtlsim_bench.measure,
     hls.synthesize,
     built_hls,
-    ipgen.hls_synth_ip,
-    ipgen.create_stitched_ip,
-    IODMA_hls.ipgen_singlenode_code,
+    hls_products,
+    mover_ip,
     build_pynq,
     c_simulate,
     write_testbench,

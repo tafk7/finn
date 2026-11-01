@@ -46,8 +46,8 @@ def test_the_placed_hierarchy_is_read_by_depth() -> None:
         (3, "inst"),
         (2, "DataflowCore_0"),
         (2, "axi_interconnect_0"),
-        (2, "idma0"),
-        (2, "odma0"),
+        (2, "in0"),
+        (2, "out0"),
     ]
     assert resources_of(rows[0][2]) == Resources(lut=1000, ff=2000, bram18=5, dsp=4)
     assert resources_of(rows[4][2]) == Resources(lut=400, ff=800, bram18=3, dsp=4)

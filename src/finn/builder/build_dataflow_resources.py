@@ -60,7 +60,7 @@ from finn.kernels.utilization import SHELL_CHARACTERISED
 from finn.platform.capabilities import Resources
 from finn.platform.shells import shell_row
 from finn.shells.integration import describe
-from finn.shells.pynq.linker import STATIC_INSTANCES, cell
+from finn.shells.pynq.linker import STATIC_INSTANCES
 from finn.shells.pynq.runner import REPORTS, bitfile_directory
 from finn.toolchain import vivado
 from finn.toolchain.launcher import Toolchain, ToolFailed
@@ -113,8 +113,8 @@ def _member_instances(parent: ModelWrapper) -> dict[str, str]:
         return {"partition": node.name}
     described = describe(parent)
     (core,) = described.cores
-    instances = {"partition": cell(core.name)}
-    instances.update({f"movers.{edge.unit}": cell(edge.unit) for edge in described.edges})
+    instances = {"partition": core.name}
+    instances.update({f"movers.{edge.unit}": edge.unit for edge in described.edges})
     static = row.fixed
     if static is not None:
         instances.update(

@@ -5,7 +5,7 @@
 """The pynq shell's PYNQ driver, from the partition's integration description
 (``finn.shells.integration``): its I/O the description's edge ports (each mover's tensor
 and shape, its element, and its beats and lanes), each mover by its cell in the block
-design (``linker.cell``); its platform its runtime's (``HOST_RUNTIMES``); it sets PL0 to
+design, its unit's name; its platform its runtime's (``HOST_RUNTIMES``); it sets PL0 to
 the clock it is given, the one the bitfile delivers, and runs the bitfile it is given
 (``write_driver``). ``driver_description`` states what it takes and returns.
 ``MakePynqDriver`` writes both for the build's parent graph, from its target, the
@@ -15,7 +15,7 @@ bitfile it states and the clock that bitfile delivers (its build's report,
 The driver's text and the files it runs with are the HWCustomOp flow's PYNQ driver's
 (finn.transformation.fpgadataflow.make_driver), copied as the shell's frozen extraction:
 the template (``templates.pynq_driver_template``), the base driver and validate.py
-(``data/pynq_driver``), and the trimmed qonnx and finn helpers the driver imports
+(``data/pynq_driver``, ``data_path``), and the trimmed qonnx and finn helpers the driver imports
 (``write_pynq_driver_support``). The driver FINN writes has no external weights and no
 MLO configuration.
 """
@@ -27,6 +27,7 @@ import json
 import os
 import shutil
 from collections.abc import Callable, Sequence
+from importlib.resources import files
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -44,8 +45,7 @@ import finn.util.data_packing
 from finn.core.graph.annotations.outputs import OUTPUT_BITFILE, OUTPUT_BITFILE_IP_KEY
 from finn.core.graph.partition import design_digest, partition_body
 from finn.shells.integration import Edge, Integration, describe
-from finn.shells.pynq import linker, templates
-from finn.shells.pynq.ipgen import data_path
+from finn.shells.pynq import templates
 from finn.shells.pynq.runner import (
     DELIVERED_CLOCK,
     PynqRefused,
@@ -53,6 +53,16 @@ from finn.shells.pynq.runner import (
     refuse_stale_bitfile,
 )
 from finn.util.data_packing import finnpy_to_packed_bytearray
+
+
+def data_path(*parts: str) -> str:
+    """An existing path in the shell's data directory (``data/``)."""
+    resource = files(__package__).joinpath("data", *parts)
+    if not isinstance(resource, Path):
+        raise RuntimeError("FINN's data requires an unpacked installation; install with pip")
+    if not resource.exists():
+        raise FileNotFoundError(resource)
+    return str(resource.resolve())
 
 
 def packed_shape(dtype: BaseDataType, folded_shape: tuple[int, ...]) -> tuple[int, ...]:
@@ -240,7 +250,7 @@ def driver_shapes(integration: Integration) -> dict[str, Any]:
         shapes[f"{side}shape_packed"] = [
             packed_shape(edge.element.dtype, each) for edge, each in zip(edges, folded)
         ]
-        shapes[dma] = [linker.cell(edge.unit) for edge in edges]
+        shapes[dma] = [edge.unit for edge in edges]
     return shapes
 
 
@@ -288,7 +298,7 @@ def driver_description(
                 "name": edge.tensor,
                 "element": edge.element.dtype.name,
                 "shape": list(edge.shape),
-                "dma": linker.cell(edge.unit),
+                "dma": edge.unit,
             }
             for edge in _edges(integration, direction)
         ]
@@ -395,6 +405,7 @@ __all__ = [
     "DRIVER_REPORT",
     "HOST_RUNTIMES",
     "MakePynqDriver",
+    "data_path",
     "delivered_mhz",
     "driver_description",
     "driver_shapes",

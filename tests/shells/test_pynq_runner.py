@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """The pynq shell's build (``finn.shells.pynq``) over the kernel path's parent graph: the
-movers' IPs its runner generates, the block design its linker writes from the integration
+movers' IPs its runner builds, the block design its linker writes from the integration
 description, the project, what it collects, its options, and its driver.
 
-The Chain (``support.chain``), its second weights streamed (two inputs, ``idma0`` and
-``idma1``, and ``odma0``), its choices saved, stated for Ultra96 in the Zynq shell and cut
+The Chain (``support.chain``), its second weights streamed (two inputs, ``in0`` and
+``in1``, and ``out0``), its choices saved, stated for Ultra96 in the Zynq shell and cut
 once. No Vivado and no Vitis HLS runs: the tools are recorded, or faked where the test
-says so. TFC's runner (Z0's block design, IODMAs and driver) is in test_builder_phase.
+says so. TFC's runner (Z0's block design, movers and driver) is in test_builder_phase.
 """
 
 from __future__ import annotations
@@ -24,7 +24,6 @@ from typing import Any, cast
 import pytest
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
-from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
 from support.configure import configured
 from support.models import configure_partition, streamed_w2_model, zynq_parent
@@ -51,6 +50,8 @@ from finn.core.graph.annotations.outputs import (
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.partition import design_digest, partition_body
 from finn.core.reporting.manifest import RECORDS, STORED
+from finn.kernels.artifacts.ipxact import vlnv
+from finn.kernels.artifacts.module import Leaf
 from finn.platform.resolve import resolve_target
 from finn.shells.integration import Integration, IpRef, describe
 from finn.shells.pynq import runner as pynq_runner
@@ -62,15 +63,7 @@ from finn.shells.pynq.driver import (
     driver_shapes,
     write_driver,
 )
-from finn.shells.pynq.ipgen import hls_synth_ip, prepare_ip
-from finn.shells.pynq.linker import (
-    block_design,
-    cell,
-    collect,
-    iodma_configuration,
-    linked_row,
-    project_script,
-)
+from finn.shells.pynq.linker import block_design, collect, linked_row, project_script
 from finn.shells.pynq.runner import (
     BITFILE,
     DELIVERED_CLOCK,
@@ -82,12 +75,15 @@ from finn.shells.pynq.runner import (
     PynqRefused,
     bitfile_directory,
     build_pynq,
+    exported_vlnv,
     integration_report,
-    iodma_model,
+    mover_ip,
 )
 from finn.shells.pynq.templates import custom_zynq_shell_template
 from finn.toolchain import hls, launcher
+from finn.toolchain.hls import HlsProduct
 from finn.toolchain.launcher import Selection, Toolchain
+from finn.transformation.kernels import hls as kernel_hls
 from finn.transformation.kernels.cut import CutKernelPartition
 from finn.transformation.kernels.package import ip_key
 
@@ -103,13 +99,13 @@ PACKAGED_KEY = "sha256:" + "1" * 64
 #: The partition's packaged IP as a test states it: named as a core's module.
 CORE_VLNV = "xilinx_finn:finn:finn_dataflowcore_0123456789abcdef:1.0"
 
-#: Each unit's IP as a test states it: the movers' IODMA IP and stitched IP, each named
-#: as its cell, the partition's packaged IP.
+#: Each unit's IP as a test states it: the movers' HLS exports, each named as an HLS top,
+#: the partition's packaged IP.
 IPS = {
-    "in0": IpRef("xilinx_finn:finn:idma0:1.0", ("/hls/idma0", "/stitch/idma0/ip")),
-    "in1": IpRef("xilinx_finn:finn:idma1:1.0", ("/hls/idma1", "/stitch/idma1/ip")),
+    "in0": IpRef("xilinx_finn:finn:finn_iodma_00000000000000a0:1.0", ("/hls/in0/ip",)),
+    "in1": IpRef("xilinx_finn:finn:finn_iodma_00000000000000a1:1.0", ("/hls/in1/ip",)),
     "DataflowCore_0": IpRef(CORE_VLNV, ("/packaged/ip",)),
-    "out0": IpRef("xilinx_finn:finn:odma0:1.0", ("/hls/odma0", "/stitch/odma0/ip")),
+    "out0": IpRef("xilinx_finn:finn:finn_iodma_00000000000000b0:1.0", ("/hls/out0/ip",)),
 }
 
 
@@ -129,16 +125,16 @@ def repositories(*paths: str) -> str:
 def mover_lines(instance: str, ip: IpRef, memory: int, control: int) -> list[str]:
     """A mover's lines as MakeZYNQProject writes an IODMA partition's: its IP and cell, its
     memory port, its control bus and the address the linker places it at (4 KiB each from
-    the control base, in order), its clock and reset."""
+    the control base, in order), its clock and reset; each pin its HLS export's."""
     return [
         repositories(*ip.repositories),
         "update_ip_catalog -rebuild -scan_changes",
         f"create_bd_cell -type ip -vlnv {ip.vlnv} {instance}",
-        f"connect_bd_intf_net [get_bd_intf_pins {instance}/m_axi_gmem0] "
+        f"connect_bd_intf_net [get_bd_intf_pins {instance}/m_axi_gmem] "
         f"[get_bd_intf_pins smartconnect_0/S{memory:02d}_AXI]",
-        f"connect_bd_intf_net [get_bd_intf_pins {instance}/s_axi_control_0] "
+        f"connect_bd_intf_net [get_bd_intf_pins {instance}/s_axi_control] "
         f"[get_bd_intf_pins axi_interconnect_0/M{control:02d}_AXI]",
-        f"assign_bd_address [get_bd_addr_segs {instance}/s_axi_control_0/Reg*] "
+        f"assign_bd_address [get_bd_addr_segs {instance}/s_axi_control/Reg*] "
         f"-offset {0xA000_0000 + 0x1000 * control:#010x} -range 4096",
         f"connect_bd_net [get_bd_pins {instance}/ap_clk] [get_bd_pins smartconnect_0/aclk]",
         f"connect_bd_net [get_bd_pins {instance}/ap_rst_n] [get_bd_pins smartconnect_0/aresetn]",
@@ -157,17 +153,17 @@ def test_the_block_design_instantiates_each_mover_and_the_partition_from_the_des
     MakeZYNQProject writes the HWCustomOp flow's link graph."""
     described = describe(zynq_parent(tmp_path))
     assert design(described).splitlines() == [
-        *mover_lines("idma0", IPS["in0"], 0, 0),
-        *mover_lines("idma1", IPS["in1"], 1, 1),
+        *mover_lines("in0", IPS["in0"], 0, 0),
+        *mover_lines("in1", IPS["in1"], 1, 1),
         repositories("/packaged/ip"),
         "update_ip_catalog -rebuild -scan_changes",
         f"create_bd_cell -type ip -vlnv {CORE_VLNV} DataflowCore_0",
         "connect_bd_net [get_bd_pins DataflowCore_0/ap_clk] [get_bd_pins smartconnect_0/aclk]",
         "connect_bd_net [get_bd_pins DataflowCore_0/ap_rst_n] [get_bd_pins smartconnect_0/aresetn]",
-        stream("DataflowCore_0/s_axis_0", "idma0/m_axis_0"),
-        stream("DataflowCore_0/s_axis_1", "idma1/m_axis_0"),
-        *mover_lines("odma0", IPS["out0"], 2, 2),
-        stream("odma0/s_axis_0", "DataflowCore_0/m_axis_0"),
+        stream("DataflowCore_0/s_axis_0", "in0/out0_V"),
+        stream("DataflowCore_0/s_axis_1", "in1/out0_V"),
+        *mover_lines("out0", IPS["out0"], 2, 2),
+        stream("out0/in0_V", "DataflowCore_0/m_axis_0"),
     ]
 
 
@@ -179,7 +175,7 @@ def test_the_debug_option_probes_every_mover_stream_and_the_memory_port(tmp_path
     plain = design(described).splitlines()
     debug = design(described, hw_debug=True).splitlines()
     assert debug[: len(plain)] == plain
-    nets = ["idma0_m_axis_0", "idma1_m_axis_0", "DataflowCore_0_m_axis_0", "smartconnect_0_M00_AXI"]
+    nets = ["in0_out0_V", "in1_out0_V", "DataflowCore_0_m_axis_0", "smartconnect_0_M00_AXI"]
     assert debug[len(plain) : len(plain) + 4] == [
         f"set_property HDL_ATTRIBUTE.DEBUG true [get_bd_intf_nets {{{net}}}]" for net in nets
     ]
@@ -229,29 +225,35 @@ def test_vivados_jobs_are_the_builds(
 
 
 #: The steps of a build that run a tool, each given the build's toolchain.
-TOOL_STEPS = ("hls_synth_ip", "create_stitched_ip", "PackagePartition")
-#: The order they run in, the block design's: each input mover's IP (HLS synthesis,
-#: then its stitched IP), the partition's, the output mover's.
-TOOL_ORDER = [
-    "hls_synth_ip",
-    "create_stitched_ip",
-    "hls_synth_ip",
-    "create_stitched_ip",
-    "PackagePartition",
-    "hls_synth_ip",
-    "create_stitched_ip",
-]
+TOOL_STEPS = ("hls_products", "PackagePartition")
+#: The order they run in, the block design's: each input mover's HLS synthesis, the
+#: partition's packaging, the output mover's.
+TOOL_ORDER = ["hls_products", "hls_products", "PackagePartition", "hls_products"]
 
 
-def built_ips(directory: Path) -> dict[str, IpRef]:
-    """The IPs the recorded build states, by unit: each mover's HLS IP and stitched IP,
-    named as its cell, the partition's packaged IP, under ``directory``."""
+def export(directory: Path, name: str) -> HlsProduct:
+    """An HLS product in ``directory`` whose IP the HLS export states as ``name``'s VLNV
+    (``xilinx_finn:finn:<name>:1.0``), in IP-XACT's namespace."""
+    product = HlsProduct(directory)
+    product.ip.mkdir(parents=True, exist_ok=True)
+    vendor, library, ip, version = vlnv(name).split(":")
+    (product.ip / "component.xml").write_text(
+        '<spirit:component xmlns:spirit="http://www.spiritconsortium.org/XMLSchema/SPIRIT/'
+        f'1685-2009"><spirit:vendor>{vendor}</spirit:vendor><spirit:library>{library}'
+        f"</spirit:library><spirit:name>{ip}</spirit:name><spirit:version>{version}"
+        "</spirit:version></spirit:component>"
+    )
+    return product
+
+
+def built_ips(directory: Path, described: Integration) -> dict[str, IpRef]:
+    """The IPs the recorded build states, by unit: each mover's its module's HLS export,
+    the partition's packaged IP, under ``directory``."""
     movers = {
-        unit: IpRef(
-            f"xilinx_finn:finn:{cell(unit)}:1.0",
-            (str(directory / "hls" / cell(unit)), str(directory / "stitch" / cell(unit) / "ip")),
+        edge.unit: IpRef(
+            vlnv(edge.module.name), (str(directory / "hls" / edge.module.name / "ip"),)
         )
-        for unit in ("in0", "in1", "out0")
+        for edge in described.edges
     }
     packaged = IpRef(CORE_VLNV, (str(directory / "packaged" / "ip"),))
     return {**movers, "DataflowCore_0": packaged}
@@ -260,11 +262,12 @@ def built_ips(directory: Path) -> dict[str, IpRef]:
 def recorded_tools(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    replaced: tuple[str, ...] = (*TOOL_STEPS, "prepare_ip"),
+    replaced: tuple[str, ...] = TOOL_STEPS,
 ) -> list[tuple[str, object, tuple[object, ...]]]:
     """The runner's ``replaced`` steps replaced by recorders of what each is given, its
     build directory under ``tmp_path``: each recorded step's name, toolchain and
-    arguments, in order, as the build runs them."""
+    arguments, in order, as the build runs them. A recorded HLS synthesis exports its
+    module's IP under ``tmp_path/hls``."""
     seen: list[tuple[str, object, tuple[object, ...]]] = []
 
     class RecordedPackaging(Transformation):
@@ -281,28 +284,13 @@ def recorded_tools(
             model.set(OUTPUT_IP_OPTIONS, {"run_synth": False})
             return model, False
 
-    def recorder(name: str) -> object:
-        """The step ``name`` replaced by one that records what it is given: a
-        transformation for PackagePartition, a function for a mover's IP steps."""
-        if name == "PackagePartition":
-            return RecordedPackaging
+    def products(module: Leaf, part: str, *, toolchain: object) -> dict[str, HlsProduct]:
+        seen.append(("hls_products", toolchain, (module, part)))
+        return {module.name: export(tmp_path / "hls" / module.name, module.name)}
 
-        def recorded(model: ModelWrapper, *args: object, toolchain: object = None) -> ModelWrapper:
-            seen.append((name, toolchain, args))
-            if name == "create_stitched_ip":
-                by_cell = {cell(unit): ip for unit, ip in built_ips(tmp_path).items()}
-                ip = by_cell[str(args[2])]
-                Path(ip.repositories[0]).mkdir(parents=True, exist_ok=True)
-                for node in model.graph.node:
-                    getCustomOp(node).set_nodeattr("ip_path", ip.repositories[0])
-                model.set_metadata_prop("vivado_stitch_proj", str(Path(ip.repositories[1]).parent))
-                model.set_metadata_prop("vivado_stitch_vlnv", ip.vlnv)
-            return model
-
-        return recorded
-
+    recorders = {"PackagePartition": RecordedPackaging, "hls_products": products}
     for name in replaced:
-        monkeypatch.setattr(pynq_runner, name, recorder(name))
+        monkeypatch.setattr(pynq_runner, name, recorders[name])
     monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "build"))
     return seen
 
@@ -311,7 +299,7 @@ def recorded_build(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     toolchain: object,
-    replaced: tuple[str, ...] = (*TOOL_STEPS, "prepare_ip"),
+    replaced: tuple[str, ...] = TOOL_STEPS,
     options: PynqOptions = PynqOptions(),
     packaged: Path | None = None,
     since: Callable[[ModelWrapper], None] | None = None,
@@ -335,46 +323,25 @@ def recorded_build(
             verified(body, node.name)
         body.save(body_file)
     described = describe(parent)
-    built = build_pynq(
-        parent,
-        described,
-        tmp_path / "movers",
-        toolchain=cast(Toolchain, toolchain),
-        options=options,
-    )
+    built = build_pynq(parent, described, toolchain=cast(Toolchain, toolchain), options=options)
     return parent, described, built, seen
 
 
 def test_a_build_generates_each_movers_ip_packages_the_partition_and_runs_vivado(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Each mover's IODMA_hls in a scratch model of its one node, configured as the linker
-    states it, made an IP and stitched as its cell; the partition packaged (its body
-    states its IP, typed); then the project's Tcl, run once by the build's toolchain,
-    and what Vivado made collected."""
+    """Each mover's module, its kernel's HLS top, synthesized and exported as its IP; the
+    partition packaged (its body states its IP, typed); then the project's Tcl, run once
+    by the build's toolchain, and what Vivado made collected."""
     vivado = FakeVivado()
     parent, described, built, seen = recorded_build(monkeypatch, tmp_path, vivado)
     assert [(name, toolchain) for name, toolchain, _ in seen if name in TOOL_STEPS] == [
         (name, vivado) for name in TOOL_ORDER
     ]
-    # Each mover at the description's part and period, stitched as its cell.
-    assert [args for name, _, args in seen if name == "prepare_ip"] == [(5.0,)] * 3
-    assert [args for name, _, args in seen if name == "hls_synth_ip"] == [(ZYNQ.part,)] * 3
-    assert [args for name, _, args in seen if name == "create_stitched_ip"] == [
-        (ZYNQ.part, 5.0, instance) for instance in ("idma0", "idma1", "odma0")
+    # Each mover's module at the description's part, in the block design's order.
+    assert [args for name, _, args in seen if name == "hls_products"] == [
+        (edge.module, ZYNQ.part) for edge in described.edges
     ]
-    for edge in described.edges:
-        instance = cell(edge.unit)
-        scratch = ModelWrapper(str(tmp_path / "movers" / f"{instance}.onnx"))
-        (node,) = scratch.graph.node
-        assert node.name == f"{instance}_IODMA_hls_0"
-        attributes = iodma_configuration(edge).attributes
-        assert {name: getCustomOp(node).get_nodeattr(name) for name in attributes} == attributes
-        # From the memory side to the boundary tensor, or back, in the channel's element.
-        memory = f"{instance}_memory"
-        sides = [memory, edge.tensor] if edge.contract.direction == "in" else [edge.tensor, memory]
-        assert [scratch.graph.input[0].name, scratch.graph.output[0].name] == sides
-        assert scratch.get_tensor_datatype(memory) == edge.contract.element.dtype
     # The partition's body, saved, states its IP typed, with its key, and no flat key;
     # the build states that key and the body's design.
     _, body, _ = partition_body(parent)
@@ -385,7 +352,7 @@ def test_a_build_generates_each_movers_ip_packages_the_partition_and_runs_vivado
     # One Vivado run, of the project's Tcl: the block design of the IPs it generated.
     ((tool, args, script),) = vivado.runs
     assert (tool, args[:3]) == ("vivado", ["-mode", "batch", "-source"])
-    assert design(described, built_ips(tmp_path)) in script
+    assert design(described, built_ips(tmp_path, described)) in script
     project = Path(built.project)
     assert args[3] == str(project / "ip_config.tcl")
     assert Path(built.bitfile).read_text() == "top_wrapper.bit"
@@ -394,7 +361,7 @@ def test_a_build_generates_each_movers_ip_packages_the_partition_and_runs_vivado
     assert Path(built.placed) == project / "synth_report.xml"
     assert sorted(built.out_of_context) == [
         "top_DataflowCore_0_0",
-        "top_idma0_0",
+        "top_in0_0",
         "top_smartconnect_0_0",
     ]
 
@@ -412,7 +379,7 @@ def test_a_partition_packaged_earlier_in_the_build_is_not_packaged_again(
     assert (body.get(OUTPUT_IP), body.get(OUTPUT_IP_KEY)) == (str(earlier), built.ip_key)
     assert built.made_from == design_digest(body)
     ips = {
-        **built_ips(tmp_path),
+        **built_ips(tmp_path, described),
         "DataflowCore_0": IpRef(CORE_VLNV, (str(earlier),)),
     }
     ((_, _, script),) = vivado.runs
@@ -460,7 +427,7 @@ def test_an_ip_of_another_key_is_packaged_again(
     assert body.get(OUTPUT_IP_KEY) == PACKAGED_KEY == built.ip_key
     assert built.made_from == design_digest(body)
     ((_, _, script),) = vivado.runs
-    assert design(described, built_ips(tmp_path)) in script
+    assert design(described, built_ips(tmp_path, described)) in script
     assert f"DataflowCore_0: its IP ({earlier}) has the key " in caplog.text
 
 
@@ -470,7 +437,7 @@ def test_the_debug_option_reaches_the_block_design(
     vivado = FakeVivado()
     recorded_build(monkeypatch, tmp_path, vivado, options=PynqOptions(hw_debug=True))
     ((_, _, script),) = vivado.runs
-    assert "set_property HDL_ATTRIBUTE.DEBUG true [get_bd_intf_nets {idma1_m_axis_0}]" in script
+    assert "set_property HDL_ATTRIBUTE.DEBUG true [get_bd_intf_nets {in1_out0_V}]" in script
     # The template's own block, on its constant nets, stays off.
     assert "if {0 == 1} {" in script
 
@@ -517,8 +484,8 @@ def test_the_bitfile_build_is_a_transformation_of_the_parent_graph(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """BuildPynqBitfile reads the shell, board, part and clock from the target the
-    partition's body states, runs the build (the movers' scratch models beside the body's
-    file) and collects what Vivado made into the output directory it is given; the
+    partition's body states, runs the build and collects what Vivado made into the output
+    directory it is given; the
     delivered clock's report states the throughput asked, the objective it is given. The
     parent graph states the bitfile, its handoff and reports, what it was made from and
     the options it was built with."""
@@ -533,12 +500,7 @@ def test_the_bitfile_build_is_a_transformation_of_the_parent_graph(
     ((_, _, script),) = vivado.runs
     assert "set FREQ_MHZ 200\n" in script and f"set FPGA_PART {ZYNQ.part}\n" in script
     assert "set_property HDL_ATTRIBUTE.DEBUG true" in script
-    _, body, body_file = partition_body(built)
-    assert sorted(path.name for path in (Path(body_file).parent / "movers").iterdir()) == [
-        "idma0.onnx",
-        "idma1.onnx",
-        "odma0.onnx",
-    ]
+    _, body, _ = partition_body(built)
     report = output / "report"
     # The model states what a later step consumes: the bitfile, its hardware handoff and
     # what it was made from; its reports are beside it, by the output directory's
@@ -591,22 +553,40 @@ def test_the_bitfile_build_refuses_a_shell_without_it(tmp_path: Path) -> None:
 
 
 #: A Vitis HLS that reports 2024.2 and, given a request, makes the solution's exported
-#: RTL, reports and IP that synthesis collects, the IP noting that it ran.
+#: RTL and reports that synthesis collects and, where the request exports its top, the IP
+#: its ``config_export`` names, in IP-XACT; the IP notes that it ran.
 FAKE_VITIS_HLS = """
-import os, sys
+import os, re, sys
 if sys.argv[1] == "-version":
     print("Vitis HLS - High-Level Synthesis from C, C++ and OpenCL v2024.2 (64-bit)")
     sys.exit()
-for made in ("syn/verilog", "syn/report", "impl/ip"):
-    os.makedirs(f"project/sol1/{made}")
-open("project/sol1/impl/ip/synthesized_here", "w").close()
+script = open("script.tcl").read()
+top = re.search(r"^set_top (\\S+)$", script, re.M).group(1)
+for made in ("syn/verilog", "syn/report"):
+    os.makedirs(f"project/solution/{made}")
+open(f"project/solution/syn/verilog/{top}.v", "w").close()
+export = re.search(
+    r"^config_export .*-vendor (\\S+) -library (\\S+) -ipname (\\S+) -version (\\S+)$",
+    script,
+    re.M,
+)
+if export and "export_design -format ip_catalog" in script:
+    os.makedirs("project/solution/impl/ip")
+    fields = zip(("vendor", "library", "name", "version"), export.groups())
+    open("project/solution/impl/ip/component.xml", "w").write(
+        '<spirit:component xmlns:spirit="http://www.spiritconsortium.org/XMLSchema/SPIRIT/'
+        '1685-2009">'
+        + "".join(f"<spirit:{key}>{value}</spirit:{key}>" for key, value in fields)
+        + "</spirit:component>"
+    )
+    open("project/solution/impl/ip/synthesized_here", "w").close()
 """
 
 
 def hls_toolchain(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **tools: str) -> Path:
     """Fake ``tools`` (each a Python body) in ``tmp_path/tools``, an HLS installation for
-    the HLS cache's key, and the HLS cache in ``tmp_path/hls_cache``: the command
-    directory."""
+    the HLS cache's key, and the HLS cache in ``tmp_path/hls_cache``, every product's pins
+    taken as declared (its RTL is empty): the command directory."""
     directory = tmp_path / "tools"
     directory.mkdir()
     for name, body in tools.items():
@@ -614,16 +594,9 @@ def hls_toolchain(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **tools: str)
         (directory / name).chmod(0o755)
     (tmp_path / "hls").mkdir()
     monkeypatch.setattr(hls, "hls_cache", lambda: tmp_path / "hls_cache")
+    monkeypatch.setattr(kernel_hls, "check_abi", lambda pins, files, top: ())
+    monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "build"))
     return directory
-
-
-class HlsToolchain(Toolchain):
-    """A toolchain that runs the tools on its PATH, Vivado faked (``FakeVivado``)."""
-
-    def run(self, tool: str, args: Any = (), **options: Any) -> Any:
-        if tool == "vivado":
-            return FakeVivado().run(tool, list(args), **options)
-        return super().run(tool, args, **options)
 
 
 def machine_refused() -> object:
@@ -633,41 +606,49 @@ def machine_refused() -> object:
 def test_hls_synthesis_runs_in_the_builds_toolchain(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Code generation and HLS synthesis run for real on the movers' scratch models, each
-    mover's synthesis by the build's toolchain (the only Vitis HLS on its PATH is a fake
-    one), through the HLS cache: each mover's IP is the build's own copy of the cached
-    one."""
+    """Each mover's HLS request is staged and synthesized for real by the build's toolchain
+    (the only Vitis HLS on its PATH is a fake one), through the HLS cache: each mover's IP
+    is its product's, exported as its module, which the block design instantiates."""
     tools = hls_toolchain(tmp_path, monkeypatch, vitis_hls=FAKE_VITIS_HLS)
-    toolchain = HlsToolchain(
+    toolchain = Toolchain(
         Selection(hls_frontend="vitis_hls"),
         {"PATH": f"{tools}:{os.defpath}", "XILINX_HLS": str(tmp_path / "hls")},
     )
+    vivado = FakeVivado()
     monkeypatch.setattr(pynq_runner, "host_toolchain", machine_refused)
     # HLS reads the launcher's (finn.toolchain.hls imports the module).
     monkeypatch.setattr(launcher, "host_toolchain", machine_refused)
-    _, described, _, seen = recorded_build(
-        monkeypatch, tmp_path, toolchain, replaced=("PackagePartition", "create_stitched_ip")
-    )
-    assert [name for name, _, _ in seen] == [name for name in TOOL_ORDER if name != "hls_synth_ip"]
+    seen = recorded_tools(monkeypatch, tmp_path, replaced=("PackagePartition",))
+    parent = zynq_parent(tmp_path)
+    described = describe(parent)
+
+    class Both(Toolchain):
+        """HLS by ``toolchain``, Vivado faked."""
+
+        def run(self, tool: str, args: Any = (), **options: Any) -> Any:
+            if tool == "vivado":
+                return vivado.run(tool, list(args), **options)
+            return toolchain.run(tool, args, **options)
+
+    build_pynq(parent, described, toolchain=Both(toolchain.selection, toolchain.environment))
+    assert [name for name, _, _ in seen] == ["PackagePartition"]
+    ((_, _, script),) = vivado.runs
     for edge in described.edges:
-        (node,) = ModelWrapper(str(tmp_path / "movers" / f"{cell(edge.unit)}.onnx")).graph.node
-        dma = getCustomOp(node)
-        code = Path(str(dma.get_nodeattr("code_gen_dir_ipgen")))
-        assert dma.get_nodeattr("ipgen_path") == f"{code}/project_{node.name}"
-        ip = code / f"project_{node.name}" / "sol1" / "impl" / "ip"
-        (cached,) = (tmp_path / "hls_cache").glob(f"{node.name}-*/ip/synthesized_here")
-        assert (ip / "synthesized_here").is_file()
-        assert not (ip / "synthesized_here").samefile(cached)
+        (cached,) = (tmp_path / "hls_cache").glob(f"{edge.module.name}-*/ip")
+        assert (cached / "synthesized_here").is_file()
+        assert exported_vlnv(cached / "component.xml") == vlnv(edge.module.name)
+        assert f"create_bd_cell -type ip -vlnv {vlnv(edge.module.name)} {edge.unit}\n" in script
+        assert f'[list "{cached}"]' in script
 
 
 def test_a_movers_hls_is_cached_across_build_directories_not_across_parts(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A mover's HLS request names neither its build directory nor the part (it reads the
-    part and finn-hlslib's location from the synthesis): generated in two build
-    directories, it is synthesized once, one entry of the HLS cache, each build holding
-    its own copy of the IP; for another part, synthesized again, another entry. Each use
-    of the cache is recorded, built or reused."""
+    part from the synthesis): built in two build directories, it is synthesized once, one
+    entry of the HLS cache, whose IP both builds instantiate; for another part,
+    synthesized again, another entry. Each use of the cache is recorded, built or
+    reused."""
     noted = 'open(os.path.join(os.path.dirname(sys.argv[0]), "runs"), "a").write("ran\\n")\n'
     tools = hls_toolchain(tmp_path, monkeypatch, vitis_hls=FAKE_VITIS_HLS + noted)
     toolchain = Toolchain(
@@ -679,9 +660,7 @@ def test_a_movers_hls_is_cached_across_build_directories_not_across_parts(
     with caplog.at_level(logging.INFO, logger=RECORDS.name):
         for build, part in (("one", ZYNQ.part), ("two", ZYNQ.part), ("three", "xc7z020clg400-1")):
             monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / build))
-            model = hls_synth_ip(prepare_ip(iodma_model(edge), 5.0), part, toolchain=toolchain)
-            (node,) = model.graph.node
-            made.append(Path(str(getCustomOp(node).get_nodeattr("ip_path"))))
+            made.append(mover_ip(edge, part, toolchain=toolchain))
     assert (tools / "runs").read_text() == "ran\n" * 2
     recorded = [getattr(record, STORED) for record in caplog.records if hasattr(record, STORED)]
     assert [(each["store"], each["status"]) for each in recorded] == [
@@ -691,70 +670,45 @@ def test_a_movers_hls_is_cached_across_build_directories_not_across_parts(
     ]
     cached = [path for path in (tmp_path / "hls_cache").iterdir() if not path.name.startswith(".")]
     assert len(cached) == 2
-    for ip, build in zip(made, ("one", "two", "three")):
-        assert ip.is_relative_to(tmp_path / build) and (ip / "synthesized_here").is_file()
+    assert {ip.vlnv for ip in made} == {vlnv(edge.module.name)}
+    assert made[0] == made[1] != made[2]
+    assert all(Path(ip.repositories[0]).parent in cached for ip in made)
 
 
-def test_a_movers_tools_write_transcripts_not_this_processs_output(
+def test_a_mover_whose_product_exports_no_ip_of_its_name_is_hls_failure(
     tmp_path: Path, capfd: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A mover's HLS and Vivado runs (``synthesize``, ``create_stitched_ip``) write what
-    they print into their transcripts, and nothing of it into this process's output (the
-    build log): HLS's beside the product it cached, Vivado's in the step's log directory,
-    which a failure names."""
+    """A mover's HLS writes what it prints into its transcript beside the product it
+    cached, nothing of it into this process's output (the build log); a product that
+    exports no IP of the module's name is HLS's failure (``ToolFailed``, no exit status),
+    naming that transcript."""
+    unexported = FAKE_VITIS_HLS.replace("-ipname (", "-ipname other_(")
     tools = hls_toolchain(
-        tmp_path,
-        monkeypatch,
-        vitis_hls="print('HLS SAYS', flush=True)\n" + FAKE_VITIS_HLS,
-        vivado="import sys\n"
-        "if sys.argv[1] == '-version': print('vivado v2024.2'); sys.exit()\n"
-        "print('VIVADO SAYS'); print('ERROR: [BD 41-1] no block design'); sys.exit(1)\n",
+        tmp_path, monkeypatch, vitis_hls="print('HLS SAYS', flush=True)\n" + unexported
     )
-    logs = tmp_path / "logs" / "step_build_bitfile"
     toolchain = Toolchain(
         Selection(hls_frontend="vitis_hls"),
         {"PATH": f"{tools}:{os.defpath}", "XILINX_HLS": str(tmp_path / "hls")},
-    ).transcripts_in(logs)
+    )
     edge = describe(zynq_parent(tmp_path)).edges[0]
     capfd.readouterr()
-    with pytest.raises(launcher.ToolFailed) as failed:
-        pynq_runner.generate_mover_ip(edge, ZYNQ.part, 5.0, tmp_path / "movers", toolchain)
+    with pytest.raises(launcher.ToolFailed, match="in0: its product .* exports no IP") as failed:
+        mover_ip(edge, ZYNQ.part, toolchain=toolchain)
     printed = capfd.readouterr()
     assert "SAYS" not in printed.out + printed.err
     (transcript,) = (tmp_path / "hls_cache").glob("*/synthesize.sh.stdout.log")
     assert transcript.read_text().startswith("HLS SAYS\n")
-    assert failed.value.tool == "vivado"
-    assert failed.value.transcript == logs / "make_project.sh.stdout.log"
-    assert failed.value.transcript.read_text().startswith("VIVADO SAYS\n")
-    assert failed.value.errors == ("ERROR: [BD 41-1] no block design",)
+    assert (failed.value.tool, failed.value.status) == ("hls", None)
+    assert failed.value.transcript == transcript
 
 
-def test_a_movers_vivado_that_exits_cleanly_without_its_wrapper_failed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Vivado exiting 0 with no wrapper HDL for the stitched project is its failure
-    (``ToolFailed``, no exit status), naming its transcript, not a bug."""
-    tools = hls_toolchain(
-        tmp_path,
-        monkeypatch,
-        vitis_hls=FAKE_VITIS_HLS,
-        vivado="import sys\n"
-        "if sys.argv[1] == '-version': print('vivado v2024.2'); sys.exit()\n"
-        "print('ERROR: [BD 41-2] no wrapper')\n",
+def test_an_exported_ip_states_its_vlnv_in_ip_xact(tmp_path: Path) -> None:
+    product = export(tmp_path / "product", "finn_iodma_0123456789abcdef")
+    assert exported_vlnv(product.ip / "component.xml") == (
+        "xilinx_finn:finn:finn_iodma_0123456789abcdef:1.0"
     )
-    logs = tmp_path / "logs" / "step_build_bitfile"
-    toolchain = Toolchain(
-        Selection(hls_frontend="vitis_hls"),
-        {"PATH": f"{tools}:{os.defpath}", "XILINX_HLS": str(tmp_path / "hls")},
-    ).transcripts_in(logs)
-    edge = describe(zynq_parent(tmp_path)).edges[0]
-    with pytest.raises(
-        launcher.ToolFailed, match="the stitched project has no wrapper HDL"
-    ) as failed:
-        pynq_runner.generate_mover_ip(edge, ZYNQ.part, 5.0, tmp_path / "movers", toolchain)
-    assert (failed.value.tool, failed.value.status) == ("vivado", None)
-    assert failed.value.transcript == logs / "make_project.sh.stdout.log"
-    assert failed.value.errors == ("ERROR: [BD 41-2] no wrapper",)
+    (tmp_path / "partial.xml").write_text("<component><vendor>v</vendor></component>")
+    assert exported_vlnv(tmp_path / "partial.xml") is None
 
 
 def test_the_driver_reads_its_io_from_the_movers_and_sets_the_clock_it_is_given(
@@ -782,9 +736,9 @@ def test_the_driver_reads_its_io_from_the_movers_and_sets_the_clock_it_is_given(
         [(1, 2, 1), (1, 4, 2)],
         [(1, 1, 4)],
     )
-    assert (shapes["input_dma_name"], shapes["output_dma_name"]) == (["idma0", "idma1"], ["odma0"])
+    assert (shapes["input_dma_name"], shapes["output_dma_name"]) == (["in0", "in1"], ["out0"])
     assert (shapes["num_inputs"], shapes["num_outputs"]) == (2, 1)
-    assert driver_shapes(described)["idma_names"] == ["idma0", "idma1"]
+    assert driver_shapes(described)["idma_names"] == ["in0", "in1"]
     assert "\nfclk_mhz = 187.512\n" in driver
     assert "fclk_mhz = fclk_mhz, weight_dir = weight_dir" in driver
     assert (
@@ -816,10 +770,10 @@ def test_the_description_states_what_the_driver_takes_and_returns(tmp_path: Path
         "bitfile": "bitfile/finn-accel.bit",
         "fclk_mhz": 187.512,
         "takes": [
-            {"name": "x", "element": "INT3", "shape": [1, 4], "dma": "idma0"},
-            {"name": "w2", "element": "INT3", "shape": [4, 4], "dma": "idma1"},
+            {"name": "x", "element": "INT3", "shape": [1, 4], "dma": "in0"},
+            {"name": "w2", "element": "INT3", "shape": [4, 4], "dma": "in1"},
         ],
-        "returns": [{"name": "y", "element": "INT7", "shape": [1, 4], "dma": "odma0"}],
+        "returns": [{"name": "y", "element": "INT7", "shape": [1, 4], "dma": "out0"}],
         "host": {"before": ["Reshape_0"], "after": []},
     }
 

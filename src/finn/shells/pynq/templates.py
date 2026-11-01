@@ -34,11 +34,6 @@ commit is 1b02563de) as the shell's frozen extraction:
 - ``custom_zynq_shell_template``: the Zynq block design's project
   (finn.transformation.fpgadataflow.templates), filled by ``linker.project_script``, its
   board part and processor family given in place of its table of board names;
-- ``ipgen_template`` and ``ipgentcl_template``: an IODMA's HLS top and its Vitis HLS
-  script (finn.custom_op.fpgadataflow.templates), filled by ``iodma.IODMA_hls``; the
-  script names no custom HLS directory, which no IODMA includes from, and is filled to
-  read its sources from its own directory and the part and finn-hlslib from Tcl
-  variables;
 - ``pynq_driver_template``: the PYNQ driver
   (finn.transformation.fpgadataflow.template_driver), filled by
   ``driver.pynq_driver_text``.
@@ -204,51 +199,6 @@ wait_on_run [get_runs impl_1]
 open_run impl_1
 report_utilization -hierarchical -hierarchical_depth 4 -file synth_report.xml -format xml
 close_project
-"""
-
-# template for an IODMA's HLS top
-ipgen_template = """
-#define AP_INT_MAX_W $AP_INT_MAX_W$
-
-#include "bnn-library.h"
-
-$GLOBALS$
-
-$DEFINES$
-
-$BLACKBOXFUNCTION$
-{
-$PRAGMAS$
-$DOCOMPUTE$
-}
-"""
-
-# tcl script for IP generation
-ipgentcl_template = """
-set config_proj_name $PROJECTNAME$
-puts "HLS project: $config_proj_name"
-set config_hwsrcdir "$HWSRCDIR$"
-puts "HW source dir: $config_hwsrcdir"
-set config_proj_part "$FPGAPART$"
-set config_bnnlibdir "$HLSLIB$"
-puts "finn-hlslib dir: $config_bnnlibdir"
-set config_toplevelfxn "$TOPFXN$"
-set config_clkperiod $CLKPERIOD$
-
-open_project $config_proj_name
-add_files $config_hwsrcdir/top_$TOPFXN$.cpp -cflags "-std=c++14 -I$config_bnnlibdir"
-
-set_top $config_toplevelfxn
-open_solution sol1
-set_part $config_proj_part
-
-$DEFAULT_DIRECTIVES$
-$EXTRA_DIRECTIVES$
-
-create_clock -period $config_clkperiod -name default
-csynth_design
-export_design -format ip_catalog
-exit 0
 """
 
 # the PYNQ driver

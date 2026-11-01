@@ -5,10 +5,9 @@
 
 Importing the build entry (``finn.builder.build_dataflow``) and the build's steps
 (and the KernelOps, ``finn.kernels``, ``finn.platform``, the cut and the pynq shell's
-build), and resolving the build's own nodes through qonnx's registry (the
-partition node, a mover's IODMA), loads no module of the HWCustomOp flow's packages,
-which are deleted. The modules a process loads are counted in a fresh interpreter: this
-one has loaded others.
+build), and resolving the build's own node through qonnx's registry (the partition
+node), loads no module of the HWCustomOp flow's packages, which are deleted. The modules
+a process loads are counted in a fresh interpreter: this one has loaded others.
 """
 
 from __future__ import annotations
@@ -20,8 +19,9 @@ from importlib.util import find_spec
 
 import pytest
 
-#: The HWCustomOp flow, deleted: its ops, analyses and transformations. Two of its names
-#: are reused: ``finn.core.rtlsim_exec`` is the XSim executor, and ``finn.analysis`` the
+#: The HWCustomOp flow, deleted: its ops, analyses and transformations, and the pynq
+#: shell's extraction of its IODMA and the IODMA's IP generation. Two of its names are
+#: reused: ``finn.core.rtlsim_exec`` is the XSim executor, and ``finn.analysis`` the
 #: generic analysis passes.
 DELETED = (
     "finn.custom_op.fpgadataflow",
@@ -30,6 +30,8 @@ DELETED = (
     "finn.analysis.verify_custom_nodes",
     "finn.transformation.fpgadataflow",
     "finn.deploy",
+    "finn.shells.pynq.iodma",
+    "finn.shells.pynq.ipgen",
 )
 
 #: The modules a build imports.
@@ -55,11 +57,7 @@ from qonnx.custom_op.registry import getCustomOp
 
 for name in sys.argv[1:]:
     importlib.import_module(name)
-for domain, op_type in (
-    ("finn.custom_op.partition", "DataflowCore"),
-    ("finn.shells.pynq.iodma", "IODMA_hls"),
-):
-    getCustomOp(helper.make_node(op_type, [], [], domain=domain))
+getCustomOp(helper.make_node("DataflowCore", [], [], domain="finn.custom_op.partition"))
 print(json.dumps(sorted(n for n in sys.modules if n == "finn" or n.startswith("finn."))))
 """
 
@@ -77,7 +75,7 @@ def loaded(*modules: str) -> list[str]:
 def test_the_builder_loads_no_module_of_the_hwcustomop_flow() -> None:
     names = loaded(*BUILD)
     assert set(BUILD) <= set(names)
-    assert {"finn.custom_op.partition", "finn.shells.pynq.iodma"} <= set(names)
+    assert "finn.custom_op.partition" in names
     assert [n for n in names if any(n == p or n.startswith(p + ".") for p in DELETED)] == []
 
 

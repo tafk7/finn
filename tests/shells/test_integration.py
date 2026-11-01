@@ -24,7 +24,6 @@ from finn.kernels.artifacts.module import module_name
 from finn.shells.integration import (
     CORE,
     MAIN,
-    MOVER_PORTS,
     Binding,
     ClockPin,
     Connection,
@@ -36,6 +35,7 @@ from finn.shells.integration import (
     Unit,
     _range,
     describe,
+    mover_pins,
 )
 from finn.transformation.kernels.cut import CutKernelPartition
 from finn.transformation.kernels.package import source_roots
@@ -70,6 +70,11 @@ def test_the_chain_is_described_by_its_core_units_and_wiring(tmp_path: Path) -> 
         DataType["INT7"],
     ]
     assert all(each.element == each.contract.element for each in described.edges)
+    # Each mover's module is its kernel's HLS top, one a configuration: the two inputs'
+    # streams differ in width.
+    modules = [each.module.name for each in described.edges]
+    assert all(name.startswith("finn_iodma_") for name in modules)
+    assert len(set(modules)) == 3
     # The core's IP named as its module, its repositories none until it is packaged.
     _, body, _ = partition_body(parent)
     module = module_name(configured_network(body, core.name)[0].module, source_roots())
@@ -80,16 +85,16 @@ def test_the_chain_is_described_by_its_core_units_and_wiring(tmp_path: Path) -> 
         Unit(name="out0", kind="iodma_hls", ip=None, window=4096),
     )
     assert described.connections == (
-        Connection("in0/m_axis_0", "DataflowCore_0/s_axis_0", 8),
-        Connection("in1/m_axis_0", "DataflowCore_0/s_axis_1", 16),
-        Connection("DataflowCore_0/m_axis_0", "out0/s_axis_0", 32),
+        Connection("in0/out0_V", "DataflowCore_0/s_axis_0", 8),
+        Connection("in1/out0_V", "DataflowCore_0/s_axis_1", 16),
+        Connection("DataflowCore_0/m_axis_0", "out0/in0_V", 32),
     )
     assert described.bindings == tuple(
-        Binding(f"{unit}/m_axi_gmem0", "HP0") for unit in ("in0", "in1", "out0")
+        Binding(f"{unit}/m_axi_gmem", "HP0") for unit in ("in0", "in1", "out0")
     )
     # The Chain's kernels present no control bus: the movers' are its endpoints.
     assert described.endpoints == tuple(
-        Endpoint(unit=unit, bus=MOVER_PORTS["control"], offset=0, range=4096)
+        Endpoint(unit=unit, bus="s_axi_control", offset=0, range=4096)
         for unit in ("in0", "in1", "out0")
     )
     assert described.clocks == tuple(
@@ -175,3 +180,26 @@ def test_a_core_named_as_a_movers_unit_is_refused(tmp_path: Path) -> None:
         message="the core 'in0' is named as a mover's unit \\(in0\\)",
     ):
         describe(parent)
+
+
+def test_a_mover_presents_one_stream_one_memory_port_and_one_control_bus(
+    tmp_path: Path,
+) -> None:
+    """A mover's pins are its module's, by role; a module without a memory port is
+    refused, naming its unit."""
+    (edge, *_) = describe(zynq_parent(tmp_path)).edges
+    pins = mover_pins(edge.unit, edge.module)
+    assert {role: bus.name for role, bus in pins.items()} == {
+        "stream": "out0_V",
+        "memory": "m_axi_gmem",
+        "control": "s_axi_control",
+    }
+    kept = tuple(pin for pin in edge.module.abi.pins if pin is not pins["memory"])
+    bare = replace(edge.module, abi=replace(edge.module.abi, pins=kept))
+    with refused(
+        "mover-pins-unsupported",
+        error=IntegrationError,
+        owner="describe",
+        message="in0: its module finn_iodma_[0-9a-f]+ presents 1 stream, 0 memory, 1 control",
+    ):
+        mover_pins(edge.unit, bare)

@@ -1,9 +1,9 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The ``pynq`` shell's linker (``finn.shells.pynq.linker``): the cells, the movers'
-``IODMA_hls`` nodes, the wires and the placement it gives the Chain's description on
-``pynq``, its second weights streamed (two inputs and one output); what it refuses.
+"""The ``pynq`` shell's linker (``finn.shells.pynq.linker``): the cells, the wires and the
+placement it gives the Chain's description on ``pynq``, its second weights streamed (two
+inputs and one output); what it refuses.
 No Vivado runs: the runner's tests link through a fake (``test_pynq_runner``)."""
 
 from __future__ import annotations
@@ -18,24 +18,14 @@ from support.packaging import FakeVivado
 from support.refusals import refused
 
 from finn.platform.shells import shell_row
-from finn.shells.integration import (
-    CORE,
-    Integration,
-    IntegrationError,
-    IpRef,
-    Unit,
-    describe,
-)
+from finn.shells.integration import Integration, IntegrationError, IpRef, describe
 from finn.shells.pynq.linker import (
     Address,
     BlockDesignLinker,
     LinkerRefused,
     Wire,
     block_design,
-    cell,
-    iodma_configuration,
     linked_row,
-    pin,
     placement,
     project_script,
     report,
@@ -59,70 +49,25 @@ def described(tmp_path: Path) -> Integration:
     return describe(zynq_parent(tmp_path))
 
 
-@pytest.mark.parametrize(
-    "unit, expected",
-    [
-        ("in0", "idma0"),
-        ("in12", "idma12"),
-        ("out3", "odma3"),
-        ("DataflowCore_0", "DataflowCore_0"),
-        ("input", "input"),
-    ],
-)
-def test_a_mover_unit_is_a_cell_by_its_direction_and_a_core_by_its_name(
-    unit: str, expected: str
-) -> None:
-    assert cell(unit) == expected
-
-
 def test_the_chain_is_wired_as_its_block_design(described: Integration) -> None:
-    """Each mover's ``IODMA_hls`` configured from its facts: a frame's beats, the stream's
-    bytes a beat in the UINT8 container, the memory port and the stream's width; the
-    streams, each memory port to the memory interconnect's next slave port, each control
-    bus from the control interconnect's next master port (input movers, the core, output
-    movers), and every cell's clock and reset."""
+    """The streams, each memory port to the memory interconnect's next slave port, each
+    control bus from the control interconnect's next master port (input movers, the core,
+    output movers), and every cell's clock and reset: each cell its unit's name, each pin
+    the description's, its IP's own."""
     row = linked_row(described)
-    assert [iodma_configuration(edge).attributes for edge in described.edges] == [
-        {
-            "numInputVectors": [1, 2],
-            "NumChannels": 1,
-            "dataType": "UINT8",
-            "intfWidth": 16,
-            "streamWidth": 8,
-            "direction": "in",
-        },
-        {
-            "numInputVectors": [1, 4],
-            "NumChannels": 2,
-            "dataType": "UINT8",
-            "intfWidth": 64,
-            "streamWidth": 16,
-            "direction": "in",
-        },
-        {
-            "numInputVectors": [1, 1],
-            "NumChannels": 4,
-            "dataType": "UINT8",
-            "intfWidth": 32,
-            "streamWidth": 32,
-            "direction": "out",
-        },
-    ]
-    assert pin("in0/s_axi_control", described) == "idma0/s_axi_control_0"
-    assert pin("DataflowCore_0/s_axis_1", described) == "DataflowCore_0/s_axis_1"
     assert wiring(described, row) == (
-        Wire("axis", "idma0/m_axis_0", "DataflowCore_0/s_axis_0"),
-        Wire("axis", "idma1/m_axis_0", "DataflowCore_0/s_axis_1"),
-        Wire("axis", "DataflowCore_0/m_axis_0", "odma0/s_axis_0"),
-        Wire("aximm", "idma0/m_axi_gmem0", "smartconnect_0/S00_AXI"),
-        Wire("aximm", "idma1/m_axi_gmem0", "smartconnect_0/S01_AXI"),
-        Wire("aximm", "odma0/m_axi_gmem0", "smartconnect_0/S02_AXI"),
-        Wire("axilite", "axi_interconnect_0/M00_AXI", "idma0/s_axi_control_0"),
-        Wire("axilite", "axi_interconnect_0/M01_AXI", "idma1/s_axi_control_0"),
-        Wire("axilite", "axi_interconnect_0/M02_AXI", "odma0/s_axi_control_0"),
+        Wire("axis", "in0/out0_V", "DataflowCore_0/s_axis_0"),
+        Wire("axis", "in1/out0_V", "DataflowCore_0/s_axis_1"),
+        Wire("axis", "DataflowCore_0/m_axis_0", "out0/in0_V"),
+        Wire("aximm", "in0/m_axi_gmem", "smartconnect_0/S00_AXI"),
+        Wire("aximm", "in1/m_axi_gmem", "smartconnect_0/S01_AXI"),
+        Wire("aximm", "out0/m_axi_gmem", "smartconnect_0/S02_AXI"),
+        Wire("axilite", "axi_interconnect_0/M00_AXI", "in0/s_axi_control"),
+        Wire("axilite", "axi_interconnect_0/M01_AXI", "in1/s_axi_control"),
+        Wire("axilite", "axi_interconnect_0/M02_AXI", "out0/s_axi_control"),
         *(
             Wire(kind, f"smartconnect_0/{source}", f"{instance}/{pin}")
-            for instance in ("idma0", "idma1", "DataflowCore_0", "odma0")
+            for instance in ("in0", "in1", "DataflowCore_0", "out0")
             for kind, source, pin in (
                 ("clock", "aclk", "ap_clk"),
                 ("reset", "aresetn", "ap_rst_n"),
@@ -137,29 +82,24 @@ def test_each_control_bus_is_placed_from_the_processors_window(
     """Each control map from the fixed shell's control base, in order, 4 KiB apart: the
     row's least window, each aligned to its range."""
     assert placement(described, linked_row(described)) == (
-        Address("idma0/s_axi_control_0", 0xA000_0000, 4096),
-        Address("idma1/s_axi_control_0", 0xA000_1000, 4096),
-        Address("odma0/s_axi_control_0", 0xA000_2000, 4096),
+        Address("in0/s_axi_control", 0xA000_0000, 4096),
+        Address("in1/s_axi_control", 0xA000_1000, 4096),
+        Address("out0/s_axi_control", 0xA000_2000, 4096),
     )
     stated = report(described)
+    assert sorted(stated) == ["addresses", "wires"]
     assert stated["addresses"][2] == {
-        "interface": "odma0/s_axi_control_0",
+        "interface": "out0/s_axi_control",
         "offset": "0xa0002000",
         "range": 4096,
-    }
-    assert stated["cells"] == {
-        "in0": "idma0",
-        "in1": "idma1",
-        "DataflowCore_0": "DataflowCore_0",
-        "out0": "odma0",
     }
 
 
 def test_a_mover_the_block_design_cannot_wire_is_refused_by_name(
     described: Integration,
 ) -> None:
-    """The block design wires one AXI-Lite bus and one memory port a mover, each an
-    ``IODMA_hls``: a mover stating other counts, or of another kind, is refused."""
+    """The block design wires one AXI-Lite bus and one memory port a mover: a mover stating
+    other counts is refused."""
     edge = described.edges[0]
     wire_one_bus_each(edge.contract, "x")
     for control, memory in ((2, 1), (1, 2), (1, 0)):
@@ -171,23 +111,17 @@ def test_a_mover_the_block_design_cannot_wire_is_refused_by_name(
             message="x: its iodma_hls mover states .* AXI-Lite",
         ):
             wire_one_bus_each(contract, "x")
-    other = replace(edge, contract=replace(edge.contract, kind="other"))
-    with refused(
-        "mover-kind-unsupported",
-        error=IntegrationError,
-        message="a mover of kind 'other' is not an iodma_hls mover",
-    ):
-        iodma_configuration(other)
 
 
 def test_a_unit_whose_ip_is_not_packaged_is_refused(described: Integration) -> None:
-    """The block design instantiates every unit's IP: the movers' are generated and the
-    core's packaged before it links."""
+    """The block design instantiates every unit's IP, each as a cell of its unit's name:
+    the movers' are built and the core's packaged before it links."""
     with refused("unit-unpackaged", error=LinkerRefused, message="^in0: its IP is not packaged"):
         block_design(described, linked_row(described))
     ips = {unit.name: IpRef(f"v:{unit.name}", (f"/{unit.name}",)) for unit in described.units}
     design = block_design(described.packaged(ips), linked_row(described))
-    assert "create_bd_cell -type ip -vlnv v:in0 idma0\n" in design
+    assert "create_bd_cell -type ip -vlnv v:in0 in0\n" in design
+    assert "create_bd_cell -type ip -vlnv v:DataflowCore_0 DataflowCore_0\n" in design
 
 
 def test_a_row_without_a_fixed_shell_is_not_linked(described: Integration) -> None:
@@ -241,7 +175,7 @@ def test_a_selection_the_block_design_does_not_wire_is_refused_by_name(
         "memory-target-unsupported",
         error=LinkerRefused,
         owner="vivado-block-design",
-        message="^in1/m_axi_gmem0: bound to 'HP1'; the block design wires memory into 'HP0'",
+        message="^in1/m_axi_gmem: bound to 'HP1'; the block design wires memory into 'HP0'",
     ):
         wiring(replace(described, bindings=(described.bindings[0], elsewhere)), row)
     other = replace(described.clocks[2], clock="fast")
@@ -253,18 +187,6 @@ def test_a_selection_the_block_design_does_not_wire_is_refused_by_name(
         wiring(replace(described, clocks=(*described.clocks[:2], other)), row)
     with refused("memory-unbound", error=LinkerRefused, message="binds no memory port"):
         wiring(replace(described, bindings=()), row)
-
-
-def test_two_units_given_one_cell_are_refused(described: Integration) -> None:
-    """A core named as a mover's cell (``idma0``) would share it with the mover."""
-    core = Unit(name="idma0", kind=CORE, ip=None, window=None)
-    units = (described.units[0], described.units[1], core, described.units[3])
-    with refused(
-        "cell-name-collides",
-        error=LinkerRefused,
-        message="the units in0, idma0 would share the cells idma0",
-    ):
-        wiring(replace(described, units=units), linked_row(described))
 
 
 def test_the_project_selects_the_declared_board_part_and_the_processors_family(

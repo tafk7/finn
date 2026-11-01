@@ -6,11 +6,9 @@
 
 It takes every name the platform gives and places every control bus:
 
-- the cells: a core's is its unit's name, a mover's ``idma<i>`` or ``odma<j>`` for its unit
-  ``in<i>`` or ``out<j>`` (``cell``); the fixed shell's are the template's
-  (``STATIC_INSTANCES``);
-- a mover's pins, those of its ``IODMA_hls`` IP as the runner packages it (``IODMA_PINS``,
-  by the description's mover ports);
+- the cells: each unit's is its name (a core's its node's, a mover's ``in<i>`` or
+  ``out<j>``), its pins the description's, which are its IP's own; the fixed shell's are
+  the template's (``STATIC_INSTANCES``);
 - the wires (``wiring``): each stream from its source pin to its sink pin; each memory port
   to the memory interconnect's next slave port (``S<nn>_AXI``); each control bus, in the
   description's order (the input movers, the core, the output movers), from the control
@@ -21,20 +19,14 @@ It takes every name the platform gives and places every control bus:
   so the placement it returns is the one Vivado was given;
 - the board (``project_script``): its board part, the board's declared fact
   (``board_part``), and its processor's family, the fixed shell's processor's
-  (``PROCESSORS``);
-- each mover's ``IODMA_hls`` node (``iodma_configuration``), its attributes from the
-  mover's facts: vectors ``(1, beats)``, the stream's bytes a beat, memory and stream
-  widths, as ``InsertIODMA`` sized them. ``IODMA_hls`` moves bytes: its ``dataType`` stays
-  the ``UINT8`` container and its generated code is the one it always was; the stream's
-  element is the mover's. The runner generates each mover's IP from it.
+  (``PROCESSORS``).
 
 It wires one AXI-Lite bus and one memory port a mover: a mover whose contract states other
-counts is refused, by name (``wire_one_bus_each``), as is a mover of another kind than
-``iodma_hls`` (``iodma_configuration``). Its template wires the memory interconnect into the
-processor's ``HP0`` port and runs every cell on the row's main clock: a memory port bound to
-another target, a unit on another clock and a description with no memory port are refused,
-each by name (``wiring``), as are two units given one cell (``cells``) and a processor or
-board it cannot select (``project_script``).
+counts is refused, by name (``wire_one_bus_each``). Its template wires the memory
+interconnect into the processor's ``HP0`` port and runs every cell on the row's main clock:
+a memory port bound to another target, a unit on another clock and a description with no
+memory port are refused, each by name (``wiring``), as is a processor or board it cannot
+select (``project_script``).
 
 ``BlockDesignLinker.link`` writes the block design (``block_design``) into
 ``templates.custom_zynq_shell_template`` (``project_script``) in a new project under the
@@ -55,17 +47,9 @@ from typing import Any
 
 from finn import resources
 from finn.core.reporting.findings import Finding, FindingKind, Refusal
-from finn.kernels.movers import IODMA_HLS, MoverContract
+from finn.kernels.movers import MoverContract
 from finn.platform.shells import VIVADO_BLOCK_DESIGN, ShellRow, shell_row
-from finn.shells.integration import (
-    CORE,
-    MAIN,
-    MOVER_PORTS,
-    Edge,
-    Integration,
-    IntegrationError,
-    Linked,
-)
+from finn.shells.integration import MAIN, Integration, IntegrationError, Linked
 from finn.shells.pynq import templates
 from finn.toolchain.launcher import StrPath, Toolchain, ToolFailed
 from finn.toolchain.vivado import tcl_quote, vivado_jobs
@@ -83,51 +67,12 @@ STATIC_INSTANCES = {
     "control_interconnect": "axi_interconnect_0",
 }
 
-CELLS = {"in": "idma", "out": "odma"}
-"""A mover's cell by its unit's direction, numbered as its unit."""
-
 MEMORY_TARGET = "HP0"
 """The memory target the template wires the memory interconnect into: the processor's
 ``HP0`` port."""
 
 PROCESSORS = {"zynq_ultra_ps_e": "zynq_us+", "processing_system7": "zynq_7000"}
 """The template's processor family (its ``ZYNQ_TYPE``) by the fixed shell's processor IP."""
-
-IODMA_PINS = {
-    MOVER_PORTS["stream_in"]: "s_axis_0",
-    MOVER_PORTS["stream_out"]: "m_axis_0",
-    MOVER_PORTS["memory"]: "m_axi_gmem0",
-    MOVER_PORTS["control"]: "s_axi_control_0",
-}
-"""The pins of an ``IODMA_hls`` mover's IP, its one node packaged as a stitched IP (the
-runner, ``finn.shells.pynq.runner``), by the description's mover ports."""
-
-
-@dataclass(frozen=True, kw_only=True)
-class IodmaConfiguration:
-    """An ``IODMA_hls`` node for a mover: its ``direction``; ``vectors``, the frame's beats
-    as ``numInputVectors``; ``channels``, the stream's bytes a beat (``NumChannels``)
-    in the byte ``container`` (``dataType``); and its ``memory_width``
-    (``intfWidth``) and ``stream_width`` (``streamWidth``), bits."""
-
-    direction: str
-    vectors: tuple[int, ...]
-    channels: int
-    container: str
-    memory_width: int
-    stream_width: int
-
-    @property
-    def attributes(self) -> dict[str, Any]:
-        """The ``IODMA_hls`` node's attributes."""
-        return {
-            "numInputVectors": list(self.vectors),
-            "NumChannels": self.channels,
-            "dataType": self.container,
-            "intfWidth": self.memory_width,
-            "streamWidth": self.stream_width,
-            "direction": self.direction,
-        }
 
 
 @dataclass(frozen=True)
@@ -156,58 +101,6 @@ class LinkerRefused(Refusal):
 
     def __init__(self, code: str, message: str) -> None:
         super().__init__((Finding(FindingKind.REJECTION, code, VIVADO_BLOCK_DESIGN, message),))
-
-
-def cell(unit: str) -> str:
-    """The block design's cell of ``unit``: a mover's ``idma<i>`` or ``odma<j>``, a core's
-    its unit's name."""
-    for direction, prefix in CELLS.items():
-        index = unit.removeprefix(direction)
-        if index != unit and index.isdigit():
-            return f"{prefix}{index}"
-    return unit
-
-
-def cells(integration: Integration) -> dict[str, str]:
-    """Each unit's cell (``cell``), refused where two units would share one
-    (``cell-name-collides``): a core named as a mover's cell."""
-    found = {unit.name: cell(unit.name) for unit in integration.units}
-    shared = sorted({name for name in found.values() if list(found.values()).count(name) > 1})
-    if shared:
-        units = [unit for unit, name in found.items() if name in shared]
-        raise LinkerRefused(
-            "cell-name-collides",
-            f"the units {', '.join(units)} would share the cells {', '.join(shared)}",
-        )
-    return found
-
-
-def pin(port: str, integration: Integration) -> str:
-    """The block design's ``<cell>/<pin>`` of a unit's ``port`` (``<unit>/<port>``): a
-    mover's pins its IP's (``IODMA_PINS``), a core's its own."""
-    unit, name = port.split("/", 1)
-    if integration.unit(unit).kind != CORE:
-        name = IODMA_PINS[name]
-    return f"{cell(unit)}/{name}"
-
-
-def iodma_configuration(edge: Edge) -> IodmaConfiguration:
-    """A mover's ``IODMA_hls`` node, from its facts, in its byte container."""
-    contract = edge.contract
-    if contract.kind != IODMA_HLS:
-        raise IntegrationError(
-            "mover-kind-unsupported",
-            "iodma_configuration",
-            f"a mover of kind {contract.kind!r} is not an {IODMA_HLS} mover",
-        )
-    return IodmaConfiguration(
-        direction=contract.direction,
-        vectors=(1, contract.beats),
-        channels=contract.tdata // 8,
-        container="UINT8",
-        memory_width=contract.memory_width,
-        stream_width=contract.tdata,
-    )
 
 
 def wire_one_bus_each(contract: MoverContract, where: str) -> None:
@@ -239,12 +132,9 @@ def linked_row(integration: Integration) -> ShellRow:
 
 def wiring(integration: Integration, row: ShellRow) -> tuple[Wire, ...]:
     """The block design's wires of ``integration`` in ``row`` (see the module docstring),
-    each mover first checked to be one it wires (``iodma_configuration``,
-    ``wire_one_bus_each``)."""
+    each mover first checked to be one it wires (``wire_one_bus_each``)."""
     assert row.fixed is not None
-    cells(integration)
     for edge in integration.edges:
-        iodma_configuration(edge)
         wire_one_bus_each(edge.contract, f"{edge.tensor} ({edge.port})")
     if not integration.bindings:
         raise LinkerRefused(
@@ -268,25 +158,18 @@ def wiring(integration: Integration, row: ShellRow) -> tuple[Wire, ...]:
             )
     memory = f"{row.fixed.memory_interconnect}_0"
     control = f"{row.fixed.control_interconnect}_0"
-    wires = [
-        Wire("axis", pin(each.source, integration), pin(each.sink, integration))
-        for each in integration.connections
-    ]
+    wires = [Wire("axis", each.source, each.sink) for each in integration.connections]
     wires += [
-        Wire("aximm", pin(each.port, integration), f"{memory}/S{index:02d}_AXI")
+        Wire("aximm", each.port, f"{memory}/S{index:02d}_AXI")
         for index, each in enumerate(integration.bindings)
     ]
     wires += [
-        Wire(
-            "axilite",
-            f"{control}/M{index:02d}_AXI",
-            pin(f"{each.unit}/{each.bus}", integration),
-        )
+        Wire("axilite", f"{control}/M{index:02d}_AXI", f"{each.unit}/{each.bus}")
         for index, each in enumerate(integration.endpoints)
     ]
     for clock in integration.clocks:
-        wires.append(Wire("clock", f"{memory}/aclk", f"{cell(clock.unit)}/{clock.pin}"))
-        wires.append(Wire("reset", f"{memory}/aresetn", f"{cell(clock.unit)}/{clock.reset}"))
+        wires.append(Wire("clock", f"{memory}/aclk", f"{clock.unit}/{clock.pin}"))
+        wires.append(Wire("reset", f"{memory}/aresetn", f"{clock.unit}/{clock.reset}"))
     return tuple(wires)
 
 
@@ -298,19 +181,16 @@ def placement(integration: Integration, row: ShellRow) -> tuple[Address, ...]:
     base = row.fixed.control_base
     for each in integration.endpoints:
         offset = -(-base // each.range) * each.range
-        interface = pin(f"{each.unit}/{each.bus}", integration)
-        addresses.append(Address(interface, offset + each.offset, each.range))
+        addresses.append(Address(f"{each.unit}/{each.bus}", offset + each.offset, each.range))
         base = offset + each.range
     return tuple(addresses)
 
 
 def report(integration: Integration) -> dict[str, Any]:
-    """What the linker names and places of ``integration``, as JSON: each unit's cell, each
-    mover's ``IODMA_hls`` node, the wires and the addresses."""
+    """What the linker names and places of ``integration``, as JSON: the wires and the
+    addresses."""
     row = linked_row(integration)
     return {
-        "cells": cells(integration),
-        "iodma": {edge.unit: iodma_configuration(edge).attributes for edge in integration.edges},
         "wires": [
             {"kind": each.kind, "source": each.source, "sink": each.sink}
             for each in wiring(integration, row)
@@ -371,7 +251,7 @@ def block_design(integration: Integration, row: ShellRow, hw_debug: bool = False
             raise LinkerRefused(
                 "unit-unpackaged", f"{unit.name}: its IP is not packaged; package it first"
             )
-        instance = cell(unit.name)
+        instance = unit.name
         repositories = " ".join(tcl_quote(path) for path in unit.ip.repositories)
         lines.append(
             "set_property ip_repo_paths [concat [get_property ip_repo_paths [current_project]] "
@@ -541,25 +421,18 @@ class BlockDesignLinker:
 
 
 __all__ = [
-    "CELLS",
-    "IODMA_PINS",
     "PROJECT",
     "STATIC_INSTANCES",
     "Address",
     "BlockDesignLinker",
-    "IodmaConfiguration",
     "LinkerRefused",
     "MEMORY_TARGET",
     "PROCESSORS",
     "Wire",
     "block_design",
-    "cell",
-    "cells",
     "collect",
     "debug_lines",
-    "iodma_configuration",
     "linked_row",
-    "pin",
     "placement",
     "project_script",
     "report",
