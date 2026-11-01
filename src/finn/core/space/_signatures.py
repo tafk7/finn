@@ -118,6 +118,17 @@ def output_semantics(
     return stated
 
 
+def declared_non_values(annotation: object) -> frozenset[type]:
+    """The non-values a computation's return annotation admits as its own answer: each of
+    ``Rejected``, ``Inapplicable`` and ``Unresolved`` it names (``QueryResult[T]`` names all
+    three; a plain ``T`` none). An override's is read against its base's (``collection``)."""
+    union = get_origin(annotation) in (Union, types.UnionType)
+    options = get_args(annotation) if union else (annotation,)
+    return frozenset(
+        cast(type, option) for option in options if option in (Inapplicable, Rejected, Unresolved)
+    )
+
+
 def _unmarked(annotation: object) -> object:
     """``annotation`` less the non-value markers (``T | Rejected`` is ``T``; ``T | None |
     Rejected`` is ``T | None``)."""

@@ -14,6 +14,7 @@ from ._nodes import NodeDecision, NodeDecl, slot_declaration
 from ._signatures import (
     BoundFunction,
     bind_function,
+    declared_non_values,
     output_semantics,
     resolve_annotations,
     resolve_source,
@@ -35,6 +36,7 @@ from .declarations import (
 )
 from .errors import DefinitionError
 from .groups import Group
+from .results import Rejected
 from .semantics import OptionalSemantics, ValueSemantics
 
 _OWNER = "space.collection"
@@ -234,6 +236,8 @@ def _collect_semantics(
                     f"{owner}: override changes declaration kind",
                     declaration=owner,
                 )
+            if isinstance(prior, (Derived, Constraint)):
+                _check_answer_within(prior, declaration, hints_for, owner)
             old_semantics = getattr(prior, "semantics", None)
             if old_semantics is None and isinstance(prior, (Derived, View)):
                 prior_function = prior.function
@@ -252,6 +256,34 @@ def _collect_semantics(
                     declaration=owner,
                 )
     return semantics
+
+
+def _check_answer_within(
+    prior: Derived[object] | Constraint,
+    declaration: Declaration,
+    hints_for: Callable[[Callable[..., object], str], Mapping[str, object]],
+    owner: str,
+) -> None:
+    """An override of a rule admits no ``Inapplicable`` and no ``Unresolved`` the answer it
+    overrides does not (``override-widens-answer``): a reader of that answer relies on it,
+    as the Kernel's class checks rely on a ``schedule`` declared never inapplicable, and a
+    constraint reading an inapplicable value counts as true. ``Rejected`` is not compared:
+    the Kernel's base declares its ``schedule`` ``Inapplicable`` and each Kernel stating one
+    declares it ``Rejected``."""
+    prior_function, function = _function(prior), _function(declaration)
+    if prior_function is None or function is None:
+        return
+    admitted = declared_non_values(hints_for(prior_function, owner).get("return"))
+    stated = declared_non_values(hints_for(function, owner).get("return"))
+    wider = stated - admitted - {Rejected}
+    if wider:
+        names = " and ".join(sorted(marker.__name__ for marker in wider))
+        raise DefinitionError.broken(
+            "override-widens-answer",
+            _OWNER,
+            f"{owner}: its answer admits {names}, which the answer it overrides does not",
+            declaration=owner,
+        )
 
 
 def _collect_guards(effective: EffectiveSpace) -> Mapping[Declaration, ValueRef[bool]]:
