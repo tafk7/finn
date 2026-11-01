@@ -9,6 +9,7 @@ each given its port (``thresholdings``)."""
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from qonnx.core.datatype import DataType
@@ -37,11 +38,16 @@ TABLE = IntegerTensorValue.of((((0, 1, 2), (0, 1, 2)),))
 """Each thresholding's table: two channels of three thresholds over UINT2, to UINT2."""
 
 
-def thresholdings(count: int, row: ShellRow, presenting: int | None = None) -> CoreComposition:
+def thresholdings(
+    count: int,
+    row: ShellRow,
+    presenting: int | None = None,
+    tables: Sequence[IntegerTensorValue] | None = None,
+) -> CoreComposition:
     """A partition declared by hand in the shell of ``row``, of ``count`` AXI-Lite
     thresholdings in a row, the first ``presenting`` (every one by default) presenting
-    its bus (``t<i>_s_axilite``) and the others not, configured: at its baseline otherwise,
-    every transport direct."""
+    its bus (``t<i>_s_axilite``) and the others not, each of its table in ``tables``
+    (``TABLE`` by default), configured: at its baseline otherwise, every transport direct."""
     platform = ULTRA96.platform
     # Each channel is on the ports of the thresholdings on either side of it; the first's
     # and the last's other side the boundary, offered the row's movers and stated by them.
@@ -63,7 +69,7 @@ def thresholdings(count: int, row: ShellRow, presenting: int | None = None) -> C
             ThresholdingKernel,
             {
                 "threshold_dtype": UINT2,
-                "thresholds": TABLE,
+                "thresholds": TABLE if tables is None else tables[index],
                 "bias": 0,
                 "input_tensor": TENSOR,
                 "control": f"t{index}_s_axilite",
