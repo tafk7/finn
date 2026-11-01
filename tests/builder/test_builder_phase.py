@@ -27,7 +27,6 @@ import numpy as np
 import pytest
 from onnx import StringStringEntryProto
 from oracle import capture
-from qonnx.core.datatype import DataType
 from qonnx.core.metadata import MetadataError
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
@@ -49,7 +48,6 @@ from support.packaging import (
     FakeVivado,
     PackagedByStub,
     bitfile_default,
-    io_shape_dict,
 )
 from support.refusals import refused
 from support.tfc import EXPORT, SHAPE, ULTRA96, built, io_settings, partition, run_steps
@@ -1792,26 +1790,14 @@ def test_z0s_movers_as_kernels_state_their_channels_movers_and_generate_z0s_iodm
 #: movers, read its slowest layer's 196).
 TFC_BOTTLENECK = 200
 
-#: The generated driver's io_shape_dict for TFC at Z0's choices, as the build's
-#: driver wrote it before the runner (from ZynqBuild's link graph), the logits INT7 (the last
-#: MatMul's result over its activations' range, [-61, 61]).
-TFC_IO_SHAPES = {
-    "idt": [DataType["UINT8"]],
-    "odt": [DataType["INT7"]],
-    "ishape_normal": [(1, 784)],
-    "oshape_normal": [(1, 10)],
-    "ishape_folded": [(1, 196, 4)],
-    "oshape_folded": [(1, 10, 1)],
-    "ishape_packed": [(1, 196, 4)],
-    "oshape_packed": [(1, 10, 1)],
-    "input_dma_name": ["in0"],
-    "output_dma_name": ["out0"],
-    "number_of_external_weights": 0,
-    "external_weights_input_shapes": {},
-    "num_inputs": 1,
-    "num_outputs": 1,
-    "mlo_weight_config": {},
-}
+#: TFC's edges at Z0's choices as the driver's runtime file states them (unit, tensor,
+#: element, shape, beats a frame, lanes a beat, bits a beat): the I/O the build's driver
+#: read before the runner (from ZynqBuild's link graph), the logits INT7 (the last MatMul's
+#: result over its activations' range, [-61, 61]).
+TFC_EDGES = [
+    ("in0", "Reshape_0_out0", "UINT8", [1, 784], 196, 4, 32),
+    ("out0", "MatMul_3_out0", "INT7", [1, 10], 10, 1, 8),
+]
 
 
 def tool_recorders(tmp_path: Path) -> dict[str, object]:
@@ -1857,9 +1843,10 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
       typed, and no flat key: the bitfile and its handoff, no report; the reports are
       collected beside them, the delivered clock's with the partition's network's
       bottleneck, movers included.
-    - The driver's io_shape_dict is the build's before the runner, the logits
-      INT7, and it sets PL0 to the delivered clock; report/driver.json states what it
-      takes and returns.
+    - The driver's runtime file is the build's report of it, its edges the I/O the
+      build's driver read before the runner, the logits INT7, its main clock the
+      delivered one; report/driver.json states the bitfile, the runtime and what the
+      driver was made from.
     - report/resources.json states each member of the shell by the model, out of
       context (the fake per-IP runs) and placed (the fake hierarchy), by its instance;
       what no member's row holds is unattributed.
@@ -1996,18 +1983,27 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
         "out_of_context": counts(0, 0),
         "placed": counts(10, 10),
     }
-    # The driver: today's I/O, the delivered clock.
-    driver = (output / "driver" / "driver.py").read_text()
-    assert io_shape_dict(driver) == TFC_IO_SHAPES
-    assert "\nfclk_mhz = 187.512\n" in driver
+    # The driver: today's I/O, the delivered clock, the runtime file the build's report.
+    runtime_file = (output / "driver" / "integration.json").read_text()
+    assert runtime_file == (report / "integration.json").read_text()
+    assert [
+        (
+            edge["unit"],
+            edge["tensor"],
+            edge["element"],
+            edge["shape"],
+            edge["beats"],
+            edge["lanes"],
+            edge["bits"],
+        )
+        for core in json.loads(runtime_file)["cores"]
+        for edge in (*core["inputs"], *core["outputs"])
+    ] == TFC_EDGES
+    assert json.loads(runtime_file)["clocks_mhz"] == {"main": 187.512}
     description = json.loads((report / "driver.json").read_text())
     assert description == {
-        "host_runtime": "zynq-iodma",
         "bitfile": "bitfile/finn-accel.bit",
-        "fclk_mhz": 187.512,
-        "takes": [{"name": "Reshape_0_out0", "element": "UINT8", "shape": [1, 784], "dma": "in0"}],
-        "returns": [{"name": "MatMul_3_out0", "element": "INT7", "shape": [1, 10], "dma": "out0"}],
-        "host": {"before": ["Reshape_0"], "after": ["TopK_0"]},
+        "runtime": "pynq",
         "made_from": design_digest(body),
         "ip_key": IP_KEY,
     }
@@ -2022,6 +2018,7 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
         "model",
     ]
     assert json.loads((deploy / "driver.json").read_text()) == description
+    assert (deploy / "driver" / "integration.json").read_text() == runtime_file
     # driver.py and validate.py run the bitfile shipped beside driver/, wherever the
     # deployment is and from whatever directory they are run.
     for script in ("driver.py", "validate.py"):

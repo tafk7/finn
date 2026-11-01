@@ -12,6 +12,8 @@ device image and its runtime file (``finn.shells.integration.runtime_file``,
 - ``driver``: ``Driver``, which runs each core by its name, writes a node's run-time
   weights at its endpoint, and runs the parent graph (``run_graph``: its host nodes by ONNX
   execution, onnx and qonnx imported only then).
+- ``cli`` and ``validate``: the command line a runtime's ``driver.py`` runs and the top-1
+  validation its ``validate.py`` runs, each over the device the runtime opens.
 
 Every refusal is a ``Refused``, its code and its message.
 """

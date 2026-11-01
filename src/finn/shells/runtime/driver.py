@@ -6,19 +6,20 @@
 
 A driver refuses a runtime file whose edge a mover kind moves that no protocol drives
 (``mover-unknown``, ``movers.PROTOCOLS``). A core runs by its node's name (``run_core``):
-each input's frames packed into its mover's buffer and synced to the device; each output
-mover, idle, started on its buffer, then each input mover; each output mover waited on, its
-buffer synced back and unpacked. An input
-holds a whole number of frames: its edge's shape, its first axis that many times
-(``frames``); every input of a call holds as many. Buffers are allocated once a size, by
-mover. ``execute`` runs every core on the inputs it is given; ``run_graph`` runs the parent
-graph, its host nodes by ONNX execution (onnx and qonnx, imported only there) and each
-``DataflowCore`` node through ``run_core``, its inputs and outputs the core's edge ports in
-port order.
+each input's frames packed into its mover's buffer and synced to the device (``stage``);
+each output mover, idle, started on its buffer, then each input mover, and each output
+mover waited on (``launch``, which a throughput test times alone); each output's buffer
+synced back and unpacked (``collect``). An input holds a whole number of frames: its edge's
+shape, its first axis that many times (``frames``); every input of a call holds as many.
+Buffers are allocated once a size, by mover. ``execute`` runs every core on the inputs it
+is given; ``run_graph`` runs the parent graph, its host nodes by ONNX execution (onnx and
+qonnx, imported only there) and each ``DataflowCore`` node through ``run_core``, its inputs
+and outputs the core's edge ports in port order.
 
 A node's run-time weights (``write_weights``) are 32-bit words written from its endpoint's
 offset, each read back where asked; more words than the endpoint holds are refused
-(``weights-outside``).
+(``weights-outside``). A directory of them holds a ``<node>.dat`` a node, its words in
+hexadecimal (``write_weight_files``).
 """
 
 from __future__ import annotations
@@ -102,11 +103,9 @@ class Driver:
             self._buffers[key] = self.device.buffer(edge.unit, port, nbytes, target)
         return self._buffers[key]
 
-    def run_core(
-        self, name: str, inputs: Mapping[str, np.ndarray[Any, Any]]
-    ) -> dict[str, np.ndarray[Any, Any]]:
-        """Run the core ``name`` on ``inputs``, by its edge's tensors (the module
-        docstring): its outputs, by tensor, as float32."""
+    def stage(self, name: str, inputs: Mapping[str, np.ndarray[Any, Any]]) -> int:
+        """Pack the inputs of the core ``name`` into its input movers' buffers and sync them
+        to the device (the module docstring): the frames they hold."""
         core = self.description.core(name)
         for edge in (*core.inputs, *core.outputs):
             if prod(edge.shape) != edge.beats * edge.lanes:
@@ -116,26 +115,40 @@ class Driver:
                     f"{edge.lanes} lanes",
                 )
         frames = self._frames(core, inputs)
-        movers = {
-            edge.unit: PROTOCOLS[edge.mover](
-                self.device, edge.unit, self.description.endpoint(edge.unit)
-            )
-            for edge in (*core.inputs, *core.outputs)
-        }
         for edge in core.inputs:
             element = Element.named(edge.element)
             folded = np.asarray(inputs[edge.tensor]).reshape(frames, edge.beats, edge.lanes)
             buffer = self._buffer(edge, frames)
             np.copyto(buffer.array, pack(folded, element).reshape(-1))
             self.device.sync(buffer, to_device=True)
+        return frames
+
+    def launch(self, name: str, frames: int) -> None:
+        """Move ``frames`` frames through the core ``name``, its inputs staged (``stage``):
+        each output mover, idle, started, then each input mover; each output mover waited
+        on."""
+        core = self.description.core(name)
+        movers = {
+            edge.unit: PROTOCOLS[edge.mover](
+                self.device, edge.unit, self.description.endpoint(edge.unit)
+            )
+            for edge in (*core.inputs, *core.outputs)
+        }
         for edge in core.outputs:
             if not movers[edge.unit].idle():
                 raise Refused("mover-busy", f"{edge.unit}: its output mover is not idle")
         for edge in (*core.outputs, *core.inputs):
             movers[edge.unit].start(self._buffer(edge, frames), frames)
-        outputs: dict[str, np.ndarray[Any, Any]] = {}
         for edge in core.outputs:
             movers[edge.unit].wait()
+
+    def collect(self, name: str, frames: int) -> dict[str, np.ndarray[Any, Any]]:
+        """The outputs of the core ``name`` after ``frames`` frames were moved
+        (``launch``): each output mover's buffer synced back and unpacked, by tensor, as
+        float32."""
+        core = self.description.core(name)
+        outputs: dict[str, np.ndarray[Any, Any]] = {}
+        for edge in core.outputs:
             buffer = self._buffer(edge, frames)
             self.device.sync(buffer, to_device=False)
             element = Element.named(edge.element)
@@ -144,6 +157,15 @@ class Driver:
             shape = (frames * first, *edge.shape[1:])
             outputs[edge.tensor] = unpack(packed, element, edge.lanes).reshape(shape)
         return outputs
+
+    def run_core(
+        self, name: str, inputs: Mapping[str, np.ndarray[Any, Any]]
+    ) -> dict[str, np.ndarray[Any, Any]]:
+        """Run the core ``name`` on ``inputs``, by its edge's tensors (``stage``,
+        ``launch``, ``collect``): its outputs, by tensor, as float32."""
+        frames = self.stage(name, inputs)
+        self.launch(name, frames)
+        return self.collect(name, frames)
 
     def execute(
         self, inputs: Mapping[str, np.ndarray[Any, Any]]
@@ -180,6 +202,17 @@ class Driver:
                     "weights-unwritten",
                     f"{node}: the words at {differ[:4]} read back otherwise than written",
                 )
+
+    def write_weight_files(self, directory: Path) -> list[str]:
+        """Write the run-time weights in ``directory``: each ``<node>.dat``, its words in
+        hexadecimal, whitespace between them, written to the node ``<node>``
+        (``write_weights``), the files in name order. The nodes written; none where the
+        directory is absent."""
+        written = []
+        for path in sorted(Path(directory).glob("*.dat")):
+            self.write_weights(path.stem, [int(word, 16) for word in path.read_text().split()])
+            written.append(path.stem)
+        return written
 
     # -- the parent graph -----------------------------------------------------------------
 

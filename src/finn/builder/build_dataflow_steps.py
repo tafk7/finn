@@ -531,24 +531,27 @@ def step_build_bitfile(
 
 
 def step_make_driver(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """Write the PYNQ driver into driver/ and its description into report/driver.json.
-    The driver sets PL0 to the clock the bitfile delivers, and loads the build's bitfile
-    by default: step_build_bitfile comes before it. Refuses a shell without a bitfile
-    build, a missing bitfile, one built from another design than the current partition or
-    from another IP than its body states, and a partition built for another target than
-    the configuration's."""
+    """Write the driver into driver/, the runtime file beside it, and its description into
+    report/driver.json. The driver sets PL0 to the clock the bitfile delivers, reaches each
+    unit where the bitfile's build placed it, and loads the build's bitfile by default:
+    step_build_bitfile comes before it. Refuses a shell without a bitfile build, a missing
+    bitfile, one built from another design than the current partition or from another IP
+    than its body states, and a partition built for another target than the
+    configuration's."""
     _refuse_shell(cfg, "step_make_driver")
     _refuse_drift(model, cfg, "pynq_driver")
     making = MakePynqDriver(Path(cfg.output_dir))
     model = model.transform(making)
     reported(Path(cfg.output_dir) / DRIVER_REPORT)
-    description = making.description
+    assert making.integration is not None
     returned = ", ".join(
-        f"{each['name']} ({each['element']}, {each['shape']})" for each in description["returns"]
+        f"{edge.tensor} ({edge.element.dtype.name}, {list(edge.shape)})"
+        for core in making.integration.cores
+        for edge in core.outputs
     )
     driver_dir = Path(cfg.output_dir) / DRIVER_DIR
     _LOG.info(
-        f"PYNQ Python driver written into {driver_dir}, at {description['fclk_mhz']} MHz; "
+        f"The {making.description['runtime']} driver written into {driver_dir}; "
         f"it returns {returned}"
     )
     return model

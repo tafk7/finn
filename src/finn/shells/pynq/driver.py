@@ -1,317 +1,34 @@
-# Copyright (C) 2020, Xilinx, Inc.
-# Copyright (C) 2025-2026, Advanced Micro Devices, Inc.
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The pynq shell's PYNQ driver, from the partition's integration description
-(``finn.shells.integration``): its I/O the description's edge ports (each mover's tensor
-and shape, its element, and its beats and lanes), each mover by its cell in the block
-design, its unit's name; its platform its runtime's (``HOST_RUNTIMES``); it sets PL0 to
-the clock it is given, the one the bitfile delivers, and runs the bitfile it is given
-(``write_driver``). ``driver_description`` states what it takes and returns.
-``MakePynqDriver`` writes both for the build's parent graph, from its target, the
-bitfile it states and the clock that bitfile delivers (its build's report,
-``runner.DELIVERED_CLOCK``).
-
-The driver's text and the files it runs with are the HWCustomOp flow's PYNQ driver's
-(finn.transformation.fpgadataflow.make_driver), copied as the shell's frozen extraction:
-the template (``templates.pynq_driver_template``), the base driver and validate.py
-(``data/pynq_driver``, ``data_path``), and the trimmed qonnx and finn helpers the driver imports
-(``write_pynq_driver_support``). The driver FINN writes has no external weights and no
-MLO configuration.
+"""The pynq shell's driver for the build's parent graph (``MakePynqDriver``): the ``pynq``
+runtime's (``runtime.PynqRuntime.emit``), from the partition's integration description and
+what the bitfile's build linked of it: the bitfile the parent graph states
+(``shipped_bitfile``), each unit's base as the build's runtime file states it
+(report/integration.json, ``linked_placement``), and the clock the bitfile delivers
+(report/delivered_clock.json, ``delivered_mhz``), which the driver sets PL0 to.
 """
 
 from __future__ import annotations
 
-import inspect
 import json
-import os
-import shutil
-from collections.abc import Callable, Sequence
-from importlib.resources import files
 from pathlib import Path
-from types import ModuleType
 from typing import Any
 
-import numpy as np
-import qonnx
-import qonnx.util.basic
-from qonnx.core.datatype import BaseDataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.base import Transformation
-from qonnx.util.basic import gen_finn_dt_tensor
 
-import finn.util
-import finn.util.data_packing
 from finn.core.graph.annotations.outputs import OUTPUT_BITFILE, OUTPUT_BITFILE_IP_KEY
 from finn.core.graph.partition import design_digest, partition_body
-from finn.shells.integration import Edge, Integration, describe
-from finn.shells.pynq import templates
+from finn.shells.integration import MAIN, RUNTIME_SCHEMA, Integration, Linked, describe
 from finn.shells.pynq.runner import (
     DELIVERED_CLOCK,
+    REPORTS,
     PynqRefused,
     pynq_row,
     refuse_stale_bitfile,
 )
-from finn.util.data_packing import finnpy_to_packed_bytearray
-
-
-def data_path(*parts: str) -> str:
-    """An existing path in the shell's data directory (``data/``)."""
-    resource = files(__package__).joinpath("data", *parts)
-    if not isinstance(resource, Path):
-        raise RuntimeError("FINN's data requires an unpacked installation; install with pip")
-    if not resource.exists():
-        raise FileNotFoundError(resource)
-    return str(resource.resolve())
-
-
-def packed_shape(dtype: BaseDataType, folded_shape: tuple[int, ...]) -> tuple[int, ...]:
-    """The shape of a folded tensor of ``dtype`` packed into bytes, as the driver packs
-    it (``finnpy_to_packed_bytearray``)."""
-    dummy = gen_finn_dt_tensor(dtype, folded_shape)
-    packed: np.ndarray[Any, Any] = finnpy_to_packed_bytearray(dummy, dtype)  # type: ignore[no-untyped-call]
-    return tuple(packed.shape)
-
-
-def _extract_license_header(source_module: ModuleType) -> str:
-    """Return the leading comment/blank-line block from a module's source file.
-
-    Used so that generated minimal copies of a source file keep the original
-    copyright/license notice intact."""
-    src_lines = inspect.getsource(source_module).splitlines()
-    header = []
-    for line in src_lines:
-        if line.startswith("#") or line.strip() == "":
-            header.append(line)
-        else:
-            break
-    return "\n".join(header).rstrip()
-
-
-def _generate_minimal_module(
-    target_file: str,
-    source_module: ModuleType,
-    functions: Sequence[Callable[..., Any]],
-    import_block: str,
-) -> None:
-    """Write a lightweight copy of source_module to target_file that contains
-    only the given functions, the original license header and a minimal import
-    block.
-
-    The generated PYNQ driver only needs a small subset of the helper functions
-    in qonnx.util.basic and finn.util.data_packing. Copying those files verbatim
-    would pull heavy imports (onnx, bitstring) onto the deployment board, even
-    though none of that functionality is exercised by the driver. Emitting a
-    trimmed-down module keeps the board dependencies limited to numpy (+pynq)."""
-    orig_module = source_module.__name__
-    license_header = _extract_license_header(source_module)
-    note = (
-        "# This is a minimal version of {0}, containing only the subset of\n"
-        "# functions required by the generated PYNQ driver. It is trimmed down to\n"
-        "# keep the runtime dependencies on the deployment board lightweight\n"
-        "# (avoiding heavy imports such as onnx / bitstring). Refer to the full\n"
-        "# {0} in the original source tree for the complete implementation."
-    ).format(orig_module)
-    bodies = "\n\n\n".join(inspect.getsource(fn) for fn in functions)
-    content = (
-        license_header
-        + "\n\n"
-        + note
-        + "\n\n"
-        + import_block.strip()
-        + "\n\n\n"
-        + bodies.rstrip()
-        + "\n"
-    )
-    with open(target_file, "w") as f:
-        f.write(content)
-
-
-def write_pynq_driver_support(pynq_driver_dir: str) -> None:
-    """What every generated PYNQ driver runs with, into ``pynq_driver_dir``: the base
-    driver (driver_base.py), validate.py, and the parts of qonnx and finn it imports,
-    trimmed to what it uses."""
-    # create the base FINN driver -- same for all accels
-    shutil.copy(data_path("pynq_driver", "driver_base.py"), pynq_driver_dir + "/driver_base.py")
-    # driver depends on qonnx and finn packages
-    # extract individual source files and copy to driver folder
-    qonnx_target_path = pynq_driver_dir + "/qonnx"
-    finn_target_path = pynq_driver_dir + "/finn"
-    os.makedirs(qonnx_target_path + "/core", exist_ok=True)
-    os.makedirs(qonnx_target_path + "/util", exist_ok=True)
-    os.makedirs(finn_target_path + "/util", exist_ok=True)
-    qonnx_path = qonnx.__path__[0]
-    finn_util_path = finn.util.__path__[0]
-    files_to_copy = [
-        (qonnx_path + "/core/datatype.py", qonnx_target_path + "/core/datatype.py"),
-        (qonnx_path + "/core/__init__.py", qonnx_target_path + "/core/__init__.py"),
-        (qonnx_path + "/util/__init__.py", qonnx_target_path + "/util/__init__.py"),
-        (finn_util_path + "/__init__.py", finn_target_path + "/util/__init__.py"),
-    ]
-    for src_file, target_file in files_to_copy:
-        shutil.copy(src_file, target_file)
-
-    # qonnx.util.basic and finn.util.data_packing are not copied verbatim:
-    # the driver only needs a handful of pure-numpy helpers from each, while
-    # the full files import onnx (qonnx.util.basic) and bitstring
-    # (finn.util.data_packing). Emitting a trimmed-down module keeps those
-    # heavy dependencies off the deployment board.
-    _generate_minimal_module(
-        qonnx_target_path + "/util/basic.py",
-        qonnx.util.basic,
-        [
-            qonnx.util.basic.roundup_to_integer_multiple,
-            qonnx.util.basic.gen_finn_dt_tensor,
-        ],
-        "import numpy as np\n"
-        "from typing import cast\n\n"
-        "from qonnx.core.datatype import BaseDataType, DataType, FixedPointType",
-    )
-    dp = finn.util.data_packing
-    _generate_minimal_module(
-        finn_target_path + "/util/data_packing.py",
-        dp,
-        [
-            dp.finnpy_to_packed_bytearray,
-            dp._pack_whole_byte_container,
-            dp._pack_bit_double_reverse,
-            dp._pack_general,
-            dp.finnpy_to_int_array,
-            dp.int_array_to_packed_bytearray,
-            dp.packed_bytearray_to_finnpy,
-            dp.prepare_values,
-            dp.unsiged_array_to_signed,
-            dp.packed_bytearray_to_finnpy_fast,
-            dp.data_prepared_to_finnpy_bipolar,
-            dp.data_prepared_to_finnpy_ternary,
-            dp.data_prepared_to_finnpy_fixed,
-            dp.data_prepared_to_finnpy_int,
-            dp.packed_bytearray_to_finnpy_float,
-        ],
-        "import numpy as np\n\n"
-        "from qonnx.core.datatype import DataType\n"
-        "from qonnx.util.basic import roundup_to_integer_multiple",
-    )
-    # add validate.py to run full top-1 test (only for suitable networks)
-    shutil.copy(data_path("pynq_driver", "validate.py"), pynq_driver_dir + "/validate.py")
-
-
-def pynq_driver_text(platform: str, shapes: dict[str, Any], fclk_mhz: float, bitfile: str) -> str:
-    """The generated PYNQ driver (driver.py) for ``platform`` (the host runtime): its I/O
-    (``shapes``, ``driver_shapes``' form), the clock in MHz the overlay sets PL0 to
-    (``fclk_mhz``), and the bitfile it runs unless told another, ``bitfile``, relative
-    to the driver's own directory. It has no external weights and no MLO configuration."""
-    default_bitfile = (
-        f"os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), {bitfile!r}))"
-    )
-    driver = templates.pynq_driver_template
-    driver = driver.replace("$PLATFORM$", platform)
-    driver = driver.replace("$INPUT_FINN_DATATYPE$", str(shapes["idt"]).replace('"', ""))
-    driver = driver.replace("$INPUT_SHAPE_NORMAL$", str(shapes["ishape_normal"]))
-    driver = driver.replace("$INPUT_SHAPE_FOLDED$", str(shapes["ishape_folded"]))
-    driver = driver.replace("$INPUT_SHAPE_PACKED$", str(shapes["ishape_packed"]))
-    driver = driver.replace("$OUTPUT_FINN_DATATYPE$", str(shapes["odt"]).replace('"', ""))
-    driver = driver.replace("$OUTPUT_SHAPE_NORMAL$", str(shapes["oshape_normal"]))
-    driver = driver.replace("$OUTPUT_SHAPE_FOLDED$", str(shapes["oshape_folded"]))
-    driver = driver.replace("$OUTPUT_SHAPE_PACKED$", str(shapes["oshape_packed"]))
-    driver = driver.replace("$INPUT_DMA_NAME$", "%s" % str(shapes["idma_names"]))
-    driver = driver.replace("$OUTPUT_DMA_NAME$", "%s" % str(shapes["odma_names"]))
-    driver = driver.replace("$NUM_INPUTS$", str(len(shapes["idma_names"])))
-    driver = driver.replace("$NUM_OUTPUTS$", str(len(shapes["odma_names"])))
-    driver = driver.replace("$EXT_WEIGHT_NUM$", "0")
-    driver = driver.replace("$EXT_WEIGHT_INPUT_SHAPES$", str({}))
-    driver = driver.replace("$MLO_WEIGHT_CONFIG$", json.dumps({}, indent=4))
-    driver = driver.replace("$FCLK_MHZ$", repr(float(fclk_mhz)))
-    driver = driver.replace("$BITFILE$", default_bitfile)
-    return driver
-
-
-#: The PYNQ driver's platform (its template's ``$PLATFORM$``) by the shell's runtime.
-HOST_RUNTIMES = {"pynq": "zynq-iodma"}
-
-
-def _edges(integration: Integration, direction: str) -> list[Edge]:
-    """The edge ports of ``integration`` in ``direction`` (``in``, ``out``), in order."""
-    return [edge for edge in integration.edges if edge.contract.direction == direction]
-
-
-def driver_shapes(integration: Integration) -> dict[str, Any]:
-    """The driver's I/O from the description's edge ports: each input's (``i``) and
-    output's (``o``) element as its ``DataType``, its tensor's shape (``normal``), its frame
-    as the mover's stream carries it, ``(1, beats, lanes)`` (``folded``), and that packed
-    into bytes (``packed``), and its mover's cell."""
-    shapes: dict[str, Any] = {}
-    for side, direction, dma in (("i", "in", "idma_names"), ("o", "out", "odma_names")):
-        edges = _edges(integration, direction)
-        folded = [(1, edge.contract.beats, edge.contract.lanes) for edge in edges]
-        shapes[f"{side}dt"] = [f"DataType['{edge.element.dtype.name}']" for edge in edges]
-        shapes[f"{side}shape_normal"] = [tuple(edge.shape) for edge in edges]
-        shapes[f"{side}shape_folded"] = folded
-        shapes[f"{side}shape_packed"] = [
-            packed_shape(edge.element.dtype, each) for edge, each in zip(edges, folded)
-        ]
-        shapes[dma] = [edge.unit for edge in edges]
-    return shapes
-
-
-def host_runtime(integration: Integration) -> str | None:
-    """The PYNQ driver's platform for the runtime of ``integration`` (``HOST_RUNTIMES``)."""
-    return None if integration.runtime is None else HOST_RUNTIMES.get(integration.runtime)
-
-
-def write_driver(integration: Integration, directory: str, fclk_mhz: float, bitfile: str) -> None:
-    """The PYNQ driver of the integration description ``integration`` into ``directory``:
-    its I/O the description's (``driver_shapes``), PL0 set to ``fclk_mhz``, the clock the
-    bitfile delivers; driver.py and validate.py run ``bitfile``, relative to
-    ``directory``, unless told another."""
-    os.makedirs(directory, exist_ok=True)
-    write_pynq_driver_support(directory)
-    platform = host_runtime(integration)
-    if platform is None:
-        raise PynqRefused(
-            "pynq_driver",
-            "host-runtime-absent",
-            f"the {integration.row[0]!r} shell states no host runtime to drive",
-            owner="configuration.target.shell",
-        )
-    with open(os.path.join(directory, "driver.py"), "w") as f:
-        f.write(pynq_driver_text(platform, driver_shapes(integration), fclk_mhz, bitfile))
-
-
-def driver_description(
-    integration: Integration,
-    fclk_mhz: float,
-    bitfile: str,
-    before: list[str],
-    after: list[str],
-) -> dict[str, Any]:
-    """What the driver of ``integration`` takes and returns: the bitfile it runs, by
-    its path in the build's output directory and in the deployment package, both of
-    which hold bitfile/ beside driver/; the partition's inputs and outputs, each by its
-    tensor's name, element and shape, and the cell of the mover that moves it; the clock
-    it sets; and the host's nodes of the parent graph that run ``before`` and ``after``
-    it."""
-
-    def tensors(direction: str) -> list[dict[str, Any]]:
-        return [
-            {
-                "name": edge.tensor,
-                "element": edge.element.dtype.name,
-                "shape": list(edge.shape),
-                "dma": edge.unit,
-            }
-            for edge in _edges(integration, direction)
-        ]
-
-    return {
-        "host_runtime": host_runtime(integration),
-        "bitfile": bitfile,
-        "fclk_mhz": fclk_mhz,
-        "takes": tensors("in"),
-        "returns": tensors("out"),
-        "host": {"before": list(before), "after": list(after)},
-    }
-
+from finn.shells.pynq.runtime import PynqRuntime
 
 #: Where ``MakePynqDriver`` writes the driver and its description, under the output
 #: directory it is given.
@@ -340,6 +57,29 @@ def delivered_mhz(directory: Path) -> float:
     return float(clock["delivered_mhz"])
 
 
+def linked_placement(directory: Path) -> dict[str, int]:
+    """Each unit's base as the bitfile built into ``directory`` placed it, from its runtime
+    file there (``runner.REPORTS``); none, or one of another schema than this FINN's
+    (``RUNTIME_SCHEMA``), is refused (``PynqRefused``)."""
+    report = Path(directory) / REPORTS["integration"]
+    if not report.is_file():
+        raise PynqRefused(
+            "pynq_driver",
+            "integration-absent",
+            f"no runtime file ({report}): the driver reaches each unit where the bitfile's "
+            "build placed it; list step_build_bitfile before step_make_driver",
+        )
+    found = json.loads(report.read_text())
+    if found.get("schema") != RUNTIME_SCHEMA:
+        raise PynqRefused(
+            "pynq_driver",
+            "integration-schema",
+            f"the runtime file {report} is of the schema {found.get('schema')!r}, and this "
+            f"FINN's is {RUNTIME_SCHEMA}: build the bitfile again (step_build_bitfile)",
+        )
+    return {unit: int(base) for unit, base in found["placement"].items()}
+
+
 def shipped_bitfile(model: ModelWrapper, directory: Path) -> Path:
     """The bitfile the parent graph ``model`` states (finn.outputs), relative to the output
     ``directory``, which the deployment package mirrors (bitfile/ beside driver/); a
@@ -356,41 +96,43 @@ def shipped_bitfile(model: ModelWrapper, directory: Path) -> Path:
 
 
 class MakePynqDriver(Transformation):
-    """The PYNQ driver the build's parent graph's shell's host runtime runs
-    (``write_driver``), into driver/ under the output ``directory``, written afresh:
-    nothing an earlier build left there stays. Its shell is the target the partition's
-    body states (``pynq_row``); its I/O the partition's integration description's, from
-    the choices the partition saves; PL0 set to the clock the bitfile delivers
-    (``delivered_mhz``, report/delivered_clock.json under ``directory``); the bitfile the
-    parent graph states (finn.outputs) its default, relative to driver/. A bitfile built
-    from another design than the partition's now, or another IP than its body states, is
-    refused, named (``refuse_stale_bitfile``). report/driver.json states that bitfile,
-    what the driver takes and returns, by name, element and shape, and the host's nodes
-    before and after it (``driver_description``), the digest of the design the driver was
-    made from (``made_from``: the partition's, which its bitfile was built from) and the
-    key of the IP its bitfile holds (``ip_key``). ``description`` holds it."""
+    """The ``pynq`` runtime's driver of the build's parent graph, into driver/ under the
+    output ``directory``, written afresh (``PynqRuntime.emit``): its shell the target the
+    partition's body states (``pynq_row``), its description the partition's
+    (``describe``, ``integration``), linked as the bitfile's build linked it (the module
+    docstring). A bitfile built from another design than the partition's now, or another
+    IP than its body states, is refused, named (``refuse_stale_bitfile``), before anything
+    is written. report/driver.json states the bitfile, by its path in the output directory
+    and in the deployment package, both of which hold bitfile/ beside driver/; the runtime;
+    the digest of the design the driver was made from (``made_from``: the partition's,
+    which its bitfile was built from) and the key of the IP its bitfile holds
+    (``ip_key``). ``description`` holds it."""
 
     def __init__(self, directory: Path) -> None:
         super().__init__()
         self.directory = Path(directory)
         self.description: dict[str, Any] = {}
+        self.integration: Integration | None = None
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
         pynq_row(model, "pynq_driver")
         fclk_mhz = delivered_mhz(self.directory)
         bitfile = shipped_bitfile(model, self.directory)
         refuse_stale_bitfile(model, "pynq_driver")
+        placement = linked_placement(self.directory)
         described = describe(model)
-        driver = self.directory / DRIVER_DIR
-        shutil.rmtree(driver, ignore_errors=True)
-        write_driver(described, str(driver), fclk_mhz, os.path.relpath(bitfile, DRIVER_DIR))
-        node, body, _ = partition_body(model)
-        names = [each.name for each in model.graph.node]
-        index = names.index(node.name)
+        linked = Linked(
+            image=self.directory / bitfile,
+            placement=placement,
+            clocks_mhz={MAIN: fclk_mhz},
+            reports={},
+        )
+        PynqRuntime().emit(described, linked, self.directory / DRIVER_DIR)
+        _, body, _ = partition_body(model)
+        self.integration = described
         self.description = {
-            **driver_description(
-                described, fclk_mhz, str(bitfile), names[:index], names[index + 1 :]
-            ),
+            "bitfile": str(bitfile),
+            "runtime": described.runtime,
             "made_from": design_digest(body),
             "ip_key": model.get(OUTPUT_BITFILE_IP_KEY),
         }
@@ -403,16 +145,8 @@ class MakePynqDriver(Transformation):
 __all__ = [
     "DRIVER_DIR",
     "DRIVER_REPORT",
-    "HOST_RUNTIMES",
     "MakePynqDriver",
-    "data_path",
     "delivered_mhz",
-    "driver_description",
-    "driver_shapes",
-    "host_runtime",
-    "packed_shape",
-    "pynq_driver_text",
+    "linked_placement",
     "shipped_bitfile",
-    "write_driver",
-    "write_pynq_driver_support",
 ]

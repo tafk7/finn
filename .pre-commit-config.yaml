@@ -28,7 +28,7 @@
 
 # Recorded evidence is reference material, not maintained code. The pynq shell's data
 # (its driver files) are shipped as they are: no hook rewrites them.
-exclude: '^(docs/conf.py|docs/(kernel|space)-[^/]+/|src/finn/shells/pynq/data/)'
+exclude: '^(docs/conf.py|docs/(kernel|space)-[^/]+/)'
 
 default_language_version:
     python: python3.12

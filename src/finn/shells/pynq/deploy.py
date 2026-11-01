@@ -5,8 +5,9 @@
 bitfile there.
 
 ``MakePynqDeployment`` writes ``deploy/`` under the build's output directory, afresh:
-the bitfile (``runner.BITFILE``'s directory), the driver (``driver.DRIVER_DIR``) and its
-description (``driver.json``, from ``driver.DRIVER_REPORT``), and the host's model
+the bitfile (``runner.BITFILE``'s directory), the driver (``driver.DRIVER_DIR``, the
+runtime file in it) and its description (``driver.json``, from ``driver.DRIVER_REPORT``),
+and the host's model
 (``model/``, ``host_model``). It ships only what that output directory's own builds
 made, from the partition's design as it is now, and refuses anything else by name
 before it copies (``PynqRefused``).

@@ -73,8 +73,8 @@ image = "bit"
 least_range = 128
 
 [runtimes.pynq]
-# The PYNQ driver, over the board's Overlay, allocate and MMIO.
-code = "finn.shells.pynq.driver:MakePynqDriver"
+# The shared driver over the board's Overlay, allocate and MMIO.
+code = "finn.shells.pynq.runtime:PynqRuntime"
 images = ["bit"]
 movers = ["iodma_hls"]
 kinds = ["moved"]

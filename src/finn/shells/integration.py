@@ -53,14 +53,16 @@ It is a function of a configured point: the description is a build's, needed onc
 and not at every point an exploration costs. A shell without a linker (``ip``) has no
 description: its user links the core.
 
-The runtime file (``runtime_file``, ``integration.json``, ``RUNTIME_SCHEMA``) is the
-description as every runtime reads it (``Integration.report``: no unit's IP, which is the
-build's), with what its linker made of it (``Linked``): each placed unit's base, where the
-platform has no name lookup, and each clock as delivered.
+The runtime file (``runtime_file``, written as ``runtime_text``, ``integration.json``,
+``RUNTIME_SCHEMA``) is the description as every runtime reads it (``Integration.report``: no
+unit's IP, which is the build's), with what its linker made of it (``Linked``): each placed
+unit's base, where the platform has no name lookup, and each clock as delivered. A declared
+runtime's code (``Runtime``) writes the driver that reads it on the board.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -363,6 +365,12 @@ def runtime_file(integration: Integration, linked: Linked) -> dict[str, Any]:
     }
 
 
+def runtime_text(integration: Integration, linked: Linked) -> str:
+    """The runtime file of ``integration`` as ``linked`` made it (``runtime_file``), as
+    written: the same text in the build's report and beside its driver."""
+    return json.dumps(runtime_file(integration, linked), indent=2)
+
+
 class Linker(Protocol):
     """A declared linker's code: it links a description on a board (the board facts its
     declaration names, ``board_keys``) into ``directory``, every tool run through
@@ -375,6 +383,14 @@ class Linker(Protocol):
         directory: Path,
         tools: Toolchain,
     ) -> Linked: ...
+
+
+class Runtime(Protocol):
+    """A declared runtime's code: it writes what runs a build on its board, from its
+    description and what its linker made of it (``linked``), into ``directory``: its driver
+    and the runtime file beside it."""
+
+    def emit(self, integration: Integration, linked: Linked, directory: Path) -> None: ...
 
 
 class IntegrationError(Refusal):
@@ -638,9 +654,11 @@ __all__ = [
     "IpRef",
     "Linked",
     "Linker",
+    "Runtime",
     "Supply",
     "Unit",
     "describe",
     "mover_pins",
     "runtime_file",
+    "runtime_text",
 ]

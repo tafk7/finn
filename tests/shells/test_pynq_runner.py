@@ -23,7 +23,6 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.base import Transformation
 from support.configure import configured
@@ -32,7 +31,6 @@ from support.packaging import (
     TIMING_REPORT,
     FakeVivado,
     bitfile_default,
-    io_shape_dict,
     verified,
 )
 from support.refusals import refused
@@ -54,17 +52,18 @@ from finn.core.reporting.manifest import RECORDS, STORED
 from finn.kernels.artifacts.ipxact import vlnv
 from finn.kernels.artifacts.module import Leaf
 from finn.platform.resolve import resolve_target
-from finn.shells.integration import RUNTIME_SCHEMA, Integration, IpRef, describe
+from finn.shells.integration import (
+    MAIN,
+    RUNTIME_SCHEMA,
+    Integration,
+    IpRef,
+    Linked,
+    describe,
+    runtime_text,
+)
 from finn.shells.pynq import linker as pynq_linker
 from finn.shells.pynq import runner as pynq_runner
-from finn.shells.pynq.driver import (
-    DRIVER_DIR,
-    DRIVER_REPORT,
-    MakePynqDriver,
-    driver_description,
-    driver_shapes,
-    write_driver,
-)
+from finn.shells.pynq.driver import DRIVER_DIR, DRIVER_REPORT, MakePynqDriver
 from finn.shells.pynq.linker import (
     LinkerRefused,
     block_design,
@@ -814,81 +813,16 @@ def test_an_exported_ip_states_its_vlnv_in_ip_xact(tmp_path: Path) -> None:
     assert exported_vlnv(tmp_path / "partial.xml") is None
 
 
-def test_the_driver_reads_its_io_from_the_movers_and_sets_the_clock_it_is_given(
-    tmp_path: Path,
-) -> None:
-    """The driver's I/O are the description's edge ports: each element, tensor shape, frame as the
-    stream carries it (beats by lanes) and packed into bytes; it sets PL0 to the clock
-    it is given, and validate.py passes it on. Both run the bitfile they are given,
-    relative to their own directory, from whatever directory they are run."""
-    described = describe(zynq_parent(tmp_path))
-    write_driver(described, str(tmp_path / "driver"), 187.512, "../bitfile/finn-accel.bit")
-    driver = (tmp_path / "driver" / "driver.py").read_text()
-    shapes = io_shape_dict(driver)
-    assert shapes["idt"] == [DataType["INT3"], DataType["INT3"]]
-    assert shapes["odt"] == [DataType["INT7"]]
-    assert (shapes["ishape_normal"], shapes["oshape_normal"]) == ([(1, 4), (4, 4)], [(1, 4)])
-    # Each frame one pass of its tensor (each mover states one pass a frame): as many
-    # elements folded as the tensor holds.
-    assert (shapes["ishape_folded"], shapes["oshape_folded"]) == (
-        [(1, 2, 2), (1, 4, 4)],
-        [(1, 1, 4)],
-    )
-    # Two and four INT3 lanes in one and two bytes a beat; four INT7 lanes in four.
-    assert (shapes["ishape_packed"], shapes["oshape_packed"]) == (
-        [(1, 2, 1), (1, 4, 2)],
-        [(1, 1, 4)],
-    )
-    assert (shapes["input_dma_name"], shapes["output_dma_name"]) == (["in0", "in1"], ["out0"])
-    assert (shapes["num_inputs"], shapes["num_outputs"]) == (2, 1)
-    assert driver_shapes(described)["idma_names"] == ["in0", "in1"]
-    assert "\nfclk_mhz = 187.512\n" in driver
-    assert "fclk_mhz = fclk_mhz, weight_dir = weight_dir" in driver
-    assert (
-        "--platform', help='Target platform: zynq-iodma vitis-xrt', default=\"zynq-iodma\""
-        in driver
-    )
-    validate = (tmp_path / "driver" / "validate.py").read_text()
-    assert "from driver import default_bitfile, fclk_mhz, io_shape_dict" in validate
-    elsewhere = tmp_path / "elsewhere"
-    elsewhere.mkdir()
-    for script in ("driver.py", "validate.py"):
-        assert bitfile_default(tmp_path / "driver" / script, elsewhere) == str(
-            tmp_path / "bitfile" / "finn-accel.bit"
-        )
-    assert "fclk_mhz=fclk_mhz," in validate
-    assert {path.name for path in (tmp_path / "driver").iterdir()} == {
-        "driver.py",
-        "driver_base.py",
-        "validate.py",
-        "qonnx",
-        "finn",
-    }
-
-
-def test_the_description_states_what_the_driver_takes_and_returns(tmp_path: Path) -> None:
-    described = describe(zynq_parent(tmp_path))
-    assert driver_description(described, 187.512, "bitfile/finn-accel.bit", ["Reshape_0"], []) == {
-        "host_runtime": "zynq-iodma",
-        "bitfile": "bitfile/finn-accel.bit",
-        "fclk_mhz": 187.512,
-        "takes": [
-            {"name": "x", "element": "INT3", "shape": [1, 4], "dma": "in0"},
-            {"name": "w2", "element": "INT3", "shape": [4, 4], "dma": "in1"},
-        ],
-        "returns": [{"name": "y", "element": "INT7", "shape": [1, 4], "dma": "out0"}],
-        "host": {"before": ["Reshape_0"], "after": []},
-    }
-
-
 def test_the_driver_is_a_transformation_of_the_parent_graph(tmp_path: Path) -> None:
-    """MakePynqDriver writes the driver afresh into driver/ under the output directory it
-    is given and its description into report/driver.json: its shell the target the
-    partition's body states, PL0 the clock the delivered-clock report there states, the
-    bitfile the parent graph states its default; the description states the design the
+    """MakePynqDriver writes the ``pynq`` runtime's driver afresh into driver/ under the
+    output directory it is given and its description into report/driver.json: its shell
+    the target the partition's body states; its runtime file the build's report of it,
+    byte for byte, each edge as its mover moves it (the frame in beats of lanes, a beat's
+    bits); PL0 the clock the delivered-clock report states; the bitfile the parent graph
+    states its default. The description states the bitfile, the runtime, the design the
     driver was made from and the IP its bitfile holds, and the parent graph is left as it
-    was. Without the report, or
-    on the ip shell, it is refused before anything is written."""
+    was. Without the delivered clock or the build's runtime file, or with one of another
+    schema, or on the ip shell, it is refused before anything is written."""
     parent = zynq_parent(tmp_path)
     output = tmp_path / "output"
     _, body, body_file = partition_body(parent)
@@ -908,26 +842,51 @@ def test_the_driver_is_a_transformation_of_the_parent_graph(tmp_path: Path) -> N
     assert not output.exists()
     (output / DELIVERED_CLOCK).parent.mkdir(parents=True)
     (output / DELIVERED_CLOCK).write_text(json.dumps({"delivered_mhz": 187.512}))
+    with refused("integration-absent", error=PynqRefused, owner="MakePynqDriver"):
+        parent.transform(MakePynqDriver(output))
+    (output / REPORTS["integration"]).write_text(json.dumps({"schema": 0}))
+    with refused("integration-schema", error=PynqRefused, owner="MakePynqDriver"):
+        parent.transform(MakePynqDriver(output))
+    assert not (output / DRIVER_DIR).exists()
+    described = describe(parent)
+    linked = Linked(
+        image=output / BITFILE,
+        placement=unit_bases(described, linked_row(described)),
+        clocks_mhz={MAIN: 187.512},
+        reports={},
+    )
+    (output / REPORTS["integration"]).write_text(runtime_text(described, linked))
     (output / DRIVER_DIR).mkdir()
     (output / DRIVER_DIR / "stale.py").write_text("an earlier build's")
     making = MakePynqDriver(output)
     made = parent.transform(making)
     assert sorted(path.name for path in (output / DRIVER_DIR).iterdir()) == [
         "driver.py",
-        "driver_base.py",
-        "finn",
-        "qonnx",
+        "finn_runtime",
+        "integration.json",
         "validate.py",
     ]
-    driver = (output / DRIVER_DIR / "driver.py").read_text()
-    assert "\nfclk_mhz = 187.512\n" in driver
+    shipped = (output / DRIVER_DIR / "integration.json").read_text()
+    assert shipped == (output / REPORTS["integration"]).read_text()
+    # Two and four INT3 lanes in one and two bytes a beat; four INT7 lanes in four.
+    assert [
+        (edge["unit"], edge["element"], edge["shape"], edge["beats"], edge["lanes"], edge["bits"])
+        for core in json.loads(shipped)["cores"]
+        for edge in (*core["inputs"], *core["outputs"])
+    ] == [
+        ("in0", "INT3", [1, 4], 2, 2, 8),
+        ("in1", "INT3", [4, 4], 4, 4, 16),
+        ("out0", "INT7", [1, 4], 1, 4, 32),
+    ]
+    assert json.loads(shipped)["clocks_mhz"] == {MAIN: 187.512}
     assert bitfile_default(output / DRIVER_DIR / "driver.py", tmp_path) == str(output / BITFILE)
     description = json.loads((output / DRIVER_REPORT).read_text())
     assert (
         description
         == making.description
         == {
-            **driver_description(describe(parent), 187.512, str(BITFILE), [], []),
+            "bitfile": str(BITFILE),
+            "runtime": "pynq",
             "made_from": design_digest(body),
             "ip_key": PACKAGED_KEY,
         }

@@ -73,7 +73,7 @@ from finn.core.graph.partition import design_digest, partition_body
 from finn.core.reporting.findings import Finding, FindingKind, Refusal
 from finn.kernels.artifacts.ipxact import vlnv
 from finn.platform.shells import VIVADO_BLOCK_DESIGN, ShellRow, shell_row
-from finn.shells.integration import Edge, Integration, IpRef, Linked, describe, runtime_file
+from finn.shells.integration import Edge, Integration, IpRef, Linked, describe, runtime_text
 from finn.shells.pynq import linker
 from finn.toolchain.ip import COMPONENT
 from finn.toolchain.launcher import Toolchain, ToolFailed, host_toolchain, transcript_files
@@ -400,9 +400,7 @@ class BuildPynqBitfile(Transformation):
             jobs=toolchain.selection.vivado_jobs,
             options=self.options,
         )
-        reports["integration"].write_text(
-            json.dumps(runtime_file(built.integration, built.linked), indent=2)
-        )
+        reports["integration"].write_text(runtime_text(built.integration, built.linked))
         # Each unit's IP is the one the build made: the core's, the one its packaging gave it.
         reports["block_design"].write_text(json.dumps(linker.report(built.integration), indent=2))
         shutil.copy(built.bitfile, self.bitfile)

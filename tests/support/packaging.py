@@ -7,12 +7,11 @@ and the testbench ask for; a toolchain double that stops PackagePartition where 
 would start, so a test reads what packaging checks before then; one that stands in for
 Vivado's packaging, so a test reads what PackagePartition writes beside the IP; and one
 that fakes the pynq shell's Vivado project. ``read_back`` checks an interface
-description against a module's ABI pins; ``io_shape_dict`` reads a generated driver's
-I/O without pynq, and ``bitfile_default`` runs its arguments' parser with pynq stubbed."""
+description against a module's ABI pins, and ``bitfile_default`` runs a driver's arguments'
+parser with pynq stubbed."""
 
 from __future__ import annotations
 
-import ast
 import os
 import re
 import subprocess
@@ -39,6 +38,7 @@ from finn.kernels.artifacts.abi import (
 )
 from finn.toolchain.launcher import Selection, Toolchain
 from finn.transformation.kernels import PackagePartition
+from support.pynq_stub import stub
 
 #: A toolchain double's environment: a Vivado installation directory with no Vivado in
 #: it, whose identity the packaged-IP store's key reads as unstated.
@@ -238,40 +238,14 @@ class FakeVivado:
             made[1].write_text(self.timing)
 
 
-def io_shape_dict(driver: str) -> dict[str, Any]:
-    """The generated driver's io_shape_dict, read without running it (it imports pynq)."""
-    tree = ast.parse(driver)
-    (value,) = [
-        node.value
-        for node in tree.body
-        if isinstance(node, ast.Assign)
-        and [getattr(target, "id", None) for target in node.targets] == ["io_shape_dict"]
-    ]
-    shapes: dict[str, Any] = eval(
-        compile(ast.Expression(value), "driver", "eval"), {"DataType": DataType}
-    )
-    return shapes
-
-
-#: What a generated driver imports of pynq, stubbed: enough to parse its arguments.
-PYNQ_STUB = {
-    "pynq/__init__.py": "class Overlay:\n    pass\n\n\nallocate = None\n",
-    "pynq/ps.py": "Clocks = None\n",
-    "pynq/pl_server/__init__.py": "",
-    "pynq/pl_server/device.py": "class Device:\n    devices = []\n",
-}
-
-
 def bitfile_default(script: Path, cwd: Path) -> str:
-    """The bitfile a generated driver script (driver.py, validate.py) runs unless told
-    another, as its --help names it: the script run from ``cwd``, pynq stubbed."""
-    stub = cwd / "pynq_stub"
-    for name, text in PYNQ_STUB.items():
-        (stub / name).parent.mkdir(parents=True, exist_ok=True)
-        (stub / name).write_text(text)
+    """The bitfile a driver's script (driver.py, validate.py) runs unless told another, as
+    its --help names it: the script run from ``cwd``, pynq stubbed
+    (``support.pynq_stub``)."""
+    stubbed = stub(cwd / "pynq_stub")
     env = {
         **os.environ,
-        "PYTHONPATH": str(stub),
+        "PYTHONPATH": str(stubbed),
         "PYTHONDONTWRITEBYTECODE": "1",
         "COLUMNS": "10000",
     }
@@ -348,7 +322,6 @@ __all__ = [
     "PackagedByStub",
     "ReachedVivado",
     "UTILIZATION_SYNTH",
-    "io_shape_dict",
     "reaches_vivado",
     "read_back",
     "verified",
