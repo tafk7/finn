@@ -48,6 +48,7 @@ from finn.kernels.laws import (
     Follows,
     Interval,
     Pacing,
+    StatedRate,
     TimedPace,
     TransportKind,
 )
@@ -111,9 +112,11 @@ class StreamPort(Space):
     name in its kernel, ``clocking`` its kernel's clock and reset (L8: the kernel's, never
     the port's) and ``interval`` its kernel's initiation interval (L6,
     ``finn.kernels.laws.Interval``), which it carries with its pace and a port of a kernel's
-    body never states (``port-interval``); its ``transport``, where
-    it states none, is its kernel's interface protocol's
-    (``finn.kernels.laws.InterfaceProtocol``): a kernel supplies all four for a port declared
+    body never states (``port-interval``), and ``rate`` its kernel's stated rate, checked
+    (``finn.kernels.laws.StatedRate``, ``Kernel.checked_rate``), whose beat times are its
+    own where it names it, never stated by the port either (``port-rate``); its
+    ``transport``, where it states none, is its kernel's interface protocol's
+    (``finn.kernels.laws.InterfaceProtocol``): a kernel supplies all five for a port declared
     in its own body that does not state them (``finn.kernels.base.Kernel``). A port with its
     own pin names, or of another interface protocol than its kernel's (MemStream's AXIS-named
     output), states its transport.
@@ -148,6 +151,7 @@ class StreamPort(Space):
     label: str = Param()
     clocking: Clocking = Param()
     interval: Interval = Param(default=RATE_INTERVAL)
+    rate: StatedRate | None = Param(default=None)
 
     # -- its presentation: exactly one of (a) and (b), checked when its kernel's class is made
     # (a) a projection of its kernel's schedule
@@ -224,13 +228,21 @@ class StreamPort(Space):
         return Pace(schedule, self.reduces, self.holds)
 
     @derived
-    def timed_pace(self) -> TimedPace | Inapplicable:
-        """Its pace in clock cycles: its ``pace`` at its kernel's ``interval``
-        (``finn.kernels.laws.TimedPace``, by the one conversion, ``in_cycles``), only where
-        it owns its pacing. Read through a node alias (``x = compute.x``), it is its own
-        kernel's, however deep: what FIFO sizing reads of the port beside a channel."""
-        if not self.placed or self.schedule is None:
-            return Inapplicable()
+    def timed_pace(self) -> TimedPace | StatedRate | None:
+        """Its pace in clock cycles, the one every reader of its beat times in cycles reads:
+        where its kernel states its rate naming it (``rate``, its kernel's checked
+        ``stated_rate``, L6), that rate's beat times and span; else, where it owns its
+        pacing, its ``pace`` at its kernel's ``interval`` (``finn.kernels.laws.TimedPace``,
+        by the one conversion, ``in_cycles``); else None (it follows another port, or is
+        idle). Read through a node alias (``x = compute.x``), it is its own kernel's, however
+        deep: what FIFO sizing reads of the port beside a channel."""
+        if not self.placed:
+            return None
+        rate: StatedRate | None = self.rate
+        if rate is not None and rate.port == self.label:
+            return rate
+        if self.schedule is None:
+            return None
         return TimedPace(self.pace, self.interval)
 
     @derived

@@ -144,7 +144,7 @@ from finn.kernels.base import (
 )
 from finn.kernels.control import presented
 from finn.kernels.fifo import FifoKernel
-from finn.kernels.laws import Axis, TimedPace, TransportKind
+from finn.kernels.laws import Axis, StatedRate, TimedPace, TransportKind
 from finn.kernels.library import leaf_at_root
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.movers import IodmaMover, MoverContract, MoverOffer
@@ -212,15 +212,16 @@ class Neighbours:
     neighbour's, outside a slice, read at its stored choices): the producing kernel's and
     the consuming kernel's, each None where that side is the channel's own, its source (a
     known value) or its boundary; and each port's pace in cycles (its ``timed_pace``: its
-    ``pace`` at its own kernel's interval, read where it is read), None where that port
-    follows another (it has no pace) or the side is the channel's own.
+    kernel's stated rate's where that names it, else its ``pace`` at its own kernel's
+    interval, read where it is read), None where that port follows another and no stated
+    rate names it, or the side is the channel's own.
     The kernel holding it wires the hops to them (``outer_hops``); FIFO sizing reads the paces
     (``finn.kernels.fifo_sizing``)."""
 
     producer: PortPins | None = None
     consumer: PortPins | None = None
-    producer_pace: TimedPace | None = None
-    consumer_pace: TimedPace | None = None
+    producer_pace: TimedPace | StatedRate | None = None
+    consumer_pace: TimedPace | StatedRate | None = None
 
 
 @dataclass(frozen=True)

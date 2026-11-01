@@ -22,14 +22,16 @@ from typing import Any
 
 import pytest
 from qonnx.core.datatype import DataType
-from support.helpers import FULL_DSP48E2
+from support.helpers import FULL_DSP48E2, in_order, stage_tensor
 from support.refusals import refused
 
 from finn.core.space import (
+    Available,
     DefinitionError,
     Inapplicable,
     Param,
     Rejected,
+    Select,
     derived,
     design_space,
     view,
@@ -39,8 +41,10 @@ from finn.dataflow.schedule import Pace
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.base import Kernel
-from finn.kernels.channels import Neighbours
+from finn.kernels.base import Kernel, neighbours
+from finn.kernels.channels import Channel, Neighbours
+from finn.kernels.configure import commit
+from finn.kernels.fifo import FifoKernel
 from finn.kernels.fifo_sizing import assumed, pattern
 from finn.kernels.laws import (
     NATIVE_PROTOCOL,
@@ -56,6 +60,7 @@ from finn.kernels.laws import (
 from finn.kernels.library import ModuleSpec
 from finn.kernels.pool import ELEMENTS, PoolKernel
 from finn.kernels.port_model import InPort, OutPort
+from finn.kernels.sides import Side
 from finn.platform.capabilities import Platform, Resources
 
 IMAGE = Tensor((4, 4, 2), ScalarEncoding(DataType["INT4"]))
@@ -133,7 +138,7 @@ def test_a_kernel_with_a_module_states_l6_s_interval_and_its_ports_carry_it() ->
     fifo = design_space(_Stage(input_tensor=TENSOR, arriving=ARRIVING))
     assert fifo.interval == RATE_INTERVAL and fifo.input.interval == RATE_INTERVAL
     # A port of a given sequence has no pace, so none in cycles.
-    assert isinstance(fifo.query(_Stage.input.timed_pace), Inapplicable)
+    assert fifo.input.timed_pace is None
 
 
 def test_a_slower_interval_scales_the_kernel_s_cycles_and_its_ports_pace() -> None:
@@ -195,10 +200,13 @@ def test_a_kernel_with_no_module_states_no_interval() -> None:
                 return TWO
 
 
-def test_fifo_sizing_says_where_it_rests_on_an_assumed_interval() -> None:
+def test_fifo_sizing_says_where_it_rests_on_an_assumed_interval_or_rate() -> None:
     point = pool(PoolKernel)
     timed = point.output.timed_pace
     assert assumed(Neighbours()) == ""
+    assert assumed(Neighbours(producer_pace=MOVED)) == ""
+    stated = replace(MOVED, standing=Standing.ASSUMED)
+    assert assumed(Neighbours(consumer_pace=stated)) == f"; at the consumer's rate {stated}"
     assert assumed(Neighbours(producer_pace=TimedPace(timed.pace, TWO))) == ""
     note = assumed(Neighbours(producer_pace=timed, consumer_pace=timed))
     assert note.startswith("; at the producer's interval 1, assumed: ")
@@ -271,7 +279,9 @@ def test_a_stated_rate_times_each_beat_within_its_span_with_its_reason_and_stand
         dict(reason=""),
         dict(span=0),
         dict(times=()),
+        dict(times=[1, 3, 5, 7]),  # not a tuple
         dict(times=(1, 3, 2, 7)),  # out of order
+        dict(times=(0, 0, 0, 0)),  # more than one beat a cycle
         dict(times=(1, 3, 5, 11)),  # past the span
         dict(times=(-1, 3, 5, 7)),
     ):
@@ -280,41 +290,201 @@ def test_a_stated_rate_times_each_beat_within_its_span_with_its_reason_and_stand
 
 
 def test_a_kernel_with_a_module_may_state_its_rate_in_place_of_the_derived_one() -> None:
+    """Its span, not its four beats at its interval; its port's pace in cycles, the rate's
+    beat times, though the port follows its other side and has no pace of its own."""
     point = design_space(_Mover(input_tensor=TENSOR, arriving=ARRIVING, rate=MOVED))
-    # Its span, not its four beats at its interval.
     assert point.frame_cycles == 11
-    assert point.stated_rate == MOVED and point.assumed == ()
+    assert point.checked_rate == point.stated_rate == MOVED and point.assumed == ()
+    assert point.input.timed_pace == MOVED
     assumed_rate = replace(MOVED, standing=Standing.ASSUMED)
     point = design_space(_Mover(input_tensor=TENSOR, arriving=ARRIVING, rate=assumed_rate))
     assert point.assumed == (f"rate {assumed_rate}",)
     # Every other kernel states none: its cycles are derived.
-    assert isinstance(pool(PoolKernel).query(PoolKernel.stated_rate), Inapplicable)
+    assert pool(PoolKernel).stated_rate is None and pool(PoolKernel).checked_rate is None
+
+
+class _Sometimes(_Stage):
+    """A stage that states its rate at some design points only."""
+
+    id = "test.interval.sometimes"
+    stating: bool = Param()
+
+    @derived
+    def stated_rate(self) -> StatedRate | None:
+        return MOVED if self.stating else None
+
+
+def test_a_kernel_states_its_rate_where_it_must_and_its_rate_is_derived_elsewhere() -> None:
+    def point(stating: bool) -> Any:
+        return design_space(_Sometimes(input_tensor=TENSOR, arriving=ARRIVING, stating=stating))
+
+    assert point(True).frame_cycles == 11 and point(True).input.timed_pace == MOVED
+    assert point(False).frame_cycles == 4 and point(False).input.timed_pace is None
+
+
+#: Pool's eight output beats on ``POOL`` (its PE 1), stalled: a beat every three cycles of a
+#: frame of 100.
+STALLED = replace(MOVED, port="output", times=(1, 4, 7, 10, 13, 16, 19, 22), span=100)
+
+
+class Stalling(PoolKernel):
+    """Pool, stating its output's rate."""
+
+    id = "test.interval.stalling"
+
+    @derived
+    def stated_rate(self) -> StatedRate:
+        return STALLED
+
+
+class WrappedStalling(Kernel):
+    """A stalling Pool, its ports exposed as the wrapper's own."""
+
+    id = "test.interval.wrapped_stalling"
+    window: tuple[int, int] = Param()
+    stride: tuple[int, int] = Param()
+    platform: Platform = Param()
+    input_tensor: Tensor = Param()
+
+    inner = Stalling(window=window, stride=stride, platform=platform, input_tensor=input_tensor)
+    x = inner.input
+    y = inner.output
 
 
 def test_a_kernel_with_a_schedule_may_state_its_rate_too() -> None:
-    """Its span, in place of its schedule's iterations at its interval."""
-    beats = pool(PoolKernel).output.stream.sequence.form.beats
-
-    class Stalling(PoolKernel):
-        id = "test.interval.stalling"
-
-        @derived
-        def stated_rate(self) -> StatedRate:
-            return replace(MOVED, port="output", times=tuple(range(beats)), span=beats + 5)
-
-    assert pool(Stalling).frame_cycles == beats + 5
+    """Its span, in place of its schedule's iterations at its interval, and its named port's
+    pace in cycles, through a wrapper's alias too; its other port keeps its derived one."""
+    point = pool(Stalling)
+    assert point.frame_cycles == 100
+    assert point.output.timed_pace == STALLED
+    assert point.input.timed_pace == TimedPace(point.input.pace, point.interval)
+    wrapped = design_space(WrappedStalling(**POOL)).with_choices({WrappedStalling.inner.pe: 1})
+    assert wrapped.y.timed_pace == STALLED and wrapped.frame_cycles == 100
 
 
 def test_a_stated_rate_times_a_port_of_its_kernel_each_beat() -> None:
+    """Checked where it is read (``checked_rate``): its cycles, its port's pace in cycles
+    and its assumptions are refused with it."""
     for rate, message in (
         (replace(MOVED, port="output"), "states the rate of 'output', no port of it"),
         (replace(MOVED, times=(1, 3, 5)), "times 3 beats of input, which carries 4 a frame"),
     ):
         point = design_space(_Mover(input_tensor=TENSOR, arriving=ARRIVING, rate=rate))
-        result = point.query(_Mover.frame_cycles)
-        assert isinstance(result, Rejected), result
-        [finding] = result.findings
-        assert (finding.code, finding.message) == ("kernel-rate-port", f"_Mover {message}")
+        for read in (_Mover.checked_rate, _Mover.frame_cycles, _Mover.input.timed_pace):
+            result = point.query(read)
+            assert isinstance(result, Rejected), result
+            [finding] = result.findings
+            assert (finding.code, finding.message) == ("kernel-rate-port", f"_Mover {message}")
+
+
+def test_a_kernel_stating_its_rate_restates_no_cycles() -> None:
+    """Its cycles are its rate's span: restating them, or the base's reading of them, could
+    only contradict it. A kernel stating no rate may restate its cycles (CONTRACT.md L6: no
+    check guards it)."""
+    for name in ("frame_cycles", "checked_rate"):
+        with refused(
+            "kernel-rate-restated", error=DefinitionError, message=rf"Restating\.{name}: "
+        ):
+            type(
+                "Restating",
+                (_Mover,),
+                {"id": f"test.interval.restating_{name}", name: view(lambda self: 99)},
+            )
+
+    class Counted(_Stage):
+        id = "test.interval.counted"
+
+        @view
+        def frame_cycles(self) -> int:
+            return 99
+
+    assert design_space(Counted(input_tensor=TENSOR, arriving=ARRIVING)).frame_cycles == 99
+
+
+def test_a_port_of_a_kernel_s_body_states_no_rate_of_its_own() -> None:
+    with refused("port-rate", error=DefinitionError, message=r"Own\.input states its own rate"):
+
+        class Own(_Stage):
+            id = "test.interval.own_rate"
+            input = InPort(tensor=_Stage.input_tensor, sequence=_Stage.arriving, rate=MOVED)
+
+
+FIFO_TENSOR = stage_tensor(4, words=4)
+FIFO: dict[str, Any] = dict(
+    input_tensor=FIFO_TENSOR, arriving=in_order(FIFO_TENSOR), depth=8, platform=FULL_DSP48E2
+)
+
+
+class TimedFifo(FifoKernel):
+    """A FIFO stating its input's rate: its four beats as ``MOVED`` times them."""
+
+    id = "test.interval.timed_fifo"
+
+    @derived
+    def stated_rate(self) -> StatedRate:
+        return MOVED
+
+
+class Holding(Kernel):
+    """A timed FIFO between two boundary channels."""
+
+    id = "test.interval.holding"
+    compute = TimedFifo(**FIFO)
+    incoming = Channel(
+        tensor=FIFO_TENSOR,
+        platform=FULL_DSP48E2,
+        producer=Side.boundary("s_axis_0"),
+        consumer=compute.input.side,
+    )
+    outgoing = Channel(
+        tensor=FIFO_TENSOR,
+        platform=FULL_DSP48E2,
+        producer=compute.output.side,
+        consumer=Side.boundary("m_axis_0"),
+    )
+    x = incoming.outer_in
+    y = outgoing.outer_out
+
+
+class Selecting(Kernel):
+    """A timed FIFO or a plain one, selected, between two boundary channels."""
+
+    id = "test.interval.selecting"
+    compute: FifoKernel = Select(timed=TimedFifo(**FIFO), plain=FifoKernel(**FIFO))
+    incoming = Channel(
+        tensor=FIFO_TENSOR,
+        platform=FULL_DSP48E2,
+        producer=Side.boundary("s_axis_0"),
+        consumer=compute.input.side,
+    )
+    outgoing = Channel(
+        tensor=FIFO_TENSOR,
+        platform=FULL_DSP48E2,
+        producer=compute.output.side,
+        consumer=Side.boundary("m_axis_0"),
+    )
+    x = incoming.outer_in
+    y = outgoing.outer_out
+
+
+DIRECT = {"incoming.transport": "direct", "outgoing.transport": "direct"}
+
+
+def test_the_port_beside_a_channel_is_paced_by_its_kernel_s_stated_rate() -> None:
+    """What FIFO sizing reads of it (``Neighbours``), a member's port and a selected case's;
+    the port its rate does not name, and the plain case's, by none."""
+    point = commit(design_space(Holding()), {"compute.ram_style": "auto", **DIRECT})
+    around = point.query(neighbours(Holding, "incoming"))
+    assert isinstance(around, Available) and around.value.consumer_pace == MOVED
+    around = point.query(neighbours(Holding, "outgoing"))
+    assert isinstance(around, Available) and around.value.producer_pace is None
+    for case, pace in (("timed", MOVED), ("plain", None)):
+        selected = commit(
+            design_space(Selecting()),
+            {"compute": case, f"compute.{case}.ram_style": "auto", **DIRECT},
+        )
+        around = selected.query(neighbours(Selecting, "incoming"))
+        assert isinstance(around, Available) and around.value.consumer_pace == pace
 
 
 def test_a_kernel_with_no_module_states_no_rate() -> None:
