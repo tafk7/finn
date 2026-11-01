@@ -69,7 +69,7 @@ from finn.kernels.artifacts.module import Abi, BusExport, Fragment, Leaf
 from finn.kernels.artifacts.top import module_abi
 from finn.kernels.budgets import SHELL, counts
 from finn.kernels.composer import Facts, Port, channel, member_name
-from finn.kernels.explore import CoreComposition, Seam, SizeFifos
+from finn.kernels.explore import CoreComposition, Defaults, Seam, SizeFifos, TargetThroughput
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import IntegerTensorValue
@@ -264,6 +264,68 @@ def test_a_refused_list_writes_nothing() -> None:
     ]
     assert model.model.SerializeToString() == before
     assert search_record(model)[0] == "current"  # the empty list's, written before
+
+
+@pytest.mark.parametrize(
+    "strategies",
+    [
+        pytest.param(lambda: [TargetThroughput(1000.0)], id="target"),
+        pytest.param(lambda: [TargetThroughput(1000.0), SizeFifos(margin=1)], id="target-sized"),
+        pytest.param(lambda: [Defaults()], id="defaults"),
+    ],
+)
+def test_a_list_that_cannot_lift_a_budget_is_refused_by_it(strategies: Any) -> None:
+    """The Chain on a row taking one AXI-Lite bus, its movers alone exceeding it: a strategy
+    reopens the stored choices it decides, and every value of one of them breaks the budget,
+    so it leaves that choice open. The exploration refuses the point it leaves, each such
+    choice by name (``choice-no-valid-value``, the budget's finding among its causes), and
+    writes nothing, so an exploration with no strategy after it and emission meet the stored
+    choices again, refused by the budget, not by a choice left open."""
+    model = kernel_model()
+    write_target(model, ULTRA96)
+    model = model.transform(MakeCutChoices(CUT_NAME))
+    explore_kernel_choices(model, name=CUT_NAME)
+    before = model.model.SerializeToString()
+    narrow = replace(PYNQ_ROW, control_budget=1)
+    with pytest.MonkeyPatch.context() as patched:
+        patched.setattr(shell, "shell_row", lambda *_: narrow)
+        with refused("choice-no-valid-value", error=KernelOpError) as caught:
+            explore_kernel_choices(model, strategies(), name=CUT_NAME)
+        assert ("interface-budget-exceeded", "within_control_budget") in [
+            (each.code, each.owner) for each in caught.finding.causes
+        ]
+        assert model.model.SerializeToString() == before
+        with refused(
+            "interface-budget-exceeded", error=KernelOpError, owner="within_control_budget"
+        ):
+            explore_kernel_choices(model, name=CUT_NAME)
+        with refused(
+            "interface-budget-exceeded", error=KernelOpError, owner="within_control_budget"
+        ):
+            configured_network(model, "chain")
+
+
+def test_a_target_names_the_choice_the_budget_leaves_no_value() -> None:
+    """A target throughput on the Chain whose budget its movers alone exceed: the
+    thresholding's AXI-Lite choice, reopened, can take no value, each value named with the
+    rules it breaks."""
+    model = kernel_model()
+    write_target(model, ULTRA96)
+    model = model.transform(MakeCutChoices(CUT_NAME))
+    explore_kernel_choices(model, name=CUT_NAME)
+    narrow = replace(PYNQ_ROW, control_budget=1)
+    with pytest.MonkeyPatch.context() as patched:
+        patched.setattr(shell, "shell_row", lambda *_: narrow)
+        with refused(
+            "choice-no-valid-value",
+            error=KernelOpError,
+            owner="activate.use_axilite",
+            message="no value is possible: False breaks shell.within_control_budget; True "
+            "breaks control_for_writes, shell.within_control_budget",
+        ) as caught:
+            explore_kernel_choices(model, [TargetThroughput(1000.0)], name=CUT_NAME)
+    assert caught.error.keys == ("activate.use_axilite",)
+    assert str(caught.error).startswith("the explored point is refused: activate.use_axilite: ")
 
 
 def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:

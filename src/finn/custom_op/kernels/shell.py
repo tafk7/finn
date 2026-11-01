@@ -359,12 +359,7 @@ def configured_network(
             for key, item in bound.decisions().items()
             if isinstance(policy(bound.owner(key[0]), item), Required)
         }
-        listed = bound.viable(key for key in open_keys if key not in required)
-        impossible = {
-            key: _impossible(bound, key, viable.values)
-            for key, viable in listed
-            if viable.values is not None and not viable.cases
-        }
+        impossible = impossible_choices(bound, (key for key in open_keys if key not in required))
         named = [
             f"{dotted(key)}: {impossible[key].message}"
             if key in impossible
@@ -473,6 +468,19 @@ def configured_network(
             node=label,
         )
     return Configured(bound, module.value, row), bound.boundary
+
+
+def impossible_choices(bound: CoreComposition, keys: Iterable[Key]) -> dict[Key, Finding]:
+    """Each of the open choices ``keys`` of ``bound`` no value of which is possible (each
+    value its domain lists refused, or none listed), with why (``choice-no-valid-value``):
+    what emission refuses by name, and an exploration's result too. A choice whose values
+    are not listed (known by membership only, or waiting on a value not known) is not
+    one."""
+    return {
+        key: _impossible(bound, key, viable.values)
+        for key, viable in bound.viable(keys)
+        if viable.values is not None and not viable.cases
+    }
 
 
 def _impossible(
@@ -709,6 +717,7 @@ __all__ = [
     "configured_network",
     "core_point",
     "core_space",
+    "impossible_choices",
     "refuse_unverified",
     "row_facts",
     "shell_composition",
