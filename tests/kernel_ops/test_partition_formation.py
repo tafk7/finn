@@ -107,7 +107,7 @@ def test_the_kernel_ops_become_one_partition_between_the_host_ops(tmp_path: Path
     # The node states its body and nothing else: no placement, no estimates.
     assert [item.name for item in parent.graph.node[1].attribute] == ["model"]
     body = ModelWrapper(sdp.get_nodeattr("model"))
-    assert [node.name for node in body.graph.node] == ["first", "activate", "second"]
+    assert [node.name for node in body.graph.node] == ["MatMul_0", "Thresholding_0", "MatMul_1"]
     assert [item.name for item in body.graph.input] == ["x_flat"]
     assert [item.name for item in body.graph.output] == ["y_kernel"]
     # The body computes the Chain, through the partition node.
@@ -130,28 +130,27 @@ def test_the_parent_graph_imports_its_partition_nodes_domain(tmp_path: Path) -> 
 
 
 def test_the_node_reads_binds_changes_and_writes_its_core(tmp_path: Path) -> None:
-    """The DataflowCore reads its core as a KernelOp reads its kernel, each reading a
-    function of its body, its module named by the node: its design space, nothing chosen
-    (``bound``), its body's stored choices bound (``point``) and a change of them
-    (``point(extra)``, a refused one a ``ValueError``); ``persist`` writes a design space's
-    choices onto its body, and ``configured`` is what emission reads."""
+    """The DataflowCore reads its core as a KernelOp reads its kernel, each reading a function of
+    its body: its design space, nothing chosen (``bound``), its body's stored choices bound
+    (``point``) and a change of them (``point(extra)``, a refused one a ``ValueError``); ``persist``
+    writes a design space's choices onto its body, and ``configured`` is what emission reads."""
     _, parent, _ = partitioned(tmp_path)
     node = parent.graph.node[1]
     core = getCustomOp(node)
     body = core.body()
-    assert [each.name for each in body.graph.node] == ["first", "activate", "second"]
+    assert [each.name for each in body.graph.node] == ["MatMul_0", "Thresholding_0", "MatMul_1"]
     empty, held = core.bound(), core.point()
-    assert type(empty) is type(held.point) and empty.name == held.point.name == node.name
+    assert type(empty) is type(held.point)
     assert not held.stale and CoreComposition(empty).chosen() == {}
     stored = core_in_shell(body, name=node.name).chosen()
-    assert CoreComposition(held.point).chosen() == stored and stored[("first", "simd")] == 2
-    changed = core.point({("first", "simd"): 4})
-    assert CoreComposition(changed.point).chosen() == {**stored, ("first", "simd"): 4}
+    assert CoreComposition(held.point).chosen() == stored and stored[("MatMul_0", "simd")] == 2
+    changed = core.point({("MatMul_0", "simd"): 4})
+    assert CoreComposition(changed.point).chosen() == {**stored, ("MatMul_0", "simd"): 4}
     with pytest.raises(ValueError, match="simd"):
-        core.point({("first", "simd"): 3})
+        core.point({("MatMul_0", "simd"): 3})
     assert CoreComposition(core.point().point).chosen() == stored  # nothing written
     core.persist(changed.point)
-    assert CoreComposition(core.point().point).chosen()[("first", "simd")] == 4
+    assert CoreComposition(core.point().point).chosen()[("MatMul_0", "simd")] == 4
     expected, _ = configured_network(core.body(), node.name)
     assert core.configured().module == expected.module
 

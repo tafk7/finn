@@ -53,21 +53,21 @@ from finn.toolchain.launcher import host_toolchain
 
 def test_each_edge_carries_its_own_adapter_and_the_netlist_is_flat():
     point = chain()
-    x, levels = point.member("x"), point.member("levels")
+    x, levels = point.member("x"), point.member("Thresholding_0_out0")
     # A replay before each MatMul's core, on the edge into it; none inside a MatMul.
     assert x.steps.kinds == levels.steps.kinds == (Step.REORDER, Step.MARKERS)
-    assert point.member("hidden").steps.kinds == ()
+    assert point.member("MatMul_0_out0").steps.kinds == ()
     module = built(point, STEM)
     # Each weight memory is its channel's source: a leaf below the channel, in the order
     # the network declares its members.
     assert labels(module) == [
         "x.adapter.input_gen.input_gen",
-        "w1.source.memstream",
-        "levels.adapter.input_gen.input_gen",
-        "w2.source.memstream",
-        "first.compute.packed",
-        "activate",
-        "second.compute.packed",
+        "MatMul_0_param0.source.memstream",
+        "Thresholding_0_out0.adapter.input_gen.input_gen",
+        "MatMul_1_param0.source.memstream",
+        "MatMul_0.compute.packed",
+        "Thresholding_0",
+        "MatMul_1.compute.packed",
     ]
     # The module's own ports are its boundary channels.
     assert {port.name for port in module.abi.pins} == {
@@ -105,13 +105,13 @@ def hidden_on(element: ScalarEncoding) -> object:
     # configured Chain's choices are bound on it: a stored set that breaks the channel's
     # rule binds, and the channel reads refused.
     stated = by_hand(members(Tensor((ROWS, HIDDEN), element)), chain().chosen())
-    return stated.member("hidden").query(Channel.well_formed)
+    return stated.member("MatMul_0_out0").query(Channel.well_formed)
 
 
 def test_a_matmuls_results_fit_their_channels_tensor():
     """MatMul's results (``y_tensor``: H over its columns' range) fit a plainly stated
     channel of their type, not one of another type or a tighter range."""
-    assert chain().member("first").y_tensor.element == ScalarEncoding(H, TensorRange(-28, 28))
+    assert chain().member("MatMul_0").y_tensor.element == ScalarEncoding(H, TensorRange(-28, 28))
     assert hidden_on(ScalarEncoding(H)) == Available(True)
     for element in (ScalarEncoding(DataType["INT32"]), ScalarEncoding(H, TensorRange(0, 1))):
         refused = hidden_on(element)

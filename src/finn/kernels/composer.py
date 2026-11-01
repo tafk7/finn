@@ -10,8 +10,8 @@ the name of the tensor each carries, each with its two sides and its own facts
 "y")``), or a ``Side`` given as a value: the boundary's (``Side.boundary``), a frozen
 neighbour's (``Side.neighbour``) or a valued channel's source (``Side.source``). A channel's
 fact is a value, or a value a member states (``Stated("mm0", "carried_weights")``: a
-parameter channel's tensor and contents). It names its module
-(``DataflowCoreDeclaration.name``), the order its module places its members in
+parameter channel's tensor and contents). It names the core its refusals are reported
+under (``DataflowCoreDeclaration.name``), the order its module places its members in
 (``order``), each kernel's policies' owner (``owners``) and, for a slice, the port beside
 each edge channel at a frozen neighbour (``frozen``). The composer never reads a graph:
 FINN's graph layer reads one into a declaration (a node's body, or a slice of a graph), and
@@ -50,13 +50,12 @@ names). Its facts:
 - **its edge ports**, one per boundary side, each a node alias of its channel's outer port
   named as the side's label, its bus (``s_axis_0 = x.outer_in``, ``m_axis_0 =
   y.outer_out``), after its members, in its instance order;
-- **its module's name**, the class's own fact (``DataflowCoreKernel.name``), and, for each
-  edge channel at a frozen neighbour, the port beside it (``<channel>-frozen``, a
-  ``finn.kernels.channels.Neighbours``, which the class answers that channel's neighbours
-  and hops from); and, as class facts, **its instance order** (``Kernel.instance_order``:
-  each member's name in the declaration's order), **its names**
-  (``DataflowCoreKernel.names``, ``finn.kernels.dataflow_core.Names``) and **each kernel's
-  policies' owner** (``DataflowCoreKernel.policy_owners``).
+- **for a slice**, the port beside each edge channel at a frozen neighbour
+  (``<channel>-frozen``, a ``finn.kernels.channels.Neighbours``, which the class answers that
+  channel's neighbours and hops from); and, as class facts, **its instance order**
+  (``Kernel.instance_order``: each member's name in the declaration's order), **its names**
+  (``DataflowCoreKernel.names``, ``finn.kernels.dataflow_core.Names``) and **each kernel's policies'
+  owner** (``DataflowCoreKernel.policy_owners``).
 
 **A side's role is the channel's to check.** A port's side is an input side or an output
 side, by its kind (``InPort``, ``OutPort``), and the channel refuses a producer that is no
@@ -258,18 +257,17 @@ def channel(producer: Port | Side, consumer: Port | Side, **facts: object) -> Ch
 
 
 class DataflowCoreDeclaration:
-    """A core as declared: its ``kernels`` by graph name, each its ``Facts``, in their order
-    (the graph's), its ``channels`` by the name of the tensor each carries, in a shell, the
-    shell's row (``shell``: its facts by name, ``finn.kernels.budgets.ShellBudgets``'s
-    formals; None outside one), its module's name (``name``, ``DataflowCoreKernel.name``:
-    a node's its own, a test core's its caller's), the order its module places its members
-    in, by graph name (``order``: the kernels, then the channels, as declared, by default;
-    ``Kernel.instance_order``), each kernel's policies' owner, by graph name (``owners``:
-    a KernelOp's its op class; ``Unstated`` for a kernel not named) and, for a slice, the
-    port beside each edge channel at a frozen neighbour, by the channel's graph name
-    (``frozen``: its stream pins and its pace at the neighbour's stored choices). An order
-    that does not name each member once, or an owner or a frozen port of no kernel or
-    channel of it, is a ``ValueError``."""
+    """A core as declared: its ``kernels`` by graph name, each its ``Facts``, in their order (the
+    graph's), its ``channels`` by the name of the tensor each carries, in a shell, the shell's row
+    (``shell``: its facts by name, ``finn.kernels.budgets.ShellBudgets``'s formals; None outside
+    one), its name (``name``, what its refusals are reported under: a node's its own, a test core's
+    its caller's; no fact of its class), the order its module places its members in, by graph name
+    (``order``: the kernels, then the channels, as declared, by default; ``Kernel.instance_order``),
+    each kernel's policies' owner, by graph name (``owners``: a KernelOp's its op class;
+    ``Unstated`` for a kernel not named) and, for a slice, the port beside each edge channel at a
+    frozen neighbour, by the channel's graph name (``frozen``: its stream pins and its pace at the
+    neighbour's stored choices). An order that does not name each member once, or an owner or a
+    frozen port of no kernel or channel of it, is a ``ValueError``."""
 
     __slots__ = ("channels", "frozen", "kernels", "name", "order", "owners", "shell")
 
@@ -540,7 +538,7 @@ def structure(declared: DataflowCoreDeclaration, ranked: list[str]) -> Hashable:
     class, policies' owner and facts given, then each channel's name, sides and facts given,
     and whether it is given the port beside it at a frozen neighbour, ranked, whether it is
     in a shell (never its row: the row's values are facts), and its instance order (never
-    its module's name, nor a frozen neighbour's port: facts)."""
+    its name, nor a frozen neighbour's port: facts)."""
     return (
         model_modes(),
         tuple(
@@ -690,7 +688,7 @@ def _made(
             edges[sides.consumer.label] = getattr(held, "outer_out")
     # Named by its key's digest (its classes and enums by their module and name): the same
     # structure is the same name in every process.
-    digest = hashlib.sha256(repr(key).encode()).hexdigest()[:12]
+    digest = hashlib.sha256(repr(key).encode()).hexdigest()[:16]
     if declared.shell is not None:
         channels[SHELL] = _shell(declared, ranked, names, nodes, digest, params, annotations, roots)
     members = {owner: names[owner] for owner in (*declared.kernels, *ranked)}
@@ -839,7 +837,7 @@ def compose(declared: DataflowCoreDeclaration) -> DataflowCoreKernel:
         facts[table.root(owner, FROZEN)] = beside
     for fact, value in (declared.shell or {}).items():
         facts[table.root(SHELL, fact)] = value
-    point: DataflowCoreKernel = design_space(cast(Any, found)(**facts, name=declared.name))
+    point: DataflowCoreKernel = design_space(cast(Any, found)(**facts))
     return point
 
 

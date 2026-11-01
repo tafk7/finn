@@ -42,7 +42,8 @@ and refuses a design never verified or changed since. Simulation and elaboration
 bind. The cut makes a body's channel choices (``make_cut_choices``) on its core in its
 shell, which alone holds both sides of a boundary channel, by the channel's policies
 (``Channel.policies``), and writes them with ``persist``. Each is given the core's name,
-its node's (``finn.custom_op.partition.DataflowCore``): its module's name.
+its node's (``finn.custom_op.partition.DataflowCore``), which names its refusals; its module's
+name leaves it out.
 """
 
 from __future__ import annotations
@@ -308,7 +309,7 @@ def shell_resources(
 def configured_network(
     model: ModelWrapper, name: str
 ) -> tuple[Configured, tuple[tuple[str, str], ...]]:
-    """A DataflowCore's body's core, its module named ``name`` (the node's), in the shell of
+    """A DataflowCore's body's core, named ``name`` (the node's), in the shell of
     its target (``core_point``), bound with
     its nodes' and its tensors' channel choices, as emission builds it (``Configured``),
     and its boundary (tensor, port). Every choice is stored where it is created (a
@@ -552,7 +553,7 @@ def _held_values(network: CoreComposition, held: Mapping[str, Sequence[str]]) ->
 
 
 def verify_partition(model: ModelWrapper, name: str) -> tuple[Configured, FifoCheck]:
-    """A DataflowCore's body's configured network, its module named ``name``
+    """A DataflowCore's body's configured network, named ``name``
     (``configured_network``, whose refusals it
     keeps) with its FIFOs checked against their streams at its bottleneck period
     (``Seam.check_fifos``: sizing's own model, whatever changed since a FIFO was sized, an
@@ -650,7 +651,7 @@ def _late(key: str, value: object) -> Finding:
 
 def make_cut_choices(model: ModelWrapper, name: str) -> CutChoices:
     """The cut's choices of a DataflowCore's body, ``model``, persisted, each owner's whole
-    (``persist``), on the core of its KernelOps, its module named ``name`` (the node's), in
+    (``persist``), on the core of its KernelOps, named ``name`` (the node's), in
     its shell (``core_point``), their stored choices bound (a value outside its domain
     dropped as stale), the policies of its members applied once over its design space
     (``CoreComposition.defaulted``): one pass

@@ -21,9 +21,8 @@ edge port aliasing anything but a member channel's outer port is refused when th
 made (``core-edge-unchanneled``, ``finn.kernels.base``): where a stream leaves a module, the
 boundary rule applies, which the channel's outer port presents.
 
-**Its facts**: its module's name (``name``: the node's, ``finn_<name>`` its module's stem)
-and, for a slice, the port beside each edge channel at a frozen neighbour, read at the
-neighbour's stored choices (``<channel>-frozen``, ``finn.kernels.channels.Neighbours``: its
+**Its facts**: for a slice, the port beside each edge channel at a frozen neighbour, read at
+the neighbour's stored choices (``<channel>-frozen``, ``finn.kernels.channels.Neighbours``: its
 stream pins and its pace), from which its class answers that channel's neighbours and hops
 as it does a member's. **Its class facts**: the order its module places its members in
 (``Kernel.instance_order``), its keyed names (``names``: each member's graph name and each
@@ -41,8 +40,9 @@ kernel's port outside its module and no AXIS port of it: a slice is not emitted
 the boundary) that no edge port names, which its class cannot see, its sides being facts
 (``port-unconnected``, the port named). Its module (``module``), its IP, is its netlist
 with its edge's buses (``core_module``), every marker pin of its edge ruled
-(``top_markers``), named after its name (``finn_<name>``, lower case) and derived by its
-class (``PRODUCER``: its ``id``).
+(``top_markers``), named by its kind and its content, its sources' bytes among it
+(``STEM``: ``finn_dataflowcore_<digest>``, ``finn.kernels.artifacts.module.module_name``),
+whatever its node is called, and derived by its class (``PRODUCER``: its ``id``).
 
 ``edge_buses`` reads each member channel through a helper of its own, ``-edge-<i>`` in its
 instance order, each reading its channel's sides and its edge ports by the names its
@@ -74,7 +74,6 @@ from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.search import Key, dotted
 from finn.core.space import (
     BrokenRule,
-    Param,
     Rejected,
     Unresolved,
     bind,
@@ -86,7 +85,7 @@ from finn.core.space._aliases import alias_table
 from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.artifacts.module import Composed as Module
-from finn.kernels.artifacts.module import Fragment, ProducerIdentity
+from finn.kernels.artifacts.module import Fragment, ProducerIdentity, instance_collisions
 from finn.kernels.artifacts.top import compose as top
 from finn.kernels.base import _END, Kernel, _connects, _installed, _members, _read_none
 from finn.kernels.channels import Neighbours
@@ -96,6 +95,9 @@ from finn.kernels.sides import SideKind
 PRODUCER = ProducerIdentity("finn.dataflow_core", "1")
 """What derives a core's module, its IP (``DataflowCoreKernel.module``): its class, by its
 ``id``."""
+#: A core module's stem, its kind: the module is ``<STEM>_<digest>``, its own name left out
+#: of the digest (``finn.kernels.artifacts.module.module_name``).
+STEM = "finn_dataflowcore"
 
 _EDGE = "edge"
 
@@ -324,8 +326,6 @@ class DataflowCoreKernel(Kernel):
     names: ClassVar[Names] = Names({}, {})
     policy_owners: ClassVar[Mapping[str, Owner]] = MappingProxyType({})
 
-    name: str = Param()
-
     def __init_subclass__(cls, **kwargs: Any) -> None:
         _install_edge(cls)
         _install_frozen(cls)
@@ -371,14 +371,13 @@ class DataflowCoreKernel(Kernel):
 
     @view
     def module(self) -> Module | Rejected:
-        """Its module, its IP (``core_module``): its netlist with its edge's buses, named
-        ``finn_<name>`` (its name in lower case) and derived by its class (``PRODUCER``);
+        """Its module, its IP (``core_module``): its netlist with its edge's buses, its stem
+        ``STEM`` and derived by its class (``PRODUCER``);
         refused where its edge or its netlist is (a slice's edge first,
         ``slice-not-emitted``), or where the module is not well formed."""
         edge: tuple[Bus, ...] = self.edge_buses
         fragment: Fragment = self.netlist
-        name: str = self.name
-        return core_module(PRODUCER, f"finn_{name.lower()}", fragment, edge)
+        return core_module(PRODUCER, STEM, fragment, edge)
 
 
 setattr(DataflowCoreKernel, _installed(_EDGE, "0"), _read_none)
@@ -433,14 +432,29 @@ def top_markers(fragment: Fragment, boundary: Iterable[Bus]) -> tuple[Finding, .
 def core_module(
     producer: ProducerIdentity, stem: str, fragment: Fragment, edge: tuple[Bus, ...]
 ) -> Module | Rejected:
-    """A core's module (``finn.kernels.artifacts.top.compose``), named ``stem`` and derived by
+    """A core's module (``finn.kernels.artifacts.top.compose``), its stem ``stem`` and derived by
     ``producer``, of its netlist (``Kernel.netlist``) and its edge
     (``DataflowCoreKernel.edge_buses``); refused where its edge leaves a marker pin unconsumed or
-    unruled (``channel-top-marker``, ``top_markers``), or where the top is not well formed
-    (``kernel-netlist``)."""
+    unruled (``channel-top-marker``, ``top_markers``), where two of its members' labels give one
+    instance name (``instance-names-collide``, the labels named), or where the top is not well
+    formed (``kernel-netlist``)."""
     unruled = top_markers(fragment, edge)
     if unruled:
         return Rejected(unruled)
+    collided = instance_collisions(label for label, _ in fragment.instances)
+    if collided:
+        return Rejected(
+            tuple(
+                Finding(
+                    FindingKind.REJECTION,
+                    "instance-names-collide",
+                    "",
+                    f"the instance labels {list(labels)} are each the instance {name}",
+                    (("instance", name), ("labels", labels)),
+                )
+                for name, labels in collided.items()
+            )
+        )
     try:
         return top(producer, stem, fragment, edge)
     except ArtifactError as error:
@@ -581,6 +595,7 @@ __all__ = [
     "FROZEN",
     "PRODUCER",
     "SEPARATOR",
+    "STEM",
     "Bound",
     "DataflowCoreKernel",
     "Names",

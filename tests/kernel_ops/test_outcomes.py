@@ -17,8 +17,10 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 from support.models import chain_source, convert
+from support.refusals import refused
 
 from finn.core.graph.errors import KernelOpError
+from finn.core.graph.partition import design_digest
 from finn.core.reporting.findings import FindingKind
 from finn.transformation.kernels import (
     Outcome,
@@ -34,10 +36,11 @@ def codes(outcome: Outcome) -> list[tuple[str, str, str]]:
 
 
 def test_every_node_of_the_chain_converts_with_no_finding() -> None:
+    # Each KernelOp is named by its position: its op type and its index among its kind.
     expected = (
-        Outcome(("first",), "MatMul"),
-        Outcome(("activate",), "Thresholding"),
-        Outcome(("second",), "MatMul"),
+        Outcome(("first",), "MatMul", name="MatMul_0"),
+        Outcome(("activate",), "Thresholding", name="Thresholding_0"),
+        Outcome(("second",), "MatMul", name="MatMul_1"),
     )
     assert convert(chain_source().transform(InferShapes()))[1].outcomes == expected
     # A fresh graph, only x's shape known: conversion infers as it goes, so the
@@ -47,22 +50,201 @@ def test_every_node_of_the_chain_converts_with_no_finding() -> None:
     assert [node.op_type for node in model.graph.node] == ["MatMul", "Thresholding", "MatMul"]
 
 
-def graph(nodes: list[Any], outputs: list[str]) -> ModelWrapper:
-    """x (4, 4) INT4 and the nodes, with w (4, 4) INT4 for every MatMul. qonnx types
-    the host nodes' integer results by their ranges, so the MatMuls after them read
-    integers the kernels admit."""
-    x = helper.make_tensor_value_info("x", TensorProto.FLOAT, [4, 4])
+def graph(nodes: list[Any], outputs: list[str], inputs: tuple[str, ...] = ("x",)) -> ModelWrapper:
+    """``inputs`` (4, 4) INT4 (``x`` by default) and the nodes, with w (4, 4) INT4 for every
+    MatMul. qonnx types the host nodes' integer results by their ranges, so the MatMuls after
+    them read integers the kernels admit."""
+    given = [helper.make_tensor_value_info(name, TensorProto.FLOAT, [4, 4]) for name in inputs]
     made = [helper.make_tensor_value_info(name, TensorProto.FLOAT, None) for name in outputs]
     model = ModelWrapper(
         qonnx_make_model(
-            helper.make_graph(nodes, "g", [x], made),
+            helper.make_graph(nodes, "g", given, made),
             opset_imports=[helper.make_opsetid("", 13)],
         )
     )
     model.set_initializer("w", np.eye(4, dtype=np.float32))
-    for name in ("x", "w"):
+    for name in (*inputs, "w"):
         model.set_tensor_datatype(name, DataType["INT4"])
     return model
+
+
+def wiring(model: ModelWrapper) -> list[tuple[str, list[str], list[str]]]:
+    """Each node of ``model``, in graph order: its name, its inputs and its outputs."""
+    return [(node.name, list(node.input), list(node.output)) for node in model.graph.node]
+
+
+def test_a_kernel_op_and_its_tensors_are_named_by_its_position_and_the_host_keeps_its_names() -> (
+    None
+):
+    """Each KernelOp is ``<OpType>_<i>``, its outputs ``<name>_out<k>`` and the initializers
+    it reads ``<name>_param<k>``; the host node, its tensor and the graph's input and output
+    keep their names."""
+    model, conversion = convert(
+        graph(
+            [
+                helper.make_node("Relu", ["x"], ["r"], name="scale"),
+                helper.make_node("MatMul", ["r", "w"], ["h"], name="a"),
+                helper.make_node("MatMul", ["h", "w"], ["y"], name="b"),
+            ],
+            ["y"],
+        )
+    )
+    named = [(node.name, list(node.input), list(node.output)) for node in model.graph.node]
+    assert named == [
+        ("scale", ["x"], ["r"]),
+        ("MatMul_0", ["r", "MatMul_0_param0"], ["MatMul_0_out0"]),
+        ("MatMul_1", ["MatMul_0_out0", "MatMul_1_param0"], ["y"]),
+    ]
+    assert [outcome.name for outcome in conversion.outcomes] == [None, "MatMul_0", "MatMul_1"]
+    report = kernel_ops_report(model, conversion.outcomes)
+    assert [(each["nodes"], each["name"]) for each in report["outcomes"]] == [
+        (["scale"], None),
+        (["a"], "MatMul_0"),
+        (["b"], "MatMul_1"),
+    ]
+
+
+def test_a_graph_name_a_host_node_or_its_tensor_holds_is_refused() -> None:
+    """A name by position that a host node, or a tensor the conversion keeps, already has
+    is refused before anything is renamed, naming both."""
+    taken_by_a_node = graph(
+        [
+            helper.make_node("Relu", ["x"], ["r"], name="MatMul_0"),
+            helper.make_node("MatMul", ["r", "w"], ["y"], name="a"),
+        ],
+        ["y"],
+    )
+    with refused(
+        "graph-name-taken",
+        error=KernelOpError,
+        owner="ToKernelOps",
+        node="a",
+        message="its graph name by position is MatMul_0, but the host node MatMul_0 has it",
+    ):
+        convert(taken_by_a_node)
+    taken_by_a_tensor = graph(
+        [
+            helper.make_node("MatMul", ["x", "w"], ["h"], name="a"),
+            helper.make_node("Relu", ["h"], ["MatMul_0_out0"], name="scale"),
+            helper.make_node("Neg", ["MatMul_0_out0"], ["y"], name="negate"),
+        ],
+        ["y"],
+    )
+    with refused(
+        "graph-name-taken",
+        error=KernelOpError,
+        owner="ToKernelOps",
+        tensor="h",
+        message="its graph name by position is MatMul_0_out0, but the tensor MatMul_0_out0",
+    ):
+        convert(taken_by_a_tensor)
+
+
+def test_a_rename_passes_through_no_name_the_graph_holds() -> None:
+    """A tensor is renamed through a temporary name no tensor of the graph holds: a graph
+    input that already has the first temporary name stays apart from the renamed tensor."""
+    model, _ = convert(
+        graph(
+            [
+                helper.make_node("MatMul", ["x", "w"], ["h"], name="a"),
+                helper.make_node("Add", ["h", "finn.renaming/0"], ["y"], name="host"),
+            ],
+            ["y"],
+            inputs=("x", "finn.renaming/0"),
+        )
+    )
+    assert wiring(model) == [
+        ("MatMul_0", ["x", "MatMul_0_param0"], ["MatMul_0_out0"]),
+        ("host", ["MatMul_0_out0", "finn.renaming/0"], ["y"]),
+    ]
+    assert [item.name for item in model.graph.input] == ["x", "finn.renaming/0"]
+
+
+def test_the_graph_is_named_in_the_order_cleanup_leaves_and_named_again_alike() -> None:
+    """The nodes are named in the order qonnx's cleanup returns them in, which need not be
+    the source's (``a`` and ``c`` read only the graph's inputs, so both come before ``b``),
+    and the outcomes follow it; a second conversion gives the same names."""
+    model, conversion = convert(
+        graph(
+            [
+                helper.make_node("MatMul", ["x", "w"], ["h"], name="a"),
+                helper.make_node("MatMul", ["h", "w"], ["z"], name="b"),
+                helper.make_node("MatMul", ["u", "w"], ["y"], name="c"),
+            ],
+            ["y", "z"],
+            inputs=("x", "u"),
+        )
+    )
+    named = [
+        ("MatMul_0", ["x", "MatMul_0_param0"], ["MatMul_0_out0"]),
+        ("MatMul_1", ["u", "MatMul_1_param0"], ["y"]),
+        ("MatMul_2", ["MatMul_0_out0", "MatMul_2_param0"], ["z"]),
+    ]
+    assert wiring(model) == named
+    assert [(o.nodes, o.name) for o in conversion.outcomes] == [
+        (("a",), "MatMul_0"),
+        (("c",), "MatMul_1"),
+        (("b",), "MatMul_2"),
+    ]
+    again, _ = convert(model)
+    assert wiring(again) == named
+    assert design_digest(again) == design_digest(model)
+
+
+def test_a_quantization_annotation_follows_the_tensors_it_names() -> None:
+    """A quantization annotation moves with its tensor, and its scale and zero point name
+    the renamed tensors they named."""
+    source = graph(
+        [
+            helper.make_node("MatMul", ["x", "w"], ["h"], name="a"),
+            helper.make_node("Relu", ["h"], ["y"], name="host"),
+        ],
+        ["y"],
+    )
+    annotation = source.graph.quantization_annotation.add(tensor_name="h")
+    annotation.quant_parameter_tensor_names.add(key="SCALE_TENSOR", value="w")
+    annotation.quant_parameter_tensor_names.add(key="ZERO_POINT_TENSOR", value="x")
+    model, _ = convert(source)
+    (found,) = [
+        {entry.key: entry.value for entry in each.quant_parameter_tensor_names}
+        for each in model.graph.quantization_annotation
+        if each.tensor_name == "MatMul_0_out0"
+    ]
+    assert found["SCALE_TENSOR"] == "MatMul_0_param0" and found["ZERO_POINT_TENSOR"] == "x"
+
+
+def test_a_renamed_tensor_a_subgraph_reads_is_refused() -> None:
+    """A host node's subgraph that reads a tensor conversion renames is refused by name
+    before anything is renamed: a subgraph is not renamed."""
+
+    def branch(name: str) -> Any:
+        out = helper.make_tensor_value_info("z", TensorProto.FLOAT, [4, 4])
+        return helper.make_graph([helper.make_node("Identity", ["h"], ["z"])], name, [], [out])
+
+    source = graph(
+        [
+            helper.make_node("MatMul", ["x", "w"], ["h"], name="a"),
+            helper.make_node(
+                "If",
+                ["condition"],
+                ["y"],
+                name="host",
+                then_branch=branch("then"),
+                else_branch=branch("else"),
+            ),
+        ],
+        ["y"],
+    )
+    source.graph.input.append(helper.make_tensor_value_info("condition", TensorProto.BOOL, []))
+    with refused(
+        "graph-name-captured",
+        error=KernelOpError,
+        owner="ToKernelOps",
+        node="host",
+        tensor="h",
+        message="its subgraph reads h, which conversion names MatMul_0_out0",
+    ):
+        convert(source)
 
 
 def test_a_host_node_between_kernel_ops_is_named_one_beside_them_is_not() -> None:

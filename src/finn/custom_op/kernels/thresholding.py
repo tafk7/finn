@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """The Thresholding KernelOp: qonnx ``MultiThreshold`` as count plus bias,
-Y = count(X >= T[c]) + bias, on ``ThresholdingAxiKernel``.
+Y = count(X >= T[c]) + bias, on ``ThresholdingKernel``.
 
 The thresholds must be an initializer: one row per channel (C, N), or one row for all
 channels (1, N). Channels are on the input's last axis. ``bias`` is a semantic
@@ -51,7 +51,7 @@ from finn.dataflow.datatypes import (
     ordinary_integer_bounds,
 )
 from finn.kernels.composer import Facts
-from finn.kernels.thresholding import ThresholdingAxiKernel, threshold_table_dtype
+from finn.kernels.thresholding import ThresholdingKernel, threshold_table_dtype
 from finn.kernels.values.semantics import IntegerTensorValue
 
 if TYPE_CHECKING:
@@ -85,11 +85,11 @@ def stored_thresholds(
 
 
 class Thresholding(KernelOp):
-    """Integer MultiThreshold, Y = count(X >= T[c]) + bias, bound to ``ThresholdingAxiKernel``."""
+    """Integer MultiThreshold, Y = count(X >= T[c]) + bias, bound to ``ThresholdingKernel``."""
 
     op_type = "Thresholding"
     op_version = 1
-    kernel = ThresholdingAxiKernel
+    kernel = ThresholdingKernel
     ports = ("x", None)
     wiring = {
         "x": Wiring("input_tensor", "input"),

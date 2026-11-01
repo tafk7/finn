@@ -424,7 +424,7 @@ LIBRARY_RULES = {
     # CONTRACT.md § 9: each module kernel's ports, by what paces them in its RTL.
     "PackedDotpKernel": {"x": SCHED, "w": SCHED, "y": SCHED},
     "Int8Dsp58DotpKernel": {"x": SCHED, "w": SCHED, "y": SCHED},
-    "ThresholdingAxiKernel": {"input": SCHED, "output": SCHED, "set": GRP},
+    "ThresholdingKernel": {"input": SCHED, "output": SCHED, "set": GRP},
     "EltwiseKernel": {"lhs": SCHED, "rhs": SCHED, "result": SCHED},
     "TransposeKernel": {"input": SCHED, "output": SCHED},
     "MemStreamKernel": {"set": GRP, "output": READ},

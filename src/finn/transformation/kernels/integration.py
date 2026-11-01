@@ -12,7 +12,7 @@ place
 (``Channel.mover_contract``) and its shell's row. For the Zynq block design
 (``vivado-block-design``, the ``pynq`` shell) it states:
 
-- the partition's IP: its instance, named as its node, and its VLNV;
+- the partition's IP: its instance, named as its node, and its VLNV, named as its module;
 - each mover as an ``IODMA_hls`` (``IodmaConfiguration``), its node attributes from the
   mover's facts: vectors ``(1, beats)``, the stream's bytes a beat, memory and stream
   widths, as ``InsertIODMA`` sized them. ``IODMA_hls`` moves bytes: its ``dataType``
@@ -56,8 +56,10 @@ from finn.core.reporting.findings import Finding, FindingKind, Refusal
 from finn.custom_op.kernels.shell import configured_network, refuse_unverified
 from finn.kernels.artifacts.abi import Bus, StandardProtocol
 from finn.kernels.artifacts.ipxact import vlnv
+from finn.kernels.artifacts.module import module_name
 from finn.kernels.movers import IODMA_HLS, MoverContract
 from finn.platform.shells import VIVADO_BLOCK_DESIGN
+from finn.transformation.kernels.package import source_roots
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
@@ -355,7 +357,7 @@ def integration(model: ModelWrapper) -> Integration:
         host_runtime=row.host_runtime,
         period_ns=target.platform.period_ns,
         partition=partition,
-        vlnv=vlnv(partition),
+        vlnv=vlnv(module_name(point.module, source_roots())),
         movers=tuple(movers),
         connections=tuple(connections),
         addresses=tuple(addresses),

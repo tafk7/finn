@@ -159,7 +159,9 @@ def test_stage_7s_chain_s_ports_read_only_their_own_kernels() -> None:
     assert not failures, "\n".join(failures)
     # Each MatMul's two cores' three ports each, which it exposes (element, stream, access
     # where it binds); each thresholding's three ports.
-    assert sorted(checked) == [f"{kind}{layer}" for kind in ("mm", "mt") for layer in range(4)]
+    assert sorted(checked) == [
+        f"{kind}_{layer}" for kind in ("MatMul", "Thresholding") for layer in range(4)
+    ]
     assert all(count > 0 for count in checked.values()), checked
 
 

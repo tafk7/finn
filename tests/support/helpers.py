@@ -89,7 +89,7 @@ from finn.kernels.matmul import KnownWeights, MatMulKernel, datatype_range
 from finn.kernels.policies import Alone, Unstated, defaulted, ranked
 from finn.kernels.port import axis, transport
 from finn.kernels.sides import Side
-from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.thresholding import ThresholdingKernel
 from finn.kernels.transport import AxisBeat, ReadyValidTransport
 from finn.kernels.values.domains import range_dtype, set_index_dtype
 from finn.kernels.values.semantics import (
@@ -517,7 +517,7 @@ def threshold_base(
     threshold_dtype: str = "INT5",
     channels: int | None = None,
     set_tensor: Tensor | None = None,
-) -> ThresholdingAxiKernel:
+) -> ThresholdingKernel:
     """A thresholding's design space on one row of ``channels`` inputs of ``input_dtype``
     (the table's rows by default), given ``set_tensor`` where several sets take one, its
     choices open."""
@@ -532,7 +532,7 @@ def threshold_base(
     )
     if set_tensor is not None:
         facts["set_tensor"] = set_tensor
-    return design_space(ThresholdingAxiKernel(**facts))
+    return design_space(ThresholdingKernel(**facts))
 
 
 def stage_tensor(word_bits: int, words: int = 6, lanes: int = 1) -> Tensor:

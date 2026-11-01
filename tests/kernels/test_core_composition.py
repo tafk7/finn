@@ -53,7 +53,7 @@ from finn.platform.capabilities import Platform
 
 FOLDING = {
     f"{layer}.{key}": value
-    for layer in ("first", "second")
+    for layer in ("MatMul_0", "MatMul_1")
     for key, value in (
         ("compute", "packed"),
         ("pe", 2),
@@ -67,9 +67,17 @@ FOLDING = {
 def test_members_are_ranked_kernels_first_then_each_channel_after_what_it_reads() -> None:
     network = chain.network()
     assert network.members == chain.MEMBERS
-    assert network.kernels == ("first", "activate", "second")
+    assert network.kernels == ("MatMul_0", "Thresholding_0", "MatMul_1")
     # The module places them as declared: channels, then kernels.
-    assert network.order == ("x", "w1", "hidden", "levels", "w2", "y", *network.kernels)
+    assert network.order == (
+        "x",
+        "MatMul_0_param0",
+        "MatMul_0_out0",
+        "Thresholding_0_out0",
+        "MatMul_1_param0",
+        "y",
+        *network.kernels,
+    )
     # A channel that reads another's port (the set port of the weights' source)
     # follows it, whatever the order declared.
     weights = ((1, 0), (0, 1))
@@ -92,9 +100,9 @@ def test_a_channel_s_sides_wait_on_its_kernels_folding() -> None:
     assert network.validity("x").status == "open"
     # Its cycles wait on what its consumer's side waits on: the kernel's core, open (its
     # folding's presence waits on it).
-    assert network.waits("x", network.query("x", Kernel.frame_cycles)) == (("first", "compute"),)
+    assert network.waits("x", network.query("x", Kernel.frame_cycles)) == (("MatMul_0", "compute"),)
     folded = choose(network, FOLDING)
-    assert folded.member("x").consumer.label == "first.x"
+    assert folded.member("x").consumer.label == "MatMul_0.x"
 
 
 def with_transports(network: CoreComposition) -> CoreComposition:
@@ -103,42 +111,46 @@ def with_transports(network: CoreComposition) -> CoreComposition:
 
 def test_a_change_keeps_the_channels_stored_choices_and_places_what_its_facts_need() -> None:
     folded = with_transports(choose(chain.network(), FOLDING))
-    changed = choose(folded, {"first.pe": 1})
+    changed = choose(folded, {"MatMul_0.pe": 1})
     # The stored choices of the channels its kernel's sides reach kept, and the output
     # adapter those sides bring into play placed, no choice: PE 1 against the
     # thresholding's 2 lanes.
-    assert changed.chosen(("hidden",)) == folded.chosen(("hidden",))
-    assert changed.member("hidden").output_adapting
-    assert not folded.member("hidden").output_adapting
+    assert changed.chosen(("MatMul_0_out0",)) == folded.chosen(("MatMul_0_out0",))
+    assert changed.member("MatMul_0_out0").output_adapting
+    assert not folded.member("MatMul_0_out0").output_adapting
 
 
 def test_a_trial_refuses_what_the_change_names_and_keeps_what_it_puts_out_of_play() -> None:
     folded = with_transports(choose(chain.network(), FOLDING))
-    fifo = choose(folded, {"hidden.transport": "fifo", "hidden.transport.fifo.depth": 16})
+    fifo = choose(
+        folded, {"MatMul_0_out0.transport": "fifo", "MatMul_0_out0.transport.fifo.depth": 16}
+    )
     # The FIFO's depth, under a case no longer selected, is kept, dormant: nothing drops.
-    trial = fifo.trial(keyed({"hidden.transport": "direct"}))
+    trial = fifo.trial(keyed({"MatMul_0_out0.transport": "direct"}))
     assert trial.accepted
-    states = dict(trial.network.states(("hidden",)))
-    assert states[("hidden", "transport.fifo.depth")] == inspection.Dormant(16)
-    assert fifo.with_choices(keyed({"hidden.transport": "direct"})).chosen(("hidden",)) == {
-        ("hidden", "transport"): "direct",
-        ("hidden", "transport.fifo.depth"): 16,
+    states = dict(trial.network.states(("MatMul_0_out0",)))
+    assert states[("MatMul_0_out0", "transport.fifo.depth")] == inspection.Dormant(16)
+    assert fifo.with_choices(keyed({"MatMul_0_out0.transport": "direct"})).chosen(
+        ("MatMul_0_out0",)
+    ) == {
+        ("MatMul_0_out0", "transport"): "direct",
+        ("MatMul_0_out0", "transport.fifo.depth"): 16,
     }
     # A value outside its domain refuses the change, by its key.
-    refused = fifo.trial(keyed({"first.pe": 3}))
+    refused = fifo.trial(keyed({"MatMul_0.pe": 3}))
     assert not refused.accepted and refused.network is fifo
-    assert list(refused.refused) == [("first", "pe")]
-    assert [f.code for f in refused.refused[("first", "pe")]] == ["domain-membership"]
+    assert list(refused.refused) == [("MatMul_0", "pe")]
+    assert [f.code for f in refused.refused[("MatMul_0", "pe")]] == ["domain-membership"]
     # A rule it would break refuses it, by the rule's key, with the stored choices
     # standing in its way: pumping needs lanes to split.
-    pumped = choose(folded, {"first.compute.packed.compute_pumping": True})
-    broken = pumped.trial(keyed({"first.simd": 1}))
-    rule = ("first", "compute.packed.pumping_has_lanes")
+    pumped = choose(folded, {"MatMul_0.compute.packed.compute_pumping": True})
+    broken = pumped.trial(keyed({"MatMul_0.simd": 1}))
+    rule = ("MatMul_0", "compute.packed.pumping_has_lanes")
     assert list(broken.refused) == [rule]
     assert [f.code for f in broken.refused[rule]] == ["dotp-pumping"]
-    assert broken.standing == {rule: (("first", "compute.packed.compute_pumping"),)}
-    with pytest.raises(ValueError, match="pumping_has_lanes.*standing: first.compute.packed"):
-        pumped.with_choices(keyed({"first.simd": 1}))
+    assert broken.standing == {rule: (("MatMul_0", "compute.packed.compute_pumping"),)}
+    with pytest.raises(ValueError, match="pumping_has_lanes.*standing: MatMul_0.compute.packed"):
+        pumped.with_choices(keyed({"MatMul_0.simd": 1}))
 
 
 def test_its_module_is_one_netlist_in_the_order_declared() -> None:
@@ -146,12 +158,12 @@ def test_its_module_is_one_netlist_in_the_order_declared() -> None:
     assert module.stem == "finn_chain"
     assert labels(module) == [
         "x.adapter.input_gen.input_gen",
-        "w1.source.memstream",
-        "levels.adapter.input_gen.input_gen",
-        "w2.source.memstream",
-        "first.compute.packed",
-        "activate",
-        "second.compute.packed",
+        "MatMul_0_param0.source.memstream",
+        "Thresholding_0_out0.adapter.input_gen.input_gen",
+        "MatMul_1_param0.source.memstream",
+        "MatMul_0.compute.packed",
+        "Thresholding_0",
+        "MatMul_1.compute.packed",
     ]
 
 
@@ -163,13 +175,13 @@ def test_stored_choices_are_bound_as_assignment() -> None:
     stored = chain.chain().chosen()
     replayed = bound_by_hand(chain.members(), stored)
     assert CoreComposition(replayed.point).chosen() == stored and not replayed.dropped
-    stale = bound_by_hand(chain.members(), {**stored, ("first", "pe"): 3})
-    assert list(stale.dropped) == [("first", "pe")]
+    stale = bound_by_hand(chain.members(), {**stored, ("MatMul_0", "pe"): 3})
+    assert list(stale.dropped) == [("MatMul_0", "pe")]
     # Its own domain refuses 3: no other piece stands beside it.
-    assert {(f.code, f.owner) for f in stale.dropped[("first", "pe")]} == {
+    assert {(f.code, f.owner) for f in stale.dropped[("MatMul_0", "pe")]} == {
         ("domain-membership", "pe"),
     }
-    assert ("first", "pe") in CoreComposition(stale.point).undecided()
+    assert ("MatMul_0", "pe") in CoreComposition(stale.point).undecided()
     waiting = bound_by_hand(chain.members(), {("x", "transport"): "direct"})
     assert CoreComposition(waiting.point).chosen()[("x", "transport")] == "direct"
     assert not waiting.dropped
@@ -211,12 +223,12 @@ class Board(Space):
 def boarded() -> dict[str, Facts | ChannelDeclaration]:
     """The Chain's members, its hidden channel's platform read from a ``Board``."""
     members = chain.members()
-    hidden = members["hidden"]
+    hidden = members["MatMul_0_out0"]
     assert isinstance(hidden, ChannelDeclaration)
     return {
         "board": Facts(Board, {}),
         **members,
-        "hidden": ChannelDeclaration(
+        "MatMul_0_out0": ChannelDeclaration(
             hidden.producer,
             hidden.consumer,
             {**hidden.facts, "platform": Stated("board", "platform")},
@@ -226,9 +238,9 @@ def boarded() -> dict[str, Facts | ChannelDeclaration]:
 
 ULTRA_FIFO = {
     "board.uram": True,
-    "hidden.transport": "fifo",
-    "hidden.transport.fifo.depth": 16,
-    "hidden.transport.fifo.buffer.ram_style": "ultra",
+    "MatMul_0_out0.transport": "fifo",
+    "MatMul_0_out0.transport.fifo.depth": 16,
+    "MatMul_0_out0.transport.fifo.buffer.ram_style": "ultra",
 }
 
 
@@ -239,7 +251,7 @@ def test_a_stored_set_that_breaks_a_rule_binds_and_reads_refused_by_name() -> No
     stored = keyed({**ULTRA_FIFO, "board.uram": False})
     bound = bound_by_hand(boarded(), {**chain.chain().chosen(), **stored})
     assert not bound.dropped
-    validity = CoreComposition(bound.point).validity("hidden")
+    validity = CoreComposition(bound.point).validity("MatMul_0_out0")
     assert validity.status == "refused" and isinstance(validity.result, Rejected)
     rule = "transport.fifo.buffer.uram_present"
     assert [(f.code, f.owner) for f in validity.result.findings] == [("uram-absent", rule)]
@@ -250,26 +262,29 @@ def test_a_change_a_stored_channel_choice_stands_in_the_way_of_is_refused_naming
     in its way, is refused, naming the rule and the choice (the seam's fold rule,
     ``finn.kernels.explore.Seam.set``, clears it and sets it again). Cleared in the same
     change, it is left open; a choice a change left open stays open."""
-    network = choose(by_hand(boarded()), {"activate.pe": chain.PE, **FOLDING})
+    network = choose(by_hand(boarded()), {"Thresholding_0.pe": chain.PE, **FOLDING})
     network = choose(network, ULTRA_FIFO)
-    style = ("hidden", "transport.fifo.buffer.ram_style")
+    style = ("MatMul_0_out0", "transport.fifo.buffer.ram_style")
     trial = network.trial(keyed({"board.uram": False}))
-    rule = ("hidden", "transport.fifo.buffer.uram_present")
+    rule = ("MatMul_0_out0", "transport.fifo.buffer.uram_present")
     assert not trial.accepted and list(trial.refused) == [rule]
     assert [finding.code for finding in trial.refused[rule]] == ["uram-absent"]
     assert trial.standing == {rule: (style,)}
     cleared = network.trial(keyed({"board.uram": False}), (style,))
     assert cleared.accepted
-    assert dict(cleared.network.states(("hidden",)))[style] == inspection.Open()
-    assert cleared.network.chosen(("hidden",)) == {
-        key: value for key, value in network.chosen(("hidden",)).items() if key != style
+    assert dict(cleared.network.states(("MatMul_0_out0",)))[style] == inspection.Open()
+    assert cleared.network.chosen(("MatMul_0_out0",)) == {
+        key: value for key, value in network.chosen(("MatMul_0_out0",)).items() if key != style
     }
     # A transport a change left open stays open when its channel's platform changes.
-    reopened = network.trial({}, (("hidden", "transport"),)).network
-    assert dict(reopened.states(("hidden",)))[("hidden", "transport")] == inspection.Open()
+    reopened = network.trial({}, (("MatMul_0_out0", "transport"),)).network
+    assert (
+        dict(reopened.states(("MatMul_0_out0",)))[("MatMul_0_out0", "transport")]
+        == inspection.Open()
+    )
     changed = reopened.trial(keyed({"board.uram": False}))
     assert changed.accepted
-    assert ("hidden", "transport") in changed.network.undecided()
+    assert ("MatMul_0_out0", "transport") in changed.network.undecided()
 
 
 def renamed(members: dict[str, Any], old: str, new: str) -> dict[str, Any]:
@@ -292,9 +307,9 @@ def renamed(members: dict[str, Any], old: str, new: str) -> dict[str, Any]:
 def test_each_member_sits_under_its_node_in_the_module() -> None:
     """Each member's node in the module is its name with ``\\W`` as ``_``: the prefix of
     its instances and of the sides it gives its channels."""
-    members = renamed(chain.members(), "first", "mm.first")
+    members = renamed(chain.members(), "MatMul_0", "mm.first")
     stored = {
-        ("mm.first" if owner == "first" else owner, key): value
+        ("mm.first" if owner == "MatMul_0" else owner, key): value
         for (owner, key), value in chain.chain().chosen().items()
     }
     named = by_hand(members, stored)
@@ -309,7 +324,7 @@ def test_two_boundary_channels_at_one_port_are_refused_when_composed() -> None:
     netlist or top is made."""
     members = chain.members()
     members["y"] = channel(
-        Port("second", "y"),
+        Port("MatMul_1", "y"),
         Side.boundary("s_axis_0"),
         tensor=chain.Y_TENSOR,
         platform=FULL_DSP48E2,

@@ -3,7 +3,8 @@
 
 """What TFC_W2A2 is built with at 1,000,000 frames a second: SetFolding's folding as the
 oracle captured it, every persisted choice of the build before the engine core
-(``TFC_BUILT``), and every one stored now (``TFC_STORED``)."""
+(``TFC_BUILT``), every one stored now (``TFC_STORED``), and the module it is packaged as
+(``TFC_MODULE``)."""
 
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ from oracle import capture
 def set_folding() -> dict[str, dict[str, int]]:
     """FINN's SetFolding on TFC_W2A2 at 1,000,000 frames a second and 5 ns (200 cycles a
     frame), as the finn-dev oracle captured it (``tfc_set_folding``): each layer's folding,
-    by the build's node (the oracle's i-th Thresholding is MultiThreshold_i, its i-th
+    by the build's node (the oracle's i-th Thresholding is Thresholding_i, its i-th
     MVAU MatMul_i; its label select is on the host here)."""
     captured = capture("tfc_set_folding")
     assert captured["target_cycles"] == 200
@@ -21,8 +22,8 @@ def set_folding() -> dict[str, dict[str, int]]:
     for layer in captured["layers"]:
         family = layer["op_type"].partition("_")[0]
         if family == "Thresholding":
-            index = sum(name.startswith("MultiThreshold") for name in folding)
-            folding[f"MultiThreshold_{index}"] = {"pe": layer["PE"]}
+            index = sum(name.startswith("Thresholding") for name in folding)
+            folding[f"Thresholding_{index}"] = {"pe": layer["PE"]}
         elif family == "MVAU":
             index = sum(name.startswith("MatMul") for name in folding)
             folding[f"MatMul_{index}"] = {
@@ -43,7 +44,7 @@ def tfc_built() -> dict[str, dict[str, object]]:
     persisted then, and each MatMul's pumping, at its baseline, off: the doubled clock is the
     shell's, which the kernels no longer read off the platform, so the choice
     is open on pynq too. Each layer's kernel on its node; each channel on its tensor: a
-    MultiThreshold's input, a MatMul's activations and weights, the graph's output. Every
+    Thresholding's input, a MatMul's activations and weights, the graph's output. Every
     memory takes its baseline, an explicit style: the first three layers' weights
     in block RAM (8 192 bits and more), the last layer's and every input buffer in LUTRAM,
     and each threshold table's stages in LUTRAM, no block stage."""
@@ -56,7 +57,7 @@ def tfc_built() -> dict[str, dict[str, object]]:
                 "compute.packed.compute_pumping": False,
                 "compute.packed.reducer": "tree",
             }
-            built[f"MultiThreshold_{layer}_out0"] = {
+            built[f"Thresholding_{layer}_out0"] = {
                 "adapter_ram_style": "distributed",
                 "transport": "direct",
             }
@@ -89,9 +90,13 @@ TFC_BUILT = tfc_built()
 #: adapter picked by its steps, not chosen: nothing stores them.
 STORED: dict[str, dict[str, object]] = {
     **{f"MatMul_{index}": {"compute": "packed"} for index in range(4)},
-    **{f"MultiThreshold_{index}": {"use_axilite": 0, "ultra_stages": 0} for index in range(4)},
+    **{f"Thresholding_{index}": {"use_axilite": 0, "ultra_stages": 0} for index in range(4)},
 }
 
 #: Every value TFC_W2A2 is built with and stores at 1,000,000 frames a second, 69 by
 #: graph name: ``TFC_BUILT`` and ``STORED``.
 TFC_STORED = {owner: {**TFC_BUILT[owner], **STORED.get(owner, {})} for owner in TFC_BUILT}
+
+#: The module TFC_W2A2 is packaged as with ``TFC_STORED`` (``module_name``): its kind and the
+#: digest of its content, its name left out, so one name in every shell.
+TFC_MODULE = "finn_dataflowcore_c61b678c2de5ef01"

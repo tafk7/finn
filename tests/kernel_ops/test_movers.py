@@ -38,6 +38,7 @@ from support.models import (
 )
 from support.ports import outer
 from support.tfc import ULTRA96
+from support.tfc_built import TFC_MODULE
 from support.xsim import requires_xsim
 
 import finn.custom_op.kernels.shell as shell
@@ -96,6 +97,7 @@ from finn.transformation.kernels import (
     kernel_choices_config,
 )
 from finn.transformation.kernels.cut import CutKernelPartition, MakeCutChoices
+from finn.transformation.kernels.package import source_roots
 from finn.util.draws import boundary_inputs
 
 # -- a mover's arithmetic -----------------------------------------------------------------
@@ -453,7 +455,7 @@ def test_a_network_waits_for_its_members_resources() -> None:
     assert bound.undecided() == ()
     assert isinstance(shell_resources(bound.point, row), ShellResources)
     # A weight's memory style cleared: it waits on that open choice, owned by its member.
-    opened = bound.trial({}, clear=[("w1", "source.ram_style")]).network
+    opened = bound.trial({}, clear=[("MatMul_0_param0", "source.ram_style")]).network
     waiting = shell_resources(opened.point, row)
     assert isinstance(waiting, tuple)
     assert {(finding.code, finding.owner) for finding in waiting} == {
@@ -519,7 +521,7 @@ def test_a_pass_its_mover_moves_once_replayed_at_the_edge_computes_what_onnx_com
     partition, cut as a build cuts it, streamed at its free sides as they present (w2
     once, 4 beats), computes what its KernelOps compute (``check_parity``)."""
     model = kernel_model(second_weights=False)
-    configured(model, {"second": ROW_MAJOR_W2})
+    configured(model, {"MatMul_1": ROW_MAJOR_W2})
     write_target(model, ULTRA96)
     model = model.transform(MakeCutChoices(CUT_NAME))
     w2 = choose_memories(model).member("w2")
@@ -634,9 +636,9 @@ def test_at_3e6_fps_a_64_bit_memory_port_binds_and_128_bits_do_not(
     bits are 98 words, so the input mover binds whatever the folding, and the strategy
     relaxes to what the root reaches; on 128 bits, 49 words, MatMul_3 binds at 64.
 
-    The first fold's input mover takes 98 + 4 = 102 cycles (MultiThreshold_0 at 14
+    The first fold's input mover takes 98 + 4 = 102 cycles (Thresholding_0 at 14
     lanes, so a width converter). Relaxed to 102, the strategy refolds to the least
-    parallelism within it: MultiThreshold_0 at 8 lanes, whose stream is the port's
+    parallelism within it: Thresholding_0 at 8 lanes, whose stream is the port's
     width, so no converter and a call constant of 13. The mover is named at
     max(beats, 98) + 13 = 111, the bottleneck that fold reaches (TargetCycles as
     built: the report states the budget relaxed to and the cycles reached).
@@ -667,7 +669,7 @@ def module_of(model: ModelWrapper, directory: Path) -> str:
     parent = model.transform(CutKernelPartition(directory))
     node, body, _ = partition_body(parent)
     point, _ = configured_network(body, node.name)
-    return module_name(point.module)
+    return module_name(point.module, source_roots())
 
 
 @pytest.mark.slow
@@ -719,5 +721,5 @@ def test_tfc_on_the_default_ip_shell_is_tfc_in_the_zynq_shell_without_its_movers
     # The module TFC in the Zynq shell was packaged as before the shells had rows (its
     # thresholds a data file, THRESHOLDS_FILE; its MatMuls after the first INT7, reading each
     # thresholding's range).
-    assert module_of(ip_model, tmp_path / "ip") == "finn_dataflowcore_0__bbdc1424bf7716b3"
-    assert module_of(zynq_model, tmp_path / "zynq") == "finn_dataflowcore_0__bbdc1424bf7716b3"
+    assert module_of(ip_model, tmp_path / "ip") == TFC_MODULE
+    assert module_of(zynq_model, tmp_path / "zynq") == TFC_MODULE

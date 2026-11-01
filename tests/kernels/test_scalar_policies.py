@@ -7,7 +7,7 @@ from support.helpers import eltwise, threshold_base
 
 from finn.core.space import Rejected, inspection
 from finn.kernels.eltwise import EltwiseKernel
-from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.thresholding import ThresholdingKernel
 
 
 def test_an_encoding_a_kernel_does_not_take_is_refused():
@@ -23,7 +23,7 @@ def test_threshold_type_refusal_precedes_unrelated_configuration_choices():
     validity = inspection.validity(base)
     assert validity.status == "refused"
     assert "types_supported" in {piece.owner for piece in validity.pieces}
-    assessment = base.inspect(ThresholdingAxiKernel.netlist)
+    assessment = base.inspect(ThresholdingKernel.netlist)
     assert isinstance(validity.result, Rejected)
     assert isinstance(assessment.result, Rejected)
     assert assessment.output_result is None

@@ -12,15 +12,15 @@ own RTL is not read.
 from __future__ import annotations
 
 from finn.kernels.artifacts.abi import Direction, abi_pins
-from finn.kernels.artifacts.module import Composed, module_name
+from finn.kernels.artifacts.module import Composed
 from support.netlist import Netlist, Port, black_box, connections
 
 _DIRECTIONS = {Direction.IN: "in", Direction.OUT: "out", Direction.INOUT: "inout"}
 
 
-def read(module: Composed, source: str, top: str | None = None) -> Netlist:
-    """``source``, the emitted top of ``module`` (named ``top``, by default its own name),
-    as its ports, instances and drives."""
+def read(module: Composed, source: str, top: str) -> Netlist:
+    """``source``, the emitted top of ``module``, named ``top``, as its ports, instances and
+    drives."""
     boxes = {
         leaf.name: black_box(
             leaf.name,
@@ -32,4 +32,4 @@ def read(module: Composed, source: str, top: str | None = None) -> Netlist:
         )
         for _, leaf in module.fragment.instances
     }
-    return connections(source + "".join(boxes.values()), top or module_name(module))
+    return connections(source + "".join(boxes.values()), top)
