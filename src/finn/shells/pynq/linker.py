@@ -17,7 +17,11 @@ It takes every name the platform gives and places every control bus:
   interconnect's next master port (``M<nn>_AXI``); every cell's clock and reset from the
   memory interconnect's;
 - the placement (``placement``): each control bus from the fixed shell's ``control_base``,
-  in that order, aligned to its range;
+  in that order, aligned to its range; the block design assigns each its address from it,
+  so the placement it returns is the one Vivado was given;
+- the board (``project_script``): its board part, the board's declared fact
+  (``board_part``), and its processor's family, the fixed shell's processor's
+  (``PROCESSORS``);
 - each mover's ``IODMA_hls`` node (``iodma_configuration``), its attributes from the
   mover's facts: vectors ``(1, beats)``, the stream's bytes a beat, memory and stream
   widths, as ``InsertIODMA`` sized them. ``IODMA_hls`` moves bytes: its ``dataType`` stays
@@ -26,17 +30,24 @@ It takes every name the platform gives and places every control bus:
 
 It wires one AXI-Lite bus and one memory port a mover: a mover whose contract states other
 counts is refused, by name (``wire_one_bus_each``), as is a mover of another kind than
-``iodma_hls`` (``iodma_configuration``).
+``iodma_hls`` (``iodma_configuration``). Its template wires the memory interconnect into the
+processor's ``HP0`` port and runs every cell on the row's main clock: a memory port bound to
+another target, a unit on another clock and a description with no memory port are refused,
+each by name (``wiring``), as are two units given one cell (``cells``) and a processor or
+board it cannot select (``project_script``).
 
 ``BlockDesignLinker.link`` writes the block design (``block_design``) into
-``templates.custom_zynq_shell_template`` (``project_script``), runs Vivado on it and
-collects what it made (``collect``): the bitfile, its hardware handoff, the routed timing
-report, the template's ``impl_1`` hierarchical utilization report and each IP's
-out-of-context synthesis report. Every unit's IP is packaged before it links.
+``templates.custom_zynq_shell_template`` (``project_script``) in a new project under the
+directory it is given, runs Vivado on it and collects what it made (``collect``): the
+bitfile, its hardware handoff, the routed timing report, the template's ``impl_1``
+hierarchical utilization report and each IP's out-of-context synthesis report. Every
+unit's IP is packaged before it links.
 """
 
 from __future__ import annotations
 
+import os
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,6 +59,7 @@ from finn.kernels.movers import IODMA_HLS, MoverContract
 from finn.platform.shells import VIVADO_BLOCK_DESIGN, ShellRow, shell_row
 from finn.shells.integration import (
     CORE,
+    MAIN,
     MOVER_PORTS,
     Edge,
     Integration,
@@ -57,7 +69,6 @@ from finn.shells.integration import (
 from finn.shells.pynq import templates
 from finn.toolchain.launcher import StrPath, Toolchain, ToolFailed
 from finn.toolchain.vivado import tcl_quote, vivado_jobs
-from finn.util.basic import make_build_dir
 
 #: The project the template creates (``create_project finn_zynq_link``).
 PROJECT = "finn_zynq_link"
@@ -74,6 +85,13 @@ STATIC_INSTANCES = {
 
 CELLS = {"in": "idma", "out": "odma"}
 """A mover's cell by its unit's direction, numbered as its unit."""
+
+MEMORY_TARGET = "HP0"
+"""The memory target the template wires the memory interconnect into: the processor's
+``HP0`` port."""
+
+PROCESSORS = {"zynq_ultra_ps_e": "zynq_us+", "processing_system7": "zynq_7000"}
+"""The template's processor family (its ``ZYNQ_TYPE``) by the fixed shell's processor IP."""
 
 IODMA_PINS = {
     MOVER_PORTS["stream_in"]: "s_axis_0",
@@ -150,6 +168,20 @@ def cell(unit: str) -> str:
     return unit
 
 
+def cells(integration: Integration) -> dict[str, str]:
+    """Each unit's cell (``cell``), refused where two units would share one
+    (``cell-name-collides``): a core named as a mover's cell."""
+    found = {unit.name: cell(unit.name) for unit in integration.units}
+    shared = sorted({name for name in found.values() if list(found.values()).count(name) > 1})
+    if shared:
+        units = [unit for unit, name in found.items() if name in shared]
+        raise LinkerRefused(
+            "cell-name-collides",
+            f"the units {', '.join(units)} would share the cells {', '.join(shared)}",
+        )
+    return found
+
+
 def pin(port: str, integration: Integration) -> str:
     """The block design's ``<cell>/<pin>`` of a unit's ``port`` (``<unit>/<port>``): a
     mover's pins its IP's (``IODMA_PINS``), a core's its own."""
@@ -210,9 +242,30 @@ def wiring(integration: Integration, row: ShellRow) -> tuple[Wire, ...]:
     each mover first checked to be one it wires (``iodma_configuration``,
     ``wire_one_bus_each``)."""
     assert row.fixed is not None
+    cells(integration)
     for edge in integration.edges:
         iodma_configuration(edge)
         wire_one_bus_each(edge.contract, f"{edge.tensor} ({edge.port})")
+    if not integration.bindings:
+        raise LinkerRefused(
+            "memory-unbound",
+            "the description binds no memory port: the block design's memory interconnect "
+            "takes one at least",
+        )
+    for binding in integration.bindings:
+        if binding.target != MEMORY_TARGET:
+            raise LinkerRefused(
+                "memory-target-unsupported",
+                f"{binding.port}: bound to {binding.target!r}; the block design wires "
+                f"memory into {MEMORY_TARGET!r} alone",
+            )
+    for clock in integration.clocks:
+        if clock.clock != MAIN:
+            raise LinkerRefused(
+                "clock-unsupported",
+                f"{clock.unit}/{clock.pin}: on the clock {clock.clock!r}; the block design "
+                f"runs every cell on the row's {MAIN!r} clock",
+            )
     memory = f"{row.fixed.memory_interconnect}_0"
     control = f"{row.fixed.control_interconnect}_0"
     wires = [
@@ -256,7 +309,7 @@ def report(integration: Integration) -> dict[str, Any]:
     mover's ``IODMA_hls`` node, the wires and the addresses."""
     row = linked_row(integration)
     return {
-        "cells": {unit.name: cell(unit.name) for unit in integration.units},
+        "cells": cells(integration),
         "iodma": {edge.unit: iodma_configuration(edge).attributes for edge in integration.edges},
         "wires": [
             {"kind": each.kind, "source": each.source, "sink": each.sink}
@@ -277,14 +330,16 @@ def _interface(own: str, peer: str) -> str:
     return f"connect_bd_intf_net [get_bd_intf_pins {own}] [get_bd_intf_pins {peer}]"
 
 
-def debug_lines(wires: tuple[Wire, ...]) -> list[str]:
+def debug_lines(wires: tuple[Wire, ...], row: ShellRow) -> list[str]:
     """Integrated logic analyzers on every stream between a mover and the core (each net
     named by its master pin) and on the memory interconnect's port to the processor, as
-    the template's debug block sets them on the HWCustomOp flow's."""
+    the template's debug block sets them on the HWCustomOp flow's, each on the processor's
+    clock the row runs the cells on (its ``main``)."""
+    assert row.fixed is not None
     streams = [wire.source.replace("/", "_") for wire in wires if wire.kind == "axis"]
-    (memory,) = {_owner(wire.sink) for wire in wires if wire.kind == "aximm"}
-    port = f"{memory}_M00_AXI"
-    clock = 'CLK_SRC "/zynq_ps/FCLK_CLK0" SYSTEM_ILA "Auto" APC_EN "0"'
+    port = f"{row.fixed.memory_interconnect}_0_M00_AXI"
+    source = f"/{STATIC_INSTANCES['processor']}/{row.clocks.main}"
+    clock = f'CLK_SRC "{source}" SYSTEM_ILA "Auto" APC_EN "0"'
     axi = " ".join(
         f'{channel} "Data and Trigger"'
         for channel in ("AXI_R_ADDRESS", "AXI_R_DATA", "AXI_W_ADDRESS", "AXI_W_DATA")
@@ -304,11 +359,12 @@ def block_design(integration: Integration, row: ShellRow, hw_debug: bool = False
     """The block design's cells and wires, as the template's custom section takes them: for
     each unit in the description's order, its IP repositories and cell, then each wire of
     one of its pins, its own pin first: its memory port to the memory interconnect, each
-    control bus from the control interconnect with its address (the template's
-    ``assign_axi_addr_proc``), its clock and reset, and each stream it takes. Each unit's
-    IP is packaged first (``unit-unpackaged`` otherwise); with ``hw_debug``,
-    ``debug_lines`` follow."""
+    control bus from the control interconnect with its address (``placement``'s, its
+    offset and range), its clock and reset, and each stream it takes. Each unit's IP is
+    packaged first (``unit-unpackaged`` otherwise); with ``hw_debug``, ``debug_lines``
+    follow."""
     wires = wiring(integration, row)
+    addresses = {address.interface: address for address in placement(integration, row)}
     lines = []
     for unit in integration.units:
         if unit.ip is None or not unit.ip.repositories:
@@ -329,8 +385,12 @@ def block_design(integration: Integration, row: ShellRow, hw_debug: bool = False
                 lines.append(_interface(wire.source, wire.sink))
         for wire in mine:
             if wire.kind == "axilite":
+                address = addresses[wire.sink]
                 lines.append(_interface(wire.sink, wire.source))
-                lines.append(f"assign_axi_addr_proc {wire.sink}")
+                lines.append(
+                    f"assign_bd_address [get_bd_addr_segs {wire.sink}/Reg*] "
+                    f"-offset {address.offset:#010x} -range {address.range}"
+                )
         for kind in ("clock", "reset"):
             for wire in mine:
                 if wire.kind == kind:
@@ -341,17 +401,40 @@ def block_design(integration: Integration, row: ShellRow, hw_debug: bool = False
             if wire.kind == "axis" and _owner(wire.sink) == instance:
                 lines.append(_interface(wire.sink, wire.source))
     if hw_debug:
-        lines += debug_lines(wires)
+        lines += debug_lines(wires, row)
     return "\n".join(lines) + "\n"
 
 
-def project_script(integration: Integration, design: str, jobs: int | None = None) -> str:
+def project_script(
+    integration: Integration,
+    design: str,
+    board: Mapping[str, str],
+    row: ShellRow,
+    jobs: int | None = None,
+) -> str:
     """The project's Tcl (``ip_config.tcl``): ``templates.custom_zynq_shell_template``
     filled with the description's clock (the period asked, in whole MHz as the template
-    takes it), its control buses and memory ports, board and part, the block design
-    ``design``, and the runs Vivado launches at once (``jobs``, by default the machine's
-    cores, capped: ``finn.toolchain.vivado.vivado_jobs``). The template's debug block
+    takes it), its control buses and memory ports, board and part, the board's part
+    (``board``'s ``board_part``) and the processor's family (``PROCESSORS``, by the fixed
+    shell's processor), the block design ``design``, and the runs Vivado launches at once
+    (``jobs``, by default the machine's cores, capped: ``finn.toolchain.vivado.vivado_jobs``).
+    A board with no board part (``board-part-unstated``) or a processor the template does
+    not instantiate (``processor-unsupported``) is refused. The template's debug block
     stays off: its nets are the HWCustomOp flow's (``debug_lines``)."""
+    assert row.fixed is not None
+    board_part = board.get("board_part")
+    if not board_part:
+        raise LinkerRefused(
+            "board-part-unstated",
+            f"the board {integration.row[1]!r} states no board_part, which the project selects",
+        )
+    family = PROCESSORS.get(row.fixed.processor)
+    if family is None:
+        raise LinkerRefused(
+            "processor-unsupported",
+            f"the processor {row.fixed.processor!r} is none the block design instantiates "
+            f"({', '.join(PROCESSORS)})",
+        )
     boards = " ".join(tcl_quote(path) for path in resources.paths("vivado-boards"))
     # Every board repository; the template is %-formatted next.
     template = templates.custom_zynq_shell_template.replace(
@@ -363,6 +446,8 @@ def project_script(integration: Integration, design: str, jobs: int | None = Non
         len(integration.bindings),
         integration.row[1],
         integration.part,
+        board_part,
+        family,
         design,
         0,
         vivado_jobs(jobs),
@@ -433,16 +518,19 @@ class BlockDesignLinker:
         directory: Path,
         tools: Toolchain,
     ) -> Linked:
-        """Link ``integration``, every unit's IP packaged, in a new project: the block design
-        written into the template, Vivado run on it through ``tools``, and what it made
-        collected. The template names the board's part by the board's name; ``board``'s
-        facts and ``directory`` are not read."""
+        """Link ``integration``, every unit's IP packaged, on the board whose facts are
+        ``board``, in a new project under ``directory``: the block design written into the
+        template, Vivado run on it through ``tools``, and what it made collected. What the
+        linker refuses is refused before Vivado runs."""
         row = linked_row(integration)
-        project: str = make_build_dir(prefix="vivado_zynq_proj_")  # type: ignore[no-untyped-call]
-        script = project + "/ip_config.tcl"
         design = block_design(integration, row, self.hw_debug)
+        text = project_script(integration, design, board, row, self.jobs)
+        Path(directory).mkdir(parents=True, exist_ok=True)
+        project = tempfile.mkdtemp(prefix="vivado_zynq_proj_", dir=directory)
+        os.chmod(project, 0o755)
+        script = project + "/ip_config.tcl"
         with open(script, "w") as f:
-            f.write(project_script(integration, design, self.jobs))
+            f.write(text)
         ran = tools.run(
             "vivado",
             ["-mode", "batch", "-source", script],
@@ -461,9 +549,12 @@ __all__ = [
     "BlockDesignLinker",
     "IodmaConfiguration",
     "LinkerRefused",
+    "MEMORY_TARGET",
+    "PROCESSORS",
     "Wire",
     "block_design",
     "cell",
+    "cells",
     "collect",
     "debug_lines",
     "iodma_configuration",

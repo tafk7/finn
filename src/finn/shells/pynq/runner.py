@@ -20,13 +20,13 @@ The runner (``build_pynq``):
     packaged it earlier in the build, and the partition is packaged once); an IP of
     another key (a choice, a fact or a weight changed since, or FinnLib, FINN's emitter or
     Vivado) is packaged again, into a new directory, and the build says so;
-- links the description, every unit's IP given (``linker.BlockDesignLinker``), and
-  collects what it made (``PynqBuilt``): the bitfile, its hardware handoff, the routed
-  timing report, the template's ``impl_1`` hierarchical utilization report and each IP's
-  out-of-context synthesis report, with the digest of the partition's design and the key
-  of its IP. The template's own debug block names nets of the HWCustomOp flow's
-  partitions and stays off; the shell's ``hw_debug`` option marks the description's
-  streams instead (``linker.debug_lines``).
+- links the description, every unit's IP given (``linker.BlockDesignLinker``), in FINN's
+  build directory (``finn.resources.scratch``), and collects what it made (``PynqBuilt``):
+  the bitfile, its hardware handoff, the routed timing report, the template's ``impl_1``
+  hierarchical utilization report and each IP's out-of-context synthesis report, with the
+  digest of the partition's design and the key of its IP. The template's own debug block
+  names nets of the HWCustomOp flow's partitions and stays off; the shell's ``hw_debug``
+  option marks the description's streams instead (``linker.debug_lines``).
 
 ``BuildPynqBitfile`` is the build as a transformation of the parent graph:
 it reads the shell, board, part and clock from the target its partition's body states
@@ -57,6 +57,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.base import Transformation
 from qonnx.util.basic import qonnx_make_model
 
+from finn import resources
 from finn.core.graph.annotations.outputs import (
     OUTPUT_BITFILE,
     OUTPUT_BITFILE_IP_KEY,
@@ -220,8 +221,9 @@ def build_pynq(
             )
     assert packaged_key is not None  # the core is one of the units
     row = shell_row(*integration.row)
+    scratch: Path = resources.scratch()  # type: ignore[no-untyped-call]
     linked = linker.BlockDesignLinker(jobs=jobs, hw_debug=options.hw_debug).link(
-        integration.packaged(ips), row.board_facts, Path(directory), toolchain
+        integration.packaged(ips), row.board_facts, scratch, toolchain
     )
     reports = linked.reports
     return PynqBuilt(

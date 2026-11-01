@@ -32,7 +32,8 @@
 commit is 1b02563de) as the shell's frozen extraction:
 
 - ``custom_zynq_shell_template``: the Zynq block design's project
-  (finn.transformation.fpgadataflow.templates), filled by ``runner.project_script``;
+  (finn.transformation.fpgadataflow.templates), filled by ``linker.project_script``, its
+  board part and processor family given in place of its table of board names;
 - ``ipgen_template`` and ``ipgentcl_template``: an IODMA's HLS top and its Vitis HLS
   script (finn.custom_op.fpgadataflow.templates), filled by ``iodma.IODMA_hls``; the
   script names no custom HLS directory, which no IODMA includes from, and is filled to
@@ -63,39 +64,8 @@ lappend paths_param $BOARD_FILES$
 set_property BOARD_PART_REPO_PATHS $paths_prop [current_project]
 set_param board.repoPaths $paths_param
 
-if {$BOARD == "ZCU104"} {
-    set_property board_part xilinx.com:zcu104:part0:1.1 [current_project]
-    set ZYNQ_TYPE "zynq_us+"
-} elseif {$BOARD == "ZCU102"} {
-    set_property board_part xilinx.com:zcu102:part0:3.3 [current_project]
-    set ZYNQ_TYPE "zynq_us+"
-} elseif {$BOARD == "RFSoC2x2"} {
-    set_property board_part xilinx.com:rfsoc2x2:part0:1.1 [current_project]
-    set ZYNQ_TYPE "zynq_us+"
-} elseif {$BOARD == "RFSoC4x2"} {
-    set_property board_part realdigital.org:rfsoc4x2:part0:1.0 [current_project]
-    set ZYNQ_TYPE "zynq_us+"
-} elseif {$BOARD == "Ultra96"} {
-    set_property board_part avnet.com:ultra96v1:part0:1.2 [current_project]
-    set ZYNQ_TYPE "zynq_us+"
-} elseif {$BOARD == "Ultra96-V2"} {
-    set_property board_part avnet.com:ultra96v2:part0:1.2 [current_project]
-    set ZYNQ_TYPE "zynq_us+"
-} elseif {$BOARD == "Pynq-Z2"} {
-    set ZYNQ_TYPE "zynq_7000"
-    set_property board_part tul.com.tw:pynq-z2:part0:1.0 [current_project]
-} elseif {$BOARD == "Pynq-Z1"} {
-    set ZYNQ_TYPE "zynq_7000"
-    set_property board_part www.digilentinc.com:pynq-z1:part0:1.0 [current_project]
-} elseif {$BOARD == "KV260_SOM"} {
-    set ZYNQ_TYPE "zynq_us+"
-    set_property board_part xilinx.com:kv260_som:part0:1.3 [current_project]
-} elseif {$BOARD == "AUP-ZU3_8GB"} {
-    set ZYNQ_TYPE "zynq_us+"
-    set_property board_part realdigital.org:aup-zu3-8gb:part0:1.0 [current_project]
-} else {
-    puts "Unrecognized board"
-}
+set_property board_part %s [current_project]
+set ZYNQ_TYPE %s
 
 create_bd_design "top"
 if {$ZYNQ_TYPE == "zynq_us+"} {

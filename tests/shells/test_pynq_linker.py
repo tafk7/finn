@@ -10,15 +10,25 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import pytest
 from support.models import zynq_parent
+from support.packaging import FakeVivado
 from support.refusals import refused
 
 from finn.platform.shells import shell_row
-from finn.shells.integration import Integration, IntegrationError, IpRef, describe
+from finn.shells.integration import (
+    CORE,
+    Integration,
+    IntegrationError,
+    IpRef,
+    Unit,
+    describe,
+)
 from finn.shells.pynq.linker import (
     Address,
+    BlockDesignLinker,
     LinkerRefused,
     Wire,
     block_design,
@@ -27,10 +37,21 @@ from finn.shells.pynq.linker import (
     linked_row,
     pin,
     placement,
+    project_script,
     report,
     wire_one_bus_each,
     wiring,
 )
+from finn.toolchain.launcher import Toolchain
+
+#: The facts the ``pynq`` shell declares of Ultra96 for its linker.
+BOARD = {"board_part": "avnet.com:ultra96v1:part0:1.2"}
+
+
+def packaged(described: Integration) -> Integration:
+    """``described``, each unit's IP named and found where the test states."""
+    ips = {unit.name: IpRef(f"v:{unit.name}", (f"/{unit.name}",)) for unit in described.units}
+    return described.packaged(ips)
 
 
 @pytest.fixture
@@ -180,3 +201,110 @@ def test_a_row_without_a_fixed_shell_is_not_linked(described: Integration) -> No
         message="the 'ip' shell states no fixed shell or no control window",
     ):
         linked_row(replace(described, row=("ip", "Ultra96")))
+
+
+def test_the_block_design_assigns_each_control_bus_the_address_it_returns(
+    described: Integration,
+) -> None:
+    """One map: the block design assigns each control bus the offset and range ``placement``
+    gives, which the link returns, whatever the window: here 64 KiB a bus, which the
+    template's own procedure would have placed 4 KiB apart."""
+    wide = replace(
+        packaged(described),
+        endpoints=tuple(replace(each, range=0x1_0000) for each in described.endpoints),
+    )
+    row = linked_row(wide)
+    assigned = [
+        line for line in block_design(wide, row).splitlines() if line.startswith("assign_bd")
+    ]
+    assert assigned == [
+        f"assign_bd_address [get_bd_addr_segs {each.interface}/Reg*] "
+        f"-offset {each.offset:#010x} -range {each.range}"
+        for each in placement(wide, row)
+    ]
+    assert [each.offset for each in placement(wide, row)] == [
+        0xA000_0000,
+        0xA001_0000,
+        0xA002_0000,
+    ]
+
+
+def test_a_selection_the_block_design_does_not_wire_is_refused_by_name(
+    described: Integration,
+) -> None:
+    """Its template wires memory into the processor's HP0 and every cell on the row's main
+    clock: a memory port bound elsewhere, a unit on another clock and a description with
+    no memory port are refused, not wired as if they were HP0's and the main clock's."""
+    row = linked_row(described)
+    elsewhere = replace(described.bindings[1], target="HP1")
+    with refused(
+        "memory-target-unsupported",
+        error=LinkerRefused,
+        owner="vivado-block-design",
+        message="^in1/m_axi_gmem0: bound to 'HP1'; the block design wires memory into 'HP0'",
+    ):
+        wiring(replace(described, bindings=(described.bindings[0], elsewhere)), row)
+    other = replace(described.clocks[2], clock="fast")
+    with refused(
+        "clock-unsupported",
+        error=LinkerRefused,
+        message="^DataflowCore_0/ap_clk: on the clock 'fast'; the block design runs every cell",
+    ):
+        wiring(replace(described, clocks=(*described.clocks[:2], other)), row)
+    with refused("memory-unbound", error=LinkerRefused, message="binds no memory port"):
+        wiring(replace(described, bindings=()), row)
+
+
+def test_two_units_given_one_cell_are_refused(described: Integration) -> None:
+    """A core named as a mover's cell (``idma0``) would share it with the mover."""
+    core = Unit(name="idma0", kind=CORE, ip=None, window=None)
+    units = (described.units[0], described.units[1], core, described.units[3])
+    with refused(
+        "cell-name-collides",
+        error=LinkerRefused,
+        message="the units in0, idma0 would share the cells idma0",
+    ):
+        wiring(replace(described, units=units), linked_row(described))
+
+
+def test_the_project_selects_the_declared_board_part_and_the_processors_family(
+    described: Integration,
+) -> None:
+    """The board is selected by its declared part, not looked up by its name, and the
+    processor's family is the fixed shell's processor's: a board with no part and a
+    processor the template does not instantiate are refused before any tool runs."""
+    row = linked_row(described)
+    script = project_script(described, "", {"board_part": "example.org:probe:part0:1.0"}, row, 1)
+    assert "set_property board_part example.org:probe:part0:1.0 [current_project]\n" in script
+    assert "set ZYNQ_TYPE zynq_us+\n" in script and "Unrecognized board" not in script
+    with refused("board-part-unstated", error=LinkerRefused, message="the board 'Ultra96'"):
+        project_script(described, "", {}, row, 1)
+    assert row.fixed is not None
+    other = replace(row, fixed=replace(row.fixed, processor="versal_cips"))
+    with refused(
+        "processor-unsupported",
+        error=LinkerRefused,
+        message="the processor 'versal_cips' is none the block design instantiates",
+    ):
+        project_script(described, "", BOARD, other, 1)
+
+
+def test_the_link_is_made_under_the_directory_it_is_given(
+    described: Integration, tmp_path: Path
+) -> None:
+    """Its project, its script, its bitfile and its reports, all under ``directory``."""
+    vivado = FakeVivado()
+    directory = tmp_path / "linked"
+    linked = BlockDesignLinker().link(
+        packaged(described), BOARD, directory, cast(Toolchain, vivado)
+    )
+    ((_, args, _),) = vivado.runs
+    (project,) = directory.iterdir()
+    assert args[-1] == f"{project}/ip_config.tcl"
+    assert linked.image.is_relative_to(project)
+    assert all(path.is_relative_to(project) for path in linked.reports.values())
+    assert linked.placement == {
+        "in0/s_axi_control": 0xA000_0000,
+        "in1/s_axi_control": 0xA000_1000,
+        "out0/s_axi_control": 0xA000_2000,
+    }

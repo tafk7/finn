@@ -92,6 +92,8 @@ from finn.transformation.kernels.package import ip_key
 
 #: Ultra96 in the Zynq shell: the target a Zynq build of Ultra96 at 5 ns reads.
 ZYNQ = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
+#: The facts the ``pynq`` shell declares of Ultra96 for its linker.
+BOARD_FACTS = {"board_part": "avnet.com:ultra96v1:part0:1.2"}
 
 #: The key of the IP a recorded packaging states (``recorded_tools``).
 PACKAGED_KEY = "sha256:" + "1" * 64
@@ -125,7 +127,8 @@ def repositories(*paths: str) -> str:
 
 def mover_lines(instance: str, ip: IpRef, memory: int, control: int) -> list[str]:
     """A mover's lines as MakeZYNQProject writes an IODMA partition's: its IP and cell, its
-    memory port, its control bus and address, its clock and reset."""
+    memory port, its control bus and the address the linker places it at (4 KiB each from
+    the control base, in order), its clock and reset."""
     return [
         repositories(*ip.repositories),
         "update_ip_catalog -rebuild -scan_changes",
@@ -134,7 +137,8 @@ def mover_lines(instance: str, ip: IpRef, memory: int, control: int) -> list[str
         f"[get_bd_intf_pins smartconnect_0/S{memory:02d}_AXI]",
         f"connect_bd_intf_net [get_bd_intf_pins {instance}/s_axi_control_0] "
         f"[get_bd_intf_pins axi_interconnect_0/M{control:02d}_AXI]",
-        f"assign_axi_addr_proc {instance}/s_axi_control_0",
+        f"assign_bd_address [get_bd_addr_segs {instance}/s_axi_control_0/Reg*] "
+        f"-offset {0xA000_0000 + 0x1000 * control:#010x} -range 4096",
         f"connect_bd_net [get_bd_pins {instance}/ap_clk] [get_bd_pins smartconnect_0/aclk]",
         f"connect_bd_net [get_bd_pins {instance}/ap_rst_n] [get_bd_pins smartconnect_0/aresetn]",
     ]
@@ -169,7 +173,7 @@ def test_the_block_design_instantiates_each_mover_and_the_partition_from_the_des
 def test_the_debug_option_probes_every_mover_stream_and_the_memory_port(tmp_path: Path) -> None:
     """The template's debug block names the HWCustomOp flow's nets; with the shell's
     hw_debug the block design marks its own: each stream's net (named by its master pin)
-    and the memory interconnect's port to the processor."""
+    and the memory interconnect's port to the processor, on the processor's clock."""
     described = describe(zynq_parent(tmp_path))
     plain = design(described).splitlines()
     debug = design(described, hw_debug=True).splitlines()
@@ -182,6 +186,9 @@ def test_the_debug_option_probes_every_mover_stream_and_the_memory_port(tmp_path
     assert automation.startswith("apply_bd_automation -rule xilinx.com:bd_rule:debug")
     assert [net for net in nets if f"[get_bd_intf_nets {net}]" in automation] == nets
     assert automation.count("AXIS_SIGNALS") == 3
+    # Each on the processor's clock the cells run on: Ultra96's processor's pl_clk0.
+    assert automation.count('CLK_SRC "/zynq_ps/pl_clk0"') == 4
+    assert "FCLK_CLK0" not in automation
 
 
 def test_the_project_is_the_template_filled_from_the_description(tmp_path: Path) -> None:
@@ -190,12 +197,18 @@ def test_the_project_is_the_template_filled_from_the_description(tmp_path: Path)
     template's own debug block off, and the runs Vivado launches at once."""
     described = describe(zynq_parent(tmp_path))
     linked = design(described)
-    script = project_script(described, linked, jobs=3)
+    script = project_script(described, linked, BOARD_FACTS, linked_row(described), jobs=3)
     assert script.startswith(
         "\nset FREQ_MHZ 200\nset NUM_AXILITE 3\nif {$NUM_AXILITE > 9} {\n"
         '    error "Maximum 10 AXI-Lite interfaces supported"\n}\nset NUM_AXIMM 3\n'
         f"set BOARD Ultra96\nset FPGA_PART {ZYNQ.part}\n"
     )
+    # The board's part as its declaration states it, the processor's family the fixed
+    # shell's processor's.
+    assert (
+        "set_property board_part avnet.com:ultra96v1:part0:1.2 [current_project]\n"
+        'set ZYNQ_TYPE zynq_us+\n\ncreate_bd_design "top"\n'
+    ) in script
     assert f"#custom IP instantiations/connections start here\n{linked}\n" in script
     assert "if {0 == 1} {" in script
     assert "launch_runs -to_step write_bitstream impl_1 -jobs 3\n" in script
@@ -210,7 +223,7 @@ def test_vivados_jobs_are_the_builds(
 ) -> None:
     monkeypatch.setenv("NUM_DEFAULT_WORKERS", "1")
     described = describe(zynq_parent(tmp_path))
-    script = project_script(described, design(described), jobs)
+    script = project_script(described, design(described), BOARD_FACTS, linked_row(described), jobs)
     assert f"launch_runs -to_step write_bitstream impl_1 -jobs {expected}\n" in script
 
 

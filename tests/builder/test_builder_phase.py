@@ -1541,8 +1541,9 @@ def test_tfc_on_pynq_is_linked_as_z0s_movers_iodmas_and_wires(
 
 #: The block design Z0's build wrote for TFC (its ip_config.tcl's custom section, its
 #: partition StreamingDataflowPartition_1 renamed, its IP named as its module), each build
-#: directory as normalized ($BUILD, a random suffix XXXXXXXX). The oracle's is the same but
-#: for the partition's IP and the quoting
+#: directory as normalized ($BUILD, a random suffix XXXXXXXX), each control bus assigned the
+#: address the linker places it at. The oracle's is the same but for the partition's IP, the
+#: quoting and its addresses, which the template's procedure assigned
 #: (``test_the_z0_literal_is_the_oracles_block_design_but_for_the_partitions_ip``).
 Z0_BLOCK_DESIGN = f"""\
 set_property ip_repo_paths [concat [get_property ip_repo_paths [current_project]] [list "$BUILD/code_gen_ipgen_idma0_IODMA_hls_0_XXXXXXXX/project_idma0_IODMA_hls_0/sol1/impl/ip" "$BUILD/vivado_stitch_proj_XXXXXXXX/ip"]] [current_project]
@@ -1550,7 +1551,7 @@ update_ip_catalog -rebuild -scan_changes
 create_bd_cell -type ip -vlnv xilinx_finn:finn:idma0:1.0 idma0
 connect_bd_intf_net [get_bd_intf_pins idma0/m_axi_gmem0] [get_bd_intf_pins smartconnect_0/S00_AXI]
 connect_bd_intf_net [get_bd_intf_pins idma0/s_axi_control_0] [get_bd_intf_pins axi_interconnect_0/M00_AXI]
-assign_axi_addr_proc idma0/s_axi_control_0
+assign_bd_address [get_bd_addr_segs idma0/s_axi_control_0/Reg*] -offset 0xa0000000 -range 4096
 connect_bd_net [get_bd_pins idma0/ap_clk] [get_bd_pins smartconnect_0/aclk]
 connect_bd_net [get_bd_pins idma0/ap_rst_n] [get_bd_pins smartconnect_0/aresetn]
 set_property ip_repo_paths [concat [get_property ip_repo_paths [current_project]] [list "$BUILD/vivado_stitch_proj_XXXXXXXX/ip"]] [current_project]
@@ -1564,7 +1565,7 @@ update_ip_catalog -rebuild -scan_changes
 create_bd_cell -type ip -vlnv xilinx_finn:finn:odma0:1.0 odma0
 connect_bd_intf_net [get_bd_intf_pins odma0/m_axi_gmem0] [get_bd_intf_pins smartconnect_0/S01_AXI]
 connect_bd_intf_net [get_bd_intf_pins odma0/s_axi_control_0] [get_bd_intf_pins axi_interconnect_0/M01_AXI]
-assign_axi_addr_proc odma0/s_axi_control_0
+assign_bd_address [get_bd_addr_segs odma0/s_axi_control_0/Reg*] -offset 0xa0001000 -range 4096
 connect_bd_net [get_bd_pins odma0/ap_clk] [get_bd_pins smartconnect_0/aclk]
 connect_bd_net [get_bd_pins odma0/ap_rst_n] [get_bd_pins smartconnect_0/aresetn]
 connect_bd_intf_net [get_bd_intf_pins odma0/s_axis_0] [get_bd_intf_pins DataflowCore_0/m_axis_0]
@@ -1586,12 +1587,23 @@ def test_the_z0_literal_is_the_oracles_block_design_but_for_the_partitions_ip() 
     line, the HWCustomOp flow's paths unquoted, except the partition's IP: its repositories
     (the flow's partition is its layers' IPs stitched, so it lists each layer's IP and
     memstream beside the stitched one; the build's partition is one packaged IP) and its
-    name (the flow's is its node's, the build's its module's)."""
+    name (the flow's is its node's, the build's its module's); and each control bus's
+    address, which the oracle has the template's procedure assign and the linker states:
+    the same, each IODMA's 6-bit register map 4 KiB at least, from the control base."""
     z0 = Z0_BLOCK_DESIGN.replace('"', "").splitlines()
     oracle = [renamed(line) for line in ZYNQ_BUILD["block_design"]]
     assert len(oracle) == len(z0)
     differing = [index for index, (ours, theirs) in enumerate(zip(z0, oracle)) if ours != theirs]
-    index, cell = differing
+    assigned = [index for index in differing if oracle[index].startswith("assign_axi_addr_proc")]
+    assert [(oracle[index], z0[index]) for index in assigned] == [
+        (
+            f"assign_axi_addr_proc {instance}/s_axi_control_0",
+            f"assign_bd_address [get_bd_addr_segs {instance}/s_axi_control_0/Reg*] "
+            f"-offset {offset} -range 4096",
+        )
+        for instance, offset in (("idma0", "0xa0000000"), ("odma0", "0xa0001000"))
+    ]
+    index, cell = (index for index in differing if index not in assigned)
     assert cell == index + 2
     assert (z0[cell], oracle[cell]) == (
         f"create_bd_cell -type ip -vlnv xilinx_finn:finn:{TFC_MODULE}:1.0 DataflowCore_0",
@@ -1634,7 +1646,13 @@ def test_the_runner_writes_z0s_block_design_for_tfc(z0_tfc: ModelWrapper) -> Non
     ips["DataflowCore_0"] = IpRef(core_ip.vlnv, (stitched,))
     design = block_design(described.packaged(ips), linked_row(described))
     assert design == Z0_BLOCK_DESIGN.replace("$BUILD", "/BUILD")
-    script = project_script(described, design, 16)
+    script = project_script(
+        described,
+        design,
+        {"board_part": "avnet.com:ultra96v1:part0:1.2"},
+        linked_row(described),
+        16,
+    )
     assert "set FREQ_MHZ 200\nset NUM_AXILITE 2\n" in script
     assert "set NUM_AXIMM 2\nset BOARD Ultra96\nset FPGA_PART xczu3eg-sbva484-1-e\n" in script
 
