@@ -96,7 +96,7 @@ def link(source: str | None, sink: str | None, *, width: int = 8) -> Link:
 def test_a_leaf_spells_its_parameters_and_holds_only_its_own_pins() -> None:
     leaf = stage()
     assert leaf.parameters == (("FLAG", True), ("WIDTH", 8))
-    assert module_name(leaf, Snapshot({}, {})) == "stage"
+    assert module_name(leaf, Snapshot()) == "stage"
     with pytest.raises(BuildError, match="canonical RTL spellings"):
         replace(leaf, abi=replace(leaf.abi, parameters=(("FLAG", "True"), ("WIDTH", "8"))))
     with pytest.raises(BuildError, match="none of its inputs"):
@@ -197,7 +197,8 @@ def composed(*, data: bytes = b"00\n", stem: str = "top") -> Composed:
 
 
 #: The stage's source, as a build read it.
-SNAPSHOT = Snapshot({("fixture", "stage.sv"): b"module stage; endmodule\n"}, {})
+STAGE = b"module stage; endmodule\n"
+SNAPSHOT = Snapshot((("fixture", "stage.sv", STAGE),))
 
 
 def test_a_composed_module_is_named_by_its_stem_and_fingerprint() -> None:
@@ -232,7 +233,7 @@ def test_a_module_s_name_covers_its_sources_bytes_not_where_they_are(tmp_path: P
     with pytest.raises(BuildError, match="no source root resolves 'fixture'"):
         capture(composed(), roots={})
     with pytest.raises(BuildError, match="the snapshot holds no stage.sv of 'fixture'"):
-        module_name(composed(), Snapshot({}, {}))
+        module_name(composed(), Snapshot())
 
 
 def test_emission_names_the_module_from_the_bytes_it_copies(
@@ -240,7 +241,7 @@ def test_emission_names_the_module_from_the_bytes_it_copies(
 ) -> None:
     """Emission reads each source once, and names the module from those bytes: a source
     that changes after it was read changes neither the copy nor the name."""
-    (tmp_path / "stage.sv").write_bytes(SNAPSHOT.copied[("fixture", "stage.sv")])
+    (tmp_path / "stage.sv").write_bytes(STAGE)
     read = Path.read_bytes
     reads: list[Path] = []
 
@@ -255,7 +256,7 @@ def test_emission_names_the_module_from_the_bytes_it_copies(
     emitted = emit_module(composed(), tmp_path / "out", roots={"fixture": tmp_path})
     monkeypatch.undo()
     assert len(reads) == 1
-    assert (emitted.directory / "stage.sv").read_bytes() == SNAPSHOT.copied[("fixture", "stage.sv")]
+    assert (emitted.directory / "stage.sv").read_bytes() == STAGE
     assert emitted.entry_point == module_name(composed(), SNAPSHOT)
     changed = emit_module(composed(), tmp_path / "again", roots={"fixture": tmp_path})
     assert changed.entry_point != emitted.entry_point

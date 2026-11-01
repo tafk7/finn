@@ -537,14 +537,24 @@ Module = Union[Leaf, Composed]
 @dataclass(frozen=True)
 class Snapshot:
     """The files a build of a module stages from outside it, as it read them, once
-    (``finn.kernels.artifacts.build.capture``): each copied source's bytes by its root's name
-    and its path within the root (``copied``), and each HLS request's product by its top's
-    name, the bytes of each of its files (its exported Verilog and its memories' images) by
-    the file's name (``products``). A module is named from the snapshot it is emitted from
-    (``fingerprint``), so its name and its files are the same bytes."""
+    (``finn.kernels.artifacts.build.capture``): each copied source's bytes with its root's name
+    and its path within the root (``copied``, read by ``source``), and each HLS request's
+    product with its top's name, each of its files (its exported Verilog and its memories'
+    images) its name and its bytes (``products``, read by ``product``). A module is named from
+    the snapshot it is emitted from (``fingerprint``), so its name and its files are the same
+    bytes."""
 
-    copied: Mapping[tuple[str, str], bytes]
-    products: Mapping[str, Mapping[str, bytes]]
+    copied: tuple[tuple[str, str, bytes], ...] = ()
+    products: tuple[tuple[str, tuple[tuple[str, bytes], ...]], ...] = ()
+
+    def source(self, root: str, path: str) -> bytes | None:
+        """The bytes of the copied source at ``path`` under ``root``, if the snapshot holds it."""
+        return next((data for at, where, data in self.copied if (at, where) == (root, path)), None)
+
+    def product(self, top: str) -> tuple[tuple[str, bytes], ...] | None:
+        """The files of the HLS product of the request whose top is ``top``, each its name and
+        its bytes, if the snapshot holds it."""
+        return next((files for name, files in self.products if name == top), None)
 
 
 def _leaves(module: Module) -> tuple[Leaf, ...]:
@@ -563,17 +573,16 @@ def source_digests(module: Module, snapshot: Snapshot) -> tuple[tuple[str, str, 
     for leaf in _leaves(module):
         for source in leaf.sources:
             if isinstance(source, HlsSource):
-                product = snapshot.products.get(source.function)
+                product = snapshot.product(source.function)
                 if product is None:
                     raise BuildError(
                         f"no HLS product is given for {source.function}: synthesize it first"
                     )
                 found |= {
-                    (source.function, name, content_digest(content))
-                    for name, content in product.items()
+                    (source.function, name, content_digest(content)) for name, content in product
                 }
                 continue
-            content = snapshot.copied.get((source.root, source.path))
+            content = snapshot.source(source.root, source.path)
             if content is None:
                 raise BuildError(f"the snapshot holds no {source.path} of {source.root!r}")
             found.add((source.root, source.path, content_digest(content)))

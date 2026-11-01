@@ -94,7 +94,7 @@ HLS_SOURCE_SUFFIXES = (".v",)
 HLS_DATA_SUFFIXES = (".dat",)
 
 
-def _hls_product(request: HlsSource, built: Mapping[str, Path]) -> dict[str, bytes]:
+def _hls_product(request: HlsSource, built: Mapping[str, Path]) -> tuple[tuple[str, bytes], ...]:
     """An HLS request's product, each file's bytes by its name: its exported Verilog, its
     top ``<top>.v`` among it, and the images its memories read (``*.dat``)."""
     function = request.function
@@ -111,7 +111,7 @@ def _hls_product(request: HlsSource, built: Mapping[str, Path]) -> dict[str, byt
         raise BuildError(
             f"the HLS product {product} holds files emission does not stage: {unknown}"
         )
-    return {name: _read(Path(product) / name, "HLS product file") for name in names}
+    return tuple((name, _read(Path(product) / name, "HLS product file")) for name in names)
 
 
 def capture(
@@ -122,7 +122,7 @@ def capture(
     the directory ``built`` names for its top. The module's name (``module_name``) and its
     emitted files are both this snapshot's."""
     copied: dict[tuple[str, str], bytes] = {}
-    products: dict[str, dict[str, bytes]] = {}
+    products: dict[str, tuple[tuple[str, bytes], ...]] = {}
     for leaf in _leaves(module):
         for item in leaf.sources:
             if isinstance(item, HlsSource):
@@ -135,7 +135,10 @@ def capture(
                 if root is None:
                     raise BuildError(f"no source root resolves {item.root!r}")
                 copied[key] = _read(Path(root) / item.path, "copied source")
-    return Snapshot(copied, products)
+    return Snapshot(
+        tuple((root, path, content) for (root, path), content in copied.items()),
+        tuple(products.items()),
+    )
 
 
 def emit_module(
@@ -149,6 +152,8 @@ def emit_module(
     them (``capture``: ``roots`` resolves each copied source's root, ``built`` each HLS
     request's product by its top's name), the module named from it."""
     snapshot = capture(module, roots=roots, built=built)
+    copied = {(root, path): content for root, path, content in snapshot.copied}
+    products = dict(snapshot.products)
     drafts: list[tuple[SourceFile, bytes]] = []
     data: dict[str, bytes] = {}
 
@@ -160,7 +165,7 @@ def emit_module(
         for item in leaf.sources:
             if isinstance(item, HlsSource):
                 function = item.function
-                for name, content in snapshot.products[function].items():
+                for name, content in products[function]:
                     if name.endswith(HLS_DATA_SUFFIXES):
                         add_data(name, content)
                         continue
@@ -168,7 +173,7 @@ def emit_module(
                     file = SourceFile(f"{function}/{name}", content_digest(content), provides)
                     drafts.append((file, content))
                 continue
-            content = snapshot.copied[(item.root, item.path)]
+            content = copied[(item.root, item.path)]
             file = SourceFile(item.path, content_digest(content), item.provides, item.requires)
             drafts.append((file, content))
         for datum in leaf.data:
