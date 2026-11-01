@@ -53,6 +53,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from finn.platform import _stated as valid
 from finn.platform.boards import Board
 from finn.platform.refusal import TargetRefused
 
@@ -77,7 +78,6 @@ KINDS = ("boards", "linkers", "runtimes", "movers", "shells")
 """The kinds of declaration, as the tables of a ``platform.toml`` name them."""
 
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
-_CODE = re.compile(r"[A-Za-z_][A-Za-z0-9_.]*:[A-Za-z_][A-Za-z0-9_.]*")
 _SHELL_OWN = {"based_on", "linker", "runtimes", "boards"}
 
 
@@ -214,92 +214,52 @@ class Declarations:
 # -- reading -----------------------------------------------------------------------------
 
 
-class _Invalid(ValueError):
-    """A malformed declaration, raised with where it is (its table) and why."""
-
-
 def _refused(origin: Origin, where: str, why: str) -> TargetRefused:
     return TargetRefused("declaration-invalid", f"{origin.file}: {where}", why)
 
 
-def _table(value: object, where: str) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        raise _Invalid(f"{where} is a table, not {value!r}")
-    return value
-
-
-def _keys(table: Mapping[str, Any], where: str, required: set[str], optional: set[str]) -> None:
-    missing, unknown = required - set(table), set(table) - required - optional
-    if missing:
-        raise _Invalid(f"{where} states no {', '.join(sorted(missing))}")
-    if unknown:
-        raise _Invalid(
-            f"{where} states {', '.join(sorted(unknown))}, which a declaration of its kind "
-            f"does not have (it has {', '.join(sorted(required | optional))})"
-        )
-
-
-def _text(value: object, where: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise _Invalid(f"{where} is a non-empty string, not {value!r}")
-    return value
-
-
-def _texts(value: object, where: str) -> tuple[str, ...]:
-    if not isinstance(value, list):
-        raise _Invalid(f"{where} is a list of strings, not {value!r}")
-    return tuple(_text(each, f"{where}[{index}]") for index, each in enumerate(value))
-
-
-def _code(value: object, where: str) -> str:
-    code = _text(value, where)
-    if not _CODE.fullmatch(code):
-        raise _Invalid(f"{where} names code as module:attr, not {code!r}")
-    return code
-
-
 def _board(name: str, table: dict[str, Any]) -> Board:
-    _keys(table, f"boards.{name}", {"part"}, set())
-    return Board(name=name, part=_text(table["part"], f"boards.{name}.part"))
+    valid.keys(table, f"boards.{name}", {"part"}, set())
+    return Board(name=name, part=valid.text(table["part"], f"boards.{name}.part"))
 
 
 def _linker(name: str, table: dict[str, Any]) -> Linker:
     where = f"linkers.{name}"
-    _keys(table, where, {"code", "tool", "board_keys", "image"}, {"versions"})
+    valid.keys(table, where, {"code", "tool", "board_keys", "image"}, {"versions"})
     versions = table.get("versions")
     return Linker(
         name=name,
-        code=_code(table["code"], f"{where}.code"),
-        tool=_text(table["tool"], f"{where}.tool"),
-        versions=None if versions is None else _text(versions, f"{where}.versions"),
-        board_keys=_texts(table["board_keys"], f"{where}.board_keys"),
-        image=_text(table["image"], f"{where}.image"),
+        code=valid.code(table["code"], f"{where}.code"),
+        tool=valid.text(table["tool"], f"{where}.tool"),
+        versions=None if versions is None else valid.text(versions, f"{where}.versions"),
+        board_keys=valid.texts(table["board_keys"], f"{where}.board_keys"),
+        image=valid.text(table["image"], f"{where}.image"),
     )
 
 
 def _runtime(name: str, table: dict[str, Any]) -> Runtime:
     where = f"runtimes.{name}"
-    _keys(table, where, {"code", "images", "movers", "kinds", "schemas"}, set())
+    valid.keys(table, where, {"code", "images", "movers", "kinds", "schemas"}, set())
     schemas = table["schemas"]
     if not isinstance(schemas, list) or not all(type(each) is int and each > 0 for each in schemas):
-        raise _Invalid(f"{where}.schemas is a list of schema numbers, not {schemas!r}")
+        raise valid.Invalid(f"{where}.schemas is a list of schema numbers, not {schemas!r}")
     return Runtime(
         name=name,
-        code=_code(table["code"], f"{where}.code"),
-        images=_texts(table["images"], f"{where}.images"),
-        movers=_texts(table["movers"], f"{where}.movers"),
-        kinds=_texts(table["kinds"], f"{where}.kinds"),
+        code=valid.code(table["code"], f"{where}.code"),
+        images=valid.texts(table["images"], f"{where}.images"),
+        movers=valid.texts(table["movers"], f"{where}.movers"),
+        kinds=valid.texts(table["kinds"], f"{where}.kinds"),
         schemas=tuple(schemas),
     )
 
 
 def _mover(name: str, table: dict[str, Any]) -> Mover:
     where = f"movers.{name}"
-    _keys(table, where, {"code", "kinds"}, set())
+    valid.keys(table, where, {"code", "kinds"}, set())
     return Mover(
         name=name,
-        code=_code(table["code"], f"{where}.code"),
-        kinds=_texts(table["kinds"], f"{where}.kinds"),
+        code=valid.code(table["code"], f"{where}.code"),
+        kinds=valid.texts(table["kinds"], f"{where}.kinds"),
     )
 
 
@@ -307,15 +267,15 @@ def _shell_table(name: str, table: dict[str, Any]) -> dict[str, Any]:
     """A shell's table, its own keys checked; its facts are ``finn.platform.shells``'."""
     where = f"shells.{name}"
     if "based_on" in table:
-        _text(table["based_on"], f"{where}.based_on")
+        valid.text(table["based_on"], f"{where}.based_on")
     if "linker" in table:
-        _text(table["linker"], f"{where}.linker")
+        valid.text(table["linker"], f"{where}.linker")
     if "runtimes" in table:
-        _texts(table["runtimes"], f"{where}.runtimes")
+        valid.texts(table["runtimes"], f"{where}.runtimes")
     boards = table.get("boards")
     if boards is not None and boards != ANY:
-        for board, entry in _table(boards, f"{where}.boards").items():
-            _table(entry, f"{where}.boards.{board}")
+        for board, entry in valid.table(boards, f"{where}.boards").items():
+            valid.table(entry, f"{where}.boards.{board}")
     return table
 
 
@@ -358,15 +318,15 @@ def _read(path: Path, origin: Origin, found: _Found) -> None:
         raise _refused(origin, ", ".join(unknown), f"a declaration is one of {', '.join(KINDS)}")
     for kind in KINDS:
         try:
-            tables = _table(stated.get(kind, {}), kind)
-        except _Invalid as error:
+            tables = valid.table(stated.get(kind, {}), kind)
+        except valid.Invalid as error:
             raise _refused(origin, kind, str(error)) from None
         for name, table in tables.items():
             where = f"{kind}.{name}"
             try:
                 if not _NAME.fullmatch(name):
-                    raise _Invalid(f"{name!r} is no name (letters, digits, '_', '.', '-')")
-                table = _table(table, where)
+                    raise valid.Invalid(f"{name!r} is no name (letters, digits, '_', '.', '-')")
+                table = valid.table(table, where)
                 if kind == "boards":
                     board = _board(name, table)
                 elif kind == "linkers":
@@ -377,7 +337,7 @@ def _read(path: Path, origin: Origin, found: _Found) -> None:
                     mover = _mover(name, table)
                 else:
                     shell = _shell_table(name, table)
-            except _Invalid as error:
+            except valid.Invalid as error:
                 raise _refused(origin, where, str(error)) from None
             found.add(kind, name, origin)
             if kind == "boards":

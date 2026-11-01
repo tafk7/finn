@@ -43,6 +43,7 @@ from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
 from finn.kernels.artifacts.module import Fragment
 from finn.kernels.artifacts.top import doubled, top_buses
 from finn.kernels.utilization import Fit
+from finn.platform import _stated as valid
 from finn.platform.capabilities import RESOURCE_NAMES, Resources
 from finn.platform.declarations import Declarations, Shell, declarations
 from finn.platform.refusal import TargetRefused
@@ -276,79 +277,44 @@ _FACTS = {
 """The facts a shell states, and its entry for a board may state in their place."""
 
 
-class _Invalid(ValueError):
-    """A fact of a shell's declaration that is not of its type."""
-
-
-def _expect(table: object, where: str, required: set[str], optional: set[str]) -> dict[str, Any]:
-    if not isinstance(table, dict):
-        raise _Invalid(f"{where} is a table, not {table!r}")
-    missing, unknown = required - set(table), set(table) - required - optional
-    if missing or unknown:
-        raise _Invalid(
-            f"{where}: "
-            + "; ".join(
-                text
-                for text in (
-                    missing and f"states no {', '.join(sorted(missing))}",
-                    unknown and f"states {', '.join(sorted(unknown))}, which it does not have",
-                )
-                if text
-            )
-        )
-    return table
-
-
-def _typed(value: object, kind: type | tuple[type, ...], where: str) -> Any:
-    # bool is an int: a count is never true or false.
-    if isinstance(value, bool) and kind is not bool:
-        raise _Invalid(f"{where} is not {value!r}")
-    if not isinstance(value, kind):
-        raise _Invalid(f"{where} is not {value!r}")
-    return value
-
-
-def _count(value: object, where: str, *, least: int = 0) -> int:
-    count: int = _typed(value, int, where)
-    if count < least:
-        raise _Invalid(f"{where} is a count of at least {least}, not {count}")
-    return count
-
-
 def _clocks(stated: object, where: str) -> Clocks:
-    table = _expect(stated, where, {"main", "set_at", "doubled"}, {"default_mhz"})
+    table = valid.expect(stated, where, {"main", "set_at", "doubled"}, {"default_mhz"})
     set_at = table["set_at"]
     if set_at not in (BUILD, RUNTIME):
-        raise _Invalid(f"{where}.set_at is {BUILD!r} or {RUNTIME!r}, not {set_at!r}")
+        raise valid.Invalid(f"{where}.set_at is {BUILD!r} or {RUNTIME!r}, not {set_at!r}")
     default = table.get("default_mhz")
     return Clocks(
-        main=_typed(table["main"], str, f"{where}.main"),
+        main=valid.typed(table["main"], str, f"{where}.main"),
         set_at=set_at,
-        default_mhz=None if default is None else float(_typed(default, (int, float), where)),
-        doubled=_typed(table["doubled"], bool, f"{where}.doubled"),
+        default_mhz=None if default is None else float(valid.typed(default, (int, float), where)),
+        doubled=valid.typed(table["doubled"], bool, f"{where}.doubled"),
     )
 
 
 def _control(stated: object, where: str) -> Control:
-    table = _expect(stated, where, {"one_port_per_unit", "least_window", "aperture"}, set())
+    table = valid.expect(stated, where, {"one_port_per_unit", "least_window", "aperture"}, set())
     return Control(
-        one_port_per_unit=_typed(table["one_port_per_unit"], bool, f"{where}.one_port_per_unit"),
-        least_window=_count(table["least_window"], f"{where}.least_window", least=1),
-        aperture=_count(table["aperture"], f"{where}.aperture", least=1),
+        one_port_per_unit=valid.typed(
+            table["one_port_per_unit"], bool, f"{where}.one_port_per_unit"
+        ),
+        least_window=valid.count(table["least_window"], f"{where}.least_window", least=1),
+        aperture=valid.count(table["aperture"], f"{where}.aperture", least=1),
     )
 
 
 def _memory(stated: object, where: str) -> tuple[MemoryTarget, ...]:
     targets = []
-    for index, each in enumerate(_typed(stated, list, where)):
+    for index, each in enumerate(valid.typed(stated, list, where)):
         here = f"{where}[{index}]"
-        table = _expect(each, here, {"name", "width"}, {"masters"})
+        table = valid.expect(each, here, {"name", "width"}, {"masters"})
         masters = table.get("masters")
         targets.append(
             MemoryTarget(
-                name=_typed(table["name"], str, f"{here}.name"),
-                width=_count(table["width"], f"{here}.width", least=8),
-                masters=None if masters is None else _count(masters, f"{here}.masters", least=1),
+                name=valid.typed(table["name"], str, f"{here}.name"),
+                width=valid.count(table["width"], f"{here}.width", least=8),
+                masters=None
+                if masters is None
+                else valid.count(masters, f"{here}.masters", least=1),
             )
         )
     return tuple(targets)
@@ -358,62 +324,62 @@ def _offers(
     stated: object, where: str, kinds: tuple[str, ...], declared: Declarations
 ) -> tuple[Offer, ...]:
     offers: list[Offer] = []
-    for index, each in enumerate(_typed(stated, list, where)):
+    for index, each in enumerate(valid.typed(stated, list, where)):
         here = f"{where}[{index}]"
-        table = _expect(each, here, {"kind", "movers"}, {"width_cap"})
+        table = valid.expect(each, here, {"kind", "movers"}, {"width_cap"})
         kind = table["kind"]
         if kind not in kinds:
-            raise _Invalid(f"{here}.kind is one of {', '.join(kinds)}, not {kind!r}")
+            raise valid.Invalid(f"{here}.kind is one of {', '.join(kinds)}, not {kind!r}")
         if kind in (offer.kind for offer in offers):
-            raise _Invalid(f"{here}: {where} offers the {kind} kind once")
+            raise valid.Invalid(f"{here}: {where} offers the {kind} kind once")
         movers = []
-        for name in _typed(table["movers"], list, f"{here}.movers"):
+        for name in valid.typed(table["movers"], list, f"{here}.movers"):
             if name not in declared.movers:
-                raise _Invalid(
+                raise valid.Invalid(
                     f"{here}.movers: {name!r} is not a declared mover kind "
                     f"(one of {sorted(declared.movers)})"
                 )
             movers.append(MoverKind(name=name, code=declared.movers[name].code))
         cap = table.get("width_cap")
-        if cap is not None and (_count(cap, f"{here}.width_cap", least=8) % 8):
-            raise _Invalid(f"{here}.width_cap: a memory port of {cap} bits is no whole bytes")
+        if cap is not None:
+            valid.whole_bytes(cap, f"{here}.width_cap")
         offers.append(Offer(kind=kind, movers=tuple(movers), width_cap=cap))
     return tuple(offers)
 
 
 def _resources(table: Mapping[str, Any], where: str) -> Resources:
     counts = {key: table[key] for key in RESOURCE_NAMES if key in table}
-    return Resources(**{key: _count(value, f"{where}.{key}") for key, value in counts.items()})
+    return Resources(**{key: valid.count(value, f"{where}.{key}") for key, value in counts.items()})
 
 
 def _fit(stated: object, where: str) -> Fit:
-    numbers = _typed(stated, list, where)
+    numbers = valid.typed(stated, list, where)
     if not numbers or not all(
         isinstance(each, (int, float)) and not isinstance(each, bool) for each in numbers
     ):
-        raise _Invalid(f"{where} is a fit: [constant, slope, ...], not {stated!r}")
+        raise valid.Invalid(f"{where} is a fit: [constant, slope, ...], not {stated!r}")
     return Fit(float(numbers[0]), tuple(float(each) for each in numbers[1:]))
 
 
 def _use(stated: object, where: str) -> tuple[str, Resources]:
-    table = _expect(stated, where, {"ip"}, set(RESOURCE_NAMES))
-    return _typed(table["ip"], str, f"{where}.ip"), _resources(table, where)
+    table = valid.expect(stated, where, {"ip"}, set(RESOURCE_NAMES))
+    return valid.text(table["ip"], f"{where}.ip"), _resources(table, where)
 
 
 def _scaled(stated: object, where: str) -> tuple[str, Scaled]:
-    table = _expect(stated, where, {"ip"}, {"fixed", "lut", "ff", "scales_from"})
+    table = valid.expect(stated, where, {"ip"}, {"fixed", "lut", "ff", "scales_from"})
     fixed = table.get("fixed", {})
-    _expect(fixed, f"{where}.fixed", set(), set(RESOURCE_NAMES))
-    return _typed(table["ip"], str, f"{where}.ip"), Scaled(
+    valid.expect(fixed, f"{where}.fixed", set(), set(RESOURCE_NAMES))
+    return valid.text(table["ip"], f"{where}.ip"), Scaled(
         fixed=_resources(fixed, f"{where}.fixed"),
         lut=_fit(table["lut"], f"{where}.lut") if "lut" in table else Fit(0, (0,)),
         ff=_fit(table["ff"], f"{where}.ff") if "ff" in table else Fit(0, (0,)),
-        scales_from=_count(table.get("scales_from", 1), f"{where}.scales_from", least=1),
+        scales_from=valid.count(table.get("scales_from", 1), f"{where}.scales_from", least=1),
     )
 
 
 def _fixed(stated: object, where: str) -> FixedShell:
-    table = _expect(
+    table = valid.expect(
         stated,
         where,
         {"control_base", "processor", "reset", "memory_interconnect", "control_interconnect"},
@@ -428,7 +394,7 @@ def _fixed(stated: object, where: str) -> FixedShell:
         reset=reset,
         memory_interconnect=memory,
         control_interconnect=control,
-        control_base=_count(table["control_base"], f"{where}.control_base"),
+        control_base=valid.count(table["control_base"], f"{where}.control_base"),
         processor_use=processor_use,
         reset_use=reset_use,
         memory_interconnect_use=memory_use,
@@ -437,11 +403,11 @@ def _fixed(stated: object, where: str) -> FixedShell:
 
 
 def _optional_count(facts: Mapping[str, Any], key: str, where: str) -> int | None:
-    return None if key not in facts else _count(facts[key], f"{where}.{key}")
+    return None if key not in facts else valid.count(facts[key], f"{where}.{key}")
 
 
-def _text(facts: Mapping[str, Any], key: str, where: str) -> str | None:
-    return None if key not in facts else _typed(facts[key], str, f"{where}.{key}")
+def _optional_text(facts: Mapping[str, Any], key: str, where: str) -> str | None:
+    return None if key not in facts else valid.text(facts[key], f"{where}.{key}")
 
 
 def _row(shell: Shell, board: str | None, declared: Declarations) -> ShellRow:
@@ -456,15 +422,17 @@ def _row(shell: Shell, board: str | None, declared: Declarations) -> ShellRow:
         entry = shell.boards[board]
         here = f"{where}.boards.{board}"
         keys = set() if linker is None else set(linker.board_keys)
-        _expect(entry, here, keys, _FACTS | {"versions"})
-        board_facts = {key: _typed(entry[key], str, f"{here}.{key}") for key in sorted(keys)}
-        narrowed = None if "versions" not in entry else _typed(entry["versions"], str, here)
+        valid.expect(entry, here, keys, _FACTS | {"versions"})
+        board_facts = {key: valid.text(entry[key], f"{here}.{key}") for key in sorted(keys)}
+        narrowed = (
+            None if "versions" not in entry else valid.text(entry["versions"], f"{here}.versions")
+        )
         facts.update({key: value for key, value in entry.items() if key in _FACTS})
     unknown = sorted(set(facts) - _FACTS)
     if unknown:
-        raise _Invalid(f"{where} states {', '.join(unknown)}, which a shell does not have")
+        raise valid.Invalid(f"{where} states {', '.join(unknown)}, which a shell does not have")
     if "clocks" not in facts:
-        raise _Invalid(f"{where} states no clocks")
+        raise valid.Invalid(f"{where} states no clocks")
     specs = [each for each in (None if linker is None else linker.versions, narrowed) if each]
     versions = None
     if specs:
@@ -473,8 +441,8 @@ def _row(shell: Shell, board: str | None, declared: Declarations) -> ShellRow:
         _clauses(versions.spec)
     timed = facts.get("timed", [])
     caveat = None
-    if board is not None and board not in _typed(timed, list, f"{where}.timed"):
-        template = _text(facts, "caveat", where)
+    if board is not None and board not in valid.typed(timed, list, f"{where}.timed"):
+        template = _optional_text(facts, "caveat", where)
         part = declared.board(board).part
         caveat = None if template is None else template.format(board=board, part=part)
     return ShellRow(
@@ -491,7 +459,7 @@ def _row(shell: Shell, board: str | None, declared: Declarations) -> ShellRow:
         runtimes=shell.runtimes,
         versions=versions,
         fixed=None if "fixed" not in facts else _fixed(facts["fixed"], f"{where}.fixed"),
-        characterised=_text(facts, "characterised", where),
+        characterised=_optional_text(facts, "characterised", where),
         caveat=caveat,
         control_budget=_optional_count(facts, "control_budget", where),
         memory_ports=_optional_count(facts, "memory_ports", where),
@@ -503,7 +471,7 @@ def row(shell: Shell, board: str | None, declared: Declarations) -> ShellRow:
     shell of any part); a fact not of its type is refused (``declaration-invalid``)."""
     try:
         return _row(shell, board, declared)
-    except (_Invalid, ValueError, KeyError) as error:
+    except (ValueError, KeyError) as error:
         origin = declared.origin("shells", shell.name)
         raise TargetRefused(
             "declaration-invalid", f"{origin.file}: shells.{shell.name}", str(error)
