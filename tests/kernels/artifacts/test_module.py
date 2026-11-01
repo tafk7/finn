@@ -21,6 +21,7 @@ from finn.kernels.artifacts.abi import (
     Signal,
     StandardProtocol,
 )
+from finn.kernels.artifacts.build import capture, emit_module
 from finn.kernels.artifacts.contributions import ContributionError, CopiedSource, GeneratedData
 from finn.kernels.artifacts.interface import InterfaceError
 from finn.kernels.artifacts.ipxact import IpxactError
@@ -35,6 +36,7 @@ from finn.kernels.artifacts.module import (
     Link,
     LinkEnd,
     RegisterMap,
+    Snapshot,
     fingerprint,
     instance_collisions,
     instance_name,
@@ -94,7 +96,7 @@ def link(source: str | None, sink: str | None, *, width: int = 8) -> Link:
 def test_a_leaf_spells_its_parameters_and_holds_only_its_own_pins() -> None:
     leaf = stage()
     assert leaf.parameters == (("FLAG", True), ("WIDTH", 8))
-    assert module_name(leaf, {}) == "stage"
+    assert module_name(leaf, Snapshot({}, {})) == "stage"
     with pytest.raises(BuildError, match="canonical RTL spellings"):
         replace(leaf, abi=replace(leaf.abi, parameters=(("FLAG", "True"), ("WIDTH", "8"))))
     with pytest.raises(BuildError, match="none of its inputs"):
@@ -194,42 +196,69 @@ def composed(*, data: bytes = b"00\n", stem: str = "top") -> Composed:
     return Composed("test.top", "1", stem, ROOT, fragment)
 
 
-@pytest.fixture(name="roots")
-def _roots(tmp_path: Path) -> dict[str, Path]:
-    """The ``fixture`` root, holding the stage's source."""
-    (tmp_path / "stage.sv").write_text("module stage; endmodule\n")
-    return {"fixture": tmp_path}
+#: The stage's source, as a build read it.
+SNAPSHOT = Snapshot({("fixture", "stage.sv"): b"module stage; endmodule\n"}, {})
 
 
-def test_a_composed_module_is_named_by_its_stem_and_fingerprint(roots: dict[str, Path]) -> None:
+def test_a_composed_module_is_named_by_its_stem_and_fingerprint() -> None:
     module = composed()
-    name = module_name(module, roots)
-    assert name == f"top_{fingerprint(module, roots)[:16]}"
+    name = module_name(module, SNAPSHOT)
+    assert name == f"top_{fingerprint(module, SNAPSHOT)[:16]}"
     # Equal values, equal fingerprints; any change, a data file's bytes among them, renames.
-    assert fingerprint(composed(), roots) == fingerprint(module, roots)
-    assert module_name(composed(), roots) == name
-    assert module_name(composed(data=b"01\n"), roots) != name
-    assert fingerprint(stage(), roots) != fingerprint(stage(width=4), roots)
+    assert fingerprint(composed(), SNAPSHOT) == fingerprint(module, SNAPSHOT)
+    assert module_name(composed(), SNAPSHOT) == name
+    assert module_name(composed(data=b"01\n"), SNAPSHOT) != name
+    assert fingerprint(stage(), SNAPSHOT) != fingerprint(stage(width=4), SNAPSHOT)
 
 
-def test_a_composed_module_s_digest_leaves_its_name_out(roots: dict[str, Path]) -> None:
+def test_a_composed_module_s_digest_leaves_its_name_out() -> None:
     # One netlist under two stems: one digest, two names, each its stem's.
     other = composed(stem="other")
-    assert fingerprint(other, roots) == fingerprint(composed(), roots)
-    assert module_name(other, roots) == f"other_{fingerprint(composed(), roots)[:16]}"
+    assert fingerprint(other, SNAPSHOT) == fingerprint(composed(), SNAPSHOT)
+    assert module_name(other, SNAPSHOT) == f"other_{fingerprint(composed(), SNAPSHOT)[:16]}"
 
 
 def test_a_module_s_name_covers_its_sources_bytes_not_where_they_are(tmp_path: Path) -> None:
     """A source's bytes are the module's content: another file at the same path under its
-    root renames the module; the same bytes under another directory do not."""
+    root renames the module; the same bytes under another directory do not. A snapshot that
+    lacks a source the module stages names nothing."""
     names = {}
     for case, text in (("a", "assign o = i;"), ("b", "assign o = ~i;"), ("c", "assign o = i;")):
         (tmp_path / case).mkdir()
         (tmp_path / case / "stage.sv").write_text(f"module stage; {text} endmodule\n")
-        names[case] = module_name(composed(), {"fixture": tmp_path / case})
+        roots = {"fixture": tmp_path / case}
+        names[case] = module_name(composed(), capture(composed(), roots=roots))
     assert names["a"] != names["b"] and names["a"] == names["c"]
     with pytest.raises(BuildError, match="no source root resolves 'fixture'"):
-        module_name(composed(), {})
+        capture(composed(), roots={})
+    with pytest.raises(BuildError, match="the snapshot holds no stage.sv of 'fixture'"):
+        module_name(composed(), Snapshot({}, {}))
+
+
+def test_emission_names_the_module_from_the_bytes_it_copies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Emission reads each source once, and names the module from those bytes: a source
+    that changes after it was read changes neither the copy nor the name."""
+    (tmp_path / "stage.sv").write_bytes(SNAPSHOT.copied[("fixture", "stage.sv")])
+    read = Path.read_bytes
+    reads: list[Path] = []
+
+    def changing(path: Path) -> bytes:
+        content = read(path)
+        if path.name == "stage.sv":
+            reads.append(path)
+            path.write_text("module stage; assign o = ~i; endmodule\n")
+        return content
+
+    monkeypatch.setattr(Path, "read_bytes", changing)
+    emitted = emit_module(composed(), tmp_path / "out", roots={"fixture": tmp_path})
+    monkeypatch.undo()
+    assert len(reads) == 1
+    assert (emitted.directory / "stage.sv").read_bytes() == SNAPSHOT.copied[("fixture", "stage.sv")]
+    assert emitted.entry_point == module_name(composed(), SNAPSHOT)
+    changed = emit_module(composed(), tmp_path / "again", roots={"fixture": tmp_path})
+    assert changed.entry_point != emitted.entry_point
 
 
 def test_an_instance_is_its_label_a_repeated_segment_dropped() -> None:

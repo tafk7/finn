@@ -38,6 +38,7 @@ from support.models import (
     kernel_model,
     streamed_w2_model,
 )
+from support.module_names import live_name
 from support.packaging import PackagedByStub, read_back, verified, verified_parent
 from support.xsim import requires_xsim
 
@@ -68,7 +69,7 @@ from finn.core.reporting.manifest import STORED
 from finn.core.rtlsim_bench import SimulationFailed
 from finn.custom_op.kernels.shell import configured_network, verify_partition
 from finn.kernels.artifacts.interface import STREAM_FACTS
-from finn.kernels.artifacts.module import instance_name, module_name
+from finn.kernels.artifacts.module import instance_name
 from finn.platform.capabilities import Resources
 from finn.platform.request import TargetRequest
 from finn.platform.resolve import resolve_target
@@ -89,7 +90,6 @@ from finn.transformation.kernels.package import (
     free_side,
     ooc_member_resources,
     resources_of,
-    source_roots,
     stream_order,
 )
 
@@ -105,7 +105,7 @@ def test_the_description_beside_the_ip_reads_back_against_the_modules_pins(
     point, boundary = configured_network(model, "sdp_1")
     read_back(described, point.module.abi.pins, 5.0)
     # The IP is named as its module, which leaves its node's name out, and shown as its node.
-    top = module_name(point.module, source_roots())
+    top = live_name(point.module)
     assert described["ip"] == {
         "name": top,
         "vlnv": f"xilinx_finn:finn:{top}:1.0",
@@ -637,7 +637,7 @@ def test_tfc_on_the_ip_shell_packages_and_its_testbench_passes_on_its_own(
     described = json.loads((core / "ip" / "interface.json").read_text())
     read_back(described, point.module.abi.pins, 5.0)
     # The IP is the partition's, named as its module and shown as its node; the body states it.
-    assert described["ip"]["name"] == module_name(point.module, source_roots())
+    assert described["ip"]["name"] == live_name(point.module)
     assert described["ip"]["display_name"] == "DataflowCore_0"
     assert body.get(OUTPUT_IP) == str(core / "ip" / "ip")
     # The exploration folds the input's thresholds at 4 lanes and the last layer at 1

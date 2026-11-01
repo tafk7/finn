@@ -36,6 +36,7 @@ from support.models import (
     configure_partition,
     kernel_model,
 )
+from support.module_names import live_name
 from support.ports import outer
 from support.tfc import ULTRA96
 from support.tfc_built import TFC_MODULE
@@ -67,7 +68,6 @@ from finn.dataflow.traversal import (
 from finn.harness.ops import check_parity
 from finn.kernels.adapters import Convert
 from finn.kernels.artifacts.abi import Direction
-from finn.kernels.artifacts.module import module_name
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
@@ -97,7 +97,6 @@ from finn.transformation.kernels import (
     kernel_choices_config,
 )
 from finn.transformation.kernels.cut import CutKernelPartition, MakeCutChoices
-from finn.transformation.kernels.package import source_roots
 from finn.util.draws import boundary_inputs
 
 # -- a mover's arithmetic -----------------------------------------------------------------
@@ -669,7 +668,7 @@ def module_of(model: ModelWrapper, directory: Path) -> str:
     parent = model.transform(CutKernelPartition(directory))
     node, body, _ = partition_body(parent)
     point, _ = configured_network(body, node.name)
-    return module_name(point.module, source_roots())
+    return live_name(point.module)
 
 
 @pytest.mark.slow

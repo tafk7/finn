@@ -35,7 +35,7 @@ from finn.kernels.artifacts.abi import (
 from finn.kernels.artifacts.abi import (
     Endpoint as Side,
 )
-from finn.kernels.artifacts.build import emit_module
+from finn.kernels.artifacts.build import capture, emit_module
 from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData
 from finn.kernels.artifacts.module import (
     Abi,
@@ -161,7 +161,7 @@ def test_one_link_wires_data_valid_and_ready_and_instances_are_named_by_label(
 ) -> None:
     module = chain()
     wired = netlist(module, fixture_root)
-    assert wired.top == module_name(module, {"finnlib": fixture_root})
+    assert wired.top == module_name(module, capture(module, roots={"finnlib": fixture_root}))
     # The declared ports, in the order they are emitted.
     assert list(wired.ports.items()) == [
         ("ap_clk", Port("in", 1)),

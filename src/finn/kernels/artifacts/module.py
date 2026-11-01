@@ -29,7 +29,6 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, fields, is_dataclass, replace
 from enum import Enum
-from pathlib import Path
 from typing import Union
 
 from finn.kernels.artifacts import ArtifactError
@@ -535,41 +534,59 @@ class Composed:
 Module = Union[Leaf, Composed]
 
 
-def source_digests(module: Module, roots: Mapping[str, Path]) -> tuple[tuple[str, str, str], ...]:
-    """Each file the module's leaves copy from a source root, a copied source's or an HLS
-    request's header, as ``(root, path, digest of its bytes)``, ``roots`` resolving each root
-    by its name; sorted, each once. Its root's name and its path within it, never where the
-    root is. A ``BuildError`` where no root resolves a source, or a file cannot be read."""
+@dataclass(frozen=True)
+class Snapshot:
+    """The files a build of a module stages from outside it, as it read them, once
+    (``finn.kernels.artifacts.build.capture``): each copied source's bytes by its root's name
+    and its path within the root (``copied``), and each HLS request's product by its top's
+    name, the bytes of each of its files (its exported Verilog and its memories' images) by
+    the file's name (``products``). A module is named from the snapshot it is emitted from
+    (``fingerprint``), so its name and its files are the same bytes."""
+
+    copied: Mapping[tuple[str, str], bytes]
+    products: Mapping[str, Mapping[str, bytes]]
+
+
+def _leaves(module: Module) -> tuple[Leaf, ...]:
     if isinstance(module, Leaf):
-        leaves: tuple[Leaf, ...] = (module,)
-    else:
-        leaves = tuple(leaf for _, leaf in module.fragment.instances)
-    copied = {
-        (item.root, item.path)
-        for leaf in leaves
-        for source in leaf.sources
-        for item in (source.headers if isinstance(source, HlsSource) else (source,))
-    }
-    found = []
-    for root, path in sorted(copied):
-        where = roots.get(root)
-        if where is None:
-            raise BuildError(f"no source root resolves {root!r}")
-        try:
-            content = (Path(where) / path).read_bytes()
-        except OSError as error:
-            raise BuildError(f"copied source {Path(where) / path} cannot be read") from error
-        found.append((root, path, content_digest(content)))
-    return tuple(found)
+        return (module,)
+    return tuple(leaf for _, leaf in module.fragment.instances)
 
 
-def fingerprint(module: Module, roots: Mapping[str, Path]) -> str:
+def source_digests(module: Module, snapshot: Snapshot) -> tuple[tuple[str, str, str], ...]:
+    """Each file the module's leaves stage from outside it, as ``(origin, path, digest of its
+    bytes)``, read from ``snapshot``; sorted, each once. A copied source by its root's name and
+    its path within it, never where the root is; each file of an HLS request's product by the
+    request's top and the file's name. A ``BuildError`` where the snapshot holds no copied
+    source or product the module stages."""
+    found: set[tuple[str, str, str]] = set()
+    for leaf in _leaves(module):
+        for source in leaf.sources:
+            if isinstance(source, HlsSource):
+                product = snapshot.products.get(source.function)
+                if product is None:
+                    raise BuildError(
+                        f"no HLS product is given for {source.function}: synthesize it first"
+                    )
+                found |= {
+                    (source.function, name, content_digest(content))
+                    for name, content in product.items()
+                }
+                continue
+            content = snapshot.copied.get((source.root, source.path))
+            if content is None:
+                raise BuildError(f"the snapshot holds no {source.path} of {source.root!r}")
+            found.add((source.root, source.path, content_digest(content)))
+    return tuple(sorted(found))
+
+
+def fingerprint(module: Module, snapshot: Snapshot) -> str:
     """The digest of everything the module says but its own name, and of the content of every
-    file it copies (``source_digests``, ``roots`` resolving their roots): a composed module's
-    stem is left out (as an HLS top's name is, ``contributions.NAME_PLACEHOLDER``), so equal
-    netlists of equal sources share it, whatever their callers name them, and a source whose
-    bytes change at the same path changes it; a leaf's name is its content."""
-    sources = source_digests(module, roots)
+    file it stages from outside it (``source_digests``, read from ``snapshot``): a composed
+    module's stem is left out (as an HLS top's name is, ``contributions.NAME_PLACEHOLDER``), so
+    equal netlists of equal files share it, whatever their callers name them, and a copied
+    source or an HLS product whose bytes change changes it; a leaf's name is its content."""
+    sources = source_digests(module, snapshot)
     if isinstance(module, Leaf):
         return digest(("module-v2", typed_canonical(module), sources))
     return digest(("module-v2", _tagged(module, ("stem",)), sources))
@@ -583,13 +600,14 @@ def declared_registers(module: Module) -> dict[str, RegisterMap]:
     return {item.port: item.registers for item in module.fragment.exports}
 
 
-def module_name(module: Module, roots: Mapping[str, Path]) -> str:
+def module_name(module: Module, snapshot: Snapshot) -> str:
     """A leaf's own name; a composed module's ``<stem>_<fingerprint[:16]>``: its kind, a FINN
-    word (``finn_dataflowcore``), and the digest of its content, its sources' bytes among it
-    (``roots`` resolving their roots), with its name left out."""
+    word (``finn_dataflowcore``), and the digest of its content, the bytes of the files it
+    stages among it (``snapshot``, as the build that emits it read them), with its name left
+    out. A build reads it from what it emitted (``EmittedModule.entry_point``)."""
     if isinstance(module, Leaf):
         return module.name
-    return f"{sanitize_stem(module.stem)}_{fingerprint(module, roots)[:16]}"
+    return f"{sanitize_stem(module.stem)}_{fingerprint(module, snapshot)[:16]}"
 
 
 __all__ = [
@@ -608,6 +626,7 @@ __all__ = [
     "RegisterMap",
     "Scalar",
     "ScalarTable",
+    "Snapshot",
     "declared_registers",
     "fingerprint",
     "source_digests",

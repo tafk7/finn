@@ -11,6 +11,7 @@ from finn.core.space import DefinitionError, Rejected, design_space
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Direction, Signal
+from finn.kernels.artifacts.build import capture
 from finn.kernels.artifacts.contributions import (
     Contribution,
     CopiedSource,
@@ -67,8 +68,8 @@ def test_resolved_module_matches_actual_existing_vpc_leaf(
     )
     assert new == old
     assert isinstance(new, Leaf)
-    roots = {"finnlib": finnlib_root()}
-    assert fingerprint(new, roots) == fingerprint(old, roots) == VPC_FINGERPRINTS[dtype]
+    snapshot = capture(new, roots={"finnlib": finnlib_root()})
+    assert fingerprint(new, snapshot) == fingerprint(old, snapshot) == VPC_FINGERPRINTS[dtype]
 
 
 def test_constant_and_dynamic_source_provision_have_one_plain_contract() -> None:

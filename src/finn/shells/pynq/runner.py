@@ -576,7 +576,6 @@ class BuildPynqBitfile(Transformation):
         hwh = self.directory / HWH
         for directory in (reports["integration"].parent, self.bitfile.parent):
             directory.mkdir(parents=True, exist_ok=True)
-        reports["integration"].write_text(json.dumps(export.report(), indent=2))
         toolchain = self.toolchain
         built = build_pynq(
             model,
@@ -586,6 +585,8 @@ class BuildPynqBitfile(Transformation):
             jobs=toolchain.selection.vivado_jobs,
             options=self.options,
         )
+        # The partition's VLNV is the one its packaging gave it, which build_pynq states.
+        reports["integration"].write_text(json.dumps(integration(model).report(), indent=2))
         shutil.copy(built.bitfile, self.bitfile)
         shutil.copy(built.hwh, hwh)
         shutil.copy(built.timing, reports["timing"])
