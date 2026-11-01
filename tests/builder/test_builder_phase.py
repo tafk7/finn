@@ -42,6 +42,7 @@ from support.models import (
     host_between_source,
     kernel_model,
 )
+from support.module_names import fixed_name, live_name
 from support.packaging import (
     PLACED_HIERARCHY,
     TIMING_REPORT,
@@ -111,7 +112,6 @@ from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.reporting.manifest import FINDING, RECORDS
 from finn.core.search import ExploreError, Hold, Ranked
 from finn.custom_op.kernels.shell import configured_network
-from finn.kernels.artifacts.module import module_name
 from finn.kernels.channels import Channel, Neighbours
 from finn.kernels.explore import KernelExplorer, TargetThroughput
 from finn.kernels.fifo_sizing import Sized
@@ -139,7 +139,7 @@ from finn.transformation.kernels import (
 )
 from finn.transformation.kernels.cut import CutKernelPartition, MakeCutChoices
 from finn.transformation.kernels.integration import Address, Connection, integration
-from finn.transformation.kernels.package import boundary_facts, source_roots
+from finn.transformation.kernels.package import boundary_facts
 
 # TFC is built from the trained network once for the module (about ten seconds), and each
 # test that runs the phases' steps on it takes about ten seconds more.
@@ -1515,20 +1515,22 @@ def test_the_export_of_tfc_on_pynq_names_both_movers_iodmas_and_every_connection
         Address("idma0/s_axi_control_0", 0xA000_0000, 4096),
         Address("odma0/s_axi_control_0", 0xA000_1000, 4096),
     )
-    assert (export.period_ns, export.vlnv) == (5.0, f"xilinx_finn:finn:{TFC_MODULE}:1.0")
+    # The partition's VLNV is the one packaging gives it: none before.
+    assert (export.period_ns, export.vlnv) == (5.0, None)
     # Z0's module, its memories in their explicit baseline styles, its thresholds a data
     # file (THRESHOLDS_FILE), and choices; its MatMuls after the first INT7, reading each
     # thresholding's range.
     node, body, _ = partition_body(parent)
     point = configured_network(body, node.name)
-    assert module_name(point.module, source_roots()) == TFC_MODULE
+    assert fixed_name(point.module) == TFC_MODULE
     persisted = json.loads((output / "report" / "kernel_choices.json").read_text())
     assert persisted == kernel_choices_config(body)
     assert persisted == TFC_STORED
 
 
 #: The block design Z0's build wrote for TFC (its ip_config.tcl's custom section, its
-#: partition StreamingDataflowPartition_1 renamed, its IP named as its module), each build
+#: partition StreamingDataflowPartition_1 renamed, its IP named as its module, here
+#: ``TFC_MODULE``), each build
 #: directory as normalized ($BUILD, a random suffix XXXXXXXX). The oracle's is the same but
 #: for the partition's IP and the quoting
 #: (``test_the_z0_literal_is_the_oracles_block_design_but_for_the_partitions_ip``).
@@ -1617,7 +1619,8 @@ def test_the_runner_writes_z0s_block_design_for_tfc(z0_tfc: ModelWrapper) -> Non
         for instance in ("idma0", "odma0")
     }
     export = integration(z0_tfc)
-    ips["DataflowCore_0"] = InstanceIP(export.vlnv, (stitched,))
+    # The partition's IP as packaged, under its module's name.
+    ips["DataflowCore_0"] = InstanceIP(f"xilinx_finn:finn:{TFC_MODULE}:1.0", (stitched,))
     design = block_design(export, ips)
     assert design == Z0_BLOCK_DESIGN.replace("$BUILD", "/BUILD")
     script = project_script(export, design, 16)
@@ -1689,7 +1692,7 @@ def tool_recorders(tmp_path: Path) -> dict[str, object]:
 
         def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
             model.set(OUTPUT_IP, str(tmp_path / "packaged" / "ip"))
-            top = module_name(configured_network(model, self.name).module, source_roots())
+            top = live_name(configured_network(model, self.name).module)
             model.set(OUTPUT_VLNV, f"xilinx_finn:finn:{top}:1.0")
             model.set(OUTPUT_INTERFACES, {"axilite": []})
             model.set(OUTPUT_IP_KEY, IP_KEY)
@@ -1781,11 +1784,15 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
         f"top_{name}_0_utilization_synth.rpt"
         for name in ("DataflowCore_0", "idma0", "smartconnect_0")
     ]
-    assert body.get(OUTPUT_VLNV) == f"xilinx_finn:finn:{TFC_MODULE}:1.0"
+    packaged = (
+        f"xilinx_finn:finn:{live_name(configured_network(body, 'DataflowCore_0').module)}:1.0"
+    )
+    assert body.get(OUTPUT_VLNV) == packaged
     assert body.get(OUTPUT_IP_KEY) == IP_KEY
     for model in (reread, body):
         assert list(model.model.metadata_props) == []
     integrated = json.loads((report / "integration.json").read_text())
+    assert integrated["partition"] == {"instance": "DataflowCore_0", "vlnv": packaged}
     assert [mover["iodma"] for mover in integrated["movers"]] == [Z0_IODMAS["in"], Z0_IODMAS["out"]]
     # The delivered clock against the one asked, the bottleneck the partition's network's,
     # its movers included: the input mover.

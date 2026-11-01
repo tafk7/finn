@@ -28,6 +28,7 @@ from support.models import (
     kernel_model,
     streamed_w2_model,
 )
+from support.module_names import live_name
 from support.packaging import NO_VIVADO, verified, verified_parent
 from support.ports import outer
 from support.refusals import refused
@@ -48,7 +49,6 @@ from finn.core.graph.partition import CUT_NAME, KERNEL_OPS_DOMAIN, design_digest
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import body_row, configured_network, shell_composition
 from finn.dataflow.traversal import Loop, Reorder, Traversal, offsets
-from finn.kernels.artifacts.module import module_name
 from finn.platform.resolve import resolve_target
 from finn.transformation.kernels import (
     InferKernelTensors,
@@ -65,7 +65,7 @@ from finn.transformation.kernels.integration import (
     integration,
     wire_one_bus_each,
 )
-from finn.transformation.kernels.package import boundary_facts, ip_key, source_roots
+from finn.transformation.kernels.package import boundary_facts, ip_key
 
 #: Ultra96 in the Zynq shell: its rows offer an IODMA_hls mover at a 128-bit port.
 ZYNQ = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
@@ -213,10 +213,17 @@ def test_the_export_names_each_mover_its_iodma_and_every_connection(tmp_path: Pa
         ZYNQ.part,
         5.0,
     )
-    # The instance is the node's name, the IP its module's.
-    _, body, _ = partition_body(parent)
-    top = module_name(configured_network(body, "DataflowCore_0").module, source_roots())
-    assert (export.partition, export.vlnv) == ("DataflowCore_0", f"xilinx_finn:finn:{top}:1.0")
+    # The instance is the node's name; the IP's VLNV is the one packaging gave it (its
+    # module's), none before: nothing predicts it.
+    assert (export.partition, export.vlnv) == ("DataflowCore_0", None)
+    _, body, body_file = partition_body(parent)
+    toolchain: Any = PackagedHere()
+    body = body.transform(
+        PackagePartition("DataflowCore_0", directory=tmp_path / "ip", toolchain=toolchain)
+    )
+    body.save(body_file)
+    top = live_name(configured_network(body, "DataflowCore_0").module)
+    assert integration(parent).vlnv == body.get(OUTPUT_VLNV) == f"xilinx_finn:finn:{top}:1.0"
     # Movers by direction in port order, each IODMA_hls configured from its facts: a
     # frame's beats, the stream's bytes a beat in the UINT8 container, the memory port
     # and the stream's width; the element is the mover's.
@@ -526,7 +533,7 @@ def test_packaging_states_its_ip_typed_and_writes_no_flat_key(tmp_path: Path) ->
         PackagePartition("DataflowCore_0", directory=project, toolchain=toolchain)
     )
     assert packaged.get(OUTPUT_IP) == str(project / "ip")
-    top = module_name(configured_network(body, "DataflowCore_0").module, source_roots())
+    top = live_name(configured_network(body, "DataflowCore_0").module)
     assert top.startswith("finn_dataflowcore_")
     assert packaged.get(OUTPUT_VLNV) == f"xilinx_finn:finn:{top}:1.0"
     interfaces = packaged.get(OUTPUT_INTERFACES)

@@ -21,7 +21,7 @@ from finn.kernels.artifacts.abi import (
     Signal,
 )
 from finn.kernels.artifacts.build import emit_module
-from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData
+from finn.kernels.artifacts.contributions import ContributionError, CopiedSource, GeneratedData
 from finn.kernels.artifacts.module import Abi, BuildError, Composed, Fragment, Leaf
 
 
@@ -117,3 +117,19 @@ def test_two_sources_claiming_one_path_or_one_module_are_refused(tmp_path: Path)
     clash = _leaf(sources=(CopiedSource("one", "a.sv"), CopiedSource("two", "a.sv")))
     with pytest.raises(BuildError, match="staged as a.sv"):
         emit_module(clash, tmp_path / "out", roots={"one": tmp_path, "two": tmp_path / "other"})
+    # Refused before anything is read: one root names no directory at all.
+    with pytest.raises(BuildError, match="staged as a.sv: 'one''s and 'two''s"):
+        emit_module(clash, tmp_path / "out", roots={"one": tmp_path, "two": tmp_path / "none"})
+
+
+def test_a_file_has_one_name() -> None:
+    """A path relative to a root, or to the module's directory, is spelled one way, so two
+    declarations of one file are one staged file, read once."""
+    for path in ("./a.sv", "a//a.sv", "a/./a.sv", "a/", "a/b/../a.sv"):
+        with pytest.raises(ContributionError):
+            CopiedSource("fixture", path)
+        with pytest.raises(ContributionError):
+            GeneratedData(path, b"")
+    with pytest.raises(ContributionError, match="'./a.sv' is not a canonical name: 'a.sv'"):
+        CopiedSource("fixture", "./a.sv")
+    assert CopiedSource("fixture", "a/a.sv").path == "a/a.sv"

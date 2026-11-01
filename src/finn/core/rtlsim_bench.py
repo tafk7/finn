@@ -631,11 +631,13 @@ def _memory(directory: Path, name: str, bits: int, words: Sequence[int], taken: 
 
 @dataclass(frozen=True)
 class StreamBench:
-    """A stream testbench: the module's sources, and the testbench module ``check``."""
+    """A stream testbench: the module's name as emitted (``top``), its sources, and the
+    testbench module ``check``."""
 
     sources: tuple[str, ...]
     text: str
     budget: int
+    top: str
 
 
 def stream_bench(
@@ -950,7 +952,7 @@ def stream_bench(
     end
 endmodule
 """
-    return StreamBench(tuple(sources), text, budget)
+    return StreamBench(tuple(sources), text, budget, top)
 
 
 def _stream(

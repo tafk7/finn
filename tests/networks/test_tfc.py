@@ -25,6 +25,7 @@ from support.configure import bound_in_shell, core_in_shell, write_raw
 from support.explore_models import explored
 from support.helpers import refused_codes
 from support.models import DOMAIN
+from support.module_names import live_name
 from support.packaging import reaches_vivado, read_back
 from support.refusals import refused
 from support.tfc import LANES, SHAPE, ULTRA96, cut, partition
@@ -43,13 +44,12 @@ from finn.core.search import Ranked, Refused
 from finn.core.space import Available, inspection
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import body_row, configured_network, shell_composition
-from finn.kernels.artifacts.module import module_name
 from finn.kernels.budgets import SHELL, counts
 from finn.kernels.dataflow_core import DataflowCoreKernel
 from finn.kernels.explore import Seam
 from finn.toolchain.launcher import host_toolchain
 from finn.transformation.kernels import PackagePartition
-from finn.transformation.kernels.package import ElaboratePartition, boundary_facts, source_roots
+from finn.transformation.kernels.package import ElaboratePartition, boundary_facts
 
 LOGITS = "MatMul_3_out0"
 FRAMES = 2
@@ -210,7 +210,7 @@ def test_tfc_w2a2_packages_as_the_shells_ip(tfc_streamlined: Path, tmp_path: Pat
     body = body.transform(PackagePartition(sdp.name, directory=project))
     # The IP is named as the core's module, by its kind and content; the node's name is its
     # display name.
-    top = module_name(configured_network(body, sdp.name).module, source_roots())
+    top = live_name(configured_network(body, sdp.name).module)
     assert top.startswith("finn_dataflowcore_")
     assert body.get(OUTPUT_VLNV) == f"xilinx_finn:finn:{top}:1.0"
     names = body.get(OUTPUT_INTERFACES)

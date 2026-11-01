@@ -49,11 +49,10 @@ from finn.core.reporting.findings import Finding, FindingKind, Refusal
 from finn.core.rtlsim_bench import SimulationFailed, Words, stream_bench
 from finn.custom_op.kernels.shell import configured_network, refuse_unverified
 from finn.dataflow.traversal import pack
-from finn.kernels.artifacts.module import module_name
 from finn.kernels.artifacts.sources import include_directories, is_header
 from finn.toolchain import xsim
 from finn.toolchain.launcher import Toolchain, ToolFailed, ToolUnavailable, run_process
-from finn.transformation.kernels.package import boundary_facts, free_side, source_roots
+from finn.transformation.kernels.package import boundary_facts, free_side
 from finn.util.draws import graph_inputs
 
 #: The directory of the testbench, beside the packaged IP.
@@ -173,7 +172,7 @@ def write_testbench(
     (directory / "check.sv").write_text("`timescale 1ns/1ps\n" + bench.text)
     relative = [str(Path(source).relative_to(directory)) for source in bench.sources]
     script = directory / RUN_SCRIPT
-    script.write_text(_run_script(module_name(point.module, source_roots()), relative))
+    script.write_text(_run_script(bench.top, relative))
     script.chmod(0o755)
 
 

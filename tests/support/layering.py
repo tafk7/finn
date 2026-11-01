@@ -542,6 +542,7 @@ LAYERS: tuple[Layer, ...] = (
             "support.ipxact_ports",
             "support.ipxact_script",
             "support.kernel_specs",
+            "support.module_names",
             "support.netlist",
             "support.ports",
             "support.xsim",

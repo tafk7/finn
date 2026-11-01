@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from finn.kernels.artifacts.abi import Clock, Direction, Free, Reset, Signal
-from finn.kernels.artifacts.build import emit_module
+from finn.kernels.artifacts.build import capture, emit_module
 from finn.kernels.artifacts.contributions import (
     ContributionError,
     CopiedSource,
@@ -180,15 +180,52 @@ def test_emission_refuses_a_missing_or_foreign_product(tmp_path: Path) -> None:
         emit_module(_leaf(request), tmp_path / "out", roots={}, built={request.function: product})
 
 
-def test_a_composed_module_s_name_covers_its_requests_headers(tmp_path: Path) -> None:
-    """A header an HLS request copies is the composed module's content, one it includes
-    among them (``util.hpp``, which ``core.hpp`` includes): another header at the same path
-    renames the module."""
-    module = Composed("test.hls.one", "1", "one", Abi(PINS), Fragment((("a", _leaf(_top())),)))
+def test_a_composed_module_s_name_covers_its_hls_products(tmp_path: Path) -> None:
+    """An HLS request's product is the composed module's content as it is staged: another
+    exported Verilog file, or another memory image, for the same request (another part, or
+    another HLS release) renames the module, and emission names it so; another header the
+    request reads renames it only through the product it synthesizes to."""
+    request = _top()
+    module = Composed("test.hls.one", "1", "one", Abi(PINS), Fragment((("a", _leaf(request)),)))
     roots = {"fixture": _fixture(tmp_path / "finnlib")}
-    name = module_name(module, roots)
+    names = {}
+    for case, change in (("as built", None), ("verilog", "_rom.v"), ("image", "_rom.dat")):
+        product = _product(tmp_path / case, request)
+        if change is not None:
+            (product / f"{request.function}{change}").write_text("// another\n")
+        built = {request.function: product}
+        names[case] = module_name(module, capture(module, roots=roots, built=built))
+        emitted = emit_module(module, tmp_path / f"out-{case}", roots=roots, built=built)
+        assert emitted.entry_point == names[case]
+    assert len(set(names.values())) == 3
     (tmp_path / "finnlib/hls/util/util.hpp").write_text("#define CHANGED 1\n")
-    assert module_name(module, roots) != name
+    built = {request.function: tmp_path / "as built"}
+    assert module_name(module, capture(module, roots=roots, built=built)) == names["as built"]
+    # What a header provides is no part of what is staged, the request's product: the same.
+    marked = replace(request, headers=tuple(replace(h, provides=("x",)) for h in HEADERS))
+    assert marked.function == request.function and marked != request
+    other = replace(module, fragment=Fragment((("a", _leaf(marked)),)))
+    assert module_name(other, capture(other, roots=roots, built=built)) == names["as built"]
+
+
+def test_a_copied_source_is_not_staged_among_an_hls_product(tmp_path: Path) -> None:
+    request = _top()
+    beside = Leaf(
+        "test.beside",
+        "beside",
+        (),
+        Abi(PINS),
+        (CopiedSource("fixture", f"{request.function}/beside.sv", provides=("module:beside",)),),
+    )
+    module = Composed(
+        "test.hls.beside",
+        "1",
+        "beside",
+        Abi(PINS),
+        Fragment((("a", _leaf(request)), ("b", beside))),
+    )
+    with pytest.raises(BuildError, match="among the HLS product of"):
+        emit_module(module, tmp_path / "out", roots={})
 
 
 def test_two_configurations_compose_without_sharing_a_file(tmp_path: Path) -> None:
@@ -204,9 +241,7 @@ def test_two_configurations_compose_without_sharing_a_file(tmp_path: Path) -> No
         Abi(PINS),
         Fragment((("a", _leaf(first)), ("b", _leaf(second)))),
     )
-    # The module's name covers its requests' headers, read from their root.
-    roots = {"fixture": _fixture(tmp_path / "finnlib")}
-    emitted = emit_module(module, tmp_path / "out", roots=roots, built=products)
+    emitted = emit_module(module, tmp_path / "out", roots={}, built=products)
     staged = [path for path in emitted.sources if path.endswith(".v")]
     assert len(staged) == 4 and len(set(staged)) == 4
     assert len(emitted.data) == 2
