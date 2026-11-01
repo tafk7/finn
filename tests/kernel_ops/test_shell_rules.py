@@ -15,10 +15,10 @@ too. Each refusal is named, owned by the shell member's rule: ``control-window-e
 partition (``viable``, the seam), and a stored one leaves it refused (exploration and
 emission name it); a row narrowed by hand stands for a shell that takes less.
 
-No KernelOp names a control port, so a partition of KernelOps presents no AXI-Lite bus:
-the windows are counted here on a partition built from the kernels directly, AXI-Lite
-thresholdings each given its port, placed behind their core's grouper as one window of its
-unit (``finn.kernels.grouper``). Emission checks the core's netlist's count
+The windows are counted here on a partition built from the kernels directly
+(``support.presenting``), as many AXI-Lite thresholdings as a case needs, each given its
+port, placed behind their core's grouper as one window of its unit
+(``finn.kernels.grouper``). Emission checks the core's netlist's count
 (``netlist_counts``, the pins its module would have) against the rules'
 (``finn.kernels.shell_rules.counts``). No kernel initiates a memory port, so on a network
 that count is always zero: ``netlist_counts`` is counted here on a netlist and boundary

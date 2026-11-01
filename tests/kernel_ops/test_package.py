@@ -218,12 +218,11 @@ def test_a_top_that_does_not_elaborate_is_refused_before_vivado(
 def test_a_core_unit_elaborates_beside_its_core_and_holds_its_ip(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """A core presenting three buses (thresholdings built by hand: no KernelOp presents
-    one) staged as its unit: the unit's module elaborates beside the core's, its project
-    holds the core's packaging project (its IP and the sources it names, ``core/``), and its
-    script finds the core's IP there and holds it as a subcore, by the VLNV it was packaged
-    as, whole (here of a vendor, library and version of its own). Packaging gets as far as
-    running Vivado."""
+    """A core presenting three buses (thresholdings built by hand) staged as its unit: the
+    unit's module elaborates beside the core's, its project holds the core's packaging
+    project (its IP and the sources it names, ``core/``), and its script finds the core's IP
+    there and holds it as a subcore, by the VLNV it was packaged as, whole (here of a
+    vendor, library and version of its own). Packaging gets as far as running Vivado."""
     point = thresholdings(3, shell_row("pynq", "Ultra96"))
     module = point.core_answer(DataflowCoreKernel.module)
     grouping = core_grouping(point)

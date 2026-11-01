@@ -3,9 +3,9 @@
 
 """A partition presenting AXI-Lite buses, declared by hand.
 
-No KernelOp names a control port, so a partition of KernelOps presents no AXI-Lite bus:
-the shell's rules, the core unit and its packaging are read on a partition built from the
-kernels directly, AXI-Lite thresholdings each given its port (``thresholdings``)."""
+The shell's rules, the core unit and its packaging are read on a partition built from the
+kernels directly, with no graph to convert: as many AXI-Lite thresholdings as a case needs,
+each given its port (``thresholdings``)."""
 
 from __future__ import annotations
 
