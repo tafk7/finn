@@ -451,6 +451,12 @@ def load(
     for each in extra:
         path = Path(each)
         file = path / FILE if path.is_dir() else path
+        if not (file.is_file() or (path.is_dir() and (path / PARTS_OVERLAY).is_file())):
+            raise TargetRefused(
+                "declaration-invalid",
+                str(path),
+                f"{path}: a {FILE}, or a directory holding {FILE} or {PARTS_OVERLAY}",
+            )
         sources.append((Origin(EXTRA, file), file.parent))
     found = _Found()
     for origin, _ in sources:

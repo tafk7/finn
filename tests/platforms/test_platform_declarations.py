@@ -129,6 +129,21 @@ def test_the_path_lists_directories_each_declaring(tmp_path: Path) -> None:
         load(environ={PATH_SETTING: str(tmp_path / "absent")})
 
 
+def test_an_added_file_or_directory_that_declares_nothing_is_refused(tmp_path: Path) -> None:
+    """A file a caller adds is read or refused, never skipped: one that is not there, or a
+    directory holding neither declarations nor a parts overlay."""
+    for absent in (tmp_path / "absent.toml", tmp_path):
+        with refused(
+            "declaration-invalid",
+            error=TargetRefused,
+            owner=str(absent),
+            message=f"^{absent}: a platform.toml, or a directory holding",
+        ):
+            load([absent], environ=FINN_ONLY)
+    (tmp_path / "parts.json").write_text('{"schema": 1, "devices": {}, "parts": {}}')
+    assert load([tmp_path], environ=FINN_ONLY).directories[-1][1] == tmp_path
+
+
 @dataclass(frozen=True)
 class _Dist:
     name: str
