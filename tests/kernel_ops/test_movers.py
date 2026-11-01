@@ -36,7 +36,7 @@ from support.models import (
     configure_partition,
     kernel_model,
 )
-from support.module_names import live_name
+from support.module_names import fixed_name
 from support.ports import outer
 from support.tfc import ULTRA96
 from support.tfc_built import TFC_MODULE
@@ -664,11 +664,11 @@ def test_at_3e6_fps_a_64_bit_memory_port_binds_and_128_bits_do_not(
 
 def module_of(model: ModelWrapper, directory: Path) -> str:
     """The name of the module the explored ``model``'s partition is packaged as, cut once
-    as the kernel path cuts it."""
+    as the kernel path cuts it, over fixed source bytes (``fixed_name``): its value's."""
     parent = model.transform(CutKernelPartition(directory))
     node, body, _ = partition_body(parent)
     point, _ = configured_network(body, node.name)
-    return live_name(point.module)
+    return fixed_name(point.module)
 
 
 @pytest.mark.slow

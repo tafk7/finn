@@ -42,7 +42,7 @@ from support.models import (
     host_between_source,
     kernel_model,
 )
-from support.module_names import live_name
+from support.module_names import fixed_name, live_name
 from support.packaging import (
     PLACED_HIERARCHY,
     TIMING_REPORT,
@@ -1521,14 +1521,15 @@ def test_the_export_of_tfc_on_pynq_names_both_movers_iodmas_and_every_connection
     # thresholding's range.
     node, body, _ = partition_body(parent)
     point, _ = configured_network(body, node.name)
-    assert live_name(point.module) == TFC_MODULE
+    assert fixed_name(point.module) == TFC_MODULE
     persisted = json.loads((output / "report" / "kernel_choices.json").read_text())
     assert persisted == kernel_choices_config(body)
     assert persisted == TFC_STORED
 
 
 #: The block design Z0's build wrote for TFC (its ip_config.tcl's custom section, its
-#: partition StreamingDataflowPartition_1 renamed, its IP named as its module), each build
+#: partition StreamingDataflowPartition_1 renamed, its IP named as its module, here
+#: ``TFC_MODULE``), each build
 #: directory as normalized ($BUILD, a random suffix XXXXXXXX). The oracle's is the same but
 #: for the partition's IP and the quoting
 #: (``test_the_z0_literal_is_the_oracles_block_design_but_for_the_partitions_ip``).

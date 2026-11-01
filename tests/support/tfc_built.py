@@ -97,6 +97,9 @@ STORED: dict[str, dict[str, object]] = {
 #: graph name: ``TFC_BUILT`` and ``STORED``.
 TFC_STORED = {owner: {**TFC_BUILT[owner], **STORED.get(owner, {})} for owner in TFC_BUILT}
 
-#: The module TFC_W2A2 is packaged as with ``TFC_STORED`` (``module_name``): its kind and the
-#: digest of its content, its name left out, so one name in every shell.
-TFC_MODULE = "finn_dataflowcore_c61b678c2de5ef01"
+#: The module TFC_W2A2 is packaged as with ``TFC_STORED``, named over fixed stand-in bytes
+#: for its sources (``support.module_names.fixed_name``): its kind and the digest of its value,
+#: its name left out, so one name in every shell. Recorded from that module: it moves with the
+#: module's value or the fingerprint's format, never with the FinnLib checked out. A build's
+#: name digests FinnLib's bytes as it reads them (``live_name``).
+TFC_MODULE = "finn_dataflowcore_7204d0d9081454a4"
