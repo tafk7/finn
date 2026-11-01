@@ -57,7 +57,7 @@ from finn.kernels.explore import (
 from finn.kernels.matmul import KnownWeights, MatMulKernel
 from finn.kernels.policies import Required
 from finn.kernels.sides import Side
-from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.thresholding import ThresholdingKernel
 from finn.kernels.utilization import total
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import RESOURCE_NAMES, Resources
@@ -124,7 +124,7 @@ def test_a_choice_names_its_space_class_and_whether_its_cases_are_ordered() -> N
     assert compute.cases == ("packed",)
     ((rule, (finding,)),) = compute.refused["int8_dsp58"].why.items()
     assert (rule, finding.code) == (("first", "compute.int8_dsp58.core_supported"), "dotp-target")
-    assert fresh["activate.ultra_stages"].space_type is ThresholdingAxiKernel
+    assert fresh["activate.ultra_stages"].space_type is ThresholdingKernel
     # The folding is MatMul's, offered while its core is open; a core's own choices wait
     # on its presence. A channel's transport is offered at once.
     pe = fresh["first.pe"]

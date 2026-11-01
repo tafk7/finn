@@ -83,7 +83,7 @@ from finn.kernels.explore import CoreComposition
 from finn.kernels.matmul import KnownWeights, MatMulKernel
 from finn.kernels.port import exposed_pins, port_direction
 from finn.kernels.sides import BUILD, Outside, Side, SideKind, Steady
-from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.thresholding import ThresholdingKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 
 
@@ -104,7 +104,7 @@ def kernels(names: Mapping[str, str] | None = None) -> dict[str, Facts]:
     return {
         named.get("first", "first"): _matmul(W1, X_TENSOR),
         named.get("activate", "activate"): Facts(
-            ThresholdingAxiKernel,
+            ThresholdingKernel,
             {
                 "threshold_dtype": THRESHOLD_DTYPE,
                 "thresholds": IntegerTensorValue.of(THRESHOLDS),
@@ -265,7 +265,7 @@ def test_the_same_structure_is_one_class_and_new_facts_a_new_design_space(cache:
     # Other thresholds: a new design space of the same class.
     other = kernels()
     other["activate"] = Facts(
-        ThresholdingAxiKernel,
+        ThresholdingKernel,
         {
             **other["activate"].arguments,
             "thresholds": IntegerTensorValue.of((tuple((-8, 0, 9) for _ in range(4)),)),
@@ -624,11 +624,9 @@ def test_a_read_no_member_states_is_refused(cache: None) -> None:
     assert _refused(declared(channels_=_wired(y=no_port))) == [
         ("channel-read", "y", "reads second, which states no port z")
     ]
-    with pytest.raises(DataflowCoreRefused, match="ThresholdingAxiKernel takes no fact depth"):
+    with pytest.raises(DataflowCoreRefused, match="ThresholdingKernel takes no fact depth"):
         given = kernels()
-        given["activate"] = Facts(
-            ThresholdingAxiKernel, {**given["activate"].arguments, "depth": 2}
-        )
+        given["activate"] = Facts(ThresholdingKernel, {**given["activate"].arguments, "depth": 2})
         compose(DataflowCoreDeclaration(given, channels(), name=TEST_CORE))
 
 
@@ -672,7 +670,7 @@ def test_a_port_s_endpoint_is_read_off_its_class() -> None:
     assert port_direction(MatMulKernel, "y") is Direction.OUT
     assert port_direction(MatMulKernel, "x") is Direction.IN
     assert port_direction(Channel, "set") is Direction.IN
-    assert port_direction(ThresholdingAxiKernel, "output") is Direction.OUT
+    assert port_direction(ThresholdingKernel, "output") is Direction.OUT
     assert port_direction(MatMulKernel, "z") is None
 
 
@@ -786,7 +784,7 @@ def test_a_member_s_port_an_alias_of_its_holder_exposes_needs_no_channel() -> No
         class Exposing(Kernel):
             id = "test.exposing"
             producer: Side = Param()
-            activate = ThresholdingAxiKernel()
+            activate = ThresholdingKernel()
             x = Channel(
                 tensor=X_TENSOR,
                 producer=producer,
@@ -814,8 +812,8 @@ def test_a_channel_side_reading_two_ports_is_refused_by_its_own_code() -> None:
         class Both(Kernel):
             id = "test.both"
             producer: Side = Param()
-            one = ThresholdingAxiKernel()
-            two = ThresholdingAxiKernel()
+            one = ThresholdingKernel()
+            two = ThresholdingKernel()
             output = one.output
             second_output = two.output
 
@@ -1055,7 +1053,7 @@ def _unchanneled(body: str) -> list[tuple[str, str]]:
     """The findings a sealed core declared by hand with ``body`` is refused with."""
     namespace: dict[str, object] = {
         "DataflowCoreKernel": DataflowCoreKernel,
-        "ThresholdingAxiKernel": ThresholdingAxiKernel,
+        "ThresholdingKernel": ThresholdingKernel,
         "Channel": Channel,
         "Param": Param,
         "Side": Side,
@@ -1076,7 +1074,7 @@ _EDGE = (
 @pytest.mark.parametrize(
     ("body", "exposed"),
     [
-        ("activate = ThresholdingAxiKernel()\n    s_axis_0 = activate.input", "activate.input"),
+        ("activate = ThresholdingKernel()\n    s_axis_0 = activate.input", "activate.input"),
         (_EDGE + "s_axis_0 = x.source.output", "x.source.output"),
         (_EDGE + "s_axis_0 = x.set", "x.source.set"),
     ],
@@ -1110,7 +1108,7 @@ def test_a_sealed_core_s_placed_outer_port_without_an_edge_port_is_refused_by_it
     class Core(DataflowCoreKernel):
         x_producer: Side = Param()
         y_consumer: Side = Param()
-        activate = ThresholdingAxiKernel(
+        activate = ThresholdingKernel(
             threshold_dtype=THRESHOLD_DTYPE,
             thresholds=IntegerTensorValue.of(THRESHOLDS),
             bias=0,

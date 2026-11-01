@@ -44,7 +44,7 @@ from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.library import library_module
-from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.thresholding import ThresholdingKernel
 from finn.kernels.values.semantics import IntegerTensorValue, integer_shape
 from finn.toolchain.launcher import host_toolchain
 
@@ -137,7 +137,7 @@ def threshold(*, use_axilite=False, deep_pipeline=False, pe=1, channels=None, **
     # Runtime-writable thresholds present their bus through a control node.
     place = controlled if use_axilite else point_for
     return place(
-        ThresholdingAxiKernel,
+        ThresholdingKernel,
         facts,
         use_axilite=use_axilite,
         deep_pipeline=deep_pipeline,
@@ -344,7 +344,7 @@ def test_required_root_bindings_and_explicit_optional_inputs_preserve_partial_qu
         FifoKernel,
         InputGeneratorKernel,
         EltwiseKernel,
-        ThresholdingAxiKernel,
+        ThresholdingKernel,
     ):
         # A missing required formal is refused when design_space() prepares the root.
         with refused("formal-unsupplied", error=DefinitionError):

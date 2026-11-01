@@ -80,14 +80,14 @@ from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.laws import Axis
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port_model import InPort, OutPort, StreamPort
-from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.thresholding import ThresholdingKernel
 
 # -- the loop-order proof: thresholding on a schedule ---------------------------------------
 
 r, c = Index("r"), Index("c")
 
 
-class RowsFirst(ThresholdingAxiKernel):
+class RowsFirst(ThresholdingKernel):
     """thresholding_axi declaring its rows outer, channels split by PE inner: the RTL's order."""
 
     id = "test.thresholding_axi.rows_first"
@@ -127,7 +127,7 @@ def split_ports(schedule: Any, lanes: tuple[Index, ...]) -> tuple[StreamPort, St
     input = InPort(
         label="input",
         transport=Axis(bus="s_axis"),
-        tensor=ThresholdingAxiKernel.input_tensor,
+        tensor=ThresholdingKernel.input_tensor,
         schedule=schedule,
         index=(r, co * 3 + ci),
         lanes=lanes,
@@ -135,7 +135,7 @@ def split_ports(schedule: Any, lanes: tuple[Index, ...]) -> tuple[StreamPort, St
     output = OutPort(
         label="output",
         transport=Axis(bus="m_axis"),
-        tensor=ThresholdingAxiKernel.output_tensor,
+        tensor=ThresholdingKernel.output_tensor,
         schedule=schedule,
         index=(r, co * 3 + ci),
         lanes=lanes,
@@ -143,7 +143,7 @@ def split_ports(schedule: Any, lanes: tuple[Index, ...]) -> tuple[StreamPort, St
     return input, output
 
 
-class LanesInOrder(ThresholdingAxiKernel):
+class LanesInOrder(ThresholdingKernel):
     """PE = C: all channels a beat, lane ``3 co + ci`` holding channel ``3 co + ci``."""
 
     id = "test.thresholding_axi.lanes_in_order"
@@ -362,7 +362,7 @@ class Unbound(MemStreamKernel):
     parameters = without(MemStreamKernel, "RAM_STYLE")
 
 
-class Unpipelined(ThresholdingAxiKernel):
+class Unpipelined(ThresholdingKernel):
     """thresholding_axi without DEEP_PIPELINE, which the module declares with a default.
 
     Checked at all because THRESHOLDS, an array, does not decline the module: the
@@ -372,7 +372,7 @@ class Unpipelined(ThresholdingAxiKernel):
     """
 
     id = "test.thresholding_axi.unpipelined"
-    parameters = without(ThresholdingAxiKernel, "DEEP_PIPELINE")
+    parameters = without(ThresholdingKernel, "DEEP_PIPELINE")
 
 
 def misspelled(kernel: type[Kernel], name: str, misspelling: str) -> Any:

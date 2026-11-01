@@ -48,7 +48,7 @@ from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port_model import InPort, OutPort, StreamPort, stream_ports
-from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.thresholding import ThresholdingKernel
 from finn.kernels.vpc import VpcKernel
 from finn.platform.shells import shell_row
 
@@ -102,7 +102,7 @@ PORT_TYPES: dict[type[Space], dict[str, type[StreamPort]]] = {
     FifoKernel: {"input": InPort, "output": OutPort},
     InputGeneratorKernel: {"input": InPort, "output": OutPort},
     VpcKernel: {"input": InPort, "output": OutPort},
-    ThresholdingAxiKernel: {"input": InPort, "output": OutPort, "set": InPort},
+    ThresholdingKernel: {"input": InPort, "output": OutPort, "set": InPort},
     PackedDotpKernel: {"x": InPort, "w": InPort, "y": OutPort},
     Int8Dsp58DotpKernel: {"x": InPort, "w": InPort, "y": OutPort},
     MemStreamKernel: {"set": InPort, "output": OutPort},

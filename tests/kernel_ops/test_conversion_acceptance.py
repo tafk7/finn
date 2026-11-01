@@ -47,7 +47,7 @@ from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.policies import FirstValid, Fixed, Required, stated
 from finn.kernels.port import stream_port
 from finn.kernels.sides import Side
-from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.thresholding import ThresholdingKernel
 from finn.transformation.kernels import (
     InferKernelTensors,
     Outcome,
@@ -363,7 +363,7 @@ class OpenPeThresholding(Thresholding):
     the kernel taken at its defaults has both its sides waiting on it."""
 
     op_type = "OpenPeThresholding"
-    policies = {ThresholdingAxiKernel.pe: Required()}
+    policies = {ThresholdingKernel.pe: Required()}
 
 
 def test_a_stream_whose_side_waits_keeps_the_node_on_the_host_with_the_side_s_findings(

@@ -21,7 +21,7 @@ from support.helpers import FULL_DSP48E2
 from finn.core.space import ConfigurationResult, Inapplicable, design_space, inspection
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.library import library_module
-from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.thresholding import ThresholdingKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import Platform
 
@@ -34,9 +34,9 @@ def table(count: int, channels: int = 4) -> tuple[tuple[tuple[int, ...], ...], .
     return (tuple(tuple(range(count)) for _ in range(channels)),)
 
 
-def configured(count: int = 3, pe: int = 1, **memory: object) -> ThresholdingAxiKernel:
+def configured(count: int = 3, pe: int = 1, **memory: object) -> ThresholdingKernel:
     base = design_space(
-        ThresholdingAxiKernel(
+        ThresholdingKernel(
             input_tensor=INPUT,
             threshold_dtype=INT8,
             thresholds=IntegerTensorValue.of(table(count)),
@@ -49,12 +49,12 @@ def configured(count: int = 3, pe: int = 1, **memory: object) -> ThresholdingAxi
     return report.instance
 
 
-def triggers(point: ThresholdingAxiKernel) -> tuple[int, int]:
+def triggers(point: ThresholdingKernel) -> tuple[int, int]:
     parameters = dict(library_module(point).parameters)
     return parameters["DEPTH_TRIGGER_BRAM"], parameters["DEPTH_TRIGGER_URAM"]
 
 
-def styles(point: ThresholdingAxiKernel) -> tuple[str, ...]:
+def styles(point: ThresholdingKernel) -> tuple[str, ...]:
     """Each stage's resource, as thresholding.sv assigns it from the triggers."""
     bram, uram = triggers(point)
     found = []
@@ -74,7 +74,7 @@ def test_the_stage_counts_range_over_the_rtl_stages(count: int, stages: int) -> 
     point = configured(count, ram_style="auto", ultra_stages=0)
     assert point.stages == stages
     base = design_space(
-        ThresholdingAxiKernel(
+        ThresholdingKernel(
             input_tensor=INPUT,
             threshold_dtype=INT8,
             thresholds=IntegerTensorValue.of(table(count)),
@@ -125,7 +125,7 @@ def test_each_case_maps_to_the_triggers_the_rtl_reads(
     assert styles(point) == assigned
 
 
-def broken(report: ConfigurationResult[ThresholdingAxiKernel]) -> list[tuple[str, set[str]]]:
+def broken(report: ConfigurationResult[ThresholdingKernel]) -> list[tuple[str, set[str]]]:
     """Each rule a refused change breaks, with its codes."""
     return [
         (rule.rule, {finding.code for finding in rule.result.findings}) for rule in report.broken
@@ -158,7 +158,7 @@ def test_every_stage_in_ultraram_has_one_spelling() -> None:
     style set beside it is kept dormant and changes nothing."""
     point = configured(ultra_stages=2)
     assert triggers(point) == (0, 4) and styles(point) == ("ultra", "ultra")
-    assert isinstance(point.query(ThresholdingAxiKernel.ram_style), Inapplicable)
+    assert isinstance(point.query(ThresholdingKernel.ram_style), Inapplicable)
     for style in ("auto", "distributed"):
         report = point.try_with_choices(ram_style=style)
         assert report.accepted
@@ -184,9 +184,9 @@ def test_the_platform_narrows_the_memories_and_a_control_bus_the_axilite() -> No
     each value is refused by the rule that names it, nothing standing, and only what
     remains is possible."""
 
-    def point(platform: Platform) -> ThresholdingAxiKernel:
+    def point(platform: Platform) -> ThresholdingKernel:
         return design_space(
-            ThresholdingAxiKernel(
+            ThresholdingKernel(
                 input_tensor=INPUT,
                 threshold_dtype=INT8,
                 thresholds=IntegerTensorValue.of(table(3)),
@@ -204,12 +204,12 @@ def test_the_platform_narrows_the_memories_and_a_control_bus_the_axilite() -> No
 
     full = point(FULL_DSP48E2)
     ultra, axilite = inspection.viable(
-        full, [ThresholdingAxiKernel.ultra_stages, ThresholdingAxiKernel.use_axilite]
+        full, [ThresholdingKernel.ultra_stages, ThresholdingKernel.use_axilite]
     )
     assert ultra.cases == (0, 1, 2)
     assert axilite.cases == (False,) and refused(axilite) == {True: [("control_for_writes", ())]}
     bare = point(replace(FULL_DSP48E2, uram=False))
-    (ultra,) = inspection.viable(bare, [ThresholdingAxiKernel.ultra_stages])
+    (ultra,) = inspection.viable(bare, [ThresholdingKernel.ultra_stages])
     assert ultra.cases == (0,)
     assert refused(ultra) == {1: [("uram_present", ())], 2: [("uram_present", ())]}
     zynq = point(replace(FULL_DSP48E2, uram_init=False))

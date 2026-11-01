@@ -16,7 +16,7 @@ from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.explore import CoreComposition
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.sides import Side
-from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.thresholding import ThresholdingKernel
 from finn.kernels.transpose import TransposeKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import Platform
@@ -91,7 +91,7 @@ def adapted(source: Traversal, pe: int, *, adaptable: bool = True) -> CoreCompos
                 },
             ),
             "activate": Facts(
-                ThresholdingAxiKernel,
+                ThresholdingKernel,
                 {
                     "threshold_dtype": DataType["INT4"],
                     "thresholds": IntegerTensorValue.of((tuple(LEVELS for _ in range(channels)),)),

@@ -204,7 +204,7 @@ _THRESHOLD_LUT = Fit(81.7, (0.271,))
 _THRESHOLD_FF = Fit(31.3, (0.948,))
 
 
-class ThresholdingAxiKernel(Kernel):
+class ThresholdingKernel(Kernel):
     """Integer ``thresholding_axi``: the input's channels counted against a table of
     thresholds, plus a bias; see the module docstring."""
 
@@ -711,7 +711,7 @@ class ThresholdingAxiKernel(Kernel):
 
 
 __all__ = [
-    "ThresholdingAxiKernel",
+    "ThresholdingKernel",
     "stage_style",
     "threshold_table_dtype",
     "thresholding_resources",

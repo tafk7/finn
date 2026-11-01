@@ -47,7 +47,7 @@ from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import (
-    ThresholdingAxiKernel,
+    ThresholdingKernel,
     stage_style,
     thresholding_resources,
 )
@@ -326,7 +326,7 @@ def test_each_memory_ranks_its_explicit_styles_by_size_then_auto() -> None:
         assert cases(point, decision) == LUTRAM_FIRST
     # The thresholds' stages left above the UltraRAM ones: distributed first.
     assert threshold_base().with_choices(ultra_stages=0).field(
-        ThresholdingAxiKernel.ram_style
+        ThresholdingKernel.ram_style
     ).candidates() == Available(("distributed", "auto"))
 
 

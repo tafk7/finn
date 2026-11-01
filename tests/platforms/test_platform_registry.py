@@ -19,7 +19,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import tile
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.movers import iodma_hls
-from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.thresholding import ThresholdingKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.architectures import rule
 from finn.platform.boards import BOARDS
@@ -234,9 +234,9 @@ def test_versal_s_ultraram_takes_initial_contents_so_initialised_ultra_memories_
             )
         )
 
-    def thresholding(platform: Platform) -> ThresholdingAxiKernel:
+    def thresholding(platform: Platform) -> ThresholdingKernel:
         return design_space(
-            ThresholdingAxiKernel(
+            ThresholdingKernel(
                 input_tensor=Tensor((1, 1), ScalarEncoding(DataType["INT8"])),
                 threshold_dtype=DataType["INT8"],
                 thresholds=IntegerTensorValue.of((((-2, 0, 3),),)),

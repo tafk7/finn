@@ -39,7 +39,7 @@ from finn.kernels.composer import DataflowCoreDeclaration, Facts, Port, Stated, 
 from finn.kernels.explore import CoreComposition, Seam, TargetCycles
 from finn.kernels.matmul import KnownWeights, MatMulKernel
 from finn.kernels.sides import Side
-from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.thresholding import ThresholdingKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import Platform
 from finn.transformation.kernels import explore_kernel_choices
@@ -72,7 +72,7 @@ def declared(*, adaptable: bool) -> DataflowCoreDeclaration:
                 },
             ),
             "activate": Facts(
-                ThresholdingAxiKernel,
+                ThresholdingKernel,
                 {
                     "threshold_dtype": THRESHOLD_DTYPE,
                     "thresholds": IntegerTensorValue.of(THRESHOLDS),

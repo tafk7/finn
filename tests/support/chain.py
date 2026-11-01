@@ -26,7 +26,7 @@ from finn.kernels.composer import ChannelDeclaration, Facts, Port, Stated, chann
 from finn.kernels.explore import CoreComposition
 from finn.kernels.matmul import KnownWeights, MatMulKernel, column_range
 from finn.kernels.sides import Side
-from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.thresholding import ThresholdingKernel
 from finn.kernels.values.domains import range_dtype
 from finn.kernels.values.semantics import IntegerTensorValue
 from support.helpers import FULL_DSP48E2, by_hand, choose, with_channel_defaults
@@ -118,7 +118,7 @@ def members(hidden: Tensor = HIDDEN_TENSOR) -> dict[str, Facts | ChannelDeclarat
         ),
         "first": matmul(W1, X_TENSOR),
         "activate": Facts(
-            ThresholdingAxiKernel,
+            ThresholdingKernel,
             {
                 "threshold_dtype": THRESHOLD_DTYPE,
                 "thresholds": IntegerTensorValue.of(THRESHOLDS),

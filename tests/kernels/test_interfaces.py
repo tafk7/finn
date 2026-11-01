@@ -41,7 +41,7 @@ from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.explore import CoreComposition
 from finn.kernels.sides import Side
-from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.thresholding import ThresholdingKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.toolchain.launcher import host_toolchain
 
@@ -94,7 +94,7 @@ def activated(*, writable: bool) -> CoreComposition:
                 },
             ),
             "activate": Facts(
-                ThresholdingAxiKernel,
+                ThresholdingKernel,
                 {
                     "threshold_dtype": R,
                     "thresholds": IntegerTensorValue.of(THRESHOLDS),
@@ -181,7 +181,7 @@ def test_writable_thresholds_without_a_control_port_are_not_offered():
     # refused by a constraint of the kernel, nothing standing, so only False is possible;
     # committed, the change is refused by the same rule.
     point = design_space(
-        ThresholdingAxiKernel(
+        ThresholdingKernel(
             threshold_dtype=R,
             thresholds=IntegerTensorValue.of(THRESHOLDS),
             bias=0,
@@ -189,7 +189,7 @@ def test_writable_thresholds_without_a_control_port_are_not_offered():
             platform=FULL_DSP48E2,
         )
     )
-    (viable,) = inspection.viable(point, [ThresholdingAxiKernel.use_axilite])
+    (viable,) = inspection.viable(point, [ThresholdingKernel.use_axilite])
     assert viable.cases == (False,)
     (refused,) = [item for item in viable.values or () if isinstance(item, inspection.Refused)]
     assert refused.value is True
@@ -269,7 +269,7 @@ def test_several_threshold_sets_take_a_set_selector_stream():
                     platform=FULL_DSP48E2,
                 ),
                 "activate": Facts(
-                    ThresholdingAxiKernel,
+                    ThresholdingKernel,
                     {
                         "threshold_dtype": R,
                         "thresholds": IntegerTensorValue.of(two_sets),

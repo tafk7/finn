@@ -36,7 +36,7 @@ from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.matmul import KnownWeights, MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.policies import Defaulted, Fixed, stated
-from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.thresholding import ThresholdingKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.transformation.kernels import InferKernelTensors
 from finn.transformation.kernels.infer import infer_node
@@ -81,7 +81,7 @@ def test_the_schema_is_the_kernel_classs_decision_keys() -> None:
     keys = {item.key for item in inspection.decisions(MatMulKernel)}
     assert set(MatMul.schema()) == keys
     assert set(Thresholding.schema()) == {
-        item.key for item in inspection.decisions(ThresholdingAxiKernel)
+        item.key for item in inspection.decisions(ThresholdingKernel)
     }
 
 
@@ -144,7 +144,7 @@ def test_the_views_answer_from_facts() -> None:
         platform=TARGET.platform,
     )
     edge = Tensor((1, 3, 4), ScalarEncoding(dtype("INT8")))
-    alone = design_space(ThresholdingAxiKernel(**facts, input_tensor=edge))
+    alone = design_space(ThresholdingKernel(**facts, input_tensor=edge))
     assert alone.result_dtype.name == "UINT2"
     assert alone.output_tensor.shape == (1, 3, 4)
 
@@ -189,7 +189,7 @@ def test_conversion_sets_each_choice_in_play_by_its_policy_on_the_kernel_alone()
     activated = kernel_op(thresholding, thresholding.graph.node[0]).defaulted()
     assert isinstance(activated, Defaulted)
     activate = activated.point
-    assert isinstance(activate, ThresholdingAxiKernel)
+    assert isinstance(activate, ThresholdingKernel)
     assert {key: state for key, state in inspection.states(activate)} == {
         "pe": inspection.Set(1),
         "use_axilite": inspection.Set(False),
@@ -289,7 +289,7 @@ def test_an_op_s_policies_are_checked_when_its_class_is_made() -> None:
     with refused("default-policy-invalid", error=DefinitionError, message="Fixed"):
 
         class Unfixed(Thresholding):
-            policies = {ThresholdingAxiKernel.ram_style: "auto"}  # type: ignore[dict-item]
+            policies = {ThresholdingKernel.ram_style: "auto"}  # type: ignore[dict-item]
 
 
 def test_reasons_name_each_key_once_with_the_choices_standing_in_its_way() -> None:
