@@ -20,9 +20,10 @@ from typing import Any
 
 import pytest
 from support.example_platform import DIRECTORY as EXAMPLE
-from support.example_platform import IMAGE, ExamplePush, RecordingRuntime
+from support.example_platform import EXAMPLE_DMA, IMAGE, ExampleDma, RecordingRuntime
 from support.refusals import refused
 
+from finn.custom_op.kernels.shell import row_movers
 from finn.platform import _cli
 from finn.platform.catalog import catalog
 from finn.platform.check import check
@@ -38,7 +39,7 @@ from finn.platform.declarations import (
 )
 from finn.platform.refusal import TargetRefused
 from finn.platform.resolve import resolve_target
-from finn.platform.shells import MOVED, PUSHED, Versions, shell_row, shell_rows
+from finn.platform.shells import Versions, shell_row, shell_rows
 
 FINN_ONLY: dict[str, str] = {}
 """An environment with no ``FINN_PLATFORM_PATH``."""
@@ -184,6 +185,7 @@ print("the package was imported")
 """
 
 _LIST_BOARDS = """\
+from finn.custom_op.kernels.shell import row_movers
 from finn.platform import _cli
 from finn.platform.declarations import declarations
 print(declarations().origin("boards", "Marked"))
@@ -485,6 +487,7 @@ boards = { Ultra96 = {} }
             ("image-unloaded", "shells.odd"),
             ("kind-unserved", "shells.odd"),
             ("mover-undriven", "shells.odd"),
+            ("offer-unplaced", "shells.odd"),
             ("linker-undeclared", "shells.unlinked"),
             ("code-unimportable", "linkers.lost"),
             ("code-not-callable", "runtimes.idle"),
@@ -492,6 +495,89 @@ boards = { Ultra96 = {} }
     )
     owners = {finding.owner for finding in check(found)}
     assert f"{path}: shells.odd" in owners and f"{FINN_FILE}: shells.pynq" not in owners
+
+
+_MOVED_128 = '{ kind = "moved", movers = ["iodma_hls"], width_cap = 128 }'
+
+
+@pytest.mark.parametrize(
+    "offers, why",
+    [
+        (
+            'supply = [{ kind = "moved", movers = ["iodma_hls"] }]\n'
+            'delivery = [{ kind = "moved", movers = ["iodma_hls"] }]',
+            "^moved by iodma_hls has no width cap, and a core's mover needs one$",
+        ),
+        (
+            f"delivery = [{_MOVED_128.replace('128', '16')}]",
+            "^its inputs are offered moved by iodma_hls up to 128 bits and its outputs moved by "
+            "iodma_hls up to 16 bits: a core places one offer on both$",
+        ),
+        ("delivery = []", "its outputs nothing moved"),
+        (
+            f'supply = [{_MOVED_128}, {{ kind = "pushed", movers = ["pushing"] }}]',
+            "^it offers the pushed kind, which a core does not place yet$",
+        ),
+        (
+            'supply = [{ kind = "moved", movers = ["iodma_hls", "other"], width_cap = 128 }]\n'
+            'delivery = [{ kind = "moved", movers = ["iodma_hls", "other"], width_cap = 128 }]',
+            "names 2 mover kinds, not one$",
+        ),
+    ],
+    ids=["uncapped", "capped differently each way", "inputs only", "pushed", "two kinds"],
+)
+def test_an_offer_a_core_cannot_place_is_refused_not_changed(
+    tmp_path: Path, offers: str, why: str
+) -> None:
+    """A core places one mover kind, moved, at a bounded cap, the same on its inputs and its
+    outputs: a shell offering anything else is refused where its movers are offered, and
+    by the check, rather than placed as something it does not offer."""
+    path = declared(
+        tmp_path,
+        '[movers.pushing]\ncode = "support.example_platform:ExampleDma"\nkinds = ["pushed"]\n'
+        '[movers.other]\ncode = "support.example_platform:ExampleDma"\nkinds = ["moved"]\n'
+        f'[shells.variant]\nbased_on = "pynq"\n{offers}\n',
+    )
+    found = load([path], environ=FINN_ONLY)
+    row = shell_row("variant", "Ultra96", found)
+    with refused("offer-unplaced", error=TargetRefused, owner="shells.variant", message=why):
+        row_movers(row)
+    assert ("offer-unplaced", "shells.variant") in findings(found)
+
+
+def test_a_moved_mover_kinds_code_makes_its_offer(tmp_path: Path) -> None:
+    """A moved mover kind's code makes the offer a core's boundary takes: ``offer`` at the
+    shell's width cap, of its own kind at that cap. Callable is not enough."""
+    path = declared(
+        tmp_path,
+        '[movers.intlike]\ncode = "builtins:int"\nkinds = ["moved"]\n'
+        '[movers.borrowed]\ncode = "finn.kernels.movers:IodmaMover"\nkinds = ["moved"]\n'
+        + "".join(
+            f'[shells.{name}]\nbased_on = "pynq"\n'
+            f"supply = [{_MOVED_128.replace('iodma_hls', name)}]\n"
+            f"delivery = [{_MOVED_128.replace('iodma_hls', name)}]\n"
+            for name in ("intlike", "borrowed")
+        ),
+    )
+    found = load([path], environ=FINN_ONLY)
+    checked = set(findings(found))
+    assert checked >= {
+        ("mover-offer-invalid", "movers.intlike"),
+        ("mover-offer-invalid", "shells.borrowed"),
+    }
+    assert ("mover-offer-invalid", "shells.intlike") not in checked
+    with refused(
+        "mover-offer-invalid",
+        error=TargetRefused,
+        message=r"^builtins:int.offer\(128\) does not make an offer: AttributeError",
+    ):
+        row_movers(shell_row("intlike", "Ultra96", found))
+    with refused(
+        "mover-offer-invalid",
+        error=TargetRefused,
+        message=r"^finn.kernels.movers:IodmaMover.offer\(128\) made MoverOffer\(kind='iodma_hls'",
+    ):
+        row_movers(shell_row("borrowed", "Ultra96", found))
 
 
 # -- the command -------------------------------------------------------------------------
@@ -562,9 +648,11 @@ def test_the_command_reports_each_finding_and_fails(
 def test_a_made_up_platform_declares_checks_and_resolves_with_no_change_to_finn(
     example_on_path: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """``support.example_platform`` declares a board, a linker, a runtime, a pushed mover
-    kind and a shell based on ``pynq``: they check, a build's target resolves on them, and
-    the command shows them, each with its origin."""
+    """``support.example_platform`` declares a board, a linker, a runtime, a moved mover
+    kind and a shell based on ``pynq``: they check, a build's target resolves on them, the
+    shell's boundary is offered the platform's own mover, and the command shows them, each
+    with its origin. Discovery and lookup only: no core is built and linked through it, as
+    FINN calls no linker or runtime through its declarations yet."""
     found = declarations()
     assert check(found) == []
     origin = f"{PATH_SETTING} {example_on_path}"
@@ -583,9 +671,10 @@ def test_a_made_up_platform_declares_checks_and_resolves_with_no_change_to_finn(
         {"slot": "B"},
     )
     assert row.versions == Versions(tool="example-tool", spec=">=1.0")
-    assert [offer.kind for offer in row.supply] == [MOVED, PUSHED]
-    assert [mover.name for mover in row.supply[1].movers] == ["example_push"]
-    assert (row.fixed, row.control, row.delivery) == (pynq.fixed, pynq.control, pynq.delivery)
+    assert row.supply == row.delivery
+    assert [mover.name for offer in row.offers for mover in offer.movers] == [EXAMPLE_DMA] * 2
+    assert (row.fixed, row.control) == (pynq.fixed, pynq.control)
+    assert row_movers(row) == (ExampleDma.offer(128),)
     assert row.caveat == (
         "the 'example' shell is made up: on Example-ZU3 (xczu3eg-sbva484-1-e) nothing is measured"
     )
@@ -598,7 +687,7 @@ def test_a_made_up_platform_declares_checks_and_resolves_with_no_change_to_finn(
     assert isinstance(runtime, RecordingRuntime)
     runtime.load(image)
     assert runtime.operations == [("load", IMAGE)]
-    assert code(found.movers["example_push"].code) is ExamplePush
+    assert code(found.movers[EXAMPLE_DMA].code) is ExampleDma
     status, out, _ = run(["list"], capsys)
     assert status == 0 and f"  {'example':<24} {origin}" in out
     status, out, _ = run(["show", "board", "Ultra96"], capsys)

@@ -44,10 +44,11 @@ from typing import Any, TypeVar
 from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
 from finn.kernels.artifacts.module import Fragment
 from finn.kernels.artifacts.top import doubled, top_buses
+from finn.kernels.movers import MoverOffer
 from finn.kernels.utilization import Fit
 from finn.platform import _stated as valid
 from finn.platform.capabilities import RESOURCE_NAMES, Resources
-from finn.platform.declarations import Declarations, Shell, declarations
+from finn.platform.declarations import Declarations, Shell, code, declarations
 from finn.platform.refusal import TargetRefused
 
 IP, PYNQ = "ip", "pynq"
@@ -524,6 +525,75 @@ def own_facts(shell: Shell, declared: Declarations) -> dict[str, Any]:
     )
 
 
+# -- the offer a core places --------------------------------------------------------------
+
+
+def placed_offer(row: ShellRow) -> Offer | None:
+    """The offer a core places on its boundary channels in ``row`` (``None``: it offers
+    none). Until the movers are kernels of their own, a core places one offer on every
+    boundary side, inputs and outputs alike: one mover kind, moved, at a bounded width cap.
+    A row offering anything else is refused (``offer-unplaced``), naming what it offers,
+    rather than placed as something it does not offer."""
+    if not row.offers:
+        return None
+    why = []
+    others = sorted({offer.kind for offer in row.offers if offer.kind != MOVED})
+    if others:
+        why.append(f"it offers the {', '.join(others)} kind, which a core does not place yet")
+    supply = [offer for offer in row.supply if offer.kind == MOVED]
+    delivery = [offer for offer in row.delivery if offer.kind == MOVED]
+    if supply != delivery:
+        why.append(
+            f"its inputs are offered {_said(supply)} and its outputs {_said(delivery)}: a "
+            "core places one offer on both"
+        )
+    for offer in {*supply, *delivery}:
+        if offer.width_cap is None:
+            why.append(f"{_said([offer])} has no width cap, and a core's mover needs one")
+        if len(offer.movers) != 1:
+            why.append(f"{_said([offer])} names {len(offer.movers)} mover kinds, not one")
+    if why:
+        raise TargetRefused("offer-unplaced", f"shells.{row.shell}", "; ".join(why))
+    return supply[0] if supply else None
+
+
+def _said(offers: list[Offer]) -> str:
+    if not offers:
+        return "nothing moved"
+    return " and ".join(
+        f"{offer.kind} by {', '.join(mover.name for mover in offer.movers)}"
+        + ("" if offer.width_cap is None else f" up to {offer.width_cap} bits")
+        for offer in offers
+    )
+
+
+def mover_offer(mover: MoverKind, width_cap: int) -> MoverOffer:
+    """What a boundary side is offered by ``mover``, a moved mover kind, at ``width_cap``:
+    its declared code's ``offer(width_cap)`` (``finn.platform.declarations.code``), a
+    ``MoverOffer`` of its kind at that cap. Code that does not keep that contract, or
+    raises, is refused (``mover-offer-invalid``)."""
+    found = code(mover.code)
+    try:
+        made = getattr(found, "offer")(width_cap)
+    except Exception as error:  # declared code, which may raise anything
+        raise TargetRefused(
+            "mover-offer-invalid",
+            mover.code,
+            f"{mover.code}.offer({width_cap}) does not make an offer: "
+            f"{type(error).__name__}: {error}",
+        ) from None
+    if not (
+        isinstance(made, MoverOffer) and made.kind == mover.name and made.width_cap == width_cap
+    ):
+        raise TargetRefused(
+            "mover-offer-invalid",
+            mover.code,
+            f"{mover.code}.offer({width_cap}) made {made!r}, not a mover's offer of the "
+            f"{mover.name!r} kind at {width_cap} bits",
+        )
+    return made
+
+
 def shell_row(shell: str, board: str | None, declared: Declarations | None = None) -> ShellRow:
     """The row of ``shell`` for ``board``, from ``declared`` (the process's declarations
     by default). Refuses a shell nothing declares (``unknown-shell``), a missing board
@@ -596,7 +666,9 @@ __all__ = [
     "ShellRow",
     "Versions",
     "bus_counts",
+    "mover_offer",
     "own_facts",
+    "placed_offer",
     "row",
     "shell_row",
     "shell_rows",

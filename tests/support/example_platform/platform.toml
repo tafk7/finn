@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 # A made-up platform, declared as a package outside FINN would declare its own: a board, a
-# linker, a runtime, a pushed mover kind and a shell on them, with no change to FINN. Its
+# linker, a runtime, a moved mover kind and a shell on them, with no change to FINN. Its
 # code is support.example_platform's.
 
 [boards.Example-ZU3]
@@ -19,25 +19,22 @@ image = "example-image"
 # Records the operations it is asked for.
 code = "support.example_platform:RecordingRuntime"
 images = ["example-image"]
-movers = ["iodma_hls", "example_push"]
-kinds = ["moved", "pushed"]
+movers = ["example_dma"]
+kinds = ["moved"]
 schemas = [1]
 
-[movers.example_push]
-# An adapter the host pushes each frame through.
-code = "support.example_platform:ExamplePush"
-kinds = ["pushed"]
+[movers.example_dma]
+# A mover of the platform's own, moving each frame between memory and a boundary channel.
+code = "support.example_platform:ExampleDma"
+kinds = ["moved"]
 
 [shells.example]
-# pynq's facts, with its own linker and runtime, a pushed input beside the moved one, and
-# no characterisation of its own.
+# pynq's facts, with its own linker, runtime and mover, and no characterisation of its own.
 based_on = "pynq"
 linker = "example-link"
 runtimes = ["example-run"]
-supply = [
-    { kind = "moved", movers = ["iodma_hls"], width_cap = 128 },
-    { kind = "pushed", movers = ["example_push"] },
-]
+supply = [{ kind = "moved", movers = ["example_dma"], width_cap = 128 }]
+delivery = [{ kind = "moved", movers = ["example_dma"], width_cap = 128 }]
 characterised = "nothing: a made-up shell"
 timed = []
 caveat = "the 'example' shell is made up: on {board} ({part}) nothing is measured"

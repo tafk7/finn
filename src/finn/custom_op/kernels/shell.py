@@ -78,8 +78,7 @@ from finn.kernels.movers import MoverContract, MoverOffer
 from finn.kernels.policies import Required, policy
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
-from finn.platform.declarations import code
-from finn.platform.shells import MOVED, ShellRow, bus_counts, shell_row
+from finn.platform.shells import ShellRow, bus_counts, mover_offer, placed_offer, shell_row
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
@@ -114,20 +113,15 @@ def row_facts(row: ShellRow) -> dict[str, object]:
 
 
 def row_movers(row: ShellRow) -> tuple[MoverOffer, ...]:
-    """The movers ``row`` offers its boundary channels: for each mover kind its ``moved``
-    offers name, inputs' then outputs', once, the offer its declared code makes at the
-    offer's width cap (``offer``, ``finn.platform.declarations.code``)."""
-    offers: dict[str, MoverOffer] = {}
-    for offered in row.offers:
-        if offered.kind != MOVED or offered.width_cap is None:
-            continue
-        for mover in offered.movers:
-            if mover.name not in offers:
-                made = getattr(code(mover.code), "offer")(offered.width_cap)
-                if not isinstance(made, MoverOffer):
-                    raise TypeError(f"{mover.code}.offer made {made!r}, not a mover's offer")
-                offers[mover.name] = made
-    return tuple(offers.values())
+    """The movers ``row`` offers its boundary channels: the offer its one placed mover kind
+    makes at its width cap (``placed_offer``, ``mover_offer``), or none. A row a core
+    cannot place as it is declared is refused (``offer-unplaced``)."""
+    offer = placed_offer(row)
+    if offer is None:
+        return ()
+    (mover,) = offer.movers
+    assert offer.width_cap is not None
+    return (mover_offer(mover, offer.width_cap),)
 
 
 def body_row(model: ModelWrapper) -> ShellRow:

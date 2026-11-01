@@ -216,12 +216,15 @@ FINN_PLATFORM_PATH=~/acme build_dataflow ...     # ~/acme/parts.json
 **Boards, shells and the rest of a platform** are declarations: a file `platform.toml`
 of five kinds (`boards`, `linkers`, `runtimes`, `movers`, `shells`), read from FINN's
 own (`src/finn/platform/data/platform.toml`), from each installed package's entry point
-in the group `finn.platform` (its value a directory holding `platform.toml` and,
-optionally, `parts.json`), and from each directory on `FINN_PLATFORM_PATH`
+in the group `finn.platform` (its value the name of a package holding `platform.toml`
+and, optionally, `parts.json`, found through the distribution's metadata without
+importing the package), and from each directory on `FINN_PLATFORM_PATH`
 (`os.pathsep`-separated). A source only adds names: one declared twice is refused,
 `platform-name-taken`, naming both origins. A shell may start from another's
 declaration (`based_on`) and replace its keys; a linker, runtime or mover kind names
-its code by `module:attribute`, imported only when it is used.
+its code by `module:attribute`, imported only when it is used. A moved mover kind's
+code has an `offer(width_cap)` making what it offers a boundary channel, as
+`finn.kernels.movers.IodmaMover` does.
 
 ```toml
 [boards.Acme-ZU3]
@@ -237,7 +240,7 @@ board_part = "acme.com:zu3:part0:1.0"
 `finn-platform list [KIND]` prints every declaration with its origin, `finn-platform
 show part|board|shell NAME` one of them (a shell as its typed rows), and `finn-platform
 check` checks them all against each other and against the part catalog, importing each
-declared code (exit 1 on any finding).
+declared code and asking each moved mover kind for its offer (exit 1 on any finding).
 
 ## Co-develop QONNX, Brevitas, finn-hlslib or another dependency
 

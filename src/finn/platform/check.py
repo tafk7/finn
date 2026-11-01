@@ -18,8 +18,18 @@ prints them.
 - ``mover-undriven``: a runtime a shell offers does not drive a mover kind the shell offers;
 - ``kind-unserved``: a runtime a shell offers, or a mover kind it offers for a kind, does
   not serve that kind;
+- ``offer-unplaced``: a shell offers what a core does not place yet
+  (``finn.platform.shells.placed_offer``): a kind other than moved, different offers on
+  its inputs and its outputs, no width cap, or more than one mover kind;
 - ``code-unimportable``: a linker's, runtime's or mover kind's ``code`` does not import;
-- ``code-not-callable``: it imports, and is not a class or a function.
+- ``code-not-callable``: it imports, and is not a class or a function;
+- ``mover-offer-invalid``: a moved mover kind's code has no ``offer``, or its offer at a
+  shell's width cap is not a mover's offer of its kind at that cap
+  (``finn.platform.shells.mover_offer``), which a core's boundary takes.
+
+The code is checked for what FINN calls of it now: a linker's and a runtime's to be
+callable, and a moved mover kind's offer. That a linker or a runtime does its work is
+not checked until FINN calls them through their declarations.
 
 Checking imports each declaration's code (``finn.platform.declarations.code``); reading
 and resolving imports none.
@@ -31,7 +41,7 @@ from finn.core.reporting.findings import Finding, FindingKind
 from finn.platform.catalog import catalog_for
 from finn.platform.declarations import Declarations, code
 from finn.platform.refusal import TargetRefused
-from finn.platform.shells import own_facts, row
+from finn.platform.shells import MOVED, Offer, mover_offer, own_facts, placed_offer, row
 
 
 def _finding(declared: Declarations, kind: str, name: str, reason: str, message: str) -> Finding:
@@ -54,6 +64,8 @@ def check(declared: Declarations) -> list[Finding]:
             findings.append(
                 _finding(declared, "boards", name, "unknown-part", str(refused.findings[0]))
             )
+    unplaced: dict[tuple[str, str], None] = {}
+    placed: dict[tuple[str, Offer], None] = {}
     for name, shell in sorted(declared.shells.items()):
         if shell.linker is not None and shell.linker not in declared.linkers:
             findings.append(
@@ -146,6 +158,14 @@ def check(declared: Declarations) -> list[Finding]:
                                 f"not the {mover.name!r} mover kind it offers",
                             )
                         )
+        for read in rows:
+            try:
+                offered = placed_offer(read)
+            except TargetRefused as refused:
+                unplaced.setdefault((name, refused.findings[0].message), None)
+                continue
+            if offered is not None:
+                placed.setdefault((name, offered), None)
         offers = {offer for each in rows for offer in each.offers}
         for offer in sorted(offers, key=lambda offer: offer.kind):
             for mover in offer.movers:
@@ -161,11 +181,14 @@ def check(declared: Declarations) -> list[Finding]:
                             f"{offer.kind!r} kind it is offered for",
                         )
                     )
+    for name, message in unplaced:
+        findings.append(_finding(declared, "shells", name, "offer-unplaced", message))
     coded: list[tuple[str, str, str]] = [
         *(("linkers", name, each.code) for name, each in declared.linkers.items()),
         *(("runtimes", name, each.code) for name, each in declared.runtimes.items()),
         *(("movers", name, each.code) for name, each in declared.movers.items()),
     ]
+    offering: set[str] = set()
     for kind, name, reference in sorted(coded):
         try:
             found = code(reference)
@@ -184,6 +207,28 @@ def check(declared: Declarations) -> list[Finding]:
                     f"{reference} is {type(found).__name__}, not a class or a function",
                 )
             )
+        elif kind == "movers" and MOVED in declared.movers[name].kinds:
+            if callable(getattr(found, "offer", None)):
+                offering.add(name)
+            else:
+                findings.append(
+                    _finding(
+                        declared,
+                        kind,
+                        name,
+                        "mover-offer-invalid",
+                        f"{reference} has no offer(width_cap), which a moved mover kind's "
+                        "code has to make what it offers a boundary side",
+                    )
+                )
+    for (name, offer), _ in placed.items():
+        (mover,) = offer.movers
+        if mover.name in offering and offer.width_cap is not None:
+            try:
+                mover_offer(mover, offer.width_cap)
+            except TargetRefused as refused:
+                message = refused.findings[0].message
+                findings.append(_finding(declared, "shells", name, "mover-offer-invalid", message))
     return findings
 
 

@@ -3,9 +3,14 @@
 
 """A made-up platform outside FINN (``platform.toml`` beside this file): the code its
 declarations name. Its linker writes the description it is given and a stub image, its
-runtime records the operations it is asked for, and its pushed mover kind is a plain
-class. A test loads the declarations with ``extra=``, or as an installed package's entry
-point would name this package."""
+runtime records the operations it is asked for, and its moved mover kind makes the offer
+a core's boundary takes, as FINN's own does (``finn.kernels.movers.IodmaMover.offer``).
+A test loads the declarations with ``extra=``, or as an installed package's entry point
+would name this package.
+
+It shows a platform declared, checked, resolved and its code found with no change to
+FINN. It does not show a core built and linked through it: FINN does not call a linker
+or a runtime through its declarations yet."""
 
 from __future__ import annotations
 
@@ -14,6 +19,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from finn.kernels.movers import MoverOffer
 
 DIRECTORY = Path(__file__).resolve().parent
 """This package's directory, holding its ``platform.toml``."""
@@ -45,11 +52,24 @@ class RecordingRuntime:
         self.operations.append(("write", (endpoint, value)))
 
 
-@dataclass(frozen=True)
-class ExamplePush:
-    """A pushed adapter: the host writes each frame to its stream, ``width`` bits a beat."""
-
-    width: int = 32
+EXAMPLE_DMA = "example_dma"
+"""The name its mover kind is declared under."""
 
 
-__all__ = ["DIRECTORY", "IMAGE", "ExamplePush", "RecordingRuntime", "link"]
+class ExampleDma:
+    """A moved mover kind of the platform's own."""
+
+    @staticmethod
+    def offer(width_cap: int) -> MoverOffer:
+        """Its offer on a shell whose memory port is at most ``width_cap`` bits wide: a
+        frame a call, and the call costs of FINN's own mover."""
+        return MoverOffer(
+            kind=EXAMPLE_DMA,
+            width_cap=width_cap,
+            frames_per_call=1,
+            call_converted=4,
+            call_direct=13,
+        )
+
+
+__all__ = ["DIRECTORY", "EXAMPLE_DMA", "IMAGE", "ExampleDma", "RecordingRuntime", "link"]
