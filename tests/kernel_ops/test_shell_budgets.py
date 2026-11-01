@@ -326,7 +326,9 @@ def test_a_target_names_the_choice_the_budget_leaves_no_value() -> None:
             explore_kernel_choices(model, [TargetThroughput(1000.0)], name=CUT_NAME)
     assert isinstance(caught.error, KernelOpError)
     assert caught.error.keys == ("Thresholding_0.use_axilite",)
-    assert str(caught.error).startswith("the explored point is refused: Thresholding_0.use_axilite: ")
+    assert str(caught.error).startswith(
+        "the explored point is refused: Thresholding_0.use_axilite: "
+    )
 
 
 def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:
