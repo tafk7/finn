@@ -13,6 +13,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+_CLAUSE = re.compile(r"\s*(>=|<=|==|!=|>|<)\s*(\d+)\.(\d+)\s*")
 _CODE = re.compile(r"[A-Za-z_][A-Za-z0-9_.]*:[A-Za-z_][A-Za-z0-9_.]*")
 _KINDS: dict[type, str] = {
     str: "a string",
@@ -107,3 +108,25 @@ def whole_bytes(value: object, where: str) -> int:
     if found % 8:
         raise Invalid(f"{where}: {found} bits is no whole bytes")
     return found
+
+
+def clauses(spec: str) -> list[tuple[str, tuple[int, int]]]:
+    """The comparisons of a release range (``>=2024.1,<2026.1``), each an operator and a
+    release (``year.minor``); a comparison of no such form is ``Invalid``."""
+    found = []
+    for clause in spec.split(","):
+        matched = _CLAUSE.fullmatch(clause)
+        if matched is None:
+            raise Invalid(f"{clause!r} is no release comparison (>=2024.1)")
+        found.append((matched[1], (int(matched[2]), int(matched[3]))))
+    return found
+
+
+def releases(value: object, where: str) -> str:
+    """``value``, a release range (``clauses``)."""
+    spec = text(value, where)
+    try:
+        clauses(spec)
+    except Invalid as error:
+        raise Invalid(f"{where}: {error}") from None
+    return spec

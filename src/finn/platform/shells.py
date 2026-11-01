@@ -34,7 +34,6 @@ block design, one row per board it supports. Any other shell is a declaration's.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from functools import partial
@@ -136,20 +135,7 @@ class Versions:
 
     def admits(self, release: tuple[int, int]) -> bool:
         """Whether ``release`` meets every comparison of ``spec``."""
-        return all(_compare(release, clause) for clause in _clauses(self.spec))
-
-
-_CLAUSE = re.compile(r"\s*(>=|<=|==|!=|>|<)\s*(\d+)\.(\d+)\s*")
-
-
-def _clauses(spec: str) -> list[tuple[str, tuple[int, int]]]:
-    clauses = []
-    for clause in spec.split(","):
-        found = _CLAUSE.fullmatch(clause)
-        if found is None:
-            raise ValueError(f"{clause!r} is no release comparison (>=2024.1)")
-        clauses.append((found[1], (int(found[2]), int(found[3]))))
-    return clauses
+        return all(_compare(release, clause) for clause in valid.clauses(self.spec))
 
 
 def _compare(release: tuple[int, int], clause: tuple[str, tuple[int, int]]) -> bool:
@@ -461,7 +447,9 @@ def _row(shell: Shell, board: str | None, declared: Declarations) -> ShellRow:
         valid.expect(entry, here, keys, _FACTS | {"versions"})
         board_facts = {key: valid.text(entry[key], f"{here}.{key}") for key in sorted(keys)}
         narrowed = (
-            None if "versions" not in entry else valid.text(entry["versions"], f"{here}.versions")
+            None
+            if "versions" not in entry
+            else valid.releases(entry["versions"], f"{here}.versions")
         )
         stated = {key: value for key, value in entry.items() if key in _FACTS}
         facts.update(_facts(stated, here, declared))
@@ -472,7 +460,6 @@ def _row(shell: Shell, board: str | None, declared: Declarations) -> ShellRow:
     if specs:
         assert linker is not None
         versions = Versions(tool=linker.tool, spec=",".join(specs))
-        _clauses(versions.spec)
     template = facts.get("caveat")
     caveat = None
     if board is not None and board not in facts.get("timed", ()) and template is not None:

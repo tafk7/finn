@@ -265,6 +265,12 @@ def test_an_installed_packages_declarations_are_read_without_running_its_code(
             "runtimes.r",
             "runtimes.r.schemas is a list of schema numbers",
         ),
+        (
+            '[linkers.l]\ncode = "a:b"\ntool = "vivado"\nboard_keys = []\nimage = "bit"\n'
+            'versions = "next Tuesday"\n',
+            "linkers.l",
+            "^linkers.l.versions: 'next Tuesday' is no release comparison",
+        ),
         ("[shells.s]\nclocks = {}\n", "shells.s", "states no boards"),
         (
             "[shells.s]\nboards = { B = {} }\nclocks = {}\n",
@@ -281,6 +287,7 @@ def test_an_installed_packages_declarations_are_read_without_running_its_code(
         "no name",
         "code not module:attr",
         "a schema 0",
+        "an unused linker's release range not one",
         "a shell with no boards",
         "boards with no linker",
         "no board",

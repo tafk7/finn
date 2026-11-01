@@ -234,7 +234,7 @@ def _linker(name: str, table: dict[str, Any]) -> Linker:
         name=name,
         code=valid.code(table["code"], f"{where}.code"),
         tool=valid.text(table["tool"], f"{where}.tool"),
-        versions=None if versions is None else valid.text(versions, f"{where}.versions"),
+        versions=None if versions is None else valid.releases(versions, f"{where}.versions"),
         board_keys=valid.texts(table["board_keys"], f"{where}.board_keys"),
         image=valid.text(table["image"], f"{where}.image"),
     )
