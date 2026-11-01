@@ -19,8 +19,8 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from support.example_platform import DIRECTORY as EXAMPLE
 from support.configure import core_in_shell
+from support.example_platform import DIRECTORY as EXAMPLE
 from support.example_platform import EXAMPLE_DMA, IMAGE, ExampleDma, RecordingRuntime
 from support.models import kernel_model
 from support.refusals import refused
