@@ -54,7 +54,8 @@ gate_ruff src/finn/kernels tests/kernels tests/support src/finn/platform src/fin
     src/finn/core/rtlsim_bench.py src/finn/core/rtlsim_exec.py src/finn/core/rtlsim_pacing.py \
     src/finn/custom_op/kernels src/finn/custom_op/partition src/finn/transformation/kernels \
     src/finn/analysis src/finn/util/draws.py src/finn/util/typed_json.py \
-    src/finn/harness src/finn/shells/*.py src/finn/shells/pynq/*.py tests/kernel_ops \
+    src/finn/harness src/finn/shells/*.py src/finn/shells/pynq/*.py src/finn/shells/runtime \
+    tests/kernel_ops \
     tests/builder tests/platforms tests/analysis tests/shells tests/networks tests/layers \
     src/finn/builder/build_dataflow_testbench.py src/finn/builder/build_dataflow_resources.py \
     src/finn/builder/build_dataflow_checks.py \
@@ -66,6 +67,7 @@ gate_ruff src/finn/kernels tests/kernels tests/support src/finn/platform src/fin
 # finn.toolchain.xsim: XSim's driver, which the testbench and packaging's elaboration run.
 # finn.shells.integration: the integration description and what a linker gives back;
 # finn.shells.pynq.linker: the pynq shell's linker.
+# finn.shells.runtime: the shared driver a build ships to its board.
 # finn.shells.pynq's runner, driver and deployment package; its IODMA and IP generation
 # are annotated, not strictly checked: frozen extractions of the HWCustomOp flow's.
 # finn.builder: its configuration, its plan, its checks
@@ -79,6 +81,7 @@ gate_mypy -p finn.kernels -p finn.platform -p finn.core.graph -p finn.custom_op.
     -m finn.core.rtlsim_pacing -m finn.core.onnx_exec \
     -m finn.shells.integration -m finn.shells.pynq.linker \
     -m finn.shells.pynq.runner -m finn.shells.pynq.driver -m finn.shells.pynq.deploy \
+    -p finn.shells.runtime \
     -m finn.toolchain.launcher -m finn.toolchain.ip \
     -m finn.toolchain.xsim \
     -m finn.builder.build_dataflow_config -m finn.builder.build_dataflow_plan \

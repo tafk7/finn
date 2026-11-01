@@ -31,6 +31,7 @@ finn.kernels, finn.platform, finn.toolchain, finn.util  <-  finn.platform.genera
                                                             catalog generator; nothing
                                                             imports it)
 finn.platform.capabilities  <-  finn.kernels, and every row above them
+finn.shells.runtime (numpy; qonnx where it runs host nodes)  <-  finn.shells, the flow
 ```
 
 Each row imports every row to its left. What a run says (finn.core.reporting: its
@@ -374,6 +375,10 @@ LAYERS: tuple[Layer, ...] = (
         ("numpy", "qonnx"),
         "tests/kernel_ops",
     ),
+    # The shells' shared driver: a build's cores run on a device by its runtime file. It
+    # runs on the board, beside FINN or without it: numpy only, and qonnx (onnx with it)
+    # imported where it runs the parent graph's host nodes.
+    Layer("shells.runtime", ("finn.shells.runtime",), (), ("numpy", "qonnx"), "tests/kernel_ops"),
     # The shells' builds: what builds the partition into a shell (the pynq shell's block
     # design, its movers' IODMAs, its driver), from the integration description. Below the
     # flow: the builder runs them. The board's driver files (finn.shells.pynq.data)
@@ -382,6 +387,7 @@ LAYERS: tuple[Layer, ...] = (
         "shells",
         ("finn.shells",),
         (
+            "shells.runtime",
             *_KERNEL_STACK,
             "platform",
             "graph.partition",
@@ -399,6 +405,7 @@ LAYERS: tuple[Layer, ...] = (
         "flow",
         ("finn",),
         (
+            "shells.runtime",
             *_KERNEL_STACK,
             "platform",
             "graph.partition",
