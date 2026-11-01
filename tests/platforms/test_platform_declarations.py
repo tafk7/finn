@@ -356,7 +356,21 @@ def test_a_shell_based_on_another_replaces_each_key_it_states(tmp_path: Path) ->
             "control.aperture: 1 bytes hold no window of the least 4096",
         ),
         ('memory = [{ name = "", width = 64 }]', "memory[0].name is a non-empty"),
-        ('memory = [{ name = "m", width = 9 }]', "memory[0].width: 9 bits is no whole bytes"),
+        ('memory = [{ name = "m", width = 9 }]', "memory[0].width: 9 bits is no AXI data width"),
+        (
+            'memory = [{ name = "HP0", width = 24 }]\n'
+            'supply = [{ kind = "moved", movers = ["iodma_hls"], width_cap = 24 }]',
+            "memory[0].width: 24 bits is no AXI data width",
+        ),
+        (
+            'memory = [{ name = "HP0", width = 128 }, { name = "HP0", width = 64 }]',
+            "memory[1].name: 'HP0' names shells.broken.memory[0] too",
+        ),
+        (
+            'memory = [{ name = "HP0", width = 8, masters = 16 }]',
+            "supply[0].width_cap: 128 bits is wider than every memory target (HP0 8 bits)",
+        ),
+        ("memory = []", "supply[0]: a moved offer, and no memory target to bind it"),
     ],
     ids=[
         "a count not a number",
@@ -369,6 +383,10 @@ def test_a_shell_based_on_another_replaces_each_key_it_states(tmp_path: Path) ->
         "an aperture below the least window",
         "a memory target with no name",
         "a memory width of no whole bytes",
+        "a memory width of whole bytes but no AXI width",
+        "a memory target named twice",
+        "an offer wider than every memory target",
+        "a moved offer with no memory target",
     ],
 )
 def test_a_fact_not_of_its_type_is_refused_when_its_row_is_read(
@@ -526,6 +544,7 @@ linker = "lost"
 runtimes = ["idle", "absent"]
 clocks = { main = "c", set_at = "build", doubled = false }
 supply = [{ kind = "moved", movers = ["iodma_hls"] }]
+memory = [{ name = "M", width = 64 }]
 boards = { Ultra96 = {}, Elsewhere = {} }
 
 [shells.unlinked]

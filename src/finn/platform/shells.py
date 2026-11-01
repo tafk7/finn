@@ -302,15 +302,21 @@ def _control(stated: object, where: str) -> Control:
 
 
 def _memory(stated: object, where: str) -> tuple[MemoryTarget, ...]:
-    targets = []
+    """A shell's memory targets: each named once, its width an AXI data width (a mover's
+    memory port binds it)."""
+    targets: list[MemoryTarget] = []
     for index, each in enumerate(valid.typed(stated, list, where)):
         here = f"{where}[{index}]"
         table = valid.expect(each, here, {"name", "width"}, {"masters"})
         masters = table.get("masters")
+        name = valid.text(table["name"], f"{here}.name")
+        named = [at for at, target in enumerate(targets) if target.name == name]
+        if named:
+            raise valid.Invalid(f"{here}.name: {name!r} names {where}[{named[0]}] too")
         targets.append(
             MemoryTarget(
-                name=valid.text(table["name"], f"{here}.name"),
-                width=valid.whole_bytes(table["width"], f"{here}.width"),
+                name=name,
+                width=valid.axi_width(table["width"], f"{here}.width"),
                 masters=None
                 if masters is None
                 else valid.count(masters, f"{here}.masters", least=1),
@@ -341,7 +347,7 @@ def _offers(
             movers.append(MoverKind(name=name, code=declared.movers[name].code))
         cap = table.get("width_cap")
         if cap is not None:
-            valid.whole_bytes(cap, f"{here}.width_cap")
+            valid.axi_width(cap, f"{here}.width_cap")
         offers.append(Offer(kind=kind, movers=tuple(movers), width_cap=cap))
     return tuple(offers)
 
@@ -435,6 +441,26 @@ def _facts(stated: Mapping[str, Any], where: str, declared: Declarations) -> dic
     return {key: readers[key](value, f"{where}.{key}") for key, value in stated.items()}
 
 
+def _bound(facts: Mapping[str, Any], where: str) -> None:
+    """Refuse a moved offer no memory target of the row can bind: a row with none, or a
+    width cap wider than every target's port (a mover's memory port binds one)."""
+    targets: tuple[MemoryTarget, ...] = facts.get("memory", ())
+    widest = max((target.width for target in targets), default=None)
+    for side in ("supply", "delivery"):
+        for index, offer in enumerate(facts.get(side, ())):
+            if offer.kind != MOVED:
+                continue
+            here = f"{where}.{side}[{index}]"
+            if widest is None:
+                raise valid.Invalid(f"{here}: a moved offer, and no memory target to bind it")
+            if offer.width_cap is not None and offer.width_cap > widest:
+                listed = ", ".join(f"{target.name} {target.width}" for target in targets)
+                raise valid.Invalid(
+                    f"{here}.width_cap: {offer.width_cap} bits is wider than every memory "
+                    f"target ({listed} bits)"
+                )
+
+
 def _row(shell: Shell, board: str | None, declared: Declarations) -> ShellRow:
     """The row of ``shell`` on ``board`` (``None`` on a shell of any part), its board
     entry's facts in place of the shell's."""
@@ -465,6 +491,7 @@ def _row(shell: Shell, board: str | None, declared: Declarations) -> ShellRow:
         facts.update(_facts(stated, here, declared))
     if "clocks" not in facts:
         raise valid.Invalid(f"{where} states no clocks")
+    _bound(facts, where)
     specs = [each for each in (None if linker is None else linker.versions, narrowed) if each]
     versions = None
     if linker is not None and specs:

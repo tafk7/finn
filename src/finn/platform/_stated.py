@@ -110,11 +110,11 @@ def code(value: object, where: str) -> str:
     return found
 
 
-def whole_bytes(value: object, where: str) -> int:
-    """``value``, a width in bits of whole bytes, at least one."""
-    found = count(value, where, least=8)
-    if found % 8:
-        raise Invalid(f"{where}: {found} bits is no whole bytes")
+def axi_width(value: object, where: str) -> int:
+    """``value``, a width in bits an AXI data bus takes: a power of two of 8 to 1024."""
+    found = count(value, where)
+    if not 8 <= found <= 1024 or found & (found - 1):
+        raise Invalid(f"{where}: {found} bits is no AXI data width (a power of two, 8 to 1024)")
     return found
 
 
