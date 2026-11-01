@@ -262,7 +262,7 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
     composed, _ = fresh_chain()
     point = composed
     scopes = inspection.model(point).scopes
-    assert isinstance(point.mm0.query(MatMulKernel.frame_cycles), Unresolved)  # type: ignore[attr-defined]
+    assert isinstance(point.MatMul_0.query(MatMulKernel.frame_cycles), Unresolved)  # type: ignore[attr-defined]
     read = scopes.counts()
     # Keep the original real-owner ratio, and bound unevaluated Port/Group allocation
     # separately before any whole-model address walk can make additional records.
@@ -270,7 +270,7 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
     assert len(_real_nonport_scopes(made)) < 225 // 8
     ports = _assert_native_scope_ownership(made)
     assert {record.name for record in ports} == {
-        f"mm0.compute.{core}.{port}"
+        f"MatMul_0.compute.{core}.{port}"
         for core in ("int8_dsp58", "packed")
         for port in ("x", "w", "y")
     }
@@ -318,7 +318,7 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
 # whose stream is evaluated).
 # Then (1061, 42) and (1662, 362) after ``viable`` became these when a vpc stated its
 # association (``VpcKernel.width_only``): the constraint of each output adapter's vpc the
-# trials evaluate, ``a1``'s and ``h2``'s (+2).
+# trials evaluate, ``Thresholding_1_out0``'s and ``MatMul_2_out0``'s (+2).
 # Then ports' ((508, 272), (601, 320)) and the totals ((1525, 314), (1664, 362)) became these
 # when each port's presentation became its own constraint (``StreamPort.presented``):
 # a placed port's commit reads its direction and its width, its transport's word,
@@ -396,8 +396,8 @@ def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
     unknown presence before the change, has none evaluated.
     Then ``viable`` of the middle MatMul's choices and one change of its ``pe``: what trials
     evaluate more (the middle MatMul's ``int8_dsp58`` case, which a trial selects, and the
-    output adapters of the channels beside it, ``a1`` and ``h2``, which read its ports'
-    streams)."""
+    output adapters of the channels beside it, ``Thresholding_1_out0`` and ``MatMul_2_out0``,
+    which read its ports' streams)."""
     monkeypatch.delenv(EAGER, raising=False)
     composed, stored = fresh_chain()
     point = composed
@@ -438,17 +438,17 @@ def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
     assert in_play == present_scopes
     unknown = {record for record in records if record.name.endswith(".compute.int8_dsp58")}
     assert {record.name for record in unknown} == {
-        f"mm{layer}.compute.int8_dsp58" for layer in range(4)
+        f"MatMul_{layer}.compute.int8_dsp58" for layer in range(4)
     }
     assert not unknown & in_play
     for record in unknown:
         guard = record.guard
         assert guard is not None and isinstance(answer(point, guard), Unresolved)
     handles = {item.key: item.reference for item in inspection.decisions(committed)}
-    middle = [key for key in handles if key.startswith("mm2.")]
+    middle = [key for key in handles if key.startswith("MatMul_2.")]
     # the middle MatMul's choices listed: its ``depthwise_datapath`` (``when=depthwise``) is not,
     # its facts alone rule it out
-    assert len(middle) == 6 and "mm2.depthwise_datapath" not in middle
+    assert len(middle) == 6 and "MatMul_2.depthwise_datapath" not in middle
     inspection.viable(committed, [handles[key] for key in middle])
     counted = scopes.counts()
     assert len(_real_nonport_scopes(scopes.registry.records.values())) == 225
@@ -459,22 +459,25 @@ def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
     _assert_evaluated(scopes, 1)
     additional = set(scopes.in_play()) - in_play
     assert {record.name for record in additional - _port_scopes(additional)} == {
-        "mm2.compute.int8_dsp58",
-        "a1.output_adapter",
-        "a1.output_adapter.vpc",
-        "h2.output_adapter",
-        "h2.output_adapter.vpc",
+        "MatMul_2.compute.int8_dsp58",
+        "Thresholding_1_out0.output_adapter",
+        "Thresholding_1_out0.output_adapter.vpc",
+        "MatMul_2_out0.output_adapter",
+        "MatMul_2_out0.output_adapter.vpc",
     }
     assert {record.name for record in _port_scopes(additional)} == {
-        *(f"mm2.compute.int8_dsp58.{port}" for port in ("x", "w", "y")),
+        *(f"MatMul_2.compute.int8_dsp58.{port}" for port in ("x", "w", "y")),
         *(
             f"{parent}.{port}"
-            for parent in ("a1.output_adapter.vpc", "h2.output_adapter.vpc")
+            for parent in (
+                "Thresholding_1_out0.output_adapter.vpc",
+                "MatMul_2_out0.output_adapter.vpc",
+            )
             for port in ("input", "output")
         ),
     }
     assert not _group_scopes(additional)
-    report = committed.try_with_choices({handles["mm2.pe"]: 2})
+    report = committed.try_with_choices({handles["MatMul_2.pe"]: 2})
     assert report.accepted
     counted = scopes.counts()
     assert len(_real_nonport_scopes(scopes.registry.records.values())) == 225

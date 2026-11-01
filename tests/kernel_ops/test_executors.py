@@ -14,9 +14,9 @@ hardware (marked ``xsim``), as a one-node partition of a Thresholding does.
 Inside a partition: Python runs a body from or up to any of its nodes, and a full
 context holds the body's tensors under the partition node's name; XSim refuses to start
 inside a body, simulates it whole to end inside it, and taps its links (the Chain's
-``hidden``, between its first MatMul and its thresholding, and ``levels``, tapped at the
-thresholding's output, before the adapter of the second MatMul's input) into the full
-context, where they equal Python's.
+``MatMul_0_out0``, between its first MatMul and its thresholding, and
+``Thresholding_0_out0``, tapped at the thresholding's output, before the adapter of the
+second MatMul's input) into the full context, where they equal Python's.
 """
 
 from __future__ import annotations
@@ -168,7 +168,7 @@ def test_the_default_executor_runs_a_kernel_partition_and_its_kernel_ops(tmp_pat
     recording = Recording()
     y = execute_onnx(parent, {"x": x}, executors=(recording,))["y"]
     (partition,) = parent.graph.node
-    assert recording.ran == [partition.name, "first", "activate", "second"]
+    assert recording.ran == [partition.name, "MatMul_0", "Thresholding_0", "MatMul_1"]
     assert np.array_equal(y, execute_onnx(parent, {"x": x})["y"])
     assert np.array_equal(y, execute_onnx(source, {"x": x})["y"])
 
@@ -225,7 +225,7 @@ def test_a_run_that_requires_hardware_refuses_a_partition_no_hardware_executor_c
 
 
 def test_a_run_that_requires_hardware_refuses_a_kernel_op_outside_a_partition() -> None:
-    with pytest.raises(HardwareRequired, match="first \\(KernelOp MatMul\\).*cut the graph"):
+    with pytest.raises(HardwareRequired, match="MatMul_0 \\(KernelOp MatMul\\).*cut the graph"):
         execute_onnx(
             kernel_model(),
             {"x": np.array(chain.X, dtype=np.float32)},
@@ -304,12 +304,12 @@ def test_xsim_refuses_a_start_node_inside_a_partition(tmp_path: Path) -> None:
     _, parent = chain_partition(tmp_path)
     (partition,) = parent.graph.node
     x = {"x": np.array(chain.X, dtype=np.float32)}
-    activate = body_node(parent, "activate")
+    activate = body_node(parent, "Thresholding_0")
     ran: RanBy = {}
     with pytest.raises(
         InsidePartition,
-        match=f"start_node activate is inside partition {partition.name}, which XSim simulates"
-        " whole.*Cut the graph at activate and build that partition",
+        match=f"start_node Thresholding_0 is inside partition {partition.name}, which XSim "
+        "simulates whole.*Cut the graph at Thresholding_0 and build that partition",
     ):
         execute_onnx(
             parent,
@@ -331,7 +331,7 @@ def test_a_python_full_context_holds_a_partitions_body_under_its_name(tmp_path: 
     x = {"x": np.array(chain.X, dtype=np.float32)}
     found = execute_onnx(parent, x, return_full_exec_context=True)
     whole = execute_onnx(source, x, return_full_exec_context=True)
-    for tensor in ("hidden", "levels"):
+    for tensor in ("MatMul_0_out0", "Thresholding_0_out0"):
         assert np.array_equal(found[f"{partition.name}_{tensor}"], whole[tensor])
     assert np.array_equal(found["y"], whole["y"]) and f"{partition.name}_y" not in found
     assert not any(key.startswith(partition.name) for key in execute_onnx(parent, x))
@@ -343,42 +343,42 @@ def test_python_runs_a_partitions_body_up_to_an_end_node_inside_it(tmp_path: Pat
     (partition,) = parent.graph.node
     x = {"x": np.array(chain.X, dtype=np.float32)}
     recording = Recording()
-    activate = body_node(parent, "activate")
+    activate = body_node(parent, "Thresholding_0")
     found = execute_onnx(
         parent, x, return_full_exec_context=True, end_node=activate, executors=(recording,)
     )
-    assert recording.ran == [partition.name, "first", "activate"]
+    assert recording.ran == [partition.name, "MatMul_0", "Thresholding_0"]
     whole = execute_onnx(source, x, return_full_exec_context=True)
-    for tensor in ("hidden", "levels"):
+    for tensor in ("MatMul_0_out0", "Thresholding_0_out0"):
         assert np.array_equal(found[f"{partition.name}_{tensor}"], whole[tensor])
     # The second MatMul did not run: the partition's output was not reached.
     assert not np.any(found["y"])
 
 
 def test_python_runs_a_partitions_body_from_a_start_node_inside_it(tmp_path: Path) -> None:
-    """The run starts inside the body from the body's tensors a caller gives as a full
-    context names them: another ``hidden`` changes what follows activate, and only that."""
+    """The run starts inside the body from the body's tensors a caller gives as a full context names
+    them: another ``MatMul_0_out0`` changes what follows ``Thresholding_0``, and only that."""
     source, parent = chain_partition(tmp_path)
     (partition,) = parent.graph.node
     x = {"x": np.array(chain.X, dtype=np.float32)}
-    activate = body_node(parent, "activate")
+    activate = body_node(parent, "Thresholding_0")
     context = execute_onnx(parent, x, return_full_exec_context=True)
     recording = Recording()
-    hidden = np.asarray(context[f"{partition.name}_hidden"])
-    given = {"x": x["x"], f"{partition.name}_hidden": hidden}
+    hidden = np.asarray(context[f"{partition.name}_MatMul_0_out0"])
+    given = {"x": x["x"], f"{partition.name}_MatMul_0_out0": hidden}
     found = execute_onnx(parent, given, start_node=activate, executors=(recording,))
-    assert recording.ran == [partition.name, "activate", "second"]
+    assert recording.ran == [partition.name, "Thresholding_0", "MatMul_1"]
     assert np.array_equal(found["y"], context["y"])
     hidden = -hidden
-    given = {"x": x["x"], f"{partition.name}_hidden": hidden}
+    given = {"x": x["x"], f"{partition.name}_MatMul_0_out0": hidden}
     found = execute_onnx(parent, given, start_node=activate, return_full_exec_context=True)
     expected = execute_onnx(
-        source, {"x": x["x"], "hidden": hidden}, start_node=activate, end_node=None
+        source, {"x": x["x"], "MatMul_0_out0": hidden}, start_node=activate, end_node=None
     )
     assert np.array_equal(found["y"], expected["y"])
     assert not np.array_equal(found["y"], context["y"])
-    with pytest.raises(ValueError, match="Provided input 'hidden' not found in model"):
-        execute_onnx(parent, {"x": x["x"], "hidden": hidden}, start_node=activate)
+    with pytest.raises(ValueError, match="Provided input 'MatMul_0_out0' not found in model"):
+        execute_onnx(parent, {"x": x["x"], "MatMul_0_out0": hidden}, start_node=activate)
 
 
 def test_a_full_context_fed_back_starts_a_run_mid_way(tmp_path: Path) -> None:
@@ -391,8 +391,8 @@ def test_a_full_context_fed_back_starts_a_run_mid_way(tmp_path: Path) -> None:
     context = execute_onnx(parent, x, return_full_exec_context=True)
     assert "" in context and f"{partition.name}_" not in context
     for start, ran in (
-        (partition, ["first", "activate", "second"]),
-        (body_node(parent, "activate"), ["activate", "second"]),
+        (partition, ["MatMul_0", "Thresholding_0", "MatMul_1"]),
+        (body_node(parent, "Thresholding_0"), ["Thresholding_0", "MatMul_1"]),
     ):
         recording = Recording()
         found = execute_onnx(parent, context, start_node=start, executors=(recording,))
@@ -402,7 +402,7 @@ def test_a_full_context_fed_back_starts_a_run_mid_way(tmp_path: Path) -> None:
 
 def test_xsim_taps_the_links_between_the_kernels_of_a_partition(tmp_path: Path) -> None:
     """Each tensor a kernel of the body produces and another consumes, at its producer's
-    output and in its producer's traversal: ``levels`` at the thresholding's output,
+    output and in its producer's traversal: ``Thresholding_0_out0`` at the thresholding's output,
     before the input generator that adapts it to the second MatMul. No Vivado needed."""
     _, parent = chain_partition(tmp_path)
     (partition,) = parent.graph.node
@@ -411,22 +411,30 @@ def test_xsim_taps_the_links_between_the_kernels_of_a_partition(tmp_path: Path) 
     point, _ = boundary(body, partition)
     names = {tensor for node in body.graph.node for tensor in node.output}
     found = {link.tensor: link for link in links(body, point, names)}
-    assert list(found) == ["hidden", "levels"]
+    assert list(found) == ["MatMul_0_out0", "Thresholding_0_out0"]
     placed = dict(point.module.fragment.instances)
     for tensor, (instance, pin) in {
-        "hidden": ("first.compute.packed", "m_axis_output_tdata"),
-        "levels": ("activate", "m_axis_tdata"),
+        "MatMul_0_out0": ("MatMul_0.compute.packed", "m_axis_output_tdata"),
+        "Thresholding_0_out0": ("Thresholding_0", "m_axis_tdata"),
     }.items():
         tap = found[tensor].tap
         assert (tap.end.instance, tap.end.data) == (instance, pin) and instance in placed
         channel = point.channel(tensor)
         assert found[tensor].form == channel.sides.source.sequence.form
         assert tap.count == found[tensor].form.beats
-    assert "levels.adapter.input_gen.input_gen" in placed
+    assert "Thresholding_0_out0.adapter.input_gen.input_gen" in placed
     # Two lanes a beat: INT6 and UINT2 elements.
-    assert (found["hidden"].bits, found["hidden"].signed, found["hidden"].tap.bits) == (6, True, 12)
-    assert (found["levels"].bits, found["levels"].signed, found["levels"].tap.bits) == (2, False, 4)
-    assert list(links(body, point, {"hidden"})) == [found["hidden"]]
+    assert (
+        found["MatMul_0_out0"].bits,
+        found["MatMul_0_out0"].signed,
+        found["MatMul_0_out0"].tap.bits,
+    ) == (6, True, 12)
+    assert (
+        found["Thresholding_0_out0"].bits,
+        found["Thresholding_0_out0"].signed,
+        found["Thresholding_0_out0"].tap.bits,
+    ) == (2, False, 4)
+    assert list(links(body, point, {"MatMul_0_out0"})) == [found["MatMul_0_out0"]]
 
 
 # -- in XSim ---------------------------------------------------------------------------
@@ -466,7 +474,7 @@ def test_xsim_puts_a_partitions_link_tensors_into_the_full_context(tmp_path: Pat
     )
     assert ran == {partition.name: simulator}
     oracle = execute_onnx(parent, x, return_full_exec_context=True)
-    for tensor in ("hidden", "levels"):
+    for tensor in ("MatMul_0_out0", "Thresholding_0_out0"):
         key = f"{partition.name}_{tensor}"
         assert found[key].dtype == oracle[key].dtype
         assert np.array_equal(found[key], oracle[key]), tensor
@@ -488,7 +496,7 @@ def test_xsim_runs_the_chain_whole_up_to_an_end_node_inside_it(tmp_path: Path) -
     x = {"x": np.array(chain.X, dtype=np.float32)}
     simulator = XSim(directory=tmp_path / "xsim")
     ran: RanBy = {}
-    first = body_node(parent, "first")
+    first = body_node(parent, "MatMul_0")
     found = execute_onnx(
         parent,
         x,
@@ -500,7 +508,7 @@ def test_xsim_runs_the_chain_whole_up_to_an_end_node_inside_it(tmp_path: Path) -
     )
     assert ran == {partition.name: simulator}
     oracle = execute_onnx(parent, x, return_full_exec_context=True, end_node=first)
-    hidden = f"{partition.name}_hidden"
+    hidden = f"{partition.name}_MatMul_0_out0"
     assert np.array_equal(found[hidden], oracle[hidden])
     assert f"{partition.name}_levels" not in found  # past first: not observed
     assert not np.any(found["y"]) and not np.any(oracle["y"])

@@ -18,12 +18,12 @@ and the boundary, unstated, on the other, its own policies applied once, refused
 validity is (no chain of modules joins them) or a choice of it can take no value. It is no
 rule of the kernel, so the kernel's policies do not steer around it. A port the kernel does
 not place is not checked; one whose side the kernel's point does not know (it waits on a
-choice, or the kernel refuses it) is refused with the side's findings. The first match whose
-kernel takes every value and whose streams each meet the boundary replaces the nodes it
-covers with one KernelOp, which keeps the anchor's name and the covered nodes' outside
-tensors, and its choices are the values its policies set, written once
-(``persist_kernel``): its kernel's, never a channel's, so nothing is written on a tensor.
-The check's channels are dropped: a partition's channels are made at the cut. A node that
+choice, or the kernel refuses it) is refused with the side's findings. The first match whose kernel
+takes every value and whose streams each meet the boundary replaces the nodes it covers with one
+KernelOp, which takes the anchor's name (until it is named by its position, below) and the covered
+nodes' outside tensors, and its choices are the values its policies set, written once
+(``persist_kernel``): its kernel's, never a channel's, so nothing is written on a tensor. The
+check's channels are dropped: a partition's channels are made at the cut. A node that
 no match converts stays on the host, unchanged, with why: its kernel refused on its facts
 alone, a choice no value can be set for (``choice-no-valid-value``), each value's refusal
 among the findings, or a stream no chain joins or whose side is not known, the check
@@ -35,8 +35,18 @@ A match of several nodes must be convex and must not hide a tensor that somethin
 outside it reads (``match-not-convex``, ``match-interior-exposed``). Nodes it depends on
 that come later in graph order are moved before it first.
 
-Every node gets an ``Outcome``: what it became, or the findings that say why it stayed
-on the host. ``kernel_ops_report`` and ``kernel_ops_summary`` turn them into the report
+Once every node is visited, each KernelOp is named by its position (``name_kernel_ops``):
+``<OpType>_<i>``, ``i`` its index among the graph's nodes of its op type in graph order (as
+qonnx's ``GiveUniqueNodeNames`` names a node), each of its outputs ``<name>_out<k>`` and
+each initializer it reads, its own copy, ``<name>_param<k>`` (as ``GiveReadableTensorNames``
+names a tensor), so the name says what the node is. Host nodes, the graph's inputs and
+outputs and the tensors only host nodes make keep their names; a name the rule gives that
+one of them already has refuses the conversion (``graph-name-taken``). The names are given
+once, here: what is stored by graph name after conversion (a node's choices, a channel's on
+its tensor, a hold) is stored under them.
+
+Every node gets an ``Outcome``: what it became, its name, or the findings that say why it
+stayed on the host. ``kernel_ops_report`` and ``kernel_ops_summary`` turn them into the report
 and the log lines. Host nodes between KernelOps stop the build (``refuse_host_between``):
 no partition could hold all the KernelOps.
 """
@@ -46,11 +56,12 @@ from __future__ import annotations
 import copy
 from collections import Counter
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from onnx import NodeProto, helper
 from qonnx.transformation.base import Transformation
+from qonnx.transformation.general import GiveUniqueParameterTensors
 
 import finn.custom_op.kernels as domain
 from finn.core.graph.annotations.platform import read_target, write_target
@@ -75,16 +86,17 @@ if TYPE_CHECKING:
 class Outcome:
     """What ``ToKernelOps`` made of the nodes it visited, and why.
 
-    ``op`` is the KernelOp the nodes became, None for nodes left on the host. For a
-    node left, ``findings`` say why. For a conversion, they say why nothing else
-    converted the node: the other patterns' findings, and the refusals of the matches
-    tried before the one that won; and each choice its policies set in listed order where
-    a ranking could not be read (``choice-order-unknown``).
+    ``op`` is the KernelOp the nodes became, None for nodes left on the host, and ``name`` its graph
+    name (``name_kernel_ops``). For a node left, ``findings`` say why. For a conversion, they say
+    why nothing else converted the node: the other patterns' findings, and the refusals of the
+    matches tried before the one that won; and each choice its policies set in listed order where a
+    ranking could not be read (``choice-order-unknown``).
     """
 
     nodes: tuple[str, ...]
     op: str | None
     findings: tuple[Finding, ...] = ()
+    name: str | None = None
 
 
 def _label(node: NodeProto) -> str:
@@ -180,8 +192,86 @@ class ToKernelOps(Transformation):
                 Outcome(labels, converted, tuple(each.about(node=about) for each in findings))
             )
             index += 1
-        self.outcomes = tuple(outcomes)
+        name_kernel_ops(model)
+        # One outcome a node, in graph order: each conversion's is its KernelOp's.
+        assert len(outcomes) == len(model.graph.node)
+        self.outcomes = tuple(
+            outcome if outcome.op is None else replace(outcome, name=node.name)
+            for outcome, node in zip(outcomes, model.graph.node, strict=True)
+        )
         return model, False
+
+
+#: What a tensor is named while ``name_kernel_ops`` renames it: no name a graph gives.
+_RENAMING = "finn.renaming/{}"
+
+
+def name_kernel_ops(model: ModelWrapper) -> None:
+    """Name each KernelOp of ``model`` by its position, and its tensors with it (see the module
+    docstring): ``<OpType>_<i>``, ``i`` its index among the nodes of its op type in graph
+    order; its outputs ``<name>_out<k>`` and the initializers it reads ``<name>_param<k>``,
+    each its own: an initializer two nodes read is copied for each reader after the first
+    (``GiveUniqueParameterTensors``, as qonnx's cleanup after a transformation copies it), so
+    the copy is named too. A graph input or output keeps its name. A name the rule gives that a
+    host node, or a tensor it does not rename, already has is refused (``graph-name-taken``),
+    naming both, before anything is renamed."""
+    GiveUniqueParameterTensors().apply(model)  # type: ignore[no-untyped-call]
+    counts: Counter[str] = Counter()
+    nodes: list[tuple[NodeProto, str]] = []
+    for node in model.graph.node:
+        index = counts[node.op_type]
+        counts[node.op_type] += 1
+        if node.domain == KERNEL_OPS_DOMAIN:
+            nodes.append((node, f"{node.op_type}_{index}"))
+    edge = {item.name for item in (*model.graph.input, *model.graph.output)}
+    tensors: dict[str, str] = {}
+    for node, name in nodes:
+        for k, tensor in enumerate(node.output):
+            if tensor and tensor not in edge:
+                tensors[tensor] = f"{name}_out{k}"
+        params = [tensor for tensor in node.input if model.get_initializer(tensor) is not None]
+        for k, tensor in enumerate(params):
+            if tensor not in edge:
+                tensors[tensor] = f"{name}_param{k}"
+    kept_nodes = {node.name for node in model.graph.node if node.domain != KERNEL_OPS_DOMAIN}
+    kept_tensors = {
+        tensor
+        for tensor in (
+            *(name for node in model.graph.node for name in (*node.input, *node.output)),
+            *(item.name for item in model.graph.initializer),
+            *(item.name for item in model.graph.value_info),
+            *edge,
+        )
+        if tensor and tensor not in tensors
+    }
+    for node, name in nodes:
+        if name in kept_nodes:
+            raise _taken(name, f"the host node {name}", node=_label(node))
+    for old, new in tensors.items():
+        if new in kept_tensors:
+            raise _taken(new, f"the tensor {new}, which it does not rename", tensor=old)
+    renamed = [(old, new) for old, new in tensors.items() if old != new]
+    for index, (old, _) in enumerate(renamed):
+        model.rename_tensor(old, _RENAMING.format(index))
+    for index, (_, new) in enumerate(renamed):
+        model.rename_tensor(_RENAMING.format(index), new)
+    for node, name in nodes:
+        node.name = name
+
+
+def _taken(
+    name: str, holder: str, *, node: str | None = None, tensor: str | None = None
+) -> KernelOpError:
+    """The refusal of a graph name the rule gives that ``holder`` already has."""
+    about = node if node is not None else tensor
+    return KernelOpError.refused(
+        "graph-name-taken",
+        ToKernelOps.__name__,
+        f"{about}: its graph name by position is {name}, but {holder} has it: rename that "
+        "one before conversion",
+        node=node,
+        tensor=tensor,
+    )
 
 
 @dataclass(frozen=True)
@@ -382,7 +472,7 @@ def between_kernel_ops(model: ModelWrapper) -> tuple[str, ...]:
 def kernel_ops_report(model: ModelWrapper, outcomes: tuple[Outcome, ...]) -> dict[str, Any]:
     """The record of a conversion (``report/kernel_ops.json``): the KernelOps made, by
     op, the nodes left on the host, the host nodes between KernelOps, and every outcome
-    with its findings."""
+    with its KernelOp's name and its findings."""
     return {
         "converted": dict(Counter(outcome.op for outcome in outcomes if outcome.op is not None)),
         "on_host": [node for outcome in outcomes if outcome.op is None for node in outcome.nodes],
@@ -391,6 +481,7 @@ def kernel_ops_report(model: ModelWrapper, outcomes: tuple[Outcome, ...]) -> dic
             {
                 "nodes": list(outcome.nodes),
                 "op": outcome.op,
+                "name": outcome.name,
                 "findings": [finding.record() for finding in outcome.findings],
             }
             for outcome in outcomes

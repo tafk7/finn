@@ -349,7 +349,7 @@ def test_the_design_digest_clears_the_search_record() -> None:
     model = chain()
     assert search_record(model) == ("none", None)
     digest = design_digest(model)
-    record = {"design": digest, "held": {"activate": ["pe"]}, "objective_fps": 1e6}
+    record = {"design": digest, "held": {"Thresholding_0": ["pe"]}, "objective_fps": 1e6}
     model.set(OUTPUT_SEARCH, record)
     assert design_digest(model) == digest
     assert search_record(model) == ("current", record)
@@ -378,10 +378,10 @@ def test_the_objective_stays_until_an_entry_changes_a_kernel() -> None:
     # A hold of the folding the target throughput found changes no kernel's choice.
     folded = cut_model()
     explore_kernel_choices(folded, [TargetThroughput(fps)], name=CUT_NAME)
-    kept = {"first": {"pe": choices(folded)["first"]["pe"]}}
+    kept = {"MatMul_0": {"pe": choices(folded)["MatMul_0"]["pe"]}}
     assert objective(TargetThroughput(fps), Hold(kept)) == fps
     # A later entry that changes a kernel's choice removes it.
-    assert objective(TargetThroughput(fps), Hold({"first": {"pe": 1, "simd": 1}})) is None
+    assert objective(TargetThroughput(fps), Hold({"MatMul_0": {"pe": 1, "simd": 1}})) is None
     assert objective(TargetThroughput(fps), Ranked(Lanes(2))) is None
     assert objective(SizeFifos()) is None
     assert objective() is None
@@ -404,7 +404,7 @@ def test_the_design_digest_ignores_orders_that_carry_no_meaning() -> None:
 
 
 def changed_choice(model: ModelWrapper) -> None:
-    configured(model, {"activate": {"deep_pipeline": 1}})
+    configured(model, {"Thresholding_0": {"deep_pipeline": 1}})
 
 
 def changed_channel(model: ModelWrapper) -> None:
@@ -412,7 +412,11 @@ def changed_channel(model: ModelWrapper) -> None:
 
 
 def changed_weight(model: ModelWrapper) -> None:
-    weights = next(name for name in ("w1", "w2") if model.get_initializer(name) is not None)
+    weights = next(
+        name
+        for name in ("MatMul_0_param0", "MatMul_1_param0")
+        if model.get_initializer(name) is not None
+    )
     values = model.get_initializer(weights)
     assert values is not None
     model.set_initializer(weights, np.where(values == 0, 1, 0).astype(values.dtype))

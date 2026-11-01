@@ -133,14 +133,16 @@ def test_a_channel_choice_under_no_input_adapter_is_kept_out_of_play_and_saved()
     bound again, the same."""
     model = kernel_model()
     key = "adapter_ram_style"
-    model.set(CHANNEL_KEYS[key], "auto", tensor="hidden")
+    model.set(CHANNEL_KEYS[key], "auto", tensor="MatMul_0_out0")
     first, first_bind = bound(model)
     assert not first_bind.stale
-    assert first.member("hidden").input_chain == "none"
-    assert dict(first.states(["hidden"]))[("hidden", key)] == inspection.Dormant("auto")
-    held = {name: value for (_, name), value in first.chosen(["hidden"]).items()}
-    assert held[key] == "auto" and persist(model, first.point)["hidden"] == held
-    assert channel_choices(model, "hidden")[key] == "auto"
+    assert first.member("MatMul_0_out0").input_chain == "none"
+    assert dict(first.states(["MatMul_0_out0"]))[("MatMul_0_out0", key)] == inspection.Dormant(
+        "auto"
+    )
+    held = {name: value for (_, name), value in first.chosen(["MatMul_0_out0"]).items()}
+    assert held[key] == "auto" and persist(model, first.point)["MatMul_0_out0"] == held
+    assert channel_choices(model, "MatMul_0_out0")[key] == "auto"
     again, again_bind = bound(model)
     assert not again_bind.stale and again.chosen() == first.chosen()
 

@@ -303,7 +303,7 @@ def test_a_shell_without_an_integration_has_no_export(tmp_path: Path) -> None:
 TILED_W2 = {
     "three rows, the Chain's folding": (3, {}),
     "one row, the Chain's folding": (1, {}),
-    "one row, first at PE 4": (1, {"first": {"pe": 4}}),
+    "one row, MatMul_0 at PE 4": (1, {"MatMul_0": {"pe": 4}}),
 }
 
 
@@ -411,9 +411,24 @@ def test_a_tiled_w2_is_regrouped_after_its_mover_by_a_vpc_and_an_input_gen(case:
     ]
     assert path == [
         (None, "s_axis_1_tdata", "w2.output_adapter.vpc.vpc", "idat"),
-        ("w2.output_adapter.vpc.vpc", "odat", "w2.adapter.input_gen_vpc.input_gen", "idat"),
-        ("w2.adapter.input_gen_vpc.input_gen", "odat", "w2.adapter.input_gen_vpc.vpc", "idat"),
-        ("w2.adapter.input_gen_vpc.vpc", "odat", "second.compute.packed", "s_axis_weights_tdata"),
+        (
+            "w2.output_adapter.vpc.vpc",
+            "odat",
+            "w2.adapter.input_gen_vpc.input_gen",
+            "idat",
+        ),
+        (
+            "w2.adapter.input_gen_vpc.input_gen",
+            "odat",
+            "w2.adapter.input_gen_vpc.vpc",
+            "idat",
+        ),
+        (
+            "w2.adapter.input_gen_vpc.vpc",
+            "odat",
+            "MatMul_1.compute.packed",
+            "s_axis_weights_tdata",
+        ),
     ]
     assert core_in_shell(model, model.graph.node).validity("x").status == "valid"
 
@@ -425,7 +440,7 @@ def test_a_row_major_w2_on_three_rows_is_replayed_by_an_input_gen_after_its_move
     transport replays the pass three times, its buffer the pass (16 INT3); its memory is
     the channel's choice (``adapter_ram_style``), which the cut makes. The network is
     configured; unstated (on ip) the edge presents the three passes and places nothing."""
-    model = streamed_on_pynq(3, {"second": ROW_MAJOR_W2})
+    model = streamed_on_pynq(3, {"MatMul_1": ROW_MAJOR_W2})
     bound = core_in_shell(model, model.graph.node)
     w2 = bound.member("w2")
     assert bound.validity("w2").status == "valid"
@@ -437,7 +452,7 @@ def test_a_row_major_w2_on_three_rows_is_replayed_by_an_input_gen_after_its_move
     choose_memories(model)
     configured_network(model, "DataflowCore_0")
     ip = kernel_model(second_weights=False)
-    configured(ip, {"second": ROW_MAJOR_W2})
+    configured(ip, {"MatMul_1": ROW_MAJOR_W2})
     unstated = core_in_shell(ip, ip.graph.node).member("w2")
     assert outer(unstated).form.beats == 12 and unstated.input_chain == "none"
 
@@ -592,7 +607,7 @@ def test_tfc_s_choices_are_created_at_conversion_and_at_the_cut(
         f"MatMul_{index}_param0" for index in range(4)
     ]
     assert sorted(name for name, held in channels.items() if "adapter_ram_style" in held) == [
-        f"MultiThreshold_{index}_out0" for index in range(4)
+        f"Thresholding_{index}_out0" for index in range(4)
     ]
     assert not [name for name, held in channels.items() if "adapter" in held]
     assert not [name for name, held in channels.items() if "mover" in held]

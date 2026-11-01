@@ -412,7 +412,7 @@ def test_a_partition_packaged_earlier_in_the_build_is_not_packaged_again(
 
 def changed_choice(body: ModelWrapper) -> None:
     """The threshold kernel's pipeline deepened: a choice changed since packaging."""
-    configured(body, {"activate": {"deep_pipeline": True}})
+    configured(body, {"Thresholding_0": {"deep_pipeline": True}})
 
 
 def other_sources(body: ModelWrapper) -> None:

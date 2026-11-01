@@ -152,7 +152,7 @@ def test_on_pynq_the_description_states_what_the_movers_state(tmp_path: Path) ->
     row-major (``ROW_MAJOR_W2``), crosses the boundary once a frame, 4 beats, and an
     ``input_gen`` in the partition replays it; every stream row-major, one pass."""
     model = kernel_model(second_weights=False)
-    configured(model, {"second": ROW_MAJOR_W2})
+    configured(model, {"MatMul_1": ROW_MAJOR_W2})
     write_target(model, ZYNQ)
     configure_partition(model)
     stub = cast(Toolchain, PackagedByStub())
@@ -192,9 +192,9 @@ REPORT = """\
 |  Instance  | Module | Total LUTs | Logic LUTs | LUTRAMs | SRLs | FFs | RAMB36 | RAMB18 | URAM | DSP Blocks |
 +------------+--------+------------+------------+---------+------+-----+--------+--------+------+------------+
 | top        |  (top) |        120 |        100 |      12 |    8 |  90 |      1 |      1 |    0 |          2 |
-|   u_first  |  first |         70 |         60 |       6 |    4 |  50 |      1 |      0 |    0 |          2 |
+|   u_first  |  MatMul_0 |         70 |         60 |       6 |    4 |  50 |      1 |      0 |    0 |          2 |
 |     inner  |  inner |         30 |         30 |       0 |    0 |  10 |      0 |      0 |    0 |          0 |
-|   u_second | second |         50 |         40 |       6 |    4 |  40 |      0 |      1 |    0 |          0 |
+|   u_second | MatMul_1 |         50 |         40 |       6 |    4 |  40 |      0 |      1 |    0 |          0 |
 +------------+--------+------------+------------+---------+------+-----+--------+--------+------+------------+
 """
 
@@ -239,16 +239,16 @@ def test_out_of_context_resources_are_stated_per_member_of_the_network(
     # weight's memory its channel's, a kernel's compute the kernel's.
     assert {path: counted["ff"] for path, counted in found["members"].items()} == {
         "x": 0,
-        "w1": 1,
-        "levels": 2,
-        "w2": 3,
-        "first": 4,
-        "activate": 5,
+        "MatMul_0_param0": 1,
+        "Thresholding_0_out0": 2,
+        "MatMul_1_param0": 3,
+        "MatMul_0": 4,
+        "Thresholding_0": 5,
     }
     assert set(found["members"]) <= set(point.network.members)
     # The flattened instance's resources are the top's, attributed to no member.
     assert found["unattributed"] == {"lut": 10, "ff": 6, "bram18": 0, "uram": 0, "dsp": 0}
-    assert found["unreported_instances"] == ["second.compute.packed"]
+    assert found["unreported_instances"] == ["MatMul_1.compute.packed"]
 
 
 class SynthesizedByStub(PackagedByStub):
@@ -339,10 +339,10 @@ def test_an_ip_the_store_holds_is_reused_and_the_step_says_so(
 
 
 def _levels_short(channel: Any, neighbours: Any, period: int, words: int) -> bool:
-    """A double of the seam's check (the Chain needs no FIFO at any folding): ``levels``
+    """A double of the seam's check (the Chain needs no FIFO at any folding): ``Thresholding_0_out0``
     (activate's output) needs more words than its transport holds; every other channel's
     holds."""
-    return not str(channel.sides.source_owner).startswith("activate.")
+    return not str(channel.sides.source_owner).startswith("Thresholding_0.")
 
 
 def test_a_fifo_too_small_for_its_stream_is_refused_at_verification(
@@ -360,7 +360,7 @@ def test_a_fifo_too_small_for_its_stream_is_refused_at_verification(
         "transport.fifo.depth": 8,
         "transport.fifo.buffer.ram_style": "auto",
     }
-    configured(body, {"levels": fifo})
+    configured(body, {"Thresholding_0_out0": fifo})
     monkeypatch.setattr(explore_module, "holds", _levels_short)
     configured_network(body, node.name)
     with pytest.raises(KernelOpError) as refused:
@@ -369,11 +369,11 @@ def test_a_fifo_too_small_for_its_stream_is_refused_at_verification(
     assert (finding.kind, finding.code, finding.owner) == (
         FindingKind.REJECTION,
         "fifo-stale",
-        "levels.transport.fifo.depth",
+        "Thresholding_0_out0.transport.fifo.depth",
     )
     assert str(refused.value).startswith(
         f"{node.name}: FIFOs too small for their streams, refused at verification (add "
-        "size_fifos to step_explore's strategies): levels: levels.transport.fifo.depth: fifo-stale: depth 8 "
+        "size_fifos to step_explore's strategies): Thresholding_0_out0: Thresholding_0_out0.transport.fifo.depth: fifo-stale: depth 8 "
         "(8 words) no longer keeps its producer"
     )
     assert body.get(OUTPUT_VERIFIED) is None
@@ -381,7 +381,7 @@ def test_a_fifo_too_small_for_its_stream_is_refused_at_verification(
         OUTPUT_SEARCH,
         {
             "design": design_digest(body),
-            "held": {"levels": ["transport.fifo.depth"]},
+            "held": {"Thresholding_0_out0": ["transport.fifo.depth"]},
             "objective_fps": None,
         },
     )
@@ -452,7 +452,7 @@ def test_packaging_and_the_integration_refuse_a_design_not_verified_as_it_is(
         "transport.fifo.depth": 32,
         "transport.fifo.buffer.ram_style": "auto",
     }
-    configured(body, {"levels": fifo})
+    configured(body, {"Thresholding_0_out0": fifo})
     body.save(body_file)
     refused("design-changed")
     verified(body, node.name)
@@ -487,7 +487,7 @@ def test_the_testbench_refuses_a_design_not_verified_as_it_is(tmp_path: Path) ->
         "transport.fifo.depth": 32,
         "transport.fifo.buffer.ram_style": "auto",
     }
-    configured(body, {"levels": fifo})
+    configured(body, {"Thresholding_0_out0": fifo})
     refused("design-changed")
     verified(body, node.name)
     write()

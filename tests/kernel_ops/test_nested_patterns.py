@@ -132,9 +132,10 @@ def codes(outcome: Outcome) -> list[tuple[str, str, str]]:
 def test_a_two_node_match_converts_to_one_node_on_its_boundary(nested: None) -> None:
     model, conversion = convert(pair())
     (node,) = model.graph.node
-    assert (node.domain, node.op_type, node.name) == (KERNELS, "CopyMatMul", "copy")
-    assert (list(node.input), list(node.output)) == (["x", "w"], ["y"])
-    assert conversion.outcomes == (Outcome(("copy", "mm"), "CopyMatMul"),)
+    # Named by its position, its weights with it.
+    assert (node.domain, node.op_type, node.name) == (KERNELS, "CopyMatMul", "CopyMatMul_0")
+    assert (list(node.input), list(node.output)) == (["x", "CopyMatMul_0_param0"], ["y"])
+    assert conversion.outcomes == (Outcome(("copy", "mm"), "CopyMatMul", name="CopyMatMul_0"),)
     assert "t" not in {info.name for info in model.graph.value_info}
     assert model.get_tensor_datatype("t") == DataType["FLOAT32"]  # not annotated
     assert model.get_tensor_shape("y") == [3, 2]
@@ -228,7 +229,7 @@ def test_a_node_the_set_depends_on_moves_before_its_anchor(nested: None) -> None
     model, conversion = convert(source)
     assert [(n.name, n.op_type) for n in model.graph.node] == [
         ("flip", "Transpose"),
-        ("copy", "CopyMatMul"),
+        ("CopyMatMul_0", "CopyMatMul"),
     ]
     assert [(o.nodes, o.op, [f.code for f in o.findings]) for o in conversion.outcomes] == [
         (("flip",), None, ["no-kernel-op"]),

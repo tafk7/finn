@@ -135,10 +135,10 @@ def test_names_are_the_class_s_structure() -> None:
 
 
 def test_a_tensor_read_more_than_once_is_refused_before_any_composition() -> None:
-    """``hidden`` also leaves the graph while ``activate`` reads it: a channel of two
+    """``MatMul_0_out0`` also leaves the graph while ``Thresholding_0`` reads it: a channel of two
     consumers, refused before anything is composed."""
     model = kernel_model()
-    hidden = model.get_tensor_valueinfo("hidden")
+    hidden = model.get_tensor_valueinfo("MatMul_0_out0")
     model.graph.value_info.remove(hidden)
     model.graph.output.append(hidden)
     classes = cached_classes()
@@ -146,8 +146,8 @@ def test_a_tensor_read_more_than_once_is_refused_before_any_composition() -> Non
         "tensor-fan-out",
         error=KernelOpError,
         owner="fan_out",
-        tensor="hidden",
-        message="hidden is read by activate",
+        tensor="MatMul_0_out0",
+        message="MatMul_0_out0 is read by Thresholding_0",
     ):
         network(model, model.graph.node, name="chain")
     assert cached_classes() == classes

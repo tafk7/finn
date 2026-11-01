@@ -90,7 +90,14 @@ def test_a_choice_never_created_refuses_packaging_and_is_named() -> None:
         r"strategy sets it",
     ) as left:
         configured_network(model, "sdp_1")
-    channels = {"x", "w1", "hidden", "levels", "w2", "y"}
+    channels = {
+        "x",
+        "MatMul_0_param0",
+        "MatMul_0_out0",
+        "Thresholding_0_out0",
+        "MatMul_1_param0",
+        "y",
+    }
     keys = cast(KernelOpError, left.error).keys
     assert keys and {key.split(".")[0] for key in keys} <= channels
     module = configured_network(model.transform(MakeCutChoices(CUT_NAME)), "sdp_1")[0].module
@@ -105,21 +112,23 @@ def test_a_choice_waiting_on_an_open_one_is_saved_and_emission_names_the_open_on
     waiting one comes back in play with it. ``undecided`` counts only the open one."""
     model = kernel_model()
     choose_memories(model)
-    write_raw(model, "activate", "ram_style", None)
+    write_raw(model, "Thresholding_0", "ram_style", None)
     bound = core_in_shell(model, model.graph.node)
     waiting = inspection.Waiting(0, ("ram_style",))
-    assert dict(bound.states(["activate"]))[("activate", "block_stages")] == waiting
-    assert [key for key in bound.undecided() if key[0] == "activate"] == [("activate", "ram_style")]
-    assert persist(model, bound.point)["activate"]["block_stages"] == 0
+    assert dict(bound.states(["Thresholding_0"]))[("Thresholding_0", "block_stages")] == waiting
+    assert [key for key in bound.undecided() if key[0] == "Thresholding_0"] == [
+        ("Thresholding_0", "ram_style")
+    ]
+    assert persist(model, bound.point)["Thresholding_0"]["block_stages"] == 0
     again = core_in_shell(model, model.graph.node)
-    assert dict(again.states(["activate"]))[("activate", "block_stages")] == waiting
+    assert dict(again.states(["Thresholding_0"]))[("Thresholding_0", "block_stages")] == waiting
     with refused(
         "choices-open",
         error=KernelOpError,
         owner="configured_network",
         node="sdp_1",
-        keys=("activate.ram_style",),
-        message=r"open choices, refused at emission: activate\.ram_style \(not set",
+        keys=("Thresholding_0.ram_style",),
+        message=r"open choices, refused at emission: Thresholding_0\.ram_style \(not set",
     ):
         configured_network(model, "sdp_1")
 
@@ -128,13 +137,13 @@ def test_an_open_required_choice_refuses_packaging_and_is_named() -> None:
     # A FIFO saved with no depth, its style created (MakeCutChoices): the depth is
     # required, and no strategy set it.
     configure_partition(model := kernel_model())
-    configured(model, {"levels": {"transport": "fifo"}})
+    configured(model, {"Thresholding_0_out0": {"transport": "fifo"}})
     model = model.transform(MakeCutChoices(CUT_NAME))
     with refused(
         "choices-open",
         error=KernelOpError,
         node="sdp_1",
-        keys=("levels.transport.fifo.depth",),
+        keys=("Thresholding_0_out0.transport.fifo.depth",),
         message=r"\(required: add size_fifos or debug_placeholder to step_explore's strategies\)",
     ):
         configured_network(model, "sdp_1")
@@ -262,7 +271,7 @@ def test_the_chain_packages_as_the_shells_ip(tmp_path: Path) -> None:
     assert f"{name}.sv" in files
     # Movable: every path the IP names is its own, relative.
     assert str(tmp_path) not in (project / "ip" / "component.xml").read_text()
-    second = tmp_path / "second"
+    second = tmp_path / "MatMul_1"
     configure_partition(again := kernel_model())
     again = again.transform(PackagePartition("sdp_1", directory=second))
     assert again.get(OUTPUT_IP_KEY) == key

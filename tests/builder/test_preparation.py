@@ -403,7 +403,9 @@ def test_a_wide_layer_converts_and_its_graphs_agree_exactly(
     scaled = None
     for model in (export, made, kernel_ops):
         context = execute_onnx(model, {"x": x}, return_full_exec_context=True)
-        assert np.array_equal(np.asarray(context["sa"]), exact)
+        # The sums, the MatMul's output: sa, or its graph name once converted.
+        sums = next(node.output[0] for node in model.graph.node if node.op_type == "MatMul")
+        assert np.array_equal(np.asarray(context[sums]), exact)
         assert np.array_equal(np.asarray(context["ya"]), ya)
         scaled = context["scaled"] if scaled is None else scaled
         assert np.array_equal(context["scaled"], scaled)

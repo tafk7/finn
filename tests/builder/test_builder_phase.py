@@ -404,7 +404,7 @@ CHAIN_TARGET = TargetRequest(part="xczu3eg-sbva484-1-e", period_ns=5.0)
 CHAIN_FPS = 1_000_000_000 // (5 * 6)
 
 #: A hold of the first MatMul's SIMD at its baseline, which the target throughput moves.
-CHAIN_PINS = {"first": {"simd": 1}}
+CHAIN_PINS = {"MatMul_0": {"simd": 1}}
 
 
 def chain_build(
@@ -433,17 +433,17 @@ def test_a_hold_in_the_list_holds_for_the_rest_of_it_and_for_verification(tmp_pa
     report/, states the choices."""
     free = chain_build(tmp_path / "free", ["step_explore"], strategies=FOLDING)
     _, body, _ = partition_body(run_steps(kernel_model(), free))
-    assert kernel_choices_config(body)["first"]["simd"] == 4
+    assert kernel_choices_config(body)["MatMul_0"]["simd"] == 4
     pinned = chain_build(
         tmp_path / "pinned", ["step_explore"], strategies=[{"hold": CHAIN_PINS}, *FOLDING]
     )
     _, body, _ = partition_body(run_steps(kernel_model(), pinned))
     held = kernel_choices_config(body)
-    assert held["first"]["simd"] == 1
-    assert held["second"]["simd"] == 4
+    assert held["MatMul_0"]["simd"] == 1
+    assert held["MatMul_1"]["simd"] == 4
     assert search_record(body) == (
         "current",
-        {"design": design_digest(body), "held": {"first": ["simd"]}, "objective_fps": CHAIN_FPS},
+        {"design": design_digest(body), "held": {"MatMul_0": ["simd"]}, "objective_fps": CHAIN_FPS},
     )
     written = json.loads((Path(pinned.output_dir) / "report" / "kernel_choices.json").read_text())
     assert written == held
@@ -454,7 +454,7 @@ def test_a_hold_in_the_list_holds_for_the_rest_of_it_and_for_verification(tmp_pa
         "target_throughput",
         "size_fifos",
     ]
-    assert strategy_report(pinned, "step_verify_partition")["held"] == {"first": ["simd"]}
+    assert strategy_report(pinned, "step_verify_partition")["held"] == {"MatMul_0": ["simd"]}
 
 
 def step_fold_my_way(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
@@ -465,12 +465,12 @@ def step_fold_my_way(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrap
 
 def _is_levels(channel: Channel) -> bool:
     """The Chain's activations (activate's output)."""
-    return str(channel.sides.source_owner).startswith("activate.")
+    return str(channel.sides.source_owner).startswith("Thresholding_0.")
 
 
 def _levels_need(period: int) -> int:
-    """The words a double of the model says ``levels`` needs at the bottleneck ``period``
-    (the Chain needs no FIFO at any folding): 5 at the baseline folding's, 16 once the
+    """The words a double of the model says ``Thresholding_0_out0`` needs at the bottleneck
+    ``period`` (the Chain needs no FIFO at any folding): 5 at the baseline folding's, 16 once the
     Chain is folded to 6 cycles a frame."""
     return 16 if period <= 6 else 5
 
@@ -520,12 +520,16 @@ def test_a_fifo_a_users_folding_step_leaves_too_small_is_refused_at_verification
         if status == 0:
             assert outcome["status"] == "completed"
             assert (
-                strategy_report(cfg, "step_explore")["strategies"][0]["channels"]["levels"]["depth"]
+                strategy_report(cfg, "step_explore")["strategies"][0]["channels"][
+                    "Thresholding_0_out0"
+                ]["depth"]
                 == 16
             )
             continue
         assert (
-            strategy_report(cfg, "step_explore")["strategies"][0]["channels"]["levels"]["depth"]
+            strategy_report(cfg, "step_explore")["strategies"][0]["channels"][
+                "Thresholding_0_out0"
+            ]["depth"]
             == 5
         )
         assert {key: outcome[key] for key in ("status", "step", "kind")} == {
@@ -535,8 +539,8 @@ def test_a_fifo_a_users_folding_step_leaves_too_small_is_refused_at_verification
         }
         assert outcome["error"]["message"].startswith(
             "DataflowCore_0: FIFOs too small for their streams, refused at verification (add "
-            "size_fifos to step_explore's strategies): levels: "
-            "levels.transport.fifo.depth: fifo-stale: depth 5 "
+            "size_fifos to step_explore's strategies): Thresholding_0_out0: "
+            "Thresholding_0_out0.transport.fifo.depth: fifo-stale: depth 5 "
             "(5 words) no longer keeps its producer"
         )
 
@@ -547,9 +551,9 @@ def _holds_nothing(channel: Channel, neighbours: Neighbours, period: int, words:
 
 
 def step_hold_levels(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """A user's own step: the Chain's ``levels`` held at the FIFO depth it states, in a
+    """A user's own step: the Chain's ``Thresholding_0_out0`` held at the FIFO depth it states, in a
     search of its own, whose record the verification reads."""
-    explore_body(model, [Hold({"levels": {"transport.fifo.depth": 8}})])
+    explore_body(model, [Hold({"Thresholding_0_out0": {"transport.fifo.depth": 8}})])
     return model
 
 
@@ -562,7 +566,7 @@ def test_the_verification_notes_what_its_check_finds_and_records_the_design(
     its report states the check (``fifos_judged``, ``fifo_check``), and the body it saves
     records the design it verified."""
     model = kernel_model()
-    configured(model, {"levels": {"transport": "fifo", "transport.fifo.depth": 8}})
+    configured(model, {"Thresholding_0_out0": {"transport": "fifo", "transport.fifo.depth": 8}})
     model_file = tmp_path / "chain.onnx"
     model.save(str(model_file))
     monkeypatch.setattr(explore_module, "holds", _holds_nothing)
@@ -578,24 +582,25 @@ def test_the_verification_notes_what_its_check_finds_and_records_the_design(
     report = strategy_report(cfg, "step_verify_partition")
     assert list(report) == ["search", "held", "fifos_judged", "fifo_check"]
     assert report["search"] == "current"
-    assert report["held"] == {"levels": ["transport.fifo.depth"]}
+    assert report["held"] == {"Thresholding_0_out0": ["transport.fifo.depth"]}
     assert report["fifos_judged"] == "model"
     check = report["fifo_check"]
-    assert check["stale"] == [] and "levels" in check["checked"]
+    assert check["stale"] == [] and "Thresholding_0_out0" in check["checked"]
     assert check["findings"] == verifying["findings"]
     assert {finding["kind"] for finding in check["findings"]} == {"limitation"}
     found = {(finding["code"], finding["owner"]) for finding in check["findings"]}
-    assert ("fifo-held-stale", "levels.transport.fifo.depth") in found
+    assert ("fifo-held-stale", "Thresholding_0_out0.transport.fifo.depth") in found
     assert {code for code, _ in found} == {"fifo-held-stale", "direct-throttles"}
     body = ModelWrapper(str(output / "DataflowCore_0" / "DataflowCore_0.onnx"))
     assert body.get(OUTPUT_VERIFIED) == design_digest(body)
 
 
 def explored_levels(directory: Path, *strategies: Any) -> tuple[ModelWrapper, DataflowBuildConfig]:
-    """The Chain with ``levels`` a FIFO of depth 8, cut and run through step_explore with
-    ``strategies`` only: the parent graph and the build's configuration, to be verified."""
+    """The Chain with ``Thresholding_0_out0`` a FIFO of depth 8, cut and run through
+    step_explore with ``strategies`` only: the parent graph and the build's configuration, to
+    be verified."""
     model = kernel_model()
-    configured(model, {"levels": {"transport": "fifo", "transport.fifo.depth": 8}})
+    configured(model, {"Thresholding_0_out0": {"transport": "fifo", "transport.fifo.depth": 8}})
     cfg = config(
         directory,
         target=CHAIN_TARGET,
@@ -605,7 +610,7 @@ def explored_levels(directory: Path, *strategies: Any) -> tuple[ModelWrapper, Da
     return run_steps(model, cfg), cfg
 
 
-HOLD_LEVELS = {"hold": {"levels": {"transport.fifo.depth": 8}}}
+HOLD_LEVELS = {"hold": {"Thresholding_0_out0": {"transport.fifo.depth": 8}}}
 
 
 def test_a_restart_at_verification_reads_the_record(
@@ -619,9 +624,12 @@ def test_a_restart_at_verification_reads_the_record(
     monkeypatch.setattr(explore_module, "holds", _holds_nothing)
     step_verify_partition(parent, cfg)
     report = strategy_report(cfg, "step_verify_partition")
-    assert (report["search"], report["held"]) == ("current", {"levels": ["transport.fifo.depth"]})
+    assert (report["search"], report["held"]) == (
+        "current",
+        {"Thresholding_0_out0": ["transport.fifo.depth"]},
+    )
     found = {(finding["code"], finding["owner"]) for finding in report["fifo_check"]["findings"]}
-    assert ("fifo-held-stale", "levels.transport.fifo.depth") in found
+    assert ("fifo-held-stale", "Thresholding_0_out0.transport.fifo.depth") in found
     assert "fifo-stale" not in {code for code, _ in found}
 
 
@@ -634,7 +642,7 @@ def test_a_body_edited_after_the_step_holds_nothing(
     for name in ("passes", "refused"):
         parent, cfg = explored_levels(tmp_path / name, HOLD_LEVELS)
         _, body, body_file = partition_body(parent)
-        configured(body, {"activate": {"deep_pipeline": 1}})
+        configured(body, {"Thresholding_0": {"deep_pipeline": 1}})
         body.save(body_file)
         assert search_record(body) == ("stale", None)
         if name == "passes":
@@ -644,7 +652,9 @@ def test_a_body_edited_after_the_step_holds_nothing(
             assert report["fifo_check"]["findings"] == []
             continue
         monkeypatch.setattr(explore_module, "holds", _holds_nothing)
-        with refused("fifo-stale", error=KernelOpError, owner="levels.transport.fifo.depth"):
+        with refused(
+            "fifo-stale", error=KernelOpError, owner="Thresholding_0_out0.transport.fifo.depth"
+        ):
             step_verify_partition(parent, cfg)
 
 
@@ -657,15 +667,15 @@ def test_a_restart_at_step_explore_runs_the_list_again(tmp_path: Path) -> None:
     parent = run_steps(kernel_model(), replace(cfg, steps=["step_create_dataflow_partition"]))
     parent = step_explore(parent, cfg, strategies=[HoldEntry(CHAIN_PINS), folding])
     _, body, _ = partition_body(parent)
-    assert kernel_choices_config(body)["first"]["simd"] == 1
+    assert kernel_choices_config(body)["MatMul_0"]["simd"] == 1
     assert search_record(body)[1] == {
         "design": design_digest(body),
-        "held": {"first": ["simd"]},
+        "held": {"MatMul_0": ["simd"]},
         "objective_fps": CHAIN_FPS,
     }
     parent = step_explore(parent, cfg, strategies=[folding])
     _, body, _ = partition_body(parent)
-    assert kernel_choices_config(body)["first"]["simd"] == 4
+    assert kernel_choices_config(body)["MatMul_0"]["simd"] == 4
     assert search_record(body)[1] == {
         "design": design_digest(body),
         "held": {},
@@ -778,7 +788,7 @@ def test_step_explore_reports_each_entry_in_one_file(tmp_path: Path) -> None:
     ]
     assert report["held"] == CHAIN_PINS
     hold, _, target, _, sizing, _ = report["strategies"]
-    assert hold["held"] == ["first.simd"]
+    assert hold["held"] == ["MatMul_0.simd"]
     assert sizing["margin"] == 2
     assert target["fps"] == CHAIN_FPS and target["changed"]
     planned = {name: each["value"] for name, each in manifest["plan"]["settings"].items()}
@@ -1067,7 +1077,7 @@ def test_the_bitfiles_objective_is_the_target_its_partition_records(
     parent.save(str(saved))
     step_build_bitfile(ModelWrapper(str(saved)), cfg)
     # The body's design edited after the search: its record is stale, and holds no objective.
-    configured(body, {"activate": {"deep_pipeline": 1}})
+    configured(body, {"Thresholding_0": {"deep_pipeline": 1}})
     body.save(body_file)
     assert search_record(body)[0] == "stale"
     step_build_bitfile(parent, cfg)
@@ -1121,8 +1131,8 @@ def test_a_choice_stale_at_the_cut_is_noted(
     left open for a strategy, and noted once: a limitation owned by the choice, the
     finding attached for the manifest."""
     model = open_model()
-    write_raw(model, "first", "simd", 2)  # past the space, as another tool wrote it
-    write_raw(model, "first", "pe", 3)
+    write_raw(model, "MatMul_0", "simd", 2)  # past the space, as another tool wrote it
+    write_raw(model, "MatMul_0", "pe", 3)
     with caplog.at_level(logging.INFO, logger=REPORTS_LOG):
         step_create_dataflow_partition(model, config(tmp_path))
     (noted,) = [record for record in caplog.records if record.levelno >= logging.WARNING]
@@ -1135,14 +1145,14 @@ def test_a_choice_stale_at_the_cut_is_noted(
     assert (finding.kind, finding.code, finding.owner) == (
         FindingKind.LIMITATION,
         "choice-stale",
-        "first.pe",
+        "MatMul_0.pe",
     )
     assert "domain-membership" in finding.message
     # The key is named once, with the value and the values it could take; the kernel's
     # finding is kept as the note's cause: its domain's, nothing beside it.
-    assert finding.message.count("first.pe") == 1
+    assert finding.message.count("MatMul_0.pe") == 1
     assert finding.message.startswith("dropped as stale at the cut (a kernel's left open")
-    assert "first.pe = 3: " in finding.message
+    assert "MatMul_0.pe = 3: " in finding.message
     assert "not one of 1, 2, 4 (domain-membership)" in finding.message
     assert {(cause.code, cause.owner) for cause in finding.causes} == {
         ("domain-membership", "pe"),
@@ -1174,7 +1184,9 @@ def test_a_step_that_moves_the_target_s_folding_leaves_the_bitfile_no_objective(
     for index, entry in enumerate(after):
         parent = step_explore(parent, cfg, strategies=[folding, entry])
         changed = strategy_report(cfg, "step_explore")["strategies"][1]["changed"]
-        moved = any(key.split(".")[0] in ("first", "activate", "second") for key in changed)
+        moved = any(
+            key.split(".")[0] in ("MatMul_0", "Thresholding_0", "MatMul_1") for key in changed
+        )
         assert moved == (index != 1), entry
         _, body, _ = partition_body(parent)
         record = search_record(body)[1]
@@ -1299,9 +1311,9 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
     assert report["bottleneck"] == {"members": ["Reshape_0_out0"], "cycles": 200}
     members = {name: row["cycles"] for name, row in report["members"].items()}
     assert [name for name, cycles in members.items() if cycles == 196] == [
-        "MultiThreshold_0",
+        "Thresholding_0",
         "MatMul_0",
-        "MultiThreshold_0_out0",
+        "Thresholding_0_out0",
         "MatMul_0_param0",
     ]
     assert set(report["movers"]) == {"Reshape_0_out0", "MatMul_3_out0"}
@@ -1351,7 +1363,7 @@ def test_sizing_fifos_on_tfc_places_none_and_changes_no_choice(
     }
     # Every activation between two layers: the consumer, or its input_gen's buffer of
     # frames, takes each word no later than the producer's idle time allows.
-    inner = [f"MultiThreshold_{index}_out0" for index in range(4)]
+    inner = [f"Thresholding_{index}_out0" for index in range(4)]
     inner += [f"MatMul_{index}_out0" for index in range(3)]
     assert {whys[name] for name in inner} == {"direct absorbs it"}
     assert len(rows) == 2 + 4 + len(inner)
@@ -1984,7 +1996,7 @@ def test_a_bitfile_built_from_another_design_or_ip_is_refused_by_name(
     node, body, body_file = partition_body(parent)
     built_from = design_digest(body)
     parent.set(OUTPUT_BITFILE_MADE_FROM, built_from)
-    configured(body, {"activate": {"deep_pipeline": True}})
+    configured(body, {"Thresholding_0": {"deep_pipeline": True}})
     body.save(body_file)
     now = design_digest(body)
     assert now != built_from

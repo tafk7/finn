@@ -487,7 +487,7 @@ def test_a_block_fifo_states_its_two_memory_spaces() -> None:
 
 def test_thresholds_read_only_and_shared_cost_no_memory() -> None:
     """Synthesis folds a constant table where every row is the same (TFC
-    MultiThreshold_0: no RAM measured); a runtime-writable one is a memory."""
+    Thresholding_0: no RAM measured); a runtime-writable one is a memory."""
 
     def table(writable: bool) -> Resources:
         return thresholding_resources(

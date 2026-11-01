@@ -4,8 +4,8 @@
 """The DSE seam over a partition declared by hand: choices, changes, cost, a strategy's
 run (reopen, search, restore), and the strategies that search it.
 
-On the Chain (``support.chain``: MatMul ``first``, Thresholding ``activate`` at a
-fixed PE, MatMul ``second``; three rows of four), its platform at 5 ns: as conversion and
+On the Chain (``support.chain``: MatMul ``MatMul_0``, Thresholding ``Thresholding_0`` at a
+fixed PE, MatMul ``MatMul_1``; three rows of four), its platform at 5 ns: as conversion and
 the cut leave it (``support.helpers.with_defaults``: each kernel's choices by its
 policies, each channel's by the cut's), or with nothing chosen
 (``chain.network()``) where a test reads what is open. No ONNX: the seam reads a partition
@@ -86,7 +86,7 @@ def folding(explorer: Seam, network: CoreComposition) -> dict[str, object]:
     return {
         k: v
         for k, v in chosen(explorer, network).items()
-        if k.endswith((".pe", ".simd")) and not k.startswith("activate.")
+        if k.endswith((".pe", ".simd")) and not k.startswith("Thresholding_0.")
     }
 
 
@@ -104,10 +104,10 @@ def state(network: CoreComposition, name: str) -> inspection.ChoiceState:
 #: The Chain's foldings at a budget of 12 cycles a frame: PE x SIMD = 4, the earlier axis
 #: least.
 FOLDED_12 = {
-    "first.pe": 1,
-    "first.simd": 4,
-    "second.pe": 1,
-    "second.simd": 4,
+    "MatMul_0.pe": 1,
+    "MatMul_0.simd": 4,
+    "MatMul_1.pe": 1,
+    "MatMul_1.simd": 4,
 }
 
 
@@ -119,28 +119,33 @@ def test_a_choice_names_its_space_class_and_whether_its_cases_are_ordered() -> N
     explorer, base = seam()
     fresh = offered(explorer, chain.network())
     # Each core is open: on a DSP48E2 platform one value is possible, and offered.
-    compute = fresh["first.compute"]
-    assert compute.key == ("first", "compute") and not compute.ordered
+    compute = fresh["MatMul_0.compute"]
+    assert compute.key == ("MatMul_0", "compute") and not compute.ordered
     assert compute.cases == ("packed",)
     ((rule, (finding,)),) = compute.refused["int8_dsp58"].why.items()
-    assert (rule, finding.code) == (("first", "compute.int8_dsp58.core_supported"), "dotp-target")
-    assert fresh["activate.ultra_stages"].space_type is ThresholdingKernel
+    assert (rule, finding.code) == (
+        ("MatMul_0", "compute.int8_dsp58.core_supported"),
+        "dotp-target",
+    )
+    assert fresh["Thresholding_0.ultra_stages"].space_type is ThresholdingKernel
     # The folding is MatMul's, offered while its core is open; a core's own choices wait
     # on its presence. A channel's transport is offered at once.
-    pe = fresh["first.pe"]
-    assert pe.key == ("first", "pe")
+    pe = fresh["MatMul_0.pe"]
+    assert pe.key == ("MatMul_0", "pe")
     assert pe.space_type is MatMulKernel and pe.ordered and pe.cases == (1, 2, 4)
-    assert "levels.transport" in fresh and "first.compute.packed.reducer" not in fresh
-    cored = choose(chain.network(), {"first.compute": "packed"})
+    assert (
+        "Thresholding_0_out0.transport" in fresh and "MatMul_0.compute.packed.reducer" not in fresh
+    )
+    cored = choose(chain.network(), {"MatMul_0.compute": "packed"})
     first = offered(explorer, cored)
-    assert first["first.pe"].cases == (1, 2, 4)
-    reducer = first["first.compute.packed.reducer"]
+    assert first["MatMul_0.pe"].cases == (1, 2, 4)
+    reducer = first["MatMul_0.compute.packed.reducer"]
     assert reducer.space_type is PackedDotpKernel and not reducer.ordered
     # As conversion and the cut leave it, nothing is open; a transport reopened is
     # offered, a list of values stating no order.
     assert offered(explorer, base) == {}
-    level = explorer.reopen(base, [("levels", "transport")])[0]
-    assert not offered(explorer, level)["levels.transport"].ordered
+    level = explorer.reopen(base, [("Thresholding_0_out0", "transport")])[0]
+    assert not offered(explorer, level)["Thresholding_0_out0.transport"].ordered
 
 
 def said(why: Any) -> str:
@@ -152,15 +157,15 @@ def test_a_change_is_refused_by_the_rule_it_breaks_or_a_value_outside_its_domain
     """The engine's refusals: a rule by its key, a value by the choice's; the seam's own
     are findings too, each owned by the key it refuses."""
     explorer, network = seam()
-    core = explorer.set(network, keyed({"first.compute": "int8_dsp58"}))
+    core = explorer.set(network, keyed({"MatMul_0.compute": "int8_dsp58"}))
     assert isinstance(core, Refused)
-    rule = ("first", "compute.int8_dsp58.core_supported")
+    rule = ("MatMul_0", "compute.int8_dsp58.core_supported")
     (found,) = core.why[rule]
     assert (found.kind, found.code) == (FindingKind.REJECTION, "dotp-target")
     assert not core.standing.get(rule)
-    three = explorer.set(network, keyed({"first.pe": 3}))
+    three = explorer.set(network, keyed({"MatMul_0.pe": 3}))
     assert isinstance(three, Refused)
-    (found,) = three.why[("first", "pe")]
+    (found,) = three.why[("MatMul_0", "pe")]
     assert found.code == "domain-membership"
     nowhere = explorer.set(network, keyed({"nowhere.pe": 1}))
     assert isinstance(nowhere, Refused)
@@ -193,16 +198,16 @@ def test_a_rule_a_value_breaks_names_the_stored_choices_standing_in_its_way() ->
     stands in its way, and a batch replacing it may set pumping on. A batch that names
     both and breaks the rule is refused by it, nothing standing."""
     explorer, base = seam()
-    alone = explorer.set(base, keyed({"first.compute.packed.compute_pumping": True}))
+    alone = explorer.set(base, keyed({"MatMul_0.compute.packed.compute_pumping": True}))
     assert isinstance(alone, Refused)
-    rule = ("first", "compute.packed.pumping_has_lanes")
+    rule = ("MatMul_0", "compute.packed.pumping_has_lanes")
     assert [f.code for f in alone.why[rule]] == ["dotp-pumping"]
-    assert alone.standing == {rule: (("first", "simd"),)}
-    pumped = keyed({"first.simd": 2, "first.compute.packed.compute_pumping": True})
+    assert alone.standing == {rule: (("MatMul_0", "simd"),)}
+    pumped = keyed({"MatMul_0.simd": 2, "MatMul_0.compute.packed.compute_pumping": True})
     outcome = explorer.set(base, pumped)
     assert isinstance(outcome, Accepted)
-    assert chosen(explorer, outcome.network)["first.compute.packed.compute_pumping"] is True
-    batch = keyed({"first.simd": 1, "first.compute.packed.compute_pumping": True})
+    assert chosen(explorer, outcome.network)["MatMul_0.compute.packed.compute_pumping"] is True
+    batch = keyed({"MatMul_0.simd": 1, "MatMul_0.compute.packed.compute_pumping": True})
     both = explorer.set(base, batch)
     assert isinstance(both, Refused)
     assert "dotp-pumping" in said(both.why) and not both.standing.get(rule)
@@ -210,62 +215,62 @@ def test_a_rule_a_value_breaks_names_the_stored_choices_standing_in_its_way() ->
 
 def test_a_batch_commits_a_selector_and_a_choice_nested_under_it_together() -> None:
     explorer, base = seam()
-    batch = keyed({"hidden.transport": "fifo", "hidden.transport.fifo.depth": 16})
+    batch = keyed({"MatMul_0_out0.transport": "fifo", "MatMul_0_out0.transport.fifo.depth": 16})
     outcome = explorer.set(base, batch)
     # The FIFO's style, brought into play by the change, is set by the channel's policy (the
     # fold rule: first valid, ``auto``), the strategy's, named.
     assert isinstance(outcome, Accepted) and not outcome.cleared
-    assert outcome.settled == keyed({"hidden.transport.fifo.buffer.ram_style": "auto"})
+    assert outcome.settled == keyed({"MatMul_0_out0.transport.fifo.buffer.ram_style": "auto"})
     assert {
-        k: v for k, v in chosen(explorer, outcome.network).items() if k.startswith("hidden.")
+        k: v for k, v in chosen(explorer, outcome.network).items() if k.startswith("MatMul_0_out0.")
     } == {
-        "hidden.transport": "fifo",
-        "hidden.transport.fifo.depth": 16,
-        "hidden.transport.fifo.buffer.ram_style": "auto",
+        "MatMul_0_out0.transport": "fifo",
+        "MatMul_0_out0.transport.fifo.depth": 16,
+        "MatMul_0_out0.transport.fifo.buffer.ram_style": "auto",
     }
     # Alone, the nested choice is stored out of play: its case is not selected.
-    alone = explorer.set(base, keyed({"hidden.transport.fifo.depth": 16}))
+    alone = explorer.set(base, keyed({"MatMul_0_out0.transport.fifo.depth": 16}))
     assert isinstance(alone, Accepted)
-    assert state(alone.network, "hidden.transport.fifo.depth") == inspection.Dormant(16)
+    assert state(alone.network, "MatMul_0_out0.transport.fifo.depth") == inspection.Dormant(16)
 
 
 def test_a_change_that_puts_a_choice_out_of_play_keeps_it_dormant_and_a_held_one_refuses() -> None:
-    """A FIFO on ``hidden`` with its depth, then ``hidden`` direct: the depth is out of
-    play, kept dormant, and nothing is open. A held choice the change would put out of
-    play refuses the change, naming it: a hold keeps its case in play."""
+    """A FIFO on ``MatMul_0_out0`` with its depth, then ``MatMul_0_out0`` direct: the depth is out
+    of play, kept dormant, and nothing is open. A held choice the change would put out of play
+    refuses the change, naming it: a hold keeps its case in play."""
     explorer, base = seam()
     fifo = explorer.set(
-        base, keyed({"hidden.transport": "fifo", "hidden.transport.fifo.depth": 16})
+        base, keyed({"MatMul_0_out0.transport": "fifo", "MatMul_0_out0.transport.fifo.depth": 16})
     )
     assert isinstance(fifo, Accepted)
-    direct = explorer.set(fifo.network, keyed({"hidden.transport": "direct"}))
+    direct = explorer.set(fifo.network, keyed({"MatMul_0_out0.transport": "direct"}))
     assert isinstance(direct, Accepted) and not direct.cleared and not direct.settled
-    depth = "hidden.transport.fifo.depth"
+    depth = "MatMul_0_out0.transport.fifo.depth"
     assert chosen(explorer, direct.network)[depth] == 16
     assert state(direct.network, depth) == inspection.Dormant(16)
     assert explorer.choices(direct.network) == ()
     # The FIFO again: the depth back in play, as it was.
-    again = explorer.set(direct.network, keyed({"hidden.transport": "fifo"}))
+    again = explorer.set(direct.network, keyed({"MatMul_0_out0.transport": "fifo"}))
     assert isinstance(again, Accepted) and state(again.network, depth) == inspection.Set(16)
-    explorer.held[("hidden", "transport.fifo.depth")] = 16
-    refused_ = explorer.set(fifo.network, keyed({"hidden.transport": "direct"}))
+    explorer.held[("MatMul_0_out0", "transport.fifo.depth")] = 16
+    refused_ = explorer.set(fifo.network, keyed({"MatMul_0_out0.transport": "direct"}))
     assert isinstance(refused_, Refused)
-    (found,) = refused_.why[("hidden", "transport.fifo.depth")]
+    (found,) = refused_.why[("MatMul_0_out0", "transport.fifo.depth")]
     assert found.code == "held" and "put out of play (dormant)" in found.message
 
 
 def test_a_fifo_depth_is_known_by_membership_and_proposed_through_a_change() -> None:
     explorer, base = seam()
-    fifo = explorer.set(base, keyed({"levels.transport": "fifo"}))
+    fifo = explorer.set(base, keyed({"Thresholding_0_out0.transport": "fifo"}))
     assert isinstance(fifo, Accepted)
-    depth = offered(explorer, fifo.network)["levels.transport.fifo.depth"]
+    depth = offered(explorer, fifo.network)["Thresholding_0_out0.transport.fifo.depth"]
     assert depth.cases is None and depth.ordered and depth.policy == Required()
     small = explorer.set(fifo.network, {depth.key: 1})
     assert isinstance(small, Refused)
     assert "domain-membership" in [finding.code for finding in small.why[depth.key]]
     # Its style is a choice of its own, brought into play with it: the fold rule sets it by
     # the channel's policy (first valid, ``auto``) and leaves the depth, required, open.
-    style = ("levels", "transport.fifo.buffer.ram_style")
+    style = ("Thresholding_0_out0", "transport.fifo.buffer.ram_style")
     assert fifo.settled == {style: "auto"} and list(fifo.unsettled) == [depth.key]
     assert dotted(style) not in offered(explorer, fifo.network)
     sized = explorer.set(fifo.network, {depth.key: 16})
@@ -276,11 +281,11 @@ def test_a_fifo_depth_is_known_by_membership_and_proposed_through_a_change() -> 
     explored = TargetCycles(12).explore(explorer, sized.network)
     assert explorer.refusals(explored) == {}
     assert explorer.chosen(explored)[depth.key] == 16
-    levels = explored.member("levels")
+    levels = explored.member("Thresholding_0_out0")
     labels = [stage.label for stage in levels.stages]
     assert labels.index("transport.fifo.buffer") < labels.index("adapter.input_gen.input_gen")
     word = levels.transport.buffer.input.width
-    assert explorer.cost(explored).buffering["levels"] >= 16 * word
+    assert explorer.cost(explored).buffering["Thresholding_0_out0"] >= 16 * word
 
 
 def test_cost_names_what_a_member_waits_on_then_its_cycles_and_the_bottleneck_ties() -> None:
@@ -288,26 +293,26 @@ def test_cost_names_what_a_member_waits_on_then_its_cycles_and_the_bottleneck_ti
     network = chain.network()
     cost = explorer.cost(network)
     # Nothing chosen: a MatMul's cycles wait on its core, open.
-    assert cost.waiting["first"] == (("first", "compute"),)
+    assert cost.waiting["MatMul_0"] == (("MatMul_0", "compute"),)
     # A channel whose contract waits on its kernel's core waits on it too.
-    assert cost.waiting["x"] == (("first", "compute"),)
-    assert cost.cycles["activate"] == 6  # its PE is the Chain's
+    assert cost.waiting["x"] == (("MatMul_0", "compute"),)
+    assert cost.cycles["Thresholding_0"] == 6  # its PE is the Chain's
     assert cost.bottleneck is None
-    cored = choose(network, {"first.compute": "packed", "second.compute": "packed"})
-    assert explorer.cost(cored).waiting["first"] == (("first", "pe"),)
+    cored = choose(network, {"MatMul_0.compute": "packed", "MatMul_1.compute": "packed"})
+    assert explorer.cost(cored).waiting["MatMul_0"] == (("MatMul_0", "pe"),)
     explored = Ranked(Lanes(2)).explore(explorer, network)
     cost = explorer.cost(explored)
-    first = explored.member("first")
-    assert cost.cycles["first"] == first.compute.schedule.iterations == 3 * 2 * 2
+    first = explored.member("MatMul_0")
+    assert cost.cycles["MatMul_0"] == first.compute.schedule.iterations == 3 * 2 * 2
     # Every member at the most cycles is named, kernels first: the activation replays
     # feed the MatMuls at their pace.
-    assert cost.bottleneck == Bottleneck(("first", "second", "x", "levels"), 12)
+    assert cost.bottleneck == Bottleneck(("MatMul_0", "MatMul_1", "x", "Thresholding_0_out0"), 12)
 
 
 #: What the fold tries of each unordered choice a member's cycles wait on, on the Chain
 #: at a DSP48E2 platform: each MatMul's core, reopened, with the one value possible,
 #: which it keeps. A channel's choices are not a fold's.
-CASES_12 = {"first.compute": "packed", "second.compute": "packed"}
+CASES_12 = {"MatMul_0.compute": "packed", "MatMul_1.compute": "packed"}
 
 
 def test_target_cycles_folds_the_least_parallelism_that_meets_the_budget() -> None:
@@ -324,7 +329,7 @@ def test_target_cycles_folds_the_least_parallelism_that_meets_the_budget() -> No
     assert (run.by_policy, run.unset, run.cleared, run.settled) == ({}, {}, {}, {})
     report = strategy.report()
     assert report["bottleneck"] == {
-        "members": ["first", "second", "x", "hidden", "levels"],
+        "members": ["MatMul_0", "MatMul_1", "x", "MatMul_0_out0", "Thresholding_0_out0"],
         "cycles": 12,
     }
     assert (report["bottleneck_of"], report["met"], report["unfolded"]) == ("folded", True, {})
@@ -346,20 +351,20 @@ def test_a_fold_that_the_engine_refuses_with_a_choice_standing_takes_another_val
     24 cycles SIMD 2 still meets the budget, the stored pumping is accepted, and it stays on."""
     explorer, base = seam()
     pumped = explorer.set(
-        base, keyed({"first.simd": 2, "first.compute.packed.compute_pumping": True})
+        base, keyed({"MatMul_0.simd": 2, "MatMul_0.compute.packed.compute_pumping": True})
     )
     assert isinstance(pumped, Accepted)
-    asked = Seam(FULL_DSP48E2).set(pumped.network, keyed({"first.simd": 1}))
+    asked = Seam(FULL_DSP48E2).set(pumped.network, keyed({"MatMul_0.simd": 1}))
     assert isinstance(asked, Refused)
-    rule = ("first", "compute.packed.pumping_has_lanes")
-    assert asked.standing == {rule: (("first", "compute.packed.compute_pumping"),)}
-    pumping = "first.compute.packed.compute_pumping"
+    rule = ("MatMul_0", "compute.packed.pumping_has_lanes")
+    assert asked.standing == {rule: (("MatMul_0", "compute.packed.compute_pumping"),)}
+    pumping = "MatMul_0.compute.packed.compute_pumping"
     for cycles, simd, taken in ((48, 1, False), (24, 2, True)):
         fold, _ = seam()
         strategy = TargetCycles(cycles)
         folded = strategy.explore(fold, pumped.network)
         values = chosen(fold, folded)
-        assert (values["first.simd"], values[pumping]) == (simd, taken)
+        assert (values["MatMul_0.simd"], values[pumping]) == (simd, taken)
         assert strategy.report()["met"] is True
 
 
@@ -370,16 +375,16 @@ def test_a_budget_no_member_meets_is_relaxed_to_the_bottleneck_reached() -> None
     # The activation's fixed PE takes 6 cycles: the MatMuls fold to meet that, no faster.
     assert strategy.relaxed_to == 6
     values = chosen(explorer, folded)
-    assert values["first.pe"] == 2 and values["first.simd"] == 4
+    assert values["MatMul_0.pe"] == 2 and values["MatMul_0.simd"] == 4
     assert explorer.cost(folded).bottleneck == Bottleneck(
-        ("first", "activate", "second", "x", "levels"), 6
+        ("MatMul_0", "Thresholding_0", "MatMul_1", "x", "Thresholding_0_out0"), 6
     )
     unrelaxed = TargetCycles(1, relax=False)
-    assert chosen(explorer, unrelaxed.explore(explorer, network))["first.pe"] == 4
+    assert chosen(explorer, unrelaxed.explore(explorer, network))["MatMul_0.pe"] == 4
     # A miss is stated: the bottleneck reached and that it does not meet the budget.
     report = unrelaxed.report()
     assert report["bottleneck"]["cycles"] == 6  # type: ignore[index]
-    assert "activate" in report["bottleneck"]["members"]  # type: ignore[index]
+    assert "Thresholding_0" in report["bottleneck"]["members"]  # type: ignore[index]
     assert (report["relaxed_to"], report["met"]) == (None, False)
     assert strategy.report()["met"] is False
 
@@ -393,7 +398,7 @@ def test_target_cycles_states_the_bottleneck_of_the_restored_point_where_it_leav
 
     class Partial(TargetCycles):
         def _fold(self, seam: Seam, network: Any, name: str, budget: int) -> Any:
-            if name == "second":
+            if name == "MatMul_1":
                 return explore_module._Folded(None, network, "left by the test")
             return super()._fold(seam, network, name, budget)
 
@@ -401,16 +406,16 @@ def test_target_cycles_states_the_bottleneck_of_the_restored_point_where_it_leav
     strategy = Partial(12)
     folded = strategy.explore(explorer, network)
     # Restored: second at its prior folding, the least parallelism.
-    assert chosen(explorer, folded)["second.pe"] == 1
-    assert chosen(explorer, folded)["second.simd"] == 1
+    assert chosen(explorer, folded)["MatMul_1.pe"] == 1
+    assert chosen(explorer, folded)["MatMul_1.simd"] == 1
     report = strategy.report()
     # second, and the channels whose cycles wait on its core.
     unfolded = report["unfolded"]
-    assert isinstance(unfolded, dict) and unfolded["second"] == "left by the test"
-    assert all("second." in why for name, why in unfolded.items() if name != "second")
+    assert isinstance(unfolded, dict) and unfolded["MatMul_1"] == "left by the test"
+    assert all("MatMul_1." in why for name, why in unfolded.items() if name != "MatMul_1")
     # Restored at its prior folding, second takes 48 cycles: the budget is missed, and said.
     assert report["bottleneck"]["cycles"] == 48  # type: ignore[index]
-    assert "second" in report["bottleneck"]["members"]  # type: ignore[index]
+    assert "MatMul_1" in report["bottleneck"]["members"]  # type: ignore[index]
     assert (report["bottleneck_of"], report["met"]) == ("restored", False)
 
 
@@ -433,24 +438,24 @@ def dsp58_matmul() -> tuple[Seam, CoreComposition]:
         {
             "x": composer.channel(
                 Side.boundary("s_axis_0"),
-                composer.Port("first", "x"),
+                composer.Port("MatMul_0", "x"),
                 tensor=x_tensor,
                 platform=FULL_DSP58,
             ),
             "w": composer.channel(
                 Side.source(),
-                composer.Port("first", "w"),
-                tensor=composer.Stated("first", "carried_weights"),
-                contents=composer.Stated("first", "stored_weights"),
+                composer.Port("MatMul_0", "w"),
+                tensor=composer.Stated("MatMul_0", "carried_weights"),
+                contents=composer.Stated("MatMul_0", "stored_weights"),
                 platform=FULL_DSP58,
             ),
             "y": composer.channel(
-                composer.Port("first", "y"),
+                composer.Port("MatMul_0", "y"),
                 Side.boundary("m_axis_0"),
                 tensor=y_tensor,
                 platform=FULL_DSP58,
             ),
-            "first": first,
+            "MatMul_0": first,
         }
     )
     return Seam(FULL_DSP58), with_defaults(network)
@@ -462,19 +467,19 @@ def test_target_cycles_folds_each_case_of_an_unordered_choice_its_cycles_wait_on
     the one kept meets the budget with the least parallelism, then the fewest resources;
     no order is imposed on the values, and the report names the value taken and why."""
     explorer, network = dsp58_matmul()
-    assert chosen(explorer, network)["first.compute"] == "packed"
-    compute = offered(explorer, explorer.reopen(network, [("first", "compute")])[0])
-    assert not compute["first.compute"].ordered
-    assert set(compute["first.compute"].cases or ()) == {"packed", "int8_dsp58"}
+    assert chosen(explorer, network)["MatMul_0.compute"] == "packed"
+    compute = offered(explorer, explorer.reopen(network, [("MatMul_0", "compute")])[0])
+    assert not compute["MatMul_0.compute"].ordered
+    assert set(compute["MatMul_0.compute"].cases or ()) == {"packed", "int8_dsp58"}
     strategy = TargetCycles(6)
     folded = strategy.explore(explorer, network)
     report = strategy.report()
     assert (report["met"], report["unfolded"]) == (True, {})
     (row,) = report["cases"].values()  # type: ignore[attr-defined]
-    assert list(report["cases"]) == ["first.compute"]  # type: ignore[call-overload]
+    assert list(report["cases"]) == ["MatMul_0.compute"]  # type: ignore[call-overload]
     taken = row["taken"]
-    assert chosen(explorer, folded)["first.compute"] == taken
-    assert chosen(explorer, folded)["first.simd"]
+    assert chosen(explorer, folded)["MatMul_0.compute"] == taken
+    assert chosen(explorer, folded)["MatMul_0.simd"]
     folds = row["folded"]
     assert set(folds) == {"packed", "int8_dsp58"} and row["refused"] == {}
     # Both cores fold to the most cycles within 6; tied, the lighter by dominance is kept.
@@ -494,7 +499,7 @@ def test_target_cycles_folds_each_case_of_an_unordered_choice_its_cycles_wait_on
     # core uses no LUTs: it is kept, and its pumping, never stored, is set by the fold's
     # policy, reported; nothing is left open.
     assert taken == "int8_dsp58"
-    pumping = ("first", "compute.int8_dsp58.compute_pumping")
+    pumping = ("MatMul_0", "compute.int8_dsp58.compute_pumping")
     (run,) = explorer.runs
     assert run.by_policy == {pumping: False} and explorer.chosen(folded)[pumping] is False
     assert explorer.choices(folded) == ()
@@ -510,8 +515,11 @@ def test_target_cycles_keeps_the_case_with_the_least_parallelism_that_meets_the_
 
     def slower_int8(self: Seam, at: Any, members: Any = None) -> Any:
         found = cost(self, at, members)
-        if "first" in found.cycles and self.chosen(at).get(("first", "compute")) == "int8_dsp58":
-            found.cycles = {**found.cycles, "first": found.cycles["first"] + 1}
+        if (
+            "MatMul_0" in found.cycles
+            and self.chosen(at).get(("MatMul_0", "compute")) == "int8_dsp58"
+        ):
+            found.cycles = {**found.cycles, "MatMul_0": found.cycles["MatMul_0"] + 1}
         return found
 
     monkeypatch.setattr(Seam, "cost", slower_int8)
@@ -550,17 +558,17 @@ def test_the_defaults_set_each_open_choice_by_its_policy_and_leave_required_ones
     explorer = held(Seam(FULL_DSP48E2))
     base = Defaults().explore(explorer, chain.network())
     values = chosen(explorer, base)
-    assert values["first.compute"] == "packed"
-    assert values["first.pe"] == 1
-    assert values["first.compute.packed.reducer"] == "tree"
-    assert values["first.compute.packed.compute_pumping"] is False
+    assert values["MatMul_0.compute"] == "packed"
+    assert values["MatMul_0.pe"] == 1
+    assert values["MatMul_0.compute.packed.reducer"] == "tree"
+    assert values["MatMul_0.compute.packed.compute_pumping"] is False
     assert {value for key, value in values.items() if key.endswith("transport")} == {"direct"}
     assert explorer.choices(base) == () and explorer.cost(base).bottleneck is not None
     assert values == chosen(explorer, with_defaults(chain.network()))
-    fifo = explorer.set(base, keyed({"levels.transport": "fifo"}))
+    fifo = explorer.set(base, keyed({"Thresholding_0_out0.transport": "fifo"}))
     assert isinstance(fifo, Accepted)
     assert [(c.key, c.policy) for c in explorer.choices(with_defaults(fifo.network))] == [
-        (("levels", "transport.fifo.depth"), Required())
+        (("Thresholding_0_out0", "transport.fifo.depth"), Required())
     ]
 
 
@@ -571,32 +579,32 @@ def test_reopen_clears_its_keys_in_one_change_and_a_channel_waits_on_its_kernel(
     a rule: a choice under a selector cleared waits on it, stored, and comes back in play
     with it. Nothing else is touched."""
     explorer, base = seam()
-    opened, reach = explorer.reopen(base, [("first", "pe")])
-    assert reach == (("first", "pe"),)
+    opened, reach = explorer.reopen(base, [("MatMul_0", "pe")])
+    assert reach == (("MatMul_0", "pe"),)
     assert set(explorer.chosen(base)) - set(explorer.chosen(opened)) == set(reach)
     states = dict(opened.states(["x"]))
-    assert states[("x", "adapter_ram_style")] == inspection.Waiting("distributed", ("first.pe",))
+    assert states[("x", "adapter_ram_style")] == inspection.Waiting("distributed", ("MatMul_0.pe",))
     assert states[("x", "transport")] == inspection.Set("direct")
     # The folding back, the channel's stored choices are set again.
-    again = explorer.set(opened, keyed({"first.pe": 1}))
+    again = explorer.set(opened, keyed({"MatMul_0.pe": 1}))
     assert isinstance(again, Accepted) and not again.cleared and not again.settled
     assert explorer.chosen(again.network) == explorer.chosen(base)
     # A key not stored is nothing to reopen.
     network = chain.network()
-    assert explorer.reopen(network, [("first", "pe")]) == (network, ())
+    assert explorer.reopen(network, [("MatMul_0", "pe")]) == (network, ())
     # A selector's nested choice waits on its presence, stored.
     sized = explorer.set(
-        base, keyed({"hidden.transport": "fifo", "hidden.transport.fifo.depth": 16})
+        base, keyed({"MatMul_0_out0.transport": "fifo", "MatMul_0_out0.transport.fifo.depth": 16})
     )
     assert isinstance(sized, Accepted)
-    depth = "hidden.transport.fifo.depth"
-    waiting, reach = explorer.reopen(sized.network, [("hidden", "transport")])
-    assert reach == (("hidden", "transport"),)
+    depth = "MatMul_0_out0.transport.fifo.depth"
+    waiting, reach = explorer.reopen(sized.network, [("MatMul_0_out0", "transport")])
+    assert reach == (("MatMul_0_out0", "transport"),)
     assert state(waiting, depth) == inspection.Waiting(16, ("transport",))
     # The FIFO again, it is in play; another transport puts it out of play, kept.
-    fifo = explorer.set(waiting, keyed({"hidden.transport": "fifo"}))
+    fifo = explorer.set(waiting, keyed({"MatMul_0_out0.transport": "fifo"}))
     assert isinstance(fifo, Accepted) and state(fifo.network, depth) == inspection.Set(16)
-    direct = explorer.set(waiting, keyed({"hidden.transport": "direct"}))
+    direct = explorer.set(waiting, keyed({"MatMul_0_out0.transport": "direct"}))
     assert isinstance(direct, Accepted) and state(direct.network, depth) == inspection.Dormant(16)
 
 
@@ -605,21 +613,21 @@ def test_restore_gives_back_each_prior_value_still_accepted_and_sets_the_rest_by
     values back, one batch; where the batch is refused, each alone, ranked, and a prior
     value refused there is set by the choice's policy instead, named (``by_policy``)."""
     explorer, base = seam()
-    keys = [("first", "compute.packed.reducer"), ("second", "pe")]
+    keys = [("MatMul_0", "compute.packed.reducer"), ("MatMul_1", "pe")]
     opened, reach = explorer.reopen(base, keys)
     assert reach == tuple(keys)
     prior = keyed(
         {
-            "first.compute.packed.reducer": "compressor",
-            "second.pe": 3,  # no divisor of four: outside its domain
+            "MatMul_0.compute.packed.reducer": "compressor",
+            "MatMul_1.pe": 3,  # no divisor of four: outside its domain
         }
     )
     restored = explorer.restore(opened, prior, "the test")
     values = chosen(explorer, restored.network)
-    assert values["first.compute.packed.reducer"] == "compressor"
-    assert values["second.pe"] == 1  # first valid
-    assert restored.kept == {("first", "compute.packed.reducer"): "compressor"}
-    assert restored.by_policy == {("second", "pe"): 1}
+    assert values["MatMul_0.compute.packed.reducer"] == "compressor"
+    assert values["MatMul_1.pe"] == 1  # first valid
+    assert restored.kept == {("MatMul_0", "compute.packed.reducer"): "compressor"}
+    assert restored.by_policy == {("MatMul_1", "pe"): 1}
     assert restored.unset == {} and explorer.choices(restored.network) == ()
     # Only what is open is given back: a stored value is never replaced.
     assert explorer.restore(base, prior).network is base
@@ -631,24 +639,24 @@ def test_set_refuses_a_change_that_breaks_a_rule_naming_what_stands_in_its_way()
     standing in its way; nothing is committed."""
     explorer, base = seam()
     pumped = explorer.set(
-        base, keyed({"first.simd": 2, "first.compute.packed.compute_pumping": True})
+        base, keyed({"MatMul_0.simd": 2, "MatMul_0.compute.packed.compute_pumping": True})
     )
     assert isinstance(pumped, Accepted)
-    replaced = explorer.set(pumped.network, keyed({"first.simd": 1}))
+    replaced = explorer.set(pumped.network, keyed({"MatMul_0.simd": 1}))
     assert isinstance(replaced, Refused)
-    rule = ("first", "compute.packed.pumping_has_lanes")
+    rule = ("MatMul_0", "compute.packed.pumping_has_lanes")
     ((key, (found,)),) = replaced.why.items()
     assert (key, found.code) == (rule, "dotp-pumping")
-    assert replaced.standing == {rule: (("first", "compute.packed.compute_pumping"),)}
+    assert replaced.standing == {rule: (("MatMul_0", "compute.packed.compute_pumping"),)}
     assert "pumping requires SIMD >= 2" in said(replaced.why)
     # Pumping replaced in the same batch, the rule holds: accepted.
     both = explorer.set(
         pumped.network,
-        keyed({"first.simd": 1, "first.compute.packed.compute_pumping": False}),
+        keyed({"MatMul_0.simd": 1, "MatMul_0.compute.packed.compute_pumping": False}),
     )
     assert isinstance(both, Accepted)
     # A change of the change's own key outside its domain is refused.
-    assert isinstance(explorer.set(base, keyed({"first.pe": 3})), Refused)
+    assert isinstance(explorer.set(base, keyed({"MatMul_0.pe": 3})), Refused)
 
 
 def test_a_held_choice_a_change_would_put_out_of_play_refuses_the_change() -> None:
@@ -659,7 +667,7 @@ def test_a_held_choice_a_change_would_put_out_of_play_refuses_the_change() -> No
     # The activations' adapter memory: a folding of four lanes a side needs no adapter,
     # so the change puts its stored style out of play, kept; held, the change is refused.
     style = ("x", "adapter_ram_style")
-    folding = keyed({"first.simd": 4, "first.pe": 4})
+    folding = keyed({"MatMul_0.simd": 4, "MatMul_0.pe": 4})
     unheld = explorer.set(base, folding)
     assert isinstance(unheld, Accepted) and not unheld.cleared
     assert state(unheld.network, dotted(style)) == inspection.Dormant("distributed")
@@ -675,24 +683,24 @@ def test_a_held_choice_a_change_would_put_out_of_play_refuses_the_change() -> No
     assert found.message == "held to 'distributed', put out of play (dormant) by the change"
     del explorer.held[style]
     pumped = explorer.set(
-        base, keyed({"first.simd": 2, "first.compute.packed.compute_pumping": True})
+        base, keyed({"MatMul_0.simd": 2, "MatMul_0.compute.packed.compute_pumping": True})
     )
     assert isinstance(pumped, Accepted)
-    pumping = ("first", "compute.packed.compute_pumping")
+    pumping = ("MatMul_0", "compute.packed.compute_pumping")
     explorer.held[pumping] = True
     # One lane: the change is refused by the rule pumping needs lanes, not by the hold.
-    ruled = explorer.set(pumped.network, keyed({"first.simd": 1}))
+    ruled = explorer.set(pumped.network, keyed({"MatMul_0.simd": 1}))
     assert isinstance(ruled, Refused)
     assert "pumping requires SIMD >= 2" in said(ruled.why)
     assert not any(f.code == "held" for why in ruled.why.values() for f in why)
     # Not reached, it stays: SIMD 4 keeps pumping possible.
-    kept = explorer.set(pumped.network, keyed({"first.simd": 4}))
+    kept = explorer.set(pumped.network, keyed({"MatMul_0.simd": 4}))
     assert isinstance(kept, Accepted)
     assert explorer.chosen(kept.network)[pumping] is True
     # A fold reopens SIMD, never the held pumping: SIMD's first value under it is 2.
     folded = TargetCycles(48).explore(explorer, pumped.network)
     assert explorer.chosen(folded)[pumping] is True
-    assert explorer.chosen(folded)[("first", "simd")] == 2
+    assert explorer.chosen(folded)[("MatMul_0", "simd")] == 2
     assert pumping not in explorer.runs[-1].reopened
 
 
@@ -701,19 +709,19 @@ def test_a_strategy_reopens_its_scope_and_keeps_what_it_does_not_decide() -> Non
     though the folding strategy reopens every choice of a member; the run records what
     it reopened and what it gave back."""
     explorer, base = seam()
-    compressor = explorer.set(base, keyed({"second.compute.packed.reducer": "compressor"}))
+    compressor = explorer.set(base, keyed({"MatMul_1.compute.packed.reducer": "compressor"}))
     assert isinstance(compressor, Accepted)
     folded = TargetCycles(12).explore(explorer, compressor.network)
     values = chosen(explorer, folded)
-    assert values["second.compute.packed.reducer"] == "compressor"
+    assert values["MatMul_1.compute.packed.reducer"] == "compressor"
     assert folding(explorer, folded) == FOLDED_12
     (run,) = explorer.runs
     assert run.strategy == "target_cycles"
-    assert ("second", "compute.packed.reducer") in run.reopened
+    assert ("MatMul_1", "compute.packed.reducer") in run.reopened
     # A channel's choices are not a fold's: they stay as stored, and one standing in a
     # fold's way is the fold rule's to clear and set again (``Seam.set``).
     assert not any(key[0] in folded.channels for key in run.reopened)
-    assert run.kept[("second", "compute.packed.reducer")] == "compressor"
+    assert run.kept[("MatMul_1", "compute.packed.reducer")] == "compressor"
     assert set(run.kept) | set(run.by_policy) <= set(run.reopened)
     # Again on the folded network: the same folding, nothing new.
     again = TargetCycles(12).explore(explorer, folded)
@@ -724,15 +732,15 @@ def test_a_pin_holds_its_keys_and_a_later_strategy_folds_around_it() -> None:
     """A ``Hold`` first: the target throughput folds the other MatMul and
     keeps the held one; its relax step reaches the hold's bottleneck."""
     explorer, base = seam()
-    explorer.held.update(keyed({"first.pe": 1, "first.simd": 1}))
+    explorer.held.update(keyed({"MatMul_0.pe": 1, "MatMul_0.simd": 1}))
     strategy = TargetCycles(1)
     folded = strategy.explore(explorer, base)
     values = chosen(explorer, folded)
-    assert (values["first.pe"], values["first.simd"]) == (1, 1)
+    assert (values["MatMul_0.pe"], values["MatMul_0.simd"]) == (1, 1)
     # first at 48 cycles binds: second folds to meet it, no faster.
     assert strategy.relaxed_to == 48
-    assert (values["second.pe"], values["second.simd"]) == (1, 1)
-    assert ("first", "pe") not in explorer.runs[-1].reopened
+    assert (values["MatMul_1.pe"], values["MatMul_1.simd"]) == (1, 1)
+    assert ("MatMul_0", "pe") not in explorer.runs[-1].reopened
 
 
 def test_a_hold_a_rule_refuses_names_the_rule_and_what_stands_in_its_way() -> None:
@@ -743,21 +751,21 @@ def test_a_hold_a_rule_refuses_names_the_rule_and_what_stands_in_its_way() -> No
         "pin-refused",
         error=ExploreError,
         owner="hold",
-        message=r"pumping_has_lanes: .*dotp-pumping.*\(standing: first\.simd\)",
+        message=r"pumping_has_lanes: .*dotp-pumping.*\(standing: MatMul_0\.simd\)",
     ):
-        Hold({"first": {"compute.packed.compute_pumping": True}}).explore(explorer, base)
+        Hold({"MatMul_0": {"compute.packed.compute_pumping": True}}).explore(explorer, base)
 
 
 def test_the_defaults_strategy_resets_every_choice_not_held() -> None:
     explorer, base = seam()
     folded = TargetCycles(12).explore(explorer, base)
-    explorer.held[("first", "simd")] = 4
+    explorer.held[("MatMul_0", "simd")] = 4
     reset = Defaults().explore(explorer, folded)
     assert folding(explorer, reset) == {
         **{key: 1 for key in FOLDED_12},
-        "first.simd": 4,
+        "MatMul_0.simd": 4,
     }
-    assert chosen(explorer, reset) == {**chosen(explorer, base), "first.simd": 4}
+    assert chosen(explorer, reset) == {**chosen(explorer, base), "MatMul_0.simd": 4}
     assert Defaults().report() == {"strategy": "defaults", "unset": {}}
 
 
@@ -769,12 +777,12 @@ def test_the_debug_placeholder_takes_a_required_choice_s_first_case_or_refuses_i
     assert explorer.chosen(placeholder.explore(explorer, base)) == explorer.chosen(base)
     assert placeholder.report() == {"strategy": "debug_placeholder", "set": {}}
     assert placeholder.label == "DEBUG: set by placeholder"
-    fifo = explorer.set(base, keyed({"levels.transport": "fifo"}))
+    fifo = explorer.set(base, keyed({"Thresholding_0_out0.transport": "fifo"}))
     assert isinstance(fifo, Accepted)
     with refused(
         "placeholder-no-case",
         error=ExploreError,
-        message="known by membership only: .*levels.transport.fifo",
+        message="known by membership only: .*Thresholding_0_out0.transport.fifo",
     ):
         DebugPlaceholder().explore(explorer, fifo.network)
 
@@ -807,16 +815,19 @@ def test_max_throughput_keeps_the_least_budget_whose_point_fits() -> None:
     folded = strategy.explore(explorer, network)
     # Half the part's 10 DSPs: the 6- and 12-cycle points use 8, the 24-cycle one 4.
     assert folding(explorer, folded) == {
-        "first.pe": 1,
-        "first.simd": 2,
-        "second.pe": 1,
-        "second.simd": 2,
+        "MatMul_0.pe": 1,
+        "MatMul_0.simd": 2,
+        "MatMul_1.pe": 1,
+        "MatMul_1.simd": 2,
     }
     # The network is returned restored, as it was costed.
     assert explorer.choices(folded) == ()
     report = strategy.report()
     assert report["budget"] == {"dsp": 5} and report["kept_budget"] is not None
-    assert report["bottleneck"] == {"members": ["first", "second", "x", "levels"], "cycles": 24}
+    assert report["bottleneck"] == {
+        "members": ["MatMul_0", "MatMul_1", "x", "Thresholding_0_out0"],
+        "cycles": 24,
+    }
     assert (report["lower_bound"], report["unstated"]) == (False, {})
     assert report["used"] == asdict(Resources(lut=331, ff=380, dsp=4))
     assert report["ratio"] == {"dsp": 0.8} and report["binding"] == "dsp" and report["fits"]
@@ -903,7 +914,7 @@ def test_max_throughput_states_and_keeps_the_least_parallelism_where_nothing_fit
     explorer, network = within_part()
     strategy = MaxThroughput({"dsp": 0.1, "lut": 1.0})
     folded = strategy.explore(explorer, network)
-    assert chosen(explorer, folded)["first.simd"] == 1
+    assert chosen(explorer, folded)["MatMul_0.simd"] == 1
     (found,) = strategy.findings
     assert (found.kind, found.code, found.owner) == (
         FindingKind.LIMITATION,
@@ -942,7 +953,10 @@ def test_max_throughput_states_where_a_budget_departs_from_its_assumption(
     assert [row["cycles"] for row in tried] == [1, None, 27, 17, 12, 15, 14, 13]
     assert [row["bottleneck"] for row in tried if row["cycles"] == 13] == [48]
     assert report["kept_budget"] == 27
-    assert report["bottleneck"] == {"members": ["first", "second", "x", "levels"], "cycles": 24}
+    assert report["bottleneck"] == {
+        "members": ["MatMul_0", "MatMul_1", "x", "Thresholding_0_out0"],
+        "cycles": 24,
+    }
     assert report["used"] == asdict(Resources(lut=331, ff=380, dsp=4)) and report["fits"]
     assert not report["monotone"]
     departures = report["departures"]
@@ -955,13 +969,13 @@ def test_max_throughput_keeps_the_tie_on_cycles_that_uses_the_least(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Two fitting points at the same cycles: the one using less of the budget is kept,
-    not the last the bisection reached. Here budget 24 also folds ``second`` to 6
+    not the last the bisection reached. Here budget 24 also folds ``MatMul_1`` to 6
     cycles: 24 cycles still, at 6 DSPs where budget 27's point uses 4."""
 
     class Heavier(TargetCycles):
         def _fold(self, seam: Seam, network: Any, name: str, budget: int) -> Any:
             return super()._fold(
-                seam, network, name, 6 if (name, budget) == ("second", 24) else budget
+                seam, network, name, 6 if (name, budget) == ("MatMul_1", 24) else budget
             )
 
     monkeypatch.setattr(explore_module, "TargetCycles", Heavier)
@@ -982,25 +996,25 @@ def test_max_throughput_budgets_what_is_stated_where_a_member_states_no_resource
     state theirs, a lower bound, and it states so (``resources-unstated``), naming the
     member and why, its findings the causes."""
     explorer, network = within_part()
-    pinned = explorer.set(network, keyed({"first.compute.packed.reducer": "compressor"}))
+    pinned = explorer.set(network, keyed({"MatMul_0.compute.packed.reducer": "compressor"}))
     assert isinstance(pinned, Accepted)
     strategy = MaxThroughput({"dsp": 0.5})
     folded = strategy.explore(explorer, pinned.network)
     (found,) = strategy.findings
     assert found.code == "resources-unstated" and found.kind is FindingKind.LIMITATION
-    assert re.search("lower bound.*first .*compressor", found.message)
-    assert found.causes == strategy.unstated()["first"]
-    assert chosen(explorer, folded)["first.compute.packed.reducer"] == "compressor"
+    assert re.search("lower bound.*MatMul_0 .*compressor", found.message)
+    assert found.causes == strategy.unstated()["MatMul_0"]
+    assert chosen(explorer, folded)["MatMul_0.compute.packed.reducer"] == "compressor"
     report = strategy.report()
     assert report["lower_bound"] is True and report["fits"] is True
     unstated = report["unstated"]
-    assert isinstance(unstated, dict) and list(unstated) == ["first"]
-    assert "not characterised" in " ".join(record["message"] for record in unstated["first"])
+    assert isinstance(unstated, dict) and list(unstated) == ["MatMul_0"]
+    assert "not characterised" in " ".join(record["message"] for record in unstated["MatMul_0"])
     # What is stated, without first's: at 6 cycles, second's 4 DSPs of the budget's 5.
     stated = explorer.resources(folded)
     assert isinstance(stated, Stated) and stated.lower_bound
     assert stated.used == total(
-        used for name, used in explorer.cost(folded).resources.items() if name != "first"
+        used for name, used in explorer.cost(folded).resources.items() if name != "MatMul_0"
     )
     assert report["used"] == asdict(stated.used) and report["bottleneck"]["cycles"] == 6  # type: ignore[index]
 

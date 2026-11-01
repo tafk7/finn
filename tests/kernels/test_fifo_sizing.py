@@ -232,12 +232,14 @@ def test_a_channel_s_sides_are_read_from_the_paces_its_ports_state() -> None:
     # hidden: first (PE 1, SIMD 4) closes a reduction of one step each beat, a lane a
     # word; the output adapter's vpc pairs them into activate's two lanes, a word the
     # cycle after its second lane. activate reads every beat.
-    supply, accept = sides(point.member("hidden"), beside(point, "hidden"))
+    supply, accept = sides(point.member("MatMul_0_out0"), beside(point, "MatMul_0_out0"))
     assert supply == Pattern((2, 4, 6, 8, 10, 12), 12)
     assert accept == Pattern(tuple(range(6)), 6)
     # levels: activate's six beats, four lanes a word after its vpc, into second's
     # input_gen, which second reads every beat.
-    supply, accept = sides(point.member("levels"), beside(point, "levels"))
+    supply, accept = sides(
+        point.member("Thresholding_0_out0"), beside(point, "Thresholding_0_out0")
+    )
     assert supply == Pattern((2, 4, 6), 6)
     assert isinstance(accept, Buffered)
     assert accept.reads == Pattern(tuple(range(12)), 12)
@@ -248,7 +250,7 @@ def test_a_boundary_and_a_memory_are_not_modelled() -> None:
     with pytest.raises(NotModelled, match="a boundary: not modelled"):
         sides(point.member("x"), beside(point, "x"))
     with pytest.raises(NotModelled, match="a memory source: paced by its consumer"):
-        sides(point.member("w1"), beside(point, "w1"))
+        sides(point.member("MatMul_0_param0"), beside(point, "MatMul_0_param0"))
 
 
 def test_a_stated_pace_is_its_pattern_and_a_steady_beat_is_expanded_at_the_edge_s_beats() -> None:
@@ -272,19 +274,19 @@ def _stated(x: Outside | None, y: Outside | None) -> CoreComposition:
     members = chain.members()
     members["x"] = channel(
         Side.boundary("s_axis_0", outside=x),
-        Port("first", "x"),
+        Port("MatMul_0", "x"),
         tensor=chain.X_TENSOR,
         platform=FULL_DSP48E2,
     )
     members["y"] = channel(
-        Port("second", "y"),
+        Port("MatMul_1", "y"),
         Side.boundary("m_axis_0", outside=y),
         tensor=chain.Y_TENSOR,
         platform=FULL_DSP48E2,
     )
     explorer = Seam(FULL_DSP48E2)
     explorer.held.update(chain.HELD)
-    network = choose(by_hand(members), {"activate.pe": chain.PE})
+    network = choose(by_hand(members), {"Thresholding_0.pe": chain.PE})
     return TargetCycles(12).explore(explorer, with_defaults(network))
 
 
@@ -337,7 +339,7 @@ def test_a_stated_pace_slower_than_the_members_bounds_the_channel_s_cycles_on_ei
     assert outer(y).form.beats == 12 and y.query(Channel.frame_cycles).value == 36
     assert explorer.cost(slow).bottleneck == Bottleneck(("y",), 36)
     # TargetCycles relaxes its budget of 12 to the 36 reached, and folds again to it.
-    assert explorer.cost(slow).cycles["first"] == 24
+    assert explorer.cost(slow).cycles["MatMul_0"] == 24
     _, accept = sides(y, beside(slow, "y"))
     assert accept == Pattern(tuple(range(0, 36, 3)), 36)
     assert size(y, beside(slow, "y"), 36) == Sized(0, "direct absorbs it", 5, 0)
@@ -365,10 +367,10 @@ def test_size_fifos_proposes_every_transport_in_one_batch_and_says_why() -> None
     assert report["period"] == 12 and report["fifo_bits"] == 0
     assert {name: row["why"] for name, row in strategy.channels().items()} == {
         "x": "a boundary: not modelled",
-        "w1": "a memory source: paced by its consumer",
-        "hidden": "direct absorbs it",
-        "levels": "direct absorbs it",
-        "w2": "a memory source: paced by its consumer",
+        "MatMul_0_param0": "a memory source: paced by its consumer",
+        "MatMul_0_out0": "direct absorbs it",
+        "Thresholding_0_out0": "direct absorbs it",
+        "MatMul_1_param0": "a memory source: paced by its consumer",
         "y": "a boundary: not modelled",
     }
 
@@ -390,7 +392,7 @@ def test_it_sizes_at_the_stored_folding_and_refuses_a_point_whose_cycles_are_unk
     with refused(
         "cycles-unknown",
         error=ExploreError,
-        message="needs every member's cycles: .*first.compute",
+        message="needs every member's cycles: .*MatMul_0.compute",
     ):
         SizeFifos().explore(explorer, point)
 
@@ -424,29 +426,42 @@ def test_a_fifo_sized_before_is_sized_again_and_a_held_one_is_not(
     held, is the strategy's: reopened, and given back)."""
     explorer, point = _folded()
     placed = explorer.set(
-        point, keyed({"levels.transport": "fifo", "levels.transport.fifo.depth": 64})
+        point,
+        keyed(
+            {
+                "Thresholding_0_out0.transport": "fifo",
+                "Thresholding_0_out0.transport.fifo.depth": 64,
+            }
+        ),
     )
     # The FIFO's style, brought into play, set by the fold rule (the channel's policy).
     assert isinstance(placed, Accepted)
-    assert placed.settled == keyed({"levels.transport.fifo.buffer.ram_style": "auto"})
+    assert placed.settled == keyed({"Thresholding_0_out0.transport.fifo.buffer.ram_style": "auto"})
     sized = SizeFifos().explore(explorer, placed.network)
-    assert chosen(explorer, sized)["levels.transport"] == "direct"
-    assert ("levels", "transport.fifo.depth") in explorer.runs[-1].reopened
-    explorer.held.update(keyed({"levels.transport": "fifo", "levels.transport.fifo.depth": 64}))
+    assert chosen(explorer, sized)["Thresholding_0_out0.transport"] == "direct"
+    assert ("Thresholding_0_out0", "transport.fifo.depth") in explorer.runs[-1].reopened
+    explorer.held.update(
+        keyed(
+            {
+                "Thresholding_0_out0.transport": "fifo",
+                "Thresholding_0_out0.transport.fifo.depth": 64,
+            }
+        )
+    )
     kept = SizeFifos().explore(explorer, placed.network)
-    assert chosen(explorer, kept)["levels.transport.fifo.depth"] == 64
-    assert chosen(explorer, kept)["levels.transport.fifo.buffer.ram_style"] == "auto"
-    assert [key for key in explorer.runs[-1].reopened if key[0] == "levels"] == [
-        ("levels", "transport.fifo.buffer.ram_style")
+    assert chosen(explorer, kept)["Thresholding_0_out0.transport.fifo.depth"] == 64
+    assert chosen(explorer, kept)["Thresholding_0_out0.transport.fifo.buffer.ram_style"] == "auto"
+    assert [key for key in explorer.runs[-1].reopened if key[0] == "Thresholding_0_out0"] == [
+        ("Thresholding_0_out0", "transport.fifo.buffer.ram_style")
     ]
 
 
 def _hidden_needs_eight(
     channel: Channel, neighbours: Neighbours, period: int, **options: Any
 ) -> Sized:
-    """A double of the per-channel sizing: ``hidden`` (first's output) needs a FIFO of
+    """A double of the per-channel sizing: ``MatMul_0_out0`` (first's output) needs a FIFO of
     eight words, every other channel none."""
-    if channel.sides.source_owner == "first.y":
+    if channel.sides.source_owner == "MatMul_0.y":
         return Sized(8, "least 8 words", 24, 8)
     return Sized(0, "direct absorbs it", 8, 0)
 
@@ -459,20 +474,20 @@ def test_a_fifo_is_proposed_with_its_depth_and_memory_in_the_same_batch(
     strategy = SizeFifos()
     found = strategy.explore(explorer, point)
     values = chosen(explorer, found)
-    assert values["hidden.transport"] == "fifo"
-    assert values["hidden.transport.fifo.depth"] == 8
+    assert values["MatMul_0_out0.transport"] == "fifo"
+    assert values["MatMul_0_out0.transport.fifo.depth"] == 8
     # Its style, never stored, is committed with its depth: the channel's policy's first
     # valid, FinnLib's ``auto``. Nothing is given back or set by policy after.
-    assert values["hidden.transport.fifo.buffer.ram_style"] == "auto"
+    assert values["MatMul_0_out0.transport.fifo.buffer.ram_style"] == "auto"
     assert explorer.runs[-1].kept == explorer.runs[-1].by_policy == {}
     assert strategy.report()["ram_style"] is None
-    assert strategy.channels()["hidden"]["bits"] == 8 * 24
+    assert strategy.channels()["MatMul_0_out0"]["bits"] == 8 * 24
     assert strategy.report()["fifo_bits"] == 8 * 24
     # A fold after it keeps it (no transport is a folding strategy's), and nothing
     # refuses itself.
     done = explore(explorer, found, [TargetCycles(12)])
     assert explorer.refusals(done) == {}
-    assert chosen(explorer, done)["hidden.transport.fifo.depth"] == 8
+    assert chosen(explorer, done)["MatMul_0_out0.transport.fifo.depth"] == 8
 
 
 def test_a_style_named_is_committed_with_the_depth(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -480,8 +495,8 @@ def test_a_style_named_is_committed_with_the_depth(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(explore_module, "size", _hidden_needs_eight)
     for style in ("auto", "distributed"):
         values = chosen(explorer, SizeFifos(ram_style=style).explore(explorer, point))
-        assert values["hidden.transport.fifo.depth"] == 8
-        assert values["hidden.transport.fifo.buffer.ram_style"] == style
+        assert values["MatMul_0_out0.transport.fifo.depth"] == 8
+        assert values["MatMul_0_out0.transport.fifo.buffer.ram_style"] == style
 
 
 def test_a_depth_is_sized_for_the_style_its_fifo_is_built_in(
@@ -501,16 +516,16 @@ def test_a_depth_is_sized_for_the_style_its_fifo_is_built_in(
 
     monkeypatch.setattr(fifo_sizing, "least_depth", lambda supply, accept, period: 300)
     monkeypatch.setattr(explore_module, "holds", holds)
-    style = ("hidden", "transport.fifo.buffer.ram_style")
+    style = ("MatMul_0_out0", "transport.fifo.buffer.ram_style")
     for held in (False, True):
         explorer, point = _folded()
         placed = explorer.set(
             point,
             keyed(
                 {
-                    "hidden.transport": "fifo",
-                    "hidden.transport.fifo.depth": 400,
-                    "hidden.transport.fifo.buffer.ram_style": "distributed",
+                    "MatMul_0_out0.transport": "fifo",
+                    "MatMul_0_out0.transport.fifo.depth": 400,
+                    "MatMul_0_out0.transport.fifo.buffer.ram_style": "distributed",
                 }
             ),
         )
@@ -520,13 +535,13 @@ def test_a_depth_is_sized_for_the_style_its_fifo_is_built_in(
         sized = SizeFifos().explore(explorer, placed.network)
         values = chosen(explorer, sized)
         # hidden, stored distributed: DEPTH 300, 300 words.
-        assert values["hidden.transport.fifo.buffer.ram_style"] == "distributed"
-        assert values["hidden.transport.fifo.depth"] == 300
+        assert values["MatMul_0_out0.transport.fifo.buffer.ram_style"] == "distributed"
+        assert values["MatMul_0_out0.transport.fifo.depth"] == 300
         # levels, no style before: auto, block RAM from DEPTH 258 (514 words).
-        assert values["levels.transport.fifo.buffer.ram_style"] == "auto"
-        assert values["levels.transport.fifo.depth"] == 258
+        assert values["Thresholding_0_out0.transport.fifo.buffer.ram_style"] == "auto"
+        assert values["Thresholding_0_out0.transport.fifo.depth"] == 258
         found = explorer.check_fifos(sized)
-        assert found.checked == ("hidden", "levels")
+        assert found.checked == ("MatMul_0_out0", "Thresholding_0_out0")
         assert found.stale == {} and found.findings == ()
 
 
@@ -548,31 +563,34 @@ def test_a_style_held_as_none_is_sized_as_auto_and_left_to_its_hold(
         point,
         keyed(
             {
-                "hidden.transport": "fifo",
-                "hidden.transport.fifo.depth": 8,
-                "hidden.transport.fifo.buffer.ram_style": "distributed",
+                "MatMul_0_out0.transport": "fifo",
+                "MatMul_0_out0.transport.fifo.depth": 8,
+                "MatMul_0_out0.transport.fifo.buffer.ram_style": "distributed",
             }
         ),
     )
     assert isinstance(placed, Accepted)
-    explorer.held[("hidden", "transport.fifo.buffer.ram_style")] = None
+    explorer.held[("MatMul_0_out0", "transport.fifo.buffer.ram_style")] = None
     found = SizeFifos().explore(explorer, placed.network)
-    assert sized["first.y"] == "auto"
+    assert sized["MatMul_0.y"] == "auto"
     assert set(sized.values()) == {"auto"}
-    assert chosen(explorer, found)["hidden.transport.fifo.buffer.ram_style"] == "distributed"
+    assert chosen(explorer, found)["MatMul_0_out0.transport.fifo.buffer.ram_style"] == "distributed"
     with refused(
         "pin-refused",
         error=ExploreError,
         owner="hold",
-        message="hidden.transport.fifo.buffer.ram_style: .*request-refused",
+        message="MatMul_0_out0.transport.fifo.buffer.ram_style: .*request-refused",
     ):
-        Hold({"hidden": {"transport.fifo.buffer.ram_style": None}}).explore(
+        Hold({"MatMul_0_out0": {"transport.fifo.buffer.ram_style": None}}).explore(
             Seam(FULL_DSP48E2), placed.network
         )
 
 
 MARKERS = Finding(
-    FindingKind.REJECTION, "fifo-markers", "hidden.transport.fifo", "what arrives carries markers"
+    FindingKind.REJECTION,
+    "fifo-markers",
+    "MatMul_0_out0.transport.fifo",
+    "what arrives carries markers",
 )
 
 
@@ -581,21 +599,21 @@ def test_a_refused_fifo_falls_back_to_direct_and_says_why(monkeypatch: pytest.Mo
 
     class Refusing(Seam):
         def set(self, network: Any, changes: Any) -> Any:
-            if changes.get(("hidden", "transport")) == "fifo":
+            if changes.get(("MatMul_0_out0", "transport")) == "fifo":
                 self.attempts += 1
-                return Refused({("hidden", ""): (MARKERS,)})
+                return Refused({("MatMul_0_out0", ""): (MARKERS,)})
             return super().set(network, changes)
 
     monkeypatch.setattr(explore_module, "size", _hidden_needs_eight)
     refusing = Refusing(FULL_DSP48E2)
     strategy = SizeFifos()
     found = strategy.explore(refusing, point)
-    assert chosen(refusing, found)["hidden.transport"] == "direct"
-    row = strategy.channels()["hidden"]
+    assert chosen(refusing, found)["MatMul_0_out0.transport"] == "direct"
+    row = strategy.channels()["MatMul_0_out0"]
     assert row["transport"] == "direct" and row["bits"] == 0
     assert row["why"] == (
-        "least 8 words; refused: hidden: hidden.transport.fifo: fifo-markers: what arrives "
-        "carries markers"
+        "least 8 words; refused: MatMul_0_out0: MatMul_0_out0.transport.fifo: fifo-markers: "
+        "what arrives carries markers"
     )
 
 
@@ -633,16 +651,16 @@ def test_the_check_is_sizing_s_own_test_at_the_words_a_transport_holds() -> None
 
 
 def _with_fifo(depth: int = 8) -> tuple[Seam, CoreComposition]:
-    """The folded Chain with a FIFO of ``depth`` on ``levels`` (a shift register of
+    """The folded Chain with a FIFO of ``depth`` on ``Thresholding_0_out0`` (a shift register of
     ``max(5, depth)`` words)."""
     explorer, point = _folded()
     placed = explorer.set(
         point,
         keyed(
             {
-                "levels.transport": "fifo",
-                "levels.transport.fifo.depth": depth,
-                "levels.transport.fifo.buffer.ram_style": "auto",
+                "Thresholding_0_out0.transport": "fifo",
+                "Thresholding_0_out0.transport.fifo.depth": depth,
+                "Thresholding_0_out0.transport.fifo.buffer.ram_style": "auto",
             }
         ),
     )
@@ -651,13 +669,13 @@ def _with_fifo(depth: int = 8) -> tuple[Seam, CoreComposition]:
 
 
 def _levels_short(channel: Channel, neighbours: Neighbours, period: int, words: int) -> bool:
-    """A double of the check (the Chain needs no FIFO at any folding): ``levels``
+    """A double of the check (the Chain needs no FIFO at any folding): ``Thresholding_0_out0``
     (activate's output) needs more words than its transport holds; every other channel's
     holds."""
-    return not str(channel.sides.source_owner).startswith("activate.")
+    return not str(channel.sides.source_owner).startswith("Thresholding_0.")
 
 
-DEPTH = ("levels", "transport.fifo.depth")
+DEPTH = ("Thresholding_0_out0", "transport.fifo.depth")
 
 
 def test_a_fifo_that_holds_its_stream_is_kept_and_the_check_says_what_it_read() -> None:
@@ -666,11 +684,11 @@ def test_a_fifo_that_holds_its_stream_is_kept_and_the_check_says_what_it_read() 
     assert checked is network
     assert found == FifoCheck(
         12,
-        checked=("hidden", "levels"),
+        checked=("MatMul_0_out0", "Thresholding_0_out0"),
         not_modelled={
             "x": "a boundary: not modelled",
-            "w1": "a memory source: paced by its consumer",
-            "w2": "a memory source: paced by its consumer",
+            "MatMul_0_param0": "a memory source: paced by its consumer",
+            "MatMul_1_param0": "a memory source: paced by its consumer",
             "y": "a boundary: not modelled",
         },
     )
@@ -686,29 +704,29 @@ def test_a_fifo_too_small_for_its_stream_is_dropped_named_and_left_open(
     assert (finding.kind, finding.code, finding.owner) == (
         FindingKind.REJECTION,
         "fifo-stale",
-        "levels.transport.fifo.depth",
+        "Thresholding_0_out0.transport.fifo.depth",
     )
     assert finding.message == (
         "depth 8 (8 words) no longer keeps its producer within its idle time at the "
         "bottleneck's 12 cycles a frame: size it again (SizeFifos)"
     )
-    assert dict(finding.details) == {"tensor": "levels", "words": 8, "period": 12}
+    assert dict(finding.details) == {"tensor": "Thresholding_0_out0", "words": 8, "period": 12}
     assert found.findings == ()
     # Left open, a required choice; the FIFO and the rest kept, the bottleneck readable,
     # so a later strategy folds and FIFO sizing sizes it again.
     values = chosen(explorer, checked)
-    assert "levels.transport.fifo.depth" not in values
+    assert "Thresholding_0_out0.transport.fifo.depth" not in values
     assert {k: v for k, v in chosen(explorer, network).items() if k != dotted(DEPTH)} == values
     offered = explorer.choices(checked)
     assert [choice.key for choice in offered if choice.policy == Required()] == [DEPTH]
     assert explorer.cost(checked).bottleneck == explorer.cost(network).bottleneck
     sized = SizeFifos().explore(explorer, checked)
-    assert chosen(explorer, sized)["levels.transport"] == "direct"
+    assert chosen(explorer, sized)["Thresholding_0_out0.transport"] == "direct"
 
 
 def test_a_held_fifo_too_small_is_kept_and_named(monkeypatch: pytest.MonkeyPatch) -> None:
     explorer, network = _with_fifo()
-    explorer.held.update(keyed({"levels.transport.fifo.depth": 8}))
+    explorer.held.update(keyed({"Thresholding_0_out0.transport.fifo.depth": 8}))
     monkeypatch.setattr(explore_module, "holds", _levels_short)
     checked, found = explorer.checked(network)
     assert checked is network and found.stale == {}
@@ -716,7 +734,7 @@ def test_a_held_fifo_too_small_is_kept_and_named(monkeypatch: pytest.MonkeyPatch
     assert (finding.kind, finding.code, finding.owner) == (
         FindingKind.LIMITATION,
         "fifo-held-stale",
-        "levels.transport.fifo.depth",
+        "Thresholding_0_out0.transport.fifo.depth",
     )
     assert finding.message.startswith("held at 8 (8 words), which no longer keeps")
 
@@ -732,7 +750,7 @@ def test_a_direct_that_throttles_its_producer_is_kept_and_named(
     assert (finding.kind, finding.code, finding.owner) == (
         FindingKind.LIMITATION,
         "direct-throttles",
-        "levels.transport",
+        "Thresholding_0_out0.transport",
     )
     assert finding.message == (
         "direct does not keep its producer within its idle time at the bottleneck's 12 "
@@ -746,7 +764,7 @@ def test_an_open_depth_and_unknown_cycles_are_not_checked() -> None:
     _, network = _with_fifo()
     opened, _ = explorer.reopen(network, [DEPTH])
     found = explorer.check_fifos(opened)
-    assert found.period == 12 and found.checked == ("hidden",)
+    assert found.period == 12 and found.checked == ("MatMul_0_out0",)
 
 
 def test_only_the_analytical_method_exists() -> None:
@@ -1016,7 +1034,7 @@ def _random_buffer(rng: random.Random, frame_words: int) -> NestBuffer:
 def test_the_presentation_by_its_events_is_the_model_beat_by_beat_on_random_sides() -> None:
     """The same ``Flow`` (or deadlock), word for word, on random patterns and nest-like
     buffers, a stream frame of one to three of the buffer's frames (the Chain's
-    ``levels``: three words through an input_gen frame of one)."""
+    ``Thresholding_0_out0``: three words through an input_gen frame of one)."""
     rng = random.Random(20261014)
     outcomes = []
     for _ in range(1500):

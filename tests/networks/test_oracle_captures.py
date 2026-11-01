@@ -46,7 +46,7 @@ def measured(model: ModelWrapper, label: str) -> dict[str, int]:
 def test_the_chains_layers_have_finns_cycles_captured() -> None:
     model = kernel_model()
     configure_partition(model)
-    assert measured(model, "chain") == {"first": 12, "activate": 6, "second": 12}
+    assert measured(model, "chain") == {"MatMul_0": 12, "Thresholding_0": 6, "MatMul_1": 12}
 
 
 @pytest.mark.slow
@@ -55,12 +55,12 @@ def test_tfcs_layers_at_16_lanes_have_finns_cycles_captured(
 ) -> None:
     _, body = partition(ModelWrapper(str(tfc_streamlined)), tmp_path)
     assert measured(body, "tfc_w2a2") == {
-        "MultiThreshold_0": 49,
+        "Thresholding_0": 49,
         "MatMul_0": 196,
-        "MultiThreshold_1": 4,
+        "Thresholding_1": 4,
         "MatMul_1": 16,
-        "MultiThreshold_2": 4,
+        "Thresholding_2": 4,
         "MatMul_2": 16,
-        "MultiThreshold_3": 4,
+        "Thresholding_3": 4,
         "MatMul_3": 4,
     }
