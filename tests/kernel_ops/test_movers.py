@@ -463,7 +463,7 @@ def test_the_shell_s_resources_are_its_partition_s_its_movers_and_its_static_reg
         )
     )
     ip = chain_network(TARGET, model=model)
-    assert shell_resources(ip) == ShellResources(split.partition, (), ())
+    assert shell_resources(ip) == ShellResources(split.partition, (), (), ())
     assert ip.own_resources() == Available(split.partition)
 
 

@@ -17,7 +17,8 @@ emission name it); a row narrowed by hand stands for a shell that takes less.
 
 No KernelOp names a control port, so a partition of KernelOps presents no AXI-Lite bus:
 the windows are counted here on a partition built from the kernels directly, AXI-Lite
-thresholdings each given its port. Emission checks the core's netlist's count
+thresholdings each given its port, placed behind their core's grouper as one window of its
+unit (``finn.kernels.grouper``). Emission checks the core's netlist's count
 (``netlist_counts``, the pins its module would have) against the rules'
 (``finn.kernels.shell_rules.counts``). No kernel initiates a memory port, so on a network
 that count is always zero: ``netlist_counts`` is counted here on a netlist and boundary
@@ -52,7 +53,14 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import CUT_NAME, search_record
 from finn.core.search import ExploreError, Refused
 from finn.core.space import Available, Rejected, inspection
-from finn.custom_op.kernels.shell import configured_network, mover_contracts, row_facts, row_offer
+from finn.custom_op.kernels.shell import (
+    ShellResources,
+    configured_network,
+    mover_contracts,
+    row_facts,
+    row_offer,
+    shell_resources,
+)
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import (
     Bus,
@@ -73,7 +81,9 @@ from finn.kernels.artifacts.top import module_abi
 from finn.kernels.base import Kernel
 from finn.kernels.composer import Facts, Port, channel, member_name
 from finn.kernels.explore import CoreComposition, Seam, SizeFifos
+from finn.kernels.grouper import DECODER
 from finn.kernels.movers import MoverContract
+from finn.kernels.shell import grouper_name
 from finn.kernels.shell_rules import SHELL, counts, netlist_counts
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingKernel
@@ -173,38 +183,64 @@ NINE = narrowed(aperture=9 * 4096)
 """The Zynq shell addressing nine 4 KiB windows."""
 
 
-def test_an_eighth_window_beside_two_movers_is_refused_in_a_shell_addressing_nine() -> None:
-    """Seven thresholdings presenting their buses and two movers fill nine 4 KiB windows,
-    each taking the least a unit takes; the eighth's is refused at the partition, by the
-    shell member's rule: ``viable`` lists it refused, and a change setting it is refused,
-    by the partition and by the seam."""
-    point = thresholdings(8, NINE, presenting=7)
+def test_a_core_s_buses_take_one_window_of_its_unit_behind_its_grouper() -> None:
+    """Eight thresholdings presenting their 32-byte buses are placed behind their core's
+    grouper, each at its offset in the unit (``map``), the unit taking one window, the
+    least a unit takes (4 KiB): with the two movers', three windows, which a shell
+    addressing three takes, where one window a bus took ten. The shell's resources count
+    its decoder, of eight slaves."""
+    point = thresholdings(8, narrowed(aperture=3 * 4096))
+    (core,) = point.names.cores
+    name = grouper_name(core)
+    grouper = point.member(point.placed(name))
+    assert point.core.control_windows == (32,) * 8
+    assert grouper.map == tuple(range(0, 256, 32)) and grouper.window == (4096,)
+    assert point.member(SHELL).windows == (64, 4096, 64)
+    assert point.validity(SHELL).status == "valid"
+    # Its thresholds' memories stated, distributed: Vivado places none.
+    distributed = (("ram_style", "distributed"), ("block_stages", 1))
+    stated = point.with_choices(
+        {(f"t{index}", key): value for index in range(8) for key, value in distributed}
+    )
+    split = shell_resources(stated)
+    assert isinstance(split, ShellResources) and split.groupers == ((name, DECODER.at(8)),)
+
+
+def test_a_core_s_first_bus_is_refused_in_a_shell_addressing_its_movers_alone() -> None:
+    """In a shell addressing two 4 KiB windows, the two movers' fill it; the first bus a
+    thresholding presents asks for its core's unit's window, a third, refused at the
+    partition by the shell member's rule: ``viable`` lists it refused, and a change setting
+    it is refused, by the partition and by the seam. Presenting none, the core has no
+    grouper in the shell's resources."""
+    point = thresholdings(8, narrowed(aperture=2 * 4096), presenting=0)
     assert [mover.control_buses for mover in movers_of(point)] == [1, 1]
     assert point.validity(SHELL).status == "valid"
-    assert len(point.member(SHELL).windows) == 9
-    ((_, viable),) = point.viable([("t7", "use_axilite")])
+    assert point.member(SHELL).windows == (64, 64)
+    split = shell_resources(point)  # a core presenting no bus has no grouper in hardware
+    assert isinstance(split, ShellResources) and split.groupers == ()
+    ((_, viable),) = point.viable([("t0", "use_axilite")])
     ((value, broken),) = [
         (item.value, item.broken)
         for item in viable.values or ()
         if isinstance(item, inspection.Refused)
     ]
     assert value is True
-    assert [point.pair("t7", rule.rule) for rule in broken] == [(SHELL, "within_control_window")]
-    trial = point.trial({("t7", "use_axilite"): True})
+    assert [point.pair("t0", rule.rule) for rule in broken] == [(SHELL, "within_control_window")]
+    trial = point.trial({("t0", "use_axilite"): True})
     ((key, (found,)),) = trial.refused.items()
     assert key == (SHELL, "within_control_window")
     assert str(found) == (
-        "within_control_window: control-window-exceeded: the 'pynq' shell addresses 0x9000 "
-        "bytes of control; the partition's 10 control windows, each aligned to itself, span "
-        "0xa000"
+        "within_control_window: control-window-exceeded: the 'pynq' shell addresses 0x2000 "
+        "bytes of control; the partition's 3 control windows, each aligned to itself, span "
+        "0x3000"
     )
-    changed = Seam().set(point, {("t7", "use_axilite"): True})
+    changed = Seam().set(point, {("t0", "use_axilite"): True})
     assert isinstance(changed, Refused) and list(changed.why) == [key]
 
 
 def test_seven_and_two_movers_fill_nine_windows_and_the_counts_agree() -> None:
-    """The core's count is its own: its seven windows, as its netlist presents them; the
-    movers' are the rules' beside it."""
+    """The core's count is its own: its seven windows, as its netlist presents them,
+    whatever its grouper places; the movers' are the rules' beside it."""
     point = thresholdings(7, NINE)
     assert point.validity(SHELL).status == "valid"
     window = point.core.control_windows[0]

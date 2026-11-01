@@ -76,10 +76,11 @@ from finn.kernels.composer import DataflowCoreDeclaration
 from finn.kernels.configure import refusal
 from finn.kernels.dataflow_core import Bound, DataflowCoreKernel
 from finn.kernels.explore import CoreComposition, FifoCheck, Seam
+from finn.kernels.grouper import GrouperKernel
 from finn.kernels.iodma import IodmaKernel
 from finn.kernels.movers import MoverContract, MoverOffer
 from finn.kernels.policies import Required, policy
-from finn.kernels.shell import ShellKernel, shell
+from finn.kernels.shell import ShellKernel, grouper_name, shell
 from finn.kernels.shell_rules import SHELL, ShellRules, counts, netlist_counts
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
@@ -93,16 +94,20 @@ if TYPE_CHECKING:
 class ShellResources:
     """A shell's resources by member, each its own statement: ``partition``, its core (its
     kernels and channels, the boundary channels' stages included); ``movers``, each mover
-    by its name in the shell (``in0``); ``static_region``, each of its row's static IPs by
-    its Vivado IP. ``total`` is their sum, the shell's ``Kernel.resources``."""
+    by its name in the shell (``in0``); ``groupers``, the grouper of each core presenting a
+    control bus, by its name in the shell (``DataflowCore_0_grouper``; a core presenting
+    none has none in hardware); ``static_region``, each of its row's static IPs by its
+    Vivado IP. ``total`` is their sum, the shell's ``Kernel.resources``."""
 
     partition: Resources
     movers: tuple[tuple[str, Resources], ...]
+    groupers: tuple[tuple[str, Resources], ...]
     static_region: tuple[tuple[str, Resources], ...]
 
     @property
     def total(self) -> Resources:
-        return total((self.partition, *(used for _, used in self.movers + self.static_region)))
+        named = (*self.movers, *self.groupers, *self.static_region)
+        return total((self.partition, *(used for _, used in named)))
 
 
 def row_facts(row: ShellRow) -> dict[str, object]:
@@ -235,14 +240,25 @@ def _counts_agree(network: CoreComposition, label: str) -> None:
 
 
 def _resources(network: CoreComposition) -> QueryResult[ShellResources]:
-    """``shell_resources``, as a query's result: its core's, each mover's and its static
-    region's, each its own statement."""
+    """``shell_resources``, as a query's result: its core's, each mover's, each grouper's
+    whose core presents a control bus, and its static region's, each its own statement."""
     partition = network.core_answer(Kernel.resources)
     movers = [
         (name, network.query(network.placed(name), Kernel.resources)) for name in network.movers
     ]
+    placed = [
+        network.placed(grouper_name(core))
+        for core in network.names.cores
+        if network.placed(grouper_name(core)) in network.names.placed
+    ]
+    windows = [network.query(name, GrouperKernel.window) for name in placed]
+    groupers = [
+        (network.names.placed[name], network.query(name, Kernel.resources))
+        for name, window in zip(placed, windows)
+        if not isinstance(window, Available) or window.value
+    ]
     region = network.query(SHELL, ShellRules.static_region)
-    found = [partition, *(used for _, used in movers), region]
+    found = [partition, *windows, *(used for _, used in (*movers, *groupers)), region]
     if not all(isinstance(each, Available) for each in found):
         return _together(each for each in found if not isinstance(each, Available))
     assert isinstance(partition, Available) and isinstance(region, Available)
@@ -250,6 +266,7 @@ def _resources(network: CoreComposition) -> QueryResult[ShellResources]:
         ShellResources(
             partition.value,
             tuple((name, used.value) for name, used in movers if isinstance(used, Available)),
+            tuple((name, used.value) for name, used in groupers if isinstance(used, Available)),
             region.value,
         )
     )

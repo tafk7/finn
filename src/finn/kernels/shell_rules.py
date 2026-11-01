@@ -449,6 +449,11 @@ def shell_members(
         for member in owners:
             members[contributor(member, kind)] = Param()
             annotations[contributor(member, kind)] = annotation
+    for core in cores:
+        # A core placed behind its grouper: its windows the grouper's one stands for.
+        if core not in windows:
+            members[contributor(core, WINDOWS)] = Param()
+            annotations[contributor(core, WINDOWS)] = tuple[int, ...]
     members["windows"] = _concatenated(
         members, [contributor(each, WINDOWS) for each in windows], "units"
     )

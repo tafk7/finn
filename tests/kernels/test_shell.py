@@ -23,9 +23,10 @@ from finn.kernels.base import Kernel
 from finn.kernels.composer import ChannelDeclaration, DataflowCoreRefused, Facts, Port, Stated
 from finn.kernels.dataflow_core import DataflowCoreKernel
 from finn.kernels.explore import CoreComposition, Seam
+from finn.kernels.grouper import GrouperKernel
 from finn.kernels.iodma import IodmaIn, IodmaKernel, IodmaOut
 from finn.kernels.movers import iodma_hls
-from finn.kernels.shell import Connection, ShellKernel, shell
+from finn.kernels.shell import Connection, ShellKernel, grouper_name, shell
 from finn.kernels.shell_rules import SHELL, FixedShell, Scaled, ShellRules
 from finn.kernels.sides import Outside, Side
 from finn.kernels.utilization import Fit, total
@@ -116,7 +117,11 @@ def test_a_shell_places_a_mover_on_each_edge_joined_by_a_connection() -> None:
     names = kind.names
     assert (names.core, names.shell) == (TEST_CORE, SHELL)
     joined = (f"{TEST_CORE}_s_axis_0", f"{TEST_CORE}_m_axis_0")
-    assert dict(names.placed) == {f"shell.{member}": member for member in ("in0", "out0", *joined)}
+    grouper = grouper_name(TEST_CORE)
+    assert dict(names.placed) == {
+        f"shell.{member}": member for member in ("in0", "out0", *joined, grouper)
+    }
+    assert isinstance(getattr(point, grouper), GrouperKernel)
     assert isinstance(getattr(point, TEST_CORE), DataflowCoreKernel)
     assert isinstance(point.in0, IodmaIn) and isinstance(point.out0, IodmaOut)  # type: ignore[attr-defined]
     assert isinstance(getattr(point, joined[0]), Connection)
@@ -129,8 +134,9 @@ def test_a_shell_places_a_mover_on_each_edge_joined_by_a_connection() -> None:
 
 def test_the_cores_are_members_by_name_their_movers_numbered_across_the_shell() -> None:
     """Each core under its node's name, its kernels and channels below it; the movers
-    numbered across the shell, the cores in order; each unit's windows, its core's after
-    its input movers' and before its output movers', the cores in order."""
+    numbered across the shell, the cores in order; each unit's windows, its core's (its
+    grouper's) after its input movers' and before its output movers', the cores in order,
+    then each core's own, which emission counts."""
     first = declared_by_hand(stated(OFFER.states()), name="DataflowCore_0")
     second = declared_by_hand(suffixed(stated(OFFER.states()), "_1"), name="DataflowCore_1")
     point = shell((first, second), row=row(), offer=OFFER)
@@ -151,7 +157,16 @@ def test_the_cores_are_members_by_name_their_movers_numbered_across_the_shell() 
         for name in vars(type(point.shell))  # type: ignore[attr-defined]
         if name.endswith("-windows")
     ]
-    assert windows == ["in0", "DataflowCore_0", "out0", "in1", "DataflowCore_1", "out1"]
+    assert windows == [
+        "in0",
+        "DataflowCore_0_grouper",
+        "out0",
+        "in1",
+        "DataflowCore_1_grouper",
+        "out1",
+        "DataflowCore_0",
+        "DataflowCore_1",
+    ]
     assert point.shell.placed == 6  # type: ignore[attr-defined]
 
 

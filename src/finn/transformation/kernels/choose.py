@@ -73,10 +73,10 @@ verifies the partition (``fifo-stale``), unless a strategy dropped it to be size
 
 The resources are the shell's (``shell_resources``), each member its own
 statement (``finn.kernels.base.Kernel.resources``): its partition (the partition's kernels
-and its channels, boundary channels included), each mover and its static region, and
-their sum, ``used``; where members state none (a memory in ``auto``, which
-Vivado places), ``used`` is the sum of those that
-do, a lower bound (``lower_bound``), each other named with why (``unstated``, its
+and its channels, boundary channels included), each mover, each core's grouper where its
+core presents a control bus (``groupers``) and its static region, and their sum, ``used``;
+where members state none (a memory in ``auto``, which Vivado places), ``used`` is the sum
+of those that do, a lower bound (``lower_bound``), each other named with why (``unstated``, its
 findings), and the
 movers and the static region are not counted. The movers' and the static region's are out
 of context, which the report says with how far that overstates the placed shell; the
@@ -245,6 +245,7 @@ def _resources_report(
         else {
             "partition": asdict(stated.partition),
             "movers": {name: asdict(each) for name, each in stated.movers},
+            "groupers": {name: asdict(each) for name, each in stated.groupers},
             "static_region": {name: asdict(each) for name, each in stated.static_region},
         },
         "lower_bound": lower_bound,

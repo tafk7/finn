@@ -31,18 +31,23 @@ core). Its members:
   of the shell, by the base's connection rules (``finn.kernels.base``), with no hardware of
   its own. Without movers (the ``ip`` shell, of one core) the shell presents the core's edge
   ports as its own, each by a node alias of its name;
+- **a grouper for each core**, where it places movers (``DataflowCore_0_grouper``,
+  ``grouper_name``; ``finn.kernels.grouper.GrouperKernel``): the core's control buses placed
+  behind its unit's one port, reading the core's ``control_windows`` and the row's least
+  window, its unit's window one;
 - **its rules** (``shell``, ``finn.kernels.shell_rules.SHELL``): the row's facts, each a
   root Param (``shell-aperture``; ``ShellRules``' formals, given by ``row``), the units it
   places (``shell-placed``: its cores and its movers), and each contributor's derived value
   bound to it: the control windows of each unit, each core's after its input movers' and
-  before its output movers', the cores in order, each by its unit's name; the cores'
+  before its output movers', the cores in order, each by its unit's name (a core's unit's
+  its grouper's, where it has one), and each core's own; the cores'
   kernels' memory initiators and their kernels' and channels' doubled clock, each by its
   core's member and its member's name in the core (``DataflowCore_0-mm0``); and each
   mover's memory port, by the mover's name.
 
 Its class facts are its names (``ShellKernel.names``, ``finn.kernels.dataflow_core.Names``:
-its cores', each below its core's member, with the shell member and the movers and
-connections it places) and its movers, each with its core's member and the edge port it
+its cores', each below its core's member, with the shell member and the movers,
+connections and groupers it places) and its movers, each with its core's member and the edge port it
 serves (``ShellKernel.movers``). A graph's names and the shell's are two namespaces: a graph
 name is its core's member's at FINN's surface, and a member the shell places is named there
 below the shell member (``shell.in0``), so a graph's tensor named ``in0`` binds beside the
@@ -100,6 +105,7 @@ from finn.kernels.composer import (
     member_name,
 )
 from finn.kernels.dataflow_core import DataflowCoreKernel, Names, placed_name, root_name
+from finn.kernels.grouper import GrouperKernel
 from finn.kernels.iodma import IodmaIn, IodmaKernel, IodmaOut
 from finn.kernels.movers import MoverOffer
 from finn.kernels.port import stream_port
@@ -118,6 +124,11 @@ from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
 
 _EDGE = re.compile(r"[sm]_axis_(\d+)")
+
+
+def grouper_name(core: str) -> str:
+    """The name of core ``core``'s grouper in its shell (``DataflowCore_0_grouper``)."""
+    return f"{core}_grouper"
 
 
 class Connection(Kernel):
@@ -312,6 +323,14 @@ def _made(
     params: dict[str, object] = {}
     annotations: dict[str, object] = {}
     roots: dict[str, Key] = {}
+    facts: dict[str, object] = {"placed": len(cores) + len(units)}
+    for fact, stated in space_formals(ShellRules).items():
+        if fact == "placed":
+            continue
+        root = root_name(SHELL, fact)
+        params[root] = facts[fact] = Param()
+        annotations[root] = declared_annotation(stated, "Param")
+        roots[root] = (SHELL, fact)
     members: dict[str, object] = {}
     graph: dict[str, str] = {}
     in_core: dict[str, str] = {}
@@ -352,18 +371,24 @@ def _made(
             else Connection(producer=edge, consumer=own)
         )
         connections.append(joined)
+    groupers = [grouper_name(core) for core in cores] if units else []
+    for core, grouper in zip(cores, groupers):
+        members[grouper] = GrouperKernel(
+            windows=cast(Any, members[core]).control_windows,
+            least_window=cast(Any, facts["least_window"]),
+        )
     for port in _exposed(cores, bool(units)):
         # The ip shell: its core's edge ports are the shell's.
         (core,) = cores
         members[port] = getattr(members[core], port)
-    members[SHELL] = _rules(cores, types, members, units, digest, params, annotations, roots)
+    members[SHELL] = _rules(cores, types, members, units, digest, facts)
     table = Names(
         graph,
         roots,
         SHELL,
         channels=channels,
         in_core=in_core,
-        placed=(*units, *connections),
+        placed=(*units, *connections, *groupers),
     )
     return composite(
         f"ShellKernel_{digest}",
@@ -386,21 +411,13 @@ def _rules(
     members: Mapping[str, object],
     units: Mapping[str, tuple[str, str, str, bool]],
     digest: str,
-    params: dict[str, object],
-    annotations: dict[str, object],
-    roots: dict[str, Key],
+    facts: Mapping[str, object],
 ) -> object:
-    """The shell member (``finn.kernels.shell_rules``): the row's facts, each a root Param
-    (added to ``params``, ``annotations`` and ``roots``), the units it places, and each
-    contributor's Param bound to its member's derived value."""
-    given: dict[str, object] = {"placed": len(cores) + len(units)}
-    for fact, formal in space_formals(ShellRules).items():
-        if fact == "placed":
-            continue
-        root = root_name(SHELL, fact)
-        params[root] = given[fact] = Param()
-        annotations[root] = declared_annotation(formal, "Param")
-        roots[root] = (SHELL, fact)
+    """The shell member (``finn.kernels.shell_rules``): the row's facts and the units it
+    places (``facts``, each bound to its root Param), and each contributor's Param bound to
+    its member's derived value: a core unit's window its grouper's, where it has one, else
+    each of the core's buses'."""
+    given: dict[str, object] = dict(facts)
     windows: list[str] = []
     initiators: list[str] = []
     doubled: list[str] = []
@@ -409,8 +426,12 @@ def _rules(
         mine = [unit for unit, each in units.items() if each[0] == core]
         entering = [unit for unit in mine if units[unit][3]]
         leaving = [unit for unit in mine if not units[unit][3]]
-        windows += [*entering, core, *leaving]
+        grouper = members.get(grouper_name(core))
+        unit = core if grouper is None else grouper_name(core)
+        windows += [*entering, unit, *leaving]
         given[contributor(core, WINDOWS)] = core_node.control_windows
+        if grouper is not None:
+            given[contributor(unit, WINDOWS)] = cast(Any, grouper).window
         core_names = types[core].names
         for owner in (*declared.kernels, *declared.channels):
             member = core_names.members[owner]
@@ -481,7 +502,8 @@ def shell(
                         f"{stated}, and is declared stated {side.outside}"
                     )
     connections = [f"{core}_{port}" for core, _, port, _ in units.values()]
-    _taken(named, [*units, *connections], _exposed(by_member, bool(units)))
+    groupers = [grouper_name(member) for member in by_member] if units else []
+    _taken(named, [*units, *connections, *groupers], _exposed(by_member, bool(units)))
     key = (model_modes(), tuple(types.items()), bool(units))
     with _LOCK:
         found = _CLASSES.get(key)
@@ -509,5 +531,6 @@ __all__ = [
     "ShellKernel",
     "cached_classes",
     "clear_classes",
+    "grouper_name",
     "shell",
 ]
