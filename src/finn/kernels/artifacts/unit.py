@@ -42,7 +42,7 @@ from finn.kernels.artifacts.abi import (
     abi_pins,
     bus_window,
 )
-from finn.kernels.artifacts.build import EmittedModule
+from finn.kernels.artifacts.build import EmittedModule, write_files
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Abi, BuildError
 from finn.kernels.artifacts.projection import content_digest, digest
@@ -305,11 +305,11 @@ def _decoder_nets(count: int, bits: int) -> str:
 
 
 def emit_unit(unit: CoreUnit, directory: Path, *, roots: Mapping[str, Path]) -> EmittedModule:
-    """Write the unit's files into ``directory``: the decoder, read once from its root
-    (``roots`` resolving ``DECODER_SOURCE``'s by name), for two buses or more, and the
-    unit's module, named from them (``CoreUnit.name``). The core's files are not among
-    them."""
-    files: list[tuple[str, bytes]] = []
+    """Write the unit's files into ``directory``, as a module's are (``write_files``: under
+    the directory resolved once): the decoder, read once from its root (``roots`` resolving
+    ``DECODER_SOURCE``'s by name), for two buses or more, and the unit's module, named from
+    them (``CoreUnit.name``). The core's files are not among them."""
+    files: dict[str, bytes] = {}
     decoder = None
     if len(unit.buses) > 1:
         root = roots.get(DECODER_SOURCE.root)
@@ -319,14 +319,10 @@ def emit_unit(unit: CoreUnit, directory: Path, *, roots: Mapping[str, Path]) -> 
             decoder = (Path(root) / DECODER_SOURCE.path).read_bytes()
         except OSError as error:
             raise BuildError(f"the decoder {DECODER_SOURCE.path} cannot be read") from error
-        files.append((DECODER_SOURCE.path, decoder))
+        files[DECODER_SOURCE.path] = decoder
     name = unit.name(decoder)
-    files.append((f"{name}.sv", unit.text(name).encode()))
-    for path, content in files:
-        target = directory / path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(content)
-    return EmittedModule(name, directory, tuple(path for path, _ in files))
+    files[f"{name}.sv"] = unit.text(name).encode()
+    return EmittedModule(name, write_files(directory, files), tuple(files))
 
 
 __all__ = [

@@ -296,6 +296,24 @@ def test_the_unit_is_named_as_its_content(tmp_path: Path) -> None:
     assert alone.sources == (f"{alone.entry_point}.sv",)
 
 
+def test_the_unit_s_files_are_written_as_a_module_s(tmp_path: Path) -> None:
+    """Under its directory resolved once, never through a link: a destination whose decoder
+    directory is a link is refused before anything is written."""
+    root = tmp_path / "finnlib"
+    (root / DECODER_SOURCE.path).parent.mkdir(parents=True)
+    (root / DECODER_SOURCE.path).write_bytes(b"decoder")
+    (tmp_path / "elsewhere").mkdir()
+    out = tmp_path / "unit"
+    out.mkdir()
+    (out / DECODER_SOURCE.path.split("/")[0]).symlink_to(
+        tmp_path / "elsewhere", target_is_directory=True
+    )
+    with pytest.raises(BuildError, match="is a link"):
+        emit_unit(unit(5, 6), out, roots={"finnlib": root})
+    assert not any((tmp_path / "elsewhere").iterdir())
+    assert sorted(path.name for path in out.iterdir()) == [DECODER_SOURCE.path.split("/")[0]]
+
+
 def test_the_unit_is_packaged_at_its_window(tmp_path: Path) -> None:
     """The unit's one register block is its window, the grouper's, whatever it is: at a
     least window of 128 bytes, two 64-byte buses take 128, which its placement assigns."""
