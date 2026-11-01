@@ -134,7 +134,8 @@ def test_the_node_reads_binds_changes_and_writes_its_core(tmp_path: Path) -> Non
     function of its body, its module named by the node: its design space, nothing chosen
     (``bound``), its body's stored choices bound (``point``) and a change of them
     (``point(extra)``, a refused one a ``ValueError``); ``persist`` writes a design space's
-    choices onto its body, and ``configured`` is what emission reads."""
+    choices onto its body, and ``configured`` is what emission reads, its boundary with it
+    (each edge tensor and its port)."""
     _, parent, _ = partitioned(tmp_path)
     node = parent.graph.node[1]
     core = getCustomOp(node)
@@ -152,8 +153,11 @@ def test_the_node_reads_binds_changes_and_writes_its_core(tmp_path: Path) -> Non
     assert CoreComposition(core.point().point).chosen() == stored  # nothing written
     core.persist(changed.point)
     assert CoreComposition(core.point().point).chosen()[("first", "simd")] == 4
-    expected, _ = configured_network(core.body(), node.name)
-    assert core.configured().module == expected.module
+    expected, boundary = configured_network(core.body(), node.name)
+    configured = core.configured()
+    assert configured.module == expected.module
+    assert configured.network.boundary == boundary
+    assert dict(boundary) == {"x_flat": "s_axis_0", "y_kernel": "m_axis_0"}
 
 
 def test_the_body_is_the_partition_packaging_takes(tmp_path: Path) -> None:

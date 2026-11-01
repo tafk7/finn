@@ -190,9 +190,10 @@ def test_the_table_rejects_an_import_across_its_order(layer: str, name: str) -> 
         ("tests.kernels", "finn.core.rtlsim_pacing.STALLED"),
         ("executors", "finn.core.rtlsim_bench.stream_out"),
         ("executors", "finn.custom_op.kernels.shell.configured_network"),
-        # Parity: two runs of the executors.
+        # Parity: two runs of the executors, the cut's core read through its node.
         ("harness", "finn.core.rtlsim_exec.XSim"),
         ("harness", "finn.core.onnx_exec.execute_onnx"),
+        ("harness", "finn.custom_op.partition.DataflowCore"),
         # The partition node runs its body under the executors of the run that reached it.
         ("custom_op.partition", "finn.core.onnx_exec.running"),
         ("executors", "finn.core.onnx_exec.running"),
