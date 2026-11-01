@@ -255,11 +255,12 @@ def test_a_kernel_with_a_module_does_not_restate_its_cycles() -> None:
                 return 1
 
     # Nor as the base's own: no library kernel does (MemStream included).
+    own = vars(Kernel)["frame_cycles"].function
     with refused("kernel-cycles-restated", error=DefinitionError, message=r"\.frame_cycles: "):
 
         class Same(_Stage):
             id = "test.interval.same"
-            frame_cycles = view(Kernel.frame_cycles.function)
+            frame_cycles = view(own)
 
     assert "frame_cycles" not in vars(MemStreamKernel)
 
