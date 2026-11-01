@@ -32,6 +32,7 @@ from finn.platform.request import TargetRequest
 from finn.platform.resolve import refuse_drift, resolve_target
 from finn.platform.shells import MOVED, MoverKind, Offer, shell_row, shell_rows
 from finn.platform.target import Target
+from finn.shells.pynq.linker import PROCESSORS
 from finn.shells.pynq.templates import custom_zynq_shell_template
 
 #: Each PYNQ board's part, DSP block and native AXI port width, as the deleted HWCustomOp
@@ -122,36 +123,40 @@ def test_every_other_boards_part_resolves_on_the_ip_shell(part_name: str) -> Non
     assert platform.dsp is DspBlock(OTHER_PART_DSPS[part_name])
 
 
-def zynq_template_branches() -> dict[str, tuple[str | None, str | None]]:
-    """Each board the Zynq template's board chain has a branch for, read from its text:
-    the ``board_part`` the branch selects and the ``ZYNQ_TYPE`` it sets (``None``: it
-    sets none)."""
-    branches: dict[str, tuple[str | None, str | None]] = {}
-    for name, body in re.findall(
-        r'\$BOARD == "([^"]+)"\} \{\n((?:    \S.*\n)+)', custom_zynq_shell_template
-    ):
-        zynq_type = re.search(r'set ZYNQ_TYPE "([^"]+)"', body)
-        if zynq_type is None:
-            continue  # not the board chain: a board's tweak inside a Zynq type's block
-        preset = re.search(r"set_property board_part (\S+)", body)
-        branches[name] = (None if preset is None else preset[1], zynq_type[1])
-    return branches
+#: The board chain the Zynq template had before the project took its board part from the
+#: board's declaration (``finn.shells.pynq.linker.project_script``): each board's
+#: ``board_part`` and processor family (its ``ZYNQ_TYPE``). ZCU111 had no branch.
+ZYNQ_TEMPLATE_BOARDS = {
+    "ZCU104": ("xilinx.com:zcu104:part0:1.1", "zynq_us+"),
+    "ZCU102": ("xilinx.com:zcu102:part0:3.3", "zynq_us+"),
+    "RFSoC2x2": ("xilinx.com:rfsoc2x2:part0:1.1", "zynq_us+"),
+    "RFSoC4x2": ("realdigital.org:rfsoc4x2:part0:1.0", "zynq_us+"),
+    "Ultra96": ("avnet.com:ultra96v1:part0:1.2", "zynq_us+"),
+    "Ultra96-V2": ("avnet.com:ultra96v2:part0:1.2", "zynq_us+"),
+    "Pynq-Z2": ("tul.com.tw:pynq-z2:part0:1.0", "zynq_7000"),
+    "Pynq-Z1": ("www.digilentinc.com:pynq-z1:part0:1.0", "zynq_7000"),
+    "KV260_SOM": ("xilinx.com:kv260_som:part0:1.3", "zynq_us+"),
+    "AUP-ZU3_8GB": ("realdigital.org:aup-zu3-8gb:part0:1.0", "zynq_us+"),
+}
 
 
-def test_every_pynq_rows_board_has_a_branch_in_the_zynq_template() -> None:
-    """The ``pynq`` shell supports a board only where the template's board chain builds a
-    Zynq UltraScale+ block design, and its board entry's ``board_part`` is its branch's; a
-    board with no such branch (ZCU111; the Zynq-7000 Pynq-Z1 and Pynq-Z2) has no entry,
-    and is refused by name."""
-    branches = zynq_template_branches()
-    assert {"Ultra96", "Pynq-Z1"} <= set(branches)  # the reading finds the chain
+def test_every_pynq_rows_board_selects_what_the_zynq_template_selected() -> None:
+    """The ``pynq`` shell supports a board where the template's board chain built a Zynq
+    UltraScale+ block design, and its project selects what the chain did: the board entry's
+    ``board_part`` and its fixed shell's processor's family (``PROCESSORS``). A board the
+    chain built otherwise or not at all (the Zynq-7000 Pynq-Z1 and Pynq-Z2; ZCU111) has no
+    entry, and is refused by name."""
+    # The project is given both, in place of the chain.
+    assert "set_property board_part %s" in custom_zynq_shell_template
+    assert "set ZYNQ_TYPE %s" in custom_zynq_shell_template
     for board in BOARDS:
-        branch = branches.get(board)
+        branch = ZYNQ_TEMPLATE_BOARDS.get(board)
         built = branch is not None and branch[1] == "zynq_us+"
         assert (board in PYNQ_BOARDS) == built, board
         if built:
             row = shell_row("pynq", board)
-            assert branch == (row.board_facts["board_part"], "zynq_us+")
+            assert row.fixed is not None
+            assert branch == (row.board_facts["board_part"], PROCESSORS[row.fixed.processor])
     assert sorted(set(BOARDS) - set(PYNQ_BOARDS)) == sorted(UNBUILT_BOARD_PARTS)
     with refused(
         "board-unsupported",
