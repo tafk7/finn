@@ -139,7 +139,7 @@ from finn.transformation.kernels import (
 )
 from finn.transformation.kernels.cut import CutKernelPartition, MakeCutChoices
 from finn.transformation.kernels.integration import Address, Connection, integration
-from finn.transformation.kernels.package import boundary_facts
+from finn.transformation.kernels.package import boundary_facts, source_roots
 
 # TFC is built from the trained network once for the module (about ten seconds), and each
 # test that runs the phases' steps on it takes about ten seconds more.
@@ -1520,7 +1520,7 @@ def test_the_export_of_tfc_on_pynq_names_both_movers_iodmas_and_every_connection
     # thresholding's range.
     node, body, _ = partition_body(parent)
     point, _ = configured_network(body, node.name)
-    assert module_name(point.module) == TFC_MODULE
+    assert module_name(point.module, source_roots()) == TFC_MODULE
     persisted = json.loads((output / "report" / "kernel_choices.json").read_text())
     assert persisted == kernel_choices_config(body)
     assert persisted == TFC_STORED
@@ -1688,7 +1688,7 @@ def tool_recorders(tmp_path: Path) -> dict[str, object]:
 
         def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
             model.set(OUTPUT_IP, str(tmp_path / "packaged" / "ip"))
-            top = module_name(configured_network(model, self.name)[0].module)
+            top = module_name(configured_network(model, self.name)[0].module, source_roots())
             model.set(OUTPUT_VLNV, f"xilinx_finn:finn:{top}:1.0")
             model.set(OUTPUT_INTERFACES, {"axilite": []})
             model.set(OUTPUT_IP_KEY, IP_KEY)

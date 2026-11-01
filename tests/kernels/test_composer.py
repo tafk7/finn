@@ -85,6 +85,7 @@ from finn.kernels.port import exposed_pins, port_direction
 from finn.kernels.sides import BUILD, Outside, Side, SideKind, Steady
 from finn.kernels.thresholding import ThresholdingKernel
 from finn.kernels.values.semantics import IntegerTensorValue
+from finn.resources import finnlib_root
 
 
 def _matmul(weights: object, x_tensor: object) -> Facts:
@@ -1044,7 +1045,8 @@ def test_the_declaration_s_order_is_a_fact_of_the_class_and_its_name_is_none(
     ]
     module, other = (each.answer(DataflowCoreKernel.module) for each in configured)
     assert isinstance(module, Available) and other == module
-    assert module_name(other.value) == module_name(module.value)
+    roots = {"finnlib": finnlib_root()}
+    assert module_name(other.value, roots) == module_name(module.value, roots)
     order = (
         "x",
         *kernels(),

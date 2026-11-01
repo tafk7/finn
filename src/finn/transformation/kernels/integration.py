@@ -59,6 +59,7 @@ from finn.kernels.artifacts.ipxact import vlnv
 from finn.kernels.artifacts.module import module_name
 from finn.kernels.movers import IODMA_HLS, MoverContract
 from finn.platform.shells import VIVADO_BLOCK_DESIGN
+from finn.transformation.kernels.package import source_roots
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
@@ -356,7 +357,7 @@ def integration(model: ModelWrapper) -> Integration:
         host_runtime=row.host_runtime,
         period_ns=target.platform.period_ns,
         partition=partition,
-        vlnv=vlnv(module_name(point.module)),
+        vlnv=vlnv(module_name(point.module, source_roots())),
         movers=tuple(movers),
         connections=tuple(connections),
         addresses=tuple(addresses),

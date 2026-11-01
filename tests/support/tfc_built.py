@@ -99,4 +99,4 @@ TFC_STORED = {owner: {**TFC_BUILT[owner], **STORED.get(owner, {})} for owner in 
 
 #: The module TFC_W2A2 is packaged as with ``TFC_STORED`` (``module_name``): its kind and the
 #: digest of its content, its name left out, so one name in every shell.
-TFC_MODULE = "finn_dataflowcore_ea492909c34023b3"
+TFC_MODULE = "finn_dataflowcore_c61b678c2de5ef01"

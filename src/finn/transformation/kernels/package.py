@@ -7,12 +7,15 @@
 a ``DataflowCore``), and writes what CreateStitchedIP writes for
 the shells (MakeZYNQProject; CreateVitisXO and VitisLink; SlashLink):
 
-- an IP at ``<vivado_stitch_proj>/ip``, self-contained (its sources and data
-  files imported), named as its module (``finn_dataflowcore_<digest>``, its content's
-  digest: one content, one VLNV) and shown as the partition node: Vitis and SLASH take the
-  IP's name as the kernel type. Vivado packages it in the packaged-IP store
-  (``finn.toolchain.ip``), unless the store holds it already, and the stored
-  project is copied into the build's directory;
+- an IP at ``<directory>/ip``, ``directory`` the packaging project (a build's
+  ``DataflowCore_0/ip``, ``step_package_partition``; a ``package_`` build directory by
+  default), its sources and data files imported, named as its module
+  (``finn_dataflowcore_<digest>``, its content's digest, its sources' bytes among it: one
+  content, one VLNV) and shown as the partition node: Vitis and SLASH take the IP's name as
+  the kernel type. Vivado packages it in the packaged-IP store (``finn.toolchain.ip``),
+  unless the store holds it already, and the stored project is copied into ``directory``.
+  The IP names an include directory of the project (``../src/<dir>``), so it does not yet
+  stand outside it;
 - its bus interfaces declared from the module's ABI, none left to Vivado's
   inference: ``ap_clk``, ``ap_clk2x`` when an instance is pumped, ``ap_rst_n``,
   each boundary channel's AXI-Stream ``s_axis_<i>``/``m_axis_<j>``, each presented AXI-Lite
@@ -223,7 +226,7 @@ def interface_description(
     (``stream_order``: on a side the outside states, the statement's)."""
     built = read_target(model)
     inputs, outputs = boundary_facts(model, point, boundary, name)
-    top = module_name(point.module)
+    top = module_name(point.module, source_roots())
     return {
         "ip": {"name": top, "vlnv": vlnv(top), "top": top, "display_name": name},
         **describe_interface(
@@ -248,6 +251,13 @@ def resources_of(counts: Mapping[str, int]) -> Resources:
     found = dict(counts)
     bram18 = 2 * found.pop("bram36", 0) + found.pop("bram18", 0)
     return Resources(**found, bram18=bram18)
+
+
+def source_roots() -> dict[str, Path]:
+    """The roots a core's modules copy their sources from, by name: FinnLib's
+    (``finnlib_root``). Emission reads them, and so does a module's name, which covers the
+    sources' bytes (``finn.kernels.artifacts.module.fingerprint``)."""
+    return {"finnlib": finnlib_root()}
 
 
 #: The hierarchical utilization report ``run_synth`` writes in the packaging project.
@@ -356,7 +366,7 @@ def staged_project(
         emitted = emit_module(
             module,
             project / "src",
-            roots={"finnlib": finnlib_root()},
+            roots=source_roots(),
             built=built_hls(module, built.part, toolchain=toolchain),
         )
         check_elaborates(emitted, module.abi, name)
@@ -416,7 +426,7 @@ class PackagePartition(Transformation):
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
         refuse_unverified(model, self.name)
         point, boundary = configured_network(model, self.name)
-        top = module_name(point.module)
+        top = module_name(point.module, source_roots())
         project = Path(
             self.directory or make_build_dir(prefix="package_")  # type: ignore[no-untyped-call]
         ).resolve()
@@ -477,7 +487,7 @@ class ElaboratePartition(Transformation):
         emitted = emit_module(
             point.module,
             directory / "src",
-            roots={"finnlib": finnlib_root()},
+            roots=source_roots(),
             built=built_hls(point.module, read_target(model).part, toolchain=toolchain),
         )
         sources = [str(emitted.directory / path) for path in emitted.sources]
@@ -499,6 +509,7 @@ __all__ = [
     "ip_key",
     "ooc_member_resources",
     "partition_utilization_report",
+    "source_roots",
     "resources_of",
     "staged_project",
 ]

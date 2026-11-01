@@ -55,6 +55,7 @@ from finn.toolchain.vivado import hierarchical_utilization
 from finn.transformation.kernels import PackagePartition
 from finn.transformation.kernels.cut import MakeCutChoices
 from finn.transformation.kernels.package import (
+    source_roots,
     ElaboratePartition,
     ip_key,
     partition_utilization_report,
@@ -67,7 +68,8 @@ def test_the_partition_packages_its_nodes_choices() -> None:
     reference = configured_network(model, "DataflowCore_0")[0].module
     assert (module.fragment, module.abi) == (reference.fragment, reference.abi)
     # Its module is named by its kind and content, not by its node: one name under both.
-    assert module.stem == STEM and module_name(module) == module_name(reference)
+    roots = source_roots()
+    assert module.stem == STEM and module_name(module, roots) == module_name(reference, roots)
     assert [port.name for port in module.abi.pins] == [
         "ap_clk",
         "ap_rst_n",
@@ -216,7 +218,7 @@ def test_the_chain_packages_as_the_shells_ip(tmp_path: Path) -> None:
     configure_partition(model := kernel_model())
     project = tmp_path / "vivado_stitch_proj"
     key = ip_key(model, "sdp_1", run_synth=False, toolchain=host_toolchain())
-    name = module_name(configured_network(model, "sdp_1")[0].module)
+    name = module_name(configured_network(model, "sdp_1")[0].module, source_roots())
     model = model.transform(PackagePartition("sdp_1", directory=project))
     assert model.get(OUTPUT_IP_KEY) == key
     # What packaging states of the IP, typed; no flat key. The IP is named as its module.

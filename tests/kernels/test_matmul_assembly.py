@@ -117,7 +117,8 @@ def test_stored_image_has_output_then_reduction_then_pe_simd_order():
 def netlist_read(module, directory):
     """The emitted top of ``module`` as ports, instances and drives."""
     emitted = emit_module(module, directory, roots={"finnlib": finnlib_root()})
-    return read(module, (emitted.directory / (emitted.entry_point + ".sv")).read_text())
+    source = (emitted.directory / (emitted.entry_point + ".sv")).read_text()
+    return read(module, source, emitted.entry_point)
 
 
 def test_input_padding_is_ignored_and_child_padding_is_zero(tmp_path):

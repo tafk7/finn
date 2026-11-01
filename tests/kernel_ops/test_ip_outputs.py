@@ -85,6 +85,7 @@ from finn.transformation.kernels import PackagePartition
 from finn.transformation.kernels.cut import CutKernelPartition
 from finn.transformation.kernels.integration import integration
 from finn.transformation.kernels.package import (
+    source_roots,
     boundary_facts,
     free_side,
     ooc_member_resources,
@@ -104,7 +105,7 @@ def test_the_description_beside_the_ip_reads_back_against_the_modules_pins(
     point, boundary = configured_network(model, "sdp_1")
     read_back(described, point.module.abi.pins, 5.0)
     # The IP is named as its module, which leaves its node's name out, and shown as its node.
-    top = module_name(point.module)
+    top = module_name(point.module, source_roots())
     assert described["ip"] == {
         "name": top,
         "vlnv": f"xilinx_finn:finn:{top}:1.0",
@@ -636,7 +637,7 @@ def test_tfc_on_the_ip_shell_packages_and_its_testbench_passes_on_its_own(
     described = json.loads((core / "ip" / "interface.json").read_text())
     read_back(described, point.module.abi.pins, 5.0)
     # The IP is the partition's, named as its module and shown as its node; the body states it.
-    assert described["ip"]["name"] == module_name(point.module)
+    assert described["ip"]["name"] == module_name(point.module, source_roots())
     assert described["ip"]["display_name"] == "DataflowCore_0"
     assert body.get(OUTPUT_IP) == str(core / "ip" / "ip")
     # The exploration folds the input's thresholds at 4 lanes and the last layer at 1

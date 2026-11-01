@@ -124,10 +124,15 @@ def chain(*, width: int = 8, lanes: tuple[int, ...] = (0,), lane_bits: int = 8) 
     return Composed("test.chain", "1", "chain", abi, fragment)
 
 
-def text(module: Composed, root: Path, out: str = "out") -> str:
-    """The emitted top of ``module``, its sources read from ``root``."""
+def emitted_top(module: Composed, root: Path, out: str = "out") -> tuple[str, str]:
+    """The emitted top of ``module``, its sources read from ``root``: its name and text."""
     emitted = emit_module(module, root / out, roots={"finnlib": root})
-    return (emitted.directory / f"{emitted.entry_point}.sv").read_text()
+    return emitted.entry_point, (emitted.directory / f"{emitted.entry_point}.sv").read_text()
+
+
+def text(module: Composed, root: Path, out: str = "out") -> str:
+    """The emitted top of ``module``'s text, its sources read from ``root``."""
+    return emitted_top(module, root, out)[1]
 
 
 @pytest.fixture(name="fixture_root")
@@ -139,7 +144,8 @@ def _fixture_root(tmp_path: Path) -> Path:
 
 def netlist(module: Composed, root: Path, out: str = "out") -> Netlist:
     """The emitted top of ``module``, read as ports, instances and drives."""
-    return read_netlist(module, text(module, root, out))
+    name, source = emitted_top(module, root, out)
+    return read_netlist(module, source, name)
 
 
 def top(port: str, bits: tuple[int, int] | None = None) -> Pin:
@@ -155,7 +161,7 @@ def test_one_link_wires_data_valid_and_ready_and_instances_are_named_by_label(
 ) -> None:
     module = chain()
     wired = netlist(module, fixture_root)
-    assert wired.top == module_name(module)
+    assert wired.top == module_name(module, {"finnlib": fixture_root})
     # The declared ports, in the order they are emitted.
     assert list(wired.ports.items()) == [
         ("ap_clk", Port("in", 1)),
