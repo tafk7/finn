@@ -312,7 +312,7 @@ def _read(path: Path, origin: Origin, found: _Found) -> None:
     try:
         with open(path, "rb") as handle:
             stated = tomllib.load(handle)
-    except (OSError, tomllib.TOMLDecodeError) as error:
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
         raise TargetRefused(
             "declaration-invalid", str(path), f"cannot read declarations: {error}"
         ) from None

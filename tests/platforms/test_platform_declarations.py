@@ -298,6 +298,18 @@ def test_a_malformed_declaration_is_refused_where_it_is(
         load([path], environ=FINN_ONLY)
 
 
+def test_a_file_not_utf8_is_refused_as_one_that_does_not_parse(tmp_path: Path) -> None:
+    path = tmp_path / "platform.toml"
+    path.write_bytes(b'[boards.B]\npart = "\xff"\n')
+    with refused(
+        "declaration-invalid",
+        error=TargetRefused,
+        owner=str(path),
+        message="^cannot read declarations: 'utf-8' codec can't decode",
+    ):
+        load([path], environ=FINN_ONLY)
+
+
 def test_a_shell_based_on_another_replaces_each_key_it_states(tmp_path: Path) -> None:
     path = declared(
         tmp_path,
