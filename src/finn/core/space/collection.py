@@ -23,7 +23,7 @@ from ._signatures import (
 from .declarations import (
     MISSING,
     Constraint,
-    Decision,
+    DecisionDecl,
     Declaration,
     Derived,
     Param,
@@ -344,7 +344,7 @@ def collect_space(space_type: type[_Namespace]) -> EffectiveSpace:
         # The annotation is the single source of a member's value type.
         if isinstance(declaration, NodeDecision):
             _check_choice_annotation(declaration)
-        elif isinstance(declaration, (Param, Decision)):
+        elif isinstance(declaration, (Param, DecisionDecl)):
             declaration.resolve()
     semantics = _collect_semantics(space_type, members, inherited, hints_for)
     preliminary = EffectiveSpace(

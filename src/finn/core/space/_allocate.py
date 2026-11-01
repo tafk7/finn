@@ -48,7 +48,7 @@ from .declarations import (
     CaseRef,
     ChoiceMemberRef,
     Constraint,
-    Decision,
+    DecisionDecl,
     Declaration,
     Derived,
     MemberRef,
@@ -264,7 +264,7 @@ class _Allocation:
                 node_kind = "param"
             else:
                 binding, node_kind = self.unsupplied(draft, member_name, declaration), "const"
-        elif isinstance(declaration, Decision):
+        elif isinstance(declaration, DecisionDecl):
             node_kind = "decision"
         else:
             node_kind = _declared_kind(declaration)

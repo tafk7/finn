@@ -33,6 +33,7 @@ from typing import (
 from .declarations import (
     Constraint,
     Decision,
+    DecisionDecl,
     Declaration,
     ValueRef,
     View,
@@ -119,7 +120,7 @@ def _when_field(*, default: None = None, kw_only: bool = True) -> Any:
 @dataclass_transform(
     kw_only_default=True,
     eq_default=False,
-    field_specifiers=(_when_field,),
+    field_specifiers=(_when_field, Decision),
 )
 class SpaceMeta(type):
     """Declare namespaces, and close each Space or Group class when it is created.
@@ -130,11 +131,15 @@ class SpaceMeta(type):
     longer be set or removed on it (``structure-finalized``). Compiling stays lazy.
 
     ``dataclass_transform`` types each Space class's call from its annotated
-    formals and Decisions (``area: int = Param()``) plus the ``when`` guard.
-    Param and Decision are deliberately not field specifiers: their call is
-    then a default, so every member is optional at the call and a bare
-    ``Room()`` type-checks (a later assignment may supply it), while each
-    keyword and assignment is typed by the annotation.
+    formals (``area: int = Param()``) plus the ``when`` guard. Param is
+    deliberately no field specifier: its call is then a default, so every formal
+    is optional at the call and a bare ``Room()`` type-checks (a later assignment,
+    or the class placing it, may supply it), while each keyword and assignment is
+    typed by the annotation. ``Decision`` is a field specifier whose ``init`` is
+    ``False``: a choice belongs to its Space class, and is no keyword of its call.
+    ``Select`` is none: a field specifier's call takes no ``**`` unpacking, and a
+    selector's cases are often given so (``Select(**cases)``); a selector stays a
+    keyword typed by its annotation, refused at the call when the call runs.
     """
 
     if not TYPE_CHECKING:
@@ -368,7 +373,7 @@ class _Namespace(metaclass=SpaceMeta):
         return inspect(self, cast("View[Any] | Constraint", view))
 
     @overload
-    def field(self, reference: Decision[T] | DecisionHandle[T]) -> BoundDecision[T]: ...
+    def field(self, reference: DecisionDecl[T] | DecisionHandle[T]) -> BoundDecision[T]: ...
 
     @overload
     def field(self, reference: ValueRef[T] | View[T]) -> BoundValue[T]: ...  # type: ignore[overload-overlap]

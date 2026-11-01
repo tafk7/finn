@@ -26,7 +26,7 @@ from .declarations import (
     CaseRef,
     ChoiceMemberRef,
     Constraint,
-    Decision,
+    DecisionDecl,
     Declaration,
     Derived,
     MemberRef,
@@ -82,7 +82,7 @@ class _Lowering:
     def domain(
         self,
         scope: int,
-        declaration: Decision[object],
+        declaration: DecisionDecl[object],
         semantics: ValueSemantics[object],
         *,
         owner: str,
@@ -217,7 +217,7 @@ class _Lowering:
             # Its default, where it has one: the value it takes where nobody supplies it.
             default = None if declaration.required else declaration.default
             return {"required": declaration.required, "value": default}
-        if isinstance(declaration, Decision):
+        if isinstance(declaration, DecisionDecl):
             assert node.semantics is not None
             changes: dict[str, Any] = {}
             changes["domain"], changes["domain_arguments"] = self.domain(
