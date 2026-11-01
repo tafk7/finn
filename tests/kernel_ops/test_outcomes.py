@@ -349,6 +349,30 @@ def test_a_subgraph_reading_a_tensor_the_cleanup_orders_after_it_is_refused() ->
         convert(source)
 
 
+def test_an_annotation_s_reference_alone_orders_nothing() -> None:
+    """A subgraph's annotation that names a tensor is no read of it: the cleanup may put its
+    node before the tensor's producer, and conversion returns that order, valid."""
+    source = graph(
+        [
+            helper.make_node("MatMul", ["x", "w"], ["h"], name="a"),
+            helper.make_node("ReduceMax", ["h"], ["scale"], name="scaling", keepdims=0),
+            helper.make_node(
+                "If",
+                ["condition"],
+                ["y"],
+                name="branches",
+                then_branch=branch("then", "x", ("z", "SCALE_TENSOR", "scale")),
+                else_branch=branch("else", "x", ("z", "SCALE_TENSOR", "scale")),
+            ),
+        ],
+        ["y", "scale"],
+    )
+    source.graph.input.append(helper.make_tensor_value_info("condition", TensorProto.BOOL, []))
+    model, _ = convert(source)
+    onnx.checker.check_model(model.model)
+    assert [node.name for node in model.graph.node] == ["MatMul_0", "branches", "scaling"]
+
+
 def test_an_annotation_naming_a_renamed_tensor_under_another_key_is_refused() -> None:
     """A quantization annotation's entry under a key that is neither ONNX's scale or zero
     point nor qonnx's nor namespaced may name a tensor, which a rename would leave behind:
@@ -384,6 +408,21 @@ def test_an_annotation_naming_a_renamed_tensor_under_another_key_is_refused() ->
         message="h: its quantization annotation's vendor/BLOCK_SCALE_TENSOR names w, which",
     ):
         convert(source)
+    # Nor does a version qonnx's reader would refuse: not a positive integer, stated twice,
+    # beside a key no namespace may declare.
+    malformed: list[list[tuple[str, str]]] = [
+        *([("vendor/@version", text)] for text in ("", "0", "-1", "01", "1.0", "one", "w")),
+        [("vendor/@version", "1"), ("vendor/@version", "1")],
+        [("vendor/@version", "1"), ("vendor/@scale", "w")],
+        [("vendor/@version", "1"), ("vendor/@follow", "false")],
+    ]
+    for entries in malformed:
+        stated = annotation.quant_parameter_tensor_names
+        for key, value in entries:
+            stated.add(key=key, value=value)
+        with refused("graph-name-unmapped", error=KernelOpError, tensor="w"):
+            convert(source)
+        del stated[1:]
     annotation.quant_parameter_tensor_names.add(key="vendor/@version", value="1")
     model, _ = convert(source)
     (kept,) = [
@@ -461,6 +500,57 @@ def test_a_node_the_cleanup_would_drop_is_refused() -> None:
         convert(source)
     with refused("cleanup-drops-node", error=KernelOpError, node="sparse_reader", tensor="s"):
         name_kernel_ops(source)
+
+
+def test_an_initializer_the_cleanup_would_drop_is_refused() -> None:
+    """qonnx's cleanup keeps an initializer only for a node that reads it. One the graph
+    outputs, or a subgraph reads, and no node does, would be dropped, its reader left
+    dangling: refused by the tensor, through ``ToKernelOps`` and ``name_kernel_ops`` alike.
+    One that nothing needs is dropped, as before."""
+
+    def holding(*nodes: Any, outputs: tuple[str, ...] = ("y",)) -> ModelWrapper:
+        source = graph(
+            [helper.make_node("MatMul", ["x", "w"], ["y"], name="a"), *nodes], list(outputs)
+        )
+        source.set_initializer("held", np.eye(4, dtype=np.float32))
+        source.set_tensor_datatype("held", DataType["INT4"])
+        source.graph.input.append(helper.make_tensor_value_info("condition", TensorProto.BOOL, []))
+        return source
+
+    with refused(
+        "cleanup-drops-initializer",
+        error=KernelOpError,
+        owner="ToKernelOps",
+        tensor="held",
+        message="held: the graph outputs it, but no node of the graph reads it, and the cleanup "
+        "after conversion, which keeps an initializer only for a node that reads it, would drop "
+        "it: read it by a node of the graph, an Identity say, and use that node's output in its "
+        "place",
+    ):
+        convert(holding(outputs=("y", "held")))
+    captured = holding(
+        helper.make_node(
+            "If",
+            ["condition"],
+            ["z"],
+            name="branches",
+            then_branch=branch("then", "held"),
+            else_branch=branch("else", "held"),
+        ),
+        outputs=("y", "z"),
+    )
+    with refused(
+        "cleanup-drops-initializer",
+        error=KernelOpError,
+        node="branches",
+        tensor="held",
+        message="held: a subgraph of branches reads it, but no node",
+    ):
+        convert(captured)
+    with refused("cleanup-drops-initializer", error=KernelOpError, tensor="held"):
+        name_kernel_ops(holding(outputs=("y", "held")))
+    model, _ = convert(holding())
+    assert "held" not in {item.name for item in model.graph.initializer}
 
 
 def test_a_host_node_between_kernel_ops_is_named_one_beside_them_is_not() -> None:

@@ -189,16 +189,51 @@ def test_a_set_refused_on_both_counts_says_both(nested: None) -> None:
     assert [code for _, _, code in codes(first)] == ["match-not-convex", "match-interior-exposed"]
 
 
-@pytest.mark.parametrize("read", ["by another node", "as a graph output"])
+def branching(read: str, *annotated: str) -> NodeProto:
+    """A host ``If`` on the graph input ``condition``, each branch ``Identity(read) -> b``,
+    its annotation of b's scale each of ``annotated``."""
+    out = helper.make_tensor_value_info("b", TensorProto.FLOAT, None)
+    body = helper.make_graph([helper.make_node("Identity", [read], ["b"])], "body", [], [out])
+    for tensor in annotated:
+        entry = body.quantization_annotation.add(tensor_name="b")
+        entry.quant_parameter_tensor_names.add(key="SCALE_TENSOR", value=tensor)
+    return helper.make_node(
+        "If", ["condition"], ["z"], name="branches", then_branch=body, else_branch=body
+    )
+
+
+@pytest.mark.parametrize(
+    "read",
+    [
+        "by another node",
+        "as a graph output",
+        "by a subgraph",
+        "by a subgraph's annotation",
+        "by an annotation",
+    ],
+)
 def test_an_interior_tensor_read_outside_the_set_is_refused_by_code(
     nested: None, read: str
 ) -> None:
+    """Something outside the set that reads the interior tensor, or names it, would be left
+    without it: a node's input, a graph output, a subgraph's node or annotation (a capture
+    is no input of its node), or an annotation's scale."""
     if read == "by another node":
         source = pair(helper.make_node("Relu", ["t"], ["z"], name="also"), outputs=("y", "z"))
-        readers = ("also",)
-    else:
+        readers: tuple[str, ...] = ("also",)
+    elif read == "as a graph output":
         source = pair(outputs=("y", "t"))
         readers = ("the graph's outputs",)
+    elif read == "by an annotation":
+        source = pair()
+        entry = source.graph.quantization_annotation.add(tensor_name="y")
+        entry.quant_parameter_tensor_names.add(key="SCALE_TENSOR", value="t")
+        readers = ("the quantization annotation of y",)
+    else:
+        captured = branching("t") if read == "by a subgraph" else branching("x", "t")
+        source = pair(captured, outputs=("y", "z"))
+        source.graph.input.append(helper.make_tensor_value_info("condition", TensorProto.BOOL, []))
+        readers = ("branches",)
     model, conversion = convert(source)
     assert model.graph.node[0].op_type == "Identity"
     first = conversion.outcomes[0]
