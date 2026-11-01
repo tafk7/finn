@@ -12,7 +12,7 @@ its doubled clock and intake MatMul's, through two levels of members.
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any, assert_type, cast
 
 import pytest
 from qonnx.core.datatype import DataType
@@ -39,12 +39,13 @@ from finn.core.space import (
 )
 from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import Tensor
-from finn.kernels.base import Kernel
+from finn.kernels.base import Kernel, PortPins
 from finn.kernels.explore import CoreComposition
 from finn.kernels.matmul import KnownWeights, MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port import exposed_name, port_direction
-from finn.kernels.port_model import exposed_ports
+from finn.kernels.port_model import InPort, OutPort, exposed_ports
+from finn.kernels.sides import Side
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import Platform
 
@@ -121,6 +122,17 @@ def test_the_wrapper_exposes_matmul_s_ports_as_its_own() -> None:
         port_direction(MatMulKernel, port) for port in "xwy"
     ]
     assert exposed_name(WrappedMatMul, "x") == "x"
+
+
+def test_an_exposed_port_is_typed_as_a_port_of_its_own() -> None:
+    """The type checker reads an exposed port as a leaf's own (``MemStreamKernel.output``):
+    its kind, and its readouts typed (strict mypy checks the assertions)."""
+    assert_type(WrappedMatMul.x, InPort)
+    assert_type(WrappedMatMul.y, OutPort)
+    assert_type(WrappedMatMul.x.side, Side)
+    assert_type(WrappedMatMul.y.stream_pins, PortPins)
+    assert_type(MemStreamKernel.output.side, Side)
+    assert_type(MemStreamKernel.output.stream_pins, PortPins)
 
 
 def test_on_its_channels_the_wrapper_is_matmul_one_name_deeper() -> None:
