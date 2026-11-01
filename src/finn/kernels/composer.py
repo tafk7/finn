@@ -71,7 +71,7 @@ guard reading a refused input) before ``channel-users``. The graph layer never d
 one: only a declaration by hand can.
 
 **In a shell** the core is a member of the shell's design space (``finn.kernels.shell``),
-which places its movers and its budgets beside it: a core's class is the same in any shell.
+which places its movers and its rules beside it: a core's class is the same in any shell.
 
 **Names** (``finn.kernels.dataflow_core.Names``): a member's name is its graph name with
 ``\\W`` as ``_`` (``member_name``). Refused, each finding naming the graph name: two graph
@@ -79,7 +79,7 @@ names that meet one member name (``name-shared``), a name that is no ASCII name 
 substituted (``name-invalid``: ``\\W`` keeps non-ASCII letters), a name the engine reserves
 (``name-reserved``: ``finn.core.space.RESERVED_NAMES``, and ``__`` names), a name the core's
 class declares (``name-reserved``: ``netlist``, ``resources``, ``names``, ...), and the shell
-member's (``name-reserved``: ``shell``, the name the shell reads its budgets by). An edge
+member's (``name-reserved``: ``shell``, the name the shell reads its rules by). An edge
 port's label is a name of the class too: refused where it is no ASCII name segment
 (``name-invalid``) or a name the core's class declares (``name-reserved``), and where it
 meets a member's name or another edge port's (``name-shared``), each finding naming the
@@ -137,11 +137,11 @@ from finn.core.space import (
 )
 from finn.core.space.compiler import compile_model
 from finn.kernels.base import Kernel
-from finn.kernels.budgets import SHELL
 from finn.kernels.channels import Channel, Neighbours
 from finn.kernels.dataflow_core import FROZEN, DataflowCoreKernel, Names, root_name
 from finn.kernels.policies import Owner, Unstated
 from finn.kernels.port import exposed_name, stream_port
+from finn.kernels.shell_rules import SHELL
 from finn.kernels.sides import Side, SideKind
 
 CLASS_CACHE_BOUND = 16

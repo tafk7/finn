@@ -275,7 +275,7 @@ def step_explore(
 
     The default sizes the FIFOs at conversion's folding. FIFO depths are sized at the folding
     before them: list ``size_fifos`` after the entries that change it. A refusal (a hold the
-    seam refuses, a held choice not kept, a point a member's validity or the shell's budgets
+    seam refuses, a held choice not kept, a point a member's validity or the shell's rules
     refuse) leaves the body and its report as they were. Writes report/step_explore.json,
     one entry for each strategy, then what the whole point has, and the search's record in the
     body."""

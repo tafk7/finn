@@ -84,7 +84,7 @@ from finn.dataflow.schedule import (
     span,
 )
 from finn.kernels.artifacts import ArtifactError
-from finn.kernels.artifacts.abi import Clocking
+from finn.kernels.artifacts.abi import Clocking, bus_window
 from finn.kernels.artifacts.contributions import Contribution, GeneratedData
 from finn.kernels.artifacts.module import BusExport, Fragment, Link, merge
 from finn.kernels.control import Control, ControlModel, control_models, presented
@@ -822,13 +822,13 @@ def _own_windows(model: str) -> Callable[[Any], tuple[int, ...] | Rejected]:
         if not config.presented:
             return ()
         bus = config.bus
-        widths = [member.width for member in bus.signals if member.logical == "awaddr"]
-        if not widths:
+        window = bus_window(bus)
+        if window is None:
             return reject(
                 "bus-aperture-unknown",
                 f"{bus.name}: an AXI-Lite bus with no awaddr has no aperture",
             )
-        return (1 << widths[0],)
+        return (window,)
 
     return own_windows
 
@@ -1889,15 +1889,15 @@ class Kernel(Space):
         ``clocking`` is its own, never its members'. The base derives a kernel's with
         members that may take it when its class is made, reading those members only, each
         where it is present (``_derive_doubled``); a case not selected is never read. What
-        a shell's clock rule reads (``finn.kernels.budgets``)."""
+        a shell's clock rule reads (``finn.kernels.shell_rules``)."""
         return self.clocking.doubling
 
     @derived
     def memory_initiators(self) -> int:
         """The memory ports it initiates itself (a memory-mapped bus it is the initiator
         of, ``finn.kernels.port_model.MemoryPort``): none here. A kernel that declares one
-        states its own (a memory mover's, ``finn.kernels.iodma``); a shell's memory rule
-        counts them (``finn.kernels.budgets``)."""
+        states its own (a memory mover's, ``finn.kernels.iodma``); a shell's memory rules
+        count them (``finn.kernels.shell_rules``)."""
         return 0
 
     # -- its schedule ----------------------------------------------------------------------
@@ -2087,9 +2087,10 @@ class Kernel(Space):
     def control_buses(self) -> tuple[str, ...]:
         """The control buses it presents, each by its path below it: its own (``""``), where
         its model presents it, and each present member's, under the member's path
-        (``compute.packed``, a selector's case). What a shell's budget counts
-        (``finn.kernels.budgets``); the base derives it for a kernel with members that may
-        present one when its class is made (``_derive_doubled``)."""
+        (``compute.packed``, a selector's case), each taking its window
+        (``control_windows``), which a shell's rules place (``finn.kernels.shell_rules``); the
+        base derives it for a kernel with members that may present one when its class is
+        made (``_derive_doubled``)."""
         found: tuple[str, ...] = getattr(self, "-own-buses")()
         return found
 

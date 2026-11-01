@@ -74,7 +74,7 @@ def bound_in_shell(
 ) -> Bound[ShellKernel]:
     """The core of ``nodes`` (every node of ``model`` where None), KernelOp nodes of
     ``model``, in the shell of its target (``finn.custom_op.kernels.shell.shell_point``:
-    its row offers the mover on each edge and states its budgets), its module named
+    its row offers the mover on each edge and states its limits), its module named
     ``name``, its stored choices bound."""
     row = body_row(model)
     offer = row_offer(row)

@@ -15,14 +15,18 @@ It takes every name the platform gives and places every control bus:
   interconnect's next master port (``M<nn>_AXI``); every cell's clock and reset from the
   memory interconnect's;
 - the placement (``placement``): each control bus from the fixed shell's ``control_base``,
-  in that order, aligned to its range; the block design assigns each its address from it,
-  so the placement it returns is the one Vivado was given;
+  in that order, aligned to its range (``finn.kernels.shell_rules.placed_windows``, by which
+  the shell's control window rule admitted them); the block design assigns each its address
+  from it, so the placement it returns is the one Vivado was given;
 - the board (``project_script``): its board part, the board's declared fact
   (``board_part``), and its processor's family, the fixed shell's processor's
   (``PROCESSORS``).
 
 It wires one AXI-Lite bus and one memory port a mover: a mover whose contract states other
-counts is refused, by name (``wire_one_bus_each``). Its template wires the memory
+counts is refused, by name (``wire_one_bus_each``). Its template's control interconnect
+takes ``CONTROL_SLAVES`` AXI-Lite buses: a description with more is refused before any tool
+runs (``control-slaves-exceeded``), where the shell's rules no longer bound them. Its
+template wires the memory
 interconnect into the processor's ``HP0`` port and runs every cell on the row's main clock:
 a memory port bound to another target, a unit on another clock and a description with no
 memory port are refused, each by name (``wiring``), as is a processor or board it cannot
@@ -48,6 +52,7 @@ from typing import Any
 from finn import resources
 from finn.core.reporting.findings import Finding, FindingKind, Refusal
 from finn.kernels.movers import MoverContract
+from finn.kernels.shell_rules import placed_windows
 from finn.platform.shells import VIVADO_BLOCK_DESIGN, ShellRow, shell_row
 from finn.shells.integration import MAIN, Integration, IntegrationError, Linked
 from finn.shells.pynq import templates
@@ -70,6 +75,9 @@ STATIC_INSTANCES = {
 MEMORY_TARGET = "HP0"
 """The memory target the template wires the memory interconnect into: the processor's
 ``HP0`` port."""
+
+CONTROL_SLAVES = 9
+"""The AXI-Lite buses the template's control interconnect takes (its ``NUM_AXILITE``)."""
 
 PROCESSORS = {"zynq_ultra_ps_e": "zynq_us+", "processing_system7": "zynq_7000"}
 """The template's processor family (its ``ZYNQ_TYPE``) by the fixed shell's processor IP."""
@@ -105,8 +113,8 @@ class LinkerRefused(Refusal):
 
 def wire_one_bus_each(contract: MoverContract, where: str) -> None:
     """Refuse a mover (at ``where``, for the message) the block design cannot wire: it
-    connects one AXI-Lite bus and one memory port a mover, while the shell's budgets
-    and costing read the counts the mover's contract states."""
+    connects one AXI-Lite bus and one memory port a mover, while the shell's rules and
+    costing read the counts the mover's contract states."""
     if (contract.control_buses, contract.memory_ports) != (1, 1):
         raise IntegrationError(
             "mover-buses-unwired",
@@ -149,6 +157,12 @@ def wiring(integration: Integration, row: ShellRow) -> tuple[Wire, ...]:
                 f"{binding.port}: bound to {binding.target!r}; the block design wires "
                 f"memory into {MEMORY_TARGET!r} alone",
             )
+    if len(integration.endpoints) > CONTROL_SLAVES:
+        raise LinkerRefused(
+            "control-slaves-exceeded",
+            f"the description places {len(integration.endpoints)} AXI-Lite buses; the "
+            f"block design's control interconnect takes {CONTROL_SLAVES}",
+        )
     for clock in integration.clocks:
         if clock.clock != MAIN:
             raise LinkerRefused(
@@ -175,15 +189,15 @@ def wiring(integration: Integration, row: ShellRow) -> tuple[Wire, ...]:
 
 def placement(integration: Integration, row: ShellRow) -> tuple[Address, ...]:
     """Each control bus of ``integration``, in its order, from the fixed shell's
-    ``control_base``, aligned to its range, at its offset in its unit."""
+    ``control_base``, aligned to its range (``placed_windows``), at its offset in its
+    unit."""
     assert row.fixed is not None
-    addresses = []
-    base = row.fixed.control_base
-    for each in integration.endpoints:
-        offset = -(-base // each.range) * each.range
-        addresses.append(Address(f"{each.unit}/{each.bus}", offset + each.offset, each.range))
-        base = offset + each.range
-    return tuple(addresses)
+    endpoints = integration.endpoints
+    offsets = placed_windows([each.range for each in endpoints], row.fixed.control_base)
+    return tuple(
+        Address(f"{each.unit}/{each.bus}", offset + each.offset, each.range)
+        for each, offset in zip(endpoints, offsets, strict=True)
+    )
 
 
 def report(integration: Integration) -> dict[str, Any]:

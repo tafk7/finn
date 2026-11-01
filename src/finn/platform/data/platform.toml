@@ -98,13 +98,10 @@ runtimes = ["pynq"]
 clocks = { main = "pl_clk0", set_at = "build", doubled = false }
 # The processor's HPM0_FPD window: 256 MiB at 0xA000_0000; each unit at least 4 KiB.
 control = { one_port_per_unit = false, least_window = 4096, aperture = 0x1000_0000 }
+# HP0 through one SmartConnect, which takes 16 mover ports at most (its slave ports).
 memory = [{ name = "HP0", width = 128, masters = 16 }]
 supply = [{ kind = "moved", movers = ["iodma_hls"], width_cap = 128 }]
 delivery = [{ kind = "moved", movers = ["iodma_hls"], width_cap = 128 }]
-# The AXI-Lite buses the template's interconnect takes, and the memory ports the
-# partition may initiate beside its movers'.
-control_budget = 9
-memory_ports = 0
 characterised = "movers (iodma_hls) and static region out of context, Vivado 2025.2, xczu3eg/xczu7ev (movers on xczu3eg, the static region on xczu3eg and xczu7ev); the shell built and timed on Ultra96 only"
 timed = ["Ultra96"]
 caveat = "the 'pynq' shell was built and timed on Ultra96 only, and its movers and static region characterised out of context, Vivado 2025.2, xczu3eg/xczu7ev: on {board} ({part}) its cost is carried over, not measured"

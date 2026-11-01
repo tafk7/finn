@@ -1,6 +1,6 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Finite shell counts over ordinary model bindings, without a timing query."""
+"""Finite shell counts and rules over ordinary model bindings, without a timing query."""
 
 from __future__ import annotations
 
@@ -26,123 +26,137 @@ from finn.core.space import (
 )
 from finn.core.space.errors import DefinitionError
 from finn.core.space.extensions import composite
-from finn.kernels.budgets import ShellBudgets, contributor, counts, shell_members
+from finn.kernels.shell_rules import ShellRules, contributor, counts, shell_members
+
+ROW: Mapping[str, object] = {
+    "shell": "literal",
+    "units": None,
+    "least_window": None,
+    "aperture": None,
+    "targets": (),
+    "doubled": True,
+    "fixed": None,
+}
+"""A row bounding nothing, the doubled clock supplied."""
 
 
 def shell_type(
     *,
-    presented: Sequence[str] = (),
+    windows: Sequence[str] = (),
+    core: str | None = None,
     movers: Sequence[str] = (),
     initiators: Sequence[str] = (),
     doubled: Sequence[str] = (),
-) -> type[ShellBudgets]:
+) -> type[ShellRules]:
     members, annotations = shell_members(
-        presented=presented, movers=movers, initiators=initiators, doubled=doubled
+        windows=windows, core=core, movers=movers, initiators=initiators, doubled=doubled
     )
-    return composite("FiniteShell", members, annotations=annotations, base=ShellBudgets)
+    return composite("FiniteShell", members, annotations=annotations, base=ShellRules)
 
 
-def shell_point(kind: type[ShellBudgets], **values: object) -> ShellBudgets:
-    return cast(
-        ShellBudgets,
-        design_space(
-            cast(Any, kind)(
-                **{
-                    "shell": "literal",
-                    "control_budget": None,
-                    "memory_ports": None,
-                    "clk2x": True,
-                    "fixed": None,
-                    **values,
-                }
-            )
-        ),
-    )
+def shell_point(kind: type[ShellRules], **values: object) -> ShellRules:
+    return cast(ShellRules, design_space(cast(Any, kind)(**{**ROW, **values})))
 
 
 @pytest.mark.parametrize("size", [0, 1, 4])
 def test_actual_shell_counts_match_independent_arithmetic(size: int) -> None:
     names = tuple(f"k{index}" for index in range(size))
-    presented = tuple(("",) if index % 2 == 0 else () for index in range(size))
+    # Each unit's windows, a 4 KiB one for each of index % 3 buses, the core the first.
+    windows = tuple((4096 << index,) * (index % 3) for index in range(size))
     memory = tuple(index + 2 for index in range(size))
     doubled = tuple(index == size - 1 for index in range(size))
-    # Each mover's buses, and a memory port each, which the static region counts.
-    buses = tuple(("",) * (index + 2) for index in range(size))
+    # A memory port each of the movers', which the static region counts.
     ports = tuple(19 for _ in range(size))
     values = {
         contributor(name, kind): value
         for kind, items in (
-            ("presented", presented),
+            ("windows", windows),
             ("initiators", memory),
             ("doubled", doubled),
-            ("mover", buses),
             ("memory", ports),
         )
         for name, value in zip(names, items)
     }
+    core = names[0] if names else None
     point = shell_point(
-        shell_type(presented=names, movers=names, initiators=names, doubled=names), **values
+        shell_type(windows=names, core=core, movers=names, initiators=names, doubled=names),
+        **values,
     )
     # These expected counts use supplied numbers, independently of Group outputs.
-    expected_control = (size + 1) // 2 + size * (size - 1) // 2 + 2 * size
+    expected_windows = tuple(4096 << index for index in range(size) for _ in range(index % 3))
     expected_memory = size * (size - 1) // 2 + 2 * size
-    assert counts(point) == Available((expected_control, expected_memory, size > 0))
-    assert point.presented_buses == (size + 1) // 2
-    assert point.mover_buses == size * (size - 1) // 2 + 2 * size
-    assert point.memory_initiators == expected_memory
+    assert counts(point) == Available(((), expected_memory, size > 0))
+    assert point.windows == expected_windows and point.core_windows == ()
+    assert point.core_initiators == expected_memory
     assert point.mover_memory == 19 * size
     assert point.doubled_clock is (size > 0)
-    assert inspection.validity(point).status == "valid"
+    # A core initiating a memory port is refused on any row.
+    assert inspection.validity(point).status == ("refused" if size else "valid")
     assert inspection.statistics(point).owning_decisions == 0
     assert dict(inspection.presence(point)) == {"": Available(True)}
     assert all(node.scope == "" for node in inspection.members(point))
 
 
-@pytest.mark.parametrize("budget", [None, 0, 2])
-@pytest.mark.parametrize("contributions", [((), 0), (("",), 3)])
-def test_budget_limits_and_original_labels(
-    budget: int | None, contributions: tuple[tuple[str, ...], int]
+@pytest.mark.parametrize("limit", [None, 0, 2])
+@pytest.mark.parametrize("contributions", [((), 0, 0), ((4096,), 3, 3)])
+def test_limits_and_their_labels(
+    limit: int | None, contributions: tuple[tuple[int, ...], int, int]
 ) -> None:
-    bus, memory = contributions
-    kind = shell_type(presented=("k0",), initiators=("k0",))
+    windows, initiators, memory = contributions
+    kind = shell_type(windows=("k0",), core="k0", movers=("m0",), initiators=("k0",))
     point = shell_point(
         kind,
-        **{"k0-presented": bus, "k0-initiators": memory},
-        control_budget=budget,
-        memory_ports=budget,
+        **{"k0-windows": windows, "k0-initiators": initiators, "m0-memory": memory},
+        least_window=None if limit is None else 4096,
+        aperture=None if limit is None else limit * 4096,
+        targets=() if limit is None else (("HP0", limit),),
     )
     assert point.shell == "literal"
-    assert counts(point) == Available((len(bus), memory, False))
-    for reference, amount, message in (
-        (ShellBudgets.within_control_budget, len(bus), "presents 1 and its movers 0"),
-        (ShellBudgets.within_memory_ports, memory, "initiates 3"),
+    assert counts(point) == Available((windows, initiators, False))
+    for reference, code, refused, message in (
+        (
+            ShellRules.within_control_window,
+            "control-window-exceeded",
+            limit is not None and len(windows) > limit,
+            "1 control windows, each aligned to itself, span 0x1000",
+        ),
+        (
+            ShellRules.within_memory_masters,
+            "memory-masters-exceeded",
+            limit is not None and memory > limit,
+            f"target HP0 takes {limit} mover ports; the partition's movers bind 3",
+        ),
+        (
+            ShellRules.core_stream_only,
+            "core-memory-port",
+            initiators > 0,
+            "the partition's core initiates 3 memory ports",
+        ),
     ):
         result = cast(QueryResult[bool], point.query(reference))
-        if budget is not None and amount > budget:
+        if refused:
             assert isinstance(result, Rejected)
             assert len(result.findings) == 1
             finding = result.findings[0]
-            assert finding.code == "interface-budget-exceeded"
-            assert finding.owner in ("within_control_budget", "within_memory_ports")
+            assert (finding.code, finding.owner) == (code, reference.name)
             assert "'literal' shell" in finding.message and message in finding.message
         else:
             assert isinstance(result, Available) and result.value is True
 
 
-def test_none_budgets_exit_before_open_counts() -> None:
-    kind = shell_type(presented=("open",), initiators=("open",))
+def test_limits_of_none_exit_before_open_counts() -> None:
+    kind = shell_type(windows=("open",), core="open", movers=("open",))
     host = bound_shell(
-        kind, {"open-presented": Inputs.first_buses, "open-initiators": Inputs.first_int}
+        kind, {"open-windows": Inputs.first_windows, "open-memory": Inputs.first_int}
     )
     point = cast(Any, design_space(host())).shell_counts
     assert inspection.validity(point).status == "valid"
     assert isinstance(counts(point), Unresolved)
-    for reference in (ShellBudgets.within_control_budget, ShellBudgets.within_memory_ports):
+    for reference in (ShellRules.within_control_window, ShellRules.within_memory_masters):
         evidence = inspection.explain(point, reference)
         assert evidence.result == Available(True)
         assert not any(
-            node.declaration.key.endswith(("presented_buses", "mover_buses", "memory_initiators"))
-            for node in evidence.nodes
+            node.declaration.key.endswith(("windows", "mover_memory")) for node in evidence.nodes
         )
 
 
@@ -152,13 +166,13 @@ class Inputs(Space):
     last_int: int = Decision(domain=(2, 5, 11))
     first_bool: bool = Decision(domain=(False, True))
     later_bool: bool = Decision(domain=(False, True))
-    moves: tuple[str, ...] = Param(default=())
+    moves: tuple[int, ...] = Param(default=())
     moved: int = Param(default=0)
 
     @derived
-    def first_buses(self) -> tuple[str, ...]:
-        """A contributor's buses, its own where ``first_bool``: what it presents."""
-        return ("",) if self.first_bool else ()
+    def first_windows(self) -> tuple[int, ...]:
+        """A contributor's windows, its own where ``first_bool``: what it presents."""
+        return (4096,) if self.first_bool else ()
 
     @derived
     def failed_int(self) -> int | Rejected:
@@ -198,16 +212,9 @@ class Inputs(Space):
         return self.first_int
 
 
-def bound_shell(kind: type[ShellBudgets], values: Mapping[str, object]) -> type[Inputs]:
+def bound_shell(kind: type[ShellRules], values: Mapping[str, object]) -> type[Inputs]:
     class Host(Inputs):
-        shell_counts = cast(Any, kind)(
-            shell="bound",
-            control_budget=None,
-            memory_ports=None,
-            clk2x=True,
-            fixed=None,
-            **values,
-        )
+        shell_counts = cast(Any, kind)(**{**ROW, "shell": "bound", **values})
 
     return Host
 
@@ -232,20 +239,20 @@ def demand(point: Space, reference: object, inputs: set[str]) -> tuple[object, l
     "values", [{}, {"first_int": 2}, {"first_int": 2, "later_int": 5, "last_int": 11}]
 )
 def test_sum_demand_matches_hand_authored_expression(values: dict[str, int]) -> None:
-    kind = shell_type(initiators=("first", "later", "last"))
+    kind = shell_type(movers=("first", "later", "last"))
     host = bound_shell(
         kind,
         {
-            "first-initiators": Inputs.first_int,
-            "later-initiators": Inputs.later_int,
-            "last-initiators": Inputs.last_int,
+            "first-memory": Inputs.first_int,
+            "later-memory": Inputs.later_int,
+            "last-memory": Inputs.last_int,
         },
     )
     point = design_space(host()).with_choices(
         {getattr(Inputs, name): value for name, value in values.items()}
     )
     inputs = {"first_int", "later_int", "last_int"}
-    folded = demand(point, cast(Any, host).shell_counts.memory_initiators, inputs)
+    folded = demand(point, cast(Any, host).shell_counts.mover_memory, inputs)
     direct = demand(point, Inputs.direct_sum, inputs)
     assert folded == direct
     assert folded[1] == (
@@ -276,20 +283,20 @@ def test_true_boolean_head_still_demands_open_tail(later: bool | None) -> None:
 
 @pytest.mark.parametrize("boolean", [False, True])
 def test_real_refused_tail_preserves_eager_boolean_and_sum_owner(boolean: bool) -> None:
-    kind = shell_type(doubled=("first", "later"), initiators=("first", "later"))
+    kind = shell_type(doubled=("first", "later"), movers=("first", "later"))
     host = bound_shell(
         kind,
         {
             "first-doubled": Inputs.first_bool,
             "later-doubled": Inputs.failed_bool,
-            "first-initiators": Inputs.first_int,
-            "later-initiators": Inputs.failed_int,
+            "first-memory": Inputs.first_int,
+            "later-memory": Inputs.failed_int,
         },
     )
     point = design_space(host()).with_choices({Inputs.first_bool: boolean, Inputs.first_int: 2})
     for folded, manual, owner in (
         (cast(Any, host).shell_counts.doubled_clock, Inputs.bool_before_failure, "failed_bool"),
-        (cast(Any, host).shell_counts.memory_initiators, Inputs.sum_before_failure, "failed_int"),
+        (cast(Any, host).shell_counts.mover_memory, Inputs.sum_before_failure, "failed_int"),
     ):
         result = point.query(folded)
         assert result == point.query(manual) and isinstance(result, Rejected)
@@ -299,26 +306,23 @@ def test_real_refused_tail_preserves_eager_boolean_and_sum_owner(boolean: bool) 
 
 
 def test_open_sum_head_halts_before_later_refusal() -> None:
-    kind = shell_type(initiators=("first", "later"))
-    host = bound_shell(
-        kind, {"first-initiators": Inputs.first_int, "later-initiators": Inputs.failed_int}
-    )
+    kind = shell_type(movers=("first", "later"))
+    host = bound_shell(kind, {"first-memory": Inputs.first_int, "later-memory": Inputs.failed_int})
     point = design_space(host())
-    folded = demand(
-        point, cast(Any, host).shell_counts.memory_initiators, {"first_int", "failed_int"}
-    )
+    folded = demand(point, cast(Any, host).shell_counts.mover_memory, {"first_int", "failed_int"})
     assert folded == demand(point, Inputs.sum_before_failure, {"first_int", "failed_int"})
     assert isinstance(folded[0], Unresolved) and folded[1] == ["first_int"]
     assert "first_int" in {finding.owner for finding in folded[0].findings}
 
 
-def test_a_movers_buses_are_counted_and_its_memory_ports_beside_the_kernels() -> None:
-    kind = shell_type(movers=("actual",))
-    host = bound_shell(kind, {"actual-mover": Inputs.moves, "actual-memory": Inputs.moved})
-    point = design_space(host(moves=("",) * 5, moved=47))
-    assert counts(cast(Any, point).shell_counts) == Available((5, 0, False))
+def test_a_movers_windows_and_memory_ports_are_counted_beside_the_core_s() -> None:
+    kind = shell_type(windows=("actual",), movers=("actual",))
+    host = bound_shell(kind, {"actual-windows": Inputs.moves, "actual-memory": Inputs.moved})
+    point = design_space(host(moves=(64,) * 5, moved=47))
+    assert counts(cast(Any, point).shell_counts) == Available(((), 0, False))
+    assert cast(Any, point).shell_counts.windows == (64,) * 5
     assert cast(Any, point).shell_counts.mover_memory == 47
-    evidence = inspection.explain(point, cast(Any, host).shell_counts.mover_buses)
+    evidence = inspection.explain(point, cast(Any, host).shell_counts.windows)
     assert any(node.declaration.key == "moves" for node in evidence.nodes)
     assert not any(
         "cycles" in node.declaration.key or "times" in node.declaration.key
@@ -344,14 +348,14 @@ def test_fresh_model_placements_preserve_counts_and_have_no_choices(
 ) -> None:
     monkeypatch.setenv("FINN_SPACE_PERMUTE", str(int(permuted)))
     monkeypatch.setenv("FINN_SPACE_EAGER", str(int(eager)))
-    left = shell_type(presented=("k",), doubled=("k",))
-    right = shell_type(presented=("k",), doubled=("k",))
+    left = shell_type(windows=("k",), core="k", doubled=("k",))
+    right = shell_type(windows=("k",), core="k", doubled=("k",))
     assert left is not right
-    point = shell_point(left, **{"k-presented": ("",), "k-doubled": False})
-    other = shell_point(right, **{"k-presented": (), "k-doubled": True})
-    assert counts(point) == Available((1, 0, False))
-    assert counts(other) == Available((0, 0, True))
-    assert counts(point) == Available((1, 0, False))
+    point = shell_point(left, **{"k-windows": (4096,), "k-doubled": False})
+    other = shell_point(right, **{"k-windows": (), "k-doubled": True})
+    assert counts(point) == Available(((4096,), 0, False))
+    assert counts(other) == Available(((), 0, True))
+    assert counts(point) == Available(((4096,), 0, False))
     assert inspection.decisions(point) == ()
     assert dict(inspection.presence(point)) == {"": Available(True)}
     assert inspection.statistics(point).scopes == 1
@@ -363,9 +367,9 @@ def test_clock_bypass_and_original_contributor_rule_names_remain() -> None:
         kind, {"first-doubled": Inputs.first_bool, "later-doubled": Inputs.later_bool}
     )
     supplied = cast(Any, design_space(host())).shell_counts
-    assert inspection.validity(supplied).status == "valid"  # clk2x skips both open inputs
+    assert inspection.validity(supplied).status == "valid"  # a doubled row skips both inputs
     assert isinstance(supplied.query(kind.doubled_clock), Unresolved)
-    point = shell_point(kind, **{"first-doubled": True, "later-doubled": False}, clk2x=False)
+    point = shell_point(kind, **{"first-doubled": True, "later-doubled": False}, doubled=False)
     result = point.query(getattr(kind, "first-clock"))
     assert isinstance(result, Rejected)
     assert [(each.code, each.owner) for each in result.findings] == [
@@ -379,9 +383,10 @@ def test_clock_bypass_and_original_contributor_rule_names_remain() -> None:
         "later-clock",
         "first-doubled",
         "later-doubled",
-        "presented_buses",
-        "mover_buses",
-        "memory_initiators",
+        "windows",
+        "core_windows",
+        "core_initiators",
+        "mover_memory",
         "doubled_clock",
     } <= members.keys()
 
@@ -396,27 +401,34 @@ class OffsetInt(int):
 
 
 @pytest.mark.parametrize("subtyped", [False, True])
-def test_initiators_project_each_int_head_before_adding(subtyped: bool) -> None:
+def test_memory_ports_project_each_int_head_before_adding(subtyped: bool) -> None:
     first = OffsetInt(2) if subtyped else 2
     second = OffsetInt(3) if subtyped else 3
     assert first + 0 == (102 if subtyped else 2)  # independent arithmetic witness
-    kind = shell_type(initiators=("first", "second"))
-    point = shell_point(
-        kind, **{"first-initiators": first, "second-initiators": second}, memory_ports=5
-    )
+    kind = shell_type(movers=("first", "second"), initiators=("first", "second"))
+    ports = {"first-memory": first, "second-memory": second}
+    point = shell_point(kind, **ports, **{"first-initiators": 0, "second-initiators": 0})
     # Both supplied subtypes must be converted before addition, as the original fold did.
-    assert point.memory_initiators == int(first) + int(second) == 5
-    assert counts(point) == Available((0, 5, False))
-    admitted = cast(QueryResult[bool], point.query(ShellBudgets.within_memory_ports))
-    assert admitted == Available(True)
-    over = shell_point(
-        kind, **{"first-initiators": first, "second-initiators": second}, memory_ports=4
+    assert point.mover_memory == int(first) + int(second) == 5
+    admitted = shell_point(
+        kind, **ports, **{"first-initiators": 0, "second-initiators": 0}, targets=(("HP0", 5),)
     )
-    result = over.query(ShellBudgets.within_memory_ports)
+    assert cast(QueryResult[bool], admitted.query(ShellRules.within_memory_masters)) == Available(
+        True
+    )
+    over = shell_point(
+        kind, **ports, **{"first-initiators": 0, "second-initiators": 0}, targets=(("HP0", 4),)
+    )
+    result = over.query(ShellRules.within_memory_masters)
     assert isinstance(result, Rejected)
     assert [(each.code, each.owner) for each in result.findings] == [
-        ("interface-budget-exceeded", "within_memory_ports")
+        ("memory-masters-exceeded", "within_memory_masters")
     ]
+    initiating = shell_point(
+        kind, **ports, **{"first-initiators": first, "second-initiators": second}
+    )
+    assert initiating.core_initiators == 5
+    assert counts(initiating) == Available(((), 5, False))
 
 
 class ClockInputs(Space):
@@ -501,12 +513,12 @@ def test_clock_requirement_preserves_exact_source_order_and_owners(
 
     class Host(ClockInputs):
         counted_shell = cast(Any, made)(
-            shell=ClockInputs.actual_row,
-            clk2x=ClockInputs.supplied,
-            control_budget=None,
-            memory_ports=None,
-            fixed=None,
-            **{"k0-doubled": ClockInputs.actual_doubled},
+            **{
+                **ROW,
+                "shell": ClockInputs.actual_row,
+                "doubled": ClockInputs.supplied,
+                "k0-doubled": ClockInputs.actual_doubled,
+            }
         )
 
     choices = {}

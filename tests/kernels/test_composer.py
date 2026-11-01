@@ -491,7 +491,7 @@ def test_an_edge_port_s_name_meets_a_member_by_its_member_name(cache: None) -> N
 
 
 def test_a_channel_named_as_the_shell_member_is_refused(cache: None) -> None:
-    """``shell`` is the name of a partition's shell member (``finn.kernels.budgets``): no
+    """``shell`` is the name of a partition's shell member (``finn.kernels.shell_rules``): no
     kernel (above) or channel of a core takes it, whatever shell it is placed in."""
     named = {
         ("shell" if name == "MatMul_0_out0" else name): each for name, each in channels().items()

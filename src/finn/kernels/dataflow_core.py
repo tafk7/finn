@@ -223,7 +223,7 @@ class Names:
     def root(self, owner: str, fact: str) -> str:
         """The root member holding ``owner``'s ``fact``: a core's own (``mm0-x_tensor``), in
         a shell lifted below the core's member (``DataflowCore_0-mm0-x_tensor``); the shell
-        member's and a member's beside the core its own (``shell-clk2x``, ``in0-offer``)."""
+        member's and a member's beside the core its own (``shell-doubled``, ``in0-offer``)."""
         if owner == self.shell or owner in self.beside:
             return root_name(owner, fact)
         found = root_name(self.members[owner], fact)

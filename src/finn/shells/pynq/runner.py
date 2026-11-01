@@ -154,9 +154,11 @@ def build_pynq(
     description ``integration`` (see the module docstring): each unit's IP in the
     description's order, the movers' (``mover_ip``) and the core's (its body saved with its
     IP stated, or the IP the body states already when its key is the one the body has
-    now), then the description linked in a new project and what Vivado made collected.
-    ``toolchain`` is the prepared toolchain every tool runs through; ``jobs`` the runs
-    Vivado launches at once; ``options`` the shell's build options."""
+    now), then the description linked in a new project and what Vivado made collected. A
+    description the block design does not wire is refused first, before any tool runs
+    (``linker.wiring``). ``toolchain`` is the prepared toolchain every tool runs through;
+    ``jobs`` the runs Vivado launches at once; ``options`` the shell's build options."""
+    linker.wiring(integration, linker.linked_row(integration))
     node, body, body_file = partition_body(model)
     ips: dict[str, IpRef] = {}
     packaged_key = None

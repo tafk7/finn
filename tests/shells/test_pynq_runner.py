@@ -18,6 +18,7 @@ import logging
 import os
 import sys
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -63,7 +64,14 @@ from finn.shells.pynq.driver import (
     driver_shapes,
     write_driver,
 )
-from finn.shells.pynq.linker import block_design, collect, linked_row, project_script
+from finn.shells.pynq.linker import (
+    CONTROL_SLAVES,
+    LinkerRefused,
+    block_design,
+    collect,
+    linked_row,
+    project_script,
+)
 from finn.shells.pynq.runner import (
     BITFILE,
     DELIVERED_CLOCK,
@@ -550,6 +558,26 @@ def test_the_bitfile_build_refuses_a_shell_without_it(tmp_path: Path) -> None:
     ):
         parent.transform(building)
     assert not (tmp_path / "output").exists() and vivado.runs == []
+
+
+def test_a_description_the_block_design_cannot_wire_is_refused_before_any_tool_runs(
+    tmp_path: Path,
+) -> None:
+    """More AXI-Lite buses than the block design's control interconnect takes: refused by
+    the linker before any mover's HLS, the partition's packaging or Vivado runs."""
+    parent = zynq_parent(tmp_path)
+    described = describe(parent)
+    endpoint = described.endpoints[0]
+    many = replace(
+        described,
+        endpoints=tuple(
+            replace(endpoint, bus=f"s_axi_{index}") for index in range(CONTROL_SLAVES + 1)
+        ),
+    )
+    vivado = FakeVivado()
+    with refused("control-slaves-exceeded", error=LinkerRefused):
+        build_pynq(parent, many, toolchain=cast(Toolchain, vivado))
+    assert vivado.runs == []
 
 
 #: A Vitis HLS that reports 2024.2 and, given a request, makes the solution's exported

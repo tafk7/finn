@@ -37,7 +37,6 @@ from finn.core.space.occurrence import ask, held
 from finn.core.space.results import Available, QueryResult, Unresolved
 from finn.custom_op.kernels.network import declaration
 from finn.custom_op.kernels.shell import row_offer
-from finn.kernels.budgets import _ClockRequirement, _DoubledAny, _PresentedSum, _Sum
 from finn.kernels.channels import Channel
 from finn.kernels.composer import clear_classes, compose
 from finn.kernels.configure import commit
@@ -49,6 +48,7 @@ from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port_model import InPort, OutPort, StreamPort, stream_ports
+from finn.kernels.shell_rules import _ClockRequirement, _DoubledAny, _Sum, _Windows
 from finn.kernels.thresholding import ThresholdingKernel
 from finn.kernels.vpc import VpcKernel
 from finn.platform.shells import shell_row
@@ -109,7 +109,7 @@ PORT_TYPES: dict[type[Space], dict[str, type[StreamPort]]] = {
     MemStreamKernel: {"set": InPort, "output": OutPort},
     Channel: {"outer_in": InPort, "outer_out": OutPort},
 }
-GROUP_TYPES = {_Sum, _PresentedSum, _DoubledAny, _ClockRequirement, ControlModel}
+GROUP_TYPES = {_Sum, _Windows, _DoubledAny, _ClockRequirement, ControlModel}
 
 
 def _group_scopes(records: Iterable[ScopeRecord]) -> set[ScopeRecord]:
@@ -177,10 +177,12 @@ def test_stage_7s_chain_of_eight_kernels_reads_alike_in_any_order_its_scopes_are
     # assembled native Ports and Control/budget Group namespaces are accounted separately,
     # with ownership checked. The ports count each channel's two outer ports, placed or not
     # (26 of the 296). The ip shell places no mover: no sum of movers' buses (2 fewer groups
-    # than when its two boundary channels each counted the movers they placed).
+    # than when its two boundary channels each counted the movers they placed). The shell's
+    # windows are each unit's, the core one unit: one concatenation where a sum stood for
+    # each of the four thresholdings' buses (3 fewer groups than when it summed them).
     assert len(_real_nonport_scopes(records)) == 214
     assert len(ports) == 296
-    assert len(_group_scopes(records)) == 53
+    assert len(_group_scopes(records)) == 50
 
 
 def _through_a_node_alias(key: str, reads: list[str]) -> bool:

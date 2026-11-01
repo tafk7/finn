@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """A partition's core in its shell (``finn.kernels.shell``): the core, a mover on each edge
-its row offers one on, a connection joining each, and the shell's budgets, as one design
+its row offers one on, a connection joining each, and the shell's rules, as one design
 space. On the Chain (``support.chain``), declared by hand: its edges stated by the
 ``IODMA_hls`` offer at a 128-bit port where a mover is placed, unstated on the ``ip``
 shell's, which places none.
@@ -19,13 +19,13 @@ from support.helpers import TEST_CORE, by_hand, choose, declared_by_hand
 
 from finn.core.space import Available, Inapplicable, Rejected, design_space
 from finn.kernels.base import Kernel
-from finn.kernels.budgets import SHELL, FixedShell, Scaled, ShellBudgets
 from finn.kernels.composer import ChannelDeclaration, DataflowCoreRefused, Facts
 from finn.kernels.dataflow_core import DataflowCoreKernel
 from finn.kernels.explore import CoreComposition, Seam
 from finn.kernels.iodma import IodmaIn, IodmaKernel, IodmaOut
 from finn.kernels.movers import iodma_hls
 from finn.kernels.shell import CORE, Connection, ShellKernel, shell
+from finn.kernels.shell_rules import SHELL, FixedShell, Scaled, ShellRules
 from finn.kernels.sides import Outside, Side
 from finn.kernels.utilization import Fit, total
 from finn.platform.capabilities import Resources
@@ -46,20 +46,22 @@ REGION = FixedShell(
 """A static region by hand: its interconnects scale with what they connect."""
 
 
-def row(*, fixed: FixedShell | None = REGION, **budgets: object) -> Mapping[str, object]:
-    """A shell's row as the shell holds it: the Zynq shell's budgets but ``budgets``, its
-    static region ``fixed``."""
+def row(*, fixed: FixedShell | None = REGION, **facts: object) -> Mapping[str, object]:
+    """A shell's row as the shell holds it: the Zynq shell's facts but ``facts``, its static
+    region ``fixed``."""
     return {
         "shell": "pynq",
-        "control_budget": 9,
-        "memory_ports": 0,
-        "clk2x": False,
+        "units": None,
+        "least_window": 4096,
+        "aperture": 0x1000_0000,
+        "targets": (("HP0", 16),),
+        "doubled": False,
         "fixed": fixed,
-        **budgets,
+        **facts,
     }
 
 
-IP = row(shell="ip", control_budget=None, memory_ports=None, clk2x=True, fixed=None)
+IP = row(shell="ip", least_window=None, aperture=None, targets=(), doubled=True, fixed=None)
 
 
 def stated(outside: Outside | None) -> dict[str, Facts | ChannelDeclaration]:
@@ -94,7 +96,7 @@ def test_a_shell_places_a_mover_on_each_edge_joined_by_a_connection() -> None:
     assert isinstance(getattr(point, CORE), DataflowCoreKernel)
     assert isinstance(point.in0, IodmaIn) and isinstance(point.out0, IodmaOut)  # type: ignore[attr-defined]
     assert isinstance(getattr(point, f"{CORE}_s_axis_0"), Connection)
-    assert isinstance(getattr(point, SHELL), ShellBudgets)
+    assert isinstance(getattr(point, SHELL), ShellRules)
     # Its movers take the offer; the core's class is its own, as outside a shell.
     assert point.in0.offer == point.out0.offer == OFFER  # type: ignore[attr-defined]
     core = by_hand(stated(OFFER.states()))
@@ -115,7 +117,7 @@ def test_one_class_serves_every_row_of_a_structure() -> None:
     placing no mover is another."""
     declared = declared_by_hand(stated(OFFER.states()))
     first = shell(declared, row=row(), offer=OFFER)
-    second = shell(declared, row=row(control_budget=2, fixed=None), offer=OFFER)
+    second = shell(declared, row=row(aperture=0x2000, fixed=None), offer=OFFER)
     bare = shell(declared_by_hand(stated(None)), row=IP)
     assert type(first) is type(second) and type(bare) is not type(first)
 
@@ -125,7 +127,7 @@ def test_an_edge_the_offer_does_not_state_is_no_shell_s() -> None:
         shell(declared_by_hand(stated(None)), row=row(), offer=OFFER)
 
 
-def test_a_row_states_every_budget() -> None:
+def test_a_row_states_every_fact() -> None:
     with pytest.raises(ValueError, match="a shell's row states"):
         shell(declared_by_hand(stated(None)), row={**IP, "unknown": 1})
 
@@ -159,7 +161,7 @@ def test_its_resources_are_its_core_s_its_movers_and_its_static_region_s() -> No
     point = in_pynq()
     core = point.core_answer(Kernel.resources)
     movers = [point.query(name, Kernel.resources) for name in point.movers]
-    region = point.query(SHELL, ShellBudgets.static_region)
+    region = point.query(SHELL, ShellRules.static_region)
     assert isinstance(core, Available) and isinstance(region, Available)
     assert all(isinstance(each, Available) for each in movers)
     # Two memory ports (the movers') and two AXI-Lite buses (the movers'): no kernel of
@@ -179,7 +181,7 @@ def test_a_static_region_is_refused_where_nothing_connects_to_it() -> None:
     """The Chain presents no AXI-Lite bus and initiates no memory port: placing no mover, a
     shell with a static region connects nothing to it."""
     point = configured(by_hand(stated(None), shell=row()))
-    region = point.query(SHELL, ShellBudgets.static_region)
+    region = point.query(SHELL, ShellRules.static_region)
     assert not isinstance(region, Available)
     assert [each.code for each in getattr(region, "findings", ())] == ["shell-resources"]
 
@@ -193,3 +195,28 @@ def test_a_connection_joins_one_stream_and_refuses_two() -> None:
     refusal = crossed.query(Connection.streams_meet)
     assert isinstance(refusal, Rejected)
     assert [each.code for each in refusal.findings] == ["connection-streams-differ"]
+
+
+def test_the_movers_memory_ports_bind_the_first_target_within_its_masters() -> None:
+    """Each mover binds the first memory target, as the integration binds them: the
+    Chain's two movers are refused in a shell whose first target takes one."""
+    targets = (("HP0", 1), ("HP1", 16))
+    point = configured(by_hand(stated(OFFER.states()), shell=row(targets=targets), offer=OFFER))
+    findings = list(getattr(point.validity(SHELL).result, "findings", ()))
+    assert [(each.code, each.owner) for each in findings] == [
+        ("memory-masters-exceeded", "within_memory_masters")
+    ]
+    assert "HP0 takes 1 mover ports; the partition's movers bind 2" in findings[0].message
+
+
+def test_the_movers_control_windows_are_placed_beside_the_core_s() -> None:
+    """Each mover presents a 64-byte window, which takes the least a unit takes (4 KiB):
+    the Chain's two span 8 KiB from the static region's base, its core presenting none. In
+    a shell addressing less, configuring the core is refused."""
+    point = configured(by_hand(stated(OFFER.states()), shell=row(aperture=0x2000), offer=OFFER))
+    assert point.validity(SHELL).status == "valid"
+    rules = point.member(SHELL)
+    assert (rules.windows, rules.core_windows) == ((64, 64), ())
+    narrow = by_hand(stated(OFFER.states()), shell=row(aperture=0x1FFF), offer=OFFER)
+    with pytest.raises(ValueError, match=r"control-window-exceeded: .* span 0x2000"):
+        configured(narrow)

@@ -26,7 +26,7 @@ stand in its way is made again with those choices cleared, and the seam sets eac
 choice it cleared or brought into play by the channel's policy (``finn.core.search.Seam.set``).
 A kernel's stored choice standing in the way (the neighbour's, or the changed kernel's own)
 refuses the change, naming it. The verdict reads every member's validity and, in a shell,
-its movers', its connections' and the shell member's (its budgets). ``held`` holds the keys
+its movers', its connections' and the shell member's (its rules). ``held`` holds the keys
 no strategy changes, with their values: those a ``Hold`` strategy fixes, for the rest of its
 list. Nothing is seeded from the body: the holds come from the strategies, and a
 verification takes the keys the search held from its record (``OUTPUT_SEARCH``,
@@ -173,7 +173,7 @@ class CoreComposition:
     member's policies (``owner``); and in a shell, its movers (``movers``: no members, but
     their cycles are costed beside the members' and their validity read by name), its
     connections and its shell member's name (``shell``: its validity read by its name, the
-    shell's budgets' rules).
+    shell's rules).
 
     A member's answers are read as its own space's were: its keys, and the owners of its
     findings, relative to it (``pe``, ``transport.fifo.depth``); a finding of another member
@@ -238,7 +238,7 @@ class CoreComposition:
 
     @property
     def shell(self) -> str | None:
-        """Its shell member's name (``finn.kernels.budgets.SHELL``), in a shell; None
+        """Its shell member's name (``finn.kernels.shell_rules.SHELL``), in a shell; None
         outside one. Not among its ``members``: its validity is read by its name
         (``validity``)."""
         return self.names.shell
@@ -396,7 +396,7 @@ class CoreComposition:
     def validity(self, name: str) -> inspection.Validity:
         """Member ``name``'s own validity inside the design space (``inspection.validity``):
         its pieces and findings relative to it. The shell member's by its name (``shell``):
-        its budgets, each a rule of its own."""
+        its limits, each a rule of its own."""
         found = inspection.validity(self.member(name))
         pieces = tuple(
             inspection.Piece(

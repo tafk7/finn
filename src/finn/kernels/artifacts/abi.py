@@ -308,6 +308,13 @@ class Bus:
 Pin = Union[Signal, Bus]
 
 
+def bus_window(bus: Bus) -> int | None:
+    """The bytes an AXI-Lite ``bus`` addresses, ``2**awaddr``; None where it has no
+    ``awaddr``."""
+    widths = [member.width for member in bus.signals if member.logical == "awaddr"]
+    return 1 << widths[0] if widths else None
+
+
 @dataclass(frozen=True, order=True)
 class ClockAlignment:
     """The bounded aligned-2x environment contract for two input clocks.
@@ -630,6 +637,7 @@ __all__ = [
     "Signal",
     "StandardProtocol",
     "abi_pins",
+    "bus_window",
     "check_against_rtl",
     "flip",
     "physical_names",

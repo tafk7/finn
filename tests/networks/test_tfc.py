@@ -44,9 +44,9 @@ from finn.core.space import Available, inspection
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import configured_network, mover_contracts
 from finn.kernels.artifacts.module import module_name
-from finn.kernels.budgets import SHELL, counts
 from finn.kernels.dataflow_core import DataflowCoreKernel
 from finn.kernels.explore import CoreComposition, Seam
+from finn.kernels.shell_rules import SHELL, counts
 from finn.toolchain.launcher import host_toolchain
 from finn.transformation.kernels import PackagePartition
 from finn.transformation.kernels.package import ElaboratePartition, boundary_facts, source_roots
@@ -301,10 +301,10 @@ def test_tfc_w2a2_binds_the_ultra96_platform(tfc_streamlined: Path, tmp_path: Pa
 
 # Partitions the whole network, a few seconds.
 @pytest.mark.slow
-def test_tfc_w2a2s_partition_holds_the_zynq_shells_budgets_as_its_rules(
+def test_tfc_w2a2s_partition_holds_the_zynq_shells_rules(
     tfc_streamlined: Path, tmp_path: Path
 ) -> None:
-    """TFC's partition in the Zynq shell holds the shell member (``finn.kernels.budgets``),
+    """TFC's partition in the Zynq shell holds the shell member (``finn.kernels.shell_rules``),
     which is no kernel or channel: in no module, persisted choice or cost. Its rules are
     the partition's: each MatMul's pumped core and each weight memory pumped are refused
     (``viable``, a change, the seam), the shell supplying no doubled clock, a core not
@@ -318,7 +318,8 @@ def test_tfc_w2a2s_partition_holds_the_zynq_shells_budgets_as_its_rules(
     assert not any(label.startswith(SHELL) for label, _ in module.value.fragment.instances)
     assert {owner for owner, _ in bound.chosen()} <= set(bound.members)
     assert set(Seam(ULTRA96.platform).cost(bound).cycles) == {*bound.members, *bound.movers}
-    assert counts(bound.member(SHELL)) == Available((2, 0, False))  # its two movers' buses
+    assert counts(bound.member(SHELL)) == Available(((), 0, False))  # the core's own: none
+    assert bound.member(SHELL).windows == (64, 64)  # its two movers'
     configured_network(body, "tfc")  # the netlist's count is the rules'
     states = dict(bound.states())
     chosen = bound.chosen()

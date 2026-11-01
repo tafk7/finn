@@ -32,7 +32,7 @@ from finn.platform.request import TargetRequest
 from finn.platform.resolve import refuse_drift, resolve_target
 from finn.platform.shells import MOVED, MoverKind, Offer, shell_row, shell_rows
 from finn.platform.target import Target
-from finn.shells.pynq.linker import PROCESSORS
+from finn.shells.pynq.linker import CONTROL_SLAVES, PROCESSORS
 from finn.shells.pynq.templates import custom_zynq_shell_template
 
 #: Each PYNQ board's part, DSP block and native AXI port width, as the deleted HWCustomOp
@@ -320,21 +320,24 @@ def test_the_ip_shell_is_the_default_with_a_doubled_clock_and_no_bound() -> None
     row = shell_row("ip", None)
     assert row.clocks.doubled and row.clocks.main == "ap_clk"
     assert row == shell_row("ip", "Ultra96") == shell_rows()["ip", None]
-    assert (row.offers, row.control_budget, row.memory_ports) == ((), None, None)
+    assert (row.offers, row.units, row.memory) == ((), None, ())
     assert (row.linker, row.runtimes, row.fixed, row.control) == (None, (), None, None)
 
 
-def test_the_pynq_row_states_its_movers_budgets_linker_and_fixed_shell() -> None:
+def test_the_pynq_row_states_its_movers_limits_linker_and_fixed_shell() -> None:
     row = shell_row("pynq", "Ultra96")
     mover = row_offer(row)
     assert mover == iodma_hls(128) and mover is not None and mover.frames_per_call == 1
-    assert (row.control_budget, row.memory_ports, row.clocks.doubled) == (9, 0, False)
+    assert (row.units, row.clocks.doubled) == (None, False)
+    assert [(each.name, each.width, each.masters) for each in row.memory] == [("HP0", 128, 16)]
     assert (row.linker, row.runtimes) == ("vivado-block-design", ("pynq",))
     assert row.fixed is not None and row.fixed.control_base == 0xA000_0000
-    assert row.control is not None and row.control.least_window == 4096
-    # The budget is the template's: its AXI-Lite interconnect takes nine buses.
+    assert row.control is not None
+    assert (row.control.least_window, row.control.aperture) == (4096, 0x1000_0000)
+    # The linker refuses what its template's AXI-Lite interconnect does not take: nine
+    # buses, before any tool runs.
     limit = re.search(r"if \{\$NUM_AXILITE > (\d+)\}", custom_zynq_shell_template)
-    assert limit is not None and int(limit.group(1)) == row.control_budget
+    assert limit is not None and int(limit.group(1)) == CONTROL_SLAVES
     target = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
     assert (target.shell, target.board) == ("pynq", "Ultra96")
     # The row owns the doubled clock; the target's platform is the part's and the

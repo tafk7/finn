@@ -328,12 +328,12 @@ def test_a_file_not_utf8_is_refused_as_one_that_does_not_parse(tmp_path: Path) -
 def test_a_shell_based_on_another_replaces_each_key_it_states(tmp_path: Path) -> None:
     path = declared(
         tmp_path,
-        '[shells.narrow]\nbased_on = "pynq"\ncontrol_budget = 4\n'
+        '[shells.narrow]\nbased_on = "pynq"\nunits = 4\n'
         '[shells.narrow.boards.Ultra96]\nboard_part = "avnet.com:ultra96v1:part0:1.2"\n',
     )
     found = load([path], environ=FINN_ONLY)
     narrow, pynq = shell_row("narrow", "Ultra96", found), shell_row("pynq", "Ultra96", found)
-    assert (narrow.control_budget, pynq.control_budget) == (4, 9)
+    assert (narrow.units, pynq.units) == (4, None)
     assert (narrow.fixed, narrow.supply, narrow.linker) == (pynq.fixed, pynq.supply, pynq.linker)
     # boards is a key like any other: the base's whole table is replaced.
     assert list(found.shell("narrow").boards) == ["Ultra96"]
@@ -343,7 +343,7 @@ def test_a_shell_based_on_another_replaces_each_key_it_states(tmp_path: Path) ->
 @pytest.mark.parametrize(
     "fact, named",
     [
-        ('control_budget = "nine"', "control_budget is a whole number"),
+        ('units = "nine"', "units is a whole number"),
         ('supply = [{ kind = "moved", movers = [{}] }]', "supply[0].movers[0] is a non-empty"),
         ('caveat = "on {board.missing}"', "caveat names {board} and {part} only"),
         ('clocks = { main = "", set_at = "build", doubled = false }', "main is a non-empty"),

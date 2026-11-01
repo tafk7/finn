@@ -93,7 +93,7 @@ resources), never bound into it.
 
 A core's resources are its members', as its class answers them (``Kernel.resources``). A
 core in its shell (``finn.custom_op.kernels.shell.shell_point``, ``finn.kernels.shell``) is a
-member of the shell's design space, beside its movers and the shell's budgets; the shell's
+member of the shell's design space, beside its movers and the shell's rules; the shell's
 resources (its members', its movers' and its static region's), and the cut's choices
 (``make_cut_choices``) on the core in its shell, are ``finn.custom_op.kernels.shell``'s.
 """

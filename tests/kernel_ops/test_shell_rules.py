@@ -1,25 +1,27 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The shell's budgets (``finn.kernels.budgets``): rules of the partition in its shell,
-over what its kernels and movers present, within what its shell's row takes.
+"""The shell's rules (``finn.kernels.shell_rules``): typed limits of the partition in its
+shell, over what its kernels and movers present, within what its shell's row gives.
 
-The Zynq shell (``pynq``) takes nine AXI-Lite buses, the partition's and its movers'
-together (each ``IODMA_hls`` mover presents one), gives a partition no memory port of its
-own and supplies no doubled clock; the ``ip`` shell bounds neither count and supplies
-the clock. Each refusal is named: ``interface-budget-exceeded``, ``clock-unavailable``,
-owned by the shell member's rule (``within_control_budget``, ``<member>-clock``). A value
-that breaks a budget is refused in the partition (``viable``, the seam), and a stored
-one leaves it refused (exploration and emission name it).
+The Zynq shell (``pynq``) addresses 256 MiB of control from its static region's base, each
+unit's window at least 4 KiB and aligned to itself; its movers bind HP0, which takes 16
+mover ports; the core initiates no memory port of its own; and it supplies no doubled
+clock. The ``ip`` shell bounds nothing and supplies the clock, but takes a stream-only core
+too. Each refusal is named, owned by the shell member's rule: ``control-window-exceeded``
+(``within_control_window``), ``memory-masters-exceeded`` (``within_memory_masters``),
+``units-exceeded`` (``within_units``), ``core-memory-port`` (``core_stream_only``),
+``clock-unavailable`` (``<member>-clock``). A value that breaks a rule is refused in the
+partition (``viable``, the seam), and a stored one leaves it refused (exploration and
+emission name it); a row narrowed by hand stands for a shell that takes less.
 
 No KernelOp names a control port, so a partition of KernelOps presents no AXI-Lite bus:
-the buses are counted here on a partition built from the kernels directly, AXI-Lite
-thresholdings each given its port. Emission checks the netlist's count (``bus_counts``,
-the pins its module would have, and the movers' buses) against the rules'
-(``finn.kernels.budgets.counts``). No kernel initiates a memory port (no bus protocol
-states one), so on a network that count is always zero: ``bus_counts`` is counted here on
-a netlist and boundary buses built directly, a boundary initiator beside the streams
-standing for a mover's memory port.
+the windows are counted here on a partition built from the kernels directly, AXI-Lite
+thresholdings each given its port. Emission checks the core's netlist's count
+(``netlist_counts``, the pins its module would have) against the rules'
+(``finn.kernels.shell_rules.counts``). No kernel initiates a memory port, so on a network
+that count is always zero: ``netlist_counts`` is counted here on a netlist and boundary
+buses built directly, a boundary initiator beside the streams standing for a memory port.
 """
 
 from __future__ import annotations
@@ -42,7 +44,7 @@ from support.helpers import (
 from support.models import MATMUL, chain_model, configure_partition, kernel_model
 from support.refusals import refused
 from support.tfc import ULTRA96
-from support.top_pins import bus_counts_of_abi
+from support.top_pins import netlist_counts_of_abi
 
 import finn.custom_op.kernels.shell as shell
 from finn.core.graph.annotations.platform import write_target
@@ -69,20 +71,37 @@ from finn.kernels.artifacts.ipxact import address_width
 from finn.kernels.artifacts.module import Abi, BusExport, Fragment, Leaf
 from finn.kernels.artifacts.top import module_abi
 from finn.kernels.base import Kernel
-from finn.kernels.budgets import SHELL, counts
 from finn.kernels.composer import Facts, Port, channel, member_name
 from finn.kernels.explore import CoreComposition, Seam, SizeFifos
 from finn.kernels.movers import MoverContract
+from finn.kernels.shell_rules import SHELL, counts, netlist_counts
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.resolve import resolve_target
-from finn.platform.shells import ShellRow, bus_counts, shell_row
+from finn.platform.shells import ShellRow, shell_row
 from finn.transformation.kernels import explore_kernel_choices
 from finn.transformation.kernels.cut import MakeCutChoices
 
 IP_ROW = shell_row("ip", None)
 PYNQ_ROW = shell_row("pynq", "Ultra96")
+
+
+def narrowed(
+    *, aperture: int | None = None, masters: int | None = None, units: int | None = None
+) -> ShellRow:
+    """Ultra96's pynq row, its control addressing ``aperture`` bytes, its memory target
+    taking ``masters`` mover ports or its shell placing ``units`` units, where given."""
+    row = PYNQ_ROW
+    if aperture is not None:
+        assert row.control is not None
+        row = replace(row, control=replace(row.control, aperture=aperture))
+    if masters is not None:
+        row = replace(row, memory=tuple(replace(each, masters=masters) for each in row.memory))
+    if units is not None:
+        row = replace(row, units=units)
+    return row
+
 
 UINT2 = DataType["UINT2"]
 TENSOR = Tensor((3, 2), ScalarEncoding(UINT2))
@@ -143,22 +162,26 @@ def movers_of(point: CoreComposition) -> tuple[MoverContract, ...]:
     return tuple(contract for _, contract in found.value)
 
 
-def netlist_counts(point: CoreComposition) -> tuple[int, int, bool]:
-    """The netlist's count (``bus_counts``), its movers' AXI-Lite buses added."""
+def core_counts(point: CoreComposition) -> tuple[tuple[int | None, ...], int, bool]:
+    """The core's netlist's count (``netlist_counts``)."""
     netlist = point.netlist()
     assert isinstance(netlist, Available), netlist
-    control, memory, doubled = bus_counts(*netlist.value)
-    return control + sum(mover.control_buses for mover in movers_of(point)), memory, doubled
+    return netlist_counts(*netlist.value)
 
 
-def test_an_eighth_axi_lite_bus_beside_two_movers_is_refused_in_the_zynq_shells_nine() -> None:
-    """Seven thresholdings presenting their buses and two movers fill the nine; the eighth's
-    bus is refused at the partition, by the shell member's rule (its text the shell's
-    budget's), where the netlist used to be checked once it was built: ``viable`` lists it
-    refused, and a change setting it is refused, by the partition and by the seam."""
-    point = thresholdings(8, PYNQ_ROW, presenting=7)
+NINE = narrowed(aperture=9 * 4096)
+"""The Zynq shell addressing nine 4 KiB windows."""
+
+
+def test_an_eighth_window_beside_two_movers_is_refused_in_a_shell_addressing_nine() -> None:
+    """Seven thresholdings presenting their buses and two movers fill nine 4 KiB windows,
+    each taking the least a unit takes; the eighth's is refused at the partition, by the
+    shell member's rule: ``viable`` lists it refused, and a change setting it is refused,
+    by the partition and by the seam."""
+    point = thresholdings(8, NINE, presenting=7)
     assert [mover.control_buses for mover in movers_of(point)] == [1, 1]
     assert point.validity(SHELL).status == "valid"
+    assert len(point.member(SHELL).windows) == 9
     ((_, viable),) = point.viable([("t7", "use_axilite")])
     ((value, broken),) = [
         (item.value, item.broken)
@@ -166,104 +189,131 @@ def test_an_eighth_axi_lite_bus_beside_two_movers_is_refused_in_the_zynq_shells_
         if isinstance(item, inspection.Refused)
     ]
     assert value is True
-    assert [point.pair("t7", rule.rule) for rule in broken] == [(SHELL, "within_control_budget")]
+    assert [point.pair("t7", rule.rule) for rule in broken] == [(SHELL, "within_control_window")]
     trial = point.trial({("t7", "use_axilite"): True})
     ((key, (found,)),) = trial.refused.items()
-    assert key == (SHELL, "within_control_budget")
+    assert key == (SHELL, "within_control_window")
     assert str(found) == (
-        "within_control_budget: interface-budget-exceeded: the 'pynq' shell takes 9 AXI-Lite "
-        "buses; the partition presents 8 and its movers 2"
+        "within_control_window: control-window-exceeded: the 'pynq' shell addresses 0x9000 "
+        "bytes of control; the partition's 10 control windows, each aligned to itself, span "
+        "0xa000"
     )
     changed = Seam().set(point, {("t7", "use_axilite"): True})
     assert isinstance(changed, Refused) and list(changed.why) == [key]
 
 
-def test_seven_and_two_movers_fill_the_budget_and_the_counts_agree() -> None:
-    point = thresholdings(7, PYNQ_ROW)
+def test_seven_and_two_movers_fill_nine_windows_and_the_counts_agree() -> None:
+    """The core's count is its own: its seven windows, as its netlist presents them; the
+    movers' are the rules' beside it."""
+    point = thresholdings(7, NINE)
     assert point.validity(SHELL).status == "valid"
-    assert (
-        counts(point.member(SHELL)) == Available(netlist_counts(point)) == Available((9, 0, False))
-    )
+    window = point.core.control_windows[0]
+    assert counts(point.member(SHELL)) == Available(core_counts(point))
+    assert core_counts(point) == ((window,) * 7, 0, False)
 
 
 def test_the_ip_shell_takes_the_same_partition_presenting_every_bus() -> None:
     point = thresholdings(8, IP_ROW)
     assert point.validity(SHELL).status == "valid"
     assert point.movers == ()
-    assert (
-        counts(point.member(SHELL)) == Available(netlist_counts(point)) == Available((8, 0, False))
-    )
+    window = point.core.control_windows[0]
+    assert counts(point.member(SHELL)) == Available(core_counts(point))
+    assert core_counts(point) == ((window,) * 8, 0, False)
     ports = [pin.name for pin in built(point, "shell").abi.pins if getattr(pin, "protocol", None)]
     assert [port for port in ports if port.endswith("_s_axilite")] == [
         f"t{index}_s_axilite" for index in range(8)
     ]
 
 
-def test_a_partition_of_kernel_ops_counts_its_movers() -> None:
-    """The Chain in the Zynq shell: no AXI-Lite bus of its own and two movers, within nine;
-    on a row taking one bus, its movers alone exceed it, so its partition reads refused by
-    the shell member, which exploration and emission name. Retargeted by hand, its new
-    movers are set as the cut sets them (``MakeCutChoices``)."""
+NARROWED = [
+    (
+        narrowed(aperture=0x1000),
+        "shell-aperture",
+        0x1000,
+        "within_control_window",
+        "control-window-exceeded",
+        "addresses 0x1000 bytes of control; the partition's 2 control windows, each aligned "
+        "to itself, span 0x2000",
+    ),
+    (
+        narrowed(masters=1),
+        "shell-targets",
+        (("HP0", 1),),
+        "within_memory_masters",
+        "memory-masters-exceeded",
+        "memory target HP0 takes 1 mover ports; the partition's movers bind 2",
+    ),
+    (
+        narrowed(units=2),
+        "shell-units",
+        2,
+        "within_units",
+        "units-exceeded",
+        "places 2 units; the partition takes 3, its core and 2 movers",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("narrow", "fact", "value", "rule", "code", "message"),
+    NARROWED,
+    ids=["control-window", "memory-masters", "units"],
+)
+def test_a_partition_of_kernel_ops_counts_its_movers(
+    narrow: ShellRow, fact: str, value: object, rule: str, code: str, message: str
+) -> None:
+    """The Chain in the Zynq shell: no AXI-Lite bus of its own and two movers, each
+    presenting a window and initiating a memory port, within the row; on a row narrowed
+    below them, its movers alone exceed it, so its partition reads refused by the shell
+    member, which exploration and emission name. Retargeted by hand, its new movers are
+    set as the cut sets them (``MakeCutChoices``)."""
     model = kernel_model()
     write_target(model, ULTRA96)
     model = model.transform(MakeCutChoices(CUT_NAME))
     explore_kernel_choices(model, name=CUT_NAME)
     configured_network(model, "chain")
-    narrow = replace(PYNQ_ROW, control_budget=1)
     with pytest.MonkeyPatch.context() as patched:
         patched.setattr(shell, "shell_row", lambda *_: narrow)
         bound = core_in_shell(model, model.graph.node, name="chain")
         assert shell.body_row(model) == narrow
-        assert root_facts(bound.point)["shell-control_budget"] == 1
+        assert root_facts(bound.point)[fact] == value
         # Refused, its class answers no view (its resources among them), so neither its
-        # shell's resources nor its seam's are answered: each is the budget's refusal. The
-        # counts the budget reads (its shell member's) are answered.
+        # shell's resources nor its seam's are answered: each is the rule's refusal. The
+        # counts its emission reads (its shell member's) are answered.
         resources = bound.own_resources()
         assert isinstance(resources, Rejected)
         seam = Seam().resources(bound)
         assert isinstance(seam, tuple)
         for findings in (resources.findings, seam):
-            assert [(f.code, f.owner) for f in findings] == [
-                ("interface-budget-exceeded", "within_control_budget")
-            ]
-        assert counts(bound.member(SHELL)) == Available((2, 0, False))
-        with refused(
-            "interface-budget-exceeded",
-            error=KernelOpError,
-            owner="within_control_budget",
-            message="the 'pynq' shell",
-        ) as explored:
+            assert [(f.code, f.owner) for f in findings] == [(code, rule)]
+        assert counts(bound.member(SHELL)) == Available(((), 0, False))
+        with refused(code, error=KernelOpError, owner=rule, message="the 'pynq' shell") as explored:
             explore_kernel_choices(model, name=CUT_NAME)
-        with refused(
-            "interface-budget-exceeded",
-            error=KernelOpError,
-            owner="within_control_budget",
-            message="takes 1 AXI-Lite buses; the partition presents 0 and its movers 2",
-        ) as packaged:
+        with refused(code, error=KernelOpError, owner=rule, message=message) as packaged:
             configured_network(model, "chain")
     # Each refusal carries the shell's findings alone, by code.
     for caught in (explored, packaged):
-        assert [f.code for f in caught.error.findings] == ["interface-budget-exceeded"]
+        assert [f.code for f in caught.error.findings] == [code]
 
 
 def test_a_refused_list_writes_nothing() -> None:
-    """A list of strategies whose result the shell's budgets refuse (the Chain on a row taking
-    one AXI-Lite bus, its movers alone exceeding it) leaves the model as it was: the choices
-    its entries made are not saved and no search's record is written. A partition a rule
-    refuses has no channel's neighbours (no view of a refused design point answers), so
-    ``SizeFifos`` refuses it before sizing, the budget's finding its cause."""
+    """A list of strategies whose result the shell's rules refuse (the Chain on a row
+    addressing one window, its movers alone exceeding it) leaves the model as it was: the
+    choices its entries made are not saved and no search's record is written. A partition a
+    rule refuses has no channel's neighbours (no view of a refused design point answers),
+    so ``SizeFifos`` refuses it before sizing, the rule's finding its cause."""
     model = kernel_model()
     write_target(model, ULTRA96)
     model = model.transform(MakeCutChoices(CUT_NAME))
     explore_kernel_choices(model, name=CUT_NAME)
     before = model.model.SerializeToString()
-    narrow = replace(PYNQ_ROW, control_budget=1)
+    narrow = narrowed(aperture=0x1000)
     with pytest.MonkeyPatch.context() as patched:
         patched.setattr(shell, "shell_row", lambda *_: narrow)
         with refused("fifos-refused", error=ExploreError, owner="size_fifos") as caught:
             explore_kernel_choices(model, [SizeFifos(margin=1)], name=CUT_NAME)
     assert [(each.code, each.owner) for each in caught.finding.causes] == [
-        ("interface-budget-exceeded", "shell.within_control_budget")
+        ("control-window-exceeded", "shell.within_control_window")
     ]
     assert model.model.SerializeToString() == before
     assert search_record(model)[0] == "current"  # the empty list's, written before
@@ -275,7 +325,7 @@ def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:
     which supplies ap_clk2x, and refused by Ultra96's pynq row, which does not:
     ``clock-unavailable``, by the MatMul's clock rule. In the Zynq shell the pumped value is
     refused at the partition; stored, it binds (bind is assignment), and emission names
-    the rule; on a row taking one bus as well, both budgets, each its finding."""
+    the rule; on a row addressing one window as well, both rules, each its finding."""
     model = kernel_model()
     pumped = {**MATMUL, "compute.packed.compute_pumping": True}
     first = model.graph.node[0].name
@@ -286,8 +336,9 @@ def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:
     assert point.module.abi.clock_alignments
     netlist = point.network.netlist()
     assert isinstance(netlist, Available)
-    assert bus_counts(*netlist.value) == bus_counts_of_abi(point.module.abi) == (0, 0, True)
-    assert counts(point.network.member(SHELL)) == Available((0, 0, True))
+    assert netlist_counts(*netlist.value) == netlist_counts_of_abi(point.module.abi)
+    assert netlist_counts(*netlist.value) == ((), 0, True)
+    assert counts(point.network.member(SHELL)) == Available(((), 0, True))
     write_target(model, ULTRA96)
     model = model.transform(MakeCutChoices(CUT_NAME))  # the movers the pynq row offers
     bound = core_in_shell(model, model.graph.node, name="chain")
@@ -307,32 +358,32 @@ def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:
         "shell does not supply",
     ):
         configured_network(model, "chain")
-    narrow = replace(PYNQ_ROW, control_budget=1)
+    narrow = narrowed(aperture=0x1000)
     with pytest.MonkeyPatch.context() as patched:
         patched.setattr(shell, "shell_row", lambda *_: narrow)
         with refused("clock-unavailable", error=KernelOpError, owner=rule) as both:
             configured_network(model, "chain")
     assert sorted(f.code for f in both.error.findings) == [
         "clock-unavailable",
-        "interface-budget-exceeded",
+        "control-window-exceeded",
     ]
 
 
 def test_emission_checks_the_netlists_count_against_the_rules() -> None:
-    """Stage 7's chain in the Zynq shell: the netlist's count and its movers' (two AXI-Lite
-    buses, no memory port, no doubled clock) are the rules'; a netlist counted otherwise
-    is refused, naming both counts."""
+    """Stage 7's chain in the Zynq shell: its core's netlist's count (no control window, no
+    memory port, no doubled clock) is the rules'; a netlist counted otherwise is refused,
+    naming both counts."""
     model = chain_model(4)
     write_target(model, ULTRA96)
     model = model.transform(MakeCutChoices(CUT_NAME))
     point, _ = configured_network(model, "chain")
-    assert counts(point.network.member(SHELL)) == Available((2, 0, False))
+    assert counts(point.network.member(SHELL)) == Available(((), 0, False))
     with pytest.MonkeyPatch.context() as patched:
-        patched.setattr(shell, "bus_counts", lambda *_: (1, 0, True))
+        patched.setattr(shell, "netlist_counts", lambda *_: ((4096,), 0, True))
         with refused(
             "shell-counts-differ",
             error=KernelOpError,
-            message=r"\(3, 0, True\) is not the shell's rules' \(2, 0, False\)",
+            message=r"\(\(4096,\), 0, True\) is not the shell's rules' \(\(\), 0, False\)",
         ):
             configured_network(model, "chain")
 
@@ -363,14 +414,13 @@ def test_one_class_serves_every_shells_row_and_one_core_class_every_shell() -> N
 
 
 def test_the_counts_are_the_modules_pins() -> None:
-    """The shell counts the netlist (``bus_counts``) as the module's pins count
-    (``bus_counts_of_abi``): each thresholding's AXI-Lite bus, no memory port, no doubled
-    clock."""
+    """The shell counts the netlist (``netlist_counts``) as the module's pins count
+    (``netlist_counts_of_abi``): each thresholding's AXI-Lite bus's window, no memory port,
+    no doubled clock."""
     point = thresholdings(3, IP_ROW)
-    netlist = point.netlist()
-    assert isinstance(netlist, Available)
     module = built(point, "shell")
-    assert bus_counts(*netlist.value) == bus_counts_of_abi(module.abi) == (3, 0, False)
+    window = point.core.control_windows[0]
+    assert core_counts(point) == netlist_counts_of_abi(module.abi) == ((window,) * 3, 0, False)
 
 
 def test_each_bus_presented_takes_the_window_its_module_states() -> None:
@@ -405,16 +455,22 @@ def test_the_shells_netlist_presents_each_bus_with_its_writes() -> None:
     assert all(len(item.registers.writes) == 6 for item in exports)
 
 
-def lite(name: str, endpoint: Endpoint, clock: str, reset: str) -> Bus:
-    """An AXI-Lite bus ``name`` of a write handshake, on ``clock`` and ``reset``."""
-    return Bus(
-        name,
-        StandardProtocol.AXILITE,
-        (Member("awvalid", f"{name}_awvalid"), Member("awready", f"{name}_awready")),
-        endpoint,
-        associated_clock=clock,
-        associated_reset=reset,
+def handshake(
+    name: str, protocol: StandardProtocol, endpoint: Endpoint, clock: str, reset: str
+) -> Bus:
+    """A ``protocol`` bus ``name`` of a write handshake and 12 address bits, on ``clock``
+    and ``reset``."""
+    members = (
+        Member("awvalid", f"{name}_awvalid"),
+        Member("awready", f"{name}_awready"),
+        Member("awaddr", f"{name}_awaddr", 12),
     )
+    return Bus(name, protocol, members, endpoint, associated_clock=clock, associated_reset=reset)
+
+
+def lite(name: str, endpoint: Endpoint, clock: str, reset: str) -> Bus:
+    """An AXI-Lite bus ``name`` (``handshake``): a 4 KiB window where it is a target."""
+    return handshake(name, StandardProtocol.AXILITE, endpoint, clock, reset)
 
 
 def stream(name: str, endpoint: Endpoint) -> Bus:
@@ -448,17 +504,19 @@ def core(*, pumped: bool) -> Leaf:
 
 
 @pytest.mark.parametrize(
-    ("pumped", "expected"), [(False, (2, 1, False)), (True, (2, 1, True))], ids=["plain", "pumped"]
+    ("pumped", "expected"),
+    [(False, ((4096,), 1, False)), (True, ((4096,), 1, True))],
+    ids=["plain", "pumped"],
 )
 def test_a_boundary_initiator_beside_the_streams_is_a_memory_port(
-    pumped: bool, expected: tuple[int, int, bool]
+    pumped: bool, expected: tuple[tuple[int, ...], int, bool]
 ) -> None:
     """A netlist and its boundary built directly, as a boundary mover's memory port would
-    present one: no network has a bus initiator beside its streams. The protocols name no
-    AXI-MM, so the initiator is an AXI-Lite one (``m_axi_gmem``), which counts both as a
-    memory port and as an AXI-Lite bus; the leaf's presented AXI-Lite bus is the other; the
-    two streams count nothing. A pumped leaf takes the doubled clock. The shell's count
-    (``bus_counts``) is the top's pins' (``bus_counts_of_abi``)."""
+    present one: no network has a bus initiator beside its streams. The AXI4 initiator
+    (``m_axi_gmem``) is a memory port, and takes no control window; an AXI-Lite initiator
+    (``m_axi_lite``) is neither; the leaf's presented AXI-Lite bus takes its 4 KiB window;
+    the two streams count nothing. A pumped leaf takes the doubled clock. The shell's count
+    (``netlist_counts``) is the top's pins' (``netlist_counts_of_abi``)."""
     fragment = Fragment(
         (("core", core(pumped=pumped)),),
         exports=(BusExport("core", lite("cfg", Endpoint.TARGET, "clk", "rst"), "core_s_axilite"),),
@@ -466,7 +524,8 @@ def test_a_boundary_initiator_beside_the_streams_is_a_memory_port(
     boundary = (
         stream("s_axis_0", Endpoint.TARGET),
         stream("m_axis_0", Endpoint.INITIATOR),
-        lite("m_axi_gmem", Endpoint.INITIATOR, "ap_clk", "ap_rst_n"),
+        handshake("m_axi_gmem", StandardProtocol.AXIMM, Endpoint.INITIATOR, "ap_clk", "ap_rst_n"),
+        lite("m_axi_lite", Endpoint.INITIATOR, "ap_clk", "ap_rst_n"),
     )
     abi = module_abi(fragment, boundary)
-    assert bus_counts(fragment, boundary) == bus_counts_of_abi(abi) == expected
+    assert netlist_counts(fragment, boundary) == netlist_counts_of_abi(abi) == expected

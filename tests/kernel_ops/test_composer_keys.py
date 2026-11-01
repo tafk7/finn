@@ -23,9 +23,9 @@ from finn.core.graph.partition import CUT_NAME
 from finn.core.space import inspection
 from finn.custom_op.kernels.network import declaration
 from finn.custom_op.kernels.shell import make_cut_choices, row_facts, row_offer
-from finn.kernels.budgets import SHELL
 from finn.kernels.dataflow_core import names_of
 from finn.kernels.shell import ShellKernel, shell
+from finn.kernels.shell_rules import SHELL
 from finn.platform.resolve import resolve_target
 from finn.platform.shells import shell_row
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps

@@ -17,9 +17,11 @@ from support.models import zynq_parent
 from support.packaging import FakeVivado
 from support.refusals import refused
 
+from finn.kernels.shell_rules import placed_windows
 from finn.platform.shells import shell_row
 from finn.shells.integration import Integration, IntegrationError, IpRef, describe
 from finn.shells.pynq.linker import (
+    CONTROL_SLAVES,
     Address,
     BlockDesignLinker,
     LinkerRefused,
@@ -161,6 +163,50 @@ def test_the_block_design_assigns_each_control_bus_the_address_it_returns(
         0xA001_0000,
         0xA002_0000,
     ]
+
+
+def test_the_block_design_places_each_window_as_the_shell_s_rules_do(
+    described: Integration,
+) -> None:
+    """A 64 KiB window between two of 4 KiB: each is placed after the last, aligned to
+    itself, at the offsets the shell's rules span (``placed_windows``), the one function
+    both read."""
+    ranges = (0x1000, 0x1_0000, 0x1000)
+    mixed = replace(
+        described,
+        endpoints=tuple(
+            replace(each, range=size) for each, size in zip(described.endpoints, ranges)
+        ),
+    )
+    row = linked_row(mixed)
+    assert row.fixed is not None
+    offsets = [each.offset for each in placement(mixed, row)]
+    assert offsets == [0xA000_0000, 0xA001_0000, 0xA002_0000]
+    assert tuple(offsets) == placed_windows(ranges, row.fixed.control_base)
+
+
+def test_more_control_buses_than_its_interconnect_takes_are_refused(
+    described: Integration,
+) -> None:
+    """The block design's control interconnect takes nine AXI-Lite buses: a description
+    placing ten is refused by the linker, before any tool runs."""
+    endpoint = described.endpoints[0]
+    many = replace(
+        described,
+        endpoints=tuple(
+            replace(endpoint, bus=f"s_axi_{index}") for index in range(CONTROL_SLAVES + 1)
+        ),
+    )
+    with refused(
+        "control-slaves-exceeded",
+        error=LinkerRefused,
+        owner="vivado-block-design",
+        message="the description places 10 AXI-Lite buses; the block design's control "
+        "interconnect takes 9",
+    ):
+        wiring(many, linked_row(many))
+    nine = replace(many, endpoints=many.endpoints[:CONTROL_SLAVES])
+    assert len([each for each in wiring(nine, linked_row(nine)) if each.kind == "axilite"]) == 9
 
 
 def test_a_selection_the_block_design_does_not_wire_is_refused_by_name(

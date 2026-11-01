@@ -20,13 +20,12 @@ states in their place. The facts:
   does) and the runtimes it offers, the first the default;
 - ``versions``: the linker's tool releases, narrowed for this board (``Versions``);
 - ``board_facts``: what the linker needs of this board (its ``board_keys``);
-- ``fixed``: its own logic and that logic's cost (``finn.kernels.budgets.FixedShell``);
+- ``fixed``: its own logic and that logic's cost (``finn.kernels.shell_rules.FixedShell``);
 - ``characterised`` and ``caveat``: where its cost was characterised and the shell built
-  and timed, and what that does not cover on this board;
-- ``control_budget`` and ``memory_ports``: the AXI-Lite buses the partition and its
-  movers may present together, and the memory ports the partition may initiate beside
-  its movers' (``None``: no bound), which the partition's shell rules read
-  (``finn.kernels.budgets``).
+  and timed, and what that does not cover on this board.
+
+The partition's rules in its shell (``finn.kernels.shell_rules``) read its ``units``, its
+``control`` and its ``memory`` as typed limits, and its ``clocks``' doubled clock.
 
 ``ip`` is the packaged IP for the user to integrate, on any part. ``pynq`` is the Zynq
 block design, one row per board it supports. Any other shell is a declaration's.
@@ -35,17 +34,14 @@ block design, one row per board it supports. Any other shell is a declaration's.
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import partial
 from string import Formatter
 from typing import Any, TypeVar
 
-from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
-from finn.kernels.artifacts.module import Fragment
-from finn.kernels.artifacts.top import doubled, top_buses
-from finn.kernels.budgets import FixedShell, Scaled
 from finn.kernels.movers import PLACED_KINDS, MoverOffer
+from finn.kernels.shell_rules import FixedShell, Scaled
 from finn.kernels.utilization import Fit
 from finn.platform import _stated as valid
 from finn.platform.capabilities import RESOURCE_NAMES, Resources
@@ -172,31 +168,11 @@ class ShellRow:
     fixed: FixedShell | None
     characterised: str | None
     caveat: str | None
-    control_budget: int | None
-    memory_ports: int | None
 
     @property
     def offers(self) -> tuple[Offer, ...]:
         """Its supply offers, then its delivery offers."""
         return self.supply + self.delivery
-
-
-def bus_counts(fragment: Fragment, boundary: Iterable[Bus]) -> tuple[int, int, bool]:
-    """What the top of ``fragment`` and its ``boundary`` buses asks of a shell, counted
-    from the pins it would have (``finn.kernels.artifacts.top``) without building it: the
-    AXI-Lite buses it presents, the AXI memory ports it initiates (a bus beside its streams
-    that it initiates: a boundary bus, since each presented bus is a target port), and
-    whether it takes an aligned doubled clock (an instance's doubled clock, ``doubled``).
-    The budgets are rules of the partition in its shell, over its members' derived values
-    (``finn.kernels.budgets``); emission checks this count against theirs, and the fixed
-    shell is sized by it."""
-    buses = top_buses(fragment, boundary)
-    control = sum(bus.protocol is StandardProtocol.AXILITE for bus in buses)
-    memory = sum(
-        bus.protocol is not StandardProtocol.AXIS and bus.endpoint is Endpoint.INITIATOR
-        for bus in buses
-    )
-    return control, memory, doubled(fragment)
 
 
 # -- a row from its declaration ----------------------------------------------------------
@@ -214,8 +190,6 @@ _FACTS = {
     "characterised",
     "timed",
     "caveat",
-    "control_budget",
-    "memory_ports",
 }
 """The facts a shell states, and its entry for a board may state in their place."""
 
@@ -390,8 +364,6 @@ def _facts(stated: Mapping[str, Any], where: str, declared: Declarations) -> dic
         "characterised": valid.text,
         "timed": valid.texts,
         "caveat": _caveat,
-        "control_budget": valid.count,
-        "memory_ports": valid.count,
     }
     unknown = sorted(set(stated) - _FACTS)
     if unknown:
@@ -474,8 +446,6 @@ def _row(shell: Shell, board: str | None, declared: Declarations) -> ShellRow:
         fixed=facts.get("fixed"),
         characterised=facts.get("characterised"),
         caveat=caveat,
-        control_budget=facts.get("control_budget"),
-        memory_ports=facts.get("memory_ports"),
     )
 
 
@@ -651,7 +621,6 @@ __all__ = [
     "Offer",
     "ShellRow",
     "Versions",
-    "bus_counts",
     "mover_offer",
     "own_facts",
     "placed_offer",

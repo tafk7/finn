@@ -170,7 +170,7 @@ LAYERS: tuple[Layer, ...] = (
     ),
     # The platform registry: parts, boards and shell rows, resolved to the build's target
     # (finn.platform.target), the capabilities kernels read with the part, shell and
-    # board. A partition's network in its shell reads its row, whose budgets a module's pins
+    # board. A partition's network in its shell reads its row, whose limits a module's pins
     # (finn.kernels.artifacts) are held to. A refusal carries its finding
     # (finn.core.reporting).
     Layer(
@@ -434,15 +434,14 @@ LAYERS: tuple[Layer, ...] = (
     # The finn-dev oracle's captures (scripts/oracle): the standard library only. The
     # kernel tests compare with the HWCustomOp flow's values through it.
     Layer("tests.oracle", ("oracle",), (), (), "tests/kernels"),
-    # The shell's bus counts (finn.platform.shells.bus_counts) checked against the top's
-    # pins on every netlist a test reads, the fixture the kernel and the kernel-op tests'
-    # conftests import: the one place the kernel tests reach the platform registry. The
-    # counts' oracle: emission checks the shell's rules' counts (finn.kernels.budgets)
-    # against these.
+    # The shell's netlist counts (finn.kernels.shell_rules.netlist_counts) checked against
+    # the top's pins on every netlist a test reads, the fixture the kernel and the
+    # kernel-op tests' conftests import. The counts' oracle: emission checks the shell's
+    # rules' counts (finn.kernels.shell_rules.counts) against these.
     Layer(
         "tests.top_pins",
         ("support.top_pins",),
-        (*_KERNEL_STACK, "platform"),
+        _KERNEL_STACK,
         ("pytest",),
         "tests/kernels",
     ),

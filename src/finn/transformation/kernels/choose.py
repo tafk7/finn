@@ -29,8 +29,8 @@ fills a value in but a strategy):
   dropped as stale, where the seam refuses it (``pin-refused``, the bind's findings first
   among its causes); a held key not at its held value at the end (``held-not-kept``,
   ``Seam.unkept``); a network a member's validity refuses (``Seam.refusals``), its shell's
-  budgets among them (its shell member's rules: its AXI-Lite buses, memory ports and doubled
-  clock against the shell's row), by name (a ``KernelOpError`` carrying their findings);
+  rules among them (its shell member's: its units, control windows, memory ports and
+  doubled clock against the shell's row), by name (a ``KernelOpError`` carrying their findings);
 - persists every value of the network where it is stated, each owner's whole
   (``persist``): a kernel's on its node, a channel's on its tensor (``finn.channel``);
   a required choice no strategy set stays open, and emission refuses it by name

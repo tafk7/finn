@@ -38,8 +38,8 @@ stream side, the free side's contract:
   cycles a call with a converter, 13 without; the call ends two converter words
   before the stream runs dry, or once its last word left);
 - it presents one AXI-Lite bus to the shell's processor (its ``s_axi_control``),
-  which the shell's budget check counts against its budget beside the
-  partition's (``MoverContract.control_buses``);
+  whose window the shell's rules place beside the partition's
+  (``MoverContract.control_buses``);
 - the memory latency ``L`` is **excluded**: the shell does not know it, and each call
   adds it (``MEMORY_LATENCY``, what the exploration report states). A frame a call is
   the bound that holds for any batch, since the batch is the driver's runtime argument;

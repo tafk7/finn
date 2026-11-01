@@ -81,8 +81,8 @@ def test_a_memory_case_the_device_cannot_build_is_refused_by_name() -> None:
 def test_a_doubled_clock_is_the_shells_not_the_platforms() -> None:
     """The platform carries no doubled clock (the shell row owns it, and the shell
     supplies it): a KernelOp offers a pumped memory on any target, and its partition in
-    the Zynq shell, which supplies none, refuses it by the shell's budget
-    (``clock-unavailable``, the weight channel's clock rule; ``test_shell_budgets``)."""
+    the Zynq shell, which supplies none, refuses it by the shell's rule
+    (``clock-unavailable``, the weight channel's clock rule; ``test_shell_rules``)."""
     assert "clk2x" not in {item.name for item in fields(Platform)}
     model = targeted(matmul_model(), TARGET)
     configured(model, {"first": MATMUL})

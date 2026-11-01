@@ -59,7 +59,7 @@ from finn.core.reporting.findings import Finding, FindingKind, Refusal
 from finn.core.space import Available
 from finn.custom_op.kernels.shell import configured_network, mover_contracts, refuse_unverified
 from finn.dataflow.tensor import ScalarEncoding
-from finn.kernels.artifacts.abi import Bus, StandardProtocol
+from finn.kernels.artifacts.abi import Bus, StandardProtocol, bus_window
 from finn.kernels.artifacts.ipxact import vlnv
 from finn.kernels.artifacts.module import Leaf, module_name
 from finn.kernels.library import library_module
@@ -304,14 +304,14 @@ class IntegrationError(Refusal):
 def _range(bus: Bus, least: int) -> int:
     """The bytes an AXI-Lite ``bus`` takes: ``2**awaddr``, and ``least`` at least. A bus with
     no ``awaddr`` is refused, naming it."""
-    widths = [signal.width for signal in bus.signals if signal.logical == "awaddr"]
-    if not widths:
+    window = bus_window(bus)
+    if window is None:
         raise IntegrationError(
             "bus-aperture-unknown",
             "describe",
             f"{bus.name}: an AXI-Lite bus with no awaddr has no aperture",
         )
-    return max(1 << widths[0], least)
+    return max(window, least)
 
 
 #: A mover's pins by their role: its stream, its memory port and its control bus.

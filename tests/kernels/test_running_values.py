@@ -95,11 +95,11 @@ from finn.dataflow.streams import Stream
 from finn.dataflow.traversal import LevelEnd, Repetition
 from finn.kernels import composer
 from finn.kernels.artifacts.abi import Clocking, Direction, Endpoint
-from finn.kernels.budgets import FixedShell, Scaled
 from finn.kernels.laws import AXIS_CLOCKING, NATIVE, Axis, AxisSpelling, Interval, Native, Standing
 from finn.kernels.matmul import KnownWeights
 from finn.kernels.movers import iodma_hls
 from finn.kernels.port import LoopEnds, PhysicalPort, stream_pins
+from finn.kernels.shell_rules import FixedShell, Scaled
 from finn.kernels.sides import Side, SideKind
 from finn.kernels.transport import MarkerKind
 from finn.kernels.utilization import Fit

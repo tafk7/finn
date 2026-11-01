@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """A partition's core in its shell: the core, the movers on its edges and the shell's
-budgets, as one design space.
+rules, as one design space.
 
 A shell's design space (``ShellKernel``) is a kernel of members only, no module of its own
 and no stream port: the shell itself is integrated by its linker (``finn.shells``), never
@@ -30,11 +30,13 @@ choices on it, each at its path below the core). Its members:
   of the shell, by the base's connection rules (``finn.kernels.base``), with no hardware of
   its own. Without movers (the ``ip`` shell) the shell presents the core's edge ports as
   its own, each by a node alias of its name;
-- **its budgets** (``shell``, ``finn.kernels.budgets.SHELL``): the row's facts, each a root
-  Param (``shell-control_budget``; ``ShellBudgets``' formals, given by ``row``), and each
-  contributor's derived value bound to it: the core's kernels' and channels' control buses,
-  memory initiators and doubled clock, each by its member's name in the core, and each
-  mover's control buses and memory port, by the mover's name.
+- **its rules** (``shell``, ``finn.kernels.shell_rules.SHELL``): the row's facts, each a
+  root Param (``shell-aperture``; ``ShellRules``' formals, given by ``row``), the units it
+  places (``shell-placed``: its core and its movers), and each contributor's derived value
+  bound to it: the control windows of the input movers, the core and the output movers, in
+  that order, each by its unit's name; the core's kernels' memory initiators and its
+  kernels' and channels' doubled clock, each by its member's name in the core; and each
+  mover's memory port, by the mover's name.
 
 Its class facts are its names (``ShellKernel.names``, ``finn.kernels.dataflow_core.Names``:
 its core's, below ``CORE``, with the shell member and the movers and connections beside it)
@@ -44,8 +46,8 @@ connection's name taken by a member of the core is refused, as a name the compos
 
 Its answers are its members': its cycles a frame the most any member takes
 (``Kernel.frame_cycles``: a mover's are its stated rate's), its resources its members' with
-its static region's (``resource_use``: ``ShellBudgets.static_region``), and its rules every
-member's, its budgets among them.
+its static region's (``resource_use``: ``ShellRules.static_region``), and its rules every
+member's, the shell's among them.
 
 The class is made once per structure, kept by its key (the engine's test modes, the core's
 class, and whether movers are placed) in a cache bounded as the composer's
@@ -80,18 +82,7 @@ from finn.core.space import (
 )
 from finn.core.space.compiler import compile_model
 from finn.kernels.artifacts.module import Fragment
-from finn.kernels.base import Kernel, may_present_bus
-from finn.kernels.budgets import (
-    DOUBLED,
-    INITIATORS,
-    MEMORY,
-    MOVER,
-    PRESENTED,
-    SHELL,
-    ShellBudgets,
-    contributor,
-    shell_members,
-)
+from finn.kernels.base import Kernel
 from finn.kernels.composer import (
     CLASS_CACHE_BOUND,
     DataflowCoreDeclaration,
@@ -105,6 +96,16 @@ from finn.kernels.dataflow_core import DataflowCoreKernel, Names, root_name
 from finn.kernels.iodma import IodmaIn, IodmaKernel, IodmaOut
 from finn.kernels.movers import MoverOffer
 from finn.kernels.port import stream_port
+from finn.kernels.shell_rules import (
+    DOUBLED,
+    INITIATORS,
+    MEMORY,
+    SHELL,
+    WINDOWS,
+    ShellRules,
+    contributor,
+    shell_members,
+)
 from finn.kernels.sides import Side, SideKind
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
@@ -146,7 +147,7 @@ class Connection(Kernel):
 
 class ShellKernel(Kernel):
     """A partition's core in its shell (the module docstring): its core (``CORE``), its
-    movers and their connections, and its budgets (``SHELL``). A sealed kernel: the
+    movers and their connections, and its rules (``SHELL``). A sealed kernel: the
     composer of a shell (``shell``) makes its classes."""
 
     id = "finn.shell"
@@ -155,7 +156,7 @@ class ShellKernel(Kernel):
     names: ClassVar[Names]
     movers: ClassVar[Mapping[str, str]] = MappingProxyType({})
 
-    regions = Members(ShellBudgets.static_region)
+    regions = Members(ShellRules.static_region)
 
     @view
     def netlist(self) -> Fragment | Rejected:
@@ -169,7 +170,7 @@ class ShellKernel(Kernel):
 
     @view
     def resource_use(self) -> Resources:
-        """Its static region's, each IP out of context (``ShellBudgets.static_region``):
+        """Its static region's, each IP out of context (``ShellRules.static_region``):
         its members state their own."""
         return total(used for region in self.regions for _, used in region.value)
 
@@ -287,7 +288,7 @@ def _made(
         # The ip shell: the core's edge ports are the shell's.
         for _, port, _ in _edges(declared):
             members[port] = getattr(core_node, port)
-    members[SHELL] = _budgets(
+    members[SHELL] = _rules(
         declared, core_names, core_node, members, units, digest, params, annotations, roots
     )
     table = Names(
@@ -311,7 +312,7 @@ def _made(
     )
 
 
-def _budgets(
+def _rules(
     declared: DataflowCoreDeclaration,
     core_names: Names,
     core_node: Any,
@@ -322,25 +323,29 @@ def _budgets(
     annotations: dict[str, object],
     roots: dict[str, Key],
 ) -> object:
-    """The shell member (``finn.kernels.budgets``): the row's facts, each a root Param
-    (added to ``params``, ``annotations`` and ``roots``), and each contributor's Param bound
-    to its member's derived value."""
-    given: dict[str, object] = {}
-    for fact, formal in space_formals(ShellBudgets).items():
+    """The shell member (``finn.kernels.shell_rules``): the row's facts, each a root Param
+    (added to ``params``, ``annotations`` and ``roots``), the units it places, and each
+    contributor's Param bound to its member's derived value."""
+    given: dict[str, object] = {"placed": 1 + len(units)}
+    for fact, formal in space_formals(ShellRules).items():
+        if fact == "placed":
+            continue
         root = root_name(SHELL, fact)
         params[root] = given[fact] = Param()
         annotations[root] = declared_annotation(formal, "Param")
         roots[root] = (SHELL, fact)
-    presented: list[str] = []
+    entering = [unit for unit, (_, _, enters) in units.items() if enters]
+    leaving = [unit for unit, (_, _, enters) in units.items() if not enters]
+    windows = [*entering, CORE, *leaving]
+    for unit in (*entering, *leaving):
+        given[contributor(unit, WINDOWS)] = cast(Any, members[unit]).control_windows
+    given[contributor(CORE, WINDOWS)] = core_node.control_windows
     initiators: list[str] = []
     doubled: list[str] = []
     for owner in (*declared.kernels, *declared.channels):
         member = core_names.members[owner]
         node = getattr(core_node, member)
         space_type = _class_of(declared, owner)
-        if may_present_bus(space_type):
-            presented.append(member)
-            given[contributor(member, PRESENTED)] = node.control_buses
         if owner in declared.kernels and _states(space_type, "memory_initiators"):
             initiators.append(member)
             given[contributor(member, INITIATORS)] = node.memory_initiators
@@ -351,13 +356,11 @@ def _budgets(
             doubled.append(member)
             given[contributor(member, DOUBLED)] = node.takes_doubled_clock
     for unit in units:
-        mover = cast(Any, members[unit])
-        given[contributor(unit, MOVER)] = mover.control_buses
-        given[contributor(unit, MEMORY)] = mover.memory_initiators
+        given[contributor(unit, MEMORY)] = cast(Any, members[unit]).memory_initiators
     found, typed = shell_members(
-        presented=presented, movers=tuple(units), initiators=initiators, doubled=doubled
+        windows=windows, core=CORE, movers=tuple(units), initiators=initiators, doubled=doubled
     )
-    made = composite(f"Shell_{digest}", found, base=ShellBudgets, annotations=typed)
+    made = composite(f"Shell_{digest}", found, base=ShellRules, annotations=typed)
     return cast(Any, made)(**given)
 
 
@@ -368,11 +371,12 @@ def shell(
     offer: MoverOffer | None = None,
 ) -> ShellKernel:
     """``declared``'s core in its shell (the module docstring): its row's facts (``row``,
-    ``ShellBudgets``' formals by name) and the mover it offers on each edge (``offer``;
+    ``ShellRules``' formals by name, but the units it places) and the mover it offers on
+    each edge (``offer``;
     None: none, the ``ip`` shell). One design space of its class, nothing chosen; a
     ``DataflowCoreRefused`` naming each reason it cannot be, the core's or a name its
     shell takes (``name-reserved``)."""
-    formals = set(space_formals(ShellBudgets))
+    formals = set(space_formals(ShellRules)) - {"placed"}
     if set(row) != formals:
         raise ValueError(f"a shell's row states {sorted(formals)}, not {sorted(row)}")
     core = compose(declared)
