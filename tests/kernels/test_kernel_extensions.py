@@ -30,12 +30,12 @@ from finn.core.space.semantics import annotation_type, canonical
 from finn.dataflow.datatypes import QONNXDataType, resolve_qonnx_datatype_name
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
-from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.abi import Direction
 from finn.kernels.base import Kernel
 from finn.kernels.configure import chosen, commit
 from finn.kernels.laws import AXIS
-from finn.kernels.port import port_endpoint, port_side
-from finn.kernels.port_model import StreamPort, stream_ports
+from finn.kernels.port import port_direction, stream_port
+from finn.kernels.port_model import InPort, OutPort, stream_ports
 from finn.kernels.values.domains import Integer
 
 
@@ -64,9 +64,10 @@ def test_kernel_identity_is_validated_at_class_creation() -> None:
     # The base's views; a kernel that binds no module and places none has no netlist.
     empty = design_space(Empty())
     assert views(empty) == [
+        "assumed",
         "buffering",
         "bus_control",
-        "cycles",
+        "frame_cycles",
         "held_bits",
         "module_data",
         "module_sources",
@@ -208,13 +209,12 @@ def test_port_discovery_reads_lexical_groups_without_implicit_child_lowering() -
     sequence = BeatSequence(vector_major((2, 4), 4))
 
     class Child(Space):
-        inner = StreamPort(transport=AXIS, label="inner", tensor=tensor, sequence=sequence)
+        inner = InPort(transport=AXIS, label="inner", tensor=tensor, sequence=sequence)
 
     class Included(Group):
-        nested = StreamPort(
+        nested = OutPort(
             transport=AXIS,
             label="nested",
-            endpoint=Endpoint.INITIATOR,
             tensor=tensor,
             sequence=sequence,
         )
@@ -228,8 +228,8 @@ def test_port_discovery_reads_lexical_groups_without_implicit_child_lowering() -
     # Groups are the parent's lexical frame, not children. Real child scopes and
     # selector candidates publish no implicit parent port: a parent serves one explicitly.
     assert list(stream_ports(Host)) == ["group.nested"]
-    assert port_endpoint(Host, "group.nested") is Endpoint.INITIATOR
+    assert port_direction(Host, "group.nested") is Direction.OUT
     for hidden in ("child.inner", "choice.child.inner"):
-        assert port_endpoint(Host, hidden) is None
+        assert port_direction(Host, hidden) is None
         with pytest.raises(KeyError):
-            port_side(Host, hidden)
+            stream_port(Host, hidden)

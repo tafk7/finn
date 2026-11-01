@@ -90,9 +90,9 @@ def test_a_channel_s_sides_wait_on_its_kernels_folding() -> None:
     assert network.validity("x").status == "open"
     # Its cycles wait on what its consumer's side waits on: the kernel's core, open (its
     # folding's presence waits on it).
-    assert network.waits("x", network.query("x", Kernel.cycles)) == (("first", "compute"),)
+    assert network.waits("x", network.query("x", Kernel.frame_cycles)) == (("first", "compute"),)
     folded = choose(network, FOLDING)
-    assert folded.member("x").consumer.label == "first.compute.packed.x"
+    assert folded.member("x").consumer.label == "first.x"
 
 
 def with_transports(network: Partition) -> Partition:
@@ -297,7 +297,7 @@ def test_each_member_sits_under_its_node_in_the_module() -> None:
     named = by_hand(members, stored)
     assert named.node("mm.first") == "mm_first"
     assert "mm_first.compute.packed" in labels(built(named, chain.STEM))
-    assert named.member("x").consumer.label == "mm_first.compute.packed.x"
+    assert named.member("x").consumer.label == "mm_first.x"
 
 
 def test_a_top_whose_pins_cannot_be_formed_is_refused_as_its_netlist() -> None:

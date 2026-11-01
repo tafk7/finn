@@ -181,9 +181,9 @@ def test_conversion_sets_each_choice_in_play_by_its_policy_on_the_kernel_alone()
         "compute.packed.reducer": inspection.Set("tree"),
         "compute.int8_dsp58.compute_pumping": inspection.Absent(),
     }
-    # a dense MatMul has no ``realization`` (``when=depthwise``): its facts alone rule it out,
-    # so it is in no list
-    assert "realization" not in {item.key for item in inspection.decisions(point)}
+    # a dense MatMul has no ``depthwise_datapath`` (``when=depthwise``): its facts alone rule
+    # it out, so it is in no list
+    assert "depthwise_datapath" not in {item.key for item in inspection.decisions(point)}
     assert inspection.validity(point).status == "valid"
     thresholding = thresholding_model()
     activated = kernel_op(thresholding, thresholding.graph.node[0]).defaulted()

@@ -45,7 +45,7 @@ from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel, ChannelFifo, open_boundary_refusal
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.policies import FirstValid, Fixed, Required, stated
-from finn.kernels.port import port_side
+from finn.kernels.port import stream_port
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.transformation.kernels import (
@@ -370,7 +370,7 @@ def test_a_stream_whose_side_waits_keeps_the_node_on_the_host_with_the_side_s_fi
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The kernel's own rules refuse nothing and no choice lacks a value, but with ``pe``
-    left open neither stream's side (``x_side``, ``y_side``) is known: the stream check
+    left open neither stream's side (``x.side``, ``y.side``) is known: the stream check
     cannot meet them with a boundary, and the node stays on the host with the side's
     findings, each about its tensor, rather than converting with the stream unchecked."""
     assert convert(multithreshold())[1].outcomes == (Outcome(("mt",), "Thresholding"),)
@@ -396,7 +396,7 @@ def test_only_a_port_that_is_not_placed_is_skipped_by_the_stream_check(
     converted, _ = convert(multithreshold())
     op = kernel_op(converted, converted.graph.node[0])
     point = op.point()
-    known = point.query(cast(Any, port_side(type(point), "input")))
+    known = point.query(cast(Any, stream_port(type(point), "input").side))
     assert isinstance(known, Available) and isinstance(known.value, Side)
     waits = Unresolved(reject("decision-unassigned", "pe is open", owner="pe").findings)
     refused = reject("channel-form", "no form", owner="x")

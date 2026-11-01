@@ -96,7 +96,7 @@ from finn.dataflow.traversal import LevelEnd, Repetition
 from finn.kernels import composer
 from finn.kernels.artifacts.abi import Clocking, Endpoint
 from finn.kernels.channels import boundary_pins
-from finn.kernels.laws import NATIVE, Axis, AxisSpelling, Native
+from finn.kernels.laws import NATIVE, Axis, AxisSpelling, Interval, Native, Standing
 from finn.kernels.matmul import KnownWeights
 from finn.kernels.movers import MoverOffer, iodma_hls
 from finn.kernels.port import LoopEnds
@@ -129,10 +129,10 @@ VERDICTS: dict[str, Verdict] = {
         "a port's transport kind: a value class of an optional string and an enum member, "
         "keyed by type and name (Axis), or of optional strings (Native)",
     ),
-    "Endpoint": Verdict("always", "an enum member, keyed by type and name"),
     "Clocking": Verdict("always", "a value class of strings, bools and optional strings"),
     "Integer": Verdict("always", "a frozen admission policy of ints, bools and None"),
     "LoopEnds": Verdict("always", "a value class of level-end integer records"),
+    "Interval": Verdict("always", "a value class of an int, an optional enum member and a string"),
     "bool": Verdict("always", "a plain type"),
     "int": Verdict("always", "a plain type"),
     "str": Verdict("always", "a plain type"),
@@ -259,9 +259,9 @@ def made() -> dict[str, tuple[object, ...]]:
             Axis(bus="s_axis"),
             Native(),
         ),
-        "Endpoint": (Endpoint.TARGET, Endpoint.INITIATOR, Endpoint.TARGET),
         "Clocking": (Clocking(), Clocking(clock="clk", reset="rst", active_low=False), Clocking()),
         "Integer": (Integer(), Integer(min_bits=2, signed=True), Integer()),
+        "Interval": (Interval(), Interval(1, Standing.ASSUMED, "a pragma"), Interval()),
         "LoopEnds": (
             LoopEnds((LevelEnd(1), LevelEnd(8))),
             LoopEnds((LevelEnd(4),)),
@@ -417,6 +417,7 @@ def test_a_key_hit_is_a_value_the_semantics_hold_equal(name: str) -> None:
 
 ENUMS: tuple[type[Enum], ...] = (
     AxisSpelling,
+    Standing,
     Form,
     Repetition,
     Step,

@@ -104,7 +104,7 @@ on ``enabled`` once cleared."""
 
 @pytest.mark.parametrize("name", sorted(IMPLEMENTATIONS))
 def test_a_formal_read_from_outside_an_absent_scope_answers_as_the_public_api(name: str) -> None:
-    """The boundary of S1 (``toys.Boundary``): ``outside.width`` reads ``guarded.leaf.width``
+    """The boundary (``toys.Boundary``): ``outside.width`` reads ``guarded.leaf.width``
     from outside ``guarded``. With ``enabled`` false, the public API's answer is
     inapplicable (``core.space.test_collapse``: a formal bound by reference answers within
     its scope), pinned here through the oracle's forms, and every registered implementation

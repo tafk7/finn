@@ -20,7 +20,7 @@ whether something exists (``existence``: a selector, for its candidate; a guard,
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from .._configuration import Space, _Namespace
 from .._failure import (
@@ -30,9 +30,9 @@ from .._failure import (
     fault,
     remember_exception,
 )
-from .._nodes import NodeDecl, unwrap
+from .._nodes import ChoicePath, NodeDecl, unwrap
 from ..declarations import Param, declared_path
-from ..errors import EvaluationError, RequestError
+from ..errors import EvaluationError, RequestError, ValueUnavailableError
 from ..groups import Group
 from ..references import descend
 from ..results import Available, Inapplicable, QueryResult
@@ -141,7 +141,14 @@ class MethodReader:
     def present(self, point: _Namespace, node: object) -> bool:
         """Whether a node is present (``occurrence.present``)."""
         self._enter()
-        target = self._node_scope(point, node)
+        if isinstance(node, ChoicePath):
+            # A node read through a selector: absent where the selection places nothing.
+            found = self._through(point, node)
+            if found is None:
+                return False
+            target: ScopeRecord | None = found._scope
+        else:
+            target = self._node_scope(point, node)
         if target is None:
             raise not_a_node(node)
         presence = target.guard
@@ -171,6 +178,36 @@ class MethodReader:
         if target is None:
             raise RequestError("node is not part of this compiled scope")
         return target
+
+    def alias_node(self, point: _Namespace, steps: tuple[str, ...]) -> _Namespace:
+        """A node alias read in the method (``self.x``): its node, through its steps. Where a
+        selection on the way places nothing, the node is absent: the read halts the method
+        as inapplicable, as a read through an absent member does (``present()`` asks)."""
+        current = point
+        for name in steps:
+            found = cast("_Namespace | None", getattr(current, name))
+            if found is None:
+                compiled = current._scope.compiled
+                choice = compiled.selectors[compiled.named_members[name]]
+                selector = current._scope.choice(choice).selector
+                absent = Inapplicable()
+                self.call.blocked[selector] = absent
+                raise ValueUnavailableError(absent, context=self.node.owner)
+            current = found
+        return current
+
+    def _through(self, point: _Namespace, path: ChoicePath) -> _Namespace | None:
+        """The receiver of the node ``path`` reads through its selector, read as the method
+        reads it (its selectors' values), or None where a selection places nothing."""
+        holder = point
+        for record in path._space_choice[:-1]:
+            holder = self.child(holder, record)
+        current = self.selected_candidate(holder, path._space_choice[-1])
+        for name in path._space_names:
+            if current is None:
+                return None
+            current = cast("_Namespace | None", getattr(current, name))
+        return current
 
     def child(self, point: _Namespace, record: object) -> _Namespace:
         """A child node's receiver."""

@@ -387,8 +387,8 @@ def test_an_offer_places_a_mover_on_each_free_side() -> None:
     assert (x.element.dtype.name, x.memory_width, x.words, x.converter) == ("INT3", 16, 3, True)
     assert (y.direction, y.port, y.memory_width, y.words) == ("out", "m_axis_0", 32, 3)
     # The mover's cycles are the channel's, beside its stages': y has none of its own.
-    assert bound.member("y").cycles == y.cycles == 6 + 4
-    assert bound.member("x").cycles == max(12, x.cycles)
+    assert bound.member("y").frame_cycles == y.cycles == 6 + 4
+    assert bound.member("x").frame_cycles == max(12, x.cycles)
 
 
 def test_each_boundary_side_is_stated_by_the_mover_its_shell_offers() -> None:
@@ -452,7 +452,7 @@ def test_a_network_waits_for_its_members_resources() -> None:
 def test_the_ip_shell_offers_no_mover() -> None:
     bound = chain_network(TARGET)
     assert bound.movers == ()
-    assert not bound.member("x").offered and bound.member("y").cycles == 0
+    assert not bound.member("x").offered and bound.member("y").frame_cycles == 0
 
 
 def test_a_mover_binds_no_rtl() -> None:

@@ -36,12 +36,19 @@ service, a native library's handle, a class with an ``==`` of its own its owner 
 registered) is no value, whatever its hash. Two kinds are taken as they are: an instance
 of a class derived from ``int``, ``str`` or ``bytes`` that holds nothing beside its value
 (no ``__dict__``), and a function, whose identity is its ``==`` and hash.
+
+A numpy number (an instance of ``numpy.number`` or ``numpy.bool_``: ``numpy.int64``,
+``numpy.float32``, ``numpy.bool_``) is taken as it is, immutable and hashed by its value, as
+a plain number is: a floating one's NaN refused and ``-0.0`` made ``0.0`` of its own type,
+a complex one's parts so. The engine imports no numpy: a value is a numpy number only where
+a process has loaded numpy (``sys.modules``).
 """
 
 from __future__ import annotations
 
 import dataclasses
 import math
+import sys
 import types
 import weakref
 from collections.abc import Callable, MutableMapping, MutableSequence, MutableSet
@@ -307,6 +314,9 @@ def canonical(value: T) -> T:
         return cast(T, complex(*parts))
     if isinstance(value, Enum) or is_value_type(kind):
         return value
+    numpy = _numpy_number(kind)
+    if numpy is not None:
+        return cast(T, _numpy_canonical(value, numpy))
     if isinstance(value, _MUTABLE):
         raise NotAValue(
             f"a {kind.__qualname__} is mutable: a value is immutable (a tuple, a frozen set, "
@@ -331,6 +341,34 @@ def canonical(value: T) -> T:
         "plain value, an enum member, a registered value type (value_type), or a tuple, a "
         "frozen set or a frozen dataclass of values"
     )
+
+
+def _numpy_number(kind: type) -> Any:
+    """numpy, where ``kind`` is one of its numbers (``numpy.number``, ``numpy.bool_``);
+    None otherwise, and wherever the process has not loaded numpy."""
+    numpy = sys.modules.get("numpy")
+    if numpy is None or not issubclass(kind, (numpy.number, numpy.bool_)):
+        return None
+    return numpy
+
+
+def _numpy_canonical(value: Any, numpy: Any) -> object:
+    """A numpy number in its canonical form: itself, but a floating one's (or a complex
+    one's part's) NaN refused and ``-0.0`` made ``0.0``, of its own type."""
+    kind = type(value)
+    if isinstance(value, numpy.floating):
+        part = float(value)
+        if math.isnan(part):
+            raise NotAValue("NaN is no value: == does not hold it equal to itself")
+        return kind(0.0) if part == 0.0 and math.copysign(1.0, part) < 0 else value
+    if isinstance(value, numpy.complexfloating):
+        whole = complex(value)
+        parts = (whole.real, whole.imag)
+        if any(math.isnan(part) for part in parts):
+            raise NotAValue("NaN is no value: == does not hold it equal to itself")
+        if any(part == 0.0 and math.copysign(1.0, part) < 0 for part in parts):
+            return kind(complex(*(abs(part) if part == 0.0 else part for part in parts)))
+    return value
 
 
 def _items(value: tuple[object, ...]) -> tuple[object, ...]:

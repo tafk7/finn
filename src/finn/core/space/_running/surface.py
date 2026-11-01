@@ -32,8 +32,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 from .._configuration import _Namespace
-from .._nodes import NodeDecl
-from ..declarations import declared_path
+from .._nodes import ChoicePath, NodeDecl
+from .._scopes import Address, ScopeRecord
+from ..declarations import ChoiceMemberRef, declared_path
 from ..errors import EvaluationError, RequestError
 from ..groups import Group
 from ..inspection import EvidenceNode, QueryEvidence, _node_info
@@ -43,6 +44,7 @@ from ..results import (
     ConstraintAssessment,
     DecisionState,
     Inapplicable,
+    NonValue,
     QueryResult,
     ViewAssessment,
     require_value,
@@ -55,7 +57,7 @@ from .receiver import scope_choice as _scope_choice
 from .value import DesignSpace
 
 if TYPE_CHECKING:
-    from .._scopes import Address, ScopeRecord
+    from .._scopes import ChoiceRecord
 
 Assessment = ViewAssessment[object] | ConstraintAssessment
 
@@ -102,6 +104,82 @@ def _public(ev: Evaluation, index: Address) -> QueryResult[object]:
     return copy_result(index, ev.result(index))
 
 
+# -- what a path through a selector reaches -----------------------------------------------
+
+
+def _selected(ev: Evaluation, choice: ChoiceRecord) -> ScopeRecord | NonValue:
+    """The scope of the case ``choice`` selects, as its selector answers: inapplicable where
+    the case places nothing, the selector's answer while it is no value."""
+    answer = ev.result(choice.selector)
+    if not isinstance(answer, Available):
+        return answer
+    for key, index in choice.cases:
+        if key == answer.value:
+            return INAPPLICABLE if index is None else index
+    raise EvaluationError(choice.key, "selection", "selector is not a declared case")
+
+
+def _reach(ev: Evaluation, scope: ScopeRecord, names: tuple[str, ...]) -> ScopeRecord | NonValue:
+    """The scope the node names ``names`` reach from ``scope``: a child, a node alias (its
+    steps), a selector's selected case."""
+    for name in names:
+        child = scope.named_children.get(name)
+        if child is not None:
+            scope = child
+            continue
+        compiled = scope.compiled
+        alias = compiled.aliases.get(name)
+        if alias is not None:
+            found = _reach(ev, scope, alias.steps)
+            if not isinstance(found, ScopeRecord):
+                return found
+            scope = found
+            continue
+        selector = compiled.named_members.get(name)
+        choice = None if selector is None else compiled.selectors.get(selector)
+        if choice is None:
+            raise RequestError(f"{name} is no node of {scope.name or '<root>'}")
+        selected = _selected(ev, scope.choice(choice))
+        if not isinstance(selected, ScopeRecord):
+            return selected
+        scope = selected
+    return scope
+
+
+def _through(at: At, ev: Evaluation, path: ChoicePath) -> ScopeRecord | NonValue:
+    """The scope of the node ``path`` reads through its selector, here."""
+    holder = descend(at.scope, path._space_choice[:-1])
+    choice = _scope_choice(holder, path._space_choice[-1])
+    selected = _selected(ev, choice)
+    if not isinstance(selected, ScopeRecord):
+        return selected
+    return _reach(ev, selected, path._space_names)
+
+
+def _address(at: At, ev: Evaluation, reference: object) -> Address | NonValue:
+    """What ``reference`` reads here: its address. A member read through a selector that
+    no class links a selection of (``MatMul.x.side``, read from a driver) is the selected
+    case's member, as its selector answers."""
+    model = at.ds.model
+    if not isinstance(reference, ChoiceMemberRef):
+        return model.resolve(at.scope, reference)
+    try:
+        return model.resolve(at.scope, reference)
+    except RequestError:
+        holder = descend(at.scope, reference.path[:-1])
+        selected = _selected(ev, _scope_choice(holder, reference.path[-1]))
+        if not isinstance(selected, ScopeRecord):
+            return selected
+        *names, last = reference.member.split(".")
+        reached = _reach(ev, selected, tuple(names))
+        if not isinstance(reached, ScopeRecord):
+            return reached
+        found = reached.named_members.get(last)
+        if found is None:
+            raise RequestError(f"{reference.member}: {reached.name} has no member {last}") from None
+        return found
+
+
 # -- a member's answer, a value, presence -----------------------------------------------
 
 
@@ -112,7 +190,14 @@ def query(at: At, reference: object, session: Session) -> QueryResult[object]:
     if isinstance(reference, Group):
         raise RequestError("a Group is a namespace; query one of its members")
     ev = _evaluation(at, session)
-    target = _node_scope(at, reference)
+    target: ScopeRecord | None
+    if isinstance(reference, ChoicePath):
+        through = _through(at, ev, reference)
+        if not isinstance(through, ScopeRecord):
+            return through
+        target = through
+    else:
+        target = _node_scope(at, reference)
     if target is not None:
         guard = target.guard
         if guard is not None:
@@ -122,14 +207,19 @@ def query(at: At, reference: object, session: Session) -> QueryResult[object]:
             if answer.value is not True:
                 return INAPPLICABLE
         return Available(At(at.ds, target))
-    return _public(ev, at.ds.model.resolve(at.scope, reference))
+    index = _address(at, ev, reference)
+    if not isinstance(index, Address):
+        return index
+    return _public(ev, index)
 
 
 def value(at: At, reference: object, session: Session) -> object:
     """A member read as a value (``point.member``): a non-value raises
     ``ValueUnavailableError`` carrying it."""
-    index = at.ds.model.resolve(at.scope, reference)
     ev = _evaluation(at, session)
+    index = _address(at, ev, reference)
+    if not isinstance(index, Address):
+        return require_value(index, context=repr(reference))
     return require_value(_public(ev, index), context=index.owner)
 
 
@@ -140,7 +230,15 @@ def present(at: At, node: object, session: Session) -> bool:
     if isinstance(node, Group):
         raise not_a_node(node)
     ev = _evaluation(at, session)
-    target = _node_scope(at, node)
+    if isinstance(node, ChoicePath):
+        through = _through(at, ev, node)
+        if isinstance(through, Inapplicable):
+            return False
+        if not isinstance(through, ScopeRecord):
+            return bool(require_value(through, context=repr(node)))
+        target: ScopeRecord | None = through
+    else:
+        target = _node_scope(at, node)
     if target is None:
         raise not_a_node(node)
     guard = target.guard

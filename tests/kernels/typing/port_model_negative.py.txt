@@ -1,13 +1,12 @@
 from finn.core.space import Group
-from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.laws import NATIVE_CLOCKING
-from finn.kernels.port_model import StreamPort, served
-from finn.kernels.laws import AXIS
+from finn.kernels.laws import AXIS, NATIVE_CLOCKING
+from finn.kernels.port_model import InPort, OutPort, served
 
-StreamPort(transport=AXIS, label="x", tensor=3)
-StreamPort(transport=AXIS, label="x", sequence="wrong")
-StreamPort(label="x", transport=(1, 2, 3))
-StreamPort(transport=AXIS, label="x", endpoint="target", clocking=NATIVE_CLOCKING)
+InPort(transport=AXIS, label="x", tensor=3)
+InPort(transport=AXIS, label="x", sequence="wrong")
+InPort(label="x", transport=(1, 2, 3))
+InPort(transport=AXIS, label="x", direction="target", clocking=NATIVE_CLOCKING)
+OutPort(transport=AXIS, label="x", governs="input")
 served(Group(), 3)
-StreamPort.stream
-StreamPort(transport=AXIS, label="x").access
+InPort.stream
+InPort(transport=AXIS, label="x").access

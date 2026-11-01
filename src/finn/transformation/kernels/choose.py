@@ -282,6 +282,7 @@ def _cost_report(network: Partition, cost: Cost, resources: dict[str, object]) -
         "members": {
             name: {
                 "cycles": cost.cycles.get(name),
+                "assumed": list(cost.assumed.get(name, ())),
                 "buffering": cost.buffering.get(name),
                 "resources": asdict(cost.resources[name]) if name in cost.resources else None,
             }

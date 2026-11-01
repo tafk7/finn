@@ -8,6 +8,7 @@ from typing import assert_type
 
 import pytest
 from qonnx.core.datatype import DataType
+from support.ports import UncheckedInPort, UncheckedOutPort
 
 from finn.core.space import (
     Available,
@@ -28,14 +29,14 @@ from finn.core.space import (
 )
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
-from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.abi import Direction
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource
 from finn.kernels.artifacts.module import Fragment
 from finn.kernels.base import Kernel
 from finn.kernels.laws import AXIS, AXIS_CLOCKING, Native
 from finn.kernels.library import ModuleSpec
-from finn.kernels.port import LoopEnds, port_endpoint, port_side, port_stream_pins
-from finn.kernels.port_model import StreamPort
+from finn.kernels.port import LoopEnds, port_direction, stream_port
+from finn.kernels.port_model import InPort
 from finn.kernels.vpc import VpcKernel
 from finn.platform.capabilities import Resources
 
@@ -62,16 +63,15 @@ class SerialVpc(VpcKernel):
         _ = self.second_state
         return SEQUENCE
 
-    input = StreamPort(
+    input = UncheckedInPort(
         label="input",
         tensor=VpcKernel.input_tensor,
         sequence=first,
         transport=Native(names=("idat", "ivld", "irdy")),
         loop_ends=UNNAMED_ENDS,
     )
-    output = StreamPort(
+    output = UncheckedOutPort(
         label="output",
-        endpoint=Endpoint.INITIATOR,
         tensor=VpcKernel.output_tensor,
         sequence=second,
         transport=Native(names=("odat", "ovld", "ordy")),
@@ -127,19 +127,21 @@ def test_actual_vpc_netlist_keeps_serial_body_demand_and_direct_refusal_order(
 
 def test_actual_vpc_surfaces_are_typed_real_children_and_not_kernel_instances() -> None:
     point = design_space(VpcKernel(input_tensor=TENSOR, arriving=SEQUENCE, leaving=SEQUENCE))
-    assert_type(VpcKernel.input, StreamPort)
+    assert_type(VpcKernel.input, InPort)
     assert isinstance(point.input, Space) and not isinstance(point.input, Kernel)
     assert point.netlists == ()
     assert isinstance(point.netlist, Fragment)
     assert inspection.statistics(point).owning_decisions == 0
-    assert port_endpoint(VpcKernel, "input") is Endpoint.TARGET
-    assert port_endpoint(VpcKernel, "output") is Endpoint.INITIATOR
-    assert point.query(port_side(VpcKernel, "output")) == Available(point.output.side)
-    assert point.query(port_stream_pins(VpcKernel, "output")) == Available(point.output.stream_pins)
+    assert port_direction(VpcKernel, "input") is Direction.IN
+    assert port_direction(VpcKernel, "output") is Direction.OUT
+    assert point.query(stream_port(VpcKernel, "output").side) == Available(point.output.side)
+    assert point.query(stream_port(VpcKernel, "output").stream_pins) == Available(
+        point.output.stream_pins
+    )
     with pytest.raises(KeyError):
-        port_side(VpcKernel, "missing")
+        stream_port(VpcKernel, "missing")
     with pytest.raises(TypeError, match="node declaration"):
-        port_side(point, "input")
+        stream_port(point, "input")
 
 
 def test_actual_parent_refusal_blocks_module_body_but_not_valid_child_characterization() -> None:
@@ -202,15 +204,19 @@ def test_a_module_requires_its_own_stream_ports() -> None:
 
 def test_port_lookup_supports_discovered_group_paths_at_the_actual_node() -> None:
     class Included(Group):
-        port = StreamPort(
-            clocking=AXIS_CLOCKING, transport=AXIS, label="p", tensor=TENSOR, sequence=SEQUENCE
+        port = InPort(
+            clocking=AXIS_CLOCKING,
+            transport=AXIS,
+            label="p",
+            tensor=TENSOR,
+            sequence=SEQUENCE,
         )
 
     class Host(Space):
         group = Included()
 
     declaration = Host()
-    side = port_side(declaration, "group.port")
+    side = stream_port(declaration, "group.port").side
 
     class Envelope(Space):
         host = declaration
@@ -218,4 +224,4 @@ def test_port_lookup_supports_discovered_group_paths_at_the_actual_node() -> Non
     point = design_space(Envelope())
     assert point.query(side) == Available(point.host.group.port.side)
     with pytest.raises(KeyError):
-        port_side(Host, "group.missing")
+        stream_port(Host, "group.missing")

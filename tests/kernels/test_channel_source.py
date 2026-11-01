@@ -194,12 +194,12 @@ def test_known_weights_give_the_weight_channel_its_source():
 
 def test_the_weight_channel_counts_its_source_s_cycles_by_kind():
     """A channel counts its members' cycles by kind (``Channel.source_cycles``,
-    ``stage_cycles``, ``mover_cycles``), not through the base's ``member_cycles``: the kinds
+    ``stage_cycles``, ``mover_cycles``), not through the base's ``member_frame_cycles``: the kinds
     name every member the base's does, here its source."""
     w = configured(base(weights=WEIGHTS), style="block").member("w")
     assert [item.node for item in w.source_cycles] == ["source"]
-    assert [item.node for item in w.member_cycles] == ["source"]
-    assert w.cycles == w.source.cycles
+    assert [item.node for item in w.member_frame_cycles] == ["source"]
+    assert w.frame_cycles == w.source.frame_cycles
 
 
 def test_an_unvalued_channel_never_demands_its_source():
@@ -507,14 +507,14 @@ def test_a_source_whose_rule_is_false_refuses_the_change_that_places_it():
     # channel's rules and guards that read its sides.
     validity = by_hand(members, stored=keyed(folding)).validity("w")
     assert validity.status == "refused"
-    assert "source.selected" in {piece.owner for piece in validity.pieces}
+    assert "source.sets_indexed" in {piece.owner for piece in validity.pieces}
     assert {
         (finding.code, finding.owner)
         for piece in validity.pieces
         for finding in piece.result.findings
         if finding.code != "guard-refused"
     } == {
-        ("memstream-set-channel", "source.selected"),
+        ("memstream-set-channel", "source.sets_indexed"),
         ("memstream-set-channel", "source.output_sequence"),
     }
 

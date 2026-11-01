@@ -71,7 +71,6 @@ from finn.core.space import (
     reject,
 )
 from finn.core.space.declarations import View
-from finn.dataflow.schedule import Pace
 from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.artifacts.module import Composed as Module
@@ -82,9 +81,10 @@ from finn.kernels.channels import Channel, Neighbours, OuterHops, outer_hops
 from finn.kernels.composer import Composed, Names, PartitionDeclaration, Port, compose
 from finn.kernels.control import Control
 from finn.kernels.control import presented as presented_buses
+from finn.kernels.laws import TimedPace
 from finn.kernels.movers import MoverOffer
 from finn.kernels.policies import Defaulted, Owner, Unstated, defaulted
-from finn.kernels.port import port_pace, port_side, port_stream_pins
+from finn.kernels.port import exposed_pins, stream_port
 from finn.kernels.sides import Side, SideKind
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
@@ -351,7 +351,7 @@ class Partition:
 
     def query(self, name: str, member: object) -> QueryResult[Any]:
         """Member ``name``'s ``member``, a view or a derived value declared on a Space class
-        ``Base`` (``Kernel.netlist``, ``Kernel.cycles``): the member of that name of the
+        ``Base`` (``Kernel.netlist``, ``Kernel.frame_cycles``): the member of that name of the
         member's own class. ``Inapplicable`` where the member's class does not derive from
         ``Base`` (``Channel`` is no class with ``Kernel.bus_control``'s bus), or where
         the member's own answer is inapplicable (a kernel declaring no control bus)."""
@@ -599,32 +599,35 @@ class Partition:
     # -- what it is -------------------------------------------------------------------------
 
     def neighbours(self, name: str) -> Neighbours:
-        """The ports beside channel ``name`` (each kernel's ``<p>_stream_pins`` view, labelled
-        below its member's node): the producing kernel's and the consuming kernel's, by the
-        side each is declared on; a frozen neighbour's, outside a slice, as given at its
-        stored choices (``frozen``); and each one's pace (``<p>_pace``, a scheduled port's).
+        """The ports beside channel ``name`` (each kernel's port's ``stream_pins`` view,
+        labelled below its member's node): the producing kernel's and the consuming kernel's,
+        by the side each is declared on; a frozen neighbour's, outside a slice, as given at
+        its stored choices (``frozen``); and each one's pace at its kernel's interval (its
+        ``timed_pace``, where it owns its pacing).
         FIFO sizing reads their paces (``finn.kernels.fifo_sizing``), and the netlist its
         hops to them (``hops``)."""
         found: dict[str, PortPins] = {}
-        paces: dict[str, Pace] = {}
+        paces: dict[str, TimedPace] = {}
         frozen = self._frozen.get(name, Neighbours())
         for side, declared in zip(("producer", "consumer"), self._sides[name], strict=True):
             if isinstance(declared, Side) and declared.kind is SideKind.NEIGHBOUR:
                 given: PortPins | None = getattr(frozen, side)
                 if given is not None:
                     found[side] = given
-                pace: Pace | None = getattr(frozen, f"{side}_pace")
+                pace: TimedPace | None = getattr(frozen, f"{side}_pace")
                 if pace is not None:
                     paces[side] = pace
                 continue
             if not isinstance(declared, Port):
                 continue
             point = self.member(declared.member)
-            answer = point.query(port_stream_pins(type(point), declared.port))
+            port = stream_port(type(point), declared.port)
+            answer = point.query(port.stream_pins)
             if isinstance(answer, Available) and isinstance(answer.value, PortPins):
-                found[side] = answer.value.under(self.node(declared.member))
-            paced = point.query(port_pace(type(point), declared.port))
-            if isinstance(paced, Available) and isinstance(paced.value, Pace):
+                exposed = exposed_pins(point, declared.port, answer.value)
+                found[side] = exposed.under(self.node(declared.member))
+            paced = point.query(port.timed_pace)
+            if isinstance(paced, Available) and isinstance(paced.value, TimedPace):
                 paces[side] = paced.value
         return Neighbours(
             found.get("producer"),
@@ -746,7 +749,7 @@ class Partition:
         for declared in self._sides.get(name, ()):
             if isinstance(declared, Port):
                 point = self.member(declared.member)
-                answer = point.query(port_side(type(point), declared.port))
+                answer = point.query(stream_port(type(point), declared.port).side)
                 label = f"{declared.member}.{declared.port}"
                 (absent if isinstance(answer, Inapplicable) else present).append(label)
         if not absent:

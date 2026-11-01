@@ -86,7 +86,9 @@ def test_real_netlist_does_not_certify_unrelated_rule_or_presence(
     bound._point = report.instance
     bound._memo = {}
     assert isinstance(bound.module_of(PRODUCER), Available)
-    assert all(isinstance(bound.query(name, Kernel.cycles), Available) for name in bound.members)
+    assert all(
+        isinstance(bound.query(name, Kernel.frame_cycles), Available) for name in bound.members
+    )
     assert not bound.undecided()
     monkeypatch.setattr(shell, "in_shell", lambda *_: bound)
     if condition == "absent":

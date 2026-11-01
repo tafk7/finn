@@ -623,8 +623,46 @@ def candidate(point: Space, decision: object, case: str) -> Space | None:
     return _candidate(point, decision, case)
 
 
+@dataclass(frozen=True, slots=True)
+class AliasInfo:
+    """A node alias of a Space class (``x = compute.port``): its name, every node it may
+    name, each by its path from the class (the owner's: ``compute.packed.port``) with its
+    class, and whether a selection may place nothing there (a selector's None case)."""
+
+    name: str
+    nodes: tuple[tuple[str, type[Space]], ...]
+    optional: bool
+
+
+def aliases(subject: Space | type[Space]) -> tuple[AliasInfo, ...]:
+    """The node aliases of a Space class, or of the class a design space is read at, in
+    declaration order: the second names it gives its members' nodes, resolved as every
+    lookup reads them (``_aliases.alias_table``), nothing evaluated."""
+    from ._aliases import alias_table
+
+    space_type = subject if isinstance(subject, type) else type(subject)
+    if not issubclass(space_type, Space):
+        raise RequestError("aliases() takes a Space class or a design space")
+    return tuple(
+        AliasInfo(
+            entry.name,
+            tuple((end.path, cast(type[Space], end.space_type)) for end in entry.ends),
+            entry.optional,
+        )
+        for entry in alias_table(space_type).values()
+    )
+
+
+def path(point: Space) -> str:
+    """The path of the node a design space is read at, from its root: its owner's, the same
+    whichever alias it was read through (``point.x``, ``point.compute.packed.port``:
+    ``compute.packed.port``). Empty at the root."""
+    return held(point).scope.name
+
+
 __all__ = [
     "Absent",
+    "AliasInfo",
     "CaseInfo",
     "ChoiceInfo",
     "ChoiceState",
@@ -643,6 +681,7 @@ __all__ = [
     "Validity",
     "Viable",
     "Waiting",
+    "aliases",
     "candidate",
     "choices",
     "decision_handle",
@@ -651,6 +690,7 @@ __all__ = [
     "members",
     "groups",
     "model",
+    "path",
     "presence",
     "states",
     "statistics",

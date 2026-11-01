@@ -8,8 +8,8 @@ A ``Channel`` is one producer-to-consumer edge, a member of a partition
 (``finn.kernels.partition``) or of a kernel with children, carrying one ``tensor`` given
 as a fact. Its two sides are facts too, ``producer`` and ``consumer``, each one value
 (``finn.kernels.sides.Side``) of its kind: a kernel's port (the ``Stream`` it presents,
-its label, ``matmul.compute.packed.x``, and on an output port its word width: a kernel's
-``x_side``), a frozen neighbour's (the same, given as a fact), the boundary's (its AXIS
+its label, ``matmul.x``, and on an output port its word width: a kernel's port's
+``side``), a frozen neighbour's (the same, given as a fact), the boundary's (its AXIS
 port's name, ``s_axis_0``, the movers a shell offers on it, and what the outside states
 of it, ``outside``, its stream never given), or, for a known value, its own source. Each
 side's role takes its kinds only (``channel-users``): a producer is an output port, the
@@ -56,8 +56,8 @@ budget check and resources.
 A channel whose tensor has a known value (``contents``) places its ``source`` (a
 memory, ``MemStreamKernel``) as its producer (its producer side the source's,
 ``channel-users``), storing one one_pass in the order its consumer reads it; with several
-sets, the source's set port is the channel's port (``set``, served from its source,
-``finn.kernels.port_model.served``), which the index tensor's channel consumes.
+sets, the source's set port, which the channel exposes as its own (``set = source.set``, a
+node alias), is the port the index tensor's channel consumes.
 
 The source and the output adapter are placed where their condition holds, not chosen,
 and each keeps the label it is placed at (``SOURCE_LABEL``, ``OUTPUT_ADAPTER_LABEL``),
@@ -71,9 +71,9 @@ are the base's views over theirs, but for two it states itself, calling the base
 netlist places its source and its output adapter at their labels and adds the hops between
 its own ends (its source, its stages, its boundary; ``netlist``), and a channel of wires
 takes no cycles of its own (0); a boundary whose outside states a pace takes no fewer than
-that pace's span a frame (``cycles``). Its cycles count its source's, its adapters' and
+that pace's span a frame (``frame_cycles``). Its cycles count its source's, its adapters' and
 its mover's, by kind (``source_cycles``, ``stage_cycles``, ``mover_cycles``), not through
-the base's ``member_cycles``: its mover is no kernel (it binds no RTL in the module), and
+the base's ``member_frame_cycles``: its mover is no kernel (it binds no RTL in the module), and
 its transport, whose cycles are inapplicable, is a choice still open when FIFO sizing reads
 them. Its hops to the ports beside it need those ports'
 stream pins, which its network holds: the network wires them (``outer_hops``, from the ports
@@ -107,7 +107,6 @@ from finn.core.space import (
     view,
 )
 from finn.dataflow.datatypes import QONNXDataType
-from finn.dataflow.schedule import Pace
 from finn.dataflow.steps import Steps, Unrealizable
 from finn.dataflow.steps import steps as between
 from finn.dataflow.streams import Stream, Streams, misfit
@@ -142,12 +141,11 @@ from finn.kernels.base import (
 )
 from finn.kernels.control import presented
 from finn.kernels.fifo import FifoKernel
-from finn.kernels.laws import AXIS_CLOCKING
+from finn.kernels.laws import AXIS_CLOCKING, TimedPace
 from finn.kernels.library import leaf_at_root
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.movers import IodmaMover, MoverContract, MoverOffer
 from finn.kernels.policies import Alone, FirstValid, Policy, Required, defaulted, stated
-from finn.kernels.port_model import served
 from finn.kernels.sides import BUILD, ROW_MAJOR, Outside, Side, SideKind, beat_times
 from finn.kernels.transport import (
     AxisBeat,
@@ -170,7 +168,7 @@ from finn.platform.capabilities import Platform
 
 SOURCE_LABEL = "source.memstream"
 """Where a channel's netlist places its source: its producer's owner (``source_label``), and
-the label of the set port it serves (``source.memstream.set``)."""
+the instance of the set port it exposes (``set``, its pins on ``source.memstream``)."""
 
 OUTPUT_ADAPTER_LABEL = "output_adapter.vpc"
 """Where a channel's netlist places its output adapter, its chain's stages below it
@@ -228,18 +226,19 @@ def wired(source: str | None, produced: StreamPins, sink: str | None, consumed: 
 @dataclass(frozen=True)
 class Neighbours:
     """The ports beside a channel, as its partition reads them (each kernel's port's
-    stream pins view, labelled below its member's node: ``matmul.compute.packed.x``; a frozen
+    stream pins view, labelled below its member's node: ``matmul.x``; a frozen
     neighbour's, outside a slice, read at its stored choices): the producing kernel's and
     the consuming kernel's, each None where that side is the channel's own, its source (a
-    known value) or its boundary; and each port's pace (its ``pace``, read where it is
-    read), None where that port is no scheduled port's or the side is the channel's own.
+    known value) or its boundary; and each port's pace in cycles (its ``timed_pace``: its
+    ``pace`` at its own kernel's interval, read where it is read), None where that port
+    follows another (it has no pace) or the side is the channel's own.
     Its network wires the hops to them (``outer_hops``); FIFO sizing reads the paces
     (``finn.kernels.fifo_sizing``)."""
 
     producer: PortPins | None = None
     consumer: PortPins | None = None
-    producer_pace: Pace | None = None
-    consumer_pace: Pace | None = None
+    producer_pace: TimedPace | None = None
+    consumer_pace: TimedPace | None = None
 
 
 @dataclass(frozen=True)
@@ -267,17 +266,17 @@ and the stream pins it presents."""
 
 
 def _kernel_of(port: PortPins, owner: str) -> str | Rejected:
-    """The node of the kernel whose port ``port`` is, beside the channel: the node above
-    its label (``matmul.compute.packed.x``, at any depth below the network:
-    ``^matmul.compute.packed``). Refused as ``channel-port``, owned by ``owner``."""
-    kernel = port.label.rpartition(".")[0]
-    if not kernel:
+    """The node of the leaf whose pins port ``port``'s are, beside the channel: its
+    instance (``PortPins.instance``, the leaf an exposed port is on: ``matmul.compute.packed``
+    for ``matmul.x``, ``^matmul.compute.packed``), never parsed from its label. Refused as
+    ``channel-port``, owned by ``owner``."""
+    if not port.instance:
         return reject(
             "channel-port",
             f"{port.label} presents stream pins, but is no kernel's port",
             owner=owner,
         )
-    return "^" + kernel
+    return "^" + port.instance
 
 
 def _own_source(channel: Channel) -> _End:
@@ -353,8 +352,8 @@ def _below_stages(holder: str, stages: tuple[Stage, ...]) -> tuple[Stage, ...]:
 class ChannelFifo(Kernel):
     """An identity stage: what arrives at it, presented on both sides of a native FIFO.
 
-    Its netlist, buffering and resources are its FIFO's, by the base. Its cycles are
-    inapplicable, which a kernel's ``member_cycles`` leaves out: a FIFO presents what
+    Its netlist, buffering and resources are its FIFO's, by the base. Its frame_cycles are
+    inapplicable, which a kernel's ``member_frame_cycles`` leaves out: a FIFO presents what
     arrives, whose beats are counted where they are made (the channel's producer, its
     source, its output adapter), so its channel's cycles are its other members'. It
     presents no port: its channel checks it by its FIFO's streams (``stage_streams``) and
@@ -388,7 +387,7 @@ class ChannelFifo(Kernel):
     )
 
     @view
-    def cycles(self) -> int | Inapplicable:
+    def frame_cycles(self) -> int | Inapplicable:
         """Inapplicable: it counts no cycles of its own (the class docstring)."""
         return Inapplicable()
 
@@ -440,7 +439,7 @@ class ChannelSides:
 
     @property
     def source_owner(self) -> str:
-        """Where the producing stream sits: its port's label (``matmul.compute.packed.y``),
+        """Where the producing stream sits: its port's label (``matmul.y``),
         the channel's source label (``SOURCE_LABEL``) for a known value, or the boundary's
         AXIS port's name."""
         if self.producer.kind is SideKind.SOURCE:
@@ -466,13 +465,13 @@ class Channel(Kernel):
     """One tensor between the two sides it takes: one producer, one consumer.
 
     ``producer`` and ``consumer`` are its sides, each one value (``Side``): a kernel's
-    port (its ``x_side``: its stream, its label, ``matmul.compute.packed.x``, and on an
+    port (its ``side``: its stream, its label, ``matmul.x``, and on an
     output port its word width), a frozen neighbour's, the boundary's (the AXIS port its
     label names, presented as ``boundary``, where the ``mover`` sits where the shell
     offers one: ``offered``), or its source's. A channel with a known value places its
     ``source`` as its producer; with several sets, the source reads the set indices
     (``index_tensor``) from the channel whose consumer is its ``set`` port, the one port it
-    serves (its source's). ``platform`` is the target's: its source, its
+    exposes (its source's, ``set = source.set``). ``platform`` is the target's: its source, its
     adapters' stages and its FIFO read it. Its members are declared in the order the stream
     runs through them, so its netlist places them in that order.
     """
@@ -567,19 +566,12 @@ class Channel(Kernel):
             return Inapplicable()
         return SOURCE_LABEL
 
-    # With several sets, its source's set port, served as a port of the channel labelled
-    # below the source's label (``source.memstream.set``): the index tensor's channel's
+    # With several sets, its source's set port, which it exposes as its own (its pins on the
+    # source, where its netlist places it, ``SOURCE_LABEL``): the index tensor's channel's
     # consumer. A channel without a known value has no source, so its set port does not
-    # apply: nothing reads the indices.
-    set = served(source, "set", label=SOURCE_LABEL)
-
-    @derived
-    def takes_doubled_clock(self) -> bool:
-        """Whether it takes the doubled clock: its source's (a pumped memory), where it
-        places one; without a known value, no source, so not."""
-        if not self.valued:
-            return False
-        return bool(self.source.takes_doubled_clock)
+    # apply: nothing reads the indices. Whether it takes the doubled clock is the base's, from
+    # its source where it places one.
+    set = source.set
 
     @derived
     def sides(self) -> ChannelSides | Rejected:
@@ -861,6 +853,10 @@ class Channel(Kernel):
 
     # -- its answers: the base's, with its own hops, and none of a channel of wires' cycles --
 
+    # Where its netlist places its source and its output adapter (``_PLACED``): the instance
+    # its source's set port, which it exposes, is on.
+    placed_at = MappingProxyType(_PLACED)
+
     @view
     def netlist(self) -> Fragment | Rejected:
         """Its members' netlists under their nodes, in the order the stream runs through
@@ -896,18 +892,17 @@ class Channel(Kernel):
             # A hop that does not connect (another element, say) is refused by the
             # channel's constraints; its wires do not exist.
             return reject("channel-link", str(error))
-        parts = [
-            (_PLACED.get(str(item.node), str(item.node)), item.value) for item in self.netlists
-        ]
+        placed = type(self).placed_at
+        parts = [(placed.get(str(item.node), str(item.node)), item.value) for item in self.netlists]
         buses = presented(
-            (_PLACED.get(str(item.node), str(item.node)), item.value) for item in self.controls
+            (placed.get(str(item.node), str(item.node)), item.value) for item in self.controls
         )
         if isinstance(buses, Rejected):
             return buses
         return merged(parts, buses, tuple(links))
 
     @view
-    def cycles(self) -> int | Rejected:
+    def frame_cycles(self) -> int | Rejected:
         """The clock cycles a frame takes through its own members: the slowest's (its
         source's, its adapters' stages', its mover's), one beat a cycle at best; a FIFO's
         are inapplicable, and a channel of wires takes none of its own. On a boundary whose
@@ -929,13 +924,13 @@ class Channel(Kernel):
         return max(found, *(beat_times(pace, edge.form.beats).span for pace in paces))
 
     # What its cycles count, by kind: its source's, its adapters' and its mover's. Not the
-    # base's ``member_cycles``, which ranges over its transport too: a FIFO's cycles are
+    # base's ``member_frame_cycles``, which ranges over its transport too: a FIFO's cycles are
     # inapplicable, but whether it places one is a choice FIFO sizing reads cycles before,
     # so the base's would wait on it. Its mover is no kernel; its cycles count here. Each
-    # kind declares ``cycles`` itself (``Members`` reads the declaring class), and must
+    # kind declares ``frame_cycles`` itself (``Members`` reads the declaring class), and must
     # keep doing so while the channel counts by kind.
-    source_cycles = Members(MemStreamKernel.cycles)
-    stage_cycles = Members(StreamAdapter.cycles)
+    source_cycles = Members(MemStreamKernel.frame_cycles)
+    stage_cycles = Members(StreamAdapter.frame_cycles)
     mover_cycles = Members(IodmaMover.cycles)
 
     @view

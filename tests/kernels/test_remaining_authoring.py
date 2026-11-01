@@ -7,6 +7,7 @@ from __future__ import annotations
 import pytest
 from qonnx.core.datatype import DataType
 from support.helpers import FULL_DSP48E2, FULL_DSP58
+from support.ports import UncheckedInPort, UncheckedOutPort
 
 from finn.core.space import (
     Decision,
@@ -22,11 +23,9 @@ from finn.core.space import (
 from finn.dataflow.schedule import Index
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import LevelEnd
-from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.laws import Native
 from finn.kernels.pool import PoolKernel, c, kh, kw
 from finn.kernels.port import LoopEnds
-from finn.kernels.port_model import StreamPort
 from finn.kernels.pwpolyf import PwPolyKernel
 
 UNNAMED_ENDS = LoopEnds((LevelEnd(1),))
@@ -74,7 +73,7 @@ class SerialPool(PoolKernel):
         _ = self.second_state
         return (c,)
 
-    input = StreamPort(
+    input = UncheckedInPort(
         label="input",
         tensor=PoolKernel.input_tensor,
         schedule=PoolKernel.schedule,
@@ -84,9 +83,8 @@ class SerialPool(PoolKernel):
         transport=Native(names=("data", "valid", "ready")),
         loop_ends=UNNAMED_ENDS,
     )
-    output = StreamPort(
+    output = UncheckedOutPort(
         label="output",
-        endpoint=Endpoint.INITIATOR,
         tensor=PoolKernel.output_tensor,
         schedule=PoolKernel.schedule,
         index=PoolKernel.output_index,

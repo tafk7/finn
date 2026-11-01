@@ -80,11 +80,12 @@ def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_th
     assert [
         item.key for item in inspection.members(point) if item.kind == "view" and item.scope == ""
     ] == [
+        "assumed",
         "buffering",
         "bus_control",
-        "cycles",
         # What its module and its resources read, and nothing in its space.
         "dsp_simd",
+        "frame_cycles",
         "held_bits",
         "module_data",
         "module_sources",
@@ -264,16 +265,27 @@ def test_space_rejects_mistyped_values_at_binding(updates, error):
         kernel(**updates)
 
 
+# A refused schedule refuses each port's presentation too (``presented``).
+PRESENTED = {(f"{port}.presented", "kernel-schedule") for port in ("x", "w", "y")}
+
+
 @pytest.mark.parametrize(
     ("factor", "pieces"),
     (
-        ("pe", {("stream_widths_supported", "kernel-schedule")}),
-        ("simd", {("simd_fits", "dotp-simd"), ("stream_widths_supported", "kernel-schedule")}),
+        ("pe", {("stream_widths_supported", "kernel-schedule"), *PRESENTED}),
+        (
+            "simd",
+            {
+                ("simd_fits", "dotp-simd"),
+                ("stream_widths_supported", "kernel-schedule"),
+                *PRESENTED,
+            },
+        ),
     ),
 )
 def test_a_folding_factor_given_that_does_not_divide_its_extent_refuses_the_core(factor, pieces):
     """The role's domains list only divisors (``role``); a core given another is refused
-    by its schedule, and SIMD by its own rule too."""
+    by its schedule, and with it each port's presentation, and SIMD by its own rule too."""
     point = kernel(**{"outputs": 6, "reduction": 6, "pe": 2, "simd": 2, factor: 4})
     status, found = validity_of(point)
     assert status == "refused"

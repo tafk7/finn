@@ -7,10 +7,10 @@ A ``Channel`` (``finn.kernels.channels``) takes two sides, its ``producer`` and 
 ``consumer``, each a ``Side`` of one of four kinds (``SideKind``):
 
 - a **kernel**'s port (``Side.kernel``): the stream it presents (``x.stream``), its label
-  (``compute.packed.x``, the label its stream pins carry) and, on an output port, its word
-  width (``x.width``), read from its stream. Each port states it (``x.side``; a served
-  port's, ``x_side``, is its child's port's, labelled below the child: ``port_side`` in
-  ``finn.kernels.port`` finds either);
+  (``x``, the label its stream pins carry, below its kernel's node in a network:
+  ``matmul.x``) and, on an output port, its word width (``x.width``), read from its stream.
+  Each port states it (``x.side``, a module's port's and an exposed port's alike:
+  ``finn.kernels.port.stream_port`` finds the port by its name);
 - a **frozen neighbour**'s (``Side.neighbour``): the same three, given as a fact read from a
   kernel outside the selection at its accepted point;
 - the **boundary**'s (``Side.boundary``): the module's AXIS port, its name as its label
@@ -42,7 +42,7 @@ the pace (the outside's beat times over a frame, or None when timing is not stat
 mover's pace comes from its contract) and the host's buffer layout (``ROW_MAJOR_HOST``). The pace is
 kept as given: ``Steady`` is expanded where the edge's beats are known, in one place
 (``beat_times``), which FIFO sizing (``finn.kernels.fifo_sizing.stated_pattern``) and a
-boundary channel's cycles (``finn.kernels.channels.Channel.cycles``: no fewer than its
+boundary channel's cycles (``finn.kernels.channels.Channel.frame_cycles``: no fewer than its
 span) read.
 """
 
@@ -131,7 +131,7 @@ def beat_times(pace: BeatTimes | Steady, beats: int) -> BeatTimes:
     expanded to ``(0, k, ..., (beats - 1) k)`` over ``beats * k``. This is the one place a
     ``Steady`` is expanded: ``Side.outside``, ``interface.json`` and any report keep the
     shorthand as given. FIFO sizing reads it (``finn.kernels.fifo_sizing.stated_pattern``),
-    and a boundary channel's cycles its span (``finn.kernels.channels.Channel.cycles``)."""
+    and a boundary channel's cycles its span (``finn.kernels.channels.Channel.frame_cycles``)."""
     if isinstance(pace, Steady):
         every = pace.every
         return BeatTimes(tuple(range(0, beats * every, every)), beats * every)
@@ -258,7 +258,7 @@ class Side:
 
     def under(self, member: str) -> Self:
         """A stated side as seen from where ``member``, which states it, is held: its label
-        below ``member`` (``first.compute.packed.x``), as ``PortPins.under``."""
+        below ``member`` (``first.x``), as ``PortPins.under``."""
         if not self.stated:
             raise ValueError(f"a {self.kind.value}'s side is labelled by no member")
         return replace(self, label=f"{member}.{self.label}")

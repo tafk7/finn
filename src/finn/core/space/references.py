@@ -106,6 +106,25 @@ def _choice(scope: ScopeRecord, path: Sequence[Declaration]) -> ChoiceRecord:
     return found
 
 
+def _member_below(scope: ScopeRecord, member: str) -> Address | None:
+    """A member of ``scope`` by its name, or by a path of names to one below it through
+    children and node aliases (``port.side``); None where nothing of that name is there, or
+    the path passes a selector (which only an evaluation can read)."""
+    *nodes, last = member.split(".")
+    pending = list(nodes)
+    while pending:
+        name = pending.pop(0)
+        child = scope.named_children.get(name)
+        if child is not None:
+            scope = child
+            continue
+        alias = scope.compiled.aliases.get(name)
+        if alias is None:
+            return None
+        pending[:0] = alias.steps
+    return scope.named_members.get(last)
+
+
 def resolve_reference(
     scopes: Scopes,
     scope: ScopeRecord,
@@ -145,9 +164,9 @@ def resolve_reference(
         if not candidate and reference.member in choice.members:
             return choice.members[reference.member]
         found = [
-            (case, child.named_members[reference.member])
+            (case, member)
             for case, child in choice.cases
-            if child is not None and reference.member in child.named_members
+            if child is not None and (member := _member_below(child, reference.member)) is not None
         ]
         if len(found) == 1:
             # Only one candidate has the member: it is present exactly when

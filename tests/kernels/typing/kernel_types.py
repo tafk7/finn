@@ -17,10 +17,10 @@ from finn.platform.capabilities import Resources
 
 def answers(kernel: Kernel) -> tuple[Fragment, int, int, Resources]:
     assert_type(kernel.netlist, Fragment)
-    assert_type(kernel.cycles, int)
+    assert_type(kernel.frame_cycles, int)
     assert_type(kernel.buffering, int)
     assert_type(kernel.resources, Resources)
-    return kernel.netlist, kernel.cycles, kernel.buffering, kernel.resources
+    return kernel.netlist, kernel.frame_cycles, kernel.buffering, kernel.resources
 
 
 def check(fifo: FifoKernel, matmul: MatMulKernel, channel: Channel, stage: ChannelFifo) -> None:
@@ -42,7 +42,7 @@ class Unbuffered(Space):
         return Fragment()
 
     @view
-    def cycles(self) -> int:
+    def frame_cycles(self) -> int:
         return 0
 
     @view

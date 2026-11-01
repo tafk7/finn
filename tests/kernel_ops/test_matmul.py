@@ -135,7 +135,7 @@ def test_the_schema_is_the_kernels_decision_keys() -> None:
 def test_the_schema_is_pinned_for_its_op_version() -> None:
     """Changing a kernel's keys changes the schema. Unreleased, the digest is re-pinned
     without an op-version bump (clean breaks)."""
-    assert (MatMul.op_version, schema_digest(MatMul)) == (1, "a934f6872bdba16d")
+    assert (MatMul.op_version, schema_digest(MatMul)) == (1, "32f320f5840a2659")
 
 
 # -- persistence ------------------------------------------------------------------------
@@ -168,7 +168,7 @@ def test_configured_choices_are_written_and_replay_reads_them() -> None:
 
 
 def test_a_stored_choice_its_facts_rule_out_is_found_by_key_and_kept_dormant() -> None:
-    """``realization`` is MatMul's choice of a depthwise form (``when=depthwise``): on a
+    """``depthwise_datapath`` is MatMul's choice of a depthwise form (``when=depthwise``): on a
     dense MatMul its facts alone rule it out, so no list of its point holds it, and it is
     still a choice by name. A stored value is found through the kernel's model, not its
     lists (``replayed``), bound, and kept dormant under the form it does not apply to; a
@@ -176,11 +176,13 @@ def test_a_stored_choice_its_facts_rule_out_is_found_by_key_and_kept_dormant() -
     model = matmul_model()
     configured(model, {"first": FOLDING})
     bare = op(model).point()
-    assert "realization" not in {item.key for item in inspection.decisions(bare)}
-    assert "realization" in {item.key for item in inspection.decisions(inspection.model(bare))}
-    point = op(model).point({"realization": "dense"})
+    assert "depthwise_datapath" not in {item.key for item in inspection.decisions(bare)}
+    assert "depthwise_datapath" in {
+        item.key for item in inspection.decisions(inspection.model(bare))
+    }
+    point = op(model).point({"depthwise_datapath": "dense"})
     states = dict(inspection.states(point))
-    assert states["realization"] == inspection.Dormant("dense")
+    assert states["depthwise_datapath"] == inspection.Dormant("dense")
     assert point.compute.pe == 2  # the rest of the stored choices are bound as before
     with refused(
         "choices-refused",

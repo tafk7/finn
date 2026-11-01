@@ -17,9 +17,8 @@ from finn.core.space import Available, DefinitionError, Param, Space, design_spa
 from finn.core.space.compiler import compile_model
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
-from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.laws import AXIS, NATIVE, NATIVE_CLOCKING
-from finn.kernels.port_model import StreamPort
+from finn.kernels.port_model import InPort, StreamPort
 
 TENSOR = Tensor((4,), ScalarEncoding(DataType["INT4"]))
 SEQUENCE = BeatSequence(vector_major((4,), 1))
@@ -27,9 +26,8 @@ SEQUENCE = BeatSequence(vector_major((4,), 1))
 
 class Annotated(Space):
     input_tensor: Tensor = Param(default=TENSOR)
-    input: StreamPort = StreamPort(
+    input: StreamPort = InPort(
         label="input",
-        endpoint=Endpoint.TARGET,
         transport=NATIVE,
         tensor=input_tensor,
         sequence=SEQUENCE,
@@ -49,8 +47,11 @@ def test_a_wrong_typed_child_model_binding_is_refused() -> None:
     with pytest.raises(DefinitionError):
 
         class Mistyped(Space):
-            input = StreamPort(
-                transport=AXIS, label=json.loads("7"), tensor=TENSOR, sequence=SEQUENCE
+            input = InPort(
+                transport=AXIS,
+                label=json.loads("7"),
+                tensor=TENSOR,
+                sequence=SEQUENCE,
             )
 
         design_space(Mistyped())

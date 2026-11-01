@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from qonnx.core.datatype import DataType
 from support.helpers import FULL_DSP58, by_hand, choose, dotp_extents, keyed
 from support.refusals import refused
@@ -38,7 +39,6 @@ from finn.dataflow.gemm import Form
 from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
-from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
 from finn.kernels.composer import Facts, Port, channel
@@ -47,7 +47,7 @@ from finn.kernels.laws import Axis
 from finn.kernels.library import ModuleSpec, library_module
 from finn.kernels.partition import Partition
 from finn.kernels.port import lane_count
-from finn.kernels.port_model import StreamPort
+from finn.kernels.port_model import InPort, OutPort
 from finn.kernels.sides import Side
 from finn.kernels.values.domains import Integer
 from finn.platform.capabilities import Resources
@@ -79,19 +79,17 @@ class Pool(Kernel):
             return shape
         return Tensor(shape, ScalarEncoding(DataType["INT8"]))
 
-    x = StreamPort(
+    x = InPort(
         label="x",
         transport=Axis(bus="s_axis_input"),
-        endpoint=Endpoint.TARGET,
         tensor=x_tensor,
         schedule=schedule,
         index=(b, s, c),
         lanes=(c,),
     )
-    y = StreamPort(
+    y = OutPort(
         label="y",
         transport=Axis(bus="m_axis_output"),
-        endpoint=Endpoint.INITIATOR,
         tensor=y_tensor,
         schedule=schedule,
         index=(b, c),
@@ -113,10 +111,6 @@ class Pool(Kernel):
             CopiedSource("finnlib", "rtl/accpool.sv", provides=("module:accpool_axi",)),
         ),
     )
-
-    @view
-    def cycles(self) -> int:
-        return max(self.x.stream.sequence.form.beats, self.y.stream.sequence.form.beats)
 
 
 def tensor(shape: tuple[int, ...], dtype: str) -> Tensor:
@@ -159,7 +153,7 @@ def test_a_kernel_binds_its_extents_from_its_inputs_and_its_folding_factors_divi
     x, y = kernel.x.stream.sequence.form, kernel.y.stream.sequence.form
     assert (x.beats, x.lanes, y.beats, y.lanes) == (8, 4, 2, 4)
     assert dict(library_module(kernel).parameters) == {"CHANNELS": 8, "PE": 4}
-    assert kernel.cycles == 8  # the most beats a port carries: x's
+    assert kernel.frame_cycles == 8  # the most beats a port carries: x's
 
 
 def test_a_producers_tensor_is_its_kernels_and_its_channel_refuses_another() -> None:
@@ -181,7 +175,7 @@ def test_an_input_without_its_tensor_is_idle_and_carries_one_lane() -> None:
     point = design_space(Pool())
     assert not point.x.placed
     ((code, message),) = coded_messages(point.query(Pool.x.element))
-    assert code == "port-element" and message == "x: an idle port states its dtype"
+    assert code == "port-element" and message == "x: an idle input states its dtype"
     ((code, message),) = coded_messages(
         lane_count(point.x.physical_spec(idle=True), ScalarEncoding(DataType["INT4"]))
     )
@@ -198,45 +192,38 @@ def test_extent_of_is_a_named_member() -> None:
 
 
 def test_a_port_presents_a_schedule_or_a_sequence_not_both() -> None:
-    class Both(Pool):
-        id = "test.accpool.both"
-        x = StreamPort(
-            label="x",
-            transport=Axis(bus="s_axis_input"),
-            endpoint=Endpoint.TARGET,
-            tensor=Pool.x_tensor,
-            schedule=Pool.schedule,
-            sequence=BeatSequence(vector_major((1, 4, 8), 8)),
-            index=(b, s, c),
-            lanes=(c,),
-        )
+    """Refused when its kernel's class is made (``port-presentation``)."""
+    with refused("port-presentation", error=DefinitionError, message="schedule and sequence"):
 
-    # The fold that places the port is refused by it, its stream's rule.
-    trial = placing(Facts(Both, {"x_tensor": X})).trial(keyed({"kernel.pe": 8}))
-    ((code, message),) = coded_messages(Rejected(trial.refused[("kernel", "x.stream")]))
-    assert code == "port-presentation"
-    assert message.startswith("x: exactly one of a schedule or a sequence")
+        class Both(Pool):
+            id = "test.accpool.both"
+            x = InPort(
+                label="x",
+                transport=Axis(bus="s_axis_input"),
+                tensor=Pool.x_tensor,
+                schedule=Pool.schedule,
+                sequence=BeatSequence(vector_major((1, 4, 8), 8)),
+                index=(b, s, c),
+                lanes=(c,),
+            )
 
 
 def test_a_producers_element_is_its_tensors() -> None:
-    class Stated(Pool):
-        id = "test.accpool.stated"
-        y = StreamPort(
-            label="y",
-            transport=Axis(bus="m_axis_output"),
-            endpoint=Endpoint.INITIATOR,
-            tensor=Pool.y_tensor,
-            schedule=Pool.schedule,
-            index=(b, c),
-            lanes=(c,),
-            reduces=(s,),
-            dtype=DataType["INT9"],
-        )
+    """An output states no element of its own: ``dtype`` is an input's (``InPort``)."""
+    with pytest.raises(DefinitionError, match=r"unknown members \['dtype'\]"):
 
-    trial = placing(Facts(Stated, {"x_tensor": X})).trial(keyed({"kernel.pe": 4}))
-    ((code, message),) = coded_messages(Rejected(trial.refused[("kernel", "y.element")]))
-    assert code == "port-element"
-    assert message.startswith("y: a producer's element is its tensor's")
+        class Stated(Pool):
+            id = "test.accpool.stated"
+            y = OutPort(
+                label="y",
+                transport=Axis(bus="m_axis_output"),
+                tensor=Pool.y_tensor,
+                schedule=Pool.schedule,
+                index=(b, c),
+                lanes=(c,),
+                reduces=(s,),
+                dtype=DataType["INT9"],
+            )
 
 
 def test_dotp_binds_from_its_inputs_through_the_dense_view() -> None:
@@ -279,12 +266,16 @@ class Holding(Kernel):
 
     id = "test.holding"
     admits: Integer | None = Param(default=None)
-    x = StreamPort(
+
+    @derived
+    def schedule(self) -> Schedule | Rejected:
+        return bound_schedule(self.extents, order=(b, s, c))
+
+    x = InPort(
         label="x",
         transport=Axis(bus="s_axis_input"),
-        endpoint=Endpoint.TARGET,
         tensor=X,
-        sequence=BeatSequence(vector_major((1, 4, 8), 8)),
+        schedule=schedule,
         index=(b, s, c),
         lanes=(c,),
         admits=admits,
@@ -306,10 +297,6 @@ class Holding(Kernel):
     @derived
     def extents(self) -> dict[Index, int] | Rejected:
         return bound_extents([self.x.access] if self.x.binds else [])
-
-    @view
-    def cycles(self) -> int:
-        return self.x.stream.sequence.form.beats
 
 
 def test_a_refused_port_still_states_its_access_and_its_kernel_its_extents() -> None:

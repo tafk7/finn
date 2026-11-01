@@ -26,6 +26,7 @@ from .declarations import (
     ChoiceMemberRef,
     Decision,
     Declaration,
+    Label,
     Param,
     PendingAnnotation,
     ValueRef,
@@ -33,6 +34,7 @@ from .declarations import (
     at,
     declared_path,
     guard,
+    label_text,
     literal,
     local_name,
     path_text,
@@ -62,7 +64,7 @@ def _space() -> type[_Namespace]:
 
 # What a member is, for what may supply it: a body supplies formals; the rest
 # belongs to the Space class.
-SlotKind = Literal["param", "decision", "choice", "node", "behaviour"]
+SlotKind = Literal["param", "decision", "choice", "node", "alias", "behaviour"]
 
 
 class NodeDecl(Declaration):
@@ -171,9 +173,171 @@ def _declaration_object(space_type: type[_Namespace], path: tuple[Declaration, .
     return node
 
 
-def path_proxy(space_type: type[_Namespace], path: tuple[Declaration, ...]) -> _Namespace:
-    """A child reached through a node declaration: ``house.kitchen``."""
-    return _declaration_object(space_type, path)
+def path_proxy(
+    space_type: type[_Namespace],
+    path: tuple[Declaration, ...],
+    label: Label | None = None,
+) -> _Namespace:
+    """A child reached through a node declaration: ``house.kitchen``. ``label``: the names it
+    was read through where a node alias is among them (``x``, for ``inner.leaf``), which a
+    reference below it reports beside its path."""
+    node = _declaration_object(space_type, path)
+    if label is not None:
+        object.__setattr__(node, "_space_label", label)
+    return node
+
+
+def path_label(node: object) -> Label | None:
+    """The names a declaration-mode node was read through, where a node alias is among them
+    (``path_proxy``); None for a node read by its own path."""
+    found = vars(node).get("_space_label") if hasattr(node, "__dict__") else None
+    return cast("Label | None", found)
+
+
+class NodeAlias(Declaration):
+    """``x = inner.leaf``, ``x = compute.port``, ``x = mm.x``: a second name, in the class that
+    holds it, for a node a member places, at any depth below it (through children, selectors
+    and the members' own aliases).
+
+    It places nothing and owns nothing: the node keeps its owner's keys, path, guard and
+    choices, and its reads are the owner's. ``target`` is the node's path as declarations,
+    the children it descends through, ending at the node or at a selector; ``below`` the
+    names read in each case of that selector (a node of each case, or a case's own alias);
+    ``written`` the names it was read through as written (``mm.x``, through MatMul's own
+    alias, where ``target`` is its path, ``mm.compute``). It is resolved by declaration in
+    the class that holds it, once (``_aliases.alias_table``), and read as its node through
+    that resolution: on the class, a node to reference below (``Kind.x.side``); on a design
+    space or a receiver, the node (``point.x``), or None where a selection places nothing
+    there."""
+
+    _record_origin = False
+
+    def _init(
+        self, target: tuple[Declaration, ...], below: tuple[str, ...], written: tuple[str, ...]
+    ) -> None:
+        self.target = target
+        self.below = below
+        self.written = written
+
+    @property
+    def spelled(self) -> str:
+        """The path it names, as written."""
+        return ".".join(self.written)
+
+    def describe(self) -> str:
+        where = f"{self.owner.__qualname__}.{self.name}" if self.owner is not None else "alias"
+        return f"{where} (an alias of {self.spelled})"
+
+    def __repr__(self) -> str:
+        return f"<{self.describe()}>"
+
+    def __get__(self, instance: object, owner: type[object] | None = None) -> Any:
+        from ._aliases import alias_face, alias_node
+
+        if instance is None:
+            assert owner is not None
+            return alias_face(cast("type[_Namespace]", owner), cast(str, self.name), (), ())
+        outer = declared_path(instance)
+        if outer is not None:
+            # ``mm.x`` in a class body: the node through the member's alias.
+            return alias_face(
+                type(cast("_Namespace", instance)),
+                cast(str, self.name),
+                outer,
+                path_label(instance) or outer,
+            )
+        return alias_node(cast("_Namespace", instance), cast(str, self.name))
+
+    def __set__(self, instance: object, value: object) -> NoReturn:
+        raise AttributeError(
+            f"{self.name} is an alias of {self.spelled}, an immutable configuration field"
+        )
+
+    def __delete__(self, instance: object) -> NoReturn:
+        raise AttributeError(
+            f"{self.name} is an alias of {self.spelled}, an immutable configuration field"
+        )
+
+
+def _refuse_alias(code: str, where: str, message: str) -> NoReturn:
+    raise DefinitionError.broken(code, _OWNER, f"{where}: {message}", declaration=where)
+
+
+def install_alias(
+    owner: type[object],
+    name: str,
+    target: tuple[Declaration, ...],
+    below: tuple[str, ...],
+    label: Label | None = None,
+) -> None:
+    """``name = <a member's node>`` in the body of ``owner``: the class attribute becomes a
+    ``NodeAlias``. Its path is checked as written: lexically the holding class's (its first
+    declaration one of the class's own or inherited members, each next one a member of the
+    class the one before places), reached through children and selectors, not a case handle;
+    its name no reserved one; unannotated (an alias is no formal). ``label`` is the names it
+    was read through, where another alias is on its path (``mm.x``)."""
+    from .collection import RESERVED_NAMES
+
+    where = f"{owner.__qualname__}.{name}"
+    written = (
+        tuple(label_text(label).split("."))
+        if label
+        else (*(str(record.name) for record in target), *below)
+    )
+    spelled = ".".join(written)
+    if name in RESERVED_NAMES or name.startswith("__"):
+        _refuse_alias("name-reserved", where, "reserved configuration name")
+    if name in vars(owner).get("__annotations__", {}):
+        _refuse_alias(
+            "alias-annotated",
+            where,
+            f"an alias of {spelled} takes its type from the node it names; write it "
+            f"unannotated ({name} = {spelled}): annotated, it reads as a formal",
+        )
+    if any(isinstance(record, NodeDecl) and record.candidate_of is not None for record in target):
+        _refuse_alias(
+            "alias-case-handle",
+            where,
+            f"{spelled} names a node of one case of a selector, read through a case "
+            "handle; alias a node every case declares, through the selector "
+            f"({name} = <selector>.<node>)",
+        )
+    if isinstance(target[-1], NodeDecision) and not below:
+        _refuse_alias(
+            "alias-target-not-node",
+            where,
+            f"{spelled} is a selector: alias a node of its cases, or the selector's own "
+            "member where it is declared",
+        )
+    first = target[0]
+    if not isinstance(owner, type) or first.owner is None or first.owner not in owner.__mro__:
+        held = first.owner.__qualname__ if first.owner is not None else "no class"
+        _refuse_alias(
+            "alias-foreign",
+            where,
+            f"{spelled} is a path in {held}, not in {owner.__qualname__}: an alias names a "
+            "node of the holding class's own members",
+        )
+    above: Declaration | None = None
+    for record in target:
+        if not isinstance(record, (NodeDecl, NodeDecision)):
+            _refuse_alias("alias-target-not-node", where, f"{spelled} is no node path")
+        if isinstance(above, NodeDecision):
+            _refuse_alias("alias-target-not-node", where, f"{spelled} is no node path")
+        if isinstance(above, NodeDecl) and (
+            record.owner is None or record.owner not in above.space_type.__mro__
+        ):
+            _refuse_alias(
+                "alias-foreign",
+                where,
+                f"{spelled}: {record.name} is not a member of {above.space_type.__qualname__}",
+            )
+        above = record
+    alias = Declaration.__new__(NodeAlias)
+    alias._init(target, below, written)
+    object.__setattr__(alias, "origin", source_origin())
+    type.__setattr__(owner, name, alias)
+    alias.__set_name__(owner, name)
 
 
 def slot_declaration(value: object) -> Declaration | None:
@@ -198,6 +362,8 @@ def slot_kind(declaration: Declaration) -> SlotKind:
         return "decision"
     if isinstance(declaration, NodeDecl):
         return "node"
+    if isinstance(declaration, NodeAlias):
+        return "alias"
     return "behaviour"
 
 
@@ -269,7 +435,7 @@ def _value_supplier(
 ) -> object:
     from ._configuration import _Namespace
 
-    if isinstance(value, (NodeChoice, _Namespace)):
+    if isinstance(value, (NodeChoice, ChoicePath, _Namespace)):
         raise DefinitionError.broken(
             "node-not-value",
             _OWNER,
@@ -329,6 +495,14 @@ def check_supplier(
     Only formals are supplied: a Decision, a Decision over nodes, a child node and
     behaviour belong to the Space class, and a subclass changes them.
     """
+    if isinstance(member, NodeAlias):
+        raise DefinitionError.broken(
+            "alias-bound",
+            _OWNER,
+            f"{label}: {member.describe()} is a second name for a member's node, not a formal: "
+            "it takes no value; bind the member's formals where the member is declared",
+            declaration=label,
+        )
     if isinstance(member, Param) and not _annotated_yet(member):
         return _pending_supplier(member, value, label)
     kind = slot_kind(member)
@@ -354,7 +528,7 @@ def _pending_supplier(member: Param[object], value: object, label: str) -> objec
     resolves. A forward or a reference waits; a literal needs its value type now."""
     from ._configuration import _Namespace
 
-    if isinstance(value, (NodeChoice, _Namespace)):
+    if isinstance(value, (NodeChoice, ChoicePath, _Namespace)):
         raise DefinitionError.broken(
             "node-not-value",
             _OWNER,
@@ -541,12 +715,7 @@ class NodeChoice:
 
     def __set_name__(self, owner: type[object], name: str) -> None:
         if len(self._space_path) != 1:
-            raise DefinitionError.broken(
-                "choice-path-nested",
-                _OWNER,
-                f"{owner.__qualname__}.{name}: a nested choice path is a reference",
-                declaration=f"{owner.__qualname__}.{name}",
-            )
+            install_alias(owner, name, self._space_path, ())  # refused: a selector
         decision = self._space_decision()
         decision.__set_name__(owner, name)
         for key, record in decision.candidates.items():
@@ -566,8 +735,13 @@ class NodeChoice:
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):
             raise AttributeError(name)
-        _check_direct_read(self._space_decision(), name)
-        return ChoiceMemberRef(self._space_path, name)
+        decision = self._space_decision()
+        cases = {
+            case: record.space_type
+            for case, record in decision.candidates.items()
+            if record is not None
+        }
+        return read_below(self._space_path, (), name, cases, None)
 
     def __getitem__(self, case: str) -> Any:
         """``choice["pump"]``: one candidate's node, for its own members."""
@@ -797,18 +971,51 @@ def _check_shared(
                 )
 
 
-def _check_direct_read(decision: NodeDecision, name: str) -> None:
-    """``choice.member`` needs a member every candidate declares, of one value type."""
-    having: dict[str, Declaration] = {}
-    lacking: list[str] = []
-    for case, record in decision.candidates.items():
-        if record is None:
-            continue  # reading through the None candidate is inapplicable, not a lack
-        member = space_members(record.space_type).get(name)
-        if member is None:
-            lacking.append(case)
-        else:
-            having[case] = member
+_NODES = (NodeDecl, NodeDecision, NodeAlias)
+
+
+def read_below(
+    path: tuple[Declaration, ...],
+    names: tuple[str, ...],
+    name: str,
+    cases: Mapping[str, type[_Namespace]],
+    label: Label | None,
+) -> Any:
+    """``selector.<names>.name`` in a class body: of each case that places something
+    (``cases``: each class the names reach, by its case), a node (``ChoicePath``, for an
+    alias to name, or a reference below it) or a value, the selected case's
+    (``ChoiceMemberRef``). Every case must hold it, and of one kind."""
+    decision = cast(NodeDecision, path[-1])
+    found = {case: space_members(space_type).get(name) for case, space_type in cases.items()}
+    dotted = (*names, name)
+    nodes = [case for case, member in found.items() if isinstance(member, _NODES)]
+    if nodes:
+        others = [case for case in found if case not in nodes]
+        if others:
+            where = f"{decision.describe()}.{'.'.join(dotted)}"
+            raise DefinitionError.broken(
+                "alias-case-absent",
+                _OWNER,
+                f"{where}: cases {others} hold no node {name!r}; a node read through a "
+                "selector is a node of every case that places something (a case placing "
+                "nothing reads as absent)",
+                declaration=where,
+            )
+        return ChoicePath(path, dotted, None if label is None else (*label, name))
+    _check_direct_read(decision, ".".join(dotted), found, cases)
+    return ChoiceMemberRef(path, ".".join(dotted), None if label is None else (*label, name))
+
+
+def _check_direct_read(
+    decision: NodeDecision,
+    name: str,
+    found: Mapping[str, Declaration | None],
+    cases: Mapping[str, type[_Namespace]],
+) -> None:
+    """``choice.member`` needs a member every candidate declares, of one value type
+    (``found``: each case's member of that name, read in ``cases``' classes)."""
+    having = {case: member for case, member in found.items() if member is not None}
+    lacking = [case for case, member in found.items() if member is None]
     if not having:
         raise AttributeError(name)
     if lacking:
@@ -824,9 +1031,8 @@ def _check_direct_read(decision: NodeDecision, name: str) -> None:
 
     known: list[tuple[str, ValueSemantics[object]]] = []
     for case, member in having.items():
-        space_type = cast(NodeDecl, decision.candidates[case]).space_type
         try:
-            semantics = collect_space(space_type).semantics.get(member)
+            semantics = collect_space(cases[case]).semantics.get(member)
         except DefinitionError:
             semantics = None  # known only when linking: checked there
         if semantics is None:
@@ -846,6 +1052,68 @@ def _check_direct_read(decision: NodeDecision, name: str) -> None:
             )
 
 
+class ChoicePath:
+    """A node read through a selector by its names in each case (``compute.port``, and
+    ``compute.inner.leaf``): what ``x = compute.port`` in a class body makes an alias of, and
+    what a class reference through such an alias is (``MatMul.x``, ``Wrapper.x``). Its
+    members read as references to the selected case's (``MatMul.x.side``: a
+    ``ChoiceMemberRef`` of ``x.side``), its nodes as deeper paths. ``label``: the names it
+    was read through where a node alias is among them."""
+
+    __slots__ = ("_space_choice", "_space_names", "_space_label")
+
+    def __init__(
+        self,
+        path: tuple[Declaration, ...],
+        names: tuple[str, ...],
+        label: Label | None = None,
+    ) -> None:
+        object.__setattr__(self, "_space_choice", path)
+        object.__setattr__(self, "_space_names", names)
+        object.__setattr__(self, "_space_label", label)
+
+    def _space_decision(self) -> NodeDecision:
+        return cast(NodeDecision, self._space_choice[-1])
+
+    @property
+    def spelled(self) -> str:
+        """Its path as declared: the selector's, then the names below it."""
+        return ".".join((*(str(record.name) for record in self._space_choice), *self._space_names))
+
+    def __set_name__(self, owner: type[object], name: str) -> None:
+        install_alias(owner, name, self._space_choice, self._space_names, self._space_label)
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            raise AttributeError(name)
+        from ._aliases import reached
+
+        cases = reached(self._space_decision(), self._space_names)
+        return read_below(self._space_choice, self._space_names, name, cases, self._space_label)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        raise AttributeError("a node read through a selector is immutable")
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ChoicePath):
+            return NotImplemented
+        return (tuple(map(id, self._space_choice)), self._space_names) == (
+            tuple(map(id, other._space_choice)),
+            other._space_names,
+        )
+
+    def __hash__(self) -> int:
+        return hash((tuple(map(id, self._space_choice)), self._space_names))
+
+    def __bool__(self) -> bool:
+        raise TypeError("a node read through a selector has no truth value")
+
+    def __repr__(self) -> str:
+        label = self._space_label
+        shown = self.spelled if label is None else f"{label_text(label)} ({self.spelled})"
+        return f"<node {shown} of the selected case>"
+
+
 def selector_value(source: object) -> object:
     """A selector given as a binding's argument reads its value, the case's name: the
     selector's node. Anything else unchanged."""
@@ -856,7 +1124,8 @@ def selector_value(source: object) -> object:
 
 def selected(selector: object) -> str:
     """A selector's value, the case's name, as a reference: internal, for a member built
-    over a child that may be a selector or not (a port's ``served``), which a binding to the
+    over a child that may be a selector or not (the case a kernel reads its members'
+    doubled clock and control buses through, ``finn.kernels.base``), which a binding to the
     selector cannot tell apart. Every other reader binds the selector itself."""
     if not isinstance(selector, NodeChoice):
         raise DefinitionError.broken(
@@ -874,6 +1143,8 @@ def unwrap(value: object) -> object:
 
 
 __all__ = [
+    "ChoicePath",
+    "NodeAlias",
     "NodeChoice",
     "NodeDecision",
     "NodeDecl",
@@ -885,6 +1156,9 @@ __all__ = [
     "selected",
     "fallback",
     "inline_decision",
+    "install_alias",
+    "path_label",
+    "read_below",
     "space_formals",
     "space_members",
     "is_required",

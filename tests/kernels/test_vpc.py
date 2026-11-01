@@ -123,69 +123,83 @@ def _pair(arriving: BeatSequence, leaving: BeatSequence, shape: tuple[int, ...] 
 
 
 @pytest.mark.parametrize(
-    ("arriving", "leaving", "shape"),
+    ("arriving", "leaving", "shape", "presented"),
     [
-        # Codex's ``vpc_reorder``: one lane each side, a 2 x 2 tensor transposed.
+        # A reorder: one lane each side, a 2 x 2 tensor transposed.
         (
             BeatSequence(vector_major((2, 2), 1)),
             BeatSequence(Traversal((2, 2), (Loop(2, 1), Loop(2, 2)), ())),
             (2, 2),
+            set(),
         ),
         # The same positions in each beat, in another lane order.
         (
             BeatSequence(vector_major(ROWS, 6)),
             BeatSequence(Traversal(ROWS, (Loop(4, 6),), (Loop(2, 1), Loop(3, 2)))),
             ROWS,
+            set(),
         ),
         # A lane group of another order (its port refuses a lane group too).
         (
             BeatSequence(COLUMNS),
             BeatSequence(vector_major((6, 2), 2)),
             (6, 2),
+            {"port-presentation-unsupported"},
         ),
         (
             BeatSequence(vector_major(ROWS, 2), Repetition.CYCLIC),
             BeatSequence(vector_major(ROWS, 3)),
             ROWS,
+            set(),
         ),
+        # A marker (its native port carries none either).
         (
             BeatSequence(vector_major(ROWS, 2)),
             BeatSequence(vector_major(ROWS, 2), markers=(LevelEnd(3),)),
             ROWS,
+            {"port-markers"},
         ),
     ],
     ids=["reorder", "lane_permutation", "lane_group_reordered", "repetition", "marker"],
 )
 def test_it_refuses_two_sides_that_differ_by_more_than_their_width(
-    arriving: BeatSequence, leaving: BeatSequence, shape: tuple[int, ...]
+    arriving: BeatSequence, leaving: BeatSequence, shape: tuple[int, ...], presented: set[str]
 ) -> None:
     """Its association (``width_only``): what leaves is what arrives at another lane count,
     the same element order, repetition and markers. Its RTL regroups lanes and does nothing
     else (the wire branch, at one lane count, passes each beat through), so any other pair
-    is refused, and with it its parameters and netlist."""
+    is refused, and with it its parameters and netlist. A side its port cannot present is
+    refused by the port too (``presented``)."""
     kernel = _pair(arriving, leaving, shape)
-    assert rejected(kernel) == {"vpc-width-only"}
+    assert rejected(kernel) == {"vpc-width-only", *presented}
     netlist = kernel.query(VpcKernel.netlist)
     assert isinstance(netlist, Rejected)
-    assert [f.code for f in netlist.findings] == ["vpc-width-only"]
+    assert "vpc-width-only" in {f.code for f in netlist.findings}
 
 
 @pytest.mark.parametrize(
-    ("arriving", "leaving", "shape"),
+    ("arriving", "leaving", "shape", "presented"),
     [
-        (BeatSequence(vector_major(ROWS, 2)), BeatSequence(vector_major(ROWS, 2)), ROWS),
+        (BeatSequence(vector_major(ROWS, 2)), BeatSequence(vector_major(ROWS, 2)), ROWS, set()),
         (
             BeatSequence(vector_major(ROWS, 2), Repetition.CYCLIC),
             BeatSequence(vector_major(ROWS, 3), Repetition.CYCLIC),
             ROWS,
+            set(),
         ),
-        (BeatSequence(COLUMNS), BeatSequence(regrouped(COLUMNS, 2)), (6, 2)),
+        # Its ports refuse a lane group (``presented``); its association does not.
+        (
+            BeatSequence(COLUMNS),
+            BeatSequence(regrouped(COLUMNS, 2)),
+            (6, 2),
+            {"port-presentation-unsupported"},
+        ),
     ],
     ids=["same_sequence", "cyclic", "lane_group_in_order"],
 )
 def test_it_admits_one_sequence_at_two_lane_counts(
-    arriving: BeatSequence, leaving: BeatSequence, shape: tuple[int, ...]
+    arriving: BeatSequence, leaving: BeatSequence, shape: tuple[int, ...], presented: set[str]
 ) -> None:
     """The same sequence, a cyclic one at another lane count, and a lane group's order at
     lanes that close its loops: each one sequence at two lane counts."""
-    assert not rejected(_pair(arriving, leaving, shape))
+    assert rejected(_pair(arriving, leaving, shape)) == presented

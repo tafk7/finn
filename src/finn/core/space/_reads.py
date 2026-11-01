@@ -442,8 +442,9 @@ class _TemplateInference:
         return tuple(items)
 
     def _scopes(self, place: _Place, path: Path, items: list[_Item]) -> list[_Place] | None:
-        """The places ``path`` (child and selector names) reaches from ``place``, adding
-        the selectors it reads on the way; ``None`` where a name is no child or selector."""
+        """The places ``path`` (child, selector and node alias names) reaches from
+        ``place``, adding the selectors it reads on the way; ``None`` where a name is no
+        child, selector or node alias."""
         reached = [place]
         for name in path:
             following: list[_Place] = []
@@ -452,6 +453,14 @@ class _TemplateInference:
                 slot = compiled.named_children.get(name)
                 if slot is not None:
                     following.append(at.child(slot))
+                    continue
+                alias = compiled.aliases.get(name)
+                if alias is not None:
+                    # A second name of a member's node: the places its steps reach.
+                    below = self._scopes(at, alias.steps, items)
+                    if below is None:
+                        return None
+                    following.extend(below)
                     continue
                 selector = compiled.named_members.get(name)
                 choice = None if selector is None else compiled.selectors.get(selector)
@@ -481,6 +490,10 @@ class _TemplateInference:
                 self._resolve(place.child(slot), rest, items, helpers, text)
             return True
         index = compiled.named_members.get(name)
+        alias = None if index is not None else compiled.aliases.get(name)
+        if alias is not None:
+            # A second name of a member's node (``x = inner.leaf``): read as its steps.
+            return self._resolve(place, (*alias.steps, *rest), items, helpers, text)
         if index is None:
             held = self._helper(compiled, name)
             if held is None:
@@ -545,6 +558,12 @@ class _TemplateInference:
         known = False
         for at in reached:
             compiled = at.compiled
+            alias = compiled.aliases.get(path[-1])
+            if alias is not None:
+                # An alias is present where the node it names is.
+                self._presence(at, alias.steps, items)
+                known = True
+                continue
             slot = compiled.named_children.get(path[-1])
             if slot is not None:
                 # The guard the child is placed under: a record of this class, or the guard

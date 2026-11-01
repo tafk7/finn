@@ -8,7 +8,7 @@ Its class: a Param per fact at the root, named ``<member>-<fact>``, each kernel'
 bound to those Params only, each channel's sides to its kernels' sides below their member's
 node; its answers, configured with the Chain's stored choices, keyed by pair; the class
 kept by its structure, at most ``CLASS_CACHE_BOUND`` of them; names, roles (each port's
-endpoint read off its class, ``port_endpoint``) and reads refused by name when the class is
+endpoint read off its class, ``port_direction``) and reads refused by name when the class is
 made; keys mapped between a path and FINN's pair.
 """
 
@@ -40,7 +40,7 @@ from finn.core.space.compiler import compile_model
 from finn.dataflow.gemm import Form, Window
 from finn.dataflow.schedule import Index
 from finn.kernels import composer
-from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.abi import Direction
 from finn.kernels.base import extent_of
 from finn.kernels.channels import Channel
 from finn.kernels.composer import (
@@ -58,7 +58,7 @@ from finn.kernels.composer import (
 )
 from finn.kernels.configure import commit
 from finn.kernels.matmul import KnownWeights, MatMulKernel
-from finn.kernels.port import port_endpoint
+from finn.kernels.port import port_direction
 from finn.kernels.sides import BUILD, Outside, Side, SideKind, Steady
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import IntegerTensorValue
@@ -206,11 +206,11 @@ def test_each_kernel_formal_is_bound_to_a_root_param_only(cache: None) -> None:
 #: Each channel's sides' labels: a kernel's port below its member's node, the boundary's
 #: AXIS port, a source's none.
 LABELS = {
-    "x": ("s_axis_0", "first.compute.packed.x"),
-    "w1": ("", "first.compute.packed.w"),
-    "hidden": ("first.compute.packed.y", "activate.input"),
-    "levels": ("activate.output", "second.compute.packed.x"),
-    "y": ("second.compute.packed.y", "m_axis_0"),
+    "x": ("s_axis_0", "first.x"),
+    "w1": ("", "first.w"),
+    "hidden": ("first.y", "activate.input"),
+    "levels": ("activate.output", "second.x"),
+    "y": ("second.y", "m_axis_0"),
 }
 
 
@@ -226,7 +226,7 @@ def test_a_kernel_side_is_labelled_below_its_member_s_node(cache: None) -> None:
         assert all(isinstance(each, Available) for each in found), found
         assert tuple(each.value.label for each in found if isinstance(each, Available)) == labels
     side = point.hidden.query(Channel.producer)  # type: ignore[attr-defined]
-    assert isinstance(side, Available) and side.value.label == "first.compute.packed.y"
+    assert isinstance(side, Available) and side.value.label == "first.y"
     assert side.value.kind is SideKind.KERNEL
 
 
@@ -472,7 +472,7 @@ def test_a_read_no_member_states_is_refused(cache: None) -> None:
         Port("second", "z"), Side.boundary("m_axis_0"), tensor=Y_TENSOR, platform=platform
     )
     assert _refused(declared(channels_=_wired(y=no_port))) == [
-        ("channel-read", "y", "reads second, which states no z_side")
+        ("channel-read", "y", "reads second, which states no port z")
     ]
     with pytest.raises(PartitionRefused, match="ThresholdingAxiKernel takes no fact depth"):
         given = kernels()
@@ -518,9 +518,9 @@ def test_a_side_is_given_as_a_side_not_as_a_fact() -> None:
 
 
 def test_a_port_s_endpoint_is_read_off_its_class() -> None:
-    # A served port's is its child's: each case's of a selector, or a placed child's.
-    assert port_endpoint(MatMulKernel, "y") is Endpoint.INITIATOR
-    assert port_endpoint(MatMulKernel, "x") is Endpoint.TARGET
-    assert port_endpoint(Channel, "set") is Endpoint.TARGET
-    assert port_endpoint(ThresholdingAxiKernel, "output") is Endpoint.INITIATOR
-    assert port_endpoint(MatMulKernel, "z") is None
+    # An exposed port's is its member's: each case's of a selector, or a placed child's.
+    assert port_direction(MatMulKernel, "y") is Direction.OUT
+    assert port_direction(MatMulKernel, "x") is Direction.IN
+    assert port_direction(Channel, "set") is Direction.IN
+    assert port_direction(ThresholdingAxiKernel, "output") is Direction.OUT
+    assert port_direction(MatMulKernel, "z") is None

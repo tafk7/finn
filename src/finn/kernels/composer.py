@@ -32,22 +32,23 @@ facts (``Composed``; ``Composed.design_space()`` opens it):
   defaults and of the choices offered, are today's), each a ``Channel`` whose ``producer``
   and ``consumer`` are bound to its kernels' sides, its value facts to their Params and its
   stated facts to the members' derived values. A kernel's side is labelled below the
-  member's name, as FINN's network labels it (``mm0.compute.packed.y``): a derived value at
-  the root, ``<channel>-producer`` or ``<channel>-consumer``, the port's ``<p>_side``
+  member's name, as FINN's network labels it (``mm0.y``): a derived value at
+  the root, ``<channel>-producer`` or ``<channel>-consumer``, the port's ``side``
   ``under`` the member, so a channel's findings name the node as today's network's do.
 
 **The side is structural.** A producer side is an output port (its actual port model's
-endpoint the initiator, or its served child's), a consumer side an input port, and a
+direction ``OUT``), a consumer side an input port, and a
 source is never a consumer: a declaration that breaks one is refused when the class is
 made (``channel-users``, the channel's text, owned by the channel's name). The channel's
-own role check (``Channel.sides``) stays the backstop where a port's endpoint is not known
+own role check (``Channel.sides``) stays the backstop where a port's direction is not known
 when its class is made.
 
 **In a shell**: a declaration that states its shell's row (``PartitionDeclaration.shell``,
 the row's facts by name) composes one member more, ``shell`` (``finn.kernels.budgets``):
 the row's facts, each a root Param (``shell-control_budget``), and each contributor's
-derived value bound to its Param (a kernel's presented bus, memory ports and doubled clock,
-a boundary channel's movers, a valued channel's doubled clock), as a channel's side is
+derived value bound to its Param (the control buses a kernel presents, its own and its
+members', where it may present one, its memory ports and doubled clock, a boundary
+channel's movers, a valued channel's doubled clock), as a channel's side is
 bound to its kernel's port, and the shell's budgets as its rules. It is in none of the
 kernels or channels (``Names.members``), and is reached by its own name (``Names.shell``).
 
@@ -88,7 +89,7 @@ import re
 import threading
 from collections import Counter, OrderedDict
 from collections.abc import Callable, Hashable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import cached_property
 from types import MappingProxyType
 from typing import Any, cast
@@ -108,8 +109,8 @@ from finn.core.space import (
     space_formals,
 )
 from finn.core.space.compiler import compile_model
-from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.base import Kernel
+from finn.kernels.artifacts.abi import Direction
+from finn.kernels.base import may_present_bus
 from finn.kernels.budgets import (
     DOUBLED,
     INITIATORS,
@@ -121,8 +122,7 @@ from finn.kernels.budgets import (
     shell_members,
 )
 from finn.kernels.channels import Channel
-from finn.kernels.control import control_models
-from finn.kernels.port import port_endpoint, port_side
+from finn.kernels.port import exposed_name, port_direction, stream_port
 from finn.kernels.sides import Side, SideKind
 
 SEPARATOR = "-"
@@ -141,7 +141,7 @@ SIDES = ("producer", "consumer")
 @dataclass(frozen=True)
 class Port:
     """A kernel's port as a channel's side: member ``member`` (a graph name) and its port
-    ``port`` (``y``: the side it states, ``y_side``)."""
+    ``port`` (``y``: the side it states, ``y.side``)."""
 
     member: str
     port: str
@@ -421,14 +421,14 @@ def _checked(declared: PartitionDeclaration) -> list[Finding]:
         for read in (each.producer, each.consumer, *each.facts.values()):
             if not isinstance(read, (Port, Stated)):
                 continue
-            stated = f"{read.port}_side" if isinstance(read, Port) else read.name
+            stated = f"port {read.port}" if isinstance(read, Port) else read.name
             if read.member not in members:
                 findings.append(
                     _refused("channel-read", name, f"reads {read.member}, which is no member")
                 )
             elif isinstance(read, Port):
                 try:
-                    port_side(_class_of(declared, read.member), read.port)
+                    stream_port(_class_of(declared, read.member), read.port)
                 except KeyError:
                     findings.append(
                         _refused(
@@ -459,9 +459,9 @@ def _roles(declared: PartitionDeclaration, name: str, each: ChannelDeclaration) 
     for role, side in (("producer", producer), ("consumer", consumer)):
         if not isinstance(side, Port) or side.member not in members:
             continue
-        endpoint = port_endpoint(_class_of(declared, side.member), side.port)
+        direction = port_direction(_class_of(declared, side.member), side.port)
         label = f"{side.member}.{side.port}"
-        if role == "producer" and endpoint is Endpoint.TARGET:
+        if role == "producer" and direction is Direction.IN:
             found.append(
                 _refused(
                     "channel-users",
@@ -469,7 +469,7 @@ def _roles(declared: PartitionDeclaration, name: str, each: ChannelDeclaration) 
                     f"a channel's producer is an output port, and {label} is an input's",
                 )
             )
-        if role == "consumer" and endpoint is Endpoint.INITIATOR:
+        if role == "consumer" and direction is Direction.OUT:
             found.append(
                 _refused(
                     "channel-users",
@@ -594,13 +594,21 @@ def _param(
     return Param()
 
 
-def _under(member: str) -> Callable[[Side], Side]:
-    """A kernel's side labelled below ``member``, its node."""
+def _under(member: str, name: str | None) -> Callable[[Side], Side]:
+    """A kernel's side labelled below ``member``, its node: a port it exposes under ``name``
+    (``finn.kernels.port.exposed_name``), its own under its label (``name`` None)."""
 
     def side(side: Side) -> Side:
         return side.under(member)
 
-    return side
+    if name is None:
+        return side
+    label: str = name
+
+    def exposed_side(side: Side) -> Side:
+        return replace(side, label=label).under(member)
+
+    return exposed_side
 
 
 def _made(
@@ -630,8 +638,11 @@ def _made(
             if isinstance(side, Port):
                 node = nodes[names[side.member]]
                 assert isinstance(node, Space)
-                read = port_side(node, side.port)  # _checked found it before construction
-                channels[root] = given[role] = derived(side=read)(_under(names[side.member]))
+                read = stream_port(node, side.port).side  # _checked found it before construction
+                exposed = exposed_name(type(node), side.port)
+                channels[root] = given[role] = derived(side=read)(
+                    _under(names[side.member], exposed)
+                )
             else:
                 params[root] = given[role] = _param(Channel, role, owner, annotations, root)
         for fact, value in sorted(each.facts.items()):
@@ -654,14 +665,6 @@ def _made(
     )
     members = {owner: names[owner] for owner in (*declared.kernels, *ranked)}
     return space_type, Names(members, roots, SHELL if declared.shell is not None else None)
-
-
-def _control_bus(space_type: type[Space]) -> str | None:
-    """The control bus a kernel class declares, by name (``finn.kernels.control``); None
-    where it declares none."""
-    if not issubclass(space_type, Kernel):
-        return None
-    return next(iter(control_models(space_type)), None)
 
 
 def _shell(
@@ -688,14 +691,10 @@ def _shell(
     doubled: list[str] = []
     for owner, facts in declared.kernels.items():
         member = names[owner]
-        bus = _control_bus(facts.space_type)
-        if bus is not None:
-            presented.append(member)
+        if may_present_bus(facts.space_type):
             # Bind the actual placed occurrence, not a borrowed class reference.
-            control = nodes[member]
-            for segment in bus.split("."):
-                control = getattr(control, segment)
-            given[contributor(member, PRESENTED)] = control.presented
+            presented.append(member)
+            given[contributor(member, PRESENTED)] = nodes[member].control_buses
         for kind, name, found in (
             (INITIATORS, "memory_initiators", initiators),
             (DOUBLED, "takes_doubled_clock", doubled),
@@ -713,6 +712,9 @@ def _shell(
         ):
             movers.append(member)
             given[contributor(member, MOVER)] = nodes[member].placed_mover
+        if may_present_bus(Channel):
+            presented.append(member)
+            given[contributor(member, PRESENTED)] = nodes[member].control_buses
         if "contents" in each.facts:
             doubled.append(member)
             given[contributor(member, DOUBLED)] = nodes[member].takes_doubled_clock

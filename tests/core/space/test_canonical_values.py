@@ -16,7 +16,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import NamedTuple
+from typing import Any, NamedTuple, cast
 
 import pytest
 from support.refusals import refused
@@ -308,3 +308,33 @@ def test_values_equal_by_their_eq_are_one_value_whatever_their_readers_see() -> 
     assert narrow.with_facts({Packed.lanes: Coarse(4, 16)}) is narrow
     other = narrow.with_facts({Packed.lanes: Coarse(5, 16)})
     assert held(other).ds is not held(narrow).ds and other.width == 16
+
+
+def test_a_numpy_number_is_taken_as_it_is_as_a_plain_number() -> None:
+    """A numpy number (``numpy.number``, ``numpy.bool_``) is a value as a plain number is:
+    taken as it is, of its own type, where it enters, and walked inside another value; a
+    floating one's ``-0.0`` is ``0.0`` of its type, and its NaN refused. The engine imports
+    no numpy: the test does."""
+    numpy: Any = pytest.importorskip("numpy")
+    for value in (numpy.int64(3), numpy.uint8(2), numpy.bool_(True), numpy.float32(1.5)):
+        meter = design_space(Meter(rate=1.0, box=Box(value)))
+        assert meter.box is not None
+        assert meter.box.inner == value and type(meter.box.inner) is type(value)
+        assert meter.with_facts({Meter.box: Box((value,))}).box == Box((value,))
+    # Hashed by its value: a value class holding it is one value with one holding the plain
+    # number ``==`` holds it equal to (the value class's ``==``).
+    given = held(design_space(Meter(rate=1.0, box=Box(numpy.int64(3))))).ds
+    assert given == held(design_space(Meter(rate=1.0, box=Box(3)))).ds
+    signed = design_space(Meter(rate=1.0, box=Box((numpy.float32(-0.0), numpy.complex64(-0j)))))
+    assert signed.box is not None
+    zero, complex_zero = cast(tuple[object, object], signed.box.inner)
+    assert type(zero).__name__ == "float32" and not negative(float(cast(float, zero)))
+    assert type(complex_zero).__name__ == "complex64"
+    assert not negative(complex(cast(complex, complex_zero)).real)
+    with refused("literal-not-value", error=DefinitionError, message="NaN is no value"):
+        Meter(rate=1.0, box=Box(numpy.float32("nan")))
+    with pytest.raises(RequestError, match="^box: .*NaN is no value"):
+        signed.with_facts({Meter.box: Box(numpy.complex64(complex(0.0, NAN)))})
+    # A numpy value that is no number is not admitted by this: an array is mutable.
+    with pytest.raises(RequestError, match="^box: Box.inner: a ndarray"):
+        signed.with_facts({Meter.box: Box(numpy.zeros(2))})

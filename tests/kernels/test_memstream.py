@@ -34,6 +34,7 @@ from finn.kernels.artifacts.contributions import ContributionError, GeneratedDat
 from finn.kernels.channels import OUTPUT_ADAPTER_LABEL, SOURCE_LABEL
 from finn.kernels.library import library_module
 from finn.kernels.memstream import MemStreamKernel
+from finn.kernels.port import exposed_pins
 from finn.kernels.values.semantics import IntegerTensorValue
 
 WEIGHTS = ((-4, -3, -2, -1), (0, 1, 2, 3), (3, 2, 1, 0), (-1, -2, -3, -4))
@@ -150,15 +151,15 @@ def test_several_weight_sets_take_a_set_index_per_row():
     # memory of one set streams one pass.
     source = built.network.member("w").source
     assert source.output_sequence.form.beats == 3 * source.form.beats
-    assert source.cycles == 3 * source.form.beats
-    assert memory().cycles == memory().form.beats
+    assert source.frame_cycles == 3 * source.form.beats
+    assert memory().frame_cycles == memory().form.beats
     # The memory's choices are the weight channel's, keyed below it.
     keys = {dotted(key) for key in built.network.decisions()}
     assert {"w.source.ram_style", "w.source.pumped_memory"} <= keys
 
 
 def test_several_sets_without_their_indices_refuse_the_sequences_that_read_them():
-    # Its rule refuses such a memory (``selected``); its set port's order and its output's
+    # Its rule refuses such a memory (``sets_indexed``); its set port's order and its output's
     # read the indices, and refuse the same way rather than read what is not given.
     space = design_space(
         MemStreamKernel(
@@ -219,7 +220,8 @@ def test_a_channel_s_placements_keep_the_labels_it_states_in_the_emitted_netlist
         "m_axis_0_tdata"
     ]
     # Its set port: labelled below it, and the index channel's hop ends at it.
-    assert w.set_stream_pins.label == f"{SOURCE_LABEL}.set"
+    pins = exposed_pins(w, "set", w.set.stream_pins)
+    assert (pins.label, pins.instance) == ("set", SOURCE_LABEL)
     assert [link.sink.data for link in links if link.sink.instance == instance] == [
         "s_axis_0_tdata"
     ]

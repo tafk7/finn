@@ -15,8 +15,9 @@ Its facts are the row's (``ShellBudgets``: the shell's name, its ``control_budge
 partition, at its root), and each contributor's derived value, a Param bound to it as a
 channel's side is bound to its kernel's port (``contributor`` names each):
 
-- each kernel with a control bus: whether it presents it (``<member>-presented``, its
-  ``<bus>_presented``, ``finn.kernels.control``);
+- each kernel or channel that may present a control bus, its own or a member's: the buses
+  it presents (``<member>-presented``, its ``control_buses``, each by its path below it,
+  ``finn.kernels.base.Kernel``);
 - each boundary channel: the movers it places (``<member>-mover``, its ``placed_mover``:
   none where its shell offers none); a mover presents its own AXI-Lite bus. Another kind of
   mover a shell places is one more Param;
@@ -164,14 +165,14 @@ class _Sum(Group):
 
 
 class _PresentedSum(Group):
-    """A presented bus contributes one to the included sum."""
+    """Each bus a contributor presents contributes one to the included sum."""
 
-    head: bool = Param()
+    head: tuple[str, ...] = Param()
     tail: int = Param()
 
     @derived
     def result(self) -> int:
-        head = int(self.head)
+        head = len(self.head)
         tail = self.tail
         return head + tail
 
@@ -234,7 +235,7 @@ def _sum(
         head = members[names[index]]
         part: _Sum | _PresentedSum | _MoverSum
         if step is _PresentedSum:
-            part = _PresentedSum(head=cast(bool, head), tail=tail)
+            part = _PresentedSum(head=cast(tuple[str, ...], head), tail=tail)
         elif step is _MoverSum:
             part = _MoverSum(head=cast(tuple[MoverContract, ...], head), tail=tail)
         else:
@@ -278,14 +279,14 @@ def shell_members(
 ) -> tuple[dict[str, object], dict[str, object]]:
     """The members of the shell member's class for a structure, with their annotations,
     which the composer makes on ``ShellBudgets`` (``composite``): a Param per contributor
-    (each member's, by its name: the kernels presenting a control bus, the boundary
+    (each member's, by its name: the members that may present a control bus, the boundary
     channels placing a mover, the kernels initiating memory ports, the members taking the
     doubled clock), the counts over them, and a clock rule per member taking the doubled
     clock (the module docstring)."""
     members: dict[str, object] = {}
     annotations: dict[str, object] = {}
     for kind, owners, annotation in (
-        (PRESENTED, presented, bool),
+        (PRESENTED, presented, tuple[str, ...]),
         (MOVER, movers, tuple[MoverContract, ...]),
         (INITIATORS, initiators, int),
         (DOUBLED, doubled, bool),

@@ -32,12 +32,11 @@ from typing import ClassVar
 from finn.core.space import Param, Rejected, constraint, derived, reject, view
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, regrouped
-from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel
-from finn.kernels.laws import NATIVE, NATIVE_CLOCKING, Intake, PortIntake, Standing
+from finn.kernels.laws import NATIVE_PROTOCOL, Intake, PortIntake, Standing
 from finn.kernels.library import ModuleSpec
-from finn.kernels.port_model import StreamPort
+from finn.kernels.port_model import InPort, OutPort
 from finn.kernels.utilization import Fit
 from finn.platform.capabilities import Resources
 
@@ -59,7 +58,7 @@ class VpcKernel(Kernel):
     count; see the module docstring."""
 
     id = "finnlib.vpc"
-    clock_domain = NATIVE_CLOCKING
+    interface_protocol = NATIVE_PROTOCOL
 
     # The tensor whose elements it regroups, a fact, and the two sides of the conversion.
     input_tensor: Tensor = Param()
@@ -72,15 +71,11 @@ class VpcKernel(Kernel):
         tensor: Tensor = self.input_tensor
         return tensor
 
-    input = StreamPort(
-        endpoint=Endpoint.TARGET,
-        transport=NATIVE,
+    input = InPort(
         tensor=input_tensor,
         sequence=arriving,
     )
-    output = StreamPort(
-        endpoint=Endpoint.INITIATOR,
-        transport=NATIVE,
+    output = OutPort(
         tensor=output_tensor,
         sequence=leaving,
     )

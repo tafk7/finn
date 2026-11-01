@@ -39,6 +39,7 @@ from types import MappingProxyType
 from typing import Any, TypeAlias, cast
 
 from . import _compose
+from ._aliases import AliasEntry, alias_table
 from ._allocate import allocate
 from ._check import check
 from ._configuration import _Namespace
@@ -154,6 +155,9 @@ class Compiled:
     keys: Mapping[str, int]
     refs: Mapping[Edge, Ref]
     order: tuple[int, ...]
+    # Its node aliases, resolved (``_aliases.alias_table``): the one table every lookup of
+    # an alias reads.
+    aliases: Mapping[str, AliasEntry] = field(default_factory=lambda: MappingProxyType({}))
     # What the checks composed across slots found of it, per placement (``_compose``,
     # ``_whole``).
     composed: dict[str, object] = field(default_factory=dict, repr=False)
@@ -297,6 +301,7 @@ def _link(space_type: type[_Namespace]) -> Compiled:
 
 
 def _compile(space_type: type[_Namespace]) -> Compiled:
+    alias_table(space_type)  # its node aliases resolve, or the class is refused here
     table = allocate(space_type, link_template)
     lower(table)
     # What crosses a slot: cycles through the Spaces it places (``_compose``).
@@ -435,7 +440,7 @@ class _Freezing:
         value_members = tuple(
             own.named_members[name]
             for name, kind in table.kinds[space_type].items()
-            if kind not in ("node", "choice")
+            if kind not in ("node", "choice", "alias")
         )
         return Compiled(
             space_type,
@@ -467,6 +472,7 @@ class _Freezing:
             _frozen({node.key: node.index for node in nodes if node.scope == 0}),
             _frozen(refs),
             self.order,
+            alias_table(space_type),
         )
 
     def slot(self, index: int, draft: int, position: tuple[int, int]) -> CompiledSlot:

@@ -95,7 +95,6 @@ from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import (
     Bus,
-    Endpoint,
     Member,
     StandardProtocol,
 )
@@ -103,9 +102,9 @@ from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData, he
 from finn.kernels.artifacts.module import RegisterMap
 from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
 from finn.kernels.control import ControlModel
-from finn.kernels.laws import AXIS, Axis, Intake, PortIntake, Standing
+from finn.kernels.laws import Axis, Intake, PortIntake, Standing
 from finn.kernels.library import ModuleSpec
-from finn.kernels.port_model import StreamPort
+from finn.kernels.port_model import InPort, OutPort
 from finn.kernels.utilization import (
     Fit,
     auto_unstated,
@@ -274,7 +273,7 @@ class ThresholdingAxiKernel(Kernel):
         return True
 
     @constraint
-    def selected(self) -> bool | Rejected:
+    def sets_indexed(self) -> bool | Rejected:
         """Several sets take a tensor of set indices, one an input beat; a single set none.
         FinnLib's ``rtl/nonlin/thresholding_axi.sv`` joins the two streams with several sets
         (SETS >= 2), accepting an input beat only beside a set beat, so without a set
@@ -479,8 +478,8 @@ class ThresholdingAxiKernel(Kernel):
                     ("RRESP", 2),
                 )
             ),
-            associated_clock=type(self).clock_domain.clock,
-            associated_reset=type(self).clock_domain.reset,
+            associated_clock=type(self).interface_protocol.clocking.clock,
+            associated_reset=type(self).interface_protocol.clocking.reset,
         )
 
     @derived
@@ -532,7 +531,7 @@ class ThresholdingAxiKernel(Kernel):
     def set_sequence(self) -> BeatSequence | Rejected:
         """One set index for each input beat. A single set takes no set channel, and its
         idle port's order is refused, with a set tensor or without; several sets without
-        their indices are refused, as ``selected`` refuses them."""
+        their indices are refused, as ``sets_indexed`` refuses them."""
         if self.shape[0] < 2:
             return reject("threshold-set-channel", "a single threshold set takes no set channel")
         if self.set_tensor is None:
@@ -555,27 +554,24 @@ class ThresholdingAxiKernel(Kernel):
             return element
         return Tensor(shape, element)
 
-    input = StreamPort(
+    input = InPort(
         transport=Axis(bus="s_axis"),
-        endpoint=Endpoint.TARGET,
         tensor=input_tensor,
         schedule=schedule,
         index=indices,
         lanes=(c,),
     )
-    output = StreamPort(
+    output = OutPort(
         transport=Axis(bus="m_axis"),
-        endpoint=Endpoint.INITIATOR,
         tensor=output_tensor,
         schedule=schedule,
         index=indices,
         lanes=(c,),
     )
     # The set port indexes beats (``c``'s folds), which no index of a tensor expresses: a
-    # selector, its beat accepted with each input beat (L4).
-    set = StreamPort(
-        transport=AXIS,
-        endpoint=Endpoint.TARGET,
+    # selector, following the input's groups, one set index a group of one input beat (L4),
+    # its beat accepted with each input beat (its intake: joined).
+    set = InPort(
         tensor=set_tensor,
         sequence=set_sequence,
         governs="input",
@@ -587,8 +583,9 @@ class ThresholdingAxiKernel(Kernel):
         """Its input guard, from its RTL (CONTRACT.md § 5): it takes an input beat while
         fewer than ``MAX_PENDING = (DEEP_PIPELINE + 1) * M + 3`` thresholdings are pending
         across its pipeline and output queue, exact both before it stops and at most; a
-        configuration access takes precedence. With several sets its set port's beats join
-        its input's, one each (L4), so it states the same."""
+        configuration access takes precedence. With several sets its set port is joined with
+        its input, each beat accepted only with one of the other (its ready equations), so it
+        states the same."""
         pending = (int(self.deep_pipeline) + 1) * self.stages + 3
         rule = (
             f"takes a beat while fewer than {pending} results are pending and no "
@@ -598,12 +595,13 @@ class ThresholdingAxiKernel(Kernel):
         ports = ["input"]
         if self.set.placed:
             ports.append("set")
-            source += "; rtl/nonlin/thresholding_axi.sv:131-144 (the set join)"
+            source += "; rtl/nonlin/thresholding_axi.sv:131-144 (the set join, :142-143)"
         return Intake(
             tuple(
                 PortIntake(port, pending, pending, rule, Standing.STRUCTURAL, source)
                 for port in ports
-            )
+            ),
+            joined=(tuple(ports),) if len(ports) > 1 else (),
         )
 
     @view

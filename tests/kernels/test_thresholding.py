@@ -28,11 +28,11 @@ from finn.core.space import (
 )
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels.artifacts.abi import Bus, Endpoint
+from finn.kernels.artifacts.abi import Bus
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.laws import Axis
 from finn.kernels.library import library_module
-from finn.kernels.port_model import StreamPort
+from finn.kernels.port_model import InPort
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel, c
 from finn.kernels.values.domains import Integer
@@ -155,17 +155,27 @@ def test_a_set_port_that_does_not_match_the_sets_is_refused_both_ways() -> None:
             for piece in validity.pieces
             for finding in piece.result.findings
         ]
+    # The set port presents the set order its kernel refuses: its presentation is refused
+    # too.
     assert pieces == [
-        ("selected", "threshold-set-channel", "several threshold sets take a set channel"),
-        ("selected", "threshold-set-channel", "a single threshold set takes no set channel"),
+        ("sets_indexed", "threshold-set-channel", "several threshold sets take a set channel"),
+        ("set.presented", "threshold-set-channel", "a single threshold set takes no set channel"),
+        ("sets_indexed", "threshold-set-channel", "a single threshold set takes no set channel"),
     ]
     # Given its set indices, the two sets stand.
     given = threshold_base(table=two_sets, set_tensor=set_indices(2, 2))
     assert inspection.validity(given).status != "refused"
+    # Each set index names the set of one input beat: its group (L4, it follows the input's
+    # groups).
+    several = threshold(table=two_sets, pe=1)
+    assert several.set.group == 1
+    # Its set port is joined with its input: each beat accepted only with one of the other.
+    assert several.intake.names == ("input", "set")
+    assert several.intake.joined == (("input", "set"),)
 
 
 def test_several_sets_without_their_indices_refuse_the_set_port_s_order() -> None:
-    # Its rule refuses such a thresholding (``selected``); the set port's order reads the
+    # Its rule refuses such a thresholding (``sets_indexed``); the set port's order reads the
     # indices, and refuses the same way rather than read what is not given.
     two_sets = (((-2, 0, 3), (-1, 1, 4)), ((-3, 0, 5), (-2, 0, 6)))
     answer = threshold_base(table=two_sets).query(ThresholdingAxiKernel.set_sequence)
@@ -183,6 +193,43 @@ def test_a_single_set_refuses_its_idle_set_port_s_order() -> None:
     assert [(finding.code, finding.owner, finding.message) for finding in answer.findings] == [
         ("threshold-set-channel", "set_sequence", "a single threshold set takes no set channel")
     ]
+
+
+class Reselected(ThresholdingAxiKernel):
+    """A thresholding redeclaring its set port as the library declares it; the input port
+    it governs is inherited."""
+
+    set = InPort(
+        tensor=ThresholdingAxiKernel.set_tensor,
+        sequence=ThresholdingAxiKernel.set_sequence,
+        governs="input",
+        dtype=ThresholdingAxiKernel.selector_dtype,
+    )
+
+
+def test_a_subclass_redeclaring_a_selector_groups_it_by_the_inherited_port_it_governs() -> None:
+    # The port a selector governs is any port of its kernel, inherited or of its body: the
+    # redeclared set port reads the inherited input's beats, as the library's does.
+    two_sets = (((-2, 0, 3), (-1, 1, 4)), ((-3, 0, 5), (-2, 0, 6)))
+    facts: dict[str, object] = dict(
+        input_tensor=Tensor((1, 2), ScalarEncoding(resolve_qonnx_datatype_name("INT8"))),
+        threshold_dtype=resolve_qonnx_datatype_name("INT5"),
+        thresholds=integer_tensor(two_sets),
+        bias=-1,
+        platform=FULL_DSP48E2,
+        set_tensor=set_indices(2, 2),
+    )
+    choices = dict(use_axilite=False, deep_pipeline=False, pe=1, **AUTO_MEMORY)
+    points = []
+    for cls in (ThresholdingAxiKernel, Reselected):
+        report = design_space(cls(**facts)).try_with_choices(**choices)
+        assert report.accepted, report.broken
+        assert inspection.validity(report.instance).status == "valid"
+        points.append(report.instance)
+    library, redeclared = points
+    assert "_set_governed" in vars(Reselected)
+    assert redeclared.set.group == library.set.group == 1
+    assert redeclared.intake.joined == library.intake.joined == (("input", "set"),)
 
 
 def test_threshold_partial_dtype_query_does_not_adopt_implementation_decisions() -> None:
@@ -240,10 +287,9 @@ def test_threshold_rejects_unsupported_profiles_and_malformed_tables() -> None:
 class NarrowInput(ThresholdingAxiKernel):
     """A thresholding whose input port takes only elements of up to 4 bits."""
 
-    input = StreamPort(
+    input = InPort(
         label="input",
         transport=Axis(bus="s_axis"),
-        endpoint=Endpoint.TARGET,
         tensor=ThresholdingAxiKernel.input_tensor,
         schedule=ThresholdingAxiKernel.schedule,
         index=ThresholdingAxiKernel.indices,
@@ -282,7 +328,7 @@ def test_a_refused_input_port_leaves_its_kernels_domains_and_refuses_its_product
         "input.element_taken"
     ]
     assert isinstance(committed.instance.query(ThresholdingAxiKernel.netlist), Rejected)
-    assert isinstance(committed.instance.query(ThresholdingAxiKernel.cycles), Rejected)
+    assert isinstance(committed.instance.query(ThresholdingAxiKernel.frame_cycles), Rejected)
 
 
 def placed_on(channels: int, table: IntegerTensor) -> ThresholdingAxiKernel:

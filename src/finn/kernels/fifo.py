@@ -40,12 +40,11 @@ from finn.core.space import (
 )
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence
-from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel
-from finn.kernels.laws import NATIVE, NATIVE_CLOCKING, Intake, PortIntake, Standing
+from finn.kernels.laws import NATIVE_PROTOCOL, Intake, PortIntake, Standing
 from finn.kernels.library import ModuleSpec
-from finn.kernels.port_model import StreamPort
+from finn.kernels.port_model import InPort, OutPort
 from finn.kernels.utilization import lutram, memory, uram_constraint
 from finn.platform.capabilities import Fabric, Platform, Resources
 
@@ -224,7 +223,7 @@ class FifoKernel(Kernel):
     module docstring."""
 
     id = "finnlib.fifo"
-    clock_domain = NATIVE_CLOCKING
+    interface_protocol = NATIVE_PROTOCOL
 
     # The tensor whose words it buffers, a fact, and what arrives of it.
     input_tensor: Tensor = Param()
@@ -244,15 +243,11 @@ class FifoKernel(Kernel):
         sequence: BeatSequence = self.arriving
         return sequence
 
-    input = StreamPort(
-        endpoint=Endpoint.TARGET,
-        transport=NATIVE,
+    input = InPort(
         tensor=input_tensor,
         sequence=arriving,
     )
-    output = StreamPort(
-        endpoint=Endpoint.INITIATOR,
-        transport=NATIVE,
+    output = OutPort(
         tensor=output_tensor,
         sequence=leaving,
     )

@@ -27,7 +27,7 @@ from finn.dataflow.traversal import BeatSequence, Grouped, LevelDone, Loop, vect
 from finn.kernels.adapters import realize
 from finn.kernels.laws import AXIS, AXIS_CLOCKING
 from finn.kernels.port import stream_refusal
-from finn.kernels.port_model import StreamPort
+from finn.kernels.port_model import InPort, StreamPort
 from finn.kernels.vpc import VpcKernel
 
 ELEMENT = ScalarEncoding(resolve_qonnx_datatype_name("INT8"))
@@ -100,7 +100,7 @@ def test_non_suffix_closing_uses_existing_tlast_only_when_it_normalizes_to_level
     m, k, t = Index("m"), Index("k"), Index("t")
     schedule = Schedule({m: 2, k: 4, t: inner_fold}, {k: 2}, (m, k, t))
     point = design_space(
-        StreamPort(
+        InPort(
             clocking=AXIS_CLOCKING,
             transport=AXIS,
             label="x",

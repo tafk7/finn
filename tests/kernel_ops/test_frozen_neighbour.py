@@ -33,7 +33,7 @@ from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel, OuterHops
 from finn.kernels.composer import ChannelDeclaration, PartitionDeclaration
 from finn.kernels.partition import Partition, partition
-from finn.kernels.port import port_side
+from finn.kernels.port import stream_port
 from finn.kernels.sides import Side, SideKind
 from finn.transformation.kernels import ToKernelOps
 
@@ -44,8 +44,8 @@ def _slice(model: ModelWrapper, *names: str) -> Partition:
 
 
 def _side(point: Kernel, port: str) -> Side:
-    """A KernelOp's port's side, its own or served."""
-    found = point.query(cast(Any, port_side(type(point), port)))
+    """A KernelOp's port's side, its own or exposed."""
+    found = point.query(cast(Any, stream_port(type(point), port).side))
     assert isinstance(found, Available) and isinstance(found.value, Side)
     return found.value
 
@@ -69,9 +69,9 @@ def test_an_upstream_neighbour_gives_its_width_and_a_downstream_one_none() -> No
     first = kernel_op(model, nodes["first"]).point()
     second = kernel_op(model, nodes["second"]).point()
     hidden, levels = alone.member("hidden"), alone.member("levels")
-    assert hidden.producer == _frozen(first, "y", "first.compute.packed.y")
+    assert hidden.producer == _frozen(first, "y", "first.y")
     assert hidden.producer.width is not None
-    assert levels.consumer == _frozen(second, "x", "second.compute.packed.x")
+    assert levels.consumer == _frozen(second, "x", "second.x")
     assert levels.consumer.width is None
     assert hidden.consumer.kind is levels.producer.kind is SideKind.KERNEL
     assert inspection.validity(hidden).status == inspection.validity(levels).status == "valid"
@@ -101,12 +101,12 @@ def test_a_neighbour_s_side_in_the_other_direction_is_refused_each_way() -> None
         (
             "hidden",
             "producer",
-            "a channel's producer is an output port, and first.compute.packed.y is an input's",
+            "a channel's producer is an output port, and first.y is an input's",
         ),
         (
             "levels",
             "consumer",
-            "a channel's consumer is an input port, and second.compute.packed.x is an output's",
+            "a channel's consumer is an input port, and second.x is an output's",
         ),
     ):
         found = _flipped(model, tensor, side).validity(tensor)
@@ -225,7 +225,7 @@ def test_a_downstream_neighbour_brings_the_input_chain_it_needs_into_the_slice()
     assert stage is not None and stage.startswith("adapter.input_gen")
     assert hops.consumer.sink.instance == "^mm2.compute.packed"
     consumer = part.neighbours("a1").consumer
-    assert consumer is not None and consumer.label == "mm2.compute.packed.x"
+    assert consumer is not None and consumer.label == "mm2.x"
 
 
 def test_a_slice_s_netlist_and_module_are_refused_by_their_code() -> None:

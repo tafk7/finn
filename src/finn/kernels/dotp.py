@@ -75,13 +75,13 @@ from finn.dataflow.datatypes import (
 from finn.dataflow.gemm import Form, Window, c, k, kh, kw, m, n, oh, ow
 from finn.dataflow.schedule import Access, Affine, Index, Schedule
 from finn.dataflow.tensor import Tensor
-from finn.kernels.artifacts.abi import Clocking, Endpoint
+from finn.kernels.artifacts.abi import Clocking
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
 from finn.kernels.laws import Axis, Intake, PortIntake, Standing, doubled
 from finn.kernels.library import ModuleSpec
 from finn.kernels.port import axis
-from finn.kernels.port_model import StreamPort
+from finn.kernels.port_model import InPort, OutPort
 from finn.kernels.utilization import Fit
 from finn.kernels.values.domains import Integer, admit_element, integer_bounds, range_dtype
 from finn.platform.capabilities import DspBlock, Platform, Resources, dsp_widths
@@ -369,9 +369,8 @@ class DotpAxiKernel(Kernel):
         """The activation encodings the core takes (``activations``)."""
         return self.activations
 
-    x = StreamPort(
+    x = InPort(
         transport=Axis(bus="s_axis_input"),
-        endpoint=Endpoint.TARGET,
         tensor=x_tensor,
         admits=activation_policy,
         schedule=schedule,
@@ -380,9 +379,8 @@ class DotpAxiKernel(Kernel):
         closes=reduced,
         reshaped=x_viewed,
     )
-    w = StreamPort(
+    w = InPort(
         transport=Axis(bus="s_axis_weights"),
-        endpoint=Endpoint.TARGET,
         tensor=w_tensor,
         admits=Integer(min_bits=2, signed=True),
         schedule=schedule,
@@ -390,9 +388,8 @@ class DotpAxiKernel(Kernel):
         lanes=w_lanes,
         reshaped=windowed,
     )
-    y = StreamPort(
+    y = OutPort(
         transport=Axis(bus="m_axis_output"),
-        endpoint=Endpoint.INITIATOR,
         tensor=y_tensor,
         admits=Integer(),
         schedule=schedule,
@@ -437,11 +434,12 @@ class DotpAxiKernel(Kernel):
 
     @derived
     def intake(self) -> Intake:
-        """dotp_axi's output queue, from its RTL (CONTRACT.md § 5): ``x`` and ``w`` advance
-        together (L2), so each states the same beats, ``SF`` of them a result (the
-        reduction's beats). With its output stalled it locks its inputs once a second result
-        waits in its queue (``OLock``), so it takes at least ``2 * SF`` beats before it
-        may stop, more as its pipeline's tail lands; it holds at most the results its queue
+        """dotp_axi's output queue, from its RTL (CONTRACT.md § 5): ``x`` and ``w`` are
+        joined, each beat accepted only with one of the other (its ready equations), so each
+        states the same beats, ``SF`` of them a result (the reduction's beats). With its
+        output stalled it locks its inputs once a second result waits in its queue
+        (``OLock``), so it takes at least ``2 * SF`` beats before it may stop, more as its
+        pipeline's tail lands; it holds at most the results its queue
         and output register hold, ``MAX_IN_FLIGHT + 2`` (``CORE_PIPELINE_DEPTH + 3``),
         and a partial result of ``SF - 1`` beats. ``CORE_PIPELINE_DEPTH`` is bounded above
         for DSP58 at a ``SEGMENTLEN`` of one: the segment length is a view, which no
@@ -457,14 +455,16 @@ class DotpAxiKernel(Kernel):
             f"stalled ({sf} beats a result), and resumes once its queue has drained"
         )
         source = (
-            "rtl/linalg/dotp_axi.sv:143-146 (ardy, s_axis_weights_tready), :318-372 "
+            "rtl/linalg/dotp_axi.sv:113 (avld), :143-146 (ardy, s_axis_weights_tready: x and "
+            "w joined), :318-372 "
             "(CORE_PIPELINE_DEPTH, MAX_IN_FLIGHT :332, OBuf :337, OLock :363-364, idle :372)"
         )
         return Intake(
             tuple(
                 PortIntake(port, before, most, rule, Standing.STRUCTURAL, source)
                 for port in ("x", "w")
-            )
+            ),
+            joined=(("x", "w"),),
         )
 
     @view
@@ -483,7 +483,7 @@ class DotpAxiKernel(Kernel):
     @derived
     def clocking(self) -> Clocking:
         # Unpumped, the RTL ignores its 2x clock input: it is held low.
-        return doubled(type(self).clock_domain, self.compute_pumping)
+        return doubled(type(self).interface_protocol.clocking, self.compute_pumping)
 
     @view
     def dsp_simd(self) -> int:

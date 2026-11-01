@@ -9,7 +9,7 @@ class is made: ``tests/kernels/test_kernel_space.py``). Its control bus is an in
 ``ControlModel``: held idle while it is not presented, presented (read as
 ``Kernel.bus_control``) while it is, so a bus is accounted for by construction; its
 pins come before every port's, its hold after theirs. Every port runs on its kernel's clock domain
-(``clock_domain``). Its module is the ``Leaf`` at the empty label of its netlist
+(``interface_protocol``). Its module is the ``Leaf`` at the empty label of its netlist
 (``library_module``). A kernel with children presents a child's port as its own
 through typed model forwards and an outward contract View, labelled below the
 child; its netlist merges its members'.
@@ -34,6 +34,7 @@ from finn.core.space import (
     Space,
     derived,
     design_space,
+    inspection,
     reject,
     view,
 )
@@ -43,7 +44,6 @@ from finn.kernels.artifacts.abi import (
     Bus,
     Clocking,
     Direction,
-    Endpoint,
     Member,
     Signal,
     StandardProtocol,
@@ -54,11 +54,11 @@ from finn.kernels.base import Kernel
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.configure import commit
 from finn.kernels.control import Control, ControlModel, held_bus
-from finn.kernels.laws import NATIVE_CLOCKING, Axis
+from finn.kernels.laws import NATIVE_PROTOCOL, Axis
 from finn.kernels.library import ModuleSpec, library_module
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.port import port_side
-from finn.kernels.port_model import OtherPins, StreamPort, served
+from finn.kernels.port import exposed_pins, exposed_side, stream_port
+from finn.kernels.port_model import InPort, OtherPins
 from finn.kernels.sides import Side
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import Resources
@@ -77,10 +77,9 @@ class Probe(Kernel):
 
     tensor: Tensor | None = Param(default=None)
 
-    x = StreamPort(
+    x = InPort(
         label="x",
         transport=Axis(bus="s_axis"),
-        endpoint=Endpoint.TARGET,
         tensor=tensor,
         sequence=BeatSequence(vector_major((4,), 1)),
     )
@@ -92,7 +91,7 @@ class Probe(Kernel):
 
     @derived
     def clocking(self) -> Clocking:
-        return replace(type(self).clock_domain, doubled="ap_clk2x", doubling=True)
+        return replace(type(self).interface_protocol.clocking, doubled="ap_clk2x", doubling=True)
 
     @view
     def parameters(self) -> dict[str, int | str]:
@@ -103,10 +102,6 @@ class Probe(Kernel):
         return reject("kernel-resources", "a model only")
 
     module_spec = ModuleSpec("probe", (PROBE,))
-
-    @view
-    def cycles(self) -> int:
-        return self.x.stream.sequence.form.beats
 
 
 def probe(**facts: object) -> Probe:
@@ -129,13 +124,13 @@ def test_a_kernel_s_other_pins_go_before_its_ports_and_their_hold_after() -> Non
     assert names == ["ap_clk", "ap_clk2x", "ap_rst_n", "mode", "busy", "s_axis"]
 
 
-def test_a_port_runs_on_its_kernels_clock_domain() -> None:
+def test_a_port_runs_on_its_kernels_interface_protocol() -> None:
     bus = library_module(probe()).abi.pins[-1]
     assert (bus.associated_clock, bus.associated_reset) == ("ap_clk", "ap_rst_n")
 
     class Native(Probe):
         id = "test.probe.native"
-        clock_domain = NATIVE_CLOCKING
+        interface_protocol = NATIVE_PROTOCOL
 
     point = design_space(Native(tensor=TENSOR))
     assert isinstance(point.query(Kernel.netlist), Available)
@@ -175,7 +170,7 @@ class Controlled(Kernel):
     )
     config = ControlModel(bus=config_bus, presented=writable)
     tensor: Tensor = Param()
-    x = StreamPort(
+    x = InPort(
         label="x",
         tensor=tensor,
         sequence=BeatSequence(vector_major((4,), 1)),
@@ -185,7 +180,7 @@ class Controlled(Kernel):
 
     @derived
     def clocking(self) -> Clocking:
-        return replace(type(self).clock_domain, doubled="ap_clk2x", doubling=True)
+        return replace(type(self).interface_protocol.clocking, doubled="ap_clk2x", doubling=True)
 
     @view
     def resource_use(self) -> Resources | Rejected:
@@ -377,7 +372,7 @@ def test_a_control_bus_is_declared_once_and_the_base_derives_what_is_read_of_it(
 
 
 def test_a_kernel_s_cycles_are_the_most_beats_a_port_carries() -> None:
-    assert probe().cycles == 4
+    assert probe().frame_cycles == 4
     assert codes(probe().query(Kernel.resources)) == {"kernel-resources"}
 
 
@@ -385,17 +380,20 @@ def test_a_kernel_with_children_presents_a_childs_port_as_its_own() -> None:
     class Presenting(Kernel):
         id = "test.presenting"
         kernel = Probe(tensor=TENSOR)
-        x = served(kernel, "x")
+        x = kernel.x
 
     point = design_space(Presenting())
-    assert point.x_stream_pins.label == "kernel.x"
-    assert point.x_stream_pins.pins == point.kernel.x.stream_pins.pins
-    assert point.x_side.stream == point.kernel.x.stream
+    # One port, its child's, read by two names; presented under the alias's, on the child.
+    assert inspection.path(point.x) == "kernel.x"
+    exposed = exposed_pins(point, "x", point.x.stream_pins)
+    assert (exposed.label, exposed.instance) == ("x", "kernel")
+    assert exposed.pins == point.kernel.x.stream_pins.pins
+    assert exposed_side(Presenting, "x", point.x.side).label == "x"
 
     class Unserved(Kernel):
         id = "test.unserved"
         kernel = Probe(tensor=TENSOR)
 
-    # A child's port is its parent's only where the parent serves it.
+    # A child's port is its parent's only where the parent exposes it.
     with pytest.raises(KeyError):
-        port_side(Unserved, "y")
+        stream_port(Unserved, "y")

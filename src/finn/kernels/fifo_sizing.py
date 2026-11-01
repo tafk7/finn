@@ -8,11 +8,13 @@ consumer`` (``finn.kernels.channels``); its ``transport`` is ``direct`` or a
 FIFO of ``depth`` words of what arrives at it, the pre-replay stream. The depth
 a channel needs is read from two patterns over a frame, repeated at the
 partition's bottleneck period ``P`` (its ``cycles``, which count a boundary's stated pace:
-``Channel.cycles``):
+``Channel.frame_cycles``):
 
 - the **supply**: when each word arrives at the transport, unthrottled. The
-  producer's beat times, its port's pace (``StreamPort.pace``, ``Pace``: an iteration a
-  cycle, by the rate law, CONTRACT.md L6), carried through the output adapter's width
+  producer's beat times, its port's pace in cycles (``StreamPort.timed_pace``,
+  ``TimedPace``: its ``Pace`` at its own kernel's interval, an iteration an interval by
+  the rate law, CONTRACT.md L6, through the one conversion its kernel's cycles read too,
+  ``finn.kernels.laws.in_cycles``), carried through the output adapter's width
   conversion (a word leaves once its last element arrived, one a cycle), and the
   producer's span, the cycles its kernel takes a frame;
 - the **acceptance**: when the input side takes a word. With no input adapter,
@@ -34,26 +36,25 @@ pipeline latency is a constant shift of a side's times, and the acceptance follo
 supply's data, so they do not change the depth.
 
 ``size`` reads a channel's sides, its producer's and its consumer's paces from the ports
-beside it (its network's ``neighbours``: each a scheduled port's ``pace``; at a slice's
-edge, a frozen neighbour's port's, at its stored choices, as a kernel's), and gives its
-``Sized``: a
-depth (``0``: direct) and why. The least depth counts the words the FIFO must
-hold; the DEPTH proposed is the least whose native storage holds them
-(``least_depth_holding``: FinnLib's FIFO is a shift register of five words up to
-33, so a DEPTH of two holds up to five). A boundary's free side is paced, in order, by
-the pace the outside states of it (``Side.outside``, ``finn.kernels.sides``: its beat
-times, or a steady beat expanded at the edge's beats, ``stated_pattern``), else by the
-mover the shell places there (``Channel.mover``, ``finn.kernels.movers``): its beat
-times over a frame, and its cycles a frame as its span. Each side's times are read from
-their owner (a port's pace, the outside's statement, the mover's contract) when a channel
-is sized, by one reader (``pattern``); a ``Pattern`` is the model's working value and is
-kept nowhere. An unstated boundary without a mover (the ``ip`` shell: its integrator's
-pacing), a memory source (paced by its consumer: its output is sourced) and a port no
-schedule paces (buffered, selected or sourced: it has no pace, CONTRACT.md § 4) are not
-modelled: direct, with that reason. So is an adapter
-chain other than one ``vpc`` before the transport and one ``input_gen`` after it.
-The strategy proposing the depths is ``finn.kernels.explore.SizeFifos``; an rtlsim
-check is evidence outside it.
+beside it (its network's ``neighbours``: each the ``timed_pace`` of a port that owns its
+pacing; at a slice's edge, a frozen neighbour's port's, at its stored choices, as a
+kernel's), and gives its ``Sized``: a depth (``0``: direct) and why, naming any interval an
+assumption (``finn.kernels.laws.Standing.ASSUMED``) it was sized at. The least depth counts
+the words the FIFO must hold; the DEPTH proposed is the least whose native storage holds
+them (``least_depth_holding``: FinnLib's FIFO is a shift register of five words up to 33,
+so a DEPTH of two holds up to five). A boundary's free side is paced, in order, by the pace
+the outside states of it (``Side.outside``, ``finn.kernels.sides``: its beat times, or a
+steady beat expanded at the edge's beats, ``stated_pattern``), else by the mover the shell
+places there (``Channel.mover``, ``finn.kernels.movers``): its beat times over a frame, and
+its cycles a frame as its span. Each side's times are read from their owner (a port's pace,
+the outside's statement, the mover's contract) when a channel is sized, by one reader
+(``pattern``); a ``Pattern`` is the model's working value and is kept nowhere. An unstated
+boundary without a mover (the ``ip`` shell: its integrator's pacing), a memory source
+(paced by its consumer: its output follows its reader) and a port that follows another
+(pass-through, groups or reader: it has no pace, CONTRACT.md § 4) are not modelled: direct,
+with that reason. So is an adapter chain other than one ``vpc`` before the transport and
+one ``input_gen`` after it. The strategy proposing the depths is
+``finn.kernels.explore.SizeFifos``; an rtlsim check is evidence outside it.
 
 ``holds`` checks a channel's transport, a FIFO of so many words or ``direct``, against
 its stream again (``keeps``, one simulation): a depth is sized at one bottleneck period,
@@ -72,12 +73,12 @@ from itertools import accumulate
 from math import ceil
 from typing import Protocol
 
-from finn.dataflow.schedule import Pace
 from finn.kernels.adapters import Convert
 from finn.kernels.base import PortPins
 from finn.kernels.channels import Channel, Neighbours
 from finn.kernels.fifo import least_depth_holding
 from finn.kernels.input_generator import Generate, NestBuffer, nest_buffer
+from finn.kernels.laws import Standing, TimedPace
 from finn.kernels.movers import MoverContract
 from finn.kernels.sides import BeatTimes, Side, SideKind, Steady, beat_times
 from finn.kernels.transport import StreamPins
@@ -108,9 +109,9 @@ class Pattern:
 
 
 class Paced(Protocol):
-    """What owns a side's beat times over a frame and its span: a scheduled port's pace
-    (``finn.dataflow.schedule.Pace``, iterations, a cycle each by the rate law), the beat
-    times the outside states (``finn.kernels.sides.BeatTimes``), a mover's contract
+    """What owns a side's beat times over a frame and its span: the pace in cycles of a port that
+    owns its pacing (``finn.kernels.laws.TimedPace``, its iterations at its kernel's interval), the
+    beat times the outside states (``finn.kernels.sides.BeatTimes``), a mover's contract
     (``finn.kernels.movers.MoverContract``)."""
 
     @property
@@ -325,12 +326,13 @@ class NotModelled(ValueError):
 
 
 def _paced(neighbours: Neighbours, side: str) -> Pattern:
-    """The pace of the port beside the channel on ``side`` (``Neighbours``): a scheduled
-    port's; ``NotModelled`` for a port of another rule, which has none."""
+    """The pace in cycles of the port beside the channel on ``side`` (``Neighbours``): a
+    port's that owns its pacing, at its own kernel's interval; ``NotModelled`` for a port
+    that follows another, which has none."""
     port: PortPins | None = getattr(neighbours, side)
     if port is None:
         raise ValueError(f"the channel's {side} is a port, and none is given beside it")
-    pace: Pace | None = getattr(neighbours, f"{side}_pace")
+    pace: TimedPace | None = getattr(neighbours, f"{side}_pace")
     if pace is None:
         raise NotModelled(f"the {side} presents a given sequence, which no schedule paces")
     return pattern(pace)
@@ -444,13 +446,28 @@ def size(
         supply, accept = sides(channel, neighbours)
     except NotModelled as error:
         return Sized(0, str(error), word_bits)
+    note = assumed(neighbours)
     least = least_depth(supply, accept, period)
     if least is None:
-        return Sized(0, f"no depth up to {FRAMES} frames keeps the producer's period", word_bits)
+        why = f"no depth up to {FRAMES} frames keeps the producer's period"
+        return Sized(0, why + note, word_bits)
     if least == 0:
-        return Sized(0, "direct absorbs it", word_bits, 0)
+        return Sized(0, "direct absorbs it" + note, word_bits, 0)
     depth = least_depth_holding(least + margin, word_bits, ram_style, channel.platform.uram)
-    return Sized(depth, f"least {least} words", word_bits, least)
+    return Sized(depth, f"least {least} words" + note, word_bits, least)
+
+
+def assumed(neighbours: Neighbours) -> str:
+    """What a sizing between ``neighbours`` rests on that is assumed: each side whose
+    port's interval stands assumed (``Standing.ASSUMED``, Pool's), as a clause for its
+    ``why``; empty where none does."""
+    found = [
+        f"{side}'s interval {pace.interval}"
+        for side in ("producer", "consumer")
+        if (pace := getattr(neighbours, f"{side}_pace")) is not None
+        and pace.interval.standing is Standing.ASSUMED
+    ]
+    return f"; at the {' and the '.join(found)}" if found else ""
 
 
 def holds(channel: Channel, neighbours: Neighbours, period: int, words: int) -> bool:
@@ -472,6 +489,7 @@ __all__ = [
     "Pattern",
     "Buffered",
     "Sized",
+    "assumed",
     "converted",
     "holds",
     "keeps",

@@ -5,13 +5,15 @@
 
 Its terms are the laws module's (``PortIntake``, ``Intake``, ``Standing``): one entry an
 input port, in beats of that port, read from the RTL (structural) or, for an HLS kernel,
-measured. The base answers a kernel with a module that states none ``intake-unstated``, by
-name, and its design point stays valid; a kernel with children derives its own from its
-members', a port it serves by its name, any other below the member.
+fitted to traces and assumed within their profile. The base answers a kernel with a module
+that states none ``intake-unstated``, by name, and its design point stays valid; a kernel
+with children derives its own from its members', a port it exposes by its name, any other
+below the member.
 """
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -22,6 +24,7 @@ from support.helpers import (
     FULL_DSP58,
     codes,
     fifo_node,
+    full_platform,
     nested,
     placed_dotp,
     stage_tensor,
@@ -42,7 +45,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.harness.points import covering
 from finn.harness.toolchain import finnlib_root
-from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.abi import Direction
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.rtl import Declined, evaluate
 from finn.kernels.base import Kernel
@@ -50,19 +53,20 @@ from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.input_generator import InputGeneratorKernel, nest_buffer
 from finn.kernels.laws import (
     INTAKE_UNSTATED,
-    NATIVE,
-    NATIVE_CLOCKING,
+    NATIVE_PROTOCOL,
+    Ahead,
     Intake,
+    IntakeProfile,
     PortIntake,
     Standing,
 )
 from finn.kernels.library import ModuleSpec
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.pool import PoolKernel
-from finn.kernels.port_model import StreamPort, served, stream_ports
+from finn.kernels.pool import INTAKE_PROFILE, PoolKernel
+from finn.kernels.port_model import InPort, OutPort, stream_ports
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.kernels.vpc import VpcKernel
-from finn.platform.capabilities import Resources
+from finn.platform.capabilities import DspBlock, Resources
 
 TENSOR = Tensor((4, 1), ScalarEncoding(DataType["INT4"]))
 ARRIVING = BeatSequence(vector_major((4, 1), 1))
@@ -109,6 +113,38 @@ def test_an_intake_states_each_port_once() -> None:
         Intake((_intake("x"), _intake("x")))
 
 
+def test_an_intake_states_its_inputs_coupling_by_their_names() -> None:
+    """Beside the counts, its inputs' coupling: ``joined``, groups of two or more inputs
+    whose beats transfer only together, each input in one at most; ``ahead``, how far an
+    input in no group is accepted beyond another. Every name is one of the ports it states,
+    and renaming renames them all."""
+    joined = Intake((_intake("x"), _intake("w"), _intake("s")), joined=(("x", "w"),))
+    ahead = Intake(
+        (
+            replace(_intake("lhs"), ahead=(Ahead("rhs", 1),)),
+            replace(_intake("rhs"), ahead=(Ahead("lhs", 1),)),
+        )
+    )
+    assert joined.under("mm").joined == (("mm.x", "mm.w"),)
+    assert ahead.under("e").of("e.lhs").ahead == (Ahead("e.rhs", 1),)
+    assert joined.renamed({"x": "a", "w": "b", "s": "c"}.__getitem__).joined == (("a", "b"),)
+    for ports, groups in (
+        ((_intake("x"),), (("x",),)),  # a group of one
+        ((_intake("x"), _intake("w")), (("x", "x"),)),  # an input twice in a group
+        ((_intake("x"), _intake("w"), _intake("s")), (("x", "w"), ("w", "s"))),  # in two
+        ((_intake("x"),), (("x", "w"),)),  # a port it does not state
+        ((replace(_intake("x"), ahead=(Ahead("w", 1),)), _intake("w")), (("x", "w"),)),
+        ((replace(_intake("x"), ahead=(Ahead("y", 1),)),), ()),  # ahead of a port not stated
+    ):
+        with pytest.raises(ValueError):
+            Intake(ports, joined=groups)
+    for wrong in ((Ahead("input", 1),), (Ahead("w", 1), Ahead("w", 2))):
+        with pytest.raises(ValueError):
+            replace(_intake("input"), ahead=wrong)
+    with pytest.raises(ValueError):
+        Ahead("w", -1)
+
+
 # -- the base: unstated, stated, derived ------------------------------------------------------
 
 
@@ -117,14 +153,12 @@ class Stage(Kernel):
     states no intake."""
 
     id = "test.intake.stage"
-    clock_domain = NATIVE_CLOCKING
+    interface_protocol = NATIVE_PROTOCOL
 
     input_tensor: Tensor = Param()
     arriving: BeatSequence = Param()
-    input = StreamPort(transport=NATIVE, tensor=input_tensor, sequence=arriving)
-    output = StreamPort(
-        endpoint=Endpoint.INITIATOR, transport=NATIVE, tensor=input_tensor, sequence=arriving
-    )
+    input = InPort(tensor=input_tensor, sequence=arriving)
+    output = OutPort(tensor=input_tensor, sequence=arriving)
 
     @view
     def parameters(self) -> dict[str, int | str]:
@@ -155,13 +189,45 @@ class OtherStage(StatedStage):
         return Intake((_intake("input", 5, 7),))
 
 
+class Coupled(StatedStage):
+    """The stage with a second input, its two inputs joined."""
+
+    id = "test.intake.coupled"
+    side = InPort(tensor=StatedStage.input_tensor, sequence=StatedStage.arriving)
+
+    @derived
+    def intake(self) -> Intake:
+        return Intake((_intake("input"), _intake("side")), joined=(("input", "side"),))
+
+
+class Misnamed(StatedStage):
+    """The stage, its intake naming a port it does not have."""
+
+    id = "test.intake.misnamed"
+
+    @derived
+    def intake(self) -> Intake:
+        return Intake((_intake("input"), _intake("other")))
+
+
+class Idling(StatedStage):
+    """The stage with a second input, idle, which its intake names."""
+
+    id = "test.intake.idling"
+    side = InPort(tensor=None, sequence=StatedStage.arriving, dtype=DataType["INT4"])
+
+    @derived
+    def intake(self) -> Intake:
+        return Intake((_intake("input"), _intake("side")))
+
+
 class Chain(Kernel):
-    """Two stated stages, the first's input served as its own ``x``."""
+    """Two stated stages, the first's input exposed as its own ``x``."""
 
     id = "test.intake.chain"
     core = Select(one=StatedStage, other=OtherStage, input_tensor=TENSOR, arriving=ARRIVING)
     kept = StatedStage(input_tensor=TENSOR, arriving=ARRIVING)
-    x = served(core, "input")
+    x = core.input
 
 
 class Holding(Kernel):
@@ -183,11 +249,74 @@ def test_a_kernel_stating_no_intake_answers_it_unstated_by_name_and_stays_valid(
 
 def test_a_kernel_with_children_derives_its_intake_from_its_members() -> None:
     point = design_space(Chain()).with_choices({Chain.core: "other"})
-    # The served port by its name, the member's own below the member.
+    # The exposed port by its name; the member's own below the member.
     assert point.intake == Intake((_intake("x", 5, 7), _intake("kept.input")))
     # A member that states none leaves its parent's unstated, by its name.
     holding = design_space(Holding()).query(Kernel.intake)
     assert isinstance(holding, Rejected) and codes(holding) == {INTAKE_UNSTATED}
+
+
+def test_a_kernel_s_intake_names_its_placed_inputs() -> None:
+    """The base reads what a kernel with a module states, and refuses an intake naming a
+    port that is no placed input of it (``intake-port-unknown``), a port it lacks or an idle
+    one: the intake's refusal, its design point still valid (``finn.kernels.base``: a rule
+    reading the intake would be refused wherever the intake is)."""
+    point = design_space(Misnamed(input_tensor=TENSOR, arriving=ARRIVING))
+    found = point.query(Kernel.intake)
+    assert isinstance(found, Rejected) and codes(found) == {"intake-port-unknown"}
+    assert "['other']" in found.findings[0].message
+    assert inspection.validity(point).status == "valid"
+    idle = design_space(Idling(input_tensor=TENSOR, arriving=ARRIVING))
+    assert codes(idle.query(Kernel.intake)) == {"intake-port-unknown"}
+    coupled = design_space(Coupled(input_tensor=TENSOR, arriving=ARRIVING))
+    assert coupled.intake.joined == (("input", "side"),)
+
+
+def test_a_stated_intake_s_refusal_is_reported_under_a_public_name() -> None:
+    """A kernel's stated intake that refuses is reported under ``stated_intake``,
+    never a private member's name: Pool's outside its profile."""
+    found = _pool((1, 1), 5.0).query(Kernel.intake)
+    assert isinstance(found, Rejected) and codes(found) == {INTAKE_UNSTATED}
+    assert [finding.owner for finding in found.findings] == ["stated_intake"]
+
+
+def test_a_kernel_with_children_renames_its_members_coupling() -> None:
+    class Holder(Kernel):
+        id = "test.intake.holder"
+        inner = Coupled(input_tensor=TENSOR, arriving=ARRIVING)
+        x = inner.input
+
+    assert design_space(Holder()).intake.joined == (("x", "inner.side"),)
+
+
+def test_a_kernel_with_children_names_a_port_it_exposes_by_its_node() -> None:
+    """However its alias spells the port: through its member's own alias (``x = mid.x``)
+    or through the member's members, across a selector (``y = chain.core.input``), it is
+    one node, which its intake names by the name it exposes it under."""
+
+    class Middle(Kernel):
+        id = "test.intake.middle"
+        inner = Coupled(input_tensor=TENSOR, arriving=ARRIVING)
+        x = inner.input
+
+    class ByAlias(Kernel):
+        id = "test.intake.by_alias"
+        mid = Middle()
+        chain = Chain()
+        x = mid.x
+        y = chain.x
+
+    class ByPath(Kernel):
+        id = "test.intake.by_path"
+        mid = Middle()
+        chain = Chain()
+        x = mid.inner.input
+        y = chain.core.input
+
+    for holder in (ByAlias, ByPath):
+        point = design_space(holder()).with_choices({holder.chain.core: "other"})
+        assert point.intake.names == ("x", "mid.inner.side", "y", "chain.kept.input"), holder
+        assert point.intake.joined == (("x", "mid.inner.side"),), holder
 
 
 def test_a_kernel_with_no_module_and_no_member_takes_nothing_ahead() -> None:
@@ -216,7 +345,7 @@ def _targets(member: Kernel) -> tuple[str, ...]:
     return tuple(
         name
         for name, port in stream_ports(type(member)).items()
-        if member.field(port.endpoint).get() is Endpoint.TARGET and member.field(port.placed).get()
+        if member.field(port.direction).get() is Direction.IN and member.field(port.placed).get()
     )
 
 
@@ -224,7 +353,8 @@ def _targets(member: Kernel) -> tuple[str, ...]:
 def test_every_module_kernel_states_its_intake_at_each_input_port_it_places(case: str) -> None:
     """At each covering point of each conformance case, every member binding a module
     states its intake (none unstated), one entry for each input port it places, in its
-    declaration order: structural, read from the RTL, but an HLS kernel's, measured."""
+    declaration order: structural, read from the RTL, but an HLS kernel's, fitted to traces
+    and assumed within their profile."""
     for where, point in _points(case):
         for name in point.members:
             member = point.member(name)
@@ -236,7 +366,7 @@ def test_every_module_kernel_states_its_intake_at_each_input_port_it_places(case
                 continue
             assert found.value.names == _targets(member), f"{where}: {name}"
             hls = isinstance(member, PoolKernel)
-            standing = Standing.MEASURED if hls else Standing.STRUCTURAL
+            standing = Standing.ASSUMED if hls else Standing.STRUCTURAL
             assert {each.standing for each in found.value.ports} <= {standing}, where
 
 
@@ -280,6 +410,11 @@ def test_the_credit_kernels_state_their_rtl_s_credit_and_sidestep() -> None:
             credit = _rtl(member, top, ("CREDIT",))["CREDIT"]
             for port in ports:
                 assert intake.of(port).before_stop == intake.of(port).most == credit + 1, where
+            # eltwise's operands are not joined: each one beat ahead at most, its sidestep.
+            assert intake.joined == (), where
+            if case == "eltwise":
+                assert intake.of("lhs").ahead == (Ahead("rhs", 1),), where
+                assert intake.of("rhs").ahead == (Ahead("lhs", 1),), where
 
 
 def test_thresholding_states_its_rtl_s_pending_cap() -> None:
@@ -295,6 +430,9 @@ def test_thresholding_states_its_rtl_s_pending_cap() -> None:
             entry = intake.of("input")
             pending = (int(given["DEEP_PIPELINE"]) + 1) * m + 3
             assert entry.before_stop == entry.most == pending, where
+            # With several sets its set port is joined with its input (its ready equations);
+            # with one, it is idle and states none.
+            assert intake.joined == ((("input", "set"),) if "set" in intake.names else ()), where
 
 
 def test_dotp_states_its_rtl_s_output_queue_by_its_core_s_pipeline_depth() -> None:
@@ -330,9 +468,17 @@ def test_dotp_states_its_rtl_s_output_queue_by_its_core_s_pipeline_depth() -> No
             platform=platform,
         )
         where = (core.__name__, simd)
+        assert point.intake.joined == (("x", "w"),), where
         for port in ("x", "w"):
             entry = point.intake.of(port)
             assert (entry.before_stop, entry.most) == (2 * 2, (depth + 4) * 2 - 1), where
+
+
+def test_matmul_s_intake_is_its_core_s_joined_under_its_own_names() -> None:
+    """A kernel with children renames its member's coupling with its ports: MatMul's ``x``
+    and ``w``, its core's, joined."""
+    for where, member, intake in _kernel("matmul"):
+        assert intake.names == ("x", "w") and intake.joined == (("x", "w"),), where
 
 
 def test_a_fifo_states_its_storage_s_capacity_in_each_style() -> None:
@@ -449,13 +595,17 @@ def test_memstream_states_its_set_port_s_intake_by_its_credit() -> None:
         ).with_choices(ram_style="distributed", pumped_memory=pumped)
         entry = several.intake.of("set")
         assert (entry.before_stop, entry.most) == counts, (depth, pumped)
+        # Each set index names the set of a set's words: its group (L4, it follows the
+        # output's groups).
+        assert several.set.group == depth, (depth, pumped)
         credit = _rtl(several, "memstream", ("FULL_CREDIT",), SETS=2, DEPTH=depth, WIDTH=12)
         assert credit["FULL_CREDIT"] == 8
 
 
-def test_pool_states_its_measured_intake_by_its_window_and_period() -> None:
-    """Measured, in windows of ``K = KH * KW`` beats: ``4K + 5`` before it stops, ``5K + 5``
-    at most at 5 and 10 ns, one more each at 2.5 ns (its source names the traces)."""
+def test_pool_states_its_fitted_intake_by_its_window_and_period() -> None:
+    """In windows of ``K = KH * KW`` beats: ``4K + 5`` before it stops, ``5K + 5`` at most at
+    5 and 10 ns, one more each at 2.5 ns; assumed, within its profile (its source names the
+    traces)."""
     for where, member, intake in _kernel("pool"):
         window = member.query(PoolKernel.window)
         assert isinstance(window, Available), where
@@ -465,6 +615,59 @@ def test_pool_states_its_measured_intake_by_its_window_and_period() -> None:
         period = member.platform.period_ns
         expected = (4 * k + 5 + (period <= 2.5), 5 * k + 5 + (period < 5.0))
         assert (entry.before_stop, entry.most) == expected, where
-        assert entry.standing is Standing.MEASURED and "Vitis HLS" in entry.source, where
-        # A form fitted to the traces, which its source says it states beyond them.
-        assert "stated beyond them" in entry.source, where
+        assert entry.standing is Standing.ASSUMED and "Vitis HLS" in entry.source, where
+        assert entry.profile == INTAKE_PROFILE, where
+
+
+def _pool(window: tuple[int, int], period_ns: float) -> Any:
+    image = Tensor((6, 6, 2), ScalarEncoding(DataType["INT4"]))
+    platform = full_platform(DspBlock.DSP48E2, period_ns=period_ns)
+    kernel = PoolKernel(window=window, stride=window, platform=platform, input_tensor=image)
+    return design_space(kernel).with_choices({PoolKernel.pe: 1})
+
+
+def test_pool_s_fitted_intake_holds_within_its_profile_and_is_unstated_outside() -> None:
+    """Inside the traced K (4..9) and period (2.5..10 ns), the form's value, assumed, at its
+    bounds included; outside, ``intake-unstated``, naming the profile and what lies outside.
+    The part and tool are stated, not checked."""
+    assert str(INTAKE_PROFILE) == (
+        "K 4..9, period_ns 2.5..10.0; traced on xczu3eg with Vitis HLS 2025.2 "
+        "(part and tool not checked)"
+    )
+    for window, period, counts in (((2, 2), 2.5, (22, 26)), ((3, 3), 10.0, (41, 50))):
+        entry = _pool(window, period).intake.of("input")
+        assert (entry.before_stop, entry.most) == counts, (window, period)
+    for window, period, beyond in (
+        ((1, 1), 5.0, "K 1"),
+        ((2, 5), 5.0, "K 10"),
+        ((2, 2), 2.0, "period_ns 2.0"),
+        ((2, 2), 12.0, "period_ns 12.0"),
+    ):
+        point = _pool(window, period)
+        found = point.query(Kernel.intake)
+        assert isinstance(found, Rejected) and codes(found) == {INTAKE_UNSTATED}
+        message = found.findings[0].message
+        assert str(INTAKE_PROFILE) in message and message.endswith(f"not at {beyond}")
+        # No rule reads intake: the point stays valid.
+        assert inspection.validity(point).status == "valid", (window, period)
+
+
+def test_an_intake_profile_states_its_part_tool_and_ranges() -> None:
+    profile = IntakeProfile("part", "tool", (("K", 1, 2),))
+    assert profile.outside(K=1) == () and profile.outside(K=3) == ("K 3",)
+    with pytest.raises(ValueError):
+        profile.outside(N=1)
+    for wrong in (
+        dict(part=""),
+        dict(tool=""),
+        dict(ranges=()),
+        dict(ranges=(("K", 2, 1),)),
+        dict(ranges=(("K", 1, 2), ("K", 1, 2))),
+        dict(ranges=(("K", True, 2),)),
+    ):
+        with pytest.raises(ValueError):
+            IntakeProfile(**({"part": "p", "tool": "t", "ranges": (("K", 1, 2),)} | wrong))  # type: ignore[arg-type]
+    # A profile is a fitted form's, so its standing is assumed.
+    with pytest.raises(ValueError):
+        PortIntake("input", 1, 1, "rule", Standing.MEASURED, "traces", profile)
+    assert PortIntake("input", 1, 1, "rule", Standing.ASSUMED, "traces", profile).profile

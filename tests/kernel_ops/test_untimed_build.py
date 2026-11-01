@@ -40,7 +40,7 @@ def test_configuration_and_emission_do_not_read_refused_cycles(
     reads: list[str] = []
 
     def untimed(self: Partition, name: str, member: object) -> QueryResult[Any]:
-        if member is Kernel.cycles:
+        if member is Kernel.frame_cycles:
             reads.append(name)
             return reject("kernel-cycles", "no cycle estimate supplied")
         return query(self, name, member)
@@ -85,7 +85,7 @@ def test_held_verification_does_not_stamp_unchecked_timing(
     reads: list[str] = []
 
     def unavailable(self: Partition, name: str, member: object) -> QueryResult[Any]:
-        if member is Kernel.cycles:
+        if member is Kernel.frame_cycles:
             reads.append(name)
             if timing == "refused":
                 return reject("kernel-cycles", "cycle estimate unavailable")
@@ -145,7 +145,7 @@ def test_held_timed_actions_refuse_before_reference_or_directory_work(
     reads: list[str] = []
 
     def unavailable(self: Partition, name: str, member: object) -> QueryResult[Any]:
-        if member is Kernel.cycles:
+        if member is Kernel.frame_cycles:
             reads.append(name)
             if timing == "refused":
                 return reject("kernel-cycles", "cycle estimate unavailable")

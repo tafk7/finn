@@ -47,9 +47,42 @@ HERE = Path(__file__).resolve().parent
 # scope (``core.space._line_reads``): two helpers calling each other (``test_reads``), each
 # reading what both read (the line kept what it found first while the cycle was open, in
 # the order it met them).
+# And each method reading through a node alias (``test_node_aliases``), which the line, older
+# than node aliases, does not follow: the owner's member it reaches, below a selector each
+# case's, with the selector.
 GAINED = {
     "Mutual": {"by_second": ["width"]},
     "PlacesMutual": {"inner.by_first": ["inner.lanes"]},
+    "Root": {"double": ["inner.leaf.answer"]},
+    "Pick": {
+        "here": ["compute", "compute.a.$selected", "compute.b.$selected"],
+        "seen": ["compute", "compute.a.leaf.answer", "compute.b.leaf.answer"],
+    },
+    "Wrap": {
+        "mm.here": ["mm.compute", "mm.compute.a.$selected", "mm.compute.b.$selected"],
+        "mm.seen": ["mm.compute", "mm.compute.a.leaf.answer", "mm.compute.b.leaf.answer"],
+    },
+    "Outer": {
+        "seen": [
+            "wrap.mm.compute",
+            "wrap.mm.compute.a.leaf.answer",
+            "wrap.mm.compute.b.leaf.answer",
+        ],
+        "wrap.mm.here": [
+            "wrap.mm.compute",
+            "wrap.mm.compute.a.$selected",
+            "wrap.mm.compute.b.$selected",
+        ],
+        "wrap.mm.seen": [
+            "wrap.mm.compute",
+            "wrap.mm.compute.a.leaf.answer",
+            "wrap.mm.compute.b.leaf.answer",
+        ],
+    },
+    "Optional": {
+        "here": ["compute", "compute.real.$selected"],
+        "seen": ["compute", "compute.real.leaf.answer"],
+    },
 }
 
 

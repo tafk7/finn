@@ -118,7 +118,6 @@ from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.search import Key, dotted
 from finn.core.space import Available, Rejected, Space, Unresolved, inspection
 from finn.custom_op.kernels.base import KernelOp, kernel_op, typed
-from finn.dataflow.schedule import Pace
 from finn.dataflow.streams import Stream
 from finn.kernels.artifacts.module import ProducerIdentity
 from finn.kernels.base import PortPins
@@ -130,9 +129,10 @@ from finn.kernels.composer import (
     Port,
     Stated,
 )
+from finn.kernels.laws import TimedPace
 from finn.kernels.movers import MoverOffer
 from finn.kernels.partition import Partition, partition
-from finn.kernels.port import port_pace, port_side, port_stream_pins
+from finn.kernels.port import exposed_pins, exposed_side, stream_port
 from finn.kernels.sides import Side
 
 if TYPE_CHECKING:
@@ -293,14 +293,14 @@ def _beyond(
 
 def _neighbour(
     model: ModelWrapper, tensor: str, side: str, node: NodeProto
-) -> tuple[Side, PortPins | None, Pace | None]:
+) -> tuple[Side, PortPins | None, TimedPace | None]:
     """The side a frozen neighbour, KernelOp ``node`` beyond the selection on ``side`` of
-    ``tensor``, gives the edge channel, as a fact: its port's ``<p>_side`` at its stored
+    ``tensor``, gives the edge channel, as a fact: its port's ``side`` at its stored
     choices (``KernelOp.point``; its facts alone, where it stores none), as a frozen
     neighbour's (``Side.neighbour``: an upstream one's stream, label and word width, a
     downstream one's stream and label), its label below the node's name; that port's
-    stream pins there (``<p>_stream_pins``), which its hop is wired to; and its pace there
-    (``<p>_pace``, a scheduled port's), which sizing reads. Only an
+    stream pins there (``stream_pins``), which its hop is wired to; and its pace there at
+    its kernel's interval (``timed_pace``, where it owns its pacing), which sizing reads. Only an
     accepted value is a fact: refused (``neighbour-unaccepted``, naming the neighbour, its
     port and why) where its stored choices are refused, its kernel is refused, or its side
     is not known there (it waits on an open choice, or is refused)."""
@@ -332,7 +332,8 @@ def _neighbour(
     validity = inspection.validity(point)
     if isinstance(validity.result, Rejected):
         raise unaccepted("its kernel is refused", validity.result.findings)
-    answer = point.query(port_side(type(point), named))
+    declared = stream_port(type(point), named)
+    answer = point.query(declared.side)
     if not isinstance(answer, Available) or not isinstance(answer.value, Side):
         why = (
             "its side waits on an open choice"
@@ -342,16 +343,18 @@ def _neighbour(
             )
         )
         raise unaccepted(why, getattr(answer, "findings", ()))
-    found: Side = answer.value
+    found: Side = exposed_side(type(point), named, answer.value)
     stated = Side.neighbour(cast(Stream, found.stream), found.label, found.width)
-    pins = point.query(port_stream_pins(type(point), named))
+    pins = point.query(declared.stream_pins)
     given = pins.value if isinstance(pins, Available) else None
-    paced = point.query(port_pace(type(point), named))
+    if isinstance(given, PortPins):
+        given = exposed_pins(point, named, given)
+    paced = point.query(declared.timed_pace)
     pace = paced.value if isinstance(paced, Available) else None
     return (
         stated.under(node.name),
         given.under(node.name) if isinstance(given, PortPins) else None,
-        pace if isinstance(pace, Pace) else None,
+        pace if isinstance(pace, TimedPace) else None,
     )
 
 

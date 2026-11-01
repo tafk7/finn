@@ -10,6 +10,7 @@ import pytest
 from support.conformance import _check_model, _contracts, _stream, _values, place, samples
 from support.helpers import FULL_DSP48E2, fifo_node, nested, stage_tensor
 from support.kernel_specs.stages import StagedInputGenerator, fifo, input_gen
+from support.ports import UncheckedInPort, UncheckedOutPort
 
 from finn.core.space import (
     Available,
@@ -29,15 +30,15 @@ from finn.core.space import (
 from finn.dataflow.steps import steps
 from finn.dataflow.traversal import BeatSequence, LevelEnd
 from finn.kernels.adapters import input_gen as InputAdapterChain
-from finn.kernels.artifacts.abi import Clocking, Direction, Endpoint, Signal
+from finn.kernels.artifacts.abi import Clocking, Direction, Signal
 from finn.kernels.artifacts.module import Fragment
 from finn.kernels.base import Kernel, PortPins
 from finn.kernels.channels import ChannelFifo
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import InputGeneratorKernel
-from finn.kernels.laws import NATIVE, Native
+from finn.kernels.laws import NATIVE, InterfaceProtocol, Native
 from finn.kernels.port import LoopEnds
-from finn.kernels.port_model import StreamPort
+from finn.kernels.port_model import InPort
 
 UNNAMED_ENDS = LoopEnds((LevelEnd(1),))
 """A loop-completion vector, which a native port named in full has no pin for: each port
@@ -59,7 +60,7 @@ def generator_node() -> InputGeneratorKernel:
 
 def test_native_model_width_is_early_and_child_characterization_is_local() -> None:
     fifo_point = design_space(fifo_node(word_bits=13, depth=1))
-    assert_type(FifoKernel.input, StreamPort)
+    assert_type(FifoKernel.input, InPort)
     assert_type(fifo_point.input.width, int)
     assert fifo_point.input.width == 13
     assert inspection.validity(fifo_point).status == "refused"
@@ -113,16 +114,15 @@ class SerialFifo(FifoKernel):
         _ = self.second_state
         return ARRIVING
 
-    input = StreamPort(
+    input = UncheckedInPort(
         label="input",
         tensor=FifoKernel.input_tensor,
         sequence=first,
         transport=Native(names=("idat", "ivld", "irdy")),
         loop_ends=UNNAMED_ENDS,
     )
-    output = StreamPort(
+    output = UncheckedOutPort(
         label="output",
-        endpoint=Endpoint.INITIATOR,
         tensor=FifoKernel.output_tensor,
         sequence=second,
         transport=Native(names=("odat", "ovld", "ordy")),
@@ -216,7 +216,9 @@ def test_staged_unused_marker_has_real_pin_and_hold_category_order() -> None:
 
 def test_native_clock_overrides_are_physical_inputs() -> None:
     class Clocked(InputGeneratorKernel):
-        clock_domain = Clocking(clock="fast", reset="clear", active_low=False)
+        interface_protocol = InterfaceProtocol(
+            Clocking(clock="fast", reset="clear", active_low=False), NATIVE
+        )
 
     point = design_space(
         Clocked(
@@ -249,7 +251,7 @@ def test_channel_fifo_counts_no_cycles_and_reads_netlist_before_contracts() -> N
     point = design_space(Holder(tensor=TENSOR, arriving=ARRIVING, platform=FULL_DSP48E2))
     assert isinstance(point, Kernel)
     point = point.with_choices({Holder.depth: 4, Holder.buffer.ram_style: "auto"})
-    assert isinstance(point.query(Holder.cycles), Inapplicable)
+    assert isinstance(point.query(Holder.frame_cycles), Inapplicable)
     evidence = inspection.explain(point, Holder.stages)
     assert isinstance(evidence.result, Rejected)
     assert [f.code for f in evidence.result.findings] == ["native-module"]
@@ -263,7 +265,7 @@ def test_channel_fifo_counts_no_cycles_and_reads_netlist_before_contracts() -> N
 def test_adapter_reads_contracts_before_netlist(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
 
-    class RefusedContract(StreamPort):
+    class RefusedContract(InPort):
         @view
         def stream_pins(self) -> PortPins | Rejected | Inapplicable:
             calls.append("stream_pins")
@@ -348,16 +350,15 @@ class SerialGenerator(InputGeneratorKernel):
         _ = self.second_state
         return ARRIVING
 
-    input = StreamPort(
+    input = UncheckedInPort(
         label="input",
         tensor=InputGeneratorKernel.input_tensor,
         sequence=first,
         transport=Native(names=("idat", "ivld", "irdy")),
         loop_ends=UNNAMED_ENDS,
     )
-    output = StreamPort(
+    output = UncheckedOutPort(
         label="output",
-        endpoint=Endpoint.INITIATOR,
         tensor=InputGeneratorKernel.output_tensor,
         sequence=second,
         transport=Native(names=("odat", "ovld", "ordy")),

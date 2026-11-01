@@ -67,12 +67,12 @@ from finn.dataflow.traversal import (
     pack,
     vector_major,
 )
-from finn.kernels.artifacts.abi import Bus, Clocking, Endpoint, Member, StandardProtocol
+from finn.kernels.artifacts.abi import Bus, Clocking, Member, StandardProtocol
 from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData, hex_image
 from finn.kernels.base import Kernel
 from finn.kernels.control import ControlModel
 from finn.kernels.laws import (
-    NATIVE_CLOCKING,
+    NATIVE_PROTOCOL,
     Axis,
     Intake,
     Native,
@@ -81,7 +81,7 @@ from finn.kernels.laws import (
     doubled,
 )
 from finn.kernels.library import ModuleSpec
-from finn.kernels.port_model import StreamPort
+from finn.kernels.port_model import InPort, OutPort
 from finn.kernels.utilization import (
     Fit,
     auto_unstated,
@@ -129,7 +129,7 @@ class MemStreamKernel(Kernel):
     """A stored operand streamed in its consumer's order; see the module docstring."""
 
     id = "finnlib.memstream_axi"
-    clock_domain = NATIVE_CLOCKING
+    interface_protocol = NATIVE_PROTOCOL
 
     dtype: QONNXDataType = Param()
     form: Traversal = Param()
@@ -212,7 +212,7 @@ class MemStreamKernel(Kernel):
         return True
 
     @constraint
-    def selected(self) -> bool | Rejected:
+    def sets_indexed(self) -> bool | Rejected:
         """Several sets take a tensor of set indices, one a beat; a single set none."""
         if self.sets < 2:
             if self.set_tensor is not None:
@@ -289,14 +289,14 @@ class MemStreamKernel(Kernel):
                     ("rdata", 32),
                 )
             ),
-            associated_clock=type(self).clock_domain.clock,
-            associated_reset=type(self).clock_domain.reset,
+            associated_clock=type(self).interface_protocol.clocking.clock,
+            associated_reset=type(self).interface_protocol.clocking.reset,
         )
 
     @derived
     def set_sequence(self) -> BeatSequence | Rejected:
         """One index a beat, one beat per pass of the weights. Without a set tensor its port
-        is idle, and its order is refused: several sets as ``selected`` refuses them, a
+        is idle, and its order is refused: several sets as ``sets_indexed`` refuses them, a
         single set because it takes no set channel."""
         if self.set_tensor is None:
             if self.sets < 2:
@@ -307,7 +307,7 @@ class MemStreamKernel(Kernel):
     @derived
     def output_sequence(self) -> BeatSequence | Rejected:
         """One set streams cyclically; several stream one pass per accepted index, and
-        without their indices are refused, as ``selected`` refuses them."""
+        without their indices are refused, as ``sets_indexed`` refuses them."""
         if self.sets > 1:
             if self.set_tensor is None:
                 return reject("memstream-set-channel", "several sets take a set channel")
@@ -327,20 +327,18 @@ class MemStreamKernel(Kernel):
             fabric=self.platform.fabric,
         )
 
-    set = StreamPort(
+    set = InPort(
         transport=Native(names=("s_axis_0_tdata", "s_axis_0_tvalid", "s_axis_0_tready")),
-        endpoint=Endpoint.TARGET,
         tensor=set_tensor,
         sequence=set_sequence,
         dtype=set_dtype,
         governs="output",
     )
-    output = StreamPort(
+    output = OutPort(
         transport=Axis(bus="m_axis_0"),
-        endpoint=Endpoint.INITIATOR,
         tensor=output_tensor,
         sequence=output_sequence,
-        stored=True,
+        sourced=True,
     )
 
     @derived
@@ -382,7 +380,7 @@ class MemStreamKernel(Kernel):
     def clocking(self) -> Clocking:
         """``clk2x`` runs a pumped memory, and is held low otherwise."""
         pumped = self.pumped_memory
-        return doubled(type(self).clock_domain, pumped)
+        return doubled(type(self).interface_protocol.clocking, pumped)
 
     @view
     def parameters(self) -> dict[str, int | str]:
@@ -417,12 +415,11 @@ class MemStreamKernel(Kernel):
         """Its module reads its contents from ``init_file``."""
         return (self.init_file,)
 
-    @view
-    def cycles(self) -> int | Rejected:
-        """The base's, by the rate law (``Kernel.cycles``: the most beats a frame its placed
-        ports carry), declared here so that its channel counts it by its kind
-        (``finn.kernels.channels.Channel.source_cycles``)."""
-        return self._cycles()
+    # Its cycles a frame are the base's, by the rate law (``Kernel.frame_cycles``: the most
+    # beats a frame its placed ports carry, at its interval), restated as the base's own so
+    # that its channel counts it by its kind (``finn.kernels.channels.Channel.source_cycles``):
+    # the one restatement a kernel with a module keeps (``kernel-cycles-restated``).
+    frame_cycles = view(Kernel._frame_cycles)
 
 
 __all__ = ["MemStreamKernel", "memstream_resources"]

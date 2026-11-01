@@ -43,12 +43,11 @@ from finn.core.space import (
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.dataflow.schedule import Access, Index, Schedule
 from finn.dataflow.tensor import Tensor
-from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel, bound_extents, bound_schedule, extent_of, spanned
-from finn.kernels.laws import NATIVE_CLOCKING, Intake, Native, PortIntake, Standing
+from finn.kernels.laws import NATIVE_PROTOCOL, Intake, Native, PortIntake, Standing
 from finn.kernels.library import ModuleSpec
-from finn.kernels.port_model import StreamPort
+from finn.kernels.port_model import InPort, OutPort
 from finn.kernels.values.domains import admit_element
 from finn.platform.capabilities import DspBlock, Platform, Resources
 
@@ -80,7 +79,7 @@ class PwPolyKernel(Kernel):
     docstring."""
 
     id = "finnlib.pwpolyf"
-    clock_domain = NATIVE_CLOCKING
+    interface_protocol = NATIVE_PROTOCOL
 
     # What it computes: a supplied input, not an interchangeable implementation choice.
     function: str = Param()
@@ -122,17 +121,15 @@ class PwPolyKernel(Kernel):
             return element
         return Tensor(shape, element)
 
-    input = StreamPort(
+    input = InPort(
         transport=Native(prefix="x"),
-        endpoint=Endpoint.TARGET,
         tensor=input_tensor,
         schedule=schedule,
         index=indices,
         lanes=(c,),
     )
-    output = StreamPort(
+    output = OutPort(
         transport=Native(prefix="y"),
-        endpoint=Endpoint.INITIATOR,
         tensor=output_tensor,
         schedule=schedule,
         index=indices,

@@ -222,8 +222,8 @@ class _Allocation:
         kinds = self.table.kinds[draft.effective.space_type]
         for member_name, declaration in draft.effective.members.items():
             kind = kinds[member_name]
-            # Structure (nodes and choices) is allocated below.
-            if kind not in ("node", "choice"):
+            # Structure (nodes and choices) is allocated below; an alias places nothing.
+            if kind not in ("node", "choice", "alias"):
                 self.member(draft, member_name, declaration)
         if draft.placed is not None:
             return index
@@ -489,7 +489,9 @@ class _Allocation:
         draft = self.table.drafts[child]
         kinds = self.table.kinds[draft.effective.space_type]
         for member, declaration in draft.effective.members.items():
-            if kinds[member] not in ("node", "choice") and not isinstance(declaration, Constraint):
+            if kinds[member] not in ("node", "choice", "alias") and not isinstance(
+                declaration, Constraint
+            ):
                 yield member, draft.effective.semantics.get(declaration)
 
     def candidate_member(self, child: int, member: str) -> NodeRef:
