@@ -180,7 +180,8 @@ class SpaceMeta(type):
 
 def _close(cls: SpaceMeta) -> None:
     """Close a Space class as it is created: freeze each declaration it holds (a node's
-    record, a selector's and each of its cases' included), and mark it closed."""
+    record, a selector's and each of its cases' included), mark it closed, and refuse an
+    override of a rule that widens its base's answer (``collection.check_overrides``)."""
     from ._nodes import NodeDecision, slot_declaration
 
     reason = f"{cls.__name__} was created"
@@ -197,6 +198,12 @@ def _close(cls: SpaceMeta) -> None:
                     case.freeze(reason)
         declaration.freeze(reason)
     type.__setattr__(cls, "_space_closed", True)
+    # The engine's own classes (Space, Group) are made before its collection is importable,
+    # and override nothing.
+    if placed and not cls.__module__.startswith(f"{__package__}."):
+        from .collection import check_overrides
+
+        check_overrides(cast("type[_Namespace]", cls))
 
 
 def _refuse_structure(cls: SpaceMeta, name: str) -> NoReturn:

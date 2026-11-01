@@ -5,10 +5,25 @@
 from __future__ import annotations
 
 import inspect
+import sys
 import types
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, Self, Union, cast, get_args, get_origin, get_type_hints
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Literal,
+    Self,
+    TypeVar,
+    Union,
+    cast,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
+
+if sys.version_info >= (3, 12):
+    from typing import TypeAliasType
 
 from ._configuration import _Namespace
 from ._nodes import selector_value
@@ -118,15 +133,63 @@ def output_semantics(
     return stated
 
 
+_MARKERS = (Inapplicable, Rejected, Unresolved)
+
+
 def declared_non_values(annotation: object) -> frozenset[type]:
     """The non-values a computation's return annotation admits as its own answer: each of
     ``Rejected``, ``Inapplicable`` and ``Unresolved`` it names (``QueryResult[T]`` names all
-    three; a plain ``T`` none). An override's is read against its base's (``collection``)."""
-    union = get_origin(annotation) in (Union, types.UnionType)
-    options = get_args(annotation) if union else (annotation,)
-    return frozenset(
-        cast(type, option) for option in options if option in (Inapplicable, Rejected, Unresolved)
-    )
+    three; a plain ``T`` none), as its answer's own options: a union's flattened, a type
+    alias's (``type Maybe[T] = T | Inapplicable``) expanded with its arguments, a subclass
+    of a marker read as that marker. A marker inside a value (``tuple[Inapplicable, ...]``)
+    is no option of the answer. An override's is read against its base's (``collection``)."""
+    found: set[type] = set()
+    for option in _options(annotation, {}):
+        found.update(marker for marker in _MARKERS if _is_subclass(option, marker))
+    return frozenset(found)
+
+
+_Arguments = Mapping[object, "tuple[object, _Arguments]"]
+
+
+def _options(annotation: object, arguments: _Arguments) -> Iterator[object]:
+    """The options of ``annotation``: a union's, an alias's value's, ``Annotated``'s first;
+    else itself. A type variable an expanded alias binds (``arguments``) is read as its
+    argument, in the arguments that argument was written under."""
+    if isinstance(annotation, TypeVar) and annotation in arguments:
+        given, scope = arguments[annotation]
+        yield from _options(given, scope)
+        return
+    if (alias := _alias(annotation)) is not None:
+        yield from _options(alias[0], {})
+        return
+    origin = get_origin(annotation)
+    if (alias := _alias(origin)) is not None:
+        value, params = alias
+        bound = {
+            param: (arg, arguments) for param, arg in zip(params, get_args(annotation), strict=True)
+        }
+        yield from _options(value, bound)
+        return
+    if origin is Annotated:
+        yield from _options(get_args(annotation)[0], arguments)
+        return
+    if origin in (Union, types.UnionType):
+        for option in get_args(annotation):
+            yield from _options(option, arguments)
+        return
+    yield annotation
+
+
+def _alias(annotation: object) -> tuple[object, tuple[object, ...]] | None:
+    """A ``type`` statement's alias (Python 3.12 on): its value and its parameters."""
+    if sys.version_info >= (3, 12) and isinstance(annotation, TypeAliasType):
+        return annotation.__value__, annotation.__type_params__
+    return None
+
+
+def _is_subclass(option: object, marker: type) -> bool:
+    return isinstance(option, type) and issubclass(option, marker)
 
 
 def _unmarked(annotation: object) -> object:
