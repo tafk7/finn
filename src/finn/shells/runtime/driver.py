@@ -6,12 +6,14 @@
 
 A driver refuses a runtime file whose edge a mover kind moves that no protocol drives
 (``mover-unknown``, ``movers.PROTOCOLS``). A core runs by its node's name (``run_core``):
-each input's frames packed into its mover's buffer and synced to the device (``stage``);
-each output mover, idle, started on its buffer, then each input mover, and each output
-mover waited on (``launch``, which a throughput test times alone); each output's buffer
-synced back and unpacked (``collect``). An input holds a whole number of frames: its edge's
-shape, its first axis that many times (``frames``); every input of a call holds as many.
-Buffers are allocated once a size, by mover. ``execute`` runs every core on the inputs it
+each input's frames packed into its mover's buffer and synced to the device, and each
+output's buffer allocated (``stage``); each output mover, idle, started on its buffer, then
+each input mover, and each output mover waited on (``launch``, which a throughput test
+times alone: it allocates nothing); each output's buffer synced back and unpacked
+(``collect``). An input holds a whole number of frames: its edge's shape, its first axis
+that many times (``frames``); every input of a call holds as many. A mover holds one
+buffer, of the size its last call took: a call of another size releases it and allocates
+another (``Device.release``). ``execute`` runs every core on the inputs it
 is given; ``run_graph`` runs the parent graph, its host nodes by ONNX execution (onnx and
 qonnx, imported only there) and each ``DataflowCore`` node through ``run_core``, its inputs
 and outputs the core's edge ports in port order.
@@ -53,7 +55,7 @@ class Driver:
                     )
         self.device = device
         self.description = description
-        self._buffers: dict[tuple[str, int], Buffer] = {}
+        self._buffers: dict[str, Buffer] = {}
 
     def load(self, image: Path) -> None:
         """Load the device image ``image``."""
@@ -87,7 +89,8 @@ class Driver:
         return next(iter(counts.values()), 1)
 
     def _buffer(self, edge: Edge, frames: int) -> Buffer:
-        """The buffer of ``edge``'s mover for ``frames`` frames, allocated once a size."""
+        """The buffer of ``edge``'s mover for ``frames`` frames: the one it holds if of
+        that size, else a new one, the one it held released."""
         element = Element.named(edge.element)
         per_beat = beat_bytes(element, edge.lanes)
         if per_beat * 8 != edge.bits:
@@ -97,15 +100,20 @@ class Driver:
                 f"beat, and its stream is {edge.bits} bits",
             )
         nbytes = frames * edge.beats * per_beat
-        key = (edge.unit, nbytes)
-        if key not in self._buffers:
-            port, target = self.description.bindings[edge.unit]
-            self._buffers[key] = self.device.buffer(edge.unit, port, nbytes, target)
-        return self._buffers[key]
+        held = self._buffers.get(edge.unit)
+        if held is not None and held.array.size == nbytes:
+            return held
+        if held is not None:
+            del self._buffers[edge.unit]
+            self.device.release(held)
+        port, target = self.description.bindings[edge.unit]
+        self._buffers[edge.unit] = self.device.buffer(edge.unit, port, nbytes, target)
+        return self._buffers[edge.unit]
 
     def stage(self, name: str, inputs: Mapping[str, np.ndarray[Any, Any]]) -> int:
         """Pack the inputs of the core ``name`` into its input movers' buffers and sync them
-        to the device (the module docstring): the frames they hold."""
+        to the device, and allocate its output movers' (the module docstring): the frames
+        they hold."""
         core = self.description.core(name)
         for edge in (*core.inputs, *core.outputs):
             if prod(edge.shape) != edge.beats * edge.lanes:
@@ -121,6 +129,8 @@ class Driver:
             buffer = self._buffer(edge, frames)
             np.copyto(buffer.array, pack(folded, element).reshape(-1))
             self.device.sync(buffer, to_device=True)
+        for edge in core.outputs:
+            self._buffer(edge, frames)
         return frames
 
     def launch(self, name: str, frames: int) -> None:

@@ -5,9 +5,12 @@
 driver over a runtime's device, by the runtime file beside it, as ``cli.main`` runs it.
 
 A build of one core with one input and one output is validated (another is refused,
-``validate-unsupported``): the test images, ``--batchsize`` at a time, each its input's
-frame, run through the core; a frame's label is its output where that is one value, else
-the place of its largest value. The datasets, MNIST and CIFAR-10, are loaded by
+``validate-unsupported``), with the run-time weights in ``--runtime_weight_dir`` written
+first, as ``cli.main`` writes them: every test image, ``--batchsize`` at a time and the last
+batch what remains, each its input's frame, run through the core; a frame's label is its
+output where that is one value, else the place of its largest value; the accuracy is over
+the whole test set. A batch of no frame (``batch-invalid``) and an empty test set
+(``dataset-empty``) are refused. The datasets, MNIST and CIFAR-10, are loaded by
 ``dataset_loading``, imported only here (its absence refused, ``dataset-loading-absent``).
 """
 
@@ -21,6 +24,7 @@ from typing import Any
 
 import numpy as np
 
+from . import cli
 from .cli import RUNTIME_FILE, OpenDevice
 from .description import read
 from .driver import Driver
@@ -46,6 +50,11 @@ def arguments(image: Path) -> argparse.ArgumentParser:
         "--dataset_root", help="dataset root dir for download/reuse", default="/tmp"
     )
     parser.add_argument("--device", help="the index of the device to use", type=int, default=0)
+    parser.add_argument(
+        "--runtime_weight_dir",
+        help="a directory of run-time weights, a <node>.dat file a node",
+        default="runtime_weights/",
+    )
     return parser
 
 
@@ -79,8 +88,9 @@ def labels_of(output: np.ndarray[Any, Any], frames: int) -> np.ndarray[Any, Any]
 def validate(
     driver: Driver, images: np.ndarray[Any, Any], labels: np.ndarray[Any, Any], batch: int
 ) -> float:
-    """The top-1 accuracy of the build's one core on ``images`` against ``labels``,
-    ``batch`` at a time, each batch's count printed as it runs: in percent."""
+    """The top-1 accuracy of the build's one core on every one of ``images`` against
+    ``labels``, ``batch`` at a time and the last batch what remains, each batch's count
+    printed as it runs: in percent. A batch below one and no image are refused."""
     cores = driver.description.cores
     if len(cores) != 1 or len(cores[0].inputs) != 1 or len(cores[0].outputs) != 1:
         ports = [(core.name, len(core.inputs), len(core.outputs)) for core in cores]
@@ -92,16 +102,21 @@ def validate(
     (core,) = cores
     (given,), (taken,) = core.inputs, core.outputs
     first = given.shape[0] if given.shape else 1
-    batches = len(images) // batch
+    size, total = cli.batch(batch), len(images)
+    if total == 0:
+        raise Refused("dataset-empty", "the test set holds no image")
+    batches = -(-total // size)
     right = 0
     for index in range(batches):
-        chosen = slice(index * batch, (index + 1) * batch)
-        frames = images[chosen].reshape(batch * first, *given.shape[1:])
+        chosen = slice(index * size, min((index + 1) * size, total))
+        count = chosen.stop - chosen.start
+        frames = images[chosen].reshape(count * first, *given.shape[1:])
         found = driver.run_core(core.name, {given.tensor: frames})[taken.tensor]
-        right += int(np.sum(labels_of(found, batch) == labels[chosen].reshape(-1)))
-        done = (index + 1) * batch
-        sys.stdout.write(f"batch {index + 1} / {batches} : total OK {right} NOK {done - right}\n")
-    return 100.0 * right / (batches * batch)
+        right += int(np.sum(labels_of(found, count) == labels[chosen].reshape(-1)))
+        sys.stdout.write(
+            f"batch {index + 1} / {batches} : total OK {right} NOK {chosen.stop - right}\n"
+        )
+    return 100.0 * right / total
 
 
 def main(argv: Sequence[str] | None, open_device: OpenDevice, here: Path, image: Path) -> int:
@@ -113,6 +128,7 @@ def main(argv: Sequence[str] | None, open_device: OpenDevice, here: Path, image:
         description = read(here / RUNTIME_FILE)
         driver = Driver(open_device(description, args.device), description)
         driver.load(Path(args.bitfile))
+        driver.write_weight_files(Path(args.runtime_weight_dir))
         images, labels = dataset_of(args.dataset, args.dataset_root)
         accuracy = validate(driver, images, labels, args.batchsize)
     except Refused as refused:

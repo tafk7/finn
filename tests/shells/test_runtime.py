@@ -15,6 +15,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Callable
@@ -27,7 +28,7 @@ import pytest
 from qonnx.core.datatype import BaseDataType, DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import gen_finn_dt_tensor
-from support.devices import BASE, FakeDevice
+from support.devices import BASE, STEP, FakeDevice
 from support.packaging import bitfile_default
 from support.pynq_stub import stub
 from support.refusals import refused
@@ -299,6 +300,85 @@ def test_packing_is_finn_s_in_the_movers_lane_order_both_ways(name: str, lanes: 
         assert np.array_equal(back, theirs), (name, lanes)
 
 
+@pytest.mark.parametrize(
+    "name, values, codes",
+    [
+        ("UINT64", np.array([3 * 2**62], np.float32), [0xC000000000000000]),
+        ("UINT64", np.array([2**64 - 1], np.uint64), [0xFFFFFFFFFFFFFFFF]),
+        ("INT64", np.array([2**63 - 1, -(2**63)], np.int64), [0x7FFFFFFFFFFFFFFF, 1 << 63]),
+        ("UINT63", np.array([2**63 - 1], np.uint64), [0x7FFFFFFFFFFFFFFF]),
+        ("INT63", np.array([2**62 - 1, -(2**62)], np.int64), [0x3FFFFFFFFFFFFFFF, 1 << 62]),
+        ("FIXED<64,1>", np.array([-1.0, 0.5]), [1 << 63, 1 << 62]),
+        ("FIXED<64,1>", np.array([-1, 0], np.int64), [1 << 63, 0]),
+    ],
+)
+def test_wide_integers_pack_exactly_and_unpack_by_their_sign(
+    name: str, values: np.ndarray[Any, Any], codes: list[int]
+) -> None:
+    """A code of up to 64 bits is packed from integers or floats exactly, and an unsigned
+    code unpacks as unsigned: the beat as the movers move it, lane 0 in its least
+    significant bits, and back, as float32."""
+    element = Element.named(name)
+    packed = pack(values.reshape(1, -1), element)
+    beat = sum(code << (element.bits * lane) for lane, code in enumerate(codes))
+    nbytes = -(-element.bits * len(codes) // 8)
+    assert packed.reshape(-1).tobytes() == beat.to_bytes(nbytes, "little")
+    back = unpack(packed, element, values.size).reshape(-1)
+    assert np.array_equal(back, values.astype(np.float32))
+
+
+@pytest.mark.parametrize(
+    "name, value",
+    [
+        ("UINT64", np.float64(2.0**64)),
+        ("INT64", np.float64(2.0**63)),
+        ("UINT8", np.int8(-1)),
+        ("INT8", np.uint8(200)),
+        ("INT8", np.float32(np.inf)),
+        ("INT8", np.float32(np.nan)),
+        ("FIXED<8,4>", np.int64(8)),
+        ("FIXED<8,4>", np.float32(0.03125)),
+    ],
+)
+def test_a_value_outside_an_element_is_refused_at_every_width(name: str, value: Any) -> None:
+    """The bounds are compared exactly: the value past the greatest code, which a float
+    rounds the greatest to, is outside; so are a negative unsigned, an infinity, a NaN and a
+    fraction finer than a fixed point's."""
+    with pytest.raises(Refused, match=f"^value-outside: {re.escape(name)} holds no "):
+        pack(np.array([[value]]), Element.named(name))
+
+
+def test_a_mover_holds_one_buffer_allocated_when_staged() -> None:
+    """Staging allocates both directions' buffers, so a launch allocates nothing; a call of
+    another batch releases each mover's buffer and allocates one of its size, and a call of
+    the same size reuses it."""
+    found = recorded()
+    (core,) = found["cores"]
+    (given,) = core["inputs"]
+    device = device_for(found)
+    driver = Driver(device, read(found))
+    for frames in (1, 2, 2):
+        driver.run_core(core["name"], {given["tensor"]: np.zeros((frames, 784))})
+        if frames == 1:
+            staged = len(device.calls)
+            driver.stage(core["name"], {given["tensor"]: np.zeros((1, 784))})
+            launching = len(device.calls)
+            driver.launch(core["name"], 1)
+            assert not any(line.startswith("buffer") for line in device.calls[launching:])
+            assert any(line.startswith("buffer") for line in device.calls[:staged])
+    assert [line for line in device.calls if line.startswith(("buffer", "release"))] == [
+        f"buffer in0 m_axi_gmem 784 HP0 -> {BASE:#x}",
+        f"buffer out0 m_axi_gmem 9 HP0 -> {BASE + STEP:#x}",
+        f"release in0 {BASE:#x}",
+        f"buffer in0 m_axi_gmem 1568 HP0 -> {BASE + 2 * STEP:#x}",
+        f"release out0 {BASE + STEP:#x}",
+        f"buffer out0 m_axi_gmem 18 HP0 -> {BASE + 3 * STEP:#x}",
+    ]
+    assert sorted(device.buffers.values()) == ["in0", "out0"]
+    with pytest.raises(Refused, match="^batch-invalid: a batch of 0 frames"):
+        cli.throughput(driver, 0)
+
+
 def test_the_recorded_texts_hold_no_machine_s_path() -> None:
     """The recorded texts are FINN's test data: no path of a machine."""
     for name in ("tfc-integration.json", "tfc-ops.txt", "tfc-pynq-calls.txt"):
@@ -374,10 +454,10 @@ def test_the_shipped_driver_runs_tfc_on_a_board_with_numpy_alone(
     tfc_parent: Path, tmp_path: Path
 ) -> None:
     """The driver as shipped, run on a board with numpy and PYNQ alone (PYNQ stubbed): the
-    device of the index asked, the bitfile beside it loaded and PL0 set to the delivered
-    clock, each mover reached at its base, the input staged and moved and the output
-    collected, every PYNQ call against the recorded sequence; the output saved. A throughput
-    test writes what it measured."""
+    device of the index asked for every call, not PYNQ's active one, the bitfile beside it
+    loaded and PL0 set to the delivered clock, each mover reached at its base, the input
+    staged and moved and the output collected, every PYNQ call against the recorded
+    sequence; the output saved. A throughput test writes what it measured."""
     driver = emitted(ModelWrapper(str(tfc_parent)), tmp_path)
     board = tmp_path / "board"
     board.mkdir()
@@ -475,10 +555,56 @@ def test_the_command_line_runs_each_core_on_its_files_and_refuses_another_count(
 
 
 def test_validation_counts_each_frame_s_label_against_the_test_set() -> None:
-    """Validation runs the one core a batch at a time; a frame's label is the place of its
-    largest output: here every output is zero, so every label 0."""
+    """Validation runs the one core a batch at a time, the last batch what remains, and
+    counts over the whole test set; a frame's label is the place of its largest output:
+    here every output is zero, so every label 0. A batch of no frame and an empty test set
+    are refused."""
     found = recorded()
     driver = Driver(device_for(found, {"out0": bytes(9)}), read(found))
     images = np.zeros((4, 1, 28, 28), dtype=np.float32)
     assert validate.validate(driver, images, np.array([0, 3, 0, 0]), 1) == 75.0
+    five, labels = np.zeros((5, 1, 28, 28), dtype=np.float32), np.array([0, 0, 0, 0, 1])
+    assert validate.validate(driver, five, labels, 2) == 80.0
+    assert validate.validate(driver, five, labels, 7) == 80.0
     assert validate.labels_of(np.array([[1.0], [4.0]]), 2).tolist() == [1.0, 4.0]
+    with pytest.raises(Refused, match="^batch-invalid: "):
+        validate.validate(driver, five, labels, 0)
+    with pytest.raises(Refused, match="^dataset-empty: "):
+        validate.validate(driver, five[:0], labels[:0], 2)
+
+
+def test_validation_writes_the_run_time_weights_before_it_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Validation writes the run-time weights in their directory once the image is loaded,
+    as the command line does, then runs the test set."""
+    found = recorded()
+    found["endpoints"].append(
+        {
+            "unit": "DataflowCore_0",
+            "bus": "Thresholding_0_s_axilite",
+            "node": "Thresholding_0",
+            "offset": 64,
+            "range": 16,
+            "registers": {},
+        }
+    )
+    (tmp_path / "integration.json").write_text(json.dumps(found))
+    (tmp_path / "weights").mkdir()
+    (tmp_path / "weights" / "Thresholding_0.dat").write_text("1 a\n")
+    test_set = (np.zeros((3, 1, 28, 28), dtype=np.float32), np.array([0, 0, 1]))
+    monkeypatch.setattr(validate, "dataset_of", lambda dataset, root: test_set)
+    devices: list[FakeDevice] = []
+
+    def opened(description: Description, index: int) -> FakeDevice:
+        devices.append(device_for(found, {"out0": bytes(9)}))
+        return devices[-1]
+
+    argv = ["--dataset", "mnist", "--runtime_weight_dir", str(tmp_path / "weights")]
+    assert validate.main(argv, opened, tmp_path, tmp_path / "x.bit") == 0
+    assert devices[0].calls[:3] == [
+        "load x.bit",
+        "write32 DataflowCore_0 0x40 0x1",
+        "write32 DataflowCore_0 0x44 0xa",
+    ]
+    assert capsys.readouterr().out.endswith("Final accuracy: 66.666667\n")

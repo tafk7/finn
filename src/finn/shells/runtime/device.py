@@ -5,9 +5,10 @@
 own library (``pynq``'s, ``finn.shells.pynq.device``), and the ``Buffer`` it allocates.
 
 A device loads its image; allocates a buffer for a mover's memory port in the memory target
-it binds; syncs a buffer to or from the device; and reads and writes a unit's 32-bit
-registers by the unit's name and an offset in its window, placing the unit itself (by the
-runtime file's placement, or by the platform's own lookup).
+it binds, and releases one the driver no longer holds; syncs a buffer to or from the device;
+and reads and writes a unit's 32-bit registers by the unit's name and an offset in its
+window, placing the unit itself (by the runtime file's placement, or by the platform's own
+lookup).
 """
 
 from __future__ import annotations
@@ -35,6 +36,8 @@ class Device(Protocol):
     def load(self, image: Path) -> None: ...
 
     def buffer(self, unit: str, port: str, nbytes: int, target: str) -> Buffer: ...
+
+    def release(self, buffer: Buffer) -> None: ...
 
     def sync(self, buffer: Buffer, to_device: bool) -> None: ...
 

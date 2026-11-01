@@ -1,8 +1,8 @@
 load finn-accel.bit
 buffer in0 m_axi_gmem 784 HP0 -> 0x120000000
 sync in0 0x120000000 to device 784
-read32 out0 0x00 -> 0x6
 buffer out0 m_axi_gmem 9 HP0 -> 0x120100000
+read32 out0 0x00 -> 0x6
 write32 out0 0x10 0x20100000
 write32 out0 0x14 0x1
 write32 out0 0x1c 0x1

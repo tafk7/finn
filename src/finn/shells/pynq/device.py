@@ -6,11 +6,12 @@
 
 It ships beside the shared driver as ``finn_runtime/devices/pynq.py``
 (``finn.shells.pynq.runtime``), so it imports nothing of FINN, and pynq only when a device
-is opened. Each unit's registers are an ``MMIO`` at the unit's base in the runtime file's
-placement, of its control window; loading the image sets PL0 to the main clock the runtime
-file states as delivered. A buffer is PYNQ's contiguous memory, its address the device's
-(``PynqBuffer``); the board has one memory, so the memory target a mover's port binds is not
-read.
+is opened. Every call names the device selected, not PYNQ's active one: the image is loaded
+on it, each unit's registers are an ``MMIO`` on it at the unit's base in the runtime file's
+placement, of its control window, and each buffer is allocated in its memory. Loading the
+image sets PL0 to the main clock the runtime file states as delivered. A buffer is PYNQ's
+contiguous memory, its address the device's (``PynqBuffer``), freed when released; the board
+has one memory, so the memory target a mover's port binds is not read.
 """
 
 from __future__ import annotations
@@ -77,7 +78,7 @@ class PynqDevice:
         self.clock_mhz = described.clocks_mhz.get(MAIN)
         windows = {unit.name: unit.window for unit in described.units}
         self.mmio = {
-            unit: pynq.MMIO(base, windows[unit])
+            unit: pynq.MMIO(base, windows[unit], device=self.device)
             for unit, base in described.placement.items()
             if windows.get(unit)
         }
@@ -93,7 +94,12 @@ class PynqDevice:
 
     def buffer(self, unit: str, port: str, nbytes: int, target: str) -> PynqBuffer:
         """A buffer of ``nbytes`` bytes for the memory port ``port`` of ``unit``."""
-        return PynqBuffer(self.pynq.allocate(shape=(nbytes,), dtype=np.uint8))
+        allocated = self.pynq.allocate(shape=(nbytes,), dtype=np.uint8, target=self.device)
+        return PynqBuffer(allocated)
+
+    def release(self, buffer: Any) -> None:
+        """Free ``buffer``'s memory."""
+        buffer.allocated.freebuffer()
 
     def sync(self, buffer: Any, to_device: bool) -> None:
         """Sync ``buffer`` to the device, or from it."""

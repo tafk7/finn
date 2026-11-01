@@ -3,8 +3,9 @@
 
 """A stand-in for PYNQ on a build machine (``PYNQ_STUB``, written by ``stub``): what the
 ``pynq`` runtime's device (``finn.shells.pynq.device``) calls, each call a line of the log
-file ``$PYNQ_STUB_LOG`` names. Every register reads idle and done; a buffer is zeros at the
-next address. ``stub`` also writes a ``sitecustomize`` that makes onnx, qonnx and finn
+file ``$PYNQ_STUB_LOG`` names, with the device it acts on: the one named, else PYNQ's active
+one, ``device0`` of two. Every register reads idle and done; a buffer is zeros at the next
+address. ``stub`` also writes a ``sitecustomize`` that makes onnx, qonnx and finn
 unimportable when ``$PYNQ_STUB_BLOCK`` is set, so a driver run there runs as on a board
 without them."""
 
@@ -28,12 +29,24 @@ def record(*fields):
 
 
 class Device:
-    devices = ["device0", "device1"]
+    def __init__(self, name):
+        self.name = name
+
+    def __str__(self):
+        return self.name
+
+
+Device.devices = [Device("device0"), Device("device1")]
+Device.active_device = Device.devices[0]
+
+
+def acting(device):
+    return Device.active_device if device is None else device
 
 
 class Overlay:
     def __init__(self, bitfile, download=True, device=None):
-        record("overlay", os.path.basename(bitfile), download, device)
+        record("overlay", os.path.basename(bitfile), download, acting(device))
 
 
 class Buffer(np.ndarray):
@@ -43,22 +56,25 @@ class Buffer(np.ndarray):
     def sync_from_device(self):
         record("sync_from_device", hex(self.device_address), self.size)
 
+    def freebuffer(self):
+        record("freebuffer", hex(self.device_address))
+
 
 ADDRESSES = [0x1_2000_0000]
 
 
-def allocate(shape, dtype):
+def allocate(shape, dtype, target=None):
     buffer = np.zeros(shape, dtype).view(Buffer)
     buffer.device_address = ADDRESSES[0]
     ADDRESSES[0] += 0x10_0000
-    record("allocate", shape, np.dtype(dtype).name, hex(buffer.device_address))
+    record("allocate", shape, np.dtype(dtype).name, hex(buffer.device_address), acting(target))
     return buffer
 
 
 class MMIO:
-    def __init__(self, base, length):
+    def __init__(self, base, length, device=None):
         self.base = base
-        record("mmio", hex(base), length)
+        record("mmio", hex(base), length, acting(device))
 
     def write(self, offset, value):
         record("write", hex(self.base + offset), hex(value))

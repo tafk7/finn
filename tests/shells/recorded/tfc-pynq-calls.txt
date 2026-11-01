@@ -1,11 +1,11 @@
-mmio 0xa0000000 4096
-mmio 0xa0001000 4096
+mmio 0xa0000000 4096 device1
+mmio 0xa0001000 4096 device1
 overlay finn-accel.bit True device1
 clock fclk0_mhz 187.512
-allocate (784,) uint8 0x120000000
+allocate (784,) uint8 0x120000000 device1
 sync_to_device 0x120000000 784
+allocate (9,) uint8 0x120100000 device1
 read 0xa0001000
-allocate (9,) uint8 0x120100000
 write 0xa0001010 0x20100000
 write 0xa0001014 0x1
 write 0xa000101c 0x1

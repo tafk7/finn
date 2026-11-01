@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """A device double for the shared driver (``finn.shells.runtime.Device``): it records every
-call as a line of text (``FakeDevice.calls``), allocates each buffer at the next address,
-keeps each register written, answers a read with the register's value unless told another
-(``answers``), and fills an output buffer synced back with the bytes given for its unit
-(``results``)."""
+call as a line of text (``FakeDevice.calls``), allocates each buffer at the next address
+(``buffers``: those not released, by address), keeps each register written, answers a read
+with the register's value unless told another (``answers``), and fills an output buffer
+synced back with the bytes given for its unit, repeated to the buffer's size (``results``)."""
 
 from __future__ import annotations
 
@@ -40,20 +40,27 @@ class FakeDevice:
     calls: list[str] = field(default_factory=list)
     registers: dict[tuple[str, int], int] = field(default_factory=dict)
     buffers: dict[int, str] = field(default_factory=dict)
+    allocated: int = 0
 
     def load(self, image: Path) -> None:
         self.calls.append(f"load {image.name}")
 
     def buffer(self, unit: str, port: str, nbytes: int, target: str) -> FakeBuffer:
-        address = BASE + STEP * len(self.buffers)
+        address = BASE + STEP * self.allocated
+        self.allocated += 1
         self.buffers[address] = unit
         self.calls.append(f"buffer {unit} {port} {nbytes} {target} -> {address:#x}")
         return FakeBuffer(address, np.zeros(nbytes, dtype=np.uint8))
 
+    def release(self, buffer: Buffer) -> None:
+        unit = self.buffers.pop(buffer.address)
+        self.calls.append(f"release {unit} {buffer.address:#x}")
+
     def sync(self, buffer: Buffer, to_device: bool) -> None:
         unit = self.buffers[buffer.address]
         if not to_device and unit in self.results:
-            buffer.array[:] = np.frombuffer(self.results[unit], dtype=np.uint8)
+            given = np.frombuffer(self.results[unit], dtype=np.uint8)
+            buffer.array[:] = np.resize(given, buffer.array.size)
         direction = "to device" if to_device else "from device"
         self.calls.append(f"sync {unit} {buffer.address:#x} {direction} {buffer.array.size}")
 

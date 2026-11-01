@@ -14,7 +14,8 @@ device image it runs unless told another. Before either mode, the run-time weigh
   ``--outputfile`` in the same order. Another count of files is refused
   (``inputs-count``).
 - ``--exec_mode throughput_test`` runs each core on ``--batchsize`` frames of values each
-  element holds and writes what it measured into ``nw_metrics.txt`` (``throughput``).
+  element holds and writes what it measured into ``nw_metrics.txt`` (``throughput``); a
+  batch of no frame is refused (``batch-invalid``).
 
 A refusal is printed, its code first, and the command exits with status 1.
 """
@@ -99,11 +100,20 @@ def held(edge: Edge, frames: int) -> np.ndarray[Any, Any]:
     return np.full((frames * first, *edge.shape[1:]), value, dtype=np.float32)
 
 
+def batch(frames: int) -> int:
+    """``frames``, a batch's size; one below one is refused (``batch-invalid``)."""
+    if frames < 1:
+        raise Refused("batch-invalid", f"a batch of {frames} frames: a batch holds one at least")
+    return frames
+
+
 def throughput(driver: Driver, frames: int) -> dict[str, float]:
     """Each core run on ``frames`` frames (``held``), timed apart: the moves alone
     (``Driver.launch``) as the runtime, the frames a second, the bytes in and out a second,
-    the clock the runtime file states, and the staging (packing and syncing the inputs)
-    and the collection (syncing and unpacking the outputs)."""
+    the clock the runtime file states, and the staging (packing and syncing the inputs,
+    and allocating every buffer) and the collection (syncing and unpacking the outputs).
+    ``frames`` below one is refused (``batch-invalid``)."""
+    batch(frames)
     description = driver.description
     staged = launched = collected = 0.0
     for core in description.cores:
@@ -179,6 +189,7 @@ __all__ = [
     "RUNTIME_FILE",
     "OpenDevice",
     "arguments",
+    "batch",
     "edges",
     "execute",
     "held",
