@@ -6,9 +6,11 @@ order it places them (``finn.kernels.shell_rules``), on kernels declared here.
 
 A core's control windows are in its instance order (``Kernel.instance_order``), as its
 netlist exports its buses: in any order of unequal windows, the windows the rules place are
-the netlist's, and so is the span they take. A kernel's memory ports are its present
-members' too (``Kernel.memory_initiators``), a selected case's or a guarded child's where it
-is present: a core whose member's child initiates one is refused on every row. Emission's
+the netlist's, and so is the span they take, a member's buses at its place whether it
+presents them or its child does. A kernel's memory ports are its present members' too
+(``Kernel.memory_initiators``), a selected case's or a guarded child's where it is present,
+and a subclass's over its own members: a core whose member's child initiates one is refused
+on every row. Emission's
 count reads every instance's memory ports, presented or not (``netlist_counts``), so a leaf
 stating none while its module initiates one is counted.
 """
@@ -172,15 +174,56 @@ class Guarded(Kernel):
     x = child.x
 
 
+class Extended(Wrapped):
+    """A wrapped reader and a second reader its subclass adds."""
+
+    id = "test.scopes.extended"
+
+    second = Reader()
+    x2 = second.x
+
+
+class ExtendedGuarded(Guarded):
+    """A guarded reader and a second reader, always present, its subclass adds."""
+
+    id = "test.scopes.extended_guarded"
+
+    second = Reader()
+    x2 = second.x
+
+
+class StatedExtended(Extended):
+    """An extended reader stating its memory ports itself."""
+
+    id = "test.scopes.stated_extended"
+
+    @derived
+    def memory_initiators(self) -> int:
+        return 2
+
+
+class Nested(Kernel):
+    """A windowed leaf as its child, its bus presented through it."""
+
+    id = "test.scopes.nested"
+
+    bits: int = Param()
+    child = Windowed(bits=bits, control="inner_cfg")
+    x = child.x
+
+
 BITS = {"small": 12, "large": 13, "small2": 12}
 """Each windowed leaf's address bits: 4, 8 and 4 KiB."""
 
 
-def windowed(order: tuple[str, ...], aperture: int | None) -> CoreComposition:
-    """A core of the windowed leaves (``BITS``), declared in ``BITS``'s order and placed in
+def windowed(
+    order: tuple[str, ...], aperture: int | None, kernels: Mapping[str, Facts] | None = None
+) -> CoreComposition:
+    """A core of ``kernels``, by default the windowed leaves (``BITS``), placed in
     ``order``, in a shell of ``ROW`` but ``aperture``, its edge ports its own."""
     declared = DataflowCoreDeclaration(
-        {
+        kernels
+        or {
             name: Facts(Windowed, {"control": f"{name}_cfg", "bits": bits})
             for name, bits in BITS.items()
         },
@@ -191,21 +234,46 @@ def windowed(order: tuple[str, ...], aperture: int | None) -> CoreComposition:
     return CoreComposition(bound(shell((declared,), row={**ROW, "aperture": aperture})).point)
 
 
-@pytest.mark.parametrize("order", list(permutations(BITS)), ids="-".join)
-def test_a_core_s_windows_are_in_the_order_its_netlist_exports_its_buses(
-    order: tuple[str, ...],
+def agree(
+    order: tuple[str, ...], windows: tuple[int, ...], kernels: Mapping[str, Facts] | None = None
 ) -> None:
-    """In any order of the unequal windows, the windows the rules place are the netlist's,
-    so is their span: the rule admits the span the netlist takes and refuses a byte less."""
-    windows = tuple(1 << BITS[name] for name in order)
-    network = windowed(order, None)
+    """The rules place ``windows`` for a core of ``kernels`` in ``order`` (``windowed``),
+    as its netlist exports them, and admit the span they take and refuse a byte less."""
+    network = windowed(order, None, kernels)
     netlist = network.netlist()
     assert isinstance(netlist, Available)
     assert counts(network.member(SHELL)) == Available((windows, 0, False))
     assert netlist_counts(*netlist.value) == (windows, 0, False)
     span = placed_windows(windows)[-1] + windows[-1]
     for aperture, status in ((span, "valid"), (span - 1, "refused")):
-        assert windowed(order, aperture).validity(SHELL).status == status
+        assert windowed(order, aperture, kernels).validity(SHELL).status == status
+
+
+@pytest.mark.parametrize("order", list(permutations(BITS)), ids="-".join)
+def test_a_core_s_windows_are_in_the_order_its_netlist_exports_its_buses(
+    order: tuple[str, ...],
+) -> None:
+    """In any order of the unequal windows, the windows the rules place are the netlist's,
+    so is their span: the rule admits the span the netlist takes and refuses a byte less."""
+    agree(order, tuple(1 << BITS[name] for name in order))
+
+
+@pytest.mark.parametrize(
+    "order", [("direct", "nested", "last"), ("nested", "direct", "last")], ids="-".join
+)
+@pytest.mark.parametrize(("direct", "nested"), [(12, 13), (13, 12)], ids=["4-8", "8-4"])
+def test_a_child_s_bus_is_at_its_member_s_place_among_the_core_s_windows(
+    order: tuple[str, ...], direct: int, nested: int
+) -> None:
+    """A bus a member's child presents is at the member's place, beside the buses the core's
+    leaves present: the rules' windows are the netlist's, whichever is larger."""
+    bits = {"direct": direct, "nested": nested, "last": 12}
+    kernels = {
+        "direct": Facts(Windowed, {"control": "direct_cfg", "bits": direct}),
+        "nested": Facts(Nested, {"bits": nested}),
+        "last": Facts(Windowed, {"control": "last_cfg", "bits": 12}),
+    }
+    agree(order, tuple(1 << bits[name] for name in order), kernels)
 
 
 def core_of(
@@ -233,21 +301,37 @@ def counted(kind: type[Kernel], stored: Mapping[str, object]) -> tuple[object, o
         (Chosen, {"k0.child": "stub"}, 0),
         (Guarded, {"k0.on": True}, 1),
         (Guarded, {"k0.on": False}, 0),
+        (Extended, {}, 2),
+        (ExtendedGuarded, {"k0.on": True}, 2),
+        (ExtendedGuarded, {"k0.on": False}, 1),
+        (StatedExtended, {}, 2),
     ],
-    ids=["leaf", "child", "selected", "not-selected", "guarded", "absent"],
+    ids=[
+        "leaf",
+        "child",
+        "selected",
+        "not-selected",
+        "guarded",
+        "absent",
+        "subclass",
+        "subclass-guarded",
+        "subclass-absent",
+        "subclass-stated",
+    ],
 )
 def test_a_core_s_memory_ports_are_its_members_at_every_present_scope(
     kind: type[Kernel], stored: Mapping[str, object], ports: int
 ) -> None:
     """A kernel's memory ports are its present members': a child's, a selected case's, a
-    guarded child's where it is present. The rules count them as the netlist does, and a
-    core initiating one is refused."""
+    guarded child's where it is present, and a subclass's over the members it adds, unless
+    it states its own. The rules count them as the netlist does, and a core initiating one
+    is refused."""
     network = core_of(kind, stored, ROW)
     assert network.member("k0").memory_initiators == ports
     assert counted(kind, stored) == (Available(((), ports, False)), ((), ports, False))
     found = network.query(SHELL, ShellRules.core_stream_only)
     codes = [each.code for each in found.findings] if isinstance(found, Rejected) else []
-    assert codes == ["core-memory-port"] * ports
+    assert codes == ["core-memory-port"] * bool(ports)
     assert network.validity(SHELL).status == ("refused" if ports else "valid")
 
 

@@ -143,12 +143,22 @@ def merged(
     """Each netlist under its node, in order, the control buses presented (each a
     ``BusExport`` with the writes its configuration takes, ``finn.kernels.control.presented``)
     and the ``links`` between them (a channel's hops): a kernel's netlist, and a
-    network's."""
+    network's. Its buses go node by node, as its control windows are derived: each node's
+    presented bus, then those its netlist presents."""
     try:
-        return merge(
-            *(netlist.under(node) for node, netlist in netlists),
-            Fragment(links=links, exports=tuple(presented)),
+        placed = [(node, netlist.under(node)) for node, netlist in netlists]
+        buses = tuple(presented)
+        nodes = {node for node, _ in placed}
+        exports = (
+            *(
+                item
+                for node, fragment in placed
+                for item in (*(bus for bus in buses if bus.instance == node), *fragment.exports)
+            ),
+            *(bus for bus in buses if bus.instance not in nodes),
         )
+        joined = merge(*(fragment for _, fragment in placed))
+        return Fragment(joined.instances, (*joined.links, *links), exports)
     except ArtifactError as error:
         return reject("kernel-netlist", str(error))
 
@@ -945,9 +955,11 @@ def _member_types(item: object) -> tuple[type[Any], ...]:
 
 def _aggregated(cls: type[Kernel], name: str) -> bool:
     """Whether ``cls`` states ``name`` itself, below ``Kernel``, but for the base's own
-    aggregation of it."""
+    aggregation of it (its function marked, ``_set_aggregated``): a class inheriting the
+    aggregation derives its own, over its own members."""
     return any(
-        name in vars(base) and not getattr(vars(base)[name], _AGGREGATED, False)
+        name in vars(base)
+        and not getattr(getattr(vars(base)[name], "function", None), _AGGREGATED, False)
         for base in cls.__mro__[: cls.__mro__.index(Kernel)]
     )
 
