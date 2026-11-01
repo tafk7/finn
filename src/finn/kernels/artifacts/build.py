@@ -15,7 +15,7 @@ The one step that touches the filesystem, in two parts:
   first (``sources.ordered``); two different files claiming one path or one
   symbol are refused. Each data file is written once.
 - **Netlist.** A ``Composed`` module adds one SystemVerilog module, named
-  ``<stem>__<fingerprint>`` (``module.module_name``) and written here from its
+  ``<stem>_<fingerprint>`` (``module.module_name``) and written here from its
   value: its ports from its pins; one net per instance input and per output
   something reads; per link, the data lanes (lane zero least significant), the
   sink's padding driven zero (a root output carries the source's own padding),
@@ -55,6 +55,7 @@ from finn.kernels.artifacts.module import (
     Link,
     LinkEnd,
     Module,
+    instance_name,
     module_name,
 )
 from finn.kernels.artifacts.projection import content_digest
@@ -202,12 +203,6 @@ def _bits(net: str, width: int, offset: int = 0, bits: int | None = None) -> str
 
 def _constant(width: int, value: int) -> str:
     return f"{width}'h{value:x}"
-
-
-def instance_name(label: str) -> str:
-    """The netlist's instance of the module's instance ``label``: what a synthesis
-    report names it by."""
-    return "u_" + label.replace(".", "_")
 
 
 def instance_net(label: str, pin: str) -> str:
@@ -389,7 +384,6 @@ def netlist(module: Composed, name: str) -> str:
 __all__ = [
     "EmittedModule",
     "emit_module",
-    "instance_name",
     "instance_net",
     "netlist",
 ]

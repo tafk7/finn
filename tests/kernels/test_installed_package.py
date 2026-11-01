@@ -227,7 +227,7 @@ for memory in ("none", "memstream"):
     expected |= {item.path for _, leaf in composed.fragment.instances for item in leaf.data}
     wrapper = materialize(composed, expected).read_text()
     assert f".ACCU_WIDTH({bits})" in wrapper
-    assert ".olst(n__u_x_adapter_input_gen_input_gen__olst)" in wrapper
+    assert ".olst(n__u_x_adapter_input_gen__olst)" in wrapper
     if memory == "memstream":
         assert '.INIT_FILE("memstream_' in wrapper
         assert root.member("w").source.image == (0x22C, 0x6BE, 0xDD3, 0x941)

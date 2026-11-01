@@ -26,7 +26,7 @@ a configuration may be is decided in the Spaces that derive it.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, fields, is_dataclass, replace
 from enum import Enum
 from typing import Union
@@ -96,18 +96,26 @@ def typed_canonical(value: object) -> object:
     if isinstance(value, Enum):
         return (f"enum:{type(value).__module__}.{type(value).__qualname__}", value.name)
     if is_dataclass(value) and not isinstance(value, type):
-        tag = f"dataclass:{type(value).__module__}.{type(value).__qualname__}"
-        return (
-            tag,
-            tuple(
-                (item.name, typed_canonical(getattr(value, item.name))) for item in fields(value)
-            ),
-        )
+        return _tagged(value, ())
     if isinstance(value, Mapping):
         return tuple((name, typed_canonical(value[name])) for name in sorted(value))
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         return tuple(typed_canonical(item) for item in value)
     return value
+
+
+def _tagged(value: object, left_out: tuple[str, ...]) -> object:
+    """A dataclass ``value`` tagged by its type, its fields but ``left_out`` canonical."""
+    assert is_dataclass(value) and not isinstance(value, type)
+    tag = f"dataclass:{type(value).__module__}.{type(value).__qualname__}"
+    return (
+        tag,
+        tuple(
+            (item.name, typed_canonical(getattr(value, item.name)))
+            for item in fields(value)
+            if item.name not in left_out
+        ),
+    )
 
 
 def sanitize_stem(stem: str) -> str:
@@ -391,10 +399,33 @@ def merge(*fragments: Fragment) -> Fragment:
     )
 
 
+def instance_name(label: str) -> str:
+    """The netlist's instance of the module's instance ``label``: ``u_`` and the label's
+    segments joined by ``_``, each segment that repeats the one before it dropped
+    (``x_out0.output_adapter.vpc.vpc`` is ``u_x_out0_output_adapter_vpc``): what a synthesis
+    report names it by. A module whose labels give one instance name twice is not made
+    (``instance_collisions``)."""
+    kept: list[str] = []
+    for segment in label.split("."):
+        if not kept or kept[-1] != segment:
+            kept.append(segment)
+    return "u_" + "_".join(kept)
+
+
+def instance_collisions(labels: Iterable[str]) -> dict[str, tuple[str, ...]]:
+    """Each instance name (``instance_name``) that two or more of ``labels`` give, with
+    those labels; empty where every label gives its own."""
+    given: dict[str, list[str]] = {}
+    for label in labels:
+        given.setdefault(instance_name(label), []).append(label)
+    return {name: tuple(found) for name, found in given.items() if len(found) > 1}
+
+
 @dataclass(frozen=True)
 class Composed:
-    """A flat netlist with an ABI: one generated module. Well formed when its links name
-    pins that exist and every instance input and root output has exactly one driver."""
+    """A flat netlist with an ABI: one generated module. Well formed when no two of its
+    instance labels give one instance name (``instance_collisions``), its links name pins
+    that exist and every instance input and root output has exactly one driver."""
 
     implementation_id: str
     implementation_version: str
@@ -411,6 +442,12 @@ class Composed:
         for label in leaves:
             if not _LABEL.fullmatch(label):
                 raise BuildError(f"{label!r} is not an instance label of the root")
+        collided = instance_collisions(leaves)
+        if collided:
+            raise BuildError(
+                "two instance labels give one instance name: "
+                + "; ".join(f"{list(labels)} each {name}" for name, labels in collided.items())
+            )
 
         def pins_of(instance: str | None, what: str) -> Mapping[str, PinInfo]:
             if instance is None:
@@ -498,8 +535,12 @@ Module = Union[Leaf, Composed]
 
 
 def fingerprint(module: Module) -> str:
-    """The digest of everything the module says; equal modules share it."""
-    return digest(("module-v1", typed_canonical(module)))
+    """The digest of everything the module says but its own name: a composed module's stem
+    is left out (as an HLS top's name is, ``contributions.NAME_PLACEHOLDER``), so equal
+    netlists share it, whatever their callers name them; a leaf's name is its content."""
+    if isinstance(module, Leaf):
+        return digest(("module-v1", typed_canonical(module)))
+    return digest(("module-v1", _tagged(module, ("stem",))))
 
 
 def declared_registers(module: Module) -> dict[str, RegisterMap]:
@@ -511,10 +552,11 @@ def declared_registers(module: Module) -> dict[str, RegisterMap]:
 
 
 def module_name(module: Module) -> str:
-    """A leaf's own name; a composed module's ``<stem>__<fingerprint[:16]>``."""
+    """A leaf's own name; a composed module's ``<stem>_<fingerprint[:16]>``: its kind, a FINN
+    word (``finn_dataflowcore``), and the digest of its content with its name left out."""
     if isinstance(module, Leaf):
         return module.name
-    return f"{sanitize_stem(module.stem)}__{fingerprint(module)[:16]}"
+    return f"{sanitize_stem(module.stem)}_{fingerprint(module)[:16]}"
 
 
 __all__ = [
@@ -535,6 +577,8 @@ __all__ = [
     "ScalarTable",
     "declared_registers",
     "fingerprint",
+    "instance_collisions",
+    "instance_name",
     "merge",
     "module_name",
 ]

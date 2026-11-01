@@ -116,9 +116,9 @@ def test_a_file_that_is_not_python_counts_by_content(tmp_path: Path) -> None:
 
 
 def test_hashes_are_blanked_in_identifiers_only() -> None:
-    text = "module finn_root__0123456789abcdef; 64'h0123456789abcdef memstream_fedcba9876543210.dat"
+    text = "module finn_root_0123456789abcdef; 64'h0123456789abcdef memstream_fedcba9876543210.dat"
     assert tool.blank_hashes(text) == (
-        "module finn_root__################; 64'h0123456789abcdef memstream_################.dat"
+        "module finn_root_################; 64'h0123456789abcdef memstream_################.dat"
     )
 
 

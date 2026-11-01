@@ -47,7 +47,7 @@ from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.policies import FirstValid, Fixed, Required, stated
 from finn.kernels.port import stream_port
 from finn.kernels.sides import Side
-from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.thresholding import ThresholdingKernel
 from finn.transformation.kernels import (
     InferKernelTensors,
     Outcome,
@@ -120,7 +120,9 @@ def rejected(model: ModelWrapper) -> list[tuple[str, str]]:
 
 def test_an_integer_matmul_and_multithreshold_convert() -> None:
     for model, op in ((matmul(), "MatMul"), (multithreshold(), "Thresholding")):
-        assert convert(model)[1].outcomes == (Outcome((model.graph.node[0].name,), op),)
+        assert convert(model)[1].outcomes == (
+            Outcome((model.graph.node[0].name,), op, name=f"{op}_0"),
+        )
 
 
 #: Each core's ports' rules on float operands: the element their hardware takes.
@@ -228,7 +230,8 @@ def test_conversion_reads_the_types_the_nodes_before_state() -> None:
     model.set_tensor_datatype("h", DataType["INT20"])
     converted, conversion = convert(model)
     assert [outcome.op for outcome in conversion.outcomes] == ["MatMul", "MatMul"]
-    assert converted.get_tensor_datatype("h").name == "INT4"
+    # h, the first MatMul's output, named by its position at conversion.
+    assert converted.get_tensor_datatype("MatMul_0_out0").name == "INT4"
 
 
 def test_a_matmul_after_a_relu_reads_its_exact_type() -> None:
@@ -299,7 +302,9 @@ def test_a_stream_no_chain_joins_keeps_the_node_on_the_host_with_the_channel_s_f
     """x (3, 4) is 12 beats; the input's two marker levels are what no chain of modules
     makes from what an open boundary presents. The kernel takes its defaults, so its own
     rules refuse nothing: the channel's do, by their owners in the channel, about x."""
-    assert convert(multithreshold())[1].outcomes == (Outcome(("mt",), "Thresholding"),)
+    assert convert(multithreshold())[1].outcomes == (
+        Outcome(("mt",), "Thresholding", name="Thresholding_0"),
+    )
     in_place_of_thresholding(monkeypatch, MarkedThresholding)
     found = rejected(multithreshold())
     assert ("input_chain", "adapter-steps") in found
@@ -337,7 +342,7 @@ def test_a_stream_joined_through_a_fifo_whose_depth_is_open_converts(
     monkeypatch.setattr(Channel, "policies", THROUGH_A_FIFO)
     model = multithreshold()
     converted, conversion = convert(model)
-    assert conversion.outcomes == (Outcome(("mt",), "Thresholding"),)
+    assert conversion.outcomes == (Outcome(("mt",), "Thresholding", name="Thresholding_0"),)
     op = kernel_op(converted, converted.graph.node[0])
     point = op.point()
     platform = read_target(converted).platform
@@ -363,7 +368,7 @@ class OpenPeThresholding(Thresholding):
     the kernel taken at its defaults has both its sides waiting on it."""
 
     op_type = "OpenPeThresholding"
-    policies = {ThresholdingAxiKernel.pe: Required()}
+    policies = {ThresholdingKernel.pe: Required()}
 
 
 def test_a_stream_whose_side_waits_keeps_the_node_on_the_host_with_the_side_s_findings(
@@ -373,7 +378,9 @@ def test_a_stream_whose_side_waits_keeps_the_node_on_the_host_with_the_side_s_fi
     left open neither stream's side (``x.side``, ``y.side``) is known: the stream check
     cannot meet them with a boundary, and the node stays on the host with the side's
     findings, each about its tensor, rather than converting with the stream unchecked."""
-    assert convert(multithreshold())[1].outcomes == (Outcome(("mt",), "Thresholding"),)
+    assert convert(multithreshold())[1].outcomes == (
+        Outcome(("mt",), "Thresholding", name="Thresholding_0"),
+    )
     in_place_of_thresholding(monkeypatch, OpenPeThresholding)
     model = multithreshold()
     (source,) = model.graph.node
@@ -425,14 +432,18 @@ def test_only_a_port_that_is_not_placed_is_skipped_by_the_stream_check(
         assert observed == ["input", "output"]
         return result
 
-    assert streamed(input=Inapplicable(), output=known) == (("y", known.value.under("mt"), True),)
-    assert streamed(input=known, output=Inapplicable()) == (("x", known.value.under("mt"), False),)
+    assert streamed(input=Inapplicable(), output=known) == (
+        ("y", known.value.under("Thresholding_0"), True),
+    )
+    assert streamed(input=known, output=Inapplicable()) == (
+        ("x", known.value.under("Thresholding_0"), False),
+    )
     assert streamed(input=Inapplicable(), output=Inapplicable()) == ()
     assert streamed(input=waits, output=known) == (
         ("x", waits.findings, False),
-        ("y", known.value.under("mt"), True),
+        ("y", known.value.under("Thresholding_0"), True),
     )
     assert streamed(input=known, output=refused) == (
-        ("x", known.value.under("mt"), False),
+        ("x", known.value.under("Thresholding_0"), False),
         ("y", refused.findings, True),
     )

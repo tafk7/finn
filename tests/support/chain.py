@@ -26,7 +26,7 @@ from finn.kernels.composer import ChannelDeclaration, Facts, Port, Stated, chann
 from finn.kernels.explore import CoreComposition
 from finn.kernels.matmul import KnownWeights, MatMulKernel, column_range
 from finn.kernels.sides import Side
-from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.thresholding import ThresholdingKernel
 from finn.kernels.values.domains import range_dtype
 from finn.kernels.values.semantics import IntegerTensorValue
 from support.helpers import FULL_DSP48E2, by_hand, choose, with_channel_defaults
@@ -49,7 +49,17 @@ LEVELS = Tensor((ROWS, HIDDEN), ScalarEncoding(T))
 STEM = "chain"
 """The Chain's module's stem: ``finn_chain``."""
 
-MEMBERS = ("first", "activate", "second", "x", "w1", "hidden", "levels", "w2", "y")
+MEMBERS = (
+    "MatMul_0",
+    "Thresholding_0",
+    "MatMul_1",
+    "x",
+    "MatMul_0_param0",
+    "MatMul_0_out0",
+    "Thresholding_0_out0",
+    "MatMul_1_param0",
+    "y",
+)
 """The Chain's members, ranked: its kernels, then its channels."""
 
 
@@ -78,7 +88,7 @@ Y_TENSOR = result(W2, LEVELS)
 
 def network(hidden: Tensor = HIDDEN_TENSOR) -> CoreComposition:
     """The Chain (``members``), nothing chosen but the thresholding's fixed ``PE``."""
-    return choose(by_hand(members(hidden)), {"activate.pe": PE})
+    return choose(by_hand(members(hidden)), {"Thresholding_0.pe": PE})
 
 
 def members(hidden: Tensor = HIDDEN_TENSOR) -> dict[str, Facts | ChannelDeclaration]:
@@ -86,39 +96,42 @@ def members(hidden: Tensor = HIDDEN_TENSOR) -> dict[str, Facts | ChannelDeclarat
     partition's to state, and the levels' channel's tensor too, as a graph states the
     thresholding's output. Each MatMul's results are its statement, which reads only its
     facts and its weights, and each weight channel carries what its MatMul states for it.
-    The hidden channel's tensor, which the thresholding reads, is ``hidden``: the first
+    The hidden channel's tensor, which the thresholding reads, is ``MatMul_0_out0``: the first
     MatMul's results by default."""
     platform = FULL_DSP48E2
     return {
         "x": channel(
-            Side.boundary("s_axis_0"), Port("first", "x"), tensor=X_TENSOR, platform=platform
+            Side.boundary("s_axis_0"), Port("MatMul_0", "x"), tensor=X_TENSOR, platform=platform
         ),
-        "w1": channel(
+        "MatMul_0_param0": channel(
             Side.source(),
-            Port("first", "w"),
-            tensor=Stated("first", "carried_weights"),
-            contents=Stated("first", "stored_weights"),
+            Port("MatMul_0", "w"),
+            tensor=Stated("MatMul_0", "carried_weights"),
+            contents=Stated("MatMul_0", "stored_weights"),
             platform=platform,
         ),
-        "hidden": channel(
-            Port("first", "y"), Port("activate", "input"), tensor=hidden, platform=platform
+        "MatMul_0_out0": channel(
+            Port("MatMul_0", "y"), Port("Thresholding_0", "input"), tensor=hidden, platform=platform
         ),
-        "levels": channel(
-            Port("activate", "output"), Port("second", "x"), tensor=LEVELS, platform=platform
+        "Thresholding_0_out0": channel(
+            Port("Thresholding_0", "output"),
+            Port("MatMul_1", "x"),
+            tensor=LEVELS,
+            platform=platform,
         ),
-        "w2": channel(
+        "MatMul_1_param0": channel(
             Side.source(),
-            Port("second", "w"),
-            tensor=Stated("second", "carried_weights"),
-            contents=Stated("second", "stored_weights"),
+            Port("MatMul_1", "w"),
+            tensor=Stated("MatMul_1", "carried_weights"),
+            contents=Stated("MatMul_1", "stored_weights"),
             platform=platform,
         ),
         "y": channel(
-            Port("second", "y"), Side.boundary("m_axis_0"), tensor=Y_TENSOR, platform=platform
+            Port("MatMul_1", "y"), Side.boundary("m_axis_0"), tensor=Y_TENSOR, platform=platform
         ),
-        "first": matmul(W1, X_TENSOR),
-        "activate": Facts(
-            ThresholdingAxiKernel,
+        "MatMul_0": matmul(W1, X_TENSOR),
+        "Thresholding_0": Facts(
+            ThresholdingKernel,
             {
                 "threshold_dtype": THRESHOLD_DTYPE,
                 "thresholds": IntegerTensorValue.of(THRESHOLDS),
@@ -127,14 +140,14 @@ def members(hidden: Tensor = HIDDEN_TENSOR) -> dict[str, Facts | ChannelDeclarat
                 "platform": platform,
             },
         ),
-        "second": matmul(W2, LEVELS),
+        "MatMul_1": matmul(W2, LEVELS),
     }
 
 
-HELD = {("activate", "pe"): PE}
+HELD = {("Thresholding_0", "pe"): PE}
 """The thresholding's fixed PE, which a test's seam holds: no strategy folds it."""
 
-LAYERS = (("first", "w1"), ("second", "w2"))
+LAYERS = (("MatMul_0", "MatMul_0_param0"), ("MatMul_1", "MatMul_1_param0"))
 """Each MatMul of the Chain and its weight channel."""
 
 
@@ -164,11 +177,11 @@ def configure_chain(chain: CoreComposition, **choices: object) -> CoreCompositio
 # baseline, LUTRAM (as the weights' and the adapters', each the first case its size
 # orders).
 ACTIVATE = {
-    "activate.use_axilite": False,
-    "activate.deep_pipeline": False,
-    "activate.ram_style": "distributed",
-    "activate.block_stages": 0,
-    "activate.ultra_stages": 0,
+    "Thresholding_0.use_axilite": False,
+    "Thresholding_0.deep_pipeline": False,
+    "Thresholding_0.ram_style": "distributed",
+    "Thresholding_0.block_stages": 0,
+    "Thresholding_0.ultra_stages": 0,
 }
 
 

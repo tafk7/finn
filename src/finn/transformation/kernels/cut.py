@@ -70,8 +70,8 @@ def _kernel_ops_together(node: NodeProto) -> str | int:
 class MakeCutChoices(Transformation):
     """What the cut does to the body it makes, for a body made by hand: the channels'
     choices made, the nodes' stored choices bound in context, and a node choice the body
-    leaves open set by its KernelOp's policies (``shell.make_cut_choices``), its core's
-    module named ``name`` (its node's, ``DataflowCore_0`` as the cut names it). ``dropped``
+    leaves open set by its KernelOp's policies (``shell.make_cut_choices``), its core
+    named ``name`` (its node's, ``DataflowCore_0`` as the cut names it). ``dropped``
     lists the stored choices dropped as stale, ``late`` the node choices set late,
     ``unset`` the choices no value could be set for and ``fallbacks`` those set in listed
     order where a ranking could not be read, by owner and key

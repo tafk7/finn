@@ -97,8 +97,8 @@ def test_a_channels_choices_are_typed_entries_of_its_tensor() -> None:
     """Each choice an entry of its tensor, typed: those set, and those the channel's policies
     make beside them (its adapter's memory, and the FIFO's style)."""
     model = kernel_model()
-    configured(model, {"levels": FIFO})
-    assert entries(model, "levels") == {
+    configured(model, {"Thresholding_0_out0": FIFO})
+    assert entries(model, "Thresholding_0_out0") == {
         "finn.channel/@version": "1",
         "finn.channel/@follow": "true",
         "finn.channel/adapter_ram_style": "distributed",
@@ -106,17 +106,17 @@ def test_a_channels_choices_are_typed_entries_of_its_tensor() -> None:
         "finn.channel/transport.fifo.depth": "8",
         "finn.channel/transport.fifo.buffer.ram_style": "auto",
     }
-    assert channel_choices(model, "levels") == {
+    assert channel_choices(model, "Thresholding_0_out0") == {
         **FIFO,
         "adapter_ram_style": "distributed",
         "transport.fifo.buffer.ram_style": "auto",
     }
     # Beside qonnx's own annotation of the tensor, which it leaves alone.
-    assert model.get_tensor_datatype("levels").name == "UINT2"
+    assert model.get_tensor_datatype("Thresholding_0_out0").name == "UINT2"
     # A node holds its kernel's choices only.
     attributes = {attribute.name for node in model.graph.node for attribute in node.attribute}
     assert not any(name.partition(".")[0] in ("x", "w", "y") for name in attributes)
-    assert composition(model, model.graph.node).member("levels").transport.depth == 8
+    assert composition(model, model.graph.node).member("Thresholding_0_out0").transport.depth == 8
 
 
 def test_the_writer_is_checked_by_replaying_the_network() -> None:
@@ -131,22 +131,28 @@ def test_the_writer_is_checked_by_replaying_the_network() -> None:
         (
             "domain-membership",
             "transport.fifo.depth",
-            {"levels": {**FIFO, "transport.fifo.depth": 1}},
+            {"Thresholding_0_out0": {**FIFO, "transport.fifo.depth": 1}},
         ),
-        ("not-a-decision", "levels.memory", {"levels": {"memory": "auto"}}),
+        (
+            "not-a-decision",
+            "Thresholding_0_out0.memory",
+            {"Thresholding_0_out0": {"memory": "auto"}},
+        ),
         (
             "request-refused",
             "transport.fifo.depth",
-            {"levels": {"transport.fifo.depth": "8"}},
+            {"Thresholding_0_out0": {"transport.fifo.depth": "8"}},
         ),
         ("member-unknown", "configured", {"thresholds": EDGE}),
     ]
     for code, owner, choices in rejections:
         with refused(code, owner=owner):
-            configured(model, {"hidden": FIFO, **choices})
+            configured(model, {"MatMul_0_out0": FIFO, **choices})
         assert kernel_choices_config(model) == before
-    model.clear(CHANNEL, tensor="levels")  # every choice it states; the seam has no clearing
-    assert "levels" not in kernel_choices_config(model)
+    model.clear(
+        CHANNEL, tensor="Thresholding_0_out0"
+    )  # every choice it states; the seam has no clearing
+    assert "Thresholding_0_out0" not in kernel_choices_config(model)
 
 
 def test_a_graph_with_nodes_on_the_host_states_no_channel_choice(tmp_path: Path) -> None:
@@ -157,7 +163,7 @@ def test_a_graph_with_nodes_on_the_host_states_no_channel_choice(tmp_path: Path)
     nodes = [node for node in model.graph.node if node.domain == KERNEL_OPS_DOMAIN]
     outside = r"channel choices \(finn.channel\) are stated in a partition's body only, not"
     hosts = r"on a graph with nodes on the host \(host\)"
-    every = ("x", "w1", "w2", "hidden", "levels", "y")
+    every = ("x", "MatMul_0_param0", "MatMul_1_param0", "MatMul_0_out0", "Thresholding_0_out0", "y")
     with refused(
         "channel-choices-outside-body",
         error=KernelOpError,
@@ -188,9 +194,9 @@ def test_the_cut_moves_a_channels_choices_into_the_body(tmp_path: Path) -> None:
     model states; what it leaves open the channel's policies set (here nothing: the
     helper made them, the adapter's memory and the FIFO's style)."""
     model = kernel_model()
-    configured(model, {"levels": FIFO})
+    configured(model, {"Thresholding_0_out0": FIFO})
     stated = kernel_choices_config(model)
-    assert {"x", "y", "levels"} <= set(stated)
+    assert {"x", "y", "Thresholding_0_out0"} <= set(stated)
     parent = model.transform(CutKernelPartition(tmp_path))
     assert parent.tensors_stating(CHANNEL) == []
     assert not any(entries(parent, tensor) for tensor in ("x", "y"))
@@ -199,7 +205,7 @@ def test_the_cut_moves_a_channels_choices_into_the_body(tmp_path: Path) -> None:
     config = kernel_choices_config(body)
     assert list(config) == list(stated)
     assert all(config[name].items() >= held.items() for name, held in stated.items())
-    assert config["levels"] == {
+    assert config["Thresholding_0_out0"] == {
         **FIFO,
         "adapter_ram_style": "distributed",
         "transport.fifo.buffer.ram_style": "auto",
@@ -216,27 +222,39 @@ def test_make_cut_choices_does_to_a_body_made_by_hand_what_the_cut_does(tmp_path
     cut does."""
     model = open_model()
     nodes = kernel_choices_config(model)
-    assert list(nodes) == ["first", "activate", "second"] and not model.tensors_stating(CHANNEL)
+    assert list(nodes) == ["MatMul_0", "Thresholding_0", "MatMul_1"] and not model.tensors_stating(
+        CHANNEL
+    )
     making = MakeCutChoices(CUT_NAME)
     model = model.transform(making)
     assert making.dropped == {}
     config = kernel_choices_config(model)
-    assert list(config) == ["x", "w1", "first", "hidden", "activate", "levels", "w2", "second", "y"]
+    assert list(config) == [
+        "x",
+        "MatMul_0_param0",
+        "MatMul_0",
+        "MatMul_0_out0",
+        "Thresholding_0",
+        "Thresholding_0_out0",
+        "MatMul_1_param0",
+        "MatMul_1",
+        "y",
+    ]
     assert {name: config[name] for name in nodes} == nodes
     assert all(held["transport"] == "direct" for name, held in config.items() if name not in nodes)
     assert explore_kernel_choices(model, name=CUT_NAME).report["open"] == []
-    write_raw(model, "first", "simd", 2)  # past the space, as another tool wrote it
-    write_raw(model, "first", "pe", 3)
+    write_raw(model, "MatMul_0", "simd", 2)  # past the space, as another tool wrote it
+    write_raw(model, "MatMul_0", "pe", 3)
     model = model.transform(making)
     # Its input buffer's channel waits on the open pe, its stored choices with it.
-    assert sorted(making.dropped) == ["first.pe"]
+    assert sorted(making.dropped) == ["MatMul_0.pe"]
     # Its own domain refuses 3: nothing else stands beside it.
-    assert {(f.code, f.owner) for f in making.dropped["first.pe"]} == {
+    assert {(f.code, f.owner) for f in making.dropped["MatMul_0.pe"]} == {
         ("domain-membership", "pe"),
     }
     first = kernel_op(model, model.graph.node[0])
     assert first.choices() == {
-        **{key: value for key, value in nodes["first"].items() if key != "pe"},
+        **{key: value for key, value in nodes["MatMul_0"].items() if key != "pe"},
         "simd": 2,
     }
     # The cut is the same step: the body it makes from the model holds the same values,
@@ -244,24 +262,24 @@ def test_make_cut_choices_does_to_a_body_made_by_hand_what_the_cut_does(tmp_path
     # conversion's policy (first valid, 1), reported.
     cut = CutKernelPartition(tmp_path)
     parent = model.transform(cut)
-    assert list(cut.late) == ["first.pe"]
+    assert list(cut.late) == ["MatMul_0.pe"]
     expected = kernel_choices_config(model)
-    expected["first"] = {**expected["first"], "pe": 1}
+    expected["MatMul_0"] = {**expected["MatMul_0"], "pe": 1}
     assert kernel_choices_config(partition_body(parent)[1]) == expected
 
 
 def test_a_stale_choice_stays_open_after_an_earlier_member_set_its_choices() -> None:
     """A node's stored choice the bind dropped as stale is left open for a strategy,
-    whatever an earlier member of the body had left open for the cut to set: ``first``'s
+    whatever an earlier member of the body had left open for the cut to set: ``MatMul_0``'s
     cleared SIMD is set late by conversion's policy (and a channel's choices by the channel's own),
-    ``second``'s PE past its domain stays dropped and open, not set late behind it."""
+    ``MatMul_1``'s PE past its domain stays dropped and open, not set late behind it."""
     model = open_model()
-    write_raw(model, "first", "simd", None)
-    write_raw(model, "second", "pe", 3)  # past the space, as another tool wrote it
+    write_raw(model, "MatMul_0", "simd", None)
+    write_raw(model, "MatMul_1", "pe", 3)  # past the space, as another tool wrote it
     making = MakeCutChoices(CUT_NAME)
     model = model.transform(making)
-    assert sorted(making.dropped) == ["second.pe"]
-    assert sorted(making.late) == ["first.simd"]
+    assert sorted(making.dropped) == ["MatMul_1.pe"]
+    assert sorted(making.late) == ["MatMul_0.simd"]
     assert "pe" not in kernel_op(model, model.graph.node[-1]).choices()
 
 
@@ -310,24 +328,37 @@ def test_the_export_names_nodes_and_tensors_and_hold_takes_it() -> None:
     model = open_model()
     explore_kernel_choices(model, [Ranked(Lanes(2))], name=CUT_NAME)
     config = kernel_choices_config(model)
-    assert list(config) == ["x", "w1", "first", "hidden", "activate", "levels", "w2", "second", "y"]
-    assert config["first"]["pe"] == 2
-    assert config["w1"]["source.pumped_memory"] is False
+    assert list(config) == [
+        "x",
+        "MatMul_0_param0",
+        "MatMul_0",
+        "MatMul_0_out0",
+        "Thresholding_0",
+        "Thresholding_0_out0",
+        "MatMul_1_param0",
+        "MatMul_1",
+        "y",
+    ]
+    assert config["MatMul_0"]["pe"] == 2
+    assert config["MatMul_0_param0"]["source.pumped_memory"] is False
     blank = open_model()
     report = explore_kernel_choices(blank, [Hold(config)], name=CUT_NAME).report
     assert kernel_choices_config(blank) == config
     # Every value is held, by its owner as the export names it; what it changed is logged
     # as the hold's.
     assert report["held"] == config
-    assert report["choices"]["first"]["pe"] == {"value": 2, "by": "hold"}
-    assert report["choices"]["levels"]["transport"]["value"] == config["levels"]["transport"]
+    assert report["choices"]["MatMul_0"]["pe"] == {"value": 2, "by": "hold"}
+    assert (
+        report["choices"]["Thresholding_0_out0"]["transport"]["value"]
+        == config["Thresholding_0_out0"]["transport"]
+    )
     # A channel's key under its consumer is no Decision of the root: D8's form is
     # refused, named.
     with refused(
-        "pin-refused", error=ExploreError, message=r"second\.x\.transport: not a Decision"
+        "pin-refused", error=ExploreError, message=r"MatMul_1\.x\.transport: not a Decision"
     ):
         explore_kernel_choices(
-            open_model(), [Hold({"second": {"x.transport": "direct"}})], name=CUT_NAME
+            open_model(), [Hold({"MatMul_1": {"x.transport": "direct"}})], name=CUT_NAME
         )
 
 
@@ -339,7 +370,7 @@ def test_the_export_is_in_graph_order_on_tfcs_body(tfc: ModelWrapper) -> None:
     explore_kernel_choices(model, [Ranked(LANES)], name=CUT_NAME)
     expected = ["Reshape_0_out0"]
     for layer in range(4):
-        threshold, matmul = f"MultiThreshold_{layer}", f"MatMul_{layer}"
+        threshold, matmul = f"Thresholding_{layer}", f"MatMul_{layer}"
         expected += [threshold, f"{threshold}_out0", f"{matmul}_param0", matmul, f"{matmul}_out0"]
     assert list(kernel_choices_config(model)) == expected
 
@@ -369,19 +400,19 @@ def test_the_export_refuses_a_node_named_like_a_stating_tensor() -> None:
     """A node and a tensor that states choices share a name: refused, by name, though the
     node holds no choice (the ``{graph name: ...}`` form would name both once)."""
     model = open_model()
-    model.set(CHANNEL_KEYS["transport"], "direct", tensor="hidden")
-    (activate,) = [node for node in model.graph.node if node.name == "activate"]
+    model.set(CHANNEL_KEYS["transport"], "direct", tensor="MatMul_0_out0")
+    (activate,) = [node for node in model.graph.node if node.name == "Thresholding_0"]
     for key in list(kernel_op(model, activate).choices()):
-        write_raw(model, "activate", key, None)
+        write_raw(model, "Thresholding_0", key, None)
     assert not kernel_op(model, activate).choices()
-    activate.name = "hidden"
+    activate.name = "MatMul_0_out0"
     with refused(
         "name-shared",
         error=KernelOpError,
         owner="kernel_choices_config",
-        message="a node and a tensor are both named hidden",
-        node="hidden",
-        tensor="hidden",
+        message="a node and a tensor are both named MatMul_0_out0",
+        node="MatMul_0_out0",
+        tensor="MatMul_0_out0",
     ):
         kernel_choices_config(model)
 
@@ -395,14 +426,16 @@ def test_a_body_stated_under_the_nodes_channel_attributes_is_refused_by_name() -
     with refused(
         "choice-unknown",
         error=KernelOpError,
-        node="second",
+        node="MatMul_1",
         keys=("x.transport",),
         message="is not a choice of MatMul; a channel's choices are its tensor's",
     ):
         composition(model, model.graph.node)
     model = kernel_model()
     (annotation,) = [
-        each for each in model.graph.quantization_annotation if each.tensor_name == "levels"
+        each
+        for each in model.graph.quantization_annotation
+        if each.tensor_name == "Thresholding_0_out0"
     ]
     annotation.quant_parameter_tensor_names.append(
         StringStringEntryProto(key="finn.channel/x.transport", value="direct")
@@ -411,7 +444,7 @@ def test_a_body_stated_under_the_nodes_channel_attributes_is_refused_by_name() -
         "channel-choices-unreadable",
         error=KernelOpError,
         message=r"\['x.transport'\] are not declared.*again",
-        tensor="levels",
+        tensor="Thresholding_0_out0",
     ):
         composition(model, model.graph.node)
 
@@ -423,7 +456,9 @@ def test_a_row_saved_with_the_placements_as_choices_is_refused_by_name() -> None
     namespace does not declare, so the body is explored again."""
     model = kernel_model()
     (annotation,) = [
-        each for each in model.graph.quantization_annotation if each.tensor_name == "w1"
+        each
+        for each in model.graph.quantization_annotation
+        if each.tensor_name == "MatMul_0_param0"
     ]
     annotation.quant_parameter_tensor_names.extend(
         (
@@ -435,7 +470,7 @@ def test_a_row_saved_with_the_placements_as_choices_is_refused_by_name() -> None
         "channel-choices-unreadable",
         error=KernelOpError,
         message=r"\['source', 'source.memstream.ram_style'\] are not declared.*again",
-        tensor="w1",
+        tensor="MatMul_0_param0",
     ):
         composition(model, model.graph.node)
 
@@ -447,7 +482,9 @@ def test_a_row_saved_with_the_input_adapter_as_a_choice_is_refused_by_name() -> 
     namespace does not declare, so the body is explored again."""
     model = kernel_model()
     (annotation,) = [
-        each for each in model.graph.quantization_annotation if each.tensor_name == "levels"
+        each
+        for each in model.graph.quantization_annotation
+        if each.tensor_name == "Thresholding_0_out0"
     ]
     annotation.quant_parameter_tensor_names.extend(
         (
@@ -461,7 +498,7 @@ def test_a_row_saved_with_the_input_adapter_as_a_choice_is_refused_by_name() -> 
         "channel-choices-unreadable",
         error=KernelOpError,
         message=r"\['adapter', 'adapter.input_gen.input_gen.ram_style'\] are not declared.*again",
-        tensor="levels",
+        tensor="Thresholding_0_out0",
     ):
         composition(model, model.graph.node)
 
@@ -470,18 +507,18 @@ def test_choices_on_a_tensor_that_is_no_channel_are_dropped_and_cleared() -> Non
     """Written past the writer, on Thresholding's table (a fact of its kernel, no
     channel): the network drops them, with why, and persisting clears them."""
     model = kernel_model()
-    model.set(CHANNEL_KEYS["transport"], "direct", tensor="thresholds")
+    model.set(CHANNEL_KEYS["transport"], "direct", tensor="Thresholding_0_param0")
     bound_found = network(model, model.graph.node, name=CUT_NAME)
     bound = CoreComposition(bound_found.point)
     ((key, (found,)),) = bound_found.stale.items()
-    assert key == "thresholds.transport"
+    assert key == "Thresholding_0_param0.transport"
     assert (found.code, found.owner, dict(found.details)) == (
         "channel-choice-stray",
         "transport",
-        {"tensor": "thresholds"},
+        {"tensor": "Thresholding_0_param0"},
     )
     persist(model, bound.point)
-    assert "thresholds" not in model.tensors_stating(CHANNEL)
+    assert "Thresholding_0_param0" not in model.tensors_stating(CHANNEL)
     assert not network(model, model.graph.node, name=CUT_NAME).stale
 
 
@@ -491,9 +528,9 @@ def test_a_channel_choice_out_of_play_is_saved_and_replayed_out_of_play() -> Non
     writes it on the tensor, as it writes one in play. The model read again holds it
     dormant, back in play with a FIFO."""
     model = kernel_model()
-    model.clear(CHANNEL, tensor="levels")
-    configured(model, {"levels": {"transport.fifo.depth": 8}})
-    assert entries(model, "levels")["finn.channel/transport.fifo.depth"] == "8"
-    assert channel_choices(model, "levels")["transport"] == "direct"
-    states = dict(composition(model, model.graph.node).states(["levels"]))
-    assert states[("levels", "transport.fifo.depth")] == inspection.Dormant(8)
+    model.clear(CHANNEL, tensor="Thresholding_0_out0")
+    configured(model, {"Thresholding_0_out0": {"transport.fifo.depth": 8}})
+    assert entries(model, "Thresholding_0_out0")["finn.channel/transport.fifo.depth"] == "8"
+    assert channel_choices(model, "Thresholding_0_out0")["transport"] == "direct"
+    states = dict(composition(model, model.graph.node).states(["Thresholding_0_out0"]))
+    assert states[("Thresholding_0_out0", "transport.fifo.depth")] == inspection.Dormant(8)

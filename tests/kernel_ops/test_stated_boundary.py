@@ -148,10 +148,12 @@ def test_the_cut_writes_the_statements_on_the_body_and_refuses_a_tensor_no_port_
     with refused(
         "boundary-port-unknown",
         error=KernelOpError,
-        message=r"^hidden: no port of the partition carries it, so the build states nothing "
+        message=r"^MatMul_0_out0: no port of the partition carries it, so the build states nothing "
         r"there; its ports are s_axis_0 \(x\), m_axis_0 \(y\)$",
     ):
-        kernel_model().transform(CutKernelPartition(tmp_path / "other", {"hidden": stated["x"]}))
+        kernel_model().transform(
+            CutKernelPartition(tmp_path / "other", {"MatMul_0_out0": stated["x"]})
+        )
     assert not (tmp_path / "other").exists()
 
 
@@ -242,9 +244,13 @@ def test_a_slice_reads_the_statement_of_an_edge_that_is_a_partition_port(
     stated = {"s_axis_1": {"pace": {"every": 1}}}
     parent = cut(tmp_path, stated, second_weights=False)
     _, body, _ = partition_body(parent)
-    assert partition_ports(body) == {"x": "s_axis_0", "w2": "s_axis_1", "y": "m_axis_0"}
-    (second,) = [node for node in body.graph.node if node.name == "second"]
-    sliced = composition(body, [second], name="second")
+    assert partition_ports(body) == {
+        "x": "s_axis_0",
+        "w2": "s_axis_1",
+        "y": "m_axis_0",
+    }
+    (second,) = [node for node in body.graph.node if node.name == "MatMul_1"]
+    sliced = composition(body, [second], name="MatMul_1")
     assert dict(sliced.boundary) == {"w2": "s_axis_0", "y": "m_axis_0"}
     w2 = sliced.member("w2")
     assert w2.producer.label == "s_axis_0"

@@ -8,7 +8,7 @@ on one seam, and saving them.
 model of KernelOps the build's cut made (``CutKernelPartition``; the build's
 ``step_explore`` opens it through the parent graph's node, ``partition_body``, and saves it
 in its file), so which KernelOps go together is the cut's alone: a model holding any other
-node is refused. It binds the body's core in its shell, its module named by the partition
+node is refused. It binds the body's core in its shell, named by the partition
 node's name (``finn.custom_op.kernels.shell.core_point``: their kernels, the channels
 between them and the channels on its boundary, members named as the graph, ``MatMul_0``;
 the nodes' and the channels' saved choices set as it binds, a stale one dropped with why),
@@ -490,7 +490,7 @@ def explore_kernel_choices(
 ) -> Explored:
     """The KernelOps of a partition's body, ``model``, explored by ``strategies``, in
     order, on one seam (the holds of one lasting through the rest), and every value
-    persisted, on its core in the shell of the model's target, its module named ``name``
+    persisted, on its core in the shell of the model's target, named ``name``
     (the partition node's), the search's record kept;
     no strategy: only checked and reported. See the module docstring. The body is changed
     only at the end, by the persisted values and the record; a refusal or an exception
@@ -655,8 +655,8 @@ def exploration_summary(explored: Explored) -> list[str]:
 
 
 def shell_bottleneck(model: ModelWrapper, name: str) -> Bottleneck | None:
-    """The slowest members of a partition model of KernelOps' core in its shell, its
-    module named ``name`` (the partition node's), movers included, and their cycles a frame,
+    """The slowest members of a partition model of KernelOps' core in its shell, named
+    ``name`` (the partition node's), movers included, and their cycles a frame,
     its saved choices replayed (None where a member's cycles wait on a choice left open)."""
     core = shell_composition(core_point(model, name).point, body_row(model))
     return Seam(read_target(model).platform).cost(core).bottleneck

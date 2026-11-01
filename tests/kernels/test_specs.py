@@ -102,7 +102,7 @@ def test_the_covering_points_reach_every_case_and_are_valid(name: str) -> None:
 def test_an_ordered_domain_is_covered_at_its_extremes_and_any_other_whole() -> None:
     """Thresholding's PE (the divisors of 6) at 1 and 6, never 2 or 3; its pipeline, a
     bool, both ways."""
-    found = _covering(_base(BY_NAME["ThresholdingAxiKernel"]))
+    found = _covering(_base(BY_NAME["ThresholdingKernel"]))
     assert sorted({point["kernel.pe"] for point in found.points}) == [1, 6]  # type: ignore[type-var]
     assert {point["kernel.deep_pipeline"] for point in found.points} == {False, True}
 

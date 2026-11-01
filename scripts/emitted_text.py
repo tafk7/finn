@@ -1031,12 +1031,12 @@ def emit_package(out: Path, work: Path, root: Path) -> int:
 
     packaging.emit_module = recorded
 
-    def emit(name: str, model: Any, ip_name: str, run_synth: bool = False) -> None:
+    def emit(name: str, model: Any, node: str, run_synth: bool = False) -> None:
         project = work / name
         emitted.clear()
         model = model.transform(
             PackagePartition(
-                ip_name, run_synth=run_synth, directory=project, toolchain=StubToolchain()
+                node, run_synth=run_synth, directory=project, toolchain=StubToolchain()
             )
         )
         (out / f"{name}.package.tcl").write_text((project / "package.tcl").read_text())

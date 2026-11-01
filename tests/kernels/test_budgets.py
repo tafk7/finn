@@ -240,15 +240,15 @@ def test_a_parent_takes_the_doubled_clock_its_child_takes() -> None:
     parent's is its own), never reading a case not selected; a channel where its source's
     memory pumps; a channel with no source does not, where reading a source would fail."""
     network = chain.network()
-    first = network.member("first")
+    first = network.member("MatMul_0")
     assert isinstance(_value(first, MatMulKernel.takes_doubled_clock), Unresolved)  # no core
-    packed = choose(network, {"first.compute": "packed"})
+    packed = choose(network, {"MatMul_0.compute": "packed"})
     for pumped in (False, True):
-        point = choose(packed, {"first.compute.packed.compute_pumping": pumped})
-        mm = point.member("first")
+        point = choose(packed, {"MatMul_0.compute.packed.compute_pumping": pumped})
+        mm = point.member("MatMul_0")
         assert mm.takes_doubled_clock is pumped and mm.clocking.doubling is False
         assert mm.compute.takes_doubled_clock is pumped
     assert network.member("x").takes_doubled_clock is False  # no known value, no source
     for pumped in (False, True):
-        point = choose(network, {"w1.source.pumped_memory": pumped})
-        assert point.member("w1").takes_doubled_clock is pumped
+        point = choose(network, {"MatMul_0_param0.source.pumped_memory": pumped})
+        assert point.member("MatMul_0_param0").takes_doubled_clock is pumped

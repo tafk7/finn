@@ -105,18 +105,25 @@ def test_the_chain_is_configured_as_the_compiler_states_it() -> None:
     """Every kernel and channel of a partition's body in one call: the network replays
     them whole, none stale, conversion's core stored with them."""
     model = open_chain()
-    channels = {"x": EDGE, "w1": WEIGHT_CHANNEL, "hidden": EDGE, "levels": EDGE, "y": EDGE}
+    # Its graph names, given by position at conversion: x and y, the graph's, keep theirs.
+    channels = {
+        "x": EDGE,
+        "MatMul_0_param0": WEIGHT_CHANNEL,
+        "MatMul_0_out0": EDGE,
+        "Thresholding_0_out0": EDGE,
+        "y": EDGE,
+    }
     configured(
         model,
-        {"first": MATMUL, "activate": THRESHOLDING, "second": MATMUL, **channels},
+        {"MatMul_0": MATMUL, "Thresholding_0": THRESHOLDING, "MatMul_1": MATMUL, **channels},
     )
     found = network(model, model.graph.node, name=CUT_NAME)
     bound = CoreComposition(found.point)
     assert not found.stale
-    assert bound.member("first").compute.pe == MATMUL["pe"]
+    assert bound.member("MatMul_0").compute.pe == MATMUL["pe"]
     assert {key for key in bound.chosen() if key[0] in channels} >= {
-        ("w1", "transport"),
-        ("levels", "transport"),
+        ("MatMul_0_param0", "transport"),
+        ("Thresholding_0_out0", "transport"),
     }
     assert stored(model)["compute"] == "packed"
 
@@ -142,7 +149,7 @@ def test_a_whole_folding_is_one_batch() -> None:
     """On the converted Chain, a folding at SIMD 2 with pumping off: one call sets both
     (pumping's rule reads SIMD, set in the same batch)."""
     model = open_chain()
-    configured(model, {"first": MATMUL})
+    configured(model, {"MatMul_0": MATMUL})
     pumping = "compute.packed.compute_pumping"
     assert stored(model)[pumping] == MATMUL[pumping]
     assert stored(model)["compute"] == "packed"

@@ -76,7 +76,7 @@ def chain(kernels: int) -> list[Station]:
     ``FINN_SPACE_EAGER``), so each mode reads a model made in it."""
     model = chain_model(kernels // 2)
     bound = CoreComposition(core_point(model, CUT_NAME).point)
-    middle = _middle([f"mm{layer}" for layer in range(kernels // 2)])
+    middle = _middle([f"MatMul_{layer}" for layer in range(kernels // 2)])
     return [_partition(f"chain-{kernels}", bound, kernels, middle, change=True)]
 
 

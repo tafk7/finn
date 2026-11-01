@@ -261,25 +261,25 @@ def test_a_point_over_the_part_is_a_finding_naming_the_binding_resource() -> Non
 
 
 def test_a_member_that_states_no_resources_is_budgeted_as_a_lower_bound() -> None:
-    """A compressor reducer pinned on ``first`` states no resources (RC5: rank and state
+    """A compressor reducer pinned on ``MatMul_0`` states no resources (RC5: rank and state
     it): the search budgets what is stated and says so (a ``resources-unstated``
     limitation, its member's findings the causes), naming it, and the report's total is
     a lower bound, naming it too, with its findings."""
-    held = {"first": {"compute.packed.reducer": "compressor"}}
+    held = {"MatMul_0": {"compute.packed.reducer": "compressor"}}
     model = ModelWrapper(kernel_model().model.__deepcopy__())
     write_target(model, TARGET)
     report, findings = explore_each(model, [Defaults(), Hold(held), *within(0.005)])
     searched = report["strategies"][2]
-    assert searched["lower_bound"] is True and list(searched["unstated"]) == ["first"]
-    assert all(record["code"] for record in searched["unstated"]["first"])
+    assert searched["lower_bound"] is True and list(searched["unstated"]) == ["MatMul_0"]
+    assert all(record["code"] for record in searched["unstated"]["MatMul_0"])
     (unstated,) = [f for f in findings if f.code == "resources-unstated"]
     assert unstated.kind is FindingKind.LIMITATION and unstated.owner == "max_throughput"
-    assert re.search(r"\bfirst .*compressor", unstated.message)
-    assert dict(unstated.details)["members"] == ("first",) and unstated.causes
+    assert re.search(r"\bMatMul_0 .*compressor", unstated.message)
+    assert dict(unstated.details)["members"] == ("MatMul_0",) and unstated.causes
     assert searched["findings"][0]["code"] == "resources-unstated"
     resources = report["resources"]
     assert resources["lower_bound"] is True and resources["shell"] is None
-    assert list(resources["unstated"]) == ["first"]
+    assert list(resources["unstated"]) == ["MatMul_0"]
     assert resources["counted"].startswith("a lower bound")
     stated = total(
         Resources(**row["resources"])
@@ -287,4 +287,4 @@ def test_a_member_that_states_no_resources_is_budgeted_as_a_lower_bound() -> Non
         if row["resources"] is not None
     )
     assert resources["used"] == {name: getattr(stated, name) for name in resources["used"]}
-    assert report["members"]["first"]["resources"] is None
+    assert report["members"]["MatMul_0"]["resources"] is None

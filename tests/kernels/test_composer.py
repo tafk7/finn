@@ -74,6 +74,7 @@ from finn.kernels.configure import commit
 from finn.kernels.dataflow_core import (
     PRODUCER,
     SEPARATOR,
+    STEM,
     DataflowCoreKernel,
     bound,
     core_module,
@@ -82,7 +83,7 @@ from finn.kernels.explore import CoreComposition
 from finn.kernels.matmul import KnownWeights, MatMulKernel
 from finn.kernels.port import exposed_pins, port_direction
 from finn.kernels.sides import BUILD, Outside, Side, SideKind, Steady
-from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.thresholding import ThresholdingKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 
 
@@ -101,9 +102,9 @@ def kernels(names: Mapping[str, str] | None = None) -> dict[str, Facts]:
     """The Chain's kernels, in order, by graph name (``names`` renames them)."""
     named = names or {}
     return {
-        named.get("first", "first"): _matmul(W1, X_TENSOR),
-        named.get("activate", "activate"): Facts(
-            ThresholdingAxiKernel,
+        named.get("MatMul_0", "MatMul_0"): _matmul(W1, X_TENSOR),
+        named.get("Thresholding_0", "Thresholding_0"): Facts(
+            ThresholdingKernel,
             {
                 "threshold_dtype": THRESHOLD_DTYPE,
                 "thresholds": IntegerTensorValue.of(THRESHOLDS),
@@ -112,36 +113,38 @@ def kernels(names: Mapping[str, str] | None = None) -> dict[str, Facts]:
                 "platform": FULL_DSP48E2,
             },
         ),
-        named.get("second", "second"): _matmul(W2, LEVELS),
+        named.get("MatMul_1", "MatMul_1"): _matmul(W2, LEVELS),
     }
 
 
 def channels(names: Mapping[str, str] | None = None) -> dict[str, ChannelDeclaration]:
     """The Chain's channels, by tensor, as ``support.chain`` declares them."""
     named = names or {}
-    first, activate, second = (named.get(each, each) for each in ("first", "activate", "second"))
+    first, activate, second = (
+        named.get(each, each) for each in ("MatMul_0", "Thresholding_0", "MatMul_1")
+    )
     platform = FULL_DSP48E2
     return {
         "x": channel(
             Side.boundary("s_axis_0"), Port(first, "x"), tensor=X_TENSOR, platform=platform
         ),
-        "w1": channel(
+        "MatMul_0_param0": channel(
             Side.source(),
             Port(first, "w"),
             tensor=Stated(first, "carried_weights"),
             contents=Stated(first, "stored_weights"),
             platform=platform,
         ),
-        "hidden": channel(
+        "MatMul_0_out0": channel(
             Port(first, "y"),
             Port(activate, "input"),
             tensor=chain.HIDDEN_TENSOR,
             platform=platform,
         ),
-        "levels": channel(
+        "Thresholding_0_out0": channel(
             Port(activate, "output"), Port(second, "x"), tensor=LEVELS, platform=platform
         ),
-        "w2": channel(
+        "MatMul_1_param0": channel(
             Side.source(),
             Port(second, "w"),
             tensor=Stated(second, "carried_weights"),
@@ -197,15 +200,15 @@ def test_a_param_per_fact_at_the_root_named_member_and_fact(cache: None) -> None
     composed = compose(declared())
     roots = composed.names.roots
     # Each kernel's facts, each channel's value facts and each side given as a value.
-    assert roots["first-x_tensor"] == ("first", "x_tensor")
-    assert roots["activate-thresholds"] == ("activate", "thresholds")
+    assert roots["MatMul_0-x_tensor"] == ("MatMul_0", "x_tensor")
+    assert roots["Thresholding_0-thresholds"] == ("Thresholding_0", "thresholds")
     assert roots["x-producer"] == ("x", "producer")
-    assert roots["w1-producer"] == ("w1", "producer")
-    assert "w1-tensor" not in roots  # stated by its MatMul, bound inside
+    assert roots["MatMul_0_param0-producer"] == ("MatMul_0_param0", "producer")
+    assert "MatMul_0_param0-tensor" not in roots  # stated by its MatMul, bound inside
     params = {name for name in root_facts(composed)}
     assert params <= set(roots)
     assert root_facts(composed)["x-producer"] == Side.boundary("s_axis_0")
-    assert root_facts(composed)["first-weights"] == KnownWeights(IntegerTensorValue.of(W1), W)
+    assert root_facts(composed)["MatMul_0-weights"] == KnownWeights(IntegerTensorValue.of(W1), W)
     for name in roots:
         member, separator, fact = name.partition(SEPARATOR)
         assert separator and member in composed.names.owners and fact.isidentifier()
@@ -215,7 +218,7 @@ def test_a_param_per_fact_at_the_root_named_member_and_fact(cache: None) -> None
 def test_each_kernel_formal_is_bound_to_a_root_param_only(cache: None) -> None:
     composed = compose(declared())
     root = line_scopes(type(composed)).root
-    for owner in ("first", "activate", "second"):
+    for owner in ("MatMul_0", "Thresholding_0", "MatMul_1"):
         scope = root.named_children[composed.names.members[owner]]
         formals = [
             node for name, node in scope.named_members.items() if name in kernels()[owner].arguments
@@ -230,11 +233,11 @@ def test_each_kernel_formal_is_bound_to_a_root_param_only(cache: None) -> None:
 #: Each channel's sides' labels: a kernel's port below its member's node, the boundary's
 #: AXIS port, a source's none.
 LABELS = {
-    "x": ("s_axis_0", "first.x"),
-    "w1": ("", "first.w"),
-    "hidden": ("first.y", "activate.input"),
-    "levels": ("activate.output", "second.x"),
-    "y": ("second.y", "m_axis_0"),
+    "x": ("s_axis_0", "MatMul_0.x"),
+    "MatMul_0_param0": ("", "MatMul_0.w"),
+    "MatMul_0_out0": ("MatMul_0.y", "Thresholding_0.input"),
+    "Thresholding_0_out0": ("Thresholding_0.output", "MatMul_1.x"),
+    "y": ("MatMul_1.y", "m_axis_0"),
 }
 
 
@@ -249,8 +252,8 @@ def test_a_kernel_side_is_labelled_below_its_member_s_node(cache: None) -> None:
         )
         assert all(isinstance(each, Available) for each in found), found
         assert tuple(each.value.label for each in found if isinstance(each, Available)) == labels
-    side = point.hidden.query(Channel.producer)  # type: ignore[attr-defined]
-    assert isinstance(side, Available) and side.value.label == "first.y"
+    side = point.MatMul_0_out0.query(Channel.producer)  # type: ignore[attr-defined]
+    assert isinstance(side, Available) and side.value.label == "MatMul_0.y"
     assert side.value.kind is SideKind.KERNEL
 
 
@@ -263,26 +266,29 @@ def test_the_same_structure_is_one_class_and_new_facts_a_new_design_space(cache:
     assert cached_classes() == 1
     # Other thresholds: a new design space of the same class.
     other = kernels()
-    other["activate"] = Facts(
-        ThresholdingAxiKernel,
+    other["Thresholding_0"] = Facts(
+        ThresholdingKernel,
         {
-            **other["activate"].arguments,
+            **other["Thresholding_0"].arguments,
             "thresholds": IntegerTensorValue.of((tuple((-8, 0, 9) for _ in range(4)),)),
         },
     )
     changed = compose(DataflowCoreDeclaration(other, channels(), name=TEST_CORE))
     assert type(changed) is type(composed) and cached_classes() == 1
-    assert root_facts(changed)["activate-thresholds"] != root_facts(composed)["activate-thresholds"]
+    assert (
+        root_facts(changed)["Thresholding_0-thresholds"]
+        != root_facts(composed)["Thresholding_0-thresholds"]
+    )
     # Another fact given, or another member name, or a side of another kind: another class.
     # A fact given counts, whatever its value: ``form=Form.DENSE`` is MatMul's default, and
     # given explicitly is another class (a cache miss, harmless). Only None is no fact (the
     # next test: given None is left out).
     more = kernels()
-    more["first"] = Facts(MatMulKernel, {**more["first"].arguments, "form": Form.DENSE})
+    more["MatMul_0"] = Facts(MatMulKernel, {**more["MatMul_0"].arguments, "form": Form.DENSE})
     assert type(compose(DataflowCoreDeclaration(more, channels(), name=TEST_CORE))) is not type(
         composed
     )
-    renamed = compose(declared({"first": "first_"}))
+    renamed = compose(declared({"MatMul_0": "first_"}))
     assert type(renamed) is not type(composed)
     assert cached_classes() == 3
 
@@ -295,7 +301,7 @@ def test_a_boundary_stated_or_not_is_one_class_its_side_a_root_fact(cache: None)
     plain = compose(declared())
     side = Side.boundary("s_axis_0", outside=Outside(BUILD, pace=Steady(2)))
     others = channels()
-    others["x"] = channel(side, Port("first", "x"), tensor=X_TENSOR, platform=FULL_DSP48E2)
+    others["x"] = channel(side, Port("MatMul_0", "x"), tensor=X_TENSOR, platform=FULL_DSP48E2)
     stated = compose(declared(channels_=others))
     assert type(stated) is type(plain) and stated.names == plain.names
     assert cached_classes() == 1
@@ -313,19 +319,23 @@ def test_a_fact_left_out_and_a_fact_given_none_are_one_class(cache: None) -> Non
     class, is pinned by the case ``more`` in the test above."""
     left_out = compose(declared())
     given_none = kernels()
-    given_none["first"] = Facts(MatMulKernel, {**given_none["first"].arguments, "window": None})
-    assert "window" not in kernels()["first"].arguments
+    given_none["MatMul_0"] = Facts(
+        MatMulKernel, {**given_none["MatMul_0"].arguments, "window": None}
+    )
+    assert "window" not in kernels()["MatMul_0"].arguments
     none = compose(DataflowCoreDeclaration(given_none, channels(), name=TEST_CORE))
     assert type(none) is type(left_out) and none.names == left_out.names
-    assert root_facts(none) == root_facts(left_out) and "first-window" not in none.names.roots
+    assert root_facts(none) == root_facts(left_out) and "MatMul_0-window" not in none.names.roots
     assert cached_classes() == 1
     # Given a value, it is another class: only None is the fact left out.
     window = Window(image=(8, 8), size=(3, 3))
     given_value = kernels()
-    given_value["first"] = Facts(MatMulKernel, {**given_value["first"].arguments, "window": window})
+    given_value["MatMul_0"] = Facts(
+        MatMulKernel, {**given_value["MatMul_0"].arguments, "window": window}
+    )
     valued = compose(DataflowCoreDeclaration(given_value, channels(), name=TEST_CORE))
     assert type(valued) is not type(left_out)
-    assert root_facts(valued)["first-window"] == window and cached_classes() == 2
+    assert root_facts(valued)["MatMul_0-window"] == window and cached_classes() == 2
 
 
 @pytest.mark.parametrize("mode", [PERMUTE, EAGER])
@@ -362,12 +372,12 @@ def test_one_structure_composed_from_several_threads_is_one_class(cache: None) -
 
 
 def test_the_class_cache_holds_at_most_its_bound(cache: None) -> None:
-    first = type(compose(declared({"first": "m0"})))
+    first = type(compose(declared({"MatMul_0": "m0"})))
     for index in range(1, CLASS_CACHE_BOUND + 1):
-        compose(declared({"first": f"m{index}"}))
+        compose(declared({"MatMul_0": f"m{index}"}))
     assert cached_classes() == CLASS_CACHE_BOUND
     # The least recently composed was dropped: composed again, it is made again.
-    assert type(compose(declared({"first": "m0"}))) is not first
+    assert type(compose(declared({"MatMul_0": "m0"}))) is not first
     assert cached_classes() == CLASS_CACHE_BOUND
 
 
@@ -387,7 +397,7 @@ def test_a_structure_whose_class_does_not_compile_is_not_cached_and_is_compiled_
     composing the structure again compiles it, and is refused, again. Another structure
     cached meanwhile is kept."""
     members = kernels()
-    members["first"] = Facts(Misplaced, members["first"].arguments)
+    members["MatMul_0"] = Facts(Misplaced, members["MatMul_0"].arguments)
     broken = declared(channels_=channels())
     broken = DataflowCoreDeclaration(members, broken.channels, name=TEST_CORE)
     good = compose(declared())
@@ -406,12 +416,16 @@ def _refused(declaration: DataflowCoreDeclaration) -> list[tuple[str, str, str]]
 
 
 def test_two_graph_names_of_one_member_name_are_refused(cache: None) -> None:
-    assert _refused(declared({"first": "a.b", "second": "a_b"})) == [
+    assert _refused(declared({"MatMul_0": "a.b", "MatMul_1": "a_b"})) == [
         ("name-shared", "a.b", "members share a node in the module: a_b: a.b, a_b")
     ]
     # A node and a tensor of one name.
-    assert _refused(declared({"activate": "hidden"})) == [
-        ("name-shared", "hidden", "hidden: a node and a tensor are both named hidden")
+    assert _refused(declared({"Thresholding_0": "MatMul_0_out0"})) == [
+        (
+            "name-shared",
+            "MatMul_0_out0",
+            "MatMul_0_out0: a node and a tensor are both named MatMul_0_out0",
+        )
     ]
 
 
@@ -430,14 +444,18 @@ def test_two_graph_names_of_one_member_name_are_refused(cache: None) -> None:
     ],
 )
 def test_a_name_no_member_can_take_is_refused(cache: None, name: str, code: str) -> None:
-    found = _refused(declared({"activate": name}))
+    found = _refused(declared({"Thresholding_0": name}))
     assert [(each[0], each[1]) for each in found] == [(code, name)]
 
 
 @pytest.mark.parametrize(
     ("label", "code", "message"),
     [
-        ("hidden", "name-shared", "y: its edge port and member hidden are both named hidden"),
+        (
+            "MatMul_0_out0",
+            "name-shared",
+            "y: its edge port and member MatMul_0_out0 are both named MatMul_0_out0",
+        ),
         ("s_axis_0", "name-shared", "y: its edge port s_axis_0 is x's edge port too"),
         ("m-axis", "name-invalid", "y: its edge port 'm-axis' is no ASCII name segment"),
         (
@@ -455,16 +473,18 @@ def test_an_edge_port_is_named_as_its_label_which_no_other_name_takes(
     no name segment, a name the core's class declares or reserves, a member's name or
     another edge port's is refused when composed, owned by the channel."""
     relabelled = _wired(
-        y=channel(Port("second", "y"), Side.boundary(label), tensor=Y_TENSOR, platform=FULL_DSP48E2)
+        y=channel(
+            Port("MatMul_1", "y"), Side.boundary(label), tensor=Y_TENSOR, platform=FULL_DSP48E2
+        )
     )
     assert _refused(declared(channels_=relabelled)) == [(code, "y", message)]
 
 
 def test_an_edge_port_s_name_meets_a_member_by_its_member_name(cache: None) -> None:
     """A graph name meets an edge port's name as its member name (``\\W`` as ``_``): the
-    Chain's ``activate`` named ``m-axis.0`` is member ``m_axis_0``, ``y``'s edge port's name.
+    Chain's ``Thresholding_0`` named ``m-axis.0`` is member ``m_axis_0``, ``y``'s edge port's name.
     It is refused, owned by the channel, the member named by its graph name."""
-    assert _refused(declared({"activate": "m-axis.0"})) == [
+    assert _refused(declared({"Thresholding_0": "m-axis.0"})) == [
         ("name-shared", "y", "y: its edge port and member m-axis.0 are both named m_axis_0")
     ]
 
@@ -472,7 +492,9 @@ def test_an_edge_port_s_name_meets_a_member_by_its_member_name(cache: None) -> N
 def test_a_channel_named_as_the_shell_member_is_refused_in_a_shell_or_not(cache: None) -> None:
     """``shell`` is the name of a partition's shell member (``finn.kernels.budgets``): no
     kernel (above) or channel takes it, whether the partition is in a shell or not."""
-    named = {("shell" if name == "hidden" else name): each for name, each in channels().items()}
+    named = {
+        ("shell" if name == "MatMul_0_out0" else name): each for name, each in channels().items()
+    }
     row = {"shell": "ip", "control_budget": None, "memory_ports": None, "clk2x": True}
     for shell in (None, row):
         found = _refused(DataflowCoreDeclaration(kernels(), named, shell, name=TEST_CORE))
@@ -482,12 +504,12 @@ def test_a_channel_named_as_the_shell_member_is_refused_in_a_shell_or_not(cache:
 
 
 def test_a_graph_name_s_member_name_is_its_node_and_its_keys_map_both_ways(cache: None) -> None:
-    composed = compose(declared({"first": "Mat.Mul:0"}))
+    composed = compose(declared({"MatMul_0": "Mat.Mul:0"}))
     names = composed.names
     assert names.members["Mat.Mul:0"] == "Mat_Mul_0"
     assert names.path(("Mat.Mul:0", "compute.packed.pe")) == "Mat_Mul_0.compute.packed.pe"
     assert names.pair("Mat_Mul_0.compute.packed.pe") == ("Mat.Mul:0", "compute.packed.pe")
-    assert names.path(("hidden", "")) == "hidden"
+    assert names.path(("MatMul_0_out0", "")) == "MatMul_0_out0"
     assert names.roots["Mat_Mul_0-x_tensor"] == ("Mat.Mul:0", "x_tensor")
     point = composed
     pairs = [names.pair(item.key) for item in inspection.decisions(point)]
@@ -512,27 +534,27 @@ def test_a_graph_name_that_begins_with_an_underscore_is_a_member_s_name_like_any
 ) -> None:
     """A graph name that begins with ``_`` (an exported ``/fc1/MatMul``'s member is
     ``_fc1_MatMul``) is a member's name like any: what the base installs for a member is
-    named so that no member's name meets it. The Chain with its first MatMul ``/first`` and
+    named so that no member's name meets it. The Chain with its first MatMul ``/MatMul_0`` and
     its hidden tensor ``_hidden``, configured as the Chain, is valid and wired as the
     Chain."""
-    renamed = {"first": "/first"}
-    graph = {"first": "/first", "hidden": "_hidden"}
+    renamed = {"MatMul_0": "/MatMul_0"}
+    graph = {"MatMul_0": "/MatMul_0", "MatMul_0_out0": "_hidden"}
     wired = {graph.get(name, name): each for name, each in channels(renamed).items()}
     composed = compose(declared(renamed, wired))
-    assert composed.names.members["/first"] == "_first"
+    assert composed.names.members["/MatMul_0"] == "_MatMul_0"
     point = _as_chain(composed, graph)
     assert inspection.validity(point).status == "valid"
     beside = point.query(neighbours(type(point), "_hidden"))
     assert isinstance(beside, Available)
     assert beside.value.producer is not None and beside.value.consumer is not None
     assert (beside.value.producer.label, beside.value.consumer.label) == (
-        "_first.y",
-        "activate.input",
+        "_MatMul_0.y",
+        "Thresholding_0.input",
     )
     found = point.query(Kernel.netlist)
     built = chain.chain().netlist()
     assert isinstance(found, Available) and isinstance(built, Available)
-    assert {str(link).replace("'_first.", "'first.") for link in found.value.links} == {
+    assert {str(link).replace("'_MatMul_0.", "'MatMul_0.") for link in found.value.links} == {
         str(link) for link in built.value[0].links
     }
 
@@ -543,13 +565,13 @@ def test_a_member_named_as_a_helper_of_the_base_is_its_member(cache: None, name:
     ends; ``_member_hops_1``), or that spells one it installs now (``-x-hops``, whose
     member is ``_x_hops``), is a member's name like any: the member is the kernel, and
     channel x's own ends and hops are answered."""
-    composed = compose(declared({"first": name}))
+    composed = compose(declared({"MatMul_0": name}))
     member = composed.names.members[name]
     space_type = type(composed)
     assert issubclass(space_type, Kernel)
     assert member.startswith("_") and member not in vars(Kernel)
     assert isinstance(getattr(space_type, member), MatMulKernel)
-    point = _as_chain(composed, {"first": name})
+    point = _as_chain(composed, {"MatMul_0": name})
     assert isinstance(point.query(own_ends(space_type, "x")), Available)
     assert isinstance(point.query(hops(space_type, "x")), Available)
     installed = {each for each in vars(space_type) if each.startswith("-")}
@@ -584,26 +606,32 @@ def test_a_port_on_the_wrong_side_composes_and_its_channel_refuses_it(cache: Non
     platform = FULL_DSP48E2
     # An input port on the producer's side, an output port on the consumer's.
     backwards = channel(
-        Port("activate", "input"), Port("first", "y"), tensor=chain.HIDDEN_TENSOR, platform=platform
+        Port("Thresholding_0", "input"),
+        Port("MatMul_0", "y"),
+        tensor=chain.HIDDEN_TENSOR,
+        platform=platform,
     )
-    assert _users(declared(channels_=_wired(hidden=backwards)), "hidden") == {
-        ("sides", "a channel's producer is an output port, and activate.input is an input's")
+    assert _users(declared(channels_=_wired(MatMul_0_out0=backwards)), "MatMul_0_out0") == {
+        ("sides", "a channel's producer is an output port, and Thresholding_0.input is an input's")
     }
     # An output port on the consumer's side alone.
     doubled = channel(
-        Port("first", "y"),
-        Port("activate", "output"),
+        Port("MatMul_0", "y"),
+        Port("Thresholding_0", "output"),
         tensor=chain.HIDDEN_TENSOR,
         platform=platform,
     )
     levels = channel(
-        Port("activate", "input"), Port("second", "x"), tensor=LEVELS, platform=platform
+        Port("Thresholding_0", "input"), Port("MatMul_1", "x"), tensor=LEVELS, platform=platform
     )
-    assert _users(declared(channels_=_wired(hidden=doubled, levels=levels)), "hidden") == {
-        ("sides", "a channel's consumer is an input port, and activate.output is an output's")
+    assert _users(
+        declared(channels_=_wired(MatMul_0_out0=doubled, Thresholding_0_out0=levels)),
+        "MatMul_0_out0",
+    ) == {
+        ("sides", "a channel's consumer is an input port, and Thresholding_0.output is an output's")
     }
     # A source on the consumer's side.
-    sourced = channel(Port("second", "y"), Side.source(), tensor=Y_TENSOR, platform=platform)
+    sourced = channel(Port("MatMul_1", "y"), Side.source(), tensor=Y_TENSOR, platform=platform)
     assert _users(declared(channels_=_wired(y=sourced)), "y") == {
         ("sides", "a channel's source is its producer, never its consumer")
     }
@@ -618,15 +646,15 @@ def test_a_read_no_member_states_is_refused(cache: None) -> None:
         ("channel-read", "y", "reads third, which is no member")
     ]
     no_port = channel(
-        Port("second", "z"), Side.boundary("m_axis_0"), tensor=Y_TENSOR, platform=platform
+        Port("MatMul_1", "z"), Side.boundary("m_axis_0"), tensor=Y_TENSOR, platform=platform
     )
     assert _refused(declared(channels_=_wired(y=no_port))) == [
-        ("channel-read", "y", "reads second, which states no port z")
+        ("channel-read", "y", "reads MatMul_1, which states no port z")
     ]
-    with pytest.raises(DataflowCoreRefused, match="ThresholdingAxiKernel takes no fact depth"):
+    with pytest.raises(DataflowCoreRefused, match="ThresholdingKernel takes no fact depth"):
         given = kernels()
-        given["activate"] = Facts(
-            ThresholdingAxiKernel, {**given["activate"].arguments, "depth": 2}
+        given["Thresholding_0"] = Facts(
+            ThresholdingKernel, {**given["Thresholding_0"].arguments, "depth": 2}
         )
         compose(DataflowCoreDeclaration(given, channels(), name=TEST_CORE))
 
@@ -636,34 +664,46 @@ def test_a_channel_reading_a_channel_is_ranked_after_it_and_a_loop_is_refused(
 ) -> None:
     platform = FULL_DSP48E2
     later = dict(channels())
-    hidden = later.pop("hidden")
+    hidden = later.pop("MatMul_0_out0")
     # ``levels`` declared before ``hidden`` reads its tensor: ranked after it.
     reading = channel(
-        Port("activate", "output"),
-        Port("second", "x"),
-        tensor=Stated("hidden", "tensor"),
+        Port("Thresholding_0", "output"),
+        Port("MatMul_1", "x"),
+        tensor=Stated("MatMul_0_out0", "tensor"),
         platform=platform,
     )
-    order = {"x": later["x"], "w1": later["w1"], "levels": reading, "hidden": hidden}
-    order |= {name: later[name] for name in ("w2", "y")}
+    order = {
+        "x": later["x"],
+        "MatMul_0_param0": later["MatMul_0_param0"],
+        "Thresholding_0_out0": reading,
+        "MatMul_0_out0": hidden,
+    }
+    order |= {name: later[name] for name in ("MatMul_1_param0", "y")}
     composed = compose(declared(channels_=order))
-    assert tuple(composed.names.members)[3:] == ("x", "w1", "hidden", "levels", "w2", "y")
+    assert tuple(composed.names.members)[3:] == (
+        "x",
+        "MatMul_0_param0",
+        "MatMul_0_out0",
+        "Thresholding_0_out0",
+        "MatMul_1_param0",
+        "y",
+    )
     looped = channel(
-        Port("first", "y"),
-        Port("activate", "input"),
-        tensor=Stated("levels", "tensor"),
+        Port("MatMul_0", "y"),
+        Port("Thresholding_0", "input"),
+        tensor=Stated("Thresholding_0_out0", "tensor"),
         platform=platform,
     )
-    found = _refused(declared(channels_={**order, "hidden": looped}))
+    found = _refused(declared(channels_={**order, "MatMul_0_out0": looped}))
     assert [(code, owner) for code, owner, _ in found] == [
-        ("channel-ranked", "levels"),
-        ("channel-ranked", "hidden"),
+        ("channel-ranked", "Thresholding_0_out0"),
+        ("channel-ranked", "MatMul_0_out0"),
     ]
 
 
 def test_a_side_is_given_as_a_side_not_as_a_fact() -> None:
     with pytest.raises(ValueError, match="sides are given as its sides"):
-        ChannelDeclaration(Side.source(), Port("first", "w"), {"producer": Side.source()})
+        ChannelDeclaration(Side.source(), Port("MatMul_0", "w"), {"producer": Side.source()})
 
 
 def test_a_port_s_endpoint_is_read_off_its_class() -> None:
@@ -671,7 +711,7 @@ def test_a_port_s_endpoint_is_read_off_its_class() -> None:
     assert port_direction(MatMulKernel, "y") is Direction.OUT
     assert port_direction(MatMulKernel, "x") is Direction.IN
     assert port_direction(Channel, "set") is Direction.IN
-    assert port_direction(ThresholdingAxiKernel, "output") is Direction.OUT
+    assert port_direction(ThresholdingKernel, "output") is Direction.OUT
     assert port_direction(MatMulKernel, "z") is None
 
 
@@ -694,10 +734,10 @@ def test_a_placed_port_on_no_channel_is_refused(cache: None) -> None:
     assert _connection_refused(declared(channels_=unwired)) == [
         (
             "port-unconnected",
-            "second",
-            "second.y is on no channel and exposed by no alias: a member's port is connected "
+            "MatMul_1",
+            "MatMul_1.y is on no channel and exposed by no alias: a member's port is connected "
             "by a channel, or presented outside by an alias, and no holder ties a port off",
-            {"port": "second.y"},
+            {"port": "MatMul_1.y"},
         )
     ]
 
@@ -706,7 +746,7 @@ def test_a_port_on_two_channels_is_refused(cache: None) -> None:
     """Two channels on one port are refused when the class is made
     (``port-connected-twice``), naming both: two readers of one value are its one channel."""
     twice = channel(
-        Port("first", "y"),
+        Port("MatMul_0", "y"),
         Side.boundary("m_axis_1"),
         tensor=chain.HIDDEN_TENSOR,
         platform=FULL_DSP48E2,
@@ -714,10 +754,10 @@ def test_a_port_on_two_channels_is_refused(cache: None) -> None:
     assert _connection_refused(declared(channels_=_wired(copy=twice))) == [
         (
             "port-connected-twice",
-            "first",
-            "first.y is on the channels hidden, copy: a port is on one channel, and two "
+            "MatMul_0",
+            "MatMul_0.y is on the channels MatMul_0_out0, copy: a port is on one channel, and two "
             "readers of one value are that value's one channel",
-            {"port": "first.y", "channels": ("hidden", "copy")},
+            {"port": "MatMul_0.y", "channels": ("MatMul_0_out0", "copy")},
         )
     ]
 
@@ -732,24 +772,24 @@ def test_a_one_set_thresholding_needs_no_channel_on_its_set_port(cache: None) ->
     assert issubclass(space_type, Kernel)
     connections = space_type.connections
     named = {str(port) for sides in connections.values() for port in sides if port is not None}
-    assert "activate.set" not in named
+    assert "Thresholding_0.set" not in named
     assert named == {
-        "first.x",
-        "first.w",
-        "first.y",
-        "activate.input",
-        "activate.output",
-        "second.x",
-        "second.w",
-        "second.y",
+        "MatMul_0.x",
+        "MatMul_0.w",
+        "MatMul_0.y",
+        "Thresholding_0.input",
+        "Thresholding_0.output",
+        "MatMul_1.x",
+        "MatMul_1.w",
+        "MatMul_1.y",
     }
     assert {name: tuple(map(str, sides)) for name, sides in connections.items()} == {
-        "x": ("None", "first.x"),
-        "w1": ("None", "first.w"),
-        "hidden": ("first.y", "activate.input"),
-        "levels": ("activate.output", "second.x"),
-        "w2": ("None", "second.w"),
-        "y": ("second.y", "None"),
+        "x": ("None", "MatMul_0.x"),
+        "MatMul_0_param0": ("None", "MatMul_0.w"),
+        "MatMul_0_out0": ("MatMul_0.y", "Thresholding_0.input"),
+        "Thresholding_0_out0": ("Thresholding_0.output", "MatMul_1.x"),
+        "MatMul_1_param0": ("None", "MatMul_1.w"),
+        "y": ("MatMul_1.y", "None"),
     }
 
 
@@ -760,18 +800,18 @@ def test_a_thresholding_given_its_set_tensor_needs_a_channel_on_its_set_port(
     optional fact: the Chain's Thresholding given its set indices (``set_tensor``) places
     its set port, which no channel feeds, so the class is refused when made."""
     given = kernels()
-    activate = given["activate"]
-    given["activate"] = Facts(
+    activate = given["Thresholding_0"]
+    given["Thresholding_0"] = Facts(
         activate.space_type, {**activate.arguments, "set_tensor": set_indices(2, 1)}
     )
     assert _connection_refused(DataflowCoreDeclaration(given, channels(), name=TEST_CORE)) == [
         (
             "port-unconnected",
-            "activate",
-            "activate.set is on no channel and exposed by no alias: a member's port is "
+            "Thresholding_0",
+            "Thresholding_0.set is on no channel and exposed by no alias: a member's port is "
             "connected by a channel, or presented outside by an alias, and no holder ties a "
             "port off",
-            {"port": "activate.set"},
+            {"port": "Thresholding_0.set"},
         )
     ]
 
@@ -779,13 +819,13 @@ def test_a_thresholding_given_its_set_tensor_needs_a_channel_on_its_set_port(
 def test_a_member_s_port_an_alias_of_its_holder_exposes_needs_no_channel() -> None:
     """A port a node alias of the holder exposes is presented outside it, and needs no
     channel: a kernel holding a Thresholding fed by a channel, its output exposed
-    (``output = activate.output``), is made; without the alias, the output is refused."""
+    (``output = Thresholding_0.output``), is made; without the alias, the output is refused."""
 
     def holder(exposed: bool) -> type[Kernel]:
         class Exposing(Kernel):
             id = "test.exposing"
             producer: Side = Param()
-            activate = ThresholdingAxiKernel()
+            activate = ThresholdingKernel()
             x = Channel(
                 tensor=X_TENSOR,
                 producer=producer,
@@ -813,8 +853,8 @@ def test_a_channel_side_reading_two_ports_is_refused_by_its_own_code() -> None:
         class Both(Kernel):
             id = "test.both"
             producer: Side = Param()
-            one = ThresholdingAxiKernel()
-            two = ThresholdingAxiKernel()
+            one = ThresholdingKernel()
+            two = ThresholdingKernel()
             output = one.output
             second_output = two.output
 
@@ -861,41 +901,42 @@ def test_a_channel_on_a_port_reached_through_two_selectors_is_refused_when_made(
 
 
 def test_a_two_set_weight_channel_s_set_port_on_no_channel_is_refused(cache: None) -> None:
-    """A channel's own ports are any member's: a weight channel of two sets exposes its
-    source's set port (``set``), which a channel feeds or the class is refused when made
-    (``port-unconnected``, owned by the weight channel). Of one set (no ``index_tensor``, as
-    the Chain's ``w1``), the port is idle by structure, through the alias, and needs none."""
-    weights = channels()["w1"]
+    """A channel's own ports are any member's: a weight channel of two sets exposes its source's set
+    port (``set``), which a channel feeds or the class is refused when made (``port-unconnected``,
+    owned by the weight channel). Of one set (no ``index_tensor``, as the Chain's
+    ``MatMul_0_param0``), the port is idle by structure, through the alias, and needs none."""
+    weights = channels()["MatMul_0_param0"]
     two_sets = ChannelDeclaration(
         weights.producer,
         weights.consumer,
         {**weights.facts, "sets": 2, "index_tensor": set_indices(2, 1)},
     )
-    assert _connection_refused(declared(channels_=_wired(w1=two_sets))) == [
+    assert _connection_refused(declared(channels_=_wired(MatMul_0_param0=two_sets))) == [
         (
             "port-unconnected",
-            "w1",
-            "w1.set is on no channel and exposed by no alias: a member's port is connected by "
-            "a channel, or presented outside by an alias, and no holder ties a port off",
-            {"port": "w1.set"},
+            "MatMul_0_param0",
+            "MatMul_0_param0.set is on no channel and exposed by no alias: a member's port is "
+            "connected by a channel, or presented outside by an alias, and no holder ties a "
+            "port off",
+            {"port": "MatMul_0_param0.set"},
         )
     ]
     space_type = type(compose(declared()))
     assert issubclass(space_type, Kernel)
     named = space_type.connections
-    assert not any(str(port) == "w1.set" for sides in named.values() for port in sides)
+    assert not any(str(port) == "MatMul_0_param0.set" for sides in named.values() for port in sides)
 
 
 #: The Chain's hidden channel's hop, from its first MatMul's core to its Thresholding.
 _HIDDEN_HOP = Link(
     LinkEnd(
-        "^first.compute.packed",
+        "^MatMul_0.compute.packed",
         "m_axis_output_tdata",
         16,
         "m_axis_output_tvalid",
         "m_axis_output_tready",
     ),
-    LinkEnd("^activate", "s_axis_tdata", 16, "s_axis_tvalid", "s_axis_tready"),
+    LinkEnd("^Thresholding_0", "s_axis_tdata", 16, "s_axis_tvalid", "s_axis_tready"),
     6,
     (0, 1),
 )
@@ -918,19 +959,19 @@ def test_the_class_answers_each_channel_s_neighbours_and_hops(cache: None) -> No
     point = network.point
     space_type = type(point)
     assert issubclass(space_type, Kernel)
-    beside = point.query(neighbours(space_type, "hidden"))
+    beside = point.query(neighbours(space_type, "MatMul_0_out0"))
     assert isinstance(beside, Available)
     assert beside.value.producer is not None and beside.value.consumer is not None
     assert (beside.value.producer.label, beside.value.consumer.label) == (
-        "first.y",
-        "activate.input",
+        "MatMul_0.y",
+        "Thresholding_0.input",
     )
     entering = point.query(neighbours(space_type, "x"))
     assert isinstance(entering, Available)
     assert entering.value.producer is None and entering.value.consumer is not None
     # The hidden channel places no stage: its one hop joins the ports beside it, each end
     # relative to the channel (``^``).
-    hopped = point.query(hops(space_type, "hidden"))
+    hopped = point.query(hops(space_type, "MatMul_0_out0"))
     assert isinstance(hopped, Available)
     assert hopped.value == OuterHops(_HIDDEN_HOP, None)
     wired = point.query(Kernel.netlist)
@@ -939,7 +980,7 @@ def test_the_class_answers_each_channel_s_neighbours_and_hops(cache: None) -> No
     assert len(links) == 8 and len(set(links)) == 8
     assert _placed(_HIDDEN_HOP) in links
     with pytest.raises(KeyError):
-        neighbours(space_type, "first")
+        neighbours(space_type, "MatMul_0")
 
 
 def test_a_channel_s_neighbours_its_class_does_not_answer_are_what_they_wait_on(
@@ -950,10 +991,10 @@ def test_a_channel_s_neighbours_its_class_does_not_answer_are_what_they_wait_on(
     read: the Chain with no choice stored waits on its first MatMul's core."""
     network = CoreComposition(compose(declared()))
     assert network.refused() is None
-    found = network.neighbours("hidden")
+    found = network.neighbours("MatMul_0_out0")
     assert isinstance(found, Unresolved)
     assert [(each.code, each.owner, dict(each.details)) for each in found.findings] == [
-        ("decision-unassigned", "compute", {"node": "first"})
+        ("decision-unassigned", "compute", {"node": "MatMul_0"})
     ]
 
 
@@ -996,7 +1037,15 @@ def test_the_declaration_s_name_and_order_are_facts_of_the_class(cache: None) ->
     renamed = compose(DataflowCoreDeclaration(kernels(), channels(), name="other"))
     assert type(renamed) is space_type
     assert getattr(renamed, "name") == "other"
-    order = ("x", *kernels(), "w1", "hidden", "levels", "w2", "y")
+    order = (
+        "x",
+        *kernels(),
+        "MatMul_0_param0",
+        "MatMul_0_out0",
+        "Thresholding_0_out0",
+        "MatMul_1_param0",
+        "y",
+    )
     reordered = compose(DataflowCoreDeclaration(kernels(), channels(), order=order, name=TEST_CORE))
     assert type(reordered) is not space_type
     assert getattr(type(reordered), "instance_order") == order
@@ -1009,8 +1058,8 @@ def test_the_declaration_s_name_and_order_are_facts_of_the_class(cache: None) ->
 def test_the_class_answers_its_netlist_edge_cycles_and_resources(cache: None) -> None:
     """The class answers what its module is made of: its netlist (``Kernel.netlist``), its
     members in its instance order, and its module's edge (``DataflowCoreKernel.edge_buses``:
-    each edge port's bus, in its instance order); its module, its IP, of them, named after
-    its name and derived by its class (``DataflowCoreKernel.module``); its cycles (the most
+    each edge port's bus, in its instance order); its module, its IP, of them, its stem its
+    kind and derived by its class (``DataflowCoreKernel.module``); its cycles (the most
     any member takes) and its resources (its members' sum). Its composition reads each of
     them."""
     network = chain.chain()
@@ -1028,8 +1077,18 @@ def test_the_class_answers_its_netlist_edge_cycles_and_resources(cache: None) ->
     assert isinstance(module, Available) and network.answer(DataflowCoreKernel.module) == module
     made = module.value
     assert (made.implementation_id, made.implementation_version) == ("finn.dataflow_core", "1")
-    assert made.stem == "finn_partition" and made.fragment == wired.value
-    assert made == core_module(PRODUCER, "finn_partition", wired.value, edge.value)
+    # Its stem is its kind, whatever the core is called (its name, "partition" here).
+    assert made.stem == STEM and made.fragment == wired.value
+    assert made == core_module(PRODUCER, STEM, wired.value, edge.value)
+    # A netlist two of whose labels give one instance name is refused, the labels named.
+    label, leaf = wired.value.instances[0]
+    repeated = f"{label}.{label.split('.')[-1]}"
+    doubled = replace(wired.value, instances=(*wired.value.instances, (repeated, leaf)))
+    refused = core_module(PRODUCER, STEM, doubled, edge.value)
+    assert isinstance(refused, Rejected)
+    assert [(each.code, dict(each.details)["labels"]) for each in refused.findings] == [
+        ("instance-names-collide", (label, repeated))
+    ]
     cycles = point.query(Kernel.frame_cycles)
     assert isinstance(cycles, Available) and network.answer(Kernel.frame_cycles) == cycles
     assert cycles.value == max(
@@ -1044,7 +1103,7 @@ def _unchanneled(body: str) -> list[tuple[str, str]]:
     """The findings a sealed core declared by hand with ``body`` is refused with."""
     namespace: dict[str, object] = {
         "DataflowCoreKernel": DataflowCoreKernel,
-        "ThresholdingAxiKernel": ThresholdingAxiKernel,
+        "ThresholdingKernel": ThresholdingKernel,
         "Channel": Channel,
         "Param": Param,
         "Side": Side,
@@ -1065,7 +1124,10 @@ _EDGE = (
 @pytest.mark.parametrize(
     ("body", "exposed"),
     [
-        ("activate = ThresholdingAxiKernel()\n    s_axis_0 = activate.input", "activate.input"),
+        (
+            "Thresholding_0 = ThresholdingKernel()\n    s_axis_0 = Thresholding_0.input",
+            "Thresholding_0.input",
+        ),
         (_EDGE + "s_axis_0 = x.source.output", "x.source.output"),
         (_EDGE + "s_axis_0 = x.set", "x.source.set"),
     ],
@@ -1099,7 +1161,7 @@ def test_a_sealed_core_s_placed_outer_port_without_an_edge_port_is_refused_by_it
     class Core(DataflowCoreKernel):
         x_producer: Side = Param()
         y_consumer: Side = Param()
-        activate = ThresholdingAxiKernel(
+        activate = ThresholdingKernel(
             threshold_dtype=THRESHOLD_DTYPE,
             thresholds=IntegerTensorValue.of(THRESHOLDS),
             bias=0,
@@ -1126,7 +1188,7 @@ def test_a_sealed_core_s_placed_outer_port_without_an_edge_port_is_refused_by_it
             )
         ),
         {
-            **chain.ACTIVATE,
+            **{f"activate.{key.partition('.')[2]}": value for key, value in chain.ACTIVATE.items()},
             "activate.pe": chain.PE,
             "x.transport": "direct",
             "y.transport": "direct",

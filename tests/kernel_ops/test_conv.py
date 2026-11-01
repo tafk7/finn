@@ -181,9 +181,13 @@ def test_a_window_inside_the_partition_is_its_edges_reorder(
     point, _ = configured_network(
         thresholded(pe, simd).transform(MakeCutChoices(CUT_NAME)), "inside"
     )
-    assert tuple(hop.step.value for hop in point.channel("a").steps.hops) == steps
-    labels = [label for label, _ in point.module.fragment.instances if label.startswith("a.")]
-    assert "a.adapter.input_gen.input_gen" in labels
+    # a, the Thresholding's output, named by its position at conversion.
+    window = "Thresholding_0_out0"
+    assert tuple(hop.step.value for hop in point.channel(window).steps.hops) == steps
+    labels = [
+        label for label, _ in point.module.fragment.instances if label.startswith(f"{window}.")
+    ]
+    assert f"{window}.adapter.input_gen.input_gen" in labels
 
 
 @requires_xsim
@@ -210,6 +214,12 @@ def test_cnvs_six_convolutions_each_convert_to_one_conv(cnv_streamlined: Path) -
     assert [outcome.nodes for outcome in windowed] == [
         (f"Im2Col_{layer}", f"MatMul_{layer}") for layer in range(6)
     ]
+    # Each named by its position, as its outputs and weights are: the fully connected MatMuls
+    # after them are MatMul_0 to MatMul_2, whose tensors no Conv's meet.
+    assert [outcome.name for outcome in windowed] == [f"Conv_{layer}" for layer in range(6)]
+    matmuls = [node for node in model.graph.node if node.op_type == "MatMul"]
+    assert [node.name for node in matmuls] == [f"MatMul_{index}" for index in range(3)]
+    assert [node.output[0] for node in matmuls] == [f"MatMul_{index}_out0" for index in range(3)]
     assert not [node for node in model.graph.node if node.op_type == "Im2Col"]
     # Each KernelOp's own choices created as it converts, each set by its default policy:
     # 93 values on CNV's 17 KernelOps, every choice in play (each MatMul and Conv's core and

@@ -18,7 +18,7 @@ from qonnx.core.datatype import DataType
 
 from finn.core.space import Space, design_space
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.thresholding import ThresholdingKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 from support.helpers import FULL_DSP48E2
 from support.kernel_specs.base import ORACLE, KernelSpec, Probe, SweepCases, refuses
@@ -59,7 +59,7 @@ PE_FACTORS = ({"pe": 1}, {"pe": 3}, {"pe": CHANNELS})
 
 def thresholding() -> dict[str, Any]:
     return dict(
-        space_type=ThresholdingAxiKernel,
+        space_type=ThresholdingKernel,
         inputs={"input_channel": tensor((PIXELS, CHANNELS), "INT4")},
         outputs={"output_channel": (PIXELS, CHANNELS)},
         reference=lambda input_channel: {"output_channel": levels(input_channel)},
@@ -95,7 +95,7 @@ def shared_row(*, axilite: bool = False) -> dict[str, Any]:
     if axilite:
         facts["control"] = "s_axilite"
     return dict(
-        space_type=ThresholdingAxiKernel,
+        space_type=ThresholdingKernel,
         inputs={"input_channel": tensor((PIXELS, SHARED_CHANNELS), "INT4")},
         outputs={"output_channel": (PIXELS, SHARED_CHANNELS)},
         reference=reference,
@@ -108,11 +108,11 @@ def shared_row(*, axilite: bool = False) -> dict[str, Any]:
 def alone(**facts: Any) -> Space:
     """The kernel alone on its case's input and ``FACTS``, but ``facts``."""
     given = {"input_tensor": tensor((PIXELS, CHANNELS), "INT4"), **FACTS, **facts}
-    return design_space(ThresholdingAxiKernel(**given))
+    return design_space(ThresholdingKernel(**given))
 
 
 SPEC = KernelSpec(
-    kernel=ThresholdingAxiKernel,
+    kernel=ThresholdingKernel,
     reference=ORACLE.format(op="Thresholding"),
     cases={
         "thresholding": thresholding,

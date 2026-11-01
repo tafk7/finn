@@ -51,7 +51,7 @@ def test_an_unpumped_matmul_has_one_clock_and_holds_the_2x_input():
     assert top["ap_clk"] == Signal("ap_clk", Direction.IN, 1, Clock(Free()))
     assert top["ap_rst_n"].role == Reset(True, True, ("ap_clk",))
     assert placed(built.module, "matmul.compute.packed").held.inputs == (("ap_clk2x", 0),)
-    compute, replay = "u_matmul_compute_packed", "u_x_adapter_input_gen_input_gen"
+    compute, replay = "u_matmul_compute_packed", "u_x_adapter_input_gen"
     assert {
         Drive(Pin(compute, "ap_clk"), Pin(None, "ap_clk")),
         Drive(Pin(compute, "ap_rst_n"), Pin(None, "ap_rst_n")),

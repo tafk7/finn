@@ -343,7 +343,7 @@ def streamed_w2_model() -> ModelWrapper:
     twice: over one row, the replay of each row is a repetition of the whole pass); the
     second folded ``ROW_MAJOR_W2``."""
     model = kernel_model(second_weights=False, rows=1)
-    return configured(model, {"first": {"pe": 4}, "second": ROW_MAJOR_W2})
+    return configured(model, {"MatMul_0": {"pe": 4}, "MatMul_1": ROW_MAJOR_W2})
 
 
 def open_memories(bound: CoreComposition) -> tuple[CoreComposition, list[str]]:

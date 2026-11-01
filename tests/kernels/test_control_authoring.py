@@ -47,7 +47,7 @@ from finn.kernels.library import ModuleSpec
 from finn.kernels.port import port_direction, stream_port
 from finn.kernels.port_model import InPort, OutPort, StreamPort
 from finn.kernels.sides import Side
-from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.thresholding import ThresholdingKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 
 BUS = Bus(
@@ -99,7 +99,7 @@ class GatedScheduled(OutPort):
     pin_values, held_values = _gated(StreamPort.pin_values, StreamPort.held_values)
 
 
-class SerialThreshold(ThresholdingAxiKernel):
+class SerialThreshold(ThresholdingKernel):
     """Gates isolate each step of the base's module assembly without side effects: each
     port's pins and holds behind its own gates."""
 
@@ -125,9 +125,9 @@ class SerialThreshold(ThresholdingAxiKernel):
     input = GatedIndexed(
         label="input",
         transport=Axis(bus="s_axis"),
-        tensor=ThresholdingAxiKernel.input_tensor,
-        schedule=ThresholdingAxiKernel.schedule,
-        index=ThresholdingAxiKernel.indices,
+        tensor=ThresholdingKernel.input_tensor,
+        schedule=ThresholdingKernel.schedule,
+        index=ThresholdingKernel.indices,
         lanes=(Index("c"),),
         pins_gate=pin_input,
         held_gate=hold_input,
@@ -135,9 +135,9 @@ class SerialThreshold(ThresholdingAxiKernel):
     output = GatedScheduled(
         label="output",
         transport=Axis(bus="m_axis"),
-        tensor=ThresholdingAxiKernel.output_tensor,
-        schedule=ThresholdingAxiKernel.schedule,
-        index=ThresholdingAxiKernel.indices,
+        tensor=ThresholdingKernel.output_tensor,
+        schedule=ThresholdingKernel.schedule,
+        index=ThresholdingKernel.indices,
         lanes=(Index("c"),),
         pins_gate=pin_output,
         held_gate=hold_output,
@@ -145,9 +145,9 @@ class SerialThreshold(ThresholdingAxiKernel):
     set = GatedSet(
         label="set",
         transport=AXIS,
-        tensor=ThresholdingAxiKernel.set_tensor,
-        sequence=ThresholdingAxiKernel.set_sequence,
-        dtype=ThresholdingAxiKernel.selector_dtype,
+        tensor=ThresholdingKernel.set_tensor,
+        sequence=ThresholdingKernel.set_sequence,
+        dtype=ThresholdingKernel.selector_dtype,
         pins_gate=pin_set,
         held_gate=hold_set,
     )
@@ -165,7 +165,7 @@ class SerialThreshold(ThresholdingAxiKernel):
             return reject("source-refusal", "the source View refuses")
         if state == "wrong":
             return (CopiedSource("finnlib", "wrong.sv", provides=("module:wrong",)),)
-        sources = ThresholdingAxiKernel.module_spec.constant_sources
+        sources = ThresholdingKernel.module_spec.constant_sources
         assert sources is not None
         return sources
 
@@ -382,7 +382,7 @@ def test_a_served_port_is_read_at_its_kernel_s_occurrence() -> None:
 
 @pytest.mark.parametrize("shown", (False, True))
 def test_actual_parent_control_skips_or_demands_register_map_view(shown: bool) -> None:
-    class WaitingRegisters(ThresholdingAxiKernel):
+    class WaitingRegisters(ThresholdingKernel):
         register_state: str = Decision(domain=("ready",))
 
         @view
@@ -413,5 +413,5 @@ def test_actual_parent_control_skips_or_demands_register_map_view(shown: bool) -
 def test_dynamic_module_spec_requires_actual_parent_source_view() -> None:
     with pytest.raises(DefinitionError, match="module_sources"):
 
-        class MissingSources(ThresholdingAxiKernel):
+        class MissingSources(ThresholdingKernel):
             module_spec = ModuleSpec("thresholding_axi")

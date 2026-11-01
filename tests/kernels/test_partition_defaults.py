@@ -48,7 +48,7 @@ def owner_of(policies: Mapping[object, Policy]) -> Any:
     return Owner
 
 
-KERNELS = ("first", "activate", "second")
+KERNELS = ("MatMul_0", "Thresholding_0", "MatMul_1")
 
 
 def chained(
@@ -62,9 +62,9 @@ def chained(
     channel admitting an adapter unless not ``adaptable``."""
     members = chain.members()
     if not adaptable:
-        members["hidden"] = channel(
-            Port("first", "y"),
-            Port("activate", "input"),
+        members["MatMul_0_out0"] = channel(
+            Port("MatMul_0", "y"),
+            Port("Thresholding_0", "input"),
             tensor=chain.HIDDEN_TENSOR,
             platform=FULL_DSP48E2,
             adaptable=False,
@@ -77,7 +77,7 @@ def chained(
         owners=owners,
     )
     return CoreComposition(
-        bound(compose(declared), keyed({"activate.pe": chain.PE, **(stored or {})})).point
+        bound(compose(declared), keyed({"Thresholding_0.pe": chain.PE, **(stored or {})})).point
     )
 
 
@@ -91,28 +91,31 @@ def test_the_pass_sets_every_member_by_its_owner_s_policy_once() -> None:
     after = held.made(done.point)
     assert after.undecided() == ()
     chosen = after.chosen()
-    assert chosen[("first", "compute")] == "packed"
-    assert {chosen[(name, "transport")] for name in ("x", "w1", "hidden", "levels")} == {"direct"}
-    assert chosen[("activate", "pe")] == chain.PE  # a stored choice is kept
+    assert chosen[("MatMul_0", "compute")] == "packed"
+    assert {
+        chosen[(name, "transport")]
+        for name in ("x", "MatMul_0_param0", "MatMul_0_out0", "Thresholding_0_out0")
+    } == {"direct"}
+    assert chosen[("Thresholding_0", "pe")] == chain.PE  # a stored choice is kept
 
 
 def test_a_channel_s_owner_is_the_channel_class() -> None:
     """A channel's policies are its class's (``Channel.policies``): whichever the partition,
     its owner is ``Channel``, where a kernel's is the owner it was given."""
     fixing = owner_of({})
-    held = chained({"first": fixing})
+    held = chained({"MatMul_0": fixing})
     assert {held.owner(name) for name in held.channels} == {Channel}
-    assert held.owner("first") is fixing
+    assert held.owner("MatMul_0") is fixing
 
 
 def test_a_kernel_class_bound_by_two_owners_takes_each_owner_s_policies_at_its_own_node() -> None:
     """The Chain's two MatMuls are one kernel class: the first's owner fixes the packed
     core's reducer to the compressor, the second's states none (first valid: the tree)."""
     fixing = owner_of({PackedDotpKernel.reducer: Fixed("compressor")})
-    held = chained({"first": fixing, "second": owner_of({})})
+    held = chained({"MatMul_0": fixing, "MatMul_1": owner_of({})})
     chosen = held.made(held.defaulted().point).chosen()
-    assert chosen[("first", "compute.packed.reducer")] == "compressor"
-    assert chosen[("second", "compute.packed.reducer")] == "tree"
+    assert chosen[("MatMul_0", "compute.packed.reducer")] == "compressor"
+    assert chosen[("MatMul_1", "compute.packed.reducer")] == "tree"
 
 
 def test_a_member_refused_on_its_own_is_skipped_and_the_others_are_set() -> None:
@@ -121,15 +124,15 @@ def test_a_member_refused_on_its_own_is_skipped_and_the_others_are_set() -> None
     its choices set (its transport stays open), reported beside the point; every other
     member is set."""
     held = chained(
-        stored={"first.compute": "packed", "first.pe": 4, "first.simd": 2}, adaptable=False
+        stored={"MatMul_0.compute": "packed", "MatMul_0.pe": 4, "MatMul_0.simd": 2}, adaptable=False
     )
-    assert held.validity("hidden").status == "refused"
+    assert held.validity("MatMul_0_out0").status == "refused"
     done = held.defaulted()
-    assert list(done.refused) == ["hidden"] and done.unset == ()
+    assert list(done.refused) == ["MatMul_0_out0"] and done.unset == ()
     after = held.made(done.point)
-    assert ("hidden", "transport") in after.undecided()
+    assert ("MatMul_0_out0", "transport") in after.undecided()
     assert after.chosen()[("x", "transport")] == "direct"
-    assert after.chosen()[("second", "compute")] == "packed"
+    assert after.chosen()[("MatMul_1", "compute")] == "packed"
 
 
 def test_a_choice_no_value_can_be_set_for_is_left_open_and_the_pass_goes_on() -> None:
@@ -138,23 +141,23 @@ def test_a_choice_no_value_can_be_set_for_is_left_open_and_the_pass_goes_on() ->
     (once, owned by its key), the MatMul's reducer and every other member's choices are
     set."""
     held = chained(
-        {"first": owner_of({MatMulKernel.pe: Fixed(4)})},
+        {"MatMul_0": owner_of({MatMulKernel.pe: Fixed(4)})},
         {
-            "first.compute": "packed",
-            "first.simd": 2,
-            "first.compute.packed.compute_pumping": False,
+            "MatMul_0.compute": "packed",
+            "MatMul_0.simd": 2,
+            "MatMul_0.compute.packed.compute_pumping": False,
         },
         adaptable=False,
     )
     done = held.defaulted()
     assert done.refused == {}
     (finding,) = done.unset
-    assert (finding.code, finding.owner) == ("choice-no-valid-value", "first.pe")
+    assert (finding.code, finding.owner) == ("choice-no-valid-value", "MatMul_0.pe")
     assert dict(finding.details) == {"policy": "fixed"}
     after = held.made(done.point)
-    assert after.undecided() == (("first", "pe"),)
-    assert after.chosen()[("first", "compute.packed.reducer")] == "tree"
-    assert after.chosen()[("hidden", "transport")] == "direct"
+    assert after.undecided() == (("MatMul_0", "pe"),)
+    assert after.chosen()[("MatMul_0", "compute.packed.reducer")] == "tree"
+    assert after.chosen()[("MatMul_0_out0", "transport")] == "direct"
 
 
 def test_the_pass_over_some_members_leaves_the_others_open() -> None:
@@ -163,4 +166,4 @@ def test_the_pass_over_some_members_leaves_the_others_open() -> None:
     held = chained()
     after = held.made(held.defaulted(members=held.channels).point)
     assert {key[0] for key in after.undecided()} == set(KERNELS)
-    assert after.chosen()[("hidden", "transport")] == "direct"
+    assert after.chosen()[("MatMul_0_out0", "transport")] == "direct"

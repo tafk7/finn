@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -66,8 +67,8 @@ from finn.core.reporting.findings import FindingKind
 from finn.core.reporting.manifest import STORED
 from finn.core.rtlsim_bench import SimulationFailed
 from finn.custom_op.kernels.shell import configured_network, verify_partition
-from finn.kernels.artifacts.build import instance_name
 from finn.kernels.artifacts.interface import STREAM_FACTS
+from finn.kernels.artifacts.module import instance_name, module_name
 from finn.platform.capabilities import Resources
 from finn.platform.request import TargetRequest
 from finn.platform.resolve import resolve_target
@@ -102,12 +103,15 @@ def test_the_description_beside_the_ip_reads_back_against_the_modules_pins(
     described = json.loads((project / "interface.json").read_text())
     point, boundary = configured_network(model, "sdp_1")
     read_back(described, point.module.abi.pins, 5.0)
+    # The IP is named as its module, which leaves its node's name out, and shown as its node.
+    top = module_name(point.module)
     assert described["ip"] == {
-        "name": "sdp_1",
-        "vlnv": "xilinx_finn:finn:sdp_1:1.0",
-        "top": described["ip"]["top"],
+        "name": top,
+        "vlnv": f"xilinx_finn:finn:{top}:1.0",
+        "top": top,
+        "display_name": "sdp_1",
     }
-    assert described["ip"]["top"].startswith("finn_sdp_1__")
+    assert top.startswith("finn_dataflowcore_")
     assert (described["part"], described["period_ns"]) == ("xczu3eg-sbva484-1-e", 5.0)
     # Each stream states its port's boundary facts, as the configured network's channels
     # state them, and the order its free side presents the tensor in: the Chain's,
@@ -148,7 +152,7 @@ def test_on_pynq_the_description_states_what_the_movers_state(tmp_path: Path) ->
     row-major (``ROW_MAJOR_W2``), crosses the boundary once a frame, 4 beats, and an
     ``input_gen`` in the partition replays it; every stream row-major, one pass."""
     model = kernel_model(second_weights=False)
-    configured(model, {"second": ROW_MAJOR_W2})
+    configured(model, {"MatMul_1": ROW_MAJOR_W2})
     write_target(model, ZYNQ)
     configure_partition(model)
     stub = cast(Toolchain, PackagedByStub())
@@ -188,9 +192,9 @@ REPORT = """\
 |  Instance  | Module | Total LUTs | Logic LUTs | LUTRAMs | SRLs | FFs | RAMB36 | RAMB18 | URAM | DSP Blocks |
 +------------+--------+------------+------------+---------+------+-----+--------+--------+------+------------+
 | top        |  (top) |        120 |        100 |      12 |    8 |  90 |      1 |      1 |    0 |          2 |
-|   u_first  |  first |         70 |         60 |       6 |    4 |  50 |      1 |      0 |    0 |          2 |
+|   u_first  |  MatMul_0 |         70 |         60 |       6 |    4 |  50 |      1 |      0 |    0 |          2 |
 |     inner  |  inner |         30 |         30 |       0 |    0 |  10 |      0 |      0 |    0 |          0 |
-|   u_second | second |         50 |         40 |       6 |    4 |  40 |      0 |      1 |    0 |          0 |
+|   u_second | MatMul_1 |         50 |         40 |       6 |    4 |  40 |      0 |      1 |    0 |          0 |
 +------------+--------+------------+------------+---------+------+-----+--------+--------+------+------------+
 """
 
@@ -235,16 +239,16 @@ def test_out_of_context_resources_are_stated_per_member_of_the_network(
     # weight's memory its channel's, a kernel's compute the kernel's.
     assert {path: counted["ff"] for path, counted in found["members"].items()} == {
         "x": 0,
-        "w1": 1,
-        "levels": 2,
-        "w2": 3,
-        "first": 4,
-        "activate": 5,
+        "MatMul_0_param0": 1,
+        "Thresholding_0_out0": 2,
+        "MatMul_1_param0": 3,
+        "MatMul_0": 4,
+        "Thresholding_0": 5,
     }
     assert set(found["members"]) <= set(point.network.members)
     # The flattened instance's resources are the top's, attributed to no member.
     assert found["unattributed"] == {"lut": 10, "ff": 6, "bram18": 0, "uram": 0, "dsp": 0}
-    assert found["unreported_instances"] == ["second.compute.packed"]
+    assert found["unreported_instances"] == ["MatMul_1.compute.packed"]
 
 
 class SynthesizedByStub(PackagedByStub):
@@ -254,8 +258,11 @@ class SynthesizedByStub(PackagedByStub):
     def run(
         self, tool: str, args: object, *, cwd: Path, **options: object
     ) -> subprocess.CompletedProcess[bytes]:
-        if "launch_runs synth_1" in (Path(cwd) / "package.tcl").read_text():
-            (Path(cwd) / "finn_dataflowcore_0_partition_util.rpt").write_text(REPORT)
+        script = (Path(cwd) / "package.tcl").read_text()
+        if "launch_runs synth_1" in script:
+            top = re.search(r"^set_property top (\S+) ", script, re.MULTILINE)
+            assert top is not None
+            (Path(cwd) / f"{top[1]}_partition_util.rpt").write_text(REPORT)
         return super().run(tool, args, cwd=cwd, **options)
 
 
@@ -271,7 +278,7 @@ def test_the_resources_report_reads_the_synthesis_of_the_ip_the_body_states(
     assert "ooc_synth" not in built_reports(parent, toolchain=stub)
     node, body, body_file = partition_body(parent)
     verified(body, node.name)
-    project = tmp_path / "stitched_ip"
+    project = tmp_path / "DataflowCore_0" / "ip"
     packaged = body.transform(PackagePartition(node.name, directory=project, toolchain=stub))
     packaged.save(body_file)
     assert "ooc_synth" not in built_reports(parent, toolchain=stub)
@@ -279,7 +286,7 @@ def test_the_resources_report_reads_the_synthesis_of_the_ip_the_body_states(
         PackagePartition(node.name, run_synth=True, directory=project, toolchain=stub)
     )
     synthesized.save(body_file)
-    report = project / "finn_dataflowcore_0_partition_util.rpt"
+    (report,) = project.glob("finn_dataflowcore_*_partition_util.rpt")
     assert built_reports(parent, toolchain=stub)["ooc_synth"] == report
     synthesized.set(OUTPUT_IP_KEY, "sha256:" + "0" * 64)
     synthesized.save(body_file)
@@ -300,7 +307,7 @@ def test_the_testbench_is_an_output_the_build_does_not_run(tmp_path: Path) -> No
     )
     cfg.prepared_toolchain = cast(Toolchain, PackagedByStub())
     step_package_partition(parent, cfg)
-    testbench = output / "stitched_ip" / TESTBENCH_DIR
+    testbench = output / "DataflowCore_0" / TESTBENCH_DIR
     assert (testbench / "check.sv").read_text().startswith("`timescale 1ns/1ps\n")
     assert (testbench / RUN_SCRIPT).is_file()
     assert not (testbench / "xsim.log").exists()
@@ -332,10 +339,10 @@ def test_an_ip_the_store_holds_is_reused_and_the_step_says_so(
 
 
 def _levels_short(channel: Any, neighbours: Any, period: int, words: int) -> bool:
-    """A double of the seam's check (the Chain needs no FIFO at any folding): ``levels``
+    """A double of the seam's check (the Chain needs no FIFO at any folding): ``Thresholding_0_out0``
     (activate's output) needs more words than its transport holds; every other channel's
     holds."""
-    return not str(channel.sides.source_owner).startswith("activate.")
+    return not str(channel.sides.source_owner).startswith("Thresholding_0.")
 
 
 def test_a_fifo_too_small_for_its_stream_is_refused_at_verification(
@@ -353,7 +360,7 @@ def test_a_fifo_too_small_for_its_stream_is_refused_at_verification(
         "transport.fifo.depth": 8,
         "transport.fifo.buffer.ram_style": "auto",
     }
-    configured(body, {"levels": fifo})
+    configured(body, {"Thresholding_0_out0": fifo})
     monkeypatch.setattr(explore_module, "holds", _levels_short)
     configured_network(body, node.name)
     with pytest.raises(KernelOpError) as refused:
@@ -362,11 +369,11 @@ def test_a_fifo_too_small_for_its_stream_is_refused_at_verification(
     assert (finding.kind, finding.code, finding.owner) == (
         FindingKind.REJECTION,
         "fifo-stale",
-        "levels.transport.fifo.depth",
+        "Thresholding_0_out0.transport.fifo.depth",
     )
     assert str(refused.value).startswith(
         f"{node.name}: FIFOs too small for their streams, refused at verification (add "
-        "size_fifos to step_explore's strategies): levels: levels.transport.fifo.depth: fifo-stale: depth 8 "
+        "size_fifos to step_explore's strategies): Thresholding_0_out0: Thresholding_0_out0.transport.fifo.depth: fifo-stale: depth 8 "
         "(8 words) no longer keeps its producer"
     )
     assert body.get(OUTPUT_VERIFIED) is None
@@ -374,7 +381,7 @@ def test_a_fifo_too_small_for_its_stream_is_refused_at_verification(
         OUTPUT_SEARCH,
         {
             "design": design_digest(body),
-            "held": {"levels": ["transport.fifo.depth"]},
+            "held": {"Thresholding_0_out0": ["transport.fifo.depth"]},
             "objective_fps": None,
         },
     )
@@ -445,7 +452,7 @@ def test_packaging_and_the_integration_refuse_a_design_not_verified_as_it_is(
         "transport.fifo.depth": 32,
         "transport.fifo.buffer.ram_style": "auto",
     }
-    configured(body, {"levels": fifo})
+    configured(body, {"Thresholding_0_out0": fifo})
     body.save(body_file)
     refused("design-changed")
     verified(body, node.name)
@@ -480,7 +487,7 @@ def test_the_testbench_refuses_a_design_not_verified_as_it_is(tmp_path: Path) ->
         "transport.fifo.depth": 32,
         "transport.fifo.buffer.ram_style": "auto",
     }
-    configured(body, {"levels": fifo})
+    configured(body, {"Thresholding_0_out0": fifo})
     refused("design-changed")
     verified(body, node.name)
     write()
@@ -542,8 +549,8 @@ def test_a_steps_tools_write_their_transcripts_into_its_log_directory(tmp_path: 
         "package.sh.stdout.log",
     ]
     assert (logs / "package.sh.stdout.log").read_text() == "INFO: [IP_Flow 19-234] packaging\n"
-    assert (output / "stitched_ip" / "package.sh").is_file()
-    assert not (output / "stitched_ip" / "package.sh.stdout.log").exists()
+    assert (output / "DataflowCore_0" / "ip" / "package.sh").is_file()
+    assert not (output / "DataflowCore_0" / "ip" / "package.sh.stdout.log").exists()
     # The build's own toolchain is unchanged: each step states its directory.
     assert cfg.prepared_toolchain.transcripts is None
 
@@ -618,19 +625,20 @@ def test_tfc_on_the_ip_shell_packages_and_its_testbench_passes_on_its_own(
     (packaged,) = [each for each in manifest["steps"] if each["name"] == "step_package_partition"]
     tools = {Path(run["transcript"]).name: run["status"] for run in packaged["tools"]}
     assert tools["package.sh.stdout.log"] == "completed"
-    ip = output / "stitched_ip"
-    ran_by_utility = run_testbench(ip / TESTBENCH_DIR, toolchain=host_toolchain())
+    core = output / "DataflowCore_0"
+    ran_by_utility = run_testbench(core / TESTBENCH_DIR, toolchain=host_toolchain())
     assert ran_by_utility.splitlines()[-1] == "PASS"
-    assert (ip / "ip" / "component.xml").is_file()
+    assert (core / "ip" / "ip" / "component.xml").is_file()
     # The partition the build packaged, opened through the parent graph the step saved.
     parent = ModelWrapper(str(output / "intermediate_models" / "step_package_partition.onnx"))
     _, body, _ = partition_body(parent)
     point, _ = configured_network(body, "DataflowCore_0")
-    described = json.loads((ip / "interface.json").read_text())
+    described = json.loads((core / "ip" / "interface.json").read_text())
     read_back(described, point.module.abi.pins, 5.0)
-    # The IP is the partition's, of its one name; the body states it.
-    assert described["ip"]["name"] == "DataflowCore_0"
-    assert body.get(OUTPUT_IP) == str(ip / "ip")
+    # The IP is the partition's, named as its module and shown as its node; the body states it.
+    assert described["ip"]["name"] == module_name(point.module)
+    assert described["ip"]["display_name"] == "DataflowCore_0"
+    assert body.get(OUTPUT_IP) == str(core / "ip" / "ip")
     # The exploration folds the input's thresholds at 4 lanes and the last layer at 1
     # (Z0's choices), not test_tfc's 16 lanes by hand.
     assert [(s["name"], s["tdata"], s["element"]) for s in described["streams"]] == [
@@ -639,7 +647,7 @@ def test_tfc_on_the_ip_shell_packages_and_its_testbench_passes_on_its_own(
     ]
     # The testbench runs from its own directory with Vivado's tools on PATH and
     # XILINX_VIVADO set, nothing else of the machine.
-    testbench = ip / TESTBENCH_DIR
+    testbench = core / TESTBENCH_DIR
     assert str(tmp_path) not in (testbench / "run.sh").read_text()
     environment = dict(host_toolchain().environment)
     vivado = environment["XILINX_VIVADO"]

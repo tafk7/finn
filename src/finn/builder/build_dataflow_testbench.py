@@ -145,7 +145,7 @@ def write_testbench(
     toolchain: Toolchain,
     name: str,
 ) -> None:
-    """Write the XSim testbench of the partition ``body``, its module named ``name`` (the
+    """Write the XSim testbench of the partition ``body``, named ``name`` (the
     partition node's), into ``directory`` (see the module docstring). It streams ``frame`` (the
     inputs by tensor name) and expects the body's outputs for it, executed in Python. Like
     PackagePartition, it writes only the design step_verify_partition verified: a body that
@@ -178,7 +178,7 @@ def write_testbench(
 
 def run_testbench(directory: Path, *, toolchain: Toolchain) -> str:
     """Run the testbench ``write_testbench`` wrote into ``directory`` (a build's is
-    ``stitched_ip/testbench`` in its output directory): its ``run.sh``, in
+    ``DataflowCore_0/testbench`` in its output directory): its ``run.sh``, in
     ``toolchain``'s environment with the selected command directory first on ``PATH``.
     Its output goes to a transcript as it runs: in the toolchain's log directory if it
     has one (``Toolchain.transcript``), else beside ``run.sh`` (``run.sh.stdout.log``,
