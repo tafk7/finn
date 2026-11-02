@@ -140,6 +140,7 @@ def test_a_configuration_holds_through_json() -> None:
         "board": "Ultra96",
         "part": None,
         "shell": "pynq",
+        "runtime": None,
     }
     # The settings beside the fields, as stated; the list as written; no base directory.
     assert {name: stated[name] for name in SETTINGS} == SETTINGS
@@ -473,29 +474,31 @@ def never(self: Toolchain, tool: str, timeout: float = 0) -> tuple[int, ...]:
     raise AssertionError(f"{tool} was asked its release")
 
 
-def board_vivado(findings: list[Finding]) -> list[str]:
-    return [finding.message for finding in findings if finding.code == "board-vivado"]
+def tool_version(findings: list[Finding]) -> list[str]:
+    return [finding.message for finding in findings if finding.code == "tool-version"]
 
 
 def test_vivado_is_asked_its_release_only_for_a_board_that_requires_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A board whose row requires a release (AUP-ZU3_8GB's, 2024.1) asks the build's
+    """A board whose row narrows its releases (AUP-ZU3_8GB's, 2024.1 on) asks the build's
     toolchain; with no Vivado on its route, the check refuses it, naming why. A board
     without one, and the ip shell, which names no board, ask nothing."""
-    (message,) = board_vivado(checked(board_build(tmp_path, "AUP-ZU3_8GB")))
-    assert message.startswith("AUP-ZU3_8GB requires Vivado 2024.1 or later, no Vivado detected")
+    (message,) = tool_version(checked(board_build(tmp_path, "AUP-ZU3_8GB")))
+    assert message.startswith(
+        "AUP-ZU3_8GB on the 'pynq' shell builds with Vivado >=2024.1, no Vivado detected"
+    )
     assert "vivado: not on this toolchain's route" in message
     monkeypatch.setattr(Toolchain, "probe", never)
-    assert board_vivado(checked(board_build(tmp_path, "Ultra96"))) == []
-    assert board_vivado(checked(board_build(tmp_path, "AUP-ZU3_8GB", "ip"))) == []
+    assert tool_version(checked(board_build(tmp_path, "Ultra96"))) == []
+    assert tool_version(checked(board_build(tmp_path, "AUP-ZU3_8GB", "ip"))) == []
 
 
 def test_a_toolchain_that_does_not_prepare_is_no_vivado_detected(tmp_path: Path) -> None:
     cfg = board_build(tmp_path, "AUP-ZU3_8GB")
     del cfg.prepared_toolchain
     cfg.toolchain = Selection(settings=(str(tmp_path / "missing-settings64.sh"),))
-    (message,) = board_vivado(checked(cfg))
+    (message,) = tool_version(checked(cfg))
     assert "no Vivado detected" in message
 
 
@@ -509,9 +512,11 @@ def test_the_release_a_boards_row_requires_against_the_toolchains(
     """The release comes from the build's toolchain's probe, the requirement from the
     board's row, on the shell that names the board."""
     monkeypatch.setattr(Toolchain, "probe", release(found))
-    stated = board_vivado(checked(board_build(tmp_path, "AUP-ZU3_8GB")))
+    stated = tool_version(checked(board_build(tmp_path, "AUP-ZU3_8GB")))
     assert stated == (
-        [] if passed else ["AUP-ZU3_8GB requires Vivado 2024.1 or later, found 2023.2"]
+        []
+        if passed
+        else ["AUP-ZU3_8GB on the 'pynq' shell builds with Vivado >=2024.1, found 2023.2"]
     )
 
 
@@ -854,7 +859,7 @@ def test_a_configuration_is_refused_with_every_rejection_at_once(tmp_path: Path)
     stated = {
         **STATED,
         "output_dir": str(tmp_path / "output"),
-        "target": {"period_ns": 5.0, "board": "U250"},
+        "target": {"period_ns": 5.0, "board": "U280"},
         "steps": ["phase_create_accelerator", "step_explore"],
         "strategies": [{"size_fifos": {"margin": -1}}],
         "fifo_margins": 2,
@@ -894,15 +899,29 @@ def test_a_configuration_is_refused_with_every_rejection_at_once(tmp_path: Path)
     cfg.prepared_toolchain = Toolchain(Selection(), {"PATH": str(tmp_path)})
     with pytest.raises(ConfigurationRefused) as refused:
         build_dataflow_cfg(str(tmp_path / "absent.onnx"), cfg)
-    assert [finding.code for finding in refused.value.findings] == ["board-vivado"]
+    assert [finding.code for finding in refused.value.findings] == ["tool-version"]
     manifest = json.loads((tmp_path / "output" / MANIFEST_FILE).read_text())
     assert [each["code"] for each in manifest["configuration_findings"]] == [
-        "board-vivado",
+        "tool-version",
         "setting-unread",
     ]
     assert manifest["plan"] is not None
     log = (tmp_path / "output" / "build_dataflow.log").read_text()
     assert log.count("configuration.strategies: setting-unread: ") == 1
+
+
+def test_a_runtime_the_shell_does_not_offer_refuses_the_configuration(tmp_path: Path) -> None:
+    """The build's runtime resolves with its target, before the first step: one its shell
+    does not offer refuses the configuration, and the manifest states no target."""
+    target = {"period_ns": 5.0, "board": "Ultra96", "shell": "pynq", "runtime": "vrt"}
+    stated = {**STATED, "output_dir": str(tmp_path / "output"), "target": target}
+    cfg = DataflowBuildConfig.from_json(json.dumps(stated))
+    assert cfg.target.runtime == "vrt"
+    owner = "configuration.target.runtime"
+    with refused("runtime-not-offered", error=ConfigurationRefused, owner=owner):
+        build_dataflow_cfg(str(tmp_path / "absent.onnx"), cfg)
+    manifest = json.loads((tmp_path / "output" / MANIFEST_FILE).read_text())
+    assert manifest["identity"]["target"] is None
 
 
 def test_a_build_directory_states_its_configuration(tmp_path: Path) -> None:

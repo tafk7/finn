@@ -114,8 +114,6 @@ OUTPUT_IP_OPTIONS = OUTPUTS.key(
 the body has now."""
 OUTPUT_BITFILE = OUTPUTS.key("bitfile", str, check=_named, expect="a file")
 """The bitfile the shell's integration made."""
-OUTPUT_HWH = OUTPUTS.key("hwh", str, check=_named, expect="a file")
-"""The bitfile's hardware handoff."""
 OUTPUT_BITFILE_MADE_FROM = OUTPUTS.key(
     "bitfile_made_from", str, check=_digest, expect="a design digest (sha256:<64 hex digits>)"
 )
@@ -129,7 +127,8 @@ the shell's build ran)."""
 OUTPUT_BITFILE_OPTIONS = OUTPUTS.key(
     "bitfile_options", JSON, check=_options, expect="the shell's build options by name"
 )
-"""The shell's build options the bitfile was built with (``hw_debug``)."""
+"""The shell's build options the bitfile was built with (``hw_debug``). The files the
+bitfile loads with are beside it (``finn.shells.build``)."""
 
 
 __all__ = [
@@ -138,7 +137,6 @@ __all__ = [
     "OUTPUT_BITFILE_IP_KEY",
     "OUTPUT_BITFILE_MADE_FROM",
     "OUTPUT_BITFILE_OPTIONS",
-    "OUTPUT_HWH",
     "OUTPUT_INTERFACES",
     "OUTPUT_IP",
     "OUTPUT_IP_KEY",

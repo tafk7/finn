@@ -44,6 +44,7 @@ from finn.kernels.artifacts.abi import (
     Bus,
     Clocking,
     Direction,
+    Endpoint,
     Member,
     Signal,
     StandardProtocol,
@@ -58,7 +59,7 @@ from finn.kernels.laws import NATIVE_PROTOCOL, Axis
 from finn.kernels.library import ModuleSpec, library_module
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port import exposed_pins, exposed_side, stream_port
-from finn.kernels.port_model import InPort, OtherPins
+from finn.kernels.port_model import InPort, MemoryPort, OtherPins
 from finn.kernels.sides import Side
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import Resources
@@ -122,6 +123,49 @@ def test_a_kernel_s_other_pins_go_before_its_ports_and_their_hold_after() -> Non
     assert isinstance(module, Leaf) and module.held.inputs == (("mode", 1),)
     names = [pin.name for pin in module.abi.pins]
     assert names == ["ap_clk", "ap_clk2x", "ap_rst_n", "mode", "busy", "s_axis"]
+
+
+def _memory(protocol: StandardProtocol, endpoint: Endpoint) -> Bus:
+    members = ("araddr", "arvalid", "arready", "rdata", "rvalid", "rready")
+    widths = {"araddr": 32, "rdata": 32}
+    return Bus(
+        "m_axi_gmem",
+        protocol,
+        tuple(Member(name, f"m_axi_gmem_{name}", widths.get(name, 1)) for name in members),
+        endpoint,
+    )
+
+
+def test_a_memory_port_goes_after_the_other_pins_and_before_the_ports_and_holds_nothing() -> None:
+    """A memory port its module initiates is presented, for its shell to bind: its pins
+    after the other pins (and the control bus) and before the ports; any other bus
+    declared as one is refused."""
+
+    class Reading(Probe):
+        id = "test.probe.reading"
+        memory = MemoryPort(bus=_memory(StandardProtocol.AXIMM, Endpoint.INITIATOR))
+
+    module = library_module(design_space(Reading(tensor=TENSOR)))
+    names = [pin.name for pin in module.abi.pins]
+    assert names == ["ap_clk", "ap_clk2x", "ap_rst_n", "mode", "busy", "m_axi_gmem", "s_axis"]
+    assert module.held.inputs == (("mode", 1),)
+    for protocol, endpoint in (
+        (StandardProtocol.AXIMM, Endpoint.TARGET),
+        (StandardProtocol.AXILITE, Endpoint.INITIATOR),
+    ):
+
+        class Misread(Probe):
+            id = "test.probe.misread"
+            memory = MemoryPort(bus=_memory(protocol, endpoint))
+
+        netlist = design_space(Misread(tensor=TENSOR)).query(Kernel.netlist)
+        assert isinstance(netlist, Rejected)
+        assert codes(netlist) == {"memory-port-bus"}
+        (finding,) = netlist.findings
+        assert finding.message == (
+            f"m_axi_gmem is a {endpoint.value} of {protocol.value}: a memory port is an AXI4 "
+            "initiator"
+        )
 
 
 def test_a_port_runs_on_its_kernels_interface_protocol() -> None:
@@ -215,6 +259,43 @@ def test_a_control_bus_presented_is_read_with_its_port_and_registers() -> None:
     control = Control(BUS, "first_s_axilite", RegisterMap(((0, 7),)))
     assert point.query(Controlled.bus_control) == Available(control)
     assert library_module(point).held.inputs == (("mode", 1),)
+
+
+ADDRESSED = Bus(
+    "s_axilite",
+    StandardProtocol.AXILITE,
+    (*BUS.signals, Member("awaddr", "s_axilite_awaddr", 12)),
+)
+"""The probe's bus with 12 address bits: a 4 KiB window."""
+
+
+class Addressed(Probe):
+    """The probe with an addressed control bus it presents where ``writable``."""
+
+    id = "test.probe.addressed"
+    writable: bool = Param(default=False)
+    control: str | None = Param(default=None)
+
+    @view
+    def register_map(self) -> RegisterMap:
+        return RegisterMap(((0, 7),))
+
+    config = ControlModel(bus=ADDRESSED, presented=writable)
+
+
+def test_a_presented_control_bus_takes_the_window_its_address_spans() -> None:
+    """A kernel's control windows (``Kernel.control_windows``) are its presented buses',
+    each ``2**awaddr`` bytes, one for each of its ``control_buses``: none while its bus is
+    held. A presented bus with no ``awaddr`` has no window to take
+    (``bus-aperture-unknown``)."""
+    held = design_space(Addressed(tensor=TENSOR))
+    assert (held.control_buses, held.control_windows) == ((), ())
+    point = design_space(Addressed(tensor=TENSOR, writable=True, control="s_axilite"))
+    assert (point.control_buses, point.control_windows) == (("",), (4096,))
+    unaddressed = controlled(writable=True, control="s_axilite")
+    assert unaddressed.control_buses == ("",)
+    answer = unaddressed.query(Controlled.control_windows)
+    assert isinstance(answer, Rejected) and codes(answer) == {"bus-aperture-unknown"}
 
 
 def test_a_control_bus_presented_without_its_port_is_refused() -> None:

@@ -198,36 +198,21 @@ def parse_clock_summary(report_path):
 PL_CLOCKS = ("clk_pl_0", "clk_fpga_0")
 
 
-def delivered_clock(
-    timing_report: str,
-    period_ns: float,
-    cycles: int | None = None,
-    objective_fps: float | None = None,
-) -> dict[str, Any]:
+def delivered_clock(timing_report: str, period_ns: float) -> dict[str, Any]:
     """The clock the routed design delivers (a PL clock in the timing report's clock
-    summary) beside the period asked, and, given the partition's bottleneck ``cycles``
-    a frame, the frames a second at each; ``objective_fps`` is the throughput asked. If
-    the summary lists no PL clock, the period asked and the clocks it lists. These are
-    facts only: the shell's build judges any shortfall
-    (``finn.shells.pynq.runner.delivered_clock_findings``)."""
+    summary) beside the period asked; if the summary lists no PL clock, the period asked
+    and the clocks it lists. The ``vivado-block-design`` linker states the main clock as
+    delivered from it (``finn.shells.pynq.linker.collect``)."""
     clocks = parse_clock_summary(timing_report)
     name = next((clock for clock in PL_CLOCKS if clock in clocks), None)
     if name is None:
         return {"target_period_ns": period_ns, "clocks": sorted(clocks)}
-    delivered, mhz = clocks[name]["period_ns"], clocks[name]["mhz"]
-    report: dict[str, Any] = {
+    return {
         "clock": name,
         "target_period_ns": period_ns,
-        "delivered_period_ns": delivered,
-        "delivered_mhz": mhz,
+        "delivered_period_ns": clocks[name]["period_ns"],
+        "delivered_mhz": clocks[name]["mhz"],
     }
-    if cycles is not None:
-        report["bottleneck_cycles"] = cycles
-        report["fps_at_target"] = round(1e9 / (period_ns * cycles), 1)
-        report["fps_at_delivered"] = round(mhz * 1e6 / cycles, 1)
-    if objective_fps is not None:
-        report["objective_fps"] = objective_fps
-    return report
 
 
 #: A hierarchical utilization report's column, by the resource it counts; a DSP column

@@ -27,8 +27,8 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 # Recorded evidence is reference material, not maintained code. The pynq shell's data
-# (driver files, the IODMA IP's descriptor) are shipped as they are: no hook rewrites them.
-exclude: '^(docs/conf.py|docs/(kernel|space)-[^/]+/|src/finn/shells/pynq/data/)'
+# (its driver files) are shipped as they are: no hook rewrites them.
+exclude: '^(docs/conf.py|docs/(kernel|space)-[^/]+/)'
 
 default_language_version:
     python: python3.12

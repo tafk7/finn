@@ -490,18 +490,16 @@ def test_an_edge_port_s_name_meets_a_member_by_its_member_name(cache: None) -> N
     ]
 
 
-def test_a_channel_named_as_the_shell_member_is_refused_in_a_shell_or_not(cache: None) -> None:
-    """``shell`` is the name of a partition's shell member (``finn.kernels.budgets``): no
-    kernel (above) or channel takes it, whether the partition is in a shell or not."""
+def test_a_channel_named_as_the_shell_member_is_refused(cache: None) -> None:
+    """``shell`` is the name of a partition's shell member (``finn.kernels.shell_rules``): no
+    kernel (above) or channel of a core takes it, whatever shell it is placed in."""
     named = {
         ("shell" if name == "MatMul_0_out0" else name): each for name, each in channels().items()
     }
-    row = {"shell": "ip", "control_budget": None, "memory_ports": None, "clk2x": True}
-    for shell in (None, row):
-        found = _refused(DataflowCoreDeclaration(kernels(), named, shell, name=TEST_CORE))
-        assert found == [
-            ("name-reserved", "shell", "shell: shell is the name of a partition's shell member")
-        ]
+    found = _refused(DataflowCoreDeclaration(kernels(), named, name=TEST_CORE))
+    assert found == [
+        ("name-reserved", "shell", "shell: shell is the name of a partition's shell member")
+    ]
 
 
 def test_a_graph_name_s_member_name_is_its_node_and_its_keys_map_both_ways(cache: None) -> None:
@@ -1043,7 +1041,7 @@ def test_the_declaration_s_order_is_a_fact_of_the_class_and_its_name_is_none(
         chain.configure_chain(choose(by_hand(chain.members(), name=name), fixed), **chain.ACTIVATE)
         for name in ("DataflowCore_0", "DataflowCore_1")
     ]
-    module, other = (each.answer(DataflowCoreKernel.module) for each in configured)
+    module, other = (each.core_answer(DataflowCoreKernel.module) for each in configured)
     assert isinstance(module, Available) and other == module
     assert live_name(other.value) == live_name(module.value)
     order = (
@@ -1083,7 +1081,9 @@ def test_the_class_answers_its_netlist_edge_cycles_and_resources(cache: None) ->
     assert placed == [name for name in order if name in placed]
     assert network.netlist() == Available((wired.value, edge.value))
     module = point.query(DataflowCoreKernel.module)
-    assert isinstance(module, Available) and network.answer(DataflowCoreKernel.module) == module
+    assert (
+        isinstance(module, Available) and network.core_answer(DataflowCoreKernel.module) == module
+    )
     made = module.value
     assert (made.implementation_id, made.implementation_version) == ("finn.dataflow_core", "1")
     # Its stem is its kind, whatever the core is called (its name, "partition" here).

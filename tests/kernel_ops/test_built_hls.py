@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 import finn.transformation.kernels.hls as hls
+from finn import resources
 from finn.kernels.artifacts.abi import Clock, Direction, Free, Reset, Signal
 from finn.kernels.artifacts.contributions import CopiedSource, HlsSource
 from finn.kernels.artifacts.module import Abi, Composed, Fragment, Leaf
@@ -93,3 +94,33 @@ def test_hls_runs_go_at_most_as_many_at_once_as_the_selection_states(
     assert set(built) == {request.function for request in requests}
     assert sorted(flight.names) == sorted(built)
     assert flight.peak == jobs
+
+
+def test_hls_headers_come_from_the_resource_each_root_names_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without ``roots``, each root the requests name is the resource of that name, as FINN
+    resolves it (FinnLib, finn-hlslib), and no other is resolved."""
+    for name in ("fixture", "other"):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / f"{name}.hpp").write_text("// a header\n")
+    resolved: list[str] = []
+
+    def path(name: str, fetch: bool = True) -> str:
+        resolved.append(name)
+        return str(tmp_path / name)
+
+    monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "build"))
+    monkeypatch.setattr(resources, "path", path)
+    monkeypatch.setattr(hls, "synthesize", Flight().synthesize)
+    monkeypatch.setattr(hls, "check_abi", lambda pins, files, top: ())
+    request = HlsSource.request(
+        "core",
+        lambda name: f'#include "fixture.hpp"\n#include "other.hpp"\nvoid {name}() {{}}\n',
+        (CopiedSource("fixture", "fixture.hpp"), CopiedSource("other", "other.hpp")),
+        5.0,
+    )
+    toolchain = Toolchain(Selection(vivado_jobs=1), {"PATH": os.defpath})
+    built = hls.built_hls(_module([request]), "xc7z020clg400-1", toolchain=toolchain)
+    assert list(built) == [request.function]
+    assert resolved == ["fixture", "other"]

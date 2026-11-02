@@ -81,8 +81,8 @@ def test_a_memory_case_the_device_cannot_build_is_refused_by_name() -> None:
 def test_a_doubled_clock_is_the_shells_not_the_platforms() -> None:
     """The platform carries no doubled clock (the shell row owns it, and the shell
     supplies it): a KernelOp offers a pumped memory on any target, and its partition in
-    the Zynq shell, which supplies none, refuses it by the shell's budget
-    (``clock-unavailable``, the weight channel's clock rule; ``test_shell_budgets``)."""
+    the Zynq shell, which supplies none, refuses it by the shell's rule
+    (``clock-unavailable``, the weight channel's clock rule; ``test_shell_rules``)."""
     assert "clk2x" not in {item.name for item in fields(Platform)}
     model = targeted(matmul_model(), TARGET)
     configured(model, {"first": MATMUL})
@@ -90,28 +90,21 @@ def test_a_doubled_clock_is_the_shells_not_the_platforms() -> None:
     assert folded(model).member("w").source.pumped_memory is True
     zynq = targeted(matmul_model(), ZYNQ)
     configured(zynq, {"first": MATMUL})
-    with refused("clock-unavailable", owner="w-clock"):
+    with refused("clock-unavailable", owner="DataflowCore_0-w-clock"):
         configured(zynq, {"w": {"source.pumped_memory": True}})
     assert folded(zynq).member("w").source.pumped_memory is False
 
 
-def test_runtime_writable_thresholds_need_a_control_bus() -> None:
-    # A KernelOp places no control bus to present its AXI-Lite interface through: of the
-    # choice's values only False is possible, True refused by ``threshold-control``, which
-    # refuses a change setting it.
+def test_runtime_writable_thresholds_are_presented_at_their_node_s_port() -> None:
+    # A KernelOp names its kernel's control port (``control_port``): runtime-writable
+    # thresholds are possible, and set, the core presents their bus at the node's port.
     model = thresholding_model()
     (viable,) = inspection.viable(op(model).point(), [ThresholdingKernel.use_axilite])
-    assert viable.cases == (False,)
-    ((value, broken),) = [
-        (item.value, item.broken)
-        for item in viable.values or ()
-        if isinstance(item, inspection.Refused)
-    ]
-    assert value is True and [rule.result.findings[0].code for rule in broken] == [
-        "threshold-control"
-    ]
-    with refused("threshold-control", owner="control_for_writes"):
-        configured(model, {"activate": {"use_axilite": True}})
+    assert viable.cases == (False, True)
+    configured(model, {"activate": {"use_axilite": True}})
+    point = core_in_shell(model)
+    assert point.core.control_buses == ("activate",)
+    assert point.member("activate").control == "activate_s_axilite"
 
 
 def test_a_partitions_weight_stream_reads_the_platform() -> None:

@@ -6,7 +6,8 @@ its design.
 
 A kernel partition is a model whose nodes are all KernelOps, or the
 ``DataflowCore`` node whose body is one. The cut makes exactly one
-(``partition_body`` opens it). ``design_digest`` identifies a design, so an artifact can
+(``partition_body`` opens it); what reads every core of a parent graph opens them in its
+order (``core_bodies``). ``design_digest`` identifies a design, so an artifact can
 record the design it was made from (``annotations.outputs``).
 
 It imports nothing of the kernels, so the builder reads a partition without loading
@@ -126,6 +127,17 @@ def kernel_partition_nodes(model: ModelWrapper) -> list[NodeProto]:
     return [node for node in model.graph.node if kernel_partition_body(node) is not None]
 
 
+def core_bodies(model: ModelWrapper) -> list[tuple[NodeProto, ModelWrapper, str]]:
+    """Every partition node of KernelOps of the parent graph, in its order, each with its
+    body opened through the node and the body's file. Refuses a graph with none
+    (``partition-count``)."""
+    found = kernel_partition_nodes(model)
+    if not found:
+        message = "the model holds no partition of KernelOps (step_create_dataflow_partition)"
+        raise Refusal((Finding(FindingKind.REJECTION, "partition-count", "core_bodies", message),))
+    return [(node, ModelWrapper(body_file(node)), body_file(node)) for node in found]
+
+
 def partition_body(model: ModelWrapper) -> tuple[NodeProto, ModelWrapper, str]:
     """The parent graph's one partition node of KernelOps, its body opened through the
     node, and the body's file. Refuses a graph with none or more than one
@@ -150,6 +162,7 @@ __all__ = [
     "PARTITION_DOMAIN",
     "PARTITION_OP",
     "body_file",
+    "core_bodies",
     "design_digest",
     "is_kernel_partition",
     "is_partition",

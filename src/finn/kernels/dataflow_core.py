@@ -69,7 +69,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import replace
 from functools import cached_property
 from types import MappingProxyType
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Generic, TypeVar
 
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.search import Key, dotted
@@ -110,6 +110,14 @@ FROZEN = "frozen"
 (``<channel>-frozen``, the module docstring)."""
 
 
+def placed_name(shell: str | None, member: str) -> str:
+    """The name at FINN's surface of ``member``, a member a shell places beside its cores (a
+    mover, a connection): below the shell member's (``shell.in0``), never a graph name."""
+    if shell is None:
+        raise ValueError(f"{member}: a member placed beside a core is a shell's")
+    return f"{shell}.{member}"
+
+
 def root_name(member: str, fact: str) -> str:
     """The name of the root member holding member ``member``'s ``fact``: a Param, or a
     channel's side (``mm0-x_tensor``, ``h0-producer``)."""
@@ -123,20 +131,28 @@ def root_name(member: str, fact: str) -> str:
 class Names:
     """A core's names, a fact of its class (``DataflowCoreKernel.names``): each graph name's
     member name (``members``, kernels then channels, ranked), its channels' graph names
-    (``channels``), each root member's owner and fact (``roots``: a Param's, a side's), by
-    its name, and, in a shell, its shell member's (``shell``: its own owner; None outside
-    one).
+    (``channels``), and each root member's owner and fact (``roots``: a Param's, a side's),
+    by its name. A shell's (``finn.kernels.shell.ShellKernel.names``) are its cores', each
+    graph name below its core's member (``in_core``; ``cores``, the cores' members in order;
+    none for a core's own), with its shell member's (``shell``: its own owner) and the members
+    it places beside its cores (``placed``: its movers, its connections), each named at FINN's
+    surface below the shell member (``shell.in0``), never as a graph name: a graph's names
+    and the shell's are two namespaces.
 
-    Inside the class a key is a path (``mm0.compute.packed.pe``); at FINN's surface it is the
-    pair (owner, key), the owner a graph name: ``path`` and ``pair`` map one to the other.
-    A member's answers are read as its own space gives them (``local``, ``relative``): its
-    keys and the owners of its findings relative to it, a finding of another member's
-    naming that member (``tensor`` for a channel, ``node`` for a kernel)."""
+    Inside the class a key is a path (``mm0.compute.packed.pe``, in a shell
+    ``DataflowCore_0.mm0.compute.packed.pe``); at FINN's surface it is the pair (owner, key),
+    the owner a graph name: ``path`` and ``pair`` map one to the other. A member's answers
+    are read as its own space gives them (``local``, ``relative``): its keys and the owners
+    of its findings relative to it, a finding of another member's naming that member
+    (``tensor`` for a channel, ``node`` for a kernel)."""
 
     members: Mapping[str, str]
     roots: Mapping[str, Key]
     shell: str | None
     channels: frozenset[str]
+    in_core: Mapping[str, str]
+    cores: tuple[str, ...]
+    placed: Mapping[str, str]
 
     def __init__(
         self,
@@ -145,20 +161,34 @@ class Names:
         shell: str | None = None,
         *,
         channels: Iterable[str] = (),
+        in_core: Mapping[str, str] | None = None,
+        placed: Iterable[str] = (),
     ) -> None:
         self.members = MappingProxyType(dict(members))
         self.roots = MappingProxyType(dict(roots))
         self.shell = shell
         self.channels = frozenset(channels)
+        self.in_core = MappingProxyType(dict(in_core or {}))
+        self.cores = tuple(dict.fromkeys(self.in_core.values()))
+        self.placed = MappingProxyType({placed_name(shell, member): member for member in placed})
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Names):
             return NotImplemented
-        return (dict(self.members), dict(self.roots), self.shell, self.channels) == (
+        return (
+            dict(self.members),
+            dict(self.roots),
+            self.shell,
+            self.channels,
+            dict(self.in_core),
+            dict(self.placed),
+        ) == (
             dict(other.members),
             dict(other.roots),
             other.shell,
             other.channels,
+            dict(other.in_core),
+            dict(other.placed),
         )
 
     __hash__ = None  # type: ignore[assignment]
@@ -166,16 +196,43 @@ class Names:
     def __repr__(self) -> str:
         return f"Names({dict(self.members)!r})"
 
+    @property
+    def core(self) -> str | None:
+        """The member of its one core, in a shell; None for a core's own. A shell of several
+        cores has none (a ``ValueError``): what reads one core reads one of them by name."""
+        if len(self.cores) > 1:
+            raise ValueError(f"a shell of the cores {list(self.cores)} has no one core")
+        return self.cores[0] if self.cores else None
+
     @cached_property
     def owners(self) -> dict[str, str]:
-        """Each member name's graph name, the shell member's its own name."""
-        found = {member: owner for owner, member in self.members.items()}
+        """Each member's path's owner: a graph name (a core's member's below its core, in a
+        shell), the shell member's its own name, a placed member's its surface name."""
+        found = {self._below_core(owner): owner for owner in self.members}
         if self.shell is not None:
             found[self.shell] = self.shell
+        found.update({member: name for name, member in self.placed.items()})
         return found
 
+    def _below_core(self, owner: str) -> str:
+        member = self.members[owner]
+        core = self.in_core.get(owner)
+        return member if core is None else f"{core}.{member}"
+
     def _member(self, owner: str) -> str:
-        return owner if owner == self.shell else self.members[owner]
+        if owner in self.members:
+            return self._below_core(owner)
+        if owner == self.shell:
+            return owner
+        return self.placed[owner]
+
+    def _split(self, path: str) -> tuple[str, str]:
+        """``path`` as the path of the member it is below and its key there."""
+        member, _, below = path.partition(".")
+        if member in self.cores:
+            inner, _, below = below.partition(".")
+            member = f"{member}.{inner}"
+        return member, below
 
     def path(self, key: Key) -> str:
         """The path of ``key`` (owner, key) inside the class (``mm0.compute.packed.pe``); a
@@ -186,17 +243,23 @@ class Names:
 
     def pair(self, path: str) -> Key:
         """The pair (owner, key) of ``path``, a path below a member."""
-        member, _, below = path.partition(".")
+        member, below = self._split(path)
         return self.owners[member], below
 
     def root(self, owner: str, fact: str) -> str:
-        """The root member holding ``owner``'s ``fact``."""
+        """The root member holding ``owner``'s ``fact``: a core's own (``mm0-x_tensor``), in
+        a shell lifted below its core's member (``DataflowCore_0-mm0-x_tensor``); the shell
+        member's and a placed member's its own (``shell-doubled``, ``in0-offer``)."""
+        if owner in self.members:
+            found = root_name(self.members[owner], fact)
+            core = self.in_core.get(owner)
+            return found if core is None else root_name(core, found)
         return root_name(self._member(owner), fact)
 
     def below(self, path: str) -> Key | None:
         """The member a path is below, by graph name, and its key there; None for a root
         Param's or a side's."""
-        member, _, below = path.partition(".")
+        member, below = self._split(path)
         owner = self.owners.get(member)
         return None if owner is None else (owner, below)
 
@@ -484,23 +547,36 @@ def _not_a_decision(key: Key) -> tuple[Finding, ...]:
 # A bind is a record FINN reads, never a value a Space holds: a plain class.
 
 
-class Bound:
-    """A core's stored choices bound on its design space (``bound``; the module docstring):
-    the design space (``point``), and what the bind dropped as stale, by key (``dropped``:
-    each with its findings, relative to its member) and by dotted key (``stale``: each a
-    value outside its domain, keeping its code, its owner and its details, which add the
-    value stored, ``value``, and the values the choice could take, ``candidates``; with what
-    its caller found stray, a graph's choices on a tensor that is no channel of it)."""
+K = TypeVar("K", bound=Kernel)
+
+
+def names_of(point: Kernel) -> Names:
+    """The names of ``point``'s class: a core's (``DataflowCoreKernel.names``), or a shell's
+    (``finn.kernels.shell.ShellKernel.names``)."""
+    found = getattr(type(point), "names", None)
+    if not isinstance(found, Names):
+        raise TypeError(f"{type(point).__qualname__} has no names: no core's or shell's class")
+    return found
+
+
+class Bound(Generic[K]):
+    """A core's stored choices bound on its design space, or on its shell's (``bound``; the
+    module docstring): the design space (``point``), and what the bind dropped as stale, by
+    key (``dropped``: each with its findings, relative to its member) and by dotted key
+    (``stale``: each a value outside its domain, keeping its code, its owner and its
+    details, which add the value stored, ``value``, and the values the choice could take,
+    ``candidates``; with what its caller found stray, a graph's choices on a tensor that is
+    no channel of it)."""
 
     __slots__ = ("dropped", "point", "stale")
 
-    point: DataflowCoreKernel
+    point: K
     dropped: Mapping[Key, tuple[Finding, ...]]
     stale: Mapping[str, tuple[Finding, ...]]
 
     def __init__(
         self,
-        point: DataflowCoreKernel,
+        point: K,
         dropped: Mapping[Key, tuple[Finding, ...]],
         stale: Mapping[str, tuple[Finding, ...]],
     ) -> None:
@@ -513,18 +589,19 @@ class Bound:
 
 
 def bound(
-    core: DataflowCoreKernel,
+    core: K,
     stored: Mapping[Key, object] | None = None,
     *,
     stray: Mapping[str, tuple[Finding, ...]] | None = None,
-) -> Bound:
+) -> Bound[K]:
     """``stored`` choices, by key, bound on ``core``, a design space of a core's class
-    (``finn.kernels.composer.compose``'s, nothing chosen): each key mapped to its path
+    (``finn.kernels.composer.compose``'s, nothing chosen) or of its shell's
+    (``finn.kernels.shell.shell``'s): each key mapped to its path
     (``Names.path``) and bound with the engine's ``bind`` (the module docstring: a value
     outside its domain, or a key that is no choice or no member's, dropped as stale; a rule
     they break binds, read refused); ``stray``, what its caller found stray, added to
     ``Bound.stale``."""
-    names = type(core).names
+    names = names_of(core)
     decisions = {item.key: item.reference for item in inspection.decisions(inspection.model(core))}
     unknown: dict[Key, tuple[Finding, ...]] = {}
     values: dict[object, object] = {}
@@ -557,7 +634,7 @@ def bound(
 
 
 def _described(
-    point: DataflowCoreKernel,
+    point: Kernel,
     dropped: Mapping[Key, tuple[Finding, ...]],
     stored: Mapping[Key, object],
 ) -> dict[str, tuple[Finding, ...]]:
@@ -567,7 +644,7 @@ def _described(
     is open), which its message names."""
     if not dropped:
         return {}
-    names = type(point).names
+    names = names_of(point)
     decisions = {item.key: item.reference for item in inspection.decisions(inspection.model(point))}
     listed = [key for key in dropped if key[0] in names.members and names.path(key) in decisions]
     found = (
@@ -602,6 +679,8 @@ __all__ = [
     "Names",
     "bound",
     "core_module",
+    "names_of",
+    "placed_name",
     "root_name",
     "top_markers",
 ]

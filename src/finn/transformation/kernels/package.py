@@ -41,10 +41,11 @@ the partition: its module, part, clock and name, and the toolchain Vivado runs i
 An HLS leaf's request is synthesized for the partition's part before the module is
 emitted (``finn.transformation.kernels.hls.built_hls``, cached).
 
-The partition's boundary, its free sides' and movers' facts, is not stored on the model: it is read
-from the configured network's boundary channels, each the stream at its free side and
-the mover the shell places there (``boundary_facts``), wherever it is needed (the
-interface description, the testbench).
+The partition's boundary, its free sides' facts, is not stored on the model: it is read
+from the configured network's boundary channels, each the stream at its free side
+(``boundary_facts``), wherever it is needed (the interface description, the testbench). The
+mover a shell places on a side is no fact of the IP: the shell's integration describes it
+(``finn.shells.integration``).
 
 The part and the clock one_pass are the model's build target (``read_target(model)``,
 ``finn.platform``), which a partition body carries from the graph it was cut from.
@@ -78,6 +79,13 @@ bus's register map), for a user who integrates the IP in their own design.
 instead of the sources, as CreateStitchedIP does for Vitis and SLASH. Its
 hierarchical utilization report is read per member of the network by
 ``ooc_member_resources``.
+
+``PackageUnit`` packages a core unit: a core presenting AXI-Lite buses, in a shell that
+places movers, is reached by one control port, its buses behind its grouper
+(``finn.kernels.artifacts.unit``). The unit's IP holds the core's IP, as its packaging made
+it, as a subcore, beside FinnLib's decoder and the unit's module (``staged_unit``); it is
+checked by slang beside the core's module, keyed and stored as the partition's IP is, and
+not stated on the body: a shell's runner builds it, as it builds a mover's.
 
 ``ElaboratePartition`` is a check, not a build step: it emits the same module and
 compiles and elaborates it in XSim (``xvlog``, ``xelab``; ``finn.toolchain.xsim``,
@@ -115,15 +123,26 @@ from finn.core.graph.annotations.outputs import (
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import shape
-from finn.custom_op.kernels.shell import Configured, configured_network, refuse_unverified
+from finn.custom_op.kernels.shell import (
+    Configured,
+    configured_network,
+    core_grouping,
+    refuse_unverified,
+)
 from finn.dataflow.traversal import Traversal, one_pass, passes
 from finn.kernels.artifacts.build import EmittedModule, emit_module
 from finn.kernels.artifacts.interface import INTERFACE_FILE, describe_interface
 from finn.kernels.artifacts.ipxact import interface_names, package_tcl, vlnv
-from finn.kernels.artifacts.module import Abi, declared_registers, instance_name
+from finn.kernels.artifacts.module import (
+    Abi,
+    BuildError,
+    Composed,
+    declared_registers,
+    instance_name,
+)
 from finn.kernels.artifacts.rtl import Declined, check_abi
 from finn.kernels.artifacts.sources import include_directories, is_header
-from finn.kernels.movers import MoverContract
+from finn.kernels.artifacts.unit import CoreUnit, emit_unit
 from finn.platform.capabilities import Resources
 from finn.resources import finnlib_root, scratch
 from finn.toolchain import vivado, xsim
@@ -136,21 +155,6 @@ _LOG = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
-
-
-def mover_facts(contract: MoverContract) -> dict[str, Any]:
-    """A mover's facts as a boundary port states them: its kind and direction, its memory
-    side and rate; the stream side is its port's."""
-    return {
-        "kind": contract.kind,
-        "direction": contract.direction,
-        "memory_width": contract.memory_width,
-        "words": contract.words,
-        "converter": contract.converter,
-        "call_cycles": contract.call_cycles,
-        "frames_per_call": contract.frames_per_call,
-        "control_buses": contract.control_buses,
-    }
 
 
 def free_side(point: Configured, tensor: str) -> Any:
@@ -188,15 +192,13 @@ def boundary_facts(
     """Each boundary port's facts, inputs then outputs, in port order: the port, the ONNX
     tensor and its shape; the stream at the channel's free side, the partition's own side
     (the side no kernel of the partition owns): the channel's element and its range,
-    lanes, beats and TDATA width; and the mover the shell places there (``mover_facts``), or
-    ``None``. A side the outside states presents the statement there: its lanes are the
-    stated ones where the build states lanes, and its TDATA width their word, padded to
-    bytes. What states the side, and the pace it states, are not facts of the IP's ports
-    and are not reported: a build's pace stays as its configuration gives it, a mover's is
-    its contract (``mover_facts``)."""
+    lanes, beats and TDATA width. A side the outside states presents the statement there:
+    its lanes are the stated ones where the build states lanes, and its TDATA width their
+    word, padded to bytes. What states the side, and the pace it states, are not facts of
+    the IP's ports and are not reported: a build's pace stays as its configuration gives
+    it, a mover's is its own (the shell's integration's, ``finn.shells.integration``)."""
     found: tuple[list[dict[str, Any]], list[dict[str, Any]]] = ([], [])
     for tensor, port in boundary:
-        channel = point.channel(tensor)
         side = free_side(point, tensor)
         element = side.element
         facts = {
@@ -208,7 +210,6 @@ def boundary_facts(
             "lanes": int(side.form.lanes),
             "beats": int(side.form.beats),
             "tdata": int(side.transport.data_width),
-            "mover": mover_facts(channel.mover_contract) if channel.offered else None,
         }
         found[0 if port.startswith("s_axis_") else 1].append(facts)
     return found
@@ -319,11 +320,14 @@ def ooc_member_resources(model: ModelWrapper, name: str, project: Path) -> dict[
     }
 
 
-def check_elaborates(emitted: EmittedModule, abi: Abi, label: str) -> None:
+def check_elaborates(
+    emitted: EmittedModule, abi: Abi, label: str, beside: Sequence[EmittedModule] = ()
+) -> None:
     """Refuse an emitted top that slang cannot elaborate under the ABI's parameter
-    binding, or whose ports contradict the ABI's pins, with slang's errors; print what
-    a passing check checked, and its time."""
-    files = [emitted.directory / path for path in emitted.sources]
+    binding, with the modules ``beside`` it (the core a unit holds), or whose ports
+    contradict the ABI's pins, with slang's errors; print what a passing check checked, and
+    its time."""
+    files = [each.directory / path for each in (emitted, *beside) for path in each.sources]
     started = time.perf_counter()
     found = check_abi(abi.pins, files, emitted.entry_point, abi.parameters)
     seconds = time.perf_counter() - started
@@ -381,6 +385,93 @@ def staged_project(
                 clock_ns=built.platform.period_ns,
                 display_name=name,
                 run_synth=run_synth,
+            )
+        )
+        yield project, emitted
+
+
+#: Where a core unit's project holds its core's IP (``ip``) and the sources it names
+#: (``src``), as the core's packaging project holds them: the unit's subcore.
+UNIT_CORE = "core"
+
+
+def unit_grouping(
+    model: ModelWrapper, point: Configured, name: str
+) -> tuple[str, tuple[int, ...], int] | None:
+    """What the core unit of the partition model ``model``'s configured network ``point``,
+    its node ``name``, holds: its core's IP, as its body states it (``finn.outputs``
+    ``vlnv``, whole), and where its grouper places its buses, its map and the unit's window
+    (``core_grouping``); None where its core presents no bus (its unit is the core). A core
+    whose IP the body does not state is refused (``unit-core-unpackaged``)."""
+    grouping = core_grouping(point.network)
+    if grouping is None:
+        return None
+    stated = model.get(OUTPUT_VLNV)
+    if stated is None or model.get(OUTPUT_IP) is None:
+        raise KernelOpError.refused(
+            "unit-core-unpackaged",
+            "PackageUnit",
+            f"{name}: its body states no packaged IP; package the partition first",
+            node=name,
+        )
+    return (stated, *grouping)
+
+
+@contextmanager
+def staged_unit(
+    subcore: str,
+    grouping: tuple[tuple[int, ...], int],
+    core: Composed,
+    core_project: Path,
+    *,
+    name: str,
+    part: str,
+    clock_ns: float,
+    toolchain: Toolchain,
+) -> Iterator[tuple[Path, EmittedModule]]:
+    """The project Vivado is given to package the core unit of the module ``core``, its
+    node ``name``, packaged as the IP ``subcore`` (its VLNV) from the project
+    ``core_project``, its buses at ``grouping`` (the grouper's map and window), for
+    ``part`` at ``clock_ns``, as an IP named as its module, in a new directory of the build
+    directory, removed on exit, and the unit's module as emitted there. The core's module
+    is emitted beside it, which names the module the unit instantiates; the unit
+    (``CoreUnit``) is its files (``src/``, ``emit_unit``), checked by slang beside the
+    core's (``check_elaborates``); the core's IP and the sources it names, from its
+    packaging project (``UNIT_CORE``); and ``package.tcl``, the core's IP held as a subcore
+    by the VLNV it was packaged as. A unit that cannot be made is refused
+    (``unit-unmade``)."""
+    root: Path = scratch()  # type: ignore[no-untyped-call]
+    root.mkdir(parents=True, exist_ok=True)
+    with (
+        tempfile.TemporaryDirectory(dir=root, prefix="package_unit_") as staging,
+        tempfile.TemporaryDirectory(dir=root, prefix="unit_core_") as held,
+    ):
+        project = Path(staging)
+        beside = emit_module(
+            core,
+            Path(held),
+            roots=source_roots(),
+            built=built_hls(core, part, toolchain=toolchain),
+        )
+        try:
+            unit = CoreUnit(beside.entry_point, subcore, core.abi, *grouping)
+            emitted = emit_unit(unit, project / "src", roots=source_roots())
+        except BuildError as error:
+            raise KernelOpError.refused(
+                "unit-unmade", "PackageUnit", f"{name}: {error}", node=name
+            ) from error
+        check_elaborates(emitted, unit.abi, name, (beside,))
+        for each in ("ip", "src"):
+            place(core_project / each, project / UNIT_CORE / each)
+        (project / PACKAGE_SCRIPT).write_text(
+            package_tcl(
+                emitted,
+                unit.abi.pins,
+                part=part,
+                clock_ns=clock_ns,
+                display_name=name,
+                run_synth=False,
+                subcores=((subcore, f"{UNIT_CORE}/ip"),),
             )
         )
         yield project, emitted
@@ -454,6 +545,75 @@ class PackagePartition(Transformation):
         return model, False
 
 
+class PackageUnit(Transformation):
+    """Package the core unit of a partition model of KernelOps, its node ``name``, whose
+    core presents control buses: the core and its grouper behind one control port
+    (``finn.kernels.artifacts.unit``), its core the IP the body states, held as a subcore
+    (``staged_unit``), packaged in the packaged-IP store. The model is unchanged: the
+    unit's IP is a function of the core's and its grouper's map, which a shell's runner
+    builds where it places the core, as it builds a mover's. A body whose design changed
+    since its check (``refuse_unverified``), a core presenting no bus (``unit-unneeded``:
+    its unit is the core) and a core not packaged are refused.
+
+    ``directory`` is the unit's project, whose ``ip`` the IP is and ``core/ip`` its core's, a
+    new build directory by default. Once applied, ``packaged`` is the store's entry, built
+    or reused, ``vlnv`` the unit's and ``repositories`` the IP repositories a tool adds to
+    find the unit and its core.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        *,
+        directory: Path | None = None,
+        toolchain: Toolchain | None = None,
+    ) -> None:
+        super().__init__()
+        self.name = name
+        self.directory = directory
+        self.toolchain = host_toolchain() if toolchain is None else toolchain
+        self.packaged: PackagedIp | None = None
+        self.vlnv: str | None = None
+        self.repositories: tuple[str, ...] = ()
+
+    def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
+        refuse_unverified(model, self.name)
+        point = configured_network(model, self.name)
+        held = unit_grouping(model, point, self.name)
+        if held is None:
+            raise KernelOpError.refused(
+                "unit-unneeded",
+                "PackageUnit",
+                f"{self.name}: its core presents no control bus: its unit is the core",
+                node=self.name,
+            )
+        project = Path(
+            self.directory or make_build_dir(prefix="package_unit_")  # type: ignore[no-untyped-call]
+        ).resolve()
+        toolchain = self.toolchain
+        built, packaged_ip = read_target(model), model.get(OUTPUT_IP)
+        assert packaged_ip is not None  # ``unit_grouping`` read the body's IP
+        subcore, offsets, window = held
+        staging = staged_unit(
+            subcore,
+            (offsets, window),
+            point.module,
+            Path(packaged_ip).parent,
+            name=self.name,
+            part=built.part,
+            clock_ns=built.platform.period_ns,
+            toolchain=toolchain,
+        )
+        with staging as (staged, emitted):
+            top = emitted.entry_point
+            stored = packaged(staged, name=top, run_synth=False, toolchain=toolchain)
+        place(stored.directory, project)
+        self.packaged = stored
+        self.vlnv = vlnv(top)
+        self.repositories = (str(project / "ip"), str(project / UNIT_CORE / "ip"))
+        return model, False
+
+
 class ElaboratePartition(Transformation):
     """Compile and elaborate the emitted RTL of a partition model, its node ``name``, in XSim;
     the model is unchanged. See the module docstring for
@@ -506,13 +666,17 @@ class ElaboratePartition(Transformation):
 
 
 __all__ = [
+    "UNIT_CORE",
     "ElaboratePartition",
     "PackagePartition",
+    "PackageUnit",
     "boundary_facts",
+    "unit_grouping",
     "ip_key",
     "ooc_member_resources",
     "partition_utilization_report",
     "source_roots",
     "resources_of",
     "staged_project",
+    "staged_unit",
 ]

@@ -2,29 +2,41 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """The one resolution of a build target: a part or a board, a clock period and a shell
-to the ``finn.platform.target.Target`` its kernels are built for."""
+to the ``finn.platform.target.Target`` its kernels are built for; the runtime the build
+runs on its board, of those its shell offers (``resolve_runtime``), which is the build's
+and not the target's: its kernels are the same under any; and the declarations a build
+stands on, each with where it is declared (``origins``)."""
 
 from __future__ import annotations
 
 from dataclasses import fields
 
-from finn.platform.boards import BOARDS
 from finn.platform.capabilities import Platform
-from finn.platform.catalog import part as catalog_part
+from finn.platform.catalog import catalog_for
+from finn.platform.declarations import Declarations, Origin, declarations
 from finn.platform.refusal import TargetRefused
-from finn.platform.shells import IP, built_shell, shell_row
+from finn.platform.shells import IP, shell_row
 from finn.platform.target import Target
 
 
 def resolve_target(
-    *, period_ns: float, part: str | None = None, board: str | None = None, shell: str = IP
+    *,
+    period_ns: float,
+    part: str | None = None,
+    board: str | None = None,
+    shell: str = IP,
+    declared: Declarations | None = None,
 ) -> Target:
-    """Resolve a build's target. A board gives its part, and a part given with it must
-    match. On the ``ip`` shell the board is dropped from the target, so naming a board
-    or its part gives the same model. The shell's own facts (doubled clock, budgets)
-    stay in its row and are not copied into the target. Refusals are
-    ``TargetRefused``."""
-    built_shell(shell)
+    """Resolve a build's target from ``declared`` (the process's declarations by
+    default), its part in their catalog (``catalog_for``: the parts overlays they hold
+    over the committed catalog). A board gives its part, and a part given with it must
+    match. On a shell of
+    any part (``ip``) the board is dropped from the target, so naming a board or its part
+    gives the same model. The shell's own facts (clocks, limits) stay in its row and are
+    not copied into the target. Refusals are ``TargetRefused``."""
+    parts = catalog_for(declared)
+    declared = declarations() if declared is None else declared
+    found_shell = declared.shell(shell)
     if not period_ns > 0:
         raise TargetRefused(
             "period-invalid",
@@ -32,24 +44,19 @@ def resolve_target(
             f"a clock period is > 0 ns, not {period_ns!r}",
         )
     if board is not None:
-        if board not in BOARDS:
-            raise TargetRefused(
-                "unknown-board",
-                "configuration.target.board",
-                f"{board!r} is not a board (one of {sorted(BOARDS)})",
-            )
-        if part is not None and catalog_part(part).name != BOARDS[board].part:
+        known = declared.board(board)
+        if part is not None and parts.part(part).name != parts.part(known.part).name:
             raise TargetRefused(
                 "board-part-mismatch",
                 "configuration.target.part",
-                f"board {board!r} carries {BOARDS[board].part!r}, not {part!r}",
+                f"board {board!r} carries {known.part!r}, not {part!r}",
             )
-        part = BOARDS[board].part
+        part = known.part
     if part is None:
         raise TargetRefused(
             "target-unstated", "configuration.target", "a target names a part or a board"
         )
-    found = catalog_part(part)
+    found = parts.part(part)
     device = found.device
     if device.fabric is None or device.dsp is None:
         raise TargetRefused(
@@ -58,7 +65,7 @@ def resolve_target(
             f"{found.name} ({device.name}, {device.architecture}/{device.family}): "
             f"{device.unsupported}",
         )
-    shell_row(shell, board)  # refuses a board the shell has no row for
+    shell_row(shell, board, declared)  # refuses a board the shell does not support
     resources = device.resources
     platform = Platform(
         period_ns=float(period_ns),
@@ -69,8 +76,61 @@ def resolve_target(
         resources=resources,
     )
     return Target(
-        part=found.name, platform=platform, shell=shell, board=None if shell == IP else board
+        part=found.name,
+        platform=platform,
+        shell=shell,
+        board=None if found_shell.any_board else board,
     )
+
+
+def resolve_runtime(
+    shell: str, runtime: str | None = None, declared: Declarations | None = None
+) -> str | None:
+    """The runtime a build on ``shell`` runs on its board, from ``declared`` (the
+    process's declarations by default): ``runtime`` if the shell offers it, else the
+    first it offers, ``None`` where it offers none (``ip``). A runtime it does not offer
+    is refused (``runtime-not-offered``), naming those it does."""
+    declared = declarations() if declared is None else declared
+    offered = declared.shell(shell).runtimes
+    if runtime is None:
+        return offered[0] if offered else None
+    if runtime not in offered:
+        offers = (
+            f"offers {', '.join(repr(name) for name in offered)}"
+            if offered
+            else "offers no runtime: leave the runtime unstated"
+        )
+        raise TargetRefused(
+            "runtime-not-offered",
+            "configuration.target.runtime",
+            f"the {shell!r} shell does not offer the runtime {runtime!r}; it {offers}",
+        )
+    return runtime
+
+
+def origins(
+    target: Target, runtime: str | None, declared: Declarations | None = None
+) -> dict[str, Origin]:
+    """Where each declaration a build on ``target`` with ``runtime`` stands on is declared,
+    by ``kind.name``, from ``declared`` (the process's declarations by default): its
+    shell and each shell it is based on, its board, its linker, its runtime and the
+    mover kinds its row offers."""
+    declared = declarations() if declared is None else declared
+    names = []
+    shell: str | None = target.shell
+    while shell is not None:
+        names.append(("shells", shell))
+        shell = declared.shell(shell).based_on
+    if target.board is not None:
+        names.append(("boards", target.board))
+    row = shell_row(target.shell, target.board, declared)
+    if row.linker is not None:
+        names.append(("linkers", row.linker))
+    if runtime is not None:
+        names.append(("runtimes", runtime))
+    movers = dict.fromkeys(mover.name for offer in row.offers for mover in offer.movers)
+    names += [("movers", mover) for mover in movers]
+    return {f"{kind}.{name}": declared.origin(kind, name) for kind, name in names}
 
 
 def refuse_drift(stated: Target, built: Target, build: str) -> None:
@@ -99,4 +159,4 @@ def refuse_drift(stated: Target, built: Target, build: str) -> None:
         )
 
 
-__all__ = ["refuse_drift", "resolve_target"]
+__all__ = ["origins", "refuse_drift", "resolve_runtime", "resolve_target"]

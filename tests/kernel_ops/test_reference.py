@@ -114,7 +114,7 @@ def test_the_platform_rows_are_each_device_family_with_each_shell_built_for_it()
     assert rows["zynquplus", IP].platform == TARGET.platform  # Ultra96's device, ip
     assert rows["zynquplus", PYNQ].board == "Ultra96"
     zynq = rows["zynquplus", PYNQ]
-    assert not shell_row(zynq.shell, zynq.board).clk2x  # the Zynq template supplies none
+    assert not shell_row(zynq.shell, zynq.board).clocks.doubled  # the Zynq template supplies none
     assert rows["zynq", IP].platform.dsp == DspBlock.DSP48E1
     assert {rows[row].platform.dsp for row in VERSAL} == {DspBlock.DSP58}
     assert len(VERSAL) == sum(rule.series == "Versal" for rule in supported)

@@ -32,11 +32,13 @@ when a beat is **consumed** or **issued**, relative to the kernel's other beats 
 ``Follows``); how far input beats are **accepted** ahead of output beats **delivered**, and
 whether one is accepted only with another port's, is its kernel's intake.
 
-And the rate law's one exception, a kernel's initiation interval (``Interval``: L6's 1,
+And the rate law's two exceptions: a kernel's initiation interval (``Interval``: L6's 1,
 ``RATE_INTERVAL``, unless a kernel states its own, with its standing and source), with the
 one conversion from iterations to clock cycles (``in_cycles``) that a kernel's cycles a
 frame and FIFO sizing both read, and the pace in cycles of a port that owns its pacing
-(``TimedPace``).
+(``TimedPace``); and the rate a frame of a kernel with a module and no schedule that
+advances otherwise than a beat a side (``StatedRate``: a memory mover, whose memory words
+and calls take cycles its stream does not show), stated with its standing and source.
 """
 
 from __future__ import annotations
@@ -108,7 +110,9 @@ RATE = Law(
     "count, at its interval, by one conversion",
     "a kernel whose iterations take more than one cycle, or whose one rests on what its RTL "
     "does not show (an HLS kernel's requested pipeline), states its initiation interval, with "
-    "its standing and source",
+    "its standing and source; a kernel with a module and no schedule that advances otherwise "
+    "than a beat a side (a memory mover) states its rate a frame, its port's beat times and "
+    "its span, with its standing and source",
 )
 RESET_LAW = Law(
     "L7",
@@ -458,6 +462,41 @@ def in_cycles(iterations: int, interval: Interval) -> int:
 
 
 @dataclass(frozen=True)
+class StatedRate:
+    """The rate a frame of a kernel with a module and no schedule that advances otherwise than
+    a beat a side, which L6 cannot give (a memory mover: its memory side's words and each
+    call's constant take cycles its stream does not show): the cycles a frame ``span``s and
+    each beat of its ``port`` from the frame's first (``times``, in order, each within the
+    span), with its ``standing`` and its ``source``. The base reads its span as the kernel's
+    cycles a frame (``finn.kernels.base.Kernel.stated_rate``), and FIFO sizing its times and
+    span as the port's pace in cycles, as it reads a ``TimedPace``."""
+
+    port: str
+    times: tuple[int, ...]
+    span: int
+    standing: Standing
+    source: str
+
+    def __post_init__(self) -> None:
+        if not self.port:
+            raise ValueError("a stated rate names the port whose beats it times")
+        if not isinstance(self.standing, Standing) or not self.source:
+            raise ValueError("a stated rate has a Standing and states where it is read")
+        if type(self.span) is not int or self.span < 1:
+            raise ValueError(f"a frame spans a positive count of cycles, not {self.span!r}")
+        times = self.times
+        if not times or any(type(time) is not int for time in times):
+            raise ValueError("a stated rate times each beat of a frame, a cycle each")
+        if times[0] < 0 or times[-1] >= self.span or any(a > b for a, b in zip(times, times[1:])):
+            raise ValueError(
+                f"beat times are in order within the frame's {self.span} cycles, not {times}"
+            )
+
+    def __str__(self) -> str:
+        return f"{self.span} cycles a frame, {self.standing.value}: {self.source}"
+
+
+@dataclass(frozen=True)
 class TimedPace:
     """The pace of a port that owns its pacing (``finn.dataflow.schedule.Pace``, in
     iterations: THEORY says nothing about time) at its kernel's interval: its beat ``times``
@@ -666,6 +705,7 @@ __all__ = [
     "RATE_INTERVAL",
     "RESET_LAW",
     "Standing",
+    "StatedRate",
     "TimedPace",
     "TransportKind",
     "axis_carrier",

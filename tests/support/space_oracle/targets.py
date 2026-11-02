@@ -8,7 +8,7 @@ stations: a design space, opened by the public API, and the change made on it.
   an optional fact left out), each opened and changed once;
 - ``chain-4``, ``chain-8``, ``chain-64``: stage 7's chain of 4, 8 or 64 kernels
   (``support.models.chain_model``), its core bound in its shell by the graph layer
-  (``core_point``: the class the composer makes of the graph's declaration, with its facts),
+  (``shell_point``: the shell's class made of the graph's declaration, with its facts),
   configured with what conversion and the cut stored (``commit``), then the middle
   MatMul's ``pe`` set to 2;
 - ``tfc``: TFC's partition after the cut and after each of seven strategy sequences, in
@@ -29,7 +29,7 @@ from typing import Any, cast
 
 from finn.core.graph.partition import CUT_NAME
 from finn.core.space import Space, design_space, inspection, space_formals
-from finn.custom_op.kernels.shell import core_point
+from finn.custom_op.kernels.shell import shell_point
 from finn.kernels.configure import commit
 from finn.kernels.explore import CoreComposition
 from support.models import chain_model
@@ -75,7 +75,7 @@ def chain(kernels: int) -> list[Station]:
     structure and by the test modes a model is made in (``FINN_SPACE_PERMUTE``,
     ``FINN_SPACE_EAGER``), so each mode reads a model made in it."""
     model = chain_model(kernels // 2)
-    bound = CoreComposition(core_point(model, CUT_NAME).point)
+    bound = CoreComposition(shell_point(model, CUT_NAME).point)
     middle = _middle([f"MatMul_{layer}" for layer in range(kernels // 2)])
     return [_partition(f"chain-{kernels}", bound, kernels, middle, change=True)]
 
@@ -96,12 +96,12 @@ def _partition(
 
     viable: Sequence[str] | None = forms.ALL
     if kernels > WIDEST:
-        prefix = f"{middle}."
+        prefix = f"{bound.path((middle, ''))}."
         viable = [item.key for item in inspection.decisions(make()) if item.key.startswith(prefix)]
     return Station(
         label,
         make,
-        {f"{middle}.pe": 2} if change else None,
+        {bound.path((middle, "pe")): 2} if change else None,
         viable,
         stored=dict(stored),
     )

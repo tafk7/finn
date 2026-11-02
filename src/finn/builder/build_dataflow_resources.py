@@ -5,8 +5,9 @@
 shell.
 
 ``shell_resources_report`` lists each member of the partition's shell (the partition,
-each mover by its boundary channel, each IP of the static region) and their total, in up
-to three columns:
+each mover by its name in the shell, ``in0``, the grouper of a core presenting control buses,
+``DataflowCore_0_grouper``, each IP of the static region) and their total, in up to three
+columns:
 
 - ``model``: the partition's network's own figures
   (``finn.custom_op.kernels.shell.shell_resources``): the partition's kernels from their
@@ -20,6 +21,11 @@ to three columns:
 - ``placed``: the routed design's hierarchical report (``vivado.placed_hierarchy``),
   each instance directly below the block design's top counted to its member. ``ip`` is
   not placed.
+
+A grouper is a part of its core's unit, the block design's cell of the partition: Vivado's
+columns count it in the partition's row, and only the model states it alone. Its instance
+is the decoder's in the unit (``DataflowCore_0/u_grouper``), or ``null`` where it has none
+(one bus, renamed).
 
 A column the build did not produce is ``null`` for every member, and ``absent`` says
 why. A member a column has no row for (the placed design has none for the processor and
@@ -47,7 +53,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import fields
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from qonnx.core.modelwrapper import ModelWrapper
@@ -56,14 +62,16 @@ from finn.core.graph.annotations.outputs import OUTPUT_IP, OUTPUT_IP_KEY, OUTPUT
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.partition import partition_body
 from finn.custom_op.kernels.shell import ShellResources, configured_network, shell_resources
-from finn.kernels.composer import member_name
+from finn.kernels.artifacts.unit import GROUPER
+from finn.kernels.shell import grouper_name
 from finn.kernels.utilization import SHELL_CHARACTERISED
 from finn.platform.capabilities import Resources
 from finn.platform.shells import shell_row
-from finn.shells.pynq.runner import REPORTS, STATIC_INSTANCES, bitfile_directory
+from finn.shells.build import REPORT_DIR, bitfile_directory, linked_record
+from finn.shells.integration import describe
+from finn.shells.pynq.linker import LINKER, OUT_OF_CONTEXT, PLACED, STATIC_INSTANCES
 from finn.toolchain import vivado
 from finn.toolchain.launcher import Toolchain, ToolFailed
-from finn.transformation.kernels.integration import integration
 from finn.transformation.kernels.package import (
     ip_key,
     ooc_member_resources,
@@ -73,6 +81,9 @@ from finn.transformation.kernels.package import (
 
 #: The report's file, under the output directory.
 RESOURCES_FILE = "report/resources.json"
+
+#: The end of a per-IP run's utilization report's name, ``<run>_utilization_synth.rpt``.
+_RUN = "_utilization_synth.rpt"
 
 
 def _counts(resources: Resources | None) -> dict[str, int] | None:
@@ -90,50 +101,58 @@ def _less(total: Resources, parts: list[Resources]) -> dict[str, int]:
     return {f.name: getattr(total, f.name) - getattr(claimed, f.name) for f in fields(total)}
 
 
-def _instance_of(name: str, instances: Mapping[str, str]) -> str | None:
+def _instance_of(name: str, instances: Mapping[str, str | None]) -> str | None:
     """The member whose instance is ``name``, or a prefix of it (an IP's own runs and
-    sub-instances, such as ``axi_interconnect_0_imp_auto_ds``); the longest match wins."""
+    sub-instances, such as ``smartconnect_0_imp_auto_ds``, or the control tree's
+    instances, ``control_0_0``); the longest match wins."""
     found = [
         (len(instance), key)
         for key, instance in instances.items()
-        if name == instance or name.startswith(instance.rstrip("_") + "_")
+        if instance is not None
+        and (name == instance or name.startswith(instance.rstrip("_") + "_"))
     ]
     return max(found)[1] if found else None
 
 
-def _member_instances(parent: ModelWrapper) -> dict[str, str]:
+def _member_instances(parent: ModelWrapper) -> dict[str, str | None]:
     """Each member of the shell's block design by its report key (``partition``,
-    ``movers.<channel>``, ``static_region.<ip>``), with its instance name, or the prefix of
-    a name Vivado chooses (the reset's, after its clock). A shell without an integration
-    has the partition alone, by its node's name."""
+    ``movers.<mover>``, ``groupers.<grouper>``, ``static_region.<role>``), with its instance
+    name, or the prefix of its instances' names (the control tree's); a grouper's
+    the decoder's in its unit, None for none. A shell without an integration has the
+    partition alone, by its node's name."""
     node, body, _ = partition_body(parent)
     target = read_target(body)
     row = shell_row(target.shell, target.board)
-    if row.integration is None:
+    if row.linker is None:
         return {"partition": node.name}
-    export = integration(parent)
-    instances = {"partition": export.partition}
-    instances.update(
-        {f"movers.{member_name(mover.tensor)}": mover.instance for mover in export.movers}
-    )
-    static = row.static_region
-    if static is not None:
+    described = describe(parent)
+    (core,) = described.cores
+    instances: dict[str, str | None] = {"partition": core.name}
+    instances.update({f"movers.{edge.unit}": edge.unit for edge in described.edges})
+    if described.unit(core.name).window is not None:
+        buses = [each for each in described.endpoints if each.unit == core.name]
+        decoder = f"{core.name}/{GROUPER}" if len(buses) > 1 else None
+        instances[f"groupers.{grouper_name(core.name)}"] = decoder
+    if row.fixed is not None:
         instances.update(
-            {
-                f"static_region.{getattr(static, role)}": instance
-                for role, instance in STATIC_INSTANCES.items()
-            }
+            {f"static_region.{role}": instance for role, instance in STATIC_INSTANCES.items()}
         )
     return instances
 
 
 def _members(split: Mapping[str, Any]) -> dict[str, Any]:
-    """The report's members, ``partition``, ``movers`` by channel and ``static_region`` by
-    IP, each with its columns (``model``, ``out_of_context``, ``placed``)."""
+    """The report's members, ``partition``, ``movers`` and ``groupers`` by name and
+    ``static_region`` by role, each with its columns (``model``, ``out_of_context``,
+    ``placed``)."""
     return {
         "partition": split["partition"],
         "movers": {
             key[len("movers.") :]: row for key, row in split.items() if key.startswith("movers.")
+        },
+        "groupers": {
+            key[len("groupers.") :]: row
+            for key, row in split.items()
+            if key.startswith("groupers.")
         },
         "static_region": {
             key[len("static_region.") :]: row
@@ -145,15 +164,26 @@ def _members(split: Mapping[str, Any]) -> dict[str, Any]:
 
 def built_reports(parent: ModelWrapper, *, toolchain: Toolchain) -> dict[str, Path]:
     """The reports the build made that ``shell_resources_report`` reads, by name: those
-    collected beside the bitfile the parent graph ``parent`` states (``placed``,
-    ``out_of_context``; none without a bitfile), and the utilization report of the IP
-    its partition's body states, packaged with ``ooc_synth`` and of the key the body has
-    now (``ip_key``, staged in ``toolchain``) (``ooc_synth``; none when the body states
-    no such IP)."""
+    the ``vivado-block-design`` linker collected beside the bitfile the parent graph
+    ``parent`` states, as the bitfile's build recorded them, each by its report name
+    (``placed``; each per-IP run's ``out_of_context/<run>_utilization_synth.rpt``; none
+    without a bitfile or its record, where another linker collected them, or where it
+    collected none of those names: never a file its record does not name), and the
+    utilization report of the IP its partition's body states, packaged with ``ooc_synth``
+    and of the key the body has now (``ip_key``, staged in ``toolchain``) (``ooc_synth``;
+    none when the body states no such IP)."""
     reports: dict[str, Path] = {}
     built = bitfile_directory(parent)
-    if built is not None:
-        reports.update({name: built / REPORTS[name] for name in ("placed", "out_of_context")})
+    collected = (
+        None if built is None else linked_record(built, "resources", owner="step_resources_report")
+    )
+    if built is not None and collected is not None and collected["linker"] == LINKER:
+        for key in collected["reports"]:
+            run = PurePosixPath(key)
+            if key == PLACED:
+                reports["placed"] = built / REPORT_DIR / PLACED
+            elif run.parent == PurePosixPath(OUT_OF_CONTEXT) and run.name.endswith(_RUN):
+                reports[key] = built / REPORT_DIR / key
     node, body, _ = partition_body(parent)
     ip, packaging = body.get(OUTPUT_IP), body.get(OUTPUT_IP_OPTIONS)
     if ip is None or packaging is None or not packaging["run_synth"]:
@@ -168,14 +198,14 @@ def built_reports(parent: ModelWrapper, *, toolchain: Toolchain) -> dict[str, Pa
 
 def shell_resources_report(parent: ModelWrapper, reports: Mapping[str, Path]) -> dict[str, Any]:
     """``report/resources.json`` for the parent graph ``parent`` (see the module
-    docstring), from the ``reports`` the build made, by name: the shell integration's
-    ``out_of_context`` (a directory) and ``placed`` (``finn.shells.pynq.runner.REPORTS``),
-    and the packaged partition's ``ooc_synth``. A column whose report is not given is
-    absent."""
+    docstring), from the ``reports`` the build made, by name (``built_reports``): each of
+    the shell integration's per-IP runs, ``out_of_context/<run>_utilization_synth.rpt``, and
+    ``placed`` (``finn.shells.pynq.linker``'s reports), and the packaged partition's
+    ``ooc_synth``. A column whose report is not given is absent."""
     node, body, _ = partition_body(parent)
     target = read_target(body)
     point = configured_network(body, node.name)
-    modelled = shell_resources(point.network.point, point.row)
+    modelled = shell_resources(point.network)
     instances = _member_instances(parent)
     columns: dict[str, dict[str, Resources | None]] = {key: {} for key in instances}
     totals: dict[str, Resources | None] = {}
@@ -185,6 +215,7 @@ def shell_resources_report(parent: ModelWrapper, reports: Mapping[str, Path]) ->
     if isinstance(modelled, ShellResources):
         stated: dict[str, Resources | None] = {"partition": modelled.partition}
         stated.update({f"movers.{key}": value for key, value in modelled.movers})
+        stated.update({f"groupers.{key}": value for key, value in modelled.groupers})
         stated.update({f"static_region.{key}": value for key, value in modelled.static_region})
         for key in instances:
             columns[key]["model"] = stated.get(key)
@@ -194,13 +225,13 @@ def shell_resources_report(parent: ModelWrapper, reports: Mapping[str, Path]) ->
         totals["model"] = None
 
     # Out of context: the integration's per-IP runs, or the packaged partition's.
-    runs = reports.get("out_of_context")
+    runs = sorted(path for key, path in reports.items() if key.startswith(f"{OUT_OF_CONTEXT}/"))
     packaged = reports.get("ooc_synth")
-    if runs is not None:
+    if runs:
         per_member: dict[str, Resources] = {}
         unclaimed = Resources()
-        for path in sorted(Path(runs).glob("*_utilization_synth.rpt")):
-            name = path.name[: -len("_utilization_synth.rpt")]
+        for path in runs:
+            name = path.name[: -len(_RUN)]
             name = name[len("top_") :] if name.startswith("top_") else name
             counted = resources_of(vivado.utilization_synth(path.read_text()))
             owner = _instance_of(name.removesuffix("_0"), instances)
@@ -236,7 +267,7 @@ def shell_resources_report(parent: ModelWrapper, reports: Mapping[str, Path]) ->
         totals["placed"] = None
         absent["placed"] = (
             f"the {target.shell!r} shell is not placed by the build"
-            if shell_row(target.shell, target.board).integration is None
+            if shell_row(target.shell, target.board).linker is None
             else "no placed design: step_build_bitfile not listed"
         )
 

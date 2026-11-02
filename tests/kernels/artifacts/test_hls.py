@@ -19,7 +19,7 @@ from finn.kernels.artifacts.contributions import (
     GeneratedData,
     HlsSource,
 )
-from finn.kernels.artifacts.hls import SCRIPT, TOP, quoted_includes, stage_hls
+from finn.kernels.artifacts.hls import SCRIPT, TOOL_HEADERS, TOP, quoted_includes, stage_hls
 from finn.kernels.artifacts.module import Abi, BuildError, Composed, Fragment, Leaf, module_name
 
 HEADERS = (
@@ -112,6 +112,53 @@ def test_staging_refuses_an_include_no_declared_header_satisfies(tmp_path: Path)
         stage_hls(undeclared, tmp_path / "out", roots={"fixture": root})
     with pytest.raises(BuildError, match="no source root resolves 'fixture'"):
         stage_hls(_top(), tmp_path / "out", roots={})
+
+
+def test_an_exported_request_says_so_in_its_digest_and_its_script(tmp_path: Path) -> None:
+    """A request that exports its top into the IP catalog digests apart from one that
+    does not, which digests as before, and its script exports it after synthesis, as the
+    IP named as its top in FINN's vendor and library."""
+    root = _fixture(tmp_path / "finnlib")
+    plain = _top()
+    exported = HlsSource.request(
+        "core",
+        lambda name: plain.top.replace(plain.function, name),
+        HEADERS,
+        5.0,
+        ("config_rtl -module_auto_prefix",),
+        export=True,
+    )
+    assert exported.export and exported.function != plain.function
+    with pytest.raises(ContributionError, match="not the request's own digest"):
+        replace(plain, export=True)
+    script = stage_hls(exported, tmp_path / "exported", roots={"fixture": root}).directory / SCRIPT
+    lines = script.read_text().splitlines()
+    configured = (
+        f"config_export -format ip_catalog -vendor xilinx_finn -library finn "
+        f"-ipname {exported.function} -version 1.0"
+    )
+    assert lines[-4:] == [
+        configured,
+        "csynth_design",
+        "export_design -format ip_catalog",
+        "exit",
+    ]
+    staged = stage_hls(plain, tmp_path / "plain", roots={"fixture": root})
+    assert "export" not in (staged.directory / SCRIPT).read_text()
+
+
+def test_staging_takes_a_quoted_include_of_the_tools_own_header(tmp_path: Path) -> None:
+    """A library may include the tool's own headers in quotes (``"hls_stream.h"``): the
+    tool finds them, so they are not declared."""
+    root = _fixture(tmp_path / "finnlib")
+    request = HlsSource.request(
+        "core",
+        lambda name: f'#include "core.hpp"\n#include "hls_stream.h"\nvoid {name}() {{}}\n',
+        HEADERS,
+        5.0,
+    )
+    assert "hls_stream.h" in TOOL_HEADERS
+    stage_hls(request, tmp_path / "out", roots={"fixture": root})
 
 
 def test_quoted_includes_are_the_requests_and_angle_brackets_the_tools() -> None:

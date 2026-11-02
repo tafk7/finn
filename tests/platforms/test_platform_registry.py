@@ -1,8 +1,9 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The platform registry (``finn.platform``): parts, boards, shell rows, and the one
-resolution of a build's target from them, every refusal named."""
+"""The platform registry (``finn.platform``): parts, the boards and shell rows FINN's
+declarations state, and the one resolution of a build's target from them, every refusal
+named."""
 
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ from support.refusals import refused
 
 from finn.core.reporting.findings import FindingKind
 from finn.core.space import design_space, inspection
+from finn.custom_op.kernels.shell import row_offer
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import tile
 from finn.kernels.memstream import MemStreamKernel
@@ -22,14 +24,15 @@ from finn.kernels.movers import iodma_hls
 from finn.kernels.thresholding import ThresholdingKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.architectures import rule
-from finn.platform.boards import BOARDS
 from finn.platform.capabilities import DspBlock, Fabric, Platform, Resources
 from finn.platform.catalog import part
+from finn.platform.declarations import declarations
 from finn.platform.refusal import TargetRefused
 from finn.platform.request import TargetRequest
-from finn.platform.resolve import refuse_drift, resolve_target
-from finn.platform.shells import PYNQ_CONTROL_BUDGET, ROWS, ZYNQ_STATIC_REGION, shell_row
+from finn.platform.resolve import origins, refuse_drift, resolve_runtime, resolve_target
+from finn.platform.shells import MOVED, MoverKind, Offer, shell_row, shell_rows
 from finn.platform.target import Target
+from finn.shells.pynq.linker import PROCESSORS
 from finn.shells.pynq.templates import custom_zynq_shell_template
 
 #: Each PYNQ board's part, DSP block and native AXI port width, as the deleted HWCustomOp
@@ -47,12 +50,22 @@ PYNQ_BOARD_FACTS = {
     "AUP-ZU3_8GB": ("xczu3eg-sfvc784-2-e", "DSP48E2", 128),
 }
 
-#: The boards no shell builds yet, each with its part: named for the part on the ``ip``
-#: shell, refused on ``pynq`` by name.
+#: The boards no shell but ``ip`` builds yet, each with its part: named for the part on
+#: the ``ip`` shell, refused on ``pynq`` by name.
 UNBUILT_BOARD_PARTS = {
     "ZCU111": "xczu28dr-ffvg1517-2-e",
     "V80": "xcv80-lsva4737-2MHP-e-S",
+    "Pynq-Z1": "xc7z020clg400-1",
+    "Pynq-Z2": "xc7z020clg400-1",
+    "U50": "xcu50-fsvh2104-2L-e",
+    "U200": "xcu200-fsgd2104-2-e",
+    "U250": "xcu250-figd2104-2L-e",
+    "U55C": "xcu55c-fsvh2892-2L-e",
+    "VCK190": "xcvc1902-vsva2197-2MP-e-S",
+    "VEK280": "xcve2802-vsvh1760-2MP-e-S",
 }
+
+BOARDS = declarations().boards
 
 #: The parts of the deleted flow's other boards (Alveo, Versal), and their DSP block.
 OTHER_PART_DSPS = {
@@ -69,11 +82,15 @@ OTHER_PART_DSPS = {
 # -- boards ------------------------------------------------------------------------------
 
 
-def test_the_boards_are_the_pynq_boards_less_the_retired_and_the_v80() -> None:
-    assert set(BOARDS) == set(PYNQ_BOARD_FACTS) | {"V80"}
+def test_the_boards_are_the_pynq_boards_and_those_no_shell_builds() -> None:
+    assert set(BOARDS) == set(PYNQ_BOARD_FACTS) | set(UNBUILT_BOARD_PARTS)
+    for board, part_name in UNBUILT_BOARD_PARTS.items():
+        assert BOARDS[board].part == part_name
 
 
-PYNQ_BOARDS = sorted(board for shell, board in ROWS if shell == "pynq" and board is not None)
+PYNQ_BOARDS = sorted(
+    board for shell, board in shell_rows() if shell == "pynq" and board is not None
+)
 
 
 @pytest.mark.parametrize("board", PYNQ_BOARDS)
@@ -83,8 +100,11 @@ def test_every_boards_row_agrees_with_its_part_and_dsp(board: str) -> None:
     assert target.part == BOARDS[board].part == part_name
     assert target.platform.dsp is DspBlock(dsp)
     assert target.platform.resources == part(part_name).device.resources  # the table's totals
-    (mover,) = shell_row("pynq", board).movers
-    assert mover == iodma_hls(width)
+    row = shell_row("pynq", board)
+    iodma = MoverKind(name="iodma_hls", code="finn.kernels.iodma:IodmaHls")
+    offer = Offer(kind=MOVED, movers=(iodma,), width_cap=width)
+    assert (row.supply, row.delivery) == ((offer,), (offer,))
+    assert row_offer(row) == iodma_hls(width)
 
 
 @pytest.mark.parametrize("board", sorted(BOARDS))
@@ -103,56 +123,74 @@ def test_every_other_boards_part_resolves_on_the_ip_shell(part_name: str) -> Non
     assert platform.dsp is DspBlock(OTHER_PART_DSPS[part_name])
 
 
-def zynq_template_branches() -> dict[str, tuple[str | None, str | None]]:
-    """Each board the Zynq template's board chain has a branch for, read from its text:
-    the ``board_part`` the branch selects and the ``ZYNQ_TYPE`` it sets (``None``: it
-    sets none)."""
-    branches: dict[str, tuple[str | None, str | None]] = {}
-    for name, body in re.findall(
-        r'\$BOARD == "([^"]+)"\} \{\n((?:    \S.*\n)+)', custom_zynq_shell_template
-    ):
-        zynq_type = re.search(r'set ZYNQ_TYPE "([^"]+)"', body)
-        if zynq_type is None:
-            continue  # not the board chain: a board's tweak inside a Zynq type's block
-        preset = re.search(r"set_property board_part (\S+)", body)
-        branches[name] = (None if preset is None else preset[1], zynq_type[1])
-    return branches
+#: The board chain the Zynq template had before the project took its board part from the
+#: board's declaration (``finn.shells.pynq.linker.project_script``): each board's
+#: ``board_part`` and processor family (its ``ZYNQ_TYPE``). ZCU111 had no branch.
+ZYNQ_TEMPLATE_BOARDS = {
+    "ZCU104": ("xilinx.com:zcu104:part0:1.1", "zynq_us+"),
+    "ZCU102": ("xilinx.com:zcu102:part0:3.3", "zynq_us+"),
+    "RFSoC2x2": ("xilinx.com:rfsoc2x2:part0:1.1", "zynq_us+"),
+    "RFSoC4x2": ("realdigital.org:rfsoc4x2:part0:1.0", "zynq_us+"),
+    "Ultra96": ("avnet.com:ultra96v1:part0:1.2", "zynq_us+"),
+    "Ultra96-V2": ("avnet.com:ultra96v2:part0:1.2", "zynq_us+"),
+    "Pynq-Z2": ("tul.com.tw:pynq-z2:part0:1.0", "zynq_7000"),
+    "Pynq-Z1": ("www.digilentinc.com:pynq-z1:part0:1.0", "zynq_7000"),
+    "KV260_SOM": ("xilinx.com:kv260_som:part0:1.3", "zynq_us+"),
+    "AUP-ZU3_8GB": ("realdigital.org:aup-zu3-8gb:part0:1.0", "zynq_us+"),
+}
 
 
-def test_every_pynq_rows_board_has_a_branch_in_the_zynq_template() -> None:
-    """The ``pynq`` shell is built only where the template's board chain builds a Zynq
-    UltraScale+ block design, and each board's preset is its branch's ``board_part``; a
-    board with no branch (ZCU111) has no preset and no row, and is refused by name."""
-    branches = zynq_template_branches()
-    assert {"Ultra96", "Pynq-Z1"} <= set(branches)  # the reading finds the chain
-    for board in PYNQ_BOARDS:
-        assert branches[board] == (BOARDS[board].preset, "zynq_us+")
-    assert {name: board.preset for name, board in BOARDS.items()} == {
-        name: branches.get(name, (None, None))[0] for name in BOARDS
-    }
-    unbuilt = sorted(set(BOARDS) - set(PYNQ_BOARDS))
-    assert unbuilt == sorted(UNBUILT_BOARD_PARTS) and not set(unbuilt) & set(branches)
+def test_every_pynq_rows_board_selects_what_the_zynq_template_selected() -> None:
+    """The ``pynq`` shell supports a board where the template's board chain built a Zynq
+    UltraScale+ block design, and its project selects what the chain did: the board entry's
+    ``board_part`` and its fixed shell's processor's family (``PROCESSORS``). A board the
+    chain built otherwise or not at all (the Zynq-7000 Pynq-Z1 and Pynq-Z2; ZCU111) has no
+    entry, and is refused by name."""
+    # The project is given both, in place of the chain.
+    assert "set_property board_part %s" in custom_zynq_shell_template
+    assert "set ZYNQ_TYPE %s" in custom_zynq_shell_template
+    for board in BOARDS:
+        branch = ZYNQ_TEMPLATE_BOARDS.get(board)
+        built = branch is not None and branch[1] == "zynq_us+"
+        assert (board in PYNQ_BOARDS) == built, board
+        if built:
+            row = shell_row("pynq", board)
+            assert row.fixed is not None
+            assert branch == (row.board_facts["board_part"], PROCESSORS[row.fixed.processor])
+    assert sorted(set(BOARDS) - set(PYNQ_BOARDS)) == sorted(UNBUILT_BOARD_PARTS)
     with refused(
-        "no-shell-row",
+        "board-unsupported",
         error=TargetRefused,
-        message="the 'pynq' shell has no row for board 'ZCU111': "
-        "the Zynq template has no branch for it",
+        message="^the 'pynq' shell does not support board 'ZCU111' "
+        r"\(xczu28dr-ffvg1517-2-e\); only 'ip' supports it$",
     ):
         resolve_target(board="ZCU111", period_ns=5.0, shell="pynq")
 
 
+def test_a_board_entry_narrows_its_linkers_releases() -> None:
+    """AUP-ZU3_8GB's board files come with Vivado 2024.1: its row builds with that release
+    or later, and every other board's with any its linker runs."""
+    for board in PYNQ_BOARDS:
+        versions = shell_row("pynq", board).versions
+        if board == "AUP-ZU3_8GB":
+            assert versions is not None and (versions.tool, versions.spec) == ("vivado", ">=2024.1")
+            assert versions.admits((2025, 2)) and not versions.admits((2023, 2))
+        else:
+            assert versions is None
+
+
 @pytest.mark.parametrize("board", sorted(UNBUILT_BOARD_PARTS))
 def test_a_board_no_shell_builds_resolves_on_ip_and_is_refused_on_pynq(board: str) -> None:
-    """A board with no shell row (no Vivado preset) is a board all the same: on ``ip`` it
-    names its part, and ``pynq`` refuses it by name, ``no-shell-row``."""
+    """A board no shell but ``ip`` supports is a board all the same: on ``ip`` it names its
+    part, and ``pynq`` refuses it by name, ``board-unsupported``."""
     on_ip = resolve_target(board=board, period_ns=5.0)
     assert on_ip == resolve_target(part=UNBUILT_BOARD_PARTS[board], period_ns=5.0)
     assert (on_ip.part, on_ip.shell, on_ip.board) == (UNBUILT_BOARD_PARTS[board], "ip", None)
     with refused(
-        "no-shell-row",
+        "board-unsupported",
         error=TargetRefused,
         owner="configuration.target.board",
-        message=re.escape(f"has no row for board {board!r}"),
+        message=re.escape(f"does not support board {board!r}"),
     ):
         resolve_target(board=board, period_ns=5.0, shell="pynq")
 
@@ -280,21 +318,26 @@ def test_the_ip_shell_is_the_default_with_a_doubled_clock_and_no_bound() -> None
     target = resolve_target(part="xczu3eg-sbva484-1-e", period_ns=5.0)
     assert (target.shell, target.board) == ("ip", None)
     row = shell_row("ip", None)
-    assert row.clk2x
-    assert row == shell_row("ip", "Ultra96") == ROWS["ip", None]
-    assert (row.movers, row.control_budget, row.memory_ports) == ((), None, None)
-    assert (row.integration, row.host_runtime, row.static_region) == (None, None, None)
+    assert row.clocks.doubled and row.clocks.main == "ap_clk"
+    assert row == shell_row("ip", "Ultra96") == shell_rows()["ip", None]
+    assert (row.offers, row.units, row.memory) == ((), None, ())
+    assert (row.linker, row.runtimes, row.fixed, row.control) == (None, (), None, None)
 
 
-def test_the_pynq_row_states_its_movers_budgets_integration_and_static_region() -> None:
+def test_the_pynq_row_states_its_movers_limits_linker_and_fixed_shell() -> None:
     row = shell_row("pynq", "Ultra96")
-    assert row.movers == (iodma_hls(128),) and row.movers[0].frames_per_call == 1
-    assert (row.control_budget, row.memory_ports, row.clk2x) == (9, 0, False)
-    assert (row.integration, row.host_runtime) == ("vivado-block-design", "zynq-iodma")
-    assert row.static_region == ZYNQ_STATIC_REGION
-    # The budget is the template's: its AXI-Lite interconnect takes nine buses.
-    limit = re.search(r"if \{\$NUM_AXILITE > (\d+)\}", custom_zynq_shell_template)
-    assert limit is not None and int(limit.group(1)) == PYNQ_CONTROL_BUDGET
+    mover = row_offer(row)
+    assert mover == iodma_hls(128) and mover is not None and mover.frames_per_call == 1
+    assert (row.units, row.clocks.doubled) == (None, False)
+    assert [(each.name, each.width, each.masters) for each in row.memory] == [("HP0", 128, 16)]
+    assert (row.linker, row.runtimes) == ("vivado-block-design", ("pynq",))
+    assert row.fixed is not None and row.fixed.control_base == 0xA000_0000
+    assert row.control is not None
+    assert (row.control.least_window, row.control.aperture) == (4096, 0x1000_0000)
+    # No count of control buses is the template's: the linker builds its control tree, 16
+    # ports a SmartConnect, and the processor's window bounds the units.
+    assert "NUM_AXILITE" not in custom_zynq_shell_template
+    assert row.fixed.control_fanout == 16
     target = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
     assert (target.shell, target.board) == ("pynq", "Ultra96")
     # The row owns the doubled clock; the target's platform is the part's and the
@@ -302,27 +345,31 @@ def test_the_pynq_row_states_its_movers_budgets_integration_and_static_region() 
     assert target.platform == resolve_target(board="Ultra96", period_ns=5.0).platform
 
 
-def test_the_zynq_static_region_states_its_resources_by_masters_and_slaves() -> None:
-    """Out of context on xczu3eg and xczu7ev: the PS 264 LUT and its reset 19; the
-    SmartConnect 5 346 LUT at 2 masters and about 2 200 a master more; the AXI
-    interconnect 1 277 LUT, and its crossbar none at 1 slave, then 131, 184 and 361 at
-    2, 4 and 9."""
-    region = dict(ZYNQ_STATIC_REGION.resources(masters=2, slaves=1))
-    assert list(region) == ["zynq_ultra_ps_e", "proc_sys_reset", "smartconnect", "axi_interconnect"]
-    assert (region["zynq_ultra_ps_e"].lut, region["proc_sys_reset"].lut) == (264, 19)
-    assert (region["smartconnect"].lut, region["axi_interconnect"].lut) == (5364, 1277)
-    smartconnect = [
-        dict(ZYNQ_STATIC_REGION.resources(masters=masters, slaves=1))["smartconnect"].lut
+def test_the_zynq_fixed_shell_states_its_resources_by_masters_and_slaves() -> None:
+    """Out of context on xczu3eg and xczu7ev, by role: the PS 264 LUT and its reset 19;
+    the memory SmartConnect 5 346 LUT at 2 masters and about 2 200 a master more; the
+    control tree of SmartConnects, each 797.5 + 81.29 LUT a port it gives (M2), 16 at
+    most: one instance to 16 buses, then a root of two and two more at 17."""
+    fixed = shell_row("pynq", "Ultra96").fixed
+    assert fixed is not None
+    assert (fixed.memory_interconnect, fixed.control_interconnect) == ("smartconnect",) * 2
+    region = dict(fixed.resources(masters=2, slaves=1))
+    assert list(region) == ["processor", "reset", "memory_interconnect", "control_interconnect"]
+    assert (region["processor"].lut, region["reset"].lut) == (264, 19)
+    assert (region["memory_interconnect"].lut, region["control_interconnect"].lut) == (5364, 879)
+    memory = [
+        dict(fixed.resources(masters=masters, slaves=1))["memory_interconnect"].lut
         for masters in (2, 3, 4)
     ]
-    assert smartconnect == [5364, 7579, 9795]
-    crossbar = [
-        dict(ZYNQ_STATIC_REGION.resources(masters=2, slaves=slaves))["axi_interconnect"].lut - 1277
-        for slaves in (1, 2, 4, 9)
+    assert memory == [5364, 7579, 9795]
+    control = [
+        dict(fixed.resources(masters=2, slaves=slaves))["control_interconnect"].lut
+        for slaves in (1, 2, 3, 16, 17)
     ]
-    assert crossbar == [0, 125, 192, 359]
+    # 17: the root's 2 ports (960), one of 16 (2 098) and one of 1 (879).
+    assert control == [879, 960, 1041, 2098, 3937]
     with pytest.raises(ValueError, match="at least one memory port"):
-        ZYNQ_STATIC_REGION.resources(masters=0, slaves=1)
+        fixed.resources(masters=0, slaves=1)
 
 
 @pytest.mark.parametrize(
@@ -330,23 +377,22 @@ def test_the_zynq_static_region_states_its_resources_by_masters_and_slaves() -> 
     [
         (
             dict(part="xcu55c-fsvh2892-2L-e", shell="xrt"),
-            "unsupported-shell",
-            r"^'xrt' \(the Vitis \(XRT\) shell\) is named but not built: "
-            r"FINN builds 'ip' and 'pynq'$",
+            "unknown-shell",
+            r"^'xrt' is not a declared shell \(one of \['ip', 'pynq'\]\)$",
         ),
-        (dict(part="xcv80-lsva4737-2MHP-e-S", shell="slash"), "unsupported-shell", "^'slash' "),
+        (dict(part="xcv80-lsva4737-2MHP-e-S", shell="slash"), "unknown-shell", "^'slash' "),
         (
             dict(part="xczu3eg-sbva484-1-e", shell="vivado_zynq"),
             "unknown-shell",
-            "^'vivado_zynq' is not a shell",
+            "^'vivado_zynq' is not a declared shell",
         ),
         (
             dict(part="xczu3eg-sbva484-1-e", shell="pynq"),
             "board-required",
             "^the 'pynq' shell is built for a board: name one of",
         ),
-        (dict(board="U250"), "unknown-board", "^'U250' is not a board"),
-        (dict(board="Pynq-Z1"), "unknown-board", "^'Pynq-Z1' "),
+        (dict(board="U280"), "unknown-board", "^'U280' is not a board"),
+        (dict(board="U250", shell="pynq"), "board-unsupported", "only 'ip' supports it$"),
         (
             dict(board="Ultra96", part="xczu3eg-sbva484-1-i"),
             "board-part-mismatch",
@@ -383,6 +429,60 @@ def test_a_request_resolves_as_the_resolver_does() -> None:
     assert pynq.resolve() == resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
     with refused("board-required", error=TargetRefused):
         TargetRequest(period_ns=5.0, part="xczu3eg-sbva484-1-e", shell="pynq").resolve()
+
+
+def test_a_build_runs_on_the_runtime_its_shell_offers_first_unless_it_names_another() -> None:
+    """The runtime is the build's, not the target's: a request resolves the same target
+    with or without it, and its shell's first runtime (``pynq``'s ``pynq``) unless it names
+    one the shell offers; ``ip`` offers none."""
+    pynq = TargetRequest(period_ns=5.0, board="Ultra96", shell="pynq")
+    named = TargetRequest(period_ns=5.0, board="Ultra96", shell="pynq", runtime="pynq")
+    assert pynq.resolve_runtime() == named.resolve_runtime() == "pynq"
+    assert named.resolve() == pynq.resolve()
+    assert resolve_runtime("ip") is None
+    assert TargetRequest(period_ns=5.0, part="xczu3eg-sbva484-1-e").resolve_runtime() is None
+
+
+def test_a_build_on_pynq_stands_on_finns_declarations_alone() -> None:
+    """Where each declaration a build stands on is declared (``origins``): pynq's shell, the
+    board, its linker, the runtime and its mover kind, each FINN's; on ``ip`` its shell."""
+    target = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
+    assert {name: str(each) for name, each in origins(target, "pynq").items()} == {
+        "shells.pynq": "FINN",
+        "boards.Ultra96": "FINN",
+        "linkers.vivado-block-design": "FINN",
+        "runtimes.pynq": "FINN",
+        "movers.iodma_hls": "FINN",
+    }
+    ip = resolve_target(board="Ultra96", period_ns=5.0)
+    assert list(origins(ip, None)) == ["shells.ip"]
+
+
+@pytest.mark.parametrize(
+    "shell, board, message",
+    [
+        (
+            "pynq",
+            "Ultra96",
+            "^the 'pynq' shell does not offer the runtime 'vrt'; it offers 'pynq'$",
+        ),
+        (
+            "ip",
+            None,
+            "^the 'ip' shell does not offer the runtime 'vrt'; it offers no runtime: "
+            "leave the runtime unstated$",
+        ),
+    ],
+)
+def test_a_runtime_the_shell_does_not_offer_is_refused_with_the_target(
+    shell: str, board: str | None, message: str
+) -> None:
+    request = TargetRequest(
+        period_ns=5.0, board=board, part="xczu3eg-sbva484-1-e", shell=shell, runtime="vrt"
+    )
+    owner = "configuration.target.runtime"
+    with refused("runtime-not-offered", owner=owner, message=message, error=TargetRefused):
+        request.resolve()
 
 
 # -- drift -------------------------------------------------------------------------------

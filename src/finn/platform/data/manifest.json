@@ -4,6 +4,21 @@
     "build": "SW Build 6299465 on Fri Nov 14 12:34:56 MST 2025"
   },
   "series": {
+    "7 Series": [
+      "aartix7",
+      "akintex7",
+      "artix7",
+      "artix7l",
+      "aspartan7",
+      "kintex7",
+      "kintex7l",
+      "qartix7",
+      "qkintex7",
+      "qkintex7l",
+      "qvirtex7",
+      "spartan7",
+      "virtex7"
+    ],
     "Zynq-7000": [
       "azynq",
       "qzynq",
@@ -50,12 +65,12 @@
     ]
   },
   "counts": {
-    "parts": 4725,
-    "devices": 261,
-    "resources": 92,
-    "pairs": 36,
-    "reduced": 50,
-    "capped": 7
+    "parts": 5601,
+    "devices": 351,
+    "resources": 122,
+    "pairs": 49,
+    "reduced": 78,
+    "capped": 10
   },
   "checks": [
     "every part of a device states its device's ARCHITECTURE, FAMILY and totals",
@@ -63,7 +78,7 @@
     "each capped device has a reviewed row of which caps a fill proved (finn.platform.architectures.CAP_EVIDENCE)",
     "each supported rule's fabric and DSP block are confirmed on every device of its pair by the site probe"
   ],
-  "generator": "sha256:5df5923f4b184065ac68b3a7a2c469f9c7b42744e338030c89b9357a5bd8265f",
-  "rules": "sha256:1616a50380354caa05f8a4d756c17cc7b3d5b0d8ccd211291c246dcc12ccc0f8",
-  "facts": "sha256:32d20aa58943e7de4f448e991209eeba6deb94865dbf6d21e45739b1e892f426"
+  "generator": "sha256:75d81f1afb3a3d637194d268e4c7cd910d79b0105d783047cc6991cba1c226b6",
+  "rules": "sha256:dbaaab0992d4161d25aa0a2f7afe142b28673904701c77983197c7d40afbe62d",
+  "facts": "sha256:6ca50c903ba20a7861a0dceceac39572f409321faa89e0f8cca70fdb6046e0b4"
 }

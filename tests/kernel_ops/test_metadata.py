@@ -28,7 +28,6 @@ from finn.core.graph.annotations.outputs import (
     OUTPUT_BITFILE_IP_KEY,
     OUTPUT_BITFILE_MADE_FROM,
     OUTPUT_BITFILE_OPTIONS,
-    OUTPUT_HWH,
     OUTPUT_INTERFACES,
     OUTPUT_IP,
     OUTPUT_IP_KEY,
@@ -246,7 +245,6 @@ def test_what_a_build_made_is_typed_in_finn_outputs() -> None:
         OUTPUT_BITFILE_MADE_FROM: DIGEST,
         OUTPUT_BITFILE_IP_KEY: DIGEST,
         OUTPUT_BITFILE_OPTIONS: {"hw_debug": False},
-        OUTPUT_HWH: "/out/bitfile/finn-accel.hwh",
     }
     for key, value in made.items():
         model.set(key, value)
@@ -259,7 +257,6 @@ def test_what_a_build_made_is_typed_in_finn_outputs() -> None:
     for key, bad in (
         (OUTPUT_IP, ""),
         (OUTPUT_INTERFACES, ["ap_clk"]),
-        (OUTPUT_HWH, ""),
         (OUTPUT_IP_KEY, "sha1:" + "0" * 40),
         (OUTPUT_IP_OPTIONS, ["run_synth"]),
         (OUTPUT_BITFILE_MADE_FROM, DIGEST.upper()),

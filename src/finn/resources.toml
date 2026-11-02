@@ -26,8 +26,8 @@ description = "FinnLib RTL and HLS component library"
 kind = ["kernel-sources"]
 redistributable = false
 git = "git@gitenterprise.xilinx.com:tkeller/finnlib.git"
-commit = "229b35f6e148fd0c67c16f0d2d99d9f8d821a5f8"
-digest = "sha256:1b2fd63d7c71e275ebddb481a306f0e38476fd1f555fa0e13ca6e6c30f8bb64e"
+commit = "bff933d6f89be95166cfc26ef6768ffab16412d1"
+digest = "sha256:9967b5c5bec2f3053f359177c7ebec9262de974463f15edc1448c81174ba2409"
 
 [resources.avnet-boards]
 description = "Avnet board files (Ultra96, ZedBoard, MicroZed and others)"

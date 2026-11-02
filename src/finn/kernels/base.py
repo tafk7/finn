@@ -17,8 +17,9 @@ which a kernel's facts hold and the engine admits only registered. No setter, re
 or flat callback table is installed on a kernel. Three things are installed when its class
 is made, each a function reading by names its closure fixes, so that its source states its
 reads: on a kernel with a module, one helper a part of its module; on a kernel with
-members that may take the doubled clock or present a control bus, what it takes and
-presents of theirs, ``takes_doubled_clock`` and ``control_buses``; on a kernel declaring a
+members that may take the doubled clock, initiate a memory port or present a control bus,
+what it takes, initiates and presents of theirs, ``takes_doubled_clock``,
+``memory_initiators`` and ``control_buses``; on a kernel declaring a
 control bus (``ControlModel``), what is read of it, ``declares_bus`` and ``bus_control``. A
 kernel with children exposes a member's port by a node alias (``x = compute.x``), for
 which nothing is installed.
@@ -84,7 +85,7 @@ from finn.dataflow.schedule import (
     span,
 )
 from finn.kernels.artifacts import ArtifactError
-from finn.kernels.artifacts.abi import Clocking
+from finn.kernels.artifacts.abi import Clocking, bus_window
 from finn.kernels.artifacts.contributions import Contribution, GeneratedData
 from finn.kernels.artifacts.module import BusExport, Fragment, Link, merge
 from finn.kernels.control import Control, ControlModel, control_models, presented
@@ -97,6 +98,7 @@ from finn.kernels.laws import (
     Interval,
     PortIntake,
     Standing,
+    StatedRate,
     TransportKind,
     in_cycles,
 )
@@ -141,12 +143,22 @@ def merged(
     """Each netlist under its node, in order, the control buses presented (each a
     ``BusExport`` with the writes its configuration takes, ``finn.kernels.control.presented``)
     and the ``links`` between them (a channel's hops): a kernel's netlist, and a
-    network's."""
+    network's. Its buses go node by node, as its control windows are derived: each node's
+    presented bus, then those its netlist presents."""
     try:
-        return merge(
-            *(netlist.under(node) for node, netlist in netlists),
-            Fragment(links=links, exports=tuple(presented)),
+        placed = [(node, netlist.under(node)) for node, netlist in netlists]
+        buses = tuple(presented)
+        nodes = {node for node, _ in placed}
+        exports = (
+            *(
+                item
+                for node, fragment in placed
+                for item in (*(bus for bus in buses if bus.instance == node), *fragment.exports)
+            ),
+            *(bus for bus in buses if bus.instance not in nodes),
         )
+        joined = merge(*(fragment for _, fragment in placed))
+        return Fragment(joined.instances, (*joined.links, *links), exports)
     except ArtifactError as error:
         return reject("kernel-netlist", str(error))
 
@@ -174,6 +186,23 @@ def _refuse_restated_cycles(cls: type[Kernel]) -> None:
                 "interval where its hardware differs",
                 declaration=where,
             )
+
+
+def _refuse_misplaced_rate(cls: type[Kernel], module: bool) -> None:
+    """Refuse a kernel stating its rate a frame (``stated_rate``) that has no module or
+    states a schedule (``kernel-rate-stated``): a composite's cycles are its members', and a
+    scheduled kernel's follow from its schedule at its interval."""
+    if not _declared(cls, "stated_rate") or (module and not _declared(cls, "schedule")):
+        return
+    where = f"{cls.__qualname__}.stated_rate"
+    raise DefinitionError.broken(
+        "kernel-rate-stated",
+        "Kernel",
+        f"{where}: only a kernel with a module and no schedule states its rate a frame: a "
+        "composite's cycles are its members', a scheduled kernel's its schedule's at its "
+        "interval",
+        declaration=where,
+    )
 
 
 def _refuse_composite_interval(cls: type[Kernel]) -> None:
@@ -207,9 +236,9 @@ def _members(cls: type[Kernel]) -> dict[str, object]:
 # member channel ``h``'s hops; ``<what>`` one of ``neighbours``, ``ends``, ``hops``,
 # ``producer``, ``consumer``, ``placed``, ``case`` and ``governed``), ``-<what>-<i>`` for the
 # ``i``-th helper of a reading (``-hops-0``), and the base's own ``-end`` (ending each
-# reading), ``-placed``, ``-no-port`` and ``-own-buses``. No member's name holds a ``-`` (a
-# Python name, or a graph name as ``finn.kernels.composer`` names its member, ``\W`` as
-# ``_``), and a composed class's root members begin with their member's name
+# reading), ``-placed``, ``-no-port``, ``-own-buses`` and ``-own-windows``. No member's name
+# holds a ``-`` (a Python name, or a graph name as ``finn.kernels.composer`` names its
+# member, ``\W`` as ``_``), and a composed class's root members begin with their member's name
 # (``mm0-x_tensor``), so no member meets one, whatever its name; their last segments, a word
 # or a number, keep them apart.
 
@@ -225,8 +254,9 @@ _END = _installed("end")
 
 # -- the module's parts, read serially ------------------------------------------------------
 #
-# A module's pins are its other pins' (``OtherPins``), its control bus's, then its ports',
-# each in declaration order; its holds its ports', its other pins', then its control bus's.
+# A module's pins are its other pins' (``OtherPins``), its control bus's, its memory ports'
+# (``MemoryPort``), then its ports', each in declaration order; its holds its ports', its
+# other pins', its control bus's, then its memory ports' (none: each is presented).
 # The base reads each part's ``pin_values``, ``held_values`` and ``pins_presented`` in that
 # order, one after another: a part's refusal is collected with the later parts' (``_each``),
 # and a part not yet known stops the reading there. A Space method's reads are found from its
@@ -268,7 +298,12 @@ def _beats_from(part: str, following: str) -> Callable[[Kernel], tuple[Any, ...]
 
 def _module_parts(cls: type[Kernel]) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """The names of its module's parts in pin order and in hold order (above)."""
-    from finn.kernels.port_model import OtherPins, StreamPort, stream_ports  # noqa: PLC0415
+    from finn.kernels.port_model import (  # noqa: PLC0415
+        MemoryPort,
+        OtherPins,
+        StreamPort,
+        stream_ports,
+    )
 
     nested = [
         name for names in (control_models(cls), stream_ports(cls)) for name in names if "." in name
@@ -284,8 +319,9 @@ def _module_parts(cls: type[Kernel]) -> tuple[tuple[str, ...], tuple[str, ...]]:
     members = _members(cls)
     others = tuple(name for name, item in members.items() if isinstance(item, OtherPins))
     controls = tuple(name for name, item in members.items() if isinstance(item, ControlModel))
+    memories = tuple(name for name, item in members.items() if isinstance(item, MemoryPort))
     ports = tuple(name for name, item in members.items() if isinstance(item, StreamPort))
-    return (*others, *controls, *ports), (*ports, *others, *controls)
+    return (*others, *controls, *memories, *ports), (*ports, *others, *controls, *memories)
 
 
 def _is_stream_port(item: object) -> bool:
@@ -783,6 +819,23 @@ def _own_buses(model: str) -> Callable[[Any], tuple[str, ...]]:
     return own_buses
 
 
+def _own_windows(model: str) -> Callable[[Any], tuple[int, ...] | Rejected]:
+    def own_windows(self: Any) -> tuple[int, ...] | Rejected:
+        config = getattr(self, model)
+        if not config.presented:
+            return ()
+        bus = config.bus
+        window = bus_window(bus)
+        if window is None:
+            return reject(
+                "bus-aperture-unknown",
+                f"{bus.name}: an AXI-Lite bus with no awaddr has no aperture",
+            )
+        return (window,)
+
+    return own_windows
+
+
 def _derive_control(cls: type[Kernel]) -> None:
     """Derive ``cls``'s ``declares_bus`` and ``bus_control`` from the control bus its own body
     declares (above); one a kernel it derives from declares, it inherits with that kernel's
@@ -849,6 +902,7 @@ def _derive_control(cls: type[Kernel]) -> None:
     if may_present:
         cls._presents_buses = True
         setattr(cls, "-own-buses", _own_buses(name))
+        setattr(cls, "-own-windows", _own_windows(name))
     declares = _declares_bus()
     declares.__annotations__ = {"return": bool}
     declares.__doc__ = f"Whether it declares a control bus: it does, {name}."
@@ -869,14 +923,15 @@ def _derive_control(cls: type[Kernel]) -> None:
 #
 # A kernel with members takes the doubled clock where it or any present member takes it, and
 # presents the control buses it and its present members present, each under its member's
-# path: the base derives both once, when its class is made, from the members whose class may
-# take a doubled clock (one deriving its own ``clocking``, or a kernel with such members) or
-# may present a bus. It reads those members only, one after another, each where it is
-# present (its guard read by the name its closure fixes) and, a selector, its selected case
-# only: a dormant case is never read. As for the module's parts, each member is read by its
-# own helper, ``-<prefix>-<i>``, so that each read names its member.
+# path, each with the window it takes: the base derives them once, when its class is made,
+# from the members whose class may take a doubled clock (one deriving its own ``clocking``,
+# or a kernel with such members) or may present a bus. It reads those members only, one
+# after another, each where it is present (its guard read by the name its closure fixes)
+# and, a selector, its selected case only: a dormant case is never read. As for the module's
+# parts, each member is read by its own helper, ``-<prefix>-<i>``, so that each read names
+# its member.
 
-_DOUBLED, _BUSES = "doubled", "buses"
+_DOUBLED, _BUSES, _WINDOWS, _INITIATORS = "doubled", "buses", "windows", "initiators"
 _AGGREGATED = "_finn_aggregated"
 
 
@@ -892,9 +947,11 @@ def _member_types(item: object) -> tuple[type[Any], ...]:
 
 def _aggregated(cls: type[Kernel], name: str) -> bool:
     """Whether ``cls`` states ``name`` itself, below ``Kernel``, but for the base's own
-    aggregation of it."""
+    aggregation of it (its function marked, ``_set_aggregated``): a class inheriting the
+    aggregation derives its own, over its own members."""
     return any(
-        name in vars(base) and not getattr(vars(base)[name], _AGGREGATED, False)
+        name in vars(base)
+        and not getattr(getattr(vars(base)[name], "function", None), _AGGREGATED, False)
         for base in cls.__mro__[: cls.__mro__.index(Kernel)]
     )
 
@@ -906,6 +963,16 @@ def _may_double(space_type: type[Any]) -> bool:
         isinstance(space_type, type)
         and issubclass(space_type, Kernel)
         and (_declared(space_type, "clocking") or _declared(space_type, "takes_doubled_clock"))
+    )
+
+
+def _may_initiate(space_type: type[Any]) -> bool:
+    """Whether a kernel of ``space_type`` may initiate a memory port: it states (or the base
+    derives) its ``memory_initiators``."""
+    return (
+        isinstance(space_type, type)
+        and issubclass(space_type, Kernel)
+        and _declared(space_type, "memory_initiators")
     )
 
 
@@ -962,6 +1029,32 @@ def _buses_from(
     return buses_from
 
 
+def _windows_from(
+    guard: str | None, member: str, following: str
+) -> Callable[[Kernel], tuple[int, ...]]:
+    def windows_from(self: Kernel) -> tuple[int, ...]:
+        found: tuple[int, ...] = ()
+        if guard is None or getattr(self, guard):
+            found = getattr(self, member).control_windows
+        following_: tuple[int, ...] = getattr(self, following)()
+        return (*found, *following_)
+
+    return windows_from
+
+
+def _initiators_from(
+    guard: str | None, member: str, following: str
+) -> Callable[[Kernel], tuple[int, ...]]:
+    def initiators_from(self: Kernel) -> tuple[int, ...]:
+        found: tuple[int, ...] = ()
+        if guard is None or getattr(self, guard):
+            found = (getattr(self, member).memory_initiators,)
+        following_: tuple[int, ...] = getattr(self, following)()
+        return (*found, *following_)
+
+    return initiators_from
+
+
 def _case_member(cls: type[Kernel], member: str, item: object) -> str | None:
     """The name of ``cls``'s private member answering a selector member's case
     (``-<member>-case``), installed where it is not yet; None for a child."""
@@ -976,8 +1069,10 @@ def _case_member(cls: type[Kernel], member: str, item: object) -> str | None:
 
 
 def _derive_doubled(cls: type[Kernel]) -> None:
-    """Derive ``cls``'s ``takes_doubled_clock`` and ``control_buses`` from the members that
-    may require them (above), where it has any and does not state its own."""
+    """Derive ``cls``'s ``takes_doubled_clock``, ``memory_initiators``, ``control_buses`` and
+    ``control_windows`` from the members that may require them (above), where it has any and
+    does not state its own: its control buses in its instance order (``instance_order``), as
+    its netlist exports them."""
     members = [
         (name, item)
         for name, item in _members(cls).items()
@@ -1000,11 +1095,30 @@ def _derive_doubled(cls: type[Kernel]) -> None:
 
         takes_doubled_clock.__doc__ = vars(Kernel)["takes_doubled_clock"].function.__doc__
         _set_aggregated(cls, "takes_doubled_clock", takes_doubled_clock, bool)
-    presenting = [
-        (name, item)
-        for name, item in members
-        if any(may_present_bus(each) for each in _member_types(item))
+    initiating = [
+        (name, item) for name, item in members if any(map(_may_initiate, _member_types(item)))
     ]
+    if initiating and not _aggregated(cls, "memory_initiators"):
+        _install_reading(
+            cls,
+            _INITIATORS,
+            [(partial(_initiators_from, _guarded(cls, item)), name) for name, item in initiating],
+        )
+
+        def memory_initiators(self: Kernel) -> int:
+            return sum(getattr(self, "-initiators-0")())
+
+        memory_initiators.__doc__ = vars(Kernel)["memory_initiators"].function.__doc__
+        _set_aggregated(cls, "memory_initiators", memory_initiators, int)
+    rank = {name: index for index, name in enumerate(cls.instance_order)}
+    presenting = sorted(
+        (
+            (name, item)
+            for name, item in members
+            if any(may_present_bus(each) for each in _member_types(item))
+        ),
+        key=lambda each: rank.get(each[0], len(rank)),
+    )
     cls._presents_buses = cls._presents_buses or bool(presenting)
     if presenting:
         _install_reading(
@@ -1022,6 +1136,21 @@ def _derive_doubled(cls: type[Kernel]) -> None:
 
         control_buses.__doc__ = vars(Kernel)["control_buses"].function.__doc__
         _set_aggregated(cls, "control_buses", control_buses, tuple[str, ...])
+        _install_reading(
+            cls,
+            _WINDOWS,
+            [(partial(_windows_from, _guarded(cls, item)), name) for name, item in presenting],
+        )
+
+        def control_windows(self: Kernel) -> tuple[int, ...] | Rejected:
+            own: tuple[int, ...] | Rejected = getattr(self, "-own-windows")()
+            if isinstance(own, Rejected):
+                return own
+            found: tuple[int, ...] = (*own, *getattr(self, "-windows-0")())
+            return found
+
+        control_windows.__doc__ = vars(Kernel)["control_windows"].function.__doc__
+        _set_aggregated(cls, "control_windows", control_windows, tuple[int, ...] | Rejected)
 
 
 def _install_reading(
@@ -1833,6 +1962,7 @@ class Kernel(Space):
                 "a kernel binds one at most",
                 declaration=cls.__qualname__,
             )
+        _refuse_misplaced_rate(cls, bool(specs))
         if not specs:
             _refuse_composite_interval(cls)
         if specs:
@@ -1917,14 +2047,17 @@ class Kernel(Space):
         ``clocking`` is its own, never its members'. The base derives a kernel's with
         members that may take it when its class is made, reading those members only, each
         where it is present (``_derive_doubled``); a case not selected is never read. What
-        a shell's clock rule reads (``finn.kernels.budgets``)."""
+        a shell's clock rule reads (``finn.kernels.shell_rules``)."""
         return self.clocking.doubling
 
     @derived
     def memory_initiators(self) -> int:
-        """The memory ports it initiates itself (a memory-mapped bus it is the initiator
-        of): none here, and no kernel declares one today. A kernel that does states its
-        own; a shell's memory rule counts them (``finn.kernels.budgets``)."""
+        """The memory ports it initiates (a memory-mapped bus it is the initiator of,
+        ``finn.kernels.port_model.MemoryPort``): none here. A kernel that declares one states
+        its own (a memory mover's, ``finn.kernels.iodma``); the base derives a kernel's with
+        members that may initiate one when its class is made, the sum of its present
+        members' (``_derive_doubled``). A shell's memory rules count them
+        (``finn.kernels.shell_rules``)."""
         return 0
 
     # -- its schedule ----------------------------------------------------------------------
@@ -1950,6 +2083,15 @@ class Kernel(Space):
         if type(self).module_spec is None:
             return Inapplicable()
         return RATE_INTERVAL
+
+    @derived
+    def stated_rate(self) -> StatedRate | Inapplicable:
+        """Its rate a frame where the rate law cannot give it (L6,
+        ``finn.kernels.laws.StatedRate``): a kernel with a module and no schedule that
+        advances otherwise than a beat a side (a memory mover) states it, its port's beat
+        times and its span, with their standing and source; its cycles a frame are then its
+        span (``frame_cycles``). Any other kernel states none (``kernel-rate-stated``)."""
+        return Inapplicable()
 
     # -- its intake ------------------------------------------------------------------------
 
@@ -2038,7 +2180,9 @@ class Kernel(Space):
         rank = {name: index for index, name in enumerate(order)}
 
         def ranked(item: Any) -> int:
-            return rank.get(str(item.node), len(order))
+            # By the member each is of, as the windows are: a selected case's node is its
+            # path below its selector (``selected.leaf``), placed where the selector is.
+            return rank.get(str(item.node).split(".", 1)[0], len(order))
 
         # Each member channel's, with its hops to the ports beside it around its own links.
         hopped: dict[str, Any] = dict(getattr(self, "-hops-0")())
@@ -2105,10 +2249,20 @@ class Kernel(Space):
     def control_buses(self) -> tuple[str, ...]:
         """The control buses it presents, each by its path below it: its own (``""``), where
         its model presents it, and each present member's, under the member's path
-        (``compute.packed``, a selector's case). What a shell's budget counts
-        (``finn.kernels.budgets``); the base derives it for a kernel with members that may
-        present one when its class is made (``_derive_doubled``)."""
+        (``compute.packed``, a selector's case), each taking its window
+        (``control_windows``), which a shell's rules place (``finn.kernels.shell_rules``); the
+        base derives it for a kernel with members that may present one when its class is
+        made (``_derive_doubled``)."""
         found: tuple[str, ...] = getattr(self, "-own-buses")()
+        return found
+
+    @derived
+    def control_windows(self) -> tuple[int, ...] | Rejected:
+        """The bytes each control bus it presents takes (``2**awaddr`` of its bus), one for
+        each of its ``control_buses``, in their order: what a shell's control window rule
+        places. The base derives it beside ``control_buses``; a presented bus with no
+        ``awaddr`` has none (``bus-aperture-unknown``)."""
+        found: tuple[int, ...] | Rejected = getattr(self, "-own-windows")()
         return found
 
     @derived
@@ -2145,10 +2299,11 @@ class Kernel(Space):
         schedule's iterations (the span of each pace of its ports), or, a kernel with
         no schedule (a stage, a memory), advancing one beat a side an interval, the most
         beats a frame any of its placed ports carries, times its interval (``in_cycles``,
-        the one conversion, which FIFO sizing reads too). A kernel with children takes the
-        most any member takes, a member counting none (inapplicable) left out. A kernel with
-        a module never restates it (``kernel-cycles-restated``, when its class is made): it
-        states its ``interval`` where its hardware differs."""
+        the one conversion, which FIFO sizing reads too), or, where it states its rate
+        (``stated_rate``: a memory mover), the cycles its frame spans. A kernel with children
+        takes the most any member takes, a member counting none (inapplicable) left out. A
+        kernel with a module never restates it (``kernel-cycles-restated``, when its class is
+        made): it states its ``interval`` where its hardware differs, or its rate."""
         if type(self).module_spec is not None:
             return self._rate_frame_cycles()
         found = [item.value for item in self.member_frame_cycles]
@@ -2167,6 +2322,10 @@ class Kernel(Space):
             interval: Interval = self.interval
             if interval.standing is Standing.ASSUMED:
                 own = (f"interval {interval}",)
+            if _declared(type(self), "stated_rate"):
+                rate: StatedRate = self.stated_rate
+                if rate.standing is Standing.ASSUMED:
+                    own = (*own, f"rate {rate}")
         below = (f"{item.node}: {each}" for item in self.member_assumed for each in item.value)
         return (*own, *below)
 
@@ -2174,7 +2333,11 @@ class Kernel(Space):
         """A kernel with a module's cycles a frame by the rate law (``frame_cycles``): its
         schedule's iterations where it states a schedule, else its placed ports' most beats
         a frame, each port read in its declaration order (``StreamPort.frame_beats``), at
-        its ``interval``; refused where it places no port."""
+        its ``interval``; refused where it places no port. Where it states its rate, its
+        span, refused unless it times each beat a frame of a port it has
+        (``kernel-rate-port``)."""
+        if _declared(type(self), "stated_rate"):
+            return self._stated_frame_cycles()
         interval: Interval = self.interval
         if _declared(type(self), "schedule"):
             schedule: Schedule = self.schedule
@@ -2185,6 +2348,26 @@ class Kernel(Space):
                 "kernel-cycles", f"no port of {type(self).__qualname__} carries a stream's beats"
             )
         return in_cycles(max(beats), interval)
+
+    def _stated_frame_cycles(self) -> int | Rejected:
+        """``_rate_frame_cycles`` where it states its rate (``stated_rate``): its ports'
+        beats a frame read as the rate law reads them, by name."""
+        rate: StatedRate = self.stated_rate
+        owner = type(self).__qualname__
+        names = (name for name, item in _members(type(self)).items() if _is_stream_port(item))
+        by_port = dict(zip(names, getattr(self, "-beats-0")()))
+        if rate.port not in by_port:
+            return reject(
+                "kernel-rate-port", f"{owner} states the rate of {rate.port!r}, no port of it"
+            )
+        beats = by_port[rate.port]
+        if beats != len(rate.times):
+            return reject(
+                "kernel-rate-port",
+                f"{owner} times {len(rate.times)} beats of {rate.port}, which carries "
+                f"{beats} a frame",
+            )
+        return rate.span
 
     # -- what it reaches of its members: their answers, read by its views, and their intake,
     # read by its own (a derived value, contract) ------------------------------------------
@@ -2222,10 +2405,11 @@ def _doubled_none(self: Kernel) -> bool:
     return False
 
 
-for _head in (_PINS, _HELD, _PRESENTED, _BEATS, _INPUTS, _BUSES, _HOPS):
+for _head in (_PINS, _HELD, _PRESENTED, _BEATS, _INPUTS, _BUSES, _WINDOWS, _HOPS):
     setattr(Kernel, _installed(_head, "0"), _read_none)
 setattr(Kernel, _installed(_DOUBLED, "0"), _doubled_none)
 setattr(Kernel, "-own-buses", _read_none)
+setattr(Kernel, "-own-windows", _read_none)
 setattr(Kernel, _END, _read_none)
 setattr(Kernel, "-no-port", _no_port)
 setattr(Kernel, "-placed", _placed)

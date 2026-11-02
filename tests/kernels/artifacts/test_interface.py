@@ -103,7 +103,7 @@ def test_every_pin_is_described_with_what_it_carries() -> None:
             "order": TRANSPOSED,
         },
     ]
-    # The bus's map is the IP-XACT's: one register block, its window at least 4 KiB.
+    # The bus's map is the IP-XACT's: one register block, its address space.
     assert described["axilite"] == [
         {
             "name": "s_axilite",
@@ -111,7 +111,7 @@ def test_every_pin_is_described_with_what_it_carries() -> None:
             "data_width": 32,
             "clock": "ap_clk",
             "register_map": [
-                {"name": "Reg0", "base": 0, "range": 4096, "width": 32, "usage": "register"}
+                {"name": "Reg0", "base": 0, "range": 32, "width": 32, "usage": "register"}
             ],
         }
     ]

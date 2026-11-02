@@ -26,7 +26,8 @@ from support.configure import configured, core_in_shell, write_raw
 from support.explore_models import kernel_model as converted_model
 from support.models import choose_memories, configure_partition, kernel_model
 from support.module_names import live_name
-from support.packaging import NoVivado, reaches_vivado
+from support.packaging import NoVivado, ReachedVivado, reaches_vivado
+from support.presenting import thresholdings
 from support.refusals import refused
 from support.xsim import requires_vivado
 
@@ -39,11 +40,14 @@ from finn.core.graph.annotations.outputs import (
 )
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import CUT_NAME, design_digest
-from finn.core.space import inspection
+from finn.core.space import Available, inspection
 from finn.custom_op.kernels.network import persist
-from finn.custom_op.kernels.shell import configured_network
+from finn.custom_op.kernels.shell import configured_network, core_grouping
 from finn.kernels.artifacts import build
-from finn.kernels.dataflow_core import STEM
+from finn.kernels.artifacts.unit import CoreUnit
+from finn.kernels.dataflow_core import STEM, DataflowCoreKernel
+from finn.platform.shells import shell_row
+from finn.toolchain.ip import PACKAGE_SCRIPT, packaged
 from finn.toolchain.launcher import (
     Selection,
     Toolchain,
@@ -55,9 +59,11 @@ from finn.toolchain.vivado import hierarchical_utilization
 from finn.transformation.kernels import PackagePartition
 from finn.transformation.kernels.cut import MakeCutChoices
 from finn.transformation.kernels.package import (
+    UNIT_CORE,
     ElaboratePartition,
     ip_key,
     partition_utilization_report,
+    staged_unit,
 )
 
 
@@ -206,6 +212,81 @@ def test_a_top_that_does_not_elaborate_is_refused_before_vivado(
             )
         )
     assert "use of undeclared identifier 'no_such_net'" in str(unelaborated.error)
+    assert toolchain.ran == []
+
+
+def test_a_core_unit_elaborates_beside_its_core_and_holds_its_ip(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A core presenting three buses (thresholdings built by hand) staged as its unit: the
+    unit's module elaborates beside the core's, its project holds the core's packaging
+    project (its IP and the sources it names, ``core/``), and its script finds the core's IP
+    there and holds it as a subcore, by the VLNV it was packaged as, whole (here of a
+    vendor, library and version of its own). Packaging gets as far as running Vivado."""
+    point = thresholdings(3, shell_row("pynq", "Ultra96"))
+    module = point.core_answer(DataflowCoreKernel.module)
+    grouping = core_grouping(point)
+    assert isinstance(module, Available) and grouping == ((0, 32, 64), 4096)
+    core = module.value
+    subcore = f"vendor:library:{live_name(core)}:2.7"
+    unit = CoreUnit(live_name(core), subcore, core.abi, *grouping)
+    project = tmp_path / "core_project"
+    for each in ("ip/component.xml", "src/core.sv"):
+        (project / each).parent.mkdir(parents=True, exist_ok=True)
+        (project / each).write_text(each)
+    toolchain = cast(Toolchain, NoVivado())
+    logger = "finn.transformation.kernels.package"
+    staging = staged_unit(
+        subcore,
+        grouping,
+        core,
+        project,
+        name="core",
+        part="xczu3eg-sbva484-1-e",
+        clock_ns=5.0,
+        toolchain=toolchain,
+    )
+    with caplog.at_level(logging.INFO, logger=logger), staging as (staged, emitted):
+        assert emitted.entry_point == unit.name(
+            (staged / "src" / "rtl/infra/axilite_decoder.sv").read_bytes()
+        )
+        for each in ("ip/component.xml", "src/core.sv"):
+            assert (staged / UNIT_CORE / each).read_text() == each
+        script = (staged / PACKAGE_SCRIPT).read_text()
+        assert f"set_property ip_repo_paths [list $project/{UNIT_CORE}/ip]" in script
+        assert f"ipx::add_subcore {subcore} " in script
+        with pytest.raises(ReachedVivado):
+            packaged(
+                staged,
+                name=emitted.entry_point,
+                run_synth=False,
+                toolchain=toolchain,
+                store=tmp_path / "store",
+            )
+    (line,) = [record.getMessage() for record in caplog.records if record.name == logger]
+    assert line.startswith(f"core: slang elaborated {emitted.entry_point} under ")
+    assert "its 5 ports agree with the pins (" in line
+
+
+def test_a_unit_that_cannot_be_made_is_refused_before_it_is_staged(tmp_path: Path) -> None:
+    """A map the grouper never gives (two buses at one offset) is refused by name, before
+    any file of the unit is written or any tool runs."""
+    point = thresholdings(2, shell_row("pynq", "Ultra96"))
+    module = point.core_answer(DataflowCoreKernel.module)
+    assert isinstance(module, Available)
+    toolchain = NoVivado()
+    with refused("unit-unmade", error=KernelOpError, owner="PackageUnit", node="core"):
+        with staged_unit(
+            "vendor:library:core:1.0",
+            ((0, 0), 4096),
+            module.value,
+            tmp_path,
+            name="core",
+            part="xczu3eg-sbva484-1-e",
+            clock_ns=5.0,
+            toolchain=cast(Toolchain, toolchain),
+        ):
+            pass
     assert toolchain.ran == []
 
 

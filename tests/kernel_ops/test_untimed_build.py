@@ -51,7 +51,7 @@ def test_configuration_and_emission_do_not_read_refused_cycles(
     with pytest.raises(KernelOpError, match="cycle characterization unavailable"):
         _ = actual.cycles
     assert reads == ["cycles"]
-    assert isinstance(actual.network.answer(DataflowCoreKernel.module), Available)
+    assert isinstance(actual.network.core_answer(DataflowCoreKernel.module), Available)
 
 
 def _unavailable(timing: str, reads: list[str]) -> Any:

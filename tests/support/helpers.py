@@ -86,8 +86,10 @@ from finn.kernels.explore import CoreComposition, Defaults, Seam
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.matmul import KnownWeights, MatMulKernel, datatype_range
+from finn.kernels.movers import MoverOffer
 from finn.kernels.policies import Alone, Unstated, defaulted, ranked
 from finn.kernels.port import axis, transport
+from finn.kernels.shell import shell as in_shell
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingKernel
 from finn.kernels.transport import AxisBeat, ReadyValidTransport
@@ -173,20 +175,16 @@ module is ``finn_partition`` (``DataflowCoreKernel.module``)."""
 
 
 def declared_by_hand(
-    members: Mapping[str, Facts | ChannelDeclaration],
-    *,
-    shell: Mapping[str, object] | None = None,
-    name: str = TEST_CORE,
+    members: Mapping[str, Facts | ChannelDeclaration], *, name: str = TEST_CORE
 ) -> DataflowCoreDeclaration:
     """A core declared by hand: ``members`` in its module's order, each kernel by name (its
     ``Facts``) and each channel by the tensor it carries (``channel``), its module named
-    ``name``; in a shell where ``shell`` states its row's facts
-    (``DataflowCoreDeclaration.shell``)."""
+    ``name``."""
     kernels = {each: item for each, item in members.items() if isinstance(item, Facts)}
     channels = {
         each: item for each, item in members.items() if isinstance(item, ChannelDeclaration)
     }
-    return DataflowCoreDeclaration(kernels, channels, shell, name=name, order=tuple(members))
+    return DataflowCoreDeclaration(kernels, channels, name=name, order=tuple(members))
 
 
 def bound_by_hand(
@@ -194,11 +192,18 @@ def bound_by_hand(
     stored: Mapping[Key, object] | None = None,
     *,
     shell: Mapping[str, object] | None = None,
+    offer: MoverOffer | None = None,
     name: str = TEST_CORE,
-) -> Bound:
-    """A core declared by hand (``declared_by_hand``), composed, its ``stored`` choices
-    bound, by key (``finn.kernels.dataflow_core.bound``: what it dropped as stale kept)."""
-    return bound(compose(declared_by_hand(members, shell=shell, name=name)), stored)
+) -> Bound[Kernel]:
+    """A core declared by hand (``declared_by_hand``), composed, alone or, where ``shell``
+    states a row's facts, in that shell with ``offer`` on each edge
+    (``finn.kernels.shell.shell``), its ``stored`` choices bound, by key
+    (``finn.kernels.dataflow_core.bound``: what it dropped as stale kept)."""
+    declared = declared_by_hand(members, name=name)
+    point: Kernel = (
+        compose(declared) if shell is None else in_shell((declared,), row=shell, offer=offer)
+    )
+    return bound(point, stored)
 
 
 def by_hand(
@@ -206,10 +211,13 @@ def by_hand(
     stored: Mapping[Key, object] | None = None,
     *,
     shell: Mapping[str, object] | None = None,
+    offer: MoverOffer | None = None,
     name: str = TEST_CORE,
 ) -> CoreComposition:
     """A core declared by hand (``bound_by_hand``), read by key: its composition."""
-    return CoreComposition(bound_by_hand(members, stored, shell=shell, name=name).point)
+    return CoreComposition(
+        bound_by_hand(members, stored, shell=shell, offer=offer, name=name).point
+    )
 
 
 def choose(network: CoreComposition, choices: Mapping[str, object]) -> CoreComposition:

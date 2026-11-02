@@ -232,22 +232,17 @@ def test_a_directory_without_its_script_is_no_staged_project(tmp_path):
         )
 
 
-def test_a_library_enters_the_hls_key_by_its_content_not_its_location(tmp_path):
-    """A request that reads a library in place (an IODMA, finn-hlslib): two copies of the
-    library give one key, a changed one another; so does the part."""
+def test_a_request_enters_the_hls_key_by_its_content_not_its_location(tmp_path):
+    """Two copies of a staged request give one key, a changed one another; so does the
+    part."""
     request = tmp_path / "request"
     request.mkdir()
-    (request / "script.tcl").write_text("source $hlslib/x.tcl\n")
-    library = tmp_path / "hlslib"
-    library.mkdir()
-    (library / "dma.h").write_text("// dma\n")
-    copy = tmp_path / "elsewhere" / "hlslib"
-    shutil.copytree(library, copy)
+    (request / "script.tcl").write_text("set_part $part\n")
+    copy = tmp_path / "elsewhere" / "request"
+    shutil.copytree(request, copy)
     part, identity = "xc7z020clg400-1", "vitis_hls 2024.2 0"
-    key = synthesis_key(request, part, identity, {"hlslib": library})
-    assert synthesis_key(request, part, identity, {"hlslib": copy}) == key
-    assert synthesis_key(request, "xczu3eg-sbva484-1-e", identity, {"hlslib": copy}) != key
-    (copy / "dma.h").write_text("// dma, changed\n")
-    assert synthesis_key(request, part, identity, {"hlslib": copy}) != key
-    # A request that reads no library keys as before.
-    assert synthesis_key(request, part, identity) == synthesis_key(request, part, identity, {})
+    key = synthesis_key(request, part, identity)
+    assert synthesis_key(copy, part, identity) == key
+    assert synthesis_key(copy, "xczu3eg-sbva484-1-e", identity) != key
+    (copy / "script.tcl").write_text("set_part $part\nexit\n")
+    assert synthesis_key(copy, part, identity) != key

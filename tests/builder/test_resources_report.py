@@ -13,7 +13,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import pytest
-from support.models import configure_partition, kernel_model
+from support.models import configure_partition, kernel_model, zynq_parent
 from support.packaging import PLACED_HIERARCHY, UTILIZATION_SYNTH
 
 from finn.builder.build_dataflow_resources import shell_resources_report
@@ -23,7 +23,7 @@ from finn.custom_op.kernels.shell import ShellResources, configured_network, she
 from finn.kernels.utilization import SHELL_CHARACTERISED
 from finn.platform.capabilities import Resources
 from finn.platform.resolve import resolve_target
-from finn.platform.shells import PYNQ_CHARACTERISED, shell_row
+from finn.platform.shells import shell_row
 from finn.toolchain.vivado import placed_hierarchy, utilization_synth
 from finn.transformation.kernels import explore_kernel_choices
 from finn.transformation.kernels.cut import CutKernelPartition
@@ -45,9 +45,9 @@ def test_the_placed_hierarchy_is_read_by_depth() -> None:
         (2, "smartconnect_0"),
         (3, "inst"),
         (2, "DataflowCore_0"),
-        (2, "axi_interconnect_0"),
-        (2, "idma0"),
-        (2, "odma0"),
+        (2, "control_0_0"),
+        (2, "in0"),
+        (2, "out0"),
     ]
     assert resources_of(rows[0][2]) == Resources(lut=1000, ff=2000, bram18=5, dsp=4)
     assert resources_of(rows[4][2]) == Resources(lut=400, ff=800, bram18=3, dsp=4)
@@ -59,7 +59,7 @@ def test_a_partition_on_the_ip_shell_states_its_model_alone(tmp_path: Path) -> N
     parent = kernel_model().transform(CutKernelPartition(tmp_path))
     node, body, _ = partition_body(parent)
     point = configured_network(body, node.name)
-    modelled = shell_resources(point.network.point, point.row)
+    modelled = shell_resources(point.network)
     assert isinstance(modelled, ShellResources)
     stated = shell_resources_report(parent, {})
     assert (stated["shell"], stated["caveat"]) == ("ip", None)
@@ -71,6 +71,7 @@ def test_a_partition_on_the_ip_shell_states_its_model_alone(tmp_path: Path) -> N
             "placed": None,
         },
         "movers": {},
+        "groupers": {},
         "static_region": {},
     }
     assert stated["total"] == {
@@ -83,6 +84,31 @@ def test_a_partition_on_the_ip_shell_states_its_model_alone(tmp_path: Path) -> N
     assert "not placed" in stated["absent"]["placed"]
 
 
+def test_a_core_presenting_a_bus_reports_its_grouper_as_its_model_states_it(
+    tmp_path: Path,
+) -> None:
+    """The Chain on pynq, its thresholds runtime-writable: its core presents one bus, so its
+    shell places a grouper, a rename of no hardware (no decoder: no instance); the model
+    states it alone, none, and Vivado's columns would count it in its unit's cell, the
+    partition's."""
+    parent = zynq_parent(tmp_path, presenting=True)
+    node, body, _ = partition_body(parent)
+    point = configured_network(body, node.name)
+    modelled = shell_resources(point.network)
+    assert isinstance(modelled, ShellResources)
+    assert modelled.groupers == (("DataflowCore_0_grouper", Resources()),)
+    stated = shell_resources_report(parent, {})
+    assert stated["members"]["groupers"] == {
+        "DataflowCore_0_grouper": {
+            "instance": None,
+            "model": asdict(Resources()),
+            "out_of_context": None,
+            "placed": None,
+        }
+    }
+    assert stated["unattributed"]["model"] == asdict(Resources())
+
+
 @pytest.mark.parametrize("board", ["Ultra96", "ZCU104"])
 def test_off_the_board_the_shell_was_timed_on_both_reports_name_the_caveat(
     board: str, tmp_path: Path
@@ -92,9 +118,9 @@ def test_off_the_board_the_shell_was_timed_on_both_reports_name_the_caveat(
     an exploration's report's ``exact`` and resources.json's ``caveat`` name it, the
     board and its part; on Ultra96 neither has a caveat."""
     row = shell_row("pynq", board)
-    assert row.characterised == PYNQ_CHARACTERISED
-    assert "xczu3eg and xczu7ev" in PYNQ_CHARACTERISED
-    assert "built and timed on Ultra96 only" in PYNQ_CHARACTERISED
+    assert row.characterised == shell_row("pynq", "Ultra96").characterised
+    assert row.characterised is not None and "xczu3eg and xczu7ev" in row.characterised
+    assert "built and timed on Ultra96 only" in row.characterised
     model = kernel_model()
     write_target(model, resolve_target(board=board, period_ns=5.0, shell="pynq"))
     configure_partition(model)

@@ -1,0 +1,60 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+
+# A made-up platform, declared as a package outside FINN would declare its own: a board, a
+# linker, a runtime, a moved mover kind and a shell on them, with no change to FINN. Its
+# code is support.example_platform's.
+
+[boards.Example-ZU3]
+part = "xczu3eg-sbva484-1-e"
+
+[linkers.example-link]
+# Checks the board states its slot; writes the description it is given, a stub image
+# and its map, each unit at a made-up base, the main clock delivered as asked.
+code = "support.example_platform:ExampleLinker"
+tool = "example-tool"
+board_keys = ["slot"]
+image = "example-image"
+least_range = 4096
+
+[runtimes.example-run]
+# Writes the runtime file and the operations its driver would run.
+code = "support.example_platform:RecordingRuntime"
+images = ["example-image"]
+movers = ["iodma_hls", "example_dma"]
+kinds = ["moved"]
+schemas = [1]
+
+[runtimes.example-alt]
+# The shell's second runtime, writing its own name first: a build names the one it runs on.
+code = "support.example_platform:AlternateRuntime"
+images = ["example-image"]
+movers = ["iodma_hls", "example_dma"]
+kinds = ["moved"]
+schemas = [1]
+
+[movers.example_dma]
+# A mover of the platform's own, moving each frame between memory and a boundary channel.
+# Declared and checked; its shell offers FINN's own, as a core places no other kind yet.
+code = "support.example_platform:ExampleDma"
+kinds = ["moved"]
+
+[shells.example]
+# pynq's facts, with its own linker and runtime, a narrower memory port, and no
+# characterisation of its own.
+based_on = "pynq"
+linker = "example-link"
+runtimes = ["example-run", "example-alt"]
+memory = [{ name = "PORT0", width = 64, masters = 4 }]
+supply = [{ kind = "moved", movers = ["iodma_hls"], width_cap = 64 }]
+delivery = [{ kind = "moved", movers = ["iodma_hls"], width_cap = 64 }]
+characterised = "nothing: a made-up shell"
+timed = []
+caveat = "the 'example' shell is made up: on {board} ({part}) nothing is measured"
+
+[shells.example.boards.Ultra96]
+slot = "A"
+
+[shells.example.boards.Example-ZU3]
+slot = "B"
+versions = ">=1.0"
