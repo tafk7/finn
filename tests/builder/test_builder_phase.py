@@ -46,6 +46,7 @@ from support.models import (
 from support.module_names import fixed_name, live_name
 from support.packaging import (
     PLACED_HIERARCHY,
+    TFC_TIMING,
     TIMING_REPORT,
     UTILIZATION_SYNTH,
     FakeVivado,
@@ -136,7 +137,7 @@ from finn.shells.build import (
     ShellRefused,
     delivered_clock_findings,
 )
-from finn.shells.integration import IpRef, Linked, Timing, describe
+from finn.shells.integration import IpRef, Linked, describe
 from finn.shells.pynq.linker import (
     LINKER,
     OUT_OF_CONTEXT,
@@ -1430,7 +1431,7 @@ def test_the_delivered_clock_is_reported_beside_the_one_asked(tmp_path: Path) ->
         placement={},
         clocks_mhz={"main": 187.512},
         reports={},
-        timing=Timing(5.333, 1.667, "post_route_timing.rpt"),
+        timing=TFC_TIMING,
     )
     clock = shell_build.delivered_clock(linked, 5.0, 196, 1_000_000)
     assert clock == {
@@ -1438,6 +1439,8 @@ def test_the_delivered_clock_is_reported_beside_the_one_asked(tmp_path: Path) ->
         "target_period_ns": 5.0,
         "closed_period_ns": 5.333,
         "wns_ns": 1.667,
+        "whs_ns": 0.014,
+        "wpws_ns": 1.166,
         "timing_report": "report/post_route_timing.rpt",
         "delivered_period_ns": 5.333,
         "delivered_mhz": 187.512,
@@ -1463,6 +1466,8 @@ def test_the_delivered_clock_is_reported_beside_the_one_asked(tmp_path: Path) ->
         "target_period_ns",
         "closed_period_ns",
         "wns_ns",
+        "whs_ns",
+        "wpws_ns",
         "timing_report",
         "delivered_period_ns",
         "delivered_mhz",

@@ -92,6 +92,7 @@ from finn.kernels.library import library_module
 from finn.kernels.movers import MoverContract
 from finn.kernels.shell import ShellKernel
 from finn.platform.shells import Offer, placed_offer
+from finn.toolchain.vivado import Check
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
@@ -343,18 +344,28 @@ class Integration:
 @dataclass(frozen=True)
 class Timing:
     """A linked image's routed timing, as its linker read it from its routed timing report
-    and admitted it: the period its main clock closed at (``period_ns``), the routed
-    design's worst setup slack there (``wns_ns``, never negative: a linker refuses an image
-    that misses timing) and the report it read (``report``, its path under a build's
-    ``report/``, a key of ``Linked.reports``)."""
+    and admitted it: the period its main clock closed at (``period_ns``), each timing check
+    of the routed design there (``checks``, by ``finn.toolchain.vivado.CHECKS``: setup,
+    hold and pulse width, each met: a linker refuses an image that misses one) and the
+    report it read (``report``, its path under a build's ``report/``, a key of
+    ``Linked.reports``)."""
 
     period_ns: float
-    wns_ns: float
+    checks: Mapping[str, Check]
     report: str
 
+    @property
+    def wns_ns(self) -> float:
+        """The routed design's worst setup slack."""
+        return self.checks["setup"].worst_ns
+
     def record(self) -> dict[str, Any]:
-        """The timing as JSON."""
-        return {"period_ns": self.period_ns, "wns_ns": self.wns_ns, "report": self.report}
+        """The timing as JSON: the period, each check (``Check.record``) and the report."""
+        return {
+            "period_ns": self.period_ns,
+            **{name: check.record() for name, check in self.checks.items()},
+            "report": self.report,
+        }
 
 
 @dataclass(frozen=True)

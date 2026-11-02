@@ -14,6 +14,7 @@ says so. TFC's build (Z0's block design, movers and driver) is in test_builder_p
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -29,6 +30,8 @@ from qonnx.transformation.base import Transformation
 from support.configure import configured
 from support.models import configure_partition, streamed_w2_model, zynq_parent
 from support.packaging import (
+    TFC_TIMING,
+    TFC_TIMING_RECORD,
     TIMING_REPORT,
     FakeVivado,
     bitfile_default,
@@ -79,7 +82,6 @@ from finn.shells.integration import (
     IntegrationError,
     IpRef,
     Linked,
-    Timing,
     describe,
     runtime_text,
 )
@@ -672,14 +674,14 @@ def test_the_bitfile_build_is_a_transformation_of_the_parent_graph(
     clock = json.loads((output / DELIVERED_CLOCK).read_text())
     assert clock == building.clock
     assert (clock["delivered_mhz"], clock["objective_fps"]) == (187.512, 1000)
-    assert (clock["closed_period_ns"], clock["wns_ns"]) == (5.333, 1.667)
+    closed = (clock["closed_period_ns"], clock["wns_ns"], clock["whs_ns"], clock["wpws_ns"])
+    assert closed == (5.333, 1.667, 0.014, 1.166)
     assert clock["timing_report"] == f"report/{TIMING}"
     assert "bottleneck_cycles" in clock
     assert [finding["code"] for finding in clock["findings"]] == ["clock-below-asked"]
     assert [finding.code for finding in building.findings] == ["clock-below-asked"]
-    timing = {"period_ns": 5.333, "wns_ns": 1.667, "report": f"report/{TIMING}"}
-    assert json.loads((output / LINKED).read_text())["timing"] == timing
-    assert linked_as_built(output, output / BITFILE).timing == Timing(5.333, 1.667, TIMING)
+    assert json.loads((output / LINKED).read_text())["timing"] == TFC_TIMING_RECORD
+    assert linked_as_built(output, output / BITFILE).timing == TFC_TIMING
 
 
 def test_the_bitfile_build_refuses_a_shell_without_it(tmp_path: Path) -> None:
@@ -882,6 +884,15 @@ def test_a_build_replaces_its_bitfile_directory_and_the_last_links_reports(
     ]
 
 
+def _timing(**checks: tuple[float, int]) -> dict[str, Any]:
+    """TFC's timing as its build records it against the report ``old.rpt``, each check
+    named given its worst slack and failing endpoints."""
+    record: dict[str, Any] = {**copy.deepcopy(TFC_TIMING_RECORD), "report": "report/old.rpt"}
+    for name, (worst, failing) in checks.items():
+        record[name].update(worst_ns=worst, failing_endpoints=failing)
+    return record
+
+
 @pytest.mark.parametrize(
     "field, entry",
     [
@@ -893,9 +904,16 @@ def test_a_build_replaces_its_bitfile_directory_and_the_last_links_reports(
         ("reports", {"../victim.txt": "report/../victim.txt"}),
         ("reports", {"old.rpt": "victim.txt"}),
         ("reports", {"integration.json": "report/integration.json"}),
-        ("timing", {"period_ns": 5.333, "wns_ns": -0.25, "report": "report/old.rpt"}),
-        ("timing", {"period_ns": 5.333, "wns_ns": 1.667, "report": "report/other.rpt"}),
-        ("timing", {"period_ns": 5.333, "wns_ns": 1.667}),
+        ("timing", _timing(setup=(-0.25, 3))),
+        ("timing", _timing(setup=(-0.0, 1))),
+        ("timing", _timing(hold=(-0.05, 1))),
+        ("timing", _timing(pulse_width=(-0.05, 1))),
+        ("timing", _timing(hold=(0.014, 1))),
+        ("timing", {**_timing(), "report": "report/other.rpt"}),
+        ("timing", {key: value for key, value in _timing().items() if key != "pulse_width"}),
+        ("timing", {**_timing(), "period_ns": float("inf")}),
+        ("timing", _timing(setup=(float("inf"), 0))),
+        ("timing", {**_timing(), "period_ns": 0}),
     ],
     ids=[
         "dotdot",
@@ -907,8 +925,15 @@ def test_a_build_replaces_its_bitfile_directory_and_the_last_links_reports(
         "report-path",
         "finn-own",
         "timing-unmet",
+        "timing-rounded",
+        "timing-hold",
+        "timing-pulse-width",
+        "timing-failing-count",
         "timing-report",
         "timing-fields",
+        "timing-infinity",
+        "timing-slack-infinity",
+        "timing-period-zero",
     ],
 )
 def test_a_record_a_build_cannot_have_written_is_refused_before_anything_is_removed(

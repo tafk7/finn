@@ -17,6 +17,7 @@ from typing import cast
 import pytest
 from support.models import zynq_parent
 from support.packaging import (
+    TFC_TIMING,
     TIMING_REPORT,
     UNMET_REPORT,
     UNMET_SLASHKIT_REPORT,
@@ -31,7 +32,6 @@ from finn.shells.integration import (
     Integration,
     IntegrationError,
     IpRef,
-    Timing,
     describe,
 )
 from finn.shells.pynq.linker import (
@@ -418,7 +418,7 @@ def test_the_link_is_made_under_the_directory_it_is_given(
     # The fake's routed timing report is TFC's on Ultra96: its PL clock as routed, the
     # design's worst setup slack there.
     assert linked.clocks_mhz == {"main": 187.512}
-    assert linked.timing == Timing(5.333, 1.667, TIMING)
+    assert linked.timing == TFC_TIMING and TFC_TIMING.report == TIMING
 
 
 def test_the_routed_timing_is_read_from_each_linker_s_real_report() -> None:
@@ -493,6 +493,19 @@ HOLD_UNMET_REPORT = TIMING_REPORT.replace(
     "1.667        0.000                      0                63298       -0.021",
 )
 
+#: TFC's real report with its pulse-width check missed: worst and total slack -0.050 ns,
+#: one failing endpoint, in the design summary and the clock's row.
+PULSE_WIDTH_UNMET_REPORT = TIMING_REPORT.replace(
+    "1.166        0.000                       0                 19432",
+    "-0.050       -0.050                       1                 19432",
+)
+
+#: TFC's real report with one failing setup endpoint whose slack rounds to -0.000 ns.
+SETUP_ROUNDED_REPORT = TIMING_REPORT.replace(
+    "1.667        0.000                      0                63298",
+    "-0.000       -0.000                      1                63298",
+)
+
 
 @pytest.mark.parametrize(
     "timing, code, message",
@@ -501,7 +514,8 @@ HOLD_UNMET_REPORT = TIMING_REPORT.replace(
             UNMET_REPORT,
             "timing-unmet",
             r"top_wrapper_timing_summary_routed\.rpt: the routed design's worst setup slack is "
-            r"-0\.906 ns at its clk_pl_0 clock's 1\.0 ns \(1000\.0 MHz; 5\.0 ns asked\)",
+            r"-0\.906 ns, 48 of 56 endpoints failing, at its clk_pl_0 clock's 1\.0 ns "
+            r"\(1000\.0 MHz; 5\.0 ns asked\): it misses timing; ask a longer period",
         ),
         (None, "timing-unreported", r"no routed timing report \(.*routed\.rpt\)"),
         (
@@ -512,11 +526,24 @@ HOLD_UNMET_REPORT = TIMING_REPORT.replace(
         (
             HOLD_UNMET_REPORT,
             "timing-hold-unmet",
-            r"routed\.rpt: the routed design's worst hold slack is -0\.021 ns: it misses "
-            "timing at any period",
+            r"routed\.rpt: the routed design's worst hold slack is -0\.021 ns, 0 of 63298 "
+            r"endpoints failing, .*: it misses timing; a hold time is missed at any period",
+        ),
+        (
+            PULSE_WIDTH_UNMET_REPORT,
+            "timing-pulse-width-unmet",
+            r"routed\.rpt: the routed design's worst pulse width slack is -0\.05 ns, 1 of "
+            r"19432 endpoints failing, .*: it misses timing; a clock's period or pulse width "
+            "is below a primitive's minimum",
+        ),
+        (
+            SETUP_ROUNDED_REPORT,
+            "timing-unmet",
+            r"routed\.rpt: the routed design's worst setup slack is -0\.0 ns, 1 of 63298 "
+            "endpoints failing",
         ),
     ],
-    ids=["unmet", "unreported", "unread", "hold-unmet"],
+    ids=["unmet", "unreported", "unread", "hold-unmet", "pulse-width-unmet", "rounded-unmet"],
 )
 def test_an_image_that_misses_timing_is_refused_naming_its_report_and_slack(
     described: Integration, tmp_path: Path, timing: str | None, code: str, message: str
@@ -527,9 +554,11 @@ def test_an_image_that_misses_timing_is_refused_naming_its_report_and_slack(
     -0.906 ns at 1 ns), naming the report, the slack and the period; as it does an image
     whose worst hold slack is negative (``timing-hold-unmet``), one with no report
     (``timing-unreported``) and one that states no PL clock or no slack
-    (``timing-unread``). No real routed report misses hold: that case is TFC's Ultra96
-    report with its worst hold slack, 0.014 ns, rewritten to -0.021 ns
-    (``HOLD_UNMET_REPORT``)."""
+    (``timing-unread``); and an image whose pulse-width check fails, or with a failing
+    setup endpoint whose slack rounds to ``-0.000``. No real routed report on hand misses
+    hold or pulse width, or rounds a violation to zero: those cases are TFC's Ultra96
+    report with its rows rewritten (``HOLD_UNMET_REPORT``, ``PULSE_WIDTH_UNMET_REPORT``,
+    ``SETUP_ROUNDED_REPORT``)."""
     vivado = FakeVivado(timing=timing)
     with refused(code, error=LinkerRefused, owner="vivado-block-design", message=message):
         BlockDesignLinker().link(packaged(described), BOARD, tmp_path, cast(Toolchain, vivado))

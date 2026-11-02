@@ -36,7 +36,9 @@ from finn.kernels.artifacts.abi import (
     Signal,
     StandardProtocol,
 )
+from finn.shells.integration import Timing
 from finn.toolchain.launcher import Selection, Toolchain
+from finn.toolchain.vivado import Check
 from finn.transformation.kernels import PackagePartition
 from support.pynq_stub import stub
 
@@ -194,6 +196,32 @@ RECORDED = Path(__file__).parent.parent / "shells" / "recorded"
 TIMING_REPORT = (RECORDED / "ultra96-tfc-timing.rpt").read_text()
 UNMET_REPORT = (RECORDED / "unmet-pynq-timing.rpt").read_text()
 UNMET_SLASHKIT_REPORT = (RECORDED / "unmet-slashkit-timing.txt").read_text()
+
+#: ``TIMING_REPORT`` as the ``pynq`` linker admits it (``finn.shells.pynq.linker.TIMING``
+#: its report's key): its PL clock's period, each of its design's checks.
+TFC_TIMING = Timing(
+    5.333,
+    {
+        "setup": Check(1.667, 0.0, 0, 63298),
+        "hold": Check(0.014, 0.0, 0, 63298),
+        "pulse_width": Check(1.166, 0.0, 0, 19432),
+    },
+    "post_route_timing.rpt",
+)
+
+#: ``TFC_TIMING`` as a bitfile's build records it (``finn.shells.build.timing_record``).
+TFC_TIMING_RECORD = {
+    "period_ns": 5.333,
+    "setup": {"worst_ns": 1.667, "total_ns": 0.0, "failing_endpoints": 0, "endpoints": 63298},
+    "hold": {"worst_ns": 0.014, "total_ns": 0.0, "failing_endpoints": 0, "endpoints": 63298},
+    "pulse_width": {
+        "worst_ns": 1.166,
+        "total_ns": 0.0,
+        "failing_endpoints": 0,
+        "endpoints": 19432,
+    },
+    "report": "report/post_route_timing.rpt",
+}
 
 
 class FakeVivado:

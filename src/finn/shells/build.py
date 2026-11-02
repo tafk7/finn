@@ -69,8 +69,10 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import math
 import shutil
 import xml.etree.ElementTree as ElementTree
+from collections.abc import Mapping
 from fnmatch import fnmatch
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
@@ -111,6 +113,7 @@ from finn.shells.integration import (
 )
 from finn.toolchain.ip import COMPONENT
 from finn.toolchain.launcher import Toolchain, ToolFailed, host_toolchain, transcript_files
+from finn.toolchain.vivado import CHECKS, Check
 from finn.transformation.kernels.choose import shell_bottleneck
 from finn.transformation.kernels.hls import hls_products
 from finn.transformation.kernels.package import PackagePartition, PackageUnit, ip_key
@@ -284,8 +287,9 @@ def delivered_clock(
     linked: Linked, period_ns: float, cycles: int | None, objective_fps: float | None
 ) -> dict[str, Any]:
     """The main clock as ``linked`` delivers it beside the period asked, its period to the
-    picosecond, the period its routed timing closed at and the worst setup slack there,
-    with the report they were read from (``Linked.timing``, where the linker states it),
+    picosecond, the period its routed timing closed at and the worst setup, hold and
+    pulse-width slacks there, with the report they were read from (``Linked.timing``,
+    where the linker states it),
     and, given the bottleneck's ``cycles`` a frame, the frames a second at each;
     ``objective_fps`` is the throughput asked. Without a main clock delivered, the period
     asked and the timing alone. Facts only: ``delivered_clock_findings`` judges them."""
@@ -293,7 +297,8 @@ def delivered_clock(
     report: dict[str, Any] = {"clock": MAIN, "target_period_ns": period_ns}
     if linked.timing is not None:
         report["closed_period_ns"] = linked.timing.period_ns
-        report["wns_ns"] = linked.timing.wns_ns
+        for key, check in (("wns_ns", "setup"), ("whs_ns", "hold"), ("wpws_ns", "pulse_width")):
+            report[key] = linked.timing.checks[check].worst_ns
         report["timing_report"] = str(REPORT_DIR / linked.timing.report)
     if mhz is None:
         return report
@@ -605,17 +610,44 @@ def timing_record(timing: Timing) -> dict[str, Any]:
     return {**timing.record(), "report": str(REPORT_DIR / timing.report)}
 
 
-def _recorded_timing(entry: object, reports: dict[str, str]) -> bool:
-    """Whether ``entry`` is a timing ``timing_record`` writes of a link whose record's
-    reports are ``reports``: its period positive, its slack not negative, its report one of
-    them; or None, a link with no routed timing."""
+def _number(entry: object) -> float:
+    """``entry``, a finite JSON number; ``ValueError`` otherwise (JSON reads ``Infinity``)."""
+    if type(entry) not in (int, float) or not math.isfinite(cast(float, entry)):
+        raise ValueError(f"not a finite number: {entry!r}")
+    return float(cast(float, entry))
+
+
+def recorded_timing(entry: object, reports: Mapping[str, str]) -> Timing | None:
+    """The timing ``timing_record`` wrote of a link whose record's reports are
+    ``reports``, or None (a link with no routed timing). ``ValueError`` unless it is one a
+    linker admits: its period a finite positive number; each check of ``CHECKS``, its
+    slacks finite numbers, its endpoints counts, and met (``Check.met``: no failing
+    endpoint, no negative slack); the setup check timing an endpoint at least; its report
+    one of ``reports``."""
     if entry is None:
-        return True
-    if not isinstance(entry, dict) or set(entry) != {"period_ns", "wns_ns", "report"}:
-        return False
-    period, wns = entry["period_ns"], entry["wns_ns"]
-    numbers = all(type(each) in (int, float) for each in (period, wns))
-    return numbers and period > 0 and wns >= 0 and entry["report"] in reports.values()
+        return None
+    fields = {"period_ns", "report", *CHECKS}
+    if not isinstance(entry, dict) or set(entry) != fields:
+        raise ValueError(
+            f"a timing of the fields {sorted(entry) if isinstance(entry, dict) else entry}"
+        )
+    checks = {}
+    for name in CHECKS:
+        found = entry[name]
+        if not isinstance(found, dict) or set(found) != set(Check(0, 0, 0, 0).record()):
+            raise ValueError(f"its {name} check is not one a linker records")
+        counts = (found["failing_endpoints"], found["endpoints"])
+        if any(type(count) is not int or count < 0 for count in counts):
+            raise ValueError(f"its {name} check's endpoints are not counts")
+        check = Check(_number(found["worst_ns"]), _number(found["total_ns"]), *counts)
+        if not check.met:
+            raise ValueError(f"its {name} check is not met")
+        checks[name] = check
+    period = _number(entry["period_ns"])
+    if period <= 0 or checks["setup"].endpoints == 0 or entry["report"] not in reports.values():
+        raise ValueError("its period, its setup endpoints or its report is not a link's")
+    key = str(PurePosixPath(entry["report"]).relative_to(REPORT_DIR.name))
+    return Timing(period, checks, key)
 
 
 def _collected_artifact(entry: object) -> bool:
@@ -640,7 +672,7 @@ def linked_record(directory: Path, output: str, owner: str | None = None) -> dic
     ``output`` (by ``owner``, as ``ShellRefused`` has it) before anything reads or removes
     what it names (``linked-invalid``): the image and each file beside it
     ``bitfile/finn-accel<suffix>``, each report a key ``report_key`` takes at
-    ``report/<key>``, the timing's report one of them, its slack not negative."""
+    ``report/<key>``, and the timing one a linker admits (``recorded_timing``)."""
     record = Path(directory) / LINKED
     if not record.is_file():
         return None
@@ -657,8 +689,9 @@ def linked_record(directory: Path, output: str, owner: str | None = None) -> dic
                 isinstance(key, str) and path == str(REPORT_DIR / report_key(key))
                 for key, path in reports.items()
             )
-            and _recorded_timing(found["timing"], reports)
         )
+        if valid:
+            recorded_timing(found["timing"], reports)
     except (ValueError, KeyError, TypeError, ShellRefused):
         valid = False
     if not valid:
@@ -706,20 +739,13 @@ def linked_as_built(directory: Path, image: Path) -> Linked:
             f"no record of what the bitfile's build collected ({Path(directory) / LINKED}): "
             "build the bitfile again (step_build_bitfile)",
         )
-    timing = collected["timing"]
     return Linked(
         image=image,
         placement={unit: int(base) for unit, base in found["placement"].items()},
         clocks_mhz={name: float(mhz) for name, mhz in found["clocks_mhz"].items()},
         reports={key: Path(directory) / path for key, path in collected["reports"].items()},
         beside=tuple(Path(directory) / path for path in collected["beside"]),
-        timing=None
-        if timing is None
-        else Timing(
-            float(timing["period_ns"]),
-            float(timing["wns_ns"]),
-            str(PurePosixPath(timing["report"]).relative_to(REPORT_DIR.name)),
-        ),
+        timing=recorded_timing(collected["timing"], collected["reports"]),
     )
 
 
@@ -898,6 +924,7 @@ __all__ = [
     "mover_ip",
     "refuse_stale_bitfile",
     "report_key",
+    "recorded_timing",
     "timing_record",
     "shipped_bitfile",
     "unit_ips",

@@ -48,13 +48,13 @@ not wire, and a board or processor the project cannot select, before any tool ru
 ``templates.custom_zynq_shell_template`` (``project_script``) in a new project under the
 directory it is given, runs Vivado on it and collects what it made (``collect``): the
 bitfile, its hardware handoff beside it, the main clock as the routed design delivers it
-and the design's worst setup slack there, read from the routed timing report, an image
-whose setup or hold slack is negative refused (``admitted``, ``timing-unmet``,
-``timing-hold-unmet``: Vivado writes the bitfile of a design that misses timing), and the
-reports, each by its path under a build's ``report/``: the routed timing report
-(``TIMING``), the template's ``impl_1`` hierarchical utilization report (``PLACED``), each
-IP's out-of-context synthesis report (under ``OUT_OF_CONTEXT``), and what it named and
-placed (``BLOCK_DESIGN``, ``report``). Every unit's IP is packaged before it links.
+and the design's timing checks there, read from the routed timing report, an image that
+misses setup, hold or pulse width refused (``admitted``: Vivado writes the bitfile of a
+design that misses timing), and the reports, each by its path under a build's
+``report/``: the routed timing report (``TIMING``), the template's ``impl_1``
+hierarchical utilization report (``PLACED``), each IP's out-of-context synthesis report
+(under ``OUT_OF_CONTEXT``), and what it named and placed (``BLOCK_DESIGN``, ``report``).
+Every unit's IP is packaged before it links.
 """
 
 from __future__ import annotations
@@ -541,16 +541,38 @@ def collect(
     )
 
 
+#: Each timing check an image must meet (``finn.toolchain.vivado.CHECKS``), by its
+#: refusal's code, its name in the message and the remedy: a longer period meets setup
+#: and a primitive's minimum period or pulse width, never hold.
+MISSED = {
+    "setup": ("timing-unmet", "setup", "ask a longer period (the target's period_ns)"),
+    "hold": (
+        "timing-hold-unmet",
+        "hold",
+        "a hold time is missed at any period, so a longer one does not meet it; the "
+        "report's timing details name the failing paths",
+    ),
+    "pulse_width": (
+        "timing-pulse-width-unmet",
+        "pulse width",
+        "a clock's period or pulse width is below a primitive's minimum; ask a longer "
+        "period (the target's period_ns)",
+    ),
+}
+
+
 def admitted(report: Path, period_ns: float) -> tuple[float, Timing]:
     """The main clock the routed design delivers, in MHz, and its timing (``Timing``),
     read once from its routed timing report ``report`` (``TIMING``,
     ``finn.toolchain.vivado.routed_timing``): the PL clock's period in the report's clock
     summary, which Vivado gives as near the ``period_ns`` asked as the processor's clocks
-    reach, and the design's worst setup slack at it. Vivado writes the bitfile of a
-    design that misses timing: a negative worst setup slack is refused (``timing-unmet``),
-    as is a negative worst hold slack (``timing-hold-unmet``: a hold time missed at any
-    period), no report (``timing-unreported``), and one that cannot be read, is cut short,
-    or names no PL clock (``timing-unread``), each naming the report and the cause."""
+    reach, and the design's setup, hold and pulse-width checks at it, each met only with
+    no failing endpoint and no negative slack (``Check.met``: a violation rounded to
+    ``-0.000`` fails). Vivado writes the bitfile of a design that misses timing: a check
+    missed is refused, each with its remedy (``MISSED``: ``timing-unmet``, setup;
+    ``timing-hold-unmet``, hold, missed at any period; ``timing-pulse-width-unmet``), as
+    is no report (``timing-unreported``), and one that cannot be read, is cut short, or
+    names no PL clock (``timing-unread``), each naming the report and the cause."""
 
     def unread(cause: str) -> LinkerRefused:
         return LinkerRefused(
@@ -578,24 +600,20 @@ def admitted(report: Path, period_ns: float) -> tuple[float, Timing]:
             f"{', '.join(sorted(routed.clocks)) or 'none'})"
         )
     period, mhz = routed.clocks[name]["period_ns"], routed.clocks[name]["mhz"]
-    wns, whs = routed.design["setup"].worst_ns, routed.design["hold"].worst_ns
+    wns = routed.design["setup"].worst_ns
     if not math.isfinite(wns):
         raise unread(f"its worst setup slack is {wns}")
-    if wns < 0:
-        raise LinkerRefused(
-            "timing-unmet",
-            f"{report}: the routed design's worst setup slack is {wns} ns at its "
-            f"{name} clock's {period} ns ({mhz} MHz; {period_ns} ns asked): it "
-            "misses timing; ask a longer period (the target's period_ns)",
-        )
-    if whs < 0:
-        raise LinkerRefused(
-            "timing-hold-unmet",
-            f"{report}: the routed design's worst hold slack is {whs} ns: it "
-            "misses timing at any period; the routed design's timing report names its "
-            "failing paths",
-        )
-    return mhz, Timing(period, wns, TIMING)
+    for check, (code, label, remedy) in MISSED.items():
+        found = routed.design[check]
+        if not found.met:
+            raise LinkerRefused(
+                code,
+                f"{report}: the routed design's worst {label} slack is {found.worst_ns} ns, "
+                f"{found.failing_endpoints} of {found.endpoints} endpoints failing, at its "
+                f"{name} clock's {period} ns ({mhz} MHz; {period_ns} ns asked): it misses "
+                f"timing; {remedy}",
+            )
+    return mhz, Timing(period, dict(routed.design), TIMING)
 
 
 class BlockDesignLinker:
@@ -659,6 +677,7 @@ __all__ = [
     "CONTROL_MASTERS",
     "LinkerRefused",
     "MEMORY_TARGET",
+    "MISSED",
     "PROCESSORS",
     "Wire",
     "admitted",
