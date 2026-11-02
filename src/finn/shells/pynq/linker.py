@@ -574,9 +574,10 @@ def admitted(report: Path, period_ns: float) -> tuple[float, Timing]:
     is a design whose slacks do not cover it (``timing-uncovered``: ``check_timing``
     counts internal paths untimed, ``finn.toolchain.vivado.UNTIMED``, or the PL clock
     times no setup endpoint), no report (``timing-unreported``), and one that cannot be
-    read, is cut short, names no PL clock or states the design not routed
-    (``timing-unread``), each naming the report and the cause. The design's checks stay
-    the backstop: another clock's or a crossing's violation is refused too."""
+    read, is cut short, names no PL clock or one of no positive period, or states the
+    design not routed (``timing-unread``), each naming the report and the cause. The
+    design's checks stay the backstop: another clock's or a crossing's violation is
+    refused too."""
 
     def unread(cause: str) -> LinkerRefused:
         return LinkerRefused(
@@ -624,6 +625,8 @@ def admitted(report: Path, period_ns: float) -> tuple[float, Timing]:
             "design's slacks are other clocks'",
         )
     period, mhz = routed.clocks[name]["period_ns"], routed.clocks[name]["mhz"]
+    if not all(math.isfinite(each) and each > 0 for each in (period, mhz)):
+        raise unread(f"its {name} clock's period, {period} ns, or {mhz} MHz is not positive")
     wns = routed.design["setup"].worst_ns
     if not math.isfinite(wns):
         raise unread(f"its worst setup slack is {wns}")

@@ -523,6 +523,12 @@ UNTIMED_PL_CLOCK_REPORT = TIMING_REPORT.replace(
     "static              1.667        0.000                      0                63298",
 )
 
+#: TFC's real report whose PL clock states a period and frequency of zero.
+ZERO_PERIOD_REPORT = TIMING_REPORT.replace(
+    "clk_pl_0  {0.000 2.667}        5.333           187.512",
+    "clk_pl_0  {0.000 2.667}        0.000           0.000",
+)
+
 #: TFC's real report stating its design synthesized, not routed.
 UNROUTED_REPORT = TIMING_REPORT.replace(
     "| Design State      : Routed", "| Design State      : Synthesized"
@@ -611,8 +617,13 @@ def test_an_image_that_misses_timing_is_refused_naming_its_report_and_slack(
             "timing-unread",
             r"routed\.rpt: it states the design 'Synthesized', not routed",
         ),
+        (
+            ZERO_PERIOD_REPORT,
+            "timing-unread",
+            r"routed\.rpt: its clk_pl_0 clock's period, 0\.0 ns, or 0\.0 MHz is not positive",
+        ),
     ],
-    ids=["untimed-paths", "untimed-pl-clock", "unrouted"],
+    ids=["untimed-paths", "untimed-pl-clock", "unrouted", "zero-period"],
 )
 def test_an_image_whose_timing_does_not_cover_it_is_refused(
     described: Integration, tmp_path: Path, timing: str, code: str, message: str
@@ -621,7 +632,8 @@ def test_an_image_whose_timing_does_not_cover_it_is_refused(
     routed design whose ``check_timing`` counts registers with no clock or internal
     endpoints unconstrained (``timing-uncovered``), one whose PL clock, the accelerator's,
     times no setup endpoint while another clock gives the design's slacks
-    (``timing-uncovered``), and a report of a design not routed (``timing-unread``). No
+    (``timing-uncovered``), a report of a design not routed and one whose PL clock's
+    period is not positive (``timing-unread``). No
     real routed report on hand leaves paths untimed: these are TFC's Ultra96 report
     rewritten (``UNTIMED_CORE_REPORT``, ``UNTIMED_PL_CLOCK_REPORT``, ``UNROUTED_REPORT``)."""
     vivado = FakeVivado(timing=timing)

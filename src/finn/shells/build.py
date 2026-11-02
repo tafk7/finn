@@ -714,7 +714,9 @@ def linked_as_built(directory: Path, image: Path) -> Linked:
     (``RUNTIME_FILE``), and the files beside the image, the reports and the routed timing,
     as its record states them (``LINKED``), ``image`` the bitfile. No runtime file, or one
     of another schema than this FINN's (``RUNTIME_SCHEMA``), is refused, as is no
-    record."""
+    record, and a clock no positive finite number, or a main clock other than the period
+    the record's timing closed at (``clock-untimed``: the runtime would set a clock no
+    timing covers)."""
     report = Path(directory) / RUNTIME_FILE
     if not report.is_file():
         raise ShellRefused(
@@ -739,14 +741,38 @@ def linked_as_built(directory: Path, image: Path) -> Linked:
             f"no record of what the bitfile's build collected ({Path(directory) / LINKED}): "
             "build the bitfile again (step_build_bitfile)",
         )
+    try:
+        clocks = {name: _number(mhz) for name, mhz in found["clocks_mhz"].items()}
+    except ValueError:
+        clocks = {}
+    timing = recorded_timing(collected["timing"], collected["reports"])
+    mhz = clocks.get(MAIN)
+    if any(each <= 0 for each in clocks.values()) or (
+        timing is not None and (mhz is None or not _closed_at(mhz, timing.period_ns))
+    ):
+        closed = "" if timing is None else f", and its timing closed at {timing.period_ns} ns"
+        raise ShellRefused(
+            "driver",
+            "clock-untimed",
+            f"the runtime file {report} states the clocks {found['clocks_mhz']} MHz{closed} "
+            f"({Path(directory) / LINKED}): each clock is a positive number, the {MAIN} one "
+            "the period the timing closed at; build the bitfile again (step_build_bitfile)",
+        )
     return Linked(
         image=image,
         placement={unit: int(base) for unit, base in found["placement"].items()},
-        clocks_mhz={name: float(mhz) for name, mhz in found["clocks_mhz"].items()},
+        clocks_mhz=clocks,
         reports={key: Path(directory) / path for key, path in collected["reports"].items()},
         beside=tuple(Path(directory) / path for path in collected["beside"]),
-        timing=recorded_timing(collected["timing"], collected["reports"]),
+        timing=timing,
     )
+
+
+def _closed_at(mhz: float, period_ns: float) -> bool:
+    """Whether a clock of ``mhz`` is one of ``period_ns``, each as a timing report rounds
+    it, to the thousandth: their difference within the period's rounding and the
+    frequency's, carried to the period."""
+    return abs(1000 / mhz - period_ns) <= 0.0005 + 1000 * 0.0005 / mhz**2
 
 
 class MakeDriver(Transformation):

@@ -684,6 +684,30 @@ def test_the_bitfile_build_is_a_transformation_of_the_parent_graph(
     assert linked_as_built(output, output / BITFILE).timing == TFC_TIMING
 
 
+def test_a_driver_is_refused_a_clock_its_bitfile_s_timing_does_not_cover(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The runtime sets the main clock its runtime file states: the driver is refused
+    (``clock-untimed``), before anything is written, where that clock is not the period
+    the bitfile's recorded timing closed at (250 MHz against 5.333 ns), none, or not a
+    positive finite number (``Infinity``, 0); the build's own runtime file is driven."""
+    recorded_tools(monkeypatch, tmp_path)
+    parent = zynq_parent(tmp_path)
+    output = tmp_path / "output"
+    built = parent.transform(BuildBitfile(output, "pynq", toolchain=cast(Toolchain, FakeVivado())))
+    runtime = json.loads((output / RUNTIME_FILE).read_text())
+    for clocks in ({MAIN: 250.0}, {}, {MAIN: float("inf")}, {MAIN: 0}):
+        (output / RUNTIME_FILE).write_text(json.dumps({**runtime, "clocks_mhz": clocks}))
+        with refused("clock-untimed", error=ShellRefused, output="driver"):
+            built.transform(MakeDriver(output, "pynq"))
+        assert not (output / DRIVER_DIR).exists()
+    (output / RUNTIME_FILE).write_text(json.dumps(runtime))
+    built.transform(MakeDriver(output, "pynq"))
+    assert json.loads((output / DRIVER_DIR / "integration.json").read_text())["clocks_mhz"] == {
+        MAIN: 187.512
+    }
+
+
 def test_the_bitfile_build_refuses_a_shell_without_it(tmp_path: Path) -> None:
     """A partition whose target is the ``ip`` shell has no bitfile build: refused, named,
     before anything is written."""
