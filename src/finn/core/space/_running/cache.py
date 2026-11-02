@@ -84,13 +84,13 @@ public layer takes around each question (``occurrence.ask``).
 
 from __future__ import annotations
 
-import dataclasses
 import random
 import weakref
 from enum import Enum
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 from .._value_types import is_value_type
+from ..semantics import compared_fields, value_class
 from .value import hashkey
 
 if TYPE_CHECKING:
@@ -109,42 +109,6 @@ Table = dict[Member, dict[ReadSet, dict[object, "Ans"]]]
 
 WIDE = 32
 """The most reads a kept answer's read set holds, by default (``NodeCache(wide=...)``)."""
-
-
-@dataclasses.dataclass(frozen=True)
-class _Generated:
-    """A frozen dataclass: where ``dataclasses`` compiles the methods it generates."""
-
-
-_GENERATED = _Generated.__eq__.__code__.co_filename
-
-
-def _generated(method: object) -> bool:
-    code = getattr(method, "__code__", None)
-    return code is not None and code.co_filename == _GENERATED
-
-
-_VALUE_CLASSES: weakref.WeakKeyDictionary[type, bool] = weakref.WeakKeyDictionary()
-"""``value_class``'s answer by class, made once."""
-
-
-def value_class(kind: type) -> bool:
-    """Whether the cache keys ``kind``'s instances field by field: a frozen dataclass
-    (declared so itself, not by a base) whose ``__eq__`` and ``__hash__`` are the ones
-    ``dataclasses`` generates, comparing the fields' values with ``==``. A hand-written
-    ``__eq__`` or hash, an ``eq=False`` dataclass (equal by identity) or a mutable one is
-    not."""
-    found = _VALUE_CLASSES.get(kind)
-    if found is None:
-        found = _VALUE_CLASSES[kind] = _value_class(kind)
-    return found
-
-
-def _value_class(kind: type) -> bool:
-    params = kind.__dict__.get("__dataclass_params__")
-    if params is None or not (params.frozen and params.eq):
-        return False
-    return _generated(kind.__dict__.get("__eq__")) and _generated(kind.__dict__.get("__hash__"))
 
 
 def enum_key(member: Enum) -> object:
@@ -166,9 +130,9 @@ def enum_key(member: Enum) -> object:
 
 def key(value: object) -> object:
     """``value`` as the cache keys it, by type and ``==`` (see the module docstring): a plain
-    type or a value type itself, an enum member by type and name, a tuple or a frozen set
-    item by item, a value class field by field; ``None`` where it is unhashable or holds a
-    type not keyed."""
+    type or a value type itself (registered, whatever else it is), an enum member by type and
+    name, a tuple or a frozen set item by item, a value class field by field; ``None`` where
+    it is unhashable or holds a type not keyed."""
     kind = type(value)
     if kind in PLAIN:
         return hashkey(value)
@@ -179,17 +143,14 @@ def key(value: object) -> object:
         if any(part is None for part in parts):
             return None
         return (kind, tuple(parts) if kind is tuple else frozenset(parts))
-    if value_class(kind):
-        fields = [
-            key(getattr(value, item.name))
-            for item in dataclasses.fields(cast(Any, kind))
-            if item.compare
-        ]
+    if is_value_type(kind):
+        return hashkey(value)
+    names = compared_fields(kind)
+    if names is not None:
+        fields = [key(getattr(value, name)) for name in names]
         if any(part is None for part in fields):
             return None
         return (kind, tuple(fields))
-    if is_value_type(kind):
-        return hashkey(value)
     return None
 
 

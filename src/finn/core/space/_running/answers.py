@@ -47,7 +47,7 @@ from ..results import (
     owned_result,
     reject,
 )
-from ..semantics import holds_mutable, recognize, same, unrecognized
+from ..semantics import holds_mutable, recognize, same, unreadable, unrecognized
 
 if TYPE_CHECKING:
     from .._scopes import Address, Argument
@@ -211,6 +211,9 @@ def _finish(node: Address, returned: object) -> Called:
     value = returned.value if isinstance(returned, Available) else returned
     if not recognize(node.semantics, value, owner=node.owner, role=node.kind):
         raise TypeError(unrecognized(node.semantics))
+    refused = unreadable(value)
+    if refused is not None:
+        raise TypeError(f"no answer: {refused}")
     return Called(Available(value))
 
 

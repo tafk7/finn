@@ -13,9 +13,13 @@ refused as a value type where it is annotated, and as a value where it enters. T
 
 from __future__ import annotations
 
+import gc
 import math
-from collections.abc import Callable
-from dataclasses import dataclass, field
+import tracemalloc
+import types
+from collections import namedtuple
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass, field, make_dataclass
 from typing import Any, NamedTuple, cast
 
 import pytest
@@ -24,13 +28,18 @@ from support.refusals import refused
 from finn.core.space import (
     Decision,
     DefinitionError,
+    EvaluationError,
     Param,
     RequestError,
     Space,
     derived,
     design_space,
+    semantics,
+    value_type,
 )
+from finn.core.space._running.cache import key
 from finn.core.space.occurrence import held
+from finn.core.space.semantics import changed_reads, compared_fields, identity, value_class
 
 NAN = float("nan")
 
@@ -321,10 +330,12 @@ def test_a_numpy_number_is_taken_as_it_is_as_a_plain_number() -> None:
         assert meter.box is not None
         assert meter.box.inner == value and type(meter.box.inner) is type(value)
         assert meter.with_facts({Meter.box: Box((value,))}).box == Box((value,))
-    # Hashed by its value: a value class holding it is one value with one holding the plain
-    # number ``==`` holds it equal to (the value class's ``==``).
+    # Hashed by its value, and of its own type: a value class holding it is not one holding
+    # the plain number ``==`` holds it equal to (the engine compares its fields, each of one
+    # type), though the two hash alike.
     given = held(design_space(Meter(rate=1.0, box=Box(numpy.int64(3))))).ds
-    assert given == held(design_space(Meter(rate=1.0, box=Box(3)))).ds
+    plain = held(design_space(Meter(rate=1.0, box=Box(3)))).ds
+    assert given != plain and hash(given) == hash(plain)
     signed = design_space(Meter(rate=1.0, box=Box((numpy.float32(-0.0), numpy.complex64(-0j)))))
     assert signed.box is not None
     zero, complex_zero = cast(tuple[object, object], signed.box.inner)
@@ -338,3 +349,402 @@ def test_a_numpy_number_is_taken_as_it_is_as_a_plain_number() -> None:
     # A numpy value that is no number is not admitted by this: an array is mutable.
     with pytest.raises(RequestError, match="^box: Box.inner: a ndarray"):
         signed.with_facts({Meter.box: Box(numpy.zeros(2))})
+
+
+# -- A value is the same as another of one type alone, item by item -------------------------
+
+
+def test_a_value_equal_to_one_met_before_keeps_its_own_type() -> None:
+    """A value class's fields, a tuple's items and a frozen set's members are each of one type
+    in the same value: a value equal by ``==`` to one a live design space holds, of another
+    type inside, is a design space of its own, holding what it was given, whatever was met
+    before. A change to it is a change; one to the same value is none."""
+    numpy: Any = pytest.importorskip("numpy")
+    seen: list[Meter] = []
+    for earlier, later in (
+        (Offset(3), numpy.int64(3)),
+        (Offset(3), 3),
+        (3, 3.0),
+        (True, 1),
+        ((True, 2), (1, 2)),
+        (frozenset({1}), frozenset({True})),
+        (Box(1), Box(1.0)),
+    ):
+        first = design_space(Meter(rate=1.0, box=Box(earlier)))
+        second = design_space(Meter(rate=1.0, box=Box(later)))
+        seen.extend((first, second))
+        assert Box(earlier) == Box(later)
+        for point, inner in ((first, earlier), (second, later)):
+            assert point.box is not None and same(point.box.inner, inner)
+        assert held(first).ds != held(second).ds
+        assert held(first).ds.layer is not held(second).ds.layer
+        changed = first.with_facts({Meter.box: Box(later)})
+        assert changed is not first and changed.box is not None
+        assert same(changed.box.inner, later)
+        assert first.with_facts({Meter.box: Box(earlier)}) is first
+    # The same value given anew is the one design space.
+    again = design_space(Meter(rate=1.0, box=Box(Offset(3))))
+    assert held(again).ds == held(seen[0]).ds
+    assert held(again).ds.layer is held(seen[0]).ds.layer
+
+
+def same(value: object, other: object) -> bool:
+    """Of one type, item by item (a frozen set's members in ``repr`` order), and equal by
+    ``==``."""
+    if type(value) is not type(other):
+        return False
+    if isinstance(value, frozenset) and isinstance(other, frozenset):
+        return same(tuple(sorted(value, key=repr)), tuple(sorted(other, key=repr)))
+    if isinstance(value, tuple) and isinstance(other, tuple):
+        return len(value) == len(other) and all(map(same, value, other))
+    return value == other
+
+
+# -- What the review found: inherited equality, a tuple's storage, authored code, a hash ---
+
+
+class Inherited(Box):
+    """A subclass of a value class not decorated: the base's generated ``==`` and hash."""
+
+    __slots__ = ()
+
+
+@dataclass(frozen=True, eq=False)
+class Annotated(Box):
+    """A subclass decorated ``eq=False``: the base's ``==``, which compares ``inner`` alone."""
+
+    note: str = ""
+
+
+class Picked(Space):
+    rate: float = Param()
+    box: Box = Decision(domain=(Inherited(1), Inherited(2)))
+
+
+def test_an_inherited_generated_eq_compares_the_fields_it_reads_each_of_one_type() -> None:
+    """A frozen dataclass's subclass inheriting its generated ``==`` (not decorated, or
+    decorated ``eq=False``) is a value class of its own type, compared by the fields that
+    ``==`` reads, each of one type: ``Inherited(1)`` is not ``Inherited(1.0)``, nor
+    ``Box(1)``, alive or not, as a fact, a change or a domain's listed value."""
+    for kind in (Inherited, Annotated):
+        assert compared_fields(kind) == ("inner",)
+        first = design_space(Meter(rate=1.0, box=kind(1)))
+        second = design_space(Meter(rate=1.0, box=kind(1.0)))
+        assert first.box is not None and type(first.box.inner) is int
+        assert second.box is not None and type(second.box.inner) is float
+        assert held(first).ds.layer is not held(second).ds.layer
+        assert first.with_facts({Meter.box: kind(1.0)}) is not first
+        assert identity(kind(1)) != identity(Box(1)) and identity(kind(1)) == identity(kind(1))
+    picked = design_space(Picked(rate=1.0))
+    assert picked.try_with_choices({Picked.box: Inherited(1)}).accepted
+    assert not picked.try_with_choices({Picked.box: Inherited(1.0)}).accepted
+
+
+def test_an_eq_written_by_hand_is_its_authors_wherever_it_was_compiled() -> None:
+    """A dataclass's ``__eq__`` is generated only where its code is the code ``dataclasses``
+    generates for its fields: one written by hand and compiled from a string (as
+    ``dataclasses`` compiles its own) is its author's, and the class no value class."""
+    namespace: dict[str, Any] = {}
+    exec("def __eq__(self, other):\n    return self is other\n", namespace)
+    authored: Any = make_dataclass(
+        "Authored", [("inner", int)], frozen=True, namespace={"__eq__": namespace["__eq__"]}
+    )
+    assert authored.__eq__.__code__.co_filename == Box.__eq__.__code__.co_filename
+    assert not value_class(authored) and value_class(Box)
+    left, right = authored(1), authored(1)
+    first = design_space(Meter(rate=1.0, box=Box(left)))
+    second = design_space(Meter(rate=1.0, box=Box(right)))
+    assert second.box is not None and second.box.inner is right
+    assert held(first).ds != held(second).ds
+
+
+class Hidden(tuple[int, ...]):
+    """A tuple whose iteration hides its items: its ``==`` and hash read what it stores."""
+
+    __slots__ = ()
+
+    def __iter__(self) -> Iterator[int]:
+        return iter(())
+
+
+@dataclass(frozen=True)
+class Unhashable:
+    inner: int
+
+    __hash__ = None  # type: ignore[assignment]
+
+
+@dataclass(frozen=True)
+class HashExcluded:
+    inner: Unhashable = field(hash=False)
+
+
+def test_a_tuple_changing_how_it_is_read_is_no_value_and_a_set_whatever_its_members_hash() -> None:
+    """A tuple subclass whose ``__iter__`` hides what it stores is no value the engine can
+    see: refused where it enters, naming what it changes, and compared by its own ``==``
+    (``Hidden((1,))`` is not ``Hidden((2,))``). A frozen set holding a value whose hash leaves
+    out an unhashable field is a value: the same as an equal set, its design space made
+    without being interned."""
+    assert changed_reads(Hidden) == ("__iter__",)
+    with refused("literal-not-value", error=DefinitionError, message="Hidden changes how a tuple"):
+        Meter(rate=1.0, box=Box(Hidden((1,))))
+    assert not semantics.same(Hidden((1,)), Hidden((2,)), owner="test", role="test")
+    members = frozenset({HashExcluded(Unhashable(1))})
+    one = design_space(Meter(rate=1.0, box=Box(members)))
+    other = design_space(Meter(rate=1.0, box=Box(frozenset({HashExcluded(Unhashable(1))}))))
+    assert held(one).ds == held(other).ds
+    assert held(one).ds != held(design_space(Meter(rate=1.0, box=Box(frozenset())))).ds
+
+
+# -- What the second review found: __class__, a set's iteration and type, cost, registration ---
+
+
+class Token:
+    """What ``Spoof.__class__`` says instead of its type."""
+
+
+@dataclass(frozen=True)
+class Plain:
+    x: int
+
+
+class Spoof(Plain):
+    """A generated ``==``'s ``__class__`` changed: it reads ``Token`` for a value whose ``x``
+    is ``SPOOFED`` itself, so two values with equal fields are not ``==``."""
+
+    __slots__ = ()
+
+    @property  # type: ignore[misc]
+    def __class__(self) -> type:
+        return Token if self.x is SPOOFED else Plain
+
+
+SPOOFED = int("1000")
+
+
+class Spoofed(Space):
+    value: Plain = Param()
+
+    @derived
+    def native(self) -> bool:
+        return self.value == Spoof(SPOOFED)
+
+
+def test_a_class_changing_how_its_type_is_read_is_compared_by_its_own_eq() -> None:
+    """A value class's subclass whose ``__class__`` (or ``__getattribute__``) is its own is
+    compared by its ``==``, not field by field: the generated ``==`` reads ``__class__``, the
+    engine its type. Two values ``==`` tells apart are two design spaces, answering as
+    ``==`` does."""
+    left, right = Spoof(SPOOFED), Spoof(int("1000"))
+    assert left != right and not value_class(Spoof) and key(left) is None
+    assert not semantics.same(left, right, owner="test", role="test")
+    first = design_space(Spoofed(value=left))
+    second = design_space(Spoofed(value=right))
+    assert held(first).ds.layer is not held(second).ds.layer
+    assert first.native and not second.native
+
+
+class HiddenFrozen(frozenset[object]):
+    """A frozen set whose ``__iter__`` hides what it stores."""
+
+    __slots__ = ()
+
+    def __iter__(self) -> Iterator[object]:
+        return iter(())
+
+
+@dataclass(frozen=True)
+class Payload:
+    items: list[int]
+
+    def __hash__(self) -> int:
+        return 1
+
+
+class Members(frozenset[float]):
+    """A frozen set subclass changing nothing of how it is read."""
+
+    __slots__ = ()
+
+
+class Sets(Space):
+    count: int = Param()
+    members: object | None = Param(default=None)
+
+    @derived
+    def hidden(self) -> HiddenFrozen:
+        return HiddenFrozen({Payload(list(range(self.count)))})
+
+    @derived
+    def nested(self) -> tuple[HiddenFrozen, list[int]]:
+        return (HiddenFrozen({Payload([self.count])}), [])
+
+
+def test_a_frozen_set_subclass_hiding_its_members_is_refused_wherever_it_is_met() -> None:
+    """A frozen set subclass hiding its members is refused where it enters, and as a derived
+    value's answer, on its own or inside one (the engine could neither copy what it holds nor
+    hand it out as it stores). One changing nothing of how it is read is taken as it is, of its
+    own type, but refused where a member's canonical form changes: it cannot be rebuilt."""
+    with refused("literal-not-value", error=DefinitionError, message="HiddenFrozen changes"):
+        Sets(count=1, members=HiddenFrozen({1.0}))
+    space = design_space(Sets(count=2))
+    with pytest.raises(EvaluationError, match="HiddenFrozen changes how a frozen set is read"):
+        space.hidden
+    with pytest.raises(EvaluationError, match="HiddenFrozen changes how a frozen set is read"):
+        space.nested
+    kept = design_space(Sets(count=1, members=Members({0.0, 1.0}))).members
+    assert type(kept) is Members and kept == frozenset({0.0, 1.0})
+    with refused("literal-not-value", error=DefinitionError, message="a Members is a frozen set"):
+        Sets(count=1, members=Members({-0.0}))
+
+
+@dataclass(frozen=True)
+class Keyed:
+    key: int
+    inner: Unhashable = field(hash=False)
+
+
+@dataclass(frozen=True)
+class Collision:
+    """Every one hashes alike: its one field is left out of its hash."""
+
+    item: int = field(hash=False)
+
+
+def test_two_frozen_sets_are_compared_member_by_member_in_linear_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Members whose identities do not hash are compared within their hash's bucket: two
+    equal sets of 400 such members take a few comparisons each, not one per pair. Members
+    whose hashes all collide but whose identities hash are compared by their identities, not
+    within that one bucket."""
+    calls = 0
+    compare = semantics._same_item
+
+    def counted(item: object, other: object) -> bool:
+        nonlocal calls
+        calls += 1
+        return compare(item, other)
+
+    monkeypatch.setattr(semantics, "_same_item", counted)
+    size = 400
+    left = frozenset(Keyed(at, Unhashable(at)) for at in range(size))
+    right = frozenset(Keyed(at, Unhashable(at)) for at in range(size))
+    assert semantics.same(left, right, owner="test", role="test")
+    assert calls <= 4 * size
+    calls = 0
+    colliding = frozenset(Collision(at) for at in range(size))
+    alike = frozenset(Collision(at) for at in range(size))
+    assert semantics.same(colliding, alike, owner="test", role="test")
+    assert calls <= 4 * size
+
+
+def test_two_long_tuples_differing_first_are_told_apart_without_a_copy() -> None:
+    """Tuples are compared as they are, the first difference ending it: no copy of either."""
+    left, right = (1,) + (0,) * 100_000, (2,) + (0,) * 100_000
+    tracemalloc.start()
+    try:
+        assert not semantics.same(left, right, owner="test", role="test")
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 64_000
+
+
+def test_a_registered_value_class_is_keyed_as_its_owner_states() -> None:
+    """A frozen dataclass registered as a value type is keyed by its ``==`` and hash, not
+    field by field: a field holding a value the cache keys no other way does not stop it."""
+
+    @dataclass(frozen=True)
+    class Registered:
+        nested: object
+
+    value = Registered(Offset(1))
+    assert key(value) is None
+    value_type(Registered)
+    assert key(value) == (Registered, value) and identity(value) == (Registered, value)
+
+
+def test_recognizing_a_value_class_keeps_no_class_for_its_shape() -> None:
+    """The generated code a value class is checked against is kept by its fields' shape, in a
+    bounded cache, and no class is kept for it: classes made for once-used shapes go."""
+    for at in range(50):
+        made: Any = make_dataclass(f"Transient{at}", [(f"field_{at}", int)], frozen=True)
+        assert value_class(made)
+        del made
+    gc.collect()
+    assert not [
+        kind for kind in gc.get_objects() if type(kind) is type and kind.__name__ == "_Reference"
+    ]
+    assert semantics._generated.cache_info().maxsize == 256
+
+
+# -- What the third review found: a class changed after use, closures, ``!=`` ---------------
+
+
+class Later(tuple[object, ...]):
+    """A tuple subclass that reads as a tuple until its ``__iter__`` is replaced."""
+
+    __slots__ = ()
+
+
+def test_a_tuple_is_walked_as_it_stores_whatever_its_class_became_after_use(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A class's reading is recognized once; its items are always walked as the tuple stores
+    them, so a class whose ``__iter__`` is replaced after it was met hides nothing: two values
+    storing other items are not the same, and one storing a list is refused for it."""
+    assert semantics.same(Later((1,)), Later((1,)), owner="test", role="test")
+    assert semantics.canonical(Later((1,))) == Later((1,))
+    monkeypatch.setattr(Later, "__iter__", lambda self: iter(()))
+    assert not semantics.same(Later((1,)), Later((2,)), owner="test", role="test")
+    assert identity(Later((1,))) != identity(Later((2,)))
+    with pytest.raises(semantics.NotAValue, match="a list is mutable"):
+        semantics.canonical(Later(([1],)))
+
+
+class Agreeable:
+    """Equal to anything: a closure holding one is not ``tuple``'s."""
+
+    def __eq__(self, other: object) -> bool:
+        return True
+
+    def __hash__(self) -> int:
+        return 0
+
+    def __call__(self, value: object) -> tuple[object, ...]:
+        return ()
+
+
+def test_a_named_tuples_copy_is_its_own_only_with_the_closure_it_was_made_with() -> None:
+    """A named tuple's ``__getnewargs__`` is taken as its own where its code and closure are
+    those ``namedtuple`` makes, the closure compared by identity: one closing over a value
+    equal to anything changes how it is read."""
+    made = namedtuple("made", "x")
+    assert changed_reads(made) == ()
+    making: Any = namedtuple
+    forged = making("Forged", "x")
+    original = forged.__getnewargs__
+    cells = tuple(types.CellType(Agreeable()) for _ in original.__closure__)
+    forged.__getnewargs__ = types.FunctionType(
+        original.__code__, original.__globals__, closure=cells
+    )
+    assert changed_reads(forged) == ("__getnewargs__",)
+
+
+class Contrary(frozenset[int]):
+    """A frozen set whose ``!=`` holds every two apart: the engine compares by ``==``."""
+
+    __slots__ = ()
+
+    def __ne__(self, other: object) -> bool:
+        return True
+
+
+def test_two_frozen_sets_are_compared_by_their_eq_not_their_ne() -> None:
+    """Sameness asks whether two sets are equal, never ``!=``: a set subclass whose ``!=``
+    disagrees with its ``==`` is the same as an equal one, and its design spaces are one."""
+    assert semantics.same(Contrary({1}), Contrary({1}), owner="test", role="test")
+    one = design_space(Meter(rate=1.0, box=Box(Contrary({1}))))
+    other = design_space(Meter(rate=1.0, box=Box(Contrary({1}))))
+    assert held(one).ds == held(other).ds

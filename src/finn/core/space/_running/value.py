@@ -11,9 +11,10 @@ same layer and stored choices are equal, whatever led to them, and answer alike.
   with those facts: the membership readings (a choice's membership read as if the choice
   existed, an evaluation of the layer with nothing stored) and the domains' outcomes. Both
   are the layer's memo, part of the value, never a cache.
-- ``DesignSpace(layer, stored)``: equal by value (each value of one type and equal by ``==``),
-  hashed by value, its hash computed once. What an evaluation of it answered hangs off it,
-  by session, and is never part of the value.
+- ``DesignSpace(layer, stored)``: equal by value (each value the same: of one type and equal
+  by ``==``, item by item, ``semantics.same``), hashed by value, its hash computed once.
+  What an evaluation of it answered hangs off it, by session, and is never part of the
+  value.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
+from ..semantics import identity
 from .answers import _same_value
 from .structure import record
 
@@ -38,16 +40,16 @@ def _frozen(mapping: Mapping[Address, object]) -> Mapping[Address, object]:
 
 
 def hashkey(value: object) -> object:
-    """``value`` as a dictionary key that tells types apart (``True`` is not ``1``, even
-    inside a tuple); ``None`` where it cannot be hashed."""
-    if type(value) is tuple:
-        parts = tuple(hashkey(item) for item in value)
-        return None if any(part is None for part in parts) else (tuple, parts)
+    """``value`` as a dictionary key equal exactly where two values are the same
+    (``semantics.identity``: ``True`` is not ``1``, nor ``Box(3)`` ``Box(3.0)``, inside a
+    tuple, a frozen set or a value class too); ``None`` where it cannot be hashed, or a part
+    of it cannot (a field a value class's hash leaves out, holding an unhashable value)."""
     try:
-        hash(value)
+        found = identity(value)
+        hash(found)
     except TypeError:
         return None
-    return (type(value), value)
+    return found
 
 
 _EXACT = (int, str, bool, bytes, type(None))

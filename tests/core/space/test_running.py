@@ -1637,7 +1637,8 @@ class Identity:
 
 
 class Inherits(Spec):
-    """A plain subclass of a value class: not one itself."""
+    """A plain subclass of a value class: one itself, by the fields its inherited ``==``
+    compares, keyed as its own type."""
 
 
 @dataclass(frozen=True)
@@ -1802,7 +1803,6 @@ NOT_VALUE_CLASSES: dict[str, tuple[type, object]] = {
     "a hand-written ==": (HandWritten, HandWritten(1, 8)),
     "equal by identity": (Identity, Identity(1)),
     "mutable": (Bag, Bag([1])),
-    "a plain subclass": (Inherits, Inherits(True, 1)),
 }
 """Classes the rule does not key, each with a value."""
 
@@ -1838,17 +1838,16 @@ def _member(semantics: ValueSemantics[Any]) -> Address:
 
 @pytest.mark.parametrize("name", sorted(VALUE_TYPES))
 def test_a_value_types_equality_and_hash_agree_with_its_key(name: str) -> None:
-    """Each sample is keyed, and in the safe direction: a key hit is the same value (of one
-    type, equal by ``==``); values ``==`` tells apart keep different keys."""
+    """Each sample is keyed, and exactly by sameness: a key hit is the same value (of one
+    type, equal by ``==``, item by item); values sameness tells apart keep different keys,
+    ``==`` holding them equal or not."""
     semantics, values = VALUE_TYPES[name]
     member = _member(semantics)
     assert all(semantics.accepts(value) for value in values)
     for left, right in itertools.product(values, repeat=2):
         same = _same_value(member, left, right)
-        if left is not right:
-            assert (left == right) is same, (left, right)
         if same:
-            assert hash(left) == hash(right), (left, right)
+            assert left == right and hash(left) == hash(right), (left, right)
         if not same:
             assert cache_key(left) != cache_key(right), (left, right)
         if cache_key(left) == cache_key(right):
@@ -1865,8 +1864,9 @@ def test_an_unhashable_value_type_is_never_keyed(name: str) -> None:
 
 def test_true_and_1_and_the_two_zeros_are_keyed_as_sameness_says() -> None:
     """``True`` and ``1``: no member holds both (each type recognizes its own), and their
-    keys differ. Inside a tuple or a value class ``==`` holds them equal, and the key still
-    tells them apart: a miss, never a wrong hit. ``-0.0`` and ``0.0`` are the same value,
+    keys differ. Inside a tuple or a value class ``==`` holds them equal, but they are not
+    the same value (each item of one type, ``semantics.same``), and the key tells them apart
+    as sameness does. ``-0.0`` and ``0.0`` are the same value,
     keyed alike, alone, inside a tuple and inside a value class; where a value enters a
     design space ``-0.0`` is ``0.0``, and a NaN is refused (``semantics.canonical``)."""
     boolean, integer, pair = (
@@ -1876,11 +1876,13 @@ def test_true_and_1_and_the_two_zeros_are_keyed_as_sameness_says() -> None:
     )
     assert not boolean.accepts(1) and not integer.accepts(True)
     assert plain_key(True) != plain_key(1) and plain_key(False) != plain_key(0)
-    assert _same_value(_member(pair), (True,), (1,)) and plain_key((True,)) != plain_key((1,))
-    assert _same_value(_member(pair), ((1, True),), ((1, 1),))
+    assert (True,) == (1,) and not _same_value(_member(pair), (True,), (1,))
+    assert plain_key((True,)) != plain_key((1,))
+    assert not _same_value(_member(pair), ((1, True),), ((1, 1),))
     assert plain_key(((1, True),)) != plain_key(((1, 1),))
     spec = VALUE_TYPES["Spec"][0]
-    assert _same_value(_member(spec), Spec(True, 1), Spec(cast(bool, 1), 1))
+    assert Spec(True, 1) == Spec(cast(bool, 1), 1)
+    assert not _same_value(_member(spec), Spec(True, 1), Spec(cast(bool, 1), 1))
     assert plain_key(Spec(True, 1)) != plain_key(Spec(cast(bool, 1), 1))
     real = VALUE_TYPES["float"][0]
     assert _same_value(_member(real), -0.0, 0.0) and plain_key(-0.0) == plain_key(0.0)
@@ -1898,8 +1900,9 @@ def test_the_cache_keys_the_types_this_test_checks_and_value_classes_by_their_ru
     """Every plain type the cache keys by ``==`` (``cache.PLAIN``), tuples and frozen sets
     are types this test checks, and so are the harness's. The rule (``cache.value_class``)
     holds for each sample value class, and for none of the classes it must not key: a
-    hand-written ``==``, equality by identity, a mutable dataclass, a plain subclass of a
-    value class. A value class holding a value with no key has none."""
+    hand-written ``==``, equality by identity, a mutable dataclass. A plain subclass of a
+    value class is one, keyed as its own type. A value class holding a value with no key has
+    none."""
     checked = {semantics.type_token for semantics, _ in VALUE_TYPES.values()}
     assert {*PLAIN, tuple, frozenset, *HARNESS} <= checked
     assert set(VALUE_CLASSES) <= checked
@@ -1909,6 +1912,8 @@ def test_the_cache_keys_the_types_this_test_checks_and_value_classes_by_their_ru
         assert plain_key(value) is None, name
         assert plain_key((1, value)) is None, name
     assert value_class(HoldsList) and plain_key(HoldsList([1])) is None
+    assert value_class(Inherits) and plain_key(Inherits(True, 1)) is not None
+    assert plain_key(Inherits(True, 1)) != plain_key(Spec(True, 1))
     assert plain_key((1, "a", frozenset({2.0}), Spec(True, 2))) is not None
     assert plain_key((Mode.SLOW, Moded(Mode.FAST, 1))) is not None
     assert plain_key(Mode.FAST) == plain_key(Mode.QUICK) == enum_key(Mode.FAST) == (Mode, "FAST")
@@ -1940,12 +1945,12 @@ def test_an_enum_overriding_equality_or_hash_gives_misses_only(name: str) -> Non
         assert OwnEq.A == OwnEq.B and _same_value(member, OwnEq.A, OwnEq.B)
     if kind is OwnHash:  # a hash read would differ each time; the key's does not
         assert hash(OwnHash.A) != hash(OwnHash.A)
-    if kind is Mixed:  # equal to the int, by the int's ``==`` and hash: a miss
+    if kind is Mixed:  # equal to the int, by the int's ``==`` and hash: not the same
         one = cast(Mixed, 1)
         assert cast(int, Mixed.ONE) == 1 and hash(Mixed.ONE) == hash(1)
         assert plain_key(Mixed.ONE) != plain_key(1)
         assert value_class(HoldsMixed) and HoldsMixed(Mixed.ONE) == HoldsMixed(one)
-        assert _same_value(
+        assert not _same_value(
             _member(default_semantics(HoldsMixed)), HoldsMixed(Mixed.ONE), HoldsMixed(one)
         )
         assert plain_key(HoldsMixed(Mixed.ONE)) != plain_key(HoldsMixed(one)) is not None
