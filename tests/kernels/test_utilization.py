@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
+import numpy as np
 import pytest
 from support.adapted import ELEMENT, transposed
 from support.helpers import (
@@ -104,6 +105,16 @@ def test_block_ram_is_counted_as_synthesis_maps_it_on_each_fabric(
 ) -> None:
     assert bram18(words, bits, fabric=fabric) == measured
     assert memory(words, bits, "block", fabric=fabric) == Resources(bram18=measured)
+
+
+def test_block_ram_is_cached_by_its_arguments_types_too() -> None:
+    # An equal argument of another type is another call, not the cached one's answer: a
+    # float width refuses after its int was counted, as it does alone.
+    assert bram18(512, 8, fabric=V) == 1
+    with pytest.raises(TypeError):
+        bram18(512, 8.0, fabric=V)
+    counted = bram18(np.int64(512), np.int64(8), fabric=V)
+    assert counted == 1 and type(counted) is int
 
 
 def test_ultraram_is_counted_in_the_fabric_s_aspects() -> None:

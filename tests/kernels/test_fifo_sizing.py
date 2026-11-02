@@ -17,6 +17,7 @@ from math import prod
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 from support import chain
 from support.helpers import FULL_DSP48E2, beside, by_hand, choose, keyed, with_defaults
@@ -99,6 +100,37 @@ def test_input_gen_s_constants_are_evaluated_once_per_nest(
     assert len(calls) == 1
     nest_geometry(7, (2, 7), (0, 1))
     assert len(calls) == 2
+
+
+def test_a_nest_is_its_integers_whatever_their_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[object] = []
+
+    def counted(*args: Any) -> Any:
+        calls.append(args)
+        return evaluate(*args)
+
+    monkeypatch.setattr(input_generator, "evaluate", counted)
+    input_generator._evaluated.cache_clear()
+    input_generator._stepped.cache_clear()
+    nest = (8, (4, 1, 2), (2, 0, 1))
+    geometry, buffer = nest_geometry(*nest), nest_buffer(*nest)
+    # numpy integers state the same nest: its answers, elaborated once.
+    numpy_nest = (np.int64(8), np.array([4, 1, 2]), np.array([2, 0, 1]))
+    assert nest_geometry(*numpy_nest) == geometry and nest_buffer(*numpy_nest) == buffer
+    assert len(calls) == 1
+    # A float or a bool equal to the cached nest's integer is no count: refused, not
+    # answered as that nest.
+    for other in (
+        (8.0, (4, 1, 2), (2, 0, 1)),
+        (8, (4.0, 1, 2), (2, 0, 1)),
+        (8, (4, True, 2), (2, 0, 1)),
+        (8, (4, 1, 2), (2, False, True)),
+    ):
+        with pytest.raises(TypeError, match="a nest counts in integers"):
+            nest_geometry(*other)
+        with pytest.raises(TypeError, match="a nest counts in integers"):
+            nest_buffer(*other)
+    assert len(calls) == 1
 
 
 def test_a_cost_query_never_fetches_finnlib(

@@ -173,10 +173,12 @@ PRIMITIVES: dict[Fabric, Primitives] = {
 UltraScale+ are one fabric."""
 
 
-@lru_cache(maxsize=None)
+@lru_cache(maxsize=None, typed=True)
 def bram18(words: int, bits: int, *, fabric: Fabric) -> int:
     """RAMB18s for ``words x bits`` on ``fabric``: the least over splitting the word
-    across its aspects (a partition of ``bits``), each part ``ceil(words / rows)`` deep."""
+    across its aspects (a partition of ``bits``), each part ``ceil(words / rows)`` deep.
+    Cached by its arguments' types too: an equal argument of another type (``8.0`` for
+    ``8``) is another call."""
     aspects = PRIMITIVES[fabric].bram18_sdp
     best = [0] * (bits + 1)
     for width in range(1, bits + 1):
