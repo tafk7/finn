@@ -807,7 +807,7 @@ def test_a_made_up_platform_declares_checks_and_resolves_with_no_change_to_finn(
     pynq = shell_row("pynq", "Ultra96")
     assert (row.linker, row.runtimes, row.board_facts) == (
         "example-link",
-        ("example-run",),
+        ("example-run", "example-alt"),
         {"slot": "B"},
     )
     assert row.versions == Versions(tool="example-tool", spec=">=1.0")

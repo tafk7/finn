@@ -66,6 +66,7 @@ from finn.builder.build_dataflow_config import (
     StepEntry,
 )
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
+from finn.builder.build_dataflow_resources import built_reports
 from finn.builder.build_dataflow_steps import (
     build_dataflow_phases,
     build_dataflow_step_lookup,
@@ -135,6 +136,9 @@ from finn.shells.build import (
 )
 from finn.shells.integration import IpRef, Linked, describe
 from finn.shells.pynq.linker import (
+    LINKER,
+    OUT_OF_CONTEXT,
+    PLACED,
     Address,
     Wire,
     block_design,
@@ -1041,7 +1045,13 @@ class ObjectiveSeen(Transformation):
     seen: list[float | None] = []
 
     def __init__(
-        self, directory: Path, *, toolchain: Toolchain, hw_debug: bool, objective_fps: float | None
+        self,
+        directory: Path,
+        runtime: str | None,
+        *,
+        toolchain: Toolchain,
+        hw_debug: bool,
+        objective_fps: float | None,
     ) -> None:
         super().__init__()
         ObjectiveSeen.seen.append(objective_fps)
@@ -1114,10 +1124,16 @@ class ClockShort(ObjectiveSeen):
     """The bitfile's build stand-in, finding the delivered clock short."""
 
     def __init__(
-        self, directory: Path, *, toolchain: Toolchain, hw_debug: bool, objective_fps: float | None
+        self,
+        directory: Path,
+        runtime: str | None,
+        *,
+        toolchain: Toolchain,
+        hw_debug: bool,
+        objective_fps: float | None,
     ) -> None:
         super().__init__(
-            directory, toolchain=toolchain, hw_debug=hw_debug, objective_fps=objective_fps
+            directory, runtime, toolchain=toolchain, hw_debug=hw_debug, objective_fps=objective_fps
         )
         self.findings = (CLOCK_SHORT,)
 
@@ -2094,20 +2110,43 @@ def test_a_made_up_shell_builds_a_core_to_its_driver_and_deployment(
     through the outputs' steps with no change to FINN, the movers' and the partition's
     tools faked and no other run:
 
+    - every output is made for the runtime the build names, the shell's second: the
+      linker's description, the runtime file and the driver;
     - the bitfile is the image its declared linker made, built with the debug option, the
       file it loads with beside it, the linker's report under report/, each unit at the
       base the linker placed it and the main clock delivered as asked;
-    - the driver is the declared runtime's, its runtime file the build's;
+    - what an earlier ``pynq`` link collected into the same output directory is removed,
+      and none of it read as this build's resources; FINN's own reports stay;
+    - the driver is the declared runtime's, given the runtime file, the file beside the
+      image and the linker's report, as the build collected them;
     - the deployment ships both."""
     for name, recorded in tool_recorders(tmp_path).items():
         monkeypatch.setattr(shell_build, name, recorded)
     monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "build"))
-    cfg = config(
-        tmp_path, target=TargetRequest(board="Example-ZU3", period_ns=5.0, shell="example")
+    request = TargetRequest(
+        board="Example-ZU3", period_ns=5.0, shell="example", runtime="example-alt"
     )
+    cfg = config(tmp_path, target=request)
     tools = FakeVivado()
     cfg.prepared_toolchain = cast(Toolchain, tools)
-    assert cfg.resolved_runtime == "example-run"
+    assert cfg.resolved_runtime == "example-alt"
+    # An earlier pynq link in the same output directory, and a report of FINN's own.
+    output = Path(cfg.output_dir)
+    earlier = {PLACED: "placed", f"{OUT_OF_CONTEXT}/top_in0_0_utilization_synth.rpt": "in0"}
+    for key, text in earlier.items():
+        (output / "report" / key).parent.mkdir(parents=True, exist_ok=True)
+        (output / "report" / key).write_text(text)
+    (output / "report" / "kernel_ops.json").write_text("{}")
+    (output / "report" / "linked.json").write_text(
+        json.dumps(
+            {
+                "linker": LINKER,
+                "image": "bitfile/finn-accel.bit",
+                "beside": ["bitfile/finn-accel.hwh"],
+                "reports": {key: f"report/{key}" for key in earlier},
+            }
+        )
+    )
     model = kernel_model()
     write_target(model, cfg.resolved_target)
     model = model.transform(MakeCutChoices(CUT_NAME))  # its movers, as the cut makes them
@@ -2117,7 +2156,6 @@ def test_a_made_up_shell_builds_a_core_to_its_driver_and_deployment(
     parent = step_make_driver(parent, cfg)
     parent = step_deployment_package(parent, cfg)
     assert tools.runs == []
-    output = Path(cfg.output_dir)
     _, body, _ = partition_body(parent)
     stated = parent.namespace(OUTPUTS)
     assert {key: value for key, value in stated.items() if key.startswith("bitfile")} == {
@@ -2134,8 +2172,19 @@ def test_a_made_up_shell_builds_a_core_to_its_driver_and_deployment(
     # The linker's report: the description it linked, on the board's slot, each unit's IP
     # the one the build made.
     linked = json.loads((output / "report" / DESCRIPTION).read_text())
-    assert (linked["slot"], linked["debug"]) == ("B", True)
+    assert (linked["slot"], linked["debug"], linked["runtime"]) == ("B", True, "example-alt")
     assert None not in linked["ips"].values()
+    # The earlier link's reports gone, FINN's own kept; this build's record its linker's.
+    assert not (output / "report" / PLACED).exists()
+    assert list((output / "report" / OUT_OF_CONTEXT).iterdir()) == []
+    assert (output / "report" / "kernel_ops.json").read_text() == "{}"
+    assert json.loads((output / "report" / "linked.json").read_text()) == {
+        "linker": "example-link",
+        "image": "bitfile/finn-accel.example",
+        "beside": ["bitfile/finn-accel.map"],
+        "reports": {DESCRIPTION: f"report/{DESCRIPTION}"},
+    }
+    assert built_reports(parent, toolchain=cast(Toolchain, tools)) == {}
     # Each unit with a control window at the base the linker placed it, the main clock
     # delivered as asked: the delivered clock states no limitation.
     runtime_file = json.loads((output / RUNTIME_FILE).read_text())
@@ -2144,7 +2193,7 @@ def test_a_made_up_shell_builds_a_core_to_its_driver_and_deployment(
     assert sorted(placement) == sorted(windows) and placement
     assert all(base >= BASE and base % windows[unit] == 0 for unit, base in placement.items())
     assert placement == json.loads((output / "bitfile" / "finn-accel.map").read_text())
-    assert runtime_file["clocks_mhz"] == {"main": 200.0}
+    assert (runtime_file["clocks_mhz"], runtime_file["runtime"]) == ({"main": 200.0}, "example-alt")
     clock = json.loads((output / DELIVERED_CLOCK).read_text())
     assert (clock["clock"], clock["delivered_mhz"], clock["findings"]) == ("main", 200.0, [])
     # The driver: the runtime's, from the runtime file the build wrote.
@@ -2152,14 +2201,18 @@ def test_a_made_up_shell_builds_a_core_to_its_driver_and_deployment(
     assert sorted(path.name for path in driver.iterdir()) == ["integration.json", OPERATIONS]
     assert (driver / "integration.json").read_text() == (output / RUNTIME_FILE).read_text()
     operations = json.loads((driver / OPERATIONS).read_text())
-    assert operations[:2] == [["load", "finn-accel.example"], ["clock", 200.0]]
-    assert operations[2:] and all(
-        kind == "start" and placement[unit] == base for kind, unit, base in operations[2:]
+    assert operations[:3] == [
+        ["load", "finn-accel.example", ["finn-accel.map"]],
+        ["clock", 200.0],
+        ["reports", [DESCRIPTION]],
+    ]
+    assert operations[3:] and all(
+        kind == "start" and placement[unit] == base for kind, unit, base in operations[3:]
     )
     description = json.loads((output / "report" / "driver.json").read_text())
     assert description == {
         "bitfile": "bitfile/finn-accel.example",
-        "runtime": "example-run",
+        "runtime": "example-alt",
         "made_from": design_digest(body),
         "ip_key": IP_KEY,
     }

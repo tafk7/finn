@@ -523,6 +523,7 @@ def step_build_bitfile(
         )
     building = BuildBitfile(
         Path(cfg.output_dir),
+        cfg.resolved_runtime,
         toolchain=cfg.step_toolchain("step_build_bitfile"),
         hw_debug=hw_debug,
         objective_fps=objective,

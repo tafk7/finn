@@ -67,9 +67,9 @@ from finn.kernels.shell import grouper_name
 from finn.kernels.utilization import SHELL_CHARACTERISED
 from finn.platform.capabilities import Resources
 from finn.platform.shells import shell_row
-from finn.shells.build import REPORT_DIR, bitfile_directory
+from finn.shells.build import REPORT_DIR, bitfile_directory, linked_record
 from finn.shells.integration import describe
-from finn.shells.pynq.linker import OUT_OF_CONTEXT, PLACED, STATIC_INSTANCES
+from finn.shells.pynq.linker import LINKER, OUT_OF_CONTEXT, PLACED, STATIC_INSTANCES
 from finn.toolchain import vivado
 from finn.toolchain.launcher import Toolchain, ToolFailed
 from finn.transformation.kernels.package import (
@@ -162,19 +162,22 @@ def _members(split: Mapping[str, Any]) -> dict[str, Any]:
 def built_reports(parent: ModelWrapper, *, toolchain: Toolchain) -> dict[str, Path]:
     """The reports the build made that ``shell_resources_report`` reads, by name: those
     the ``vivado-block-design`` linker collected beside the bitfile the parent graph
-    ``parent`` states (``placed``, ``out_of_context``, by its report names; none without a
-    bitfile, or where another linker collected none of those names), and the utilization
-    report of the IP
+    ``parent`` states, as the bitfile's build recorded them (``placed``, ``out_of_context``,
+    by its report names; none without a bitfile or its record, where another linker
+    collected them, or where it collected none of those names: never an earlier link's),
+    and the utilization report of the IP
     its partition's body states, packaged with ``ooc_synth`` and of the key the body has
     now (``ip_key``, staged in ``toolchain``) (``ooc_synth``; none when the body states
     no such IP)."""
     reports: dict[str, Path] = {}
     built = bitfile_directory(parent)
-    if built is not None:
-        named = {"placed": PLACED, "out_of_context": OUT_OF_CONTEXT}
-        for name, report in named.items():
-            if (built / REPORT_DIR / report).exists():
-                reports[name] = built / REPORT_DIR / report
+    collected = None if built is None else linked_record(built)
+    if built is not None and collected is not None and collected["linker"] == LINKER:
+        keys = collected["reports"]
+        if PLACED in keys:
+            reports["placed"] = built / REPORT_DIR / PLACED
+        if any(key.startswith(f"{OUT_OF_CONTEXT}/") for key in keys):
+            reports["out_of_context"] = built / REPORT_DIR / OUT_OF_CONTEXT
     node, body, _ = partition_body(parent)
     ip, packaging = body.get(OUTPUT_IP), body.get(OUTPUT_IP_OPTIONS)
     if ip is None or packaging is None or not packaging["run_synth"]:

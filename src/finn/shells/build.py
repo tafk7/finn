@@ -26,12 +26,21 @@ The bitfile (``BuildBitfile``) is the parent graph's integration description
     subcore (``PackageUnit``), not stated on the body, is the cell's;
 - the linker links the description, every unit's IP given, in FINN's build directory
   (``finn.resources.scratch``), and what it made (``Linked``) is collected into the output
-  directory: the image and the files it loads with into ``bitfile/``, each named
-  ``finn-accel`` with its own suffix (``finn-accel.bit`` beside ``finn-accel.hwh`` on
-  ``pynq``); each report into ``report/`` by its path there; the runtime file
-  (``report/integration.json``, ``finn.shells.integration.runtime_text``); and the main
-  clock as delivered beside the one asked (``report/delivered_clock.json``,
-  ``delivered_clock``, with its limitations, ``delivered_clock_findings``).
+  directory (``collection``): the image and the files it loads with into ``bitfile/``,
+  each named ``finn-accel`` with its own suffix (``finn-accel.bit`` beside
+  ``finn-accel.hwh`` on ``pynq``); each report into ``report/`` by its path there; the
+  runtime file (``report/integration.json``, ``finn.shells.integration.runtime_text``);
+  the main clock as delivered beside the one asked (``report/delivered_clock.json``,
+  ``delivered_clock``, with its limitations, ``delivered_clock_findings``); and what was
+  collected, by its paths in the output directory, with the linker's name
+  (``report/linked.json``, ``LINKED``).
+
+Collection refuses, before anything is copied: two files beside the image of one suffix,
+or one of the image's (``artifact-collision``), and a report's path that is not a plain
+relative path, one inside another report's, or one of FINN's own reports
+(``report-key-invalid``, ``FINN_REPORTS``). It removes what the last link in the output
+directory collected (by its ``LINKED``) and nothing else, so no earlier link's report is
+read as this one's, and a report directory is the linker's, not merged with an earlier one.
 
 The parent graph states the bitfile, what it was made from (the design and the IP) and the
 options it was built with (``finn.outputs``); its reports are found beside it
@@ -40,7 +49,8 @@ than the partition's now, or from another IP than the one its body states.
 
 The driver (``MakeDriver``) is the build's runtime's (its declared code's ``Runtime.emit``),
 into ``driver/``: the description linked as the bitfile's build linked it, read back from
-its runtime file (each unit's base, each clock as delivered), the bitfile its default.
+its runtime file (each unit's base, each clock as delivered) and its ``LINKED`` (the
+files beside the image and the reports), the bitfile its default.
 ``report/driver.json`` states the bitfile, the runtime, the design and the IP. The
 deployment package (``MakeDeployment``) is ``deploy/``: the bitfile's directory, the driver,
 the host's model (``host_model``) and the driver's description.
@@ -48,7 +58,8 @@ the host's model (``host_model``) and the driver's description.
 Every refusal is a ``ShellRefused``, owned by the transformation making the output
 (``MAKERS``) unless the configuration's field to change owns it: a shell with no linker
 (``shell-integrates-nothing``), a build with no runtime (``runtime-absent``), a missing,
-foreign or stale bitfile or driver, a runtime file absent or of another schema.
+foreign or stale bitfile or driver, a runtime file absent or of another schema, and a link
+whose record of what it collected is absent (``linked-absent``).
 """
 
 from __future__ import annotations
@@ -58,7 +69,8 @@ import json
 import logging
 import shutil
 import xml.etree.ElementTree as ElementTree
-from pathlib import Path
+from fnmatch import fnmatch
+from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
 from qonnx.core.modelwrapper import ModelWrapper
@@ -114,6 +126,23 @@ DELIVERED_CLOCK = REPORT_DIR / "delivered_clock.json"
 DRIVER_DIR = Path("driver")
 DRIVER_REPORT = REPORT_DIR / "driver.json"
 DEPLOY_DIR = Path("deploy")
+LINKED = REPORT_DIR / "linked.json"
+
+#: The reports FINN writes into ``report/``, by name, which no linker's report may take;
+#: and every step's own report (``step_<name>.json``, ``FINN_STEP_REPORTS``).
+FINN_REPORTS = frozenset(
+    {
+        "build.json",
+        "kernel_ops.json",
+        "kernel_choices.json",
+        "resources.json",
+        RUNTIME_FILE.name,
+        DELIVERED_CLOCK.name,
+        DRIVER_REPORT.name,
+        LINKED.name,
+    }
+)
+FINN_STEP_REPORTS = "step_*.json"
 
 #: The transformation that makes each output, by the output's name: who refuses to make it.
 MAKERS = {
@@ -331,18 +360,95 @@ def bitfile_directory(model: ModelWrapper) -> Path | None:
     return Path(bitfile).parent.parent
 
 
+def report_key(key: str) -> PurePosixPath:
+    """A linker's report ``key`` as a path under ``report/``: a plain relative path (no
+    ``.`` or ``..``, not absolute, as written), not one of FINN's own reports
+    (``FINN_REPORTS``, ``FINN_STEP_REPORTS``); another is refused (``report-key-invalid``)."""
+    path = PurePosixPath(key)
+    plain = bool(key) and not path.is_absolute() and str(path) == key
+    if not plain or any(part in (".", "..") for part in path.parts):
+        raise ShellRefused(
+            "bitfile",
+            "report-key-invalid",
+            f"the linker's report {key!r} is not a plain relative path under report/",
+        )
+    if path.parts[0] in FINN_REPORTS or fnmatch(path.parts[0], FINN_STEP_REPORTS):
+        raise ShellRefused(
+            "bitfile",
+            "report-key-invalid",
+            f"the linker's report {key!r} takes the name of one of FINN's own reports",
+        )
+    return path
+
+
+def collection(linked: Linked) -> dict[Path, Path]:
+    """Where ``BuildBitfile`` collects what ``linked`` made, each file by its destination
+    in the output directory: the image ``bitfile/finn-accel<suffix>``, each file beside it
+    ``bitfile/finn-accel<its suffix>``, each report ``report/<key>`` (``report_key``). Two
+    files beside the image of one suffix, or one of the image's, are refused
+    (``artifact-collision``), as is a report inside another report's path
+    (``report-key-invalid``)."""
+    image = BITFILE_DIR / f"{IMAGE}{linked.image.suffix}"
+    found = {image: linked.image}
+    for path in linked.beside:
+        target = BITFILE_DIR / f"{IMAGE}{path.suffix}"
+        if target in found:
+            raise ShellRefused(
+                "bitfile",
+                "artifact-collision",
+                f"the linker's {path.name} and {found[target].name} would both be collected "
+                f"as {target}: each file beside the image takes a suffix of its own",
+            )
+        found[target] = path
+    keys = {key: report_key(key) for key in linked.reports}
+    for key, under in keys.items():
+        inside = sorted(other for other, each in keys.items() if under in each.parents)
+        if inside:
+            raise ShellRefused(
+                "bitfile",
+                "report-key-invalid",
+                f"the linker's reports {inside} are inside its report {key!r}",
+            )
+        found[REPORT_DIR / Path(*under.parts)] = linked.reports[key]
+    return found
+
+
+def _removed(directory: Path) -> None:
+    """Remove what the last link in the output ``directory`` collected, by its record
+    (``LINKED``), and the record: an earlier link's files beside its image and its reports,
+    nothing else."""
+    record = directory / LINKED
+    if not record.is_file():
+        return
+    try:
+        stated = json.loads(record.read_text())
+        paths = [*stated["beside"], *(REPORT_DIR / report_key(key) for key in stated["reports"])]
+    except (ValueError, KeyError, TypeError, ShellRefused):
+        paths = []
+    record.unlink()
+    for path in paths:
+        target = directory / path
+        if target.is_dir():
+            shutil.rmtree(target)
+        elif target.exists():
+            target.unlink()
+
+
 def _collected(source: Path, target: Path) -> None:
-    """Copy ``source``, a file or a directory, to ``target``."""
+    """Copy ``source``, a file or a directory, to ``target``, replacing what is there."""
     target.parent.mkdir(parents=True, exist_ok=True)
+    if target.is_dir():
+        shutil.rmtree(target)
     if source.is_dir():
-        shutil.copytree(source, target, dirs_exist_ok=True)
+        shutil.copytree(source, target)
     else:
         shutil.copy(source, target)
 
 
 class BuildBitfile(Transformation):
     """The bitfile of the build's parent graph through its shell's declared linker (the
-    module docstring), collected into the output ``directory``. ``toolchain`` runs every
+    module docstring), described for the build's ``runtime`` (the row's first where
+    ``None``), collected into the output ``directory``. ``toolchain`` runs every
     tool, by default the machine's (``host_toolchain``), prepared once, when the
     transformation is made; ``hw_debug`` is the linker's ``debug`` option, recorded with
     the bitfile (``bitfile_options``); ``objective_fps`` is the throughput the partition
@@ -353,6 +459,7 @@ class BuildBitfile(Transformation):
     def __init__(
         self,
         directory: Path,
+        runtime: str | None,
         *,
         toolchain: Toolchain | None = None,
         hw_debug: bool = False,
@@ -360,6 +467,7 @@ class BuildBitfile(Transformation):
     ) -> None:
         super().__init__()
         self.directory = Path(directory)
+        self.runtime = runtime
         self.objective_fps = objective_fps
         self.toolchain = host_toolchain() if toolchain is None else toolchain
         self.hw_debug = hw_debug
@@ -373,7 +481,7 @@ class BuildBitfile(Transformation):
         linker = declared_linker(row, self.hw_debug)
         node, body, _ = partition_body(model)
         bottleneck = shell_bottleneck(body, node.name)
-        described = describe(model)
+        described = describe(model, self.runtime)
         linker.check(described, row.board_facts)
         ips, packaged_key = unit_ips(model, described, toolchain=self.toolchain)
         _, body, _ = partition_body(model)
@@ -381,15 +489,15 @@ class BuildBitfile(Transformation):
         scratch: Path = resources.scratch()  # type: ignore[no-untyped-call]
         linked = linker.link(built, row.board_facts, scratch, self.toolchain)
         output = self.directory
+        found = collection(linked)
+        image, *beside = [target for target in found if target.parent == BITFILE_DIR]
+        _removed(output)
         shutil.rmtree(output / BITFILE_DIR, ignore_errors=True)
-        self.bitfile = output / BITFILE_DIR / f"{IMAGE}{linked.image.suffix}"
-        _collected(linked.image, self.bitfile)
-        for path in linked.beside:
-            _collected(path, output / BITFILE_DIR / f"{IMAGE}{path.suffix}")
-        self.reports = []
-        for name, path in linked.reports.items():
-            _collected(path, output / REPORT_DIR / name)
-            self.reports.append(output / REPORT_DIR / name)
+        (output / REPORT_DIR).mkdir(parents=True, exist_ok=True)
+        for target, source in found.items():
+            _collected(source, output / target)
+        self.bitfile = output / image
+        self.reports = [output / target for target in found if target.parent != BITFILE_DIR]
         (output / RUNTIME_FILE).write_text(runtime_text(built, linked))
         self.clock = delivered_clock(
             linked,
@@ -400,7 +508,14 @@ class BuildBitfile(Transformation):
         self.findings = delivered_clock_findings(self.clock)
         self.clock["findings"] = [finding.record() for finding in self.findings]
         (output / DELIVERED_CLOCK).write_text(json.dumps(self.clock, indent=2))
-        self.reports += [output / RUNTIME_FILE, output / DELIVERED_CLOCK]
+        record = {
+            "linker": row.linker,
+            "image": str(image),
+            "beside": [str(path) for path in beside],
+            "reports": {key: str(REPORT_DIR / key) for key in linked.reports},
+        }
+        (output / LINKED).write_text(json.dumps(record, indent=2))
+        self.reports += [output / RUNTIME_FILE, output / DELIVERED_CLOCK, output / LINKED]
         model.set(OUTPUT_BITFILE, str(self.bitfile))
         model.set(OUTPUT_BITFILE_MADE_FROM, design_digest(body))
         model.set(OUTPUT_BITFILE_IP_KEY, packaged_key)
@@ -464,11 +579,23 @@ def shipped_bitfile(model: ModelWrapper, directory: Path) -> Path:
     return Path(bitfile).relative_to(Path(directory))
 
 
+def linked_record(directory: Path) -> dict[str, Any] | None:
+    """What the bitfile's build in the output ``directory`` collected (``LINKED``): the
+    linker's name, the image, the files beside it and the reports, by their paths there;
+    None where it collected nothing."""
+    record = Path(directory) / LINKED
+    if not record.is_file():
+        return None
+    found: dict[str, Any] = json.loads(record.read_text())
+    return found
+
+
 def linked_as_built(directory: Path, image: Path) -> Linked:
-    """What the bitfile's build in ``directory`` linked, as its runtime file there states
-    it (``RUNTIME_FILE``): each unit's base and each clock as delivered, ``image`` the
-    bitfile; none, or one of another schema than this FINN's (``RUNTIME_SCHEMA``), is
-    refused."""
+    """What the bitfile's build in ``directory`` linked, as it collected it there: each
+    unit's base and each clock as delivered, as its runtime file states them
+    (``RUNTIME_FILE``), and the files beside the image and the reports, as its record states
+    them (``LINKED``), ``image`` the bitfile. No runtime file, or one of another schema
+    than this FINN's (``RUNTIME_SCHEMA``), is refused, as is no record."""
     report = Path(directory) / RUNTIME_FILE
     if not report.is_file():
         raise ShellRefused(
@@ -485,11 +612,20 @@ def linked_as_built(directory: Path, image: Path) -> Linked:
             f"the runtime file {report} is of the schema {found.get('schema')!r}, and this "
             f"FINN's is {RUNTIME_SCHEMA}: build the bitfile again (step_build_bitfile)",
         )
+    collected = linked_record(directory)
+    if collected is None:
+        raise ShellRefused(
+            "driver",
+            "linked-absent",
+            f"no record of what the bitfile's build collected ({Path(directory) / LINKED}): "
+            "build the bitfile again (step_build_bitfile)",
+        )
     return Linked(
         image=image,
         placement={unit: int(base) for unit, base in found["placement"].items()},
         clocks_mhz={name: float(mhz) for name, mhz in found["clocks_mhz"].items()},
-        reports={},
+        reports={key: Path(directory) / path for key, path in collected["reports"].items()},
+        beside=tuple(Path(directory) / path for path in collected["beside"]),
     )
 
 
@@ -642,7 +778,10 @@ __all__ = [
     "DEPLOY_DIR",
     "DRIVER_DIR",
     "DRIVER_REPORT",
+    "FINN_REPORTS",
+    "FINN_STEP_REPORTS",
     "IMAGE",
+    "LINKED",
     "MACHINE_PATHS",
     "MAKERS",
     "REPORT_DIR",
@@ -653,6 +792,7 @@ __all__ = [
     "ShellRefused",
     "bitfile_directory",
     "built_row",
+    "collection",
     "declared_linker",
     "declared_runtime",
     "delivered_clock",
@@ -660,8 +800,10 @@ __all__ = [
     "exported_vlnv",
     "host_model",
     "linked_as_built",
+    "linked_record",
     "mover_ip",
     "refuse_stale_bitfile",
+    "report_key",
     "shipped_bitfile",
     "unit_ips",
 ]

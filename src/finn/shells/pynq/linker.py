@@ -78,6 +78,9 @@ from finn.toolchain.vivado import delivered_clock, tcl_quote, vivado_jobs
 
 _LOG = logging.getLogger(__name__)
 
+#: The name FINN declares this linker under (``[linkers.vivado-block-design]``).
+LINKER = "vivado-block-design"
+
 #: The project the template creates (``create_project finn_zynq_link``).
 PROJECT = "finn_zynq_link"
 
@@ -583,6 +586,7 @@ class BlockDesignLinker:
 
 __all__ = [
     "BLOCK_DESIGN",
+    "LINKER",
     "OUT_OF_CONTEXT",
     "PLACED",
     "PROJECT",

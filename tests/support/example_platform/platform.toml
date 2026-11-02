@@ -25,6 +25,14 @@ movers = ["iodma_hls", "example_dma"]
 kinds = ["moved"]
 schemas = [1]
 
+[runtimes.example-alt]
+# The same runtime under another name, the shell's second: a build names the one it runs on.
+code = "support.example_platform:RecordingRuntime"
+images = ["example-image"]
+movers = ["iodma_hls", "example_dma"]
+kinds = ["moved"]
+schemas = [1]
+
 [movers.example_dma]
 # A mover of the platform's own, moving each frame between memory and a boundary channel.
 # Declared and checked; its shell offers FINN's own, as a core places no other kind yet.
@@ -36,7 +44,7 @@ kinds = ["moved"]
 # characterisation of its own.
 based_on = "pynq"
 linker = "example-link"
-runtimes = ["example-run"]
+runtimes = ["example-run", "example-alt"]
 memory = [{ name = "PORT0", width = 64, masters = 4 }]
 supply = [{ kind = "moved", movers = ["iodma_hls"], width_cap = 64 }]
 delivery = [{ kind = "moved", movers = ["iodma_hls"], width_cap = 64 }]

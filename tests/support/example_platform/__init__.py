@@ -100,17 +100,21 @@ class ExampleLinker:
 
 
 class RecordingRuntime:
-    """The ``example-run`` runtime: into a driver's directory, the runtime file
-    (``integration.json``) and the operations its driver would run (``OPERATIONS``): the
-    image loaded, the main clock set, and each core's movers started by unit and base."""
+    """The ``example-run`` and ``example-alt`` runtimes: into a driver's directory, the
+    runtime file (``integration.json``) and the operations its driver would run
+    (``OPERATIONS``): the image loaded with the files beside it, the main clock set, the
+    linker's reports read, and each core's movers started by unit and base."""
 
     def emit(self, integration: Integration, linked: Linked, directory: Path) -> None:
         directory.mkdir(parents=True, exist_ok=True)
         (directory / "integration.json").write_text(runtime_text(integration, linked))
         operations: list[list[object]] = [
-            ["load", linked.image.name],
+            ["load", linked.image.name, sorted(path.name for path in linked.beside)],
             ["clock", linked.clocks_mhz.get(MAIN)],
+            ["reports", sorted(linked.reports)],
         ]
+        for path in (linked.image, *linked.beside, *linked.reports.values()):
+            assert path.exists(), path
         for core in integration.cores:
             for edge in (*core.outputs, *core.inputs):
                 operations.append(["start", edge.unit, linked.placement[edge.unit]])

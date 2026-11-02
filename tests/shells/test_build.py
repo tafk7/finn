@@ -18,7 +18,7 @@ import json
 import logging
 import os
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
@@ -59,11 +59,13 @@ from finn.shells.build import (
     DELIVERED_CLOCK,
     DRIVER_DIR,
     DRIVER_REPORT,
+    LINKED,
     RUNTIME_FILE,
     BuildBitfile,
     MakeDriver,
     ShellRefused,
     bitfile_directory,
+    collection,
     exported_vlnv,
     mover_ip,
     unit_ips,
@@ -580,7 +582,7 @@ def test_the_bitfile_build_prepares_its_default_toolchain_once_when_made(
 
     monkeypatch.setattr(shell_build, "host_toolchain", host_toolchain)
     seen = recorded_tools(monkeypatch, tmp_path)
-    building = BuildBitfile(tmp_path / "output")
+    building = BuildBitfile(tmp_path / "output", None)
     assert len(prepared) == 1 and building.toolchain is cast(Toolchain, prepared[0])
     zynq_parent(tmp_path).transform(building)
     assert len(prepared) == 1
@@ -602,7 +604,7 @@ def test_the_bitfile_build_is_a_transformation_of_the_parent_graph(
     output = tmp_path / "output"
     vivado = FakeVivado(timing=TIMING_REPORT)
     building = BuildBitfile(
-        output, toolchain=cast(Toolchain, vivado), hw_debug=True, objective_fps=1000
+        output, "pynq", toolchain=cast(Toolchain, vivado), hw_debug=True, objective_fps=1000
     )
     built = parent.transform(building)
     ((_, _, script),) = vivado.runs
@@ -628,7 +630,15 @@ def test_the_bitfile_build_is_a_transformation_of_the_parent_graph(
     assert (output / BITFILE).read_text() == "top_wrapper.bit"
     assert (output / BITFILE_DIR / "finn-accel.hwh").read_text() == "top.hwh"
     assert sorted(path.name for path in report.iterdir()) == sorted(
-        [TIMING, PLACED, OUT_OF_CONTEXT, BLOCK_DESIGN, "integration.json", "delivered_clock.json"]
+        [
+            TIMING,
+            PLACED,
+            OUT_OF_CONTEXT,
+            BLOCK_DESIGN,
+            "integration.json",
+            "delivered_clock.json",
+            "linked.json",
+        ]
     )
     assert sorted(building.reports) == sorted(path for path in report.rglob("*") if path.is_file())
     assert len(list((report / OUT_OF_CONTEXT).iterdir())) == 3
@@ -670,7 +680,7 @@ def test_the_bitfile_build_refuses_a_shell_without_it(tmp_path: Path) -> None:
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     vivado = FakeVivado()
-    building = BuildBitfile(tmp_path / "output", toolchain=cast(Toolchain, vivado))
+    building = BuildBitfile(tmp_path / "output", None, toolchain=cast(Toolchain, vivado))
     with refused(
         "shell-integrates-nothing",
         error=ShellRefused,
@@ -704,9 +714,160 @@ def test_a_description_the_block_design_cannot_wire_is_refused_before_any_tool_r
     monkeypatch.setattr(shell_build, "describe", lambda model, runtime=None: narrow)
     vivado = FakeVivado()
     with refused("range-below-least", error=LinkerRefused):
-        parent.transform(BuildBitfile(tmp_path / "output", toolchain=cast(Toolchain, vivado)))
+        parent.transform(BuildBitfile(tmp_path / "output", None, toolchain=cast(Toolchain, vivado)))
     assert vivado.runs == [] and seen == []
     assert not (tmp_path / "output").exists()
+
+
+class GivenLinker:
+    """A linker that links nothing: it gives back ``linked`` whatever it is given."""
+
+    def __init__(self, linked: Linked) -> None:
+        self.linked = linked
+
+    def check(self, integration: Integration, board: Mapping[str, str]) -> None:
+        pass
+
+    def link(
+        self,
+        integration: Integration,
+        board: Mapping[str, str],
+        directory: Path,
+        tools: Toolchain,
+    ) -> Linked:
+        return replace(self.linked, placement=unit_bases(integration, linked_row(integration)))
+
+
+def made(directory: Path, beside: tuple[str, ...] = (), **reports: str) -> Linked:
+    """What a linker made in ``directory``: an image ``image.bit``, the files ``beside``
+    it, and the ``reports``, each a file (by its key, its text) or, where the text is a
+    name ending in ``/``, a directory holding that file."""
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "image.bit").write_text("IMAGE")
+    for name in beside:
+        (directory / name).write_text(name)
+    found = {}
+    for key, text in reports.items():
+        path = directory / "reports" / key.replace("/", "_")
+        if text.endswith("/"):
+            path.mkdir(parents=True)
+            (path / text[:-1]).write_text(text)
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text)
+        found[key.replace("__", "/")] = path
+    return Linked(
+        image=directory / "image.bit",
+        placement={},
+        clocks_mhz={MAIN: 200.0},
+        reports=found,
+        beside=tuple(directory / name for name in beside),
+    )
+
+
+@pytest.mark.parametrize(
+    "beside, reports, code",
+    [
+        (("control.map", "memory.map"), {}, "artifact-collision"),
+        (("metadata.bit",), {}, "artifact-collision"),
+        ((), {"..__bitfile__finn-accel.bit": "R"}, "report-key-invalid"),
+        ((), {"integration.json": "R"}, "report-key-invalid"),
+        ((), {"step_explore.json": "R"}, "report-key-invalid"),
+        ((), {"logs": "R", "logs__run.log": "R"}, "report-key-invalid"),
+    ],
+    ids=["same-suffix", "image-suffix", "escaping", "finn-own", "finn-step", "nested"],
+)
+def test_what_a_build_cannot_collect_is_refused_before_anything_is_copied(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    beside: tuple[str, ...],
+    reports: dict[str, str],
+    code: str,
+) -> None:
+    """Two files beside the image of one suffix, or one of the image's; a report outside
+    report/, of one of FINN's own names or a step's, or inside another report: refused
+    once linked, before the earlier bitfile, its reports or FINN's are touched."""
+    recorded_tools(monkeypatch, tmp_path)
+    linked = made(tmp_path / "linked", beside, **reports)
+    monkeypatch.setattr(shell_build, "declared_linker", lambda row, debug: GivenLinker(linked))
+    output = tmp_path / "output"
+    (output / "bitfile").mkdir(parents=True)
+    (output / BITFILE).write_text("EARLIER")
+    (output / "report").mkdir()
+    (output / RUNTIME_FILE).write_text("EARLIER")
+    with refused(code, error=ShellRefused, owner="BuildBitfile", output="bitfile"):
+        zynq_parent(tmp_path).transform(
+            BuildBitfile(output, None, toolchain=cast(Toolchain, FakeVivado()))
+        )
+    assert (output / BITFILE).read_text() == (output / RUNTIME_FILE).read_text() == "EARLIER"
+    assert sorted(path.name for path in output.rglob("*")) == [
+        "bitfile",
+        "finn-accel.bit",
+        "integration.json",
+        "report",
+    ]
+    with pytest.raises(ShellRefused):
+        collection(linked)
+    absolute = replace(linked, beside=(), reports={"/elsewhere": linked.image})
+    with refused("report-key-invalid", error=ShellRefused, message="not a plain relative"):
+        collection(absolute)
+
+
+def test_a_build_replaces_what_the_last_link_collected_and_nothing_else(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A linker that gives back no report and nothing beside its image builds into a fresh
+    output directory: report/ is made for FINN's own reports. Built again, by a linker
+    giving back a directory of reports, then once more giving back that directory with
+    other files: each build removes what the last one collected, by its record, and a
+    report directory is the last link's alone; a report of FINN's own, and any other file,
+    stay."""
+    recorded_tools(monkeypatch, tmp_path)
+    parent = zynq_parent(tmp_path)
+    output = tmp_path / "output"
+    toolchain = cast(Toolchain, FakeVivado())
+    for index, (beside, reports) in enumerate(
+        [
+            ((), {}),
+            (("image.map",), {"logs": "first.log/", "old.rpt": "O"}),
+            ((), {"logs": "second.log/"}),
+        ]
+    ):
+        linked = made(tmp_path / f"linked{index}", beside, **reports)
+        monkeypatch.setattr(shell_build, "declared_linker", lambda row, debug: GivenLinker(linked))
+        building = BuildBitfile(output, None, toolchain=toolchain)
+        parent.transform(building)
+        if index == 0:
+            assert sorted(path.name for path in (output / "report").iterdir()) == [
+                "delivered_clock.json",
+                "integration.json",
+                "linked.json",
+            ]
+            (output / "report" / "kernel_ops.json").write_text("FINN's")
+            (output / "notes.txt").write_text("the user's")
+    assert sorted(
+        str(path.relative_to(output)) for path in output.rglob("*") if path.is_file()
+    ) == [
+        "bitfile/finn-accel.bit",
+        "notes.txt",
+        "report/delivered_clock.json",
+        "report/integration.json",
+        "report/kernel_ops.json",
+        "report/linked.json",
+        "report/logs/second.log",
+    ]
+    assert json.loads((output / LINKED).read_text()) == {
+        "linker": "vivado-block-design",
+        "image": "bitfile/finn-accel.bit",
+        "beside": [],
+        "reports": {"logs": "report/logs"},
+    }
+    assert building.reports == [
+        output / "report" / "logs",
+        output / RUNTIME_FILE,
+        output / DELIVERED_CLOCK,
+        output / LINKED,
+    ]
 
 
 #: A Vitis HLS that reports 2024.2 and, given a request, makes the solution's exported
@@ -876,9 +1037,9 @@ def test_the_driver_is_a_transformation_of_the_parent_graph(tmp_path: Path) -> N
     lanes, a beat's bits), the main clock as delivered; the bitfile the parent graph states
     its default. The description states the bitfile, the runtime, the design the driver was
     made from and the IP its bitfile holds, and the parent graph is left as it was. Without
-    the build's runtime file, or with one of another schema, without a runtime, with one
-    the shell does not offer, or on the ip shell, it is refused before anything is
-    written."""
+    the build's runtime file, or with one of another schema, without the record of what
+    the build collected, without a runtime, with one the shell does not offer, or on the ip
+    shell, it is refused before anything is written."""
     parent = zynq_parent(tmp_path)
     output = tmp_path / "output"
     _, body, body_file = partition_body(parent)
@@ -908,6 +1069,13 @@ def test_the_driver_is_a_transformation_of_the_parent_graph(tmp_path: Path) -> N
         reports={},
     )
     (output / RUNTIME_FILE).write_text(runtime_text(described, linked))
+    with refused("linked-absent", error=ShellRefused, owner="MakeDriver", output="driver"):
+        parent.transform(MakeDriver(output, "pynq"))
+    (output / LINKED).write_text(
+        json.dumps(
+            {"linker": "vivado-block-design", "image": str(BITFILE), "beside": [], "reports": {}}
+        )
+    )
     with refused(
         "runtime-absent",
         error=ShellRefused,

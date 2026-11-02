@@ -186,7 +186,7 @@ def machine(monkeypatch):
         lambda tmp_path, **given: PackagePartition("p", **given),
         lambda tmp_path, **given: ElaboratePartition("p", **given),
         lambda tmp_path, **given: XSim(**given),
-        lambda tmp_path, **given: BuildBitfile(tmp_path, **given),
+        lambda tmp_path, **given: BuildBitfile(tmp_path, None, **given),
     ],
     ids=["PackagePartition", "ElaboratePartition", "XSim", "BuildBitfile"],
 )
