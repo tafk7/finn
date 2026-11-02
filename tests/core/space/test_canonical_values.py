@@ -31,11 +31,11 @@ from finn.core.space import (
     Space,
     derived,
     design_space,
+    semantics,
     value_type,
 )
-from finn.core.space.occurrence import held
-from finn.core.space import semantics
 from finn.core.space._running.cache import key
+from finn.core.space.occurrence import held
 from finn.core.space.semantics import changed_reads, compared_fields, identity, value_class
 
 NAN = float("nan")
