@@ -49,12 +49,12 @@ not wire, and a board or processor the project cannot select, before any tool ru
 directory it is given, runs Vivado on it and collects what it made (``collect``): the
 bitfile, its hardware handoff beside it, the main clock as the routed design delivers it
 and the design's worst setup slack there, read from the routed timing report, an image
-whose slack is negative refused (``admitted``, ``timing-unmet``: Vivado writes the
-bitfile of a design that misses timing), and the reports, each by its path under a
-build's ``report/``: the routed timing report (``TIMING``), the template's ``impl_1``
-hierarchical utilization report (``PLACED``), each IP's out-of-context synthesis report
-(under ``OUT_OF_CONTEXT``), and what it named and placed (``BLOCK_DESIGN``, ``report``).
-Every unit's IP is packaged before it links.
+whose setup or hold slack is negative refused (``admitted``, ``timing-unmet``,
+``timing-hold-unmet``: Vivado writes the bitfile of a design that misses timing), and the
+reports, each by its path under a build's ``report/``: the routed timing report
+(``TIMING``), the template's ``impl_1`` hierarchical utilization report (``PLACED``), each
+IP's out-of-context synthesis report (under ``OUT_OF_CONTEXT``), and what it named and
+placed (``BLOCK_DESIGN``, ``report``). Every unit's IP is packaged before it links.
 """
 
 from __future__ import annotations
@@ -553,7 +553,8 @@ def admitted(report: Path, period_ns: float) -> tuple[float, Timing]:
     report's clock summary, which Vivado gives as near the ``period_ns`` asked as the
     processor's clocks reach (``delivered_clock``), and the design's worst setup slack at
     it (``design_timing``). Vivado writes the bitfile of a design that misses timing: a
-    negative worst setup slack is refused (``timing-unmet``), as is no report
+    negative worst setup slack is refused (``timing-unmet``), as is a negative worst hold
+    slack (``timing-hold-unmet``: a hold time missed at any period), no report
     (``timing-unreported``) and one that names no PL clock or no worst setup slack
     (``timing-unread``), each naming the report."""
     if not report.is_file():
@@ -577,6 +578,14 @@ def admitted(report: Path, period_ns: float) -> tuple[float, Timing]:
             f"{report}: the routed design's worst setup slack is {wns} ns at its "
             f"{clock['clock']} clock's {period} ns ({mhz} MHz; {period_ns} ns asked): it "
             "misses timing; ask a longer period (the target's period_ns)",
+        )
+    assert design is not None  # its worst setup slack was read
+    if design["whs_ns"] < 0:
+        raise LinkerRefused(
+            "timing-hold-unmet",
+            f"{report}: the routed design's worst hold slack is {design['whs_ns']} ns: it "
+            "misses timing at any period; the routed design's timing report names its "
+            "failing paths",
         )
     return mhz, Timing(period, wns, TIMING)
 

@@ -455,6 +455,15 @@ def test_the_routed_timing_is_read_from_each_linker_s_real_report(tmp_path: Path
     assert read["none"] == (None, {"target_period_ns": 5.0, "clocks": []})
 
 
+#: TFC's real Ultra96 report (``TIMING_REPORT``) with its design's worst hold slack
+#: rewritten from 0.014 to -0.021 ns, in the design summary and the clock's own row: no
+#: real routed report on hand misses hold (Vivado's router fixes hold where it can).
+HOLD_UNMET_REPORT = TIMING_REPORT.replace(
+    "1.667        0.000                      0                63298        0.014",
+    "1.667        0.000                      0                63298       -0.021",
+)
+
+
 @pytest.mark.parametrize(
     "timing, code, message",
     [
@@ -466,8 +475,14 @@ def test_the_routed_timing_is_read_from_each_linker_s_real_report(tmp_path: Path
         ),
         (None, "timing-unreported", r"no routed timing report \(.*routed\.rpt\)"),
         ("no summary", "timing-unread", r"routed\.rpt: names no PL clock"),
+        (
+            HOLD_UNMET_REPORT,
+            "timing-hold-unmet",
+            r"routed\.rpt: the routed design's worst hold slack is -0\.021 ns: it misses "
+            "timing at any period",
+        ),
     ],
-    ids=["unmet", "unreported", "unread"],
+    ids=["unmet", "unreported", "unread", "hold-unmet"],
 )
 def test_an_image_that_misses_timing_is_refused_naming_its_report_and_slack(
     described: Integration, tmp_path: Path, timing: str | None, code: str, message: str
@@ -476,8 +491,11 @@ def test_an_image_that_misses_timing_is_refused_naming_its_report_and_slack(
     the routed timing report it collects and refuses an image whose worst setup slack is
     negative at the period its PL clock was routed at (``timing-unmet``: a real report,
     -0.906 ns at 1 ns), naming the report, the slack and the period; as it does an image
-    with no report (``timing-unreported``) or one that states no PL clock or no slack
-    (``timing-unread``)."""
+    whose worst hold slack is negative (``timing-hold-unmet``), one with no report
+    (``timing-unreported``) and one that states no PL clock or no slack
+    (``timing-unread``). No real routed report misses hold: that case is TFC's Ultra96
+    report with its worst hold slack, 0.014 ns, rewritten to -0.021 ns
+    (``HOLD_UNMET_REPORT``)."""
     vivado = FakeVivado(timing=timing)
     with refused(code, error=LinkerRefused, owner="vivado-block-design", message=message):
         BlockDesignLinker().link(packaged(described), BOARD, tmp_path, cast(Toolchain, vivado))

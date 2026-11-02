@@ -557,9 +557,9 @@ the files, and the routed timing its linker admitted: the period its main clock 
 and the worst setup slack there, also in the clock report, `report/delivered_clock.json`),
 which the driver and the resources report read, each only the files it names; a rebuild
 replaces `bitfile/`, the build's own, whole, and removes the reports the last one
-collected. A linker refuses an image that misses timing (`timing-unmet`: Vivado writes the
-bitfile of a routed design whose worst setup slack is negative), naming its routed timing
-report and the slack.
+collected. A linker refuses an image that misses timing (`timing-unmet`,
+`timing-hold-unmet`: Vivado writes the bitfile of a routed design whose worst setup or
+hold slack is negative), naming its routed timing report and the slack.
 
 What a build logs, at which level, and what reaches the console
 (`finn.core.reporting.log`):
