@@ -12,7 +12,9 @@ and a composite none (``kernel-interval-composite``). Where its schedule and por
 interval cannot express its rate (a memory mover), a kernel with a module states its rate a
 frame (``StatedRate``): a port's beat times and its span, with its reason, standing and
 source; its cycles a frame are its span. A composite states none
-(``kernel-rate-composite``).
+(``kernel-rate-composite``). A stated rate is contract: refused, or waiting on an open
+choice, it refuses or opens its design point. A port class states no pace, interval, rate
+or pace in cycles of its own (``port-rate``).
 """
 
 from __future__ import annotations
@@ -27,11 +29,13 @@ from support.refusals import refused
 
 from finn.core.space import (
     Available,
+    Decision,
     DefinitionError,
     Inapplicable,
     Param,
     Rejected,
     Select,
+    Space,
     derived,
     design_space,
     inspection,
@@ -214,6 +218,10 @@ def test_fifo_sizing_says_where_it_rests_on_an_assumed_interval_or_rate() -> Non
     assert " and the consumer's interval 1, assumed: " in note
 
 
+class _Extra(Space):
+    level: int = Param(default=1)
+
+
 class _Stage(Kernel):
     """A model-only stage on a library module."""
 
@@ -365,7 +373,9 @@ def test_a_kernel_with_a_schedule_may_state_its_rate_too() -> None:
 
 def test_a_stated_rate_times_a_port_of_its_kernel_each_beat() -> None:
     """Checked where it is read (``checked_rate``): its cycles, its port's pace in cycles
-    and its assumptions are refused with it."""
+    and its assumptions are refused with it, and so is its design point: a stated rate is
+    contract (CONTRACT.md L6), read by a constraint the base gives each class stating one
+    (``-stated-rate``)."""
     for rate, message in (
         (replace(MOVED, port="output"), "states the rate of 'output', no port of it"),
         (replace(MOVED, times=(1, 3, 5)), "times 3 beats of input, which carries 4 a frame"),
@@ -376,6 +386,56 @@ def test_a_stated_rate_times_a_port_of_its_kernel_each_beat() -> None:
             assert isinstance(result, Rejected), result
             [finding] = result.findings
             assert (finding.code, finding.message) == ("kernel-rate-port", f"_Mover {message}")
+        validity = inspection.validity(point)
+        assert validity.status == "refused"
+        assert [piece.owner for piece in validity.pieces] == ["-stated-rate"]
+        refusal = validity.pieces[0].result
+        assert isinstance(refusal, Rejected)
+        assert [each.code for each in refusal.findings] == ["kernel-rate-port"]
+    point = design_space(_Mover(input_tensor=TENSOR, arriving=ARRIVING, rate=MOVED))
+    assert inspection.validity(point).status == "valid"
+
+
+class _Choosing(_Stage):
+    """A stage whose stated rate waits on an open choice."""
+
+    id = "test.interval.choosing"
+    slow: bool = Decision(domain=(False, True))
+
+    @derived
+    def stated_rate(self) -> StatedRate:
+        return replace(MOVED, span=13) if self.slow else MOVED
+
+
+class _AbsentRate(_Stage):
+    """A stage whose stated rate reads a member of an absent scope."""
+
+    id = "test.interval.absent_rate"
+    extended: bool = Param(default=False)
+    extra = _Extra(when=extended)
+
+    @derived
+    def stated_rate(self) -> StatedRate:
+        return replace(MOVED, span=11 * self.extra.level)
+
+
+def test_a_stated_rate_open_leaves_its_point_open_and_one_not_applying_refuses_it() -> None:
+    """The constraint reading it waits with it, and applies wherever its kernel is present
+    (``kernel-rate-inapplicable``). A kernel stating no rate has no such constraint."""
+    point = design_space(_Choosing(input_tensor=TENSOR, arriving=ARRIVING))
+    validity = inspection.validity(point)
+    assert validity.status == "open"
+    assert "-stated-rate" in [piece.owner for piece in validity.pieces]
+    assert inspection.validity(point.with_choices({_Choosing.slow: True})).status == "valid"
+    absent = design_space(_AbsentRate(input_tensor=TENSOR, arriving=ARRIVING))
+    validity = inspection.validity(absent)
+    assert validity.status == "refused"
+    (piece,) = validity.pieces
+    assert piece.owner == "-stated-rate" and isinstance(piece.result, Rejected)
+    assert [each.code for each in piece.result.findings] == ["kernel-rate-inapplicable"]
+    extended = design_space(_AbsentRate(input_tensor=TENSOR, arriving=ARRIVING, extended=True))
+    assert inspection.validity(extended).status == "valid"
+    assert not hasattr(PoolKernel, "-stated-rate") and not hasattr(_Stage, "-stated-rate")
 
 
 def test_a_kernel_states_its_rate_and_restates_no_cycles_where_it_does() -> None:
@@ -439,6 +499,30 @@ def test_a_port_of_a_kernel_s_body_states_no_rate_of_its_own() -> None:
 
         class Rated(InPort):
             rate: StatedRate | None = Param(default=MOVED)
+
+
+def test_a_port_class_states_no_pace_or_interval_of_its_own() -> None:
+    """Its pace is its kernel's schedule's, and its interval its kernel's (``port-rate``,
+    as for ``rate`` and ``timed_pace``): a class's own would time its beats otherwise than
+    its kernel's cycles, which FIFO sizing reads."""
+    with refused("port-rate", error=DefinitionError, message=r"Later\.pace: "):
+
+        class Later(InPort):
+            @derived
+            def pace(self) -> Pace | Inapplicable:
+                return Inapplicable()
+
+    with refused("port-rate", error=DefinitionError, message=r"Slow\.interval: "):
+
+        class Slow(InPort):
+            @derived  # type: ignore[misc]  # a Param's name, the refusal tested
+            def interval(self) -> Interval:
+                return TWO
+
+    with refused("port-rate", error=DefinitionError, message=r"Defaulted\.interval: "):
+
+        class Defaulted(OutPort):
+            interval: Interval = Param(default=TWO)
 
 
 class _Labelled(_Mover):

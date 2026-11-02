@@ -67,7 +67,7 @@ from finn.kernels.sides import Side
 from finn.kernels.values.domains import Integer, admit_element
 
 _KIND_MEMBERS = {"direction": "port-direction", "pacing": "port-pacing", "follows": "port-pacing"}
-_TIMING_MEMBERS = ("rate", "timed_pace")
+_TIMING_MEMBERS = ("pace", "interval", "rate", "timed_pace")
 
 
 def _refuse_kind_overridden(cls: type[StreamPort]) -> None:
@@ -78,9 +78,10 @@ def _refuse_kind_overridden(cls: type[StreamPort]) -> None:
     input side or an output side), whose role the channel checks, an exposed port's kind,
     checked when its kernel's class is made, and a reader of a class's port
     (``finn.kernels.port.port_direction``). A port's pacing follows from its declaration,
-    checked when its kernel's class is made. And refuse one that declares ``rate`` or
-    ``timed_pace`` (``port-rate``): its pace in cycles is its kernel's (L6), which states its
-    interval or its rate, so every reader of it reads the rate its kernel checked."""
+    checked when its kernel's class is made. And refuse one that declares ``pace``,
+    ``interval``, ``rate`` or ``timed_pace`` (``port-rate``): its pace is its kernel's
+    schedule's, and its pace in cycles its kernel's (L6), which states its interval or its
+    rate, so every reader of it reads the pace and the rate its kernel states and checks."""
     for base in cls.__mro__:
         if base.__module__ == __name__ or base in StreamPort.__mro__:
             continue
@@ -90,8 +91,9 @@ def _refuse_kind_overridden(cls: type[StreamPort]) -> None:
                 raise DefinitionError.broken(
                     "port-rate",
                     "StreamPort",
-                    f"{where}: a port's pace in cycles is its kernel's (L6), never a port "
-                    "class's own: its kernel states its interval or its rate (stated_rate)",
+                    f"{where}: a port's pace and its pace in cycles are its kernel's (L6), "
+                    "never a port class's own: its kernel states its schedule, its interval "
+                    "or its rate (stated_rate)",
                     declaration=where,
                 )
         for name, code in _KIND_MEMBERS.items():
@@ -128,7 +130,7 @@ class StreamPort(Space):
     body never states (``port-interval``), and ``rate`` its kernel's stated rate, checked
     (``finn.kernels.laws.StatedRate``, ``Kernel.checked_rate``), where it names the port by
     its name in its kernel, else None, never stated by the port or its class either
-    (``port-rate``); its
+    (``port-rate``, as its class states no ``pace`` or ``interval`` of its own); its
     ``transport``, where it states none, is its kernel's interface protocol's
     (``finn.kernels.laws.InterfaceProtocol``): a kernel supplies all five for a port declared
     in its own body that does not state them (``finn.kernels.base.Kernel``). A port with its
@@ -315,13 +317,16 @@ class StreamPort(Space):
         stream = self.stream
         return data_width(self.physical_spec(idle=False), stream)
 
-    @constraint
+    @constraint(applies="port-presentation-inapplicable")
     def presented(self) -> bool | Rejected:
         """A stream port is an input or an output, and a placed port's presentation is
         applicable, accepted and carried: its ``stream`` (its schedule's projection, or its
         given sequence, on the physical schemas) and its ``width`` (its transport carries the
         stream) are answers, or its design point is refused with their refusal (a native
-        port presenting markers its pins cannot carry, ``port-markers``). An idle port
+        port presenting markers its pins cannot carry, ``port-markers``). It applies
+        wherever its port is present: where what it reads does not apply (a schedule that
+        reads a value that does not apply, a stream whose channel is absent), it refuses its
+        design point (``port-presentation-inapplicable``), never counts as true. An idle port
         presents nothing. Its kernel's class refuses what it sees of these in a declaration
         (a ``StreamPort`` of neither kind, ``port-direction``); this refuses one used outside
         a kernel's class, at the design point."""

@@ -1040,6 +1040,94 @@ def test_a_scheduled_port_s_kernel_states_a_schedule_never_inapplicable() -> Non
         inspection.validity(point)
 
 
+_R, _C = Index("r"), Index("c")
+
+
+class _Extra(Space):
+    level: int = Param(default=1)
+
+    @derived
+    def doubled(self) -> int:
+        return 2 * self.level
+
+
+class _Indirect(Kernel):
+    """A schedule declared never inapplicable that reads a value admitting it: it stops
+    there, and answers ``Inapplicable`` whatever it declares (space DESIGN § 8)."""
+
+    id = "test.presented.indirect"
+
+    @derived
+    def prerequisite(self) -> bool | Inapplicable:
+        return Inapplicable()
+
+    @derived
+    def schedule(self) -> Schedule | Rejected:
+        _ = self.prerequisite
+        return Schedule({_R: 2, _C: 4})
+
+    input = InPort(tensor=TENSOR, schedule=schedule, index=(_R, _C))
+
+
+class _Explicit(Kernel):
+    """The same through an explicit argument."""
+
+    id = "test.presented.explicit"
+
+    @derived
+    def prerequisite(self) -> int | Inapplicable:
+        return Inapplicable()
+
+    @derived(prerequisite=prerequisite)
+    def gate(prerequisite: int) -> bool:
+        return prerequisite > 0
+
+    @derived
+    def schedule(self) -> Schedule | Rejected:
+        _ = self.gate
+        return Schedule({_R: 2, _C: 4})
+
+    input = InPort(tensor=TENSOR, schedule=schedule, index=(_R, _C))
+
+
+class _Absent(Kernel):
+    """A schedule reading a member of its own child, placed where a value is false: its
+    scope absent."""
+
+    id = "test.presented.absent"
+    extended: bool = Param(default=False)
+    extra = _Extra(when=extended)
+
+    @derived
+    def schedule(self) -> Schedule | Rejected:
+        return Schedule({_R: 2, _C: 4 * self.extra.doubled // 2})
+
+    input = InPort(tensor=TENSOR, schedule=schedule, index=(_R, _C))
+
+
+@pytest.mark.parametrize("kernel", [_Indirect, _Explicit, _Absent])
+def test_a_placed_port_whose_presentation_does_not_apply_refuses_its_point(
+    kernel: type[_Indirect | _Explicit | _Absent],
+) -> None:
+    """R3: a placed port's presentation applies. A schedule declared ``Schedule | Rejected``
+    that reads a value that does not apply (a declared ``Inapplicable``, through a method or
+    an explicit argument, or a member of an absent scope) answers ``Inapplicable``, and so
+    does the port's stream; its ``presented`` applies wherever the port is present
+    (``@constraint(applies=...)``), so it refuses the point
+    (``port-presentation-inapplicable``), never counts as true."""
+    point = design_space(kernel())
+    assert isinstance(point.query(kernel.schedule), Inapplicable)
+    assert isinstance(point.query(kernel.input.stream), Inapplicable)
+    validity = inspection.validity(point)
+    assert validity.status == "refused"
+    (piece,) = validity.pieces
+    assert piece.owner == "input.presented"
+    assert isinstance(piece.result, Rejected)
+    (finding,) = piece.result.findings
+    assert finding.code == "port-presentation-inapplicable"
+    assert dict(finding.details)["read"] == ("input.stream",)
+
+
 def test_a_placed_port_s_presentation_is_accepted_and_carried_or_its_point_is_refused() -> None:
     """A placed port's presentation (``presented``): a schedule's projection that does not
     project, or a stream its transport cannot carry (a vpc presenting the same marker on

@@ -49,6 +49,7 @@ from finn.core.space import (
     Param,
     Rejected,
     Space,
+    constraint,
     derived,
     reject,
     space_formals,
@@ -234,12 +235,12 @@ def _members(cls: type[Kernel]) -> dict[str, object]:
 # member channel ``h``'s hops; ``<what>`` one of ``neighbours``, ``ends``, ``hops``,
 # ``producer``, ``consumer``, ``placed``, ``case``, ``governed`` and ``rate``),
 # ``-<what>-<i>`` for the ``i``-th helper of a reading (``-hops-0``), and the base's own
-# ``-end`` (ending each reading), ``-placed``, ``-no-port``, ``-own-buses`` and
-# ``-own-windows``. No member's name holds a ``-`` (a Python name, or a graph name as
-# ``finn.kernels.composer`` names its member, ``\W`` as ``_``), and a composed class's root
-# members begin with their member's name
-# (``mm0-x_tensor``), so no member meets one, whatever its name; their last segments, a word
-# or a number, keep them apart.
+# ``-end`` (ending each reading), ``-placed``, ``-no-port``, ``-own-buses``,
+# ``-own-windows`` and ``-stated-rate``. No member's name holds a ``-`` (a Python name, or
+# a graph name as ``finn.kernels.composer`` names its member, ``\W`` as ``_``), and a
+# composed class's root members begin with their member's name (``mm0-x_tensor``), so no
+# member meets one, whatever its name; their last segments, a word or a number, keep them
+# apart.
 
 
 def _installed(*parts: str) -> str:
@@ -388,6 +389,29 @@ def _supply_ports(cls: type[Kernel]) -> None:
             setattr(cls, named, rate)
             getattr(rate, "__set_name__")(cls, named)
             assign(value, "rate", rate)
+
+
+_STATED_RATE = _installed("stated", "rate")
+
+
+def _check_stated_rate(cls: type[Kernel]) -> None:
+    """Give a kernel class that states its rate (``stated_rate``, in its body or a base's
+    below ``Kernel``) a constraint reading its checked rate (``-stated-rate``): a stated
+    rate is contract (CONTRACT.md L6), so one refused refuses its design point, and one
+    waiting on an open choice leaves it open; and the constraint applies wherever its
+    kernel is present (``kernel-rate-inapplicable`` where the rate does not apply). A class
+    stating none has none, and evaluates nothing more."""
+    if not _declared(cls, "stated_rate") or _declared(cls, _STATED_RATE):
+        return
+
+    def stated_rate(self: Kernel) -> bool:
+        _ = self.checked_rate
+        return True
+
+    stated_rate.__annotations__ = {"return": bool}
+    rule = constraint(applies="kernel-rate-inapplicable")(stated_rate)
+    setattr(cls, _STATED_RATE, rule)
+    getattr(rule, "__set_name__")(cls, _STATED_RATE)
 
 
 def _port_rate(port: str) -> Callable[[Kernel], StatedRate | None]:
@@ -1932,6 +1956,7 @@ class Kernel(Space):
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         _supply_ports(cls)
+        _check_stated_rate(cls)
         _read_intake(cls)
         _check_ports(cls)
         _expose_ports(cls)
