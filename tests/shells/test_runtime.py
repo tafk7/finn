@@ -13,6 +13,7 @@ driver it writes, run as on a board with numpy and a stubbed PYNQ alone
 from __future__ import annotations
 
 import ast
+import gc
 import json
 import os
 import re
@@ -39,7 +40,8 @@ from finn.shells.build import ShellRefused
 from finn.shells.integration import MAIN, Linked, describe, runtime_file
 from finn.shells.pynq.linker import linked_row, unit_bases
 from finn.shells.pynq.runtime import PynqRuntime, shipped
-from finn.shells.runtime import Description, Driver, Refused, cli, read, validate
+from finn.shells.runtime import Buffer, Description, Driver, Refused, cli, read, validate
+from finn.shells.runtime.driver import RETAINED
 from finn.shells.runtime.movers import DONE, IDLE, START
 from finn.shells.runtime.packing import Element, pack, unpack
 from finn.util import data_packing
@@ -464,6 +466,101 @@ def test_closing_releases_every_buffer_once_its_movers_are_idle() -> None:
         driver.run_core(core["name"], inputs)
     assert sorted(stalling.buffers.values()) == ["in0", "out0"]
     assert not any(line.startswith("release") for line in stalling.calls)
+
+
+class Unstartable(FakeDevice):
+    """The device double whose mover ``failing`` does not start: writing any of its
+    registers raises."""
+
+    failing = ""
+
+    def write32(self, unit: str, offset: int, value: int) -> None:
+        if unit == self.failing:
+            raise OSError(f"{unit}: its register did not write")
+        super().write32(unit, offset, value)
+
+
+def test_a_partial_launch_faults_the_driver_until_the_image_is_loaded_again() -> None:
+    """The output mover started and the input mover failing to start: the driver refuses
+    every use, settling and closing included, and keeps every buffer, retained past the
+    driver's life, also when its context is left on the error. Loading the image again
+    resets the movers: the driver goes on, and closes."""
+    found = recorded()
+    (core,) = found["cores"]
+    (given,) = core["inputs"]
+    inputs = {given["tensor"]: np.zeros((1, 784))}
+    device = Unstartable(answers=device_for(found).answers)
+    driver = Driver(device, read(found))
+    driver.stage(core["name"], inputs)
+    held, before = dict(device.buffers), set(RETAINED)
+    device.failing = "in0"
+    with pytest.raises(OSError, match="in0: its register did not write"):
+        driver.launch(core["name"], 1)
+    faulted = (
+        r"^driver-faulted: \S+: a launch of DataflowCore_0: in0 failed to start after "
+        r"\['out0'\] started"
+    )
+    for use in (
+        lambda: driver.run_core(core["name"], inputs),
+        lambda: driver.settle(core["name"]),
+        driver.close,
+    ):
+        with pytest.raises(Refused, match=faulted):
+            use()
+    assert device.buffers == held
+    retained = set(RETAINED) - before
+    assert sorted(RETAINED[each].address for each in retained) == sorted(held)
+    device.failing = ""
+    driver.load(Path("finn-accel.bit"))
+    assert not retained & set(RETAINED)
+    driver.run_core(core["name"], inputs)
+    driver.close()
+    assert device.buffers == {}
+    # Left on the error, the driver dropped: its buffers retained, none released.
+    device = Unstartable(answers=device.answers)
+    before = set(RETAINED)
+    with pytest.raises(OSError), Driver(device, read(found)) as dropped:
+        dropped.stage(core["name"], inputs)
+        device.failing = "in0"
+        dropped.launch(core["name"], 1)
+    del dropped
+    gc.collect()
+    assert len(set(RETAINED) - before) == 2
+    assert not any(line.startswith("release") for line in device.calls)
+
+
+def test_a_core_is_staged_whole_or_not_at_all(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Restaging a core that its packing refuses touches none of its buffers, and one whose
+    sync fails stops there: either leaves the core unstaged, a launch and a collection
+    refused, until it is staged again."""
+    found = recorded()
+    (core,) = found["cores"]
+    (given,) = core["inputs"]
+    device = device_for(found)
+    driver = Driver(device, read(found))
+    driver.stage(core["name"], {given["tensor"]: np.ones((1, 784))})
+    made = len(device.calls)
+    with pytest.raises(Refused, match="^value-outside: "):
+        driver.stage(core["name"], {given["tensor"]: np.full((1, 784), 10**6)})
+    assert device.calls[made:] == []
+    unstaged = "^core-unstaged: DataflowCore_0: not staged for 1 frames"
+    with pytest.raises(Refused, match=unstaged):
+        driver.launch(core["name"], 1)
+    with pytest.raises(Refused, match=unstaged):
+        driver.collect(core["name"], 1)
+    driver.stage(core["name"], {given["tensor"]: np.ones((1, 784))})
+
+    def unsynced(buffer: Buffer, to_device: bool) -> None:
+        raise OSError("the buffer did not sync")
+
+    monkeypatch.setattr(device, "sync", unsynced)
+    with pytest.raises(OSError, match="did not sync"):
+        driver.stage(core["name"], {given["tensor"]: np.zeros((1, 784))})
+    with pytest.raises(Refused, match=unstaged):
+        driver.launch(core["name"], 1)
+    monkeypatch.undo()
+    driver.stage(core["name"], {given["tensor"]: np.zeros((1, 784))})
+    driver.launch(core["name"], 1)
 
 
 def test_the_pynq_stand_in_keeps_each_device_s_state(tmp_path: Path) -> None:

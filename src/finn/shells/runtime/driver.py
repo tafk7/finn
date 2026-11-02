@@ -18,14 +18,29 @@ is given; ``run_graph`` runs the parent graph, its host nodes by ONNX execution 
 qonnx, imported only there) and each ``DataflowCore`` node through ``run_core``, its inputs
 and outputs the core's edge ports in port order.
 
+A core is staged whole or not at all: staging marks it unstaged first, packs every input
+before any buffer is written, and marks it staged with its frames once every input is
+synced and every output allocated; a launch or a collection of a core not staged at those
+frames is refused (``core-unstaged``), so no launch moves one call's inputs beside
+another's.
+
 A mover's buffer is the hardware's from the moment the mover is started until its core's
 launch completes, every output mover done (by then each input mover has moved its whole
-buffer: the core has consumed it). A launch that did not complete (a status read failed)
-leaves its movers armed: their buffers are neither written, released nor read again, and
-the core is refused (``mover-armed``) until ``settle`` finds each of them idle. ``close``
-releases every buffer the driver holds, each armed mover found idle first; one that is not
-is refused (``mover-busy``) and every buffer kept, never freed under the hardware. A driver
-is a context manager that closes on its exit; a closed one is refused (``driver-closed``).
+buffer: the core has consumed it). While it is, the buffer is held in ``RETAINED`` too, so
+dropping the driver frees none under a mover. A launch that did not complete:
+
+- a status read failed, every mover started: its movers stay armed, their buffers neither
+  written, released nor read again, and the core is refused (``mover-armed``) until
+  ``settle`` finds each of them idle;
+- a mover failed to start after another started (a partial launch): a started output
+  mover may wait for ever, so the driver refuses every further use (``driver-faulted``),
+  ``settle`` and ``close`` included, until the image is loaded again (``load``), which
+  resets every mover.
+
+``close`` releases every buffer the driver holds, each armed mover found idle first; one
+that is not is refused (``mover-busy``) and every buffer kept, never freed under the
+hardware. A driver is a context manager that closes on its exit; a closed one is refused
+(``driver-closed``).
 
 A node's run-time weights (``write_weights``) are 32-bit words written from its endpoint's
 offset, each read back where asked; more words than the endpoint holds are refused
@@ -49,6 +64,11 @@ from .errors import Refused
 from .movers import PROTOCOLS
 from .packing import Element, beat_bytes, pack, unpack
 
+RETAINED: dict[int, Buffer] = {}
+"""Every buffer an armed mover holds, by its identity, across every driver of the process:
+held here until its launch completes, it is found idle, or the image is loaded again, so
+none is freed under the hardware when its driver is dropped."""
+
 
 class Driver:
     """A build's cores on ``device``, as its runtime file ``description`` states them (the
@@ -70,6 +90,8 @@ class Driver:
             edge.unit: edge for core in description.cores for edge in (*core.inputs, *core.outputs)
         }
         self._armed: set[str] = set()
+        self._staged: dict[str, int] = {}
+        self._faulted: str | None = None
         self._closed = False
 
     def __enter__(self) -> Driver:
@@ -85,8 +107,12 @@ class Driver:
             self.close()
 
     def load(self, image: Path) -> None:
-        """Load the device image ``image``."""
+        """Load the device image ``image``, which resets every mover: none is armed, the
+        driver is no longer faulted, and no core is staged."""
         self.device.load(image)
+        self._disarm(set(self._armed))
+        self._faulted = None
+        self._staged.clear()
 
     # -- a core ---------------------------------------------------------------------------
 
@@ -94,11 +120,27 @@ class Driver:
         """The protocol driving ``edge``'s mover."""
         return PROTOCOLS[edge.mover](self.device, edge.unit, self.description.endpoint(edge.unit))
 
-    def _quiet(self, core: Core) -> None:
-        """Refuse ``core`` on a closed driver, or while a launch on its movers has not
-        completed (the module docstring)."""
+    def _disarm(self, units: set[str]) -> None:
+        """``units``' movers stopped: their buffers no longer retained."""
+        for unit in units & self._armed:
+            RETAINED.pop(id(self._buffers[unit]), None)
+        self._armed -= units
+
+    def _usable(self, name: str) -> None:
+        """Refuse a closed driver, and a faulted one (the module docstring), for ``name``."""
         if self._closed:
-            raise Refused("driver-closed", f"{core.name}: the driver is closed")
+            raise Refused("driver-closed", f"{name}: the driver is closed")
+        if self._faulted is not None:
+            raise Refused(
+                "driver-faulted",
+                f"{name}: {self._faulted}: a started mover may wait for ever; load the image "
+                "again (load) to reset the movers",
+            )
+
+    def _quiet(self, core: Core) -> None:
+        """Refuse ``core`` on a closed or faulted driver, or while a launch on its movers
+        has not completed (the module docstring)."""
+        self._usable(core.name)
         armed = sorted(
             edge.unit for edge in (*core.inputs, *core.outputs) if edge.unit in self._armed
         )
@@ -170,58 +212,78 @@ class Driver:
                     f"{edge.lanes} lanes",
                 )
         frames = self._frames(core, inputs)
+        self._staged.pop(name, None)
+        packed = {
+            edge.unit: pack(
+                np.asarray(inputs[edge.tensor]).reshape(frames, edge.beats, edge.lanes),
+                Element.named(edge.element),
+            ).reshape(-1)
+            for edge in core.inputs
+        }
         for edge in core.inputs:
-            element = Element.named(edge.element)
-            folded = np.asarray(inputs[edge.tensor]).reshape(frames, edge.beats, edge.lanes)
             buffer = self._buffer(edge, frames)
-            np.copyto(buffer.array, pack(folded, element).reshape(-1))
+            np.copyto(buffer.array, packed[edge.unit])
             self.device.sync(buffer, to_device=True)
         for edge in core.outputs:
             self._buffer(edge, frames)
+        self._staged[name] = frames
         return frames
 
-    def _held(self, edge: Edge, frames: int) -> Buffer:
-        """The buffer ``edge``'s mover holds for ``frames`` frames; none of that size is
-        refused (``core-unstaged``)."""
-        held = self._buffers.get(edge.unit)
-        if held is None or held.array.size != frames * edge.beats * edge.bits // 8:
+    def _held(self, core: Core, frames: int) -> dict[str, Buffer]:
+        """The buffers of ``core``'s movers, staged for ``frames`` frames; a core not staged
+        at those frames is refused (``core-unstaged``)."""
+        if self._staged.get(core.name) != frames:
             raise Refused(
-                "core-unstaged", f"{edge.unit}: no buffer of {frames} frames: stage them first"
+                "core-unstaged", f"{core.name}: not staged for {frames} frames: stage them first"
             )
-        return held
+        return {edge.unit: self._buffers[edge.unit] for edge in (*core.outputs, *core.inputs)}
 
     def launch(self, name: str, frames: int) -> None:
         """Move ``frames`` frames through the core ``name``, its inputs staged (``stage``):
         each output mover, idle, started, then each input mover; each output mover waited
-        on. Each mover is armed as it is started, and the core's movers are disarmed once
-        every output mover is done (the module docstring)."""
+        on. Each mover is armed as it is started, its buffer retained, and the core's
+        movers are disarmed once every output mover is done; a mover that fails to start
+        after another started faults the driver (the module docstring)."""
         core = self.description.core(name)
         self._quiet(core)
         edges = (*core.outputs, *core.inputs)
-        buffers = {edge.unit: self._held(edge, frames) for edge in edges}
+        buffers = self._held(core, frames)
         movers = {edge.unit: self._mover(edge) for edge in edges}
         for edge in core.outputs:
             if not movers[edge.unit].idle():
                 raise Refused("mover-busy", f"{edge.unit}: its output mover is not idle")
+        started: list[str] = []
         for edge in edges:
             self._armed.add(edge.unit)
-            movers[edge.unit].start(buffers[edge.unit], frames)
+            RETAINED[id(buffers[edge.unit])] = buffers[edge.unit]
+            try:
+                movers[edge.unit].start(buffers[edge.unit], frames)
+            except BaseException:
+                if started:
+                    self._faulted = (
+                        f"a launch of {core.name}: {edge.unit} failed to start after "
+                        f"{started} started"
+                    )
+                raise
+            started.append(edge.unit)
         for edge in core.outputs:
             movers[edge.unit].wait()
-        self._armed.difference_update(buffers)
+        self._disarm(set(buffers))
 
     def settle(self, name: str) -> None:
         """After a launch of the core ``name`` that did not complete, find each of its
         armed movers idle, its buffer the driver's again; one not idle is refused
-        (``mover-busy``), its buffer kept."""
+        (``mover-busy``), its buffer kept. A faulted driver is refused (``driver-faulted``):
+        only loading the image again resets its movers."""
         core = self.description.core(name)
+        self._usable(core.name)
         for edge in (*core.outputs, *core.inputs):
             if edge.unit in self._armed:
                 if not self._mover(edge).idle():
                     raise Refused(
                         "mover-busy", f"{edge.unit}: its mover is not idle: its buffer is kept"
                     )
-                self._armed.discard(edge.unit)
+                self._disarm({edge.unit})
 
     def collect(self, name: str, frames: int) -> dict[str, np.ndarray[Any, Any]]:
         """The outputs of the core ``name`` after ``frames`` frames were moved
@@ -229,9 +291,10 @@ class Driver:
         float32."""
         core = self.description.core(name)
         self._quiet(core)
+        buffers = self._held(core, frames)
         outputs: dict[str, np.ndarray[Any, Any]] = {}
         for edge in core.outputs:
-            buffer = self._held(edge, frames)
+            buffer = buffers[edge.unit]
             self.device.sync(buffer, to_device=False)
             element = Element.named(edge.element)
             packed = buffer.array.reshape(frames, edge.beats, -1)
@@ -261,16 +324,19 @@ class Driver:
 
     def close(self) -> None:
         """Release every buffer the driver holds, each armed mover found idle first; one
-        that is not is refused (``mover-busy``) and every buffer kept. Closing a closed
-        driver does nothing."""
+        that is not is refused (``mover-busy``), as is a faulted driver
+        (``driver-faulted``), and every buffer kept, an armed mover's retained
+        (``RETAINED``). Closing a closed driver does nothing."""
         if self._closed:
             return
+        self._usable("close")
         for unit in sorted(self._armed):
             if not self._mover(self._edges[unit]).idle():
                 raise Refused(
                     "mover-busy", f"{unit}: its mover is not idle: the driver's buffers are kept"
                 )
-        self._armed.clear()
+        self._disarm(set(self._armed))
+        self._staged.clear()
         for unit in sorted(self._buffers):
             self.device.release(self._buffers[unit])
             del self._buffers[unit]
@@ -347,4 +413,4 @@ class Driver:
         return {each.name: context[each.name] for each in model.graph.output}
 
 
-__all__ = ["Driver"]
+__all__ = ["RETAINED", "Driver"]
