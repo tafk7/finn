@@ -34,6 +34,7 @@ from finn.core.space import (
     Select,
     derived,
     design_space,
+    inspection,
     view,
 )
 from finn.dataflow.gemm import c, kh, kw
@@ -377,19 +378,29 @@ def test_a_stated_rate_times_a_port_of_its_kernel_each_beat() -> None:
             assert (finding.code, finding.message) == ("kernel-rate-port", f"_Mover {message}")
 
 
-def test_a_kernel_stating_its_rate_restates_no_cycles() -> None:
-    """Its cycles are its rate's span: restating them, or the base's reading of them, could
-    only contradict it. A kernel stating no rate may restate its cycles (CONTRACT.md L6: no
-    check guards it)."""
-    for name in ("frame_cycles", "checked_rate"):
-        with refused(
-            "kernel-rate-restated", error=DefinitionError, message=rf"Restating\.{name}: "
-        ):
-            type(
-                "Restating",
-                (_Mover,),
-                {"id": f"test.interval.restating_{name}", name: view(lambda self: 99)},
-            )
+def test_a_kernel_states_its_rate_and_restates_no_cycles_where_it_does() -> None:
+    """Its cycles are its rate's span: where it states one and its class restates its
+    cycles, its rate is refused (``kernel-rate-restated``), and with it its port's pace in
+    cycles; where it states none, its own cycles stand. A kernel
+    stating no rate may restate its cycles (CONTRACT.md L6: no check guards it). The base's
+    reading of the rate, ``checked_rate``, no class restates."""
+
+    class Restating(_Sometimes):
+        id = "test.interval.restating"
+
+        @view
+        def frame_cycles(self) -> int:
+            return 99
+
+    def point(stating: bool) -> Any:
+        return design_space(Restating(input_tensor=TENSOR, arriving=ARRIVING, stating=stating))
+
+    for read in (Restating.checked_rate, Restating.input.timed_pace):
+        result = point(True).query(read)
+        assert isinstance(result, Rejected), result
+        assert [each.code for each in result.findings] == ["kernel-rate-restated"]
+    assert point(False).frame_cycles == 99 and point(False).checked_rate is None
+    assert inspection.validity(point(False)).status == "valid"
 
     class Counted(_Stage):
         id = "test.interval.counted"
@@ -399,14 +410,54 @@ def test_a_kernel_stating_its_rate_restates_no_cycles() -> None:
             return 99
 
     assert design_space(Counted(input_tensor=TENSOR, arriving=ARRIVING)).frame_cycles == 99
+    with refused("kernel-rate-restated", error=DefinitionError, message=r"Reading\.checked_rate: "):
+
+        class Reading(_Stage):
+            id = "test.interval.reading"
+
+            @derived
+            def checked_rate(self) -> StatedRate | None:
+                return None
 
 
 def test_a_port_of_a_kernel_s_body_states_no_rate_of_its_own() -> None:
+    """Neither by its binding nor by its class: its pace in cycles is its kernel's."""
     with refused("port-rate", error=DefinitionError, message=r"Own\.input states its own rate"):
 
         class Own(_Stage):
             id = "test.interval.own_rate"
             input = InPort(tensor=_Stage.input_tensor, sequence=_Stage.arriving, rate=MOVED)
+
+    with refused("port-rate", error=DefinitionError, message=r"Pacing\.timed_pace: "):
+
+        class Pacing(InPort):
+            @derived
+            def timed_pace(self) -> TimedPace | StatedRate | None:
+                return replace(MOVED, times=(0, 1, 2, 3), span=4)
+
+    with refused("port-rate", error=DefinitionError, message=r"Rated\.rate: "):
+
+        class Rated(InPort):
+            rate: StatedRate | None = Param(default=MOVED)
+
+
+class _Labelled(_Mover):
+    """A mover whose input's pins are labelled other than its name."""
+
+    id = "test.interval.labelled"
+    input = InPort(tensor=_Stage.input_tensor, sequence=_Stage.arriving, label="s_axis")
+
+
+def test_a_stated_rate_names_its_port_by_its_name_in_the_kernel_never_its_label() -> None:
+    point = design_space(_Labelled(input_tensor=TENSOR, arriving=ARRIVING, rate=MOVED))
+    assert point.input.label == "s_axis"
+    assert point.input.timed_pace == MOVED and point.frame_cycles == 11
+    labelled = replace(MOVED, port="s_axis")
+    result = design_space(_Labelled(input_tensor=TENSOR, arriving=ARRIVING, rate=labelled)).query(
+        _Labelled.input.timed_pace
+    )
+    assert isinstance(result, Rejected)
+    assert [each.code for each in result.findings] == ["kernel-rate-port"]
 
 
 FIFO_TENSOR = stage_tensor(4, words=4)

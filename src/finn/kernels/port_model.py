@@ -67,6 +67,7 @@ from finn.kernels.sides import Side
 from finn.kernels.values.domains import Integer, admit_element
 
 _KIND_MEMBERS = {"direction": "port-direction", "pacing": "port-pacing", "follows": "port-pacing"}
+_TIMING_MEMBERS = ("rate", "timed_pace")
 
 
 def _refuse_kind_overridden(cls: type[StreamPort]) -> None:
@@ -77,10 +78,22 @@ def _refuse_kind_overridden(cls: type[StreamPort]) -> None:
     input side or an output side), whose role the channel checks, an exposed port's kind,
     checked when its kernel's class is made, and a reader of a class's port
     (``finn.kernels.port.port_direction``). A port's pacing follows from its declaration,
-    checked when its kernel's class is made."""
+    checked when its kernel's class is made. And refuse one that declares ``rate`` or
+    ``timed_pace`` (``port-rate``): its pace in cycles is its kernel's (L6), which states its
+    interval or its rate, so every reader of it reads the rate its kernel checked."""
     for base in cls.__mro__:
         if base.__module__ == __name__ or base in StreamPort.__mro__:
             continue
+        for name in _TIMING_MEMBERS:
+            if name in vars(base):
+                where = f"{base.__qualname__}.{name}"
+                raise DefinitionError.broken(
+                    "port-rate",
+                    "StreamPort",
+                    f"{where}: a port's pace in cycles is its kernel's (L6), never a port "
+                    "class's own: its kernel states its interval or its rate (stated_rate)",
+                    declaration=where,
+                )
         for name, code in _KIND_MEMBERS.items():
             if name in vars(base):
                 where = f"{base.__qualname__}.{name}"
@@ -113,8 +126,9 @@ class StreamPort(Space):
     the port's) and ``interval`` its kernel's initiation interval (L6,
     ``finn.kernels.laws.Interval``), which it carries with its pace and a port of a kernel's
     body never states (``port-interval``), and ``rate`` its kernel's stated rate, checked
-    (``finn.kernels.laws.StatedRate``, ``Kernel.checked_rate``), whose beat times are its
-    own where it names it, never stated by the port either (``port-rate``); its
+    (``finn.kernels.laws.StatedRate``, ``Kernel.checked_rate``), where it names the port by
+    its name in its kernel, else None, never stated by the port or its class either
+    (``port-rate``); its
     ``transport``, where it states none, is its kernel's interface protocol's
     (``finn.kernels.laws.InterfaceProtocol``): a kernel supplies all five for a port declared
     in its own body that does not state them (``finn.kernels.base.Kernel``). A port with its
@@ -231,7 +245,8 @@ class StreamPort(Space):
     def timed_pace(self) -> TimedPace | StatedRate | None:
         """Its pace in clock cycles, the one every reader of its beat times in cycles reads:
         where its kernel states its rate naming it (``rate``, its kernel's checked
-        ``stated_rate``, L6), that rate's beat times and span; else, where it owns its
+        ``stated_rate``, L6, given by its kernel by the port's name, never its label), that
+        rate's beat times and span; else, where it owns its
         pacing, its ``pace`` at its kernel's ``interval`` (``finn.kernels.laws.TimedPace``,
         by the one conversion, ``in_cycles``); else None (it follows another port, or is
         idle). Read through a node alias (``x = compute.x``), it is its own kernel's, however
@@ -239,7 +254,7 @@ class StreamPort(Space):
         if not self.placed:
             return None
         rate: StatedRate | None = self.rate
-        if rate is not None and rate.port == self.label:
+        if rate is not None:
             return rate
         if self.schedule is None:
             return None

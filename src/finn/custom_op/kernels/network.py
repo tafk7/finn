@@ -302,8 +302,8 @@ def _neighbour(
     it, else its pace at its kernel's interval, where it owns its pacing), which sizing
     reads. Only an accepted value is a fact: refused (``neighbour-unaccepted``, naming the
     neighbour, its port and why) where its stored choices are refused, its kernel
-    is refused, or its side is not known there (it waits on an open choice, or is
-    refused)."""
+    is refused, or its side or its pace in cycles is not known there (it waits on an open
+    choice, or is refused); a pace answered None is no pace."""
     op = kernel_op(model, node)
     port = (
         op.outputs[list(node.output).index(tensor)]
@@ -352,6 +352,9 @@ def _neighbour(
     if isinstance(given, PortPins):
         given = exposed_pins(point, named, given)
     paced = point.query(declared.timed_pace)
+    if isinstance(paced, (Rejected, Unresolved)):
+        why = "waits on an open choice" if isinstance(paced, Unresolved) else "is refused"
+        raise unaccepted(f"its pace in cycles {why}", paced.findings)
     pace = paced.value if isinstance(paced, Available) else None
     return (
         stated.under(node.name),

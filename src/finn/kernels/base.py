@@ -190,24 +190,22 @@ def _refuse_composite_rate(cls: type[Kernel]) -> None:
     )
 
 
-def _refuse_restated_beside_rate(cls: type[Kernel]) -> None:
-    """Refuse a kernel with a module that states its rate (``stated_rate``) and restates its
-    cycles a frame, or the base's reading of them (``frame_cycles``, ``_rate_frame_cycles``,
-    ``checked_rate``) (``kernel-rate-restated``): its cycles a frame are its rate's span,
-    which another statement of them could only contradict or repeat unchecked."""
-    if not _declared(cls, "stated_rate"):
+def _refuse_restated_rate_reading(cls: type[Kernel]) -> None:
+    """Refuse a kernel class that restates the base's reading of its stated rate
+    (``checked_rate``, ``kernel-rate-restated``): every cycle reader reads the rate through
+    it, checked. A kernel restating its cycles a frame (``frame_cycles``,
+    ``_rate_frame_cycles``) is refused only at a design point where it states a rate
+    (``Kernel.checked_rate``)."""
+    if not _declared(cls, "checked_rate"):
         return
-    for name in ("frame_cycles", "_rate_frame_cycles", "checked_rate"):
-        if not _declared(cls, name):
-            continue
-        where = f"{cls.__qualname__}.{name}"
-        raise DefinitionError.broken(
-            "kernel-rate-restated",
-            "Kernel",
-            f"{where}: {cls.__qualname__} states its rate (stated_rate), whose span is its "
-            "cycles a frame: it restates neither them nor the base's reading of them",
-            declaration=where,
-        )
+    where = f"{cls.__qualname__}.checked_rate"
+    raise DefinitionError.broken(
+        "kernel-rate-restated",
+        "Kernel",
+        f"{where}: the base reads a kernel's stated rate (stated_rate), checked; a kernel "
+        "states its rate, never the reading of it",
+        declaration=where,
+    )
 
 
 def _members(cls: type[Kernel]) -> dict[str, object]:
@@ -223,8 +221,9 @@ def _members(cls: type[Kernel]) -> dict[str, object]:
 # Each member the base installs on a kernel's class, and each helper it reads them through,
 # is named beginning with ``-``: ``-<member>-...-<what>`` for one of a member's (``-h-hops``,
 # member channel ``h``'s hops; ``<what>`` one of ``neighbours``, ``ends``, ``hops``,
-# ``producer``, ``consumer``, ``placed``, ``case`` and ``governed``), ``-<what>-<i>`` for the
-# ``i``-th helper of a reading (``-hops-0``), and the base's own ``-end`` (ending each
+# ``producer``, ``consumer``, ``placed``, ``case``, ``governed`` and ``rate``),
+# ``-<what>-<i>`` for the ``i``-th helper of a reading (``-hops-0``), and the base's own
+# ``-end`` (ending each
 # reading), ``-placed``, ``-no-port`` and ``-own-buses``. No member's name holds a ``-`` (a
 # Python name, or a graph name as ``finn.kernels.composer`` names its member, ``\W`` as
 # ``_``), and a composed class's root members begin with their member's name
@@ -325,11 +324,13 @@ def _supply_ports(cls: type[Kernel]) -> None:
     port's clock is its kernel's), its ``transport``, its kernel's interface protocol's
     (``Kernel.port_transport``), and its ``interval``, the kernel's (``Kernel.interval``,
     L6; a port states none of its own, ``port-interval``), which it carries with its pace,
-    and its ``rate``, the kernel's stated rate, checked (``Kernel.checked_rate``; a port
-    states none of its own, ``port-rate``), which gives the pace in cycles of the port it
-    names. A port declared in a Group states its label, clocking and transport; only a
-    kernel with no module declares one (``module-part-nested``), and such a kernel has no
-    interval and no rate, so the port keeps L6's interval and no rate.
+    and its ``rate``, the kernel's stated rate, checked (``Kernel.checked_rate``), where it
+    names the port by its name in the kernel (never its label), else None, by a private
+    derived member of its body, ``-<port>-rate`` (a port states none of its own,
+    ``port-rate``): its pace in cycles where it is not None. A port declared in a Group
+    states its label, clocking and transport; only a kernel with no module declares one
+    (``module-part-nested``), and such a kernel has no interval and no rate, so the port
+    keeps L6's interval and no rate.
 
     And a selector of its body (``InPort.governs``, a literal naming another port of its
     kernel, declared in its body or inherited) with the beats a frame of the port it governs
@@ -364,7 +365,23 @@ def _supply_ports(cls: type[Kernel]) -> None:
         if "interval" not in record.settings:
             assign(value, "interval", Kernel.interval)
         if "rate" not in record.settings:
-            assign(value, "rate", Kernel.checked_rate)
+            rate = derived(_port_rate(name))
+            named = _installed(name, "rate")
+            setattr(cls, named, rate)
+            getattr(rate, "__set_name__")(cls, named)
+            assign(value, "rate", rate)
+
+
+def _port_rate(port: str) -> Callable[[Kernel], StatedRate | None]:
+    """A port's ``rate`` (``_supply_ports``): its kernel's checked stated rate where it names
+    port ``port``, by its name in the kernel, else None."""
+
+    def rate(self: Kernel) -> StatedRate | None:
+        stated: StatedRate | None = self.checked_rate
+        return stated if stated is not None and stated.port == port else None
+
+    rate.__annotations__ = {"return": StatedRate | None}
+    return rate
 
 
 def _governed_beats(governed: str) -> Callable[[Kernel], int | None]:
@@ -527,8 +544,8 @@ def _check_ports(cls: type[Kernel]) -> None:
       overriding ``schedule`` then gives it; or states an ``interval`` other than its
       kernel's (``port-interval``): a port carries its kernel's (L6, ``Kernel.interval``),
       which the base supplies, so its pace in cycles and its kernel's cycles read one
-      interval; or states a ``rate`` other than its kernel's (``port-rate``), for the same
-      reason.
+      interval; or states a ``rate`` other than its kernel's (``port-rate``, its
+      ``-<port>-rate``), for the same reason.
 
     And refuse ``cls`` where a port it places presents its schedule and it states none
     (``port-schedule-unstated``) or states one whose declared answer admits
@@ -593,7 +610,7 @@ def _check_ports(cls: type[Kernel]) -> None:
                 f"states its own interval, {bound['interval']}: a port carries its "
                 f"kernel's (L6), which {cls.__qualname__} states where its hardware differs",
             )
-        if "rate" in bound and not _kernel_member(cls, bound["rate"], "checked_rate"):
+        if "rate" in bound and not _kernel_member(cls, bound["rate"], _installed(name, "rate")):
             raise refused(
                 "port-rate",
                 f"states its own rate, {bound['rate']}: a port carries its kernel's (L6), "
@@ -1856,8 +1873,8 @@ class Kernel(Space):
         if not specs:
             _refuse_composite_interval(cls)
             _refuse_composite_rate(cls)
+        _refuse_restated_rate_reading(cls)
         if specs:
-            _refuse_restated_beside_rate(cls)
             pins, holds = _module_parts(cls)
             _install(cls, _PINS, _pins_from, pins)
             _install(cls, _HELD, _held_from, holds)
@@ -1990,15 +2007,26 @@ class Kernel(Space):
     @derived
     def checked_rate(self) -> StatedRate | Rejected | None:
         """Its ``stated_rate``, checked: what its cycles a frame and its ports' paces in
-        cycles read of it (the base supplies it to every port of its body,
-        ``StreamPort.rate``). Refused (``kernel-rate-port``) where it times no port of its
-        own, an idle one, or another count of beats than the port carries a frame, its
-        ports' beats a frame read as its derived cycles read them, by name; None where it
-        states none."""
+        cycles read of it (the base gives it to the port it names, ``StreamPort.rate``).
+        Refused (``kernel-rate-port``) where it times no port of its own, an idle one, or
+        another count of beats than the port carries a frame, its ports' beats a frame read
+        as its derived cycles read them, by name; and (``kernel-rate-restated``) where its
+        class restates its cycles a frame (``frame_cycles``, ``_rate_frame_cycles``), which
+        are its rate's span where it states one. None where it states none, at this design
+        point."""
         rate: StatedRate | None = self.stated_rate
         if rate is None:
             return None
         owner = type(self).__qualname__
+        restated = [
+            name for name in ("frame_cycles", "_rate_frame_cycles") if _declared(type(self), name)
+        ]
+        if restated:
+            return reject(
+                "kernel-rate-restated",
+                f"{owner} states its rate here and restates its cycles a frame "
+                f"({', '.join(restated)}), which are its rate's span",
+            )
         names = (name for name, item in _members(type(self)).items() if _is_stream_port(item))
         by_port = dict(zip(names, getattr(self, "-beats-0")()))
         if rate.port not in by_port:
