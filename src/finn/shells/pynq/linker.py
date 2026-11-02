@@ -47,17 +47,21 @@ not wire, and a board or processor the project cannot select, before any tool ru
 ``link`` writes the block design (``block_design``) into
 ``templates.custom_zynq_shell_template`` (``project_script``) in a new project under the
 directory it is given, runs Vivado on it and collects what it made (``collect``): the
-bitfile, its hardware handoff beside it, the main clock as the routed design delivers it,
-and the reports, each by its path under a build's ``report/``: the routed timing report
-(``TIMING``), the template's ``impl_1`` hierarchical utilization report (``PLACED``), each
-IP's out-of-context synthesis report (under ``OUT_OF_CONTEXT``), and what it named and
-placed (``BLOCK_DESIGN``, ``report``). Every unit's IP is packaged before it links.
+bitfile, its hardware handoff beside it, the main clock as the routed design delivers it
+and the design's worst setup slack there, read from the routed timing report, an image
+whose slack is negative refused (``admitted``, ``timing-unmet``: Vivado writes the
+bitfile of a design that misses timing), and the reports, each by its path under a
+build's ``report/``: the routed timing report (``TIMING``), the template's ``impl_1``
+hierarchical utilization report (``PLACED``), each IP's out-of-context synthesis report
+(under ``OUT_OF_CONTEXT``), and what it named and placed (``BLOCK_DESIGN``, ``report``).
+Every unit's IP is packaged before it links.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import tempfile
 from collections.abc import Mapping
@@ -71,10 +75,16 @@ from finn.kernels.artifacts.unit import CONTROL
 from finn.kernels.movers import MoverContract
 from finn.kernels.shell_rules import interconnect_tree, placed_windows
 from finn.platform.shells import VIVADO_BLOCK_DESIGN, ShellRow, shell_row
-from finn.shells.integration import MAIN, Integration, IntegrationError, Linked, Unit
+from finn.shells.integration import MAIN, Integration, IntegrationError, Linked, Timing, Unit
 from finn.shells.pynq import templates
 from finn.toolchain.launcher import StrPath, Toolchain, ToolFailed
-from finn.toolchain.vivado import delivered_clock, tcl_quote, vivado_jobs
+from finn.toolchain.vivado import (
+    PL_CLOCKS,
+    delivered_clock,
+    design_timing,
+    tcl_quote,
+    vivado_jobs,
+)
 
 _LOG = logging.getLogger(__name__)
 
@@ -493,12 +503,12 @@ def collect(
 ) -> Linked:
     """What Vivado made in ``project`` (the template's project) of ``integration``: the
     bitfile (``image``) and its hardware handoff beside it, each unit's base
-    (``unit_bases``), the row's main clock as the routed design delivers it (none where
-    there is no timing report, or it names no PL clock), and the reports by their paths
-    under a build's ``report/`` (the module docstring), ``BLOCK_DESIGN`` written into the
-    project. A bitfile or hardware handoff not there is Vivado's failure (``ToolFailed``,
-    its errors read from the run's ``transcript``, pointing at the project's logs): it
-    exits cleanly when its implementation fails."""
+    (``unit_bases``), the row's main clock as the routed design delivers it and its timing
+    there, admitted (``admitted``: an image that misses timing is refused), and the
+    reports by their paths under a build's ``report/`` (the module docstring),
+    ``BLOCK_DESIGN`` written into the project. A bitfile or hardware handoff not there is
+    Vivado's failure (``ToolFailed``, its errors read from the run's ``transcript``,
+    pointing at the project's logs): it exits cleanly when its implementation fails."""
     root = Path(project)
     runs = root / f"{PROJECT}.runs"
     bitfile = runs / "impl_1" / "top_wrapper.bit"
@@ -526,15 +536,49 @@ def collect(
             for path in sorted(runs.glob("*_synth_1/*_utilization_synth.rpt"))
         }
     )
-    timing = reports[TIMING]
-    clock = delivered_clock(str(timing), integration.period_ns) if timing.is_file() else {}
+    mhz, timing = admitted(reports[TIMING], integration.period_ns)
     return Linked(
         image=bitfile,
         placement=unit_bases(integration, row),
-        clocks_mhz={MAIN: clock["delivered_mhz"]} if "delivered_mhz" in clock else {},
+        clocks_mhz={MAIN: mhz},
         reports=reports,
         beside=(hwh,),
+        timing=timing,
     )
+
+
+def admitted(report: Path, period_ns: float) -> tuple[float, Timing]:
+    """The main clock the routed design delivers, in MHz, and its timing (``Timing``),
+    read from its routed timing report ``report`` (``TIMING``): the PL clock's period in the
+    report's clock summary, which Vivado gives as near the ``period_ns`` asked as the
+    processor's clocks reach (``delivered_clock``), and the design's worst setup slack at
+    it (``design_timing``). Vivado writes the bitfile of a design that misses timing: a
+    negative worst setup slack is refused (``timing-unmet``), as is no report
+    (``timing-unreported``) and one that names no PL clock or no worst setup slack
+    (``timing-unread``), each naming the report."""
+    if not report.is_file():
+        raise LinkerRefused(
+            "timing-unreported",
+            f"no routed timing report ({report}): whether the image meets its clock is unknown",
+        )
+    clock = delivered_clock(str(report), period_ns)
+    design = design_timing(str(report))
+    wns = None if design is None else design["wns_ns"]
+    if "delivered_period_ns" not in clock or wns is None or not math.isfinite(wns):
+        raise LinkerRefused(
+            "timing-unread",
+            f"{report}: names no PL clock ({', '.join(PL_CLOCKS)}; it lists "
+            f"{', '.join(clock.get('clocks', [])) or 'none'}) or no worst setup slack",
+        )
+    period, mhz = clock["delivered_period_ns"], clock["delivered_mhz"]
+    if wns < 0:
+        raise LinkerRefused(
+            "timing-unmet",
+            f"{report}: the routed design's worst setup slack is {wns} ns at its "
+            f"{clock['clock']} clock's {period} ns ({mhz} MHz; {period_ns} ns asked): it "
+            "misses timing; ask a longer period (the target's period_ns)",
+        )
+    return mhz, Timing(period, wns, TIMING)
 
 
 class BlockDesignLinker:
@@ -600,6 +644,7 @@ __all__ = [
     "MEMORY_TARGET",
     "PROCESSORS",
     "Wire",
+    "admitted",
     "block_design",
     "collect",
     "control_instance",

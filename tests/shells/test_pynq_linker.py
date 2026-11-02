@@ -15,13 +15,26 @@ from typing import cast
 
 import pytest
 from support.models import zynq_parent
-from support.packaging import FakeVivado
+from support.packaging import (
+    TIMING_REPORT,
+    UNMET_REPORT,
+    UNMET_SLASHKIT_REPORT,
+    FakeVivado,
+)
 from support.refusals import refused
 
 from finn.kernels.shell_rules import placed_windows
 from finn.platform.shells import shell_row
-from finn.shells.integration import Endpoint, Integration, IntegrationError, IpRef, describe
+from finn.shells.integration import (
+    Endpoint,
+    Integration,
+    IntegrationError,
+    IpRef,
+    Timing,
+    describe,
+)
 from finn.shells.pynq.linker import (
+    TIMING,
     Address,
     BlockDesignLinker,
     LinkerRefused,
@@ -36,6 +49,7 @@ from finn.shells.pynq.linker import (
     wiring,
 )
 from finn.toolchain.launcher import Toolchain
+from finn.toolchain.vivado import delivered_clock, design_timing
 
 #: The facts the ``pynq`` shell declares of Ultra96 for its linker.
 BOARD = {"board_part": "avnet.com:ultra96v1:part0:1.2"}
@@ -399,5 +413,71 @@ def test_the_link_is_made_under_the_directory_it_is_given(
     assert linked.image.is_relative_to(project)
     assert all(path.is_relative_to(project) for path in linked.reports.values())
     assert linked.placement == {"in0": 0xA000_0000, "in1": 0xA000_1000, "out0": 0xA000_2000}
-    # The fake's timing report names no PL clock: no clock is known delivered.
-    assert linked.clocks_mhz == {}
+    # The fake's routed timing report is TFC's on Ultra96: its PL clock as routed, the
+    # design's worst setup slack there.
+    assert linked.clocks_mhz == {"main": 187.512}
+    assert linked.timing == Timing(5.333, 1.667, TIMING)
+
+
+def test_the_routed_timing_is_read_from_each_linker_s_real_report(tmp_path: Path) -> None:
+    """The design's worst setup slack, its total over the failing endpoints and the worst
+    hold slack, and the PL clock as routed, from real routed reports: TFC's on Ultra96,
+    which meets its 5.333 ns; a design routed at 1 ns that misses it, reported as the
+    ``pynq`` template and as ``slashkit`` report a routed design, read alike. A report with
+    no summary states none."""
+    read = {}
+    for name, text in (
+        ("tfc", TIMING_REPORT),
+        ("unmet", UNMET_REPORT),
+        ("slashkit", UNMET_SLASHKIT_REPORT),
+        ("none", "no summary"),
+    ):
+        (tmp_path / name).write_text(text)
+        read[name] = (
+            design_timing(str(tmp_path / name)),
+            delivered_clock(str(tmp_path / name), 5.0),
+        )
+    assert read["tfc"][0] == {
+        "wns_ns": 1.667,
+        "tns_ns": 0.0,
+        "failing_endpoints": 0,
+        "whs_ns": 0.014,
+    }
+    assert read["tfc"][1]["delivered_period_ns"] == 5.333
+    assert read["unmet"][0] == {
+        "wns_ns": -0.906,
+        "tns_ns": -43.505,
+        "failing_endpoints": 48,
+        "whs_ns": 0.125,
+    }
+    assert read["unmet"][1]["delivered_period_ns"] == 1.0
+    assert read["slashkit"] == read["unmet"]
+    assert read["none"] == (None, {"target_period_ns": 5.0, "clocks": []})
+
+
+@pytest.mark.parametrize(
+    "timing, code, message",
+    [
+        (
+            UNMET_REPORT,
+            "timing-unmet",
+            r"top_wrapper_timing_summary_routed\.rpt: the routed design's worst setup slack is "
+            r"-0\.906 ns at its clk_pl_0 clock's 1\.0 ns \(1000\.0 MHz; 5\.0 ns asked\)",
+        ),
+        (None, "timing-unreported", r"no routed timing report \(.*routed\.rpt\)"),
+        ("no summary", "timing-unread", r"routed\.rpt: names no PL clock"),
+    ],
+    ids=["unmet", "unreported", "unread"],
+)
+def test_an_image_that_misses_timing_is_refused_naming_its_report_and_slack(
+    described: Integration, tmp_path: Path, timing: str | None, code: str, message: str
+) -> None:
+    """Vivado writes the bitfile of a routed design that misses timing: the linker reads
+    the routed timing report it collects and refuses an image whose worst setup slack is
+    negative at the period its PL clock was routed at (``timing-unmet``: a real report,
+    -0.906 ns at 1 ns), naming the report, the slack and the period; as it does an image
+    with no report (``timing-unreported``) or one that states no PL clock or no slack
+    (``timing-unread``)."""
+    vivado = FakeVivado(timing=timing)
+    with refused(code, error=LinkerRefused, owner="vivado-block-design", message=message):
+        BlockDesignLinker().link(packaged(described), BOARD, tmp_path, cast(Toolchain, vivado))

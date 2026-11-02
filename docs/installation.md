@@ -552,10 +552,14 @@ records only what a later step consumes, in `finn.outputs`: the packaged IP (`ip
 `vlnv`, `interfaces`, `ip_key`, `ip_options`) on the partition's body, the bitfile
 (`bitfile`, `bitfile_made_from`, `bitfile_ip_key`, `bitfile_options`) on the parent
 graph; the files the bitfile loads with are beside it in `bitfile/`, and its reports under
-`report/`, with the record of what the bitfile's build collected (`report/linked.json`),
+`report/`, with the record of what the bitfile's build collected (`report/linked.json`:
+the files, and the routed timing its linker admitted: the period its main clock closed at
+and the worst setup slack there, also in the clock report, `report/delivered_clock.json`),
 which the driver and the resources report read, each only the files it names; a rebuild
 replaces `bitfile/`, the build's own, whole, and removes the reports the last one
-collected.
+collected. A linker refuses an image that misses timing (`timing-unmet`: Vivado writes the
+bitfile of a routed design whose worst setup slack is negative), naming its routed timing
+report and the slack.
 
 What a build logs, at which level, and what reaches the console
 (`finn.core.reporting.log`):

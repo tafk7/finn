@@ -176,33 +176,36 @@ PLACED_HIERARCHY = (
 )
 
 
-#: The clock summary of a routed Zynq UltraScale+ design whose PS gives 187.512 MHz for
-#: 200 asked, as Vivado's timing summary report lays it out (the rest of the report cut).
-TIMING_REPORT = """\
-------------------------------------------------------------------------------------------------
-| Clock Summary
-| -------------
-------------------------------------------------------------------------------------------------
-
-Clock     Waveform(ns)         Period(ns)      Frequency(MHz)
------     ------------         ----------      --------------
-clk_pl_0  {0.000 2.667}        5.333           187.512
-
-
-------------------------------------------------------------------------------------------------
-| Intra Clock Table
-"""
+#: Real routed timing reports (``tests/shells/recorded``), each its summary tables, the
+#: report cut at its timing details, the header's host line dropped and trailing spaces
+#: stripped:
+#: - ``TIMING_REPORT``: TFC's writable build on Ultra96 (shell landing 1's full tier, Vivado
+#:   2025.2), 5 ns asked, its PS's PL clock routed at 5.333 ns (187.512 MHz), its worst
+#:   setup slack 1.667 ns;
+#: - ``UNMET_REPORT``: a registered 16x16 multiply-accumulate routed on Ultra96's part at
+#:   1 ns, which it misses: its worst setup slack -0.906 ns, reported with the options of
+#:   the ``pynq`` template's routed report (Vivado 2025.2); its clock named ``clk_pl_0``, as
+#:   the PS names the PL clock, though no block design;
+#: - ``UNMET_SLASHKIT_REPORT``: the same routed design, reported as ``slashkit`` reports
+#:   its routed design (``slash_project_build.tcl`` at SLASH 26f9c55c); no ``slash``
+#:   hardware build has run.
+#: Each report's ``-file`` path is cut to its name.
+RECORDED = Path(__file__).parent.parent / "shells" / "recorded"
+TIMING_REPORT = (RECORDED / "ultra96-tfc-timing.rpt").read_text()
+UNMET_REPORT = (RECORDED / "unmet-pynq-timing.rpt").read_text()
+UNMET_SLASHKIT_REPORT = (RECORDED / "unmet-slashkit-timing.txt").read_text()
 
 
 class FakeVivado:
     """A toolchain double for the pynq shell's linker (``finn.shells.pynq.linker``): its
     Vivado run keeps the project's Tcl and makes what the template's project makes
     (unless ``makes`` is False), each file naming itself, the routed timing summary
-    ``timing`` if given. ``selection`` is the toolchain's (``Selection.vivado_jobs``)."""
+    ``timing`` (by default TFC's on Ultra96, ``TIMING_REPORT``; None, none).
+    ``selection`` is the toolchain's (``Selection.vivado_jobs``)."""
 
     environment = NO_VIVADO
 
-    def __init__(self, makes: bool = True, timing: str | None = None) -> None:
+    def __init__(self, makes: bool = True, timing: str | None = TIMING_REPORT) -> None:
         self.runs: list[tuple[str, list[str], str]] = []
         self.makes = makes
         self.timing = timing
@@ -234,7 +237,9 @@ class FakeVivado:
         for index, path in enumerate(synthesized):
             path.write_text(UTILIZATION_SYNTH.format(lut=100 * (index + 1), ff=10))
         made[3].write_text(PLACED_HIERARCHY)
-        if self.timing is not None:
+        if self.timing is None:
+            made[1].unlink()
+        else:
             made[1].write_text(self.timing)
 
 

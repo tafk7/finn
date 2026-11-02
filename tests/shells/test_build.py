@@ -79,6 +79,7 @@ from finn.shells.integration import (
     IntegrationError,
     IpRef,
     Linked,
+    Timing,
     describe,
     runtime_text,
 )
@@ -599,8 +600,10 @@ def test_the_bitfile_build_is_a_transformation_of_the_parent_graph(
     body states, links through the shell's declared linker and collects what it made into
     the output directory it is given: the bitfile with its hardware handoff beside it, each
     report by its path under report/, the runtime file and the delivered clock, whose
-    report states the throughput asked, the objective it is given. The parent graph states
-    the bitfile, what it was made from and the options it was built with."""
+    report states the throughput asked, the objective it is given, and the period the
+    routed design closed at with its worst setup slack there, as the record of what was
+    collected does. The parent graph states the bitfile, what it was made from and the
+    options it was built with."""
     recorded_tools(monkeypatch, tmp_path)
     parent = zynq_parent(tmp_path)
     output = tmp_path / "output"
@@ -669,9 +672,14 @@ def test_the_bitfile_build_is_a_transformation_of_the_parent_graph(
     clock = json.loads((output / DELIVERED_CLOCK).read_text())
     assert clock == building.clock
     assert (clock["delivered_mhz"], clock["objective_fps"]) == (187.512, 1000)
+    assert (clock["closed_period_ns"], clock["wns_ns"]) == (5.333, 1.667)
+    assert clock["timing_report"] == f"report/{TIMING}"
     assert "bottleneck_cycles" in clock
     assert [finding["code"] for finding in clock["findings"]] == ["clock-below-asked"]
     assert [finding.code for finding in building.findings] == ["clock-below-asked"]
+    timing = {"period_ns": 5.333, "wns_ns": 1.667, "report": f"report/{TIMING}"}
+    assert json.loads((output / LINKED).read_text())["timing"] == timing
+    assert linked_as_built(output, output / BITFILE).timing == Timing(5.333, 1.667, TIMING)
 
 
 def test_the_bitfile_build_refuses_a_shell_without_it(tmp_path: Path) -> None:
@@ -864,6 +872,7 @@ def test_a_build_replaces_its_bitfile_directory_and_the_last_links_reports(
         "image": "bitfile/finn-accel.bit",
         "beside": [],
         "reports": {"logs": "report/logs"},
+        "timing": None,
     }
     assert building.reports == [
         output / "report" / "logs",
@@ -884,6 +893,9 @@ def test_a_build_replaces_its_bitfile_directory_and_the_last_links_reports(
         ("reports", {"../victim.txt": "report/../victim.txt"}),
         ("reports", {"old.rpt": "victim.txt"}),
         ("reports", {"integration.json": "report/integration.json"}),
+        ("timing", {"period_ns": 5.333, "wns_ns": -0.25, "report": "report/old.rpt"}),
+        ("timing", {"period_ns": 5.333, "wns_ns": 1.667, "report": "report/other.rpt"}),
+        ("timing", {"period_ns": 5.333, "wns_ns": 1.667}),
     ],
     ids=[
         "dotdot",
@@ -894,6 +906,9 @@ def test_a_build_replaces_its_bitfile_directory_and_the_last_links_reports(
         "report-key",
         "report-path",
         "finn-own",
+        "timing-unmet",
+        "timing-report",
+        "timing-fields",
     ],
 )
 def test_a_record_a_build_cannot_have_written_is_refused_before_anything_is_removed(
@@ -901,9 +916,10 @@ def test_a_record_a_build_cannot_have_written_is_refused_before_anything_is_remo
 ) -> None:
     """The record of what the last link collected names each file it removes: one naming a
     file a link cannot have collected (outside the output directory, outside bitfile/ or
-    report/, not ``finn-accel<suffix>``, or one of FINN's own reports) is refused
-    (``linked-invalid``) before any file is removed or copied, the record kept; so is a
-    driver made from it, and a resources report read by it."""
+    report/, not ``finn-accel<suffix>``, or one of FINN's own reports), or a timing no
+    linker admits (a negative slack, a report it did not collect, a field missing), is
+    refused (``linked-invalid``) before any file is removed or copied, the record kept; so
+    is a driver made from it, and a resources report read by it."""
     recorded_tools(monkeypatch, tmp_path)
     linked = made(tmp_path / "linked")
     monkeypatch.setattr(shell_build, "declared_linker", lambda row, debug: GivenLinker(linked))
@@ -920,6 +936,7 @@ def test_a_record_a_build_cannot_have_written_is_refused_before_anything_is_remo
         "image": "bitfile/finn-accel.bit",
         "beside": [],
         "reports": {"old.rpt": "report/old.rpt"},
+        "timing": None,
     }
     record[field] = [str(victim) if entry == "VICTIM" else entry] if field == "beside" else entry
     (output / LINKED).write_text(json.dumps(record))
@@ -1141,7 +1158,13 @@ def test_the_driver_is_a_transformation_of_the_parent_graph(tmp_path: Path) -> N
         parent.transform(MakeDriver(output, "pynq"))
     (output / LINKED).write_text(
         json.dumps(
-            {"linker": "vivado-block-design", "image": str(BITFILE), "beside": [], "reports": {}}
+            {
+                "linker": "vivado-block-design",
+                "image": str(BITFILE),
+                "beside": [],
+                "reports": {},
+                "timing": None,
+            }
         )
     )
     with refused(

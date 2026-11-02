@@ -30,10 +30,12 @@ The bitfile (``BuildBitfile``) is the parent graph's integration description
   each named ``finn-accel`` with its own suffix (``finn-accel.bit`` beside
   ``finn-accel.hwh`` on ``pynq``); each report into ``report/`` by its path there; the
   runtime file (``report/integration.json``, ``finn.shells.integration.runtime_text``);
-  the main clock as delivered beside the one asked (``report/delivered_clock.json``,
+  the main clock as delivered beside the one asked, with the period its routed timing
+  closed at and the worst setup slack there (``report/delivered_clock.json``,
   ``delivered_clock``, with its limitations, ``delivered_clock_findings``); and what was
-  collected, by its paths in the output directory, with the linker's name
-  (``report/linked.json``, ``LINKED``).
+  collected, by its paths in the output directory, with the linker's name and the routed
+  timing it admitted (``report/linked.json``, ``LINKED``). A linker refuses an image that
+  misses timing (the ``pynq`` one: ``finn.shells.pynq.linker.admitted``).
 
 Collection refuses, before anything is copied: two files beside the image of one suffix,
 or one of the image's (``artifact-collision``), and a report's path that is not a plain
@@ -103,6 +105,7 @@ from finn.shells.integration import (
     Linked,
     Linker,
     Runtime,
+    Timing,
     describe,
     runtime_text,
 )
@@ -281,18 +284,21 @@ def delivered_clock(
     linked: Linked, period_ns: float, cycles: int | None, objective_fps: float | None
 ) -> dict[str, Any]:
     """The main clock as ``linked`` delivers it beside the period asked, its period to the
-    picosecond, and, given the bottleneck's ``cycles`` a frame, the frames a second at each;
+    picosecond, the period its routed timing closed at and the worst setup slack there,
+    with the report they were read from (``Linked.timing``, where the linker states it),
+    and, given the bottleneck's ``cycles`` a frame, the frames a second at each;
     ``objective_fps`` is the throughput asked. Without a main clock delivered, the period
-    asked alone. Facts only: ``delivered_clock_findings`` judges them."""
+    asked and the timing alone. Facts only: ``delivered_clock_findings`` judges them."""
     mhz = linked.clocks_mhz.get(MAIN)
+    report: dict[str, Any] = {"clock": MAIN, "target_period_ns": period_ns}
+    if linked.timing is not None:
+        report["closed_period_ns"] = linked.timing.period_ns
+        report["wns_ns"] = linked.timing.wns_ns
+        report["timing_report"] = str(REPORT_DIR / linked.timing.report)
     if mhz is None:
-        return {"clock": MAIN, "target_period_ns": period_ns}
-    report: dict[str, Any] = {
-        "clock": MAIN,
-        "target_period_ns": period_ns,
-        "delivered_period_ns": round(1000 / mhz, 3),
-        "delivered_mhz": mhz,
-    }
+        return report
+    report["delivered_period_ns"] = round(1000 / mhz, 3)
+    report["delivered_mhz"] = mhz
     if cycles is not None:
         report["bottleneck_cycles"] = cycles
         report["fps_at_target"] = round(1e9 / (period_ns * cycles), 1)
@@ -304,14 +310,28 @@ def delivered_clock(
 
 def delivered_clock_findings(clock: dict[str, Any]) -> tuple[Finding, ...]:
     """The limitations of a delivered clock (``delivered_clock``), for
-    report/delivered_clock.json: none delivered (``clock-unknown``), or a delivered period
-    other than the one asked, slower (``clock-below-asked``) or faster
-    (``clock-above-asked``) than asked (a shell may give its nearest clock to the request),
-    with both numbers, the frames a second at each and the objective where the report
-    states them. Never a refusal."""
+    report/delivered_clock.json: no routed timing (``timing-unchecked``: the linker states
+    none, so whether the image meets its clock is unknown); none delivered
+    (``clock-unknown``), or a delivered period other than the one asked, slower
+    (``clock-below-asked``) or faster (``clock-above-asked``) than asked (a shell may give
+    its nearest clock to the request), with both numbers, the frames a second at each and
+    the objective where the report states them. Never a refusal: a linker refuses an image
+    that misses timing itself."""
     period = clock["target_period_ns"]
+    unchecked: tuple[Finding, ...] = ()
+    if "wns_ns" not in clock:
+        unchecked = (
+            Finding(
+                FindingKind.LIMITATION,
+                "timing-unchecked",
+                "delivered_clock",
+                "the linker states no routed timing: whether the image meets its clock is "
+                "not checked",
+            ),
+        )
     if "delivered_period_ns" not in clock:
         return (
+            *unchecked,
             Finding(
                 FindingKind.LIMITATION,
                 "clock-unknown",
@@ -323,7 +343,7 @@ def delivered_clock_findings(clock: dict[str, Any]) -> tuple[Finding, ...]:
     delivered, mhz = clock["delivered_period_ns"], clock["delivered_mhz"]
     # A delivered period is stated to the picosecond.
     if abs(delivered - period) < 0.0005:
-        return ()
+        return unchecked
     message = (
         f"the shell delivers its {clock['clock']} clock at {delivered} ns ({mhz} MHz), "
         f"not the {period} ns asked"
@@ -337,6 +357,7 @@ def delivered_clock_findings(clock: dict[str, Any]) -> tuple[Finding, ...]:
     if "objective_fps" in clock:
         message += f"; the objective is {clock['objective_fps']:,.0f} fps"
     return (
+        *unchecked,
         Finding(
             FindingKind.LIMITATION,
             "clock-below-asked" if delivered > period else "clock-above-asked",
@@ -511,6 +532,7 @@ class BuildBitfile(Transformation):
             "image": str(image),
             "beside": [str(path) for path in beside],
             "reports": {key: str(REPORT_DIR / key) for key in linked.reports},
+            "timing": None if linked.timing is None else timing_record(linked.timing),
         }
         (output / LINKED).write_text(json.dumps(record, indent=2))
         self.reports += [output / RUNTIME_FILE, output / DELIVERED_CLOCK, output / LINKED]
@@ -577,6 +599,25 @@ def shipped_bitfile(model: ModelWrapper, directory: Path) -> Path:
     return Path(bitfile).relative_to(Path(directory))
 
 
+def timing_record(timing: Timing) -> dict[str, Any]:
+    """``timing`` as ``LINKED`` records it: its report by its path in the output directory,
+    as the record's reports are."""
+    return {**timing.record(), "report": str(REPORT_DIR / timing.report)}
+
+
+def _recorded_timing(entry: object, reports: dict[str, str]) -> bool:
+    """Whether ``entry`` is a timing ``timing_record`` writes of a link whose record's
+    reports are ``reports``: its period positive, its slack not negative, its report one of
+    them; or None, a link with no routed timing."""
+    if entry is None:
+        return True
+    if not isinstance(entry, dict) or set(entry) != {"period_ns", "wns_ns", "report"}:
+        return False
+    period, wns = entry["period_ns"], entry["wns_ns"]
+    numbers = all(type(each) in (int, float) for each in (period, wns))
+    return numbers and period > 0 and wns >= 0 and entry["report"] in reports.values()
+
+
 def _collected_artifact(entry: object) -> bool:
     """Whether ``entry`` names a file a link collects beside the image or the image, as
     ``collection`` does: ``bitfile/finn-accel<suffix>``, written so."""
@@ -593,12 +634,13 @@ def _collected_artifact(entry: object) -> bool:
 
 def linked_record(directory: Path, output: str, owner: str | None = None) -> dict[str, Any] | None:
     """What the bitfile's build in the output ``directory`` collected (``LINKED``): the
-    linker's name, the image, the files beside it and the reports, by their paths there;
-    None where it collected nothing. A record ``collection`` cannot have written is refused
-    for ``output`` (by ``owner``, as ``ShellRefused`` has it) before anything reads or
-    removes what it names (``linked-invalid``): the
-    image and each file beside it ``bitfile/finn-accel<suffix>``, each report a key
-    ``report_key`` takes at ``report/<key>``."""
+    linker's name, the image, the files beside it and the reports, by their paths there,
+    and the routed timing the linker admitted (``timing_record``, or None); None where it
+    collected nothing. A record ``collection`` cannot have written is refused for
+    ``output`` (by ``owner``, as ``ShellRefused`` has it) before anything reads or removes
+    what it names (``linked-invalid``): the image and each file beside it
+    ``bitfile/finn-accel<suffix>``, each report a key ``report_key`` takes at
+    ``report/<key>``, the timing's report one of them, its slack not negative."""
     record = Path(directory) / LINKED
     if not record.is_file():
         return None
@@ -615,6 +657,7 @@ def linked_record(directory: Path, output: str, owner: str | None = None) -> dic
                 isinstance(key, str) and path == str(REPORT_DIR / report_key(key))
                 for key, path in reports.items()
             )
+            and _recorded_timing(found["timing"], reports)
         )
     except (ValueError, KeyError, TypeError, ShellRefused):
         valid = False
@@ -623,8 +666,9 @@ def linked_record(directory: Path, output: str, owner: str | None = None) -> dic
             output,
             "linked-invalid",
             f"{record} is not a record a bitfile's build writes: each file it names is "
-            "bitfile/finn-accel<suffix> or a linker's report under report/; remove it and "
-            "build the bitfile again (step_build_bitfile)",
+            "bitfile/finn-accel<suffix> or a linker's report under report/, and its timing "
+            "one the linker admitted, or none; remove it and build the bitfile again "
+            "(step_build_bitfile)",
             owner,
         )
     checked: dict[str, Any] = found
@@ -634,9 +678,10 @@ def linked_record(directory: Path, output: str, owner: str | None = None) -> dic
 def linked_as_built(directory: Path, image: Path) -> Linked:
     """What the bitfile's build in ``directory`` linked, as it collected it there: each
     unit's base and each clock as delivered, as its runtime file states them
-    (``RUNTIME_FILE``), and the files beside the image and the reports, as its record states
-    them (``LINKED``), ``image`` the bitfile. No runtime file, or one of another schema
-    than this FINN's (``RUNTIME_SCHEMA``), is refused, as is no record."""
+    (``RUNTIME_FILE``), and the files beside the image, the reports and the routed timing,
+    as its record states them (``LINKED``), ``image`` the bitfile. No runtime file, or one
+    of another schema than this FINN's (``RUNTIME_SCHEMA``), is refused, as is no
+    record."""
     report = Path(directory) / RUNTIME_FILE
     if not report.is_file():
         raise ShellRefused(
@@ -661,12 +706,20 @@ def linked_as_built(directory: Path, image: Path) -> Linked:
             f"no record of what the bitfile's build collected ({Path(directory) / LINKED}): "
             "build the bitfile again (step_build_bitfile)",
         )
+    timing = collected["timing"]
     return Linked(
         image=image,
         placement={unit: int(base) for unit, base in found["placement"].items()},
         clocks_mhz={name: float(mhz) for name, mhz in found["clocks_mhz"].items()},
         reports={key: Path(directory) / path for key, path in collected["reports"].items()},
         beside=tuple(Path(directory) / path for path in collected["beside"]),
+        timing=None
+        if timing is None
+        else Timing(
+            float(timing["period_ns"]),
+            float(timing["wns_ns"]),
+            str(PurePosixPath(timing["report"]).relative_to(REPORT_DIR.name)),
+        ),
     )
 
 
@@ -845,6 +898,7 @@ __all__ = [
     "mover_ip",
     "refuse_stale_bitfile",
     "report_key",
+    "timing_record",
     "shipped_bitfile",
     "unit_ips",
 ]

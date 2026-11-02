@@ -30,7 +30,7 @@
 ``release``, ``glbl``), how many runs it launches at once, how to read what its tools
 print (``messages``: ``SEVERITY: [Tool N-M] text``, the form Vivado, xvlog, xelab, xsim
 and the HLS frontends share; whether no licence was found), and how to read its reports
-(the routed clocks; utilization, as plain counts by resource: ``lut``, ``ff``,
+(the routed clocks and slacks; utilization, as plain counts by resource: ``lut``, ``ff``,
 ``bram36``, ``bram18``, ``uram``, ``dsp``).
 
 Every reader of "which Vivado" reads it here, through a toolchain, never from this
@@ -191,6 +191,36 @@ def parse_clock_summary(report_path):
                 "mhz": float(match.group(3)),
             }
     return clocks
+
+
+def design_timing(report_path: str) -> dict[str, float] | None:
+    """The routed design's worst slacks, as a Vivado timing summary report's "Design
+    Timing Summary" states them, each in ns: the worst setup slack (``wns_ns``), the total
+    of the negative ones (``tns_ns``) over the failing endpoints (``failing_endpoints``),
+    and the worst hold slack (``whs_ns``). Where no path is timed, Vivado writes ``inf``,
+    read so. None where the report holds no such table (the report of ``-delay_type min_max``,
+    ``report_timing_summary``'s default)."""
+    with open(report_path) as f:
+        lines = f.read().splitlines()
+    titled = [i for i, line in enumerate(lines) if line.strip() == "| Design Timing Summary"]
+    headers = [
+        i
+        for i in range(titled[0] if titled else len(lines), len(lines))
+        if lines[i].split()[:2] == ["WNS(ns)", "TNS(ns)"]
+    ]
+    if not headers:
+        return None
+    row = next((line.split() for line in lines[headers[0] + 2 :] if line.strip()), [])
+    try:
+        wns, tns, failing, _, whs = row[:5]
+        return {
+            "wns_ns": float(wns),
+            "tns_ns": float(tns),
+            "failing_endpoints": int(failing),
+            "whs_ns": float(whs),
+        }
+    except ValueError:
+        return None
 
 
 #: The clock the Zynq shell's PS drives the accelerator with: Zynq UltraScale+'s
