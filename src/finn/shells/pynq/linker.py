@@ -78,7 +78,7 @@ from finn.platform.shells import VIVADO_BLOCK_DESIGN, ShellRow, shell_row
 from finn.shells.integration import MAIN, Integration, IntegrationError, Linked, Timing, Unit
 from finn.shells.pynq import templates
 from finn.toolchain.launcher import StrPath, Toolchain, ToolFailed
-from finn.toolchain.vivado import PL_CLOCKS, routed_timing, tcl_quote, vivado_jobs
+from finn.toolchain.vivado import PL_CLOCKS, UNTIMED, routed_timing, tcl_quote, vivado_jobs
 
 _LOG = logging.getLogger(__name__)
 
@@ -571,8 +571,12 @@ def admitted(report: Path, period_ns: float) -> tuple[float, Timing]:
     ``-0.000`` fails). Vivado writes the bitfile of a design that misses timing: a check
     missed is refused, each with its remedy (``MISSED``: ``timing-unmet``, setup;
     ``timing-hold-unmet``, hold, missed at any period; ``timing-pulse-width-unmet``), as
-    is no report (``timing-unreported``), and one that cannot be read, is cut short, or
-    names no PL clock (``timing-unread``), each naming the report and the cause."""
+    is a design whose slacks do not cover it (``timing-uncovered``: ``check_timing``
+    counts internal paths untimed, ``finn.toolchain.vivado.UNTIMED``, or the PL clock
+    times no setup endpoint), no report (``timing-unreported``), and one that cannot be
+    read, is cut short, names no PL clock or states the design not routed
+    (``timing-unread``), each naming the report and the cause. The design's checks stay
+    the backstop: another clock's or a crossing's violation is refused too."""
 
     def unread(cause: str) -> LinkerRefused:
         return LinkerRefused(
@@ -598,6 +602,26 @@ def admitted(report: Path, period_ns: float) -> tuple[float, Timing]:
         raise unread(
             f"names no PL clock ({', '.join(PL_CLOCKS)}; it lists "
             f"{', '.join(sorted(routed.clocks)) or 'none'})"
+        )
+    if routed.state != "Routed":
+        raise unread(f"it states the design {routed.state!r}, not routed")
+    untimed = {check: routed.unchecked.get(check) for check in UNTIMED}
+    if None in untimed.values():
+        raise unread(f"its check_timing counts no {', '.join(UNTIMED)}")
+    if any(untimed.values()):
+        counted = ", ".join(f"{check} {count}" for check, count in untimed.items() if count)
+        raise LinkerRefused(
+            "timing-uncovered",
+            f"{report}: the routed design leaves paths untimed (check_timing: {counted}), "
+            "so its slacks do not cover the image; constrain every clock and path",
+        )
+    own = routed.intra.get(name)
+    if own is None or own["setup"].endpoints == 0:
+        raise LinkerRefused(
+            "timing-uncovered",
+            f"{report}: its {name} clock, the accelerator's, times no setup endpoint "
+            f"({'no row' if own is None else 'none'} in its intra-clock table), so the "
+            "design's slacks are other clocks'",
         )
     period, mhz = routed.clocks[name]["period_ns"], routed.clocks[name]["mhz"]
     wns = routed.design["setup"].worst_ns

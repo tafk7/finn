@@ -500,6 +500,34 @@ PULSE_WIDTH_UNMET_REPORT = TIMING_REPORT.replace(
     "-0.050       -0.050                       1                 19432",
 )
 
+#: TFC's real report whose check_timing counts a register with no clock and two internal
+#: endpoints unconstrained, its slacks unchanged.
+UNTIMED_CORE_REPORT = TIMING_REPORT.replace(
+    "checking no_clock (0)", "checking no_clock (1)"
+).replace(
+    "checking unconstrained_internal_endpoints (0)",
+    "checking unconstrained_internal_endpoints (2)",
+)
+
+#: TFC's real report with its PL clock timing no endpoint and another clock, ``static``,
+#: giving the design's slacks.
+UNTIMED_PL_CLOCK_REPORT = TIMING_REPORT.replace(
+    "clk_pl_0  {0.000 2.667}        5.333           187.512",
+    "clk_pl_0  {0.000 2.667}        5.333           187.512\n"
+    "static    {0.000 5.000}        10.000          100.000",
+).replace(
+    "clk_pl_0            1.667        0.000                      0                63298",
+    "clk_pl_0              inf        0.000                      0                    0"
+    "          inf        0.000                      0                    0"
+    "          inf        0.000                       0                     0\n"
+    "static              1.667        0.000                      0                63298",
+)
+
+#: TFC's real report stating its design synthesized, not routed.
+UNROUTED_REPORT = TIMING_REPORT.replace(
+    "| Design State      : Routed", "| Design State      : Synthesized"
+)
+
 #: TFC's real report with one failing setup endpoint whose slack rounds to -0.000 ns.
 SETUP_ROUNDED_REPORT = TIMING_REPORT.replace(
     "1.667        0.000                      0                63298",
@@ -559,6 +587,43 @@ def test_an_image_that_misses_timing_is_refused_naming_its_report_and_slack(
     hold or pulse width, or rounds a violation to zero: those cases are TFC's Ultra96
     report with its rows rewritten (``HOLD_UNMET_REPORT``, ``PULSE_WIDTH_UNMET_REPORT``,
     ``SETUP_ROUNDED_REPORT``)."""
+    vivado = FakeVivado(timing=timing)
+    with refused(code, error=LinkerRefused, owner="vivado-block-design", message=message):
+        BlockDesignLinker().link(packaged(described), BOARD, tmp_path, cast(Toolchain, vivado))
+
+
+@pytest.mark.parametrize(
+    "timing, code, message",
+    [
+        (
+            UNTIMED_CORE_REPORT,
+            "timing-uncovered",
+            r"routed\.rpt: the routed design leaves paths untimed \(check_timing: no_clock 1, "
+            r"unconstrained_internal_endpoints 2\)",
+        ),
+        (
+            UNTIMED_PL_CLOCK_REPORT,
+            "timing-uncovered",
+            r"routed\.rpt: its clk_pl_0 clock, the accelerator's, times no setup endpoint",
+        ),
+        (
+            UNROUTED_REPORT,
+            "timing-unread",
+            r"routed\.rpt: it states the design 'Synthesized', not routed",
+        ),
+    ],
+    ids=["untimed-paths", "untimed-pl-clock", "unrouted"],
+)
+def test_an_image_whose_timing_does_not_cover_it_is_refused(
+    described: Integration, tmp_path: Path, timing: str, code: str, message: str
+) -> None:
+    """A finite slack proves nothing of paths it does not time: the linker refuses a
+    routed design whose ``check_timing`` counts registers with no clock or internal
+    endpoints unconstrained (``timing-uncovered``), one whose PL clock, the accelerator's,
+    times no setup endpoint while another clock gives the design's slacks
+    (``timing-uncovered``), and a report of a design not routed (``timing-unread``). No
+    real routed report on hand leaves paths untimed: these are TFC's Ultra96 report
+    rewritten (``UNTIMED_CORE_REPORT``, ``UNTIMED_PL_CLOCK_REPORT``, ``UNROUTED_REPORT``)."""
     vivado = FakeVivado(timing=timing)
     with refused(code, error=LinkerRefused, owner="vivado-block-design", message=message):
         BlockDesignLinker().link(packaged(described), BOARD, tmp_path, cast(Toolchain, vivado))
