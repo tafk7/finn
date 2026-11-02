@@ -125,7 +125,6 @@ from finn.kernels.dataflow_core import (
 )
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.fifo_sizing import FRAMES, NotModelled, Sized, holds, size
-from finn.kernels.iodma import IodmaKernel
 from finn.kernels.policies import (
     Defaulted,
     Fixed,
@@ -734,12 +733,13 @@ class CoreComposition:
         (``finn.kernels.base.neighbours``: each kernel's port's stream pins, labelled below
         its member's node, and its pace at its kernel's interval, where it owns its pacing;
         a frozen neighbour's, outside a slice, as its class's fact gives it at the neighbour's
-        stored choices; on a boundary side in a shell, the pace of the mover placed there,
-        its ``stated_rate``, its port none of the core's). FIFO sizing reads their paces
-        (``finn.kernels.fifo_sizing``), and the netlist its hops to them (``hops``). Refused
-        where a rule refuses the core (``refused``): its class answers them only where every
-        rule accepts it; and where its class does not answer them, what refuses them or what
-        they wait on, each finding naming its member (``answer``)."""
+        stored choices; on a boundary side in a shell, the pace of the port of the mover
+        placed there, its ``timed_pace``, the mover's stated rate, its port none of the
+        core's). FIFO sizing reads their paces (``finn.kernels.fifo_sizing``), and the
+        netlist its hops to them (``hops``). Refused where a rule refuses the core
+        (``refused``): its class answers them only where every rule accepts it; and where its
+        class does not answer them, what refuses them or what they wait on, each finding
+        naming its member (``answer``)."""
         refused = self.refused()
         if refused is not None:
             return refused
@@ -751,13 +751,17 @@ class CoreComposition:
         mover = self.mover(name)
         if mover is None:
             return beside
-        rate = self.query(self.placed(mover), IodmaKernel.stated_rate)
-        if isinstance(rate, (Rejected, Unresolved)):
-            return type(rate)(rate.findings)
-        assert isinstance(rate, Available)  # a mover states its rate
-        if self.member(name).entering:
-            return replace(beside, producer_pace=rate.value)
-        return replace(beside, consumer_pace=rate.value)
+        entering = self.member(name).entering
+        placed = self.placed(mover)
+        point = self.member(placed)
+        port = getattr(type(point), "output" if entering else "input")
+        pace = self._result(placed, point.query(port.timed_pace))
+        if isinstance(pace, (Rejected, Unresolved)):
+            return type(pace)(pace.findings)
+        assert isinstance(pace, Available)  # a mover's port, placed: its rate
+        if entering:
+            return replace(beside, producer_pace=pace.value)
+        return replace(beside, consumer_pace=pace.value)
 
     def hops(self, name: str) -> OuterHops | Rejected | Unresolved:
         """Channel ``name``'s hops to the ports beside it, as its class answers them

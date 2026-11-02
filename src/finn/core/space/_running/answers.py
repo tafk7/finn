@@ -196,7 +196,16 @@ def _empty_domain(node: Address) -> Rejected:
 
 
 def _finish(node: Address, returned: object) -> Called:
-    """A callback's returned value as the node's answer and assessment."""
+    """A callback's returned value as the node's answer and assessment. An ``Inapplicable``
+    its return annotation does not admit (``Address.admits_inapplicable``) is the owner's
+    error, as a value not of its type is: a constraint reading it would count as true.
+    ``Rejected`` and ``Unresolved`` every answer admits: neither makes a point valid."""
+    if isinstance(returned, Inapplicable) and not node.admits_inapplicable:
+        raise EvaluationError(
+            node.owner,
+            node.kind,
+            "answered Inapplicable, which its return annotation does not admit (answer-undeclared)",
+        )
     if node.kind == "constraint":
         normalized = constraint_result(cast(bool | QueryResult[bool], returned), node.owner)
         return Called(

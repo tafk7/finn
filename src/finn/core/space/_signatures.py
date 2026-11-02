@@ -59,6 +59,8 @@ class BoundFunction:
     dependencies: tuple[BoundArgument, ...]
     semantics: ValueSemantics[object]
     call_style: Literal["explicit", "self"] = "explicit"
+    # Whether its return annotation admits ``Inapplicable`` (``collection.declared_answer``).
+    admits_inapplicable: bool = False
 
 
 def resolve_annotations(
@@ -142,7 +144,9 @@ def declared_non_values(annotation: object) -> frozenset[type]:
     three; a plain ``T`` none), as its answer's own options: a union's flattened, a type
     alias's (``type Maybe[T] = T | Inapplicable``) expanded with its arguments, a subclass
     of a marker read as that marker. A marker inside a value (``tuple[Inapplicable, ...]``)
-    is no option of the answer. An override's is read against its base's (``collection``)."""
+    is no option of the answer. An override's is read against its base's, and the compiled
+    computation keeps whether it admits ``Inapplicable``, which its answer is checked
+    against when it is evaluated (``collection``)."""
     found: set[type] = set()
     for option in _options(annotation, {}):
         found.update(marker for marker in _MARKERS if _is_subclass(option, marker))

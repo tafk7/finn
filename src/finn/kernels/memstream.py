@@ -22,7 +22,7 @@ It is a channel's ``source`` candidate (``finn.kernels.channels``): placed by th
 channel it drives, its output presents its given sequence, and its set port reads the
 channel's ``index_tensor``. Placed by a parent, its ports give the channels on them
 their stream pins (``output.stream_pins``, ``set.stream_pins``). Its cycles are the
-beats its output carries a frame, by the rate law, as every leaf's without a schedule:
+beats its output carries a frame, derived (L6), as every leaf's without a schedule:
 one pass with one set, one pass an index with several.
 
 ``ram_style`` and ``pumped_memory`` are its choices. A pumped memory runs at

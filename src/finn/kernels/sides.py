@@ -56,6 +56,7 @@ from typing import Self
 
 from finn.dataflow.streams import Stream
 from finn.kernels.artifacts.abi import Direction
+from finn.kernels.laws import check_beat_times
 
 
 class SideKind(Enum):
@@ -94,24 +95,16 @@ class BeatTimes:
     """The outside's beat times over a frame: each beat's cycle (``times``, from the
     frame's start) and the frame's span (``span``, cycles). At least one beat, at most one
     a cycle (``times`` strictly ascending), the first at cycle 0 or later, each within the
-    span (``times[-1] < span``). One time a beat at the edge: FIFO sizing reads it where
-    the edge presents as many beats a frame (``finn.kernels.fifo_sizing.stated_pattern``)."""
+    span (``times[-1] < span``), checked as a stated rate's are
+    (``finn.kernels.laws.check_beat_times``). One time a beat at the edge: FIFO sizing reads
+    it where the edge presents as many beats a frame
+    (``finn.kernels.fifo_sizing.stated_pattern``)."""
 
     times: tuple[int, ...]
     span: int
 
     def __post_init__(self) -> None:
-        times = self.times
-        if type(times) is not tuple or not times or not all(_count(time) for time in times):
-            raise ValueError("a pace's beat times are a tuple of at least one cycle")
-        if not _count(self.span) or self.span < 1:
-            raise ValueError(f"a frame spans at least one cycle, not {self.span!r}")
-        if times[0] < 0 or any(later <= earlier for earlier, later in zip(times, times[1:])):
-            raise ValueError("a pace's beat times start at cycle 0 or later, one beat a cycle")
-        if times[-1] >= self.span:
-            raise ValueError(
-                f"a pace's beat times lie within its span: a beat at {times[-1]} of {self.span}"
-            )
+        check_beat_times(self.times, self.span)
 
 
 @dataclass(frozen=True)

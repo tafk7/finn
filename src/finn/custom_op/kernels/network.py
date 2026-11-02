@@ -135,7 +135,7 @@ from finn.kernels.composer import (
 )
 from finn.kernels.dataflow_core import Bound, DataflowCoreKernel, bound
 from finn.kernels.explore import CoreComposition
-from finn.kernels.laws import TimedPace
+from finn.kernels.laws import StatedRate, TimedPace
 from finn.kernels.movers import MoverOffer
 from finn.kernels.port import exposed_pins, exposed_side, stream_port
 from finn.kernels.sides import Side
@@ -292,18 +292,19 @@ def _beyond(
 
 def _neighbour(
     model: ModelWrapper, tensor: str, side: str, node: NodeProto
-) -> tuple[Side, PortPins | None, TimedPace | None]:
+) -> tuple[Side, PortPins | None, TimedPace | StatedRate | None]:
     """The side a frozen neighbour, KernelOp ``node`` beyond the selection on ``side`` of
     ``tensor``, gives the edge channel, as a fact: its port's ``side`` at its stored
     choices (``KernelOp.point``; its facts alone, where it stores none), as a frozen
     neighbour's (``Side.neighbour``: an upstream one's output side, its stream, label and
     word width, a downstream one's input side, its stream and label), its label below the
     node's name; that port's stream pins there (``stream_pins``), which its hop is wired to;
-    and its pace there at its kernel's interval (``timed_pace``, where it owns its pacing), which
-    sizing reads. Only an accepted value is a fact: refused (``neighbour-unaccepted``,
-    naming the neighbour, its port and why) where its stored choices are refused, its kernel
-    is refused, or its side is not known there (it waits on an open choice, or is
-    refused)."""
+    and its pace in cycles there (``timed_pace``: its kernel's stated rate's where that names
+    it, else its pace at its kernel's interval, where it owns its pacing), which sizing
+    reads. Only an accepted value is a fact: refused (``neighbour-unaccepted``, naming the
+    neighbour, its port and why) where its stored choices are refused, its kernel
+    is refused, or its side or its pace in cycles is not known there (it waits on an open
+    choice, or is refused); a pace answered None is no pace."""
     op = kernel_op(model, node)
     port = (
         op.outputs[list(node.output).index(tensor)]
@@ -352,11 +353,14 @@ def _neighbour(
     if isinstance(given, PortPins):
         given = exposed_pins(point, named, given)
     paced = point.query(declared.timed_pace)
+    if isinstance(paced, (Rejected, Unresolved)):
+        why = "waits on an open choice" if isinstance(paced, Unresolved) else "is refused"
+        raise unaccepted(f"its pace in cycles {why}", paced.findings)
     pace = paced.value if isinstance(paced, Available) else None
     return (
         stated.under(node.name),
         given.under(node.name) if isinstance(given, PortPins) else None,
-        pace if isinstance(pace, TimedPace) else None,
+        pace if isinstance(pace, (TimedPace, StatedRate)) else None,
     )
 
 

@@ -62,6 +62,8 @@ class Node:
     arguments: tuple[Argument, ...] = ()
     function: Callable[..., object] | None = None
     call_style: Literal["explicit", "self"] = "explicit"
+    # A computation's: whether its return annotation admits ``Inapplicable``.
+    admits_inapplicable: bool = False
     value: object = None
     # A formal's: something must supply it.
     required: bool = True
@@ -171,6 +173,8 @@ class Member:
     arguments: tuple[tuple[str, Edge], ...] = ()
     function: Callable[..., object] | None = None
     call_style: Literal["explicit", "self"] = "explicit"
+    # A computation's: whether its return annotation admits ``Inapplicable``.
+    admits_inapplicable: bool = False
     value: object = None
     required: bool = True
     domain: Domain[object] | None = None

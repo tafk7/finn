@@ -18,8 +18,12 @@ import copy
 import re
 from collections.abc import Mapping
 from dataclasses import replace
+from types import SimpleNamespace
 from typing import Any, cast
 
+import pytest
+from onnx import helper
+from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from support.configure import composition, write_raw
 from support.helpers import beside, root_facts
@@ -28,18 +32,36 @@ from support.refusals import refused
 
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import CUT_NAME
-from finn.core.space import Available, Rejected, inspection
+from finn.core.space import (
+    Available,
+    Decision,
+    Param,
+    Rejected,
+    derived,
+    design_space,
+    inspection,
+    view,
+)
+from finn.core.space.domains import finite
+from finn.custom_op.kernels import network as frozen_network
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import declaration
+from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels import fifo_sizing
 from finn.kernels.artifacts.abi import Direction
+from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel, Neighbours, OuterHops
 from finn.kernels.composer import ChannelDeclaration, DataflowCoreDeclaration, compose
 from finn.kernels.dataflow_core import DataflowCoreKernel, bound
 from finn.kernels.explore import CoreComposition
+from finn.kernels.laws import NATIVE_PROTOCOL, Standing, StatedRate
+from finn.kernels.library import ModuleSpec
 from finn.kernels.port import stream_port
+from finn.kernels.port_model import InPort
 from finn.kernels.sides import Side, SideKind
+from finn.platform.capabilities import Resources
 from finn.transformation.kernels import ToKernelOps
 
 
@@ -314,3 +336,85 @@ def test_another_neighbour_is_another_design_space_of_the_same_class() -> None:
     for network, given in ((part, before), (other, after)):
         found = beside(network, "Thresholding_1_out0")
         assert (found.consumer, found.consumer_pace) == (given.consumer, given.consumer_pace)
+
+
+#: A rate stated on a four-beat input: its beats as its words arrive, in 11 cycles a frame.
+_RATE = StatedRate("input", (1, 3, 5, 7), 11, Standing.MEASURED, "a test's trace", "its words")
+_TENSOR = Tensor((4, 1), ScalarEncoding(DataType["INT4"]))
+
+
+class _Rated(Kernel):
+    """A stage stating its input's rate where ``stating`` chooses so, as ``rate`` gives it."""
+
+    id = "test.frozen.rated"
+    interface_protocol = NATIVE_PROTOCOL
+    module_spec = ModuleSpec(
+        "probe", (CopiedSource("finnlib", "rtl/probe.sv", provides=("module:probe",)),)
+    )
+    input = InPort(tensor=_TENSOR, sequence=BeatSequence(vector_major((4, 1), 1)))
+    rate: StatedRate = Param()
+    stating: bool = Decision(domain=finite((False, True)))
+
+    @derived
+    def stated_rate(self) -> StatedRate | None:
+        stated: StatedRate = self.rate
+        return stated if self.stating else None
+
+    @view
+    def parameters(self) -> dict[str, int | str]:
+        return {}
+
+    @view
+    def resource_use(self) -> Resources:
+        return Resources()
+
+
+class _Stating(_Rated):
+    """``_Rated``, stating its rate wherever."""
+
+    id = "test.frozen.stating"
+
+    @derived
+    def stated_rate(self) -> StatedRate | None:
+        stated: StatedRate = self.rate
+        return stated
+
+
+def test_a_neighbour_whose_pace_in_cycles_is_not_known_is_refused_by_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Its kernel's stated rate refused (``kernel-rate-port``), or waiting on an open choice:
+    its pace in cycles is no fact, so neither is the neighbour, its causes kept; a pace
+    answered None (a rate not stated) is no pace, and a stated one the neighbour's. The
+    KernelOp is stood in for by its design space (``kernel_op``), the reader is the
+    network's."""
+    node = helper.make_node("Rated", ["edge"], ["out"], name="Rated_0")
+
+    def frozen(point: Kernel) -> Any:
+        op = SimpleNamespace(
+            outputs=(),
+            ports=("input",),
+            wiring={"input": SimpleNamespace(port="input")},
+            op_type="Rated",
+            point=lambda: point,
+        )
+        monkeypatch.setattr(frozen_network, "kernel_op", lambda model, node: op)
+        return frozen_network._neighbour(cast(ModelWrapper, None), "edge", "consumer", node)
+
+    space = design_space(_Rated(rate=_RATE))
+    for point, why, code in (
+        (
+            design_space(_Stating(rate=replace(_RATE, times=(1, 3, 5)))),
+            "its pace in cycles is refused",
+            "kernel-rate-port",
+        ),
+        (space, "its pace in cycles waits on an open choice", "decision-unassigned"),
+    ):
+        with refused(
+            "neighbour-unaccepted", error=KernelOpError, node="Rated_0", message=re.escape(why)
+        ) as found:
+            frozen(point)
+        (finding,) = found.error.findings
+        assert code in {cause.code for cause in finding.causes}
+    assert frozen(space.with_choices({_Rated.stating: False}))[2] is None
+    assert frozen(space.with_choices({_Rated.stating: True}))[2] == _RATE

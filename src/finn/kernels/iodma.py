@@ -97,6 +97,9 @@ _IODMA_RATE = (
     "IODMA_hls simulated against a memory model: a beat or a memory word a cycle, and "
     "each call's constant (4 cycles with a width converter, 13 without)"
 )
+_IODMA_REASON = (
+    "its memory side's words and each call's constant take cycles its stream does not show"
+)
 
 
 def iodma_top(
@@ -354,10 +357,17 @@ class IodmaKernel(Kernel):
     @derived
     def stated_rate(self) -> StatedRate:
         """Its port's beat times over a frame within its cycles (``MoverContract.times``,
-        ``cycles``), as measured; the memory latency excluded (``MEMORY_LATENCY``)."""
+        ``cycles``), as measured; the memory latency excluded (``MEMORY_LATENCY``). Its
+        schedule and ports cannot express it (CONTRACT.md L6): its memory side's words and
+        each call's constant take cycles its stream does not show."""
         contract: MoverContract = self.contract
         return StatedRate(
-            self.port, contract.times, contract.cycles, Standing.MEASURED, _IODMA_RATE
+            self.port,
+            contract.times,
+            contract.cycles,
+            Standing.MEASURED,
+            _IODMA_RATE,
+            _IODMA_REASON,
         )
 
     @derived

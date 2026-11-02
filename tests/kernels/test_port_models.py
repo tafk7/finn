@@ -17,6 +17,7 @@ from finn.core.space import (
     Available,
     Decision,
     DefinitionError,
+    EvaluationError,
     Group,
     Inapplicable,
     Param,
@@ -978,7 +979,8 @@ def test_a_scheduled_port_s_kernel_states_a_schedule_never_inapplicable() -> Non
     """A port presenting its kernel's schedule where the kernel states none
     (``port-schedule-unstated``), or one whose declared answer admits ``Inapplicable``, its
     own or a subclass's (``port-schedule-inapplicable``): its stream would be inapplicable,
-    which no constraint refuses."""
+    which no constraint refuses. One declared never inapplicable that answers
+    ``Inapplicable`` fails, the engine's (``answer-undeclared``)."""
     r, c = Index("r"), Index("c")
 
     with refused("port-schedule-unstated", error=DefinitionError, message=r"\['input'\]"):
@@ -1023,6 +1025,19 @@ def test_a_scheduled_port_s_kernel_states_a_schedule_never_inapplicable() -> Non
             @derived
             def schedule(self) -> Schedule | Inapplicable:
                 return Inapplicable()
+
+    class Undeclared(Kernel):
+        id = "test.schedule.undeclared"
+
+        @derived
+        def schedule(self) -> Schedule | Rejected:
+            return Inapplicable()  # type: ignore[return-value]
+
+        input = InPort(tensor=TENSOR, schedule=schedule, index=(r, c))
+
+    point = design_space(Undeclared())
+    with pytest.raises(EvaluationError, match=r"answered Inapplicable.*\(answer-undeclared\)"):
+        inspection.validity(point)
 
 
 def test_a_placed_port_s_presentation_is_accepted_and_carried_or_its_point_is_refused() -> None:

@@ -11,10 +11,11 @@ partition's bottleneck period ``P`` (its ``cycles``, which count a boundary's st
 ``Channel.frame_cycles``):
 
 - the **supply**: when each word arrives at the transport, unthrottled. The
-  producer's beat times, its port's pace in cycles (``StreamPort.timed_pace``,
-  ``TimedPace``: its ``Pace`` at its own kernel's interval, an iteration an interval by
-  the rate law, CONTRACT.md L6, through the one conversion its kernel's cycles read too,
-  ``finn.kernels.laws.in_cycles``), carried through the output adapter's width
+  producer's beat times, its port's pace in cycles (``StreamPort.timed_pace``: a
+  ``TimedPace``, its ``Pace`` at its own kernel's interval, an iteration an interval, the
+  rate derived by default, CONTRACT.md L6, through the one conversion its kernel's cycles
+  read too, ``finn.kernels.laws.in_cycles``; or its kernel's ``StatedRate`` where that names
+  it), carried through the output adapter's width
   conversion (a word leaves once its last element arrived, one a cycle), and the
   producer's span, the cycles its kernel takes a frame;
 - the **acceptance**: when the input side takes a word. With no input adapter,
@@ -37,10 +38,11 @@ supply's data, so they do not change the depth.
 
 ``size`` reads a channel's sides, its producer's and its consumer's paces from the ports
 beside it (its network's ``neighbours``: each the ``timed_pace`` of a port that owns its
-pacing; at a slice's edge, a frozen neighbour's port's, at its stored choices, as a
-kernel's), and gives its ``Sized``: a depth (``0``: direct) and why, naming any interval an
-assumption (``finn.kernels.laws.Standing.ASSUMED``) it was sized at. The least depth counts
-the words the FIFO must hold; the DEPTH proposed is the least whose native storage holds
+pacing or that its kernel's stated rate names; at a slice's edge, a frozen neighbour's
+port's, at its stored choices, as a kernel's), and gives its ``Sized``: a depth (``0``:
+direct) and why, naming any interval or stated rate an assumption
+(``finn.kernels.laws.Standing.ASSUMED``) it was sized at. The least depth counts the words
+the FIFO must hold; the DEPTH proposed is the least whose native storage holds
 them (``least_depth_holding``: FinnLib's FIFO is a shift register of five words up to 33,
 so a DEPTH of two holds up to five). A boundary's free side is paced, in order, by the pace
 the outside states of it (``Side.outside``, ``finn.kernels.sides``: its beat times, or a
@@ -111,7 +113,7 @@ class Pattern:
 class Paced(Protocol):
     """What owns a side's beat times over a frame and its span: the pace in cycles of a port that
     owns its pacing (``finn.kernels.laws.TimedPace``, its iterations at its kernel's interval), the
-    beat times the outside states (``finn.kernels.sides.BeatTimes``), a mover's stated rate
+    beat times the outside states (``finn.kernels.sides.BeatTimes``), a kernel's stated rate
     (``finn.kernels.laws.StatedRate``)."""
 
     @property
@@ -326,15 +328,18 @@ class NotModelled(ValueError):
 
 
 def _paced(neighbours: Neighbours, side: str) -> Pattern:
-    """The pace in cycles of the port beside the channel on ``side`` (``Neighbours``): a
-    port's that owns its pacing, at its own kernel's interval; ``NotModelled`` for a port
-    that follows another, which has none."""
+    """The pace in cycles of the port beside the channel on ``side`` (``Neighbours``): its
+    kernel's stated rate's where that names it, else a port's that owns its pacing, at its
+    own kernel's interval; ``NotModelled`` for a port that follows another and no stated
+    rate names, which has none."""
     port: PortPins | None = getattr(neighbours, side)
     if port is None:
         raise ValueError(f"the channel's {side} is a port, and none is given beside it")
     pace: TimedPace | StatedRate | None = getattr(neighbours, f"{side}_pace")
     if pace is None:
-        raise NotModelled(f"the {side} presents a given sequence, which no schedule paces")
+        raise NotModelled(
+            f"the {side} presents a given sequence, which no schedule or stated rate paces"
+        )
     return pattern(pace)
 
 
@@ -458,8 +463,8 @@ def size(
 
 def assumed(neighbours: Neighbours) -> str:
     """What a sizing between ``neighbours`` rests on that is assumed: each side whose
-    port's interval stands assumed (``Standing.ASSUMED``, Pool's), or whose stated rate
-    does, as a clause for its ``why``; empty where none does."""
+    port's interval stands assumed (``Standing.ASSUMED``, Pool's), or whose kernel's stated
+    rate does, as a clause for its ``why``; empty where none does."""
     found: list[str] = []
     for side in ("producer", "consumer"):
         pace: TimedPace | StatedRate | None = getattr(neighbours, f"{side}_pace")

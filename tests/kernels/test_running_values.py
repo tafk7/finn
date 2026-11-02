@@ -95,7 +95,16 @@ from finn.dataflow.streams import Stream
 from finn.dataflow.traversal import LevelEnd, Repetition
 from finn.kernels import composer
 from finn.kernels.artifacts.abi import Clocking, Direction, Endpoint
-from finn.kernels.laws import AXIS_CLOCKING, NATIVE, Axis, AxisSpelling, Interval, Native, Standing
+from finn.kernels.laws import (
+    AXIS_CLOCKING,
+    NATIVE,
+    Axis,
+    AxisSpelling,
+    Interval,
+    Native,
+    Standing,
+    StatedRate,
+)
 from finn.kernels.matmul import KnownWeights
 from finn.kernels.movers import iodma_hls
 from finn.kernels.port import LoopEnds, PhysicalPort, stream_pins
@@ -134,6 +143,9 @@ VERDICTS: dict[str, Verdict] = {
     "Integer": Verdict("always", "a frozen admission policy of ints, bools and None"),
     "LoopEnds": Verdict("always", "a value class of level-end integer records"),
     "Interval": Verdict("always", "a value class of an int, an optional enum member and a string"),
+    "StatedRate": Verdict(
+        "always", "a value class of strings, an int tuple, an int and an enum member"
+    ),
     "bool": Verdict("always", "a plain type"),
     "int": Verdict("always", "a plain type"),
     "str": Verdict("always", "a plain type"),
@@ -265,6 +277,12 @@ def made() -> dict[str, tuple[object, ...]]:
         "Clocking": (Clocking(), Clocking(clock="clk", reset="rst", active_low=False), Clocking()),
         "Integer": (Integer(), Integer(min_bits=2, signed=True), Integer()),
         "Interval": (Interval(), Interval(1, Standing.ASSUMED, "a pragma"), Interval()),
+        # The Chain's kernels state no rate (None: derived).
+        "StatedRate": (
+            StatedRate("x", (0, 2), 4, Standing.MEASURED, "a trace", "memory words"),
+            StatedRate("x", (0, 1), 4, Standing.ASSUMED, "a trace", "memory words"),
+            StatedRate("x", (0, 2), 4, Standing.MEASURED, "a trace", "memory words"),
+        ),
         "LoopEnds": (
             LoopEnds((LevelEnd(1), LevelEnd(8))),
             LoopEnds((LevelEnd(4),)),

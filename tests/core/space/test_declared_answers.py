@@ -3,16 +3,19 @@
 
 """A rule's declared answer: the non-values its return annotation admits.
 
-A derived value or a constraint answers its value type, and each of ``Rejected``,
-``Inapplicable`` and ``Unresolved`` its annotation names (``T | Rejected``; a plain ``T``
-names none). An override admitting ``Inapplicable`` or ``Unresolved`` where the answer it
-overrides does not is refused when its class is made (``override-widens-answer``);
-``Rejected`` is not compared. An answer is read through its type aliases, unions and marker
+A derived value or a constraint answers its value type, ``Rejected`` and ``Unresolved``
+(neither makes a design point valid), and ``Inapplicable`` where its annotation names it
+(``T | Inapplicable``): one it does not name, answered, is the rule's ``EvaluationError``
+(``answer-undeclared``), since a constraint reading it counts as true. An override admitting
+``Inapplicable`` where the answer it overrides does not is refused when its class is made
+(``override-widens-answer``). An answer is read through its type aliases, unions and marker
 subclasses, each in the class that declares it.
 """
 
 from __future__ import annotations
 
+import gc
+import weakref
 from typing import TypeAlias, TypeAliasType, TypeVar
 
 import pytest
@@ -20,6 +23,7 @@ from support.refusals import refused
 
 from finn.core.space import (
     Available,
+    EvaluationError,
     Inapplicable,
     Param,
     QueryResult,
@@ -29,6 +33,7 @@ from finn.core.space import (
     constraint,
     derived,
     design_space,
+    inspection,
     reject,
 )
 from finn.core.space._signatures import declared_non_values
@@ -73,9 +78,7 @@ def test_an_override_within_its_base_s_answer_is_made() -> None:
     assert design_space(Narrower(n=3)).refusing == 3
 
 
-def test_a_derived_override_admitting_inapplicable_or_unresolved_its_base_does_not_is_refused() -> (
-    None
-):
+def test_a_derived_override_admitting_inapplicable_its_base_does_not_is_refused() -> None:
     """Refused by its class statement, before anything collects it."""
     with refused(
         "override-widens-answer",
@@ -89,28 +92,24 @@ def test_a_derived_override_admitting_inapplicable_or_unresolved_its_base_does_n
                 return Inapplicable()
 
     assert str(dict(caught.finding.details)["declaration"]).endswith(".Absent.refusing")
-    with refused(
-        "override-widens-answer",
-        error=DefinitionError,
-        message=r"admits Unresolved, which the answer it overrides does not",
-    ):
-
-        class Waiting(Base):
-            @derived
-            def plain(self) -> int | Unresolved:
-                return self.n
 
 
-def test_an_override_admitting_a_refusal_its_base_does_not_is_made() -> None:
-    """The Kernel's ``schedule``: its base's is ``Schedule | Inapplicable``, each Kernel
-    stating one declares ``Schedule | Rejected``."""
+def test_an_override_admitting_a_refusal_or_unresolved_its_base_does_not_is_made() -> None:
+    """Every answer admits both. The Kernel's ``schedule``: its base's is
+    ``Schedule | Inapplicable``, each Kernel stating one declares ``Schedule | Rejected``."""
 
     class Refusing(Base):
         @derived
         def plain(self) -> int | Rejected:
             return reject("odd", "odd") if self.n % 2 else self.n
 
+    class Waiting(Base):
+        @derived
+        def plain(self) -> int | Unresolved:
+            return self.n
+
     assert isinstance(design_space(Refusing(n=3)).query(Refusing.plain), Rejected)
+    assert design_space(Waiting(n=3)).plain == 3
 
 
 def test_a_constraint_override_admitting_inapplicable_is_refused() -> None:
@@ -223,3 +222,80 @@ def test_an_answer_not_resolvable_when_its_class_is_made_is_compared_when_collec
     monkeypatch.setitem(globals(), "Later", int | Inapplicable)
     with refused("override-widens-answer", error=DefinitionError):
         collect_space(Forward)
+
+
+class Undeclared(Space):
+    """Rules answering non-values their annotations do not name."""
+
+    n: int = Param()
+
+    @derived
+    def value(self) -> int | Rejected:
+        return Inapplicable() if self.n < 0 else self.n  # type: ignore[return-value]
+
+    @derived
+    def plain(self) -> int:
+        return reject("odd", "odd") if self.n % 2 else self.n  # type: ignore[return-value]
+
+    @constraint
+    def positive(self) -> bool | Rejected:
+        return self.value > 0
+
+
+def test_a_rule_answering_an_inapplicable_its_annotation_does_not_admit_fails() -> None:
+    """The ``value`` read by a constraint: without the check, the constraint reading it
+    would be inapplicable, counted true, and the point valid."""
+    assert inspection.validity(design_space(Undeclared(n=2))).status == "valid"
+    with pytest.raises(EvaluationError, match=r"answered Inapplicable.*\(answer-undeclared\)"):
+        inspection.validity(design_space(Undeclared(n=-2)))
+    with pytest.raises(EvaluationError, match=r"^value \(derived\): answered"):
+        design_space(Undeclared(n=-2)).query(Undeclared.value)
+
+
+def test_a_rule_answering_a_refusal_or_unresolved_undeclared_is_admitted() -> None:
+    """Neither makes a point valid: a refusal its annotation does not name refuses the
+    point as any refusal does."""
+    rejected = design_space(Undeclared(n=3)).query(Undeclared.plain)
+    assert isinstance(rejected, Rejected)
+    findings = rejected.findings
+
+    class Waits(Space):
+        @derived
+        def later(self) -> int:
+            return Unresolved(findings)  # type: ignore[return-value]
+
+    assert isinstance(design_space(Waits()).query(Waits.later), Unresolved)
+
+
+def test_a_constraint_answering_inapplicable_undeclared_fails() -> None:
+    class Holds(Space):
+        @constraint
+        def holds(self) -> bool | Rejected:
+            return Inapplicable()  # type: ignore[return-value]
+
+    class Declared(Space):
+        @constraint
+        def holds(self) -> bool | Inapplicable:
+            return Inapplicable()
+
+    with pytest.raises(EvaluationError, match="answered Inapplicable"):
+        inspection.validity(design_space(Holds()))
+    assert inspection.validity(design_space(Declared())).status == "valid"
+
+
+def test_a_collected_class_s_declared_answers_do_not_keep_it_alive() -> None:
+    """Each answer is kept on its declaration, which lives with its class: a class no one
+    holds is reclaimed once collected."""
+
+    def make() -> weakref.ref[type[Space]]:
+        class Transient(Base):
+            @derived
+            def refusing(self) -> int:
+                return self.n
+
+        collect_space(Transient)
+        return weakref.ref(Transient)
+
+    held = make()
+    gc.collect()
+    assert held() is None
