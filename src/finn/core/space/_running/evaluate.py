@@ -126,6 +126,7 @@ from ..semantics import recognize
 from . import depth, purity
 from .answers import (
     Called,
+    _applied,
     _blocked,
     _empty_domain,
     _finished,
@@ -864,7 +865,7 @@ class Evaluation:
             (),
             arguments,
         )
-        return _finished(node, cast(_Returned, outcome).value)
+        return _applied(node, _finished(node, cast(_Returned, outcome).value))
 
     def call_method(self, node: Address, reader: Address) -> tuple[Called, Trace]:
         call = Call(node.owner, node.kind)
@@ -879,9 +880,12 @@ class Evaluation:
         if isinstance(outcome, _Halted):
             blocked = cast(NonValue, _blocked(outcome.results))
             called = Called(blocked, _guard_assessment(node, blocked), existence=existence)
+            called = _applied(node, called, tuple(call.blocked))
         else:
             done = _finished(node, outcome.value)
-            called = Called(done.result, done.assessment, done.own_refusal, existence)
+            called = _applied(
+                node, Called(done.result, done.assessment, done.own_refusal, existence)
+            )
         return called, tuple(receiver.trace)
 
     # -- domains (each read by the choice it belongs to)
@@ -1334,7 +1338,13 @@ def _callback(ev: Evaluation, node: Address, trace: _Tr, reader: Address) -> Ans
     answers = [ev.read(trace, argument.node, reader).result for argument in node.arguments]
     blocked = _blocked([answer for answer in answers if not isinstance(answer, Available)])
     if blocked is not None:
-        return Ans(blocked, tuple(trace), _guard_assessment(node, blocked))
+        absent = [
+            argument.node
+            for argument, answer in zip(node.arguments, answers)
+            if isinstance(answer, Inapplicable)
+        ]
+        called = _applied(node, Called(blocked, _guard_assessment(node, blocked)), absent)
+        return Ans(called.result, tuple(trace), called.assessment, called.own_refusal)
     called = ev.authored(node.kind, lambda: ev.call_explicit(node, answers))
     return Ans(called.result, tuple(trace), called.assessment, called.own_refusal)
 

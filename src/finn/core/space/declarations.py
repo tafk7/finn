@@ -905,28 +905,32 @@ class _MemberOfNode:
 class Constraint(_MemberOfNode, Declaration):
     """A rule of its Space: true, false (refused, with its findings) or unknown. Every
     constraint of a present Space counts toward the Space's validity
-    (``inspection.validity``); a constraint that returns ``Inapplicable()`` counts as
-    true. A constraint reads values (formals, choices, derived values, a child's
-    derived value), never a view of its own Space or of an ancestor: that view's
-    answer reads this constraint, a dependency cycle."""
+    (``inspection.validity``); a constraint that answers ``Inapplicable`` counts as true,
+    but one declared to apply wherever it is present (``applies``, the code it refuses
+    with): it is refused there instead. A constraint reads values (formals, choices,
+    derived values, a child's derived value), never a view of its own Space or of an
+    ancestor: that view's answer reads this constraint, a dependency cycle."""
 
     def __init__(
         self,
         function: Callable[..., bool | QueryResult[bool]],
         *,
         aliases: Mapping[str, object] | None = None,
+        applies: str | None = None,
     ) -> None:
         self.function = function
         self.aliases = MappingProxyType(dict(aliases or {}))
         self.semantics = cast("ValueSemantics[bool]", BOOL)
+        self.applies = applies
 
 
 class _ConstraintDecorator:
-    def __init__(self, aliases: Mapping[str, object]) -> None:
+    def __init__(self, aliases: Mapping[str, object], applies: str | None) -> None:
         self.aliases = aliases
+        self.applies = applies
 
     def __call__(self, function: Callable[..., bool | QueryResult[bool]]) -> Constraint:
-        return Constraint(function, aliases=self.aliases)
+        return Constraint(function, aliases=self.aliases, applies=self.applies)
 
 
 @overload
@@ -934,18 +938,33 @@ def constraint(function: Callable[..., bool | QueryResult[bool]], /) -> Constrai
 
 
 @overload
-def constraint(**aliases: object) -> _ConstraintDecorator: ...
+def constraint(*, applies: str | None = None, **aliases: object) -> _ConstraintDecorator: ...
 
 
 def constraint(
     function: Callable[..., bool | QueryResult[bool]] | None = None,
     /,
+    *,
+    applies: str | None = None,
     **aliases: object,
 ) -> Constraint | _ConstraintDecorator:
+    """A constraint: ``@constraint`` on a method, or ``@constraint(**aliases)``.
+    ``applies=CODE`` declares that it applies wherever it is present: where it answers
+    ``Inapplicable`` (it read a value that does not apply, or returned one its annotation
+    admits) it is refused, by a finding of code ``CODE`` naming what it read, where any
+    other constraint would count as true. Its own absence (its Space absent) is
+    unchanged."""
     _refuse_computation_when("constraint", aliases)
+    if applies is not None and (not isinstance(applies, str) or not applies):
+        raise DefinitionError.broken(
+            "constraint-applies",
+            _OWNER,
+            f"constraint{at(source_origin())}: applies= names the code of its refusal, a "
+            f"nonempty str, not {applies!r}",
+        )
     if function is not None:
-        return Constraint(function, aliases=aliases)
-    return _ConstraintDecorator(aliases)
+        return Constraint(function, aliases=aliases, applies=applies)
+    return _ConstraintDecorator(aliases, applies)
 
 
 class View(Declaration, Generic[T]):

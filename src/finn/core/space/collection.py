@@ -286,7 +286,8 @@ def _check_answer_within(
     """An override of a rule admits no ``Inapplicable`` the answer it overrides does not
     (``override-widens-answer``): a reader of that answer relies on it, as the Kernel's
     class checks rely on a ``schedule`` declared never inapplicable, and a constraint
-    reading an inapplicable value counts as true. ``Rejected`` and ``Unresolved`` are
+    reading an inapplicable value counts as true (but one declared to apply wherever it is
+    present, ``constraint(applies=...)``). ``Rejected`` and ``Unresolved`` are
     admitted by every answer (``_running.answers._finish``), so neither widens one. Each
     answer is its own declaration's, read in the class that declares it
     (``declared_answer``)."""
@@ -445,7 +446,11 @@ def collect_space(space_type: type[_Namespace]) -> EffectiveSpace:
             )
             if answer is None:
                 answer = declared_non_values(hint_cache[id(function)].get("return"))
-            functions[name] = replace(bound, admits_inapplicable=Inapplicable in answer)
+            functions[name] = replace(
+                bound,
+                admits_inapplicable=Inapplicable in answer,
+                applies=declaration.applies if isinstance(declaration, Constraint) else None,
+            )
     for declaration in members.values():
         if isinstance(declaration, View):
             inferred = source_semantics(declaration, preliminary)

@@ -141,6 +141,7 @@ class _Lowering:
             "function": function.function,
             "call_style": function.call_style,
             "admits_inapplicable": function.admits_inapplicable,
+            "applies": function.applies,
             "arguments": self.arguments(node.scope, function, owner=node.owner),
         }
 
