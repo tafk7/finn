@@ -439,12 +439,12 @@ def collection(linked: Linked) -> dict[Path, Path]:
     return found
 
 
-def _removed(directory: Path) -> None:
-    """Remove the reports the last link in the output ``directory`` collected, by its record
-    (``LINKED``, read whole and checked first: ``linked_record``), then the record: an
-    earlier link's reports, none of FINN's or another's. Its image and the files beside it
-    are in ``BITFILE_DIR``, which a build replaces whole."""
-    record = linked_record(directory, "bitfile")
+def _removed(directory: Path, record: dict[str, Any] | None) -> None:
+    """Remove the reports the last link in the output ``directory`` collected, by its
+    ``record`` (``LINKED``, read and checked before the build ran any tool:
+    ``linked_record``, not timed), then the record: an earlier link's reports, none of
+    FINN's or another's. Its image and the files beside it are in ``BITFILE_DIR``, which a
+    build replaces whole."""
     if record is None:
         return
     for key in record["reports"]:
@@ -472,8 +472,9 @@ class BuildBitfile(Transformation):
     module docstring), described for the build's ``runtime`` (the row's first where
     ``None``), collected into the output ``directory``: ``BITFILE_DIR`` is the build's own,
     replaced whole, with whatever else it held; under ``REPORT_DIR`` only the reports the
-    last link collected are removed (``LINKED``). ``toolchain`` runs every
-    tool, by default the machine's (``host_toolchain``), prepared once, when the
+    last link collected are removed (``LINKED``, its paths checked before any tool runs;
+    its timing not read, so building again replaces an earlier one). ``toolchain`` runs
+    every tool, by default the machine's (``host_toolchain``), prepared once, when the
     transformation is made; ``hw_debug`` is the linker's ``debug`` option, recorded with
     the bitfile (``bitfile_options``); ``objective_fps`` is the throughput the partition
     was folded for, if any. ``bitfile`` and ``clock`` hold the bitfile's path and the
@@ -502,6 +503,7 @@ class BuildBitfile(Transformation):
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
         row = built_row(model, "bitfile")
+        earlier = linked_record(self.directory, "bitfile", timed=False)
         linker = declared_linker(row, self.hw_debug)
         node, body, _ = partition_body(model)
         bottleneck = shell_bottleneck(body, node.name)
@@ -515,7 +517,7 @@ class BuildBitfile(Transformation):
         output = self.directory
         found = collection(linked)
         image, *beside = [target for target in found if target.parent == BITFILE_DIR]
-        _removed(output)
+        _removed(output, earlier)
         shutil.rmtree(output / BITFILE_DIR, ignore_errors=True)
         (output / REPORT_DIR).mkdir(parents=True, exist_ok=True)
         for target, source in found.items():
@@ -664,7 +666,9 @@ def _collected_artifact(entry: object) -> bool:
     )
 
 
-def linked_record(directory: Path, output: str, owner: str | None = None) -> dict[str, Any] | None:
+def linked_record(
+    directory: Path, output: str, owner: str | None = None, timed: bool = True
+) -> dict[str, Any] | None:
     """What the bitfile's build in the output ``directory`` collected (``LINKED``): the
     linker's name, the image, the files beside it and the reports, by their paths there,
     and the routed timing the linker admitted (``timing_record``, or None); None where it
@@ -672,7 +676,10 @@ def linked_record(directory: Path, output: str, owner: str | None = None) -> dic
     ``output`` (by ``owner``, as ``ShellRefused`` has it) before anything reads or removes
     what it names (``linked-invalid``): the image and each file beside it
     ``bitfile/finn-accel<suffix>``, each report a key ``report_key`` takes at
-    ``report/<key>``, and the timing one a linker admits (``recorded_timing``)."""
+    ``report/<key>``, and the timing one a linker admits (``recorded_timing``). Not
+    ``timed``, the timing is not read: what a build removes before it links again, so an
+    earlier build's record (one before the timing was recorded, or one whose timing no
+    linker admits) is replaced by building again, while what reads the build refuses it."""
     record = Path(directory) / LINKED
     if not record.is_file():
         return None
@@ -690,7 +697,7 @@ def linked_record(directory: Path, output: str, owner: str | None = None) -> dic
                 for key, path in reports.items()
             )
         )
-        if valid:
+        if valid and timed:
             recorded_timing(found["timing"], reports)
     except (ValueError, KeyError, TypeError, ShellRefused):
         valid = False

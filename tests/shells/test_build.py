@@ -963,64 +963,10 @@ def _timing(**checks: tuple[float, int]) -> dict[str, Any]:
     return record
 
 
-@pytest.mark.parametrize(
-    "field, entry",
-    [
-        ("beside", "../victim.txt"),
-        ("beside", "VICTIM"),
-        ("beside", "bitfile/../../victim.txt"),
-        ("beside", "bitfile/notes.txt"),
-        ("image", "bitfile/finn-accel.tar.gz"),
-        ("reports", {"../victim.txt": "report/../victim.txt"}),
-        ("reports", {"old.rpt": "victim.txt"}),
-        ("reports", {"integration.json": "report/integration.json"}),
-        ("timing", _timing(setup=(-0.25, 3))),
-        ("timing", _timing(setup=(-0.0, 1))),
-        ("timing", _timing(hold=(-0.05, 1))),
-        ("timing", _timing(pulse_width=(-0.05, 1))),
-        ("timing", _timing(hold=(0.014, 1))),
-        ("timing", {**_timing(), "report": "report/other.rpt"}),
-        ("timing", {key: value for key, value in _timing().items() if key != "pulse_width"}),
-        ("timing", {**_timing(), "period_ns": float("inf")}),
-        ("timing", _timing(setup=(float("inf"), 0))),
-        ("timing", {**_timing(), "period_ns": 0}),
-    ],
-    ids=[
-        "dotdot",
-        "absolute",
-        "dotdot-inside",
-        "not-the-image",
-        "two-suffixes",
-        "report-key",
-        "report-path",
-        "finn-own",
-        "timing-unmet",
-        "timing-rounded",
-        "timing-hold",
-        "timing-pulse-width",
-        "timing-failing-count",
-        "timing-report",
-        "timing-fields",
-        "timing-infinity",
-        "timing-slack-infinity",
-        "timing-period-zero",
-    ],
-)
-def test_a_record_a_build_cannot_have_written_is_refused_before_anything_is_removed(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, field: str, entry: object
-) -> None:
-    """The record of what the last link collected names each file it removes: one naming a
-    file a link cannot have collected (outside the output directory, outside bitfile/ or
-    report/, not ``finn-accel<suffix>``, or one of FINN's own reports), or a timing no
-    linker admits (a negative slack, a report it did not collect, a field missing), is
-    refused (``linked-invalid``) before any file is removed or copied, the record kept; so
-    is a driver made from it, and a resources report read by it."""
-    recorded_tools(monkeypatch, tmp_path)
-    linked = made(tmp_path / "linked")
-    monkeypatch.setattr(shell_build, "declared_linker", lambda row, debug: GivenLinker(linked))
-    output = tmp_path / "output"
-    victim = tmp_path / "victim.txt"
-    victim.write_text("not the build's")
+def _earlier(output: Path, field: str, entry: object, victim: Path) -> dict[str, object]:
+    """An earlier build's output in ``output``: its bitfile, a report ``old.rpt``, a
+    runtime file and its record (``LINKED``), ``field`` given ``entry`` (``victim``'s path
+    for ``"VICTIM"``; the field removed for ``"ABSENT"``); the record written."""
     (output / "bitfile").mkdir(parents=True)
     (output / BITFILE).write_text("EARLIER")
     (output / "report").mkdir()
@@ -1034,13 +980,15 @@ def test_a_record_a_build_cannot_have_written_is_refused_before_anything_is_remo
         "timing": None,
     }
     record[field] = [str(victim) if entry == "VICTIM" else entry] if field == "beside" else entry
+    if entry == "ABSENT":
+        del record[field]
     (output / LINKED).write_text(json.dumps(record))
-    parent = zynq_parent(tmp_path)
-    with refused("linked-invalid", error=ShellRefused, owner="BuildBitfile", output="bitfile"):
-        parent.transform(BuildBitfile(output, None, toolchain=cast(Toolchain, FakeVivado())))
-    assert victim.read_text() == "not the build's"
-    assert (output / BITFILE).read_text() == (output / "report" / "old.rpt").read_text()
-    assert json.loads((output / LINKED).read_text()) == record
+    return record
+
+
+def _refused_by_its_readers(parent: ModelWrapper, output: Path) -> None:
+    """A driver made from the record in ``output`` and a resources report read by it are
+    refused (``linked-invalid``)."""
     with refused("linked-invalid", error=ShellRefused, output="driver"):
         linked_as_built(output, output / BITFILE)
     parent.set(OUTPUT_BITFILE, str(output / BITFILE))
@@ -1048,6 +996,127 @@ def test_a_record_a_build_cannot_have_written_is_refused_before_anything_is_remo
         "linked-invalid", error=ShellRefused, owner="step_resources_report", output="resources"
     ):
         built_reports(parent, toolchain=cast(Toolchain, FakeVivado()))
+
+
+@pytest.mark.parametrize(
+    "field, entry",
+    [
+        ("beside", "../victim.txt"),
+        ("beside", "VICTIM"),
+        ("beside", "bitfile/../../victim.txt"),
+        ("beside", "bitfile/notes.txt"),
+        ("image", "bitfile/finn-accel.tar.gz"),
+        ("reports", {"../victim.txt": "report/../victim.txt"}),
+        ("reports", {"old.rpt": "victim.txt"}),
+        ("reports", {"integration.json": "report/integration.json"}),
+        ("reports", "ABSENT"),
+    ],
+    ids=[
+        "dotdot",
+        "absolute",
+        "dotdot-inside",
+        "not-the-image",
+        "two-suffixes",
+        "report-key",
+        "report-path",
+        "finn-own",
+        "reports-absent",
+    ],
+)
+def test_a_record_a_build_cannot_have_written_is_refused_before_any_tool_runs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, field: str, entry: object
+) -> None:
+    """The record of what the last link collected names each file it removes: one naming a
+    file a link cannot have collected (outside the output directory, outside bitfile/ or
+    report/, not ``finn-accel<suffix>``, or one of FINN's own reports) is refused
+    (``linked-invalid``) before any tool runs or any file is removed or copied, the record
+    kept; so is a driver made from it, and a resources report read by it."""
+    seen = recorded_tools(monkeypatch, tmp_path)
+    linked = made(tmp_path / "linked")
+    linking: list[Linked] = []
+
+    class SeenLinker(GivenLinker):
+        def link(
+            self,
+            integration: Integration,
+            board: Mapping[str, str],
+            directory: Path,
+            tools: Toolchain,
+        ) -> Linked:
+            linking.append(self.linked)
+            return super().link(integration, board, directory, tools)
+
+    monkeypatch.setattr(shell_build, "declared_linker", lambda row, debug: SeenLinker(linked))
+    output = tmp_path / "output"
+    victim = tmp_path / "victim.txt"
+    victim.write_text("not the build's")
+    record = _earlier(output, field, entry, victim)
+    parent = zynq_parent(tmp_path)
+    with refused("linked-invalid", error=ShellRefused, owner="BuildBitfile", output="bitfile"):
+        parent.transform(BuildBitfile(output, None, toolchain=cast(Toolchain, FakeVivado())))
+    assert seen == [] and linking == []
+    assert victim.read_text() == "not the build's"
+    assert (output / BITFILE).read_text() == (output / "report" / "old.rpt").read_text()
+    assert json.loads((output / LINKED).read_text()) == record
+    _refused_by_its_readers(parent, output)
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "ABSENT",
+        _timing(setup=(-0.25, 3)),
+        _timing(setup=(-0.0, 1)),
+        _timing(hold=(-0.05, 1)),
+        _timing(pulse_width=(-0.05, 1)),
+        _timing(hold=(0.014, 1)),
+        {**_timing(), "report": "report/other.rpt"},
+        {key: value for key, value in _timing().items() if key != "pulse_width"},
+        {**_timing(), "period_ns": float("inf")},
+        _timing(setup=(float("inf"), 0)),
+        {**_timing(), "period_ns": 0},
+    ],
+    ids=[
+        "before-timing",
+        "timing-unmet",
+        "timing-rounded",
+        "timing-hold",
+        "timing-pulse-width",
+        "timing-failing-count",
+        "timing-report",
+        "timing-fields",
+        "timing-infinity",
+        "timing-slack-infinity",
+        "timing-period-zero",
+    ],
+)
+def test_a_record_whose_timing_no_linker_admits_is_refused_until_built_again(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, entry: object
+) -> None:
+    """A record of what the last link collected that states no timing (one written before
+    the timing was recorded) or a timing no linker admits (a slack missed or rounded to
+    nothing, an endpoint failing, a report it did not collect, a field missing, a number
+    not finite or a period not positive) is refused (``linked-invalid``) by a driver made
+    from it and a resources report read by it; building the bitfile again removes the
+    reports it names and replaces it."""
+    recorded_tools(monkeypatch, tmp_path)
+    routed = tmp_path / "linked" / "post_route_timing.rpt"
+    linked = replace(
+        made(tmp_path / "linked"),
+        clocks_mhz={MAIN: 187.512},
+        reports={routed.name: routed},
+        timing=TFC_TIMING,
+    )
+    routed.write_text("ROUTED")
+    monkeypatch.setattr(shell_build, "declared_linker", lambda row, debug: GivenLinker(linked))
+    output = tmp_path / "output"
+    _earlier(output, "timing", entry, tmp_path / "victim.txt")
+    parent = zynq_parent(tmp_path)
+    _refused_by_its_readers(parent, output)
+    parent.transform(BuildBitfile(output, None, toolchain=cast(Toolchain, FakeVivado())))
+    assert not (output / "report" / "old.rpt").exists()
+    assert json.loads((output / LINKED).read_text())["timing"] == TFC_TIMING_RECORD
+    assert linked_as_built(output, output / BITFILE).timing == TFC_TIMING
 
 
 #: A Vitis HLS that reports 2024.2 and, given a request, makes the solution's exported
