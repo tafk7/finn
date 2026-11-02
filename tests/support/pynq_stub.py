@@ -10,8 +10,9 @@ loaded, its registers and its live buffers. A register is reached only on a devi
 overlay loaded and within its MMIO's window, and every register reads idle and done; a
 buffer is zeros at the next address, and a freed one can be neither synced nor freed again.
 Each breach raises, so the driver's run fails. ``stub`` also writes a ``sitecustomize``
-that makes onnx, qonnx and finn unimportable when ``$PYNQ_STUB_BLOCK`` is set, so a driver
-run there runs as on a board without them."""
+that makes onnx, ONNX Runtime, finn and qonnx but its type module unimportable when
+``$PYNQ_STUB_BLOCK`` is set, so a driver run there runs as on a board that runs the
+accelerator alone, qonnx installed without its dependencies."""
 
 from __future__ import annotations
 
@@ -130,17 +131,19 @@ Clocks = _Clocks()
 ''',
     "pynq/pl_server/__init__.py": "",
     "pynq/pl_server/device.py": "from pynq import Device\n",
-    "sitecustomize.py": '''"""onnx, qonnx and finn unimportable where $PYNQ_STUB_BLOCK is set."""
+    "sitecustomize.py": '''"""onnx, ONNX Runtime, finn and qonnx but its type module unimportable
+where $PYNQ_STUB_BLOCK is set."""
 
 import os
 import sys
 
-BLOCKED = ("onnx", "qonnx", "finn")
+BLOCKED = ("onnx", "onnxruntime", "qonnx", "finn")
+ALLOWED = ("qonnx", "qonnx.core", "qonnx.core.datatype")
 
 
 class Blocked:
     def find_spec(self, name, path=None, target=None):
-        if name.split(".")[0] in BLOCKED:
+        if name.split(".")[0] in BLOCKED and name not in ALLOWED:
             raise ImportError(f"{name} is not on the board", name=name)
         return None
 

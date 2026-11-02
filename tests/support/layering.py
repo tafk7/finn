@@ -376,13 +376,14 @@ LAYERS: tuple[Layer, ...] = (
         "tests/kernel_ops",
     ),
     # The shells' shared driver: a build's cores run on a device by its runtime file. It
-    # runs on the board, beside FINN or without it: numpy only, and qonnx (onnx with it)
-    # imported where it runs the parent graph's host nodes, dataset_loading where it validates.
+    # runs on the board, beside FINN or without it: numpy and qonnx's type module, and the
+    # rest of qonnx and onnx imported where it runs the parent graph's host nodes,
+    # dataset_loading where it validates.
     Layer(
         "shells.runtime",
         ("finn.shells.runtime",),
         (),
-        ("numpy", "qonnx", "dataset_loading"),
+        ("numpy", "qonnx", "onnx", "dataset_loading"),
         "tests/kernel_ops",
     ),
     # The shells' builds: what builds the partition into a shell (the pynq shell's block

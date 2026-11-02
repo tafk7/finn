@@ -297,8 +297,8 @@ class Driver:
 
     def collect(self, name: str, frames: int) -> dict[str, np.ndarray[Any, Any]]:
         """The outputs of the core ``name`` after ``frames`` frames were moved
-        (``launch``): each output mover's buffer synced back and unpacked, by tensor, as
-        float32."""
+        (``launch``): each output mover's buffer synced back and unpacked, by tensor, each in
+        its element's container (``packing.Element.container``)."""
         core = self.description.core(name)
         self._quiet(core)
         buffers = self._held(core, frames)
@@ -317,7 +317,7 @@ class Driver:
         self, name: str, inputs: Mapping[str, np.ndarray[Any, Any]]
     ) -> dict[str, np.ndarray[Any, Any]]:
         """Run the core ``name`` on ``inputs``, by its edge's tensors (``stage``,
-        ``launch``, ``collect``): its outputs, by tensor, as float32."""
+        ``launch``, ``collect``): its outputs, by tensor, in their containers."""
         frames = self.stage(name, inputs)
         self.launch(name, frames)
         return self.collect(name, frames)
@@ -406,8 +406,11 @@ class Driver:
         """Run the parent graph at ``parent`` on ``inputs``, by its inputs' names: each
         ``DataflowCore`` node through ``run_core``, by its name, every other node by ONNX
         execution (onnx and qonnx; their absence refused, ``host-execution-unavailable``).
-        Its outputs, by name."""
+        Each core's output is given to the graph in the type the graph declares for its
+        tensor (float32, for FINN's), a value that type would change refused
+        (``value-inexact``). Its outputs, by name."""
         try:
+            from onnx.helper import tensor_dtype_to_np_dtype  # noqa: PLC0415
             from qonnx.core.modelwrapper import ModelWrapper  # noqa: PLC0415
             from qonnx.core.onnx_exec import execute_node  # noqa: PLC0415
         except ImportError as error:
@@ -428,8 +431,34 @@ class Driver:
             given = {edge.tensor: context[name] for edge, name in zip(core.inputs, node.input)}
             found = self.run_core(node.name, given)
             for edge, name in zip(core.outputs, node.output):
-                context[name] = found[edge.tensor]
+                declared = model.get_tensor_valueinfo(name)
+                if declared is None:
+                    context[name] = found[edge.tensor]
+                    continue
+                held = tensor_dtype_to_np_dtype(declared.type.tensor_type.elem_type)
+                context[name] = _declared(name, found[edge.tensor], held)
         return {each.name: context[each.name] for each in model.graph.output}
+
+
+def _declared(
+    tensor: str, values: np.ndarray[Any, Any], held: np.dtype[Any]
+) -> np.ndarray[Any, Any]:
+    """``values`` of the graph's ``tensor`` in ``held``, the type the graph declares for it;
+    one the cast would change is refused (``value-inexact``)."""
+    if values.dtype == held:
+        return values
+    cast = values.astype(held)
+    with np.errstate(invalid="ignore", over="ignore"):
+        back = cast.astype(values.dtype)
+    kept = (cast == values) & (back == values) | (np.isnan(cast) & np.isnan(values))
+    if not np.all(kept):
+        changed = values.reshape(-1)[~kept.reshape(-1)][:4]
+        raise Refused(
+            "value-inexact",
+            f"{tensor}: the parent graph holds it as {held}, which changes {changed.tolist()}: "
+            f"exact in {values.dtype}, as its core gives it (run_core)",
+        )
+    return cast
 
 
 __all__ = ["RETAINED", "Driver"]

@@ -3,7 +3,10 @@
 
 """The host driver every runtime shares: plain Python, shipped as it is beside a build's
 device image and its runtime file (``finn.shells.integration.runtime_file``,
-``integration.json``), importing the standard library and numpy alone.
+``integration.json``), importing the standard library, numpy and qonnx's type module
+(``qonnx.core.datatype``, which imports numpy and the standard library alone: a board that
+runs the accelerator alone installs qonnx at FINN's pin with ``pip install --no-deps``;
+Python 3.10 or later).
 
 - ``description``: the runtime file, read (``read``), a schema it does not list refused;
 - ``packing``: an edge's values packed into the bytes its mover moves, and back;

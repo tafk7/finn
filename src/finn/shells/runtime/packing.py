@@ -9,8 +9,10 @@ movers read and write.
 
 An element is a FINN data type by its name (``Element``): ``BINARY``, ``BIPOLAR``,
 ``TERNARY``, ``INT<n>`` and ``UINT<n>`` (to 64 bits), ``FIXED<w,i>`` and the IEEE floats
-``FLOAT16``, ``FLOAT32`` and ``FLOAT64``. Any other is refused (``element-unsupported``), as
-is a value the element cannot hold (``value-outside``).
+``FLOAT16`` and ``FLOAT32``. Any other is refused (``element-unsupported``), as is a value
+the element cannot hold (``value-outside``). Its values are unpacked into the numpy type
+qonnx holds that data type in (``Element.container``, from qonnx's type module), exactly
+where it can.
 """
 
 from __future__ import annotations
@@ -20,12 +22,13 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+from qonnx.core.datatype import DataType
 
 from .errors import Refused
 
 _INTEGER = re.compile(r"(U?)INT([1-9][0-9]*)")
 _FIXED = re.compile(r"FIXED<([1-9][0-9]*),([1-9][0-9]*)>")
-_FLOATS = {"FLOAT16": 16, "FLOAT32": 32, "FLOAT64": 64}
+_FLOATS = {"FLOAT16": 16, "FLOAT32": 32}
 
 
 @dataclass(frozen=True)
@@ -54,14 +57,23 @@ class Element:
         if integer is not None and int(integer.group(2)) <= 64:
             return Element(name, int(integer.group(2)), not integer.group(1))
         fixed = _FIXED.fullmatch(name)
-        if fixed is not None and int(fixed.group(2)) <= int(fixed.group(1)) <= 64:
+        if fixed is not None and int(fixed.group(2)) < int(fixed.group(1)) <= 64:
             width, whole = int(fixed.group(1)), int(fixed.group(2))
             return Element(name, width, True, fraction=width - whole)
         raise Refused(
             "element-unsupported",
             f"{name}: no element the driver packs (BINARY, BIPOLAR, TERNARY, INT<n>, UINT<n>, "
-            "FIXED<w,i>, FLOAT16, FLOAT32, FLOAT64)",
+            "FIXED<w,i>, FLOAT16, FLOAT32)",
         )
+
+    @property
+    def container(self) -> np.dtype[Any]:
+        """The numpy type its values are given in: qonnx's for its data type
+        (``DataType.to_numpy_dt``). An IEEE float in its own; a fixed point in float32;
+        every other in the smallest integer type of its values' sign holding ``bits`` bits
+        (``BIPOLAR`` and ``TERNARY`` int8)."""
+        container: np.dtype[Any] = DataType[self.name].to_numpy_dt()
+        return container
 
     @property
     def _codes(self) -> tuple[int, int]:
@@ -134,22 +146,23 @@ class Element:
         return allowed, codes << np.uint64(self.fraction)
 
     def values(self, codes: np.ndarray[Any, np.dtype[np.uint64]]) -> np.ndarray[Any, Any]:
-        """The values of ``codes``, as float32 (as FINN's unpacking gives them); an
-        unsigned code read as unsigned at every width."""
+        """The values of ``codes``, in the element's ``container``: exact, but for a fixed
+        point float32 cannot hold; an unsigned code read as unsigned at every width."""
         codes = np.asarray(codes, dtype=np.uint64)
         if self.float:
-            width = f"<u{self.bits // 8}"
-            return codes.astype(width).view(f"<f{self.bits // 8}").astype(np.float32)
+            return codes.astype(f"<u{self.bits // 8}").view(self.container)
         if self.name == "BIPOLAR":
-            return (codes.astype(np.int64) * 2 - 1).astype(np.float32)
+            return (codes.astype(np.int64) * 2 - 1).astype(self.container)
         if not self.signed:
-            return codes.astype(np.float32)
+            return codes.astype(self.container)
         if self.bits == 64:
             signed = codes.view(np.int64)
         else:
             top = np.int64(1 << (self.bits - 1))
             signed = (codes.astype(np.int64) ^ top) - top
-        return (signed * 2.0**-self.fraction).astype(np.float32)
+        if self.fraction:
+            return (signed * 2.0**-self.fraction).astype(self.container)
+        return signed.astype(self.container)
 
 
 def beat_bytes(element: Element, lanes: int) -> int:
@@ -174,8 +187,8 @@ def pack(values: np.ndarray[Any, Any], element: Element) -> np.ndarray[Any, np.d
 def unpack(
     packed: np.ndarray[Any, np.dtype[np.uint8]], element: Element, lanes: int
 ) -> np.ndarray[Any, Any]:
-    """The values of ``packed``, ``pack``'s bytes, ``lanes`` a beat along its last axis, as
-    float32."""
+    """The values of ``packed``, ``pack``'s bytes, ``lanes`` a beat along its last axis, in
+    the element's container (``Element.values``)."""
     bits = np.unpackbits(packed, axis=-1, bitorder="little")[..., : lanes * element.bits]
     bits = bits.reshape(*packed.shape[:-1], lanes, element.bits).astype(np.uint64)
     shifts = np.arange(element.bits, dtype=np.uint64)

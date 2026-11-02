@@ -28,6 +28,7 @@ import numpy as np
 import pytest
 from qonnx.core.datatype import BaseDataType, DataType
 from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.core.onnx_exec import EXACT_INTEGERS
 from qonnx.util.basic import gen_finn_dt_tensor
 from support.devices import BASE, STEP, FakeDevice
 from support.packaging import bitfile_default
@@ -148,9 +149,16 @@ def test_tfc_s_core_runs_as_the_recorded_operations() -> None:
     assert np.array_equal(outputs[taken["tensor"]], expected.reshape(taken["shape"]))
 
 
-def test_the_parent_graph_runs_its_host_nodes_around_the_core(tfc_parent: Path) -> None:
+@pytest.mark.parametrize("exact", ["1", "0"], ids=["finn", "shipped"])
+def test_the_parent_graph_runs_its_host_nodes_around_the_core(
+    tfc_parent: Path, monkeypatch: pytest.MonkeyPatch, exact: str
+) -> None:
     """The parent graph: the Reshape before the core and the TopK after it by ONNX
-    execution, the core on the device by its name, as ``run_core`` runs it."""
+    execution, the core on the device by its name, as ``run_core`` runs it, its output
+    given to the TopK in the graph's float32, not its int8 container. So also where qonnx's
+    exact integers are off, as in the shipped driver, which imports no FINN (ONNX Runtime
+    refuses an int8 input the graph declares float)."""
+    monkeypatch.setenv(EXACT_INTEGERS, exact)
     found = recorded()
     (core,) = found["cores"]
     (taken,) = core["outputs"]
@@ -170,7 +178,44 @@ def test_the_parent_graph_runs_its_host_nodes_around_the_core(tfc_parent: Path) 
     assert device.calls == alone.calls
     (output,) = model.graph.output
     top = np.argsort(-run[taken["tensor"]], axis=-1, kind="stable")[..., :1]
+    assert run[taken["tensor"]].dtype == np.int8
     assert np.array_equal(outputs[output.name].reshape(-1), top.reshape(-1))
+
+
+def test_a_core_s_output_the_graph_s_type_would_change_is_refused(
+    tfc_parent: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A core's output past what the graph's float32 holds exactly (an integer past 2**24)
+    is refused before the host nodes run (``value-inexact``); one it holds goes on."""
+    found = recorded()
+    (core,) = found["cores"]
+    (taken,) = core["outputs"]
+    model = ModelWrapper(str(tfc_parent))
+    shape = model.get_tensor_shape(model.graph.input[0].name)
+    assert shape is not None
+    image = np.zeros(shape, np.float32)
+    driver = Driver(device_for(found), read(found))
+    width = taken["shape"][-1]
+    for value, exact in ((2**24, True), (2**24 + 1, False)):
+        given = np.full((1, width), value, np.uint32)
+        given[0, 1] = 3
+
+        def core_gives(
+            name: str, inputs: object, out: np.ndarray[Any, Any] = given
+        ) -> dict[str, np.ndarray[Any, Any]]:
+            return {taken["tensor"]: out}
+
+        monkeypatch.setattr(driver, "run_core", core_gives)
+        if exact:
+            outputs = driver.run_graph(tfc_parent, {model.graph.input[0].name: image})
+            assert next(iter(outputs.values())).reshape(-1).tolist() == [0]
+            continue
+        with pytest.raises(
+            Refused,
+            match=r"^value-inexact: MatMul_3_out0: the parent graph holds it as float32, which "
+            r"changes \[16777217, ",
+        ):
+            driver.run_graph(tfc_parent, {model.graph.input[0].name: image})
 
 
 def with_weights(found: dict[str, Any]) -> dict[str, Any]:
@@ -251,8 +296,9 @@ def test_what_a_driver_cannot_run_is_refused() -> None:
     busy = Driver(FakeDevice(), read(found))
     with pytest.raises(Refused, match="^mover-busy: out0"):
         busy.run_core(core["name"], {given["tensor"]: np.zeros(given["shape"])})
-    with pytest.raises(Refused, match="^element-unsupported: SCALEDINT<8>"):
-        Element.named("SCALEDINT<8>")
+    for unsupported in ("SCALEDINT<8>", "FLOAT64", "FIXED<8,8>"):
+        with pytest.raises(Refused, match=f"^element-unsupported: {re.escape(unsupported)}"):
+            Element.named(unsupported)
     with pytest.raises(Refused, match=r"^value-outside: UINT2 holds no \[4\]"):
         pack(np.array([[1, 4]]), Element.named("UINT2"))
 
@@ -300,7 +346,8 @@ def test_packing_is_finn_s_in_the_movers_lane_order_both_ways(name: str, lanes: 
     finn = finn_packed(values, element)
     assert np.array_equal(packed, finn), (name, lanes)
     back = unpack(np.ascontiguousarray(finn), Element.named(name), lanes)
-    assert np.array_equal(back, np.asarray(values, dtype=np.float32)), (name, lanes)
+    assert back.dtype == element.to_numpy_dt(), (name, lanes)
+    assert np.array_equal(back, values), (name, lanes)
     # FINN's unpacking of a fixed point of 8 or 16 bits in this order reads its bytes as
     # floats and fails; there the values themselves are the reference.
     if not (name.startswith("FIXED") and element.bitwidth() in (8, 16)):
@@ -313,6 +360,8 @@ def test_packing_is_finn_s_in_the_movers_lane_order_both_ways(name: str, lanes: 
     [
         ("UINT64", np.array([3 * 2**62], np.float32), [0xC000000000000000]),
         ("UINT64", np.array([2**64 - 1], np.uint64), [0xFFFFFFFFFFFFFFFF]),
+        ("UINT64", np.array([2**24 + 1], np.uint64), [2**24 + 1]),
+        ("INT32", np.array([2**24 + 1, -(2**31)], np.int64), [2**24 + 1, 1 << 31]),
         ("INT64", np.array([2**63 - 1, -(2**63)], np.int64), [0x7FFFFFFFFFFFFFFF, 1 << 63]),
         ("UINT63", np.array([2**63 - 1], np.uint64), [0x7FFFFFFFFFFFFFFF]),
         ("INT63", np.array([2**62 - 1, -(2**62)], np.int64), [0x3FFFFFFFFFFFFFFF, 1 << 62]),
@@ -325,14 +374,16 @@ def test_wide_integers_pack_exactly_and_unpack_by_their_sign(
 ) -> None:
     """A code of up to 64 bits is packed from integers or floats exactly, and an unsigned
     code unpacks as unsigned: the beat as the movers move it, lane 0 in its least
-    significant bits, and back, as float32."""
+    significant bits, and back, exactly, in qonnx's container for the type (an integer
+    past float32's 2**24 kept)."""
     element = Element.named(name)
     packed = pack(values.reshape(1, -1), element)
     beat = sum(code << (element.bits * lane) for lane, code in enumerate(codes))
     nbytes = -(-element.bits * len(codes) // 8)
     assert packed.reshape(-1).tobytes() == beat.to_bytes(nbytes, "little")
     back = unpack(packed, element, values.size).reshape(-1)
-    assert np.array_equal(back, values.astype(np.float32))
+    assert back.dtype == DataType[name].to_numpy_dt()
+    assert np.array_equal(back, values)
 
 
 @pytest.mark.parametrize(
