@@ -725,10 +725,7 @@ def test_a_named_tuples_copy_is_its_own_only_with_the_closure_it_was_made_with()
     making: Any = namedtuple
     forged = making("Forged", "x")
     original = forged.__getnewargs__
-    cells = tuple(
-        (lambda kept: lambda: kept)(Agreeable()).__closure__[0]  # type: ignore[index]
-        for _ in original.__closure__
-    )
+    cells = tuple(types.CellType(Agreeable()) for _ in original.__closure__)
     forged.__getnewargs__ = types.FunctionType(
         original.__code__, original.__globals__, closure=cells
     )
