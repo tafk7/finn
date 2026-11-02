@@ -816,7 +816,6 @@ commit = "{"1" * 40}"
 digest = "sha256:{hlslib * 64}"
 
 [resources.finnlib]
-git = "git@example.invalid:finnlib.git"
 commit = "{"2" * 40}"
 digest = "sha256:{finnlib * 64}"
 

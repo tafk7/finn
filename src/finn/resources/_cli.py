@@ -199,7 +199,7 @@ def _update(args):
             "resource-undeclared",
             f"No resource named {args.name!r} is declared",
         )
-    if not resource.git:
+    if not resource.commit:
         raise ResourceError(
             "update-not-git",
             f"update moves git resources; for {args.name}, change url and sha256 by hand "
@@ -287,11 +287,7 @@ def _check(args):
         declared = {}
     if shutil.which("git") is None:
         # GitHub sources fall back to GitHub's archive of the commit.
-        stuck = [
-            r.name
-            for r in declared.values()
-            if r.git and not _store.github_archive(_store.urls(r)[0], r.commit)
-        ]
+        stuck = [r.name for r in declared.values() if r.commit and not _archived(r)]
         if stuck:
             problems.append(f"git is not installed, so these cannot be fetched: {', '.join(stuck)}")
     system = os.environ.get(PREFIX + "SYSTEM_CACHE")
@@ -317,3 +313,12 @@ def _check(args):
     if not problems:
         print(f"ok: {len(declared)} resources declared; fetches go to {root}")
     return 1 if problems else 0
+
+
+def _archived(resource):
+    """Whether a git resource can do without git, with GitHub's archive of its commit.
+    One naming no repository is left out: using it says why it cannot be fetched."""
+    try:
+        return bool(_store.github_archive(_store.urls(resource)[0], resource.commit))
+    except ResourceError:
+        return True

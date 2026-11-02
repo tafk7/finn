@@ -28,5 +28,6 @@ outside this repository until the package is final.
 | `artifacts/` | module values (`Leaf`, a flat `Composed` netlist) and their ABI (`abi.py`, with a module's clocking pins, `Clocking`), the top (`top.py`: a netlist wrapped as a `Composed` with FINN's top conventions, `compose`), their sources (`contributions.py`: copied files, generated data, HLS build requests), their emission, an HLS request's staging (`hls.py`; a request that exports its top as FINN's IP, `HlsSource.export`, stages the export), the RTL checker (and `evaluate`, the constants a module derives at elaboration), the IP-XACT packaging Tcl (`ipxact.py`), a packaged module's `interface.json` (`interface.py`) and the canonical digest (`projection.py`) |
 
 FinnLib is the `finnlib` resource (`src/finn/resources.toml`); set
-`FINN_RESOURCES_FINNLIB` to work against a clone. Checks:
+`FINN_RESOURCES_FINNLIB` to work against a clone, or `FINN_RESOURCES_FINNLIB_URL`
+to its repository to fetch the pin (the declaration does not name it). Checks:
 `bash scripts/check-kernels.sh`.

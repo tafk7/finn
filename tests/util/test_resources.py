@@ -134,6 +134,11 @@ def test_finn_declares_hlslib_and_board_files(project):
     assert len(boards) == 5
     assert not any(r.redistributable for r in boards)
     assert all(r.origin == str(_declare.FINN_FILE) for r in declared.values())
+    # FinnLib's repository is not published: FINN declares only its pin.
+    finnlib = declared["finnlib"]
+    assert finnlib.git is None and finnlib.url is None and not finnlib.mirrors
+    assert finnlib.commit and finnlib.digest
+    assert finnlib.source == f"FINN_RESOURCES_FINNLIB_URL@{finnlib.commit[:12]}"
 
 
 def test_sparse_fetch_places_subdir_into_root_and_caches(boards, tmp_path, monkeypatch):
@@ -341,6 +346,8 @@ def test_project_redefinition_is_logged_and_packages_cannot_redefine(
         ({"git": "u", "commit": "c" * 40}, "digest-invalid", "digest must be"),
         ({"git": "u"}, "field-required", "commit is required"),
         ({"git": "u", "url": "u"}, "source-not-one", "exactly one source"),
+        ({"commit": "c" * 40}, "digest-invalid", "digest must be"),
+        ({"commit": "c" * 40, "package": "m"}, "field-inapplicable", "commit does not apply"),
         (
             {"git": "u", "commit": "main", "digest": "sha256:" + "0" * 64},
             "commit-invalid",
@@ -713,6 +720,44 @@ def test_mirrors_and_url_override(boards, project, tmp_path, monkeypatch):
     # FINN_RESOURCES_<NAME>_URL replaces the declared URL, e.g. with a site mirror.
     monkeypatch.setenv("FINN_RESOURCES_KV260_BOARDS_URL", boards.as_uri())
     assert Path(resources.path("kv260-boards")) == path
+
+
+def test_an_unpublished_repository_is_named_by_its_url_variable(
+    boards, project, tmp_path, capsys, monkeypatch
+):
+    # The pin without its repository, as FINN declares FinnLib.
+    text = (project / "pyproject.toml").read_text()
+    declare(project, text.replace(f'git = "{boards.as_uri()}"\n', ""))
+    resource = resources.declarations()["kv260-boards"]
+    assert resource.git is None and resource.commit
+    with fault("repository-unnamed") as error:
+        resources.path("kv260-boards")
+    message = str(error.value)
+    assert "FINN_RESOURCES_KV260_BOARDS=/path/to/checkout" in message
+    assert "FINN_RESOURCES_KV260_BOARDS_URL" in message and resource.commit in message
+    code, _, err = cli(capsys, "update", "kv260-boards")
+    assert code == 1 and "FINN_RESOURCES_KV260_BOARDS_URL" in err
+    assert resources.status("kv260-boards").state == "missing"
+
+    # The variable names it: the pin is fetched and verified as declared.
+    monkeypatch.setenv("FINN_RESOURCES_KV260_BOARDS_URL", boards.as_uri())
+    path = Path(resources.path("kv260-boards"))
+    assert (path / "kv260/board.xml").read_text() == "k\n"
+
+    # A cached copy, or one carried to another cache, needs no repository.
+    monkeypatch.delenv("FINN_RESOURCES_KV260_BOARDS_URL")
+    assert resources.path("kv260-boards") == str(path)
+    (carried,) = resources.fetch(["kv260-boards"], tmp_path / "carry")
+    assert resources.tree_digest(carried) == resource.digest
+
+    # The pin moves through the variable, and the declaration still names no repository.
+    monkeypatch.setenv("FINN_RESOURCES_KV260_BOARDS_URL", boards.as_uri())
+    revision = commit(boards, {"boards/Xilinx/kv260/board.xml": "k2\n"})
+    assert cli(capsys, "update", "kv260-boards")[0] == 0
+    resources._cache.clear()
+    moved = resources.declarations()["kv260-boards"]
+    assert moved.commit == revision and moved.git is None
+    assert boards.as_uri() not in (project / "pyproject.toml").read_text()
 
 
 def test_without_git_github_sources_use_the_commit_archive(boards, project, tmp_path, monkeypatch):
