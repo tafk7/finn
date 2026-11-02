@@ -624,8 +624,8 @@ def recorded_timing(entry: object, reports: Mapping[str, str]) -> Timing | None:
     ``reports``, or None (a link with no routed timing). ``ValueError`` unless it is one a
     linker admits: its period a finite positive number; each check of ``CHECKS``, its
     slacks finite numbers, its endpoints counts, and met (``Check.met``: no failing
-    endpoint, no negative slack); the setup check timing an endpoint at least; its report
-    one of ``reports``."""
+    endpoint, no negative slack), timing an endpoint at least (as admission requires);
+    its report one of ``reports``."""
     if entry is None:
         return None
     fields = {"period_ns", "report", *CHECKS}
@@ -642,12 +642,12 @@ def recorded_timing(entry: object, reports: Mapping[str, str]) -> Timing | None:
         if any(type(count) is not int or count < 0 for count in counts):
             raise ValueError(f"its {name} check's endpoints are not counts")
         check = Check(_number(found["worst_ns"]), _number(found["total_ns"]), *counts)
-        if not check.met:
-            raise ValueError(f"its {name} check is not met")
+        if not check.met or check.endpoints == 0:
+            raise ValueError(f"its {name} check is not met or times no endpoint")
         checks[name] = check
     period = _number(entry["period_ns"])
-    if period <= 0 or checks["setup"].endpoints == 0 or entry["report"] not in reports.values():
-        raise ValueError("its period, its setup endpoints or its report is not a link's")
+    if period <= 0 or entry["report"] not in reports.values():
+        raise ValueError("its period or its report is not a link's")
     key = str(PurePosixPath(entry["report"]).relative_to(REPORT_DIR.name))
     return Timing(period, checks, key)
 

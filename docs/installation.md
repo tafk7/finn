@@ -563,8 +563,8 @@ built. A linker refuses an image that misses timing (`timing-unmet`, `timing-hol
 `timing-pulse-width-unmet`: Vivado writes the bitfile of a routed design whose worst
 slack of that check is negative, or rounds to zero with an endpoint failing), naming its
 routed timing report, the slack and the failing endpoints; and one whose timing does not
-cover it (`timing-uncovered`: paths `check_timing` finds untimed, or a PL clock that times
-no endpoint), or whose report it cannot read whole (`timing-unread`).
+cover it (`timing-uncovered`: paths `check_timing` finds untimed, a PL clock that times
+no endpoint, or a setup, hold or pulse-width check that times none), or whose report it cannot read whole (`timing-unread`).
 
 What a build logs, at which level, and what reaches the console
 (`finn.core.reporting.log`):

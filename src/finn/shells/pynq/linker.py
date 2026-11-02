@@ -572,12 +572,12 @@ def admitted(report: Path, period_ns: float) -> tuple[float, Timing]:
     missed is refused, each with its remedy (``MISSED``: ``timing-unmet``, setup;
     ``timing-hold-unmet``, hold, missed at any period; ``timing-pulse-width-unmet``), as
     is a design whose slacks do not cover it (``timing-uncovered``: ``check_timing``
-    counts internal paths untimed, ``finn.toolchain.vivado.UNTIMED``, or the PL clock
-    times no setup endpoint), no report (``timing-unreported``), and one that cannot be
-    read, is cut short, names no PL clock or one of no positive period, or states the
-    design not routed (``timing-unread``), each naming the report and the cause. The
-    design's checks stay the backstop: another clock's or a crossing's violation is
-    refused too."""
+    counts internal paths untimed, ``finn.toolchain.vivado.UNTIMED``, the PL clock times
+    no setup endpoint, or a check of the design times none), no report
+    (``timing-unreported``), and one that cannot be read, is cut short, names no PL clock
+    or one of no positive period, states a slack not finite, or states the design not
+    routed (``timing-unread``), each naming the report and the cause. The design's checks
+    stay the backstop: another clock's or a crossing's violation is refused too."""
 
     def unread(cause: str) -> LinkerRefused:
         return LinkerRefused(
@@ -627,9 +627,16 @@ def admitted(report: Path, period_ns: float) -> tuple[float, Timing]:
     period, mhz = routed.clocks[name]["period_ns"], routed.clocks[name]["mhz"]
     if not all(math.isfinite(each) and each > 0 for each in (period, mhz)):
         raise unread(f"its {name} clock's period, {period} ns, or {mhz} MHz is not positive")
-    wns = routed.design["setup"].worst_ns
-    if not math.isfinite(wns):
-        raise unread(f"its worst setup slack is {wns}")
+    for check, (_, label, _) in MISSED.items():
+        found = routed.design[check]
+        if found.endpoints == 0:
+            raise LinkerRefused(
+                "timing-uncovered",
+                f"{report}: the routed design times no {label} endpoint (its worst {label} "
+                f"slack {found.worst_ns} ns), so its {label} check covers nothing of the image",
+            )
+        if not math.isfinite(found.worst_ns):
+            raise unread(f"its worst {label} slack is {found.worst_ns}")
     for check, (code, label, remedy) in MISSED.items():
         found = routed.design[check]
         if not found.met:

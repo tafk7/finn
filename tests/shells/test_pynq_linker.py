@@ -534,6 +534,19 @@ UNTIMED_PL_CLOCK_REPORT = TIMING_REPORT.replace(
     "static              1.667        0.000                      0                63298",
 )
 
+#: TFC's real report whose hold check times no endpoint, as Vivado writes a check with
+#: none (``inf``), in the design summary and the clock's row.
+NO_HOLD_ENDPOINTS_REPORT = TIMING_REPORT.replace(
+    "0.014        0.000                      0                63298",
+    "  inf        0.000                      0                    0",
+)
+
+#: TFC's real report whose pulse-width check times no endpoint, likewise.
+NO_PULSE_WIDTH_ENDPOINTS_REPORT = TIMING_REPORT.replace(
+    "1.166        0.000                       0                 19432",
+    "  inf        0.000                       0                     0",
+)
+
 #: TFC's real report whose PL clock states a period and frequency of zero.
 ZERO_PERIOD_REPORT = TIMING_REPORT.replace(
     "clk_pl_0  {0.000 2.667}        5.333           187.512",
@@ -624,6 +637,17 @@ def test_an_image_that_misses_timing_is_refused_naming_its_report_and_slack(
             r"routed\.rpt: its clk_pl_0 clock, the accelerator's, times no setup endpoint",
         ),
         (
+            NO_HOLD_ENDPOINTS_REPORT,
+            "timing-uncovered",
+            r"routed\.rpt: the routed design times no hold endpoint \(its worst hold slack "
+            r"inf ns\), so its hold check covers nothing of the image",
+        ),
+        (
+            NO_PULSE_WIDTH_ENDPOINTS_REPORT,
+            "timing-uncovered",
+            r"routed\.rpt: the routed design times no pulse width endpoint",
+        ),
+        (
             UNROUTED_REPORT,
             "timing-unread",
             r"routed\.rpt: it states the design 'Synthesized', not routed",
@@ -634,7 +658,14 @@ def test_an_image_that_misses_timing_is_refused_naming_its_report_and_slack(
             r"routed\.rpt: its clk_pl_0 clock's period, 0\.0 ns, or 0\.0 MHz is not positive",
         ),
     ],
-    ids=["untimed-paths", "untimed-pl-clock", "unrouted", "zero-period"],
+    ids=[
+        "untimed-paths",
+        "untimed-pl-clock",
+        "no-hold-endpoints",
+        "no-pulse-width-endpoints",
+        "unrouted",
+        "zero-period",
+    ],
 )
 def test_an_image_whose_timing_does_not_cover_it_is_refused(
     described: Integration, tmp_path: Path, timing: str, code: str, message: str
@@ -643,10 +674,12 @@ def test_an_image_whose_timing_does_not_cover_it_is_refused(
     routed design whose ``check_timing`` counts registers with no clock or internal
     endpoints unconstrained (``timing-uncovered``), one whose PL clock, the accelerator's,
     times no setup endpoint while another clock gives the design's slacks
-    (``timing-uncovered``), a report of a design not routed and one whose PL clock's
-    period is not positive (``timing-unread``). No
-    real routed report on hand leaves paths untimed: these are TFC's Ultra96 report
-    rewritten (``UNTIMED_CORE_REPORT``, ``UNTIMED_PL_CLOCK_REPORT``, ``UNROUTED_REPORT``)."""
+    (``timing-uncovered``), one whose hold or pulse-width check times no endpoint, which
+    Vivado states as an infinite slack (``timing-uncovered``: admitted, its record would
+    hold a slack no reader admits), a report of a design not routed and one whose PL
+    clock's period is not positive (``timing-unread``). No real routed report on hand
+    leaves paths untimed: these are TFC's Ultra96 report rewritten (``UNTIMED_CORE_REPORT``,
+    ``UNTIMED_PL_CLOCK_REPORT``, ``NO_HOLD_ENDPOINTS_REPORT``, ...)."""
     vivado = FakeVivado(timing=timing)
     with refused(code, error=LinkerRefused, owner="vivado-block-design", message=message):
         BlockDesignLinker().link(packaged(described), BOARD, tmp_path, cast(Toolchain, vivado))

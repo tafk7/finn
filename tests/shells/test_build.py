@@ -954,12 +954,14 @@ def test_a_build_replaces_its_bitfile_directory_and_the_last_links_reports(
     ]
 
 
-def _timing(**checks: tuple[float, int]) -> dict[str, Any]:
+def _timing(endpoints: int | None = None, **checks: tuple[float, int]) -> dict[str, Any]:
     """TFC's timing as its build records it against the report ``old.rpt``, each check
-    named given its worst slack and failing endpoints."""
+    named given its worst slack and failing endpoints (and, given, its ``endpoints``)."""
     record: dict[str, Any] = {**copy.deepcopy(TFC_TIMING_RECORD), "report": "report/old.rpt"}
     for name, (worst, failing) in checks.items():
         record[name].update(worst_ns=worst, failing_endpoints=failing)
+        if endpoints is not None:
+            record[name]["endpoints"] = endpoints
     return record
 
 
@@ -1075,6 +1077,8 @@ def test_a_record_a_build_cannot_have_written_is_refused_before_any_tool_runs(
         {**_timing(), "period_ns": float("inf")},
         _timing(setup=(float("inf"), 0)),
         {**_timing(), "period_ns": 0},
+        _timing(hold=(0.014, 0), endpoints=0),
+        _timing(pulse_width=(1.166, 0), endpoints=0),
     ],
     ids=[
         "before-timing",
@@ -1088,6 +1092,8 @@ def test_a_record_a_build_cannot_have_written_is_refused_before_any_tool_runs(
         "timing-infinity",
         "timing-slack-infinity",
         "timing-period-zero",
+        "timing-no-hold-endpoints",
+        "timing-no-pulse-width-endpoints",
     ],
 )
 def test_a_record_whose_timing_no_linker_admits_is_refused_until_built_again(
@@ -1095,10 +1101,10 @@ def test_a_record_whose_timing_no_linker_admits_is_refused_until_built_again(
 ) -> None:
     """A record of what the last link collected that states no timing (one written before
     the timing was recorded) or a timing no linker admits (a slack missed or rounded to
-    nothing, an endpoint failing, a report it did not collect, a field missing, a number
-    not finite or a period not positive) is refused (``linked-invalid``) by a driver made
-    from it and a resources report read by it; building the bitfile again removes the
-    reports it names and replaces it."""
+    nothing, an endpoint failing, a check timing no endpoint, a report it did not
+    collect, a field missing, a number not finite or a period not positive) is refused
+    (``linked-invalid``) by a driver made from it and a resources report read by it;
+    building the bitfile again removes the reports it names and replaces it."""
     recorded_tools(monkeypatch, tmp_path)
     routed = tmp_path / "linked" / "post_route_timing.rpt"
     linked = replace(
