@@ -9,7 +9,9 @@ as ``top.cpp``, each header under its path below its root, and ``script.tcl``, w
 names only relative paths. The script is FinnLib's HLS recipe (``hls/hbc.tcl``) with
 the simulation stages off: open a project, add the top with the C++14 flags and an
 include directory per declared header's directory, set the top, open a solution,
-set the part, create the clock, run the request's directives, synthesize. The part
+set the part, create the clock, run the request's directives, synthesize, and, for a
+request that exports its IP, export it into the IP catalog under FINN's vendor and library
+as the IP named as its top (``config_export``, ``export_design``). The part
 is the one thing it does not state: it reads ``$part``, which whoever runs it sets
 first (``finn.toolchain.hls``), so the staged request, and its digest, are the same on
 every machine and for every part.
@@ -21,7 +23,9 @@ its ABI alone.
 Staging checks what it can without a tool: every quoted ``#include`` in the top and
 the headers names a declared header, beside the including file or on the include
 path; refusal only, as the RTL checker refuses (``rtl``). An angle-bracket include
-is the tool's (``ap_int.h``, ``hls_stream.h``) and is not checked.
+is the tool's (``ap_int.h``, ``hls_stream.h``) and is not checked, nor is a quoted
+include of one of the tool's own headers (``TOOL_HEADERS``), as finn-hlslib includes
+``"ap_axi_sdata.h"``.
 """
 
 from __future__ import annotations
@@ -32,6 +36,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from finn.kernels.artifacts.contributions import HlsSource
+from finn.kernels.artifacts.ipxact import LIBRARY, VENDOR, VERSION
 from finn.kernels.artifacts.module import BuildError
 
 #: The staged request's files, relative to its directory.
@@ -41,6 +46,12 @@ SCRIPT = "script.tcl"
 PROJECT, SOLUTION = "project", "solution"
 #: FinnLib's own flags for its HLS sources (``hls/hbc.tcl``), less its warnings.
 CFLAGS = "-std=c++14 -O2"
+
+#: The HLS tool's own headers, which it finds wherever they are included from: a library
+#: may include them in quotes.
+TOOL_HEADERS = frozenset(
+    ("ap_axi_sdata.h", "ap_fixed.h", "ap_int.h", "hls_stream.h", "hls_vector.h")
+)
 
 _INCLUDE = re.compile(r'^\s*#\s*include\s*"([^"]+)"', re.MULTILINE)
 
@@ -87,7 +98,16 @@ def script(source: HlsSource) -> str:
         "set_part $part",
         f"create_clock -period {source.period_ns:g} -name default",
         *source.directives,
+        *(
+            (
+                f"config_export -format ip_catalog -vendor {VENDOR} -library {LIBRARY} "
+                f"-ipname {source.function} -version {VERSION}",
+            )
+            if source.export
+            else ()
+        ),
         "csynth_design",
+        *(("export_design -format ip_catalog",) if source.export else ()),
         "exit",
     ]
     return "\n".join(lines) + "\n"
@@ -100,6 +120,8 @@ def _check_includes(source: HlsSource, contents: Mapping[str, bytes]) -> None:
     for name, content in contents.items():
         here = str(PurePosixPath(name).parent)
         for included in quoted_includes(content.decode(errors="replace")):
+            if included in TOOL_HEADERS:
+                continue
             candidates = (here, *path)
             if not any(
                 str(PurePosixPath(directory) / included) in declared for directory in candidates
@@ -137,6 +159,7 @@ __all__ = [
     "axis_type",
     "SCRIPT",
     "StagedHls",
+    "TOOL_HEADERS",
     "TOP",
     "include_path",
     "quoted_includes",

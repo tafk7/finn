@@ -157,12 +157,9 @@ def test_a_whole_folding_is_one_batch() -> None:
 
 
 def test_a_value_a_rule_refuses_is_refused_by_the_rule() -> None:
-    """The INT8 core on DSP48E2, AXI-Lite without a control bus: each rule refuses it,
-    by its code."""
+    """The INT8 core on DSP48E2: its rule refuses it, by its code."""
     with refused("dotp-target", owner="compute.int8_dsp58.core_supported"):
         configured(matmul_model(), {"first": {"compute": "int8_dsp58"}})
-    with refused("threshold-control", owner="control_for_writes"):
-        configured(thresholding_model(), {"activate": {"use_axilite": True}})
 
 
 def test_a_key_that_is_open_on_the_target_is_set() -> None:

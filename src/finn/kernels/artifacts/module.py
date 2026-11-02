@@ -12,7 +12,8 @@ values compiled into the top. A ``Composed`` module is a ``Fragment`` with an AB
 leaf instances, the ``Link`` of each channel hop between their pins and the
 control buses it presents (``BusExport``), each with the writes its kernel's
 configuration takes (``RegisterMap``: what a host, or a testbench, writes before
-streaming). Every instance is a leaf: the netlist is flat, and grouping it into
+streaming). A bus a runtime drives names its registers (``Registers``: a mover's start,
+buffer address and count). Every instance is a leaf: the netlist is flat, and grouping it into
 modules is a later decision of the flow.
 
 A fragment names its instances by labels relative to its owner (``compute.packed``);
@@ -344,6 +345,39 @@ class RegisterMap:
 
 
 @dataclass(frozen=True)
+class Registers:
+    """The registers of a control bus that a runtime writes and reads by name: each
+    ``(name, byte offset, bits)``, 32 or 64 bits, at an offset aligned to a 32-bit word
+    (a 64-bit register two words, its low word first). Empty for a bus a runtime drives
+    by no named register. Two registers of one name, or overlapping, are refused."""
+
+    registers: tuple[tuple[str, int, int], ...] = ()
+
+    def __post_init__(self) -> None:
+        registers = tuple((name, offset, bits) for name, offset, bits in self.registers)
+        names = [name for name, _, _ in registers]
+        if len(names) != len(set(names)):
+            twice = sorted({name for name in names if names.count(name) > 1})
+            raise BuildError(f"the registers {twice} are named twice")
+        taken: dict[int, str] = {}
+        for name, offset, bits in registers:
+            if bits not in (32, 64):
+                raise BuildError(f"{name}: a register is 32 or 64 bits, not {bits}")
+            if offset < 0 or offset % 4:
+                raise BuildError(f"{name}: {offset:#x} is not a 32-bit word's address")
+            for word in range(offset, offset + bits // 8, 4):
+                if word in taken:
+                    raise BuildError(f"{name} and {taken[word]} both take {word:#x}")
+                taken[word] = name
+        object.__setattr__(self, "registers", registers)
+
+    def offset(self, name: str) -> int:
+        """The byte offset of the register ``name``."""
+        (found,) = (offset for each, offset, _ in self.registers if each == name)
+        return found
+
+
+@dataclass(frozen=True)
 class BusExport:
     """An instance's bus, presented as the root's target port ``port`` (its members
     ``<port>_<MEMBER>``), and the writes its configuration takes (``registers``)."""
@@ -641,6 +675,7 @@ __all__ = [
     "Abi",
     "ProducerIdentity",
     "RegisterMap",
+    "Registers",
     "Scalar",
     "ScalarTable",
     "Snapshot",

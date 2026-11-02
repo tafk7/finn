@@ -135,7 +135,6 @@ def _redeclared(
     changed = DataflowCoreDeclaration(
         declared.kernels,
         channels,
-        declared.shell,
         name=declared.name,
         order=declared.order,
         owners=declared.owners,
@@ -300,7 +299,7 @@ def test_a_slice_s_netlist_and_module_are_refused_by_their_code() -> None:
     bare error."""
     model = chain_model(4)
     part = _slice(model, "MatMul_1", "Thresholding_1")
-    netlist, module = part.netlist(), part.answer(DataflowCoreKernel.module)
+    netlist, module = part.netlist(), part.core_answer(DataflowCoreKernel.module)
     assert isinstance(netlist, Rejected) and isinstance(module, Rejected)
     for found in (netlist, module):
         assert [(f.code, f.owner, dict(f.details)["tensor"]) for f in found.findings] == [

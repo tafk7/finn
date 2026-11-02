@@ -5,10 +5,10 @@
 
 The seam (``finn.core.search``) answers what an exploration asks of a composition, each
 choice keyed by a pair ``(owner, key)``. FINN's composition (``CoreComposition``: one design
-space of a DataflowCore's class, ``finn.kernels.dataflow_core.DataflowCoreKernel``, a node's,
-a slice's or a test core's, read by key) names its members by graph name (a kernel's node, a
-channel's tensor), the decision key in each member's space (``("first", "pe")``, ``("y",
-"transport")``). FINN
+space of a DataflowCore's class, ``finn.kernels.dataflow_core.DataflowCoreKernel``, a slice's
+or a test core's, or of a core's in its shell, ``finn.kernels.shell.ShellKernel``, a node's;
+read by key) names its members by graph name (a kernel's node, a channel's tensor), the
+decision key in each member's space (``("first", "pe")``, ``("y", "transport")``). FINN
 makes the seam (``Seam``) with its hook (``KERNEL_HOOK``) and the ``platform`` its kernels
 are built for; on it ``cost`` gives each member's cycles a frame, buffering and resources,
 and the bottleneck, and ``resources`` what the network uses as far as it is stated. The
@@ -26,10 +26,11 @@ stand in its way is made again with those choices cleared, and the seam sets eac
 choice it cleared or brought into play by the channel's policy (``finn.core.search.Seam.set``).
 A kernel's stored choice standing in the way (the neighbour's, or the changed kernel's own)
 refuses the change, naming it. The verdict reads every member's validity and, in a shell,
-the shell member's (its budgets). ``held`` holds the keys no strategy changes, with their
-values: those a ``Hold`` strategy fixes, for the rest of its list. Nothing is seeded from the
-body: the holds come from the strategies, and a verification takes the keys the search held
-from its record (``OUTPUT_SEARCH``, ``finn.core.graph.partition.search_record``).
+its movers', its connections' and the shell member's (its rules). ``held`` holds the keys
+no strategy changes, with their values: those a ``Hold`` strategy fixes, for the rest of its
+list. Nothing is seeded from the body: the holds come from the strategies, and a
+verification takes the keys the search held from its record (``OUTPUT_SEARCH``,
+``finn.core.graph.partition.search_record``).
 
 The strategies, each an objective and its constraints searched through the seam (``Hold``
 and ``Ranked`` are the seam's own, ``finn.core.search``):
@@ -114,7 +115,14 @@ from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.module import Fragment
 from finn.kernels.base import Kernel, hops, neighbours
 from finn.kernels.channels import Channel, ChannelFifo, Neighbours, OuterHops
-from finn.kernels.dataflow_core import DataflowCoreKernel, Names, _not_a_decision
+from finn.kernels.composer import DataflowCoreRefused
+from finn.kernels.dataflow_core import (
+    DataflowCoreKernel,
+    Names,
+    _not_a_decision,
+    names_of,
+    placed_name,
+)
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.fifo_sizing import FRAMES, NotModelled, Sized, holds, size
 from finn.kernels.policies import (
@@ -154,27 +162,27 @@ class _Placed:
         return result.findings if isinstance(result, Rejected) else ()
 
 
-ShellUse = Callable[["CoreComposition"], QueryResult[Resources]]
-"""What a shell uses over a core's composition: its members', its movers' and its static
-region's resources (``finn.custom_op.kernels.shell``, given its row)."""
-
-
 class CoreComposition:
     """What FINN's seam explores (``finn.core.search.Composition``, and FINN's own): one
-    design space of a core's class (``point``, a ``DataflowCoreKernel``: a node's, the graph
-    binds one in its shell, ``finn.custom_op.kernels.shell``; a slice's; or a test core's,
-    declared by hand), read by ``(member, key)``. Every name it reads is its class's
-    (``DataflowCoreKernel.names``: its members by graph name, its keys, its instance order,
-    each kernel's policies' owner), and every answer its design space's; in a shell, until
-    the shell's own design pass places the movers, it is given what the shell uses over it
-    (``shell_use``: its members', its movers' and its static region's resources), which it
-    states as its own (``own_resources``). Its channels among its members; per member its
-    Space (``member``) and the answers it gives (``query``, and the open Decisions an answer
-    waits on, ``waits``); per channel the ports beside it (``neighbours``, whose paces FIFO
-    sizing reads) and its hops to them (``hops``); its class's answers (``answer``); the
-    owner of each member's policies (``owner``); and in a shell, its shell member's name
-    (``shell``: no member, but its validity is read by its name, the shell's budgets'
-    rules).
+    design space (``point``) of a core's class (a ``DataflowCoreKernel``: a slice's, or a
+    test core's, declared by hand) or of a core's in its shell (a
+    ``finn.kernels.shell.ShellKernel``: a node's, ``finn.custom_op.kernels.shell``), read by
+    ``(member, key)``. Every name it reads is its class's (``Names``: its members by graph
+    name, its keys; the core's instance order and each kernel's policies' owner, of the core,
+    ``core``), and every answer its design space's. Its members are its core's, its channels
+    among them; per member its Space (``member``) and the answers it gives (``query``, and
+    the open Decisions an answer waits on, ``waits``); per channel the ports beside it
+    (``neighbours``, whose paces FIFO sizing reads: a boundary side's, in a shell, its
+    mover's) and its hops to them (``hops``); its design space's answers (``answer``: in a
+    shell, the shell's, its movers' cycles and resources and its static region's among
+    them) and its core's (``core_answer``: its netlist, its module); the owner of each
+    member's policies (``owner``); and in a shell, its movers (``movers``: no members, but
+    their cycles are costed beside the members' and their validity read by their surface
+    names, ``placed``), its connections and its shell member's name (``shell``: its validity
+    read by its name, the shell's rules). A shell's members beside its core are named below
+    the shell member (``shell.in0``, ``Names.placed``), never as a graph's members are. It
+    reads one core: a shell of several is refused where it is made (``cores-several``,
+    owned by the second core's name), as its members' graph names are read in one core.
 
     A member's answers are read as its own space's were: its keys, and the owners of its
     findings, relative to it (``pe``, ``transport.fifo.depth``); a finding of another member
@@ -184,27 +192,39 @@ class CoreComposition:
     A core's own flow order interleaves its members, each channel after the kernels it
     joins; the cut's pass reads that one (``defaulted``). The seam's order (``states``) is
     by member. Immutable, as a design space: a change (``trial``) is another composition, of
-    the design space the change makes, given the same ``shell_use``."""
+    the design space the change makes."""
 
-    __slots__ = ("_decisions", "_memo", "_point", "_shell_use")
+    __slots__ = ("_decisions", "_memo", "_point")
 
-    _point: DataflowCoreKernel
-    _shell_use: ShellUse | None
+    _point: Kernel
     _decisions: Mapping[Key, inspection.DecisionInfo[object]]
     _memo: dict[str, object]
 
-    def __init__(self, point: DataflowCoreKernel, *, shell_use: ShellUse | None = None) -> None:
-        self._point, self._shell_use = point, shell_use
+    def __init__(self, point: Kernel) -> None:
+        cores = names_of(point).cores
+        if len(cores) > 1:
+            raise DataflowCoreRefused(
+                (
+                    Finding(
+                        FindingKind.REJECTION,
+                        "cores-several",
+                        cores[1],
+                        f"a shell of the cores {', '.join(cores)}: a composition reads one "
+                        "core, its members by their graph names",
+                    ),
+                )
+            )
+        self._point = point
         self._decisions = MappingProxyType(_decisions(point))
         self._memo = {}
 
     def made(self, point: Space) -> CoreComposition:
         """The composition of ``point``, another design space of its class (a change's, or
-        one its members' policies made, ``defaulted``), given the same ``shell_use``."""
+        one its members' policies made, ``defaulted``)."""
         if type(point) is not type(self._point):
             raise ValueError(f"{point!r} is no design space of {self!r}")
-        assert isinstance(point, DataflowCoreKernel)  # its class is one
-        return CoreComposition(point, shell_use=self._shell_use)
+        assert isinstance(point, Kernel)  # its class is one
+        return CoreComposition(point)
 
     def _read(self, question: str, answer: Callable[[], Any]) -> Any:
         """``answer()``, read once of this composition (it is immutable)."""
@@ -215,14 +235,22 @@ class CoreComposition:
     # -- its members ------------------------------------------------------------------------
 
     @property
-    def point(self) -> DataflowCoreKernel:
-        """Its design space."""
+    def point(self) -> Kernel:
+        """Its design space: a core's, or a core's in its shell."""
         return self._point
 
     @property
+    def core(self) -> DataflowCoreKernel:
+        """Its core's design space: its own, or its shell's core member's."""
+        name = self.names.core
+        found = self._point if name is None else getattr(self._point, name)
+        assert isinstance(found, DataflowCoreKernel)
+        return found
+
+    @property
     def names(self) -> Names:
-        """Its class's names (``DataflowCoreKernel.names``)."""
-        return type(self._point).names
+        """Its class's names (``DataflowCoreKernel.names``, ``ShellKernel.names``)."""
+        return names_of(self._point)
 
     @property
     def members(self) -> tuple[str, ...]:
@@ -232,7 +260,7 @@ class CoreComposition:
 
     @property
     def shell(self) -> str | None:
-        """Its shell member's name (``finn.kernels.budgets.SHELL``), in a shell; None
+        """Its shell member's name (``finn.kernels.shell_rules.SHELL``), in a shell; None
         outside one. Not among its ``members``: its validity is read by its name
         (``validity``)."""
         return self.names.shell
@@ -241,8 +269,8 @@ class CoreComposition:
     def order(self) -> tuple[str, ...]:
         """Every member in its module's instance order (``Kernel.instance_order``, a fact
         of its class)."""
-        owners = self.names.owners
-        return tuple(owners[member] for member in type(self._point).instance_order)
+        owners = {member: owner for owner, member in self.names.members.items()}
+        return tuple(owners[member] for member in type(self.core).instance_order)
 
     @property
     def kernels(self) -> tuple[str, ...]:
@@ -262,9 +290,9 @@ class CoreComposition:
         side's label, its AXIS bus), inputs then outputs, each in its instance order."""
 
         def read() -> tuple[tuple[str, str], ...]:
-            owners = self.names.owners
+            owners = {member: owner for owner, member in self.names.members.items()}
             found: dict[str, list[tuple[str, str]]] = {"outer_in": [], "outer_out": []}
-            for label, entry in alias_table(type(self._point)).items():
+            for label, entry in alias_table(type(self.core)).items():
                 for end in entry.ends:
                     member, _, port = end.path.partition(".")
                     if port in found and member in owners:
@@ -276,17 +304,26 @@ class CoreComposition:
 
     @property
     def movers(self) -> tuple[str, ...]:
-        """Its boundary channels offered movers (each boundary side's offers,
-        ``Side.boundary``), in ``boundary``'s order: a shell's row offers them, until the
-        shell's own design pass places them."""
-        return tuple(
-            tensor
-            for tensor, _ in self.boundary
-            if any(
-                getattr(side, "offers", ())
-                for side in (self.member(tensor).producer, self.member(tensor).consumer)
-            )
-        )
+        """Its shell's movers, by their names in the shell (``in0``, ``out0``;
+        ``finn.kernels.shell``): none outside a shell, or where its row offers none."""
+        return tuple(getattr(type(self._point), "movers", {}))
+
+    def placed(self, name: str) -> str:
+        """The surface name of ``name``, a member its shell places beside its core (a mover,
+        a connection): what ``member``, ``query`` and ``validity`` read it by
+        (``shell.in0``)."""
+        return placed_name(self.names.shell, name)
+
+    def mover(self, tensor: str) -> str | None:
+        """The mover its shell places on boundary channel ``tensor``'s edge, by its name in
+        the shell; None where none is."""
+        movers: Mapping[str, tuple[str, str]] = getattr(type(self._point), "movers", {})
+        placed = {edge: unit for unit, edge in movers.items()}
+        core = self.names.core
+        if core is None:
+            return None
+        ports = [port for each, port in self.boundary if each == tensor]
+        return placed.get((core, ports[0])) if ports else None
 
     def node(self, name: str) -> str:
         """Member ``name``'s node in the module, its member name: the prefix of its
@@ -304,13 +341,18 @@ class CoreComposition:
         return self.names.pair(key)
 
     def member(self, name: str) -> Any:
-        """Member ``name``'s Space inside the design space; the shell member's by its name
-        (``shell``)."""
+        """Member ``name``'s Space inside the design space; in a shell, the shell member's by
+        its name (``shell``), a mover's and a connection's by its surface name
+        (``placed``)."""
         names = self.names
-        member = name if name == names.shell else names.members.get(name)
+        if name == names.shell:
+            return getattr(self._point, name)
+        if name in names.placed:
+            return getattr(self._point, names.placed[name])
+        member = names.members.get(name)
         if member is None:
             raise ValueError(f"{name} is no member of the partition")
-        return getattr(self._point, member)
+        return getattr(self.core, member)
 
     def owner(self, name: str) -> Owner:
         """The owner of member ``name``'s policies (``finn.kernels.policies.policy``): a
@@ -321,14 +363,15 @@ class CoreComposition:
             return Channel
         if name not in self.names.members:
             raise ValueError(f"{name} is no member of the partition")
-        return type(self._point).policy_owners.get(name, Unstated)
+        return type(self.core).policy_owners.get(name, Unstated)
 
     def located(self, name: str, finding: Finding) -> Finding:
         """A finding of member ``name``'s, its owner kept, with the member named in its
         details (a finding of another member's names that one already): a channel as its
         ``tensor``, a kernel as its ``node``. The shell member's is no node or tensor of the
-        graph: its finding is kept as it is (its message names the shell)."""
-        if name == self.names.shell:
+        graph, and neither is a mover or a connection: their findings are kept as they are
+        (each message names its member)."""
+        if name == self.names.shell or name in self.names.placed:
             return finding
         return finding.about(**{"tensor" if name in self.names.channels else "node": name})
 
@@ -389,7 +432,7 @@ class CoreComposition:
     def validity(self, name: str) -> inspection.Validity:
         """Member ``name``'s own validity inside the design space (``inspection.validity``):
         its pieces and findings relative to it. The shell member's by its name (``shell``):
-        its budgets, each a rule of its own."""
+        its limits, each a rule of its own."""
         found = inspection.validity(self.member(name))
         pieces = tuple(
             inspection.Piece(
@@ -621,22 +664,36 @@ class CoreComposition:
         return found
 
     def answer(self, member: View[T]) -> QueryResult[T]:
-        """Its class's answer ``member``, a view of the core's own (``Kernel.netlist``,
-        ``Kernel.frame_cycles``, ``DataflowCoreKernel.module``), read once: each finding
-        below a member as that member's (``local``), naming it (``located``). Refused, as a
-        whole, where a rule of it refuses it (``refused``): the engine answers a view only
-        where every rule below it accepts it."""
+        """Its design space's answer ``member``, a view of its own (``Kernel.frame_cycles``,
+        ``Kernel.resources``: in a shell, the shell's, over its core, its movers and its
+        static region), read once: each finding below a member as that member's
+        (``local``), naming it (``located``). Refused, as a whole, where a rule of it
+        refuses it (``refused``): the engine answers a view only where every rule below it
+        accepts it."""
+        return self._answer(self._point, "answer", member)
 
+    def core_answer(self, member: View[T]) -> QueryResult[T]:
+        """Its core's answer ``member`` (``Kernel.netlist``, ``DataflowCoreKernel.module``,
+        ``DataflowCoreKernel.edge_buses``), read once, as ``answer`` reads its own: in a
+        shell, below the shell's rules, so a refused shell refuses it (``refused``), as a
+        core a rule of its own refuses answers no view."""
+        if self.names.core is not None:
+            refused = self.refused()
+            if refused is not None:
+                return Rejected(tuple(map(self._rooted, refused.findings)))
+        return self._answer(self.core, "core", member)
+
+    def _answer(self, point: Space, question: str, member: View[T]) -> QueryResult[T]:
         name = member.name
         assert name is not None  # a view declared in a Space class is named there
 
         def read() -> QueryResult[T]:
-            found: QueryResult[T] = self._point.query(getattr(type(self._point), name))
+            found: QueryResult[T] = point.query(getattr(type(point), name))
             if isinstance(found, (Rejected, Unresolved)):
                 return type(found)(tuple(map(self._rooted, found.findings)))
             return found
 
-        answered: QueryResult[T] = self._read(f"answer {name}", read)
+        answered: QueryResult[T] = self._read(f"{question} {name}", read)
         return answered
 
     def netlist(self) -> QueryResult[tuple[Fragment, tuple[Bus, ...]]]:
@@ -646,10 +703,10 @@ class CoreComposition:
         an outer port placed and named by no edge port, ``port-unconnected``), then what
         refuses its netlist, then what either waits on. The shell's counts read it
         (``finn.custom_op.kernels.shell``), its top's pins counted without building it."""
-        edge = self.answer(DataflowCoreKernel.edge_buses)
+        edge = self.core_answer(DataflowCoreKernel.edge_buses)
         if isinstance(edge, Rejected):
             return edge
-        found = self.answer(Kernel.netlist)
+        found = self.core_answer(Kernel.netlist)
         if not isinstance(found, Available):
             return found
         if not isinstance(edge, Available):
@@ -658,9 +715,13 @@ class CoreComposition:
 
     def _rooted(self, finding: Finding) -> Finding:
         """A finding of its class's answer, as the member it is below gives it, naming the
-        member (``answer``); one of no member's as it is."""
+        member (``answer``); one of no member's as it is, a core's own relative to the core
+        (in a shell, ``DataflowCore_0.edge``: ``edge``)."""
         below = self.names.below(finding.owner)
         if below is None:
+            core = self.names.core
+            if core is not None and finding.owner.startswith(f"{core}."):
+                return replace(finding, owner=finding.owner.removeprefix(f"{core}."))
             return finding
         name, key = below
         return self.located(
@@ -672,56 +733,68 @@ class CoreComposition:
         (``finn.kernels.base.neighbours``: each kernel's port's stream pins, labelled below
         its member's node, and its pace at its kernel's interval, where it owns its pacing;
         a frozen neighbour's, outside a slice, as its class's fact gives it at the neighbour's
-        stored choices). FIFO sizing reads their paces (``finn.kernels.fifo_sizing``), and
-        the netlist its hops to them (``hops``). Refused where a rule refuses the core
-        (``refused``): its class answers them only where every rule accepts it; and where
-        its class does not answer them, what refuses them or what they wait on, each finding
+        stored choices; on a boundary side in a shell, the pace of the port of the mover
+        placed there, its ``timed_pace``, the mover's stated rate, its port none of the
+        core's). FIFO sizing reads their paces (``finn.kernels.fifo_sizing``), and the
+        netlist its hops to them (``hops``). Refused where a rule refuses the core
+        (``refused``): its class answers them only where every rule accepts it; and where its
+        class does not answer them, what refuses them or what they wait on, each finding
         naming its member (``answer``)."""
         refused = self.refused()
         if refused is not None:
             return refused
-        found = self.answer(neighbours(type(self._point), self.node(name)))
+        found = self.core_answer(neighbours(type(self.core), self.node(name)))
         if isinstance(found, (Rejected, Unresolved)):
             return found
         assert isinstance(found, Available)  # a view of each member channel, never inapplicable
         beside: Neighbours = found.value
-        return beside
+        mover = self.mover(name)
+        if mover is None:
+            return beside
+        entering = self.member(name).entering
+        placed = self.placed(mover)
+        point = self.member(placed)
+        port = getattr(type(point), "output" if entering else "input")
+        pace = self._result(placed, point.query(port.timed_pace))
+        if isinstance(pace, (Rejected, Unresolved)):
+            return type(pace)(pace.findings)
+        assert isinstance(pace, Available)  # a mover's port, placed: its rate
+        if entering:
+            return replace(beside, producer_pace=pace.value)
+        return replace(beside, consumer_pace=pace.value)
 
     def hops(self, name: str) -> OuterHops | Rejected | Unresolved:
         """Channel ``name``'s hops to the ports beside it, as its class answers them
         (``finn.kernels.base.hops``); or why not, its refusals owned by ``name``, or what
         they wait on."""
         node = self.node(name)
-        found = self._result(name, self._point.query(hops(type(self._point), node)))
+        core = self.names.core
+        at = (node, f"{core}.{node}") if core is not None else (node,)
+        found = self._result(name, self.core.query(hops(type(self.core), node)))
         if isinstance(found, Available):
             wired: OuterHops = found.value
             return wired
         owned = tuple(
-            replace(each, owner=name) if each.owner == node else each
+            replace(each, owner=name) if each.owner in at else each
             for each in getattr(found, "findings", ())
         )
         return Rejected(owned) if isinstance(found, Rejected) else Unresolved(owned)
 
     def own_resources(self) -> QueryResult[Resources]:
         """What it uses: its members' own statements' sum, as its class answers it
-        (``Kernel.resources``, ``answer``), or, in a shell, what the shell uses over it
-        (``shell_use``: its members', its movers' and its static region's); or what they
-        wait on, or why it is refused."""
-        shell_use = self._shell_use
-        if shell_use is not None:
-            used: QueryResult[Resources] = self._read("shell use", lambda: shell_use(self))
-            return used
+        (``Kernel.resources``, ``answer``), in a shell its movers' and its static region's
+        with them; or what they wait on, or why it is refused."""
         return self.answer(Kernel.resources)
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}({', '.join(self.order)})"
 
 
-def _decisions(point: DataflowCoreKernel) -> dict[Key, inspection.DecisionInfo[object]]:
+def _decisions(point: Kernel) -> dict[Key, inspection.DecisionInfo[object]]:
     """Every Decision of ``point``, by key, by member in rank order, each member's in the
     flow order: its class's, listed or not (a choice its facts alone rule out is in no list
     of a design space, and is still a choice by name)."""
-    names = type(point).names
+    names = names_of(point)
     found: dict[str, dict[Key, inspection.DecisionInfo[object]]] = {
         name: {} for name in names.members
     }
@@ -786,7 +859,7 @@ class KernelHook:
         network = _kernel(composition)
         if network.shell is None:
             return tuple(network.members)
-        return (*network.members, network.shell)
+        return (*network.members, *network.names.placed, network.shell)
 
 
 #: FINN's hook, the one every FINN seam is made with.
@@ -1049,10 +1122,10 @@ class Seam(search.Seam):
 
     def cost(self, network: CoreComposition, members: Iterable[str] | None = None) -> Cost:
         """Each member's cycles a frame, buffering and resources (``Kernel.frame_cycles``,
-        ``Kernel.buffering``, ``Kernel.resources``; only ``members``' when named), and what
-        its cycles assume (``Kernel.assumed``, where known and not empty),
-        one member at a time, so a member that waits
-        hides no other."""
+        ``Kernel.buffering``, ``Kernel.resources``; only ``members``' when named, else every
+        member's and, in a shell, each mover's), and what its cycles assume
+        (``Kernel.assumed``, where known and not empty), one member at a time, so a member
+        that waits hides no other."""
         cycles: dict[str, int] = {}
         buffering: dict[str, int] = {}
         waiting: dict[str, tuple[Key, ...]] = {}
@@ -1060,7 +1133,10 @@ class Seam(search.Seam):
         resources: dict[str, Resources] = {}
         unstated: dict[str, tuple[Finding, ...]] = {}
         assumed: dict[str, tuple[str, ...]] = {}
-        for name in network.members if members is None else members:
+        named = (
+            (*network.members, *map(network.placed, network.movers)) if members is None else members
+        )
+        for name in named:
             held = network.query(name, Kernel.buffering)
             if isinstance(held, Available):
                 buffering[name] = held.value

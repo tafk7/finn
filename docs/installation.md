@@ -140,20 +140,21 @@ In containers:
 
 ## Parts and custom devices
 
-A build names its part (or a board, which names one), and FINN reads
-the part's facts from its part catalog, `finn.platform.catalog`: every part of
-Zynq-7000, UltraScale, UltraScale+ and Versal that Vivado 2025.2 installs, its
-device, and the device's LUTs, flip-flops, RAMB18s, UltraRAMs and DSPs per SLR.
-Devices with identical resources share one record, and each device states the
-others it shares with. A device sold on a larger die (an XCZU2EG on the XCZU3EG's)
-states its own totals. Where it spans several SLRs, Vivado does not say how they
-split: each SLR states its site capacity, an upper bound for that SLR alone, and the
-device's totals cap their sum (`capped`), so not every SLR can be full at once.
-Which of those caps Vivado was seen to enforce, and which are inferred, is the
-device's `cap_evidence`. What FINN builds on a device (its fabric, DSP block and
-whether an UltraRAM takes initial contents) is the rule for Vivado's
-`(ARCHITECTURE, FAMILY)` pair, `finn.platform.architectures`. A part the catalog
-does not have is refused, `unknown-part`, with close names and none chosen.
+A build names its part (or a board, which names one), and FINN reads the part's
+facts from its part catalog, `finn.platform.catalog`: every part of the 7 Series
+(Artix-7, Kintex-7, Virtex-7, Spartan-7), Zynq-7000, UltraScale, UltraScale+ and
+Versal that Vivado 2025.2 installs, its device, and the device's LUTs, flip-flops,
+RAMB18s, UltraRAMs and DSPs per SLR. Devices with identical resources share one
+record, and each device states the others it shares with. A device sold on a larger
+die (an XCZU2EG on the XCZU3EG's) states its own totals. Where it spans several
+SLRs, Vivado does not say how they split: each SLR states its site capacity, an
+upper bound for that SLR alone, and the device's totals cap their sum (`capped`), so
+not every SLR can be full at once. Which of those caps Vivado was seen to enforce,
+and which are inferred, is the device's `cap_evidence`. What FINN builds on a device
+(its fabric, DSP block and whether an UltraRAM takes initial contents) is the rule
+for Vivado's `(ARCHITECTURE, FAMILY)` pair, `finn.platform.architectures`. A part
+the catalog does not have is refused, `unknown-part`, with close names and none
+chosen.
 
 ```python
 from finn.platform.catalog import device, part
@@ -171,9 +172,9 @@ again and reports every part, device or field that differs (exit 0: identical);
 processes at once, 8 by default).
 
 **A device FINN does not ship** (a new part, an engineering sample, a board with a
-custom part) is added without editing FINN: an overlay file, named by the machine
-setting `FINN_PLATFORM_CATALOG` (read once, when the catalog is first queried). It
-holds records of the committed data's schema, each list optional, and is validated
+custom part) is added without editing FINN: a parts overlay, a file `parts.json` in a
+declaration directory (one on the machine setting `FINN_PLATFORM_PATH`, below, or an
+installed package's), read once, when the catalog is first queried. It holds records of the committed data's schema, each list optional, and is validated
 when it is loaded (`catalog-overlay-invalid` names what is wrong):
 
 ```json
@@ -195,7 +196,7 @@ when it is loaded (`catalog-overlay-invalid` names what is wrong):
 ```
 
 ```bash
-FINN_PLATFORM_CATALOG=~/acme/parts.json build_dataflow ...
+FINN_PLATFORM_PATH=~/acme build_dataflow ...     # ~/acme/parts.json
 ```
 
 - A device's `resources` is its record, or the `digest` of one the catalog ships
@@ -211,6 +212,36 @@ FINN_PLATFORM_CATALOG=~/acme/parts.json build_dataflow ...
   (`report/step_explore.json`, `resources.part.source`).
 - An entry whose name is a shipped part or device is refused, unless it says
   `"overrides": true`; `overrides` on a name the catalog does not ship is refused.
+  A name two overlays both add is refused.
+
+**Boards, shells and the rest of a platform** are declarations: a file `platform.toml`
+of five kinds (`boards`, `linkers`, `runtimes`, `movers`, `shells`), read from FINN's
+own (`src/finn/platform/data/platform.toml`), from each installed package's entry point
+in the group `finn.platform` (its value the name of a package holding `platform.toml`
+and, optionally, `parts.json`, found through the distribution's metadata without
+importing the package), and from each directory on `FINN_PLATFORM_PATH`
+(`os.pathsep`-separated). A source only adds names: one declared twice is refused,
+`platform-name-taken`, naming both origins. A shell may start from another's
+declaration (`based_on`) and replace its keys; a linker, runtime or mover kind names
+its code by `module:attribute`, imported only when it is used. A moved mover kind's
+code has an `offer(width_cap)` making what it offers each edge of a core, as
+`finn.kernels.iodma.IodmaHls` does.
+
+```toml
+[boards.Acme-ZU3]
+part = "xczu3eg_es1-sbva484-1-e"
+
+[shells.acme]
+based_on = "pynq"
+
+[shells.acme.boards.Acme-ZU3]
+board_part = "acme.com:zu3:part0:1.0"
+```
+
+`finn-platform list [KIND]` prints every declaration with its origin, `finn-platform
+show part|board|shell NAME` one of them (a shell as its typed rows), and `finn-platform
+check` checks them all against each other and against the part catalog, importing each
+declared code and asking each moved mover kind for its offer (exit 1 on any finding).
 
 ## Co-develop QONNX, Brevitas, finn-hlslib or another dependency
 
@@ -259,8 +290,9 @@ where.
 FINN's own sources in the wheel are the XSI bridge's, in `finn/xsi/src`; the kernels'
 RTL and HLS are FinnLib's (the `finnlib` resource). Look them up by resource name,
 not location: `finn.resources.path("xsi")`; inside FINN,
-`finn.xsi.paths.resource_path(family, *parts)` does the same. The pynq shell's
-data (its PYNQ driver files and design description) is in `finn/shells/pynq/data`.
+`finn.xsi.paths.resource_path(family, *parts)` does the same. The driver a build
+ships is FINN's shared driver, `finn/shells/runtime`, copied beside its runtime's device
+(`finn/shells/pynq/device.py` on pynq).
 The Python XSI driver lives at `src/finn_xsi/`.
 Editable installations observe changes to these directly. Generated RTL, driver
 files and compiled XSI extensions belong in writable build storage, never in the
@@ -495,7 +527,8 @@ transcript under `logs/<step>/` (`<run>.stdout.log`, `.stderr.log`, written as t
 tool runs), the intermediate models, and the outputs its steps made. `report/build.json` is
 the build's manifest, the index of the run a program reads after the exit code, and
 never the log: the build's identity (FINN's revision where it is known, the
-toolchain's selection, the target and the model), what checking the
+toolchain's selection, the target with its shell's linker, the runtime and where each
+declaration it stands on is declared, and the model), what checking the
 configuration found (its rejections and the limitations warned of), the plan (the steps
 it runs, and each setting with its value or default and its readers), each step with
 its status (`running` while it runs, then
@@ -512,8 +545,12 @@ reach it as records of one logger, `finn.core.reporting.manifest`, whose level
 the build sets: a caller that quiets another of FINN's loggers keeps them. The model
 records only what a later step consumes, in `finn.outputs`: the packaged IP (`ip`,
 `vlnv`, `interfaces`, `ip_key`, `ip_options`) on the partition's body, the bitfile
-(`bitfile`, `hwh`, `bitfile_made_from`, `bitfile_ip_key`, `bitfile_options`) on the
-parent graph; the bitfile's reports are beside it under `report/`.
+(`bitfile`, `bitfile_made_from`, `bitfile_ip_key`, `bitfile_options`) on the parent
+graph; the files the bitfile loads with are beside it in `bitfile/`, and its reports under
+`report/`, with the record of what the bitfile's build collected (`report/linked.json`),
+which the driver and the resources report read, each only the files it names; a rebuild
+replaces `bitfile/`, the build's own, whole, and removes the reports the last one
+collected.
 
 What a build logs, at which level, and what reaches the console
 (`finn.core.reporting.log`):
@@ -544,7 +581,7 @@ Vendor commands execute with argv, child env and cwd. Probes use the identical
 route and a bounded timeout. Every function that runs a tool requires a
 prepared toolchain (`toolchain=`). Only the entry points a user calls default to
 one: `PackagePartition`, `ElaboratePartition` and the XSim executor when they are
-made, the pynq shell's `BuildPynqBitfile`, and the command lines
+made, the bitfile's build `finn.shells.build.BuildBitfile`, and the command lines
 (`python -m finn.platform.generate`, `python -m finn.xsi.setup`). Each prepares the
 machine's once and passes it down,
 `finn.toolchain.launcher.host_toolchain()`: the environment as configured (no
@@ -593,7 +630,9 @@ the configuration states no `toolchain`):
 `target` states the clock period, a `board` or a `part` (a board gives its part; a
 part beside it is an assertion) and the `shell`: `ip` unless one is stated, the
 packaged IP its user integrates, whose target states the part alone; `pynq`, the
-Zynq block design for a board.
+Zynq block design for a board. It may name the `runtime` the build's driver runs on, of
+those its shell offers (`pynq` offers `pynq`); unstated, it is the shell's first, and a
+runtime the shell does not offer is refused (`runtime-not-offered`).
 
 `boundary` states, for the `ip` shell, what its integrator presents or takes at each
 port of the partition, by the partition's port names (`s_axis_<i>` for its i-th input,
@@ -627,8 +666,9 @@ drawn from the partition's input datatypes, checked against the partition in Pyt
 the build does not run it); its setting `ooc_synth`
 (default false) synthesizes the IP out of context. `step_build_bitfile` builds the
 shell around the partition to a bitfile (packaging the partition itself unless
-`step_package_partition` packaged it), `step_make_driver` writes the PYNQ driver for
-that bitfile, and `step_deployment_package` packages both for the board, in
+`step_package_partition` packaged it) through its shell's declared linker,
+`step_make_driver` writes the driver of the build's runtime (`pynq` on pynq) for that
+bitfile, and `step_deployment_package` packages both for the board, in
 `deploy/`. These three need a shell with a bitfile build (`pynq`), and each is refused
 at its turn on another, such as `ip`. An output made from another is listed after it:
 the driver after the bitfile, the deployment after both; a step whose input is missing

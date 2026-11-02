@@ -43,10 +43,10 @@ from finn.core.rtlsim_pacing import FREE, STALLED
 from finn.core.search import Ranked, Refused
 from finn.core.space import Available, inspection
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import body_row, configured_network, shell_composition
-from finn.kernels.budgets import SHELL, counts
+from finn.custom_op.kernels.shell import configured_network, mover_contracts
 from finn.kernels.dataflow_core import DataflowCoreKernel
-from finn.kernels.explore import Seam
+from finn.kernels.explore import CoreComposition, Seam
+from finn.kernels.shell_rules import SHELL, counts
 from finn.toolchain.launcher import host_toolchain
 from finn.transformation.kernels import PackagePartition
 from finn.transformation.kernels.package import ElaboratePartition, boundary_facts
@@ -54,12 +54,9 @@ from finn.transformation.kernels.package import ElaboratePartition, boundary_fac
 LOGITS = "MatMul_3_out0"
 FRAMES = 2
 """Images streamed through the partition in XSim, back to back."""
-# The partition's boundary, its free sides' and movers' facts in the Zynq shell:
-# 784 UINT8 pixels in 49 beats of 16 lanes, which an IODMA_hls reads from a 128-bit port
-# with no width converter; ten INT7 logits over [-61, 61] (the last MatMul's columns over its
-# activations' range, [-1, 1]) in one beat of 72 bits, which an IODMA_hls writes through
-# a converter to an 8-bit port, nine words.
-MOVER = {"kind": "iodma_hls", "frames_per_call": 1, "control_buses": 1}
+# The partition's boundary, its free sides' facts in the Zynq shell: 784 UINT8 pixels in 49
+# beats of 16 lanes; ten INT7 logits over [-61, 61] (the last MatMul's columns over its
+# activations' range, [-1, 1]) in one beat of 72 bits.
 FACTS = (
     [
         {
@@ -71,14 +68,6 @@ FACTS = (
             "lanes": 16,
             "beats": 49,
             "tdata": 128,
-            "mover": {
-                **MOVER,
-                "direction": "in",
-                "memory_width": 128,
-                "words": 49,
-                "converter": False,
-                "call_cycles": 13,
-            },
         }
     ],
     [
@@ -91,17 +80,33 @@ FACTS = (
             "lanes": 10,
             "beats": 1,
             "tdata": 72,
-            "mover": {
-                **MOVER,
-                "direction": "out",
-                "memory_width": 8,
-                "words": 9,
-                "converter": True,
-                "call_cycles": 4,
-            },
         }
     ],
 )
+# Its movers in that shell, by name: an IODMA_hls reads the pixels from a 128-bit port with
+# no width converter, and one writes the logits through a converter to an 8-bit port, nine
+# words.
+MOVER = {"kind": "iodma_hls", "frames_per_call": 1, "control_buses": 1}
+MOVERS = {
+    "in0": {
+        **MOVER,
+        "direction": "in",
+        "port": "s_axis_0",
+        "memory_width": 128,
+        "words": 49,
+        "converter": False,
+        "call_cycles": 13,
+    },
+    "out0": {
+        **MOVER,
+        "direction": "out",
+        "port": "m_axis_0",
+        "memory_width": 8,
+        "words": 9,
+        "converter": True,
+        "call_cycles": 4,
+    },
+}
 
 
 @pytest.mark.slow
@@ -145,9 +150,15 @@ def test_tfc_w2a2_computes_its_logits_in_xsim(tfc_streamlined: Path, tmp_path: P
     # nothing behind.
     assert not np.array_equal(*expected)
     bound_found = bound_in_shell(body, body.graph.node)
-    bound = shell_composition(bound_found.point, body_row(body))
+    bound = CoreComposition(bound_found.point)
     assert bound.undecided() == () and not bound_found.stale
     assert bound.boundary == ((body.graph.input[0].name, "s_axis_0"), (LOGITS, "m_axis_0"))
+    contracts = mover_contracts(bound)
+    assert isinstance(contracts, Available)
+    assert {
+        name: {key: getattr(contract, key) for key in MOVERS[name]}
+        for name, contract in contracts.value
+    } == MOVERS
     point = configured_network(body, "partition")
     boundary = point.network.boundary
     # The input's one threshold row, shared by its 784 pixels, is bound as it is
@@ -292,10 +303,10 @@ def test_tfc_w2a2_binds_the_ultra96_platform(tfc_streamlined: Path, tmp_path: Pa
 
 # Partitions the whole network, a few seconds.
 @pytest.mark.slow
-def test_tfc_w2a2s_partition_holds_the_zynq_shells_budgets_as_its_rules(
+def test_tfc_w2a2s_partition_holds_the_zynq_shells_rules(
     tfc_streamlined: Path, tmp_path: Path
 ) -> None:
-    """TFC's partition in the Zynq shell holds the shell member (``finn.kernels.budgets``),
+    """TFC's partition in the Zynq shell holds the shell member (``finn.kernels.shell_rules``),
     which is no kernel or channel: in no module, persisted choice or cost. Its rules are
     the partition's: each MatMul's pumped core and each weight memory pumped are refused
     (``viable``, a change, the seam), the shell supplying no doubled clock, a core not
@@ -304,12 +315,16 @@ def test_tfc_w2a2s_partition_holds_the_zynq_shells_budgets_as_its_rules(
     _, body = partition(ModelWrapper(str(tfc_streamlined)), tmp_path)
     bound = core_in_shell(body, body.graph.node)
     assert bound.shell == SHELL and SHELL not in {*bound.members, *bound.order}
-    module = bound.answer(DataflowCoreKernel.module)
+    module = bound.core_answer(DataflowCoreKernel.module)
     assert isinstance(module, Available)
     assert not any(label.startswith(SHELL) for label, _ in module.value.fragment.instances)
     assert {owner for owner, _ in bound.chosen()} <= set(bound.members)
-    assert set(Seam(ULTRA96.platform).cost(bound).cycles) == set(bound.members)
-    assert counts(bound.member(SHELL)) == Available((2, 0, False))  # its two movers' buses
+    assert set(Seam(ULTRA96.platform).cost(bound).cycles) == {
+        *bound.members,
+        *map(bound.placed, bound.movers),
+    }
+    assert counts(bound.member(SHELL)) == Available(((), 0, False))  # the core's own: none
+    assert bound.member(SHELL).windows == (64, 64)  # its two movers'
     configured_network(body, "tfc")  # the netlist's count is the rules'
     states = dict(bound.states())
     chosen = bound.chosen()
@@ -332,19 +347,23 @@ def test_tfc_w2a2s_partition_holds_the_zynq_shells_budgets_as_its_rules(
             if isinstance(item, inspection.Refused)
         }
         selected = cores.get(key, True)
-        assert refusing == ({True: [(SHELL, f"{key[0]}-clock")]} if selected else {}), key
+        assert refusing == (
+            {True: [(SHELL, f"DataflowCore_0-{key[0]}-clock")]} if selected else {}
+        ), key
     first = ("MatMul_0", f"compute.{chosen[('MatMul_0', 'compute')]}.compute_pumping")
     trial = bound.trial({first: True})
     assert [(key, [f.code for f in found]) for key, found in trial.refused.items()] == [
-        ((SHELL, "MatMul_0-clock"), ["clock-unavailable"])
+        ((SHELL, "DataflowCore_0-MatMul_0-clock"), ["clock-unavailable"])
     ]
     changed = Seam(ULTRA96.platform).set(bound, {first: True})
-    assert isinstance(changed, Refused) and list(changed.why) == [(SHELL, "MatMul_0-clock")]
+    assert isinstance(changed, Refused) and list(changed.why) == [
+        (SHELL, "DataflowCore_0-MatMul_0-clock")
+    ]
     write_raw(body, "MatMul_0", first[1], 1)
     pumped = core_in_shell(body, body.graph.node)
     found = Seam(ULTRA96.platform).refusals(pumped)
     assert {name: [f.code for f in why] for name, why in found.items()} == {
         SHELL: ["clock-unavailable"]
     }
-    with refused("clock-unavailable", error=KernelOpError, owner="MatMul_0-clock"):
+    with refused("clock-unavailable", error=KernelOpError, owner="tfc-MatMul_0-clock"):
         configured_network(body, "tfc")

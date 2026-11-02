@@ -23,7 +23,6 @@ from finn.platform.architectures import CAP_EVIDENCE, RULES, rules_digest
 from finn.platform.capabilities import RESOURCE_NAMES, DspBlock, Fabric, Resources
 from finn.platform.catalog import (
     DATA,
-    OVERLAY_SETTING,
     SLRS_CAPPED,
     Catalog,
     Record,
@@ -33,6 +32,9 @@ from finn.platform.catalog import (
     part_report,
     parts,
 )
+from finn.platform.check import check
+from finn.platform.declarations import PARTS_OVERLAY, PATH_SETTING, declarations
+from finn.platform.declarations import load as load_declarations
 from finn.platform.generate import (
     DeviceProbe,
     GenerationError,
@@ -240,7 +242,7 @@ def test_an_overlay_device_states_its_fabric_where_its_pair_has_no_rule(
     with refused(
         "catalog-overlay-invalid",
         error=TargetRefused,
-        owner="FINN_PLATFORM_CATALOG",
+        owner="parts.json",
         message="no rule for newarch/newfamily: state its fabric",
     ):
         load(data, overlay(tmp_path, {"devices": [device]}))
@@ -281,6 +283,10 @@ def test_an_overlay_redefines_a_shipped_entry_only_where_it_says_so(
         load(data, overlay(tmp_path, CUSTOM | {"parts": [stray]}))
 
 
+KEYS = ("resources", "devices", "parts")
+"""An overlay's collections, each a JSON array."""
+
+
 @pytest.mark.parametrize(
     "stated, reason",
     [
@@ -306,6 +312,24 @@ def test_an_overlay_redefines_a_shipped_entry_only_where_it_says_so(
             "no device 'xcnone'",
         ),
         ([], "a record is a JSON object"),
+        *(({"source": "s", key: None}, f"{key}: a JSON array, not None") for key in KEYS),
+        *(({"source": "s", key: {}}, f"{key}: a JSON array, not {{}}") for key in KEYS),
+        (
+            {
+                "source": "s",
+                "parts": [
+                    {
+                        "name": "xczu3eg-sbva484-1-e",
+                        "device": "xc7a35t",
+                        "package": "sbva484",
+                        "speed": "-1",
+                        "temperature": "e",
+                        "overrides": "false",
+                    }
+                ],
+            },
+            "part xczu3eg-sbva484-1-e: overrides is true or false, not 'false'",
+        ),
     ],
 )
 def test_an_invalid_overlay_is_refused_on_load(
@@ -331,17 +355,21 @@ def guide_overlay() -> dict[str, Any]:
 
 @pytest.fixture
 def machine_overlay(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
-    """The committed catalog with the guide's overlay named by the machine setting."""
-    path = overlay(tmp_path, guide_overlay())
-    monkeypatch.setenv(OVERLAY_SETTING, str(path))
+    """The committed catalog with the guide's overlay, ``parts.json`` in a directory on the
+    machine setting ``FINN_PLATFORM_PATH``."""
+    path = tmp_path / PARTS_OVERLAY
+    path.write_text(json.dumps(guide_overlay()))
+    monkeypatch.setenv(PATH_SETTING, str(tmp_path))
+    declarations.cache_clear()
     catalog.cache_clear()
     yield path
-    monkeypatch.delenv(OVERLAY_SETTING)
+    monkeypatch.delenv(PATH_SETTING)
+    declarations.cache_clear()
     catalog.cache_clear()
 
 
 def test_the_guides_overlay_resolves_its_custom_part(machine_overlay: Path) -> None:
-    """``docs/installation.md``'s example, named by ``FINN_PLATFORM_CATALOG``: its part
+    """``docs/installation.md``'s example, in a directory on ``FINN_PLATFORM_PATH``: its part
     resolves with its device's totals, and the exploration report states their source."""
     target = resolve_target(part="XCZU3EG_ES1-SBVA484-1-E", period_ns=5.0)
     assert target.part == "xczu3eg_es1-sbva484-1-e"
@@ -351,6 +379,24 @@ def test_the_guides_overlay_resolves_its_custom_part(machine_overlay: Path) -> N
     reported = part_report(target.part)
     assert reported["source"] == f"{guide_overlay()['source']} (overlay {machine_overlay})"
     assert reported["slrs"] == [stated]
+
+
+def test_declarations_given_resolve_by_the_overlay_they_hold(tmp_path: Path) -> None:
+    """Declarations loaded with a directory holding a board, a shell for it and the guide's
+    overlay check and resolve by their own catalog, whatever the process's environment:
+    the part is known to them and to no other load."""
+    (tmp_path / PARTS_OVERLAY).write_text(json.dumps(guide_overlay()))
+    (tmp_path / "platform.toml").write_text(
+        '[boards.Custom]\npart = "xczu3eg_es1-sbva484-1-e"\n'
+        '[shells.custom]\nbased_on = "pynq"\n'
+        '[shells.custom.boards.Custom]\nboard_part = "example.com:custom:part0:1.0"\n'
+    )
+    found = load_declarations([tmp_path], environ={})
+    assert check(found) == []
+    target = resolve_target(board="Custom", shell="custom", period_ns=5.0, declared=found)
+    assert target.part == "xczu3eg_es1-sbva484-1-e"
+    with refused("unknown-part", error=TargetRefused):
+        resolve_target(part=target.part, period_ns=5.0, declared=load_declarations(environ={}))
 
 
 def test_device_and_parts_answer_from_the_process_catalog(machine_overlay: Path) -> None:
@@ -476,7 +522,13 @@ def test_the_manifest_counts_the_data_and_names_the_rules_the_probe_checked(
         "resources": len({each.digest for each in committed.devices.values()}),
         "pairs": len({(d.architecture, d.family) for d in committed.devices.values()}),
     }
-    assert set(manifest["series"]) == {"Zynq-7000", "UltraScale", "UltraScale+", "Versal"}
+    assert set(manifest["series"]) == {
+        "7 Series",
+        "Zynq-7000",
+        "UltraScale",
+        "UltraScale+",
+        "Versal",
+    }
     # A rule the probe checks changed without a new catalog: run the generator.
     assert manifest["rules"] == rules_digest()
     assert {(d.architecture, d.family) for d in committed.devices.values()} == set(RULES)
@@ -484,9 +536,15 @@ def test_the_manifest_counts_the_data_and_names_the_rules_the_probe_checked(
 
 def test_the_catalog_has_every_installed_part_of_the_supported_series(committed: Catalog) -> None:
     devices = committed.devices.values()
-    assert (len(committed.by_name), len(devices)) == (4_725, 261)
+    assert (len(committed.by_name), len(devices)) == (5_601, 351)
     series = Counter(RULES[(d.architecture, d.family)].series for d in devices)
-    assert series == {"Zynq-7000": 24, "UltraScale": 30, "UltraScale+": 137, "Versal": 70}
+    assert series == {
+        "7 Series": 90,
+        "Zynq-7000": 24,
+        "UltraScale": 30,
+        "UltraScale+": 137,
+        "Versal": 70,
+    }
 
 
 def test_every_part_resolves_or_is_refused_by_name(committed: Catalog) -> None:
@@ -503,7 +561,10 @@ def test_every_part_resolves_or_is_refused_by_name(committed: Catalog) -> None:
     assert refused == {}  # every pair of the installed series is confirmed by the probe
 
 
-CAPPED = ["xcku085", "xcku085_CIV", "xcvu160", "xcvu160_CIV", "xcvu27p", "xcvu5p", "xcvu5p_CIV"]
+CAPPED = sorted(
+    ["xcku085", "xcku085_CIV", "xcvu160", "xcvu160_CIV", "xcvu27p", "xcvu5p", "xcvu5p_CIV"]
+    + ["xc7vh580t", "xc7vh870t", "xc7vx1140t"]
+)
 """The reduced dies of several SLRs Vivado 2025.2 installs."""
 
 
@@ -559,6 +620,9 @@ def test_the_cap_evidence_covers_every_capped_device(committed: Catalog) -> None
         "xcku085_CIV": [],
         "xcvu160_CIV": [],
         "xcvu5p_CIV": [],
+        "xc7vh580t": [],
+        "xc7vh870t": [],
+        "xc7vx1140t": [],
     }
     for name, each in CAP_EVIDENCE.items():
         device = committed.device(name)
@@ -566,6 +630,14 @@ def test_the_cap_evidence_covers_every_capped_device(committed: Catalog) -> None
         assert {"lut", "ff"} <= set(device.capped) - each.proven  # never filled
         assert name in each.evidence and "Vivado 2025.2" in each.evidence
     assert "dsp" not in CAP_EVIDENCE["xcvu27p"].proven  # its DSP fills did not complete
+    # Three Virtex-7 dies of several SLRs hold more slices than their totals state, and
+    # their memories and DSPs match: their LUT and FF caps are the totals, no fill ran.
+    for name in ("xc7vh580t", "xc7vh870t", "xc7vx1140t"):
+        assert committed.device(name).capped == ("lut", "ff")
+        assert CAP_EVIDENCE[name].evidence.startswith(f"No fill ran on {name}")
+    assert committed.device("xc7vx1140t").resources == Resources(
+        lut=712_000, ff=1_424_000, bram18=3_760, uram=0, dsp=3_360
+    )
 
 
 def reduced_vu5p() -> dict[str, Any]:

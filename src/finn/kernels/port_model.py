@@ -16,7 +16,7 @@ base's, ``Kernel.netlist``) calls each port's ordinary methods, ``pin_values``,
 ``held_values`` and ``pins_presented``, over literal model inputs and the pure
 physical functions; it must not read these Views, so that it collects directly
 returned refusals. ``OtherPins`` is the one raw pin declaration: a module's pins
-outside its ports and its control bus.
+outside its ports, its control bus and its memory ports (``MemoryPort``).
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ from finn.dataflow.schedule import Access, Affine, Index, Pace, Refused, Schedul
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence
-from finn.kernels.artifacts.abi import Clocking, Direction, Pin
+from finn.kernels.artifacts.abi import Bus, Clocking, Direction, Endpoint, Pin, StandardProtocol
 from finn.kernels.artifacts.module import Held
 from finn.kernels.base import PortPins
 from finn.kernels.laws import (
@@ -562,6 +562,33 @@ class OtherPins(Group):
         return False
 
 
+class MemoryPort(Group):
+    """A memory port its module initiates (``bus``: an AXI4 initiator,
+    ``StandardProtocol.AXIMM``), presented at the module's boundary for its shell to bind
+    to memory, as a memory mover's (``finn.kernels.movers``). Its pins go after its kernel's
+    control bus and before its ports. A bus of another protocol or endpoint is refused
+    (``memory-port-bus``)."""
+
+    bus: Bus = Param()
+
+    def pin_values(self) -> tuple[Pin, ...] | Rejected:
+        bus = self.bus
+        if bus.protocol is not StandardProtocol.AXIMM or bus.endpoint is not Endpoint.INITIATOR:
+            return reject(
+                "memory-port-bus",
+                f"{bus.name} is a {bus.endpoint.value} of {bus.protocol.value}: a memory port "
+                "is an AXI4 initiator",
+            )
+        return (bus,)
+
+    def held_values(self) -> Held:
+        return Held()
+
+    def pins_presented(self) -> bool:
+        """Always presented: its shell binds it."""
+        return True
+
+
 def stream_ports(space_type: type[Space]) -> dict[str, StreamPort]:
     """The stream ports ``space_type`` declares, in inherited declaration order, through
     its Groups (by dotted path, ``group.port``), each bound where it is declared. Stops at
@@ -608,6 +635,7 @@ def exposed_ports(space_type: type[Space]) -> dict[str, StreamPort]:
 
 __all__ = [
     "InPort",
+    "MemoryPort",
     "OtherPins",
     "OutPort",
     "StreamPort",

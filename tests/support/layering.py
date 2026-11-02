@@ -31,6 +31,7 @@ finn.kernels, finn.platform, finn.toolchain, finn.util  <-  finn.platform.genera
                                                             catalog generator; nothing
                                                             imports it)
 finn.platform.capabilities  <-  finn.kernels, and every row above them
+finn.shells.runtime (numpy; qonnx, dataset_loading where used)  <-  finn.shells, the flow
 ```
 
 Each row imports every row to its left. What a run says (finn.core.reporting: its
@@ -171,7 +172,7 @@ LAYERS: tuple[Layer, ...] = (
     ),
     # The platform registry: parts, boards and shell rows, resolved to the build's target
     # (finn.platform.target), the capabilities kernels read with the part, shell and
-    # board. A partition's network in its shell reads its row, whose budgets a module's pins
+    # board. A partition's network in its shell reads its row, whose limits a module's pins
     # (finn.kernels.artifacts) are held to. A refusal carries its finding
     # (finn.core.reporting).
     Layer(
@@ -184,7 +185,7 @@ LAYERS: tuple[Layer, ...] = (
     # What is read of a partition and what a build made of it (finn.outputs, the search's
     # record among it, which no design digest covers): below both its writers
     # (the cut, PackagePartition) and its readers (the channel's annotation, whose choices
-    # a partition's body states; the builder, the integration export, the shell's build,
+    # a partition's body states; the builder, the integration description, the shell's build,
     # the executors). qonnx (and onnx, which qonnx depends on: its nodes are NodeProto)
     # and the findings only, so the builder reads it without loading the kernel stack.
     Layer(
@@ -374,14 +375,26 @@ LAYERS: tuple[Layer, ...] = (
         ("numpy", "qonnx"),
         "tests/kernel_ops",
     ),
+    # The shells' shared driver: a build's cores run on a device by its runtime file. It
+    # runs on the board, beside FINN or without it: numpy and qonnx's type module, and the
+    # rest of qonnx and onnx imported where it runs the parent graph's host nodes,
+    # dataset_loading where it validates.
+    Layer(
+        "shells.runtime",
+        ("finn.shells.runtime",),
+        (),
+        ("numpy", "qonnx", "onnx", "dataset_loading"),
+        "tests/kernel_ops",
+    ),
     # The shells' builds: what builds the partition into a shell (the pynq shell's block
-    # design, its movers' IODMAs, its driver), from the integration export. Below the
+    # design, its movers' IODMAs, its driver), from the integration description. Below the
     # flow: the builder runs them. The board's driver files (finn.shells.pynq.data)
     # import pynq, each other and, to validate, dataset_loading.
     Layer(
         "shells",
         ("finn.shells",),
         (
+            "shells.runtime",
             *_KERNEL_STACK,
             "platform",
             "graph.partition",
@@ -399,6 +412,7 @@ LAYERS: tuple[Layer, ...] = (
         "flow",
         ("finn",),
         (
+            "shells.runtime",
             *_KERNEL_STACK,
             "platform",
             "graph.partition",
@@ -436,15 +450,14 @@ LAYERS: tuple[Layer, ...] = (
     # The finn-dev oracle's captures (scripts/oracle): the standard library only. The
     # kernel tests compare with the HWCustomOp flow's values through it.
     Layer("tests.oracle", ("oracle",), (), (), "tests/kernels"),
-    # The shell's bus counts (finn.platform.shells.bus_counts) checked against the top's
-    # pins on every netlist a test reads, the fixture the kernel and the kernel-op tests'
-    # conftests import: the one place the kernel tests reach the platform registry. The
-    # counts' oracle: emission checks the shell's rules' counts (finn.kernels.budgets)
-    # against these.
+    # The shell's netlist counts (finn.kernels.shell_rules.netlist_counts) checked against
+    # the top's pins on every netlist a test reads, the fixture the kernel and the
+    # kernel-op tests' conftests import. The counts' oracle: emission checks the shell's
+    # rules' counts (finn.kernels.shell_rules.counts) against these.
     Layer(
         "tests.top_pins",
         ("support.top_pins",),
-        (*_KERNEL_STACK, "platform"),
+        _KERNEL_STACK,
         ("pytest",),
         "tests/kernels",
     ),
@@ -583,7 +596,7 @@ LAYERS: tuple[Layer, ...] = (
         ("space", "kernels", "tests.core.space"),
         ("support.models",),
         "tests/kernel_ops",
-        ("finn.custom_op.kernels.shell.core_point", "finn.core.graph.partition.CUT_NAME"),
+        ("finn.custom_op.kernels.shell.shell_point", "finn.core.graph.partition.CUT_NAME"),
     ),
 )
 

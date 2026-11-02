@@ -123,8 +123,6 @@ if __name__ == "__main__":
             # Data directories inside packages, not packages of their own.
             "finn.xsi.src",
             "finn.xsi.src.*",
-            "finn.shells.pynq.data",
-            "finn.shells.pynq.data.*",
             "finn.platform.data",
         ],
     )
@@ -136,9 +134,6 @@ if __name__ == "__main__":
         package_data={
             "finn": ["resources.toml"],
             "finn.xsi": resource_files("src/finn/xsi/src", prefix="src/"),
-            "finn.shells.pynq": resource_files(
-                "src/finn/shells/pynq/data", prefix="data/", extra=(".py",)
-            ),
             "finn.core.graph": ["py.typed"],
             "finn.core.reporting": ["py.typed"],
             "finn.core.search": ["py.typed"],
@@ -147,7 +142,13 @@ if __name__ == "__main__":
             "finn.custom_op.partition": ["py.typed"],
             "finn.dataflow": ["py.typed"],
             "finn.kernels": ["py.typed"],
-            "finn.platform": ["catalog.tcl", "data/*.jsonl", "data/manifest.json", "py.typed"],
+            "finn.platform": [
+                "catalog.tcl",
+                "data/*.jsonl",
+                "data/manifest.json",
+                "data/platform.toml",
+                "py.typed",
+            ],
             "finn.shells": ["py.typed"],
         },
     )

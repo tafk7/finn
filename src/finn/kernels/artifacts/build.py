@@ -230,15 +230,24 @@ def emit_module(
         raise BuildError(str(error)) from error
     contents = dict(drafts)
     written = tuple(file.path for file in order)
-    directory = directory.resolve()
-    _refuse_aliases(directory, written, tuple(data))
-
-    directory.mkdir(parents=True, exist_ok=True)
-    for file in order:
-        _place(directory / file.path, contents[file])
-    for path, content in data.items():
-        _place(directory / path, content)
+    directory = write_files(directory, {file.path: contents[file] for file in order}, data)
     return EmittedModule(name, directory, written, tuple(data))
+
+
+def write_files(
+    directory: Path, sources: Mapping[str, bytes], data: Mapping[str, bytes] | None = None
+) -> Path:
+    """Write a module's ``sources`` and ``data`` files, by their staged names, under
+    ``directory`` resolved once (the links above it followed as the caller meant them),
+    each a new file; the resolved directory. Staged names that would reach one file twice
+    are refused before anything is written (``_refuse_aliases``)."""
+    data = data or {}
+    directory = directory.resolve()
+    _refuse_aliases(directory, tuple(sources), tuple(data))
+    directory.mkdir(parents=True, exist_ok=True)
+    for path, content in (*sources.items(), *data.items()):
+        _place(directory / path, content)
+    return directory
 
 
 def _refuse_aliases(directory: Path, sources: Sequence[str], data: Sequence[str]) -> None:
@@ -494,4 +503,5 @@ __all__ = [
     "emit_module",
     "instance_net",
     "netlist",
+    "write_files",
 ]

@@ -42,7 +42,7 @@ from finn.core.space import inspection
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import network, persist
 from finn.custom_op.kernels.shell import configured_network
-from finn.kernels.dataflow_core import Bound
+from finn.kernels.dataflow_core import Bound, DataflowCoreKernel
 from finn.kernels.explore import CoreComposition
 from finn.platform.target import Target
 from finn.transformation.kernels import InferKernelTensors, kernel_choices_config
@@ -67,7 +67,7 @@ VERSAL = Target(part="a part with UltraRAM it initializes", platform=FULL_DSP58,
 """A target with UltraRAM, on which a MatMul's ``compute`` has two possible values."""
 
 
-def bound(model: ModelWrapper) -> tuple[CoreComposition, Bound]:
+def bound(model: ModelWrapper) -> tuple[CoreComposition, Bound[DataflowCoreKernel]]:
     """The network of ``model``'s nodes, bound from the graph, and the bind."""
     found = network(model, model.graph.node, name=CUT_NAME)
     return CoreComposition(found.point), found
@@ -80,7 +80,7 @@ def node(model: ModelWrapper) -> NodeProto:
     return first
 
 
-def stale(found: Bound) -> dict[str, list[tuple[str, str, dict[str, object]]]]:
+def stale(found: Bound[DataflowCoreKernel]) -> dict[str, list[tuple[str, str, dict[str, object]]]]:
     """The network's stale choices by key, each finding's code, owner and details."""
     return {
         key: [(found.code, found.owner, dict(found.details)) for found in findings]

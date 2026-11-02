@@ -5,7 +5,8 @@
 
 ``built_hls`` lists the module's HLS requests (``hls_requests``: each leaf whose
 source is an ``HlsSource``, each request once), stages each
-(``finn.kernels.artifacts.hls.stage_hls``, FinnLib as FINN resolves it), and takes
+(``finn.kernels.artifacts.hls.stage_hls``, each header root the resource FINN resolves
+by its name: FinnLib, finn-hlslib), and takes
 its product from the HLS cache, synthesizing what is missing
 (``finn.toolchain.hls.synthesize``), the requests in parallel, each its own tool
 process, at most as many at once as the toolchain's selection states Vivado's runs
@@ -15,6 +16,9 @@ against the leaf's declared pins (``finn.kernels.artifacts.rtl.check_abi``): the
 declaration stays the ABI, and a product that contradicts it is refused
 (``HlsAbiRefused``), as is one the checker cannot read. What it returns is what
 ``emit_module`` takes as ``built``: each request's exported Verilog by its top's name.
+``hls_products`` returns the products themselves, by the same names: a request that exports
+its IP holds it there (``HlsProduct.ip``), which a shell's linker instantiates (a mover's,
+``finn.shells.build.mover_ip``).
 
 Every caller that emits a module calls it first: ``PackagePartition`` and
 ``ElaboratePartition`` with the partition's part, the harness with the part it
@@ -62,7 +66,7 @@ def hls_requests(module: Module) -> tuple[tuple[Leaf, HlsSource], ...]:
     return tuple(found.values())
 
 
-def _verified(leaf: Leaf, product: HlsProduct) -> Path:
+def _verified(leaf: Leaf, product: HlsProduct) -> HlsProduct:
     files = sorted(path for path in product.verilog.iterdir() if path.suffix == ".v")
     checked = check_abi(leaf.abi.pins, files, leaf.name)
     if isinstance(checked, Declined):
@@ -78,32 +82,34 @@ def _verified(leaf: Leaf, product: HlsProduct) -> Path:
             f"{leaf.name} refuses its declared pins: "
             + "; ".join(each.message for each in checked),
         )
-    return product.verilog
+    return product
 
 
-def built_hls(
+def hls_products(
     module: Module,
     part: str,
     *,
     toolchain: Toolchain,
     cache: Path | None = None,
     roots: Mapping[str, Path] | None = None,
-) -> dict[str, Path]:
-    """Each HLS request's exported Verilog in ``module``, by its top's name, synthesized for
-    ``part`` unless cached (``cache``, ``$FINN_HOME/hls`` by default) and checked against
-    its leaf's pins. ``roots`` resolves the headers' roots (FinnLib as FINN resolves it by
-    default); ``toolchain`` runs HLS, at most ``vivado_jobs(toolchain.selection.vivado_jobs)``
-    syntheses at once: the number its selection states for Vivado's runs, else the machine's
-    cores, capped."""
+) -> dict[str, HlsProduct]:
+    """Each HLS request's product in ``module``, by its top's name, synthesized for ``part``
+    unless cached (``cache``, ``$FINN_HOME/hls`` by default) and checked against its leaf's
+    pins. ``roots`` resolves the headers' roots (by default each root the requests name, as
+    FINN resolves the resource of its name: FinnLib, finn-hlslib); ``toolchain`` runs HLS,
+    at most ``vivado_jobs(toolchain.selection.vivado_jobs)`` syntheses at once: the number
+    its selection states for Vivado's runs, else the machine's cores, capped."""
     requests = hls_requests(module)
     if not requests:
         return {}
-    roots = {"finnlib": resources.finnlib_root()} if roots is None else roots
+    if roots is None:
+        named = sorted({item.root for _, request in requests for item in request.headers})
+        roots = {name: Path(resources.path(name)) for name in named}
     scratch: Path = resources.scratch()  # type: ignore[no-untyped-call]
     scratch.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=scratch, prefix="hls_requests_") as staging:
 
-        def build(item: tuple[Leaf, HlsSource]) -> tuple[str, Path]:
+        def build(item: tuple[Leaf, HlsSource]) -> tuple[str, HlsProduct]:
             leaf, request = item
             staged = stage_hls(request, Path(staging) / request.function, roots=roots)
             product = synthesize(
@@ -116,4 +122,18 @@ def built_hls(
             return dict(pool.map(build, requests))
 
 
-__all__ = ["HlsAbiRefused", "built_hls", "hls_requests"]
+def built_hls(
+    module: Module,
+    part: str,
+    *,
+    toolchain: Toolchain,
+    cache: Path | None = None,
+    roots: Mapping[str, Path] | None = None,
+) -> dict[str, Path]:
+    """Each HLS request's exported Verilog in ``module``, by its top's name: its product's
+    (``hls_products``, which every argument is given to)."""
+    products = hls_products(module, part, toolchain=toolchain, cache=cache, roots=roots)
+    return {name: product.verilog for name, product in products.items()}
+
+
+__all__ = ["HlsAbiRefused", "built_hls", "hls_products", "hls_requests"]

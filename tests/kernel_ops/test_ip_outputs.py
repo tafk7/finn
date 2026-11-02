@@ -73,6 +73,7 @@ from finn.kernels.artifacts.module import instance_name
 from finn.platform.capabilities import Resources
 from finn.platform.request import TargetRequest
 from finn.platform.resolve import resolve_target
+from finn.shells.integration import describe
 from finn.toolchain import xsim
 from finn.toolchain.launcher import (
     Selection,
@@ -84,7 +85,6 @@ from finn.toolchain.launcher import (
 from finn.toolchain.vivado import hierarchical_utilization
 from finn.transformation.kernels import PackagePartition
 from finn.transformation.kernels.cut import CutKernelPartition
-from finn.transformation.kernels.integration import integration
 from finn.transformation.kernels.package import (
     boundary_facts,
     free_side,
@@ -416,7 +416,7 @@ def test_verification_records_the_design_it_verified_and_a_save_keeps_it(
     assert again.get(OUTPUT_VERIFIED) == design_digest(again) == before
 
 
-#: Ultra96 in the Zynq shell, whose integration reads the partition's movers.
+#: Ultra96 in the Zynq shell, whose integration description reads the partition's movers.
 ZYNQ = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
 
 
@@ -425,8 +425,9 @@ def test_packaging_and_the_integration_refuse_a_design_not_verified_as_it_is(
 ) -> None:
     """Emission compares the body's design with the one its verification recorded
     (``refuse_unverified``): packaging, before anything is staged, and the shell's
-    integration refuse a body never verified (``design-unverified``) and one changed since
-    (``design-changed``: here a FIFO stated by hand); verified again, both take it."""
+    integration description refuse a body never verified (``design-unverified``) and one
+    changed since (``design-changed``: here a FIFO stated by hand); verified again, both
+    take it."""
     model = streamed_w2_model()
     write_target(model, ZYNQ)
     choose_memories(model)
@@ -438,7 +439,7 @@ def test_packaging_and_the_integration_refuse_a_design_not_verified_as_it_is(
     )
 
     def refused(code: str) -> None:
-        for emit in (lambda: body.transform(packaging), lambda: integration(parent)):
+        for emit in (lambda: body.transform(packaging), lambda: describe(parent)):
             with pytest.raises(KernelOpError) as found:
                 emit()
             assert [(f.code, f.owner) for f in found.value.findings] == [
@@ -459,7 +460,7 @@ def test_packaging_and_the_integration_refuse_a_design_not_verified_as_it_is(
     refused("design-changed")
     verified(body, node.name)
     body.save(body_file)
-    integration(parent)
+    describe(parent)
     assert body.transform(packaging).get(OUTPUT_IP) == str(project / "ip")
 
 

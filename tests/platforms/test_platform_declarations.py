@@ -1,0 +1,849 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+
+"""The platform's declarations (``finn.platform.declarations``): FINN's own file, the
+three sources and their order, the refusals of a malformed or repeated declaration,
+``based_on``, code imported only on use, the checks (``finn.platform.check``) and the
+``finn-platform`` command; and a made-up platform (``support.example_platform``) declared
+outside FINN, which needs no change to FINN."""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from collections.abc import Iterator
+from dataclasses import dataclass
+from pathlib import Path
+
+import pytest
+from support.configure import core_in_shell
+from support.example_platform import DIRECTORY as EXAMPLE
+from support.example_platform import (
+    EXAMPLE_DMA,
+    AlternateRuntime,
+    ExampleDma,
+    ExampleLinker,
+    RecordingRuntime,
+)
+from support.models import kernel_model
+from support.refusals import refused
+
+from finn.core.graph.annotations.platform import write_target
+from finn.core.graph.partition import CUT_NAME
+from finn.core.space import Available
+from finn.custom_op.kernels.shell import mover_contracts, row_offer
+from finn.kernels.iodma import IodmaHls
+from finn.kernels.movers import IODMA_HLS
+from finn.platform import _cli
+from finn.platform.catalog import catalog
+from finn.platform.check import check
+from finn.platform.declarations import (
+    FINN_FILE,
+    GROUP,
+    PATH_SETTING,
+    Declarations,
+    Origin,
+    code,
+    declarations,
+    load,
+)
+from finn.platform.refusal import TargetRefused
+from finn.platform.resolve import origins, resolve_runtime, resolve_target
+from finn.platform.shells import MoverKind, Versions, mover_offer, shell_row, shell_rows
+from finn.transformation.kernels.cut import MakeCutChoices
+
+FINN_ONLY: dict[str, str] = {}
+"""An environment with no ``FINN_PLATFORM_PATH``."""
+
+
+def declared(tmp_path: Path, text: str, name: str = "platform.toml") -> Path:
+    """``text`` written as a declaration file in ``tmp_path``; its path."""
+    path = tmp_path / name
+    path.write_text(text)
+    return path
+
+
+def findings(declared_: Declarations) -> list[tuple[str, str]]:
+    return [(finding.code, finding.owner.split(": ")[-1]) for finding in check(declared_)]
+
+
+# -- FINN's own --------------------------------------------------------------------------
+
+
+def test_finn_declares_its_boards_shells_linker_runtime_and_mover_kind() -> None:
+    finn = load(environ=FINN_ONLY)
+    assert sorted(finn.shells) == ["ip", "pynq"]
+    assert list(finn.linkers) == ["vivado-block-design"]
+    assert list(finn.runtimes) == ["pynq"] and list(finn.movers) == ["iodma_hls"]
+    assert len(finn.boards) == 18
+    assert {
+        str(finn.origin(kind, name))
+        for kind in ("boards", "shells")
+        for name in ("V80", "ip")
+        if name in getattr(finn, kind)
+    } == {"FINN"}
+    assert finn.origin("shells", "pynq") == Origin("finn", FINN_FILE)
+    assert str(finn.origin("shells", "pynq")) == "FINN"
+    assert finn.shell("ip").any_board and finn.supporting("ZCU111") == ("ip",)
+    assert finn.supporting("Ultra96") == ("pynq", "ip")
+
+
+def test_finns_declarations_check() -> None:
+    assert check(load(environ=FINN_ONLY)) == []
+
+
+def test_reading_and_resolving_import_no_declared_code(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A declaration names its code; only ``code`` (and the checks) import it."""
+    monkeypatch.delitem(sys.modules, "support.example_platform", raising=False)
+    found = load([EXAMPLE], environ=FINN_ONLY)
+    shell_rows(found)
+    resolve_target(board="Example-ZU3", period_ns=5.0, shell="example", declared=found)
+    assert "support.example_platform" not in sys.modules
+    assert (
+        code(found.runtimes["example-run"].code)
+        is sys.modules["support.example_platform"].RecordingRuntime
+    )
+
+
+# -- sources and their refusals ----------------------------------------------------------
+
+
+def test_a_name_is_declared_once_across_every_source(tmp_path: Path) -> None:
+    again = declared(tmp_path, '[boards.Ultra96]\npart = "xczu3eg-sbva484-1-i"\n')
+    with refused(
+        "platform-name-taken",
+        error=TargetRefused,
+        owner=f"{again}: boards.Ultra96",
+        message=f"^boards.Ultra96 is declared by FINN and again by {again}: a source only adds",
+    ):
+        load([again], environ=FINN_ONLY)
+    on_path = tmp_path / "on-path"
+    on_path.mkdir()
+    declared(on_path, '[shells.pynq]\nboards = "any"\nclocks = {}\n')
+    with refused(
+        "platform-name-taken",
+        error=TargetRefused,
+        message=f"^shells.pynq is declared by FINN and again by {PATH_SETTING} {on_path}",
+    ):
+        load(environ={PATH_SETTING: str(on_path)})
+
+
+def test_the_path_lists_directories_each_declaring(tmp_path: Path) -> None:
+    first, second = tmp_path / "first", tmp_path / "second"
+    for directory, board in ((first, "One"), (second, "Two")):
+        directory.mkdir()
+        declared(directory, f'[boards.{board}]\npart = "xczu3eg-sbva484-1-e"\n')
+    found = load(environ={PATH_SETTING: f"{first}:{second}"})
+    assert [str(found.origin("boards", name)) for name in ("One", "Two")] == [
+        f"{PATH_SETTING} {first}",
+        f"{PATH_SETTING} {second}",
+    ]
+    assert [directory for _, directory in found.directories] == [first, second]
+    with refused("declaration-invalid", error=TargetRefused, owner=PATH_SETTING):
+        load(environ={PATH_SETTING: str(tmp_path / "absent")})
+
+
+def test_an_added_file_or_directory_that_declares_nothing_is_refused(tmp_path: Path) -> None:
+    """A file a caller adds is read or refused, never skipped: one that is not there, or a
+    directory holding neither declarations nor a parts overlay."""
+    for absent in (tmp_path / "absent.toml", tmp_path):
+        with refused(
+            "declaration-invalid",
+            error=TargetRefused,
+            owner=str(absent),
+            message=f"^{absent}: a platform.toml, or a directory holding",
+        ):
+            load([absent], environ=FINN_ONLY)
+    (tmp_path / "parts.json").write_text('{"schema": 1, "devices": {}, "parts": {}}')
+    assert load([tmp_path], environ=FINN_ONLY).directories[-1][1] == tmp_path
+
+
+@dataclass(frozen=True)
+class _Dist:
+    name: str
+    version: str
+    files: None = None  # recorded none: an editable install's
+
+
+@dataclass(frozen=True)
+class _EntryPoint:
+    name: str
+    value: str
+    dist: _Dist
+
+
+def test_an_installed_package_declares_through_its_entry_point(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A package names its declarations' package in the group ``finn.platform``; they are
+    read after FINN's, with the distribution as their origin."""
+    point = _EntryPoint("example", "support.example_platform", _Dist("example-platform", "0.1"))
+
+    def entry_points(*, group: str) -> list[_EntryPoint]:
+        return [point] if group == GROUP else []
+
+    monkeypatch.setattr("finn.platform.declarations.entry_points", entry_points)
+    found = load(environ=FINN_ONLY)
+    assert str(found.origin("shells", "example")) == "package example-platform 0.1"
+    assert found.directories == ((found.origin("shells", "example"), EXAMPLE),)
+    assert check(found) == []
+
+
+_INITIALIZER = """\
+import os, pathlib
+pathlib.Path(os.environ["MARKER"]).write_text("ran")
+print("the package was imported")
+"""
+
+_LIST_BOARDS = """\
+from finn.custom_op.kernels.shell import row_offer
+from finn.platform import _cli
+from finn.platform.declarations import declarations
+print(declarations().origin("boards", "Marked"))
+_cli.main(["list", "boards"])
+"""
+
+
+def _installed(site: Path, package: str, *, declares: bool) -> None:
+    """``package`` installed in ``site`` as a wheel installs it: its code, which marks that
+    it ran, its ``platform.toml`` (if it ``declares``), and its distribution's metadata,
+    recording its files and naming it in the group ``finn.platform``."""
+    (site / package).mkdir(parents=True)
+    (site / package / "__init__.py").write_text(_INITIALIZER)
+    files = [f"{package}/__init__.py"]
+    if declares:
+        (site / package / "platform.toml").write_text(
+            '[boards.Marked]\npart = "xczu3eg-sbva484-1-e"\n'
+        )
+        files.append(f"{package}/platform.toml")
+    info = site / f"{package}-1.0.dist-info"
+    info.mkdir()
+    (info / "METADATA").write_text(f"Metadata-Version: 2.1\nName: {package}\nVersion: 1.0\n")
+    (info / "entry_points.txt").write_text(f"[{GROUP}]\nmarked = {package}\n")
+    (info / "RECORD").write_text("".join(f"{each},,\n" for each in files))
+
+
+def _fresh(site: Path, script: str, marker: Path) -> subprocess.CompletedProcess[str]:
+    """``script`` run in a fresh interpreter with ``site`` on its path."""
+    environ = {key: value for key, value in os.environ.items() if key != PATH_SETTING}
+    environ["PYTHONPATH"] = os.pathsep.join(
+        each for each in (str(site), os.environ.get("PYTHONPATH")) if each
+    )
+    environ["MARKER"] = str(marker)
+    return subprocess.run(
+        [sys.executable, "-c", script], env=environ, capture_output=True, text=True, check=False
+    )
+
+
+def test_an_installed_packages_declarations_are_read_without_running_its_code(
+    tmp_path: Path,
+) -> None:
+    """Found through its distribution's metadata in a fresh process, an installed package's
+    declarations are read, listed and shown, and the package's own code never runs; one that
+    holds no declarations is refused, owned by its distribution."""
+    site, marker = tmp_path / "site", tmp_path / "marker"
+    _installed(site, "marked_platform", declares=True)
+    ran = _fresh(site, _LIST_BOARDS, marker)
+    assert ran.returncode == 0, ran.stderr
+    origin, *listed = ran.stdout.splitlines()
+    assert origin == "package marked_platform 1.0"
+    assert ["Marked", "package", "marked_platform", "1.0"] in [line.split() for line in listed]
+    assert "imported" not in ran.stdout and not marker.exists()
+
+    bare = tmp_path / "bare"
+    _installed(bare, "bare_platform", declares=False)
+    ran = _fresh(bare, _LIST_BOARDS, marker)
+    assert ran.returncode != 0 and not marker.exists()
+    assert (
+        "package bare_platform 1.0: entry point 'marked': declaration-invalid: "
+        "bare_platform holds no platform.toml"
+    ) in ran.stderr
+
+
+@pytest.mark.parametrize(
+    "text, where, message",
+    [
+        ('[boards.B]\npart = "x"\nvivado = "2024.1"\n', "boards.B", "states vivado, which"),
+        ("[board.B]\n", "board", "a declaration is one of boards, linkers"),
+        ('[boards."a b"]\npart = "x"\n', "boards.a b", "is no name"),
+        (
+            '[movers.m]\ncode = "no colon"\nkinds = ["moved"]\n',
+            "movers.m",
+            "movers.m.code names code as module:attr",
+        ),
+        (
+            '[runtimes.r]\ncode = "a:b"\nimages = []\nmovers = []\nkinds = []\nschemas = [0]\n',
+            "runtimes.r",
+            "runtimes.r.schemas is a list of schema numbers",
+        ),
+        (
+            '[linkers.l]\ncode = "a:b"\ntool = "vivado"\nboard_keys = []\nimage = "bit"\n'
+            'least_range = 128\nversions = "next Tuesday"\n',
+            "linkers.l",
+            "^linkers.l.versions: 'next Tuesday' is no release comparison",
+        ),
+        (
+            '[linkers.l]\ncode = "a:b"\ntool = "vivado"\nboard_keys = []\nimage = "bit"\n'
+            "least_range = 100\n",
+            "linkers.l",
+            "^linkers.l.least_range is a power of two, not 100",
+        ),
+        ("[shells.s]\nclocks = {}\n", "shells.s", "states no boards"),
+        (
+            "[shells.s]\nboards = { B = {} }\nclocks = {}\n",
+            "shells.s",
+            "a shell with no linker supports any part",
+        ),
+        ('[shells.s]\nbased_on = "pynq"\nboards = {}\n', "shells.s", "supports no board"),
+        ('[shells.s]\nbased_on = "s"\nboards = "any"\n', "shells.s.based_on", "based on itself"),
+        ('[shells.s]\nbased_on = "t"\nboards = "any"\n', "shells.s.based_on", "not a declared"),
+    ],
+    ids=[
+        "an unknown key",
+        "an unknown kind",
+        "no name",
+        "code not module:attr",
+        "a schema 0",
+        "an unused linker's release range not one",
+        "a linker's least range not a power of two",
+        "a shell with no boards",
+        "boards with no linker",
+        "no board",
+        "based on itself",
+        "based on nothing",
+    ],
+)
+def test_a_malformed_declaration_is_refused_where_it_is(
+    tmp_path: Path, text: str, where: str, message: str
+) -> None:
+    path = declared(tmp_path, text)
+    with refused(
+        "declaration-invalid", error=TargetRefused, owner=f"{path}: {where}", message=message
+    ):
+        load([path], environ=FINN_ONLY)
+
+
+def test_a_file_not_utf8_is_refused_as_one_that_does_not_parse(tmp_path: Path) -> None:
+    path = tmp_path / "platform.toml"
+    path.write_bytes(b'[boards.B]\npart = "\xff"\n')
+    with refused(
+        "declaration-invalid",
+        error=TargetRefused,
+        owner=str(path),
+        message="^cannot read declarations: 'utf-8' codec can't decode",
+    ):
+        load([path], environ=FINN_ONLY)
+
+
+def test_a_shell_based_on_another_replaces_each_key_it_states(tmp_path: Path) -> None:
+    path = declared(
+        tmp_path,
+        '[shells.narrow]\nbased_on = "pynq"\nunits = 4\n'
+        '[shells.narrow.boards.Ultra96]\nboard_part = "avnet.com:ultra96v1:part0:1.2"\n',
+    )
+    found = load([path], environ=FINN_ONLY)
+    narrow, pynq = shell_row("narrow", "Ultra96", found), shell_row("pynq", "Ultra96", found)
+    assert (narrow.units, pynq.units) == (4, None)
+    assert (narrow.fixed, narrow.supply, narrow.linker) == (pynq.fixed, pynq.supply, pynq.linker)
+    # boards is a key like any other: the base's whole table is replaced.
+    assert list(found.shell("narrow").boards) == ["Ultra96"]
+    assert found.shell("narrow").based_on == "pynq"
+
+
+@pytest.mark.parametrize(
+    "fact, named",
+    [
+        ('units = "nine"', "units is a whole number"),
+        ('supply = [{ kind = "moved", movers = [{}] }]', "supply[0].movers[0] is a non-empty"),
+        ('caveat = "on {board.missing}"', "caveat names {board} and {part} only"),
+        ('clocks = { main = "", set_at = "build", doubled = false }', "main is a non-empty"),
+        (
+            'clocks = { main = "c", set_at = "build", doubled = false, default_mhz = -100.0 }',
+            "default_mhz is a finite number above zero",
+        ),
+        (
+            'clocks = { main = "c", set_at = "build", doubled = false, default_mhz = inf }',
+            "default_mhz is a finite number above zero",
+        ),
+        (
+            "control = { one_port_per_unit = false, least_window = 4097, aperture = 268435456 }",
+            "control.least_window is a power of two, not 4097",
+        ),
+        (
+            "control = { one_port_per_unit = false, least_window = 4096, aperture = 1 }",
+            "control.aperture: 1 bytes hold no window of the least 4096",
+        ),
+        (
+            "control = { one_port_per_unit = false, least_window = 64, aperture = 256 }",
+            "control.least_window: 64 bytes is less than its linker 'vivado-block-design' "
+            "assigns a control bus (128)",
+        ),
+        ('memory = [{ name = "", width = 64 }]', "memory[0].name is a non-empty"),
+        ('memory = [{ name = "m", width = 9 }]', "memory[0].width: 9 bits is no AXI data width"),
+        (
+            'memory = [{ name = "HP0", width = 24 }]\n'
+            'supply = [{ kind = "moved", movers = ["iodma_hls"], width_cap = 24 }]',
+            "memory[0].width: 24 bits is no AXI data width",
+        ),
+        (
+            'memory = [{ name = "HP0", width = 128 }, { name = "HP0", width = 64 }]',
+            "memory[1].name: 'HP0' names shells.broken.memory[0] too",
+        ),
+        (
+            'memory = [{ name = "HP0", width = 8, masters = 16 }]',
+            "supply[0].width_cap: 128 bits is wider than every memory target (HP0 8 bits)",
+        ),
+        ("memory = []", "supply[0]: a moved offer, and no memory target to bind it"),
+        *(
+            (
+                "fixed = { control_base = 0, processor = { ip = 'p' }, reset = { ip = 'r' }, "
+                "memory_interconnect = { ip = 'm' }, "
+                f"control_interconnect = {{ ip = 'c', lut = {fit} }} }}",
+                "fixed.control_interconnect.lut is a fit over the count that scales it",
+            )
+            for fit in ("[10.0]", "[10.0, 2.0, 3.0]", "[inf, 1.0]", "[1.0, nan]")
+        ),
+    ],
+    ids=[
+        "a count not a number",
+        "a mover kind not a name",
+        "a caveat naming another field",
+        "a clock with no name",
+        "a negative frequency",
+        "an infinite frequency",
+        "a least window not a power of two",
+        "an aperture below the least window",
+        "a least window below its linker's least range",
+        "a memory target with no name",
+        "a memory width of no whole bytes",
+        "a memory width of whole bytes but no AXI width",
+        "a memory target named twice",
+        "an offer wider than every memory target",
+        "a moved offer with no memory target",
+        "a fit with no slope",
+        "a fit with two slopes",
+        "a fit with an infinite constant",
+        "a fit with a slope not a number",
+    ],
+)
+def test_a_fact_not_of_its_type_is_refused_when_its_row_is_read(
+    tmp_path: Path, fact: str, named: str
+) -> None:
+    path = declared(tmp_path, f'[shells.broken]\nbased_on = "pynq"\n{fact}\n')
+    found = load([path], environ=FINN_ONLY)
+    with refused(
+        "declaration-invalid", error=TargetRefused, owner=f"{path}: shells.broken"
+    ) as caught:
+        shell_row("broken", "Ultra96", found)
+    assert named in str(caught.error)
+    # Once, though every board's row is refused for it.
+    assert findings(found).count(("declaration-invalid", "shells.broken")) == 1
+
+
+def test_a_shells_own_facts_and_its_linkers_needs_are_read_whatever_its_boards(
+    tmp_path: Path,
+) -> None:
+    """A shell's own facts are read apart from its boards, so an entry stating a fact in
+    its place, or a board nothing declares, hides no malformed one; and a shell of any
+    part on a linker that needs keys of each board is refused, as nothing gives them."""
+    path = declared(
+        tmp_path,
+        '[shells.hidden]\nbased_on = "pynq"\nclocks = "oops"\n'
+        '[shells.hidden.boards.Ultra96]\nboard_part = "avnet.com:ultra96v1:part0:1.2"\n'
+        'clocks = { main = "c", set_at = "build", doubled = false }\n'
+        '[shells.nowhere]\nbased_on = "pynq"\nclocks = "oops"\n'
+        '[shells.nowhere.boards.Nowhere]\nboard_part = "x"\n'
+        '[shells.wild]\nbased_on = "pynq"\nboards = "any"\n',
+    )
+    found = load([path], environ=FINN_ONLY)
+    with refused("declaration-invalid", error=TargetRefused, message="clocks is a table"):
+        shell_row("hidden", "Ultra96", found)
+    with refused(
+        "declaration-invalid",
+        error=TargetRefused,
+        owner=f"{path}: shells.wild",
+        message="^shells.wild supports any part, and its linker 'vivado-block-design' needs "
+        "board_part of each board",
+    ):
+        resolve_target(part="xcu55c-fsvh2892-2L-e", period_ns=5.0, shell="wild", declared=found)
+    assert sorted(set(findings(found))) == [
+        ("board-undeclared", "shells.nowhere"),
+        ("declaration-invalid", "shells.hidden"),
+        ("declaration-invalid", "shells.nowhere"),
+        ("declaration-invalid", "shells.wild"),
+    ]
+
+
+def test_a_shell_on_an_undeclared_linker_is_one_finding_and_its_row_refused(
+    tmp_path: Path,
+) -> None:
+    """A shell naming a linker nothing declares, with a board entry narrowing its releases:
+    the check names the linker once and goes on to the next declaration, and its row is
+    refused, named."""
+    path = declared(
+        tmp_path,
+        '[shells.bad]\nlinker = "misspelled"\n'
+        'clocks = { main = "clk", set_at = "build", doubled = false }\n'
+        '[shells.bad.boards.Ultra96]\nversions = ">=2024.1"\n'
+        '[boards.Nowhere]\npart = "xcnothing-0"\n',
+    )
+    found = load([path], environ=FINN_ONLY)
+    assert findings(found) == [
+        ("unknown-part", "boards.Nowhere"),
+        ("linker-undeclared", "shells.bad"),
+    ]
+    with refused(
+        "declaration-invalid",
+        error=TargetRefused,
+        owner=f"{path}: shells.bad",
+        message="^shells.bad: its linker 'misspelled' is not declared$",
+    ):
+        shell_row("bad", "Ultra96", found)
+
+
+def test_checking_goes_on_past_a_malformed_shell_and_code_that_fails_to_import(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each malformed declaration is a finding owned by it, and code whose module raises
+    as it is imported is ``code-unimportable``, whatever it raises: the rest is checked."""
+    (tmp_path / "failing_platform_code.py").write_text('raise RuntimeError("it fails")\n')
+    monkeypatch.syspath_prepend(str(tmp_path))
+    path = declared(
+        tmp_path,
+        '[movers.failing]\ncode = "failing_platform_code:Mover"\nkinds = ["moved"]\n'
+        '[shells.unhashable]\nbased_on = "pynq"\nsupply = [{ kind = "moved", movers = [{}] }]\n'
+        '[shells.misspelt]\nbased_on = "pynq"\ncaveat = "on {board.missing}"\n',
+    )
+    found = findings(load([path], environ=FINN_ONLY))
+    assert {
+        ("code-unimportable", "movers.failing"),
+        ("declaration-invalid", "shells.unhashable"),
+        ("declaration-invalid", "shells.misspelt"),
+    } == set(found)
+    with refused("code-unimportable", error=TargetRefused, message="it fails"):
+        code("failing_platform_code:Mover")
+
+
+# -- resolving through the declarations --------------------------------------------------
+
+
+def test_an_undeclared_shell_is_refused_listing_the_declared_ones() -> None:
+    with refused(
+        "unknown-shell",
+        error=TargetRefused,
+        owner="configuration.target.shell",
+        message=r"^'xrt' is not a declared shell \(one of \['ip', 'pynq'\]\)$",
+    ):
+        shell_row("xrt", None)
+
+
+def test_a_known_board_its_shell_does_not_support_names_those_that_do() -> None:
+    with refused(
+        "board-unsupported",
+        error=TargetRefused,
+        message=r"^the 'pynq' shell does not support board 'V80' \(xcv80-lsva4737-2MHP-e-S\); "
+        r"only 'ip' supports it$",
+    ):
+        shell_row("pynq", "V80")
+
+
+def test_a_board_entry_without_its_linkers_keys_is_refused(tmp_path: Path) -> None:
+    path = declared(tmp_path, '[shells.bare]\nbased_on = "pynq"\nboards = { Ultra96 = {} }\n')
+    found = load([path], environ=FINN_ONLY)
+    with refused("declaration-invalid", error=TargetRefused, message="states no board_part"):
+        shell_row("bare", "Ultra96", found)
+
+
+# -- the checks --------------------------------------------------------------------------
+
+
+def test_every_check_names_its_declaration(tmp_path: Path) -> None:
+    path = declared(
+        tmp_path,
+        """
+[boards.Nowhere]
+part = "xcnothing-0"
+
+[linkers.lost]
+code = "support.no_such_module:link"
+tool = "vivado"
+board_keys = []
+image = "rom"
+least_range = 4096
+
+[runtimes.idle]
+code = "support.example_platform:IMAGE"
+images = ["bit"]
+movers = []
+kinds = []
+schemas = [1]
+
+[shells.odd]
+linker = "lost"
+runtimes = ["idle", "absent"]
+clocks = { main = "c", set_at = "build", doubled = false }
+supply = [{ kind = "moved", movers = ["iodma_hls"] }]
+memory = [{ name = "M", width = 64 }]
+boards = { Ultra96 = {}, Elsewhere = {} }
+
+[shells.unlinked]
+linker = "gone"
+clocks = { main = "c", set_at = "build", doubled = false }
+boards = { Ultra96 = {} }
+""",
+    )
+    found = load([path], environ=FINN_ONLY)
+    assert sorted(set(findings(found))) == sorted(
+        {
+            ("unknown-part", "boards.Nowhere"),
+            ("runtime-undeclared", "shells.odd"),
+            ("board-undeclared", "shells.odd"),
+            ("image-unloaded", "shells.odd"),
+            ("kind-unserved", "shells.odd"),
+            ("mover-undriven", "shells.odd"),
+            ("offer-unplaced", "shells.odd"),
+            ("linker-undeclared", "shells.unlinked"),
+            ("code-unimportable", "linkers.lost"),
+            ("code-not-callable", "runtimes.idle"),
+        }
+    )
+    owners = {finding.owner for finding in check(found)}
+    assert f"{path}: shells.odd" in owners and f"{FINN_FILE}: shells.pynq" not in owners
+
+
+_MOVED_128 = '{ kind = "moved", movers = ["iodma_hls"], width_cap = 128 }'
+
+
+@pytest.mark.parametrize(
+    "offers, why",
+    [
+        (
+            'supply = [{ kind = "moved", movers = ["iodma_hls"] }]\n'
+            'delivery = [{ kind = "moved", movers = ["iodma_hls"] }]',
+            "^moved by iodma_hls has no width cap, and a core's mover needs one$",
+        ),
+        (
+            f"delivery = [{_MOVED_128.replace('128', '16')}]",
+            "^its inputs are offered moved by iodma_hls up to 128 bits and its outputs moved by "
+            "iodma_hls up to 16 bits: a core places one offer on both$",
+        ),
+        ("delivery = []", "its outputs nothing moved"),
+        (
+            f'supply = [{_MOVED_128}, {{ kind = "pushed", movers = ["pushing"] }}]',
+            "^it offers the pushed kind, which a core does not place yet$",
+        ),
+        (
+            'supply = [{ kind = "moved", movers = ["iodma_hls", "other"], width_cap = 128 }]\n'
+            'delivery = [{ kind = "moved", movers = ["iodma_hls", "other"], width_cap = 128 }]',
+            "names 2 mover kinds, not one; a core places iodma_hls movers alone yet, not other$",
+        ),
+        (
+            f"supply = [{_MOVED_128.replace('iodma_hls', 'other')}]\n"
+            f"delivery = [{_MOVED_128.replace('iodma_hls', 'other')}]",
+            "^a core places iodma_hls movers alone yet, not other$",
+        ),
+    ],
+    ids=[
+        "uncapped",
+        "capped differently each way",
+        "inputs only",
+        "pushed",
+        "two kinds",
+        "a kind of its own",
+    ],
+)
+def test_an_offer_a_core_cannot_place_is_refused_not_changed(
+    tmp_path: Path, offers: str, why: str
+) -> None:
+    """A core places one mover kind, moved, at a bounded cap, the same on its inputs and its
+    outputs, and that kind FINN's own until a declared kind's code places it: a shell
+    offering anything else is refused where its movers are offered, and
+    by the check, rather than placed as something it does not offer."""
+    path = declared(
+        tmp_path,
+        '[movers.pushing]\ncode = "support.example_platform:ExampleDma"\nkinds = ["pushed"]\n'
+        '[movers.other]\ncode = "support.example_platform:ExampleDma"\nkinds = ["moved"]\n'
+        f'[shells.variant]\nbased_on = "pynq"\n{offers}\n',
+    )
+    found = load([path], environ=FINN_ONLY)
+    row = shell_row("variant", "Ultra96", found)
+    with refused("offer-unplaced", error=TargetRefused, owner="shells.variant", message=why):
+        row_offer(row)
+    assert ("offer-unplaced", "shells.variant") in findings(found)
+
+
+def test_a_moved_mover_kinds_code_makes_its_offer(tmp_path: Path) -> None:
+    """A moved mover kind's code makes the offer a core's boundary takes: ``offer`` at the
+    shell's width cap, of its own kind at that cap. Callable is not enough. The check calls
+    it at each cap a shell offers the kind at, though a core does not place the kind yet."""
+    path = declared(
+        tmp_path,
+        '[movers.intlike]\ncode = "builtins:int"\nkinds = ["moved"]\n'
+        '[movers.borrowed]\ncode = "finn.kernels.iodma:IodmaHls"\nkinds = ["moved"]\n'
+        + "".join(
+            f'[shells.{name}]\nbased_on = "pynq"\n'
+            f"supply = [{_MOVED_128.replace('iodma_hls', name)}]\n"
+            f"delivery = [{_MOVED_128.replace('iodma_hls', name)}]\n"
+            for name in ("intlike", "borrowed")
+        ),
+    )
+    found = load([path], environ=FINN_ONLY)
+    checked = set(findings(found))
+    assert checked >= {
+        ("mover-offer-invalid", "movers.intlike"),
+        ("mover-offer-invalid", "shells.borrowed"),
+    }
+    assert ("mover-offer-invalid", "shells.intlike") not in checked
+    with refused(
+        "mover-offer-invalid",
+        error=TargetRefused,
+        message=r"^builtins:int.offer\(128\) does not make an offer: AttributeError",
+    ):
+        mover_offer(MoverKind(name="intlike", code=found.movers["intlike"].code), 128)
+    with refused(
+        "mover-offer-invalid",
+        error=TargetRefused,
+        message=r"^finn.kernels.iodma:IodmaHls.offer\(128\) made MoverOffer\(kind='iodma_hls'",
+    ):
+        mover_offer(MoverKind(name="borrowed", code=found.movers["borrowed"].code), 128)
+
+
+# -- the command -------------------------------------------------------------------------
+
+
+@pytest.fixture
+def example_on_path(monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+    """The made-up platform's directory on ``FINN_PLATFORM_PATH``, the process's
+    declarations and catalog read again."""
+    monkeypatch.setenv(PATH_SETTING, str(EXAMPLE))
+    declarations.cache_clear()
+    catalog.cache_clear()
+    yield EXAMPLE
+    monkeypatch.delenv(PATH_SETTING)
+    declarations.cache_clear()
+    catalog.cache_clear()
+
+
+def run(argv: list[str], capsys: pytest.CaptureFixture[str]) -> tuple[int, str, str]:
+    status = _cli.main(argv)
+    out, err = capsys.readouterr()
+    return status, out, err
+
+
+def test_the_command_lists_shows_and_checks(capsys: pytest.CaptureFixture[str]) -> None:
+    status, out, _ = run(["list", "shells"], capsys)
+    assert status == 0 and out.splitlines() == [
+        "shells:",
+        f"  {'ip':<24} FINN",
+        f"  {'pynq':<24} FINN",
+    ]
+    status, out, _ = run(["show", "board", "AUP-ZU3_8GB"], capsys)
+    assert status == 0
+    assert out.splitlines()[0] == "board AUP-ZU3_8GB: part xczu3eg-sfvc784-2-e (FINN)"
+    assert '  shell pynq: {"board_part": ' in out and "  shell ip (any part)" in out
+    status, out, _ = run(["show", "shell", "pynq", "--board", "Ultra96"], capsys)
+    stated = json.loads("\n".join(line[4:] for line in out.splitlines()[2:]))
+    assert stated["control"]["aperture"] == "0x10000000"
+    assert stated["fixed"]["control_base"] == "0xa0000000"
+    assert stated["board_facts"] == {"board_part": "avnet.com:ultra96v1:part0:1.2"}
+    status, out, _ = run(["show", "part", "xczu3eg-sbva484-1-e"], capsys)
+    assert status == 0 and json.loads(out)["name"] == "xczu3eg-sbva484-1-e"
+    status, out, _ = run(["check"], capsys)
+    assert status == 0 and out.startswith("finn-platform: every declaration checks (18 boards, ")
+    status, _, err = run(["show", "shell", "xrt"], capsys)
+    assert status == 1 and err.startswith(
+        "finn-platform: configuration.target.shell: unknown-shell"
+    )
+    status, out, err = run(["show", "part", "xc-not-a-part"], capsys)
+    assert status == 1 and not out and "unknown-part" in err
+
+
+def test_the_command_reports_each_finding_and_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    declared(tmp_path, '[boards.Nowhere]\npart = "xcnothing-0"\n')
+    monkeypatch.setenv(PATH_SETTING, str(tmp_path))
+    declarations.cache_clear()
+    try:
+        status, out, _ = run(["check"], capsys)
+    finally:
+        declarations.cache_clear()
+    assert status == 1
+    assert out.startswith(f"{tmp_path / 'platform.toml'}: boards.Nowhere: unknown-part: ")
+
+
+# -- a made-up platform, declared outside FINN -------------------------------------------
+
+
+def test_a_made_up_platform_declares_checks_and_resolves_with_no_change_to_finn(
+    example_on_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``support.example_platform`` declares a board, a linker, a runtime, a moved mover
+    kind and a shell based on ``pynq``: they check, a build's target resolves on them, a
+    core is placed in the shell, its boundary moved by FINN's mover at the shell's cap, and
+    the command shows them, each with its origin, and a build on it records where each
+    declaration it stands on comes from. A core built through it, to its driver and
+    deployment, is in test_builder_phase."""
+    found = declarations()
+    assert check(found) == []
+    origin = f"{PATH_SETTING} {example_on_path}"
+    assert str(found.origin("shells", "example")) == origin
+    target = resolve_target(board="Example-ZU3", period_ns=5.0, shell="example")
+    assert (target.shell, target.board, target.part) == (
+        "example",
+        "Example-ZU3",
+        "xczu3eg-sbva484-1-e",
+    )
+    selected = resolve_runtime("example")
+    assert selected == "example-run"
+    # Its own declarations from its directory, the shell it is based on and the mover kind
+    # it offers from FINN's.
+    own = {"kind": "path", "file": str(example_on_path / "platform.toml")}
+    assert {name: each.record() for name, each in origins(target, selected).items()} == {
+        "shells.example": own,
+        "shells.pynq": {"kind": "finn"},
+        "boards.Example-ZU3": own,
+        "linkers.example-link": own,
+        "runtimes.example-run": own,
+        "movers.iodma_hls": {"kind": "finn"},
+    }
+    row = shell_row("example", "Example-ZU3")
+    pynq = shell_row("pynq", "Ultra96")
+    assert (row.linker, row.runtimes, row.board_facts) == (
+        "example-link",
+        ("example-run", "example-alt"),
+        {"slot": "B"},
+    )
+    assert row.versions == Versions(tool="example-tool", spec=">=1.0")
+    assert row.supply == row.delivery
+    assert [mover.name for offer in row.offers for mover in offer.movers] == [IODMA_HLS] * 2
+    assert (row.fixed, row.control) == (pynq.fixed, pynq.control)
+    assert row_offer(row) == IodmaHls.offer(64)
+    # A core placed in it: each edge moved by FINN's mover, within the shell's cap.
+    model = kernel_model()
+    write_target(model, target)
+    model = model.transform(MakeCutChoices(CUT_NAME))
+    core = core_in_shell(model, model.graph.node, name="chain")
+    contracts = mover_contracts(core)
+    assert isinstance(contracts, Available) and contracts.value
+    placed = [contract for _, contract in contracts.value]
+    assert {contract.kind for contract in placed} == {IODMA_HLS}
+    assert all(contract.memory_width <= 64 for contract in placed)
+    assert isinstance(core.own_resources(), Available)
+    assert row.caveat == (
+        "the 'example' shell is made up: on Example-ZU3 (xczu3eg-sbva484-1-e) nothing is measured"
+    )
+    # Its code is a package's own, imported where it is used.
+    assert code(found.linkers["example-link"].code) is ExampleLinker
+    assert code(found.runtimes["example-run"].code) is RecordingRuntime
+    assert code(found.runtimes["example-alt"].code) is AlternateRuntime
+    assert code(found.movers[EXAMPLE_DMA].code) is ExampleDma
+    assert mover_offer(MoverKind(name=EXAMPLE_DMA, code=found.movers[EXAMPLE_DMA].code), 64) == (
+        ExampleDma.offer(64)
+    )
+    status, out, _ = run(["list"], capsys)
+    assert status == 0 and f"  {'example':<24} {origin}" in out
+    status, out, _ = run(["show", "board", "Ultra96"], capsys)
+    assert '  shell example: {"slot": "A"}' in out

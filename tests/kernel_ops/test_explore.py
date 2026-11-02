@@ -158,7 +158,12 @@ def test_exploring_saves_the_point_s_choices_and_reports_its_cost() -> None:
     platform = read_target(model).platform.resources
     assert platform is not None and resources["platform"] == asdict(platform)
     assert resources["share"]["dsp"] == round(4 / platform.dsp, 4)
-    assert resources["shell"] == {"partition": resources["used"], "movers": {}, "static_region": {}}
+    assert resources["shell"] == {
+        "partition": resources["used"],
+        "movers": {},
+        "groupers": {},
+        "static_region": {},
+    }
     assert "each mover and its static region" in resources["counted"]
     ranked = report["strategies"][0]
     assert ranked["strategy"] == "ranked" and ranked["attempts"] > 0

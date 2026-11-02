@@ -3,7 +3,7 @@
 """The class-based oracle's TFC target (``tfc``): TFC's partition (``support.tfc``) after
 the cut, and after each of seven strategy lists explored on the cut's body
 (``SEQUENCES``), each its core's class as the graph layer binds it in its shell
-(``core_point``), configured with its stored choices; and the oracle's tool with every target,
+(``shell_point``), configured with its stored choices; and the oracle's tool with every target,
 TFC's too:
 
     python -m support.space_oracle_tfc dump tfc OUT.json [--implementation M:A]
@@ -30,7 +30,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.core.graph.partition import CUT_NAME
 from finn.core.search import Hold, Ranked
-from finn.custom_op.kernels.shell import core_point
+from finn.custom_op.kernels.shell import shell_point
 from finn.kernels.explore import (
     CoreComposition,
     Defaults,
@@ -67,7 +67,7 @@ whose strategy is now ``Defaults``."""
 def _tfc_partition(label: str, body: ModelWrapper) -> Station:
     nodes = list(body.graph.node)
     matmuls = [node.name for node in nodes if "MatMul" in node.op_type]
-    bound = CoreComposition(core_point(body, CUT_NAME).point)
+    bound = CoreComposition(shell_point(body, CUT_NAME).point)
     return _partition(f"tfc-{label}", bound, len(nodes), _middle(matmuls))
 
 

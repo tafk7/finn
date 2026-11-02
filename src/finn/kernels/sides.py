@@ -15,15 +15,13 @@ A ``Channel`` (``finn.kernels.channels``) takes two sides, its ``producer`` and 
 - a **frozen neighbour**'s (``Side.neighbour``): the same four, given as a fact read from a
   kernel outside the selection at its accepted point;
 - the **boundary**'s (``Side.boundary``): the module's AXIS port, its name as its label
-  (``s_axis_0``, ``m_axis_0``), the movers a shell offers on it (``offers``), and what the
-  outside states of it (``outside``). Its ``stream`` is None: the channel places the port,
-  its outer port (``Channel.outer_in``, ``Channel.outer_out``), and derives what it
-  presents. **Unstated** (``outside`` None, the default), that is what its other side
-  presents; **stated** (an ``Outside``), the stated order, passes
-  and lanes, each one left None as the other side presents it. A side offered a mover
-  carries that mover's statement (``MoverOffer.states``), and a mover's statement is made
-  only on a side offered that mover: a mover is never placed on a side it does not state,
-  and the build states only a side offered none;
+  (``s_axis_0``, ``m_axis_0``), and what the outside states of it (``outside``). Its
+  ``stream`` is None: the channel places the port, its outer port (``Channel.outer_in``,
+  ``Channel.outer_out``), and derives what it presents. **Unstated** (``outside`` None, the
+  default), that is what its other side presents; **stated** (an ``Outside``), the stated
+  order, passes and lanes, each one left None as the other side presents it. In a shell
+  that places a mover on it, the mover's statement (``MoverOffer.states``,
+  ``finn.kernels.shell``); else the build's, where it states one;
 - a valued channel's **source** (``Side.source``): the channel's own memory, which produces
   its known value.
 
@@ -38,16 +36,16 @@ A side is a value class: frozen, compared and hashed field by field. So are the 
 outside states (``Outside``) and its pace (``BeatTimes``, or the steady shorthand
 ``Steady``).
 
-**The outside's statement** (``Outside``) is made by its ``source``: a mover a shell offers
-on the boundary (a ``MOVERS`` kind, ``iodma_hls``), or the build (``BUILD``). It states
+**The outside's statement** (``Outside``) is made by its ``source``: the mover a shell places
+on the boundary (a declared mover kind, ``iodma_hls``), or the build (``BUILD``). It states
 the order of each pass (``ROW_MAJOR``, or None: as the inside presents it), the passes a
 frame (1, or None: as presented), the lanes a beat (the edge's word, or None: the inside's),
 the pace (the outside's beat times over a frame, or None when timing is not stated; a
-mover's pace comes from its contract) and the host's buffer layout (``ROW_MAJOR_HOST``). The pace is
-kept as given: ``Steady`` is expanded where the edge's beats are known, in one place
-(``beat_times``), which FIFO sizing (``finn.kernels.fifo_sizing.stated_pattern``) and a
-boundary channel's cycles (``finn.kernels.channels.Channel.frame_cycles``: no fewer than its
-span) read.
+mover's pace is its own, read beside the channel in its shell) and the host's buffer layout
+(``ROW_MAJOR_HOST``). The pace is kept as given: ``Steady`` is expanded where the edge's
+beats are known, in one place (``beat_times``), which FIFO sizing
+(``finn.kernels.fifo_sizing.stated_pattern``) and a boundary channel's cycles
+(``finn.kernels.channels.Channel.frame_cycles``: no fewer than its span) read.
 """
 
 from __future__ import annotations
@@ -59,7 +57,6 @@ from typing import Self
 from finn.dataflow.streams import Stream
 from finn.kernels.artifacts.abi import Direction
 from finn.kernels.laws import check_beat_times
-from finn.kernels.movers import MOVERS, MoverOffer
 
 
 class SideKind(Enum):
@@ -139,11 +136,12 @@ def beat_times(pace: BeatTimes | Steady, beats: int) -> BeatTimes:
 @dataclass(frozen=True)
 class Outside:
     """What the outside states of a boundary side (the module docstring): its ``source``
-    (a ``MOVERS`` kind, or ``BUILD``), the ``order`` of each pass (``ROW_MAJOR``), the
+    (a declared mover kind, or ``BUILD``; the shell placing that mover checks it,
+    ``finn.kernels.shell``), the ``order`` of each pass (``ROW_MAJOR``), the
     ``passes`` a frame (1), the ``lanes`` a beat (at least 1), the ``pace``
     (``BeatTimes`` or ``Steady``) and the host buffer's ``layout`` (``ROW_MAJOR_HOST``).
     ``order``, ``passes`` and ``lanes`` left None are as the inside presents them; the
-    ``pace`` left None leaves timing unstated; a mover's pace comes from its contract."""
+    ``pace`` left None leaves timing unstated; a mover's pace is its own."""
 
     source: str
     order: str | None = None
@@ -153,11 +151,8 @@ class Outside:
     layout: str = ROW_MAJOR_HOST
 
     def __post_init__(self) -> None:
-        if self.source != BUILD and self.source not in MOVERS:
-            raise ValueError(
-                f"a boundary is stated by a mover ({', '.join(sorted(MOVERS))}) or the "
-                f"build, not {self.source!r}"
-            )
+        if not isinstance(self.source, str) or not self.source:
+            raise ValueError(f"a boundary is stated by a mover or the build, not {self.source!r}")
         if self.order not in (ROW_MAJOR, None):
             raise ValueError(f"the outside states a {ROW_MAJOR} order, not {self.order!r}")
         if self.passes is not None and (not _count(self.passes) or self.passes != 1):
@@ -177,18 +172,15 @@ class Side:
     stated side's; None on the boundary, which the channel derives, and for a source), its
     ``direction`` (a stated side's, its port's kind: ``IN`` an input port's, ``OUT`` an
     output port's; None on the boundary and for a source), its word width (``width``: an
-    output side's), the movers a shell offers on the boundary
-    (``offers``), and what the outside states of the boundary (``outside``: None, unstated,
-    the boundary presents what its other side presents). Made by ``kernel``,
-    ``neighbour``, ``boundary`` or ``source``. A boundary offered movers carries the
-    statement of one of them (``MoverOffer.states``)."""
+    output side's), and what the outside states of the boundary (``outside``: None,
+    unstated, the boundary presents what its other side presents). Made by ``kernel``,
+    ``neighbour``, ``boundary`` or ``source``."""
 
     kind: SideKind
     label: str = ""
     stream: Stream | None = None
     direction: Direction | None = None
     width: int | None = None
-    offers: tuple[MoverOffer, ...] = ()
     outside: Outside | None = None
 
     def __post_init__(self) -> None:
@@ -203,29 +195,8 @@ class Side:
             raise ValueError("only an output's side states a word width")
         if self.kind is SideKind.BOUNDARY and (self.stream is not None or not self.label):
             raise ValueError("the boundary's side is its AXIS port's name, its stream unstated")
-        if self.kind is not SideKind.BOUNDARY and self.offers:
-            raise ValueError("only the boundary's side is offered movers")
         if self.kind is not SideKind.BOUNDARY and self.outside is not None:
             raise ValueError("only the boundary's side is stated by the outside")
-        outside = self.outside
-        if outside is not None and outside.source != BUILD:
-            if not any(offer.kind == outside.source for offer in self.offers):
-                raise ValueError(
-                    f"{self.label} is stated by an {outside.source} mover, and none is offered"
-                )
-        if self.offers and outside not in [offer.states() for offer in self.offers]:
-            kinds = " or ".join(offer.kind for offer in self.offers)
-            said = (
-                "left unstated"
-                if outside is None
-                else "stated by the build"
-                if outside.source == BUILD
-                else f"stated otherwise than its {outside.source} mover states it"
-            )
-            raise ValueError(
-                f"{self.label} is offered an {kinds} mover and {said}: a side offered a "
-                "mover carries that mover's statement"
-            )
         if self.kind is SideKind.SOURCE and (self.stream is not None or self.label):
             raise ValueError("a source's side states nothing: the channel's source is its own")
 
@@ -246,14 +217,12 @@ class Side:
         return cls(SideKind.NEIGHBOUR, label, stream, direction, width)
 
     @classmethod
-    def boundary(
-        cls, port: str, offers: tuple[MoverOffer, ...] = (), outside: Outside | None = None
-    ) -> Self:
-        """The boundary: its AXIS port's name (``port``), the movers a shell offers on it
-        (``offers``), and what the outside states of it (``outside``; None, unstated by
-        default: the boundary presents what its other side presents). Offered a mover, it
-        is stated by that mover (``offer.states()``)."""
-        return cls(SideKind.BOUNDARY, port, offers=tuple(offers), outside=outside)
+    def boundary(cls, port: str, outside: Outside | None = None) -> Self:
+        """The boundary: its AXIS port's name (``port``), and what the outside states of it
+        (``outside``; None, unstated by default: the boundary presents what its other side
+        presents). Where a shell places a mover on it, the mover's statement
+        (``MoverOffer.states``)."""
+        return cls(SideKind.BOUNDARY, port, outside=outside)
 
     @classmethod
     def source(cls) -> Self:

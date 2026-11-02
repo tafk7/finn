@@ -1,0 +1,296 @@
+{
+  "schema": 1,
+  "row": {
+    "shell": "pynq",
+    "board": "Ultra96"
+  },
+  "linker": "vivado-block-design",
+  "runtime": "pynq",
+  "part": "xczu3eg-sbva484-1-e",
+  "period_ns": 5.0,
+  "cores": [
+    {
+      "name": "DataflowCore_0",
+      "inputs": [
+        {
+          "port": "s_axis_0",
+          "tensor": "Reshape_0_out0",
+          "shape": [
+            1,
+            784
+          ],
+          "element": "UINT8",
+          "kind": "moved",
+          "unit": "in0",
+          "target": "HP0",
+          "mover": "iodma_hls",
+          "bits": 128,
+          "beats": 49,
+          "lanes": 16
+        }
+      ],
+      "outputs": [
+        {
+          "port": "m_axis_0",
+          "tensor": "MatMul_3_out0",
+          "shape": [
+            1,
+            10
+          ],
+          "element": "INT7",
+          "kind": "moved",
+          "unit": "out0",
+          "target": "HP0",
+          "mover": "iodma_hls",
+          "bits": 72,
+          "beats": 1,
+          "lanes": 10
+        }
+      ]
+    },
+    {
+      "name": "DataflowCore_1",
+      "inputs": [
+        {
+          "port": "s_axis_0",
+          "tensor": "B_Reshape_0_out0",
+          "shape": [
+            1,
+            784
+          ],
+          "element": "UINT8",
+          "kind": "moved",
+          "unit": "in1",
+          "target": "HP0",
+          "mover": "iodma_hls",
+          "bits": 128,
+          "beats": 49,
+          "lanes": 16
+        }
+      ],
+      "outputs": [
+        {
+          "port": "m_axis_0",
+          "tensor": "B_MatMul_3_out0",
+          "shape": [
+            1,
+            10
+          ],
+          "element": "INT7",
+          "kind": "moved",
+          "unit": "out1",
+          "target": "HP0",
+          "mover": "iodma_hls",
+          "bits": 72,
+          "beats": 1,
+          "lanes": 10
+        }
+      ]
+    }
+  ],
+  "units": [
+    {
+      "name": "in0",
+      "kind": "iodma_hls",
+      "window": 4096
+    },
+    {
+      "name": "DataflowCore_0",
+      "kind": "core",
+      "window": null
+    },
+    {
+      "name": "out0",
+      "kind": "iodma_hls",
+      "window": 4096
+    },
+    {
+      "name": "in1",
+      "kind": "iodma_hls",
+      "window": 4096
+    },
+    {
+      "name": "DataflowCore_1",
+      "kind": "core",
+      "window": null
+    },
+    {
+      "name": "out1",
+      "kind": "iodma_hls",
+      "window": 4096
+    }
+  ],
+  "connections": [
+    {
+      "source": "in0/out0_V",
+      "sink": "DataflowCore_0/s_axis_0",
+      "bits": 128
+    },
+    {
+      "source": "DataflowCore_0/m_axis_0",
+      "sink": "out0/in0_V",
+      "bits": 72
+    },
+    {
+      "source": "in1/out0_V",
+      "sink": "DataflowCore_1/s_axis_0",
+      "bits": 128
+    },
+    {
+      "source": "DataflowCore_1/m_axis_0",
+      "sink": "out1/in0_V",
+      "bits": 72
+    }
+  ],
+  "bindings": [
+    {
+      "port": "in0/m_axi_gmem",
+      "target": "HP0"
+    },
+    {
+      "port": "out0/m_axi_gmem",
+      "target": "HP0"
+    },
+    {
+      "port": "in1/m_axi_gmem",
+      "target": "HP0"
+    },
+    {
+      "port": "out1/m_axi_gmem",
+      "target": "HP0"
+    }
+  ],
+  "endpoints": [
+    {
+      "unit": "in0",
+      "bus": "s_axi_control",
+      "node": null,
+      "offset": 0,
+      "range": 4096,
+      "registers": {
+        "control": {
+          "offset": 0,
+          "bits": 32
+        },
+        "address": {
+          "offset": 16,
+          "bits": 64
+        },
+        "count": {
+          "offset": 28,
+          "bits": 32
+        }
+      }
+    },
+    {
+      "unit": "out0",
+      "bus": "s_axi_control",
+      "node": null,
+      "offset": 0,
+      "range": 4096,
+      "registers": {
+        "control": {
+          "offset": 0,
+          "bits": 32
+        },
+        "address": {
+          "offset": 16,
+          "bits": 64
+        },
+        "count": {
+          "offset": 28,
+          "bits": 32
+        }
+      }
+    },
+    {
+      "unit": "in1",
+      "bus": "s_axi_control",
+      "node": null,
+      "offset": 0,
+      "range": 4096,
+      "registers": {
+        "control": {
+          "offset": 0,
+          "bits": 32
+        },
+        "address": {
+          "offset": 16,
+          "bits": 64
+        },
+        "count": {
+          "offset": 28,
+          "bits": 32
+        }
+      }
+    },
+    {
+      "unit": "out1",
+      "bus": "s_axi_control",
+      "node": null,
+      "offset": 0,
+      "range": 4096,
+      "registers": {
+        "control": {
+          "offset": 0,
+          "bits": 32
+        },
+        "address": {
+          "offset": 16,
+          "bits": 64
+        },
+        "count": {
+          "offset": 28,
+          "bits": 32
+        }
+      }
+    }
+  ],
+  "clocks": [
+    {
+      "unit": "in0",
+      "pin": "ap_clk",
+      "reset": "ap_rst_n",
+      "clock": "main"
+    },
+    {
+      "unit": "DataflowCore_0",
+      "pin": "ap_clk",
+      "reset": "ap_rst_n",
+      "clock": "main"
+    },
+    {
+      "unit": "out0",
+      "pin": "ap_clk",
+      "reset": "ap_rst_n",
+      "clock": "main"
+    },
+    {
+      "unit": "in1",
+      "pin": "ap_clk",
+      "reset": "ap_rst_n",
+      "clock": "main"
+    },
+    {
+      "unit": "DataflowCore_1",
+      "pin": "ap_clk",
+      "reset": "ap_rst_n",
+      "clock": "main"
+    },
+    {
+      "unit": "out1",
+      "pin": "ap_clk",
+      "reset": "ap_rst_n",
+      "clock": "main"
+    }
+  ],
+  "placement": {
+    "in0": 2684354560,
+    "out0": 2684358656,
+    "in1": 2684362752,
+    "out1": 2684366848
+  },
+  "clocks_mhz": {
+    "main": 187.512
+  }
+}

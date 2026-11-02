@@ -107,8 +107,8 @@ class Platform:
       not a budget (``None``: not known for this part). No kernel reads it; a
       strategy may.
 
-    What a shell gives a partition is not a capability: its budgets (AXI-Lite buses,
-    memory ports) and its aligned doubled clock (``ap_clk2x``) are in its shell row
+    What a shell gives a partition is not a capability: its limits (units, control
+    windows, memory ports) and its aligned doubled clock (``ap_clk2x``) are in its shell row
     (``finn.platform.shells.ShellRow``), and the partition is checked against that row.
     So a kernel offers its pumped cases on any platform and declares that it takes the
     doubled clock.

@@ -280,12 +280,15 @@ def test_a_refused_configuration_is_logged_each_finding_once_then_raises(capsys,
         settings={"strategies": [{"size_fifos": {"margin": 2}}]},
     )
     cfg.prepared_toolchain = Toolchain(Selection(), {"PATH": output})
-    refusal = "configuration.toolchain: board-vivado: AUP-ZU3_8GB requires Vivado 2024.1"
+    refusal = (
+        "configuration.toolchain: tool-version: "
+        "AUP-ZU3_8GB on the 'pynq' shell builds with Vivado >=2024.1"
+    )
     with refused(
-        "board-vivado",
+        "tool-version",
         error=ConfigurationRefused,
         owner="configuration.toolchain",
-        message="^AUP-ZU3_8GB requires Vivado 2024.1",
+        message="^AUP-ZU3_8GB on the 'pynq' shell builds with Vivado >=2024.1",
     ):
         build.build_dataflow_cfg(model, cfg)
     err = capsys.readouterr().err
@@ -297,7 +300,7 @@ def test_a_refused_configuration_is_logged_each_finding_once_then_raises(capsys,
         f"WARNING: {warning}, and start_step/stop_step leave them out",
         "ERROR: Configuration refused: 1 findings",
     ]
-    assert lines[2].startswith(f"ERROR:   {refusal} or later, no Vivado detected")
+    assert lines[2].startswith(f"ERROR:   {refusal}, no Vivado detected")
     assert log.count(refusal) == 1 and log.count(warning) == 1
     assert "Traceback" not in log
     assert sorted(os.listdir(output)) == ["build_dataflow.log", "model.onnx", "report"]

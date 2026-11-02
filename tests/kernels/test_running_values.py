@@ -106,17 +106,19 @@ from finn.kernels.laws import (
     StatedRate,
 )
 from finn.kernels.matmul import KnownWeights
-from finn.kernels.movers import MoverOffer, iodma_hls
+from finn.kernels.movers import iodma_hls
 from finn.kernels.port import LoopEnds, PhysicalPort, stream_pins
+from finn.kernels.shell_rules import FixedShell, Scaled
 from finn.kernels.sides import Side, SideKind
 from finn.kernels.transport import MarkerKind
+from finn.kernels.utilization import Fit
 from finn.kernels.values.domains import Integer
 from finn.kernels.values.semantics import (
     IntegerTensorValue,
     integer_bytes,
     integer_digest,
 )
-from finn.platform.capabilities import DspBlock, Fabric
+from finn.platform.capabilities import DspBlock, Fabric, Resources
 
 
 @dataclass(frozen=True)
@@ -148,11 +150,7 @@ VERDICTS: dict[str, Verdict] = {
     "int": Verdict("always", "a plain type"),
     "str": Verdict("always", "a plain type"),
     "float": Verdict("always", "a plain type"),
-    "tuple": Verdict(
-        "always",
-        "item by item: a pair of ints (a dot product's result range), mover offers (value "
-        "classes of a str and ints)",
-    ),
+    "tuple": Verdict("always", "item by item: a pair of ints (a dot product's result range)"),
     "Traversal": Verdict("always", "a value class of int tuples and loops (value classes of ints)"),
     "Window": Verdict("always", "a value class of int pairs"),
     "Steps": Verdict(
@@ -181,8 +179,14 @@ VERDICTS: dict[str, Verdict] = {
         "always",
         "a value class: its kind an enum member, keyed by type and name; its label a str; "
         "its stream, where it states one, a value class holding its element's QONNX "
-        "datatype, a value type, and a beat sequence; its width an int or None; its offers "
-        "value classes of a str and ints",
+        "datatype, a value type, and a beat sequence; its width an int or None; what the "
+        "outside states, a value class of strs, ints and beat times",
+    ),
+    "MoverOffer": Verdict("always", "a value class of a str and ints"),
+    "FixedShell": Verdict(
+        "always",
+        "a value class of strs, an int, resources (a value class of ints) and scaled "
+        "resources (value classes of resources, fits of floats and an int)",
     ),
     "BaseDataType": Verdict("always", "a value type, the one instance of its name"),
     "IntegerTensorValue": Verdict("always", "a value type, equal by its digest"),
@@ -289,11 +293,6 @@ def made() -> dict[str, tuple[object, ...]]:
             (-3, 4),
             (0, 7),
             (-3, 4),
-            (
-                MoverOffer(
-                    kind="iodma", width_cap=64, frames_per_call=1, call_converted=2, call_direct=1
-                ),
-            ),
         ),
         "Window": (
             Window((4, 4), (3, 3)),
@@ -310,11 +309,13 @@ def made() -> dict[str, tuple[object, ...]]:
         # The Chain gives its MatMuls no form (the default): two equal ones made here.
         "Form": (Form.DENSE, Form.DEPTHWISE, Form.DENSE),
         "Side": (
-            Side.boundary("s_axis_0", (iodma_hls(64),), iodma_hls(64).states()),
-            Side.boundary("s_axis_0", (iodma_hls(64),), iodma_hls(64).states()),
+            Side.boundary("s_axis_0", iodma_hls(64).states()),
+            Side.boundary("s_axis_0", iodma_hls(64).states()),
             Side.source(),
             Side.neighbour(Direction.OUT, Stream(eight.element, in_order(eight)), "a.y", 8),
         ),
+        "MoverOffer": (iodma_hls(64), iodma_hls(32), iodma_hls(64)),
+        "FixedShell": (fixed_shell(1), fixed_shell(2), fixed_shell(1)),
         "Platform": (full_platform(DspBlock.DSP58),),
         "BaseDataType": (DataType["INT8"], DataType["UINT2"], DataType["INT8"]),
         "Tensor | KnownWeights": (
@@ -329,6 +330,22 @@ def made() -> dict[str, tuple[object, ...]]:
             IntegerTensorValue.of(((1, 2), (3, 5))),
         ),
     }
+
+
+def fixed_shell(base: int) -> FixedShell:
+    """A static region whose processor's control base is ``base``."""
+    scaled = Scaled(fixed=Resources(lut=10), lut=Fit(1.5, (2.0,)), scales_from=2)
+    return FixedShell(
+        processor="ps",
+        reset="rst",
+        memory_interconnect="smc",
+        control_interconnect="ic",
+        control_base=base,
+        processor_use=Resources(),
+        reset_use=Resources(lut=20, ff=40),
+        memory_interconnect_use=scaled,
+        control_interconnect_use=Scaled(),
+    )
 
 
 @cache

@@ -3,7 +3,8 @@
 
 """The kernel path's one cut, its partition's boundary (its free sides' and movers' facts,
 read from the configured network: ``boundary_facts``), what is built of it
-(``finn.outputs``) and the integration export read from its movers.
+(``finn.outputs``). The integration description read from its movers is the shells'
+(``tests/shells``).
 
 The Chain (``support.chain``), its choices saved, as the partition; with its second
 weights streamed, so two inputs cross the boundary. No Vivado.
@@ -12,7 +13,6 @@ weights streamed, so two inputs cross the boundary. No Vivado.
 from __future__ import annotations
 
 import subprocess
-from dataclasses import replace
 from itertools import product
 from pathlib import Path
 from typing import Any
@@ -20,7 +20,6 @@ from typing import Any
 import pytest
 from qonnx.core.modelwrapper import ModelWrapper
 from support.configure import bound_in_shell, configured, core_in_shell
-from support.ipxact_ports import AXILITE
 from support.models import (
     ROW_MAJOR_W2,
     choose_memories,
@@ -29,7 +28,7 @@ from support.models import (
     streamed_w2_model,
 )
 from support.module_names import live_name
-from support.packaging import NO_VIVADO, verified, verified_parent
+from support.packaging import NO_VIVADO, verified
 from support.ports import outer
 from support.refusals import refused
 from support.tfc import ULTRA96
@@ -46,9 +45,11 @@ from finn.core.graph.annotations.outputs import (
 from finn.core.graph.annotations.platform import PLATFORM_KEYS, read_target, write_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import CUT_NAME, KERNEL_OPS_DOMAIN, design_digest, partition_body
+from finn.core.space import Available
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import body_row, configured_network, shell_composition
+from finn.custom_op.kernels.shell import configured_network, mover_contracts
 from finn.dataflow.traversal import Loop, Reorder, Traversal, offsets
+from finn.kernels.explore import CoreComposition
 from finn.platform.resolve import resolve_target
 from finn.transformation.kernels import (
     InferKernelTensors,
@@ -57,14 +58,6 @@ from finn.transformation.kernels import (
     kernel_choices_config,
 )
 from finn.transformation.kernels.cut import CutKernelPartition, MakeCutChoices
-from finn.transformation.kernels.integration import (
-    Address,
-    Connection,
-    IntegrationError,
-    _aperture,
-    integration,
-    wire_one_bus_each,
-)
 from finn.transformation.kernels.package import boundary_facts, ip_key
 
 #: Ultra96 in the Zynq shell: its rows offer an IODMA_hls mover at a 128-bit port.
@@ -94,6 +87,18 @@ def facts(model: ModelWrapper) -> tuple[list[dict[str, Any]], list[dict[str, Any
     return boundary_facts(model, point, boundary, "DataflowCore_0")
 
 
+def movers(model: ModelWrapper) -> dict[str, dict[str, Any]]:
+    """The movers the shell of ``model``'s configured network places, by name, each its
+    contract's facts ``iodma`` states."""
+    point = configured_network(model, "DataflowCore_0")
+    found = mover_contracts(point.network)
+    assert isinstance(found, Available), found
+    return {
+        name: {key: getattr(contract, key) for key in iodma("in", 0)}
+        for name, contract in found.value
+    }
+
+
 def port(name: str, tensor: str, dims: list[int], element: str, *counts: int) -> dict[str, Any]:
     lanes, beats, tdata = counts
     bits = int(element[3:])
@@ -106,7 +111,6 @@ def port(name: str, tensor: str, dims: list[int], element: str, *counts: int) ->
         "lanes": lanes,
         "beats": beats,
         "tdata": tdata,
-        "mover": None,
     }
 
 
@@ -141,14 +145,19 @@ PYNQ_Y_MOVER = {**iodma("out", 32), "converter": False, "call_cycles": 13}
 
 
 def test_on_ip_the_facts_are_the_boundary_streams_with_no_mover() -> None:
-    assert facts(chain()) == ([X, W2], [Y])
+    model = chain()
+    assert facts(model) == ([X, W2], [Y])
+    assert movers(model) == {}
 
 
-def test_on_pynq_each_boundary_port_states_its_mover_and_the_channels_element() -> None:
-    assert facts(chain("pynq")) == (
-        [{**PYNQ_X, "mover": iodma("in", 16)}, {**PYNQ_W2, "mover": iodma("in", 64)}],
-        [{**PYNQ_Y, "mover": PYNQ_Y_MOVER}],
-    )
+def test_on_pynq_each_boundary_port_states_the_channels_element_beside_its_mover() -> None:
+    model = chain("pynq")
+    assert facts(model) == ([PYNQ_X, PYNQ_W2], [PYNQ_Y])
+    assert movers(model) == {
+        "in0": iodma("in", 16),
+        "in1": iodma("in", 64),
+        "out0": PYNQ_Y_MOVER,
+    }
 
 
 def test_packaging_reads_the_part_and_period_from_the_target() -> None:
@@ -186,7 +195,7 @@ def test_the_cut_keeps_the_parent_graph_with_one_partition_of_one_name(tmp_path:
         item.key for item in model.graph.metadata_props
     }
     assert [item.domain for item in body.graph.node] == [KERNEL_OPS_DOMAIN] * 3
-    assert facts(body)[0][0]["mover"] == iodma("in", 16)
+    assert movers(body)["in0"] == iodma("in", 16)
 
 
 def test_the_kernel_path_cuts_once(tmp_path: Path) -> None:
@@ -202,107 +211,6 @@ def test_the_kernel_path_cuts_once(tmp_path: Path) -> None:
         "partition-count", owner="partition_body", message="holds 0 partitions of KernelOps"
     ):
         partition_body(chain())
-
-
-def test_the_export_names_each_mover_its_iodma_and_every_connection(tmp_path: Path) -> None:
-    parent = verified_parent(chain("pynq").transform(CutKernelPartition(tmp_path)))
-    export = integration(parent)
-    assert (export.shell, export.board, export.part, export.period_ns) == (
-        "pynq",
-        "Ultra96",
-        ZYNQ.part,
-        5.0,
-    )
-    # The instance is the node's name; the IP's VLNV is the one packaging gave it (its
-    # module's), none before: nothing predicts it.
-    assert (export.partition, export.vlnv) == ("DataflowCore_0", None)
-    _, body, body_file = partition_body(parent)
-    toolchain: Any = PackagedHere()
-    body = body.transform(
-        PackagePartition("DataflowCore_0", directory=tmp_path / "ip", toolchain=toolchain)
-    )
-    body.save(body_file)
-    top = live_name(configured_network(body, "DataflowCore_0").module)
-    assert integration(parent).vlnv == body.get(OUTPUT_VLNV) == f"xilinx_finn:finn:{top}:1.0"
-    # Movers by direction in port order, each IODMA_hls configured from its facts: a
-    # frame's beats, the stream's bytes a beat in the UINT8 container, the memory port
-    # and the stream's width; the element is the mover's.
-    assert [(mover.instance, mover.tensor, mover.port) for mover in export.movers] == [
-        ("idma0", "x", "s_axis_0"),
-        ("idma1", "w2", "s_axis_1"),
-        ("odma0", "y", "m_axis_0"),
-    ]
-    assert [mover.iodma.attributes for mover in export.movers] == [
-        {
-            "numInputVectors": [1, 2],
-            "NumChannels": 1,
-            "dataType": "UINT8",
-            "intfWidth": 16,
-            "streamWidth": 8,
-            "direction": "in",
-        },
-        {
-            "numInputVectors": [1, 4],
-            "NumChannels": 2,
-            "dataType": "UINT8",
-            "intfWidth": 64,
-            "streamWidth": 16,
-            "direction": "in",
-        },
-        {
-            "numInputVectors": [1, 1],
-            "NumChannels": 4,
-            "dataType": "UINT8",
-            "intfWidth": 32,
-            "streamWidth": 32,
-            "direction": "out",
-        },
-    ]
-    assert [mover.contract.element.dtype.name for mover in export.movers] == [
-        "INT3",
-        "INT3",
-        "INT7",
-    ]
-    assert export.connections == (
-        Connection("axis", "idma0/m_axis_0", "DataflowCore_0/s_axis_0"),
-        Connection("axis", "idma1/m_axis_0", "DataflowCore_0/s_axis_1"),
-        Connection("axis", "DataflowCore_0/m_axis_0", "odma0/s_axis_0"),
-        Connection("aximm", "idma0/m_axi_gmem0", "smartconnect_0/S00_AXI"),
-        Connection("aximm", "idma1/m_axi_gmem0", "smartconnect_0/S01_AXI"),
-        Connection("aximm", "odma0/m_axi_gmem0", "smartconnect_0/S02_AXI"),
-        Connection("axilite", "axi_interconnect_0/M00_AXI", "idma0/s_axi_control_0"),
-        Connection("axilite", "axi_interconnect_0/M01_AXI", "idma1/s_axi_control_0"),
-        Connection("axilite", "axi_interconnect_0/M02_AXI", "odma0/s_axi_control_0"),
-        *(
-            Connection(kind, f"smartconnect_0/{source}", f"{instance}/{pin}")
-            for instance in ("idma0", "idma1", "DataflowCore_0", "odma0")
-            for kind, source, pin in (
-                ("clock", "aclk", "ap_clk"),
-                ("reset", "aresetn", "ap_rst_n"),
-            )
-        ),
-    )
-    # Each control map from the processor's peripheral base, 4 KiB apart.
-    assert export.addresses == (
-        Address("idma0/s_axi_control_0", 0xA000_0000, 4096),
-        Address("idma1/s_axi_control_0", 0xA000_1000, 4096),
-        Address("odma0/s_axi_control_0", 0xA000_2000, 4096),
-    )
-    assert export.report()["addresses"][2] == {
-        "interface": "odma0/s_axi_control_0",
-        "offset": "0xa0002000",
-        "range": 4096,
-    }
-
-
-def test_a_shell_without_an_integration_has_no_export(tmp_path: Path) -> None:
-    parent = verified_parent(chain().transform(CutKernelPartition(tmp_path)))
-    with refused(
-        "integration-unexported",
-        error=IntegrationError,
-        message="the 'ip' shell's integration is None: no export",
-    ):
-        integration(parent)
 
 
 #: The Chain with its weights w2 streamed, by its rows and a folding, as the boundary's
@@ -386,7 +294,8 @@ def test_a_tiled_w2_is_regrouped_after_its_mover_by_a_vpc_and_an_input_gen(case:
     assert delivered(row_major, hops) == [int(offset) for offset in offsets(read)]
     assert w2.output_adapting and w2.input_chain == "input_gen_vpc"
     assert w2.adapter.frame_bits == 16 * 3
-    mover = w2.mover_contract
+    assert bound.mover("w2") == "in1"
+    mover = bound.member(bound.placed("in1")).contract
     assert (mover.beats, mover.tdata, mover.memory_width, mover.words) == (4, 16, 64, 1)
     choose_memories(model)
     configured = configured_network(model, "DataflowCore_0")
@@ -456,7 +365,8 @@ def test_a_row_major_w2_on_three_rows_is_replayed_by_an_input_gen_after_its_move
     assert (outer(w2).form.lanes, outer(w2).form.beats) == (4, 4)
     assert w2.input_chain == "input_gen" and w2.adapter.frame_bits == 16 * 3
     assert ("w2", "adapter_ram_style") in bound.chosen()
-    mover = w2.mover_contract
+    assert bound.mover("w2") == "in1"
+    mover = bound.member(bound.placed("in1")).contract
     assert (mover.beats, mover.tdata, mover.memory_width, mover.words) == (4, 16, 64, 1)
     choose_memories(model)
     configured_network(model, "DataflowCore_0")
@@ -475,37 +385,12 @@ def test_x_read_twice_on_one_row_is_replayed_by_an_input_gen_after_its_mover() -
     bound = core_in_shell(model, model.graph.node)
     x = bound.member("x")
     assert bound.validity("x").status == "valid"
-    assert (outer(x).form.beats, x.mover_contract.beats) == (2, 2)
+    assert (outer(x).form.beats, bound.member("shell.in0").contract.beats) == (2, 2)
     assert x.input_chain == "input_gen" and x.adapter.frame_bits == 4 * 3
     assert x.input_steps.describe() == "reorder -> markers"
     assert ("x", "adapter_ram_style") in bound.chosen()
     ip = kernel_model(second_weights=False, rows=1)
     assert outer(core_in_shell(ip, ip.graph.node).member("x")).form.beats == 4
-
-
-def test_a_mover_or_bus_the_block_design_cannot_wire_is_refused_by_name(tmp_path: Path) -> None:
-    """The block design wires one AXI-Lite bus and one memory port a mover, and maps a bus
-    by its ``awaddr``: a mover stating other counts, or a bus without one, is refused."""
-    parent = verified_parent(chain("pynq").transform(CutKernelPartition(tmp_path)))
-    mover = integration(parent).movers[0]
-    wire_one_bus_each(mover.contract, "x")
-    for counts in ({"control_buses": 2}, {"memory_ports": 2}, {"memory_ports": 0}):
-        with refused(
-            "mover-buses-unwired",
-            error=IntegrationError,
-            owner="vivado-block-design",
-            message="x: its iodma_hls mover states .* AXI-Lite",
-        ):
-            wire_one_bus_each(replace(mover.contract, **counts), "x")
-    assert _aperture(AXILITE, 4096) == 4096 and _aperture(AXILITE, 16) == 32
-    bare = replace(AXILITE, signals=tuple(s for s in AXILITE.signals if s.logical != "awaddr"))
-    with refused(
-        "bus-aperture-unknown",
-        error=IntegrationError,
-        owner="vivado-block-design",
-        message="s_axilite: an AXI-Lite bus with no awaddr",
-    ):
-        _aperture(bare, 4096)
 
 
 class PackagedHere:
@@ -621,6 +506,6 @@ def test_tfc_s_choices_are_created_at_conversion_and_at_the_cut(
     assert not [name for name, held in channels.items() if "adapter" in held]
     assert not [name for name, held in channels.items() if "mover" in held]
     found = bound_in_shell(body, body.graph.node)
-    bound = shell_composition(found.point, body_row(body))
+    bound = CoreComposition(found.point)
     assert found.stale == {}
     assert bound.undecided() == ()

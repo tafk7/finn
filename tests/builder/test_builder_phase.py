@@ -18,7 +18,7 @@ import json
 import logging
 import re
 import shutil
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
@@ -27,13 +27,14 @@ import numpy as np
 import pytest
 from onnx import StringStringEntryProto
 from oracle import capture
-from qonnx.core.datatype import DataType
 from qonnx.core.metadata import MetadataError
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
 from qonnx.transformation.infer_shapes import InferShapes
 from support.configure import configured, write_raw
+from support.example_platform import BASE, DESCRIPTION, OPERATIONS
+from support.example_platform import DIRECTORY as EXAMPLE
 from support.explore_models import kernel_model as open_model
 from support.helpers import Lanes
 from support.models import (
@@ -46,16 +47,17 @@ from support.module_names import fixed_name, live_name
 from support.packaging import (
     PLACED_HIERARCHY,
     TIMING_REPORT,
+    UTILIZATION_SYNTH,
     FakeVivado,
     PackagedByStub,
     bitfile_default,
-    io_shape_dict,
 )
 from support.refusals import refused
 from support.tfc import EXPORT, SHAPE, ULTRA96, built, io_settings, partition, run_steps
 from support.tfc_built import SET_FOLDING, TFC_BUILT, TFC_MODULE, TFC_STORED
 
 import finn.kernels.explore as explore_module
+from finn import resources
 from finn.builder import build_dataflow_steps
 from finn.builder.build_dataflow import build_dataflow_cfg, build_plan
 from finn.builder.build_dataflow_checks import configuration_findings
@@ -65,6 +67,7 @@ from finn.builder.build_dataflow_config import (
     StepEntry,
 )
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
+from finn.builder.build_dataflow_resources import built_reports
 from finn.builder.build_dataflow_steps import (
     build_dataflow_phases,
     build_dataflow_step_lookup,
@@ -74,6 +77,7 @@ from finn.builder.build_dataflow_steps import (
     step_deployment_package,
     step_explore,
     step_make_driver,
+    step_resources_report,
     step_verify_partition,
 )
 from finn.builder.build_dataflow_strategies import (
@@ -111,24 +115,41 @@ from finn.core.onnx_exec import execute_onnx
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.reporting.manifest import FINDING, RECORDS
 from finn.core.search import ExploreError, Hold, Ranked
-from finn.custom_op.kernels.shell import configured_network
+from finn.core.space import Available
+from finn.custom_op.kernels.shell import configured_network, mover_contracts
+from finn.kernels.artifacts.contributions import HlsSource
+from finn.kernels.artifacts.hls import stage_hls
+from finn.kernels.artifacts.module import Leaf
 from finn.kernels.channels import Channel, Neighbours
 from finn.kernels.explore import KernelExplorer, TargetThroughput
 from finn.kernels.fifo_sizing import Sized
+from finn.kernels.iodma import IodmaIn, IodmaOut
+from finn.platform.catalog import catalog
+from finn.platform.declarations import PATH_SETTING, declarations
 from finn.platform.refusal import TargetRefused
 from finn.platform.request import TargetRequest
 from finn.platform.resolve import resolve_target
-from finn.shells.pynq import runner as pynq_runner
-from finn.shells.pynq.ipgen import prepare_ip
-from finn.shells.pynq.runner import (
+from finn.shells import build as shell_build
+from finn.shells.build import (
     DELIVERED_CLOCK,
-    InstanceIP,
-    PynqRefused,
-    block_design,
+    RUNTIME_FILE,
+    ShellRefused,
     delivered_clock_findings,
-    iodma_model,
-    project_script,
 )
+from finn.shells.integration import IpRef, Linked, describe
+from finn.shells.pynq.linker import (
+    LINKER,
+    OUT_OF_CONTEXT,
+    PLACED,
+    Address,
+    Wire,
+    block_design,
+    linked_row,
+    placement,
+    project_script,
+    wiring,
+)
+from finn.toolchain.hls import HlsProduct
 from finn.toolchain.launcher import Selection, Toolchain
 from finn.toolchain.vivado import delivered_clock
 from finn.transformation.kernels import (
@@ -138,7 +159,7 @@ from finn.transformation.kernels import (
     shell_bottleneck,
 )
 from finn.transformation.kernels.cut import CutKernelPartition, MakeCutChoices
-from finn.transformation.kernels.integration import Address, Connection, integration
+from finn.transformation.kernels.hls import hls_requests
 from finn.transformation.kernels.package import boundary_facts
 
 # TFC is built from the trained network once for the module (about ten seconds), and each
@@ -337,9 +358,12 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     point = configured_network(built, "DataflowCore_0")
     boundary = point.network.boundary
     inputs, outputs = boundary_facts(built, point, boundary, "DataflowCore_0")
-    assert [(port["tensor"], port["mover"]["kind"]) for port in inputs + outputs] == [
-        ("Reshape_0_out0", "iodma_hls"),
-        ("MatMul_3_out0", "iodma_hls"),
+    contracts = mover_contracts(point.network)
+    assert isinstance(contracts, Available)
+    assert [port["tensor"] for port in inputs + outputs] == ["Reshape_0_out0", "MatMul_3_out0"]
+    assert [(name, contract.kind) for name, contract in contracts.value] == [
+        ("in0", "iodma_hls"),
+        ("out0", "iodma_hls"),
     ]
     assert json.loads((output / "report" / "kernel_choices.json").read_text()) == (
         kernel_choices_config(built)
@@ -857,7 +881,7 @@ def test_the_builds_target_is_the_one_its_configuration_states(tmp_path: Path) -
     with refused("board-part-mismatch", error=TargetRefused):
         step_convert_to_hw(chain_source(), config(tmp_path, target=asserted))
     xrt = TargetRequest(part="xcu250-figd2104-2L-e", period_ns=5.0, shell="xrt")
-    with refused("unsupported-shell", error=TargetRefused, message="^'xrt' "):
+    with refused("unknown-shell", error=TargetRefused, message="^'xrt' "):
         step_convert_to_hw(chain_source(), config(tmp_path, target=xrt))
 
 
@@ -919,7 +943,7 @@ IP_KEY, OTHER_IP_KEY = "sha256:" + "1" * 64, "sha256:" + "2" * 64
 
 
 def test_an_output_is_listed_after_the_outputs_it_is_made_from(tmp_path: Path) -> None:
-    """The driver sets the clock its bitfile delivers, and the deployment ships the bitfile
+    """The driver runs the bitfile the build ships, and the deployment ships the bitfile
     and the driver: listed without them before, each passes the checks and is refused
     when it runs, naming the steps to list before it."""
     for steps in (["step_make_driver"], ["step_deployment_package", "step_build_bitfile"]):
@@ -930,12 +954,12 @@ def test_an_output_is_listed_after_the_outputs_it_is_made_from(tmp_path: Path) -
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)
-    with pytest.raises(PynqRefused) as refused:
+    with pytest.raises(ShellRefused) as refused:
         step_make_driver(parent, cfg)
     ((code, message),) = [(each.code, each.message) for each in refused.value.findings]
-    assert code == "clock-absent"
+    assert code == "bitfile-absent"
     assert message.endswith("; list step_build_bitfile before step_make_driver")
-    with pytest.raises(PynqRefused) as refused:
+    with pytest.raises(ShellRefused) as refused:
         step_deployment_package(parent, cfg)
     ((code, message),) = [(each.code, each.message) for each in refused.value.findings]
     assert code == "bitfile-absent"
@@ -961,7 +985,7 @@ def test_a_deployment_ships_only_the_bitfile_and_driver_its_build_made(tmp_path:
     (output / "driver" / "driver.py").write_text("an earlier build's driver")
     found = []
     with refused(
-        "bitfile-absent", error=PynqRefused, message="the model states no bitfile"
+        "bitfile-absent", error=ShellRefused, message="the model states no bitfile"
     ) as caught:
         step_deployment_package(parent, cfg)
     found.append(caught.error.findings)
@@ -969,14 +993,14 @@ def test_a_deployment_ships_only_the_bitfile_and_driver_its_build_made(tmp_path:
     parent.set(OUTPUT_BITFILE, str(elsewhere))
     with refused(
         "bitfile-foreign",
-        error=PynqRefused,
-        message="the model's bitfile is .*elsewhere.*, not this ",
+        error=ShellRefused,
+        message="the model's bitfile is .*elsewhere.*, not one of this ",
     ) as caught:
         step_deployment_package(parent, cfg)
     found.append(caught.error.findings)
     parent.set(OUTPUT_BITFILE, str(output / "bitfile" / "finn-accel.bit"))
     with refused(
-        "driver-absent", error=PynqRefused, message="no driver in this output directory"
+        "driver-absent", error=ShellRefused, message="no driver in this output directory"
     ) as caught:
         step_deployment_package(parent, cfg)
     found.append(caught.error.findings)
@@ -989,10 +1013,10 @@ def test_a_deployment_ships_only_the_bitfile_and_driver_its_build_made(tmp_path:
     (output / "report").mkdir()
     described = {"made_from": earlier, "ip_key": IP_KEY}
     (output / "report" / "driver.json").write_text(json.dumps(described))
-    with pytest.raises(PynqRefused) as raised:
+    with pytest.raises(ShellRefused) as raised:
         step_deployment_package(parent, cfg)
     assert str(raised.value) == (
-        f"MakePynqDeployment: driver-stale: the driver in this output directory "
+        f"MakeDeployment: driver-stale: the driver in this output directory "
         f"({output / 'driver'}) was "
         f"made from the design {earlier}, and the partition's design is now "
         f"{design_digest(body)}; make the driver again (step_make_driver)"
@@ -1000,34 +1024,41 @@ def test_a_deployment_ships_only_the_bitfile_and_driver_its_build_made(tmp_path:
     found.append(raised.value.findings)
     described = {"made_from": design_digest(body), "ip_key": OTHER_IP_KEY}
     (output / "report" / "driver.json").write_text(json.dumps(described))
-    with pytest.raises(PynqRefused) as raised:
+    with pytest.raises(ShellRefused) as raised:
         step_deployment_package(parent, cfg)
     assert str(raised.value) == (
-        f"MakePynqDeployment: driver-ip-stale: the driver in this output directory "
+        f"MakeDeployment: driver-ip-stale: the driver in this output directory "
         f"({output / 'driver'}) was made for the IP of the key {OTHER_IP_KEY}, and the "
         f"partition's IP is now {IP_KEY}; make the driver again (step_make_driver)"
     )
     found.append(raised.value.findings)
     codes = ("bitfile-absent", "bitfile-foreign", "driver-absent", "driver-stale")
     assert [(each.code, each.owner, each.kind, dict(each.details)) for (each,) in found] == [
-        (code, "MakePynqDeployment", FindingKind.REJECTION, {"output": "deployment_package"})
+        (code, "MakeDeployment", FindingKind.REJECTION, {"output": "deployment_package"})
         for code in (*codes, "driver-ip-stale")
     ]
     assert not (output / "deploy").exists()
 
 
 class ObjectiveSeen(Transformation):
-    """Stands in for the bitfile's build (BuildPynqBitfile): keeps the objective it is
-    given, and builds nothing."""
+    """Stands in for the bitfile's build (BuildBitfile): keeps the objective it is given,
+    and builds nothing."""
 
     seen: list[float | None] = []
 
     def __init__(
-        self, directory: Path, *, toolchain: Toolchain, hw_debug: bool, objective_fps: float | None
+        self,
+        directory: Path,
+        runtime: str | None,
+        *,
+        toolchain: Toolchain,
+        hw_debug: bool,
+        objective_fps: float | None,
     ) -> None:
         super().__init__()
         ObjectiveSeen.seen.append(objective_fps)
         self.findings: tuple[Finding, ...] = ()
+        self.reports: list[Path] = []
         self.bitfile = directory / "bitfile" / "finn-accel.bit"
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
@@ -1051,7 +1082,7 @@ def test_the_bitfiles_objective_is_the_target_its_partition_records(
     none where none did, though an earlier build left its report in the output directory; a
     build resumed from the saved model reads the same; and none where the record is stale
     (the body's design changed after the search)."""
-    monkeypatch.setattr(build_dataflow_steps, "BuildPynqBitfile", ObjectiveSeen)
+    monkeypatch.setattr(build_dataflow_steps, "BuildBitfile", ObjectiveSeen)
     monkeypatch.setattr(ObjectiveSeen, "seen", [])
     parent = cut_parent(tmp_path / "cut")
     cfg = config(tmp_path)
@@ -1095,10 +1126,16 @@ class ClockShort(ObjectiveSeen):
     """The bitfile's build stand-in, finding the delivered clock short."""
 
     def __init__(
-        self, directory: Path, *, toolchain: Toolchain, hw_debug: bool, objective_fps: float | None
+        self,
+        directory: Path,
+        runtime: str | None,
+        *,
+        toolchain: Toolchain,
+        hw_debug: bool,
+        objective_fps: float | None,
     ) -> None:
         super().__init__(
-            directory, toolchain=toolchain, hw_debug=hw_debug, objective_fps=objective_fps
+            directory, runtime, toolchain=toolchain, hw_debug=hw_debug, objective_fps=objective_fps
         )
         self.findings = (CLOCK_SHORT,)
 
@@ -1108,7 +1145,7 @@ def test_the_bitfiles_clock_findings_are_noted(
 ) -> None:
     """A finding of the bitfile's build is noted once: one warning on the records logger,
     its line the finding's, the finding attached for the manifest."""
-    monkeypatch.setattr(build_dataflow_steps, "BuildPynqBitfile", ClockShort)
+    monkeypatch.setattr(build_dataflow_steps, "BuildBitfile", ClockShort)
     monkeypatch.setattr(ObjectiveSeen, "seen", [])
     model = kernel_model()
     write_target(model, ULTRA96)
@@ -1171,7 +1208,7 @@ def test_a_step_that_moves_the_target_s_folding_leaves_the_bitfile_no_objective(
     shell the movers bound the period at 16 cycles a frame: the target's folding is already
     the fastest within it, so the maximum throughput changes nothing there, while the hold
     and the baselines move it."""
-    monkeypatch.setattr(build_dataflow_steps, "BuildPynqBitfile", ObjectiveSeen)
+    monkeypatch.setattr(build_dataflow_steps, "BuildBitfile", ObjectiveSeen)
     monkeypatch.setattr(ObjectiveSeen, "seen", [])
     parent = cut_parent(tmp_path / "cut")
     cfg = config(tmp_path)
@@ -1198,21 +1235,21 @@ def test_a_step_that_moves_the_target_s_folding_leaves_the_bitfile_no_objective(
 
 
 def test_a_target_the_registry_refuses_is_refused_before_the_build(tmp_path: Path) -> None:
-    unknown = TargetRequest(board="U250", period_ns=5.0)
+    unknown = TargetRequest(board="U280", period_ns=5.0)
     assert build_refused_by(
         config(tmp_path, target=unknown),
         "unknown-board",
         owner="configuration.target.board",
-        message="^'U250' is not a board",
+        message="^'U280' is not a board",
     ) == ["unknown-board"]
     # A board the Zynq template cannot build: refused before any step runs.
     zcu111 = TargetRequest(board="ZCU111", period_ns=5.0, shell="pynq")
     assert build_refused_by(
         config(tmp_path, target=zcu111),
-        "no-shell-row",
+        "board-unsupported",
         owner="configuration.target.board",
-        message="has no row for board 'ZCU111'",
-    ) == ["no-shell-row"]
+        message="does not support board 'ZCU111'",
+    ) == ["board-unsupported"]
     # The ip shell takes the part.
     on_part = TargetRequest(part="xcu250-figd2104-2L-e", period_ns=5.0)
     assert failed_checks(config(tmp_path, target=on_part)) == {}
@@ -1309,7 +1346,7 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
     # The Zynq shell's input mover binds: 196 beats and a call's 4 cycles (a
     # frame a call), within the budget of 200; the slowest of the other members, the
     # first layer's activations, weights, thresholds and MatMul, tie at 196.
-    assert report["bottleneck"] == {"members": ["Reshape_0_out0"], "cycles": 200}
+    assert report["bottleneck"] == {"members": ["shell.in0"], "cycles": 200}
     members = {name: row["cycles"] for name, row in report["members"].items()}
     assert [name for name, cycles in members.items() if cycles == 196] == [
         "Thresholding_0",
@@ -1317,7 +1354,7 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
         "Thresholding_0_out0",
         "MatMul_0_param0",
     ]
-    assert set(report["movers"]) == {"Reshape_0_out0", "MatMul_3_out0"}
+    assert set(report["movers"]) == {"in0", "out0"}
 
 
 @pytest.mark.slow
@@ -1376,12 +1413,21 @@ def test_sizing_fifos_on_tfc_places_none_and_changes_no_choice(
 def test_the_delivered_clock_is_reported_beside_the_one_asked(tmp_path: Path) -> None:
     """TFC's case: 196 cycles a frame at the 187.512 MHz the shell delivers for 5 ns asked
     give 956,694 frames a second, against the 1e6 its exploration asked: a limitation
-    with both numbers (a finding, never a Python warning)."""
+    with both numbers (a finding, never a Python warning). The main clock is the one the
+    linker states as delivered; the ``pynq`` linker reads it from the routed design's
+    timing summary, its PL clock."""
     report = tmp_path / "timing.rpt"
     report.write_text(TIMING_REPORT)
-    clock = delivered_clock(str(report), 5.0, 196, 1_000_000)
-    assert clock == {
+    assert delivered_clock(str(report), 5.0) == {
         "clock": "clk_pl_0",
+        "target_period_ns": 5.0,
+        "delivered_period_ns": 5.333,
+        "delivered_mhz": 187.512,
+    }
+    linked = Linked(tmp_path / "image", placement={}, clocks_mhz={"main": 187.512}, reports={})
+    clock = shell_build.delivered_clock(linked, 5.0, 196, 1_000_000)
+    assert clock == {
+        "clock": "main",
         "target_period_ns": 5.0,
         "delivered_period_ns": 5.333,
         "delivered_mhz": 187.512,
@@ -1390,27 +1436,31 @@ def test_the_delivered_clock_is_reported_beside_the_one_asked(tmp_path: Path) ->
         "fps_at_delivered": 956693.9,
         "objective_fps": 1_000_000,
     }
-    (below,) = delivered_clock_findings(clock, str(report))
+    (below,) = delivered_clock_findings(clock)
     assert (below.kind, below.code) == (FindingKind.LIMITATION, "clock-below-asked")
     assert below.message == (
-        "the shell delivers clk_pl_0 at 5.333 ns (187.512 MHz), not the 5.0 ns asked: "
+        "the shell delivers its main clock at 5.333 ns (187.512 MHz), not the 5.0 ns asked: "
         "196 cycles a frame give 956,694 fps at it, 1,020,408 at the clock asked; "
         "the objective is 1,000,000 fps"
     )
     assert dict(below.details) == {"asked_period_ns": 5.0, "delivered_period_ns": 5.333}
     # The clock asked, delivered: nothing to state; without a partition, the clock alone.
-    assert delivered_clock_findings(delivered_clock(str(report), 5.333, 196), str(report)) == ()
-    alone = delivered_clock(str(report), 5.0)
+    delivered = shell_build.delivered_clock(linked, 5.333, 196, None)
+    assert delivered_clock_findings(delivered) == ()
+    alone = shell_build.delivered_clock(linked, 5.0, None, None)
     assert set(alone) == {"clock", "target_period_ns", "delivered_period_ns", "delivered_mhz"}
-    (below,) = delivered_clock_findings(alone, str(report))
+    (below,) = delivered_clock_findings(alone)
     assert below.message.endswith("not the 5.0 ns asked")
-    (above,) = delivered_clock_findings(delivered_clock(str(report), 6.0), str(report))
+    (above,) = delivered_clock_findings(shell_build.delivered_clock(linked, 6.0, None, None))
     assert above.code == "clock-above-asked"
+    # A routed design whose timing summary names no PL clock: the linker states no main
+    # clock, and the period asked is not confirmed.
     report.write_text("no clock summary")
-    unknown = delivered_clock(str(report), 5.0)
-    assert unknown == {"target_period_ns": 5.0, "clocks": []}
-    (found,) = delivered_clock_findings(unknown, str(report))
-    assert found.code == "clock-unknown" and "no PL clock" in found.message
+    assert delivered_clock(str(report), 5.0) == {"target_period_ns": 5.0, "clocks": []}
+    unknown = shell_build.delivered_clock(replace(linked, clocks_mhz={}), 5.0, 196, None)
+    assert unknown == {"clock": "main", "target_period_ns": 5.0}
+    (found,) = delivered_clock_findings(unknown)
+    assert found.code == "clock-unknown" and "states no main clock" in found.message
 
 
 def test_a_partitions_bottleneck_is_read_from_its_saved_choices() -> None:
@@ -1474,49 +1524,64 @@ def z0_tfc(z0_cut: Path) -> ModelWrapper:
 
 
 @pytest.mark.slow
-def test_the_export_of_tfc_on_pynq_names_both_movers_iodmas_and_every_connection(
+def test_tfc_on_pynq_is_linked_as_z0s_movers_iodmas_and_wires(
     z0_tfc: ModelWrapper, z0_cut: Path
 ) -> None:
-    """Z0's TFC (Ultra96, 5 ns, Z0's chain) on pynq: the export configures each mover's
-    IODMA_hls as ZynqBuild inserted it, names the block design's connections as Z0's
-    ip_config.tcl makes them (its partition then named StreamingDataflowPartition_1),
-    and the partition is Z0's module, with Z0's choices."""
+    """Z0's TFC (Ultra96, 5 ns, Z0's chain) on pynq: its description's edge ports are the
+    movers ZynqBuild inserted, each mover's contract the one ZynqBuild configured its
+    IODMA_hls with, its module its kernel's HLS top (``TFC_MOVERS``); the linker names the
+    block design's wires as Z0's ip_config.tcl makes them (its partition then named
+    StreamingDataflowPartition_1) but for each mover's cell, its unit's name, and its pins,
+    its HLS export's own; and the partition is Z0's module, with Z0's choices."""
     parent, output = z0_tfc, z0_cut.parent / "output"
-    export = integration(parent)
-    assert [(mover.instance, mover.tensor, mover.port) for mover in export.movers] == [
-        ("idma0", "Reshape_0_out0", "s_axis_0"),
-        ("odma0", "MatMul_3_out0", "m_axis_0"),
+    described = describe(parent)
+    row = linked_row(described)
+    assert [(edge.unit, edge.tensor, edge.port) for edge in described.edges] == [
+        ("in0", "Reshape_0_out0", "s_axis_0"),
+        ("out0", "MatMul_3_out0", "m_axis_0"),
     ]
-    assert [mover.iodma.attributes for mover in export.movers] == [
-        Z0_IODMAS["in"],
-        Z0_IODMAS["out"],
-    ]
+    assert [
+        {
+            "numInputVectors": [1, edge.contract.beats],
+            "NumChannels": edge.contract.tdata // 8,
+            "dataType": "UINT8",
+            "intfWidth": edge.contract.memory_width,
+            "streamWidth": edge.contract.tdata,
+            "direction": edge.contract.direction,
+        }
+        for edge in described.edges
+    ] == [Z0_IODMAS["in"], Z0_IODMAS["out"]]
+    assert {edge.unit: edge.module.name for edge in described.edges} == TFC_MOVERS
     # The bytes' element is the channel's: the pixels and the logits, INT7 over the last
     # MatMul's range, [-61, 61], read from the activations' [-1, 1].
-    assert [str(mover.contract.element) for mover in export.movers] == [
+    assert [str(edge.contract.element) for edge in described.edges] == [
         "UINT8",
         "INT7 over [-61, 61]",
     ]
     clocked = [
-        Connection(kind, f"smartconnect_0/{source}", f"{instance}/{pin}")
-        for instance in ("idma0", "DataflowCore_0", "odma0")
+        Wire(kind, f"smartconnect_0/{source}", f"{instance}/{pin}")
+        for instance in ("in0", "DataflowCore_0", "out0")
         for kind, source, pin in (("clock", "aclk", "ap_clk"), ("reset", "aresetn", "ap_rst_n"))
     ]
-    assert export.connections == (
-        Connection("axis", "idma0/m_axis_0", "DataflowCore_0/s_axis_0"),
-        Connection("axis", "DataflowCore_0/m_axis_0", "odma0/s_axis_0"),
-        Connection("aximm", "idma0/m_axi_gmem0", "smartconnect_0/S00_AXI"),
-        Connection("aximm", "odma0/m_axi_gmem0", "smartconnect_0/S01_AXI"),
-        Connection("axilite", "axi_interconnect_0/M00_AXI", "idma0/s_axi_control_0"),
-        Connection("axilite", "axi_interconnect_0/M01_AXI", "odma0/s_axi_control_0"),
+    assert wiring(described, row) == (
+        Wire("axis", "in0/out0_V", "DataflowCore_0/s_axis_0"),
+        Wire("axis", "DataflowCore_0/m_axis_0", "out0/in0_V"),
+        Wire("aximm", "in0/m_axi_gmem", "smartconnect_0/S00_AXI"),
+        Wire("aximm", "out0/m_axi_gmem", "smartconnect_0/S01_AXI"),
+        Wire("axilite", "zynq_ps/M_AXI_HPM0_FPD", "control_0_0/S00_AXI"),
+        Wire("axilite", "control_0_0/M00_AXI", "in0/s_axi_control"),
+        Wire("axilite", "control_0_0/M01_AXI", "out0/s_axi_control"),
+        Wire("clock", "zynq_ps/pl_clk0", "control_0_0/aclk"),
+        Wire("reset", "rst_ps/peripheral_aresetn", "control_0_0/aresetn"),
         *clocked,
     )
-    assert export.addresses == (
-        Address("idma0/s_axi_control_0", 0xA000_0000, 4096),
-        Address("odma0/s_axi_control_0", 0xA000_1000, 4096),
+    assert placement(described, row) == (
+        Address("in0/s_axi_control", 0xA000_0000, 4096),
+        Address("out0/s_axi_control", 0xA000_1000, 4096),
     )
-    # The partition's VLNV is the one packaging gives it: none before.
-    assert (export.period_ns, export.vlnv) == (5.0, None)
+    # The core's IP is the one packaging gives it: none before.
+    (core,) = described.cores
+    assert (described.period_ns, described.unit(core.name).ip) == (5.0, None)
     # Z0's module, its memories in their explicit baseline styles, its thresholds a data
     # file (THRESHOLDS_FILE), and choices; its MatMuls after the first INT7, reading each
     # thresholding's range.
@@ -1529,10 +1594,10 @@ def test_the_export_of_tfc_on_pynq_names_both_movers_iodmas_and_every_connection
 
 
 #: The block design Z0's build wrote for TFC (its ip_config.tcl's custom section, its
-#: partition StreamingDataflowPartition_1 renamed, its IP named as its module, here
-#: ``TFC_MODULE``), each build
-#: directory as normalized ($BUILD, a random suffix XXXXXXXX). The oracle's is the same but
-#: for the partition's IP and the quoting
+#: partition StreamingDataflowPartition_1 renamed, its IP named as its module), each build
+#: directory as normalized ($BUILD, a random suffix XXXXXXXX), each control bus assigned the
+#: address the linker places it at. The oracle's is the same but for the partition's IP, the
+#: quoting and its addresses, which the template's procedure assigned
 #: (``test_the_z0_literal_is_the_oracles_block_design_but_for_the_partitions_ip``).
 Z0_BLOCK_DESIGN = f"""\
 set_property ip_repo_paths [concat [get_property ip_repo_paths [current_project]] [list "$BUILD/code_gen_ipgen_idma0_IODMA_hls_0_XXXXXXXX/project_idma0_IODMA_hls_0/sol1/impl/ip" "$BUILD/vivado_stitch_proj_XXXXXXXX/ip"]] [current_project]
@@ -1540,7 +1605,7 @@ update_ip_catalog -rebuild -scan_changes
 create_bd_cell -type ip -vlnv xilinx_finn:finn:idma0:1.0 idma0
 connect_bd_intf_net [get_bd_intf_pins idma0/m_axi_gmem0] [get_bd_intf_pins smartconnect_0/S00_AXI]
 connect_bd_intf_net [get_bd_intf_pins idma0/s_axi_control_0] [get_bd_intf_pins axi_interconnect_0/M00_AXI]
-assign_axi_addr_proc idma0/s_axi_control_0
+assign_bd_address [get_bd_addr_segs idma0/s_axi_control_0/Reg*] -offset 0xa0000000 -range 4096
 connect_bd_net [get_bd_pins idma0/ap_clk] [get_bd_pins smartconnect_0/aclk]
 connect_bd_net [get_bd_pins idma0/ap_rst_n] [get_bd_pins smartconnect_0/aresetn]
 set_property ip_repo_paths [concat [get_property ip_repo_paths [current_project]] [list "$BUILD/vivado_stitch_proj_XXXXXXXX/ip"]] [current_project]
@@ -1554,11 +1619,71 @@ update_ip_catalog -rebuild -scan_changes
 create_bd_cell -type ip -vlnv xilinx_finn:finn:odma0:1.0 odma0
 connect_bd_intf_net [get_bd_intf_pins odma0/m_axi_gmem0] [get_bd_intf_pins smartconnect_0/S01_AXI]
 connect_bd_intf_net [get_bd_intf_pins odma0/s_axi_control_0] [get_bd_intf_pins axi_interconnect_0/M01_AXI]
-assign_axi_addr_proc odma0/s_axi_control_0
+assign_bd_address [get_bd_addr_segs odma0/s_axi_control_0/Reg*] -offset 0xa0001000 -range 4096
 connect_bd_net [get_bd_pins odma0/ap_clk] [get_bd_pins smartconnect_0/aclk]
 connect_bd_net [get_bd_pins odma0/ap_rst_n] [get_bd_pins smartconnect_0/aresetn]
 connect_bd_intf_net [get_bd_intf_pins odma0/s_axis_0] [get_bd_intf_pins DataflowCore_0/m_axis_0]
 """  # noqa: E501
+
+#: TFC's movers at Z0's choices, by unit: each its kernel's HLS top, named by its request's
+#: digest, whose IP is the HLS export's, ``xilinx_finn:finn:<top>:1.0``.
+TFC_MOVERS = {
+    "in0": "finn_iodma_14aacd5fc842d1d0",
+    "out0": "finn_iodma_f0a1887e0eb9a5f8",
+}
+
+#: Z0's block design as the build writes it now, each mover a kernel: the HWCustomOp
+#: flow's cell and stitched IP of each mover (``idma0``, ``odma0``) its unit's name and its
+#: kernel's HLS export, that IP's own pins and the HLS product's IP its one repository
+#: (``$HLS/<top>/ip``). Nothing else of Z0's changes.
+AS_KERNELS = (
+    *(
+        (
+            f'[list "$BUILD/code_gen_ipgen_{cell}_IODMA_hls_0_XXXXXXXX/project_{cell}_IODMA_hls_0'
+            '/sol1/impl/ip" "$BUILD/vivado_stitch_proj_XXXXXXXX/ip"]',
+            f'[list "$HLS/{TFC_MOVERS[unit]}/ip"]',
+        )
+        for cell, unit in (("idma0", "in0"), ("odma0", "out0"))
+    ),
+    *(
+        (f"xilinx_finn:finn:{cell}:1.0", f"xilinx_finn:finn:{TFC_MOVERS[unit]}:1.0")
+        for cell, unit in (("idma0", "in0"), ("odma0", "out0"))
+    ),
+    ("idma0/m_axis_0", "in0/out0_V"),
+    ("odma0/s_axis_0", "out0/in0_V"),
+    ("/m_axi_gmem0]", "/m_axi_gmem]"),
+    ("/s_axi_control_0", "/s_axi_control"),
+    ("idma0", "in0"),
+    ("odma0", "out0"),
+)
+
+
+def as_kernels(design: str) -> str:
+    """Z0's block design ``design`` renamed as ``AS_KERNELS`` states, in its order."""
+    for before, after in AS_KERNELS:
+        design = design.replace(before, after)
+    return design
+
+
+#: The control tree the build's block design opens with for TFC's two control buses: one
+#: SmartConnect, the processor's control master into it, on the processor's clock and the
+#: template's reset. Z0's AXI interconnect was the template's.
+CONTROL_TREE = """\
+create_bd_cell -type ip -vlnv $smartconnect_vlnv control_0_0
+set_property -dict [list CONFIG.NUM_SI 1 CONFIG.NUM_MI 2 CONFIG.STRATEGY LOW_AREA] [get_bd_cells control_0_0]
+connect_bd_intf_net [get_bd_intf_pins control_0_0/S00_AXI] [get_bd_intf_pins zynq_ps/M_AXI_HPM0_FPD]
+connect_bd_net [get_bd_pins control_0_0/aclk] [get_bd_pins zynq_ps/pl_clk0]
+connect_bd_net [get_bd_pins control_0_0/aresetn] [get_bd_pins rst_ps/peripheral_aresetn]
+"""  # noqa: E501
+
+
+#: The block design the build writes for TFC: the control tree, then Z0's, its movers
+#: kernels (``as_kernels``), each control bus from the tree's master ports in place of the
+#: AXI interconnect's.
+BLOCK_DESIGN = CONTROL_TREE + as_kernels(Z0_BLOCK_DESIGN).replace(
+    "axi_interconnect_0/", "control_0_0/"
+)
+
 
 #: The IODMAs' generated HLS code at Z0's choices (PrepareIP's top_<node>.cpp), by
 #: instance: the oracle's, its partitions renamed. (Z0's build generated the same.)
@@ -1576,12 +1701,23 @@ def test_the_z0_literal_is_the_oracles_block_design_but_for_the_partitions_ip() 
     line, the HWCustomOp flow's paths unquoted, except the partition's IP: its repositories
     (the flow's partition is its layers' IPs stitched, so it lists each layer's IP and
     memstream beside the stitched one; the build's partition is one packaged IP) and its
-    name (the flow's is its node's, the build's its module's)."""
+    name (the flow's is its node's, the build's its module's); and each control bus's
+    address, which the oracle has the template's procedure assign and the linker states:
+    the same, each IODMA's 6-bit register map 4 KiB at least, from the control base."""
     z0 = Z0_BLOCK_DESIGN.replace('"', "").splitlines()
     oracle = [renamed(line) for line in ZYNQ_BUILD["block_design"]]
     assert len(oracle) == len(z0)
     differing = [index for index, (ours, theirs) in enumerate(zip(z0, oracle)) if ours != theirs]
-    index, cell = differing
+    assigned = [index for index in differing if oracle[index].startswith("assign_axi_addr_proc")]
+    assert [(oracle[index], z0[index]) for index in assigned] == [
+        (
+            f"assign_axi_addr_proc {instance}/s_axi_control_0",
+            f"assign_bd_address [get_bd_addr_segs {instance}/s_axi_control_0/Reg*] "
+            f"-offset {offset} -range 4096",
+        )
+        for instance, offset in (("idma0", "0xa0000000"), ("odma0", "0xa0001000"))
+    ]
+    index, cell = (index for index in differing if index not in assigned)
     assert cell == index + 2
     assert (z0[cell], oracle[cell]) == (
         f"create_bd_cell -type ip -vlnv xilinx_finn:finn:{TFC_MODULE}:1.0 DataflowCore_0",
@@ -1602,54 +1738,92 @@ def test_the_z0_literal_is_the_oracles_block_design_but_for_the_partitions_ip() 
 
 @pytest.mark.slow
 def test_the_runner_writes_z0s_block_design_for_tfc(z0_tfc: ModelWrapper) -> None:
-    """The block design the runner writes from TFC's export, each instance's IP where Z0's
-    build made it (the normalized build directory, a Tcl variable there, as a path
-    here), is Z0's, line for line."""
-    build = "/BUILD/{}_XXXXXXXX"
-    stitched = build.format("vivado_stitch_proj") + "/ip"
+    """The block design the linker writes from TFC's description, the core's IP where Z0's
+    build made it (the normalized build directory, a Tcl variable there, as a path here)
+    and each mover's where its HLS product holds it, is ``BLOCK_DESIGN`` line for line:
+    the control tree, then Z0's but for each mover's cell, IP, repository and pins and its
+    control bus's master port, the tree's."""
+    stitched = "/BUILD/vivado_stitch_proj_XXXXXXXX/ip"
     ips = {
-        instance: InstanceIP(
-            f"xilinx_finn:finn:{instance}:1.0",
-            (
-                build.format(f"code_gen_ipgen_{instance}_IODMA_hls_0")
-                + f"/project_{instance}_IODMA_hls_0/sol1/impl/ip",
-                stitched,
-            ),
-        )
-        for instance in ("idma0", "odma0")
+        unit: IpRef(f"xilinx_finn:finn:{top}:1.0", (f"/HLS/{top}/ip",))
+        for unit, top in TFC_MOVERS.items()
     }
-    export = integration(z0_tfc)
-    # The partition's IP as packaged, under its module's name.
-    ips["DataflowCore_0"] = InstanceIP(f"xilinx_finn:finn:{TFC_MODULE}:1.0", (stitched,))
-    design = block_design(export, ips)
-    assert design == Z0_BLOCK_DESIGN.replace("$BUILD", "/BUILD")
-    script = project_script(export, design, 16)
-    assert "set FREQ_MHZ 200\nset NUM_AXILITE 2\n" in script
-    assert "set NUM_AXIMM 2\nset BOARD Ultra96\nset FPGA_PART xczu3eg-sbva484-1-e\n" in script
+    described = describe(z0_tfc)
+    # The core's IP as packaged, under its module's name.
+    ips["DataflowCore_0"] = IpRef(f"xilinx_finn:finn:{TFC_MODULE}:1.0", (stitched,))
+    design = block_design(described.packaged(ips), linked_row(described))
+    assert design == BLOCK_DESIGN.replace("$BUILD", "/BUILD").replace("$HLS", "/HLS")
+    tree = len(CONTROL_TREE.splitlines())
+    differing = [
+        (z0, ours)
+        for z0, ours in zip(Z0_BLOCK_DESIGN.splitlines(), BLOCK_DESIGN.splitlines()[tree:])
+        if z0 != ours
+    ]
+    assert len(differing) == 16
+    assert all(any(cell in z0 for cell in ("idma0", "odma0")) for z0, _ in differing)
+    script = project_script(
+        described,
+        design,
+        {"board_part": "avnet.com:ultra96v1:part0:1.2"},
+        linked_row(described),
+        16,
+    )
+    assert (
+        "set FREQ_MHZ 200\nset NUM_AXIMM 2\nset BOARD Ultra96\nset FPGA_PART xczu3eg-sbva484-1-e\n"
+        in script
+    )
 
 
 @pytest.mark.slow
-def test_the_runner_generates_z0s_iodmas_for_tfc(
-    z0_tfc: ModelWrapper, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_each_movers_hls_request_is_z0s_iodma_exported_as_its_top(
+    z0_tfc: ModelWrapper, tmp_path: Path
 ) -> None:
-    """Each mover's IODMA_hls, generated in its scratch model (``prepare_ip``, for real: code
-    generation runs no tool), is Z0's code, text for text, staged as an HLS request whose
-    script names no path of the build and no part: it reads both."""
-    monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path))
-    export = integration(z0_tfc)
-    for mover in export.movers:
-        model = prepare_ip(iodma_model(mover), export.period_ns)
-        (node,) = model.graph.node
-        request = Path(str(getCustomOp(node).get_nodeattr("code_gen_dir_ipgen"))) / "request"
-        assert sorted(path.name for path in request.iterdir()) == [
-            "script.tcl",
-            f"top_{node.name}.cpp",
-        ]
-        assert (request / f"top_{node.name}.cpp").read_text() == Z0_IODMA_CODE[mover.instance]
-        script = (request / "script.tcl").read_text()
-        assert str(tmp_path) not in script and export.part not in script
-        assert 'set config_proj_part "$part"\n' in script
-        assert 'set config_bnnlibdir "$hlslib"\n' in script
+    """Each mover's module, staged as an HLS request (``stage_hls``: it runs no tool), is
+    Z0's IODMA code under its top's name, over finn-hlslib's headers; its script names no
+    path of the build and no part (it reads the part), and exports the top into the IP
+    catalog as FINN's IP of its own name."""
+    for edge in describe(z0_tfc).edges:
+        ((_, request),) = hls_requests(edge.module)
+        staged = stage_hls(
+            request, tmp_path / edge.unit, roots={"hlslib": Path(resources.path("hlslib"))}
+        )
+        cell = {"in0": "idma0", "out0": "odma0"}[edge.unit]
+        top = (staged.directory / "top.cpp").read_text()
+        assert top == Z0_IODMA_CODE[cell].replace(f"{cell}_IODMA_hls_0", request.function)
+        script = (staged.directory / "script.tcl").read_text()
+        assert str(tmp_path) not in script and "xczu3eg" not in script
+        assert "set_part $part\n" in script
+        assert (
+            "config_export -format ip_catalog -vendor xilinx_finn -library finn "
+            f"-ipname {request.function} -version 1.0\ncsynth_design\n"
+            "export_design -format ip_catalog\n"
+        ) in script
+
+
+@pytest.mark.slow
+def test_z0s_movers_as_kernels_state_their_channels_movers_and_generate_z0s_iodmas(
+    z0_tfc: ModelWrapper,
+) -> None:
+    """On each of TFC's edges at Z0's choices, the mover its shell places (an ``IodmaIn`` or
+    an ``IodmaOut``, by its unit's name) states the contract its description states, and its
+    HLS top is Z0's IODMA code but for the top's name: the input mover's cycles a frame
+    TFC's bottleneck."""
+    described = describe(z0_tfc)
+    (core,) = described.cores
+    _, body, _ = partition_body(z0_tfc)
+    network = configured_network(body, core.name).network
+    cycles: dict[str, int] = {}
+    for edge in described.edges:
+        point = network.member(network.placed(edge.unit))
+        kind = IodmaIn if edge.contract.direction == "in" else IodmaOut
+        assert isinstance(point, kind) and network.mover(edge.tensor) == edge.unit
+        assert point.contract == edge.contract
+        (request,) = point.module_sources
+        assert isinstance(request, HlsSource)
+        cell = {"in0": "idma0", "out0": "odma0"}[edge.unit]
+        assert request.top == Z0_IODMA_CODE[cell].replace(f"{cell}_IODMA_hls_0", request.function)
+        cycles[edge.unit] = point.frame_cycles
+    assert cycles == {"in0": TFC_BOTTLENECK, "out0": 14}
 
 
 #: TFC's bottleneck at Z0's choices on its partition's network, movers included: the input
@@ -1657,33 +1831,20 @@ def test_the_runner_generates_z0s_iodmas_for_tfc(
 #: movers, read its slowest layer's 196).
 TFC_BOTTLENECK = 200
 
-#: The generated driver's io_shape_dict for TFC at Z0's choices, as the build's
-#: driver wrote it before the runner (from ZynqBuild's link graph), the logits INT7 (the last
-#: MatMul's result over its activations' range, [-61, 61]).
-TFC_IO_SHAPES = {
-    "idt": [DataType["UINT8"]],
-    "odt": [DataType["INT7"]],
-    "ishape_normal": [(1, 784)],
-    "oshape_normal": [(1, 10)],
-    "ishape_folded": [(1, 196, 4)],
-    "oshape_folded": [(1, 10, 1)],
-    "ishape_packed": [(1, 196, 4)],
-    "oshape_packed": [(1, 10, 1)],
-    "input_dma_name": ["idma0"],
-    "output_dma_name": ["odma0"],
-    "number_of_external_weights": 0,
-    "external_weights_input_shapes": {},
-    "num_inputs": 1,
-    "num_outputs": 1,
-    "mlo_weight_config": {},
-}
+#: TFC's edges at Z0's choices as the driver's runtime file states them (unit, tensor,
+#: element, shape, beats a frame, lanes a beat, bits a beat): the I/O the build's driver
+#: read before the runner (from ZynqBuild's link graph), the logits INT7 (the last MatMul's
+#: result over its activations' range, [-61, 61]).
+TFC_EDGES = [
+    ("in0", "Reshape_0_out0", "UINT8", [1, 784], 196, 4, 32),
+    ("out0", "MatMul_3_out0", "INT7", [1, 10], 10, 1, 8),
+]
 
 
 def tool_recorders(tmp_path: Path) -> dict[str, object]:
-    """The runner's tool steps, each replaced by one that states what the tool would
-    have made, in ``tmp_path``: prepare_ip and hls_synth_ip do nothing,
-    create_stitched_ip states a mover's IP, PackagePartition the partition's, named as its
-    module."""
+    """The bitfile build's tool steps, each replaced by one that states what the tool would
+    have made, in ``tmp_path``: hls_products a mover's HLS export, named as its top,
+    PackagePartition the partition's IP, named as its module."""
 
     class Packaged(Transformation):
         def __init__(self, name: str, **kwargs: object) -> None:
@@ -1699,43 +1860,34 @@ def tool_recorders(tmp_path: Path) -> dict[str, object]:
             model.set(OUTPUT_IP_OPTIONS, {"run_synth": False})
             return model, False
 
-    def unchanged(model: ModelWrapper, *args: object, **kwargs: object) -> ModelWrapper:
-        return model
+    def products(module: Leaf, part: str, **kwargs: object) -> dict[str, HlsProduct]:
+        product = HlsProduct(tmp_path / "hls" / module.name)
+        product.ip.mkdir(parents=True, exist_ok=True)
+        (product.ip / "component.xml").write_text(
+            "<component><vendor>xilinx_finn</vendor><library>finn</library>"
+            f"<name>{module.name}</name><version>1.0</version></component>"
+        )
+        return {module.name: product}
 
-    def stitched(
-        model: ModelWrapper, part: str, period_ns: float, instance: str, **kwargs: object
-    ) -> ModelWrapper:
-        hls = tmp_path / "hls" / instance
-        hls.mkdir(parents=True, exist_ok=True)
-        for node in model.graph.node:
-            getCustomOp(node).set_nodeattr("ip_path", str(hls))
-        model.set_metadata_prop("vivado_stitch_proj", str(tmp_path / "stitch"))
-        model.set_metadata_prop("vivado_stitch_vlnv", f"xilinx_finn:finn:{instance}:1.0")
-        return model
-
-    return {
-        "prepare_ip": unchanged,
-        "hls_synth_ip": unchanged,
-        "create_stitched_ip": stitched,
-        "PackagePartition": Packaged,
-    }
+    return {"hls_products": products, "PackagePartition": Packaged}
 
 
 @pytest.mark.slow
 def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
     source: ModelWrapper, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """TFC on pynq through the build and its shell's outputs, the runner's tools
+    """TFC on pynq through the build and its shell's outputs, the bitfile build's tools
     faked (its tool steps state what they would make; Vivado makes its project's files,
     the timing summary a PS that gives 187.512 MHz for the 200 asked).
 
     - The parent graph stays the build's model and states what a later step consumes,
-      typed, and no flat key: the bitfile and its handoff, no report; the reports are
-      collected beside them, the delivered clock's with the partition's network's
-      bottleneck, movers included.
-    - The driver's io_shape_dict is the build's before the runner, the logits
-      INT7, and it sets PL0 to the delivered clock; report/driver.json states what it
-      takes and returns.
+      typed, and no flat key: the bitfile, no report; its hardware handoff is beside it,
+      and the reports are collected beside them, the delivered clock's with the
+      partition's network's bottleneck, movers included.
+    - The driver's runtime file is the build's report of it, its edges the I/O the
+      build's driver read before the shared driver, the logits INT7, its main clock the
+      delivered one; report/driver.json states the bitfile, the runtime and what the
+      driver was made from.
     - report/resources.json states each member of the shell by the model, out of
       context (the fake per-IP runs) and placed (the fake hierarchy), by its instance;
       what no member's row holds is unattributed.
@@ -1743,7 +1895,7 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
       part of the parent graph, whose partition node reads its body by a relative path:
       executed from there, it gives the build's labels."""
     for name, recorded in tool_recorders(tmp_path).items():
-        monkeypatch.setattr(pynq_runner, name, recorded)
+        monkeypatch.setattr(shell_build, name, recorded)
     monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "build"))
     cfg = config(tmp_path)
     vivado = FakeVivado(timing=TIMING_REPORT)
@@ -1761,7 +1913,8 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
         parent = step.function(parent, cfg, **step.settings)
     assert [node.name for node in parent.graph.node] == ["Reshape_0", "DataflowCore_0", "TopK_0"]
     ((_, _, script),) = vivado.runs
-    assert "create_bd_cell -type ip -vlnv xilinx_finn:finn:odma0:1.0 odma0\n" in script
+    out = TFC_MOVERS["out0"]
+    assert f"create_bd_cell -type ip -vlnv xilinx_finn:finn:{out}:1.0 out0\n" in script
     saved = tmp_path / "parent.onnx"
     parent.save(str(saved))
     reread = ModelWrapper(str(saved))
@@ -1776,13 +1929,12 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
         "bitfile_made_from": design_digest(body),
         "bitfile_ip_key": IP_KEY,
         "bitfile_options": {"hw_debug": False},
-        "hwh": str(output / "bitfile" / "finn-accel.hwh"),
     }
     assert (output / "bitfile" / "finn-accel.hwh").read_text() == "top.hwh"
     assert (report / "placed_utilization.xml").read_text() == PLACED_HIERARCHY
     assert sorted(path.name for path in (report / "out_of_context").iterdir()) == [
         f"top_{name}_0_utilization_synth.rpt"
-        for name in ("DataflowCore_0", "idma0", "smartconnect_0")
+        for name in ("DataflowCore_0", "in0", "smartconnect_0")
     ]
     packaged = (
         f"xilinx_finn:finn:{live_name(configured_network(body, 'DataflowCore_0').module)}:1.0"
@@ -1791,16 +1943,22 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
     assert body.get(OUTPUT_IP_KEY) == IP_KEY
     for model in (reread, body):
         assert list(model.model.metadata_props) == []
-    integrated = json.loads((report / "integration.json").read_text())
-    assert integrated["partition"] == {"instance": "DataflowCore_0", "vlnv": packaged}
-    assert [mover["iodma"] for mover in integrated["movers"]] == [Z0_IODMAS["in"], Z0_IODMAS["out"]]
+    designed = json.loads((report / "block_design.json").read_text())
+    (core_unit,) = (unit for unit in designed["units"] if unit["name"] == "DataflowCore_0")
+    assert core_unit["ip"]["vlnv"] == packaged
+    assert json.loads((report / "integration.json").read_text())["schema"] == 1
+    assert designed["wires"][0] == {
+        "kind": "axis",
+        "source": "in0/out0_V",
+        "sink": "DataflowCore_0/s_axis_0",
+    }
     # The delivered clock against the one asked, the bottleneck the partition's network's,
     # its movers included: the input mover.
     clock = json.loads((report / "delivered_clock.json").read_text())
     bottleneck = shell_bottleneck(body, CUT_NAME)
     assert bottleneck is not None
     assert (clock["delivered_mhz"], clock["bottleneck_cycles"]) == (187.512, bottleneck.cycles)
-    assert (bottleneck.members, bottleneck.cycles) == (("Reshape_0_out0",), TFC_BOTTLENECK)
+    assert (bottleneck.members, bottleneck.cycles) == (("shell.in0",), TFC_BOTTLENECK)
     assert clock["objective_fps"] == 1_000_000
     assert [finding["code"] for finding in clock["findings"]] == ["clock-below-asked"]
     # The resources per member: Z7's model of TFC (the thresholdings read INT7 sums); the
@@ -1816,12 +1974,12 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
     }
     assert {key: row["instance"] for key, row in rows.items()} == {
         "partition": "DataflowCore_0",
-        "movers.Reshape_0_out0": "idma0",
-        "movers.MatMul_3_out0": "odma0",
-        "static_region.zynq_ultra_ps_e": "zynq_ps",
-        "static_region.proc_sys_reset": "rst_zynq_ps_",
-        "static_region.smartconnect": "smartconnect_0",
-        "static_region.axi_interconnect": "axi_interconnect_0",
+        "movers.in0": "in0",
+        "movers.out0": "out0",
+        "static_region.processor": "zynq_ps",
+        "static_region.reset": "rst_ps",
+        "static_region.memory_interconnect": "smartconnect_0",
+        "static_region.control_interconnect": "control_",
     }
 
     def counts(lut: int, ff: int, bram18: int = 0, dsp: int = 0) -> dict[str, int]:
@@ -1829,18 +1987,18 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
 
     assert {key: row["model"] for key, row in rows.items()} == {
         "partition": counts(5270, 7077, 19, 100),
-        "movers.Reshape_0_out0": counts(1305, 2279, 4),
-        "movers.MatMul_3_out0": counts(1390, 2069),
-        "static_region.zynq_ultra_ps_e": counts(264, 0),
-        "static_region.proc_sys_reset": counts(19, 40),
-        "static_region.smartconnect": counts(5364, 8530),
-        "static_region.axi_interconnect": counts(1402, 1535),
+        "movers.in0": counts(1305, 2279, 4),
+        "movers.out0": counts(1390, 2069),
+        "static_region.processor": counts(264, 0),
+        "static_region.reset": counts(19, 40),
+        "static_region.memory_interconnect": counts(5364, 8530),
+        "static_region.control_interconnect": counts(960, 1149),
     }
-    # FakeVivado's runs: idma0, the partition and the SmartConnect, each its own LUTs.
+    # FakeVivado's runs: in0, the partition and the SmartConnect, each its own LUTs.
     synthesized = {
         "partition": 200,
-        "movers.Reshape_0_out0": 100,
-        "static_region.smartconnect": 300,
+        "movers.in0": 100,
+        "static_region.memory_interconnect": 300,
     }
     assert {key: row["out_of_context"] for key, row in rows.items()} == {
         key: counts(synthesized[key], 10, 5, 3) if key in synthesized else None for key in rows
@@ -1848,15 +2006,15 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
     # The placed hierarchy lists neither the processor nor its reset.
     assert {key: row["placed"] for key, row in rows.items()} == {
         "partition": counts(400, 800, 3, 4),
-        "movers.Reshape_0_out0": counts(100, 250, 2),
-        "movers.MatMul_3_out0": counts(90, 240),
-        "static_region.zynq_ultra_ps_e": None,
-        "static_region.proc_sys_reset": None,
-        "static_region.smartconnect": counts(300, 500),
-        "static_region.axi_interconnect": counts(100, 200),
+        "movers.in0": counts(100, 250, 2),
+        "movers.out0": counts(90, 240),
+        "static_region.processor": None,
+        "static_region.reset": None,
+        "static_region.memory_interconnect": counts(300, 500),
+        "static_region.control_interconnect": counts(100, 200),
     }
     assert stated["total"] == {
-        "model": counts(15014, 21530, 23, 100),
+        "model": counts(14572, 21144, 23, 100),
         "out_of_context": counts(600, 30, 15, 9),
         "placed": counts(1000, 2000, 5, 4),
     }
@@ -1865,20 +2023,34 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
         "out_of_context": counts(0, 0),
         "placed": counts(10, 10),
     }
-    # The driver: today's I/O, the delivered clock.
-    driver = (output / "driver" / "driver.py").read_text()
-    assert io_shape_dict(driver) == TFC_IO_SHAPES
-    assert "\nfclk_mhz = 187.512\n" in driver
+    # A per-IP run the bitfile's build did not collect (an interrupted earlier one's) is
+    # never read: only the files its record names.
+    (report / "out_of_context" / "top_out0_0_utilization_synth.rpt").write_text(
+        UTILIZATION_SYNTH.format(lut=700001, ff=10)
+    )
+    step_resources_report(parent, cfg)
+    assert json.loads((report / "resources.json").read_text()) == stated
+    # The driver: today's I/O, the delivered clock, the runtime file the build's report.
+    runtime_file = (output / "driver" / "integration.json").read_text()
+    assert runtime_file == (report / "integration.json").read_text()
+    assert [
+        (
+            edge["unit"],
+            edge["tensor"],
+            edge["element"],
+            edge["shape"],
+            edge["beats"],
+            edge["lanes"],
+            edge["bits"],
+        )
+        for core in json.loads(runtime_file)["cores"]
+        for edge in (*core["inputs"], *core["outputs"])
+    ] == TFC_EDGES
+    assert json.loads(runtime_file)["clocks_mhz"] == {"main": 187.512}
     description = json.loads((report / "driver.json").read_text())
     assert description == {
-        "host_runtime": "zynq-iodma",
         "bitfile": "bitfile/finn-accel.bit",
-        "fclk_mhz": 187.512,
-        "takes": [
-            {"name": "Reshape_0_out0", "element": "UINT8", "shape": [1, 784], "dma": "idma0"}
-        ],
-        "returns": [{"name": "MatMul_3_out0", "element": "INT7", "shape": [1, 10], "dma": "odma0"}],
-        "host": {"before": ["Reshape_0"], "after": ["TopK_0"]},
+        "runtime": "pynq",
         "made_from": design_digest(body),
         "ip_key": IP_KEY,
     }
@@ -1893,6 +2065,7 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
         "model",
     ]
     assert json.loads((deploy / "driver.json").read_text()) == description
+    assert (deploy / "driver" / "integration.json").read_text() == runtime_file
     # driver.py and validate.py run the bitfile shipped beside driver/, wherever the
     # deployment is and from whatever directory they are run.
     for script in ("driver.py", "validate.py"):
@@ -1925,39 +2098,170 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
     assert np.array_equal(labels[shipped.graph.output[0].name], expected)
 
 
-def test_a_driver_without_its_bitfile_or_its_clock_is_refused(tmp_path: Path) -> None:
-    """The driver sets the clock its bitfile delivers and runs the bitfile the build
-    ships: an output directory with no delivered-clock report (the bitfile's build
-    writes it there) is refused, so is one whose routed design states no PL clock, and
-    so is a parent graph that states no bitfile."""
+@pytest.fixture
+def example_platform(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """The made-up platform (``support.example_platform``) on ``FINN_PLATFORM_PATH``, the
+    process's declarations and catalog read again."""
+    monkeypatch.setenv(PATH_SETTING, str(EXAMPLE))
+    declarations.cache_clear()
+    catalog.cache_clear()
+    yield
+    monkeypatch.delenv(PATH_SETTING)
+    declarations.cache_clear()
+    catalog.cache_clear()
+
+
+@pytest.mark.usefixtures("example_platform")
+def test_a_made_up_shell_builds_a_core_to_its_driver_and_deployment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Chain in the ``example`` shell, declared outside FINN (``support.example_platform``),
+    through the outputs' steps with no change to FINN, the movers' and the partition's
+    tools faked and no other run:
+
+    - every output is made for the runtime the build names, the shell's second: the
+      linker's description, the runtime file and the driver;
+    - the bitfile is the image its declared linker made, built with the debug option, the
+      file it loads with beside it, the linker's report under report/, each unit at the
+      base the linker placed it and the main clock delivered as asked;
+    - what an earlier ``pynq`` link collected into the same output directory is removed,
+      and none of it read as this build's resources; FINN's own reports stay;
+    - the driver is the declared runtime's, given the runtime file, the file beside the
+      image and the linker's report, as the build collected them;
+    - the deployment ships both."""
+    for name, recorded in tool_recorders(tmp_path).items():
+        monkeypatch.setattr(shell_build, name, recorded)
+    monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "build"))
+    request = TargetRequest(
+        board="Example-ZU3", period_ns=5.0, shell="example", runtime="example-alt"
+    )
+    cfg = config(tmp_path, target=request)
+    tools = FakeVivado()
+    cfg.prepared_toolchain = cast(Toolchain, tools)
+    assert cfg.resolved_runtime == "example-alt"
+    # An earlier pynq link in the same output directory, and a report of FINN's own.
+    output = Path(cfg.output_dir)
+    earlier = {PLACED: "placed", f"{OUT_OF_CONTEXT}/top_in0_0_utilization_synth.rpt": "in0"}
+    for key, text in earlier.items():
+        (output / "report" / key).parent.mkdir(parents=True, exist_ok=True)
+        (output / "report" / key).write_text(text)
+    (output / "report" / "kernel_ops.json").write_text("{}")
+    (output / "report" / "linked.json").write_text(
+        json.dumps(
+            {
+                "linker": LINKER,
+                "image": "bitfile/finn-accel.bit",
+                "beside": ["bitfile/finn-accel.hwh"],
+                "reports": {key: f"report/{key}" for key in earlier},
+            }
+        )
+    )
+    model = kernel_model()
+    write_target(model, cfg.resolved_target)
+    model = model.transform(MakeCutChoices(CUT_NAME))  # its movers, as the cut makes them
+    configure_partition(model)
+    parent = model.transform(CutKernelPartition(tmp_path / "cut"))
+    parent = step_build_bitfile(parent, cfg, hw_debug=True)
+    parent = step_make_driver(parent, cfg)
+    parent = step_deployment_package(parent, cfg)
+    assert tools.runs == []
+    _, body, _ = partition_body(parent)
+    stated = parent.namespace(OUTPUTS)
+    assert {key: value for key, value in stated.items() if key.startswith("bitfile")} == {
+        "bitfile": str(output / "bitfile" / "finn-accel.example"),
+        "bitfile_made_from": design_digest(body),
+        "bitfile_ip_key": IP_KEY,
+        "bitfile_options": {"hw_debug": True},
+    }
+    assert sorted(path.name for path in (output / "bitfile").iterdir()) == [
+        "finn-accel.example",
+        "finn-accel.map",
+    ]
+    assert (output / "bitfile" / "finn-accel.example").read_bytes() == b"example image\n"
+    # The linker's report: the description it linked, on the board's slot, each unit's IP
+    # the one the build made.
+    linked = json.loads((output / "report" / DESCRIPTION).read_text())
+    assert (linked["slot"], linked["debug"], linked["runtime"]) == ("B", True, "example-alt")
+    assert None not in linked["ips"].values()
+    # The earlier link's reports gone, FINN's own kept; this build's record its linker's.
+    assert not (output / "report" / PLACED).exists()
+    assert list((output / "report" / OUT_OF_CONTEXT).iterdir()) == []
+    assert (output / "report" / "kernel_ops.json").read_text() == "{}"
+    assert json.loads((output / "report" / "linked.json").read_text()) == {
+        "linker": "example-link",
+        "image": "bitfile/finn-accel.example",
+        "beside": ["bitfile/finn-accel.map"],
+        "reports": {DESCRIPTION: f"report/{DESCRIPTION}"},
+    }
+    assert built_reports(parent, toolchain=cast(Toolchain, tools)) == {}
+    # Each unit with a control window at the base the linker placed it, the main clock
+    # delivered as asked: the delivered clock states no limitation.
+    runtime_file = json.loads((output / RUNTIME_FILE).read_text())
+    placement = runtime_file["placement"]
+    windows = {unit.name: unit.window for unit in describe(parent).units if unit.window}
+    assert sorted(placement) == sorted(windows) and placement
+    assert all(base >= BASE and base % windows[unit] == 0 for unit, base in placement.items())
+    assert placement == json.loads((output / "bitfile" / "finn-accel.map").read_text())
+    assert (runtime_file["clocks_mhz"], runtime_file["runtime"]) == ({"main": 200.0}, "example-alt")
+    clock = json.loads((output / DELIVERED_CLOCK).read_text())
+    assert (clock["clock"], clock["delivered_mhz"], clock["findings"]) == ("main", 200.0, [])
+    # The driver: the runtime's, from the runtime file the build wrote.
+    driver = output / "driver"
+    assert sorted(path.name for path in driver.iterdir()) == ["integration.json", OPERATIONS]
+    assert (driver / "integration.json").read_text() == (output / RUNTIME_FILE).read_text()
+    operations = json.loads((driver / OPERATIONS).read_text())
+    # Written by the runtime the build names, not the shell's first.
+    assert operations[:4] == [
+        ["runtime", "example-alt"],
+        ["load", "finn-accel.example", ["finn-accel.map"]],
+        ["clock", 200.0],
+        ["reports", [DESCRIPTION]],
+    ]
+    assert operations[4:] and all(
+        kind == "start" and placement[unit] == base for kind, unit, base in operations[4:]
+    )
+    description = json.loads((output / "report" / "driver.json").read_text())
+    assert description == {
+        "bitfile": "bitfile/finn-accel.example",
+        "runtime": "example-alt",
+        "made_from": design_digest(body),
+        "ip_key": IP_KEY,
+    }
+    deploy = output / "deploy"
+    assert sorted(path.name for path in deploy.iterdir()) == [
+        "bitfile",
+        "driver",
+        "driver.json",
+        "model",
+    ]
+    assert (deploy / "driver" / OPERATIONS).read_text() == (driver / OPERATIONS).read_text()
+    assert json.loads((deploy / "driver" / OPERATIONS).read_text())[0] == ["runtime", "example-alt"]
+
+
+def test_a_driver_without_its_bitfile_or_its_runtime_file_is_refused(tmp_path: Path) -> None:
+    """The driver runs the bitfile the build ships and reaches each unit where its build
+    placed it: a parent graph that states no bitfile is refused, and so is an output
+    directory with no runtime file (the bitfile's build writes it there)."""
     model = kernel_model()
     write_target(model, ULTRA96)
     model = model.transform(MakeCutChoices(CUT_NAME))  # its movers, as the cut makes them
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)
-    report = Path(cfg.output_dir) / DELIVERED_CLOCK
-    with refused(
-        "clock-absent",
-        error=PynqRefused,
-        owner="MakePynqDriver",
-        message=re.escape(f"no delivered clock ({report})"),
-    ):
+    with refused("bitfile-absent", error=ShellRefused, owner="MakeDriver"):
         step_make_driver(parent, cfg)
-    report.parent.mkdir(parents=True)
-    unknown = Finding(
-        FindingKind.LIMITATION, "clock-unknown", "delivered_clock", "no PL clock in it"
-    ).record()
-    report.write_text(json.dumps({"target_period_ns": 5.0, "clocks": [], "findings": [unknown]}))
+    _, body, body_file = partition_body(parent)
+    body.set(OUTPUT_IP_KEY, IP_KEY)
+    body.save(body_file)
+    parent.set(OUTPUT_BITFILE, str(Path(cfg.output_dir) / "bitfile" / "finn-accel.bit"))
+    parent.set(OUTPUT_BITFILE_MADE_FROM, design_digest(body))
+    parent.set(OUTPUT_BITFILE_IP_KEY, IP_KEY)
     with refused(
-        "clock-unknown",
-        error=PynqRefused,
-        owner="MakePynqDriver",
-        message="the bitfile's clock is not known: no PL clock in it",
+        "integration-absent",
+        error=ShellRefused,
+        owner="MakeDriver",
+        message=re.escape(f"no runtime file ({Path(cfg.output_dir) / RUNTIME_FILE})"),
     ):
-        step_make_driver(parent, cfg)
-    report.write_text(json.dumps({"target_period_ns": 5.0, "delivered_mhz": 187.512}))
-    with refused("bitfile-absent", error=PynqRefused, owner="MakePynqDriver"):
         step_make_driver(parent, cfg)
     assert not (Path(cfg.output_dir) / "driver").exists()
 
@@ -1965,8 +2269,8 @@ def test_a_driver_without_its_bitfile_or_its_clock_is_refused(tmp_path: Path) ->
 @pytest.mark.parametrize(
     "step, output, maker",
     [
-        (step_make_driver, "pynq_driver", "MakePynqDriver"),
-        (step_deployment_package, "deployment_package", "MakePynqDeployment"),
+        (step_make_driver, "driver", "MakeDriver"),
+        (step_deployment_package, "deployment_package", "MakeDeployment"),
     ],
 )
 def test_a_bitfile_built_from_another_design_or_ip_is_refused_by_name(
@@ -1987,15 +2291,13 @@ def test_a_bitfile_built_from_another_design_or_ip_is_refused_by_name(
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)
     output_dir = Path(cfg.output_dir)
-    clock = output_dir / DELIVERED_CLOCK
-    clock.parent.mkdir(parents=True)
-    clock.write_text(json.dumps({"target_period_ns": 5.0, "delivered_mhz": 187.512}))
+    (output_dir / "report").mkdir(parents=True)
     bitfile = output_dir / "bitfile" / "finn-accel.bit"
     parent.set(OUTPUT_BITFILE, str(bitfile))
     (output_dir / "report" / "driver.json").write_text(json.dumps({"made_from": None}))
     with refused(
         "bitfile-unmade",
-        error=PynqRefused,
+        error=ShellRefused,
         owner=maker,
         output=output,
         message=r"the model's bitfile \(.*\) states no design",
@@ -2008,7 +2310,7 @@ def test_a_bitfile_built_from_another_design_or_ip_is_refused_by_name(
     body.save(body_file)
     now = design_digest(body)
     assert now != built_from
-    with pytest.raises(PynqRefused) as raised:
+    with pytest.raises(ShellRefused) as raised:
         step(parent, cfg)
     assert [each.code for each in raised.value.findings] == ["bitfile-stale"]
     assert str(raised.value) == (
@@ -2021,7 +2323,7 @@ def test_a_bitfile_built_from_another_design_or_ip_is_refused_by_name(
     parent.set(OUTPUT_BITFILE_IP_KEY, OTHER_IP_KEY)
     body.set(OUTPUT_IP_KEY, IP_KEY)
     body.save(body_file)
-    with pytest.raises(PynqRefused) as raised:
+    with pytest.raises(ShellRefused) as raised:
         step(parent, cfg)
     assert [each.code for each in raised.value.findings] == ["bitfile-ip-stale"]
     assert str(raised.value) == (

@@ -60,6 +60,8 @@ from finn.core.reporting.findings import Finding, FindingKind, Refusal
 from finn.core.reporting.log import FILE_ONLY, log_run, running_step
 from finn.core.reporting.manifest import note, recorded_run
 from finn.platform.refusal import TargetRefused
+from finn.platform.resolve import origins
+from finn.platform.shells import shell_row
 from finn.platform.target import Target
 from finn.toolchain.launcher import ToolFailed, ToolUnavailable, host_selection
 
@@ -147,10 +149,13 @@ def _run_build_steps(model, cfg: DataflowBuildConfig, plan: Plan, manifest: Buil
     return 0
 
 
-def _identity(output_dir: str, selection: dict | None, target: Target | None) -> dict:
+def _identity(
+    output_dir: str, selection: dict | None, target: Target | None, runtime: str | None = None
+) -> dict:
     """The build's identity for its manifest: FINN's revision, the toolchain's
-    ``selection`` and the resolved ``target``, each None where it is not known. The model
-    is added once the build reads it."""
+    ``selection`` and the resolved ``target`` with the shell's linker, the build's
+    ``runtime`` and where each declaration the build stands on is declared (``origins``),
+    each None where it is not known. The model is added once the build reads it."""
     stated = None
     if target is not None:
         stated = {
@@ -158,6 +163,9 @@ def _identity(output_dir: str, selection: dict | None, target: Target | None) ->
             "shell": target.shell,
             "board": target.board,
             "period_ns": target.platform.period_ns,
+            "linker": shell_row(target.shell, target.board).linker,
+            "runtime": runtime,
+            "origins": {name: origin.record() for name, origin in origins(target, runtime).items()},
         }
     return {
         "finn": finn_revision(),
@@ -171,12 +179,13 @@ def _identity(output_dir: str, selection: dict | None, target: Target | None) ->
 
 def _manifest(cfg: DataflowBuildConfig, target: Target | None) -> BuildManifest:
     """The build's manifest, its identity stated: the toolchain's selection where it
-    reads, and the resolved ``target``."""
+    reads, and the resolved ``target`` with the build's runtime."""
     try:
         selection = asdict(host_selection(stated=cfg.toolchain))
     except ValueError:
         selection = None
-    return BuildManifest(cfg.output_dir, _identity(cfg.output_dir, selection, target))
+    runtime = None if target is None else cfg.resolved_runtime
+    return BuildManifest(cfg.output_dir, _identity(cfg.output_dir, selection, target, runtime))
 
 
 def build_plan(cfg: DataflowBuildConfig) -> Plan:

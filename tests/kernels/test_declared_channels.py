@@ -58,7 +58,7 @@ from finn.kernels.configure import commit
 from finn.kernels.explore import CoreComposition
 from finn.kernels.laws import AXIS_CLOCKING, Axis
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.movers import IODMA_HLS, iodma_hls
+from finn.kernels.movers import IODMA_HLS
 from finn.kernels.port_model import InPort, StreamPort
 from finn.kernels.sides import BUILD, ROW_MAJOR, Outside, Side, Steady
 from finn.kernels.transport import AxisBeat, StreamPins
@@ -502,7 +502,7 @@ def test_an_interior_channel_s_channel_steps_names_no_statement():
     assert inspection.validity(refused).status == "refused"
     assert stated_by(rows, tiles) == stated_by(Side.boundary("s_axis_0"), tiles) == ""
     mover = Outside(IODMA_HLS, ROW_MAJOR, 1)
-    offered = Side.boundary("s_axis_1", (iodma_hls(128),), mover)
+    offered = Side.boundary("s_axis_1", mover)
     assert stated_by(offered, tiles) == (
         "the boundary s_axis_1, stated by the iodma_hls mover (row-major, one pass a frame): "
     )
@@ -563,8 +563,8 @@ def test_a_statement_of_nothing_the_inside_does_not_present_answers_as_unstated(
 
 def test_a_channel_s_cycles_read_every_member_but_its_transport():
     """A channel's cycles read each member it places (``Channel.frame_cycles``: its source,
-    its output adapter, its input adapter, its mover) but its transport, whose only case
-    is a FIFO, counting none. A new member, its outer ports aside (stream ports, no members
+    its output adapter, its input adapter) but its transport, whose only case is a FIFO,
+    counting none. A new member, its outer ports aside (stream ports, no members
     counting cycles), fails here by name until its cycles are read there too."""
     placed: dict[str, list[type]] = {}
     for name, value in vars(Channel).items():
@@ -577,5 +577,5 @@ def test_a_channel_s_cycles_read_every_member_but_its_transport():
             declaration.space_type, StreamPort
         ):
             placed[name] = [declaration.space_type]
-    assert set(placed) == {"source", "mover", "output_adapter", "transport", "adapter"}
+    assert set(placed) == {"source", "output_adapter", "transport", "adapter"}
     assert placed["transport"] == [ChannelFifo]

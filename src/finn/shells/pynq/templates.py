@@ -28,28 +28,18 @@
 
 # flake8: noqa
 
-"""The pynq shell's text templates, copied from the HWCustomOp flow (deleted; its last
-commit is 1b02563de) as the shell's frozen extraction:
-
-- ``custom_zynq_shell_template``: the Zynq block design's project
-  (finn.transformation.fpgadataflow.templates), filled by ``runner.project_script``;
-- ``ipgen_template`` and ``ipgentcl_template``: an IODMA's HLS top and its Vitis HLS
-  script (finn.custom_op.fpgadataflow.templates), filled by ``iodma.IODMA_hls``; the
-  script names no custom HLS directory, which no IODMA includes from, and is filled to
-  read its sources from its own directory and the part and finn-hlslib from Tcl
-  variables;
-- ``pynq_driver_template``: the PYNQ driver
-  (finn.transformation.fpgadataflow.template_driver), filled by
-  ``driver.pynq_driver_text``.
+"""The pynq shell's project template, copied from the HWCustomOp flow (deleted; its last
+commit is 1b02563de) as the shell's extraction: ``custom_zynq_shell_template``, the Zynq
+block design's project (finn.transformation.fpgadataflow.templates), filled by
+``linker.project_script``, its board part and processor family given in place of its table
+of board names. Its fixed shell is the processor, the memory SmartConnect into HP0 and a
+reset of its own (``rst_ps``, wired by hand: SmartConnect takes no clock automation); the
+control interconnect is the linker's tree, in the custom section.
 """
 
 # template for the Zynq block design's project (ip_config.tcl)
 custom_zynq_shell_template = """
 set FREQ_MHZ %s
-set NUM_AXILITE %d
-if {$NUM_AXILITE > 9} {
-    error "Maximum 10 AXI-Lite interfaces supported"
-}
 set NUM_AXIMM %d
 set BOARD %s
 set FPGA_PART %s
@@ -63,39 +53,8 @@ lappend paths_param $BOARD_FILES$
 set_property BOARD_PART_REPO_PATHS $paths_prop [current_project]
 set_param board.repoPaths $paths_param
 
-if {$BOARD == "ZCU104"} {
-    set_property board_part xilinx.com:zcu104:part0:1.1 [current_project]
-    set ZYNQ_TYPE "zynq_us+"
-} elseif {$BOARD == "ZCU102"} {
-    set_property board_part xilinx.com:zcu102:part0:3.3 [current_project]
-    set ZYNQ_TYPE "zynq_us+"
-} elseif {$BOARD == "RFSoC2x2"} {
-    set_property board_part xilinx.com:rfsoc2x2:part0:1.1 [current_project]
-    set ZYNQ_TYPE "zynq_us+"
-} elseif {$BOARD == "RFSoC4x2"} {
-    set_property board_part realdigital.org:rfsoc4x2:part0:1.0 [current_project]
-    set ZYNQ_TYPE "zynq_us+"
-} elseif {$BOARD == "Ultra96"} {
-    set_property board_part avnet.com:ultra96v1:part0:1.2 [current_project]
-    set ZYNQ_TYPE "zynq_us+"
-} elseif {$BOARD == "Ultra96-V2"} {
-    set_property board_part avnet.com:ultra96v2:part0:1.2 [current_project]
-    set ZYNQ_TYPE "zynq_us+"
-} elseif {$BOARD == "Pynq-Z2"} {
-    set ZYNQ_TYPE "zynq_7000"
-    set_property board_part tul.com.tw:pynq-z2:part0:1.0 [current_project]
-} elseif {$BOARD == "Pynq-Z1"} {
-    set ZYNQ_TYPE "zynq_7000"
-    set_property board_part www.digilentinc.com:pynq-z1:part0:1.0 [current_project]
-} elseif {$BOARD == "KV260_SOM"} {
-    set ZYNQ_TYPE "zynq_us+"
-    set_property board_part xilinx.com:kv260_som:part0:1.3 [current_project]
-} elseif {$BOARD == "AUP-ZU3_8GB"} {
-    set ZYNQ_TYPE "zynq_us+"
-    set_property board_part realdigital.org:aup-zu3-8gb:part0:1.0 [current_project]
-} else {
-    puts "Unrecognized board"
-}
+set_property board_part %s [current_project]
+set ZYNQ_TYPE %s
 
 create_bd_design "top"
 if {$ZYNQ_TYPE == "zynq_us+"} {
@@ -123,72 +82,33 @@ if {$ZYNQ_TYPE == "zynq_us+"} {
     puts "Unrecognized Zynq type"
 }
 
-#instantiate axi interconnect, axi smartconnect
-set interconnect_vlnv [get_property VLNV [get_ipdefs -all "xilinx.com:ip:axi_interconnect:*" -filter design_tool_contexts=~*IPI*]]
+#instantiate the memory smartconnect and the reset
 set smartconnect_vlnv [get_property VLNV [get_ipdefs "xilinx.com:ip:smartconnect:*"]]
-create_bd_cell -type ip -vlnv $interconnect_vlnv axi_interconnect_0
+set reset_vlnv [get_property VLNV [get_ipdefs "xilinx.com:ip:proc_sys_reset:*"]]
 create_bd_cell -type ip -vlnv $smartconnect_vlnv smartconnect_0
-#set number of axilite interfaces, and number of axi master interfaces
 set_property -dict [list CONFIG.NUM_SI $NUM_AXIMM] [get_bd_cells smartconnect_0]
-set_property -dict [list CONFIG.NUM_MI $NUM_AXILITE] [get_bd_cells axi_interconnect_0]
+create_bd_cell -type ip -vlnv $reset_vlnv rst_ps
 
-#create reset controller and connect interconnects to PS
+#connect the memory smartconnect to the PS, the reset to its clock (smartconnect takes no clkrst automation)
 if {$ZYNQ_TYPE == "zynq_us+"} {
-    set axi_peripheral_base 0xA0000000
     connect_bd_intf_net [get_bd_intf_pins smartconnect_0/M00_AXI] [get_bd_intf_pins zynq_ps/S_AXI_HP0_FPD]
-    connect_bd_intf_net [get_bd_intf_pins zynq_ps/M_AXI_HPM0_FPD] -boundary_type upper [get_bd_intf_pins axi_interconnect_0/S00_AXI]
-    #connect interconnect clocks and resets
-    apply_bd_automation -rule xilinx.com:bd_rule:clkrst -config { Clk {/zynq_ps/pl_clk0} Freq {} Ref_Clk0 {} Ref_Clk1 {} Ref_Clk2 {}}  [get_bd_pins axi_interconnect_0/ACLK]
-    apply_bd_automation -rule xilinx.com:bd_rule:clkrst -config { Clk {/zynq_ps/pl_clk0} Freq {} Ref_Clk0 {} Ref_Clk1 {} Ref_Clk2 {}}  [get_bd_pins axi_interconnect_0/S00_ACLK]
+    connect_bd_net [get_bd_pins zynq_ps/pl_clk0] [get_bd_pins rst_ps/slowest_sync_clk]
+    connect_bd_net [get_bd_pins zynq_ps/pl_resetn0] [get_bd_pins rst_ps/ext_reset_in]
     apply_bd_automation -rule xilinx.com:bd_rule:clkrst -config { Clk {/zynq_ps/pl_clk0} Freq {} Ref_Clk0 {} Ref_Clk1 {} Ref_Clk2 {}}  [get_bd_pins zynq_ps/saxihp0_fpd_aclk]
+    catch {connect_bd_net [get_bd_pins smartconnect_0/aclk] [get_bd_pins zynq_ps/pl_clk0]}
+    catch {connect_bd_net [get_bd_pins zynq_ps/maxihpm0_fpd_aclk] [get_bd_pins zynq_ps/pl_clk0]}
 } elseif {$ZYNQ_TYPE == "zynq_7000"} {
-    set axi_peripheral_base 0x40000000
-    connect_bd_intf_net -boundary_type upper [get_bd_intf_pins zynq_ps/M_AXI_GP0] [get_bd_intf_pins axi_interconnect_0/S00_AXI]
     connect_bd_intf_net [get_bd_intf_pins smartconnect_0/M00_AXI] [get_bd_intf_pins zynq_ps/S_AXI_HP0]
-    apply_bd_automation -rule xilinx.com:bd_rule:clkrst -config { Clk {/zynq_ps/FCLK_CLK0} Freq {} Ref_Clk0 {} Ref_Clk1 {} Ref_Clk2 {}}  [get_bd_pins axi_interconnect_0/ACLK]
-    apply_bd_automation -rule xilinx.com:bd_rule:clkrst -config { Clk {/zynq_ps/FCLK_CLK0} Freq {} Ref_Clk0 {} Ref_Clk1 {} Ref_Clk2 {}}  [get_bd_pins axi_interconnect_0/S00_ACLK]
+    connect_bd_net [get_bd_pins zynq_ps/FCLK_CLK0] [get_bd_pins rst_ps/slowest_sync_clk]
+    connect_bd_net [get_bd_pins zynq_ps/FCLK_RESET0_N] [get_bd_pins rst_ps/ext_reset_in]
     apply_bd_automation -rule xilinx.com:bd_rule:clkrst -config { Clk {/zynq_ps/FCLK_CLK0} Freq {} Ref_Clk0 {} Ref_Clk1 {} Ref_Clk2 {}}  [get_bd_pins zynq_ps/S_AXI_HP0_ACLK]
+    catch {connect_bd_net [get_bd_pins smartconnect_0/aclk] [get_bd_pins zynq_ps/FCLK_CLK0]}
+    catch {connect_bd_net [get_bd_pins zynq_ps/M_AXI_GP0_ACLK] [get_bd_pins zynq_ps/FCLK_CLK0]}
 }
-connect_bd_net [get_bd_pins axi_interconnect_0/ARESETN] [get_bd_pins smartconnect_0/aresetn]
-
-#procedure used by below IP instantiations to map BD address segments based on the axi interface aperture
-proc assign_axi_addr_proc {axi_intf_path} {
-    #global variable holds current base address
-    global axi_peripheral_base
-    #infer range
-    set range [expr 2**[get_property CONFIG.ADDR_WIDTH [get_bd_intf_pins $axi_intf_path]]]
-    set range [expr $range < 4096 ? 4096 : $range]
-    #align base address to range
-    set offset [expr ($axi_peripheral_base + ($range-1)) & ~($range-1)]
-    #perform assignment
-    assign_bd_address [get_bd_addr_segs $axi_intf_path/Reg*] -offset $offset -range $range
-    #advance base address
-    set axi_peripheral_base [expr $offset + $range]
-}
+connect_bd_net [get_bd_pins rst_ps/peripheral_aresetn] [get_bd_pins smartconnect_0/aresetn]
 
 #custom IP instantiations/connections start here
 %s
-
-#MLO (Multi-Layer Offload) weight streaming
-if {$ZYNQ_TYPE == "zynq_us+"} {
-    set mlo_mm_pins [get_bd_intf_pins -quiet -of_objects [get_bd_cells] \
-        -filter {MODE == Master && (NAME == m_axi_intermediate_frame || NAME =~ m_axi_MVAU_*)}]
-    if {[llength $mlo_mm_pins] > 0} {
-        set_property -dict [list CONFIG.PSU__USE__S_AXI_GP3 {1}] [get_bd_cells zynq_ps]
-        create_bd_cell -type ip -vlnv $smartconnect_vlnv smartconnect_mlo
-        set_property -dict [list CONFIG.NUM_SI [llength $mlo_mm_pins]] [get_bd_cells smartconnect_mlo]
-        connect_bd_intf_net [get_bd_intf_pins smartconnect_mlo/M00_AXI] [get_bd_intf_pins zynq_ps/S_AXI_HP1_FPD]
-        set mlo_si_idx 0
-        foreach mlo_mm_pin $mlo_mm_pins {
-            set mlo_si_name [format "S%%02d_AXI" $mlo_si_idx]
-            connect_bd_intf_net $mlo_mm_pin [get_bd_intf_pins smartconnect_mlo/$mlo_si_name]
-            incr mlo_si_idx
-        }
-        connect_bd_net [get_bd_pins smartconnect_mlo/aclk] [get_bd_pins zynq_ps/pl_clk0]
-        connect_bd_net [get_bd_pins zynq_ps/saxihp1_fpd_aclk] [get_bd_pins zynq_ps/pl_clk0]
-        connect_bd_net [get_bd_pins smartconnect_mlo/aresetn] [get_bd_pins axi_interconnect_0/ARESETN]
-    }
-}
 
 # set up debug
 if {%d == 1} {
@@ -200,13 +120,6 @@ if {%d == 1} {
                                                               [get_bd_intf_nets idma0_m_axis_0] {AXIS_SIGNALS "Data and Trigger" CLK_SRC "/zynq_ps/FCLK_CLK0" SYSTEM_ILA "Auto" APC_EN "0" } \
                                                               [get_bd_intf_nets DataflowCore_0_m_axis_0] {AXIS_SIGNALS "Data and Trigger" CLK_SRC "/zynq_ps/FCLK_CLK0" SYSTEM_ILA "Auto" APC_EN "0" } \
                                                              ]
-}
-
-#finalize clock and reset connections for interconnects
-if {$ZYNQ_TYPE == "zynq_us+"} {
-    apply_bd_automation -rule xilinx.com:bd_rule:clkrst -config { Clk {/zynq_ps/pl_clk0} }  [get_bd_pins axi_interconnect_0/M*_ACLK]
-} elseif {$ZYNQ_TYPE == "zynq_7000"} {
-    apply_bd_automation -rule xilinx.com:bd_rule:clkrst -config { Clk {/zynq_ps/FCLK_CLK0} }  [get_bd_pins axi_interconnect_0/M*_ACLK]
 }
 
 save_bd_design
@@ -234,174 +147,4 @@ wait_on_run [get_runs impl_1]
 open_run impl_1
 report_utilization -hierarchical -hierarchical_depth 4 -file synth_report.xml -format xml
 close_project
-"""
-
-# template for an IODMA's HLS top
-ipgen_template = """
-#define AP_INT_MAX_W $AP_INT_MAX_W$
-
-#include "bnn-library.h"
-
-$GLOBALS$
-
-$DEFINES$
-
-$BLACKBOXFUNCTION$
-{
-$PRAGMAS$
-$DOCOMPUTE$
-}
-"""
-
-# tcl script for IP generation
-ipgentcl_template = """
-set config_proj_name $PROJECTNAME$
-puts "HLS project: $config_proj_name"
-set config_hwsrcdir "$HWSRCDIR$"
-puts "HW source dir: $config_hwsrcdir"
-set config_proj_part "$FPGAPART$"
-set config_bnnlibdir "$HLSLIB$"
-puts "finn-hlslib dir: $config_bnnlibdir"
-set config_toplevelfxn "$TOPFXN$"
-set config_clkperiod $CLKPERIOD$
-
-open_project $config_proj_name
-add_files $config_hwsrcdir/top_$TOPFXN$.cpp -cflags "-std=c++14 -I$config_bnnlibdir"
-
-set_top $config_toplevelfxn
-open_solution sol1
-set_part $config_proj_part
-
-$DEFAULT_DIRECTIVES$
-$EXTRA_DIRECTIVES$
-
-create_clock -period $config_clkperiod -name default
-csynth_design
-export_design -format ip_catalog
-exit 0
-"""
-
-# the PYNQ driver
-pynq_driver_template = """
-# Copyright (c) 2020 Xilinx, Inc.
-# All rights reserved.
-#
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are met:
-#
-# * Redistributions of source code must retain the above copyright notice, this
-#   list of conditions and the following disclaimer.
-#
-# * Redistributions in binary form must reproduce the above copyright notice,
-#   this list of conditions and the following disclaimer in the documentation
-#   and/or other materials provided with the distribution.
-#
-# * Neither the name of Xilinx nor the names of its
-#   contributors may be used to endorse or promote products derived from
-#   this software without specific prior written permission.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-import argparse
-import numpy as np
-import os
-from qonnx.core.datatype import DataType
-from driver_base import FINNExampleOverlay
-from pynq.pl_server.device import Device
-
-# dictionary describing the I/O of the FINN-generated accelerator
-io_shape_dict = {
-    # FINN DataType for input and output tensors
-    "idt" : $INPUT_FINN_DATATYPE$,
-    "odt" : $OUTPUT_FINN_DATATYPE$,
-    # shapes for input and output tensors (NHWC layout)
-    "ishape_normal" : $INPUT_SHAPE_NORMAL$,
-    "oshape_normal" : $OUTPUT_SHAPE_NORMAL$,
-    # folded / packed shapes below depend on idt/odt and input/output
-    # PE/SIMD parallelization settings -- these are calculated by the
-    # FINN compiler.
-    "ishape_folded" : $INPUT_SHAPE_FOLDED$,
-    "oshape_folded" : $OUTPUT_SHAPE_FOLDED$,
-    "ishape_packed" : $INPUT_SHAPE_PACKED$,
-    "oshape_packed" : $OUTPUT_SHAPE_PACKED$,
-    "input_dma_name" : $INPUT_DMA_NAME$,
-    "output_dma_name" : $OUTPUT_DMA_NAME$,
-    "number_of_external_weights": $EXT_WEIGHT_NUM$,
-    "external_weights_input_shapes": $EXT_WEIGHT_INPUT_SHAPES$,
-    "num_inputs" : $NUM_INPUTS$,
-    "num_outputs" : $NUM_OUTPUTS$,
-    # MLO/FINNLoop DDR weight config
-    "mlo_weight_config" : $MLO_WEIGHT_CONFIG$,
-}
-
-# the clock (MHz) the accelerator was built to run at, which the overlay sets PL0 to
-# on Zynq
-fclk_mhz = $FCLK_MHZ$
-
-# the bitfile the accelerator runs unless --bitfile names another
-default_bitfile = $BITFILE$
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Execute FINN-generated accelerator on numpy inputs, or run throughput test')
-    parser.add_argument('--exec_mode', help='Please select functional verification ("execute") or throughput test ("throughput_test")', default="execute")
-    parser.add_argument('--platform', help='Target platform: zynq-iodma vitis-xrt', default="$PLATFORM$")
-    parser.add_argument('--batchsize', help='number of samples for inference', type=int, default=1)
-    parser.add_argument('--device', help='FPGA device to be used', type=int, default=0)
-    parser.add_argument('--bitfile', help='the bitfile to run (default: %(default)s)', default=default_bitfile)
-    parser.add_argument('--inputfile', help='name(s) of input npy file(s) (i.e. "input.npy")', nargs="*", type=str, default=["input.npy"])
-    parser.add_argument('--outputfile', help='name(s) of output npy file(s) (i.e. "output.npy")', nargs="*", type=str, default=["output.npy"])
-    parser.add_argument('--weight_dir', help='path to folder containing the weights subfolders (runtime_weights/, mlo_weights/)', default="weights/")
-    # parse arguments
-    args = parser.parse_args()
-    exec_mode = args.exec_mode
-    platform = args.platform
-    batch_size = args.batchsize
-    bitfile = args.bitfile
-    inputfile = args.inputfile
-    outputfile = args.outputfile
-    weight_dir = args.weight_dir
-    devID = args.device
-    device = Device.devices[devID]
-
-    # instantiate FINN accelerator driver and pass batchsize and bitfile
-    accel = FINNExampleOverlay(
-        bitfile_name = bitfile, platform = platform,
-        io_shape_dict = io_shape_dict, batch_size = batch_size,
-        fclk_mhz = fclk_mhz, weight_dir = weight_dir, device=device
-    )
-
-    # for the remote execution the data from the input npy file has to be loaded,
-    # packed and copied to the PYNQ buffer
-    if exec_mode == "execute":
-        # load desired input .npy file(s)
-        ibuf_normal = []
-        for ifn in inputfile:
-            ibuf_normal.append(np.load(ifn))
-        obuf_normal = accel.execute(ibuf_normal)
-        if not isinstance(obuf_normal, list):
-            obuf_normal = [obuf_normal]
-        for o, obuf in enumerate(obuf_normal):
-            np.save(outputfile[o], obuf)
-    elif exec_mode == "throughput_test":
-        # remove old metrics file
-        try:
-            os.remove("nw_metrics.txt")
-        except FileNotFoundError:
-            pass
-        res = accel.throughput_test()
-        file = open("nw_metrics.txt", "w")
-        file.write(str(res))
-        file.close()
-        print("Results written to nw_metrics.txt")
-    else:
-        raise Exception("Exec mode has to be set to execute or throughput_test")
 """
