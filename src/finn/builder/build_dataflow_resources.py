@@ -53,7 +53,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import fields
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from qonnx.core.modelwrapper import ModelWrapper
@@ -81,6 +81,9 @@ from finn.transformation.kernels.package import (
 
 #: The report's file, under the output directory.
 RESOURCES_FILE = "report/resources.json"
+
+#: The end of a per-IP run's utilization report's name, ``<run>_utilization_synth.rpt``.
+_RUN = "_utilization_synth.rpt"
 
 
 def _counts(resources: Resources | None) -> dict[str, int] | None:
@@ -162,22 +165,25 @@ def _members(split: Mapping[str, Any]) -> dict[str, Any]:
 def built_reports(parent: ModelWrapper, *, toolchain: Toolchain) -> dict[str, Path]:
     """The reports the build made that ``shell_resources_report`` reads, by name: those
     the ``vivado-block-design`` linker collected beside the bitfile the parent graph
-    ``parent`` states, as the bitfile's build recorded them (``placed``, ``out_of_context``,
-    by its report names; none without a bitfile or its record, where another linker
-    collected them, or where it collected none of those names: never an earlier link's),
-    and the utilization report of the IP
-    its partition's body states, packaged with ``ooc_synth`` and of the key the body has
-    now (``ip_key``, staged in ``toolchain``) (``ooc_synth``; none when the body states
-    no such IP)."""
+    ``parent`` states, as the bitfile's build recorded them, each by its report name
+    (``placed``; each per-IP run's ``out_of_context/<run>_utilization_synth.rpt``; none
+    without a bitfile or its record, where another linker collected them, or where it
+    collected none of those names: never a file its record does not name), and the
+    utilization report of the IP its partition's body states, packaged with ``ooc_synth``
+    and of the key the body has now (``ip_key``, staged in ``toolchain``) (``ooc_synth``;
+    none when the body states no such IP)."""
     reports: dict[str, Path] = {}
     built = bitfile_directory(parent)
-    collected = None if built is None else linked_record(built)
+    collected = (
+        None if built is None else linked_record(built, "resources", owner="step_resources_report")
+    )
     if built is not None and collected is not None and collected["linker"] == LINKER:
-        keys = collected["reports"]
-        if PLACED in keys:
-            reports["placed"] = built / REPORT_DIR / PLACED
-        if any(key.startswith(f"{OUT_OF_CONTEXT}/") for key in keys):
-            reports["out_of_context"] = built / REPORT_DIR / OUT_OF_CONTEXT
+        for key in collected["reports"]:
+            run = PurePosixPath(key)
+            if key == PLACED:
+                reports["placed"] = built / REPORT_DIR / PLACED
+            elif run.parent == PurePosixPath(OUT_OF_CONTEXT) and run.name.endswith(_RUN):
+                reports[key] = built / REPORT_DIR / key
     node, body, _ = partition_body(parent)
     ip, packaging = body.get(OUTPUT_IP), body.get(OUTPUT_IP_OPTIONS)
     if ip is None or packaging is None or not packaging["run_synth"]:
@@ -192,10 +198,10 @@ def built_reports(parent: ModelWrapper, *, toolchain: Toolchain) -> dict[str, Pa
 
 def shell_resources_report(parent: ModelWrapper, reports: Mapping[str, Path]) -> dict[str, Any]:
     """``report/resources.json`` for the parent graph ``parent`` (see the module
-    docstring), from the ``reports`` the build made, by name: the shell integration's
-    ``out_of_context`` (a directory) and ``placed`` (``finn.shells.pynq.linker``'s reports),
-    and the packaged partition's ``ooc_synth``. A column whose report is not given is
-    absent."""
+    docstring), from the ``reports`` the build made, by name (``built_reports``): each of
+    the shell integration's per-IP runs, ``out_of_context/<run>_utilization_synth.rpt``, and
+    ``placed`` (``finn.shells.pynq.linker``'s reports), and the packaged partition's
+    ``ooc_synth``. A column whose report is not given is absent."""
     node, body, _ = partition_body(parent)
     target = read_target(body)
     point = configured_network(body, node.name)
@@ -219,13 +225,13 @@ def shell_resources_report(parent: ModelWrapper, reports: Mapping[str, Path]) ->
         totals["model"] = None
 
     # Out of context: the integration's per-IP runs, or the packaged partition's.
-    runs = reports.get("out_of_context")
+    runs = sorted(path for key, path in reports.items() if key.startswith(f"{OUT_OF_CONTEXT}/"))
     packaged = reports.get("ooc_synth")
-    if runs is not None:
+    if runs:
         per_member: dict[str, Resources] = {}
         unclaimed = Resources()
-        for path in sorted(Path(runs).glob("*_utilization_synth.rpt")):
-            name = path.name[: -len("_utilization_synth.rpt")]
+        for path in runs:
+            name = path.name[: -len(_RUN)]
             name = name[len("top_") :] if name.startswith("top_") else name
             counted = resources_of(vivado.utilization_synth(path.read_text()))
             owner = _instance_of(name.removesuffix("_0"), instances)

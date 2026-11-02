@@ -414,24 +414,20 @@ def collection(linked: Linked) -> dict[Path, Path]:
 
 
 def _removed(directory: Path) -> None:
-    """Remove what the last link in the output ``directory`` collected, by its record
-    (``LINKED``), and the record: an earlier link's files beside its image and its reports,
-    nothing else."""
-    record = directory / LINKED
-    if not record.is_file():
+    """Remove the reports the last link in the output ``directory`` collected, by its record
+    (``LINKED``, read whole and checked first: ``linked_record``), then the record: an
+    earlier link's reports, none of FINN's or another's. Its image and the files beside it
+    are in ``BITFILE_DIR``, which a build replaces whole."""
+    record = linked_record(directory, "bitfile")
+    if record is None:
         return
-    try:
-        stated = json.loads(record.read_text())
-        paths = [*stated["beside"], *(REPORT_DIR / report_key(key) for key in stated["reports"])]
-    except (ValueError, KeyError, TypeError, ShellRefused):
-        paths = []
-    record.unlink()
-    for path in paths:
-        target = directory / path
+    for key in record["reports"]:
+        target = directory / REPORT_DIR / key
         if target.is_dir():
             shutil.rmtree(target)
         elif target.exists():
             target.unlink()
+    (directory / LINKED).unlink()
 
 
 def _collected(source: Path, target: Path) -> None:
@@ -448,7 +444,9 @@ def _collected(source: Path, target: Path) -> None:
 class BuildBitfile(Transformation):
     """The bitfile of the build's parent graph through its shell's declared linker (the
     module docstring), described for the build's ``runtime`` (the row's first where
-    ``None``), collected into the output ``directory``. ``toolchain`` runs every
+    ``None``), collected into the output ``directory``: ``BITFILE_DIR`` is the build's own,
+    replaced whole, with whatever else it held; under ``REPORT_DIR`` only the reports the
+    last link collected are removed (``LINKED``). ``toolchain`` runs every
     tool, by default the machine's (``host_toolchain``), prepared once, when the
     transformation is made; ``hw_debug`` is the linker's ``debug`` option, recorded with
     the bitfile (``bitfile_options``); ``objective_fps`` is the throughput the partition
@@ -579,15 +577,58 @@ def shipped_bitfile(model: ModelWrapper, directory: Path) -> Path:
     return Path(bitfile).relative_to(Path(directory))
 
 
-def linked_record(directory: Path) -> dict[str, Any] | None:
+def _collected_artifact(entry: object) -> bool:
+    """Whether ``entry`` names a file a link collects beside the image or the image, as
+    ``collection`` does: ``bitfile/finn-accel<suffix>``, written so."""
+    if not isinstance(entry, str):
+        return False
+    path = PurePosixPath(entry)
+    name = path.name
+    return (
+        str(path) == entry
+        and path.parts == (BITFILE_DIR.name, name)
+        and name == f"{IMAGE}{PurePosixPath(name).suffix}"
+    )
+
+
+def linked_record(directory: Path, output: str, owner: str | None = None) -> dict[str, Any] | None:
     """What the bitfile's build in the output ``directory`` collected (``LINKED``): the
     linker's name, the image, the files beside it and the reports, by their paths there;
-    None where it collected nothing."""
+    None where it collected nothing. A record ``collection`` cannot have written is refused
+    for ``output`` (by ``owner``, as ``ShellRefused`` has it) before anything reads or
+    removes what it names (``linked-invalid``): the
+    image and each file beside it ``bitfile/finn-accel<suffix>``, each report a key
+    ``report_key`` takes at ``report/<key>``."""
     record = Path(directory) / LINKED
     if not record.is_file():
         return None
-    found: dict[str, Any] = json.loads(record.read_text())
-    return found
+    try:
+        found = json.loads(record.read_text())
+        reports = found["reports"]
+        valid = (
+            isinstance(found["linker"], str)
+            and _collected_artifact(found["image"])
+            and isinstance(found["beside"], list)
+            and all(map(_collected_artifact, found["beside"]))
+            and isinstance(reports, dict)
+            and all(
+                isinstance(key, str) and path == str(REPORT_DIR / report_key(key))
+                for key, path in reports.items()
+            )
+        )
+    except (ValueError, KeyError, TypeError, ShellRefused):
+        valid = False
+    if not valid:
+        raise ShellRefused(
+            output,
+            "linked-invalid",
+            f"{record} is not a record a bitfile's build writes: each file it names is "
+            "bitfile/finn-accel<suffix> or a linker's report under report/; remove it and "
+            "build the bitfile again (step_build_bitfile)",
+            owner,
+        )
+    checked: dict[str, Any] = found
+    return checked
 
 
 def linked_as_built(directory: Path, image: Path) -> Linked:
@@ -612,7 +653,7 @@ def linked_as_built(directory: Path, image: Path) -> Linked:
             f"the runtime file {report} is of the schema {found.get('schema')!r}, and this "
             f"FINN's is {RUNTIME_SCHEMA}: build the bitfile again (step_build_bitfile)",
         )
-    collected = linked_record(directory)
+    collected = linked_record(directory, "driver")
     if collected is None:
         raise ShellRefused(
             "driver",

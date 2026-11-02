@@ -47,6 +47,7 @@ from support.module_names import fixed_name, live_name
 from support.packaging import (
     PLACED_HIERARCHY,
     TIMING_REPORT,
+    UTILIZATION_SYNTH,
     FakeVivado,
     PackagedByStub,
     bitfile_default,
@@ -76,6 +77,7 @@ from finn.builder.build_dataflow_steps import (
     step_deployment_package,
     step_explore,
     step_make_driver,
+    step_resources_report,
     step_verify_partition,
 )
 from finn.builder.build_dataflow_strategies import (
@@ -2021,6 +2023,13 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
         "out_of_context": counts(0, 0),
         "placed": counts(10, 10),
     }
+    # A per-IP run the bitfile's build did not collect (an interrupted earlier one's) is
+    # never read: only the files its record names.
+    (report / "out_of_context" / "top_out0_0_utilization_synth.rpt").write_text(
+        UTILIZATION_SYNTH.format(lut=700001, ff=10)
+    )
+    step_resources_report(parent, cfg)
+    assert json.loads((report / "resources.json").read_text()) == stated
     # The driver: today's I/O, the delivered clock, the runtime file the build's report.
     runtime_file = (output / "driver" / "integration.json").read_text()
     assert runtime_file == (report / "integration.json").read_text()
@@ -2201,13 +2210,15 @@ def test_a_made_up_shell_builds_a_core_to_its_driver_and_deployment(
     assert sorted(path.name for path in driver.iterdir()) == ["integration.json", OPERATIONS]
     assert (driver / "integration.json").read_text() == (output / RUNTIME_FILE).read_text()
     operations = json.loads((driver / OPERATIONS).read_text())
-    assert operations[:3] == [
+    # Written by the runtime the build names, not the shell's first.
+    assert operations[:4] == [
+        ["runtime", "example-alt"],
         ["load", "finn-accel.example", ["finn-accel.map"]],
         ["clock", 200.0],
         ["reports", [DESCRIPTION]],
     ]
-    assert operations[3:] and all(
-        kind == "start" and placement[unit] == base for kind, unit, base in operations[3:]
+    assert operations[4:] and all(
+        kind == "start" and placement[unit] == base for kind, unit, base in operations[4:]
     )
     description = json.loads((output / "report" / "driver.json").read_text())
     assert description == {
@@ -2224,6 +2235,7 @@ def test_a_made_up_shell_builds_a_core_to_its_driver_and_deployment(
         "model",
     ]
     assert (deploy / "driver" / OPERATIONS).read_text() == (driver / OPERATIONS).read_text()
+    assert json.loads((deploy / "driver" / OPERATIONS).read_text())[0] == ["runtime", "example-alt"]
 
 
 def test_a_driver_without_its_bitfile_or_its_runtime_file_is_refused(tmp_path: Path) -> None:

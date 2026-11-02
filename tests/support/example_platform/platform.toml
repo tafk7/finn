@@ -26,8 +26,8 @@ kinds = ["moved"]
 schemas = [1]
 
 [runtimes.example-alt]
-# The same runtime under another name, the shell's second: a build names the one it runs on.
-code = "support.example_platform:RecordingRuntime"
+# The shell's second runtime, writing its own name first: a build names the one it runs on.
+code = "support.example_platform:AlternateRuntime"
 images = ["example-image"]
 movers = ["iodma_hls", "example_dma"]
 kinds = ["moved"]

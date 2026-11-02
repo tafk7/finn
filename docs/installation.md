@@ -548,7 +548,8 @@ records only what a later step consumes, in `finn.outputs`: the packaged IP (`ip
 (`bitfile`, `bitfile_made_from`, `bitfile_ip_key`, `bitfile_options`) on the parent
 graph; the files the bitfile loads with are beside it in `bitfile/`, and its reports under
 `report/`, with the record of what the bitfile's build collected (`report/linked.json`),
-which the driver and the resources report read; a rebuild removes what the last one
+which the driver and the resources report read, each only the files it names; a rebuild
+replaces `bitfile/`, the build's own, whole, and removes the reports the last one
 collected.
 
 What a build logs, at which level, and what reaches the console

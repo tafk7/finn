@@ -36,6 +36,7 @@ from support.packaging import (
 )
 from support.refusals import refused
 
+from finn.builder.build_dataflow_resources import built_reports
 from finn.core.graph.annotations.outputs import (
     OUTPUT_BITFILE,
     OUTPUT_BITFILE_IP_KEY,
@@ -67,6 +68,7 @@ from finn.shells.build import (
     bitfile_directory,
     collection,
     exported_vlnv,
+    linked_as_built,
     mover_ip,
     unit_ips,
 )
@@ -813,15 +815,15 @@ def test_what_a_build_cannot_collect_is_refused_before_anything_is_copied(
         collection(absolute)
 
 
-def test_a_build_replaces_what_the_last_link_collected_and_nothing_else(
+def test_a_build_replaces_its_bitfile_directory_and_the_last_links_reports(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """A linker that gives back no report and nothing beside its image builds into a fresh
     output directory: report/ is made for FINN's own reports. Built again, by a linker
     giving back a directory of reports, then once more giving back that directory with
-    other files: each build removes what the last one collected, by its record, and a
-    report directory is the last link's alone; a report of FINN's own, and any other file,
-    stay."""
+    other files: each build replaces bitfile/, the build's own, whole, and removes the
+    reports the last one collected, by its record, so a report directory is the last link's
+    alone; a report of FINN's own, and any other file outside bitfile/, stay."""
     recorded_tools(monkeypatch, tmp_path)
     parent = zynq_parent(tmp_path)
     output = tmp_path / "output"
@@ -845,6 +847,7 @@ def test_a_build_replaces_what_the_last_link_collected_and_nothing_else(
             ]
             (output / "report" / "kernel_ops.json").write_text("FINN's")
             (output / "notes.txt").write_text("the user's")
+            (output / "bitfile" / "notes.txt").write_text("the user's, in the build's own")
     assert sorted(
         str(path.relative_to(output)) for path in output.rglob("*") if path.is_file()
     ) == [
@@ -868,6 +871,71 @@ def test_a_build_replaces_what_the_last_link_collected_and_nothing_else(
         output / DELIVERED_CLOCK,
         output / LINKED,
     ]
+
+
+@pytest.mark.parametrize(
+    "field, entry",
+    [
+        ("beside", "../victim.txt"),
+        ("beside", "VICTIM"),
+        ("beside", "bitfile/../../victim.txt"),
+        ("beside", "bitfile/notes.txt"),
+        ("image", "bitfile/finn-accel.tar.gz"),
+        ("reports", {"../victim.txt": "report/../victim.txt"}),
+        ("reports", {"old.rpt": "victim.txt"}),
+        ("reports", {"integration.json": "report/integration.json"}),
+    ],
+    ids=[
+        "dotdot",
+        "absolute",
+        "dotdot-inside",
+        "not-the-image",
+        "two-suffixes",
+        "report-key",
+        "report-path",
+        "finn-own",
+    ],
+)
+def test_a_record_a_build_cannot_have_written_is_refused_before_anything_is_removed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, field: str, entry: object
+) -> None:
+    """The record of what the last link collected names each file it removes: one naming a
+    file a link cannot have collected (outside the output directory, outside bitfile/ or
+    report/, not ``finn-accel<suffix>``, or one of FINN's own reports) is refused
+    (``linked-invalid``) before any file is removed or copied, the record kept; so is a
+    driver made from it, and a resources report read by it."""
+    recorded_tools(monkeypatch, tmp_path)
+    linked = made(tmp_path / "linked")
+    monkeypatch.setattr(shell_build, "declared_linker", lambda row, debug: GivenLinker(linked))
+    output = tmp_path / "output"
+    victim = tmp_path / "victim.txt"
+    victim.write_text("not the build's")
+    (output / "bitfile").mkdir(parents=True)
+    (output / BITFILE).write_text("EARLIER")
+    (output / "report").mkdir()
+    (output / "report" / "old.rpt").write_text("EARLIER")
+    (output / RUNTIME_FILE).write_text(json.dumps({"schema": RUNTIME_SCHEMA}))
+    record: dict[str, object] = {
+        "linker": "vivado-block-design",
+        "image": "bitfile/finn-accel.bit",
+        "beside": [],
+        "reports": {"old.rpt": "report/old.rpt"},
+    }
+    record[field] = [str(victim) if entry == "VICTIM" else entry] if field == "beside" else entry
+    (output / LINKED).write_text(json.dumps(record))
+    parent = zynq_parent(tmp_path)
+    with refused("linked-invalid", error=ShellRefused, owner="BuildBitfile", output="bitfile"):
+        parent.transform(BuildBitfile(output, None, toolchain=cast(Toolchain, FakeVivado())))
+    assert victim.read_text() == "not the build's"
+    assert (output / BITFILE).read_text() == (output / "report" / "old.rpt").read_text()
+    assert json.loads((output / LINKED).read_text()) == record
+    with refused("linked-invalid", error=ShellRefused, output="driver"):
+        linked_as_built(output, output / BITFILE)
+    parent.set(OUTPUT_BITFILE, str(output / BITFILE))
+    with refused(
+        "linked-invalid", error=ShellRefused, owner="step_resources_report", output="resources"
+    ):
+        built_reports(parent, toolchain=cast(Toolchain, FakeVivado()))
 
 
 #: A Vitis HLS that reports 2024.2 and, given a request, makes the solution's exported

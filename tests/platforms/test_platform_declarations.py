@@ -20,7 +20,13 @@ from pathlib import Path
 import pytest
 from support.configure import core_in_shell
 from support.example_platform import DIRECTORY as EXAMPLE
-from support.example_platform import EXAMPLE_DMA, ExampleDma, ExampleLinker, RecordingRuntime
+from support.example_platform import (
+    EXAMPLE_DMA,
+    AlternateRuntime,
+    ExampleDma,
+    ExampleLinker,
+    RecordingRuntime,
+)
 from support.models import kernel_model
 from support.refusals import refused
 
@@ -832,6 +838,7 @@ def test_a_made_up_platform_declares_checks_and_resolves_with_no_change_to_finn(
     # Its code is a package's own, imported where it is used.
     assert code(found.linkers["example-link"].code) is ExampleLinker
     assert code(found.runtimes["example-run"].code) is RecordingRuntime
+    assert code(found.runtimes["example-alt"].code) is AlternateRuntime
     assert code(found.movers[EXAMPLE_DMA].code) is ExampleDma
     assert mover_offer(MoverKind(name=EXAMPLE_DMA, code=found.movers[EXAMPLE_DMA].code), 64) == (
         ExampleDma.offer(64)

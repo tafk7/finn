@@ -4,8 +4,9 @@
 """A made-up platform outside FINN (``platform.toml`` beside this file): the code its
 declarations name. Its linker (``ExampleLinker``) checks that the board states its slot
 and links a description into a stub image, placing each unit at a made-up base and
-delivering the main clock as asked; its runtime (``RecordingRuntime``) writes the runtime
-file and the operations its driver would run; its moved mover kind makes an offer as
+delivering the main clock as asked; its runtimes (``RecordingRuntime``,
+``AlternateRuntime``) write the runtime file and the operations their driver would run,
+each its own name first; its moved mover kind makes an offer as
 FINN's own does (``finn.kernels.iodma.IodmaHls.offer``). Its shell offers FINN's own mover
 kind, the one a shell places yet (``finn.kernels.movers.PLACED_KINDS``). A test loads the
 declarations with ``extra=``, or as an installed package's entry point would name this
@@ -100,15 +101,18 @@ class ExampleLinker:
 
 
 class RecordingRuntime:
-    """The ``example-run`` and ``example-alt`` runtimes: into a driver's directory, the
-    runtime file (``integration.json``) and the operations its driver would run
-    (``OPERATIONS``): the image loaded with the files beside it, the main clock set, the
-    linker's reports read, and each core's movers started by unit and base."""
+    """The ``example-run`` runtime: into a driver's directory, the runtime file
+    (``integration.json``) and the operations its driver would run (``OPERATIONS``): the
+    runtime's name (``NAME``), the image loaded with the files beside it, the main clock
+    set, the linker's reports read, and each core's movers started by unit and base."""
+
+    NAME = "example-run"
 
     def emit(self, integration: Integration, linked: Linked, directory: Path) -> None:
         directory.mkdir(parents=True, exist_ok=True)
         (directory / "integration.json").write_text(runtime_text(integration, linked))
         operations: list[list[object]] = [
+            ["runtime", self.NAME],
             ["load", linked.image.name, sorted(path.name for path in linked.beside)],
             ["clock", linked.clocks_mhz.get(MAIN)],
             ["reports", sorted(linked.reports)],
@@ -119,6 +123,13 @@ class RecordingRuntime:
             for edge in (*core.outputs, *core.inputs):
                 operations.append(["start", edge.unit, linked.placement[edge.unit]])
         (directory / OPERATIONS).write_text(json.dumps(operations, indent=2))
+
+
+class AlternateRuntime(RecordingRuntime):
+    """The ``example-alt`` runtime: ``RecordingRuntime``'s operations under its own name, so
+    a driver shows which of the two wrote it."""
+
+    NAME = "example-alt"
 
 
 EXAMPLE_DMA = "example_dma"
@@ -149,6 +160,7 @@ __all__ = [
     "IMAGE",
     "MAP",
     "OPERATIONS",
+    "AlternateRuntime",
     "ExampleDma",
     "ExampleLinker",
     "RecordingRuntime",
