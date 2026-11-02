@@ -12,6 +12,7 @@ value: nested int tuples make one by ``IntegerTensorValue.of``.
 from __future__ import annotations
 
 import hashlib
+import operator
 import sys
 from array import array
 from collections.abc import Callable, Sequence
@@ -26,6 +27,18 @@ from finn.core.space import value_type
 from finn.dataflow.datatypes import QONNXDataType
 
 IntegerVector = tuple[int, ...]
+
+
+def count(value: int) -> int:
+    """``value`` as the builtin ``int`` it counts (``operator.index``: a numpy integer is its
+    ``int``); ``TypeError`` for anything that is no integer, a ``bool`` among them, Python's or
+    numpy's: ``True`` is not the count 1."""
+    if not isinstance(value, (bool, np.bool_)):
+        try:
+            return operator.index(value)
+        except TypeError:
+            pass
+    raise TypeError(f"a count is an integer, not {value!r}")
 
 
 def _shape(value: object) -> tuple[int, ...] | None:
@@ -304,6 +317,7 @@ __all__ = [
     "IntegerTensor",
     "IntegerTensorValue",
     "IntegerVector",
+    "count",
     "integer_bytes",
     "integer_columns",
     "integer_digest",

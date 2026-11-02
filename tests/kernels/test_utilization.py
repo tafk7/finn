@@ -36,6 +36,7 @@ from finn.core.space import Available, Decision, Param, Rejected, Space, design_
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
+from finn.kernels import utilization
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.dotp import (
     Int8Dsp58DotpKernel,
@@ -107,14 +108,19 @@ def test_block_ram_is_counted_as_synthesis_maps_it_on_each_fabric(
     assert memory(words, bits, "block", fabric=fabric) == Resources(bram18=measured)
 
 
-def test_block_ram_is_cached_by_its_arguments_types_too() -> None:
-    # An equal argument of another type is another call, not the cached one's answer: a
-    # float width refuses after its int was counted, as it does alone.
+def test_block_ram_counts_are_integers_whatever_their_type() -> None:
+    # Counted as the ints they are, before the cache: a numpy integer of any width counts as
+    # its int, cold or after its int (np.uint64 + 1 is a float in numpy 1); a float or a
+    # bool, Python's or numpy's, is refused, as alone, after an equal int was counted.
+    given: Any = bram18  # as any caller may: numbers of every type
+    utilization._bram18.cache_clear()
+    for kind in (np.uint64, np.int64, np.uint8, int):
+        counted = given(kind(64), kind(8), fabric=V)
+        assert counted == 1 and type(counted) is int
     assert bram18(512, 8, fabric=V) == 1
-    with pytest.raises(TypeError):
-        bram18(512, 8.0, fabric=V)
-    counted = bram18(np.int64(512), np.int64(8), fabric=V)
-    assert counted == 1 and type(counted) is int
+    for words, bits in ((512, 8.0), (512.0, 8), (True, 8), (512, np.True_), (np.True_, 8)):
+        with pytest.raises(TypeError, match="a count is an integer"):
+            given(words, bits, fabric=V)
 
 
 def test_ultraram_is_counted_in_the_fabric_s_aspects() -> None:

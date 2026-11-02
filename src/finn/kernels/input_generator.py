@@ -42,13 +42,12 @@ emitted module takes this source from. A cost query reads it and never fetches i
 where no local copy is (an override, a path, a cache), ``nest_geometry`` refuses
 with the resource's error, which names it, rather than doing network I/O. The
 constants are evaluated once per nest and source, a nest by its integers whatever their
-type states them (``operator.index``: a numpy integer is its ``int``; a float or a
-``bool`` is no count and is refused).
+type states them (``finn.kernels.values.semantics.count``: a numpy integer is its ``int``;
+a float or a ``bool``, Python's or numpy's, is no count and is refused).
 """
 
 from __future__ import annotations
 
-import operator
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cache
@@ -81,7 +80,7 @@ from finn.kernels.utilization import (
     auto_unstated,
     memory,
 )
-from finn.kernels.values.semantics import IntegerVector
+from finn.kernels.values.semantics import IntegerVector, count
 from finn.platform.capabilities import Fabric, Platform, Resources
 
 SOURCE = CopiedSource("finnlib", "rtl/shape/input_gen.sv", provides=("module:input_gen",))
@@ -402,22 +401,14 @@ def _evaluated(
     )
 
 
-def _count(value: int) -> int:
-    if not isinstance(value, bool):
-        try:
-            return operator.index(value)
-        except TypeError:
-            pass
-    raise TypeError(f"a nest counts in integers, not {value!r}")
-
-
 def _nest(
     frame_words: int, dims: Sequence[int], strides: Sequence[int]
 ) -> tuple[int, tuple[int, ...], tuple[int, ...]]:
-    """The nest as the ``int``s its elaboration binds, the key of its caches: equal
-    integers of another type (``numpy.int64``) are the same nest; ``TypeError`` for a
-    value that is no integer, a ``bool`` among them (``True`` is not the count 1)."""
-    return _count(frame_words), tuple(map(_count, dims)), tuple(map(_count, strides))
+    """The nest as the ``int``s its elaboration binds (``count``), the key of its caches:
+    equal integers of another type (``numpy.int64``) are the same nest; ``TypeError`` for a
+    value that is no integer, a ``bool`` among them, Python's or numpy's (``True`` is not the
+    count 1)."""
+    return count(frame_words), tuple(map(count, dims)), tuple(map(count, strides))
 
 
 def nest_geometry(frame_words: int, dims: Sequence[int], strides: Sequence[int]) -> NestGeometry:

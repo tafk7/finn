@@ -111,6 +111,7 @@ from finn.core.space import (
 )
 from finn.core.space._aliases import alias_table
 from finn.core.space.declarations import View
+from finn.core.space.semantics import identity
 from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.module import Fragment
 from finn.kernels.base import Kernel, hops, neighbours
@@ -1548,10 +1549,11 @@ class TargetCycles:
     ) -> _Folded:
         """The member folded in each possible value of ``choice``, an unordered open
         choice of its own its cycles wait on, and the value that meets ``budget`` with the
-        least parallelism kept (the class docstring)."""
-        folds: dict[object, _Folded] = {}
+        least parallelism kept (the class docstring). Its cases are kept by their place in
+        the list: two equal cases of two types are two cases."""
+        folds: dict[int, tuple[object, _Folded]] = {}
         refused: dict[str, str] = {}
-        for case in choice.cases or ():
+        for at, case in enumerate(choice.cases or ()):
             outcome = self._asked.ask(
                 network, ("case", choice.key, case), lambda: seam.set(network, {choice.key: case})
             )
@@ -1562,7 +1564,7 @@ class TargetCycles:
             if folded.cycles is None:
                 refused[str(case)] = folded.why
             else:
-                folds[case] = folded
+                folds[at] = (case, folded)
         if not folds:
             return _Folded(
                 None,
@@ -1570,33 +1572,33 @@ class TargetCycles:
                 f"no case of {dotted(choice.key)} folds: "
                 + "; ".join(f"{case}: {why}" for case, why in refused.items()),
             )
-        meeting = [case for case, folded in folds.items() if (folded.cycles or 0) <= budget]
+        meeting = [key for key, (_, folded) in folds.items() if (folded.cycles or 0) <= budget]
         if meeting:
-            cycles = max(folds[case].cycles or 0 for case in meeting)
+            cycles = max(folds[key][1].cycles or 0 for key in meeting)
             why = f"meets the budget of {budget} with the least parallelism, {cycles} cycles"
         else:
-            cycles = min(folded.cycles or 0 for folded in folds.values())
+            cycles = min(folded.cycles or 0 for _, folded in folds.values())
             why = f"no case meets the budget of {budget}; the fewest cycles, {cycles}"
-        tied = [case for case, folded in folds.items() if folded.cycles == cycles]
-        used: dict[object, Resources | tuple[Finding, ...]] = {}
+        tied = [key for key, (_, folded) in folds.items() if folded.cycles == cycles]
+        used: dict[int, Resources | tuple[Finding, ...]] = {}
         if len(tied) > 1:
-            used = {case: self._member_resources(seam, folds[case].network, name) for case in tied}
+            used = {key: self._member_resources(seam, folds[key][1].network, name) for key in tied}
             tied, how = _lightest(tied, used, seam.platform)
             why += f"; tied on cycles with {how}"
-        taken = tied[0]
+        taken, found = folds[tied[0]]
         self.cases[dotted(choice.key)] = {
             "taken": taken,
             "why": why,
             "folded": {
                 str(case): {
                     "cycles": folded.cycles,
-                    **({"resources": _resources_row(used[case])} if case in used else {}),
+                    **({"resources": _resources_row(used[key])} if key in used else {}),
                 }
-                for case, folded in folds.items()
+                for key, (case, folded) in folds.items()
             },
             "refused": refused,
         }
-        return folds[taken]
+        return found
 
     def _member_resources(
         self, seam: Seam, network: S, name: str
@@ -1648,11 +1650,12 @@ def _unknown(cost: Cost, waits: str = "", restored: Restored[Any] | None = None)
 
 
 def _lightest(
-    cases: Sequence[object],
-    used: Mapping[object, Resources | tuple[Finding, ...]],
+    cases: Sequence[T],
+    used: Mapping[T, Resources | tuple[Finding, ...]],
     platform: Platform | None,
-) -> tuple[list[object], str]:
-    """``cases`` lightest first, and how they were ordered: against the part's totals
+) -> tuple[list[T], str]:
+    """``cases`` (each a key standing for one case, ``_fold_cases``'s place in its list, as
+    in ``used``) lightest first, and how they were ordered: against the part's totals
     where the platform states them (the highest share first, then the next), otherwise
     by dominance alone (a case using no more of any resource and less of one is
     lighter); a case that states no resources is never lighter, and cases no count
@@ -1666,7 +1669,7 @@ def _lightest(
     if totals is not None:
         limits = {name: getattr(totals, name) for name in RESOURCE_NAMES}
 
-        def shares(case: object) -> tuple[float, ...]:
+        def shares(case: T) -> tuple[float, ...]:
             found = (ratio(counts[case], limits, name) for name in RESOURCE_NAMES)
             return tuple(sorted(found, reverse=True))
 
@@ -1754,15 +1757,22 @@ class _Asked:
     on the members before the first that folds otherwise) ask it once. An answer's
     networks are the ones first answered, so a fold that agrees reaches the same network
     objects. Each answer is kept with the network it answers, so that the network's
-    identity is never reused while it is held."""
+    identity is never reused while it is held. A question is kept by its ``identity``
+    (``finn.core.space.semantics``), its values' types with them: a case ``3`` and a case
+    ``numpy.int64(3)`` are two questions; one whose identity does not hash is not kept."""
 
     def __init__(self) -> None:
         self._answers: dict[tuple[int, Hashable], tuple[object, Any]] = {}
 
     def ask(self, network: object, question: Hashable, answer: Callable[[], T]) -> T:
         """``answer()``, the first time ``question`` is asked of ``network``."""
-        key = (id(network), question)
-        held = self._answers.get(key)
+        try:
+            key = (id(network), identity(question))
+            held = self._answers.get(key)
+        except TypeError:
+            # No key holds it (a value class's field its hash leaves out, unhashable): asked
+            # again each time, as the engine's node cache keeps no such value.
+            return answer()
         if held is None:
             held = self._answers[key] = (network, answer())
         found: T = held[1]

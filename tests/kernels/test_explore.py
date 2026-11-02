@@ -17,9 +17,11 @@ and its members, each key a member and the key in its space; owners are the Kern
 from __future__ import annotations
 
 import re
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, field, replace
+from types import SimpleNamespace
 from typing import Any, cast
 
+import numpy as np
 import pytest
 from qonnx.core.datatype import DataType
 from support import chain
@@ -38,6 +40,7 @@ from support.refusals import refused
 import finn.kernels.explore as explore_module
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.search import Accepted, ExploreError, Hold, Ranked, Refused, dotted, explore
+from finn.core.search.seam import Choice
 from finn.core.space import inspection
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels import composer
@@ -534,6 +537,110 @@ def test_target_cycles_keeps_the_case_with_the_least_parallelism_that_meets_the_
     (row,) = missed.report()["cases"].values()  # type: ignore[attr-defined]
     assert row["taken"] == "packed" and row["why"].startswith("no case meets the budget of 1")
     assert missed.report()["met"] is False
+
+
+@dataclass(frozen=True)
+class _Configured:
+    """A network double: the choices set on it, in order."""
+
+    choices: tuple[tuple[object, object], ...] = ()
+
+
+PE = ("member", "pe")
+
+
+@dataclass(frozen=True)
+class _Unkeyed:
+    """A value class whose hash leaves out a field holding an unhashable value."""
+
+    count: int
+    held: list[int] = field(hash=False)
+
+
+class _TypedSeam:
+    """A seam double whose cost tells a case's type: a plain ``int`` PE takes 8 cycles, any
+    other 4. Equal values of two types are two values (the Space's rule); a seam may tell
+    them apart, so a fold must never answer one with the other's outcome."""
+
+    platform = None
+
+    def __init__(self) -> None:
+        self.set_calls: list[tuple[str, ...]] = []
+
+    def set(self, network: _Configured, batch: dict[object, object]) -> Accepted[Any]:
+        self.set_calls.append(tuple(type(value).__name__ for value in batch.values()))
+        return Accepted(_Configured((*network.choices, *batch.items())))
+
+    def cost(self, network: _Configured, names: tuple[str, ...]) -> Any:
+        pe = dict(network.choices)[PE]
+        return SimpleNamespace(cycles={"member": 8 if type(pe) is int else 4})
+
+
+def test_a_fold_keeps_each_question_and_case_with_its_values_types() -> None:
+    """Exploration's memo of what a fold asked, and the outcomes it ranks, keep a case by
+    its ``identity``: ``numpy.int64(3)``, ``3``, ``3.0`` and ``True`` for ``1`` are each
+    asked and folded as themselves, whichever comes first."""
+    network: Any = _Configured()
+    for first, second in ((np.int64(3), 3), (3, np.int64(3)), (3, 3.0), (1, True)):
+        for question in (
+            lambda value: ("case", PE, value),
+            lambda value: ("fold", "member", ((PE, value),)),
+        ):
+            asked, calls = explore_module._Asked(), []
+
+            def answer(value: object) -> object:
+                calls.append(value)
+                return value
+
+            assert asked.ask(network, question(first), lambda: answer(first)) is first
+            assert asked.ask(network, question(second), lambda: answer(second)) is second
+            assert [type(each) for each in calls] == [type(first), type(second)]
+    # A question whose identity does not hash (a field its hash leaves out, a list) is
+    # asked again each time, not refused.
+    asked, calls = explore_module._Asked(), []
+    for _ in range(2):
+        asked.ask(network, ("case", PE, _Unkeyed(3, [3])), lambda: calls.append(3))
+    assert len(calls) == 2
+    # Folding ordered axes, PE's cases each a prefix: both asked, the plain int's 8 cycles
+    # the most that meet the budget of 10.
+    seam = _TypedSeam()
+    axes = [
+        Choice(PE, None, (np.int64(3), 3), True, {}, None),
+        Choice(("member", "simd"), None, (1,), True, {}, None),
+    ]
+    strategy: Any = TargetCycles(10)
+    folded = strategy._fold_axes(seam, network, "member", axes, 10)
+    assert seam.set_calls == [("int64", "int"), ("int", "int")]
+    assert folded.cycles == 8 and type(dict(folded.network.choices)[PE]) is int
+    # Folding each case of an unordered choice: neither overwrites the other.
+    for cases in ((3, np.int64(3)), (np.int64(3), 3)):
+        seam, strategy = _TypedSeam(), cast(Any, TargetCycles(10))
+        strategy._fold = lambda seam, at, name, budget: explore_module._Folded(
+            seam.cost(at, (name,)).cycles[name], at
+        )
+        choice = Choice(PE, None, cases, False, {}, None)
+        folded = strategy._fold_cases(seam, network, "member", choice, 10)
+        assert sorted(seam.set_calls) == [("int",), ("int64",)]
+        assert folded.cycles == 8 and type(dict(folded.network.choices)[PE]) is int
+        row = strategy.cases["member.pe"]
+        assert type(row["taken"]) is int
+
+
+def test_cases_tied_on_cycles_are_weighed_each_by_its_own_resources() -> None:
+    """Tied cases' resources (``used``) are kept by the case's identity too: the lighter
+    of ``3`` and ``numpy.int64(3)`` is taken, whichever is listed first."""
+    network: Any = _Configured()
+    for cases in ((3, np.int64(3)), (np.int64(3), 3)):
+        seam, strategy = cast(Any, _TypedSeam()), cast(Any, TargetCycles(10))
+        seam.cost = lambda at, names: SimpleNamespace(cycles={"member": 8})
+        strategy._fold = lambda seam, at, name, budget: explore_module._Folded(8, at)
+        strategy._member_resources = lambda seam, at, name: Resources(
+            lut=10 if type(dict(at.choices)[PE]) is int else 20
+        )
+        choice = Choice(PE, None, cases, False, {}, None)
+        folded = strategy._fold_cases(seam, network, "member", choice, 10)
+        assert type(dict(folded.network.choices)[PE]) is int
+        assert type(strategy.cases["member.pe"]["taken"]) is int
 
 
 def test_a_target_throughput_is_a_cycles_budget_at_the_platform_s_clock() -> None:

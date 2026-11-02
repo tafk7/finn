@@ -26,7 +26,7 @@ from finn.dataflow.datatypes import (
     qonnx_datatype_width,
     resolve_qonnx_datatype_name,
 )
-from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.dataflow.tensor import ScalarEncoding, Tensor, full
 
 
 class _LyingWidth(BaseDataType):
@@ -346,3 +346,15 @@ def test_zero_width_encodings_are_no_tensors_element(name: str) -> None:
     # any kernel reads it.
     with pytest.raises(ValueError, match="positive width"):
         ScalarEncoding(resolve_qonnx_datatype_name(name))
+
+
+def test_a_datatype_s_full_range_is_refused_its_name_cold_or_cached() -> None:
+    """``full`` refuses a datatype's name before its cache, whether or not the datatype's
+    range was read: the name compares and hashes equal to the datatype, and is no datatype."""
+    for read_first in (False, True):
+        if read_first:
+            assert full(DataType["INT8"]) == TensorRange(-128, 127)
+        with refused("datatype-name-not-value", error=DatatypeError):
+            full("INT8")  # type: ignore[arg-type]
+        with refused("datatype-name-not-value", error=DatatypeError):
+            full(dtype="INT8")  # type: ignore[arg-type]

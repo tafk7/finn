@@ -95,8 +95,11 @@ class), each member's name and its class's identity, each kernel's policies' own
 channel's sides as (member, port) or the side's kind (a boundary's with its port), each
 member's facts by name with how each is given (a value, or stated by a member), in order,
 which edge channels are given the port beside them at a frozen neighbour, and its instance
-order. A declaration of the same structure with other facts (another name, another frozen
-neighbour's port among them) is a new design space of the same class, and compiles nothing.
+order; the key by its identity (``finn.core.space.semantics.identity``), so an owner equal to
+another but holding a value of another type is another structure, its names a declaration's
+builtin ``str`` (a ``numpy.str_`` name is its text). A declaration of the same structure
+with other facts (another name, another frozen neighbour's port among them) is a new design
+space of the same class, and compiles nothing.
 The cache is **bounded**: it holds at most ``CLASS_CACHE_BOUND`` classes (16), the least
 recently composed dropped past it (a dropped class lives on while a design space of it
 does, and a later composition of its structure makes it again). Each class holds its
@@ -136,6 +139,7 @@ from finn.core.space import (
     space_formals,
 )
 from finn.core.space.compiler import compile_model
+from finn.core.space.semantics import identity
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel, Neighbours
 from finn.kernels.dataflow_core import FROZEN, DataflowCoreKernel, Names, root_name
@@ -158,22 +162,39 @@ a core's class is refused by when it is made."""
 # -- the declaration ----------------------------------------------------------------------
 
 
+def _text(name: str) -> str:
+    """A name as a declaration keeps it, a builtin ``str`` (a ``numpy.str_`` is its text),
+    so that the class a structure is made into holds the names of none of its callers;
+    ``TypeError`` for anything that is no string."""
+    if not isinstance(name, str):
+        raise TypeError(f"a name is a string, not {name!r}")
+    return str.__str__(name)
+
+
 @dataclass(frozen=True)
 class Port:
     """A kernel's port as a channel's side: member ``member`` (a graph name) and its port
-    ``port`` (``y``: the side it states, ``y.side``)."""
+    ``port`` (``y``: the side it states, ``y.side``), each a builtin ``str`` (``_text``)."""
 
     member: str
     port: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "member", _text(self.member))
+        object.__setattr__(self, "port", _text(self.port))
 
 
 @dataclass(frozen=True)
 class Stated:
     """A channel's fact a member states: member ``member``'s derived value ``name``
-    (``carried_weights``)."""
+    (``carried_weights``), each a builtin ``str`` (``_text``)."""
 
     member: str
     name: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "member", _text(self.member))
+        object.__setattr__(self, "name", _text(self.name))
 
 
 # A declaration is a record the composer reads once, never a value a Space holds: plain
@@ -192,7 +213,7 @@ class Facts:
 
     def __init__(self, space_type: type[Space], arguments: Mapping[str, object]) -> None:
         self.space_type = space_type
-        self.arguments = MappingProxyType(dict(arguments))
+        self.arguments = MappingProxyType({_text(name): value for name, value in arguments.items()})
 
     def __repr__(self) -> str:
         return f"Facts({self.space_type.__name__}, {dict(self.arguments)!r})"
@@ -221,7 +242,7 @@ class ChannelDeclaration:
         if sided:
             raise ValueError(f"a channel's sides are given as its sides, not facts: {sided}")
         self.producer, self.consumer = producer, consumer
-        self.facts = MappingProxyType(dict(facts))
+        self.facts = MappingProxyType({_text(name): value for name, value in facts.items()})
 
     @property
     def reads(self) -> tuple[str, ...]:
@@ -250,8 +271,9 @@ class DataflowCoreDeclaration:
     each kernel's policies' owner, by graph name (``owners``: a KernelOp's its op class;
     ``Unstated`` for a kernel not named) and, for a slice, the port beside each edge channel at a
     frozen neighbour, by the channel's graph name (``frozen``: its stream pins and its pace at the
-    neighbour's stored choices). An order that does not name each member once, or an owner or a
-    frozen port of no kernel or channel of it, is a ``ValueError``."""
+    neighbour's stored choices). Its names are kept as builtin ``str`` (``_text``). An order that
+    does not name each member once, or an owner or a frozen port of no kernel or channel of it,
+    is a ``ValueError``."""
 
     __slots__ = ("channels", "frozen", "kernels", "name", "order", "owners")
 
@@ -272,20 +294,22 @@ class DataflowCoreDeclaration:
         owners: Mapping[str, Owner] | None = None,
         frozen: Mapping[str, Neighbours] | None = None,
     ) -> None:
-        self.kernels = MappingProxyType(dict(kernels))
-        self.channels = MappingProxyType(dict(channels))
-        self.name = name
+        self.kernels = MappingProxyType({_text(each): facts for each, facts in kernels.items()})
+        self.channels = MappingProxyType({_text(each): sides for each, sides in channels.items()})
+        self.name = _text(name)
         members = (*self.kernels, *self.channels)
-        self.order = members if order is None else tuple(order)
+        self.order = members if order is None else tuple(map(_text, order))
         if sorted(self.order) != sorted(members):
             raise ValueError(
                 f"{name}: its order {list(self.order)} names each of its members once, {members}"
             )
-        self.owners = MappingProxyType(dict(owners or {}))
+        self.owners = MappingProxyType(
+            {_text(each): owner for each, owner in (owners or {}).items()}
+        )
         unknown = sorted(set(self.owners) - set(self.kernels))
         if unknown:
             raise ValueError(f"{name}: owners of no kernel of it: {unknown}")
-        self.frozen = MappingProxyType(dict(frozen or {}))
+        self.frozen = MappingProxyType({_text(each): port for each, port in (frozen or {}).items()})
         unknown = sorted(set(self.frozen) - set(self.channels))
         if unknown:
             raise ValueError(f"{name}: frozen neighbours' ports of no channel of it: {unknown}")
@@ -725,19 +749,29 @@ def compose(declared: DataflowCoreDeclaration) -> DataflowCoreKernel:
         raise DataflowCoreRefused(findings)
     ranked = _ranked(declared)
     key = structure(declared, ranked)
+    # Kept by the key's identity, its values' types with them: an owner equal to another but
+    # holding a value of another type is another structure (its class holds its owner). A
+    # key whose identity does not hash (a value class's field its hash leaves out,
+    # unhashable) is not kept, as the engine's node cache keeps no such value.
+    try:
+        kept: Hashable | None = identity(key)
+        hash(kept)
+    except TypeError:
+        kept = None
     with _LOCK:
-        found = _CLASSES.get(key)
+        found = None if kept is None else _CLASSES.get(kept)
         if found is None:
             found = _made(declared, ranked, names, key)
             # Compiled before it is kept: a class that does not compile (a kernel's
             # declaration the engine refuses) raises here, its error the engine's, and is
             # no entry: composed again, it is compiled, and refused, again.
             compile_model(found)
-            _CLASSES[key] = found
+            if kept is not None:
+                _CLASSES[kept] = found
             while len(_CLASSES) > CLASS_CACHE_BOUND:
                 _CLASSES.popitem(last=False)
         else:
-            _CLASSES.move_to_end(key)
+            _CLASSES.move_to_end(kept)
     table = found.names
     facts: dict[str, object] = {}
     for owner, kernel in declared.kernels.items():
