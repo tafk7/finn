@@ -61,11 +61,13 @@ from finn.shells import build as shell_build
 from finn.shells.build import (
     BITFILE_DIR,
     DELIVERED_CLOCK,
+    DEPLOY_DIR,
     DRIVER_DIR,
     DRIVER_REPORT,
     LINKED,
     RUNTIME_FILE,
     BuildBitfile,
+    MakeDeployment,
     MakeDriver,
     ShellRefused,
     bitfile_directory,
@@ -706,6 +708,50 @@ def test_a_driver_is_refused_a_clock_its_bitfile_s_timing_does_not_cover(
     assert json.loads((output / DRIVER_DIR / "integration.json").read_text())["clocks_mhz"] == {
         MAIN: 187.512
     }
+
+
+@pytest.mark.parametrize(
+    "case, code",
+    [
+        ("before-timing", "linked-invalid"),
+        ("timing-unmet", "linked-invalid"),
+        ("absent", "linked-absent"),
+    ],
+)
+def test_a_deployment_is_refused_a_bitfile_whose_record_its_build_did_not_admit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    case: str,
+    code: str,
+) -> None:
+    """The deployment ships the bitfile only as its build's record admits it: with the
+    driver an earlier build made, a record of what the bitfile's build collected that
+    states no timing (one written before timing was recorded), one whose timing misses
+    setup, and none, are each refused before anything is removed or copied; the build's
+    own record deploys."""
+    recorded_tools(monkeypatch, tmp_path)
+    parent = zynq_parent(tmp_path)
+    output = tmp_path / "output"
+    built = parent.transform(BuildBitfile(output, "pynq", toolchain=cast(Toolchain, FakeVivado())))
+    built = built.transform(MakeDriver(output, "pynq"))
+    found = json.loads((output / LINKED).read_text())
+    if case == "absent":
+        (output / LINKED).unlink()
+    elif case == "before-timing":
+        earlier = {key: value for key, value in found.items() if key != "timing"}
+        (output / LINKED).write_text(json.dumps(earlier))
+    else:
+        unmet = copy.deepcopy(found)
+        unmet["timing"]["setup"].update(worst_ns=-0.25, failing_endpoints=3)
+        (output / LINKED).write_text(json.dumps(unmet))
+    (output / DEPLOY_DIR).mkdir()
+    (output / DEPLOY_DIR / "earlier.txt").write_text("an earlier deployment's")
+    with refused(code, error=ShellRefused, owner="MakeDeployment"):
+        built.transform(MakeDeployment(output))
+    assert [path.name for path in (output / DEPLOY_DIR).iterdir()] == ["earlier.txt"]
+    (output / LINKED).write_text(json.dumps(found))
+    built.transform(MakeDeployment(output))
+    assert (output / DEPLOY_DIR / BITFILE).is_file()
 
 
 def test_the_bitfile_build_refuses_a_shell_without_it(tmp_path: Path) -> None:

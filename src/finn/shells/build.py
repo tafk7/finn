@@ -708,7 +708,7 @@ def linked_record(directory: Path, output: str, owner: str | None = None) -> dic
     return checked
 
 
-def linked_as_built(directory: Path, image: Path) -> Linked:
+def linked_as_built(directory: Path, image: Path, output: str = "driver") -> Linked:
     """What the bitfile's build in ``directory`` linked, as it collected it there: each
     unit's base and each clock as delivered, as its runtime file states them
     (``RUNTIME_FILE``), and the files beside the image, the reports and the routed timing,
@@ -716,11 +716,11 @@ def linked_as_built(directory: Path, image: Path) -> Linked:
     of another schema than this FINN's (``RUNTIME_SCHEMA``), is refused, as is no
     record, and a clock no positive finite number, or a main clock other than the period
     the record's timing closed at (``clock-untimed``: the runtime would set a clock no
-    timing covers)."""
+    timing covers), each for ``output`` (the driver, or the deployment that ships it)."""
     report = Path(directory) / RUNTIME_FILE
     if not report.is_file():
         raise ShellRefused(
-            "driver",
+            output,
             "integration-absent",
             f"no runtime file ({report}): the driver reaches each unit where the bitfile's "
             "build placed it; list step_build_bitfile before step_make_driver",
@@ -728,15 +728,15 @@ def linked_as_built(directory: Path, image: Path) -> Linked:
     found = json.loads(report.read_text())
     if found.get("schema") != RUNTIME_SCHEMA:
         raise ShellRefused(
-            "driver",
+            output,
             "integration-schema",
             f"the runtime file {report} is of the schema {found.get('schema')!r}, and this "
             f"FINN's is {RUNTIME_SCHEMA}: build the bitfile again (step_build_bitfile)",
         )
-    collected = linked_record(directory, "driver")
+    collected = linked_record(directory, output)
     if collected is None:
         raise ShellRefused(
-            "driver",
+            output,
             "linked-absent",
             f"no record of what the bitfile's build collected ({Path(directory) / LINKED}): "
             "build the bitfile again (step_build_bitfile)",
@@ -752,7 +752,7 @@ def linked_as_built(directory: Path, image: Path) -> Linked:
     ):
         closed = "" if timing is None else f", and its timing closed at {timing.period_ns} ns"
         raise ShellRefused(
-            "driver",
+            output,
             "clock-untimed",
             f"the runtime file {report} states the clocks {found['clocks_mhz']} MHz{closed} "
             f"({Path(directory) / LINKED}): each clock is a positive number, the {MAIN} one "
@@ -852,8 +852,11 @@ class MakeDeployment(Transformation):
     own builds made: a parent graph that states no bitfile, or another directory's, an
     output directory without the driver's description, and a bitfile or driver made from
     another design than the partition's now, or for another IP than its body states, are
-    refused, by name, from what the graphs and the description record. The parent graph
-    is unchanged."""
+    refused, by name, from what the graphs and the description record, as is a bitfile
+    whose build's runtime file or record of what it collected is absent, of another
+    schema, not one a build writes, or with a timing no linker admits or a main clock it
+    does not cover (``linked_as_built``): each before anything is removed or copied. The
+    parent graph is unchanged."""
 
     def __init__(self, directory: Path) -> None:
         super().__init__()
@@ -909,6 +912,7 @@ class MakeDeployment(Transformation):
                 f"the IP of the key {driven}, and the partition's IP is now {ip}; make the "
                 "driver again (step_make_driver)",
             )
+        linked_as_built(output, Path(stated), made)
         deploy = output / DEPLOY_DIR
         shutil.rmtree(deploy, ignore_errors=True)
         shutil.copytree(output / BITFILE_DIR, deploy / BITFILE_DIR)
