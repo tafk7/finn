@@ -30,10 +30,12 @@ The bitfile (``BuildBitfile``) is the parent graph's integration description
   each named ``finn-accel`` with its own suffix (``finn-accel.bit`` beside
   ``finn-accel.hwh`` on ``pynq``); each report into ``report/`` by its path there; the
   runtime file (``report/integration.json``, ``finn.shells.integration.runtime_text``);
-  the main clock as delivered beside the one asked (``report/delivered_clock.json``,
+  the main clock as delivered beside the one asked, with the period its routed timing
+  closed at and the worst setup slack there (``report/delivered_clock.json``,
   ``delivered_clock``, with its limitations, ``delivered_clock_findings``); and what was
-  collected, by its paths in the output directory, with the linker's name
-  (``report/linked.json``, ``LINKED``).
+  collected, by its paths in the output directory, with the linker's name and the routed
+  timing it admitted (``report/linked.json``, ``LINKED``). A linker refuses an image that
+  misses timing (the ``pynq`` one: ``finn.shells.pynq.linker.admitted``).
 
 Collection refuses, before anything is copied: two files beside the image of one suffix,
 or one of the image's (``artifact-collision``), and a report's path that is not a plain
@@ -67,8 +69,10 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import math
 import shutil
 import xml.etree.ElementTree as ElementTree
+from collections.abc import Mapping
 from fnmatch import fnmatch
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
@@ -103,11 +107,13 @@ from finn.shells.integration import (
     Linked,
     Linker,
     Runtime,
+    Timing,
     describe,
     runtime_text,
 )
 from finn.toolchain.ip import COMPONENT
 from finn.toolchain.launcher import Toolchain, ToolFailed, host_toolchain, transcript_files
+from finn.toolchain.vivado import CHECKS, Check
 from finn.transformation.kernels.choose import shell_bottleneck
 from finn.transformation.kernels.hls import hls_products
 from finn.transformation.kernels.package import PackagePartition, PackageUnit, ip_key
@@ -281,18 +287,23 @@ def delivered_clock(
     linked: Linked, period_ns: float, cycles: int | None, objective_fps: float | None
 ) -> dict[str, Any]:
     """The main clock as ``linked`` delivers it beside the period asked, its period to the
-    picosecond, and, given the bottleneck's ``cycles`` a frame, the frames a second at each;
+    picosecond, the period its routed timing closed at and the worst setup, hold and
+    pulse-width slacks there, with the report they were read from (``Linked.timing``,
+    where the linker states it),
+    and, given the bottleneck's ``cycles`` a frame, the frames a second at each;
     ``objective_fps`` is the throughput asked. Without a main clock delivered, the period
-    asked alone. Facts only: ``delivered_clock_findings`` judges them."""
+    asked and the timing alone. Facts only: ``delivered_clock_findings`` judges them."""
     mhz = linked.clocks_mhz.get(MAIN)
+    report: dict[str, Any] = {"clock": MAIN, "target_period_ns": period_ns}
+    if linked.timing is not None:
+        report["closed_period_ns"] = linked.timing.period_ns
+        for key, check in (("wns_ns", "setup"), ("whs_ns", "hold"), ("wpws_ns", "pulse_width")):
+            report[key] = linked.timing.checks[check].worst_ns
+        report["timing_report"] = str(REPORT_DIR / linked.timing.report)
     if mhz is None:
-        return {"clock": MAIN, "target_period_ns": period_ns}
-    report: dict[str, Any] = {
-        "clock": MAIN,
-        "target_period_ns": period_ns,
-        "delivered_period_ns": round(1000 / mhz, 3),
-        "delivered_mhz": mhz,
-    }
+        return report
+    report["delivered_period_ns"] = round(1000 / mhz, 3)
+    report["delivered_mhz"] = mhz
     if cycles is not None:
         report["bottleneck_cycles"] = cycles
         report["fps_at_target"] = round(1e9 / (period_ns * cycles), 1)
@@ -304,14 +315,28 @@ def delivered_clock(
 
 def delivered_clock_findings(clock: dict[str, Any]) -> tuple[Finding, ...]:
     """The limitations of a delivered clock (``delivered_clock``), for
-    report/delivered_clock.json: none delivered (``clock-unknown``), or a delivered period
-    other than the one asked, slower (``clock-below-asked``) or faster
-    (``clock-above-asked``) than asked (a shell may give its nearest clock to the request),
-    with both numbers, the frames a second at each and the objective where the report
-    states them. Never a refusal."""
+    report/delivered_clock.json: no routed timing (``timing-unchecked``: the linker states
+    none, so whether the image meets its clock is unknown); none delivered
+    (``clock-unknown``), or a delivered period other than the one asked, slower
+    (``clock-below-asked``) or faster (``clock-above-asked``) than asked (a shell may give
+    its nearest clock to the request), with both numbers, the frames a second at each and
+    the objective where the report states them. Never a refusal: a linker refuses an image
+    that misses timing itself."""
     period = clock["target_period_ns"]
+    unchecked: tuple[Finding, ...] = ()
+    if "wns_ns" not in clock:
+        unchecked = (
+            Finding(
+                FindingKind.LIMITATION,
+                "timing-unchecked",
+                "delivered_clock",
+                "the linker states no routed timing: whether the image meets its clock is "
+                "not checked",
+            ),
+        )
     if "delivered_period_ns" not in clock:
         return (
+            *unchecked,
             Finding(
                 FindingKind.LIMITATION,
                 "clock-unknown",
@@ -323,7 +348,7 @@ def delivered_clock_findings(clock: dict[str, Any]) -> tuple[Finding, ...]:
     delivered, mhz = clock["delivered_period_ns"], clock["delivered_mhz"]
     # A delivered period is stated to the picosecond.
     if abs(delivered - period) < 0.0005:
-        return ()
+        return unchecked
     message = (
         f"the shell delivers its {clock['clock']} clock at {delivered} ns ({mhz} MHz), "
         f"not the {period} ns asked"
@@ -337,6 +362,7 @@ def delivered_clock_findings(clock: dict[str, Any]) -> tuple[Finding, ...]:
     if "objective_fps" in clock:
         message += f"; the objective is {clock['objective_fps']:,.0f} fps"
     return (
+        *unchecked,
         Finding(
             FindingKind.LIMITATION,
             "clock-below-asked" if delivered > period else "clock-above-asked",
@@ -413,12 +439,12 @@ def collection(linked: Linked) -> dict[Path, Path]:
     return found
 
 
-def _removed(directory: Path) -> None:
-    """Remove the reports the last link in the output ``directory`` collected, by its record
-    (``LINKED``, read whole and checked first: ``linked_record``), then the record: an
-    earlier link's reports, none of FINN's or another's. Its image and the files beside it
-    are in ``BITFILE_DIR``, which a build replaces whole."""
-    record = linked_record(directory, "bitfile")
+def _removed(directory: Path, record: dict[str, Any] | None) -> None:
+    """Remove the reports the last link in the output ``directory`` collected, by its
+    ``record`` (``LINKED``, read and checked before the build ran any tool:
+    ``linked_record``, not timed), then the record: an earlier link's reports, none of
+    FINN's or another's. Its image and the files beside it are in ``BITFILE_DIR``, which a
+    build replaces whole."""
     if record is None:
         return
     for key in record["reports"]:
@@ -446,8 +472,9 @@ class BuildBitfile(Transformation):
     module docstring), described for the build's ``runtime`` (the row's first where
     ``None``), collected into the output ``directory``: ``BITFILE_DIR`` is the build's own,
     replaced whole, with whatever else it held; under ``REPORT_DIR`` only the reports the
-    last link collected are removed (``LINKED``). ``toolchain`` runs every
-    tool, by default the machine's (``host_toolchain``), prepared once, when the
+    last link collected are removed (``LINKED``, its paths checked before any tool runs;
+    its timing not read, so building again replaces an earlier one). ``toolchain`` runs
+    every tool, by default the machine's (``host_toolchain``), prepared once, when the
     transformation is made; ``hw_debug`` is the linker's ``debug`` option, recorded with
     the bitfile (``bitfile_options``); ``objective_fps`` is the throughput the partition
     was folded for, if any. ``bitfile`` and ``clock`` hold the bitfile's path and the
@@ -476,6 +503,7 @@ class BuildBitfile(Transformation):
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
         row = built_row(model, "bitfile")
+        earlier = linked_record(self.directory, "bitfile", timed=False)
         linker = declared_linker(row, self.hw_debug)
         node, body, _ = partition_body(model)
         bottleneck = shell_bottleneck(body, node.name)
@@ -489,7 +517,7 @@ class BuildBitfile(Transformation):
         output = self.directory
         found = collection(linked)
         image, *beside = [target for target in found if target.parent == BITFILE_DIR]
-        _removed(output)
+        _removed(output, earlier)
         shutil.rmtree(output / BITFILE_DIR, ignore_errors=True)
         (output / REPORT_DIR).mkdir(parents=True, exist_ok=True)
         for target, source in found.items():
@@ -511,6 +539,7 @@ class BuildBitfile(Transformation):
             "image": str(image),
             "beside": [str(path) for path in beside],
             "reports": {key: str(REPORT_DIR / key) for key in linked.reports},
+            "timing": None if linked.timing is None else timing_record(linked.timing),
         }
         (output / LINKED).write_text(json.dumps(record, indent=2))
         self.reports += [output / RUNTIME_FILE, output / DELIVERED_CLOCK, output / LINKED]
@@ -577,6 +606,52 @@ def shipped_bitfile(model: ModelWrapper, directory: Path) -> Path:
     return Path(bitfile).relative_to(Path(directory))
 
 
+def timing_record(timing: Timing) -> dict[str, Any]:
+    """``timing`` as ``LINKED`` records it: its report by its path in the output directory,
+    as the record's reports are."""
+    return {**timing.record(), "report": str(REPORT_DIR / timing.report)}
+
+
+def _number(entry: object) -> float:
+    """``entry``, a finite JSON number; ``ValueError`` otherwise (JSON reads ``Infinity``)."""
+    if type(entry) not in (int, float) or not math.isfinite(cast(float, entry)):
+        raise ValueError(f"not a finite number: {entry!r}")
+    return float(cast(float, entry))
+
+
+def recorded_timing(entry: object, reports: Mapping[str, str]) -> Timing | None:
+    """The timing ``timing_record`` wrote of a link whose record's reports are
+    ``reports``, or None (a link with no routed timing). ``ValueError`` unless it is one a
+    linker admits: its period a finite positive number; each check of ``CHECKS``, its
+    slacks finite numbers, its endpoints counts, and met (``Check.met``: no failing
+    endpoint, no negative slack), timing an endpoint at least (as admission requires);
+    its report one of ``reports``."""
+    if entry is None:
+        return None
+    fields = {"period_ns", "report", *CHECKS}
+    if not isinstance(entry, dict) or set(entry) != fields:
+        raise ValueError(
+            f"a timing of the fields {sorted(entry) if isinstance(entry, dict) else entry}"
+        )
+    checks = {}
+    for name in CHECKS:
+        found = entry[name]
+        if not isinstance(found, dict) or set(found) != set(Check(0, 0, 0, 0).record()):
+            raise ValueError(f"its {name} check is not one a linker records")
+        counts = (found["failing_endpoints"], found["endpoints"])
+        if any(type(count) is not int or count < 0 for count in counts):
+            raise ValueError(f"its {name} check's endpoints are not counts")
+        check = Check(_number(found["worst_ns"]), _number(found["total_ns"]), *counts)
+        if not check.met or check.endpoints == 0:
+            raise ValueError(f"its {name} check is not met or times no endpoint")
+        checks[name] = check
+    period = _number(entry["period_ns"])
+    if period <= 0 or entry["report"] not in reports.values():
+        raise ValueError("its period or its report is not a link's")
+    key = str(PurePosixPath(entry["report"]).relative_to(REPORT_DIR.name))
+    return Timing(period, checks, key)
+
+
 def _collected_artifact(entry: object) -> bool:
     """Whether ``entry`` names a file a link collects beside the image or the image, as
     ``collection`` does: ``bitfile/finn-accel<suffix>``, written so."""
@@ -591,14 +666,20 @@ def _collected_artifact(entry: object) -> bool:
     )
 
 
-def linked_record(directory: Path, output: str, owner: str | None = None) -> dict[str, Any] | None:
+def linked_record(
+    directory: Path, output: str, owner: str | None = None, timed: bool = True
+) -> dict[str, Any] | None:
     """What the bitfile's build in the output ``directory`` collected (``LINKED``): the
-    linker's name, the image, the files beside it and the reports, by their paths there;
-    None where it collected nothing. A record ``collection`` cannot have written is refused
-    for ``output`` (by ``owner``, as ``ShellRefused`` has it) before anything reads or
-    removes what it names (``linked-invalid``): the
-    image and each file beside it ``bitfile/finn-accel<suffix>``, each report a key
-    ``report_key`` takes at ``report/<key>``."""
+    linker's name, the image, the files beside it and the reports, by their paths there,
+    and the routed timing the linker admitted (``timing_record``, or None); None where it
+    collected nothing. A record ``collection`` cannot have written is refused for
+    ``output`` (by ``owner``, as ``ShellRefused`` has it) before anything reads or removes
+    what it names (``linked-invalid``): the image and each file beside it
+    ``bitfile/finn-accel<suffix>``, each report a key ``report_key`` takes at
+    ``report/<key>``, and the timing one a linker admits (``recorded_timing``). Not
+    ``timed``, the timing is not read: what a build removes before it links again, so an
+    earlier build's record (one before the timing was recorded, or one whose timing no
+    linker admits) is replaced by building again, while what reads the build refuses it."""
     record = Path(directory) / LINKED
     if not record.is_file():
         return None
@@ -616,6 +697,8 @@ def linked_record(directory: Path, output: str, owner: str | None = None) -> dic
                 for key, path in reports.items()
             )
         )
+        if valid and timed:
+            recorded_timing(found["timing"], reports)
     except (ValueError, KeyError, TypeError, ShellRefused):
         valid = False
     if not valid:
@@ -623,24 +706,28 @@ def linked_record(directory: Path, output: str, owner: str | None = None) -> dic
             output,
             "linked-invalid",
             f"{record} is not a record a bitfile's build writes: each file it names is "
-            "bitfile/finn-accel<suffix> or a linker's report under report/; remove it and "
-            "build the bitfile again (step_build_bitfile)",
+            "bitfile/finn-accel<suffix> or a linker's report under report/, and its timing "
+            "one the linker admitted, or none; remove it and build the bitfile again "
+            "(step_build_bitfile)",
             owner,
         )
     checked: dict[str, Any] = found
     return checked
 
 
-def linked_as_built(directory: Path, image: Path) -> Linked:
+def linked_as_built(directory: Path, image: Path, output: str = "driver") -> Linked:
     """What the bitfile's build in ``directory`` linked, as it collected it there: each
     unit's base and each clock as delivered, as its runtime file states them
-    (``RUNTIME_FILE``), and the files beside the image and the reports, as its record states
-    them (``LINKED``), ``image`` the bitfile. No runtime file, or one of another schema
-    than this FINN's (``RUNTIME_SCHEMA``), is refused, as is no record."""
+    (``RUNTIME_FILE``), and the files beside the image, the reports and the routed timing,
+    as its record states them (``LINKED``), ``image`` the bitfile. No runtime file, or one
+    of another schema than this FINN's (``RUNTIME_SCHEMA``), is refused, as is no
+    record, and a clock no positive finite number, or a main clock other than the period
+    the record's timing closed at (``clock-untimed``: the runtime would set a clock no
+    timing covers), each for ``output`` (the driver, or the deployment that ships it)."""
     report = Path(directory) / RUNTIME_FILE
     if not report.is_file():
         raise ShellRefused(
-            "driver",
+            output,
             "integration-absent",
             f"no runtime file ({report}): the driver reaches each unit where the bitfile's "
             "build placed it; list step_build_bitfile before step_make_driver",
@@ -648,26 +735,51 @@ def linked_as_built(directory: Path, image: Path) -> Linked:
     found = json.loads(report.read_text())
     if found.get("schema") != RUNTIME_SCHEMA:
         raise ShellRefused(
-            "driver",
+            output,
             "integration-schema",
             f"the runtime file {report} is of the schema {found.get('schema')!r}, and this "
             f"FINN's is {RUNTIME_SCHEMA}: build the bitfile again (step_build_bitfile)",
         )
-    collected = linked_record(directory, "driver")
+    collected = linked_record(directory, output)
     if collected is None:
         raise ShellRefused(
-            "driver",
+            output,
             "linked-absent",
             f"no record of what the bitfile's build collected ({Path(directory) / LINKED}): "
             "build the bitfile again (step_build_bitfile)",
         )
+    try:
+        clocks = {name: _number(mhz) for name, mhz in found["clocks_mhz"].items()}
+    except ValueError:
+        clocks = {}
+    timing = recorded_timing(collected["timing"], collected["reports"])
+    mhz = clocks.get(MAIN)
+    if any(each <= 0 for each in clocks.values()) or (
+        timing is not None and (mhz is None or not _closed_at(mhz, timing.period_ns))
+    ):
+        closed = "" if timing is None else f", and its timing closed at {timing.period_ns} ns"
+        raise ShellRefused(
+            output,
+            "clock-untimed",
+            f"the runtime file {report} states the clocks {found['clocks_mhz']} MHz{closed} "
+            f"({Path(directory) / LINKED}): each clock is a positive number, the {MAIN} one "
+            "the period the timing closed at; build the bitfile again (step_build_bitfile)",
+        )
     return Linked(
         image=image,
         placement={unit: int(base) for unit, base in found["placement"].items()},
-        clocks_mhz={name: float(mhz) for name, mhz in found["clocks_mhz"].items()},
+        clocks_mhz=clocks,
         reports={key: Path(directory) / path for key, path in collected["reports"].items()},
         beside=tuple(Path(directory) / path for path in collected["beside"]),
+        timing=timing,
     )
+
+
+def _closed_at(mhz: float, period_ns: float) -> bool:
+    """Whether a clock of ``mhz`` is one of ``period_ns``, each as a timing report rounds
+    it, to the thousandth: their difference within the period's rounding and the
+    frequency's, carried to the period."""
+    return abs(1000 / mhz - period_ns) <= 0.0005 + 1000 * 0.0005 / mhz**2
 
 
 class MakeDriver(Transformation):
@@ -747,8 +859,11 @@ class MakeDeployment(Transformation):
     own builds made: a parent graph that states no bitfile, or another directory's, an
     output directory without the driver's description, and a bitfile or driver made from
     another design than the partition's now, or for another IP than its body states, are
-    refused, by name, from what the graphs and the description record. The parent graph
-    is unchanged."""
+    refused, by name, from what the graphs and the description record, as is a bitfile
+    whose build's runtime file or record of what it collected is absent, of another
+    schema, not one a build writes, or with a timing no linker admits or a main clock it
+    does not cover (``linked_as_built``): each before anything is removed or copied. The
+    parent graph is unchanged."""
 
     def __init__(self, directory: Path) -> None:
         super().__init__()
@@ -804,6 +919,7 @@ class MakeDeployment(Transformation):
                 f"the IP of the key {driven}, and the partition's IP is now {ip}; make the "
                 "driver again (step_make_driver)",
             )
+        linked_as_built(output, Path(stated), made)
         deploy = output / DEPLOY_DIR
         shutil.rmtree(deploy, ignore_errors=True)
         shutil.copytree(output / BITFILE_DIR, deploy / BITFILE_DIR)
@@ -845,6 +961,8 @@ __all__ = [
     "mover_ip",
     "refuse_stale_bitfile",
     "report_key",
+    "recorded_timing",
+    "timing_record",
     "shipped_bitfile",
     "unit_ips",
 ]

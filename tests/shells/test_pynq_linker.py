@@ -8,6 +8,7 @@ No Vivado runs: the runner's tests link through a fake (``test_pynq_runner``).""
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from dataclasses import replace
 from pathlib import Path
@@ -15,17 +16,31 @@ from typing import cast
 
 import pytest
 from support.models import zynq_parent
-from support.packaging import FakeVivado
+from support.packaging import (
+    TFC_TIMING,
+    TIMING_REPORT,
+    UNMET_REPORT,
+    UNMET_SLASHKIT_REPORT,
+    FakeVivado,
+)
 from support.refusals import refused
 
 from finn.kernels.shell_rules import placed_windows
 from finn.platform.shells import shell_row
-from finn.shells.integration import Endpoint, Integration, IntegrationError, IpRef, describe
+from finn.shells.integration import (
+    Endpoint,
+    Integration,
+    IntegrationError,
+    IpRef,
+    describe,
+)
 from finn.shells.pynq.linker import (
+    TIMING,
     Address,
     BlockDesignLinker,
     LinkerRefused,
     Wire,
+    admitted,
     block_design,
     linked_row,
     placement,
@@ -36,6 +51,7 @@ from finn.shells.pynq.linker import (
     wiring,
 )
 from finn.toolchain.launcher import Toolchain
+from finn.toolchain.vivado import Check, routed_timing
 
 #: The facts the ``pynq`` shell declares of Ultra96 for its linker.
 BOARD = {"board_part": "avnet.com:ultra96v1:part0:1.2"}
@@ -399,5 +415,271 @@ def test_the_link_is_made_under_the_directory_it_is_given(
     assert linked.image.is_relative_to(project)
     assert all(path.is_relative_to(project) for path in linked.reports.values())
     assert linked.placement == {"in0": 0xA000_0000, "in1": 0xA000_1000, "out0": 0xA000_2000}
-    # The fake's timing report names no PL clock: no clock is known delivered.
-    assert linked.clocks_mhz == {}
+    # The fake's routed timing report is TFC's on Ultra96: its PL clock as routed, the
+    # design's worst setup slack there.
+    assert linked.clocks_mhz == {"main": 187.512}
+    assert linked.timing == TFC_TIMING and TFC_TIMING.report == TIMING
+
+
+def test_the_routed_timing_is_read_from_each_linker_s_real_report() -> None:
+    """Each timing check of the design (setup, hold, pulse width: worst and total slack,
+    failing and timed endpoints), each clock as routed, each clock's own checks and the
+    ``check_timing`` counts, from real routed reports read once: TFC's on Ultra96, which
+    meets its 5.333 ns; a design routed at 1 ns that misses it, reported as the ``pynq``
+    template and as ``slashkit`` report a routed design, read alike. A report with no
+    summary, or one cut short, is not read."""
+    tfc = routed_timing(TIMING_REPORT)
+    assert tfc.state == "Routed"
+    assert tfc.design == {
+        "setup": Check(1.667, 0.0, 0, 63298),
+        "hold": Check(0.014, 0.0, 0, 63298),
+        "pulse_width": Check(1.166, 0.0, 0, 19432),
+    }
+    assert tfc.clocks == {"clk_pl_0": {"period_ns": 5.333, "mhz": 187.512}}
+    assert tfc.intra == {"clk_pl_0": tfc.design}
+    assert (tfc.unchecked["no_clock"], tfc.unchecked["unconstrained_internal_endpoints"]) == (0, 0)
+    unmet = routed_timing(UNMET_REPORT)
+    assert unmet.design == {
+        "setup": Check(-0.906, -43.505, 48, 56),
+        "hold": Check(0.125, 0.0, 0, 56),
+        "pulse_width": Check(-0.499, -0.499, 1, 10),
+    }
+    assert unmet.clocks == {"clk_pl_0": {"period_ns": 1.0, "mhz": 1000.0}}
+    assert routed_timing(UNMET_SLASHKIT_REPORT) == unmet
+    with pytest.raises(ValueError, match="no design state"):
+        routed_timing("no summary")
+    with pytest.raises(ValueError, match="'Clock Summary' table has no header"):
+        routed_timing(_cut_after("| Clock Summary"))
+    for damaged in ("| Design State", "| Design State      :"):
+        with pytest.raises(ValueError, match="its design state line states no state"):
+            routed_timing(TIMING_REPORT.replace("| Design State      : Routed", damaged))
+
+
+def _cut_after(line: str) -> str:
+    """TFC's real report (``TIMING_REPORT``) cut after its first line ``line``."""
+    lines = TIMING_REPORT.splitlines(keepends=True)
+    return "".join(lines[: [each.strip() for each in lines].index(line) + 1])
+
+
+@pytest.mark.parametrize(
+    "case, cause",
+    [
+        ("cut", r"not a whole timing summary \(the 'Clock Summary' table has no header\)"),
+        (
+            "state",
+            r"not a whole timing summary \(its design state line states no state: "
+            r"'\| Design State'\)",
+        ),
+        ("encoding", r"not read \(UnicodeDecodeError: 'utf-8' codec can't decode"),
+        ("unreadable", r"not read \(PermissionError: \[Errno 13\]"),
+    ],
+)
+def test_a_report_cut_short_or_unreadable_is_refused_naming_its_cause(
+    tmp_path: Path, case: str, cause: str
+) -> None:
+    """A routed timing report cut short in its clock summary, one whose design state line
+    is cut before its state, one not UTF-8 and one that cannot be opened are each refused
+    as unread (``timing-unread``), naming the report and the cause, not escaping as the
+    reader's error."""
+    report = tmp_path / "post_route_timing.rpt"
+    if case == "cut":
+        report.write_text(_cut_after("| Clock Summary"))
+    elif case == "state":
+        report.write_text(TIMING_REPORT.replace("| Design State      : Routed", "| Design State"))
+    elif case == "encoding":
+        report.write_bytes(b"\xff" + TIMING_REPORT.encode())
+    else:
+        report.write_text(TIMING_REPORT)
+        report.chmod(0)
+    message = re.escape(str(report)) + ": " + cause
+    with refused("timing-unread", error=LinkerRefused, message=message):
+        admitted(report, 5.0)
+
+
+#: TFC's real Ultra96 report (``TIMING_REPORT``) with its design's worst hold slack
+#: rewritten from 0.014 to -0.021 ns, in the design summary and the clock's own row: no
+#: real routed report on hand misses hold (Vivado's router fixes hold where it can).
+HOLD_UNMET_REPORT = TIMING_REPORT.replace(
+    "1.667        0.000                      0                63298        0.014",
+    "1.667        0.000                      0                63298       -0.021",
+)
+
+#: TFC's real report with its pulse-width check missed: worst and total slack -0.050 ns,
+#: one failing endpoint, in the design summary and the clock's row.
+PULSE_WIDTH_UNMET_REPORT = TIMING_REPORT.replace(
+    "1.166        0.000                       0                 19432",
+    "-0.050       -0.050                       1                 19432",
+)
+
+#: TFC's real report whose check_timing counts a register with no clock and two internal
+#: endpoints unconstrained, its slacks unchanged.
+UNTIMED_CORE_REPORT = TIMING_REPORT.replace(
+    "checking no_clock (0)", "checking no_clock (1)"
+).replace(
+    "checking unconstrained_internal_endpoints (0)",
+    "checking unconstrained_internal_endpoints (2)",
+)
+
+#: TFC's real report with its PL clock timing no endpoint and another clock, ``static``,
+#: giving the design's slacks.
+UNTIMED_PL_CLOCK_REPORT = TIMING_REPORT.replace(
+    "clk_pl_0  {0.000 2.667}        5.333           187.512",
+    "clk_pl_0  {0.000 2.667}        5.333           187.512\n"
+    "static    {0.000 5.000}        10.000          100.000",
+).replace(
+    "clk_pl_0            1.667        0.000                      0                63298",
+    "clk_pl_0              inf        0.000                      0                    0"
+    "          inf        0.000                      0                    0"
+    "          inf        0.000                       0                     0\n"
+    "static              1.667        0.000                      0                63298",
+)
+
+#: TFC's real report whose hold check times no endpoint, as Vivado writes a check with
+#: none (``inf``), in the design summary and the clock's row.
+NO_HOLD_ENDPOINTS_REPORT = TIMING_REPORT.replace(
+    "0.014        0.000                      0                63298",
+    "  inf        0.000                      0                    0",
+)
+
+#: TFC's real report whose pulse-width check times no endpoint, likewise.
+NO_PULSE_WIDTH_ENDPOINTS_REPORT = TIMING_REPORT.replace(
+    "1.166        0.000                       0                 19432",
+    "  inf        0.000                       0                     0",
+)
+
+#: TFC's real report whose PL clock states a period and frequency of zero.
+ZERO_PERIOD_REPORT = TIMING_REPORT.replace(
+    "clk_pl_0  {0.000 2.667}        5.333           187.512",
+    "clk_pl_0  {0.000 2.667}        0.000           0.000",
+)
+
+#: TFC's real report stating its design synthesized, not routed.
+UNROUTED_REPORT = TIMING_REPORT.replace(
+    "| Design State      : Routed", "| Design State      : Synthesized"
+)
+
+#: TFC's real report with one failing setup endpoint whose slack rounds to -0.000 ns.
+SETUP_ROUNDED_REPORT = TIMING_REPORT.replace(
+    "1.667        0.000                      0                63298",
+    "-0.000       -0.000                      1                63298",
+)
+
+
+@pytest.mark.parametrize(
+    "timing, code, message",
+    [
+        (
+            UNMET_REPORT,
+            "timing-unmet",
+            r"top_wrapper_timing_summary_routed\.rpt: the routed design's worst setup slack is "
+            r"-0\.906 ns, 48 of 56 endpoints failing, at its clk_pl_0 clock's 1\.0 ns "
+            r"\(1000\.0 MHz; 5\.0 ns asked\): it misses timing; ask a longer period",
+        ),
+        (None, "timing-unreported", r"no routed timing report \(.*routed\.rpt\)"),
+        (
+            "no summary",
+            "timing-unread",
+            r"routed\.rpt: not a whole timing summary \(no design state\)",
+        ),
+        (
+            HOLD_UNMET_REPORT,
+            "timing-hold-unmet",
+            r"routed\.rpt: the routed design's worst hold slack is -0\.021 ns, 0 of 63298 "
+            r"endpoints failing, .*: it misses timing; a hold time is missed at any period",
+        ),
+        (
+            PULSE_WIDTH_UNMET_REPORT,
+            "timing-pulse-width-unmet",
+            r"routed\.rpt: the routed design's worst pulse width slack is -0\.05 ns, 1 of "
+            r"19432 endpoints failing, .*: it misses timing; a clock's period or pulse width "
+            "is below a primitive's minimum",
+        ),
+        (
+            SETUP_ROUNDED_REPORT,
+            "timing-unmet",
+            r"routed\.rpt: the routed design's worst setup slack is -0\.0 ns, 1 of 63298 "
+            "endpoints failing",
+        ),
+    ],
+    ids=["unmet", "unreported", "unread", "hold-unmet", "pulse-width-unmet", "rounded-unmet"],
+)
+def test_an_image_that_misses_timing_is_refused_naming_its_report_and_slack(
+    described: Integration, tmp_path: Path, timing: str | None, code: str, message: str
+) -> None:
+    """Vivado writes the bitfile of a routed design that misses timing: the linker reads
+    the routed timing report it collects and refuses an image whose worst setup slack is
+    negative at the period its PL clock was routed at (``timing-unmet``: a real report,
+    -0.906 ns at 1 ns), naming the report, the slack and the period; as it does an image
+    whose worst hold slack is negative (``timing-hold-unmet``), one with no report
+    (``timing-unreported``) and one that states no PL clock or no slack
+    (``timing-unread``); and an image whose pulse-width check fails, or with a failing
+    setup endpoint whose slack rounds to ``-0.000``. No real routed report on hand misses
+    hold or pulse width, or rounds a violation to zero: those cases are TFC's Ultra96
+    report with its rows rewritten (``HOLD_UNMET_REPORT``, ``PULSE_WIDTH_UNMET_REPORT``,
+    ``SETUP_ROUNDED_REPORT``)."""
+    vivado = FakeVivado(timing=timing)
+    with refused(code, error=LinkerRefused, owner="vivado-block-design", message=message):
+        BlockDesignLinker().link(packaged(described), BOARD, tmp_path, cast(Toolchain, vivado))
+
+
+@pytest.mark.parametrize(
+    "timing, code, message",
+    [
+        (
+            UNTIMED_CORE_REPORT,
+            "timing-uncovered",
+            r"routed\.rpt: the routed design leaves paths untimed \(check_timing: no_clock 1, "
+            r"unconstrained_internal_endpoints 2\)",
+        ),
+        (
+            UNTIMED_PL_CLOCK_REPORT,
+            "timing-uncovered",
+            r"routed\.rpt: its clk_pl_0 clock, the accelerator's, times no setup endpoint",
+        ),
+        (
+            NO_HOLD_ENDPOINTS_REPORT,
+            "timing-uncovered",
+            r"routed\.rpt: the routed design times no hold endpoint \(its worst hold slack "
+            r"inf ns\), so its hold check covers nothing of the image",
+        ),
+        (
+            NO_PULSE_WIDTH_ENDPOINTS_REPORT,
+            "timing-uncovered",
+            r"routed\.rpt: the routed design times no pulse width endpoint",
+        ),
+        (
+            UNROUTED_REPORT,
+            "timing-unread",
+            r"routed\.rpt: it states the design 'Synthesized', not routed",
+        ),
+        (
+            ZERO_PERIOD_REPORT,
+            "timing-unread",
+            r"routed\.rpt: its clk_pl_0 clock's period, 0\.0 ns, or 0\.0 MHz is not positive",
+        ),
+    ],
+    ids=[
+        "untimed-paths",
+        "untimed-pl-clock",
+        "no-hold-endpoints",
+        "no-pulse-width-endpoints",
+        "unrouted",
+        "zero-period",
+    ],
+)
+def test_an_image_whose_timing_does_not_cover_it_is_refused(
+    described: Integration, tmp_path: Path, timing: str, code: str, message: str
+) -> None:
+    """A finite slack proves nothing of paths it does not time: the linker refuses a
+    routed design whose ``check_timing`` counts registers with no clock or internal
+    endpoints unconstrained (``timing-uncovered``), one whose PL clock, the accelerator's,
+    times no setup endpoint while another clock gives the design's slacks
+    (``timing-uncovered``), one whose hold or pulse-width check times no endpoint, which
+    Vivado states as an infinite slack (``timing-uncovered``: admitted, its record would
+    hold a slack no reader admits), a report of a design not routed and one whose PL
+    clock's period is not positive (``timing-unread``). No real routed report on hand
+    leaves paths untimed: these are TFC's Ultra96 report rewritten (``UNTIMED_CORE_REPORT``,
+    ``UNTIMED_PL_CLOCK_REPORT``, ``NO_HOLD_ENDPOINTS_REPORT``, ...)."""
+    vivado = FakeVivado(timing=timing)
+    with refused(code, error=LinkerRefused, owner="vivado-block-design", message=message):
+        BlockDesignLinker().link(packaged(described), BOARD, tmp_path, cast(Toolchain, vivado))

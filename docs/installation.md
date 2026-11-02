@@ -552,10 +552,19 @@ records only what a later step consumes, in `finn.outputs`: the packaged IP (`ip
 `vlnv`, `interfaces`, `ip_key`, `ip_options`) on the partition's body, the bitfile
 (`bitfile`, `bitfile_made_from`, `bitfile_ip_key`, `bitfile_options`) on the parent
 graph; the files the bitfile loads with are beside it in `bitfile/`, and its reports under
-`report/`, with the record of what the bitfile's build collected (`report/linked.json`),
-which the driver and the resources report read, each only the files it names; a rebuild
-replaces `bitfile/`, the build's own, whole, and removes the reports the last one
-collected.
+`report/`, with the record of what the bitfile's build collected (`report/linked.json`:
+the files, and the routed timing its linker admitted: the period its main clock closed at
+and the worst setup, hold and pulse-width slacks there, with their failing endpoints; the
+period and slacks also in the clock report, `report/delivered_clock.json`), which the driver, the deployment and
+the resources report read, each only the files it names, and refuse without that timing
+(`linked-invalid`); a rebuild replaces `bitfile/`, the build's own, whole, and removes the
+reports the last one collected, so building again repairs a directory an earlier FINN
+built. A linker refuses an image that misses timing (`timing-unmet`, `timing-hold-unmet`,
+`timing-pulse-width-unmet`: Vivado writes the bitfile of a routed design whose worst
+slack of that check is negative, or rounds to zero with an endpoint failing), naming its
+routed timing report, the slack and the failing endpoints; and one whose timing does not
+cover it (`timing-uncovered`: paths `check_timing` finds untimed, a PL clock that times
+no endpoint, or a setup, hold or pulse-width check that times none), or whose report it cannot read whole (`timing-unread`).
 
 What a build logs, at which level, and what reaches the console
 (`finn.core.reporting.log`):

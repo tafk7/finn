@@ -46,6 +46,7 @@ from support.models import (
 from support.module_names import fixed_name, live_name
 from support.packaging import (
     PLACED_HIERARCHY,
+    TFC_TIMING,
     TIMING_REPORT,
     UTILIZATION_SYNTH,
     FakeVivado,
@@ -1415,7 +1416,8 @@ def test_the_delivered_clock_is_reported_beside_the_one_asked(tmp_path: Path) ->
     give 956,694 frames a second, against the 1e6 its exploration asked: a limitation
     with both numbers (a finding, never a Python warning). The main clock is the one the
     linker states as delivered; the ``pynq`` linker reads it from the routed design's
-    timing summary, its PL clock."""
+    timing summary, its PL clock, beside the period the routed design closed at and its
+    worst setup slack there (``Linked.timing``)."""
     report = tmp_path / "timing.rpt"
     report.write_text(TIMING_REPORT)
     assert delivered_clock(str(report), 5.0) == {
@@ -1424,11 +1426,22 @@ def test_the_delivered_clock_is_reported_beside_the_one_asked(tmp_path: Path) ->
         "delivered_period_ns": 5.333,
         "delivered_mhz": 187.512,
     }
-    linked = Linked(tmp_path / "image", placement={}, clocks_mhz={"main": 187.512}, reports={})
+    linked = Linked(
+        tmp_path / "image",
+        placement={},
+        clocks_mhz={"main": 187.512},
+        reports={},
+        timing=TFC_TIMING,
+    )
     clock = shell_build.delivered_clock(linked, 5.0, 196, 1_000_000)
     assert clock == {
         "clock": "main",
         "target_period_ns": 5.0,
+        "closed_period_ns": 5.333,
+        "wns_ns": 1.667,
+        "whs_ns": 0.014,
+        "wpws_ns": 1.166,
+        "timing_report": "report/post_route_timing.rpt",
         "delivered_period_ns": 5.333,
         "delivered_mhz": 187.512,
         "bottleneck_cycles": 196,
@@ -1448,18 +1461,31 @@ def test_the_delivered_clock_is_reported_beside_the_one_asked(tmp_path: Path) ->
     delivered = shell_build.delivered_clock(linked, 5.333, 196, None)
     assert delivered_clock_findings(delivered) == ()
     alone = shell_build.delivered_clock(linked, 5.0, None, None)
-    assert set(alone) == {"clock", "target_period_ns", "delivered_period_ns", "delivered_mhz"}
+    assert set(alone) == {
+        "clock",
+        "target_period_ns",
+        "closed_period_ns",
+        "wns_ns",
+        "whs_ns",
+        "wpws_ns",
+        "timing_report",
+        "delivered_period_ns",
+        "delivered_mhz",
+    }
     (below,) = delivered_clock_findings(alone)
     assert below.message.endswith("not the 5.0 ns asked")
     (above,) = delivered_clock_findings(shell_build.delivered_clock(linked, 6.0, None, None))
     assert above.code == "clock-above-asked"
-    # A routed design whose timing summary names no PL clock: the linker states no main
-    # clock, and the period asked is not confirmed.
+    # A linker that states no main clock and no routed timing: the period asked is not
+    # confirmed, and whether the image meets it not checked.
     report.write_text("no clock summary")
     assert delivered_clock(str(report), 5.0) == {"target_period_ns": 5.0, "clocks": []}
-    unknown = shell_build.delivered_clock(replace(linked, clocks_mhz={}), 5.0, 196, None)
+    unknown = shell_build.delivered_clock(
+        replace(linked, clocks_mhz={}, timing=None), 5.0, 196, None
+    )
     assert unknown == {"clock": "main", "target_period_ns": 5.0}
-    (found,) = delivered_clock_findings(unknown)
+    unchecked, found = delivered_clock_findings(unknown)
+    assert unchecked.code == "timing-unchecked" and "not checked" in unchecked.message
     assert found.code == "clock-unknown" and "states no main clock" in found.message
 
 
@@ -2153,6 +2179,7 @@ def test_a_made_up_shell_builds_a_core_to_its_driver_and_deployment(
                 "image": "bitfile/finn-accel.bit",
                 "beside": ["bitfile/finn-accel.hwh"],
                 "reports": {key: f"report/{key}" for key in earlier},
+                "timing": None,
             }
         )
     )
@@ -2192,10 +2219,12 @@ def test_a_made_up_shell_builds_a_core_to_its_driver_and_deployment(
         "image": "bitfile/finn-accel.example",
         "beside": ["bitfile/finn-accel.map"],
         "reports": {DESCRIPTION: f"report/{DESCRIPTION}"},
+        "timing": None,
     }
     assert built_reports(parent, toolchain=cast(Toolchain, tools)) == {}
     # Each unit with a control window at the base the linker placed it, the main clock
-    # delivered as asked: the delivered clock states no limitation.
+    # delivered as asked: the delivered clock's one limitation is the routed timing the
+    # made-up linker does not state.
     runtime_file = json.loads((output / RUNTIME_FILE).read_text())
     placement = runtime_file["placement"]
     windows = {unit.name: unit.window for unit in describe(parent).units if unit.window}
@@ -2204,7 +2233,8 @@ def test_a_made_up_shell_builds_a_core_to_its_driver_and_deployment(
     assert placement == json.loads((output / "bitfile" / "finn-accel.map").read_text())
     assert (runtime_file["clocks_mhz"], runtime_file["runtime"]) == ({"main": 200.0}, "example-alt")
     clock = json.loads((output / DELIVERED_CLOCK).read_text())
-    assert (clock["clock"], clock["delivered_mhz"], clock["findings"]) == ("main", 200.0, [])
+    assert (clock["clock"], clock["delivered_mhz"]) == ("main", 200.0)
+    assert [finding["code"] for finding in clock["findings"]] == ["timing-unchecked"]
     # The driver: the runtime's, from the runtime file the build wrote.
     driver = output / "driver"
     assert sorted(path.name for path in driver.iterdir()) == ["integration.json", OPERATIONS]

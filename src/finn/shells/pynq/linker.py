@@ -47,17 +47,21 @@ not wire, and a board or processor the project cannot select, before any tool ru
 ``link`` writes the block design (``block_design``) into
 ``templates.custom_zynq_shell_template`` (``project_script``) in a new project under the
 directory it is given, runs Vivado on it and collects what it made (``collect``): the
-bitfile, its hardware handoff beside it, the main clock as the routed design delivers it,
-and the reports, each by its path under a build's ``report/``: the routed timing report
-(``TIMING``), the template's ``impl_1`` hierarchical utilization report (``PLACED``), each
-IP's out-of-context synthesis report (under ``OUT_OF_CONTEXT``), and what it named and
-placed (``BLOCK_DESIGN``, ``report``). Every unit's IP is packaged before it links.
+bitfile, its hardware handoff beside it, the main clock as the routed design delivers it
+and the design's timing checks there, read from the routed timing report, an image that
+misses setup, hold or pulse width refused (``admitted``: Vivado writes the bitfile of a
+design that misses timing), and the reports, each by its path under a build's
+``report/``: the routed timing report (``TIMING``), the template's ``impl_1``
+hierarchical utilization report (``PLACED``), each IP's out-of-context synthesis report
+(under ``OUT_OF_CONTEXT``), and what it named and placed (``BLOCK_DESIGN``, ``report``).
+Every unit's IP is packaged before it links.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import tempfile
 from collections.abc import Mapping
@@ -71,10 +75,10 @@ from finn.kernels.artifacts.unit import CONTROL
 from finn.kernels.movers import MoverContract
 from finn.kernels.shell_rules import interconnect_tree, placed_windows
 from finn.platform.shells import VIVADO_BLOCK_DESIGN, ShellRow, shell_row
-from finn.shells.integration import MAIN, Integration, IntegrationError, Linked, Unit
+from finn.shells.integration import MAIN, Integration, IntegrationError, Linked, Timing, Unit
 from finn.shells.pynq import templates
 from finn.toolchain.launcher import StrPath, Toolchain, ToolFailed
-from finn.toolchain.vivado import delivered_clock, tcl_quote, vivado_jobs
+from finn.toolchain.vivado import PL_CLOCKS, UNTIMED, routed_timing, tcl_quote, vivado_jobs
 
 _LOG = logging.getLogger(__name__)
 
@@ -493,12 +497,12 @@ def collect(
 ) -> Linked:
     """What Vivado made in ``project`` (the template's project) of ``integration``: the
     bitfile (``image``) and its hardware handoff beside it, each unit's base
-    (``unit_bases``), the row's main clock as the routed design delivers it (none where
-    there is no timing report, or it names no PL clock), and the reports by their paths
-    under a build's ``report/`` (the module docstring), ``BLOCK_DESIGN`` written into the
-    project. A bitfile or hardware handoff not there is Vivado's failure (``ToolFailed``,
-    its errors read from the run's ``transcript``, pointing at the project's logs): it
-    exits cleanly when its implementation fails."""
+    (``unit_bases``), the row's main clock as the routed design delivers it and its timing
+    there, admitted (``admitted``: an image that misses timing is refused), and the
+    reports by their paths under a build's ``report/`` (the module docstring),
+    ``BLOCK_DESIGN`` written into the project. A bitfile or hardware handoff not there is
+    Vivado's failure (``ToolFailed``, its errors read from the run's ``transcript``,
+    pointing at the project's logs): it exits cleanly when its implementation fails."""
     root = Path(project)
     runs = root / f"{PROJECT}.runs"
     bitfile = runs / "impl_1" / "top_wrapper.bit"
@@ -526,15 +530,124 @@ def collect(
             for path in sorted(runs.glob("*_synth_1/*_utilization_synth.rpt"))
         }
     )
-    timing = reports[TIMING]
-    clock = delivered_clock(str(timing), integration.period_ns) if timing.is_file() else {}
+    mhz, timing = admitted(reports[TIMING], integration.period_ns)
     return Linked(
         image=bitfile,
         placement=unit_bases(integration, row),
-        clocks_mhz={MAIN: clock["delivered_mhz"]} if "delivered_mhz" in clock else {},
+        clocks_mhz={MAIN: mhz},
         reports=reports,
         beside=(hwh,),
+        timing=timing,
     )
+
+
+#: Each timing check an image must meet (``finn.toolchain.vivado.CHECKS``), by its
+#: refusal's code, its name in the message and the remedy: a longer period meets setup
+#: and a primitive's minimum period or pulse width, never hold.
+MISSED = {
+    "setup": ("timing-unmet", "setup", "ask a longer period (the target's period_ns)"),
+    "hold": (
+        "timing-hold-unmet",
+        "hold",
+        "a hold time is missed at any period, so a longer one does not meet it; the "
+        "report's timing details name the failing paths",
+    ),
+    "pulse_width": (
+        "timing-pulse-width-unmet",
+        "pulse width",
+        "a clock's period or pulse width is below a primitive's minimum; ask a longer "
+        "period (the target's period_ns)",
+    ),
+}
+
+
+def admitted(report: Path, period_ns: float) -> tuple[float, Timing]:
+    """The main clock the routed design delivers, in MHz, and its timing (``Timing``),
+    read once from its routed timing report ``report`` (``TIMING``,
+    ``finn.toolchain.vivado.routed_timing``): the PL clock's period in the report's clock
+    summary, which Vivado gives as near the ``period_ns`` asked as the processor's clocks
+    reach, and the design's setup, hold and pulse-width checks at it, each met only with
+    no failing endpoint and no negative slack (``Check.met``: a violation rounded to
+    ``-0.000`` fails). Vivado writes the bitfile of a design that misses timing: a check
+    missed is refused, each with its remedy (``MISSED``: ``timing-unmet``, setup;
+    ``timing-hold-unmet``, hold, missed at any period; ``timing-pulse-width-unmet``), as
+    is a design whose slacks do not cover it (``timing-uncovered``: ``check_timing``
+    counts internal paths untimed, ``finn.toolchain.vivado.UNTIMED``, the PL clock times
+    no setup endpoint, or a check of the design times none), no report
+    (``timing-unreported``), and one that cannot be read, is cut short, names no PL clock
+    or one of no positive period, states a slack not finite, or states the design not
+    routed (``timing-unread``), each naming the report and the cause. The design's checks
+    stay the backstop: another clock's or a crossing's violation is refused too."""
+
+    def unread(cause: str) -> LinkerRefused:
+        return LinkerRefused(
+            "timing-unread",
+            f"{report}: {cause}: whether the image meets its clock is unknown",
+        )
+
+    try:
+        text = report.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        raise LinkerRefused(
+            "timing-unreported",
+            f"no routed timing report ({report}): whether the image meets its clock is unknown",
+        ) from None
+    except (OSError, UnicodeDecodeError) as error:
+        raise unread(f"not read ({type(error).__name__}: {error})") from error
+    try:
+        routed = routed_timing(text)
+    except ValueError as error:
+        raise unread(f"not a whole timing summary ({error})") from error
+    name = next((clock for clock in PL_CLOCKS if clock in routed.clocks), None)
+    if name is None:
+        raise unread(
+            f"names no PL clock ({', '.join(PL_CLOCKS)}; it lists "
+            f"{', '.join(sorted(routed.clocks)) or 'none'})"
+        )
+    if routed.state != "Routed":
+        raise unread(f"it states the design {routed.state!r}, not routed")
+    untimed = {check: routed.unchecked.get(check) for check in UNTIMED}
+    if None in untimed.values():
+        raise unread(f"its check_timing counts no {', '.join(UNTIMED)}")
+    if any(untimed.values()):
+        counted = ", ".join(f"{check} {count}" for check, count in untimed.items() if count)
+        raise LinkerRefused(
+            "timing-uncovered",
+            f"{report}: the routed design leaves paths untimed (check_timing: {counted}), "
+            "so its slacks do not cover the image; constrain every clock and path",
+        )
+    own = routed.intra.get(name)
+    if own is None or own["setup"].endpoints == 0:
+        raise LinkerRefused(
+            "timing-uncovered",
+            f"{report}: its {name} clock, the accelerator's, times no setup endpoint "
+            f"({'no row' if own is None else 'none'} in its intra-clock table), so the "
+            "design's slacks are other clocks'",
+        )
+    period, mhz = routed.clocks[name]["period_ns"], routed.clocks[name]["mhz"]
+    if not all(math.isfinite(each) and each > 0 for each in (period, mhz)):
+        raise unread(f"its {name} clock's period, {period} ns, or {mhz} MHz is not positive")
+    for check, (_, label, _) in MISSED.items():
+        found = routed.design[check]
+        if found.endpoints == 0:
+            raise LinkerRefused(
+                "timing-uncovered",
+                f"{report}: the routed design times no {label} endpoint (its worst {label} "
+                f"slack {found.worst_ns} ns), so its {label} check covers nothing of the image",
+            )
+        if not math.isfinite(found.worst_ns):
+            raise unread(f"its worst {label} slack is {found.worst_ns}")
+    for check, (code, label, remedy) in MISSED.items():
+        found = routed.design[check]
+        if not found.met:
+            raise LinkerRefused(
+                code,
+                f"{report}: the routed design's worst {label} slack is {found.worst_ns} ns, "
+                f"{found.failing_endpoints} of {found.endpoints} endpoints failing, at its "
+                f"{name} clock's {period} ns ({mhz} MHz; {period_ns} ns asked): it misses "
+                f"timing; {remedy}",
+            )
+    return mhz, Timing(period, dict(routed.design), TIMING)
 
 
 class BlockDesignLinker:
@@ -598,8 +711,10 @@ __all__ = [
     "CONTROL_MASTERS",
     "LinkerRefused",
     "MEMORY_TARGET",
+    "MISSED",
     "PROCESSORS",
     "Wire",
+    "admitted",
     "block_design",
     "collect",
     "control_instance",

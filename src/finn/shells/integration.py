@@ -92,6 +92,7 @@ from finn.kernels.library import library_module
 from finn.kernels.movers import MoverContract
 from finn.kernels.shell import ShellKernel
 from finn.platform.shells import Offer, placed_offer
+from finn.toolchain.vivado import Check
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
@@ -341,20 +342,49 @@ class Integration:
 
 
 @dataclass(frozen=True)
+class Timing:
+    """A linked image's routed timing, as its linker read it from its routed timing report
+    and admitted it: the period its main clock closed at (``period_ns``), each timing check
+    of the routed design there (``checks``, by ``finn.toolchain.vivado.CHECKS``: setup,
+    hold and pulse width, each met: a linker refuses an image that misses one) and the
+    report it read (``report``, its path under a build's ``report/``, a key of
+    ``Linked.reports``)."""
+
+    period_ns: float
+    checks: Mapping[str, Check]
+    report: str
+
+    @property
+    def wns_ns(self) -> float:
+        """The routed design's worst setup slack."""
+        return self.checks["setup"].worst_ns
+
+    def record(self) -> dict[str, Any]:
+        """The timing as JSON: the period, each check (``Check.record``) and the report."""
+        return {
+            "period_ns": self.period_ns,
+            **{name: check.record() for name, check in self.checks.items()},
+            "report": self.report,
+        }
+
+
+@dataclass(frozen=True)
 class Linked:
     """What a linker made of a description: the ``image`` the platform loads, the
     ``placement`` (each unit with a control window to its base address, where the platform
     has no name lookup; an endpoint is at its unit's base and its offset), each of the row's
     clocks as it delivers it, in MHz (``clocks_mhz``: none it does not know), its
     ``reports``, each by its path under a build's ``report/`` (a file, or a directory of
-    them), and the files the image loads with (``beside``: PYNQ's hardware handoff beside
-    its bitfile)."""
+    them), the files the image loads with (``beside``: PYNQ's hardware handoff beside
+    its bitfile) and its routed timing as admitted (``timing``: None where the linker
+    states none, an image with no routed design)."""
 
     image: Path
     placement: Mapping[str, int]
     clocks_mhz: Mapping[str, float]
     reports: Mapping[str, Path]
     beside: tuple[Path, ...] = ()
+    timing: Timing | None = None
 
 
 def runtime_file(integration: Integration, linked: Linked) -> dict[str, Any]:
@@ -676,6 +706,7 @@ __all__ = [
     "Linker",
     "Runtime",
     "Supply",
+    "Timing",
     "Unit",
     "describe",
     "mover_pins",

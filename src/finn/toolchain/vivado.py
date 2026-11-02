@@ -30,7 +30,7 @@
 ``release``, ``glbl``), how many runs it launches at once, how to read what its tools
 print (``messages``: ``SEVERITY: [Tool N-M] text``, the form Vivado, xvlog, xelab, xsim
 and the HLS frontends share; whether no licence was found), and how to read its reports
-(the routed clocks; utilization, as plain counts by resource: ``lut``, ``ff``,
+(the routed clocks and slacks; utilization, as plain counts by resource: ``lut``, ``ff``,
 ``bram36``, ``bram18``, ``uram``, ``dsp``).
 
 Every reader of "which Vivado" reads it here, through a toolchain, never from this
@@ -40,6 +40,7 @@ the toolchain selects no Vivado.
 
 from __future__ import annotations
 
+import math
 import os
 import re
 import xml.etree.ElementTree as ET
@@ -169,21 +170,36 @@ def vivado_jobs(requested: int | None = None) -> int:
     return requested
 
 
-def parse_clock_summary(report_path):
-    """The clocks a Vivado timing summary report's "Clock Summary" table lists, by
-    name: each one's period (ns) and frequency (MHz), as routed. A generated clock's
-    indented name is read without its indent."""
-    with open(report_path) as f:
-        lines = f.read().splitlines()
-    clocks = {}
-    try:
-        start = next(i for i, line in enumerate(lines) if line.strip() == "| Clock Summary")
-    except StopIteration:
-        return clocks
-    header = next(i for i in range(start, len(lines)) if lines[i].startswith("Clock "))
-    for line in lines[header + 2 :]:
+def _table(lines: list[str], title: str, header: tuple[str, ...]) -> list[str]:
+    """The rows of a timing summary report's table titled ``title`` (``| <title>``): the
+    lines after its header line (the first whose words start with ``header``) and its
+    dashes, up to the first empty line. ``ValueError`` where the title, the header or the
+    dashes are not there: a report cut short."""
+    titled = [i for i, line in enumerate(lines) if line.strip() == f"| {title}"]
+    if not titled:
+        raise ValueError(f"no {title!r} table")
+    headers = [
+        i for i in range(titled[0], len(lines)) if tuple(lines[i].split()[: len(header)]) == header
+    ]
+    if (
+        not headers
+        or headers[0] + 1 >= len(lines)
+        or not lines[headers[0] + 1].lstrip().startswith("-")
+    ):
+        raise ValueError(f"the {title!r} table has no header")
+    rows = []
+    for line in lines[headers[0] + 2 :]:
         if not line.strip():
             break
+        rows.append(line)
+    return rows
+
+
+def _clocks(lines: list[str]) -> dict[str, dict[str, float]]:
+    """The "Clock Summary" table's clocks (``parse_clock_summary``); ``ValueError`` where
+    it is cut short."""
+    clocks = {}
+    for line in _table(lines, "Clock Summary", ("Clock", "Waveform(ns)")):
         match = re.match(r"\s*(\S+)\s+\{[^}]*\}\s+(-?[\d.]+)\s+(-?[\d.]+)", line)
         if match:
             clocks[match.group(1)] = {
@@ -191,6 +207,127 @@ def parse_clock_summary(report_path):
                 "mhz": float(match.group(3)),
             }
     return clocks
+
+
+def parse_clock_summary(report_path):
+    """The clocks a Vivado timing summary report's "Clock Summary" table lists, by
+    name: each one's period (ns) and frequency (MHz), as routed. A generated clock's
+    indented name is read without its indent. None where the report has no such table,
+    or one cut short."""
+    with open(report_path) as f:
+        lines = f.read().splitlines()
+    try:
+        return _clocks(lines)
+    except ValueError:
+        return {}
+
+
+@dataclass(frozen=True)
+class Check:
+    """One timing check of a routed design (``CHECKS``: setup, hold or pulse width), as a
+    timing summary's row states it: the worst slack and the total of the negative ones
+    (ns), the endpoints that fail it and the endpoints it times. Vivado writes ``inf`` as
+    the worst slack of a check that times no endpoint, read so; it rounds each slack to
+    the picosecond, so a failing endpoint can show ``-0.000``."""
+
+    worst_ns: float
+    total_ns: float
+    failing_endpoints: int
+    endpoints: int
+
+    @property
+    def met(self) -> bool:
+        """Whether the check passes: no endpoint fails it, and its worst slack is not
+        negative (``-0.000`` is: a violation rounded to the picosecond)."""
+        return (
+            self.failing_endpoints == 0
+            and self.worst_ns >= 0
+            and math.copysign(1.0, self.worst_ns) > 0
+        )
+
+    def record(self) -> dict[str, Any]:
+        """The check as JSON."""
+        return {
+            "worst_ns": self.worst_ns,
+            "total_ns": self.total_ns,
+            "failing_endpoints": self.failing_endpoints,
+            "endpoints": self.endpoints,
+        }
+
+
+#: A timing summary row's checks, in its column order (WNS/TNS, WHS/THS, WPWS/TPWS).
+CHECKS = ("setup", "hold", "pulse_width")
+
+#: The ``check_timing`` checks whose count is internal paths a routed design leaves
+#: untimed: registers with no clock, internal endpoints unconstrained for maximum delay,
+#: and generated clocks not connected to a clock source.
+UNTIMED = ("no_clock", "unconstrained_internal_endpoints", "generated_clocks")
+
+
+def _checks(cells: list[str]) -> dict[str, Check]:
+    """A timing summary row's twelve cells as its checks; ``ValueError`` otherwise."""
+    if len(cells) != 4 * len(CHECKS):
+        raise ValueError(f"a timing row of {len(cells)} cells, not {4 * len(CHECKS)}")
+    return {
+        check: Check(
+            float(cells[4 * index]),
+            float(cells[4 * index + 1]),
+            int(cells[4 * index + 2]),
+            int(cells[4 * index + 3]),
+        )
+        for index, check in enumerate(CHECKS)
+    }
+
+
+@dataclass(frozen=True)
+class RoutedTiming:
+    """What a Vivado timing summary report (``report_timing_summary``) states of a design:
+    its state (``state``, ``Routed`` once routed); the design's checks (``design``, by
+    ``CHECKS``); each clock's period and frequency (``clocks``, as
+    ``parse_clock_summary``); each clock's own checks (``intra``, its "Intra Clock Table"
+    row, by clock); and the ``check_timing`` counts (``unchecked``, by check name:
+    ``no_clock``, ``unconstrained_internal_endpoints``, ...)."""
+
+    state: str
+    design: Mapping[str, Check]
+    clocks: Mapping[str, Mapping[str, float]]
+    intra: Mapping[str, Mapping[str, Check]]
+    unchecked: Mapping[str, int]
+
+
+def routed_timing(text: str) -> RoutedTiming:
+    """The timing summary report ``text``, read once (``RoutedTiming``). ``ValueError``,
+    naming what is missing, where the report states no design state (or a line for it
+    without one), or its design summary, clock summary, intra-clock table or
+    ``check_timing`` counts are missing or cut short. An intra-clock row of other than
+    twelve numbers is not read."""
+    lines = text.splitlines()
+    stated = next((line for line in lines if line.startswith("| Design State")), None)
+    if stated is None:
+        raise ValueError("no design state")
+    state = stated.partition(":")[2].strip()
+    if not state:
+        raise ValueError(f"its design state line states no state: {stated.strip()!r}")
+    design_rows = _table(lines, "Design Timing Summary", ("WNS(ns)", "TNS(ns)"))
+    if not design_rows:
+        raise ValueError("the 'Design Timing Summary' table has no row")
+    design = _checks(design_rows[0].split())
+    clocks = _clocks(lines)
+    intra = {}
+    for row in _table(lines, "Intra Clock Table", ("Clock", "WNS(ns)")):
+        name, *cells = row.split()
+        try:
+            intra[name] = _checks(cells)
+        except ValueError:
+            continue
+    unchecked: dict[str, int] = {}
+    for line in lines:
+        match = re.match(r"\d+\. checking (\w+) \((\d+)\)$", line.strip())
+        if match:
+            unchecked.setdefault(match.group(1), int(match.group(2)))
+    if not unchecked:
+        raise ValueError("no check_timing counts")
+    return RoutedTiming(state, design, clocks, intra, unchecked)
 
 
 #: The clock the Zynq shell's PS drives the accelerator with: Zynq UltraScale+'s
