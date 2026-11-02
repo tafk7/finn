@@ -173,10 +173,9 @@ def test_the_parent_graph_runs_its_host_nodes_around_the_core(tfc_parent: Path) 
     assert np.array_equal(outputs[output.name].reshape(-1), top.reshape(-1))
 
 
-def test_a_node_s_weights_are_written_at_its_endpoint_and_read_back() -> None:
-    """A node's run-time weights: words from its endpoint's offset in its unit, each read
-    back; more words than its endpoint holds refused."""
-    found = recorded()
+def with_weights(found: dict[str, Any]) -> dict[str, Any]:
+    """``found`` with an endpoint of run-time weights: Thresholding_0's, four words from the
+    offset 64 of its core's unit."""
     found["endpoints"].append(
         {
             "unit": "DataflowCore_0",
@@ -187,6 +186,13 @@ def test_a_node_s_weights_are_written_at_its_endpoint_and_read_back() -> None:
             "registers": {},
         }
     )
+    return found
+
+
+def test_a_node_s_weights_are_written_at_its_endpoint_and_read_back() -> None:
+    """A node's run-time weights: words from its endpoint's offset in its unit, each read
+    back; more words than its endpoint holds refused."""
+    found = with_weights(recorded())
     device = FakeDevice()
     driver = Driver(device, read(found))
     driver.write_weights("Thresholding_0", [1, 2, 3, 4])
@@ -509,7 +515,7 @@ def test_a_partial_launch_faults_the_driver_until_the_image_is_loaded_again() ->
             use()
     assert device.buffers == held
     retained = set(RETAINED) - before
-    assert sorted(RETAINED[each].address for each in retained) == sorted(held)
+    assert sorted(RETAINED[each][2].address for each in retained) == sorted(held)
     device.failing = ""
     driver.load(Path("finn-accel.bit"))
     assert not retained & set(RETAINED)
@@ -529,10 +535,121 @@ def test_a_partial_launch_faults_the_driver_until_the_image_is_loaded_again() ->
     assert not any(line.startswith("release") for line in device.calls)
 
 
+def abandoned(device: Unstartable, found: dict[str, Any]) -> None:
+    """A partial launch on ``device``, its driver left on the error and dropped."""
+    (core,) = found["cores"]
+    (given,) = core["inputs"]
+    with pytest.raises(OSError), Driver(device, read(found)) as driver:
+        driver.stage(core["name"], {given["tensor"]: np.zeros((1, 784))})
+        device.failing = "in0"
+        driver.launch(core["name"], 1)
+    device.failing = ""
+
+
+def test_loading_a_device_s_image_releases_what_its_dropped_drivers_retained() -> None:
+    """A driver dropped after a partial launch leaves its buffers retained; a new driver of
+    the same device loading the image again releases them, each once, whatever the
+    drivers dropped before; another device's stay retained, and so do those of a driver
+    still alive."""
+    found = recorded()
+    before = set(RETAINED)
+    other = Unstartable(answers=device_for(found).answers)
+    abandoned(other, found)
+    device = Unstartable(answers=other.answers)
+    alive = Driver(device, read(found))
+    (core,) = found["cores"]
+    (given,) = core["inputs"]
+    alive.stage(core["name"], {given["tensor"]: np.zeros((1, 784))})
+    device.failing = "in0"
+    with pytest.raises(OSError):
+        alive.launch(core["name"], 1)
+    device.failing = ""
+    kept = set(RETAINED) - before
+    for _ in range(3):
+        abandoned(device, found)
+        gc.collect()
+        assert len(set(RETAINED) - before - kept) == 2
+        released = len(device.calls)
+        Driver(device, read(found)).load(Path("finn-accel.bit"))
+        assert sorted(line.split()[1] for line in device.calls[released:] if "release" in line) == [
+            "in0",
+            "out0",
+        ]
+        assert set(RETAINED) - before == kept
+    assert len(kept) == 4
+    assert not any(line.startswith("release") for line in other.calls)
+    alive.load(Path("finn-accel.bit"))
+    assert len(set(RETAINED) - before) == 2
+
+
+def test_a_mover_failing_to_start_faults_the_driver_though_none_started_before() -> None:
+    """The first mover failing to start may have started: the driver is faulted as after a
+    partial launch, its buffer retained, until the image is loaded again."""
+    found = recorded()
+    (core,) = found["cores"]
+    (given,) = core["inputs"]
+    inputs = {given["tensor"]: np.zeros((1, 784))}
+    device = Unstartable(answers=device_for(found).answers)
+    driver = Driver(device, read(found))
+    driver.stage(core["name"], inputs)
+    before = set(RETAINED)
+    device.failing = "out0"
+    with pytest.raises(OSError, match="out0: its register did not write"):
+        driver.launch(core["name"], 1)
+    with pytest.raises(
+        Refused,
+        match=r"^driver-faulted: DataflowCore_0: a launch of DataflowCore_0: out0 failed to "
+        r"start: a started mover",
+    ):
+        driver.run_core(core["name"], inputs)
+    assert [RETAINED[each][2].address for each in set(RETAINED) - before] == [BASE + STEP]
+    device.failing = ""
+    driver.load(Path("finn-accel.bit"))
+    assert set(RETAINED) == before
+    driver.run_core(core["name"], inputs)
+
+
+def test_weights_are_written_between_launches_on_a_driver_in_use(tmp_path: Path) -> None:
+    """Run-time weights are refused while a launch has not completed, on a faulted driver
+    and on a closed one, before any register is written."""
+    found = with_weights(recorded())
+    (tmp_path / "Thresholding_0.dat").write_text("1")
+    (core,) = found["cores"]
+    (given,) = core["inputs"]
+    inputs = {given["tensor"]: np.zeros((1, 784))}
+    stalling = Stalling(answers=device_for(found).answers)
+    stalling.failures = 1
+    armed = Driver(stalling, read(found))
+    with pytest.raises(OSError):
+        armed.run_core(core["name"], inputs)
+    device = Unstartable(answers=stalling.answers)
+    faulted = Driver(device, read(found))
+    faulted.stage(core["name"], inputs)
+    device.failing = "in0"
+    with pytest.raises(OSError):
+        faulted.launch(core["name"], 1)
+    closed = Driver(FakeDevice(), read(found))
+    closed.close()
+    for driver, code in (
+        (armed, "mover-armed"),
+        (faulted, "driver-faulted"),
+        (closed, "driver-closed"),
+    ):
+        written = len(driver.device.calls)  # type: ignore[attr-defined]
+        with pytest.raises(Refused, match=f"^{code}: Thresholding_0: "):
+            driver.write_weights("Thresholding_0", [1])
+        with pytest.raises(Refused, match=f"^{code}: "):
+            driver.write_weight_files(tmp_path)
+        assert driver.device.calls[written:] == []  # type: ignore[attr-defined]
+    stalling.registers.clear()
+    armed.settle(core["name"])
+    armed.write_weights("Thresholding_0", [1])
+
+
 def test_a_core_is_staged_whole_or_not_at_all(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Restaging a core that its packing refuses touches none of its buffers, and one whose
-    sync fails stops there: either leaves the core unstaged, a launch and a collection
-    refused, until it is staged again."""
+    """Restaging a core that its packing refuses, or its inputs' shape or presence, touches
+    none of its buffers, and one whose sync fails stops there: each leaves the core
+    unstaged, a launch and a collection refused, until it is staged again."""
     found = recorded()
     (core,) = found["cores"]
     (given,) = core["inputs"]
@@ -549,6 +666,18 @@ def test_a_core_is_staged_whole_or_not_at_all(monkeypatch: pytest.MonkeyPatch) -
     with pytest.raises(Refused, match=unstaged):
         driver.collect(core["name"], 1)
     driver.stage(core["name"], {given["tensor"]: np.ones((1, 784))})
+    # An input of another shape, or none: refused before any buffer, the core unstaged.
+    for refusal, given_inputs in (
+        ("input-shape", {given["tensor"]: np.ones((1, 783))}),
+        ("input-absent", {}),
+    ):
+        made = len(device.calls)
+        with pytest.raises(Refused, match=f"^{refusal}: "):
+            driver.stage(core["name"], given_inputs)
+        assert device.calls[made:] == []
+        with pytest.raises(Refused, match=unstaged):
+            driver.launch(core["name"], 1)
+        driver.stage(core["name"], {given["tensor"]: np.ones((1, 784))})
 
     def unsynced(buffer: Buffer, to_device: bool) -> None:
         raise OSError("the buffer did not sync")

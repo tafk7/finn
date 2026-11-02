@@ -18,24 +18,27 @@ is given; ``run_graph`` runs the parent graph, its host nodes by ONNX execution 
 qonnx, imported only there) and each ``DataflowCore`` node through ``run_core``, its inputs
 and outputs the core's edge ports in port order.
 
-A core is staged whole or not at all: staging marks it unstaged first, packs every input
-before any buffer is written, and marks it staged with its frames once every input is
-synced and every output allocated; a launch or a collection of a core not staged at those
-frames is refused (``core-unstaged``), so no launch moves one call's inputs beside
-another's.
+A core is staged whole or not at all: staging marks it unstaged first, whatever it then
+refuses (a frame, an input's presence, shape or values), packs every input before any
+buffer is written, and marks it staged with its frames once every input is synced and every
+output allocated; a launch or a collection of a core not staged at those frames is refused
+(``core-unstaged``), so no launch moves one call's inputs beside another's. A stage the
+driver's state refuses (closed, faulted, a launch not completed) changes nothing.
 
 A mover's buffer is the hardware's from the moment the mover is started until its core's
 launch completes, every output mover done (by then each input mover has moved its whole
-buffer: the core has consumed it). While it is, the buffer is held in ``RETAINED`` too, so
-dropping the driver frees none under a mover. A launch that did not complete:
+buffer: the core has consumed it). While it is, the buffer is held in ``RETAINED`` too, with
+its device and its driver, so dropping the driver frees none under a mover; loading the
+image again on that device (``load``, by any driver of it) releases those of drivers since
+dropped. A launch that did not complete:
 
 - a status read failed, every mover started: its movers stay armed, their buffers neither
   written, released nor read again, and the core is refused (``mover-armed``) until
   ``settle`` finds each of them idle;
-- a mover failed to start after another started (a partial launch): a started output
-  mover may wait for ever, so the driver refuses every further use (``driver-faulted``),
-  ``settle`` and ``close`` included, until the image is loaded again (``load``), which
-  resets every mover.
+- a mover failed to start (a partial launch: its start may have reached the hardware, and
+  others may have started): a started output mover may wait for ever, so the driver
+  refuses every further use (``driver-faulted``), ``settle``, ``close`` and run-time
+  weights included, until the image is loaded again (``load``), which resets every mover.
 
 ``close`` releases every buffer the driver holds, each armed mover found idle first; one
 that is not is refused (``mover-busy``) and every buffer kept, never freed under the
@@ -44,12 +47,14 @@ hardware. A driver is a context manager that closes on its exit; a closed one is
 
 A node's run-time weights (``write_weights``) are 32-bit words written from its endpoint's
 offset, each read back where asked; more words than the endpoint holds are refused
-(``weights-outside``). A directory of them holds a ``<node>.dat`` a node, its words in
-hexadecimal (``write_weight_files``).
+(``weights-outside``), and so are weights on a closed or faulted driver, or while a launch
+has not completed (``mover-armed``): they change between launches. A directory of them
+holds a ``<node>.dat`` a node, its words in hexadecimal (``write_weight_files``).
 """
 
 from __future__ import annotations
 
+import weakref
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from math import prod
@@ -64,10 +69,11 @@ from .errors import Refused
 from .movers import PROTOCOLS
 from .packing import Element, beat_bytes, pack, unpack
 
-RETAINED: dict[int, Buffer] = {}
-"""Every buffer an armed mover holds, by its identity, across every driver of the process:
-held here until its launch completes, it is found idle, or the image is loaded again, so
-none is freed under the hardware when its driver is dropped."""
+RETAINED: dict[int, tuple[Device, weakref.ref[Driver], Buffer]] = {}
+"""Every buffer an armed mover holds, by its identity, across every driver of the process,
+with its device and the driver that armed it: held here until its launch completes, it is
+found idle, or the image is loaded again on its device, so none is freed under the hardware
+when its driver is dropped."""
 
 
 class Driver:
@@ -108,11 +114,17 @@ class Driver:
 
     def load(self, image: Path) -> None:
         """Load the device image ``image``, which resets every mover: none is armed, the
-        driver is no longer faulted, and no core is staged."""
+        driver is no longer faulted, and no core is staged. The buffers armed movers of this
+        device held for drivers since dropped are released (``RETAINED``); another
+        driver's stay its own."""
         self.device.load(image)
         self._disarm(set(self._armed))
         self._faulted = None
         self._staged.clear()
+        for key, (device, driver, buffer) in list(RETAINED.items()):
+            if device is self.device and driver() is None:
+                del RETAINED[key]
+                self.device.release(buffer)
 
     # -- a core ---------------------------------------------------------------------------
 
@@ -204,6 +216,7 @@ class Driver:
         they hold."""
         core = self.description.core(name)
         self._quiet(core)
+        self._staged.pop(name, None)
         for edge in (*core.inputs, *core.outputs):
             if prod(edge.shape) != edge.beats * edge.lanes:
                 raise Refused(
@@ -212,7 +225,6 @@ class Driver:
                     f"{edge.lanes} lanes",
                 )
         frames = self._frames(core, inputs)
-        self._staged.pop(name, None)
         packed = {
             edge.unit: pack(
                 np.asarray(inputs[edge.tensor]).reshape(frames, edge.beats, edge.lanes),
@@ -243,7 +255,7 @@ class Driver:
         each output mover, idle, started, then each input mover; each output mover waited
         on. Each mover is armed as it is started, its buffer retained, and the core's
         movers are disarmed once every output mover is done; a mover that fails to start
-        after another started faults the driver (the module docstring)."""
+        faults the driver (the module docstring)."""
         core = self.description.core(name)
         self._quiet(core)
         edges = (*core.outputs, *core.inputs)
@@ -255,15 +267,13 @@ class Driver:
         started: list[str] = []
         for edge in edges:
             self._armed.add(edge.unit)
-            RETAINED[id(buffers[edge.unit])] = buffers[edge.unit]
+            buffer = buffers[edge.unit]
+            RETAINED[id(buffer)] = (self.device, weakref.ref(self), buffer)
             try:
-                movers[edge.unit].start(buffers[edge.unit], frames)
+                movers[edge.unit].start(buffer, frames)
             except BaseException:
-                if started:
-                    self._faulted = (
-                        f"a launch of {core.name}: {edge.unit} failed to start after "
-                        f"{started} started"
-                    )
+                after = f" after {started} started" if started else ""
+                self._faulted = f"a launch of {core.name}: {edge.unit} failed to start{after}"
                 raise
             started.append(edge.unit)
         for edge in core.outputs:
@@ -346,7 +356,15 @@ class Driver:
 
     def write_weights(self, node: str, words: Sequence[int], verify: bool = True) -> None:
         """Write ``words``, 32 bits each, from the offset of the endpoint configuring graph
-        node ``node``; each read back and compared where ``verify``."""
+        node ``node``; each read back and compared where ``verify``. Refused on a closed or
+        faulted driver, and while a launch has not completed (the module docstring)."""
+        self._usable(node)
+        if self._armed:
+            raise Refused(
+                "mover-armed",
+                f"{node}: a launch on {sorted(self._armed)} did not complete: weights are "
+                "written between launches (settle)",
+            )
         endpoint = self.description.node(node)
         if len(words) * 4 > endpoint.range:
             raise Refused(
@@ -372,7 +390,8 @@ class Driver:
         """Write the run-time weights in ``directory``: each ``<node>.dat``, its words in
         hexadecimal, whitespace between them, written to the node ``<node>``
         (``write_weights``), the files in name order. The nodes written; none where the
-        directory is absent."""
+        directory is absent. Refused as ``write_weights`` is, before any is written."""
+        self._usable("write_weight_files")
         written = []
         for path in sorted(Path(directory).glob("*.dat")):
             self.write_weights(path.stem, [int(word, 16) for word in path.read_text().split()])
