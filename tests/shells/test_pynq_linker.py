@@ -8,6 +8,7 @@ No Vivado runs: the runner's tests link through a fake (``test_pynq_runner``).""
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from dataclasses import replace
 from pathlib import Path
@@ -39,6 +40,7 @@ from finn.shells.pynq.linker import (
     BlockDesignLinker,
     LinkerRefused,
     Wire,
+    admitted,
     block_design,
     linked_row,
     placement,
@@ -49,7 +51,7 @@ from finn.shells.pynq.linker import (
     wiring,
 )
 from finn.toolchain.launcher import Toolchain
-from finn.toolchain.vivado import delivered_clock, design_timing
+from finn.toolchain.vivado import Check, routed_timing
 
 #: The facts the ``pynq`` shell declares of Ultra96 for its linker.
 BOARD = {"board_part": "avnet.com:ultra96v1:part0:1.2"}
@@ -419,40 +421,68 @@ def test_the_link_is_made_under_the_directory_it_is_given(
     assert linked.timing == Timing(5.333, 1.667, TIMING)
 
 
-def test_the_routed_timing_is_read_from_each_linker_s_real_report(tmp_path: Path) -> None:
-    """The design's worst setup slack, its total over the failing endpoints and the worst
-    hold slack, and the PL clock as routed, from real routed reports: TFC's on Ultra96,
-    which meets its 5.333 ns; a design routed at 1 ns that misses it, reported as the
-    ``pynq`` template and as ``slashkit`` report a routed design, read alike. A report with
-    no summary states none."""
-    read = {}
-    for name, text in (
-        ("tfc", TIMING_REPORT),
-        ("unmet", UNMET_REPORT),
-        ("slashkit", UNMET_SLASHKIT_REPORT),
-        ("none", "no summary"),
-    ):
-        (tmp_path / name).write_text(text)
-        read[name] = (
-            design_timing(str(tmp_path / name)),
-            delivered_clock(str(tmp_path / name), 5.0),
-        )
-    assert read["tfc"][0] == {
-        "wns_ns": 1.667,
-        "tns_ns": 0.0,
-        "failing_endpoints": 0,
-        "whs_ns": 0.014,
+def test_the_routed_timing_is_read_from_each_linker_s_real_report() -> None:
+    """Each timing check of the design (setup, hold, pulse width: worst and total slack,
+    failing and timed endpoints), each clock as routed, each clock's own checks and the
+    ``check_timing`` counts, from real routed reports read once: TFC's on Ultra96, which
+    meets its 5.333 ns; a design routed at 1 ns that misses it, reported as the ``pynq``
+    template and as ``slashkit`` report a routed design, read alike. A report with no
+    summary, or one cut short, is not read."""
+    tfc = routed_timing(TIMING_REPORT)
+    assert tfc.state == "Routed"
+    assert tfc.design == {
+        "setup": Check(1.667, 0.0, 0, 63298),
+        "hold": Check(0.014, 0.0, 0, 63298),
+        "pulse_width": Check(1.166, 0.0, 0, 19432),
     }
-    assert read["tfc"][1]["delivered_period_ns"] == 5.333
-    assert read["unmet"][0] == {
-        "wns_ns": -0.906,
-        "tns_ns": -43.505,
-        "failing_endpoints": 48,
-        "whs_ns": 0.125,
+    assert tfc.clocks == {"clk_pl_0": {"period_ns": 5.333, "mhz": 187.512}}
+    assert tfc.intra == {"clk_pl_0": tfc.design}
+    assert (tfc.unchecked["no_clock"], tfc.unchecked["unconstrained_internal_endpoints"]) == (0, 0)
+    unmet = routed_timing(UNMET_REPORT)
+    assert unmet.design == {
+        "setup": Check(-0.906, -43.505, 48, 56),
+        "hold": Check(0.125, 0.0, 0, 56),
+        "pulse_width": Check(-0.499, -0.499, 1, 10),
     }
-    assert read["unmet"][1]["delivered_period_ns"] == 1.0
-    assert read["slashkit"] == read["unmet"]
-    assert read["none"] == (None, {"target_period_ns": 5.0, "clocks": []})
+    assert unmet.clocks == {"clk_pl_0": {"period_ns": 1.0, "mhz": 1000.0}}
+    assert routed_timing(UNMET_SLASHKIT_REPORT) == unmet
+    with pytest.raises(ValueError, match="no design state"):
+        routed_timing("no summary")
+    with pytest.raises(ValueError, match="'Clock Summary' table has no header"):
+        routed_timing(_cut_after("| Clock Summary"))
+
+
+def _cut_after(line: str) -> str:
+    """TFC's real report (``TIMING_REPORT``) cut after its first line ``line``."""
+    lines = TIMING_REPORT.splitlines(keepends=True)
+    return "".join(lines[: [each.strip() for each in lines].index(line) + 1])
+
+
+@pytest.mark.parametrize(
+    "case, cause",
+    [
+        ("cut", r"not a whole timing summary \(the 'Clock Summary' table has no header\)"),
+        ("encoding", r"not read \(UnicodeDecodeError: 'utf-8' codec can't decode"),
+        ("unreadable", r"not read \(PermissionError: \[Errno 13\]"),
+    ],
+)
+def test_a_report_cut_short_or_unreadable_is_refused_naming_its_cause(
+    tmp_path: Path, case: str, cause: str
+) -> None:
+    """A routed timing report cut short in its clock summary, one not UTF-8 and one that
+    cannot be opened are each refused as unread (``timing-unread``), naming the report and
+    the cause, not escaping as the reader's error."""
+    report = tmp_path / "post_route_timing.rpt"
+    if case == "cut":
+        report.write_text(_cut_after("| Clock Summary"))
+    elif case == "encoding":
+        report.write_bytes(b"\xff" + TIMING_REPORT.encode())
+    else:
+        report.write_text(TIMING_REPORT)
+        report.chmod(0)
+    message = re.escape(str(report)) + ": " + cause
+    with refused("timing-unread", error=LinkerRefused, message=message):
+        admitted(report, 5.0)
 
 
 #: TFC's real Ultra96 report (``TIMING_REPORT``) with its design's worst hold slack
@@ -474,7 +504,11 @@ HOLD_UNMET_REPORT = TIMING_REPORT.replace(
             r"-0\.906 ns at its clk_pl_0 clock's 1\.0 ns \(1000\.0 MHz; 5\.0 ns asked\)",
         ),
         (None, "timing-unreported", r"no routed timing report \(.*routed\.rpt\)"),
-        ("no summary", "timing-unread", r"routed\.rpt: names no PL clock"),
+        (
+            "no summary",
+            "timing-unread",
+            r"routed\.rpt: not a whole timing summary \(no design state\)",
+        ),
         (
             HOLD_UNMET_REPORT,
             "timing-hold-unmet",

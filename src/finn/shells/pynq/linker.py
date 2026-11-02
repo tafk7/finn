@@ -78,13 +78,7 @@ from finn.platform.shells import VIVADO_BLOCK_DESIGN, ShellRow, shell_row
 from finn.shells.integration import MAIN, Integration, IntegrationError, Linked, Timing, Unit
 from finn.shells.pynq import templates
 from finn.toolchain.launcher import StrPath, Toolchain, ToolFailed
-from finn.toolchain.vivado import (
-    PL_CLOCKS,
-    delivered_clock,
-    design_timing,
-    tcl_quote,
-    vivado_jobs,
-)
+from finn.toolchain.vivado import PL_CLOCKS, routed_timing, tcl_quote, vivado_jobs
 
 _LOG = logging.getLogger(__name__)
 
@@ -549,41 +543,55 @@ def collect(
 
 def admitted(report: Path, period_ns: float) -> tuple[float, Timing]:
     """The main clock the routed design delivers, in MHz, and its timing (``Timing``),
-    read from its routed timing report ``report`` (``TIMING``): the PL clock's period in the
-    report's clock summary, which Vivado gives as near the ``period_ns`` asked as the
-    processor's clocks reach (``delivered_clock``), and the design's worst setup slack at
-    it (``design_timing``). Vivado writes the bitfile of a design that misses timing: a
-    negative worst setup slack is refused (``timing-unmet``), as is a negative worst hold
-    slack (``timing-hold-unmet``: a hold time missed at any period), no report
-    (``timing-unreported``) and one that names no PL clock or no worst setup slack
-    (``timing-unread``), each naming the report."""
-    if not report.is_file():
+    read once from its routed timing report ``report`` (``TIMING``,
+    ``finn.toolchain.vivado.routed_timing``): the PL clock's period in the report's clock
+    summary, which Vivado gives as near the ``period_ns`` asked as the processor's clocks
+    reach, and the design's worst setup slack at it. Vivado writes the bitfile of a
+    design that misses timing: a negative worst setup slack is refused (``timing-unmet``),
+    as is a negative worst hold slack (``timing-hold-unmet``: a hold time missed at any
+    period), no report (``timing-unreported``), and one that cannot be read, is cut short,
+    or names no PL clock (``timing-unread``), each naming the report and the cause."""
+
+    def unread(cause: str) -> LinkerRefused:
+        return LinkerRefused(
+            "timing-unread",
+            f"{report}: {cause}: whether the image meets its clock is unknown",
+        )
+
+    try:
+        text = report.read_text(encoding="utf-8")
+    except FileNotFoundError:
         raise LinkerRefused(
             "timing-unreported",
             f"no routed timing report ({report}): whether the image meets its clock is unknown",
+        ) from None
+    except (OSError, UnicodeDecodeError) as error:
+        raise unread(f"not read ({type(error).__name__}: {error})") from error
+    try:
+        routed = routed_timing(text)
+    except ValueError as error:
+        raise unread(f"not a whole timing summary ({error})") from error
+    name = next((clock for clock in PL_CLOCKS if clock in routed.clocks), None)
+    if name is None:
+        raise unread(
+            f"names no PL clock ({', '.join(PL_CLOCKS)}; it lists "
+            f"{', '.join(sorted(routed.clocks)) or 'none'})"
         )
-    clock = delivered_clock(str(report), period_ns)
-    design = design_timing(str(report))
-    wns = None if design is None else design["wns_ns"]
-    if "delivered_period_ns" not in clock or wns is None or not math.isfinite(wns):
-        raise LinkerRefused(
-            "timing-unread",
-            f"{report}: names no PL clock ({', '.join(PL_CLOCKS)}; it lists "
-            f"{', '.join(clock.get('clocks', [])) or 'none'}) or no worst setup slack",
-        )
-    period, mhz = clock["delivered_period_ns"], clock["delivered_mhz"]
+    period, mhz = routed.clocks[name]["period_ns"], routed.clocks[name]["mhz"]
+    wns, whs = routed.design["setup"].worst_ns, routed.design["hold"].worst_ns
+    if not math.isfinite(wns):
+        raise unread(f"its worst setup slack is {wns}")
     if wns < 0:
         raise LinkerRefused(
             "timing-unmet",
             f"{report}: the routed design's worst setup slack is {wns} ns at its "
-            f"{clock['clock']} clock's {period} ns ({mhz} MHz; {period_ns} ns asked): it "
+            f"{name} clock's {period} ns ({mhz} MHz; {period_ns} ns asked): it "
             "misses timing; ask a longer period (the target's period_ns)",
         )
-    assert design is not None  # its worst setup slack was read
-    if design["whs_ns"] < 0:
+    if whs < 0:
         raise LinkerRefused(
             "timing-hold-unmet",
-            f"{report}: the routed design's worst hold slack is {design['whs_ns']} ns: it "
+            f"{report}: the routed design's worst hold slack is {whs} ns: it "
             "misses timing at any period; the routed design's timing report names its "
             "failing paths",
         )
