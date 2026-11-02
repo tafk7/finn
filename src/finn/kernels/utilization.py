@@ -45,6 +45,7 @@ from finn.core.space import (
     reject,
 )
 from finn.core.space.declarations import Constraint
+from finn.kernels.values.semantics import count
 from finn.platform.capabilities import Fabric, Platform, Resources
 
 CHARACTERISED = "xczu3eg-sbva484-1-i, Vivado 2025.2, out of context at 5 ns"
@@ -173,10 +174,16 @@ PRIMITIVES: dict[Fabric, Primitives] = {
 UltraScale+ are one fabric."""
 
 
-@lru_cache(maxsize=None)
 def bram18(words: int, bits: int, *, fabric: Fabric) -> int:
     """RAMB18s for ``words x bits`` on ``fabric``: the least over splitting the word
-    across its aspects (a partition of ``bits``), each part ``ceil(words / rows)`` deep."""
+    across its aspects (a partition of ``bits``), each part ``ceil(words / rows)`` deep.
+    ``words`` and ``bits`` are counts, cached as the ``int``s they are (``count``: a numpy
+    integer is its ``int``; a float or a bool is refused, ``TypeError``)."""
+    return _bram18(count(words), count(bits), fabric)
+
+
+@lru_cache(maxsize=None)
+def _bram18(words: int, bits: int, fabric: Fabric) -> int:
     aspects = PRIMITIVES[fabric].bram18_sdp
     best = [0] * (bits + 1)
     for width in range(1, bits + 1):

@@ -17,8 +17,11 @@ from __future__ import annotations
 import threading
 from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
+from types import MappingProxyType
+from typing import Any, cast
 
+import numpy as np
 import pytest
 from core.space._line_reads import line_scopes
 from support import chain
@@ -292,6 +295,82 @@ def test_the_same_structure_is_one_class_and_new_facts_a_new_design_space(cache:
     renamed = compose(declared({"MatMul_0": "first_"}))
     assert type(renamed) is not type(composed)
     assert cached_classes() == 3
+
+
+def _renamed(kind: type[str]) -> DataflowCoreDeclaration:
+    """The test core with each member's name as a ``kind``."""
+    original = declared()
+    return DataflowCoreDeclaration(
+        {kind(name): facts for name, facts in original.kernels.items()},
+        {kind(name): sides for name, sides in original.channels.items()},
+        name=kind(original.name),
+        order=tuple(kind(name) for name in original.order),
+    )
+
+
+def test_names_are_kept_as_builtin_strings_whichever_caller_composes_first(
+    cache: None,
+) -> None:
+    """A declaration keeps its names as builtin ``str`` (a ``numpy.str_`` is its text), so
+    the class made of a structure holds no caller's name type: composed after numpy names,
+    the plain declaration's class answers in builtin strings, as when composed alone."""
+    numpy, plain = _renamed(np.str_), _renamed(str)
+    assert all(type(name) is str for name in (*numpy.kernels, *numpy.channels, *numpy.order))
+    assert type(numpy.name) is str
+    first = compose(numpy)
+    second = compose(plain)
+    assert type(second) is type(first) and cached_classes() == 1
+    names = type(second).names
+    assert all(type(name) is str for name in names.members)
+    assert all(type(owner) is str for owner, _ in names.roots.values())
+    port, stated = Port(np.str_("mm0"), np.str_("y")), Stated(np.str_("mm0"), np.str_("w"))
+    assert {type(each) for each in (port.member, port.port, stated.member, stated.name)} == {str}
+    with pytest.raises(TypeError, match="a name is a string"):
+        Port(cast(str, 3), "y")
+
+
+@dataclass(frozen=True)
+class _Owner:
+    """A policy owner of the ``Owner`` protocol, a value class holding a value."""
+
+    count: object
+
+    @property
+    def policies(self) -> Mapping[object, object]:
+        return MappingProxyType({})
+
+
+def test_an_owner_equal_to_another_of_other_types_is_another_class(cache: None) -> None:
+    """The class cache is kept by its key's identity: an owner equal to an earlier one but
+    holding a value of another type is another structure, and its class holds its own
+    owner; an owner the same as an earlier one is the earlier class."""
+
+    def owned(count: object) -> DataflowCoreDeclaration:
+        original = declared()
+        return DataflowCoreDeclaration(
+            original.kernels,
+            original.channels,
+            name=TEST_CORE,
+            owners={"MatMul_0": cast(Any, _Owner(count))},
+        )
+
+    first = compose(owned(np.int64(3)))
+    second = compose(owned(3))
+    assert type(second) is not type(first) and cached_classes() == 2
+    assert type(cast(_Owner, type(second).policy_owners["MatMul_0"]).count) is int
+    assert type(compose(owned(3))) is type(second) and cached_classes() == 2
+    # An owner whose identity does not hash (a field its hash leaves out, a list): its
+    # class is made each time and not kept.
+    unkeyed = owned(_Unkeyed(3, [3]))
+    assert type(compose(unkeyed)) is not type(compose(unkeyed)) and cached_classes() == 2
+
+
+@dataclass(frozen=True)
+class _Unkeyed:
+    """A value class whose hash leaves out a field holding an unhashable value."""
+
+    count: int
+    held: list[int] = field(hash=False)
 
 
 def test_a_boundary_stated_or_not_is_one_class_its_side_a_root_fact(cache: None) -> None:

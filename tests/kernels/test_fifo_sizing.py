@@ -17,6 +17,7 @@ from math import prod
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 from support import chain
 from support.helpers import FULL_DSP48E2, beside, by_hand, choose, keyed, with_defaults
@@ -99,6 +100,58 @@ def test_input_gen_s_constants_are_evaluated_once_per_nest(
     assert len(calls) == 1
     nest_geometry(7, (2, 7), (0, 1))
     assert len(calls) == 2
+
+
+def test_a_nest_is_its_integers_whatever_their_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[object] = []
+
+    def counted(*args: Any) -> Any:
+        calls.append(args)
+        return evaluate(*args)
+
+    monkeypatch.setattr(input_generator, "evaluate", counted)
+    input_generator._evaluated.cache_clear()
+    input_generator._stepped.cache_clear()
+    # As any caller may: numbers of every type.
+    geometry_of: Any = nest_geometry
+    buffer_of: Any = nest_buffer
+    nest = (8, (4, 1, 2), (2, 0, 1))
+    geometry, buffer = nest_geometry(*nest), nest_buffer(*nest)
+    # numpy integers state the same nest: its answers, elaborated once.
+    numpy_nest = (np.int64(8), np.array([4, 1, 2]), np.array([2, 0, 1]))
+    assert geometry_of(*numpy_nest) == geometry and buffer_of(*numpy_nest) == buffer
+    assert len(calls) == 1
+    # A float or a bool (Python's or numpy's) in any position, equal to the nest's integer
+    # there where it can be, is no count: refused before FinnLib is looked up, with the
+    # caches warm (the nest's) or cold, never answered as the nest.
+    flat = (nest[0], *nest[1], *nest[2])
+    others = [
+        (*flat[:at], other(flat[at]), *flat[at + 1 :])
+        for at in range(len(flat))
+        for other in (float, bool, np.bool_)
+    ]
+
+    def looked_up(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("FinnLib looked up for a nest that is no count")
+
+    for cold in (False, True):
+        if cold:
+            input_generator._evaluated.cache_clear()
+            input_generator._stepped.cache_clear()
+        with monkeypatch.context() as patched:
+            patched.setattr(resources, "path", looked_up)
+            for frame, *rest in others:
+                other = (frame, tuple(rest[:3]), tuple(rest[3:]))
+                with pytest.raises(TypeError, match="a count is an integer"):
+                    geometry_of(*other)
+                with pytest.raises(TypeError, match="a count is an integer"):
+                    buffer_of(*other)
+    assert len(calls) == 1
+    # Cold, a numpy nest is elaborated as its ints, of any integer width.
+    for kind in (np.uint64, np.int8):
+        input_generator._evaluated.cache_clear()
+        input_generator._stepped.cache_clear()
+        assert buffer_of(kind(8), tuple(map(kind, nest[1])), tuple(map(kind, nest[2]))) == buffer
 
 
 def test_a_cost_query_never_fetches_finnlib(

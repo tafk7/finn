@@ -34,9 +34,15 @@ from finn.dataflow.datatypes import (
 )
 
 
-@cache
 def full(dtype: QONNXDataType) -> TensorRange:
-    """``dtype``'s full range (``qonnx.core.ranges.full``), read once per datatype."""
+    """``dtype``'s full range (``qonnx.core.ranges.full``), read once per datatype; a value
+    that is no datatype is refused before the cache (``canonical_qonnx_datatype``: a
+    datatype's name, equal to it, is no datatype)."""
+    return _full(canonical_qonnx_datatype(dtype))
+
+
+@cache
+def _full(dtype: QONNXDataType) -> TensorRange:
     return ranges.full(dtype)
 
 

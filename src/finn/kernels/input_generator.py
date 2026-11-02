@@ -41,7 +41,9 @@ word while fewer than ``BUF_SIZE - 1`` accepted words are unfreed. FinnLib is th
 emitted module takes this source from. A cost query reads it and never fetches it:
 where no local copy is (an override, a path, a cache), ``nest_geometry`` refuses
 with the resource's error, which names it, rather than doing network I/O. The
-constants are evaluated once per nest and source.
+constants are evaluated once per nest and source, a nest by its integers whatever their
+type states them (``finn.kernels.values.semantics.count``: a numpy integer is its ``int``;
+a float or a ``bool``, Python's or numpy's, is no count and is refused).
 """
 
 from __future__ import annotations
@@ -78,7 +80,7 @@ from finn.kernels.utilization import (
     auto_unstated,
     memory,
 )
-from finn.kernels.values.semantics import IntegerVector
+from finn.kernels.values.semantics import IntegerVector, count
 from finn.platform.capabilities import Fabric, Platform, Resources
 
 SOURCE = CopiedSource("finnlib", "rtl/shape/input_gen.sv", provides=("module:input_gen",))
@@ -399,13 +401,24 @@ def _evaluated(
     )
 
 
+def _nest(
+    frame_words: int, dims: Sequence[int], strides: Sequence[int]
+) -> tuple[int, tuple[int, ...], tuple[int, ...]]:
+    """The nest as the ``int``s its elaboration binds (``count``), the key of its caches:
+    equal integers of another type (``numpy.int64``) are the same nest; ``TypeError`` for a
+    value that is no integer, a ``bool`` among them, Python's or numpy's (``True`` is not the
+    count 1)."""
+    return count(frame_words), tuple(map(count, dims)), tuple(map(count, strides))
+
+
 def nest_geometry(frame_words: int, dims: Sequence[int], strides: Sequence[int]) -> NestGeometry:
     """The constants FinnLib's ``input_gen`` derives for ``FM_SIZE``, ``DIMS`` and
-    ``COEFS``, elaborated with slang (once per nest and source); ``GeometryError`` when
-    slang declines. FinnLib is read where it is, never fetched: without a local copy,
-    ``finn.resources.ResourceError`` names it."""
+    ``COEFS``, elaborated with slang (once per nest and source, ``_nest``);
+    ``GeometryError`` when slang declines. FinnLib is read where it is, never fetched:
+    without a local copy, ``finn.resources.ResourceError`` names it."""
+    nest = _nest(frame_words, dims, strides)
     source = Path(resources.path(SOURCE.root, fetch=False)) / SOURCE.path
-    return _evaluated(source, frame_words, tuple(dims), tuple(strides))
+    return _evaluated(source, *nest)
 
 
 @dataclass(frozen=True)
@@ -452,15 +465,17 @@ def _stepped(
 
 def nest_buffer(frame_words: int, dims: Sequence[int], strides: Sequence[int]) -> NestBuffer:
     """``input_gen``'s buffer over one frame: its pointers stepped as its nest counters
-    select the increments ``nest_geometry`` read from the RTL (once per nest and source).
+    select the increments ``nest_geometry`` read from the RTL (once per nest and source,
+    ``_nest``).
 
     At each output beat, the outermost level the beat completes (with every level
     inside it) selects the read pointer's increment and, where that level frees
     (``R_FLAG``), the free pointer's; a beat completing no loop advances by the
     innermost default (level ``D``).
     """
+    nest = _nest(frame_words, dims, strides)
     source = Path(resources.path(SOURCE.root, fetch=False)) / SOURCE.path
-    return _stepped(source, frame_words, tuple(dims), tuple(strides))
+    return _stepped(source, *nest)
 
 
 __all__ = [
