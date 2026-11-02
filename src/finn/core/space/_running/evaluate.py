@@ -1339,7 +1339,7 @@ def _callback(ev: Evaluation, node: Address, trace: _Tr, reader: Address) -> Ans
     blocked = _blocked([answer for answer in answers if not isinstance(answer, Available)])
     if blocked is not None:
         absent = [
-            argument.node
+            ev.source(argument.node, reader)
             for argument, answer in zip(node.arguments, answers)
             if isinstance(answer, Inapplicable)
         ]

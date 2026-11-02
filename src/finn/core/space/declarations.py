@@ -953,7 +953,8 @@ def constraint(
     ``Inapplicable`` (it read a value that does not apply, or returned one its annotation
     admits) it is refused, by a finding of code ``CODE`` naming what it read, where any
     other constraint would count as true. Its own absence (its Space absent) is
-    unchanged."""
+    unchanged. An override of it restates it: one dropping it or naming another code is
+    refused when its class is made (``override-applies``)."""
     _refuse_computation_when("constraint", aliases)
     if applies is not None and (not isinstance(applies, str) or not applies):
         raise DefinitionError.broken(

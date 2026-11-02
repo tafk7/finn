@@ -255,6 +255,8 @@ def _collect_semantics(
                     f"{owner}: override changes declaration kind",
                     declaration=owner,
                 )
+            if isinstance(prior, Constraint):
+                _check_applies_kept(prior, declaration, owner)
             if isinstance(prior, (Derived, Constraint)):
                 _check_answer_within(prior, declaration, owner, namespace_of)
             old_semantics = getattr(prior, "semantics", None)
@@ -275,6 +277,28 @@ def _collect_semantics(
                     declaration=owner,
                 )
     return semantics
+
+
+def _check_applies_kept(prior: Constraint, declaration: Declaration, owner: str) -> None:
+    """An override of a constraint declared to apply wherever it is present
+    (``constraint(applies=CODE)``) declares the same: one dropping it, or naming another
+    code, is refused (``override-applies``), since a reader of the rule relies on its never
+    counting as true where what it reads does not apply (FINN's ``StreamPort.presented``).
+    One restating it is made, and so is one adding it where its base has none."""
+    if prior.applies is None:
+        return
+    stated = getattr(declaration, "applies", None)
+    if stated == prior.applies:
+        return
+    restated = "drops it" if stated is None else f"declares {stated!r}"
+    raise DefinitionError.broken(
+        "override-applies",
+        _OWNER,
+        f"{owner}: the constraint it overrides applies wherever it is present "
+        f"(applies={prior.applies!r}), and the override {restated}: restate "
+        f"@constraint(applies={prior.applies!r})",
+        declaration=owner,
+    )
 
 
 def _check_answer_within(
@@ -329,9 +353,11 @@ def declared_answer(
 
 def check_overrides(space_type: type[_Namespace]) -> None:
     """Refuse, when ``space_type`` is made, an override of a rule its own body declares that
-    widens its base's answer (``_check_answer_within``). An answer whose annotation does not
-    resolve yet (a name its module binds further down) is compared when the class is
-    collected, which repeats the check and reports the annotation."""
+    widens its base's answer (``_check_answer_within``), or drops or changes the code of a
+    constraint declared to apply wherever it is present (``_check_applies_kept``). An
+    answer whose annotation does not resolve yet (a name its module binds further down) is
+    compared when the class is collected, which repeats the check and reports the
+    annotation."""
     namespace_of = _namespaces()
     for name, value in vars(space_type).items():
         declaration = slot_declaration(value)
@@ -348,6 +374,8 @@ def check_overrides(space_type: type[_Namespace]) -> None:
         if type(prior) is not type(declaration):
             continue  # a change of kind is the collection's to refuse
         owner = f"{space_type.__qualname__}.{name}"
+        if isinstance(prior, Constraint):
+            _check_applies_kept(prior, declaration, owner)
         try:
             _check_answer_within(
                 cast("Derived[object] | Constraint", prior), declaration, owner, namespace_of

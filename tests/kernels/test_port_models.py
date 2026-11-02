@@ -1128,6 +1128,19 @@ def test_a_placed_port_whose_presentation_does_not_apply_refuses_its_point(
     assert dict(finding.details)["read"] == ("input.stream",)
 
 
+def test_a_port_class_overriding_presented_restates_that_it_applies() -> None:
+    """``presented`` applies wherever its port is present: a port class overriding it with
+    a plain ``@constraint`` would let a presentation that does not apply count as true, so it
+    is refused when the class is made (``override-applies``)."""
+    with refused("override-applies", error=DefinitionError, message=r"Customized\.presented"):
+
+        class Customized(InPort):
+            @constraint
+            def presented(self) -> bool | Rejected:
+                _ = self.stream
+                return True
+
+
 def test_a_placed_port_s_presentation_is_accepted_and_carried_or_its_point_is_refused() -> None:
     """A placed port's presentation (``presented``): a schedule's projection that does not
     project, or a stream its transport cannot carry (a vpc presenting the same marker on

@@ -9,7 +9,8 @@ declared ``applies=CODE`` is refused there instead, by a finding of code ``CODE`
 what it read: a read that does not apply (by a method's halt or an explicit argument), or an
 ``Inapplicable`` it returns where its annotation admits one. Its own absence is unchanged:
 in a Space that is absent it is no piece. A read refused or waiting is refused or waits, as
-for any constraint.
+for any constraint. An override restates it: one dropping it or naming another code is
+refused when its class is made (``override-applies``).
 """
 
 from __future__ import annotations
@@ -200,3 +201,80 @@ def test_applies_names_a_code(code: object) -> None:
             @constraint(applies=cast(str, code))
             def holds(self) -> bool:
                 return True
+
+
+class BoundReader(Space):
+    value: int = Param()
+
+    @constraint(applies="bound-missing", v=value)
+    def explicit(v: int) -> bool:
+        return v > 0
+
+    @constraint(applies="bound-missing")
+    def method(self) -> bool:
+        return self.value > 0
+
+
+class BindingOwner(Space):
+    @derived
+    def missing(self) -> int | Inapplicable:
+        return Inapplicable()
+
+    child = BoundReader(value=missing)
+
+
+def test_both_styles_name_the_read_a_formal_is_bound_to() -> None:
+    """A formal bound by reference is transparent (space DESIGN § 6.1): an explicit argument
+    and a method's read of it name its source, ``missing``, never the formal."""
+    pieces = {
+        piece.owner: piece.result
+        for piece in inspection.validity(design_space(BindingOwner())).pieces
+    }
+    assert set(pieces) == {"child.explicit", "child.method"}
+    for result in pieces.values():
+        (finding,) = cast_rejected(result).findings
+        assert finding.code == "bound-missing"
+        assert dict(finding.details)["read"] == ("missing",)
+
+
+class Required(Space):
+    @constraint(applies="required-holds")
+    def holds(self) -> bool:
+        return True
+
+
+def test_an_override_keeps_its_base_s_applies() -> None:
+    """Restating it is made, and so is adding it where the base has none; dropping it, or
+    naming another code, is refused when the class is made: a reader of the rule relies on
+    its never counting as true where what it reads does not apply."""
+    with refused("override-applies", error=DefinitionError, message="drops it"):
+
+        class Dropping(Required):
+            @constraint
+            def holds(self) -> bool:
+                return True
+
+    with refused("override-applies", error=DefinitionError, message="declares 'other'"):
+
+        class Renaming(Required):
+            @constraint(applies="other")
+            def holds(self) -> bool:
+                return True
+
+    class Restating(Required):
+        @constraint(applies="required-holds")
+        def holds(self) -> bool:
+            return True
+
+    class Adding(Space):
+        @constraint
+        def holds(self) -> bool:
+            return True
+
+    class Added(Adding):
+        @constraint(applies="added-holds")
+        def holds(self) -> bool:
+            return True
+
+    assert inspection.validity(design_space(Restating())).status == "valid"
+    assert inspection.validity(design_space(Added())).status == "valid"
