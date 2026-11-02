@@ -297,16 +297,17 @@ class RoutedTiming:
 
 def routed_timing(text: str) -> RoutedTiming:
     """The timing summary report ``text``, read once (``RoutedTiming``). ``ValueError``,
-    naming what is missing, where the report states no design state, or its design
-    summary, clock summary, intra-clock table or ``check_timing`` counts are missing or cut
-    short. An intra-clock row of other than twelve numbers is not read."""
+    naming what is missing, where the report states no design state (or a line for it
+    without one), or its design summary, clock summary, intra-clock table or
+    ``check_timing`` counts are missing or cut short. An intra-clock row of other than
+    twelve numbers is not read."""
     lines = text.splitlines()
-    state = next(
-        (line.split(":", 1)[1].strip() for line in lines if line.startswith("| Design State")),
-        None,
-    )
-    if state is None:
+    stated = next((line for line in lines if line.startswith("| Design State")), None)
+    if stated is None:
         raise ValueError("no design state")
+    state = stated.partition(":")[2].strip()
+    if not state:
+        raise ValueError(f"its design state line states no state: {stated.strip()!r}")
     design_rows = _table(lines, "Design Timing Summary", ("WNS(ns)", "TNS(ns)"))
     if not design_rows:
         raise ValueError("the 'Design Timing Summary' table has no row")

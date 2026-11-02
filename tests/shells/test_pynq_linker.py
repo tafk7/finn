@@ -450,6 +450,9 @@ def test_the_routed_timing_is_read_from_each_linker_s_real_report() -> None:
         routed_timing("no summary")
     with pytest.raises(ValueError, match="'Clock Summary' table has no header"):
         routed_timing(_cut_after("| Clock Summary"))
+    for damaged in ("| Design State", "| Design State      :"):
+        with pytest.raises(ValueError, match="its design state line states no state"):
+            routed_timing(TIMING_REPORT.replace("| Design State      : Routed", damaged))
 
 
 def _cut_after(line: str) -> str:
@@ -462,6 +465,11 @@ def _cut_after(line: str) -> str:
     "case, cause",
     [
         ("cut", r"not a whole timing summary \(the 'Clock Summary' table has no header\)"),
+        (
+            "state",
+            r"not a whole timing summary \(its design state line states no state: "
+            r"'\| Design State'\)",
+        ),
         ("encoding", r"not read \(UnicodeDecodeError: 'utf-8' codec can't decode"),
         ("unreadable", r"not read \(PermissionError: \[Errno 13\]"),
     ],
@@ -469,12 +477,15 @@ def _cut_after(line: str) -> str:
 def test_a_report_cut_short_or_unreadable_is_refused_naming_its_cause(
     tmp_path: Path, case: str, cause: str
 ) -> None:
-    """A routed timing report cut short in its clock summary, one not UTF-8 and one that
-    cannot be opened are each refused as unread (``timing-unread``), naming the report and
-    the cause, not escaping as the reader's error."""
+    """A routed timing report cut short in its clock summary, one whose design state line
+    is cut before its state, one not UTF-8 and one that cannot be opened are each refused
+    as unread (``timing-unread``), naming the report and the cause, not escaping as the
+    reader's error."""
     report = tmp_path / "post_route_timing.rpt"
     if case == "cut":
         report.write_text(_cut_after("| Clock Summary"))
+    elif case == "state":
+        report.write_text(TIMING_REPORT.replace("| Design State      : Routed", "| Design State"))
     elif case == "encoding":
         report.write_bytes(b"\xff" + TIMING_REPORT.encode())
     else:
