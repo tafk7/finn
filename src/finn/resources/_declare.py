@@ -9,6 +9,9 @@ theirs through the ``finn.resources`` entry-point group: each entry point names
 a module (package) containing a ``resources.toml``. A project may add or
 redefine resources in ``[tool.finn.resources]`` of its ``pyproject.toml`` or in
 files listed in FINN_RESOURCES_FILES.
+
+A git source may leave its repository unpublished, declaring only the commit:
+``FINN_RESOURCES_<NAME>_URL`` then names the repository to fetch it from.
 """
 import logging
 import os
@@ -105,7 +108,10 @@ class Resource:
             return f"package {self.package}" + (f" ({self.subdir})" if self.subdir else "")
         if self.path:
             return f"path {self.location}"
-        where = f"{self.git}@{self.commit[:12]}" if self.git else self.url
+        if self.commit:
+            where = f"{self.git or self.env + '_URL'}@{self.commit[:12]}"
+        else:
+            where = self.url
         return f"{where} ({self.subdir})" if self.subdir else where
 
 
@@ -135,10 +141,14 @@ def _resource(name, fields, origin):
     if unknown:
         fail("field-unknown", f"unknown field(s) {', '.join(sorted(unknown))}")
     sources = [key for key in _SOURCES if key in fields]
+    if not sources and "commit" in fields:
+        # A git source whose repository is not published: its URL variable names it.
+        sources = ["git"]
     if len(sources) != 1:
         fail(
             "source-not-one",
-            "give exactly one source: git and commit, url and sha256, package, or path",
+            "give exactly one source: git and commit (or commit alone, the repository "
+            "named by its URL variable), url and sha256, package, or path",
         )
     source = sources[0]
     for key in ("commit", "sha256"):

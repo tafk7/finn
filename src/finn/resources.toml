@@ -19,13 +19,12 @@ digest = "sha256:eaeda81ff5f5c12ad413bcd346dac0b039cc2738368f99aef5d5ce8743a3c98
 # FinnLib: the RTL and HLS sources of the kernels in finn.kernels. It is private
 # and changes with FINN, so it is not redistributable and is never baked into an
 # image: developers point FINN_RESOURCES_FINNLIB at a working clone, and the pin
-# records which commit a FINN revision was validated against. Fetching needs SSH
-# access to the repository.
+# records which commit a FINN revision was validated against. Its repository is
+# not published here: FINN_RESOURCES_FINNLIB_URL names it to fetch the pin.
 [resources.finnlib]
 description = "FinnLib RTL and HLS component library"
 kind = ["kernel-sources"]
 redistributable = false
-git = "git@gitenterprise.xilinx.com:tkeller/finnlib.git"
 commit = "bff933d6f89be95166cfc26ef6768ffab16412d1"
 digest = "sha256:9967b5c5bec2f3053f359177c7ebec9262de974463f15edc1448c81174ba2409"
 

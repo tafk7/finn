@@ -145,9 +145,18 @@ def fetch(resource, root):
 
 def urls(resource):
     """Where a resource's source is fetched from, in order: the declared URL, or
-    FINN_RESOURCES_<NAME>_URL in its place, then the declared mirrors."""
+    FINN_RESOURCES_<NAME>_URL in its place, then the declared mirrors. A git source
+    that does not publish its repository and has no mirror needs the variable."""
     primary = os.environ.get(resource.env + "_URL") or resource.git or resource.url
-    return [primary, *resource.mirrors]
+    found = [url for url in (primary, *resource.mirrors) if url]
+    if not found:
+        raise ResourceError(
+            "repository-unnamed",
+            f"Resource {resource.name}: {resource.origin} does not name its repository, so "
+            f"commit {resource.commit} cannot be fetched. Set {resource.env}=/path/to/checkout "
+            f"to use a local clone, or {resource.env}_URL to the repository to fetch it from.",
+        )
+    return found
 
 
 def _verified_tree(resource, work):
@@ -155,8 +164,15 @@ def _verified_tree(resource, work):
     # A copy in another cache (e.g. when filling a directory to carry offline)
     # saves the download; it is verified like a fetched tree.
     copy = lookup(resource)
+
+    def places():
+        if copy:
+            yield copy
+        # Named only past the copy: a verified copy needs no repository.
+        yield from urls(resource)
+
     failures = []
-    for number, where in enumerate(([copy] if copy else []) + urls(resource)):
+    for number, where in enumerate(places()):
         print(f"finn: fetching resource {resource.name} from {where}", file=sys.stderr)
         try:
             if where == copy:
@@ -193,7 +209,7 @@ def assemble(resource, work, url=None):
     """Fetch a resource's source (by default from its first URL) into work and lay
     out its tree, unverified."""
     url = url or urls(resource)[0]
-    if resource.git:
+    if resource.commit:
         source = git_source(url, resource.commit, resource.subdir, work / "source")
     else:
         source = archive(url, resource.sha256, work / "source")

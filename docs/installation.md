@@ -327,7 +327,7 @@ Declared in `src/finn/resources.toml`, which ships in the wheel:
 | `avnet-boards` | `vivado-boards` | [Avnet/bdf](https://github.com/Avnet/bdf) |
 | `rfsoc2x2-boards`, `kv260-som-boards` | `vivado-boards` | one board each from [XilinxBoardStore](https://github.com/Xilinx/XilinxBoardStore) |
 | `rfsoc4x2-boards`, `aup-zu3-boards` | `vivado-boards` | RealDigital's board support repositories |
-| `finnlib` | `kernel-sources` | FinnLib, the RTL/HLS component library of `finn.kernels` (private; SSH access) |
+| `finnlib` | `kernel-sources` | FinnLib, the RTL/HLS component library of `finn.kernels` (private; its repository is not published) |
 
 The HLS include path is the `hlslib` resource. Every `vivado-boards` resource is
 added to Vivado's board repository paths. Board files are third-party files FINN
@@ -337,8 +337,11 @@ and `pip install finn` fetch them on first use.
 FinnLib changes together with FINN, so it is never baked into an image. Work
 against a clone: `FINN_RESOURCES_FINNLIB=../finnlib` (in sbx, mount the clone and set it with `-e`; see
 [the sbx guide](../docker/sbx/README.md)). The pin records the commit
-a FINN revision was validated against; fetching it needs SSH access, and
-`finn-resources update finnlib --ref BRANCH` moves it once that commit is pushed.
+a FINN revision was validated against. The declaration does not name FinnLib's
+repository: with access to it, set `FINN_RESOURCES_FINNLIB_URL` to its URL to
+fetch the pin, and `finn-resources update finnlib --ref BRANCH` moves the pin once
+that commit is pushed. With neither the clone nor the URL, a use of FinnLib is
+refused with the error `repository-unnamed`, naming both variables.
 
 ### Caches
 
@@ -381,8 +384,10 @@ finn-resources check
 With `FINN_RESOURCES_OFFLINE=1`, a resource missing from every cache is an error
 that names the command to fetch it, never a network access. A site mirror can
 stand in for a source: `FINN_RESOURCES_HLSLIB_URL=https://git.example/finn-hlslib.git`
-replaces the declared URL. A declaration can also list `mirrors`, which are tried
-in order after the source; every source is verified against the same digest.
+replaces the declared URL. A git declaration may leave its repository out and
+give only `commit` and `digest`; that variable then names the repository. A
+declaration can also list `mirrors`, which are tried in order after the source;
+every source is verified against the same digest.
 
 ### Overrides and co-development
 
