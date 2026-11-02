@@ -34,8 +34,11 @@ dict, a set, a bytearray, any mutable sequence, mapping or set, a dataclass that
 frozen, a class without a hash), and so is a dataclass leaving a field out of ``==``. A
 registered value type (``value_type``) and an enum member are taken as they are: their
 owners state them immutable. A tuple subclass is rebuilt by its ``_make`` (a named tuple's);
-one without is refused where an item changes. A frozen dataclass is rebuilt where a field
-changes, a field its ``__init__`` does not take (``init=False``) set on the rebuilt value.
+one without is refused where an item changes, and so is a frozen set subclass where a member
+does. A tuple or frozen set subclass changing how it is read (its iteration, length, items,
+membership, copy, type or attribute access: ``changed_reads``) is refused: what it says it
+holds is not what it stores. A frozen dataclass is rebuilt where a field changes, a field its
+``__init__`` does not take (``init=False``) set on the rebuilt value.
 
 Anything else is refused: an object of a class the engine cannot see is immutable (a
 service, a native library's handle, a class with an ``==`` of its own its owner has not
@@ -52,7 +55,9 @@ a process has loaded numpy (``sys.modules``).
 
 from __future__ import annotations
 
+import collections
 import dataclasses
+import functools
 import math
 import sys
 import types
@@ -266,13 +271,12 @@ def same(left: object, right: object, *, owner: str, role: str) -> bool:
 
 def _same(left: object, right: object) -> bool:
     """``same`` for two values of one type."""
-    kind = type(left)
-    walked = _walked(kind)
+    walked = _walked(type(left))
     if walked is tuple:
-        items, others = _stored_items(left), _stored_items(right)
+        items, others = cast("tuple[object, ...]", left), cast("tuple[object, ...]", right)
         return len(items) == len(others) and all(map(_same_item, items, others))
     if walked is frozenset:
-        return _same_members(_stored_items(left), _stored_items(right))
+        return _same_members(cast("frozenset[object]", left), cast("frozenset[object]", right))
     if walked is not None:
         return all(
             _same_item(getattr(left, name), getattr(right, name))
@@ -285,24 +289,21 @@ def _same_item(item: object, other: object) -> bool:
     return item is other or (type(item) is type(other) and _same(item, other))
 
 
-def _same_members(members: tuple[object, ...], others: tuple[object, ...]) -> bool:
-    """Two frozen sets' members, the same one to one: by their identities where those hash,
-    else each member against the other set's (a frozen set holds no two members ``==``
-    holds equal, so a member has one candidate at most)."""
-    if len(members) != len(others) or frozenset(members) != frozenset(others):
+def _same_members(members: frozenset[object], others: frozenset[object]) -> bool:
+    """Two frozen sets equal by ``==``, their members the same one to one: each member against
+    the other set's of its hash (a frozen set holds no two members ``==`` holds equal, and
+    the same members are equal, so hash alike: a member has one candidate at most). Their
+    identities need not hash (a field a value class's hash leaves out may hold an unhashable
+    value)."""
+    if len(members) != len(others) or members != others:
         return False
-    try:
-        return frozenset(map(identity, members)) == frozenset(map(identity, others))
-    except TypeError:  # an identity holding a field the value's hash leaves out, unhashable
-        return all(any(_same_item(member, other) for other in others) for member in members)
-
-
-def _stored_items(value: object) -> tuple[object, ...]:
-    """A tuple's items or a frozen set's members as the type stores them (its ``==`` and
-    hash read those), whatever its class makes of ``__iter__``."""
-    if isinstance(value, tuple):
-        return tuple(tuple.__iter__(value))
-    return tuple(frozenset.__iter__(cast("frozenset[object]", value)))
+    by_hash: dict[int, list[object]] = {}
+    for other in others:
+        by_hash.setdefault(hash(other), []).append(other)
+    return all(
+        any(_same_item(member, other) for other in by_hash.get(hash(member), ()))
+        for member in members
+    )
 
 
 def identity(value: object) -> object:
@@ -313,9 +314,9 @@ def identity(value: object) -> object:
     kind = type(value)
     walked = _walked(kind)
     if walked is tuple:
-        return (kind, tuple(map(identity, _stored_items(value))))
+        return (kind, tuple(map(identity, cast("tuple[object, ...]", value))))
     if walked is frozenset:
-        return (kind, frozenset(map(identity, _stored_items(value))))
+        return (kind, frozenset(map(identity, cast("frozenset[object]", value))))
     if walked is not None:
         names = cast("tuple[str, ...]", walked)
         return (kind, tuple(identity(getattr(value, name)) for name in names))
@@ -328,11 +329,11 @@ _WALKED: weakref.WeakKeyDictionary[type, object] = weakref.WeakKeyDictionary()
 
 def _walked(kind: type) -> object:
     """How ``same`` sees through ``kind``'s ``==``: ``tuple`` (item by item: a tuple, or a
-    tuple subclass comparing as one, a named tuple's), ``frozenset`` (member by member,
-    likewise), a value class's compared fields' names (field by field: ``value_class``),
-    else ``None`` (by its ``==``: a plain value, a registered value type, an enum member, a
-    class with an ``==`` of its own). A class registered as a value type later is so from
-    then on."""
+    tuple subclass compared and read as one, a named tuple's), ``frozenset`` (member by
+    member, likewise), a value class's compared fields' names (field by field:
+    ``value_class``), else ``None`` (by its ``==``: a plain value, a registered value type,
+    an enum member, a class with an ``==`` of its own, or one changing how it is read). A
+    class registered as a value type later is so from then on."""
     if kind is tuple or kind is frozenset:
         return kind
     if kind in _PLAIN or is_value_type(kind):
@@ -351,9 +352,83 @@ def _walk(kind: type) -> object:
     if issubclass(kind, Enum):
         return None
     for base in (tuple, frozenset):
-        if issubclass(kind, base) and kind.__eq__ is base.__eq__ and kind.__hash__ is base.__hash__:
-            return base
+        if issubclass(kind, base):
+            compared = kind.__eq__ is base.__eq__ and kind.__hash__ is base.__hash__
+            return base if compared and not changed_reads(kind) else None
     return compared_fields(kind)
+
+
+_READ = (
+    "__iter__",
+    "__len__",
+    "__getitem__",
+    "__contains__",
+    "__reduce__",
+    "__reduce_ex__",
+    "__getnewargs__",
+    "__copy__",
+    "__deepcopy__",
+    "__class__",
+    "__getattribute__",
+)
+"""What a tuple or a frozen set is read through: by the engine's walks, ``==``, its hash, its
+type, and a copy."""
+
+_IDENTITY = ("__class__", "__getattribute__")
+"""What an object's type is read through (``__class__``), and every attribute
+(``__getattribute__``): the engine's ``type`` stands for a generated ``==``'s
+``__class__`` only where both are ``object``'s."""
+
+_CHANGED: weakref.WeakKeyDictionary[type, tuple[str, ...]] = weakref.WeakKeyDictionary()
+"""``changed_reads``'s answer by class, made once."""
+
+
+def changed_reads(kind: type) -> tuple[str, ...]:
+    """What a tuple or frozen set subclass ``kind`` changes of how its base is read (``_READ``:
+    its iteration, length, items, membership, copy, type or attribute access; a named
+    tuple's ``__getnewargs__`` reads what it stores), by name; the engine walks one that
+    changes none, by what it stores. ``()`` for any other class."""
+    found = _CHANGED.get(kind)
+    if found is None:
+        base = (
+            tuple if issubclass(kind, tuple) else frozenset if issubclass(kind, frozenset) else None
+        )
+        found = _CHANGED[kind] = (
+            ()
+            if base is None
+            else tuple(name for name in _READ if not _reads_as_base(kind, base, name))
+        )
+    return found
+
+
+_NAMED = collections.namedtuple("_NAMED", "item")
+"""A named tuple: every one's ``__getnewargs__`` is this one's code, reading what the tuple
+stores."""
+
+
+def _reads_as_base(kind: type, base: type, name: str) -> bool:
+    found = _resolved(kind, name)
+    if found is _resolved(base, name):
+        return True
+    named = _resolved(_NAMED, "__getnewargs__")
+    return (
+        name == "__getnewargs__"
+        and getattr(found, "__code__", None) is getattr(named, "__code__", _MISSING)
+        and _cells(found) == _cells(named)
+    )
+
+
+def _cells(function: object) -> list[object]:
+    return [cell.cell_contents for cell in getattr(function, "__closure__", None) or ()]
+
+
+def _resolved(kind: type, name: str) -> object:
+    """The attribute ``name`` of ``kind``'s instances as their class gives it: the first
+    class along its method resolution order declaring it; ``None`` where none does."""
+    for base in kind.__mro__:
+        if name in base.__dict__:
+            return base.__dict__[name]
+    return None
 
 
 def value_class(kind: type) -> bool:
@@ -371,11 +446,13 @@ def compared_fields(kind: type) -> tuple[str, ...] | None:
     ``kind`` is no value class. A value class is a frozen dataclass whose ``__eq__`` and
     ``__hash__`` are the ones ``dataclasses`` generates, declared by it or inherited (a
     subclass not decorated, or decorated ``eq=False``, compares the fields of the dataclass
-    that generated its ``==``). Generated means the very code ``dataclasses`` makes for those
-    fields (a reference made alike, ``_reference``), not where a method was compiled: a
-    method that is not, written by hand or uncertain, is its author's ``==`` (or hash), and
-    the class no value class. An ``eq=False`` dataclass inheriting no generated ``==`` (equal
-    by identity) and a mutable one are none."""
+    that generated its ``==``), and whose type and attributes are read as ``object``'s
+    (``__class__``, ``__getattribute__``: the generated ``==`` compares ``__class__``, which
+    the engine reads as the type). Generated means the very code ``dataclasses`` makes for
+    those fields (``_generated``), not where a method was compiled: a method that is not,
+    written by hand or uncertain, is its author's ``==`` (or hash), and the class no value
+    class. An ``eq=False`` dataclass inheriting no generated ``==`` (equal by identity) and a
+    mutable one are none."""
     if kind not in _COMPARED:
         _COMPARED[kind] = _compared_fields(kind)
     return _COMPARED[kind]
@@ -385,55 +462,46 @@ def _compared_fields(kind: type) -> tuple[str, ...] | None:
     params = getattr(kind, "__dataclass_params__", None)
     if params is None or not params.frozen:
         return None
+    if any(_resolved(kind, name) is not _resolved(object, name) for name in _IDENTITY):
+        return None
     owner = next((base for base in kind.__mro__ if "__eq__" in base.__dict__), None)
     if owner is None or "__dataclass_fields__" not in owner.__dict__:
         return None
     fields = dataclasses.fields(cast(Any, owner))
     shape = tuple((item.name, item.compare, item.hash) for item in fields)
-    reference = _reference(shape)
-    if not (
-        _same_code(kind.__eq__, reference.__eq__) and _same_code(kind.__hash__, reference.__hash__)
-    ):
+    generated = _generated(shape)
+    if None in generated or (_code(kind.__eq__), _code(kind.__hash__)) != generated:
         return None
     return tuple(item.name for item in fields if item.compare)
 
 
-_REFERENCES: dict[tuple[tuple[str, bool, bool | None], ...], type] = {}
-"""``_reference``'s answer by fields, made once."""
-
-
-def _reference(shape: tuple[tuple[str, bool, bool | None], ...]) -> type:
-    """A frozen dataclass of these fields (name, ``compare``, ``hash``), in order: its
-    ``__eq__`` and ``__hash__`` are the code ``dataclasses`` generates for them."""
-    found = _REFERENCES.get(shape)
-    if found is None:
-        found = _REFERENCES[shape] = dataclasses.make_dataclass(
-            "_Reference",
-            [
-                (name, object, dataclasses.field(default=None, compare=compare, hash=hashed))
-                for name, compare, hashed in shape
-            ],
-            frozen=True,
-        )
-    return found
-
-
-def _same_code(method: object, reference: object) -> bool:
-    """Whether ``method`` is ``reference``'s code: the same instructions, names, constants,
-    arguments and no defaults or closure."""
-    code, model = getattr(method, "__code__", None), getattr(reference, "__code__", None)
-    if code is None or model is None:
-        return False
-    return (
-        code.co_code == model.co_code
-        and code.co_names == model.co_names
-        and code.co_consts == model.co_consts
-        and code.co_varnames == model.co_varnames
-        and code.co_argcount == model.co_argcount
-        and getattr(method, "__defaults__", None) is None
-        and getattr(method, "__kwdefaults__", None) is None
-        and getattr(method, "__closure__", None) is None
+@functools.lru_cache(maxsize=256)
+def _generated(shape: tuple[tuple[str, bool, bool | None], ...]) -> tuple[object, object]:
+    """The code ``dataclasses`` generates for a frozen dataclass's ``__eq__`` and
+    ``__hash__`` with these fields (name, ``compare``, ``hash``), in order (``_code``), read
+    off a dataclass made alike and dropped; kept for the latest shapes alone."""
+    reference = dataclasses.make_dataclass(
+        "_Reference",
+        [
+            (name, object, dataclasses.field(default=None, compare=compare, hash=hashed))
+            for name, compare, hashed in shape
+        ],
+        frozen=True,
     )
+    return _code(reference.__eq__), _code(reference.__hash__)
+
+
+def _code(method: object) -> object:
+    """A function's code as compared with the generated one: its instructions, names,
+    constants and arguments; ``None`` where it is no function, or has defaults or a closure
+    (no generated method has)."""
+    code = getattr(method, "__code__", None)
+    if code is None or any(
+        getattr(method, name, None) is not None
+        for name in ("__defaults__", "__kwdefaults__", "__closure__")
+    ):
+        return None
+    return (code.co_code, code.co_names, code.co_consts, code.co_varnames, code.co_argcount)
 
 
 R = TypeVar("R")
@@ -501,6 +569,14 @@ def canonical(value: T) -> T:
             f"a {kind.__qualname__} is mutable: a value is immutable (a tuple, a frozen set, "
             "a frozen dataclass)"
         )
+    if isinstance(value, (tuple, frozenset)):
+        changed = changed_reads(kind)
+        if changed:
+            raise NotAValue(
+                f"a {kind.__qualname__} changes how a "
+                f"{'tuple' if isinstance(value, tuple) else 'frozen set'} is read "
+                f"({', '.join(changed)}): the engine cannot see what it holds"
+            )
     if isinstance(value, tuple):
         return cast(T, _items(cast(tuple[object, ...], value)))
     if isinstance(value, frozenset):
@@ -551,16 +627,13 @@ def _numpy_canonical(value: Any, numpy: Any) -> object:
 
 
 def _items(value: tuple[object, ...]) -> tuple[object, ...]:
-    """A tuple's items in their canonical form, read as the tuple stores them
-    (``_stored_items``)."""
-    stored = _stored_items(value)
     items = []
-    for position, item in enumerate(stored):
+    for position, item in enumerate(value):
         try:
             items.append(canonical(item))
         except NotAValue as refusal:
             raise NotAValue(f"item {position}: {refusal}") from None
-    if all(new is old for new, old in zip(items, stored)):
+    if all(new is old for new, old in zip(items, value)):
         return value
     kind = type(value)
     if kind is tuple:
@@ -576,13 +649,19 @@ def _items(value: tuple[object, ...]) -> tuple[object, ...]:
 
 def _members(value: frozenset[object]) -> frozenset[object]:
     pairs = []
-    for item in _stored_items(value):
+    for item in value:
         try:
             pairs.append((item, canonical(item)))
         except NotAValue as refusal:
             raise NotAValue(f"a member: {refusal}") from None
     if all(new is old for old, new in pairs):
         return value
+    kind = type(value)
+    if kind is not frozenset:
+        raise NotAValue(
+            f"a {kind.__qualname__} is a frozen set subclass: its members' canonical form "
+            "cannot be rebuilt"
+        )
     return frozenset(new for _, new in pairs)
 
 
@@ -653,7 +732,9 @@ def holds_mutable(value: object) -> bool:
     items, a tuple subclass's included, a frozen set's members, a dataclass's fields): a
     list, a dict, a set, a bytearray, any mutable sequence, mapping or set, or a dataclass
     that is not frozen. An answer that does is handed out as a copy
-    (``answers.handed_out``). A registered value type and an enum member hold none."""
+    (``answers.handed_out``). A registered value type and an enum member hold none, and a
+    tuple or frozen set subclass changing how it is read (``changed_reads``) is not walked:
+    the canonical form refuses it, and a copy would read it as it says, not as it stores."""
     kind = type(value)
     if kind in _ATOMS or kind is float:
         return False
@@ -662,7 +743,9 @@ def holds_mutable(value: object) -> bool:
     if isinstance(value, Enum) or is_value_type(kind):
         return False
     if isinstance(value, (tuple, frozenset)):
-        return any(holds_mutable(item) for item in _stored_items(value))
+        if changed_reads(kind):
+            return False  # no value, refused where one enters; not walked
+        return any(holds_mutable(item) for item in cast("tuple[object, ...]", value))
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         params = getattr(kind, "__dataclass_params__", None)
         if params is None or not params.frozen:
@@ -683,6 +766,7 @@ __all__ = [
     "ValueSemantics",
     "annotation_type",
     "canonical",
+    "changed_reads",
     "compared_fields",
     "default_semantics",
     "holds_mutable",

@@ -13,7 +13,9 @@ refused as a value type where it is annotated, and as a value where it enters. T
 
 from __future__ import annotations
 
+import gc
 import math
+import tracemalloc
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field, make_dataclass
 from typing import Any, NamedTuple, cast
@@ -29,9 +31,12 @@ from finn.core.space import (
     Space,
     derived,
     design_space,
+    value_type,
 )
 from finn.core.space.occurrence import held
-from finn.core.space.semantics import compared_fields, identity, value_class
+from finn.core.space import semantics
+from finn.core.space._running.cache import key
+from finn.core.space.semantics import changed_reads, compared_fields, identity, value_class
 
 NAN = float("nan")
 
@@ -471,17 +476,180 @@ class HashExcluded:
     inner: Unhashable = field(hash=False)
 
 
-def test_a_tuple_is_walked_as_it_stores_its_items_and_a_set_whatever_its_members_hash() -> None:
-    """A tuple subclass comparing as a tuple is walked by what it stores, whatever its
-    ``__iter__`` says: ``Hidden((1,))`` is not ``Hidden((2,))``. A frozen set holding a value
-    whose hash leaves out an unhashable field is a value too: the same as an equal set, its
-    design space made without being interned."""
-    first = design_space(Meter(rate=1.0, box=Box(Hidden((1,)))))
-    second = design_space(Meter(rate=1.0, box=Box(Hidden((2,)))))
-    assert held(first).ds != held(second).ds
-    assert second.box is not None and cast(Hidden, second.box.inner)[0] == 2
+def test_a_tuple_changing_how_it_is_read_is_no_value_and_a_set_whatever_its_members_hash() -> None:
+    """A tuple subclass whose ``__iter__`` hides what it stores is no value the engine can
+    see: refused where it enters, naming what it changes, and compared by its own ``==``
+    (``Hidden((1,))`` is not ``Hidden((2,))``). A frozen set holding a value whose hash leaves
+    out an unhashable field is a value: the same as an equal set, its design space made
+    without being interned."""
+    assert changed_reads(Hidden) == ("__iter__",)
+    with refused("literal-not-value", error=DefinitionError, message="Hidden changes how a tuple"):
+        Meter(rate=1.0, box=Box(Hidden((1,))))
+    assert not semantics.same(Hidden((1,)), Hidden((2,)), owner="test", role="test")
     members = frozenset({HashExcluded(Unhashable(1))})
     one = design_space(Meter(rate=1.0, box=Box(members)))
     other = design_space(Meter(rate=1.0, box=Box(frozenset({HashExcluded(Unhashable(1))}))))
     assert held(one).ds == held(other).ds
     assert held(one).ds != held(design_space(Meter(rate=1.0, box=Box(frozenset())))).ds
+
+
+# -- What the second review found: __class__, a set's iteration and type, cost, registration ---
+
+
+class Token:
+    """What ``Spoof.__class__`` says instead of its type."""
+
+
+@dataclass(frozen=True)
+class Plain:
+    x: int
+
+
+class Spoof(Plain):
+    """A generated ``==``'s ``__class__`` changed: it reads ``Token`` for a value whose ``x``
+    is ``SPOOFED`` itself, so two values with equal fields are not ``==``."""
+
+    __slots__ = ()
+
+    @property  # type: ignore[misc]
+    def __class__(self) -> type:
+        return Token if self.x is SPOOFED else Plain
+
+
+SPOOFED = int("1000")
+
+
+class Spoofed(Space):
+    value: Plain = Param()
+
+    @derived
+    def native(self) -> bool:
+        return self.value == Spoof(SPOOFED)
+
+
+def test_a_class_changing_how_its_type_is_read_is_compared_by_its_own_eq() -> None:
+    """A value class's subclass whose ``__class__`` (or ``__getattribute__``) is its own is
+    compared by its ``==``, not field by field: the generated ``==`` reads ``__class__``, the
+    engine its type. Two values ``==`` tells apart are two design spaces, answering as
+    ``==`` does."""
+    left, right = Spoof(SPOOFED), Spoof(int("1000"))
+    assert left != right and not value_class(Spoof) and key(left) is None
+    assert not semantics.same(left, right, owner="test", role="test")
+    first = design_space(Spoofed(value=left))
+    second = design_space(Spoofed(value=right))
+    assert held(first).ds.layer is not held(second).ds.layer
+    assert first.native and not second.native
+
+
+class HiddenFrozen(frozenset[object]):
+    """A frozen set whose ``__iter__`` hides what it stores."""
+
+    __slots__ = ()
+
+    def __iter__(self) -> Iterator[object]:
+        return iter(())
+
+
+@dataclass(frozen=True)
+class Payload:
+    items: list[int]
+
+    def __hash__(self) -> int:
+        return 1
+
+
+class Members(frozenset[float]):
+    """A frozen set subclass changing nothing of how it is read."""
+
+    __slots__ = ()
+
+
+class Sets(Space):
+    count: int = Param()
+    members: object | None = Param(default=None)
+
+    @derived
+    def hidden(self) -> HiddenFrozen:
+        return HiddenFrozen({Payload(list(range(self.count)))})
+
+
+def test_a_frozen_set_subclass_is_refused_not_retyped_and_handed_out_as_it_stores() -> None:
+    """A frozen set subclass hiding its members is refused where it enters; a derived value
+    answering one is handed out as it is, with what it stores (a copy would read it as it
+    says: empty). One changing nothing of how it is read is taken as it is, of its own type,
+    but refused where a member's canonical form changes: it cannot be rebuilt."""
+    with refused("literal-not-value", error=DefinitionError, message="HiddenFrozen changes"):
+        Sets(count=1, members=HiddenFrozen({1.0}))
+    hidden = design_space(Sets(count=2)).hidden
+    assert type(hidden) is HiddenFrozen and frozenset.__len__(hidden) == 1
+    kept = design_space(Sets(count=1, members=Members({0.0, 1.0}))).members
+    assert type(kept) is Members and kept == frozenset({0.0, 1.0})
+    with refused("literal-not-value", error=DefinitionError, message="a Members is a frozen set"):
+        Sets(count=1, members=Members({-0.0}))
+
+
+@dataclass(frozen=True)
+class Keyed:
+    key: int
+    inner: Unhashable = field(hash=False)
+
+
+def test_two_frozen_sets_are_compared_member_by_member_in_linear_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Members whose identities do not hash are compared within their hash's bucket: two
+    equal sets of 400 such members take a few comparisons each, not one per pair."""
+    calls = 0
+    compare = semantics._same_item
+
+    def counted(item: object, other: object) -> bool:
+        nonlocal calls
+        calls += 1
+        return compare(item, other)
+
+    monkeypatch.setattr(semantics, "_same_item", counted)
+    size = 400
+    left = frozenset(Keyed(at, Unhashable(at)) for at in range(size))
+    right = frozenset(Keyed(at, Unhashable(at)) for at in range(size))
+    assert semantics.same(left, right, owner="test", role="test")
+    assert calls <= 4 * size
+
+
+def test_two_long_tuples_differing_first_are_told_apart_without_a_copy() -> None:
+    """Tuples are compared as they are, the first difference ending it: no copy of either."""
+    left, right = (1,) + (0,) * 100_000, (2,) + (0,) * 100_000
+    tracemalloc.start()
+    try:
+        assert not semantics.same(left, right, owner="test", role="test")
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 64_000
+
+
+def test_a_registered_value_class_is_keyed_as_its_owner_states() -> None:
+    """A frozen dataclass registered as a value type is keyed by its ``==`` and hash, not
+    field by field: a field holding a value the cache keys no other way does not stop it."""
+
+    @dataclass(frozen=True)
+    class Registered:
+        nested: object
+
+    value = Registered(Offset(1))
+    assert key(value) is None
+    value_type(Registered)
+    assert key(value) == (Registered, value) and identity(value) == (Registered, value)
+
+
+def test_recognizing_a_value_class_keeps_no_class_for_its_shape() -> None:
+    """The generated code a value class is checked against is kept by its fields' shape, in a
+    bounded cache, and no class is kept for it: classes made for once-used shapes go."""
+    for at in range(50):
+        made: Any = make_dataclass(f"Transient{at}", [(f"field_{at}", int)], frozen=True)
+        assert value_class(made)
+        del made
+    gc.collect()
+    assert not [
+        kind for kind in gc.get_objects() if type(kind) is type and kind.__name__ == "_Reference"
+    ]
+    assert semantics._generated.cache_info().maxsize == 256

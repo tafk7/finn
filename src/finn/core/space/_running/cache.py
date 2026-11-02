@@ -130,9 +130,9 @@ def enum_key(member: Enum) -> object:
 
 def key(value: object) -> object:
     """``value`` as the cache keys it, by type and ``==`` (see the module docstring): a plain
-    type or a value type itself, an enum member by type and name, a tuple or a frozen set
-    item by item, a value class field by field; ``None`` where it is unhashable or holds a
-    type not keyed."""
+    type or a value type itself (registered, whatever else it is), an enum member by type and
+    name, a tuple or a frozen set item by item, a value class field by field; ``None`` where
+    it is unhashable or holds a type not keyed."""
     kind = type(value)
     if kind in PLAIN:
         return hashkey(value)
@@ -143,14 +143,14 @@ def key(value: object) -> object:
         if any(part is None for part in parts):
             return None
         return (kind, tuple(parts) if kind is tuple else frozenset(parts))
+    if is_value_type(kind):
+        return hashkey(value)
     names = compared_fields(kind)
     if names is not None:
         fields = [key(getattr(value, name)) for name in names]
         if any(part is None for part in fields):
             return None
         return (kind, tuple(fields))
-    if is_value_type(kind):
-        return hashkey(value)
     return None
 
 
