@@ -36,9 +36,11 @@ registered value type (``value_type``) and an enum member are taken as they are:
 owners state them immutable. A tuple subclass is rebuilt by its ``_make`` (a named tuple's);
 one without is refused where an item changes, and so is a frozen set subclass where a member
 does. A tuple or frozen set subclass changing how it is read (its iteration, length, items,
-membership, copy, type or attribute access: ``changed_reads``) is refused: what it says it
-holds is not what it stores. A frozen dataclass is rebuilt where a field changes, a field its
-``__init__`` does not take (``init=False``) set on the rebuilt value.
+membership, copy, type or attribute access: ``changed_reads``) is refused, and so is an answer
+holding one (``unreadable``): what it says it holds is not what it stores. Tuples and frozen
+sets are always walked as they store their items, whatever their class says. A frozen
+dataclass is rebuilt where a field changes, a field its ``__init__`` does not take
+(``init=False``) set on the rebuilt value.
 
 Anything else is refused: an object of a class the engine cannot see is immutable (a
 service, a native library's handle, a class with an ``==`` of its own its owner has not
@@ -62,7 +64,7 @@ import math
 import sys
 import types
 import weakref
-from collections.abc import Callable, MutableMapping, MutableSequence, MutableSet
+from collections.abc import Callable, Iterator, MutableMapping, MutableSequence, MutableSet
 from copy import copy
 from dataclasses import dataclass
 from enum import Enum
@@ -274,7 +276,9 @@ def _same(left: object, right: object) -> bool:
     walked = _walked(type(left))
     if walked is tuple:
         items, others = cast("tuple[object, ...]", left), cast("tuple[object, ...]", right)
-        return len(items) == len(others) and all(map(_same_item, items, others))
+        return tuple.__len__(items) == tuple.__len__(others) and all(
+            map(_same_item, tuple.__iter__(items), tuple.__iter__(others))
+        )
     if walked is frozenset:
         return _same_members(cast("frozenset[object]", left), cast("frozenset[object]", right))
     if walked is not None:
@@ -290,19 +294,25 @@ def _same_item(item: object, other: object) -> bool:
 
 
 def _same_members(members: frozenset[object], others: frozenset[object]) -> bool:
-    """Two frozen sets equal by ``==``, their members the same one to one: each member against
-    the other set's of its hash (a frozen set holds no two members ``==`` holds equal, and
-    the same members are equal, so hash alike: a member has one candidate at most). Their
-    identities need not hash (a field a value class's hash leaves out may hold an unhashable
-    value)."""
-    if len(members) != len(others) or members != others:
+    """Two frozen sets equal by a frozen set's ``==``, their members the same one to one: by
+    their identities where those hash, else each member against the other set's of its hash
+    (a frozen set holds no two members ``==`` holds equal, and the same members are equal, so
+    hash alike: a member has one candidate at most), as a field a value class's hash leaves
+    out may hold an unhashable value."""
+    if not frozenset.__eq__(members, others):
         return False
+    try:
+        return frozenset(map(identity, frozenset.__iter__(members))) == frozenset(
+            map(identity, frozenset.__iter__(others))
+        )
+    except TypeError:
+        pass
     by_hash: dict[int, list[object]] = {}
-    for other in others:
+    for other in frozenset.__iter__(others):
         by_hash.setdefault(hash(other), []).append(other)
     return all(
         any(_same_item(member, other) for other in by_hash.get(hash(member), ()))
-        for member in members
+        for member in frozenset.__iter__(members)
     )
 
 
@@ -314,9 +324,12 @@ def identity(value: object) -> object:
     kind = type(value)
     walked = _walked(kind)
     if walked is tuple:
-        return (kind, tuple(map(identity, cast("tuple[object, ...]", value))))
+        return (kind, tuple(map(identity, tuple.__iter__(cast("tuple[object, ...]", value)))))
     if walked is frozenset:
-        return (kind, frozenset(map(identity, cast("frozenset[object]", value))))
+        return (
+            kind,
+            frozenset(map(identity, frozenset.__iter__(cast("frozenset[object]", value)))),
+        )
     if walked is not None:
         names = cast("tuple[str, ...]", walked)
         return (kind, tuple(identity(getattr(value, name)) for name in names))
@@ -414,12 +427,18 @@ def _reads_as_base(kind: type, base: type, name: str) -> bool:
     return (
         name == "__getnewargs__"
         and getattr(found, "__code__", None) is getattr(named, "__code__", _MISSING)
-        and _cells(found) == _cells(named)
+        and _same_cells(found, named)
     )
 
 
-def _cells(function: object) -> list[object]:
-    return [cell.cell_contents for cell in getattr(function, "__closure__", None) or ()]
+def _same_cells(function: object, model: object) -> bool:
+    """Whether two functions close over the very same objects (by identity: an object's
+    ``==`` could hold anything equal)."""
+    cells = getattr(function, "__closure__", None) or ()
+    models = getattr(model, "__closure__", None) or ()
+    return len(cells) == len(models) and all(
+        cell.cell_contents is other.cell_contents for cell, other in zip(cells, models)
+    )
 
 
 def _resolved(kind: type, name: str) -> object:
@@ -569,14 +588,8 @@ def canonical(value: T) -> T:
             f"a {kind.__qualname__} is mutable: a value is immutable (a tuple, a frozen set, "
             "a frozen dataclass)"
         )
-    if isinstance(value, (tuple, frozenset)):
-        changed = changed_reads(kind)
-        if changed:
-            raise NotAValue(
-                f"a {kind.__qualname__} changes how a "
-                f"{'tuple' if isinstance(value, tuple) else 'frozen set'} is read "
-                f"({', '.join(changed)}): the engine cannot see what it holds"
-            )
+    if isinstance(value, (tuple, frozenset)) and changed_reads(kind):
+        raise NotAValue(cast(str, unreadable(value)))
     if isinstance(value, tuple):
         return cast(T, _items(cast(tuple[object, ...], value)))
     if isinstance(value, frozenset):
@@ -627,13 +640,14 @@ def _numpy_canonical(value: Any, numpy: Any) -> object:
 
 
 def _items(value: tuple[object, ...]) -> tuple[object, ...]:
+    """A tuple's items in their canonical form, read as it stores them (``tuple.__iter__``)."""
     items = []
-    for position, item in enumerate(value):
+    for position, item in enumerate(tuple.__iter__(value)):
         try:
             items.append(canonical(item))
         except NotAValue as refusal:
             raise NotAValue(f"item {position}: {refusal}") from None
-    if all(new is old for new, old in zip(items, value)):
+    if all(new is old for new, old in zip(items, tuple.__iter__(value))):
         return value
     kind = type(value)
     if kind is tuple:
@@ -649,7 +663,7 @@ def _items(value: tuple[object, ...]) -> tuple[object, ...]:
 
 def _members(value: frozenset[object]) -> frozenset[object]:
     pairs = []
-    for item in value:
+    for item in frozenset.__iter__(value):
         try:
             pairs.append((item, canonical(item)))
         except NotAValue as refusal:
@@ -732,9 +746,9 @@ def holds_mutable(value: object) -> bool:
     items, a tuple subclass's included, a frozen set's members, a dataclass's fields): a
     list, a dict, a set, a bytearray, any mutable sequence, mapping or set, or a dataclass
     that is not frozen. An answer that does is handed out as a copy
-    (``answers.handed_out``). A registered value type and an enum member hold none, and a
-    tuple or frozen set subclass changing how it is read (``changed_reads``) is not walked:
-    the canonical form refuses it, and a copy would read it as it says, not as it stores."""
+    (``answers.handed_out``). A registered value type and an enum member hold none. A tuple
+    or frozen set is walked as it stores its items; one changing how it is read
+    (``changed_reads``) is no answer (``unreadable``)."""
     kind = type(value)
     if kind in _ATOMS or kind is float:
         return False
@@ -743,9 +757,7 @@ def holds_mutable(value: object) -> bool:
     if isinstance(value, Enum) or is_value_type(kind):
         return False
     if isinstance(value, (tuple, frozenset)):
-        if changed_reads(kind):
-            return False  # no value, refused where one enters; not walked
-        return any(holds_mutable(item) for item in cast("tuple[object, ...]", value))
+        return any(holds_mutable(item) for item in _stored(value))
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         params = getattr(kind, "__dataclass_params__", None)
         if params is None or not params.frozen:
@@ -757,6 +769,43 @@ def holds_mutable(value: object) -> bool:
             )
         return any(holds_mutable(getattr(value, name)) for name in names)
     return False
+
+
+def _stored(value: tuple[object, ...] | frozenset[object]) -> Iterator[object]:
+    """A tuple's items or a frozen set's members as it stores them, whatever its class says."""
+    if isinstance(value, tuple):
+        return tuple.__iter__(value)
+    return frozenset.__iter__(value)
+
+
+def unreadable(value: object) -> str | None:
+    """Why ``value`` holds, anywhere the canonical form walks it, a tuple or frozen set
+    subclass changing how it is read (``changed_reads``): such a container is no value where
+    one enters, and no answer either, as a copy handed out would read it as it says, not as
+    it stores; ``None`` where it holds none."""
+    kind = type(value)
+    if kind in _ATOMS or kind is float or isinstance(value, Enum) or is_value_type(kind):
+        return None
+    if isinstance(value, (tuple, frozenset)):
+        changed = changed_reads(kind)
+        if changed:
+            container = "tuple" if isinstance(value, tuple) else "frozen set"
+            return (
+                f"a {kind.__qualname__} changes how a {container} is read "
+                f"({', '.join(changed)}): the engine cannot see what it holds"
+            )
+        return next(filter(None, map(unreadable, _stored(value))), None)
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return next(
+            filter(
+                None, (unreadable(getattr(value, item.name)) for item in dataclasses.fields(value))
+            ),
+            None,
+        )
+    if isinstance(value, (list, dict, set)):
+        items = [*value.keys(), *value.values()] if isinstance(value, dict) else value
+        return next(filter(None, map(unreadable, items)), None)
+    return None
 
 
 __all__ = [
@@ -774,5 +823,6 @@ __all__ = [
     "optional",
     "same",
     "union",
+    "unreadable",
     "value_class",
 ]

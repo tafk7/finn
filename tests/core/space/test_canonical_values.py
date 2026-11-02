@@ -16,6 +16,8 @@ from __future__ import annotations
 import gc
 import math
 import tracemalloc
+import types
+from collections import namedtuple
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field, make_dataclass
 from typing import Any, NamedTuple, cast
@@ -26,6 +28,7 @@ from support.refusals import refused
 from finn.core.space import (
     Decision,
     DefinitionError,
+    EvaluationError,
     Param,
     RequestError,
     Space,
@@ -572,16 +575,23 @@ class Sets(Space):
     def hidden(self) -> HiddenFrozen:
         return HiddenFrozen({Payload(list(range(self.count)))})
 
+    @derived
+    def nested(self) -> tuple[HiddenFrozen, list[int]]:
+        return (HiddenFrozen({Payload([self.count])}), [])
 
-def test_a_frozen_set_subclass_is_refused_not_retyped_and_handed_out_as_it_stores() -> None:
-    """A frozen set subclass hiding its members is refused where it enters; a derived value
-    answering one is handed out as it is, with what it stores (a copy would read it as it
-    says: empty). One changing nothing of how it is read is taken as it is, of its own type,
-    but refused where a member's canonical form changes: it cannot be rebuilt."""
+
+def test_a_frozen_set_subclass_hiding_its_members_is_refused_wherever_it_is_met() -> None:
+    """A frozen set subclass hiding its members is refused where it enters, and as a derived
+    value's answer, on its own or inside one (the engine could neither copy what it holds nor
+    hand it out as it stores). One changing nothing of how it is read is taken as it is, of its
+    own type, but refused where a member's canonical form changes: it cannot be rebuilt."""
     with refused("literal-not-value", error=DefinitionError, message="HiddenFrozen changes"):
         Sets(count=1, members=HiddenFrozen({1.0}))
-    hidden = design_space(Sets(count=2)).hidden
-    assert type(hidden) is HiddenFrozen and frozenset.__len__(hidden) == 1
+    space = design_space(Sets(count=2))
+    with pytest.raises(EvaluationError, match="HiddenFrozen changes how a frozen set is read"):
+        space.hidden
+    with pytest.raises(EvaluationError, match="HiddenFrozen changes how a frozen set is read"):
+        space.nested
     kept = design_space(Sets(count=1, members=Members({0.0, 1.0}))).members
     assert type(kept) is Members and kept == frozenset({0.0, 1.0})
     with refused("literal-not-value", error=DefinitionError, message="a Members is a frozen set"):
@@ -594,11 +604,20 @@ class Keyed:
     inner: Unhashable = field(hash=False)
 
 
+@dataclass(frozen=True)
+class Collision:
+    """Every one hashes alike: its one field is left out of its hash."""
+
+    item: int = field(hash=False)
+
+
 def test_two_frozen_sets_are_compared_member_by_member_in_linear_time(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Members whose identities do not hash are compared within their hash's bucket: two
-    equal sets of 400 such members take a few comparisons each, not one per pair."""
+    equal sets of 400 such members take a few comparisons each, not one per pair. Members
+    whose hashes all collide but whose identities hash are compared by their identities, not
+    within that one bucket."""
     calls = 0
     compare = semantics._same_item
 
@@ -612,6 +631,11 @@ def test_two_frozen_sets_are_compared_member_by_member_in_linear_time(
     left = frozenset(Keyed(at, Unhashable(at)) for at in range(size))
     right = frozenset(Keyed(at, Unhashable(at)) for at in range(size))
     assert semantics.same(left, right, owner="test", role="test")
+    assert calls <= 4 * size
+    calls = 0
+    colliding = frozenset(Collision(at) for at in range(size))
+    alike = frozenset(Collision(at) for at in range(size))
+    assert semantics.same(colliding, alike, owner="test", role="test")
     assert calls <= 4 * size
 
 
@@ -653,3 +677,77 @@ def test_recognizing_a_value_class_keeps_no_class_for_its_shape() -> None:
         kind for kind in gc.get_objects() if type(kind) is type and kind.__name__ == "_Reference"
     ]
     assert semantics._generated.cache_info().maxsize == 256
+
+
+# -- What the third review found: a class changed after use, closures, ``!=`` ---------------
+
+
+class Later(tuple[object, ...]):
+    """A tuple subclass that reads as a tuple until its ``__iter__`` is replaced."""
+
+    __slots__ = ()
+
+
+def test_a_tuple_is_walked_as_it_stores_whatever_its_class_became_after_use(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A class's reading is recognized once; its items are always walked as the tuple stores
+    them, so a class whose ``__iter__`` is replaced after it was met hides nothing: two values
+    storing other items are not the same, and one storing a list is refused for it."""
+    assert semantics.same(Later((1,)), Later((1,)), owner="test", role="test")
+    assert semantics.canonical(Later((1,))) == Later((1,))
+    monkeypatch.setattr(Later, "__iter__", lambda self: iter(()))
+    assert not semantics.same(Later((1,)), Later((2,)), owner="test", role="test")
+    assert identity(Later((1,))) != identity(Later((2,)))
+    with pytest.raises(semantics.NotAValue, match="a list is mutable"):
+        semantics.canonical(Later(([1],)))
+
+
+class Agreeable:
+    """Equal to anything: a closure holding one is not ``tuple``'s."""
+
+    def __eq__(self, other: object) -> bool:
+        return True
+
+    def __hash__(self) -> int:
+        return 0
+
+    def __call__(self, value: object) -> tuple[object, ...]:
+        return ()
+
+
+def test_a_named_tuples_copy_is_its_own_only_with_the_closure_it_was_made_with() -> None:
+    """A named tuple's ``__getnewargs__`` is taken as its own where its code and closure are
+    those ``namedtuple`` makes, the closure compared by identity: one closing over a value
+    equal to anything changes how it is read."""
+    made = namedtuple("made", "x")
+    assert changed_reads(made) == ()
+    making: Any = namedtuple
+    forged = making("Forged", "x")
+    original = forged.__getnewargs__
+    cells = tuple(
+        (lambda kept: lambda: kept)(Agreeable()).__closure__[0]  # type: ignore[index]
+        for _ in original.__closure__
+    )
+    forged.__getnewargs__ = types.FunctionType(
+        original.__code__, original.__globals__, closure=cells
+    )
+    assert changed_reads(forged) == ("__getnewargs__",)
+
+
+class Contrary(frozenset[int]):
+    """A frozen set whose ``!=`` holds every two apart: the engine compares by ``==``."""
+
+    __slots__ = ()
+
+    def __ne__(self, other: object) -> bool:
+        return True
+
+
+def test_two_frozen_sets_are_compared_by_their_eq_not_their_ne() -> None:
+    """Sameness asks whether two sets are equal, never ``!=``: a set subclass whose ``!=``
+    disagrees with its ``==`` is the same as an equal one, and its design spaces are one."""
+    assert semantics.same(Contrary({1}), Contrary({1}), owner="test", role="test")
+    one = design_space(Meter(rate=1.0, box=Box(Contrary({1}))))
+    other = design_space(Meter(rate=1.0, box=Box(Contrary({1}))))
+    assert held(one).ds == held(other).ds
