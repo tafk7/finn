@@ -61,6 +61,8 @@ class BoundFunction:
     call_style: Literal["explicit", "self"] = "explicit"
     # Whether its return annotation admits ``Inapplicable`` (``collection.declared_answer``).
     admits_inapplicable: bool = False
+    # A constraint declared to apply wherever it is present: its refusal's code.
+    applies: str | None = None
 
 
 def resolve_annotations(

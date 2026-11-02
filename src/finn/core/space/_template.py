@@ -374,6 +374,7 @@ class _Freezing:
             function=node.function,
             call_style=node.call_style,
             admits_inapplicable=node.admits_inapplicable,
+            applies=node.applies,
             value=node.value,
             required=node.required,
             domain=node.domain,

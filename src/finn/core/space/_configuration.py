@@ -181,7 +181,8 @@ class SpaceMeta(type):
 def _close(cls: SpaceMeta) -> None:
     """Close a Space class as it is created: freeze each declaration it holds (a node's
     record, a selector's and each of its cases' included), mark it closed, and refuse an
-    override of a rule that widens its base's answer (``collection.check_overrides``)."""
+    override of a rule that widens its base's answer, or drops a constraint's ``applies``
+    (``collection.check_overrides``)."""
     from ._nodes import NodeDecision, slot_declaration
 
     reason = f"{cls.__name__} was created"

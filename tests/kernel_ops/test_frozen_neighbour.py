@@ -384,10 +384,11 @@ def test_a_neighbour_whose_pace_in_cycles_is_not_known_is_refused_by_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Its kernel's stated rate refused (``kernel-rate-port``), or waiting on an open choice:
-    its pace in cycles is no fact, so neither is the neighbour, its causes kept; a pace
-    answered None (a rate not stated) is no pace, and a stated one the neighbour's. The
-    KernelOp is stood in for by its design space (``kernel_op``), the reader is the
-    network's."""
+    its pace in cycles is no fact, so neither is the neighbour, its causes kept. A stated
+    rate is contract (CONTRACT.md L6): refused, it refuses its kernel's design point, so the
+    neighbour is refused as its kernel is, before its pace is read. A pace answered None (a
+    rate not stated) is no pace, and a stated one the neighbour's. The KernelOp is stood in
+    for by its design space (``kernel_op``), the reader is the network's."""
     node = helper.make_node("Rated", ["edge"], ["out"], name="Rated_0")
 
     def frozen(point: Kernel) -> Any:
@@ -405,7 +406,7 @@ def test_a_neighbour_whose_pace_in_cycles_is_not_known_is_refused_by_name(
     for point, why, code in (
         (
             design_space(_Stating(rate=replace(_RATE, times=(1, 3, 5)))),
-            "its pace in cycles is refused",
+            "its kernel is refused",
             "kernel-rate-port",
         ),
         (space, "its pace in cycles waits on an open choice", "decision-unassigned"),

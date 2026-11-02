@@ -15,9 +15,11 @@ class UncheckedInPort(InPort):
     so that a fixture's port whose transport refuses its stream (a loop-completion vector
     on a native port named in full) leaves its design point valid, and its kernel's module
     assembly reads its refused pins: the order in which a netlist reads its parts and
-    collects their refusals, which a library kernel's point never reaches."""
+    collects their refusals, which a library kernel's point never reaches. The override
+    restates that the rule applies wherever its port is present (``override-applies``); it
+    reads nothing, so it is never inapplicable."""
 
-    @constraint
+    @constraint(applies="port-presentation-inapplicable")
     def presented(self) -> bool:
         return True
 
@@ -25,7 +27,7 @@ class UncheckedInPort(InPort):
 class UncheckedOutPort(OutPort):
     """The output counterpart of :class:`UncheckedInPort`."""
 
-    @constraint
+    @constraint(applies="port-presentation-inapplicable")
     def presented(self) -> bool:
         return True
 

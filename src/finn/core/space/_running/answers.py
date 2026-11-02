@@ -226,6 +226,36 @@ def _finish(node: Address, returned: object) -> Called:
     return Called(Available(value))
 
 
+def _applied(node: Address, called: Called, read: Sequence[Address] = ()) -> Called:
+    """A constraint declared to apply wherever it is present (``Address.applies``), where it
+    answers ``Inapplicable`` (by a read ``read`` that does not apply, or returned): refused
+    on its own values, by a finding of its declared code naming what it read, the read's
+    findings its causes. Any other answer is unchanged."""
+    answer = called.result
+    if node.applies is None or not isinstance(answer, Inapplicable):
+        return called
+    owners = tuple(dict.fromkeys(each.owner for each in read))
+    message = (
+        f"it applies wherever it is present, and read {', '.join(owners)}, which does not apply"
+        if owners
+        else "it applies wherever it is present, and answered Inapplicable"
+    )
+    refusal = Rejected(
+        (
+            Finding(
+                FindingKind.REJECTION,
+                node.applies,
+                node.owner,
+                message,
+                details=(("read", owners),) if owners else (),
+                causes=answer.findings,
+            ),
+        )
+    )
+    assessment = ConstraintAssessment({node.key: refusal}, refusal)
+    return Called(refusal, assessment, True, called.existence)
+
+
 def _finished(node: Address, returned: object) -> Called:
     """``_finish``, where a returned value that fails as an answer is the owner's error."""
     try:

@@ -397,8 +397,10 @@ def test_the_sources_choices_round_trip_through_another_partition():
 def test_several_weight_sets_without_known_weights_leave_the_set_channel_unplaced():
     # No value, no source: the set channel's consumer, the source's set port, does not
     # apply, and neither does the channel (its sides, its netlist): the partition's module
-    # is not made, and the netlist's refusal says why (``channel-unused``: no port of the
-    # channel is present).
+    # is not made. The channel's entering boundary port is placed and presents nothing (its
+    # stream does not apply), so its design point is refused at that port's ``presented``,
+    # which applies wherever its port is present (CONTRACT.md R3, level 1:
+    # ``port-presentation-inapplicable``), before its netlist (``channel-unused``).
     point = configured(base(weight_sets=2))
     assert isinstance(point.member("set").query(Channel.sides), Inapplicable)
     assert isinstance(point.netlist(), Rejected)
@@ -406,10 +408,10 @@ def test_several_weight_sets_without_known_weights_leave_the_set_channel_unplace
     assert isinstance(module, Rejected)
     ((found,),) = [module.findings]
     assert (found.code, found.owner, found.message, dict(found.details)) == (
-        "channel-unused",
-        "set",
-        "no present port is on this channel: w.set does not apply (its member places no such port)",
-        {"tensor": "set"},
+        "port-presentation-inapplicable",
+        "outer_in.presented",
+        "it applies wherever it is present, and read set.outer_in.stream, which does not apply",
+        {"read": ("set.outer_in.stream",), "tensor": "set"},
     )
 
 

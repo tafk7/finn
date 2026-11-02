@@ -64,6 +64,8 @@ class Node:
     call_style: Literal["explicit", "self"] = "explicit"
     # A computation's: whether its return annotation admits ``Inapplicable``.
     admits_inapplicable: bool = False
+    # A constraint's declared to apply wherever it is present: its refusal's code.
+    applies: str | None = None
     value: object = None
     # A formal's: something must supply it.
     required: bool = True
@@ -175,6 +177,8 @@ class Member:
     call_style: Literal["explicit", "self"] = "explicit"
     # A computation's: whether its return annotation admits ``Inapplicable``.
     admits_inapplicable: bool = False
+    # A constraint's declared to apply wherever it is present: its refusal's code.
+    applies: str | None = None
     value: object = None
     required: bool = True
     domain: Domain[object] | None = None
