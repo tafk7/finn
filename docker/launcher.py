@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """FINN's host launcher: build, run and transport the FINN Docker image.
 
-One standard-library program (Python 3.10 or later) owns everything the host
+One standard-library program (Python 3.7 or later) owns everything the host
 decides before a container starts:
 
 - the host file ``~/.config/finn/xilinx.env`` and AMD's install layouts;
@@ -34,8 +34,17 @@ import sys
 import tempfile
 import urllib.request
 import uuid
-from dataclasses import dataclass, field
-from pathlib import Path
+
+# Build agents run this with their system python3, before FINN's environment
+# exists; name the requirement instead of failing on the first missing module.
+if sys.version_info < (3, 7):
+    sys.exit(
+        "docker/launcher.py needs Python 3.7 or later on the host; %s is %d.%d"
+        % ((sys.executable,) + tuple(sys.version_info[:2]))
+    )
+
+from dataclasses import dataclass, field  # noqa: E402
+from pathlib import Path  # noqa: E402
 
 DOCKER_DIR = Path(__file__).resolve().parent
 REPO = DOCKER_DIR.parent
@@ -393,14 +402,21 @@ def add_toolchain(out):
                 out["mounts"].append(
                     {"source": value, "target": value, "mode": "ro", "reason": "tool-override"}
                 )
-    override = hostpath(os.environ.get("FINN_TOOL_DIR_OVERRIDE"))
+    override = os.environ.get("FINN_TOOL_DIR_OVERRIDE")
     if override:
-        if not os.path.isdir(override):
-            raise LaunchError("FINN_TOOL_DIR_OVERRIDE is not a directory: " + override, 3)
+        if os.path.isdir(hostpath(override)):
+            override = hostpath(override)
+            out["mounts"].append(
+                {"source": override, "target": override, "mode": "ro", "reason": "site-tools"}
+            )
+        else:
+            # A site can name a directory that only exists in the container, such as
+            # an LSF wrapper kit that FINN_DOCKER_EXTRA mounts.
+            warn(
+                "FINN_TOOL_DIR_OVERRIDE=%s is not a host directory; passing it on "
+                "unmounted, for FINN_DOCKER_EXTRA to provide" % override
+            )
         out["env"]["FINN_TOOL_DIR_OVERRIDE"] = override
-        out["mounts"].append(
-            {"source": override, "target": override, "mode": "ro", "reason": "site-tools"}
-        )
     return root
 
 
@@ -944,7 +960,9 @@ def image_revision(runtimes, root=REPO):
         optional = pattern.startswith("?")
         pattern = pattern[1:] if optional else pattern
         found = False
-        for path in sorted(glob.glob(pattern, root_dir=str(root), recursive=True)):
+        base = os.path.join(glob.escape(str(root)), "")
+        matches = glob.glob(base + pattern, recursive=True)
+        for path in sorted(os.path.relpath(match, str(root)) for match in matches):
             full = root / path
             if not full.is_file() or re.search(r"(^|/)__pycache__/|\.pyc$|\.so$|\.egg-info/", path):
                 continue

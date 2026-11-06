@@ -637,6 +637,33 @@ def test_site_directories_must_exist(tmp_path):
     assert data["mounts"][0]["source"] == str(golden) and data["mounts"][0]["mode"] == "rw"
 
 
+def test_tool_dir_override_may_exist_only_in_the_container(tmp_path):
+    # Jenkins mounts its LSF wrapper kit through FINN_DOCKER_EXTRA and names the
+    # container path, which the build agent itself does not have.
+    tools = {
+        "FINN_XILINX_PATH": make_tree(tmp_path / "Xilinx", "old", "2024.2"),
+        "FINN_XILINX_VERSION": "2024.2",
+    }
+    wrappers = tmp_path / "wrappers"
+    wrappers.mkdir()
+    data = inspect(dict(tools, FINN_TOOL_DIR_OVERRIDE=str(wrappers)), "build")
+    assert data["env"]["FINN_TOOL_DIR_OVERRIDE"] == str(wrappers)
+    assert {
+        "source": str(wrappers),
+        "target": str(wrappers),
+        "mode": "ro",
+        "reason": "site-tools",
+    } in data["mounts"]
+    kit = "/opt/finn-lsf/bin"
+    assert not os.path.exists(kit)
+    proc = launch("inspect", "--tier", "build", env=dict(tools, FINN_TOOL_DIR_OVERRIDE=kit))
+    assert proc.returncode == 0, proc.stderr
+    data = json.loads(proc.stdout)
+    assert data["env"]["FINN_TOOL_DIR_OVERRIDE"] == kit
+    assert not any(m["source"] == kit for m in data["mounts"])
+    assert "is not a host directory" in proc.stderr
+
+
 # --------------------------------------------------------------------------
 # docker run.
 # --------------------------------------------------------------------------

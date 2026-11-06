@@ -71,7 +71,7 @@ and runs the requested argument vector. Failed preparation stops the command.
 
 Configured host tools and licences are mounted automatically; ``--fpga`` makes
 them a requirement and ``--no-tools`` leaves them out. Host discovery is the
-standard-library ``docker/launcher.py`` (Python 3.10 or later); native activation
+standard-library ``docker/launcher.py`` (Python 3.7 or later); native activation
 and containers share ``docker/finn-toolchain.sh``. ``--runtime xrt`` selects
 accelerator userspace independently of host tools. Runtime manifests also
 support supplied SLASH packages. Board kernel drivers remain host responsibilities.

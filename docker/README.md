@@ -6,7 +6,7 @@ The development image contains the full locked environment, including notebook,
 export, reporting and benchmark packages.
 
 `docker/build` and `docker/run` are thin wrappers around `docker/launcher.py`, a
-standard-library Python program (Python 3.10 or later on the host) that owns every
+standard-library Python program (Python 3.7 or later on the host) that owns every
 host decision: tools, licences, mounts, image identity and image transport.
 Building needs Docker Buildx with Bake (`docker buildx bake --help`; install
 `docker-buildx-plugin` if it is missing). Running a published, verified image
@@ -89,7 +89,9 @@ declarations, not firewall rules.
 `/opt/xilinx/platforms` where that exists. `VIVADO_PATH`, `VITIS_PATH` and
 `HLS_PATH` override single tools. `FINN_TOOL_DIR_OVERRIDE` keeps site tool
 interception, including LSF routing, through `resolve_xilinx_tool()`; wrapper
-directories are not prepended to `PATH` for bare commands. Keep the build
+directories are not prepended to `PATH` for bare commands. A host directory is
+mounted read-only; a path that exists only in the container, such as a wrapper
+kit mounted through `FINN_DOCKER_EXTRA`, is passed on with a warning. Keep the build
 directory and `FINN_HOME` on storage the farm sees at the same absolute path,
 since generated Tcl embeds them. `.Xilinx/` Tcl files in the checkout are copied
 into the container's home.

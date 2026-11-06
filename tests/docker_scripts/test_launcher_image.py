@@ -493,14 +493,32 @@ def test_publication_sigterm_cleans_partial_archive(clean, tmp_path, monkeypatch
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not shutil.which("python3.10"), reason="needs python3.10")
-def test_launcher_runs_on_python_3_10(tmp_path):
+# Build agents may only have an older system python3, so test the oldest one found.
+OLD_PYTHON = next(
+    (p for p in ("python3.7", "python3.8", "python3.9", "python3.10") if shutil.which(p)), None
+)
+
+
+@pytest.mark.skipif(OLD_PYTHON is None, reason="needs python3.7 to python3.10")
+def test_launcher_runs_on_an_old_python(tmp_path):
     env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path), "FINN_XILINX_ENV": ""}
     for args in (["build", "--print"], ["run", "--print"], ["inspect", "--format", "sh"]):
         proc = subprocess.run(
-            ["python3.10", "-I", LAUNCHER, *args], capture_output=True, text=True, env=env
+            [OLD_PYTHON, "-I", LAUNCHER, *args], capture_output=True, text=True, env=env
         )
-        assert proc.returncode == 0, (args, proc.stderr)
+        assert proc.returncode == 0, (OLD_PYTHON, args, proc.stderr)
     source = (REPO / "docker/launcher.py").read_text() + (REPO / "docker/identity.py").read_text()
-    for unavailable in ("tomllib", "file_digest", "datetime.UTC", "ExceptionGroup"):
+    # Newer than 3.7: glob's root_dir (3.10), str.removeprefix (3.9), shlex.join (3.8),
+    # tomllib and hashlib.file_digest (3.11).
+    for unavailable in ("root_dir=", "removeprefix", "shlex.join", "tomllib", "file_digest"):
         assert unavailable not in source
+
+
+def test_launcher_names_its_python_requirement():
+    code = (
+        "import runpy, sys; sys.version_info = (3, 6, 15, 'final', 0); "
+        "runpy.run_path(%r, run_name='__main__')" % LAUNCHER
+    )
+    proc = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True)
+    assert proc.returncode == 1
+    assert "needs Python 3.7 or later on the host" in proc.stderr
