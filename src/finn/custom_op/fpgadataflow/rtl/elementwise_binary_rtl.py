@@ -10,6 +10,7 @@ import numpy as np
 import os
 from qonnx.core.datatype import DataType
 
+from finn import resources
 from finn.custom_op.fpgadataflow import elementwise_binary
 from finn.custom_op.fpgadataflow.elementwise_binary import ElementwiseBinaryOperation
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
@@ -117,7 +118,7 @@ class ElementwiseBinary_rtl(ElementwiseBinaryOperation, RTLBackend):
         if has_const:
             self.generate_params(model, code_gen_dir)
 
-        rtlsrc = f'{os.environ["FINN_ROOT"]}/finn-rtllib/eltwise'
+        rtlsrc = resources.join("rtllib", "eltwise")
         template_path = f"{rtlsrc}/eltwise_template.v"
         pe = self.get_nodeattr("PE")
 
@@ -160,7 +161,7 @@ class ElementwiseBinary_rtl(ElementwiseBinaryOperation, RTLBackend):
     def get_rtl_file_list(self, abspath=False):
         if abspath:
             code_gen_dir = f"{self.get_nodeattr('code_gen_dir_ipgen')}/"
-            rtllib_dir = f'{os.environ["FINN_ROOT"]}/finn-rtllib/eltwise/'
+            rtllib_dir = resources.join("rtllib", "eltwise/")
         else:
             code_gen_dir = ""
             rtllib_dir = ""
@@ -274,8 +275,8 @@ class ElementwiseBinary_rtl(ElementwiseBinaryOperation, RTLBackend):
             code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
             runtime_writable = self.get_nodeattr("runtime_writeable_weights") == 1
 
-            axi_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/axi/hdl/")
-            ms_rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/memstream/hdl/")
+            axi_dir = resources.join("rtllib", "axi/hdl/")
+            ms_rtllib_dir = resources.join("rtllib", "memstream/hdl/")
             file_suffix = "_memstream_wrapper.v"
 
             strm_tmpl = None

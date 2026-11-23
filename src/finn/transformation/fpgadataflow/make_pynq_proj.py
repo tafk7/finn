@@ -37,6 +37,7 @@ from qonnx.transformation.infer_data_layouts import InferDataLayouts
 from qonnx.util.basic import get_num_default_workers
 from shutil import copy
 
+from finn import resources
 from finn.resources.prepare import board_files
 from finn.transformation.fpgadataflow.create_dataflow_partition import (
     CreateDataflowPartition,
@@ -89,7 +90,7 @@ def collect_ip_dirs(model, ipstitch_path):
     ip_dirs += [ipstitch_path + "/ip"]
     if need_memstreamer:
         # add RTL streamer IP
-        ip_dirs.append("$::env(FINN_ROOT)/finn-rtllib/memstream")
+        ip_dirs.append(tcl_string(resources.join("rtllib", "memstream")))
     return ip_dirs
 
 

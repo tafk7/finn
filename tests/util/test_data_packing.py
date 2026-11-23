@@ -30,10 +30,12 @@ import pytest
 
 import numpy as np
 import os
+import shlex
 import subprocess
 from qonnx.core.datatype import DataType
 from qonnx.util.basic import gen_finn_dt_tensor
 
+from finn import resources
 from finn.util.basic import make_build_dir, robust_rmtree
 from finn.util.data_packing import (
     finnpy_to_packed_bytearray,
@@ -82,11 +84,14 @@ def test_npy2tensorstream(test_shape, dtype):
     with open(test_dir + "/test.cpp", "w") as f:
         f.write("\n".join(test_app_string))
     cmd_compile = """
-g++ -o test_npy2tensorstream test.cpp $FINN_ROOT/src/finn/qnn-data/cpp/cnpy.cpp \
--I{}/include -I{}/include -I$FINN_ROOT/src/finn/qnn-data/cpp \
--I"$FINN_HLSLIB_PATH" \
+g++ -o test_npy2tensorstream test.cpp {cpp}/cnpy.cpp \
+-I{}/include -I{}/include -I{cpp} \
+-I{hlslib} \
 --std=c++17 -lz""".format(
-        os.environ["HLS_PATH"], os.environ["VITIS_PATH"]
+        os.environ["HLS_PATH"],
+        os.environ["VITIS_PATH"],
+        cpp=shlex.quote(resources.join("qnn-data", "cpp")),
+        hlslib=shlex.quote(resources.path("hlslib")),
     )
     with open(test_dir + "/compile.sh", "w") as f:
         f.write(cmd_compile)

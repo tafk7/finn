@@ -6,15 +6,15 @@
 
 import pytest
 
-import os
 import sys
 
-# finn_xsi is not pip-installed (only src/ is packaged), and finn.xsi adds this
-# dir to sys.path at runtime. srcutil has no xsi C-extension import, so we can
-# add the dir and import it even in a checkout where finn_xsi is not built yet
-# (finn_xsi.adapter could not, since it imports sim_engine).
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_XSI_ROOT = os.path.join(os.environ.get("FINN_ROOT", _REPO_ROOT), "finn_xsi")
+from finn import resources
+
+# finn_xsi is not an installed package: finn.xsi adds the finn-xsi resource to
+# sys.path at runtime. srcutil has no xsi C-extension import, so we can add the
+# dir and import it even where finn_xsi is not built yet (finn_xsi.adapter could
+# not, since it imports sim_engine).
+_XSI_ROOT = resources.path("finn-xsi")
 if _XSI_ROOT not in sys.path:
     sys.path.insert(0, _XSI_ROOT)
 

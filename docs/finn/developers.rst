@@ -90,9 +90,9 @@ and ``ci/README.md`` for the full variable list, migration and validation contra
 It is possible to launch builds for FINN-generated HLS IP and stitched-IP folders outside of the Docker container.
 This may be necessary for visual inspection of the generated designs inside the Vivado GUI, if you run into licensing
 issues during synthesis, or other environmental problems.
-Simply set the ``FINN_ROOT`` environment variable to the location where the FINN compiler is installed on the host
-computer, and you should be able to launch the various .tcl scripts or .xpr project files without using the FINN
-Docker container as well.
+Generated scripts name FINN's sources (finn-rtllib, finn-hlslib and the other resources) by absolute path, and
+``docker/run --fpga`` mounts the checkout and ``FINN_HOME`` at their host paths, so the various .tcl scripts and .xpr
+project files can be launched on the host as they are.
 
 Linting
 =======

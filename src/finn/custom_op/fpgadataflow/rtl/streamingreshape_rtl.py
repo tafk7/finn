@@ -5,12 +5,13 @@
 
 import os
 
+from finn import resources
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
 from finn.custom_op.fpgadataflow.streamingreshape import StreamingReshape
 
 
 def _rtlsrc_dir():
-    return os.path.join(os.environ["FINN_ROOT"], "finn-rtllib", "passthru", "hdl")
+    return resources.join("rtllib", "passthru", "hdl")
 
 
 class StreamingReshape_rtl(StreamingReshape, RTLBackend):

@@ -21,6 +21,7 @@ from qonnx.util.basic import qonnx_make_model
 import finn.builder.build_dataflow as build
 import finn.builder.build_dataflow_config as build_cfg
 import finn.transformation.fpgadataflow.derive_characteristic as derive_characteristic
+from finn import resources
 from finn.analysis.fpgadataflow.dataflow_performance import dataflow_performance
 from finn.analysis.fpgadataflow.exp_cycles_per_layer import exp_cycles_per_layer
 from finn.analysis.fpgadataflow.res_estimation import (
@@ -114,7 +115,7 @@ def test_estimate_only_steps_defined():
 def test_estimate_only_flow_produces_reports():
     """Test estimate-only flow runs and produces estimate reports without Vivado."""
     output_dir = make_build_dir("test_estimate_flow_")
-    model_file = os.environ["FINN_ROOT"] + "/src/finn/qnn-data/build_dataflow/model.onnx"
+    model_file = resources.join("qnn-data", "build_dataflow/model.onnx")
 
     cfg = build.DataflowBuildConfig(
         output_dir=output_dir,

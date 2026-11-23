@@ -28,6 +28,7 @@
 
 import os
 
+from finn import resources
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
 from finn.custom_op.fpgadataflow.streamingdatawidthconverter import (
     StreamingDataWidthConverter,
@@ -63,7 +64,7 @@ class StreamingDataWidthConverter_rtl(StreamingDataWidthConverter, RTLBackend):
         return code_gen_dict
 
     def generate_hdl(self, model, fpgapart, clk):
-        rtlsrc = os.environ["FINN_ROOT"] + "/finn-rtllib/dwc/hdl"
+        rtlsrc = resources.join("rtllib", "dwc/hdl")
         template_path = rtlsrc + "/dwc_template.v"
         code_gen_dict = self.get_template_values()
         # save top module name so we can refer to it after this node has been renamed
@@ -92,7 +93,7 @@ class StreamingDataWidthConverter_rtl(StreamingDataWidthConverter, RTLBackend):
     def get_rtl_file_list(self, abspath=False):
         if abspath:
             code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen") + "/"
-            rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/dwc/hdl/")
+            rtllib_dir = resources.join("rtllib", "dwc/hdl/")
         else:
             code_gen_dir = ""
             rtllib_dir = ""

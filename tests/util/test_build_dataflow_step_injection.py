@@ -15,6 +15,7 @@ import os
 
 import finn.builder.build_dataflow as build
 import finn.builder.build_dataflow_config as build_cfg
+from finn import resources
 from finn.util.basic import make_build_dir
 
 # module-level log that injected steps append to, so the test can assert the
@@ -39,7 +40,7 @@ def _make_recording_step(tag):
 def test_build_dataflow_step_injection():
     CALL_ORDER.clear()
     output_dir = make_build_dir("test_step_injection_")
-    model_file = os.environ["FINN_ROOT"] + "/src/finn/qnn-data/build_dataflow/model.onnx"
+    model_file = resources.join("qnn-data", "build_dataflow/model.onnx")
 
     # injected steps: two at phase granularity, two at internal-step granularity,
     # covering both the before and after hooks
@@ -101,7 +102,7 @@ def test_build_dataflow_no_injection_is_noop():
     """Without injection config, only the phase's own steps run and no extra
     checkpoints are produced."""
     output_dir = make_build_dir("test_no_injection_")
-    model_file = os.environ["FINN_ROOT"] + "/src/finn/qnn-data/build_dataflow/model.onnx"
+    model_file = resources.join("qnn-data", "build_dataflow/model.onnx")
 
     cfg = build.DataflowBuildConfig(
         output_dir=output_dir,
@@ -131,7 +132,7 @@ def test_estimate_only_flow_skips_fifo_sizing():
     produce estimate reports but no ``final_hw_config.json`` (which
     step_set_fifo_depths is the only step to write)."""
     output_dir = make_build_dir("test_fifo_skip_")
-    model_file = os.environ["FINN_ROOT"] + "/src/finn/qnn-data/build_dataflow/model.onnx"
+    model_file = resources.join("qnn-data", "build_dataflow/model.onnx")
 
     cfg = build.DataflowBuildConfig(
         output_dir=output_dir,

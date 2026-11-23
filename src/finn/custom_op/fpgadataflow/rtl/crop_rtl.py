@@ -3,12 +3,13 @@
 
 import os
 
+from finn import resources
 from finn.custom_op.fpgadataflow.crop import Crop
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
 
 
 def _rtlsrc_dir():
-    return os.path.join(os.environ["FINN_ROOT"], "finn-rtllib", "crop", "hdl")
+    return resources.join("rtllib", "crop", "hdl")
 
 
 class Crop_rtl(Crop, RTLBackend):

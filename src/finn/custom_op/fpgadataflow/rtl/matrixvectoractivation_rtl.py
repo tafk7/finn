@@ -29,6 +29,7 @@
 import numpy as np
 import os
 
+from finn import resources
 from finn.custom_op.fpgadataflow.matrixvectoractivation import MVAU
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
 from finn.util.basic import DSP_VERSIONS, get_dsp_datapath_limits, resolve_dsp_block
@@ -192,7 +193,7 @@ class MVAU_rtl(MVAU, RTLBackend):
         node_name = self.onnx_node.name
         code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
 
-        rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/mvu/")
+        rtllib_dir = resources.join("rtllib", "mvu/")
         sourcefiles = [
             "mvu_pkg.sv",
             "mvu_vvu_axi.sv",
@@ -341,7 +342,7 @@ class MVAU_rtl(MVAU, RTLBackend):
         self.set_nodeattr("ip_path", code_gen_dir)
 
     def prepare_codegen_default(self, fpgapart, clk):
-        template_path = os.environ["FINN_ROOT"] + "/finn-rtllib/mvu/mvu_vvu_axi_wrapper.v"
+        template_path = resources.join("rtllib", "mvu/mvu_vvu_axi_wrapper.v")
 
         # check if settings are valid
         pumped_compute = self.get_nodeattr("pumpedCompute")
@@ -434,7 +435,7 @@ class MVAU_rtl(MVAU, RTLBackend):
     def get_rtl_file_list(self, abspath=False):
         if abspath:
             code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen") + "/"
-            rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/mvu/")
+            rtllib_dir = resources.join("rtllib", "mvu/")
         else:
             code_gen_dir = ""
             rtllib_dir = ""
@@ -461,6 +462,6 @@ class MVAU_rtl(MVAU, RTLBackend):
 
     def get_verilog_paths(self):
         verilog_paths = super().get_verilog_paths()
-        verilog_paths.append(os.environ["FINN_ROOT"] + "/finn-rtllib/mvu")
-        verilog_paths.append(os.environ["FINN_ROOT"] + "/finn-rtllib/input_gen/hdl")
+        verilog_paths.append(resources.join("rtllib", "mvu"))
+        verilog_paths.append(resources.join("rtllib", "input_gen/hdl"))
         return verilog_paths

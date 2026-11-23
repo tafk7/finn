@@ -29,7 +29,6 @@ def state(tmp_path, monkeypatch):
         ):
             monkeypatch.delenv(name)
     monkeypatch.setenv("FINN_HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("FINN_ROOT", str(Path(__file__).resolve().parents[2]))
     monkeypatch.setenv("FINN_RESOURCES_SYSTEM_CACHE", str(tmp_path / "no-system-cache"))
     resources._cache.clear()
     return tmp_path / "home"
@@ -75,7 +74,7 @@ def test_xsi_builds_are_keyed_under_finn_home(state, tmp_path, monkeypatch):
     (checkout / "finn_xsi").mkdir(parents=True)
     cpp = checkout / "finn_xsi/xsi_finn.cpp"
     cpp.write_text("// version one")
-    monkeypatch.setenv("FINN_ROOT", str(checkout))
+    monkeypatch.setenv("FINN_RESOURCES_FINN_XSI", str(checkout / "finn_xsi"))
     monkeypatch.setenv("XILINX_VIVADO", str(vivado(tmp_path)))
     original = paths.build_dir()
     assert original.parent == state / "xsi"
@@ -94,9 +93,9 @@ def test_xsi_key_ignores_the_checkout_location(state, tmp_path, monkeypatch):
     for name in ("checkout", "checkout@2"):
         (tmp_path / name / "finn_xsi").mkdir(parents=True)
         (tmp_path / name / "finn_xsi/xsi_finn.cpp").write_text("// same")
-    monkeypatch.setenv("FINN_ROOT", str(tmp_path / "checkout"))
+    monkeypatch.setenv("FINN_RESOURCES_FINN_XSI", str(tmp_path / "checkout/finn_xsi"))
     first = paths.build_dir()
-    monkeypatch.setenv("FINN_ROOT", str(tmp_path / "checkout@2"))
+    monkeypatch.setenv("FINN_RESOURCES_FINN_XSI", str(tmp_path / "checkout@2/finn_xsi"))
     assert paths.build_dir() == first
 
 

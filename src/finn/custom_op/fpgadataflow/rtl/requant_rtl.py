@@ -4,6 +4,7 @@
 import numpy as np
 import os
 
+from finn import resources
 from finn.custom_op.fpgadataflow.requant import Requant, float32_literal
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
 from finn.util.basic import (
@@ -379,7 +380,7 @@ class Requant_rtl(Requant, RTLBackend):
         out_stream_width = ((pe * n + 7) // 8) * 8
 
         top_module_name = self.get_verilog_top_module_name()
-        rtllib_dir = os.environ["FINN_ROOT"] + "/finn-rtllib/requant/hdl/"
+        rtllib_dir = resources.join("rtllib", "requant/hdl/")
 
         # Generate SystemVerilog implementation module (with _impl suffix)
         sv_template_path = rtllib_dir + "requant_wrapper_template.sv"
@@ -457,7 +458,7 @@ class Requant_rtl(Requant, RTLBackend):
         out_stream_width = ((pe * n + 7) // 8) * 8
 
         top_module_name = self.get_verilog_top_module_name()
-        rtllib_dir = os.environ["FINN_ROOT"] + "/finn-rtllib/requantf/hdl/nonlin/"
+        rtllib_dir = resources.join("rtllib", "requantf/hdl/nonlin/")
 
         # Generate SystemVerilog implementation module (with _impl suffix)
         sv_template_path = rtllib_dir + "requantf_wrapper_template.sv"
@@ -519,7 +520,7 @@ class Requant_rtl(Requant, RTLBackend):
         odt = self.get_output_datatype()
 
         if self.get_input_datatype(0) == "FLOAT32":
-            rtllib_dir = os.environ["FINN_ROOT"] + "/finn-rtllib/requantf/hdl/nonlin/"
+            rtllib_dir = resources.join("rtllib", "requantf/hdl/nonlin/")
             template_name = "requantf_wrapper_decoupled_template.v"
             subst = {
                 "$TOP_MODULE_NAME$": top_module_name,
@@ -530,7 +531,7 @@ class Requant_rtl(Requant, RTLBackend):
             }
         else:
             idt = self.get_input_datatype(0)
-            rtllib_dir = os.environ["FINN_ROOT"] + "/finn-rtllib/requant/hdl/"
+            rtllib_dir = resources.join("rtllib", "requant/hdl/")
             template_name = "requant_wrapper_decoupled_template.v"
             subst = {
                 "$TOP_MODULE_NAME$": top_module_name,
@@ -586,7 +587,7 @@ class Requant_rtl(Requant, RTLBackend):
 
         if self.get_input_datatype(0) == "FLOAT32":
             # requantf core (DSPFP32 via fmaf); Versal only.
-            rtllib_dir = os.environ["FINN_ROOT"] + "/finn-rtllib/requantf/hdl/"
+            rtllib_dir = resources.join("rtllib", "requantf/hdl/")
             if decoupled:
                 rtl_files = [
                     rtllib_dir + "nonlin/requantf_decoupled.sv",
@@ -605,7 +606,7 @@ class Requant_rtl(Requant, RTLBackend):
                     os.path.join(code_gen_dir, top_module + ".v"),
                 ] + fifo_rtl_files()
         else:
-            rtllib_dir = os.environ["FINN_ROOT"] + "/finn-rtllib/requant/hdl/"
+            rtllib_dir = resources.join("rtllib", "requant/hdl/")
             if decoupled:
                 rtl_files = [
                     rtllib_dir + "requant_decoupled.sv",
@@ -698,8 +699,8 @@ class Requant_rtl(Requant, RTLBackend):
         )
 
         # Shared memstream sources
-        axi_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/axi/hdl/")
-        ms_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/memstream/hdl/")
+        axi_dir = resources.join("rtllib", "axi/hdl/")
+        ms_dir = resources.join("rtllib", "memstream/hdl/")
         for f in [axi_dir + "axilite.sv", ms_dir + "memstream_axi.sv", ms_dir + "memstream.sv"]:
             cmd.append("add_files -norecurse %s" % f)
 

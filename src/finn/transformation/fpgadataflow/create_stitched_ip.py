@@ -36,10 +36,11 @@ from qonnx.transformation.base import Transformation
 from qonnx.util.basic import get_num_default_workers
 from shutil import copytree
 
+from finn import resources
 from finn.transformation.fpgadataflow.replace_verilog_relpaths import (
     ReplaceVerilogRelPaths,
 )
-from finn.util.basic import make_build_dir
+from finn.util.basic import make_build_dir, tcl_string
 from finn.util.fpgadataflow import is_hls_node, is_rtl_node
 from finn.util.launcher import run_tool
 
@@ -175,10 +176,11 @@ class CreateStitchedIP(Transformation):
         clk2x_domain, whose MMCM primitive derives the 1x and 2x clocks from
         ap_clk and which provides them and the design reset (see
         finn-rtllib/clk2x_gen/clk2x_gen.tcl)."""
-        rtllib = "$::env(FINN_ROOT)/finn-rtllib/clk2x_gen"
+        domain = resources.join("rtllib", "clk2x_gen", "hdl", "clk2x_domain.v")
+        generator = resources.join("rtllib", "clk2x_gen", "clk2x_gen.tcl")
         self.create_cmds += [
-            "add_files -norecurse %s/hdl/clk2x_domain.v" % rtllib,
-            "source %s/clk2x_gen.tcl" % rtllib,
+            "add_files -norecurse %s" % tcl_string(domain),
+            "source %s" % tcl_string(generator),
             "clk2x_gen_create %r %s/clk2x_gen.json %s/clk2x_gen.xdc finn_clk2x_%s"
             % (1000.0 / self.clk_ns, self.proj_dir, self.proj_dir, block_name),
         ]
@@ -460,7 +462,7 @@ class CreateStitchedIP(Transformation):
         self.connect_cmds.append("assign_bd_address")
 
     def insert_sim_ctrl(self):
-        sim_ctrl_src = "$::env(FINN_ROOT)/finn-rtllib/sim/hdl/sim_ctrl.v"
+        sim_ctrl_src = tcl_string(resources.join("rtllib", "sim/hdl/sim_ctrl.v"))
         sim_ctrl_name = "sim_ctrl_0"
         self.create_cmds.append("add_files -norecurse %s" % sim_ctrl_src)
         self.create_cmds.append(
@@ -479,9 +481,9 @@ class CreateStitchedIP(Transformation):
         model = model.transform(ReplaceVerilogRelPaths())
         ip_dirs = ["list"]
         # add RTL streamer IP
-        ip_dirs.append("$::env(FINN_ROOT)/finn-rtllib/memstream")
+        ip_dirs.append(tcl_string(resources.join("rtllib", "memstream")))
         if self.signature:
-            ip_dirs.append("$::env(FINN_ROOT)/finn-rtllib/axi_info")
+            ip_dirs.append(tcl_string(resources.join("rtllib", "axi_info")))
         # DMA partitions may start with the DWC attached to an output IODMA
         has_iodma = any(n.op_type == "IODMA_hls" for n in model.graph.node)
         if model.graph.node[0].op_type != "StreamingFIFO_rtl" and not has_iodma:
@@ -779,7 +781,7 @@ class CreateStitchedIP(Transformation):
                 "[ipx::get_file_groups xilinx_simulationcheckpoint]" % block_name
             )
         # add a rudimentary driver mdd to get correct ranges in xparameters.h later on
-        example_data_dir = os.environ["FINN_ROOT"] + "/src/finn/qnn-data/mdd-data"
+        example_data_dir = resources.join("qnn-data", "mdd-data")
         copytree(example_data_dir, vivado_stitch_proj_dir + "/data")
 
         #####
@@ -872,9 +874,9 @@ close $ofile
         tcl.append("foreach vf $all_v_files {puts $fp $vf}")
         tcl.append("close $fp")
         # write the project creator tcl script
-        tcl_string = "\n".join(tcl) + "\n"
+        tcl_text = "\n".join(tcl) + "\n"
         with open(vivado_stitch_proj_dir + "/make_project.tcl", "w") as f:
-            f.write(tcl_string)
+            f.write(tcl_text)
         # call Vivado; make_project.sh repeats the run by hand
         run_tool(
             ["vivado", "-mode", "batch", "-source", "make_project.tcl"],

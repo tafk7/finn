@@ -6,17 +6,18 @@ import os
 from bitstring import BitArray
 from qonnx.core.datatype import DataType
 
+from finn import resources
 from finn.custom_op.fpgadataflow.pad1d import Pad1D
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
 
 
 def _rtlsrc_dir():
-    return os.environ["FINN_ROOT"] + "/finn-rtllib/pad1d/hdl"
+    return resources.join("rtllib", "pad1d/hdl")
 
 
 def _pad_rtlsrc_dir():
-    return os.environ["FINN_ROOT"] + "/finn-rtllib/pad/hdl"
+    return resources.join("rtllib", "pad/hdl")
 
 
 class Pad1D_rtl(Pad1D, RTLBackend):

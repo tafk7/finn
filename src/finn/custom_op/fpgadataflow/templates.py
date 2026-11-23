@@ -128,13 +128,11 @@ puts "HW source dir: $config_hwsrcdir"
 set config_proj_part "$FPGAPART$"
 set config_bnnlibdir $HLSLIB$
 puts "finn-hlslib dir: $config_bnnlibdir"
-set config_customhlsdir "$::env(FINN_ROOT)/custom_hls"
-puts "custom HLS dir: $config_customhlsdir"
 set config_toplevelfxn "$TOPFXN$"
 set config_clkperiod $CLKPERIOD$
 
 open_project $config_proj_name
-add_files $config_hwsrcdir/top_$TOPFXN$.cpp -cflags "-std=c++14 -I$config_bnnlibdir -I$config_customhlsdir"
+add_files $config_hwsrcdir/top_$TOPFXN$.cpp -cflags "-std=c++14 $HLSINCLUDES$"
 
 set_top $config_toplevelfxn
 open_solution sol1
@@ -323,30 +321,31 @@ set_property -dict [list \
     CONFIG.c_s_axis_s2mm_tdata_width {256} \
 ] [get_ips cdma_datamover]
 
-add_files -norecurse "$::env(FINN_ROOT)/finn-rtllib/cdma/cdma_top.sv"
-add_files -norecurse "$::env(FINN_ROOT)/finn-rtllib/cdma/krnl_counter.sv"
-add_files -norecurse "$::env(FINN_ROOT)/finn-rtllib/cdma/cdma_a/cdma_a.sv"
-add_files -norecurse "$::env(FINN_ROOT)/finn-rtllib/cdma/cdma_a/cdma_a_rd.sv"
-add_files -norecurse "$::env(FINN_ROOT)/finn-rtllib/cdma/cdma_a/cdma_a_wr.sv"
-add_files -norecurse "$::env(FINN_ROOT)/finn-rtllib/cdma/cdma_a/axi_dma_rd_a.sv"
-add_files -norecurse "$::env(FINN_ROOT)/finn-rtllib/cdma/cdma_a/axi_dma_wr_a.sv"
-add_files -norecurse "$::env(FINN_ROOT)/finn-rtllib/cdma/cdma_u/cdma_u.sv"
-add_files -norecurse "$::env(FINN_ROOT)/finn-rtllib/cdma/cdma_u/cdma_u_wr.sv"
-add_files -norecurse "$::env(FINN_ROOT)/finn-rtllib/cdma/cdma_u/axi_dma_rd_u.sv"
-add_files -norecurse "$::env(FINN_ROOT)/finn-rtllib/cdma/cdma_u/axi_dma_wr_u.sv"
-add_files -norecurse "$::env(FINN_ROOT)/finn-rtllib/cdma/cdma_x/cdma_x.sv"
-add_files -norecurse "$::env(FINN_ROOT)/finn-rtllib/cdma/cdma_x/cdma_x_rd.sv"
-add_files -norecurse "$::env(FINN_ROOT)/finn-rtllib/cdma/cdma_x/cdma_x_wr.sv"
-add_files -norecurse "$::env(FINN_ROOT)/finn-rtllib/skid/skid.sv"
-add_files -norecurse "$::env(FINN_ROOT)/finn-rtllib/mlo/infrastructure/intermediate_frames.sv"
-add_files -norecurse "$::env(FINN_ROOT)/finn-rtllib/mlo/infrastructure/mux.sv"
-add_files -norecurse "$::env(FINN_ROOT)/finn-rtllib/mlo/infrastructure/demux.sv"
-add_files -norecurse "$::env(FINN_ROOT)/finn-rtllib/mlo/loop_control.sv"
-add_files -norecurse "$::env(FINN_ROOT)/finn-rtllib/mlo/address_config.sv"
-add_files -norecurse "$::env(FINN_ROOT)/finn-rtllib/axi/hdl/axilite.sv"
+set finn_rtllib @RTLLIB@
+add_files -norecurse "$finn_rtllib/cdma/cdma_top.sv"
+add_files -norecurse "$finn_rtllib/cdma/krnl_counter.sv"
+add_files -norecurse "$finn_rtllib/cdma/cdma_a/cdma_a.sv"
+add_files -norecurse "$finn_rtllib/cdma/cdma_a/cdma_a_rd.sv"
+add_files -norecurse "$finn_rtllib/cdma/cdma_a/cdma_a_wr.sv"
+add_files -norecurse "$finn_rtllib/cdma/cdma_a/axi_dma_rd_a.sv"
+add_files -norecurse "$finn_rtllib/cdma/cdma_a/axi_dma_wr_a.sv"
+add_files -norecurse "$finn_rtllib/cdma/cdma_u/cdma_u.sv"
+add_files -norecurse "$finn_rtllib/cdma/cdma_u/cdma_u_wr.sv"
+add_files -norecurse "$finn_rtllib/cdma/cdma_u/axi_dma_rd_u.sv"
+add_files -norecurse "$finn_rtllib/cdma/cdma_u/axi_dma_wr_u.sv"
+add_files -norecurse "$finn_rtllib/cdma/cdma_x/cdma_x.sv"
+add_files -norecurse "$finn_rtllib/cdma/cdma_x/cdma_x_rd.sv"
+add_files -norecurse "$finn_rtllib/cdma/cdma_x/cdma_x_wr.sv"
+add_files -norecurse "$finn_rtllib/skid/skid.sv"
+add_files -norecurse "$finn_rtllib/mlo/infrastructure/intermediate_frames.sv"
+add_files -norecurse "$finn_rtllib/mlo/infrastructure/mux.sv"
+add_files -norecurse "$finn_rtllib/mlo/infrastructure/demux.sv"
+add_files -norecurse "$finn_rtllib/mlo/loop_control.sv"
+add_files -norecurse "$finn_rtllib/mlo/address_config.sv"
+add_files -norecurse "$finn_rtllib/axi/hdl/axilite.sv"
 add_files -norecurse "@TOP_VERILOG_FILE@"
-add_files -norecurse "$::env(FINN_ROOT)/finn-rtllib/fifo/hdl/fifo_gauge.sv"
-add_files -norecurse "$::env(FINN_ROOT)/finn-rtllib/fifo/hdl/fifo.sv"
+add_files -norecurse "$finn_rtllib/fifo/hdl/fifo_gauge.sv"
+add_files -norecurse "$finn_rtllib/fifo/hdl/fifo.sv"
 
 @IP_GEN@
 

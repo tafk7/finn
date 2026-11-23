@@ -31,9 +31,8 @@ import numpy as np
 import os
 from qonnx.custom_op.registry import getCustomOp
 
-from finn import xsi
+from finn import resources, xsi
 from finn.util.basic import (
-    get_finn_root,
     get_rtlsim_timeout_error_message,
     get_vivado_root,
     get_watchdog_timeout_cycles,
@@ -217,7 +216,7 @@ def rtlsim_exec_cppxsi(
         sim_base, sim_rel = rtlsim_so.split("xsim.dir")
         sim_rel = "xsim.dir" + sim_rel
     # prepare the C++ sim driver template
-    finnxsi_dir = get_finn_root() + "/finn_xsi"
+    finnxsi_dir = resources.path("finn-xsi")
     fifosim_config_fname = finnxsi_dir + "/rtlsim_config.hpp.template"
     with open(fifosim_config_fname, "r") as f:
         fifsom_config_template = f.read()

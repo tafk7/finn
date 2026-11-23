@@ -37,6 +37,7 @@ import re
 from qonnx.core.modelwrapper import ModelWrapper
 from shutil import copytree
 
+from finn import resources
 from finn.builder.build_dataflow import build_dataflow_directory
 from finn.util.basic import make_build_dir
 
@@ -47,7 +48,7 @@ from finn.util.basic import make_build_dir
 def test_end2end_build_dataflow_directory():
     test_dir = make_build_dir("test_build_dataflow_directory_")
     target_dir = test_dir + "/build_dataflow"
-    example_data_dir = os.environ["FINN_ROOT"] + "/src/finn/qnn-data/build_dataflow"
+    example_data_dir = resources.join("qnn-data", "build_dataflow")
     copytree(example_data_dir, target_dir)
     # disable pdb postmortem on the copy only, the shipped example keeps the default
     cfg_file = target_dir + "/dataflow_build_config.json"

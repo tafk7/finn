@@ -5,6 +5,7 @@ import numpy as np
 import os
 from qonnx.core.datatype import DataType
 
+from finn import resources
 from finn.custom_op.fpgadataflow.pwpolyf import PWPolyF
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
 from finn.custom_op.general.pwpolyfunction import (
@@ -100,7 +101,7 @@ class PWPolyF_rtl(PWPolyF, RTLBackend):
         return _generate_coeffs_pkg_data(K, degree=degree, num_samples=num_samples)
 
     def generate_hdl(self, model, fpgapart, clk):
-        rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/pwpolyf/hdl/")
+        rtllib_dir = resources.join("rtllib", "pwpolyf/hdl/")
         template_path = rtllib_dir + "pwpolyf_template_wrapper.v"
         code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
 
@@ -138,7 +139,7 @@ class PWPolyF_rtl(PWPolyF, RTLBackend):
     def get_rtl_file_list(self, abspath=False):
         if abspath:
             code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen") + "/"
-            rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/pwpolyf/hdl/")
+            rtllib_dir = resources.join("rtllib", "pwpolyf/hdl/")
         else:
             code_gen_dir = ""
             rtllib_dir = ""

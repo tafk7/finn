@@ -40,6 +40,7 @@ from qonnx.custom_op.registry import getCustomOp
 from qonnx.util.basic import gen_finn_dt_tensor, roundup_to_integer_multiple
 from typing import Dict, Optional, Sequence, Tuple, Union
 
+from finn import resources
 from finn.resources import scratch
 from finn.resources.prepare import GOLDEN_FILES, golden_dir
 from finn.util.data_packing import finnpy_to_packed_bytearray
@@ -171,7 +172,7 @@ def fifo_rtl_files(abspath=True, gauge=False):
     names = (["fifo_gauge.sv"] if gauge else []) + ["fifo.sv"]
     if not abspath:
         return names
-    rtlsrc = os.path.join(get_finn_root(), "finn-rtllib", "fifo", "hdl")
+    rtlsrc = resources.join("rtllib", "fifo", "hdl")
     return [os.path.join(rtlsrc, n) for n in names]
 
 
@@ -180,7 +181,7 @@ def arith_rtl_files(names, abspath=True):
     names, referenced in place like the FIFO sources."""
     if not abspath:
         return list(names)
-    rtlsrc = os.path.join(get_finn_root(), "finn-rtllib", "arith")
+    rtlsrc = resources.join("rtllib", "arith")
     return [os.path.join(rtlsrc, n) for n in names]
 
 

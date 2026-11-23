@@ -3,12 +3,13 @@
 
 import os
 
+from finn import resources
 from finn.custom_op.fpgadataflow.hwcustomop import HWCustomOp
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
 
 
 def _rtlsrc_dir():
-    return os.path.join(os.environ["FINN_ROOT"], "finn-rtllib", "lastmarker", "hdl")
+    return resources.join("rtllib", "lastmarker", "hdl")
 
 
 class TLastMarker_rtl(HWCustomOp, RTLBackend):

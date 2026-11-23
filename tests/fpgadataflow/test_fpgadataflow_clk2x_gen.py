@@ -38,6 +38,7 @@ import finn.builder.build_dataflow_steps as build_steps
 import finn.core.onnx_exec as oxe
 import finn.transformation.fpgadataflow.set_fifo_depths as set_fifo_depths
 import finn.util.rtlsim as rtlsim
+from finn import resources
 from finn.transformation.fpgadataflow import templates
 from finn.transformation.fpgadataflow.alveo_build import PrepareForLinking, VitisLink
 from finn.transformation.fpgadataflow.create_dataflow_partition import (
@@ -63,7 +64,7 @@ from finn.util.launcher import run_tool
 from finn.util.test import bd_nets, cppsim_reference, make_pumped_chain_model
 
 parts = {"versal": "xcvc1902-vsva2197-2MP-e-S", "zu3": "xczu3eg-sfvc784-2-e"}
-CLK2X_GEN_TCL = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/clk2x_gen/clk2x_gen.tcl")
+CLK2X_GEN_TCL = resources.join("rtllib", "clk2x_gen/clk2x_gen.tcl")
 
 
 def run_vivado_tcl(tcl, prefix, files={}):
@@ -629,7 +630,7 @@ def test_clk2x_gen_gates_axi_lite_and_mm():
     proj = model.get_metadata_prop("vivado_stitch_proj")
     with open(proj + "/all_verilog_srcs.txt") as f:
         srcs = f.read().split()
-    tb = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/clk2x_gen/tb/clk2x_gate_tb.sv")
+    tb = resources.join("rtllib", "clk2x_gen/tb/clk2x_gate_tb.sv")
     sim_dir = make_build_dir("clk2x_gate_tb_")
     with open(sim_dir + "/tb.prj", "w") as f:
         for src in srcs + [tb]:

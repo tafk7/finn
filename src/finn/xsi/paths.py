@@ -24,8 +24,8 @@ def _compiler_version(path, modified, size):
 
 
 def source_dir() -> Path:
-    """Return the sources embedded in a release or the selected checkout."""
-    return Path(os.environ["FINN_ROOT"]) / "finn_xsi"
+    """The finn_xsi sources: the resource finn-xsi (a checkout's finn_xsi/, or a wheel's copy)."""
+    return Path(resources.path("finn-xsi"))
 
 
 def build_dir() -> Path:

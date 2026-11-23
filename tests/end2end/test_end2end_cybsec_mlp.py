@@ -42,6 +42,7 @@ from qonnx.util.cleanup import cleanup as qonnx_cleanup
 
 import finn.builder.build_dataflow as build
 import finn.builder.build_dataflow_config as build_cfg
+from finn import resources
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
 from finn.util.basic import make_build_dir
 from finn.util.test import load_test_checkpoint_or_skip
@@ -80,7 +81,7 @@ class CybSecMLPForExport(nn.Module):
 @pytest.mark.xdist_group(name="end2end_cybsec")
 @pytest.mark.end2end
 def test_end2end_cybsec_mlp_export():
-    assets_dir = os.environ["FINN_ROOT"] + "/src/finn/qnn-data/cybsec-mlp"
+    assets_dir = resources.join("qnn-data", "cybsec-mlp")
     # load up trained net in Brevitas
     input_size = 593
     hidden1 = 64

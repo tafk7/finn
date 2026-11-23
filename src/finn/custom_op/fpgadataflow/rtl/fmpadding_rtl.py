@@ -30,6 +30,7 @@ import math
 import os
 from qonnx.util.basic import roundup_to_integer_multiple
 
+from finn import resources
 from finn.custom_op.fpgadataflow.fmpadding import FMPadding
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
 
@@ -108,7 +109,7 @@ class FMPadding_rtl(FMPadding, RTLBackend):
         return config
 
     def generate_hdl(self, model, fpgapart, clk):
-        rtlsrc = os.environ["FINN_ROOT"] + "/finn-rtllib/fmpadding/hdl"
+        rtlsrc = resources.join("rtllib", "fmpadding/hdl")
         template_path = rtlsrc + "/fmpadding_template.v"
         dims = self.get_nodeattr("ImgDim")
         pads = self.get_nodeattr("Padding")
@@ -142,8 +143,8 @@ class FMPadding_rtl(FMPadding, RTLBackend):
     def get_rtl_file_list(self, abspath=False):
         if abspath:
             code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen") + "/"
-            rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/fmpadding/hdl/")
-            pad_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/pad/hdl/")
+            rtllib_dir = resources.join("rtllib", "fmpadding/hdl/")
+            pad_dir = resources.join("rtllib", "pad/hdl/")
         else:
             code_gen_dir = ""
             rtllib_dir = ""

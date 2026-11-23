@@ -33,6 +33,7 @@ from math import ceil, log2
 from qonnx.core.datatype import DataType
 from qonnx.util.basic import roundup_to_integer_multiple
 
+from finn import resources
 from finn.custom_op.fpgadataflow.hlsbackend import HLSBackend
 from finn.custom_op.fpgadataflow.thresholding import Thresholding
 from finn.util.basic import get_vivado_version, is_versal
@@ -659,8 +660,8 @@ class Thresholding_hls(Thresholding, HLSBackend):
             )
             # instantiate a streamer and connect it to the IP
             code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
-            axi_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/axi/hdl/")
-            ms_rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/memstream/hdl/")
+            axi_dir = resources.join("rtllib", "axi/hdl/")
+            ms_rtllib_dir = resources.join("rtllib", "memstream/hdl/")
             file_suffix = "_memstream_wrapper.v"
             # automatically find memstream verilog component in code generation directory
             for fname in os.listdir(code_gen_dir):

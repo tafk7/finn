@@ -32,7 +32,7 @@ from abc import abstractmethod
 from qonnx.custom_op.base import CustomOp
 from qonnx.util.basic import get_by_name, roundup_to_integer_multiple
 
-from finn import xsi
+from finn import resources, xsi
 from finn.transformation.fpgadataflow.fifo_sizing.tav import save_tav_npy
 from finn.transformation.fpgadataflow.fifo_sizing.tree_models.base import get_tree_model
 from finn.util.basic import get_watchdog_timeout_cycles, is_versal
@@ -386,9 +386,7 @@ class HWCustomOp(CustomOp):
         on the op-specific defaults."""
         ops = ["MVAU_hls", "MVAU_rtl", "VVAU_hls", "VVAU_rtl", "Thresholding_hls", "Requant_rtl"]
         if self.onnx_node.op_type in ops or self.onnx_node.op_type.startswith("Elementwise"):
-            template_path = (
-                os.environ["FINN_ROOT"] + "/finn-rtllib/memstream/hdl/memstream_wrapper_template.v"
-            )
+            template_path = resources.join("rtllib", "memstream/hdl/memstream_wrapper_template.v")
             mname = name if name is not None else self.onnx_node.name
             sets = 1
             mlo_max_iter = self.get_nodeattr("mlo_max_iter")
@@ -443,9 +441,7 @@ class HWCustomOp(CustomOp):
         Currently utilized by MVAU."""
         ops = ["MVAU_hls", "MVAU_rtl"]
         if self.onnx_node.op_type in ops or self.onnx_node.op_type.startswith("Elementwise"):
-            template_path = (
-                os.environ["FINN_ROOT"] + "/finn-rtllib/fetch_weights/fetch_weights_wrapper.v"
-            )
+            template_path = resources.join("rtllib", "fetch_weights/fetch_weights_wrapper.v")
             mname = self.onnx_node.name
             wdt = self.get_input_datatype(1)
             if self.onnx_node.op_type in ops:
@@ -507,9 +503,7 @@ class HWCustomOp(CustomOp):
             pass
 
     def generate_hdl_dynload(self):
-        template_path = (
-            os.environ["FINN_ROOT"] + "/finn-rtllib/dynload/hdl/dynamic_load_wrapper_template.v"
-        )
+        template_path = resources.join("rtllib", "dynload/hdl/dynamic_load_wrapper_template.v")
         mname = self.onnx_node.name
         pe = self.get_nodeattr("PE")
         simd = self.get_nodeattr("SIMD")

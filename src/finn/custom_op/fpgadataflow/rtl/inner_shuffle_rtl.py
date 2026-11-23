@@ -9,6 +9,7 @@
 import os
 from qonnx.core.datatype import DataType
 
+from finn import resources
 from finn.custom_op.fpgadataflow.inner_shuffle import InnerShuffle
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
 from finn.util.basic import fifo_rtl_files
@@ -38,7 +39,7 @@ class InnerShuffle_rtl(InnerShuffle, RTLBackend):
         return code_gen_dict
 
     def generate_hdl(self, model, fpgapart, clk):
-        rtlsrc = f'{os.environ["FINN_ROOT"]}/finn-rtllib/inner_shuffle'
+        rtlsrc = resources.join("rtllib", "inner_shuffle")
         template_path = f"{rtlsrc}/inner_shuffle_template.v"
         code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
         dt = DataType[self.get_nodeattr("data_type")]
@@ -71,7 +72,7 @@ class InnerShuffle_rtl(InnerShuffle, RTLBackend):
     def get_rtl_file_list(self, abspath=False):
         if abspath:
             code_gen_dir = f"{self.get_nodeattr('code_gen_dir_ipgen')}/"
-            rtllib_dir = f'{os.environ["FINN_ROOT"]}/finn-rtllib'
+            rtllib_dir = resources.path("rtllib")
         else:
             code_gen_dir = ""
             rtllib_dir = ""

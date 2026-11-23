@@ -164,6 +164,10 @@ class HLSBackend(ABC):
         template = templates.ipgentcl_template.replace(
             "$HLSLIB$", tcl_string(resources.path("hlslib"))
         )
+        # Every hls-include resource, FINN's and any a project or package declares;
+        # each path is escaped for the double-quoted -cflags word.
+        includes = " ".join("-I" + tcl_string(p)[1:-1] for p in resources.paths("hls-include"))
+        template = template.replace("$HLSINCLUDES$", includes)
 
         for key in self.code_gen_dict:
             # transform list into long string separated by '\n'
@@ -268,14 +272,14 @@ class HLSBackend(ABC):
         builder = CppBuilder()
         # to enable additional debug features please uncommand the next line
         # builder.append_includes("-DDEBUG")
-        builder.append_includes(["-I", "$FINN_ROOT/src/finn/qnn-data/cpp"])
-        builder.append_includes(["-I", resources.path("hlslib")])
-        builder.append_includes(["-I", "$FINN_ROOT/custom_hls"])
+        builder.append_includes(["-I", resources.join("qnn-data", "cpp")])
+        for include in resources.paths("hls-include"):
+            builder.append_includes(["-I", include])
         builder.append_includes(["-I", os.path.join(hls_path, "include")])
         builder.append_includes("--std=c++17")
         builder.append_includes("-O3")
         builder.append_sources(code_gen_dir + "/*.cpp")
-        builder.append_sources("$FINN_ROOT/src/finn/qnn-data/cpp/cnpy.cpp")
+        builder.append_sources(resources.join("qnn-data", "cpp", "cnpy.cpp"))
         builder.append_includes("-lz")
         builder.append_includes(["-fno-builtin", "-fno-inline"])
         builder.append_includes([f"-Wl,-rpath,{hls_path}/lnx64/lib/csim"])

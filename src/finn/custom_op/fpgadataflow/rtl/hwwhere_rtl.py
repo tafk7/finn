@@ -3,16 +3,17 @@
 
 import os
 
+from finn import resources
 from finn.custom_op.fpgadataflow.hwwhere import HWWhere
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
 
 
 def _rtlsrc_dir():
-    return os.environ["FINN_ROOT"] + "/finn-rtllib/where/hdl"
+    return resources.join("rtllib", "where/hdl")
 
 
 def _input_gen_dir():
-    return os.environ["FINN_ROOT"] + "/finn-rtllib/input_gen/hdl"
+    return resources.join("rtllib", "input_gen/hdl")
 
 
 class HWWhere_rtl(HWWhere, RTLBackend):

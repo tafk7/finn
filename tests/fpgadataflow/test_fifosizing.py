@@ -46,6 +46,7 @@ from qonnx.util.basic import gen_finn_dt_tensor, qonnx_make_model
 
 import finn.builder.build_dataflow as build
 import finn.builder.build_dataflow_config as build_cfg
+from finn import resources
 from finn.analysis.fpgadataflow.fifo_transaction_counts import fifo_transaction_counts
 from finn.transformation.fpgadataflow.set_fifo_depths import (
     InsertAndSetFIFODepths,
@@ -456,7 +457,7 @@ def test_fifo_gauge_overflow_sentinel_matches_rtl():
     is exactly the class of bug this guard exists to catch. This parses the two HDL
     sources so any drift trips the test instead of passing quietly.
     """
-    hdl_dir = os.environ["FINN_ROOT"] + "/finn-rtllib/fifo/hdl"
+    hdl_dir = resources.join("rtllib", "fifo/hdl")
     with open(os.path.join(hdl_dir, "fifo_gauge.sv")) as f:
         gauge = f.read()
     with open(os.path.join(hdl_dir, "fifo_template.v")) as f:

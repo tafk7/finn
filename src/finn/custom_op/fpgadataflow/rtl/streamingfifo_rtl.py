@@ -27,6 +27,7 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 import os
 
+from finn import resources
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
 from finn.custom_op.fpgadataflow.streamingfifo import StreamingFIFO
 from finn.util.basic import fifo_rtl_files
@@ -50,7 +51,7 @@ class StreamingFIFO_rtl(StreamingFIFO, RTLBackend):
         return ret
 
     def generate_hdl(self, model, fpgapart, clk):
-        rtlsrc = os.environ["FINN_ROOT"] + "/finn-rtllib/fifo/hdl"
+        rtlsrc = resources.join("rtllib", "fifo/hdl")
         template_path = rtlsrc + "/fifo_template.v"
 
         # save top module name so we can refer to it after this node has been renamed

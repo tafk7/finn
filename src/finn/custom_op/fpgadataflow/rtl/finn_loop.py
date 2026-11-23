@@ -38,13 +38,13 @@ from qonnx.custom_op.registry import getCustomOp, is_custom_op
 from qonnx.util.basic import get_by_name, qonnx_make_model
 
 import finn.core.onnx_exec as oxe
-from finn import xsi
+from finn import resources, xsi
 from finn.analysis.fpgadataflow.dataflow_performance import dataflow_performance
 from finn.custom_op.fpgadataflow import templates
 from finn.custom_op.fpgadataflow.hwcustomop import HWCustomOp
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
 from finn.transformation.fpgadataflow.annotate_cycles import AnnotateCycles
-from finn.util.basic import make_build_dir
+from finn.util.basic import make_build_dir, tcl_string
 from finn.util.create import adjacency_list
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
 from finn.util.launcher import run_tool
@@ -72,7 +72,7 @@ def collect_ip_dirs(model, ipstitch_path):
     ip_dirs += [ipstitch_path + "/ip"]
     if need_memstreamer:
         # add RTL streamer IP
-        ip_dirs.append("$::env(FINN_ROOT)/finn-rtllib/memstream")
+        ip_dirs.append(tcl_string(resources.join("rtllib", "memstream")))
     return ip_dirs
 
 
@@ -408,7 +408,7 @@ class FINNLoop(HWCustomOp, RTLBackend):
         input_elements = int(np.prod(self.get_normal_input_shape(0)))
         code_gen_dict["$INPUT_ELEMS$"] = [str(input_elements)]
 
-        template_path = os.environ["FINN_ROOT"] + "/finn-rtllib/mlo/loop_control_wrapper.v"
+        template_path = resources.join("rtllib", "mlo/loop_control_wrapper.v")
         with open(template_path, "r") as f:
             template_wrapper = f.read()
         for key, value in code_gen_dict.items():
@@ -425,7 +425,7 @@ class FINNLoop(HWCustomOp, RTLBackend):
 
     def generate_params(self, model, path, fpgapart=None):
         if get_by_name(self.onnx_node.attribute, "address_offset") is not None:
-            ac_template_path = os.environ["FINN_ROOT"] + "/finn-rtllib/mlo/address_config_wrapper.v"
+            ac_template_path = resources.join("rtllib", "mlo/address_config_wrapper.v")
             ac_module_name = self.onnx_node.name + "_address_config_wrapper"
             with open(ac_template_path, "r") as f:
                 ac_wrapper = f.read()
@@ -668,9 +668,7 @@ class FINNLoop(HWCustomOp, RTLBackend):
 
     def generate_hdl_stream_tap(self):
         """Helper function to generate verilog code for stream tap components."""
-        template_path = (
-            os.environ["FINN_ROOT"] + "/finn-rtllib/stream_tap/hdl/stream_tap_wrapper_template.v"
-        )
+        template_path = resources.join("rtllib", "stream_tap/hdl/stream_tap_wrapper_template.v")
         code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
         iteration = self.get_nodeattr("iteration")
         loop_body = self.get_nodeattr("body")
@@ -757,7 +755,7 @@ class FINNLoop(HWCustomOp, RTLBackend):
         # add all the generated IP dirs to ip_repo_paths
         ip_dirs = ["list"]
         # add RTL streamer IP
-        ip_dirs.append("$::env(FINN_ROOT)/finn-rtllib/memstream")
+        ip_dirs.append(tcl_string(resources.join("rtllib", "memstream")))
         loop_model = self.get_nodeattr("body")
         for node in loop_model.graph.node:
             node_inst = getCustomOp(node)
@@ -894,8 +892,8 @@ class FINNLoop(HWCustomOp, RTLBackend):
                 "-vlnv xilinx.com:interface:axis_rtl:1.0 /%s/m_axis_%d" % (bd_name, pid)
             )
         # get stream tap (+ skid)  components
-        skid_file = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/skid/skid.sv")
-        stream_tap_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/stream_tap/hdl/")
+        skid_file = resources.join("rtllib", "skid/skid.sv")
+        stream_tap_dir = resources.join("rtllib", "stream_tap/hdl/")
         file_suffix = "_stream_tap_wrapper.v"
         # automatically find stream tap verilog components in code generation directory
         st_tmpl_names = []
@@ -904,7 +902,7 @@ class FINNLoop(HWCustomOp, RTLBackend):
             if fname.endswith(file_suffix):
                 st_verilog_files.append(os.path.join(code_gen_dir, fname))
                 st_tmpl_names.append(fname[:-2])
-        dwc_rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/dwc/hdl/")
+        dwc_rtllib_dir = resources.join("rtllib", "dwc/hdl/")
         sourcefiles = st_verilog_files + [
             stream_tap_dir + "stream_tap.sv",
             skid_file,
@@ -1396,7 +1394,7 @@ class FINNLoop(HWCustomOp, RTLBackend):
             "set_property value_resolve_type user [ipx::get_bus_parameters "
             "-of [ipx::get_bus_interfaces -of [ipx::current_core ]]]"
         )
-        example_data_dir = os.environ["FINN_ROOT"] + "/src/finn/qnn-data/mdd-data"
+        example_data_dir = resources.join("qnn-data", "mdd-data")
         shutil.copytree(example_data_dir, vivado_stitch_proj_dir + "/data")
 
         template = templates.ip_gen_loop_op
@@ -1407,6 +1405,7 @@ class FINNLoop(HWCustomOp, RTLBackend):
         template = template.replace("@PRJNAME@", prjname)
         template = template.replace("@PRJFOLDER@", vivado_stitch_proj_dir)
         template = template.replace("@FPGAPART@", fpgapart)
+        template = template.replace("@RTLLIB@", tcl_string(resources.path("rtllib")))
         template = template.replace(
             "@TOP_VERILOG_FILE@",
             f"{self.get_nodeattr('code_gen_dir_ipgen')}/{self.onnx_node.name}_wrapper.v",

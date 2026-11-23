@@ -40,6 +40,7 @@ from qonnx.util.basic import (
     roundup_to_integer_multiple,
 )
 
+from finn import resources
 from finn.custom_op.fpgadataflow.hwcustomop import HWCustomOp
 from finn.transformation.fpgadataflow.fifo_sizing.tav import load_tav_npy, save_tav_npy
 from finn.util.basic import fifo_rtl_files, is_versal, least_divisor_at_most
@@ -1164,9 +1165,7 @@ class MVAU(HWCustomOp):
                     )
 
                     # dynamic loader
-                    dyn_rtllib_dir = os.path.join(
-                        os.environ["FINN_ROOT"], "finn-rtllib/dynload/hdl/"
-                    )
+                    dyn_rtllib_dir = resources.join("rtllib", "dynload/hdl/")
                     file_suffix = "_dynamic_load_wrapper.v"
                     # automatically find memstream verilog component in code generation directory
                     for fname in os.listdir(code_gen_dir):
@@ -1204,18 +1203,16 @@ class MVAU(HWCustomOp):
                             )
 
                     # instantiate a fetch weights component and connect it to the IP
-                    reg_rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/skid/")
-                    fwg_rtllib_dir = os.path.join(
-                        os.environ["FINN_ROOT"], "finn-rtllib/fetch_weights/"
-                    )
-                    dma_rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/cdma/")
+                    reg_rtllib_dir = resources.join("rtllib", "skid/")
+                    fwg_rtllib_dir = resources.join("rtllib", "fetch_weights/")
+                    dma_rtllib_dir = resources.join("rtllib", "cdma/")
                     file_suffix = "_fetch_weights_wrapper.v"
                     # automatically find memstream verilog component in code generation directory
                     for fname in os.listdir(code_gen_dir):
                         if fname.endswith(file_suffix):
                             strm_tmpl = fname
                     strm_tmpl_name = strm_tmpl[:-2]
-                    dwc_rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/dwc/hdl/")
+                    dwc_rtllib_dir = resources.join("rtllib", "dwc/hdl/")
                     sourcefiles = [
                         os.path.join(code_gen_dir, strm_tmpl),
                         reg_rtllib_dir + "skid.sv",
@@ -1249,10 +1246,8 @@ class MVAU(HWCustomOp):
                 # Memstream instantiation
                 case "internal_decoupled":
                     # instantiate a streamer and connect it to the IP
-                    axi_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/axi/hdl/")
-                    ms_rtllib_dir = os.path.join(
-                        os.environ["FINN_ROOT"], "finn-rtllib/memstream/hdl/"
-                    )
+                    axi_dir = resources.join("rtllib", "axi/hdl/")
+                    ms_rtllib_dir = resources.join("rtllib", "memstream/hdl/")
                     file_suffix = "_memstream_wrapper.v"
                     # automatically find memstream verilog component in code generation directory
                     for fname in os.listdir(code_gen_dir):
