@@ -43,12 +43,12 @@ def test_failure_archive_includes_launcher_transcripts_in_build_families(tmp_pat
     ]
     for name in excluded:
         write_file(build, name)
-    source = tmp_path / "source"
-    expected.append(write_file(source, "finn_xsi/compile_xsi.stderr.log"))
-    expected.append(write_file(source, "finn_xsi/compile_xsi.sh"))
-    write_file(source, "finn_xsi/unrelated.stderr.log")
+    xsi = tmp_path / "xsi"
+    expected.append(write_file(xsi, "0123abcd/compile_xsi.stderr.log"))
+    expected.append(write_file(xsi, "0123abcd/compile_xsi.sh"))
+    write_file(xsi, "0123abcd/unrelated.stderr.log")
     bundle = tmp_path / "failure.tar.gz"
-    env = {**os.environ, "FINN_ROOT": str(source), "FINN_LSF_NFS_STAGING": ""}
+    env = {**os.environ, "FINN_XSI_PATH": str(xsi), "FINN_LSF_NFS_STAGING": ""}
     subprocess.run(["bash", str(SCRIPT), str(build), str(bundle)], env=env, check=True)
     with tarfile.open(bundle) as archive:
         assert set(archive.getnames()) == {str(path).lstrip("/") for path in expected}
