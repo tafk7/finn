@@ -17,6 +17,20 @@ REPO = Path(__file__).resolve().parents[2]
 # What the wheel is built from: the project files and the trees it ships.
 INPUTS = ("pyproject.toml", "setup.py", "MANIFEST.in", "README.md", "LICENSE.txt", "src")
 TREES = {"rtllib": "finn-rtllib", "finn-xsi": "finn_xsi", "custom-hls": "custom_hls"}
+SKIP = shutil.ignore_patterns("__pycache__", "*.pyc", "*.so", "*.egg-info", "build")
+
+
+def files(root):
+    """The files under root, relative, without byte code or build output."""
+    found = []
+    for directory, dirs, names in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in SKIP(directory, dirs)]
+        found += [
+            Path(directory, n).relative_to(root).as_posix()
+            for n in names
+            if n not in SKIP(directory, names)
+        ]
+    return found
 
 
 @pytest.fixture(scope="module")
@@ -24,16 +38,11 @@ def wheel(tmp_path_factory):
     pytest.importorskip("setuptools")
     pytest.importorskip("wheel")
     source = tmp_path_factory.mktemp("source")
-    tracked = subprocess.run(
-        ["git", "ls-files", "-z", "--", *INPUTS, *TREES.values()],
-        cwd=REPO,
-        capture_output=True,
-        check=True,
-    ).stdout.split(b"\0")
-    for name in filter(None, tracked):
-        target = source / name.decode()
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(REPO / name.decode(), target)
+    for name in (*INPUTS, *TREES.values()):
+        if (REPO / name).is_dir():
+            shutil.copytree(REPO / name, source / name, ignore=SKIP)
+        else:
+            shutil.copy2(REPO / name, source / name)
     out = tmp_path_factory.mktemp("dist")
     # The PEP 517 backend in this environment: no download, no build isolation.
     subprocess.run(
@@ -53,16 +62,7 @@ def wheel(tmp_path_factory):
 def test_the_wheel_ships_finn_trees(wheel):
     names = set(zipfile.ZipFile(wheel).namelist())
     for name, tree in TREES.items():
-        expected = {
-            f"finn/_sources/{name}/{path}"
-            for path in subprocess.run(
-                ["git", "ls-files", "--", "."],
-                cwd=REPO / tree,
-                capture_output=True,
-                text=True,
-                check=True,
-            ).stdout.split()
-        }
+        expected = {f"finn/_sources/{name}/{path}" for path in files(REPO / tree)}
         assert expected <= names, sorted(expected - names)[:5]
     assert "finn/qnn-data/cpp/cnpy.cpp" in names
     assert not [n for n in names if "__pycache__" in n or n.endswith(".pyc")]
