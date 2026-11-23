@@ -30,12 +30,10 @@ import numpy as np
 import warnings
 from qonnx.core.datatype import DataType
 from qonnx.custom_op.general.multithreshold import multithreshold
-from qonnx.util.basic import (
-    interleave_matrix_outer_dim_from_partitions,
-    roundup_to_integer_multiple,
-)
+from qonnx.util.basic import interleave_matrix_outer_dim_from_partitions
 
 from finn.custom_op.fpgadataflow.hwcustomop import HWCustomOp
+from finn.util.mlo import mlo_set_select_bits
 
 
 class Thresholding(HWCustomOp):
@@ -293,6 +291,7 @@ class Thresholding(HWCustomOp):
         return num_channels // pe
 
     def get_verilog_top_module_intf_names(self):
+        """Return dict of names of input and output interfaces for MLO support."""
         intf_names = {}
         intf_names["clk"] = ["ap_clk"]
         intf_names["rst"] = ["ap_rst_n"]
@@ -305,9 +304,7 @@ class Thresholding(HWCustomOp):
         intf_names["ap_none"] = []
         mlo_max_iter = self.get_nodeattr("mlo_max_iter")
         if mlo_max_iter:
-            stream_width = DataType.get_smallest_possible(mlo_max_iter).bitwidth()
-            stream_width_padded = roundup_to_integer_multiple(stream_width, 8)
-            intf_names["s_axis"].append(("in1_V", stream_width_padded))
+            intf_names["s_axis"].append(("in1_V", mlo_set_select_bits(mlo_max_iter)))
         else:
             # try to access mem_mode attribute, doesn't exist for RTL Thresholding
             try:

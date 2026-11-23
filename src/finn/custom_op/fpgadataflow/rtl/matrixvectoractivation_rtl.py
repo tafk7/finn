@@ -31,7 +31,7 @@ import os
 
 from finn.custom_op.fpgadataflow.matrixvectoractivation import MVAU
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
-from finn.util.basic import get_dsp_block, get_dsp_datapath_limits
+from finn.util.basic import DSP_VERSIONS, get_dsp_datapath_limits, resolve_dsp_block
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
 
 # ONNX i/o tensor shape assumptions for MatrixVectorActivation_rtl:
@@ -51,6 +51,8 @@ class MVAU_rtl(MVAU, RTLBackend):
         my_attrs = {
             # Double-pumped DSPs enabled
             "pumpedCompute": ("i", False, 0, {0, 1}),
+            # DSP generation of the target part, set by SpecializeLayers
+            "dsp_block": ("s", False, "", {"", "DSP48E1", "DSP48E2", "DSP58"}),
         }
         my_attrs.update(MVAU.get_nodeattr_types(self))
         my_attrs.update(RTLBackend.get_nodeattr_types(self))
@@ -164,41 +166,46 @@ class MVAU_rtl(MVAU, RTLBackend):
         # multiplication
         P = self.get_nodeattr("PE")
         Q = self.get_nodeattr("SIMD")
-        dsp_block = get_dsp_block(fpgapart)
+        dsp_block = resolve_dsp_block(self, fpgapart, record=False)
         if dsp_block == "DSP58":
             mult_dsp = P * np.ceil(Q / 3)
         else:
             mult_dsp = np.ceil(P / 4) * Q
         return int(mult_dsp)
 
+    def get_exp_compute_cycles(self):
+        exp_cycles = super().get_exp_compute_cycles()
+        th = self.get_nodeattr("TH")
+        if th > 1:
+            # The tiled MVU stalls after every NF*SF*TH beats to drain its compute
+            # pipeline (CORE_PIPELINE_DEPTH in mvu_vvu_axi.sv), i.e. once per group
+            # of TH input vectors. Uses the depth of the lane-sliced core, which is
+            # an upper bound for the shallower DSP58 INT8 core.
+            simd = self.get_nodeattr("SIMD")
+            n_vecs = np.prod(self.get_nodeattr("numInputVectors"))
+            drain = 4 + (simd - 1).bit_length() + (simd == 1) + 1
+            exp_cycles += (n_vecs // th) * drain
+        return int(exp_cycles)
+
     def instantiate_ip(self, cmd):
         # instantiate the RTL IP
         node_name = self.onnx_node.name
         code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
 
-        theight = self.get_nodeattr("TH")
-
-        if theight > 1:
-            rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/mvu_tiled/")
-            sourcefiles = [
-                "../skid/skid.sv",
-                "../mvu/mvu_pkg.sv",
-                "../mvu/add_multi.sv",
-                "mvu_tiled_axi.sv",
-                "cu_mvau_tiled.sv",
-                "acc_stage.sv",
-                "input_gen.sv",
+        rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/mvu/")
+        sourcefiles = [
+            "mvu_pkg.sv",
+            "mvu_vvu_axi.sv",
+            "replay_buffer.sv",
+            "mvu.sv",
+            "mvu_vvu_8sx9_dsp58.sv",
+            "add_multi.sv",
+        ]
+        if self.get_nodeattr("TH") > 1:
+            sourcefiles += [
+                "../input_gen/hdl/input_gen.sv",
                 "weights_buff_tile.sv",
-            ]
-        else:
-            rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/mvu/")
-            sourcefiles = [
-                "mvu_pkg.sv",
-                "mvu_vvu_axi.sv",
-                "replay_buffer.sv",
-                "mvu.sv",
-                "mvu_vvu_8sx9_dsp58.sv",
-                "add_multi.sv",
+                "../skid/skid.sv",
             ]
         sourcefiles = [
             os.path.join(code_gen_dir, self.get_nodeattr("gen_top_module") + "_wrapper.v")
@@ -286,13 +293,7 @@ class MVAU_rtl(MVAU, RTLBackend):
             self.onnx_node.name
         )
 
-        match dsp_block:
-            case "DSP58":
-                return 3
-            case "DSP48E2":
-                return 2
-            case _:
-                return 1
+        return DSP_VERSIONS[dsp_block]
 
     def generate_hdl(self, model, fpgapart, clk):
         # Generate params as part of IP preparation
@@ -340,12 +341,7 @@ class MVAU_rtl(MVAU, RTLBackend):
         self.set_nodeattr("ip_path", code_gen_dir)
 
     def prepare_codegen_default(self, fpgapart, clk):
-        if self.get_nodeattr("TH") > 1:
-            template_path = (
-                os.environ["FINN_ROOT"] + "/finn-rtllib/mvu_tiled/mvu_tiled_axi_wrapper.v"
-            )
-        else:
-            template_path = os.environ["FINN_ROOT"] + "/finn-rtllib/mvu/mvu_vvu_axi_wrapper.v"
+        template_path = os.environ["FINN_ROOT"] + "/finn-rtllib/mvu/mvu_vvu_axi_wrapper.v"
 
         # check if settings are valid
         pumped_compute = self.get_nodeattr("pumpedCompute")
@@ -357,21 +353,14 @@ class MVAU_rtl(MVAU, RTLBackend):
 
         # Validate the tiled-MVU (TH>1) constraints
         theight = self.get_nodeattr("TH")
+        # the tiled MVU rejects PUMPED_COMPUTE at elaboration, and the pumped
+        # weight memstream is not verified with the tiled (WSIMD) weight stream
+        if theight > 1 and (pumped_compute or self.get_nodeattr("pumpedMemory")):
+            raise Exception(
+                "%s: pumpedCompute/pumpedMemory are not supported by the tiled MVU "
+                "(TH=%d). Use TH=1 or disable clock pumping." % (self.onnx_node.name, theight)
+            )
         if theight > 1:
-            # The tiled wrapper conservatively caps both activation and weight widths at 8 bits.
-            act_width = self.get_input_datatype(0).bitwidth()
-            if act_width > 8:
-                raise Exception(
-                    "%s: activation width of %d bits exceeds the tiled MVU maximum of 8 bits."
-                    % (self.onnx_node.name, act_width)
-                )
-            weight_width = self.get_input_datatype(1).bitwidth()
-            if weight_width > 8:
-                raise Exception(
-                    "%s: weight width of %d bits exceeds the tiled MVU maximum of 8 bits."
-                    % (self.onnx_node.name, weight_width)
-                )
-
             # The tile size must divide the number of input vectors evenly; otherwise the
             # final partial tile can cause output to be dropped and eventually stall.
             num_inp_vec = int(np.prod(self.get_nodeattr("numInputVectors")))
@@ -383,7 +372,7 @@ class MVAU_rtl(MVAU, RTLBackend):
                     % (self.onnx_node.name, theight, num_inp_vec, valid_th)
                 )
 
-        dsp_block = get_dsp_block(fpgapart)
+        dsp_block = resolve_dsp_block(self, fpgapart)
 
         # the operand and accumulator widths must fit the target DSP datapath
         # (activation->B, weight->A, accumulator->P); wider values would be
@@ -438,53 +427,40 @@ class MVAU_rtl(MVAU, RTLBackend):
             [str(1)] if (self.get_input_datatype(0).min() < 0) else [str(0)]
         )
         code_gen_dict["$SEGMENTLEN$"] = [str(self._resolve_segment_len(clk))]
+        code_gen_dict["$N_DCPL_STAGES$"] = [str(2)]
 
         return template_path, code_gen_dict
 
     def get_rtl_file_list(self, abspath=False):
         if abspath:
             code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen") + "/"
-            if self.get_nodeattr("TH") > 1:
-                rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/mvu_tiled/")
-            else:
-                rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/mvu/")
+            rtllib_dir = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/mvu/")
         else:
             code_gen_dir = ""
             rtllib_dir = ""
 
+        sourcefiles = [
+            "mvu_pkg.sv",
+            "mvu_vvu_axi.sv",
+            "replay_buffer.sv",
+            "mvu.sv",
+            "mvu_vvu_8sx9_dsp58.sv",
+            "add_multi.sv",
+        ]
         if self.get_nodeattr("TH") > 1:
-            verilog_files = [
-                "../skid/skid.sv",
-                "../mvu/mvu_pkg.sv",
-                "../mvu/add_multi.sv",
-                "acc_stage.sv",
-                "input_gen.sv",
+            sourcefiles += [
+                "../input_gen/hdl/input_gen.sv",
                 "weights_buff_tile.sv",
-                "cu_mvau_tiled.sv",
-                "mvu_tiled_axi.sv",
+                "../skid/skid.sv",
             ]
-            verilog_files = [
-                os.path.join(code_gen_dir, self.get_nodeattr("gen_top_module") + "_wrapper.v")
-            ] + [rtllib_dir + _ for _ in verilog_files]
-        else:
-            verilog_files = [
-                "mvu_pkg.sv",
-                "mvu_vvu_axi.sv",
-                "replay_buffer.sv",
-                "mvu.sv",
-                "mvu_vvu_8sx9_dsp58.sv",
-                "add_multi.sv",
-            ]
-            verilog_files = [
-                os.path.join(code_gen_dir, self.get_nodeattr("gen_top_module") + "_wrapper.v")
-            ] + [rtllib_dir + _ for _ in verilog_files]
+        verilog_files = [
+            os.path.join(code_gen_dir, self.get_nodeattr("gen_top_module") + "_wrapper.v")
+        ] + [rtllib_dir + _ for _ in sourcefiles]
 
         return verilog_files
 
     def get_verilog_paths(self):
         verilog_paths = super().get_verilog_paths()
-        if self.get_nodeattr("TH") > 1:
-            verilog_paths.append(os.environ["FINN_ROOT"] + "/finn-rtllib/mvu_tiled")
-        else:
-            verilog_paths.append(os.environ["FINN_ROOT"] + "/finn-rtllib/mvu")
+        verilog_paths.append(os.environ["FINN_ROOT"] + "/finn-rtllib/mvu")
+        verilog_paths.append(os.environ["FINN_ROOT"] + "/finn-rtllib/input_gen/hdl")
         return verilog_paths

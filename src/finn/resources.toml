@@ -10,8 +10,8 @@ description = "finn-hlslib HLS C++ library"
 kind = ["hls-include"]
 redistributable = true
 git = "https://github.com/Xilinx/finn-hlslib.git"
-commit = "66e53fca6be11fa65f3aef03100287da3a361459"
-digest = "sha256:9716b5dc3418ec225027ba5936849e45576172b243ef3b192ce82ced9b426658"
+commit = "8706a00b1774c2ecc4fb705a194f39c714f92e6a"
+digest = "sha256:c43ac3e536ffad0cf101dbbf073ae7bf0d79ca62d2c965ff2adfddf62cf90bdb"
 
 # Vivado board files. Third-party files FINN does not redistribute; each root is
 # a separate Vivado board repository path.

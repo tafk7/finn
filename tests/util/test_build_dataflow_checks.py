@@ -7,11 +7,14 @@ import pytest
 
 import json
 import os
+import warnings
 from onnx import TensorProto, helper
 from unittest.mock import patch
 
 from finn.builder.build_dataflow import build_dataflow_cfg
+from finn.builder.build_dataflow_checks import run_all_config_checks
 from finn.builder.build_dataflow_config import (
+    AutoFIFOSizingMethod,
     DataflowBuildConfig,
     DataflowOutputType,
     ShellFlowType,
@@ -382,3 +385,141 @@ class TestConfigCheckIntegration:
             c["name"] for c in report["checks"] if not c["passed"] and c["severity"] == "ERROR"
         ]
         assert "folding_missing" not in error_names
+
+    @pytest.mark.parametrize(
+        "strategy,error,warning",
+        [
+            ("heuristic_analytical", False, False),
+            (AutoFIFOSizingMethod.LARGEFIFO_RTLSIM, False, False),
+            ("characterize", False, True),
+            ("characterise", True, False),
+        ],
+    )
+    def test_auto_fifo_strategy(self, strategy, error, warning):
+        """An unknown auto_fifo_strategy fails the config check instead of skipping
+        FIFO sizing; the deprecated "characterize" only warns."""
+        build_dir = make_build_dir("test_config_check_")
+        model_path = make_test_model(build_dir)
+        output_dir = os.path.join(build_dir, "output")
+        build_cfg = cfg(output_dir, auto_fifo_strategy=strategy)
+
+        with patch.dict("os.environ", {"XILINX_VIVADO": "/tools/Vivado/2024.2"}):
+            if error:
+                with pytest.raises(AssertionError, match="Configuration check failed"):
+                    build_dataflow_cfg(model_path, build_cfg)
+            else:
+                build_dataflow_cfg(model_path, build_cfg)
+
+        with open(os.path.join(output_dir, "config_check_report.json")) as f:
+            report = json.load(f)
+        failed = {c["name"]: c["severity"] for c in report["checks"] if not c["passed"]}
+        assert (failed.get("auto_fifo_strategy") == "ERROR") == error
+        assert (failed.get("auto_fifo_strategy_deprecated") == "WARNING") == warning
+
+
+@pytest.mark.util
+def test_auto_fifo_strategy_characterize_alias():
+    """The deprecated "characterize" resolves to heuristic_rtlsim, from Python
+    and from a JSON config, without a warning of its own: the config check
+    reports the deprecation (see test_auto_fifo_strategy)."""
+    build_cfg = cfg("unused", auto_fifo_strategy="characterize")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        assert build_cfg._resolve_auto_fifo_strategy() == AutoFIFOSizingMethod.HEURISTIC_RTLSIM
+        loaded = DataflowBuildConfig.from_json(build_cfg.to_json())
+    assert loaded.auto_fifo_strategy == AutoFIFOSizingMethod.HEURISTIC_RTLSIM
+    with pytest.raises(ValueError):
+        cfg("unused", auto_fifo_strategy="characterise")._resolve_auto_fifo_strategy()
+
+
+@pytest.mark.util
+@pytest.mark.parametrize(
+    "check_name,kw",
+    [
+        ("v80_vivado", {"board": "V80"}),
+        ("slash_vivado", {"shell_flow_type": ShellFlowType.SLASH_ALVEO}),
+        ("mlo_vivado", {"mlo": True}),
+        ("aupzu3_vivado", {"board": "AUP-ZU3_8GB"}),
+    ],
+)
+def test_vivado_version_checks_without_vivado(check_name, kw):
+    """Without Vivado (XILINX_VIVADO unset) a version check fails with a message
+    instead of crashing while formatting the version it did not find."""
+    output_dir = make_build_dir("test_config_check_no_vivado_")
+    with patch.dict("os.environ", {"XILINX_VIVADO": ""}):
+        report = run_all_config_checks(cfg(output_dir, **kw))
+    check = next(c for c in report.checks if c.name == check_name)
+    assert not check.passed
+    assert "found unknown" in check.message
+
+
+@pytest.mark.util
+# config, failing check (None: neither fails), its severity
+@pytest.mark.parametrize(
+    "kw, check_name, severity",
+    [
+        ({"mlo_parallel_rtlsim": True}, "mlo_parallel_rtlsim", "WARNING"),
+        (
+            {
+                "mlo": True,
+                "mlo_parallel_rtlsim": True,
+                "verify_steps": ["stitched_ip_rtlsim"],
+                "verify_input_npy": None,
+            },
+            "mlo_parallel_rtlsim_input",
+            "ERROR",
+        ),
+        (
+            {
+                "mlo": True,
+                "mlo_parallel_rtlsim": True,
+                "verify_steps": ["stitched_ip_rtlsim"],
+                "verify_input_npy": "input.npy",
+            },
+            None,
+            None,
+        ),
+    ],
+)
+def test_mlo_parallel_rtlsim_checks(kw, check_name, severity):
+    """mlo_parallel_rtlsim is flagged without MLO, and rejected at config-check
+    time without the verification input it derives its golden frames from."""
+    output_dir = make_build_dir("test_config_check_mlo_parallel_")
+    report = run_all_config_checks(cfg(output_dir, **kw))
+    failed = {c.name: c.severity.value for c in report.checks if not c.passed}
+    for name in ("mlo_parallel_rtlsim", "mlo_parallel_rtlsim_input"):
+        if name == check_name:
+            assert failed[name] == severity
+        else:
+            assert name not in failed
+
+
+@pytest.mark.util
+@pytest.mark.parametrize(
+    "strategy, error",
+    [("largefifo_rtlsim", True), ("heuristic_rtlsim", False), ("heuristic_analytical", False)],
+)
+def test_mlo_auto_fifo_strategy(strategy, error):
+    """MLO is rejected at config-check time with largefifo_rtlsim, which cannot
+    size the FIFOs around a FINNLoop."""
+    output_dir = make_build_dir("test_config_check_mlo_fifo_")
+    report = run_all_config_checks(cfg(output_dir, mlo=True, auto_fifo_strategy=strategy))
+    failed = {c.name: c.severity.value for c in report.checks if not c.passed}
+    assert (failed.get("auto_fifo_strategy_mlo") == "ERROR") == error
+
+
+@pytest.mark.util
+# shell flow given explicitly, or inferred from the board
+@pytest.mark.parametrize("explicit_shell", [True, False])
+def test_shell_checks_use_inferred_shell_flow(explicit_shell):
+    """Checks keyed on the shell flow apply whether it is set or inferred from the
+    board, e.g. the Vitis environment check for board="U250" alone."""
+    output_dir = make_build_dir("test_config_check_inferred_shell_")
+    kw = {"board": "U250", "generate_outputs": [DataflowOutputType.BITFILE]}
+    if explicit_shell:
+        kw["shell_flow_type"] = ShellFlowType.VITIS_ALVEO
+    env = {k: v for k, v in os.environ.items() if k not in ("VITIS_PATH", "XILINX_XRT")}
+    with patch.dict("os.environ", env, clear=True):
+        report = run_all_config_checks(cfg(output_dir, **kw))
+    check = next(c for c in report.checks if c.name == "vitis_envvars")
+    assert not check.passed

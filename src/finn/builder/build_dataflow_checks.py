@@ -12,9 +12,11 @@ from enum import Enum
 from typing import List, Optional, Tuple
 
 from finn.builder.build_dataflow_config import (
+    AutoFIFOSizingMethod,
     DataflowBuildConfig,
     DataflowOutputType,
     ShellFlowType,
+    VerificationStepType,
     verify_step_prereqs,
 )
 from finn.util.basic import (
@@ -73,11 +75,26 @@ def _cfg_default(field_name):
 def run_all_config_checks(cfg: DataflowBuildConfig) -> Report:
     """Run all configuration checks and return report."""
     v = get_vivado_version()
+    # for the check messages; v is None without Vivado (XILINX_VIVADO unset)
+    v_found = "%d.%d" % v if v else "unknown"
     checks = []
 
     has_bitfile = cfg.generate_outputs and DataflowOutputType.BITFILE in cfg.generate_outputs
     alveo_boards = set(vitis_part_map.keys())
     pynq_boards = set(pynq_part_map.keys())
+
+    # Resolve the shell the build will actually use for the checks below: an unset
+    # shell_flow_type is inferred from the board. A board with no shell is only an
+    # error when a bitfile is requested, so leave resolved_shell as None here and let
+    # the has_bitfile-gated checks below report it.
+    try:
+        resolved_shell = (
+            cfg._resolve_shell_flow_type()
+            if (cfg.shell_flow_type is not None or cfg.board is not None)
+            else None
+        )
+    except Exception:
+        resolved_shell = None
 
     # === Vivado Version Checks ===
     if cfg.board == "V80":
@@ -86,20 +103,18 @@ def run_all_config_checks(cfg: DataflowBuildConfig) -> Report:
                 "v80_vivado",
                 Severity.ERROR,
                 v and v >= (2024, 2),
-                "V80 board requires Vivado 2024.2 or later, "
-                f"found {v[0]}.{v[1] if v else 'unknown'}",
+                f"V80 board requires Vivado 2024.2 or later, found {v_found}",
                 "Upgrade to Vivado 2024.2 or later to use V80",
             )
         )
 
-    if cfg.shell_flow_type == ShellFlowType.SLASH_ALVEO:
+    if resolved_shell == ShellFlowType.SLASH_ALVEO:
         checks.append(
             _check(
                 "slash_vivado",
                 Severity.ERROR,
                 v and v >= (2025, 1),
-                "SLASH_ALVEO shell flow requires Vivado 2025.1, "
-                f"found {v[0]}.{v[1] if v else 'unknown'}",
+                f"SLASH_ALVEO shell flow requires Vivado 2025.1, found {v_found}",
                 "Upgrade to Vivado 2025.1 for SLASH support",
             )
         )
@@ -110,7 +125,7 @@ def run_all_config_checks(cfg: DataflowBuildConfig) -> Report:
                 "mlo_vivado",
                 Severity.ERROR,
                 v and v >= (2024, 2),
-                "MLO requires Vivado 2024.2 or later, " f"found {v[0]}.{v[1] if v else 'unknown'}",
+                f"MLO requires Vivado 2024.2 or later, found {v_found}",
                 "Upgrade to Vivado 2024.2 or later for MLO support",
             )
         )
@@ -121,8 +136,7 @@ def run_all_config_checks(cfg: DataflowBuildConfig) -> Report:
                 "aupzu3_vivado",
                 Severity.ERROR,
                 v and v >= (2024, 1),
-                f"AUP-ZU3_8GB board requires Vivado 2024.1 or later, "
-                f"found {v[0]}.{v[1] if v else 'unknown'}",
+                f"AUP-ZU3_8GB board requires Vivado 2024.1 or later, found {v_found}",
                 "Upgrade to Vivado 2024.1 or later to use AUP-ZU3_8GB",
             )
         )
@@ -179,19 +193,6 @@ def run_all_config_checks(cfg: DataflowBuildConfig) -> Report:
                 "matching Platform class in util/platforms.py).",
             )
         )
-
-    # Resolve the shell the build will actually use for the bitfile-consistency
-    # checks below: an unset shell_flow_type is inferred from the board. A board
-    # with no shell is only an error when a bitfile is requested, so leave resolved_shell
-    # as None here and let the has_bitfile-gated checks below report it.
-    try:
-        resolved_shell = (
-            cfg._resolve_shell_flow_type()
-            if (cfg.shell_flow_type is not None or cfg.board is not None)
-            else None
-        )
-    except Exception:
-        resolved_shell = None
 
     if has_bitfile:
         is_v80 = cfg.board == "V80" or (cfg.fpga_part and cfg.fpga_part.startswith("xcv80"))
@@ -331,7 +332,7 @@ def run_all_config_checks(cfg: DataflowBuildConfig) -> Report:
         )
 
     # === Environment Variables ===
-    if has_bitfile and cfg.shell_flow_type == ShellFlowType.VITIS_ALVEO:
+    if has_bitfile and resolved_shell == ShellFlowType.VITIS_ALVEO:
         missing = [
             v for v in ["VITIS_PATH", "PLATFORM_REPO_PATHS", "XILINX_XRT"] if v not in os.environ
         ]
@@ -432,6 +433,47 @@ def run_all_config_checks(cfg: DataflowBuildConfig) -> Report:
                         )
                     )
 
+    # === FIFO Sizing Strategy ===
+    # an unknown auto_fifo_strategy only fails in step_set_fifo_depths, partway into
+    # the build, so catch it here
+    if cfg.auto_fifo_depths:
+        strategy = cfg.auto_fifo_strategy
+        valid = [m.value for m in AutoFIFOSizingMethod]
+        checks.append(
+            _check(
+                "auto_fifo_strategy",
+                Severity.ERROR,
+                strategy in valid or strategy == "characterize",
+                f"auto_fifo_strategy={strategy!r} is not a FIFO sizing strategy",
+                "Set auto_fifo_strategy to one of " + ", ".join(valid),
+            )
+        )
+        if strategy == "characterize":
+            checks.append(
+                _check(
+                    "auto_fifo_strategy_deprecated",
+                    Severity.WARNING,
+                    False,
+                    "auto_fifo_strategy 'characterize' has been replaced by 'heuristic_rtlsim' "
+                    "(which it now runs) and will be removed in a future release",
+                    "Set auto_fifo_strategy to 'heuristic_rtlsim' or 'heuristic_analytical'",
+                )
+            )
+        # InsertAndSetFIFODepths cannot simulate a FINNLoop as part of its stitched
+        # design; step_set_fifo_depths would only fail late in the build
+        if cfg.mlo and strategy == AutoFIFOSizingMethod.LARGEFIFO_RTLSIM:
+            checks.append(
+                _check(
+                    "auto_fifo_strategy_mlo",
+                    Severity.ERROR,
+                    False,
+                    "auto_fifo_strategy 'largefifo_rtlsim' (the default) cannot size the FIFOs "
+                    "around a FINNLoop; MLO models need a heuristic strategy. The FIFOs inside "
+                    "the loop bodies are sized by simulating each body, whatever the strategy",
+                    "Set auto_fifo_strategy to 'heuristic_rtlsim' or 'heuristic_analytical'",
+                )
+            )
+
     # === FIFO Debug Logging ===
     # fifo_log_flush_cycles reaches the RTL via int() in _attach_fifo_debug_logs and
     # InsertAndSetFIFODepths; None or a negative value only fails there, partway into
@@ -520,29 +562,47 @@ def run_all_config_checks(cfg: DataflowBuildConfig) -> Report:
         )
 
     if cfg.mlo and cfg.generate_outputs:
-        if DataflowOutputType.ESTIMATE_REPORTS in cfg.generate_outputs:
+        if (
+            DataflowOutputType.ESTIMATE_REPORTS in cfg.generate_outputs
+            or DataflowOutputType.RTLSIM_PERFORMANCE in cfg.generate_outputs
+        ):
             checks.append(
                 _check(
-                    "mlo_estimates",
-                    Severity.WARNING,
+                    "mlo_performance",
+                    Severity.INFO,
                     False,
-                    "MLO enabled with ESTIMATE_REPORTS: Network performance cannot be "
-                    "estimated for MLO models. Individual layer estimates will still be "
-                    "generated",
+                    "MLO throughput (estimate and RTLSIM_PERFORMANCE) assumes that the loop "
+                    "controller keeps the loop body fully busy, with ideal external memory; "
+                    "it is an upper bound. The RTLSIM_PERFORMANCE latency is not available "
+                    "for MLO models",
                 )
             )
-        if DataflowOutputType.RTLSIM_PERFORMANCE in cfg.generate_outputs:
-            checks.append(
-                _check(
-                    "mlo_rtlsim",
-                    Severity.WARNING,
-                    False,
-                    "MLO enabled with RTLSIM_PERFORMANCE: RTL simulation performance "
-                    "measurement is skipped for MLO models",
-                    "Remove RTLSIM_PERFORMANCE from generate_outputs or disable MLO",
-                )
+    if cfg.mlo_parallel_rtlsim and not cfg.mlo:
+        checks.append(
+            _check(
+                "mlo_parallel_rtlsim",
+                Severity.WARNING,
+                False,
+                "mlo_parallel_rtlsim=True without mlo=True has no effect",
+                "Enable mlo or remove mlo_parallel_rtlsim",
             )
-
+        )
+    if (
+        cfg.mlo
+        and cfg.mlo_parallel_rtlsim
+        and VerificationStepType.STITCHED_IP_RTLSIM in cfg._resolve_verification_steps()
+        and not cfg.verify_input_npy
+    ):
+        checks.append(
+            _check(
+                "mlo_parallel_rtlsim_input",
+                Severity.ERROR,
+                False,
+                "mlo_parallel_rtlsim=True needs verify_input_npy: the parallel stitched-IP "
+                "rtlsim derives its per-iteration golden frames from it",
+                "Set verify_input_npy, or disable mlo_parallel_rtlsim",
+            )
+        )
     if cfg.mlo and cfg.verify_save_full_context:
         checks.append(
             _check(
@@ -601,7 +661,7 @@ def run_all_config_checks(cfg: DataflowBuildConfig) -> Report:
             )
         )
 
-    if cfg.shell_flow_type == ShellFlowType.SLASH_ALVEO:
+    if resolved_shell == ShellFlowType.SLASH_ALVEO:
         checks.append(
             _check(
                 "slash_external",

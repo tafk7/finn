@@ -24,11 +24,11 @@ import argparse
 import importlib
 import os
 import shutil
-import subprocess
 import sys
 from typing import List
 
 from finn.resources import _store
+from finn.util.launcher import ToolFailed, ToolUnavailable, run_tool
 from finn.xsi._build_config import LINK_ARGS, get_build_paths
 from finn.xsi.paths import build_dir, source_dir
 
@@ -134,16 +134,17 @@ def build_xsi(force: bool = False, verbose: bool = True) -> bool:
             return True
         xsi_path.mkdir(parents=True, exist_ok=True)
         cmd[cmd.index("-o") + 1] = "xsi.so.tmp"
-        result = subprocess.run(cmd, cwd=xsi_path, capture_output=True, text=True)
-        if result.returncode == 0:
+        try:
+            result = run_tool(cmd, cwd=xsi_path, replay=xsi_path / "compile_xsi.sh")
+        except (ToolFailed, ToolUnavailable) as exc:
+            failure = exc
+        else:
+            failure = None
             (xsi_path / "xsi.so.tmp").replace(xsi_path / "xsi.so")
 
-    if result.returncode != 0:
+    if failure is not None:
         print("Build failed!")
-        if result.stderr:
-            print("Error output:", result.stderr)
-        if result.stdout:
-            print("Build output:", result.stdout)
+        print(failure)
         print("\nBuild command was:")
         print(" ".join(cmd))
         print("\nCommon issues:")
@@ -153,7 +154,7 @@ def build_xsi(force: bool = False, verbose: bool = True) -> bool:
         return False
 
     if verbose and result.stdout:
-        print(result.stdout)
+        print(result.stdout.decode("utf-8", errors="replace"))
 
     if verbose:
         print("Build completed successfully.")

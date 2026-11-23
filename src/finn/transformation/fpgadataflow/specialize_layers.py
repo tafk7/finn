@@ -232,15 +232,12 @@ def _mvu_rtl_possible(n, fpgapart, model):
     # Currently, for DSP48 we only support computations up to
     # 8sx8u (8-bit signed weights x 8-bit (un)signed activations)
     # and for DSP58 we support up to 8sx9s.
-    # Please note, DSP48E1 does only support narrow range for weights
-    # Next to that, embedded thresholding functionality is not supported
-    # and neither binaryxnormode computation.
+    # Please note, DSP48E1 does only support narrow range for weights.
+    # Next to that, embedded thresholding functionality is not supported.
     node_inst = getCustomOp(n)
-    # first check if no Activation or binary xnor mode and return False
-    # immediately if one of them is True
+    # first check if no Activation and return False immediately if True
     no_activation = node_inst.get_nodeattr("noActivation") == 0
-    not_binaryxnor_mode = node_inst.get_nodeattr("binaryXnorMode") == 1
-    if no_activation or not_binaryxnor_mode:
+    if no_activation:
         return False
 
     # check if weights are signed, if not return False
@@ -434,6 +431,11 @@ class SpecializeLayers(Transformation):
             for attribute in node.attribute:
                 if attribute.name != "preferred_impl_style":
                     new_node.attribute.append(attribute)
+            # layers whose arithmetic depends on the DSP generation record it here,
+            # where the target part is known (e.g. Requant_rtl's operand widths)
+            new_inst = getCustomOp(new_node)
+            if "dsp_block" in new_inst.get_nodeattr_types():
+                new_inst.set_nodeattr("dsp_block", get_dsp_block(self.fpgapart))
             graph.node.insert(node_ind, new_node)
             # remove old nodes
             graph.node.remove(node)

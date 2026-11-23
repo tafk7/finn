@@ -47,10 +47,33 @@ from finn.util.basic import (
 
 
 class AutoFIFOSizingMethod(str, Enum):
-    "Select the type of automatic FIFO sizing strategy."
+    """Select the type of automatic FIFO sizing strategy.
 
-    CHARACTERIZE = "characterize"
+    The two heuristic strategies differ only in where each node's token access
+    vector comes from. ``heuristic_analytical`` builds it from the node's tree
+    model, which needs no IP generation and no simulator; ``heuristic_rtlsim``
+    measures it per node with rtlsim, which is far slower but covers operators
+    that have no tree model. Both then size the FIFOs with the chained-TAV pass
+    (``DeriveFIFOSizes``).
+
+    ``"characterize"``, the name of the rtlsim-based strategy these replaced, is
+    still accepted as a deprecated alias of ``heuristic_rtlsim``.
+    """
+
+    #: token access vectors from the operators' tree models
+    HEURISTIC_ANALYTICAL = "heuristic_analytical"
+    #: token access vectors measured per node with rtlsim
+    HEURISTIC_RTLSIM = "heuristic_rtlsim"
+    #: set every FIFO large, rtlsim the whole graph, then trim to the high-water mark
     LARGEFIFO_RTLSIM = "largefifo_rtlsim"
+
+    @classmethod
+    def _missing_(cls, value):
+        # the deprecation is reported once, by the auto_fifo_strategy_deprecated
+        # config check
+        if value == "characterize":
+            return cls.HEURISTIC_RTLSIM
+        return None
 
 
 class ShellFlowType(str, Enum):
@@ -61,6 +84,20 @@ class ShellFlowType(str, Enum):
     VIVADO_VERSAL = "vivado_versal"
     VITIS_ALVEO = "vitis_alveo"
     SLASH_ALVEO = "slash_alveo"
+
+
+class Clk2xSource(str, Enum):
+    """Source of the double-speed clock ap_clk2x of double-pumped nodes
+    (pumpedCompute, pumpedMemory) in the stitched IP that is delivered or
+    integrated into a shell. It must be phase-aligned with ap_clk."""
+
+    #: The stitched IP derives ap_clk2x from ap_clk by an internal clock
+    #: generator (MMCM) and has no ap_clk2x input.
+    GENERATOR = "generator"
+    #: The stitched IP has an ap_clk2x input. The integrating system must drive
+    #: it with a clock of twice the frequency of ap_clk and phase-aligned with
+    #: it, e.g. a pair of platform clocks (see vitis_clk2x_clock_ids).
+    EXTERNAL = "external"
 
 
 class DataflowOutputType(str, Enum):
@@ -213,6 +250,13 @@ class DataflowBuildConfig:
     #: verification. Only required if verify_steps is not empty.
     verify_expected_output_npy: Optional[str] = "expected_output.npy"
 
+    #: (Optional) Number of frames to verify in a single stitched-IP rtlsim run.
+    #: Only the stitched_ip_rtlsim verification step uses this. All other steps and
+    #: stitched_ip_rtlsim when this is unset, verify one frame at a time.
+    #: A single-frame verification input/output pair is repeated to this many frames.
+    #: This is separate from rtlsim_batch_size, which controls performance simulation.
+    verify_batch_size: Optional[int] = None
+
     #: (Optional) Save full execution context for each of the verify_steps.
     #: By default, only the top-level graph output is saved.
     verify_save_full_context: Optional[bool] = False
@@ -286,7 +330,9 @@ class DataflowBuildConfig:
     auto_fifo_depths: Optional[bool] = True
 
     #: When `auto_fifo_depths = True`, select which method will be used for
-    #: setting the FIFO sizes.
+    #: setting the FIFO sizes. See :class:`AutoFIFOSizingMethod`; the two
+    #: heuristic strategies differ only in whether each node's token access
+    #: vector comes from its tree model or from rtlsim.
     auto_fifo_strategy: Optional[AutoFIFOSizingMethod] = AutoFIFOSizingMethod.LARGEFIFO_RTLSIM
 
     #: Enable input throttling for simulation-based FIFO sizing
@@ -298,9 +344,10 @@ class DataflowBuildConfig:
     fifosim_n_inferences: Optional[int] = 2
 
     #: Enable saving waveforms from simulation-based FIFO sizing.
-    #: Applies to the LARGEFIFO_RTLSIM strategy as well as the characterize
-    #: strategy (used for MLO/FINNLoop models), where it traces the per-node
-    #: characterization simulations.
+    #: Applies to the LARGEFIFO_RTLSIM strategy (including the FIFO sizing of
+    #: MLO/FINNLoop loop bodies) and, for the heuristic strategies, to the
+    #: per-node characterization simulations that derive the token access
+    #: vectors (HEURISTIC_RTLSIM, or nodes without a tree model).
     fifosim_save_waveform: Optional[bool] = False
 
     #: Enable FIFOs to output log files documenting what they witness.
@@ -340,6 +387,23 @@ class DataflowBuildConfig:
     #: Only relevant when `shell_flow_type = ShellFlowType.VITIS_ALVEO`
     vitis_opt_strategy: Optional[VitisOptStrategyCfg] = VitisOptStrategyCfg.DEFAULT
 
+    #: Source of the double-speed clock ap_clk2x of double-pumped nodes in the
+    #: stitched IP and in the shell kernels, see :class:`Clk2xSource`. If unset,
+    #: the shell kernels derive ap_clk2x by the internal clock generator and the
+    #: delivered stitched IP (STITCHED_IP, PORTABLE_RTL) has an ap_clk2x input
+    #: for the integrating system to drive. A set value applies to both. Inner
+    #: IPs (FINNLoop bodies, IPs stitched for FIFO sizing or simulation) always
+    #: get an ap_clk2x input, which the enclosing IP drives.
+    clk2x_source: Optional[Clk2xSource] = None
+
+    #: Vitis platform clock ids [id_ap_clk, id_ap_clk2x] for kernels with an
+    #: ap_clk2x input (clk2x_source = EXTERNAL). The platform must provide the
+    #: two clocks phase-aligned, at 1000/synth_clk_period_ns MHz and twice that.
+    #: For example, the VCK190 Vitis base platform lists such a pair as ids
+    #: [2, 1] (156.25 and 312.5 MHz); this has not been verified with a link.
+    #: Only relevant when `shell_flow_type = ShellFlowType.VITIS_ALVEO`.
+    vitis_clk2x_clock_ids: Optional[List[int]] = None
+
     #: Whether intermediate ONNX files will be saved during the build process.
     #: These can be useful for debugging if the build fails.
     save_intermediate_models: Optional[bool] = True
@@ -355,8 +419,10 @@ class DataflowBuildConfig:
     #: Whether pdb postmortem debuggig will be launched when the build fails
     enable_build_pdb_debug: Optional[bool] = True
 
-    #: When True, all warnings and compiler output will be printed in stdout.
-    #: Otherwise, these will be suppressed and only appear in the build log.
+    #: When True, the console also shows FINN's INFO records, the output of tools
+    #: run with run_tool(..., log_output=True) and each Python warning. Otherwise
+    #: these only appear in build_dataflow.log, while the console shows the step
+    #: timeline, FINN's warnings and errors and a count of Python warnings.
     verbose: Optional[bool] = False
 
     #: If given, only run the steps in the list. If not, run default steps.
@@ -402,6 +468,10 @@ class DataflowBuildConfig:
     #: If set to True, the FINN compiler tries to create an MLO design based on
     #: loop_body_hierarchy and loop_body_range
     mlo: Optional[bool] = False
+
+    #: If set to True, MLO stitched-IP rtlsim verification uses the parallel
+    #: "stream tap + body" path that simulates all loop iterations concurrently
+    mlo_parallel_rtlsim: Optional[bool] = False
 
     #: A List of strings that specify the PyTorch metadata hierarchy to
     #: be used for the loop body hierarchy. Each item in the list should
@@ -482,6 +552,21 @@ class DataflowBuildConfig:
             n_clock_cycles_per_sec = 10**9 / self.synth_clk_period_ns
             n_cycles_per_frame = n_clock_cycles_per_sec / self.target_fps
             return int(n_cycles_per_frame)
+
+    def _resolve_auto_fifo_strategy(self):
+        """The ``AutoFIFOSizingMethod`` for ``auto_fifo_strategy``, which may be
+        given as the enum or its string value. Maps the deprecated
+        ``"characterize"`` to ``HEURISTIC_RTLSIM``; raises ValueError for an
+        unknown strategy."""
+        return AutoFIFOSizingMethod(self.auto_fifo_strategy)
+
+    def _resolve_clk2x_gen(self, shell_kernel):
+        """Whether an IP derives ap_clk2x by an internal clock generator
+        (CreateStitchedIP clk2x_gen): a shell kernel if `shell_kernel`, else the
+        delivered stitched IP. Without a clk2x_source, only shell kernels do."""
+        if self.clk2x_source is None:
+            return shell_kernel
+        return Clk2xSource(self.clk2x_source) == Clk2xSource.GENERATOR
 
     def _resolve_vitis_opt_strategy(self):
         # convert human-readable enum to value expected by v++

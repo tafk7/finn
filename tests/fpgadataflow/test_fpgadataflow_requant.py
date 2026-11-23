@@ -21,6 +21,7 @@ import torch
 from brevitas.core.scaling import ScalingImplType
 from brevitas.export import export_qonnx
 from brevitas.nn import QuantIdentity, QuantReLU
+from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
@@ -33,7 +34,7 @@ from qonnx.transformation.general import (
 from qonnx.transformation.infer_data_layouts import InferDataLayouts
 from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
-from qonnx.util.basic import gen_finn_dt_tensor
+from qonnx.util.basic import gen_finn_dt_tensor, qonnx_make_model
 from qonnx.util.cleanup import cleanup as qonnx_cleanup
 
 import finn.core.onnx_exec as oxe
@@ -61,11 +62,15 @@ from finn.transformation.qonnx.quant_act_to_multithreshold import (
     default_filter_function_generator,
 )
 from finn.transformation.streamline.absorb import AbsorbScalarBiasIntoMultiThreshold
-from finn.util.basic import make_build_dir, pynq_part_map
+from finn.util.basic import get_dsp_block, make_build_dir, pynq_part_map
+from finn.util.test import tree_model_test
 
 test_pynq_board = "ZCU104"
 test_fpga_part = pynq_part_map[test_pynq_board]
 target_clk_ns = 10
+
+tree_model_fpga_part = "xczu7ev-ffvc1156-2-e"
+tree_model_clk_ns = 5.0
 
 
 def create_requant_model(abits, max_val, ishape, per_channel):
@@ -724,3 +729,267 @@ def test_infer_requant_from_quant(channelwise, pe, need_extraction_scale, need_e
     model = model.transform(PrepareRTLSim())
     y_rtlsim = oxe.execute_onnx(model, {model.graph.input[0].name: inp})[model.graph.output[0].name]
     assert np.allclose(y_golden, y_rtlsim)
+
+
+# =============================================================================
+# Tree Model Test - the analytical token access vector against rtlsim
+# =============================================================================
+
+
+def make_requant_modelwrapper(ishape, num_channels, pe, idt, odt, impl_style):
+    """A graph holding one Requant node, with scale and bias as initializers."""
+    inp = helper.make_tensor_value_info("inp", TensorProto.FLOAT, list(ishape))
+    outp = helper.make_tensor_value_info("outp", TensorProto.FLOAT, list(ishape))
+    node = helper.make_node(
+        "Requant",
+        ["inp", "scale", "bias"],
+        ["outp"],
+        domain="finn.custom_op.fpgadataflow",
+        backend="fpgadataflow",
+        NumChannels=num_channels,
+        PE=pe,
+        inputDataType=idt.name,
+        outputDataType=odt.name,
+        numInputVectors=list(ishape[:-1]),
+        preferred_impl_style=impl_style,
+    )
+    graph = helper.make_graph(nodes=[node], name="requant_graph", inputs=[inp], outputs=[outp])
+    model = ModelWrapper(qonnx_make_model(graph, producer_name="requant-model"))
+    model.set_tensor_datatype("inp", idt)
+    model.set_tensor_datatype("outp", odt)
+    model.set_initializer("scale", np.full((num_channels,), 0.5, dtype=np.float32))
+    model.set_initializer("bias", np.zeros((num_channels,), dtype=np.float32))
+    return model
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        ((1, 16, 64), 64, 1, "hls"),
+        ((1, 16, 64), 64, 8, "hls"),
+        ((1, 16, 64), 64, 16, "hls"),
+        ((1, 16, 64), 64, 1, "rtl"),
+        ((1, 16, 64), 64, 4, "rtl"),
+    ],
+)
+@pytest.mark.fpgadataflow
+@pytest.mark.slow
+@pytest.mark.vivado
+@pytest.mark.node_tree_modeling
+def test_fpgadataflow_analytical_characterization_requant(config):
+    ishape, num_channels, pe, impl_style = config
+
+    model = make_requant_modelwrapper(
+        ishape, num_channels, pe, DataType["INT8"], DataType["UINT8"], impl_style
+    )
+    model = model.transform(SpecializeLayers(tree_model_fpga_part))
+    model = model.transform(GiveUniqueNodeNames())
+    assert model.graph.node[0].op_type == "Requant_" + impl_style
+
+    node_details = ("Requant", config)
+
+    # Both rows are one solid run at one token per cycle, so nothing can drift
+    # and the volume budget is a floor, not a fraction. The length budget covers
+    # the pipeline fill, which the period deliberately leaves out: it is a fixed
+    # cost the reference's period carries a share of, and folding it into the
+    # period would put a hole in a row that has none.
+    max_allowed_volume_frac = 0.0
+    volume_const = 2
+    max_allowed_length_frac = 0.04
+    length_const = 20
+
+    assert tree_model_test(
+        model,
+        node_details,
+        tree_model_fpga_part,
+        tree_model_clk_ns,
+        max_allowed_volume_frac,
+        max_allowed_length_frac,
+        volume_const,
+        length_const,
+    ), "characterized TAV does not match RTLsim'd one!"
+
+
+# backend, part: the embedded RTL core for FLOAT32 input needs DSPFP32 (Versal)
+@pytest.mark.parametrize(
+    "impl_style,part",
+    [("rtl", "xcvc1902-vsva2197-2MP-e-S"), ("hls", "xczu7ev-ffvc1156-2-e")],
+)
+@pytest.mark.fpgadataflow
+@pytest.mark.slow
+@pytest.mark.vivado
+def test_requant_small_scales_are_exact(impl_style, part):
+    """Scales and biases reach the generated code exactly as float32.
+
+    Scales around 1e-7 have no more than one significant digit left in a
+    fixed-point literal with six decimals, which the embedded RTL core used to
+    receive. Inputs of up to 3e8 turn such a rounding into errors of several
+    output steps.
+    """
+    ishape, num_channels, pe = (1, 4, 8), 8, 2
+    idt, odt = DataType["FLOAT32"], DataType["INT8"]
+    model = make_requant_modelwrapper(ishape, num_channels, pe, idt, odt, impl_style)
+    rng = np.random.default_rng(0)
+    model.set_initializer("scale", rng.uniform(1e-7, 4e-7, num_channels).astype(np.float32))
+    model.set_initializer("bias", rng.uniform(-0.5, 0.5, num_channels).astype(np.float32))
+    inp = rng.uniform(-3e8, 3e8, ishape).astype(np.float32)
+    y_expected = oxe.execute_onnx(model, {"inp": inp})["outp"]
+
+    model = model.transform(SpecializeLayers(part))
+    model = model.transform(GiveUniqueNodeNames())
+    assert model.graph.node[0].op_type == "Requant_" + impl_style
+    if impl_style == "rtl":
+        getCustomOp(model.graph.node[0]).set_nodeattr("mem_mode", "internal_embedded")
+    model = model.transform(SetExecMode("rtlsim"))
+    model = model.transform(PrepareIP(part, 5))
+    model = model.transform(HLSSynthIP())
+    model = model.transform(PrepareRTLSim())
+    y_rtlsim = oxe.execute_onnx(model, {"inp": inp})["outp"]
+    # a fused multiply-add may round a product sitting on a .5 boundary differently
+    assert np.abs(y_rtlsim - y_expected).max() <= 1
+
+
+# float input on a non-Versal part specializes to HLS, an integer input to RTL
+@pytest.mark.parametrize(
+    "idt,impl_style", [("FLOAT32", "hls"), ("INT8", "rtl")], ids=["hls", "rtl"]
+)
+@pytest.mark.fpgadataflow
+def test_requant_adapt_for_loop_body(idt, impl_style):
+    """Per-iteration Requant parameters in an MLO loop body: the RTL backend
+    streams them, any other backend must refuse instead of keeping constants."""
+    model = make_requant_modelwrapper((1, 4, 8), 8, 2, DataType[idt], DataType["INT8"], impl_style)
+    model = model.transform(SpecializeLayers("xczu7ev-ffvc1156-2-e"))
+    node = model.graph.node[0]
+    assert node.op_type == "Requant_" + impl_style
+    inst = getCustomOp(node)
+
+    # parameters constant across iterations: nothing to adapt
+    inst.adapt_for_loop_body([])
+    # LoopRolling flags per-iteration parameters by setting mlo_max_iter
+    inst.set_nodeattr("mlo_max_iter", 3)
+    if impl_style == "rtl":
+        inst.adapt_for_loop_body([])
+        assert inst.get_nodeattr("mem_mode") == "internal_decoupled"
+    else:
+        with pytest.raises(Exception, match="RTL Requant"):
+            inst.adapt_for_loop_body([])
+
+
+# part: one DSP generation each (DSP58, DSP48E2, DSP48E1)
+# idt: the widest input per part is 2 bits wider than its multiplier input (27 or
+# 25 bits), so the core drops low input bits
+# mem_mode: embedded parameters for all inputs, the decoupled memstream for the widest
+@pytest.mark.parametrize(
+    "part,idt,mem_mode",
+    [
+        (part, idt, mem_mode)
+        for part, widest in [
+            ("xcvc1902-vsva2197-2MP-e-S", "INT29"),
+            ("xczu7ev-ffvc1156-2-e", "INT29"),
+            ("xc7z020clg400-1", "INT27"),
+        ]
+        for idt, mem_mode in [
+            ("INT8", "internal_embedded"),
+            ("UINT20", "internal_embedded"),
+            (widest, "internal_embedded"),
+            (widest, "internal_decoupled"),
+        ]
+    ],
+)
+@pytest.mark.fpgadataflow
+@pytest.mark.slow
+@pytest.mark.vivado
+def test_requant_rtl_python_model_is_exact(part, idt, mem_mode):
+    """The Python execution of Requant_rtl matches its rtlsim bit for bit.
+
+    The core computes x * scale + bias exactly in fixed point. A float32 model
+    rounds twice and can land on the other side of a .5 boundary, so the inputs
+    include, per channel, the ones whose exact result is closest to a boundary.
+    """
+    ishape, num_channels, pe = (1, 256, 8), 8, 2
+    idt, odt = DataType[idt], DataType["INT8"]
+    model = make_requant_modelwrapper(ishape, num_channels, pe, idt, odt, "rtl")
+    rng = np.random.default_rng(0)
+    scale = (rng.uniform(0.5, 1.0, num_channels) * 127 / 2 ** (idt.bitwidth() - 1)).astype(
+        np.float32
+    )
+    bias = rng.uniform(-0.5, 0.5, num_channels).astype(np.float32)
+    model.set_initializer("scale", scale)
+    model.set_initializer("bias", bias)
+    # per channel: half random inputs, half the ones closest to a rounding boundary,
+    # within +-2^24 so that the float32 input tensor holds them exactly
+    lo, hi = max(idt.min(), -(1 << 24)), min(idt.max(), 1 << 24)
+    cand = rng.integers(lo, hi, size=(1 << 16, num_channels), endpoint=True)
+    exact = cand * scale.astype(np.float64) + bias.astype(np.float64)
+    dist = np.abs(exact - np.floor(exact) - 0.5)
+    nearest = np.take_along_axis(cand, np.argsort(dist, axis=0)[: ishape[1] // 2], axis=0)
+    inp = np.concatenate([cand[: ishape[1] // 2], nearest]).reshape(ishape).astype(np.float32)
+
+    model = model.transform(SpecializeLayers(part))
+    model = model.transform(GiveUniqueNodeNames())
+    assert model.graph.node[0].op_type == "Requant_rtl"
+    inst = getCustomOp(model.graph.node[0])
+    inst.set_nodeattr("mem_mode", mem_mode)
+    # SpecializeLayers records the DSP generation the Python model needs
+    assert inst.get_nodeattr("dsp_block") == get_dsp_block(part)
+    model = model.transform(SetExecMode("rtlsim"))
+    model = model.transform(PrepareIP(part, 5))
+    model = model.transform(PrepareRTLSim())
+    y_rtlsim = oxe.execute_onnx(model, {"inp": inp})["outp"]
+    # an empty exec_mode selects the Python model (SetExecMode only accepts sim modes)
+    getCustomOp(model.graph.node[0]).set_nodeattr("exec_mode", "")
+    y_python = oxe.execute_onnx(model, {"inp": inp})["outp"]
+    assert np.array_equal(y_python, y_rtlsim)
+
+
+@pytest.mark.fpgadataflow
+def test_requant_rtl_dsp_block_must_match_the_part():
+    """Code generation for another DSP generation than the node was specialized
+    for is refused: its Python model would no longer describe the hardware."""
+    idt, odt = DataType["INT8"], DataType["INT8"]
+    model = make_requant_modelwrapper((1, 4, 8), 8, 2, idt, odt, "rtl")
+    model = model.transform(SpecializeLayers("xczu7ev-ffvc1156-2-e"))
+    inst = getCustomOp(model.graph.node[0])
+    assert inst.get_nodeattr("dsp_block") == "DSP48E2"
+    assert inst._dsp_version() == 2
+    with pytest.raises(ValueError, match="specialized for DSP48E2"):
+        inst._dsp_version("xcvc1902-vsva2197-2MP-e-S")
+
+
+@pytest.mark.fpgadataflow
+def test_check_uniform_thresholds():
+    """Uniform thresholds are recognised through their float32 noise, others are not.
+
+    The first gap carries the rounding of two thresholds, so a step taken from it
+    drifts over 255 steps. The least-squares step stays within float32 noise.
+    """
+    rng = np.random.default_rng(0)
+    num_channels, num_thresholds = 4, 255
+    step = rng.uniform(1000, 2000, num_channels)
+    first = rng.uniform(1e5, 2e5, num_channels)
+    idx = np.arange(num_thresholds)
+    # computed in float32, as streamlining does
+    first32, step32 = first.astype(np.float32), step.astype(np.float32)
+    thresholds = first32[:, None] + idx.astype(np.float32) * step32[:, None]
+
+    is_uniform, step_sizes, first_thresholds = to_hw._check_uniform_thresholds(thresholds)
+    assert is_uniform
+    assert np.allclose(step_sizes, step32, rtol=1e-6)
+    assert np.allclose(first_thresholds, first32, rtol=1e-6)
+
+    # rounded to integers with a non-integer step: not uniform (InferRequantLayer
+    # sees the float thresholds, it runs before RoundAndClipThresholds)
+    assert not to_hw._check_uniform_thresholds(np.ceil(thresholds))[0]
+    # one gap 0.5 % wider: not uniform
+    uneven = thresholds.copy()
+    uneven[:, 128:] += np.float32(0.005) * step32[:, None]
+    assert not to_hw._check_uniform_thresholds(uneven)[0]
+    # a single threshold is trivially uniform
+    assert to_hw._check_uniform_thresholds(thresholds[:, :1])[0]
+    # equal thresholds have no step to derive a scale from, also as the only such
+    # channel next to uniform ones; np.polyfit returns a tiny step of either sign
+    for ch in range(num_channels):
+        dead = thresholds.copy()
+        dead[ch] = first32[ch]
+        assert not to_hw._check_uniform_thresholds(dead)[0]
+        assert not to_hw._check_uniform_thresholds(dead[ch : ch + 1])[0]

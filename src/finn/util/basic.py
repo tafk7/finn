@@ -27,21 +27,31 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import errno
+import glob
+import logging
 import os
 import re
+import shlex
 import shutil
-import subprocess
-import sys
 import tempfile
 import time
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.util.basic import gen_finn_dt_tensor, roundup_to_integer_multiple
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Sequence, Tuple, Union
 
 from finn.resources import scratch
 from finn.resources.prepare import GOLDEN_FILES, golden_dir
 from finn.util.data_packing import finnpy_to_packed_bytearray
+from finn.util.launcher import (
+    TOOL_DIR_ENV,
+    StrPath,
+    ToolUnavailable,
+    run_tool,
+    xilinx_tool,
+)
+
+log = logging.getLogger(__name__)
 
 # mapping from PYNQ board names to FPGA part names
 pynq_part_map = dict()
@@ -165,6 +175,15 @@ def fifo_rtl_files(abspath=True, gauge=False):
     return [os.path.join(rtlsrc, n) for n in names]
 
 
+def arith_rtl_files(names, abspath=True):
+    """Return the shared arithmetic RTL sources (finn-rtllib/arith) named in
+    names, referenced in place like the FIFO sources."""
+    if not abspath:
+        return list(names)
+    rtlsrc = os.path.join(get_finn_root(), "finn-rtllib", "arith")
+    return [os.path.join(rtlsrc, n) for n in names]
+
+
 def get_vivado_root():
     "Return the root directory that Vivado is installed into."
 
@@ -183,6 +202,22 @@ def get_vivado_version() -> Optional[Tuple[int, int]]:
     path = os.environ.get("XILINX_VIVADO", "")
     match = re.search(r"\b(20\d{2})\.(1|2)\b", path)
     return (int(match.group(1)), int(match.group(2))) if match else None
+
+
+def require_vivado_version() -> Tuple[int, int]:
+    """Return get_vivado_version(), or raise ToolUnavailable if it is unknown."""
+    version = get_vivado_version()
+    if version is None:
+        path = os.environ.get("XILINX_VIVADO")
+        if not path:
+            raise ToolUnavailable("vivado", "XILINX_VIVADO is not set")
+        raise ToolUnavailable(
+            "vivado",
+            f"XILINX_VIVADO={path} does not name the Vivado release; set it to the "
+            "installation directory (<root>/<release>/Vivado), as the installation's "
+            "settings64.sh does",
+        )
+    return version
 
 
 def get_liveness_threshold_cycles():
@@ -236,7 +271,9 @@ def make_build_dir(prefix=""):
 
 def robust_rmtree(path, retries=6, initial_delay=0.1, backoff=2.0):
     """Remove a directory tree with retries for transient NFS cleanup races.
-    Retries ``ENOTEMPTY``/``EBUSY``. Other errors propagate immediately.
+    Retries ``ENOTEMPTY``/``EBUSY``, and a ``FileNotFoundError`` for an entry
+    that vanished while the tree still exists (``shutil.rmtree`` re-raises it,
+    e.g. for a stale NFS directory listing). Other errors propagate immediately.
     """
     if not path or not os.path.exists(path):
         return
@@ -245,10 +282,10 @@ def robust_rmtree(path, retries=6, initial_delay=0.1, backoff=2.0):
         try:
             shutil.rmtree(path)
             return
-        except FileNotFoundError:
-            return
         except OSError as exc:
-            transient = exc.errno in (errno.ENOTEMPTY, errno.EBUSY)
+            if isinstance(exc, FileNotFoundError) and not os.path.exists(path):
+                return
+            transient = exc.errno in (errno.ENOTEMPTY, errno.EBUSY, errno.ENOENT)
             if not transient or attempt == retries - 1:
                 raise
             time.sleep(delay)
@@ -256,8 +293,7 @@ def robust_rmtree(path, retries=6, initial_delay=0.1, backoff=2.0):
 
 
 class CppBuilder:
-    """Builds the g++ compiler command to produces the executable of the c++ code
-    in code_gen_dir which is passed to the function build() of this class."""
+    """Compile C++ sources with g++, retaining a replay and output transcripts."""
 
     def __init__(self):
         self.include_paths = []
@@ -267,72 +303,39 @@ class CppBuilder:
         self.compile_components = []
         self.compile_script = ""
 
-    def append_includes(self, library_path):
-        """Adds given library path to include_paths list."""
+    def append_includes(self, library_path: Union[str, Sequence[StrPath]]) -> None:
+        """Append compiler arguments, as tokens or a legacy shell-quoted fragment."""
         self.include_paths.append(library_path)
 
-    def append_sources(self, cpp_file):
-        """Adds given c++ file to cpp_files list."""
+    def append_sources(self, cpp_file: StrPath) -> None:
+        """Append a source path or glob, with environment variables expanded at build."""
         self.cpp_files.append(cpp_file)
 
-    def set_executable_path(self, path):
+    def set_executable_path(self, path: StrPath) -> None:
         """Sets member variable "executable_path" to given path."""
         self.executable_path = path
 
-    def build(self, code_gen_dir):
-        """Builds the g++ compiler command according to entries in include_paths
-        and cpp_files lists. Saves it in bash script in given folder and
-        executes it."""
-        # raise error if includes are empty
+    def build(self, code_gen_dir: StrPath) -> None:
+        """Compile directly, saving a replay and transcripts in ``code_gen_dir``."""
         self.code_gen_dir = code_gen_dir
-        self.compile_components.append("g++ -o " + str(self.executable_path))
+        command = ["g++", "-o", os.path.expandvars(os.fspath(self.executable_path))]
         for cpp_file in self.cpp_files:
-            self.compile_components.append(cpp_file)
+            source = os.path.expandvars(os.fspath(cpp_file))
+            if glob.has_magic(source):
+                matches = sorted(glob.glob(source))
+                if not matches:
+                    raise FileNotFoundError(f"No C++ sources match {source}")
+                command.extend(matches)
+            else:
+                command.append(source)
         for lib in self.include_paths:
-            self.compile_components.append(lib)
-        bash_compile = ""
-        for component in self.compile_components:
-            bash_compile += str(component) + " "
-        self.compile_script = str(self.code_gen_dir) + "/compile.sh"
-        with open(self.compile_script, "w") as f:
-            f.write("#!/bin/bash \n")
-            f.write(bash_compile + "\n")
-        bash_command = ["bash", self.compile_script]
-        process_compile = subprocess.Popen(bash_command, stdout=subprocess.PIPE)
-        process_compile.communicate()
-
-
-def launch_process_helper(args, proc_env=None, cwd=None, check=False):
-    """Launch a process and capture its output for logging with Python loggers.
-
-    Returns ``(cmd_out, cmd_err)`` as UTF-8 strings, with undecodable bytes in
-    tool output replaced rather than raised. Both streams are also written
-    through to ``sys.stdout``/``sys.stderr``.
-
-    When ``check`` is True and the process exits non-zero, raises
-    ``subprocess.CalledProcessError`` with ``output`` and ``stderr`` set to the
-    captured strings. The write-through happens before the raise, so the tool
-    log is still visible on failure. That is why the return code is checked by
-    hand rather than relying on ``subprocess.run(check=True)``.
-    """
-    if proc_env is None:
-        proc_env = os.environ.copy()
-    proc = subprocess.run(
-        args,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=proc_env,
-        cwd=cwd,
-        encoding="utf-8",
-        errors="replace",
-    )
-    cmd_out = proc.stdout
-    cmd_err = proc.stderr
-    sys.stdout.write(cmd_out)
-    sys.stderr.write(cmd_err)
-    if check and proc.returncode != 0:
-        raise subprocess.CalledProcessError(proc.returncode, args, cmd_out, cmd_err)
-    return (cmd_out, cmd_err)
+            tokens = shlex.split(lib) if isinstance(lib, str) else lib
+            command.extend(os.path.expandvars(os.fspath(token)) for token in tokens)
+        self.compile_components = command
+        self.compile_script = os.path.join(code_gen_dir, "compile.sh")
+        # Historically compilation used the caller's CWD, including for relative
+        # sources. Retain that behavior and record it in the replay.
+        run_tool(command, cwd=os.getcwd(), replay=self.compile_script)
 
 
 def which(program):
@@ -356,7 +359,7 @@ def which(program):
     return None
 
 
-_XILINX_TOOL_DIR_ENV = "FINN_TOOL_DIR_OVERRIDE"
+_XILINX_TOOL_DIR_ENV = TOOL_DIR_ENV
 
 
 def resolve_xilinx_tool(tool_name):
@@ -377,16 +380,15 @@ def resolve_xilinx_tool(tool_name):
     bsub dispatcher) needs: point it at a shim dir whose filenames match the
     bare tool names. Raises FileNotFoundError when the resolved command is
     not found, so all the default names must have a corresponding shim filename.
+
+    ``finn.util.launcher.run_tool`` resolves these names itself; this function is
+    for commands written into scripts.
     """
-    dir_override = os.environ.get(_XILINX_TOOL_DIR_ENV)
-    tool = os.path.join(dir_override, tool_name) if dir_override else tool_name
-    if which(tool) is None:
-        if dir_override:
-            raise FileNotFoundError(
-                "%s not found (%s=%r)" % (tool, _XILINX_TOOL_DIR_ENV, dir_override)
-            )
-        raise FileNotFoundError("%s not found in PATH" % tool)
-    return tool
+    try:
+        path = xilinx_tool(tool_name)
+    except ToolUnavailable as exc:
+        raise FileNotFoundError(str(exc)) from exc
+    return path if os.environ.get(_XILINX_TOOL_DIR_ENV) else tool_name
 
 
 mem_primitives_versal = {
@@ -470,6 +472,39 @@ def get_dsp_block(fpgapart):
         return "DSP48E1"
     else:
         return "DSP48E2"
+
+
+#: VERSION parameter of the DSP-based RTL cores (mvu.sv, requant.sv) per DSP block
+DSP_VERSIONS = {"DSP48E1": 1, "DSP48E2": 2, "DSP58": 3}
+
+
+def resolve_dsp_block(inst, fpgapart=None, record=True):
+    """The DSP block (generation) an RTL node with a ``dsp_block`` attribute targets.
+
+    SpecializeLayers sets the attribute from the part it specializes for. Without
+    a part (Python execution), the attribute is the answer. Given a part (code
+    generation, estimation), it must agree with the attribute, so that a node
+    specialized for one DSP generation is not built for another; an unset
+    attribute is filled in from the part unless ``record`` is False (analyses
+    must not change the model).
+    """
+    block = inst.get_nodeattr("dsp_block")
+    if fpgapart is not None:
+        part_block = get_dsp_block(fpgapart)
+        if block and block != part_block:
+            raise ValueError(
+                f"{inst.onnx_node.name} was specialized for {block}, "
+                f"but is built for {fpgapart} ({part_block})"
+            )
+        if not block and record:
+            inst.set_nodeattr("dsp_block", part_block)
+        block = part_block
+    if not block:
+        raise ValueError(
+            f"{inst.onnx_node.name}: unknown DSP generation, "
+            "specialize with SpecializeLayers(fpgapart) first"
+        )
+    return block
 
 
 def get_dsp_datapath_limits(dsp_block):
