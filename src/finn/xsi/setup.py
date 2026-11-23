@@ -25,7 +25,7 @@ import importlib
 import os
 import shutil
 import sys
-from typing import List
+from typing import List, Optional
 
 from finn.resources import _store
 from finn.util.launcher import ToolFailed, ToolUnavailable, run_tool
@@ -134,13 +134,12 @@ def build_xsi(force: bool = False, verbose: bool = True) -> bool:
             return True
         xsi_path.mkdir(parents=True, exist_ok=True)
         cmd[cmd.index("-o") + 1] = "xsi.so.tmp"
+        failure: Optional[Exception] = None
         try:
             result = run_tool(cmd, cwd=xsi_path, replay=xsi_path / "compile_xsi.sh")
+            (xsi_path / "xsi.so.tmp").replace(xsi_path / "xsi.so")
         except (ToolFailed, ToolUnavailable) as exc:
             failure = exc
-        else:
-            failure = None
-            (xsi_path / "xsi.so.tmp").replace(xsi_path / "xsi.so")
 
     if failure is not None:
         print("Build failed!")

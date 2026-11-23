@@ -23,3 +23,7 @@ select = ["E", "F", "PLC", "TID251"]
 # Tests drive processes themselves; the CI harness runs without FINN installed.
 "tests/**" = ["TID251"]
 "ci/**" = ["TID251"]
+# The container launcher runs on the host, without FINN installed.
+"docker/**" = ["TID251"]
+# The image build runs finn.resources from its own directory, before FINN is installed.
+"src/finn/resources/**" = ["TID251"]

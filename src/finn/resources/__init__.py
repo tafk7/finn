@@ -31,6 +31,7 @@ before FINN is installed: ``PYTHONPATH=src python -m finn.resources``.
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Dict, Optional
 
 from . import _declare, _store
 from ._declare import PREFIX, DeclarationError, Resource, ResourceError
@@ -51,7 +52,7 @@ __all__ = [
     "tree_digest",
 ]
 
-_cache = {}
+_cache: Dict[str, Dict[str, Resource]] = {}
 
 
 @dataclass(frozen=True)
@@ -60,7 +61,7 @@ class Status:
 
     name: str
     state: str
-    path: str = None
+    path: Optional[str] = None
     detail: str = ""
 
 

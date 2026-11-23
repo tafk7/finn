@@ -12,6 +12,7 @@ import shutil
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import Optional
 
 FINN_FILE = Path(__file__).resolve().parent.parent / "resources.toml"
 PREFIX = "FINN_RESOURCES_"
@@ -48,8 +49,8 @@ class Resource:
     kind: tuple = ()
     description: str = ""
     redistributable: bool = False
-    subdir: str = None
-    into: str = None
+    subdir: Optional[str] = None
+    into: Optional[str] = None
 
     @property
     def env(self):

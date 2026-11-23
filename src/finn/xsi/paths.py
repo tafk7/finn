@@ -6,20 +6,20 @@ import importlib.metadata
 import json
 import os
 import shutil
-import subprocess
 import sysconfig
 from functools import lru_cache
 from pathlib import Path
 
 from finn import resources
+from finn.util.launcher import ToolFailed, ToolUnavailable, run_tool
 from finn.xsi._build_config import LINK_ARGS, get_build_paths
 
 
 @lru_cache(maxsize=32)
 def _compiler_version(path, modified, size):
     try:
-        return subprocess.check_output([path, "--version"], text=True, stderr=subprocess.DEVNULL)
-    except (OSError, subprocess.CalledProcessError):
+        return run_tool([path, "--version"]).stdout.decode()
+    except (OSError, ToolFailed, ToolUnavailable):
         return "unavailable"
 
 
@@ -45,11 +45,11 @@ def build_dir() -> Path:
     executable = shutil.which(compiler)
     compiler_info = {"command": compiler}
     if executable:
-        executable = Path(executable).resolve()
-        stat = executable.stat()
+        resolved = Path(executable).resolve()
+        stat = resolved.stat()
         compiler_info.update(
-            path=str(executable),
-            version=_compiler_version(str(executable), stat.st_mtime_ns, stat.st_size),
+            path=str(resolved),
+            version=_compiler_version(str(resolved), stat.st_mtime_ns, stat.st_size),
         )
     try:
         pybind11_version = importlib.metadata.version("pybind11")
