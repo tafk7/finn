@@ -46,15 +46,16 @@ def board_files() -> str:
 
 def _board_sources(fetch=True):
     """(directory, identity) of each board source. A cached copy was verified
-    against its pinned digest; a local override is identified by its content,
-    since users may edit it in place."""
+    against its pinned digest; an override or a local source is identified by
+    its content, since users may edit it in place."""
     sources = []
     for resource in resources.declarations().values():
         if "vivado-boards" not in resource.kind:
             continue
         current = resources.status(resource.name)
         path = current.path or resources.path(resource.name, fetch)
-        identity = _store.tree_digest(path) if current.state == "override" else resource.digest
+        local = current.state == "override" or resource.local
+        identity = _store.tree_digest(path) if local else resource.digest
         sources.append((path, identity))
     return sources
 
@@ -81,9 +82,9 @@ def _golden_identity() -> dict:
     vivado = os.environ.get("XILINX_VIVADO", "")
     settings = Path(vivado) / "settings64.sh"
     return {
-        # A local override is unverified, so its content is the identity.
+        # A local override or source is unverified, so its content is the identity.
         "source": resources.tree_digest(pynq.path)
-        if pynq.state == "override"
+        if pynq.state in ("override", "package", "path")
         else resources.declarations()["pynq"].digest,
         "vivado": str(Path(vivado).resolve()) if vivado else "",
         # Track installation changes under the same path as well as version selection.

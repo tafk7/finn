@@ -6,8 +6,10 @@ import argparse
 import os
 import re
 import shutil
+import site
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import xml.etree.ElementTree as ElementTree
 from dataclasses import replace
@@ -16,15 +18,16 @@ from pathlib import Path
 import finn.resources as api
 
 from . import _declare, _store
-from ._declare import ResourceError
+from ._declare import PREFIX, ResourceError
 
 _ENTRY = re.compile(r"(?P<name>[a-z0-9][a-z0-9-]*)-[0-9a-f]{16}")
+_SETTINGS = {PREFIX + s for s in ("DIR", "SYSTEM_CACHE", "FILES", "OFFLINE")}
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="finn-resources",
-        description="External resources FINN uses: finn-hlslib, board files and sources.",
+        description="Resources FINN uses: its own trees, finn-hlslib, board files and yours.",
     )
     commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
 
@@ -54,7 +57,7 @@ def main(argv=None):
     command = commands.add_parser("update", help="move a git resource to a new commit")
     command.add_argument("name")
     command.add_argument("--ref", default="HEAD", help="branch, tag or commit (default: HEAD)")
-    command.add_argument("--file", help="declaration file to edit (default: FINN's)")
+    command.add_argument("--file", help="declaration file to edit (default: the declaring one)")
 
     command = commands.add_parser("digest", help="print the tree digest of a directory")
     command.add_argument("directory")
@@ -67,6 +70,8 @@ def main(argv=None):
         action="store_true",
         help="keep what this checkout and toolchain use (other checkouts may use the rest)",
     )
+
+    commands.add_parser("check", help="report problems with declarations, caches and overrides")
 
     args = parser.parse_args(argv)
     try:
@@ -95,6 +100,8 @@ def _list(args):
             notes.append(f"{resource.name}: overridden by {current.detail}")
         if os.environ.get(resource.env + "_URL"):
             notes.append(f"{resource.name}: fetched from {resource.env}_URL")
+        if resource.origin != str(_declare.FINN_FILE):
+            notes.append(f"{resource.name}: declared by {resource.origin}")
     _table(rows)
     for note in notes:
         print(note)
@@ -173,6 +180,11 @@ def _verify(args):
         resource = api.declarations().get(name)
         if resource is None:
             raise ResourceError("resource-undeclared", f"No resource named {name!r} is declared")
+        if resource.local:
+            if args.names:
+                current = api.status(name)
+                print(f"{current.state}  {name}  {current.path}")
+            continue
         copies = [r / resource.entry for r, _ in _store.roots()]
         copies = [entry for entry in copies if _store.complete(entry, resource.digest)]
         if not copies and args.names:
@@ -198,7 +210,13 @@ def _update(args):
             "resource-undeclared",
             f"No resource named {args.name!r} is declared",
         )
-    commit = _resolve(_store.url(resource), args.ref)
+    if not resource.commit:
+        raise ResourceError(
+            "update-not-git",
+            f"update moves git resources; for {args.name}, change url and sha256 by hand "
+            "and set digest to the output of `finn-resources digest DIR`",
+        )
+    commit = _resolve(_store.urls(resource)[0], args.ref)
     candidate = replace(resource, commit=commit, digest="sha256:" + "0" * 64)
     root = _store.fetch_root()
     root.mkdir(parents=True, exist_ok=True)
@@ -213,7 +231,13 @@ def _update(args):
     if (resource.commit, resource.digest) == (new.commit, new.digest) and not args.file:
         print(f"{args.name} is already at {commit}")
         return 0
-    _declare.rewrite(target, args.name, values)
+    if not target.is_file() or _packaged(target):
+        print(f"{target} is part of an installed package; declare the new pin in your project:")
+        print(f"[tool.finn.resources.{args.name}]")
+        for key, value in values.items():
+            print(f'{key} = "{value}"')
+        return 0
+    _declare.rewrite(target, _declare.table_keys(target), args.name, values)
     print(f"{args.name}: {resource.commit[:12]} -> {commit[:12]}, {new.digest} ({target})")
 
 
@@ -240,6 +264,14 @@ def _resolve(url, ref):
     raise ResourceError("ref-not-found", f"{url} has no branch or tag {ref!r}")
 
 
+def _packaged(file):
+    """Whether a declaration file belongs to an installed (not editable) package."""
+    installed = {sysconfig.get_paths()[k] for k in ("purelib", "platlib")}
+    installed.update(site.getsitepackages() + [site.getusersitepackages()])
+    file = file.resolve()
+    return any(file.is_relative_to(Path(d).resolve()) for d in installed if d)
+
+
 def _digest(args):
     print(api.tree_digest(args.directory))
 
@@ -255,7 +287,7 @@ def _clean(args):
 
     keep = set()
     if args.unused:
-        declared = api.declarations().values()
+        declared = [r for r in api.declarations().values() if not r.local]
         keep.update(root / r.entry for root, _ in _store.roots() for r in declared)
         for current in (_current_boards, xsi_paths.build_dir, prepare.golden_dir):
             try:
@@ -283,3 +315,49 @@ def _current_boards():
     if os.environ.get("FINN_BOARD_FILES_PATH"):
         raise ResourceError("board-path-supplied", "site board files are not cached")
     return prepare.board_entry()
+
+
+def _check(args):
+    problems = []
+    try:
+        declared = api.declarations()
+    except ResourceError as error:
+        problems.append(str(error))
+        declared = {}
+    if shutil.which("git") is None:
+        # GitHub sources fall back to GitHub's archive of the commit.
+        stuck = [r.name for r in declared.values() if r.commit and not _archived(r)]
+        if stuck:
+            problems.append(f"git is not installed, so these cannot be fetched: {', '.join(stuck)}")
+    system = os.environ.get(PREFIX + "SYSTEM_CACHE")
+    if system and not Path(system).is_dir():
+        problems.append(f"{PREFIX}SYSTEM_CACHE={system} is not a directory")
+    root = _store.fetch_root()
+    existing = next((p for p in (root, *root.parents) if p.exists()), None)
+    if existing is None or not os.access(existing, os.W_OK):
+        problems.append(f"the cache {root} is not writable, so resources cannot be fetched")
+    overrides = {r.env for r in declared.values()}
+    sources = {r.env + "_URL" for r in declared.values() if not r.local}
+    for variable, value in sorted(os.environ.items()):
+        if variable in overrides and value and not Path(value).is_dir():
+            problems.append(f"{variable}={value} is not a directory")
+        elif variable.startswith(PREFIX) and variable not in overrides | sources | _SETTINGS:
+            problems.append(f"{variable} matches no declared resource")
+    if os.environ.get(PREFIX + "OFFLINE", "") not in ("", "0"):
+        missing = [r.name for r in declared.values() if not r.local and not _store.lookup(r)]
+        if missing:
+            problems.append(f"offline, and not in any cache: {', '.join(missing)}")
+    for problem in problems:
+        print(f"problem: {problem}")
+    if not problems:
+        print(f"ok: {len(declared)} resources declared; fetches go to {root}")
+    return 1 if problems else 0
+
+
+def _archived(resource):
+    """Whether a git resource can do without git, with GitHub's archive of its commit.
+    One naming no repository is left out: using it says why it cannot be fetched."""
+    try:
+        return bool(_store.github_archive(_store.urls(resource)[0], resource.commit))
+    except ResourceError:
+        return True

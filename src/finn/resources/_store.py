@@ -13,11 +13,16 @@ import contextlib
 import fcntl
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
-from pathlib import Path
+import urllib.request
+import zipfile
+from pathlib import Path, PurePosixPath
+from typing import Optional
 
 from ._declare import PREFIX, ResourceError
 
@@ -142,10 +147,20 @@ def fetch(resource, root):
     return entry
 
 
-def url(resource):
-    """Where a resource's source is fetched from: FINN_RESOURCES_<NAME>_URL (e.g. a
-    site mirror), else the declared repository."""
-    return os.environ.get(resource.env + "_URL") or resource.git
+def urls(resource):
+    """Where a resource's source is fetched from, in order: the declared URL, or
+    FINN_RESOURCES_<NAME>_URL in its place, then the declared mirrors. A git source
+    that does not publish its repository and has no mirror needs the variable."""
+    primary = os.environ.get(resource.env + "_URL") or resource.git or resource.url
+    found = [url for url in (primary, *resource.mirrors) if url]
+    if not found:
+        raise ResourceError(
+            "repository-unnamed",
+            f"Resource {resource.name}: {resource.origin} does not name its repository, so "
+            f"commit {resource.commit} cannot be fetched. Set {resource.env}=/path/to/checkout "
+            f"to use a local clone, or {resource.env}_URL to the repository to fetch it from.",
+        )
+    return found
 
 
 def _verified_tree(resource, work):
@@ -160,7 +175,15 @@ def _verified_tree(resource, work):
             "resource-offline",
             f"Resource {resource.name} is not cached; offline fetching is disabled",
         )
-    for number, where in enumerate(([copy] if copy else []) + ([] if offline else [url(resource)])):
+
+    def places():
+        if copy:
+            yield copy
+        # Named only past the copy: a verified copy needs no repository.
+        if not offline:
+            yield from urls(resource)
+
+    for number, where in enumerate(places()):
         print(f"finn: fetching resource {resource.name} from {where}", file=sys.stderr)
         try:
             if where == copy:
@@ -193,17 +216,20 @@ def publish(tree, entry, digest):
     tree.rename(entry)
 
 
-def assemble(resource, work, source_url=None):
-    """Check out a resource's source (by default from url()) into work and lay out
-    its tree, unverified."""
-    source_url = source_url or url(resource)
-    source = git_checkout(source_url, resource.commit, resource.subdir, work / "source")
+def assemble(resource, work, url=None) -> Path:
+    """Fetch a resource's source (by default from its first URL) into work and lay
+    out its tree, unverified."""
+    url = url or urls(resource)[0]
+    if resource.commit:
+        source = git_source(url, resource.commit, resource.subdir, work / "source")
+    else:
+        source = archive(url, resource.sha256, work / "source")
     if resource.subdir:
         source = source / resource.subdir
         if not source.is_dir():
             raise ResourceError(
                 "subdir-missing",
-                f"{resource.subdir} is not a directory in {source_url}",
+                f"{resource.subdir} is not a directory in {url}",
             )
     tree = work / "tree"
     shutil.copytree(
@@ -215,10 +241,28 @@ def assemble(resource, work, source_url=None):
     return tree
 
 
+def git_source(url, commit, subdir, dest):
+    """One commit of a git repository: a sparse checkout, or without git, GitHub's
+    archive of the commit."""
+    if shutil.which("git"):
+        return git_checkout(url, commit, subdir, dest)
+    tarball = github_archive(url, commit)
+    if tarball is None:
+        raise ResourceError("git-unavailable", f"git is required to fetch {url}")
+    print(f"finn: git is not installed; using {tarball}", file=sys.stderr)
+    # GitHub archives are not byte-stable, so there is no archive checksum; the
+    # tree digest verifies the content.
+    return archive(tarball, None, dest)
+
+
+def github_archive(url, commit) -> Optional[str]:
+    """The URL of GitHub's tarball of a commit, or None for other hosts."""
+    match = re.fullmatch(r"https://github\.com/([\w.-]+)/([\w.-]+?)(?:\.git)?/?", url)
+    return match and f"https://github.com/{match[1]}/{match[2]}/archive/{commit}.tar.gz"
+
+
 def git_checkout(url, commit, subdir, dest):
     """Check out one commit, fetching only the blobs under subdir; return the checkout."""
-    if not shutil.which("git"):
-        raise ResourceError("git-unavailable", f"git is required to fetch {url}")
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
 
     def git(*args):
@@ -239,3 +283,52 @@ def git_checkout(url, commit, subdir, dest):
     git("fetch", "--quiet", "--depth", "1", "--filter=blob:none", "origin", commit)
     git("checkout", "--quiet", "FETCH_HEAD")
     return dest
+
+
+def archive(url, sha256, dest) -> Path:
+    """Download, check (unless sha256 is None) and safely extract an archive;
+    return its root directory.
+
+    An archive holding a single top-level directory has that directory as its
+    root, as source archives usually do.
+    """
+    dest.mkdir(parents=True)
+    download = dest / "archive"
+    try:
+        # urllib honours the usual proxy variables.
+        with urllib.request.urlopen(url, timeout=60) as response, open(download, "wb") as out:
+            shutil.copyfileobj(response, out)
+    except OSError as error:
+        raise ResourceError("download-failed", f"Cannot download {url}: {error}") from None
+    actual = _file_sha256(download).hexdigest()
+    if sha256 is not None and actual != sha256:
+        raise ResourceError(
+            "archive-sha256-mismatch", f"{url} has sha256 {actual}, expected {sha256}"
+        )
+    tree = dest / "tree"
+    tree.mkdir()
+    if tarfile.is_tarfile(download):
+        if not hasattr(tarfile, "data_filter"):
+            raise ResourceError(
+                "archive-extraction-unsupported",
+                "Extracting archives safely needs Python 3.11.4 or later",
+            )
+        with tarfile.open(download) as tar:
+            try:
+                tar.extractall(tree, filter="data")
+            except tarfile.FilterError as error:
+                raise ResourceError("archive-unsafe", f"Unsafe archive {url}: {error}") from None
+    elif zipfile.is_zipfile(download):
+        with zipfile.ZipFile(download) as zip_file:
+            for name in zip_file.namelist():
+                path = PurePosixPath(name)
+                if path.is_absolute() or ".." in path.parts or "\\" in name:
+                    raise ResourceError("archive-unsafe", f"Unsafe archive {url}: member {name}")
+            zip_file.extractall(tree)
+    else:
+        raise ResourceError("archive-format-unknown", f"{url} is not a tar or zip archive")
+    download.unlink()
+    children = list(tree.iterdir())
+    if len(children) == 1 and children[0].is_dir() and not children[0].is_symlink():
+        return children[0]
+    return tree

@@ -125,10 +125,15 @@ def boards(tmp_path, project):
     return repo
 
 
-def test_finn_declares_hlslib_and_board_files(project):
+def test_finn_declares_its_trees_hlslib_and_board_files(project):
     declared = resources.declarations()
-    assert list(declared)[0] == "hlslib"
+    own = {r.name: r for r in declared.values() if r.local}
+    assert set(own) == {"rtllib", "finn-xsi", "qnn-data", "custom-hls"}
+    assert all(r.redistributable for r in own.values())
     assert declared["hlslib"].kind == ("hls-include",) and declared["hlslib"].redistributable
+    # FINN's own include directory follows finn-hlslib, as the include order did.
+    hls = [r.name for r in declared.values() if "hls-include" in r.kind]
+    assert hls == ["hlslib", "custom-hls"]
     boards = [r for r in declared.values() if "vivado-boards" in r.kind]
     assert len(boards) == 5
     assert not any(r.redistributable for r in boards)
@@ -285,14 +290,19 @@ VALID = {"git": "u", "commit": "c" * 40, "digest": "sha256:" + "0" * 64}
 @pytest.mark.parametrize(
     "fields, code, message",
     [
-        ({"git": "u", "commit": "c" * 40}, "field-required", "digest required"),
-        ({"git": "u"}, "field-required", "commit, digest required"),
+        ({"git": "u", "commit": "c" * 40}, "digest-invalid", "digest must be"),
+        ({"git": "u"}, "field-required", "commit is required"),
         ({**VALID, "digest": "sha256:0"}, "digest-invalid", "digest must be"),
         ({**VALID, "commit": "main"}, "commit-invalid", "full 40-character"),
         ({**VALID, "subdir": "../x"}, "path-not-relative", "relative"),
         ({**VALID, "kind": "rtl"}, "field-type-invalid", "kind must be a list"),
-        ({**VALID, "url": "u"}, "field-unknown", "unknown field"),
-        ({**VALID, "mirrors": ["u"]}, "field-unknown", "unknown field"),
+        ({**VALID, "url": "u"}, "source-not-one", "exactly one source"),
+        ({**VALID, "mirrors": "u"}, "field-type-invalid", "mirrors must be a list"),
+        ({**VALID, "colour": "x"}, "field-unknown", "unknown field"),
+        ({"url": "u", "digest": VALID["digest"]}, "field-required", "sha256 is required"),
+        ({"package": "a-b"}, "package-invalid", "importable module"),
+        ({"package": "acme", "digest": VALID["digest"]}, "package-fields-invalid", "only subdir"),
+        ({"path": "x", "subdir": "y"}, "path-fields-invalid", "a path source is a directory"),
     ],
 )
 def test_invalid_declarations_are_rejected(fields, code, message):
@@ -420,12 +430,12 @@ def test_update_refuses_edits_it_cannot_confine(tmp_path):
     inline = '[resources]\nacme = { git = "u", commit = "%s", digest = "d" }\n' % ("a" * 40)
     file.write_text(inline)
     with fault("rewrite-value-missing", resources.DeclarationError, "edit it by hand"):
-        _declare.rewrite(file, "acme", {"commit": "b" * 40})
+        _declare.rewrite(file, ("resources",), "acme", {"commit": "b" * 40})
     # A multi-line string that looks like a field would change another value.
     tricky = '[resources.acme]\nnote = """\ncommit = "x"\n"""\ncommit = "%s"\n' % ("a" * 40)
     file.write_text(tricky)
     with fault("rewrite-changes-more", resources.DeclarationError, "change more than"):
-        _declare.rewrite(file, "acme", {"commit": "b" * 40})
+        _declare.rewrite(file, ("resources",), "acme", {"commit": "b" * 40})
     assert file.read_text() == tricky
 
 
@@ -447,3 +457,174 @@ def test_a_resource_fault_names_its_reason_by_a_code_and_keeps_its_message():
     declaration = resources.DeclarationError("name-invalid", "bad name")
     assert isinstance(declaration, resources.ResourceError)
     assert (declaration.code, str(declaration)) == ("name-invalid", "bad name")
+
+
+def test_local_sources_are_used_in_place(project, tmp_path, monkeypatch):
+    write(tmp_path / "lib", {"acme/rtl/core.v": "module core;\n", "acme/__init__.py": ""})
+    monkeypatch.syspath_prepend(str(tmp_path / "lib"))
+    write(tmp_path, {"local/inc/a.h": "// a\n"})
+    project(
+        """
+        [resources.acme-rtl]
+        kind = ["rtl-sources"]
+        package = "acme"
+        subdir = "rtl"
+
+        [resources.acme-inc]
+        kind = ["hls-include"]
+        path = "local/inc"
+        """
+    )
+    assert resources.status("acme-rtl").state == "package"
+    assert resources.path("acme-rtl") == str((tmp_path / "lib/acme/rtl").resolve())
+    # A relative path is relative to the declaring file, not the working directory.
+    monkeypatch.chdir(tmp_path / "lib")
+    assert resources.status("acme-inc").state == "path"
+    assert resources.paths("hls-include") == [str((tmp_path / "local/inc").resolve())]
+    # Used in place: nothing is fetched, verified or cached.
+    assert resources.fetch(["acme-rtl", "acme-inc"]) == []
+    assert not (tmp_path / "finn-home/resources").exists()
+
+
+def test_join_stays_inside_a_resource(project, tmp_path):
+    write(tmp_path, {"own/mvu/mvu.sv": "module mvu;\n"})
+    project('[resources.own]\npath = "own"\n')
+    assert resources.join("own", "mvu", "mvu.sv") == str((tmp_path / "own/mvu/mvu.sv").resolve())
+    assert resources.join("own", "mvu/").endswith("/mvu/")
+    for escape in ("../x", "/etc/passwd", "mvu/../../x"):
+        with pytest.raises(ValueError, match="leaves resource own"):
+            resources.join("own", escape)
+    with fault("resource-file-missing", message="in resource own"):
+        resources.join("own", "mvu", "absent.sv")
+
+
+def test_a_project_adds_and_redefines_resources(project, tmp_path, monkeypatch, caplog):
+    write(tmp_path, {"mine/a.v": "1\n", "fork/a.v": "2\n", "extra/b.v": "3\n"})
+    project('[resources.own]\ndescription = "FINN\'s"\npath = "fork"\n')
+    write(
+        tmp_path,
+        {
+            "app/pyproject.toml": textwrap.dedent(
+                """
+                [project]
+                name = "app"
+
+                [tool.finn.resources.mine]
+                kind = ["rtl-sources"]
+                path = "../mine"
+
+                [tool.finn.resources.own]
+                path = "../fork"
+                """
+            ),
+            "more.toml": '[resources.extra]\npath = "extra"\n',
+        },
+    )
+    monkeypatch.chdir(tmp_path / "app")
+    monkeypatch.setenv("FINN_RESOURCES_FILES", str(tmp_path / "more.toml"))
+    declared = resources.declarations()
+    assert list(declared) == ["own", "mine", "extra"]
+    assert declared["own"].origin == str(tmp_path / "app/pyproject.toml")
+    assert "redefines resource 'own'" in caplog.text
+    assert resources.path("mine") == str((tmp_path / "mine").resolve())
+    assert resources.path("extra") == str((tmp_path / "extra").resolve())
+
+
+def test_a_package_may_only_add_resources(tmp_path):
+    finn = _declare.parse({"own": {"path": "x"}}, "finn")
+    package = _declare.parse({"own": {"path": "y"}}, "acme")
+    with fault("resource-redeclared", resources.DeclarationError, "only a project may redefine"):
+        _declare.merge(finn, package, [])
+
+
+def installed(site, dist, module, declarations):
+    """An installed distribution declaring resources through the finn.resources group."""
+    info = f"{dist.replace('-', '_')}-1.0.dist-info"
+    return write(
+        site,
+        {
+            f"{module}/__init__.py": "",
+            f"{module}/resources.toml": textwrap.dedent(declarations),
+            f"{module}/rtl/core.v": "module core;\n",
+            f"{info}/METADATA": f"Metadata-Version: 2.1\nName: {dist}\nVersion: 1.0\n",
+            f"{info}/entry_points.txt": f"[finn.resources]\n{module} = {module}\n",
+        },
+    )
+
+
+def test_package_declarations_in_a_virtual_environment(tmp_path):
+    venv = tmp_path / "venv"
+    subprocess.run([sys.executable, "-m", "venv", "--without-pip", venv], check=True)
+    site = next(venv.glob("lib/python*/site-packages"))
+    (site / "finn-src.pth").write_text(SRC + "\n")
+    installed(
+        site,
+        "acme-finn",
+        "acme_finn",
+        '[resources.acme-rtl]\nkind = ["rtl"]\npackage = "acme_finn"\nsubdir = "rtl"\n',
+    )
+
+    def run(*args):
+        return subprocess.run(
+            [venv / "bin/python", "-I", "-m", "finn.resources", *args],
+            cwd=tmp_path,
+            env={"PATH": os.defpath, "HOME": str(tmp_path)},
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+
+    assert run("list", "--kind", "rtl").splitlines()[1].split()[:3] == [
+        "acme-rtl",
+        "package",
+        "rtl",
+    ]
+    assert run("path", "acme-rtl").strip() == str(site / "acme_finn/rtl")
+
+
+def test_archive_sources_are_checked_and_verified(project, tmp_path):
+    import tarfile  # noqa: PLC0415
+
+    write(tmp_path / "src", {"lib-1.0/core.v": "module core;\n"})
+    archive = tmp_path / "lib-1.0.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        tar.add(tmp_path / "src/lib-1.0", arcname="lib-1.0")
+    checksum = sha256(archive.read_bytes()).hexdigest()
+    digest = digest_of(tmp_path, {"core.v": "module core;\n"})
+    project(
+        f"""
+        [resources.lib]
+        url = "{archive.as_uri()}"
+        sha256 = "{checksum}"
+        digest = "{digest}"
+        """
+    )
+    assert (Path(resources.path("lib")) / "core.v").read_text() == "module core;\n"
+    resources._cache.clear()
+    project(
+        f"""
+        [resources.lib2]
+        url = "{archive.as_uri()}"
+        sha256 = "{'0' * 64}"
+        digest = "{digest}"
+        """
+    )
+    with fault("fetch-failed", message="expected 0000"):
+        resources.path("lib2")
+
+
+def test_a_wheel_declares_finn_trees_as_package_sources(tmp_path):
+    text, trees = _declare.packaged(_declare.FINN_FILE, "finn", "_sources")
+    assert set(trees) == {"rtllib", "finn-xsi", "custom-hls"}
+    assert all(Path(location).is_dir() for location in trees.values())
+    file = write(tmp_path, {"resources.toml": text}) / "resources.toml"
+    packaged = {r.name: r for r in _declare.load(file, ("resources",))}
+    finn = {r.name: r for r in _declare.load(_declare.FINN_FILE, ("resources",))}
+    assert packaged["rtllib"].package == "finn"
+    assert packaged["rtllib"].subdir == "_sources/rtllib" and packaged["rtllib"].path is None
+    assert packaged["qnn-data"] == finn["qnn-data"].__class__(
+        **{**finn["qnn-data"].__dict__, "origin": str(file)}
+    )
+    # Everything else is declared as before.
+    for name in finn.keys() - trees.keys():
+        assert packaged[name].__dict__ | {"origin": ""} == finn[name].__dict__ | {"origin": ""}

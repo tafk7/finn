@@ -1,17 +1,30 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""External resources: directory trees FINN uses but does not contain.
+"""External resources: directory trees FINN uses that are not Python code.
 
-Each resource (finn-hlslib, Vivado board files...) is declared in
-``finn/resources.toml`` with a pinned git commit and a content digest, fetched
-on first use, and cached by digest. Consumers ask for resources by name or
-kind::
+Each resource is declared in a ``resources.toml`` table with one source:
+
+- ``git`` and ``commit`` (or ``url`` and ``sha256``): fetched on first use,
+  verified against ``digest`` and cached by it (finn-hlslib, Vivado board files);
+- ``package``: a directory in an installed module, used in place (FINN's own
+  trees in a wheel, a library's RTL);
+- ``path``: a local directory, relative to the declaring file (FINN's own trees
+  in a checkout: finn-rtllib, custom_hls, finn_xsi).
+
+Consumers ask by name or kind, never by location::
 
     from finn import resources
 
     resources.path("hlslib")               # one resource, fetched if needed
+    resources.join("rtllib", "mvu")        # a path inside a resource
     resources.paths("vivado-boards")       # every resource of a kind
+
+Declarations come from FINN (``finn/resources.toml``), then installed packages
+(the ``finn.resources`` entry-point group, naming a module that contains a
+``resources.toml``), then the nearest ``pyproject.toml``
+(``[tool.finn.resources]``) and files listed in FINN_RESOURCES_FILES. Packages
+may only add resources; the project may also redefine them.
 
 ``FINN_RESOURCES_<NAME>=/dir`` replaces a resource with a local directory,
 unverified; ``FINN_RESOURCES_<NAME>_URL`` fetches it from another repository
@@ -31,7 +44,7 @@ before FINN is installed: ``PYTHONPATH=src python -m finn.resources``.
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from . import _declare, _store
 from ._declare import PREFIX, DeclarationError, Resource, ResourceError
@@ -45,6 +58,7 @@ __all__ = [
     "declarations",
     "fetch",
     "home",
+    "join",
     "path",
     "paths",
     "scratch",
@@ -57,7 +71,7 @@ _cache: Dict[str, Dict[str, Resource]] = {}
 
 @dataclass(frozen=True)
 class Status:
-    """Where a resource comes from: 'override', 'cached' or 'missing'."""
+    """Where a resource comes from: 'override', 'package', 'path', 'cached' or 'missing'."""
 
     name: str
     state: str
@@ -65,11 +79,18 @@ class Status:
     detail: str = ""
 
 
-def declarations():
-    """FINN's declarations, by name, in declaration order."""
-    key = str(_declare.FINN_FILE)
+def declarations() -> Dict[str, Resource]:
+    """The merged declarations, by name, in declaration order.
+
+    The project is found from the working directory on first use and kept for
+    the rest of the process, so a later change of directory changes nothing.
+    """
+    key = os.environ.get(PREFIX + "FILES", "")
     if key not in _cache:
-        _cache[key] = {r.name: r for r in _declare.load(_declare.FINN_FILE)}
+        finn = _declare.load(_declare.FINN_FILE, ("resources",))
+        packages = [r for f in _declare.package_files() for r in _declare.load(f, ("resources",))]
+        project = [r for f, keys in _declare.project_files() for r in _declare.load(f, keys)]
+        _cache[key] = _declare.merge(finn, packages, project)
     return dict(_cache[key])
 
 
@@ -94,12 +115,45 @@ def _override(resource):
     return resource.env, os.path.realpath(value)
 
 
-def status(name):
+def _package_path(resource):
+    from importlib.resources import files  # noqa: PLC0415
+
+    module, subdir = resource.package, resource.subdir
+    try:
+        location = files(module).joinpath(subdir) if subdir else files(module)
+    except ModuleNotFoundError:
+        raise ResourceError(
+            "package-not-installed",
+            f"Resource {resource.name}: module {module} is not installed",
+        ) from None
+    if not os.path.isdir(str(location)):
+        raise ResourceError(
+            "package-not-directory",
+            f"Resource {resource.name}: {resource.source} is not a directory in an "
+            "unpacked installation",
+        )
+    return os.path.realpath(str(location))
+
+
+def _local_path(resource):
+    if not os.path.isdir(resource.location):
+        raise ResourceError(
+            "path-not-directory",
+            f"Resource {resource.name}: {resource.location} is not a directory",
+        )
+    return os.path.realpath(resource.location)
+
+
+def status(name) -> Status:
     """Report whether a resource is overridden, cached or missing, and where."""
     resource = _get(name)
     override = _override(resource)
     if override:
         return Status(name, "override", override[1], override[0])
+    if resource.package:
+        return Status(name, "package", _package_path(resource), resource.package)
+    if resource.path:
+        return Status(name, "path", _local_path(resource), resource.origin)
     entry = _store.lookup(resource)
     if entry:
         return Status(name, "cached", str(entry), str(entry.parent))
@@ -111,6 +165,7 @@ def path(name: str, fetch: bool = True) -> str:
     current = status(name)
     if current.path:
         return current.path
+    resource = _get(name)
     if not fetch or os.environ.get(PREFIX + "OFFLINE", "") not in ("", "0"):
         searched = ", ".join(str(root) for root, _ in _store.roots())
         raise ResourceError(
@@ -119,20 +174,38 @@ def path(name: str, fetch: bool = True) -> str:
             f"Where the network is available, run `finn-resources fetch {name} --dest DIR`, "
             f"then set {PREFIX}DIR=DIR (or {PREFIX}SYSTEM_CACHE=DIR to use it read-only).",
         )
-    return str(_store.fetch(_get(name), _store.fetch_root()))
+    return str(_store.fetch(resource, _store.fetch_root()))
 
 
-def paths(kind: str, fetch: bool = True) -> list[str]:
+def join(name: str, *parts: str) -> str:
+    """Return an existing path inside a resource, fetching it if needed.
+
+    The parts stay inside the resource: absolute parts and ``..`` are refused.
+    """
+    for part in parts:
+        if Path(part).is_absolute() or ".." in Path(part).parts:
+            raise ValueError(f"{part!r} leaves resource {name}")
+    location = os.path.join(path(name), *parts)
+    if not os.path.exists(location):
+        raise ResourceError(
+            "resource-file-missing",
+            f"{location} does not exist in resource {name} ({_get(name).source})",
+        )
+    return location
+
+
+def paths(kind: str, fetch: bool = True) -> List[str]:
     """Return the directories of every resource of a kind, in declaration order."""
     return [path(r.name, fetch) for r in declarations().values() if kind in r.kind]
 
 
-def fetch(names, dest=None):
+def fetch(names, dest=None) -> List[str]:
     """Fetch resources into a cache root (default: the first writable one).
 
     Unlike path(), this ignores overrides and existing copies elsewhere: it fills
     one cache, e.g. an image's system cache or a directory to carry offline.
-    Returns the entries.
+    Package and path resources need no fetching and are skipped. Returns the entries.
     """
     root = Path(dest) if dest else _store.fetch_root()
-    return [str(_store.fetch(_get(name), root)) for name in names]
+    declared = [_get(name) for name in names]
+    return [str(_store.fetch(r, root)) for r in declared if not r.local]

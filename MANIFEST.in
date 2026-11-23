@@ -1,0 +1,6 @@
+# FINN's own trees, which the wheel build copies into the package (setup.py).
+graft finn-rtllib
+graft custom_hls
+graft finn_xsi
+graft src/finn/qnn-data
+global-exclude __pycache__ *.py[cod] *.so

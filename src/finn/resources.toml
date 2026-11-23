@@ -1,9 +1,31 @@
-# FINN's resources: its own sources used in place, and directory trees it uses but does not contain.
-# Each is fetched from its pinned source on first use and verified against its
-# digest. See finn/resources/__init__.py, or run `finn-resources list`.
+# FINN's resources: its own trees used in place, and directory trees it uses but does not contain.
+# Fetched resources come from their pinned source on first use and are verified
+# against their digest. See finn/resources/__init__.py, or run `finn-resources list`.
 #
 # To move a pin: finn-resources update NAME --ref REF
 # To try a local checkout: FINN_RESOURCES_<NAME>=/path/to/checkout
+# To add your own: [tool.finn.resources.NAME] in your project's pyproject.toml
+
+# FINN's own trees. In a checkout they are path sources beside the package; a
+# wheel copies them into finn/_sources and declares them as package sources there.
+[resources.rtllib]
+description = "finn-rtllib: FINN's RTL component library"
+kind = ["rtl-sources"]
+redistributable = true
+path = "../../finn-rtllib"
+
+[resources.finn-xsi]
+description = "finn_xsi: the XSim bridge's C++ sources and Python adapter"
+kind = ["xsi-sources"]
+redistributable = true
+path = "../../finn_xsi"
+
+[resources.qnn-data]
+description = "FINN's C++ helpers, driver templates and example data"
+kind = ["finn-data"]
+redistributable = true
+package = "finn"
+subdir = "qnn-data"
 
 [resources.hlslib]
 description = "finn-hlslib HLS C++ library"
@@ -12,6 +34,12 @@ redistributable = true
 git = "https://github.com/Xilinx/finn-hlslib.git"
 commit = "8706a00b1774c2ecc4fb705a194f39c714f92e6a"
 digest = "sha256:c43ac3e536ffad0cf101dbbf073ae7bf0d79ca62d2c965ff2adfddf62cf90bdb"
+
+[resources.custom-hls]
+description = "custom_hls: FINN's own HLS headers"
+kind = ["hls-include"]
+redistributable = true
+path = "../../custom_hls"
 
 # Vivado board files. Third-party files FINN does not redistribute; each root is
 # a separate Vivado board repository path.

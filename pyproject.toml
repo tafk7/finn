@@ -46,7 +46,10 @@ finn-resources = "finn.resources._cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-finn = ["resources.toml"]
+finn = ["resources.toml", "qnn-data/**/*"]
+
+[tool.setuptools.exclude-package-data]
+"*" = ["__pycache__/*", "*.pyc"]
 
 [dependency-groups]
 test = [
