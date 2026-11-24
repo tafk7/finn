@@ -18,6 +18,7 @@ from qonnx.util.basic import qonnx_make_model
 
 import finn.builder.build_dataflow as build
 import finn.builder.build_dataflow_config as build_cfg
+from finn import resources
 from finn.transformation.fpgadataflow.derive_characteristic import (
     DeriveTokenAccessVectors,
     is_stream_join,
@@ -223,7 +224,7 @@ def test_fifosizing_elementwise_join(op_type):
         fps, depths = build_and_measure(model_file, build_dir, strategy)
         results[strategy] = {"fps": fps, "depths": depths}
 
-    summary_dir = os.path.join(os.environ["FINN_BUILD_DIR"], "fifosizing_elementwise_join")
+    summary_dir = os.path.join(str(resources.scratch()), "fifosizing_elementwise_join")
     os.makedirs(summary_dir, exist_ok=True)
     with open(os.path.join(summary_dir, op_type + ".json"), "w") as f:
         json.dump(dict(results, build_dir=build_dir), f, indent=2)

@@ -29,7 +29,6 @@
 import pytest
 
 import numpy as np
-import os
 from onnx import TensorProto
 from onnx import helper as oh
 from os.path import join
@@ -37,6 +36,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import gen_finn_dt_tensor, qonnx_make_model
 
 import finn.core.onnx_exec as oxe
+from finn import resources
 from finn.transformation.streamline.reorder import (
     MoveAddPastJoinConcat,
     MoveMulPastJoinConcat,
@@ -148,7 +148,7 @@ transform_dict = {
 )
 def test_move_identical_op_past_join_concat(identical_op):
     model = create_concat_model(identical_op)
-    build_dir = os.environ["FINN_BUILD_DIR"]
+    build_dir = str(resources.scratch())
     model.save(join(build_dir, "concat_pytest_model_{}.onnx".format(identical_op)))
 
     # Create input data

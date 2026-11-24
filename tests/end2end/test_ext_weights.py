@@ -52,7 +52,7 @@ from finn.util.test import (
 target_clk_ns = 10
 # the CI hardware pipeline tests this board's bitfiles under ext_weights_build
 target_board = "AUP-ZU3_8GB"
-build_dir = os.environ["FINN_BUILD_DIR"]
+build_dir = str(resources.scratch())
 onnx_zip_url = "https://github.com/Xilinx/finn-examples"
 onnx_zip_url += "/releases/download/v0.0.1a/onnx-models-bnn-pynq.zip"
 onnx_zip_local = build_dir + "/onnx-models-bnn-pynq.zip"

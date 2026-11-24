@@ -48,7 +48,7 @@ from finn.util.basic import make_build_dir
 from finn.util.test import load_test_checkpoint_or_skip
 
 target_clk_ns = 10
-build_dir = os.environ["FINN_BUILD_DIR"]
+build_dir = str(resources.scratch())
 
 
 def get_checkpoint_name(step):

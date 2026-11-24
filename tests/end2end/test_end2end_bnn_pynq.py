@@ -63,6 +63,7 @@ from shutil import copy, copytree
 
 import finn.transformation.fpgadataflow.convert_to_hw_layers as to_hw
 import finn.transformation.streamline.absorb as absorb
+from finn import resources
 from finn.analysis.fpgadataflow.dataflow_performance import dataflow_performance
 from finn.core.onnx_exec import execute_onnx
 from finn.transformation.fpgadataflow.alveo_build import PrepareForLinking
@@ -110,7 +111,7 @@ from finn.util.test import (
     load_test_checkpoint_or_skip,
 )
 
-build_dir = os.environ["FINN_BUILD_DIR"]
+build_dir = str(resources.scratch())
 target_clk_ns = 20
 mem_mode = "internal_decoupled"
 rtlsim_trace = False
