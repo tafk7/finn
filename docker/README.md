@@ -52,25 +52,46 @@ checkout's `uv.lock` matches the image. A failed startup step stops the command.
 
 ### Native use
 
-Install the Ubuntu system prerequisites (`sudo ./scripts/install-system-deps.sh`), then:
+Install the system prerequisites (`sudo ./scripts/install-system-deps.sh`), then:
 
 ```bash
-./setup-local.sh --skip-xsi
+source /tools/Xilinx/2025.2/Vivado/settings64.sh   # or the site's Vivado module
+./setup-local.sh
 source scripts/activate.sh
 ./scripts/quicktest-local.sh
 ```
 
 Setup bootstraps the uv version in `.uv-version` into `~/.cache/finn/uv-tool/`
-if needed; it never installs compiler packages with pip. Omit `--skip-xsi` to
-build XSI when Vivado is configured. `FINN_VENV` and `FINN_PYTHON` select the
+if needed; it never installs compiler packages with pip. It builds XSI when the
+shell has Vivado (`--skip-xsi` skips it). `FINN_VENV` and `FINN_PYTHON` select the
 environment (default `.venv` in the checkout) and the Python 3.12 interpreter.
-Activation installs nothing and resolves tools exactly as `docker/run` does.
+Activation installs nothing: it activates the environment and sets `FINN_ROOT`.
+
+FINN reads the AMD tools' own environment, as a release's `settings64.sh` or a
+site's module sets it: `XILINX_VIVADO`, `XILINX_HLS`, `XILINX_VITIS` and the tools
+on `PATH`. It builds none of it, so switching releases is sourcing another
+`settings64.sh` in a new shell, and one FINN process uses one release. FINN refuses
+an environment whose variables or tools come from different releases. With no AMD
+tools set up, a step that needs them names the newest release installed under
+`/tools/Xilinx`, `/opt/Xilinx` or `~/Xilinx` and the `settings64.sh` to source; it
+never uses it by itself. `VIVADO_PATH`, `VITIS_PATH` and `HLS_PATH`, which only
+`run-docker.sh` set, are still read in place of the AMD names, with a warning.
 
 ## Host tools and licences
 
-The launcher reads `~/.config/finn/xilinx.env`; environment variables take
-precedence. `FINN_XILINX_ENV` selects another file, and an empty value disables
-it. Write plain `NAME=value` lines, without expansion or quotes:
+A container has no shell to source `settings64.sh` in, so the launcher decides
+what to mount and passes the AMD variables in. It takes, in this order:
+
+1. `FINN_XILINX_PATH` and `FINN_XILINX_VERSION` in the environment (Jenkins sets
+   these);
+2. the AMD variables of the calling shell (a sourced `settings64.sh` or a module);
+3. the host file `~/.config/finn/xilinx.env`.
+
+The host file is the machine description for launchers without a login shell:
+`docker/run`, Dev Containers, CI agents and sandboxes (an sbx kit reads it as its
+argument file). FINN itself never reads it. Environment variables override its
+values; `FINN_XILINX_ENV` selects another file, and an empty value disables it.
+Write plain `NAME=value` lines, without expansion or quotes:
 
 ```text
 FINN_XILINX_PATH=/opt/Xilinx
@@ -86,8 +107,10 @@ pinned vendor-daemon port. Network requirements reported by `inspect` are
 declarations, not firewall rules.
 
 `PLATFORM_REPO_PATHS` takes colon-separated directories and defaults to
-`/opt/xilinx/platforms` where that exists. `VIVADO_PATH`, `VITIS_PATH` and
-`HLS_PATH` override single tools. `FINN_TOOL_DIR_OVERRIDE` keeps site tool
+`/opt/xilinx/platforms` where that exists. Tool directories outside both layouts
+are given as the AMD variables themselves (`XILINX_VIVADO`, `XILINX_HLS`,
+`XILINX_VITIS`); `VIVADO_PATH`, `VITIS_PATH` and `HLS_PATH` are deprecated
+aliases. `FINN_TOOL_DIR_OVERRIDE` keeps site tool
 interception, including LSF routing, through `resolve_xilinx_tool()`; wrapper
 directories are not prepended to `PATH` for bare commands. A host directory is
 mounted read-only; a path that exists only in the container, such as a wrapper
@@ -122,7 +145,7 @@ Dev Container that owns its workspace and state.
 | `FINN_RESOURCES_<NAME>` | unset | a local directory replacing one resource, unverified |
 | `FINN_BOARD_FILES_PATH` | assembled in `FINN_RESOURCES_DIR` | an already assembled site board tree |
 | `FINN_DOCKER_CACHE_DIR` | unset | Torch, Hugging Face and uv download caches for containers |
-| `VIVADO_IP_CACHE` | `$FINN_BUILD_DIR/vivado_ip_cache` natively | Vivado's IP cache |
+| `VIVADO_IP_CACHE` | `/tmp/vivado_ip_cache` in the image | Vivado's IP cache |
 
 Deleting `FINN_HOME` costs only rebuilds and downloads; deleting the build
 directory loses only build output. `docker/run` creates `FINN_HOME`,
@@ -291,7 +314,8 @@ and fails. The launcher warns about retired variables it sees.
 | `run-docker.sh build_dataflow DIR` | `docker/run --fpga --volume DIR:DIR -- build_dataflow DIR` |
 | `run-docker.sh build_custom DIR FLOW` | `docker/run --fpga --volume DIR:DIR --workdir DIR -- python FLOW.py` |
 | `run-docker.sh notebook` | `docker/run --notebook` |
-| `scripts/finn-env.sh` | `scripts/activate.sh` |
+| `scripts/finn-env.sh` | `scripts/activate.sh`, with the AMD tools from a sourced `settings64.sh` |
+| `VIVADO_PATH`, `VITIS_PATH`, `HLS_PATH` | `XILINX_VIVADO`, `XILINX_VITIS`, `XILINX_HLS` (the old names are read, with a warning) |
 | `fetch-repos.sh`, Python clones in `deps/` | `uv.lock` and verified resources |
 | `deps/pynq_golden` | `$FINN_HOME/golden`, or `FINN_GOLDEN_DIR` |
 | `requirements.txt`, `docs/requirements.txt` | dependency groups and `uv.lock`; `uv export` if needed |

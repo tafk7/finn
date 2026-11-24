@@ -6,15 +6,18 @@
 One standard-library program (Python 3.7 or later) owns everything the host
 decides before a container starts:
 
-- the host file ``~/.config/finn/xilinx.env`` and AMD's install layouts;
+- the AMD tools: a sourced host shell's own variables, ``FINN_XILINX_PATH`` and
+  ``FINN_XILINX_VERSION``, or the host file ``~/.config/finn/xilinx.env`` (the
+  machine description launchers read; the FINN package never does), and AMD's
+  install layouts;
 - workspace, build directory, FINN_HOME, toolchain, licence and resource mounts;
 - the image identity (a hash of ``docker/image-inputs.txt``), Bake builds and tags;
 - publication and verified loading of images over shared storage (Jenkins).
 
 ``docker/build`` and ``docker/run`` are thin wrappers around the ``build`` and
 ``run`` commands. ``inspect`` prints the resolved host request (``--format sh``
-is what ``scripts/activate.sh`` evaluates) and ``compose`` renders a Compose
-override from the same resolution. Diagnostics go to stderr, because stdout is
+for a script that starts FINN outside a container) and ``compose`` renders a
+Compose override from the same resolution. Diagnostics go to stderr, because stdout is
 machine-readable data.
 """
 import argparse
@@ -115,6 +118,16 @@ HOST_KEYS = (
 HOST_PATH_KEYS = ("FINN_XILINX_PATH", "PLATFORM_REPO_PATHS")
 # FlexLM reads either; one set by the caller is never replaced.
 LICENSE_VARIABLES = ("XILINXD_LICENSE_FILE", "LM_LICENSE_FILE")
+# The AMD tools' own variables, as a release's settings64.sh or a site module sets
+# them. A host shell that set them chose a release; FINN_XILINX_PATH and
+# FINN_XILINX_VERSION in the environment still win, and the host file comes last.
+AMD_VARIABLES = ("XILINX_VIVADO", "XILINX_HLS", "XILINX_VITIS")
+# Names only run-docker.sh used to set: read as the AMD ones, with a warning.
+DEPRECATED_NAMES = {
+    "XILINX_VIVADO": "VIVADO_PATH",
+    "XILINX_HLS": "HLS_PATH",
+    "XILINX_VITIS": "VITIS_PATH",
+}
 
 
 def host_file_path(environ=None):
@@ -189,8 +202,17 @@ def apply_host_settings():
     file without every reader knowing about the file. A licence given as host and
     port becomes the FlexLM form when no licence variable is set.
     """
+    for name, old in DEPRECATED_NAMES.items():
+        if os.environ.get(old):
+            warn("%s is deprecated; set %s, as settings64.sh does" % (old, name))
+            os.environ.setdefault(name, os.environ[old])
     values = host_settings()
+    sourced = not os.environ.get("FINN_XILINX_PATH") and any(
+        os.environ.get(name) for name in AMD_VARIABLES
+    )
     for key, value in values.items():
+        if sourced and key in ("FINN_XILINX_PATH", "FINN_XILINX_VERSION"):
+            continue
         os.environ.setdefault(key, value)
     licence = license_for(os.environ, values)
     if licence:
@@ -325,8 +347,7 @@ def tools_configured():
     """Whether the host names an installed Xilinx toolchain."""
     root = hostpath(os.environ.get("FINN_XILINX_PATH"))
     return bool(root and os.path.isdir(root)) or any(
-        os.path.isdir(hostpath(os.environ.get(alias)) or "")
-        for alias in ("VIVADO_PATH", "VITIS_PATH", "HLS_PATH")
+        os.path.isdir(hostpath(os.environ.get(name)) or "") for name in AMD_VARIABLES
     )
 
 
@@ -367,41 +388,65 @@ def resolve_finn_home():
     return hostpath(os.environ.get("FINN_HOME") or "~/.finn")
 
 
+def release_root(path):
+    """The install root holding a tool directory, in either AMD layout:
+    <root>/<release>/Vivado or <root>/Vivado/<release>."""
+    return os.path.dirname(os.path.dirname(path))
+
+
 def add_toolchain(out):
-    """Add toolchain paths and their read-only root mount; return the root."""
+    """Add the AMD tools' paths and read-only mounts of their install roots; return
+    the first root. FINN_XILINX_PATH and FINN_XILINX_VERSION name a release under a
+    root; without them, the host's own AMD variables (a sourced settings64.sh or a
+    site module) name the tool directories."""
     root = hostpath(os.environ.get("FINN_XILINX_PATH"))
     version = os.environ.get("FINN_XILINX_VERSION")
-    if not root or not os.path.isdir(root):
+    if root and not os.path.isdir(root):
         warn("FINN_XILINX_PATH=%s is not an installed directory; not mounted" % root)
         root = None
     if root:
+        layout = xilinx_layout(root, version)
+        if not layout:
+            warn(
+                "no Vivado/Vitis/HLS found under %s for version %r; "
+                "the toolchain mount will be present but empty of known tools" % (root, version)
+            )
+        sourced = {name: os.environ[name] for name in AMD_VARIABLES if os.environ.get(name)}
+        if (
+            layout
+            and sourced
+            and any(hostpath(sourced[name]) != layout.get(name) for name in sourced)
+        ):
+            warn(
+                "FINN_XILINX_PATH/FINN_XILINX_VERSION select %s; the shell's %s is not used"
+                % (layout.get("XILINX_VIVADO") or root, ", ".join(sorted(sourced)))
+            )
+        roots = [root]
+    else:
+        layout = {}
+        for name in AMD_VARIABLES:
+            value = hostpath(os.environ.get(name))
+            if not value:
+                continue
+            if not os.path.isdir(value):
+                warn("%s=%s is not an installed directory; not mounted" % (name, value))
+                continue
+            layout[name] = value
+        if not layout and not os.environ.get("FINN_XILINX_PATH"):
+            warn(
+                "no Xilinx tools configured (FINN_XILINX_PATH and FINN_XILINX_VERSION, a "
+                "sourced settings64.sh, or the host file); none mounted"
+            )
+        roots = []
+        for value in layout.values():
+            candidate = release_root(value)
+            if candidate not in roots:
+                roots.append(candidate)
+    for mount in roots:
         out["mounts"].append(
-            {"source": root, "target": root, "mode": "ro", "reason": "xilinx-toolchain"}
-        )
-    layout = xilinx_layout(root, version) if root else {}
-    if root and not layout:
-        warn(
-            "no Vivado/Vitis/HLS found under %s for version %r; "
-            "the toolchain mount will be present but empty of known tools" % (root, version)
+            {"source": mount, "target": mount, "mode": "ro", "reason": "xilinx-toolchain"}
         )
     out["env"].update(layout)
-    for alias, name in (
-        ("VIVADO_PATH", "XILINX_VIVADO"),
-        ("VITIS_PATH", "XILINX_VITIS"),
-        ("HLS_PATH", "XILINX_HLS"),
-    ):
-        value = os.environ.get(alias) or layout.get(name)
-        if value:
-            value = hostpath(value)
-            if not os.path.isdir(value):
-                warn(alias + " is not an installed directory; not mounted: " + value)
-                continue
-            out["env"][alias] = value
-            out["env"][name] = value
-            if not root or (not value.startswith(root + os.sep) and value != root):
-                out["mounts"].append(
-                    {"source": value, "target": value, "mode": "ro", "reason": "tool-override"}
-                )
     override = os.environ.get("FINN_TOOL_DIR_OVERRIDE")
     if override:
         if os.path.isdir(hostpath(override)):
@@ -417,7 +462,7 @@ def add_toolchain(out):
                 "unmounted, for FINN_DOCKER_EXTRA to provide" % override
             )
         out["env"]["FINN_TOOL_DIR_OVERRIDE"] = override
-    return root
+    return roots[0] if roots else None
 
 
 # Upstream's launcher default, where Vitis platforms are conventionally installed.
@@ -582,9 +627,9 @@ def require_tools(data):
     """`--fpga` is a promise of tools: fail before any build when there are none."""
     if not any(data["env"].get(name) for name in ("XILINX_VIVADO", "XILINX_VITIS", "XILINX_HLS")):
         raise LaunchError(
-            "--fpga needs the Xilinx tools, but none were found. Set FINN_XILINX_PATH and "
-            "FINN_XILINX_VERSION (or write them to %s); see %s."
-            % (host_file_path() or "~/.config/finn/xilinx.env", DOCS),
+            "--fpga needs the Xilinx tools, but none were found. Source a release's "
+            "settings64.sh, or set FINN_XILINX_PATH and FINN_XILINX_VERSION (or write "
+            "them to %s); see %s." % (host_file_path() or "~/.config/finn/xilinx.env", DOCS),
             3,
         )
 
@@ -1499,8 +1544,9 @@ Usage: docker/run [--fpga | --no-tools] [--runtime NAME] [--no-build] [--rebuild
                   [--volume SPEC] [--env NAME[=VALUE]] [--workdir DIR]
                   [--name NAME] [--notebook] [--print] [-- COMMAND...]
 
-The Xilinx tools are mounted whenever they are configured (FINN_XILINX_PATH and
-FINN_XILINX_VERSION, or ~/.config/finn/xilinx.env).
+The Xilinx tools are mounted whenever they are configured: FINN_XILINX_PATH and
+FINN_XILINX_VERSION, else the AMD variables of a sourced settings64.sh, else
+~/.config/finn/xilinx.env.
   --fpga       require the tools: fail if none are configured
   --no-tools   never mount the tools
 """

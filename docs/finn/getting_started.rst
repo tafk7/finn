@@ -89,9 +89,12 @@ Open the token URL printed by Jupyter. ``JUPYTER_PORT`` defaults to 8888 and
 
 Environment variables
 **********************
-The host resolver reads ``~/.config/finn/xilinx.env``. Environment variables take
-precedence; ``FINN_XILINX_ENV`` selects another file (empty disables it).
-Write plain ``NAME=value`` lines, without quotes or expansion::
+``docker/run`` mounts the Xilinx tools named by ``FINN_XILINX_PATH`` and
+``FINN_XILINX_VERSION``, else those of a shell that sourced a release's
+``settings64.sh``, else those in ``~/.config/finn/xilinx.env``, the machine
+description that launchers (``docker/run``, Dev Containers, CI agents, sandboxes)
+read. ``FINN_XILINX_ENV`` selects another file (empty disables it). Write plain
+``NAME=value`` lines, without quotes or expansion::
 
   FINN_XILINX_PATH=/opt/Xilinx
   FINN_XILINX_VERSION=2024.2
@@ -140,10 +143,14 @@ Quick Start
 
     sudo ./scripts/install-system-deps.sh
 
-2. Set up Xilinx tools environment variables::
+2. Set up the Xilinx tools as for any AMD tool, by sourcing the release's settings
+   (or loading your site's Vivado module), and name your licence server::
 
-    export FINN_XILINX_PATH=/opt/Xilinx
-    export FINN_XILINX_VERSION=2024.2
+    source /tools/Xilinx/2025.2/Vivado/settings64.sh
+    export XILINXD_LICENSE_FILE=2100@licence-server
+
+   FINN uses the release this shell has; to switch, source another release's
+   ``settings64.sh`` in a new shell.
 
 3. Install uv 0.10.0, then clone FINN and run the local setup script::
 
@@ -244,7 +251,7 @@ On the target side:
 
 On the host side:
 
-1. Install Vitis 2024.2 and set up the ``VITIS_PATH`` environment variable to point to your installation.
+1. Install Vitis 2024.2 and source its ``settings64.sh``, which sets ``XILINX_VITIS``.
 2. Install Xilinx XRT on the host if you want to run accelerators there; the FINN image gets its pinned XRT userspace with ``./docker/build --runtime xrt``.
 3. Install the Vitis platform files for Alveo and set up the ``PLATFORM_REPO_PATHS`` environment variable to point to your installation. *This must be the same path as the target's platform files (target step 2)*
 4. `Set up public key authentication <https://www.digitalocean.com/community/tutorials/how-to-configure-ssh-key-based-authentication-on-a-linux-server>`_. Copy your private key to the ``finn/ssh_keys`` folder on the host to get password-less deployment and remote execution.

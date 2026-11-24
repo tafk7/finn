@@ -172,122 +172,61 @@ def test_slashkit_has_a_transparent_tool_shim():
 # --------------------------------------------------------------------------
 
 
-def make_old_layout(root, version):
-    for directory in ("Vivado", "Vitis", "Vitis_HLS"):
-        (root / directory / version).mkdir(parents=True)
-    return root
-
-
 def standin_checkout(tmp_path):
-    """Activation's own files, with a test-owned virtual environment."""
+    """Activation's own file, with a test-owned virtual environment."""
     checkout = tmp_path / "finn"
-    for relative in (
-        "scripts/activate.sh",
-        "docker/launcher.py",
-        "docker/identity.py",
-        "docker/finn-toolchain.sh",
-    ):
-        (checkout / relative).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(REPO / relative, checkout / relative)
+    (checkout / "scripts").mkdir(parents=True)
+    shutil.copy2(REPO / "scripts/activate.sh", checkout / "scripts/activate.sh")
     (checkout / ".venv/bin").mkdir(parents=True)
-    (checkout / ".venv/bin/activate").write_text(": # test-owned virtual environment stand-in\n")
-    (tmp_path / "hlslib").mkdir()
-    (tmp_path / "boards").mkdir()
+    (checkout / ".venv/bin/activate").write_text(
+        'PATH="%s:$PATH"  # test-owned virtual environment stand-in\n'
+        % os.path.dirname(sys.executable)
+    )
     return checkout
 
 
-def test_activation_resolves_tools_without_allocating(tmp_path):
-    """Activation in a stand-in checkout: no installation, no directories."""
-    checkout = standin_checkout(tmp_path)
-    root = make_old_layout(tmp_path / "Xilinx", "2022.2")
-    proc = subprocess.run(
-        [
-            "bash",
-            "-c",
-            'source "$FINN_ROOT/scripts/activate.sh"; test "$XILINX_VIVADO" = "$1" '
-            '&& test "$FINN_HOME" = "$HOME/.finn" && test ! -e "$FINN_HOME" '
-            '&& test "$FINN_BUILD_DIR" = "$2" && test ! -e "$FINN_BUILD_DIR"',
-            "test",
-            str(root / "Vivado/2022.2"),
-            str(tmp_path / "build"),
-        ],
-        env={
-            "PATH": os.environ["PATH"],
-            "HOME": str(tmp_path / "home"),
-            "FINN_ROOT": str(checkout),
-            "FINN_XILINX_ENV": "",
-            "FINN_RESOURCES_HLSLIB": str(tmp_path / "hlslib"),
-            "FINN_BOARD_FILES_PATH": str(tmp_path / "boards"),
-            "FINN_HOST_BUILD_DIR": str(tmp_path / "build"),
-            "FINN_XILINX_PATH": str(root),
-            "FINN_XILINX_VERSION": "2022.2",
-        },
+def activate(checkout, tmp_path, probe, **env):
+    return subprocess.run(
+        ["bash", "-c", 'source "$1/scripts/activate.sh" && ' + probe, "test", str(checkout)],
+        env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path / "home"), **env},
         text=True,
         capture_output=True,
+    )
+
+
+def test_activation_takes_the_shells_tools_and_sets_nothing_else(tmp_path):
+    """Native use is the venv plus AMD's own settings: activation neither selects
+    tools nor allocates FINN's directories."""
+    checkout = standin_checkout(tmp_path)
+    vivado = "/tools/Xilinx/2025.2/Vivado"
+    proc = activate(
+        checkout,
+        tmp_path,
+        'test "$FINN_ROOT" = "$1" && test "$XILINX_VIVADO" = "%s" && env | sort' % vivado,
+        XILINX_VIVADO=vivado,
     )
     assert proc.returncode == 0, proc.stderr
+    assert proc.stderr == ""
+    names = {line.split("=", 1)[0] for line in proc.stdout.splitlines()}
+    assert {name for name in names if name.startswith("FINN_")} == {"FINN_ROOT"}
+    assert "LD_LIBRARY_PATH" not in names and "LD_PRELOAD" not in names
+    assert not (tmp_path / "home").exists()
 
 
-def test_reactivation_recomputes_what_activation_computed(tmp_path):
-    """Activation's outputs are not read back as overrides: a changed version
-    selects the new tools. A value the caller sets in between still wins."""
+def test_activation_without_tools_says_what_to_source(tmp_path):
     checkout = standin_checkout(tmp_path)
-    root = make_old_layout(tmp_path / "Xilinx", "2024.2")
-    make_old_layout(root, "2025.2")
-    proc = subprocess.run(
-        [
-            "bash",
-            "-c",
-            'source "$FINN_ROOT/scripts/activate.sh" && echo "$VIVADO_PATH" '
-            '&& FINN_XILINX_VERSION=2025.2 && source "$FINN_ROOT/scripts/activate.sh" '
-            '&& echo "$VIVADO_PATH" && echo "$XILINX_VIVADO" '
-            '&& VITIS_PATH=$1 && source "$FINN_ROOT/scripts/activate.sh" && echo "$XILINX_VITIS"',
-            "test",
-            str(root / "Vitis/2024.2"),
-        ],
-        env={
-            "PATH": os.path.dirname(sys.executable) + os.pathsep + os.environ["PATH"],
-            "HOME": str(tmp_path / "home"),
-            "FINN_ROOT": str(checkout),
-            "FINN_XILINX_ENV": "",
-            "FINN_RESOURCES_HLSLIB": str(tmp_path / "hlslib"),
-            "FINN_BOARD_FILES_PATH": str(tmp_path / "boards"),
-            "FINN_XILINX_PATH": str(root),
-            "FINN_XILINX_VERSION": "2024.2",
-        },
-        text=True,
-        capture_output=True,
-    )
+    proc = activate(checkout, tmp_path, "true")
     assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.splitlines() == [
-        str(root / "Vivado/2024.2"),
-        str(root / "Vivado/2025.2"),
-        str(root / "Vivado/2025.2"),
-        str(root / "Vitis/2024.2"),
-    ]
+    assert proc.stderr.startswith("FINN: no AMD tools in this shell. ")
+    assert "settings64.sh" in proc.stderr
 
 
-def test_native_hls_only_activation_does_not_fetch_boards(clean_env, tmp_path, monkeypatch):
-    root = tmp_path / "tools"
-    (root / "Vitis_HLS/2024.2").mkdir(parents=True)
-    library = tmp_path / "hlslib"
-    library.mkdir()
-    monkeypatch.setenv("FINN_XILINX_PATH", str(root))
-    monkeypatch.setenv("FINN_XILINX_VERSION", "2024.2")
-    monkeypatch.setenv("FINN_RESOURCES_HLSLIB", str(library))
-    monkeypatch.setenv("FINN_RESOURCES_OFFLINE", "1")
-    result = subprocess.run(
-        [
-            "bash",
-            "-c",
-            'source scripts/activate.sh && test -n "$XILINX_HLS" && test -z "${XILINX_VIVADO:-}"',
-        ],
-        cwd=REPO,
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, result.stderr
-    assert not (Path(os.environ["FINN_HOME"]) / "resources").exists()
+def test_activation_needs_the_environment(tmp_path):
+    checkout = standin_checkout(tmp_path)
+    (checkout / ".venv/bin/activate").unlink()
+    proc = activate(checkout, tmp_path, "true")
+    assert proc.returncode == 1
+    assert "run %s/setup-local.sh" % checkout in proc.stderr
 
 
 def test_installers_do_not_hardcode_layouts_or_pins():

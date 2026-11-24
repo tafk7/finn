@@ -340,13 +340,71 @@ def test_platform_repositories(host, tmp_path, monkeypatch):
 
 
 def test_missing_optional_installation_is_skipped(host, tmp_path, monkeypatch):
-    hls = tmp_path / "HLS"
-    hls.mkdir()
+    hls = tmp_path / "2024.2" / "HLS"
+    hls.mkdir(parents=True)
     monkeypatch.setenv("FINN_XILINX_PATH", str(tmp_path / "not-installed"))
-    monkeypatch.setenv("HLS_PATH", str(hls))
+    monkeypatch.setenv("XILINX_HLS", str(hls))
     request = launcher.resolve_host("build", "mirror")
     assert request["env"]["XILINX_HLS"] == str(hls)
     assert all(Path(m["source"]).is_dir() for m in request["mounts"])
+
+
+def sourced_release(root, version):
+    """A release as settings64.sh sets it up: the AMD variables of its tool directories."""
+    tools = {
+        "XILINX_VIVADO": root / version / "Vivado",
+        "XILINX_HLS": root / version / "Vitis",
+        "XILINX_VITIS": root / version / "Vitis",
+    }
+    for directory in tools.values():
+        directory.mkdir(parents=True, exist_ok=True)
+    return {name: str(path) for name, path in tools.items()}
+
+
+def test_a_sourced_host_shell_selects_the_release(host, tmp_path, monkeypatch):
+    """settings64.sh or a site module set the AMD variables: the launcher mounts their
+    install root and passes them on, and the host file's release is not used."""
+    sourced = sourced_release(tmp_path / "tools", "2024.2")
+    sourced_release(tmp_path / "file-tools", "2025.2")
+    for name, value in sourced.items():
+        monkeypatch.setenv(name, value)
+    path = host_file(
+        tmp_path,
+        "FINN_XILINX_PATH=%s\nFINN_XILINX_VERSION=2025.2\nFINN_LICENSE_HOST=lic\n"
+        "FINN_LICENSE_PORT=2100\n" % (tmp_path / "file-tools"),
+    )
+    monkeypatch.setenv("FINN_XILINX_ENV", str(path))
+    request = launcher.resolve_host("build", "mirror")
+    for name, value in sourced.items():
+        assert request["env"][name] == value
+    toolchain = [m["source"] for m in request["mounts"] if m["reason"] == "xilinx-toolchain"]
+    assert toolchain == [str(tmp_path / "tools")]
+    # The rest of the host file still applies.
+    assert request["env"]["XILINXD_LICENSE_FILE"] == "2100@lic"
+    assert launcher.tools_configured()
+
+
+def test_finn_xilinx_variables_win_over_a_sourced_shell(host, tmp_path, monkeypatch, capsys):
+    for name, value in sourced_release(tmp_path / "tools", "2024.2").items():
+        monkeypatch.setenv(name, value)
+    sourced_release(tmp_path / "pinned", "2025.2")
+    monkeypatch.setenv("FINN_XILINX_PATH", str(tmp_path / "pinned"))
+    monkeypatch.setenv("FINN_XILINX_VERSION", "2025.2")
+    request = launcher.resolve_host("build", "mirror")
+    assert request["env"]["XILINX_VIVADO"] == str(tmp_path / "pinned/2025.2/Vivado")
+    assert (
+        "the shell's XILINX_HLS, XILINX_VITIS, XILINX_VIVADO is not used" in capsys.readouterr().err
+    )
+
+
+def test_the_old_tool_names_are_deprecated_aliases(host, tmp_path, monkeypatch, capsys):
+    vivado = tmp_path / "Vivado" / "2024.2"
+    vivado.mkdir(parents=True)
+    monkeypatch.setenv("VIVADO_PATH", str(vivado))
+    request = launcher.resolve_host("build", "mirror")
+    assert request["env"]["XILINX_VIVADO"] == str(vivado)
+    assert "VIVADO_PATH" not in request["env"]
+    assert "VIVADO_PATH is deprecated; set XILINX_VIVADO" in capsys.readouterr().err
 
 
 # --------------------------------------------------------------------------
@@ -740,7 +798,7 @@ def test_tool_libraries_are_in_the_creation_environment(host, tmp_path, monkeypa
     monkeypatch.setenv("FINN_XILINX_PATH", str(root))
     monkeypatch.setenv("FINN_XILINX_VERSION", "2024.2")
     env = launcher.container_environment(launcher.resolve_host("build", "mirror", ["xrt"]))
-    assert env["HLS_PATH"] == str(root / "Vitis_HLS/2024.2")
+    assert env["XILINX_HLS"] == str(root / "Vitis_HLS/2024.2")
     assert env["XILINX_XRT"] == "/opt/xilinx/xrt"
     assert str(root / "Vivado/2024.2/lib/lnx64.o") in env["LD_LIBRARY_PATH"].split(":")
     assert "/opt/xilinx/xrt/lib" in env["LD_LIBRARY_PATH"].split(":")
