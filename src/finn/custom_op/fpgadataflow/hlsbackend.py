@@ -274,6 +274,8 @@ class HLSBackend(ABC):
         builder.append_sources(code_gen_dir + "/*.cpp")
         builder.append_sources(resources.join("qnn-data", "cpp", "cnpy.cpp"))
         builder.append_includes(["-fno-builtin", "-fno-inline"])
+        # RPATH, not RUNPATH: libhlsmc++ finds the floating-point model through it too.
+        builder.append_includes("-Wl,--disable-new-dtags")
         builder.append_includes([f"-Wl,-rpath,{hls_path}/lnx64/lib/csim"])
         builder.append_includes(["-L", f"{hls_path}/lnx64/lib/csim", "-lhlsmc++-GCC46"])
         builder.append_includes([f"-Wl,-rpath,{hls_path}/lnx64/tools/fpo_v7_1"])
