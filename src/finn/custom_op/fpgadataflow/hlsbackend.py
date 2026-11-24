@@ -273,7 +273,6 @@ class HLSBackend(ABC):
         builder.append_includes("-O3")
         builder.append_sources(code_gen_dir + "/*.cpp")
         builder.append_sources(resources.join("qnn-data", "cpp", "cnpy.cpp"))
-        builder.append_includes("-lz")
         builder.append_includes(["-fno-builtin", "-fno-inline"])
         builder.append_includes([f"-Wl,-rpath,{hls_path}/lnx64/lib/csim"])
         builder.append_includes(["-L", f"{hls_path}/lnx64/lib/csim", "-lhlsmc++-GCC46"])

@@ -87,7 +87,7 @@ def test_npy2tensorstream(test_shape, dtype):
 g++ -o test_npy2tensorstream test.cpp {cpp}/cnpy.cpp \
 -I{}/include -I{cpp} \
 -I{hlslib} \
---std=c++17 -lz""".format(
+--std=c++17""".format(
         shlex.quote(hls_root()),
         cpp=shlex.quote(resources.join("qnn-data", "cpp")),
         hlslib=shlex.quote(resources.path("hlslib")),

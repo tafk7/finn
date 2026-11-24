@@ -70,12 +70,8 @@ if command -v apt-get &> /dev/null; then
         unzip \
         python3 \
         python3-pip \
-        python3-venv
-
-    # Required for finn_xsi (Vivado Python bindings) and finn-hlslib
-    apt-get install -y \
-        pybind11-dev \
-        libboost-dev
+        python3-venv \
+        python3-dev
 
     gecho "System dependencies installed successfully!"
     echo ""
@@ -98,8 +94,6 @@ elif command -v dnf &> /dev/null; then
         python3 \
         python3-pip \
         python3-devel \
-        pybind11-devel \
-        boost-devel \
         fmt-devel \
         jansson-devel \
         glib2 \
@@ -114,7 +108,6 @@ elif command -v yum &> /dev/null; then
     recho "Please install the following packages manually:"
     echo "  - gcc-c++ make git wget unzip"
     echo "  - python3 python3-pip python3-devel"
-    echo "  - pybind11-devel boost-devel"
     exit 1
 
 else
@@ -134,8 +127,6 @@ else
     echo "  - python3-dev (development headers)"
     echo ""
     echo "Libraries:"
-    echo "  - pybind11 development files"
-    echo "  - boost development files"
     echo "  - fmt development files"
     echo "  - jansson development files"
     echo ""
@@ -144,3 +135,5 @@ fi
 
 echo ""
 gecho "Done! You can now run ./setup-local.sh to set up FINN."
+echo "The Vivado and Vitis installation has its own prerequisites: run the release's"
+echo "scripts/installLibs.sh (for example /tools/Xilinx/2025.2/Vitis/scripts/installLibs.sh)."
