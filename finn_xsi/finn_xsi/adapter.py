@@ -12,12 +12,13 @@ import errno
 import os
 import os.path
 import xsi
+from finn_xsi.kernel_loader import load_kernel
 from finn_xsi.sim_engine import SimEngine
 from finn_xsi.srcutil import order_pkg_first
 from typing import Optional
 
 from finn.util.basic import get_rtlsim_timeout_error_message
-from finn.util.launcher import ToolUnavailable, run_tool
+from finn.util.launcher import ToolUnavailable, amd_path, not_set_up, run_tool
 
 
 def locate_glbl() -> Optional[str]:
@@ -138,9 +139,9 @@ def get_simkernel_so():
     """Return the file name of the XSI simulation kernel library of the Vivado
     installation in XILINX_VIVADO. Vivado 2024.2 renamed it from
     librdi_simulator_kernel.so to libxv_simulator_kernel.so."""
-    vivado_path = os.environ.get("XILINX_VIVADO")
+    vivado_path = amd_path("XILINX_VIVADO")
     if not vivado_path:
-        raise ToolUnavailable("vivado", "XILINX_VIVADO is not set")
+        raise not_set_up("vivado", "XILINX_VIVADO is not set")
     lib_dir = os.path.join(vivado_path, "lib", "lnx64.o")
     for simkernel_so in ("libxv_simulator_kernel.so", "librdi_simulator_kernel.so"):
         if os.path.isfile(os.path.join(lib_dir, simkernel_so)):
@@ -151,6 +152,7 @@ def get_simkernel_so():
 def load_sim_obj(sim_out_dir, out_so_relative_path, tracefile=None, simkernel_so=None):
     if simkernel_so is None:
         simkernel_so = get_simkernel_so()
+    load_kernel(amd_path("XILINX_VIVADO"), simkernel_so)
     # The xsim kernel opens some snapshot files lazily during simulation, e.g.
     # xsim.dir/<top>/xsim.svtype on the first executed $readmemh (XPM memories with
     # a MEMORY_INIT_FILE do so at #10). With a relative design path, these lookups
