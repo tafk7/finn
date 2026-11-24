@@ -12,26 +12,22 @@ authors = [{name = "Yaman Umuroglu"}, {name = "Jakoba Petri-Koenig", email = "ja
 requires-python = ">=3.12,<3.13"
 classifiers = ["Development Status :: 4 - Beta", "Programming Language :: Python", "Operating System :: POSIX :: Linux"]
 dependencies = [
-    "bitstring==4.2.3",
-    "clize==5.0.1",
-    "dataclasses-json==0.5.7",
-    "numpy==1.26.4",
-    "onnx==1.22.0",
-    "onnxoptimizer",
-    "onnxruntime==1.28.0",
-    "onnxscript==0.6.2",
-    "protobuf==5.29.6",
-    "psutil==5.9.4",
-    "pybind11==2.11.1",
-    "scipy==1.11.4",
-    "sigtools==4.0.1",
-    "toposort==1.7.0",
-    "vcdvcd==1.0.5",
-    "torch==2.8.0",
-    "brevitas",
-    "torchvision==0.23.0",
-    "importlib-resources==6.1.0",
-    "qonnx",
+    # Lower bounds are the versions upstream dev tests (requirements.txt, the image).
+    "bitstring>=4.2.3,<5",  # 5.0 drops BitArray(length=...)
+    "brevitas>=0.13.4",
+    "clize>=5.0.1",
+    "dataclasses-json>=0.5.7",
+    "importlib-resources>=6.1.0",
+    "numpy>=1.26.4,<2",  # numpy 2: qonnx attributes reject numpy.float32 from streamlining
+    "onnx>=1.22.0,<1.23",  # 1.23 writes IR version 14, which onnxruntime 1.28 cannot read
+    "onnxoptimizer>=0.4.2",  # brevitas exports through it, without declaring it
+    "onnxruntime>=1.28.0",
+    "onnxscript>=0.6.2,<0.7",  # loop rolling uses its private rewriter, reworked in 0.7
+    "pybind11>=2.11.1",
+    "qonnx @ git+https://github.com/fastmachinelearning/qonnx.git@4c1f9b4452bb90e743f3bd7e182603fa5096af06",
+    "scipy>=1.11.4",
+    "torch>=2.8.0,<2.9",  # from 2.9 brevitas exports with dynamo, which cannot target the opsets FINN uses
+    "torchvision>=0.23.0,<0.24",
 ]
 
 [project.urls]
@@ -123,8 +119,6 @@ constraint-dependencies = ["setuptools==68.2.2", "wheel==0.45.1"]
 # adapter below builds its verified, unchanged sources with current metadata.
 
 [tool.uv.sources]
-qonnx = {git = "https://github.com/fastmachinelearning/qonnx.git", rev = "4c1f9b4452bb90e743f3bd7e182603fa5096af06"}
-brevitas = {git = "https://github.com/Xilinx/brevitas.git", rev = "06133f4778ecedc77020b5e778022cf4e805bc86"}
 finn-experimental = {path = "packaging/finn-experimental"}
 dataset-loading = {git = "https://github.com/fbcotter/dataset_loading.git", rev = "5b9faa226e5f7c857579d31cdd9acde8cdfb816f"}
 # PyTorch builds: CPU by default; `uv sync --no-group cpu --group cuda` selects CUDA.

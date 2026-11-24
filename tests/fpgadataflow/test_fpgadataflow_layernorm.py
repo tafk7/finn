@@ -333,7 +333,9 @@ def test_extract_norm_scale_bias(idt, ishape, has_scale, has_bias):
     input_t = {model.graph.input[0].name: input}
 
     y_out = oxe.execute_onnx(model, input_t)[model.graph.output[0].name]
-    assert (y_ref == y_out).all()
+    # Scale and bias inside LayerNormalization round differently from a separate Mul
+    # and Add (onnxruntime 1.30 and later), so the results agree to float32 precision.
+    assert np.allclose(y_ref, y_out, rtol=1e-6, atol=1e-6)
 
 
 def create_mul_layernorm_model(idt, ishape, mul_param_shape):
