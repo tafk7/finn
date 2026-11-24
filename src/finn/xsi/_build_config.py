@@ -6,6 +6,8 @@ import shutil
 import sysconfig
 from typing import List, Tuple
 
+from finn.util.launcher import amd_path
+
 LINK_ARGS = ["-ldl", "-lrt"]
 
 
@@ -38,7 +40,7 @@ def get_build_paths() -> Tuple[List[str], str, List[str]]:
         pass
 
     # Get Xilinx Vivado include directory
-    xilinx_vivado = os.environ.get("XILINX_VIVADO")
+    xilinx_vivado = amd_path("XILINX_VIVADO")
     if xilinx_vivado:
         xilinx_include = os.path.join(xilinx_vivado, "data", "xsim", "include")
         if os.path.exists(xilinx_include):

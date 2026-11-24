@@ -53,13 +53,13 @@ from finn.transformation.fpgadataflow.prepare_ip import PrepareIP
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
 from finn.util.basic import make_build_dir
 from finn.util.fpgadataflow import find_clk2x_nodes
-from finn.util.launcher import run_tool
+from finn.util.launcher import amd_path, run_tool
 
 from . import templates
 
 
 def _check_vitis_envvars():
-    assert "VITIS_PATH" in os.environ, "VITIS_PATH must be set for Vitis"
+    assert amd_path("XILINX_VITIS"), "XILINX_VITIS must be set for Vitis: source its settings64.sh"
     assert "PLATFORM_REPO_PATHS" in os.environ, "PLATFORM_REPO_PATHS must be set for Vitis"
     assert (
         "XILINX_XRT" in os.environ

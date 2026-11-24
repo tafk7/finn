@@ -19,10 +19,10 @@ Usage:
 """
 
 import logging
-import os
 import sys
 from typing import Any, Optional
 
+from finn.util.launcher import amd_path, not_set_up
 from finn.xsi.paths import build_dir, source_dir
 
 
@@ -102,11 +102,13 @@ def _load_modules() -> bool:
 
 def unavailable_message() -> str:
     """Why finn_xsi cannot be used here, and what to do about it."""
-    if not os.environ.get("XILINX_VIVADO"):
-        return (
-            "RTL simulation needs Vivado, but XILINX_VIVADO is not set. Launch the "
-            "container with `docker/run --fpga`, or configure the Xilinx tools before "
-            "`source scripts/activate.sh`."
+    if not amd_path("XILINX_VIVADO"):
+        return str(
+            not_set_up(
+                "vivado",
+                "RTL simulation needs Vivado, but XILINX_VIVADO is not set "
+                "(in a container, use `docker/run --fpga`)",
+            )
         )
     return (
         f"finn_xsi is not built for this Vivado installation and Python environment "

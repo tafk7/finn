@@ -156,7 +156,7 @@ class TestConfigCheckIntegration:
 
         env = {
             "XILINX_VIVADO": "/tools/Vivado/2024.2",
-            "VITIS_PATH": "/tools/Vitis/2024.2",
+            "XILINX_VITIS": "/tools/Vitis/2024.2",
             "PLATFORM_REPO_PATHS": "/opt/platforms",
             "XILINX_XRT": "/opt/xilinx/xrt",
         }
@@ -518,7 +518,9 @@ def test_shell_checks_use_inferred_shell_flow(explicit_shell):
     kw = {"board": "U250", "generate_outputs": [DataflowOutputType.BITFILE]}
     if explicit_shell:
         kw["shell_flow_type"] = ShellFlowType.VITIS_ALVEO
-    env = {k: v for k, v in os.environ.items() if k not in ("VITIS_PATH", "XILINX_XRT")}
+    env = {
+        k: v for k, v in os.environ.items() if k not in ("XILINX_VITIS", "VITIS_PATH", "XILINX_XRT")
+    }
     with patch.dict("os.environ", env, clear=True):
         report = run_all_config_checks(cfg(output_dir, **kw))
     check = next(c for c in report.checks if c.name == "vitis_envvars")

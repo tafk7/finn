@@ -11,7 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from finn import resources
-from finn.util.launcher import ToolFailed, ToolUnavailable, run_tool
+from finn.util.launcher import ToolFailed, ToolUnavailable, amd_path, run_tool
 from finn.xsi._build_config import LINK_ARGS, get_build_paths
 
 
@@ -31,7 +31,7 @@ def source_dir() -> Path:
 def build_dir() -> Path:
     """Separate Python ABIs, source changes and selected Vivado installations."""
     source = source_dir()
-    vivado = Path(os.environ.get("XILINX_VIVADO", "/missing-vivado")).resolve()
+    vivado = Path(amd_path("XILINX_VIVADO") or "/missing-vivado").resolve()
     includes, compiler, flags = get_build_paths()
     # pybind11's headers are identified by its version below. Their location is
     # the venv's, which differs between otherwise identical checkouts.

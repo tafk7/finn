@@ -29,7 +29,6 @@
 import pytest
 
 import numpy as np
-import os
 import shlex
 import subprocess
 from qonnx.core.datatype import DataType
@@ -44,6 +43,7 @@ from finn.util.data_packing import (
     numpy_to_hls_code,
     packed_bytearray_to_finnpy,
 )
+from finn.util.launcher import hls_root
 
 
 @pytest.mark.util
@@ -85,11 +85,10 @@ def test_npy2tensorstream(test_shape, dtype):
         f.write("\n".join(test_app_string))
     cmd_compile = """
 g++ -o test_npy2tensorstream test.cpp {cpp}/cnpy.cpp \
--I{}/include -I{}/include -I{cpp} \
+-I{}/include -I{cpp} \
 -I{hlslib} \
 --std=c++17 -lz""".format(
-        os.environ["HLS_PATH"],
-        os.environ["VITIS_PATH"],
+        shlex.quote(hls_root()),
         cpp=shlex.quote(resources.join("qnn-data", "cpp")),
         hlslib=shlex.quote(resources.path("hlslib")),
     )

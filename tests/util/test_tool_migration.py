@@ -118,7 +118,7 @@ def kernel_model(directory):
 def link_model(tmp_path, monkeypatch, tool_dir):
     for tool in ("vivado", "v++", "slashkit"):
         tool_dir(tool)
-    for name in ("VITIS_PATH", "PLATFORM_REPO_PATHS", "XILINX_XRT"):
+    for name in ("XILINX_VITIS", "PLATFORM_REPO_PATHS", "XILINX_XRT"):
         monkeypatch.setenv(name, str(tmp_path))
     monkeypatch.delenv("PWD", raising=False)
     nodes = []
@@ -145,7 +145,7 @@ def link_model(tmp_path, monkeypatch, tool_dir):
 @pytest.mark.util
 def test_xo_packaging_rejects_a_failed_vivado_run_with_a_stale_xo(tmp_path, tool_dir, monkeypatch):
     tool_dir("vivado")
-    for name in ("VITIS_PATH", "PLATFORM_REPO_PATHS", "XILINX_XRT"):
+    for name in ("XILINX_VITIS", "PLATFORM_REPO_PATHS", "XILINX_XRT"):
         monkeypatch.setenv(name, str(tmp_path))
     monkeypatch.delenv("PWD", raising=False)  # the scripts used to read it
     directory = tmp_path / "xo with spaces"

@@ -48,6 +48,9 @@ from finn.util.launcher import (
     TOOL_DIR_ENV,
     StrPath,
     ToolUnavailable,
+    amd_path,
+    not_set_up,
+    release_of,
     run_tool,
     xilinx_tool,
 )
@@ -186,32 +189,27 @@ def arith_rtl_files(names, abspath=True):
 
 
 def get_vivado_root():
-    "Return the root directory that Vivado is installed into."
-
-    try:
-        return os.environ["XILINX_VIVADO"]
-    except KeyError:
-        raise Exception(
-            """Environment variable XILINX_VIVADO must be set
-        correctly. Please ensure you have launched the Docker contaier correctly.
-        """
-        )
+    """Return the Vivado installation, XILINX_VIVADO, which its settings64.sh sets."""
+    path = amd_path("XILINX_VIVADO")
+    if not path:
+        raise not_set_up("vivado", "XILINX_VIVADO is not set")
+    return path
 
 
 def get_vivado_version() -> Optional[Tuple[int, int]]:
-    """Extract Vivado version as (year, minor) tuple from XILINX_VIVADO."""
-    path = os.environ.get("XILINX_VIVADO", "")
-    match = re.search(r"\b(20\d{2})\.(1|2)\b", path)
-    return (int(match.group(1)), int(match.group(2))) if match else None
+    """Return the release of the Vivado installation (XILINX_VIVADO) as (year, half),
+    or None."""
+    path = amd_path("XILINX_VIVADO")
+    return release_of(path) if path else None
 
 
 def require_vivado_version() -> Tuple[int, int]:
     """Return get_vivado_version(), or raise ToolUnavailable if it is unknown."""
     version = get_vivado_version()
     if version is None:
-        path = os.environ.get("XILINX_VIVADO")
+        path = amd_path("XILINX_VIVADO")
         if not path:
-            raise ToolUnavailable("vivado", "XILINX_VIVADO is not set")
+            raise not_set_up("vivado", "XILINX_VIVADO is not set")
         raise ToolUnavailable(
             "vivado",
             f"XILINX_VIVADO={path} does not name the Vivado release; set it to the "

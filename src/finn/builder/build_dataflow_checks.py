@@ -29,6 +29,7 @@ from finn.util.basic import (
     retired_pynq_boards,
     vitis_part_map,
 )
+from finn.util.launcher import amd_path
 
 
 class Severity(Enum):
@@ -333,9 +334,9 @@ def run_all_config_checks(cfg: DataflowBuildConfig) -> Report:
 
     # === Environment Variables ===
     if has_bitfile and resolved_shell == ShellFlowType.VITIS_ALVEO:
-        missing = [
-            v for v in ["VITIS_PATH", "PLATFORM_REPO_PATHS", "XILINX_XRT"] if v not in os.environ
-        ]
+        missing = [v for v in ["PLATFORM_REPO_PATHS", "XILINX_XRT"] if v not in os.environ]
+        if not amd_path("XILINX_VITIS"):
+            missing.insert(0, "XILINX_VITIS")
         if missing:
             checks.append(
                 _check(
@@ -343,8 +344,8 @@ def run_all_config_checks(cfg: DataflowBuildConfig) -> Report:
                     Severity.ERROR,
                     False,
                     f"VITIS_ALVEO flow requires environment variables: {', '.join(missing)}",
-                    "VITIS_PATH and XILINX_XRT are set by the Docker container (ensure "
-                    "SKIP_XRT is not set). PLATFORM_REPO_PATHS must be set by the user",
+                    "Source the settings64.sh of Vitis and XRT's setup.sh (the Docker "
+                    "container does both). PLATFORM_REPO_PATHS must be set by the user",
                 )
             )
 

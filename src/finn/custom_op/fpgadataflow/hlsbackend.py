@@ -35,14 +35,14 @@ from qonnx.core.datatype import DataType
 
 from finn import resources, xsi
 from finn.custom_op.fpgadataflow import templates
-from finn.util.basic import CppBuilder, get_vivado_version, make_build_dir, tcl_string
+from finn.util.basic import CppBuilder, make_build_dir, tcl_string
 from finn.util.data_packing import (
     hls_datatype_str,
     npy_to_rtlsim_input,
     rtlsim_output_to_npy,
 )
 from finn.util.hls import CallHLS
-from finn.util.launcher import run_tool
+from finn.util.launcher import hls_root, run_tool
 
 finnxsi = xsi
 
@@ -261,14 +261,7 @@ class HLSBackend(ABC):
     def compile_singlenode_code(self):
         """Compile the cppsim executable, retaining a replay and transcripts."""
         code_gen_dir = self.get_nodeattr("code_gen_dir_cppsim")
-        # From 2024.2, the HLS headers are in the Vitis installation (VITIS_PATH).
-        vivado_version = get_vivado_version()
-        if vivado_version is not None and vivado_version < (2024, 2):
-            hls_path = os.environ["HLS_PATH"]
-        elif "VITIS_PATH" in os.environ:
-            hls_path = os.environ["VITIS_PATH"]
-        else:
-            hls_path = os.environ["HLS_PATH"]
+        hls_path = hls_root()
         builder = CppBuilder()
         # to enable additional debug features please uncommand the next line
         # builder.append_includes("-DDEBUG")

@@ -13,6 +13,7 @@ from pathlib import Path
 
 from finn import resources
 from finn.resources import _store
+from finn.util.launcher import amd_path
 
 GOLDEN_FILES = ("golden_ref.tcl", "golden_noc.ncr", "golden_routed.dcp")
 
@@ -79,7 +80,7 @@ def golden_root() -> Path:
 def _golden_identity() -> dict:
     """The inputs of a golden reference, known without fetching or building."""
     pynq = resources.status("pynq")
-    vivado = os.environ.get("XILINX_VIVADO", "")
+    vivado = amd_path("XILINX_VIVADO") or ""
     settings = Path(vivado) / "settings64.sh"
     return {
         # A local override or source is unverified, so its content is the identity.
@@ -119,7 +120,7 @@ def golden() -> str:
     if os.environ.get("FINN_GOLDEN_DIR") and all((output / f).is_file() for f in GOLDEN_FILES):
         # A site-supplied reference is used as is.
         return str(output)
-    if not os.environ.get("XILINX_VIVADO"):
+    if not amd_path("XILINX_VIVADO"):
         raise RuntimeError("FINN_VCK190_GOLDEN=1 requires a selected Vivado installation")
     identity = _golden_identity()
     digest = _golden_digest(identity)

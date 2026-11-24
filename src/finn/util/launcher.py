@@ -27,7 +27,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Mapping, Optional, Sequence, Tuple, Union
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 from finn.util import vivado
 from finn.util.build_log import FILE_ONLY, in_run
@@ -72,7 +72,9 @@ class ToolRun(subprocess.CompletedProcess):
 
 
 def resolve_executable(
-    name: StrPath, cwd: Optional[StrPath] = None, env: Optional[Mapping[str, str]] = None
+    name: StrPath,
+    cwd: Optional[StrPath] = None,
+    env: Optional[Mapping[str, str]] = None,
 ) -> Optional[str]:
     """Return the path of the executable that a child process started in ``cwd`` with
     the environment ``env`` runs for ``name``, as ``subprocess.Popen`` finds it. A name
@@ -97,15 +99,134 @@ XILINX_TOOLS = frozenset({"vivado", "vitis_hls", "vitis-run", "v++", "xelab", "s
 TOOL_DIR_ENV = "FINN_TOOL_DIR_OVERRIDE"
 
 
+# FINN reads the AMD tools' own environment, as a release's settings64.sh (or a site's
+# environment module) sets it, and never builds it: whoever starts FINN does.
+AMD_VARIABLES = ("XILINX_VIVADO", "XILINX_HLS", "XILINX_VITIS")
+# Names that only run-docker.sh used to set. Still read, with a warning.
+DEPRECATED_NAMES = {
+    "XILINX_VIVADO": "VIVADO_PATH",
+    "XILINX_HLS": "HLS_PATH",
+    "XILINX_VITIS": "VITIS_PATH",
+}
+# Where AMD's installer puts releases. FINN only looks here to tell a user without the
+# tools which settings64.sh to source; it never uses what it finds.
+INSTALL_ROOTS = ("/tools/Xilinx", "/opt/Xilinx", "~/Xilinx")
+# A release in a path: the last one, since a site's install root may name a build of
+# it too (/proj/xbuilds/SWIP/2022.2_1014_8888/installs/lin64/Vivado/2022.2).
+_RELEASE = re.compile(r"(?<![\d.])(20\d\d)\.([12])(?![\d.])")
+_warned_names = set()
+
+
+def amd_path(name: str) -> Optional[str]:
+    """Return the directory that AMD's variable ``name`` (one of ``AMD_VARIABLES``)
+    names, or None. A deprecated name set without the AMD one is read with a warning."""
+    value = os.environ.get(name)
+    if value:
+        return value
+    old = DEPRECATED_NAMES[name]
+    value = os.environ.get(old)
+    if value:
+        if old not in _warned_names:
+            _warned_names.add(old)
+            log.warning("%s is deprecated: FINN reads %s, which settings64.sh sets", old, name)
+        return value
+    return None
+
+
+def release_of(path: StrPath) -> Optional[Tuple[int, int]]:
+    """Return the AMD release (year, half) that ``path`` lies in, or None."""
+    found = _RELEASE.findall(os.fspath(path))
+    return (int(found[-1][0]), int(found[-1][1])) if found else None
+
+
+def installed_releases(
+    roots: Optional[Sequence[str]] = None,
+) -> List[Tuple[Tuple[int, int], str]]:
+    """Return ``(release, settings64.sh)`` for each Vivado release under ``roots``, in
+    both of AMD's layouts, newest first."""
+    found: Dict[Tuple[int, int], str] = {}
+    for root in INSTALL_ROOTS if roots is None else roots:
+        root = os.path.expanduser(root)
+        for pattern in ("*/Vivado/settings64.sh", "Vivado/*/settings64.sh"):
+            for script in sorted(Path(root).glob(pattern)):
+                release = release_of(script.relative_to(root))
+                if release:
+                    found.setdefault(release, str(script))
+    return sorted(found.items(), reverse=True)
+
+
+def setup_hint(roots: Optional[Sequence[str]] = None) -> str:
+    """Tell a user whose environment has no AMD tools what to source."""
+    releases = installed_releases(roots)
+    if not releases:
+        return (
+            "Install the AMD tools and source a release's settings64.sh "
+            "(<root>/<release>/Vivado/settings64.sh), or load the site's Vivado module."
+        )
+    (year, half), script = releases[0]
+    hint = f"To use Vivado {year}.{half}: source {script}"
+    if len(releases) > 1:
+        others = ", ".join(f"{y}.{h}" for (y, h), _ in releases[1:])
+        hint += f" (also installed: {others})"
+    return hint
+
+
+class ToolchainMismatch(RuntimeError):
+    """AMD tools from different releases in one environment."""
+
+
+def expected_release() -> Optional[Tuple[int, int]]:
+    """Return the release of the AMD tools set up in this environment, or None.
+    Raises ``ToolchainMismatch`` if the AMD variables name different releases."""
+    releases = {}
+    for name in AMD_VARIABLES:
+        path = amd_path(name)
+        release = release_of(path) if path else None
+        if release:
+            releases[name] = (release, path)
+    if len({release for release, _ in releases.values()}) > 1:
+        raise ToolchainMismatch(
+            "the AMD tools in this environment come from different releases: "
+            + ", ".join(f"{name}={path}" for name, (_, path) in releases.items())
+            + ". Start FINN from a shell that sourced one release's settings64.sh."
+        )
+    return next(iter(releases.values()))[0] if releases else None
+
+
+def not_set_up(tool: str, reason: str) -> "ToolUnavailable":
+    """``ToolUnavailable`` for ``tool``, adding what to source when the environment
+    has no AMD tools at all."""
+    if not any(amd_path(name) for name in AMD_VARIABLES):
+        reason = f"{reason}. No AMD tools are set up in this environment. {setup_hint()}"
+    return ToolUnavailable(tool, reason)
+
+
+def hls_root() -> str:
+    """Return the Vitis HLS installation: the one of XILINX_HLS and XILINX_VITIS that
+    holds the HLS headers (from 2024.2 they are part of Vitis)."""
+    paths = [path for path in (amd_path("XILINX_HLS"), amd_path("XILINX_VITIS")) if path]
+    for path in paths:
+        if os.path.isfile(os.path.join(path, "include", "hls_stream.h")):
+            return path
+    if paths:
+        raise ToolUnavailable(
+            "vitis_hls",
+            "no HLS headers (include/hls_stream.h) in " + " or ".join(paths),
+        )
+    raise not_set_up("vitis_hls", "XILINX_HLS and XILINX_VITIS are not set")
+
+
 @functools.lru_cache(maxsize=None)
 def xilinx_tool(name: str) -> str:
     """Return the path of the AMD tool ``name``: ``<FINN_TOOL_DIR_OVERRIDE>/<name>`` if
     that variable is set, else ``name`` on PATH. Raises ``ToolUnavailable`` if there is
-    no such executable.
+    no such executable, and ``ToolchainMismatch`` if it belongs to another release than
+    the AMD variables name.
 
     The tools are set up once, before FINN starts, so each name is resolved once per
     process. ``xilinx_tool.cache_clear()`` forgets the results, for a test that
     changes the environment. A failed lookup is not kept."""
+    expected = expected_release()
     override = os.environ.get(TOOL_DIR_ENV)
     if override:
         path = os.path.abspath(os.path.join(override, name))
@@ -114,8 +235,18 @@ def xilinx_tool(name: str) -> str:
         return path
     path = shutil.which(name)
     if path is None:
-        raise ToolUnavailable(name, "not found in PATH")
-    return os.path.abspath(path)
+        raise not_set_up(name, "not found in PATH")
+    path = os.path.abspath(path)
+    # A wrapper (a site's, or the container's shim) names no release; a tool that
+    # names another release than the variables would run a different Vivado.
+    found = release_of(os.path.realpath(path)) or release_of(path)
+    if expected and found and found != expected:
+        raise ToolchainMismatch(
+            f"{name} on PATH is {path} (release {found[0]}.{found[1]}), but the AMD "
+            f"variables name release {expected[0]}.{expected[1]}. Start FINN from a shell "
+            "that sourced one release's settings64.sh."
+        )
+    return path
 
 
 def _popen(command, **kwargs):
@@ -384,7 +515,14 @@ class ToolFailed(RuntimeError):
         # Keep all fields across a multiprocessing pool (NodeLocalTransformation).
         return (
             type(self),
-            (self.tool, self.status, self.transcript, self.errors, self.code, self.command),
+            (
+                self.tool,
+                self.status,
+                self.transcript,
+                self.errors,
+                self.code,
+                self.command,
+            ),
         )
 
     @classmethod
@@ -520,10 +658,19 @@ def run_tool(
             transcript = os.path.splitext(os.fspath(replay))[0]
     try:
         result = run_process(
-            command, env=env, cwd=cwd, timeout=timeout, check=False, transcript=transcript
+            command,
+            env=env,
+            cwd=cwd,
+            timeout=timeout,
+            check=False,
+            transcript=transcript,
         )
     except OSError as exc:
-        if exc.filename == command[0] and exc.errno in (errno.ENOENT, errno.EACCES, errno.ENOEXEC):
+        if exc.filename == command[0] and exc.errno in (
+            errno.ENOENT,
+            errno.EACCES,
+            errno.ENOEXEC,
+        ):
             raise ToolUnavailable(os.path.basename(command[0]), str(exc)) from exc
         raise
     if log_output:

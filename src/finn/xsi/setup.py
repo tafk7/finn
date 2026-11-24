@@ -28,7 +28,13 @@ import sys
 from typing import List, Optional
 
 from finn.resources import _store
-from finn.util.launcher import ToolFailed, ToolUnavailable, run_tool
+from finn.util.launcher import (
+    ToolFailed,
+    ToolUnavailable,
+    amd_path,
+    not_set_up,
+    run_tool,
+)
 from finn.xsi._build_config import LINK_ARGS, get_build_paths
 from finn.xsi.paths import build_dir, source_dir
 
@@ -46,9 +52,9 @@ def check_prerequisites() -> List[str]:
         errors.append("'vivado' not found. Ensure Xilinx tools are in PATH.")
 
     # Check Xilinx Vivado environment variable
-    xilinx_vivado = os.environ.get("XILINX_VIVADO")
+    xilinx_vivado = amd_path("XILINX_VIVADO")
     if not xilinx_vivado:
-        errors.append("XILINX_VIVADO environment variable not set. Please source Vivado settings.")
+        errors.append(str(not_set_up("vivado", "XILINX_VIVADO is not set")))
     elif not os.path.exists(os.path.join(xilinx_vivado, "data", "xsim", "include")):
         errors.append(f"Xilinx XSim headers not found at {xilinx_vivado}/data/xsim/include")
 
