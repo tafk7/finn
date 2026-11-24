@@ -11,8 +11,6 @@
 ###################################################################################
 
 import numpy as np
-import torch
-import torch.nn.functional as F
 import warnings
 from qonnx.core.datatype import DataType
 
@@ -49,12 +47,14 @@ class LayerNorm(HWCustomOp):
         in_values = context[node.input[0]]
         out_values = context[node.output[0]]
         # Get any shape info that needs reuse
-        ishape = in_values.shape
         oshape = out_values.shape
-        # Functionally verify with PyTorch implementation, since weight & bias are removed
-        in_act = torch.from_numpy(in_values)
-        out_act = F.layer_norm(in_act, [ishape[-1]], eps=self.get_nodeattr("epsilon"))
-        context[node.output[0]] = np.asarray(out_act, dtype=np.float32).reshape(oshape)
+        # Normalize over the last axis; weight and bias have been extracted.
+        # Computed in float64, then rounded once to float32.
+        x = np.asarray(in_values, dtype=np.float64)
+        mean = x.mean(axis=-1, keepdims=True)
+        var = np.square(x - mean).mean(axis=-1, keepdims=True)
+        out_act = (x - mean) / np.sqrt(var + self.get_nodeattr("epsilon"))
+        context[node.output[0]] = out_act.astype(np.float32).reshape(oshape)
 
     def get_normal_input_shape(self, ind=0):
         return self.get_nodeattr("ifm_dim")

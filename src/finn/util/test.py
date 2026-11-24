@@ -35,10 +35,8 @@ import onnx
 import onnx.numpy_helper as nph
 import os
 import shutil
-import torchvision.transforms.functional as torchvision_util
 import warnings
 import xml.etree.ElementTree as ET
-from brevitas_examples import bnn_pynq, imagenet_classification
 from onnx import TensorProto, helper
 from pkgutil import get_data
 from qonnx.core.datatype import DataType
@@ -48,6 +46,7 @@ from qonnx.transformation.general import GiveUniqueNodeNames
 from qonnx.util.basic import gen_finn_dt_tensor, qonnx_make_model
 
 from finn.core.onnx_exec import execute_onnx
+from finn.core.onnx_exec import execute_parent as execute_parent_model
 from finn.transformation.fpgadataflow.alveo_build import VitisLink, VitisOptStrategy
 from finn.transformation.fpgadataflow.annotate_cycles import AnnotateCycles
 from finn.transformation.fpgadataflow.compile_cppsim import CompileCppSim
@@ -68,28 +67,34 @@ from finn.util.basic import (
     vitis_part_map,
 )
 
+
 # map of (wbits,abits) -> model
-example_map = {
-    ("CNV", 1, 1): bnn_pynq.cnv_1w1a,
-    ("CNV", 1, 2): bnn_pynq.cnv_1w2a,
-    ("CNV", 2, 2): bnn_pynq.cnv_2w2a,
-    ("LFC", 1, 1): bnn_pynq.lfc_1w1a,
-    ("LFC", 1, 2): bnn_pynq.lfc_1w2a,
-    ("SFC", 1, 1): bnn_pynq.sfc_1w1a,
-    ("SFC", 1, 2): bnn_pynq.sfc_1w2a,
-    ("SFC", 2, 2): bnn_pynq.sfc_2w2a,
-    ("TFC", 1, 1): bnn_pynq.tfc_1w1a,
-    ("TFC", 1, 2): bnn_pynq.tfc_1w2a,
-    ("TFC", 2, 2): bnn_pynq.tfc_2w2a,
-    ("mobilenet", 4, 4): imagenet_classification.quant_mobilenet_v1_4b,
-}
+def example_map():
+    """The Brevitas example networks, by (name, weight bits, activation bits).
+    Needs brevitas (and with it torch), which FINN itself does not."""
+    from brevitas_examples import bnn_pynq, imagenet_classification  # noqa: PLC0415
+
+    return {
+        ("CNV", 1, 1): bnn_pynq.cnv_1w1a,
+        ("CNV", 1, 2): bnn_pynq.cnv_1w2a,
+        ("CNV", 2, 2): bnn_pynq.cnv_2w2a,
+        ("LFC", 1, 1): bnn_pynq.lfc_1w1a,
+        ("LFC", 1, 2): bnn_pynq.lfc_1w2a,
+        ("SFC", 1, 1): bnn_pynq.sfc_1w1a,
+        ("SFC", 1, 2): bnn_pynq.sfc_1w2a,
+        ("SFC", 2, 2): bnn_pynq.sfc_2w2a,
+        ("TFC", 1, 1): bnn_pynq.tfc_1w1a,
+        ("TFC", 1, 2): bnn_pynq.tfc_1w2a,
+        ("TFC", 2, 2): bnn_pynq.tfc_2w2a,
+        ("mobilenet", 4, 4): imagenet_classification.quant_mobilenet_v1_4b,
+    }
 
 
 def get_test_model(netname, wbits, abits, pretrained):
     """Returns the model specified by input arguments from the Brevitas BNN-PYNQ
     test networks. Pretrained weights loaded if pretrained is True."""
     model_cfg = (netname, wbits, abits)
-    model_def_fxn = example_map[model_cfg]
+    model_def_fxn = example_map()[model_cfg]
     fc = model_def_fxn(pretrained)
     return fc.eval()
 
@@ -210,74 +215,14 @@ def execute_parent(
     return_full_ctx=False,
     batch_child=False,
 ):
-    """Execute a parent model containing one StreamingDataflowPartition.
-
-    With ``batch_child=True``, parent processing keeps its compiled batch-one
-    shapes while the partition child receives all preprocessed frames at once.
-    A full-context batched call returns one parent context per frame as a list.
-    """
-
-    parent_model = load_test_checkpoint_or_skip(parent_path)
-    iname = parent_model.get_first_global_in()
-    oname = parent_model.get_first_global_out()
-    sdp_node = parent_model.get_nodes_by_op_type("StreamingDataflowPartition")[0]
-    sdp_inst = getCustomOp(sdp_node)
-    sdp_inst.set_nodeattr("model", child_path)
-    sdp_inst.set_nodeattr("return_full_exec_context", 1 if return_full_ctx else 0)
-
-    batch_size = input_tensor_npy.shape[0]
-    if not batch_child or batch_size == 1:
-        ret = execute_onnx(parent_model, {iname: input_tensor_npy}, True)
-        if return_full_ctx:
-            return ret
-        else:
-            return ret[oname]
-
-    sdp_index = parent_model.get_node_index(sdp_node)
-    frame_contexts = []
-    for batch_index in range(batch_size):
-        frame_input = input_tensor_npy[batch_index : batch_index + 1]
-        if sdp_index == 0:
-            frame_context = parent_model.make_empty_exec_context()
-            frame_context[iname] = frame_input
-        else:
-            frame_context = execute_onnx(
-                parent_model,
-                {iname: frame_input},
-                True,
-                end_node=parent_model.graph.node[sdp_index - 1],
-            )
-        frame_contexts.append(frame_context)
-
-    # The partition only reads its declared inputs, so it does not need the full
-    # parent execution contexts.
-    partition_context = {
-        name: np.concatenate([context[name] for context in frame_contexts], axis=0)
-        for name in sdp_node.input
-    }
-    sdp_inst.execute_node(partition_context, parent_model.graph)
-
-    for output_name in sdp_node.output:
-        batched_output = partition_context[output_name]
-        for batch_index, frame_context in enumerate(frame_contexts):
-            frame_context[output_name] = batched_output[batch_index : batch_index + 1]
-
-    if sdp_index + 1 < len(parent_model.graph.node):
-        suffix_start = parent_model.graph.node[sdp_index + 1]
-        for batch_index, frame_context in enumerate(frame_contexts):
-            resume_context = {
-                name: value for name, value in frame_context.items() if value is not None
-            }
-            frame_contexts[batch_index] = execute_onnx(
-                parent_model,
-                resume_context,
-                True,
-                start_node=suffix_start,
-            )
-
-    if return_full_ctx:
-        return frame_contexts
-    return np.concatenate([context[oname] for context in frame_contexts], axis=0)
+    """finn.core.onnx_exec.execute_parent, skipping the test if the parent model is missing."""
+    return execute_parent_model(
+        load_test_checkpoint_or_skip(parent_path),
+        child_path,
+        input_tensor_npy,
+        return_full_ctx=return_full_ctx,
+        batch_child=batch_child,
+    )
 
 
 def stage_hw_deployment(deploy_dir, board, model_title, input_npy, reference_npy):
@@ -304,11 +249,15 @@ def stage_hw_deployment(deploy_dir, board, model_title, input_npy, reference_npy
 def resize_smaller_side(target_pixels, img):
     """Resizes smallest side of image to target pixels and resizes larger side with
     same ratio. Expects a PIL image."""
+    import torchvision.transforms.functional as torchvision_util  # noqa: PLC0415
+
     return torchvision_util.resize(img, target_pixels)
 
 
 def crop_center(size, img):
     """Crop central size*size window out of a PIL image."""
+    import torchvision.transforms.functional as torchvision_util  # noqa: PLC0415
+
     return torchvision_util.center_crop(img, size)
 
 

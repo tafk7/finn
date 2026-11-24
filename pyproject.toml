@@ -14,18 +14,24 @@ classifiers = ["Development Status :: 4 - Beta", "Programming Language :: Python
 dependencies = [
     # Lower bounds are the versions upstream dev tests (requirements.txt, the image).
     "bitstring>=4.2.3,<5",  # 5.0 drops BitArray(length=...)
-    "brevitas>=0.13.4",
     "clize>=5.0.1",
     "dataclasses-json>=0.5.7",
     "importlib-resources>=6.1.0",
     "numpy>=1.26.4,<2",  # numpy 2: qonnx attributes reject numpy.float32 from streamlining
     "onnx>=1.22.0,<1.23",  # 1.23 writes IR version 14, which onnxruntime 1.28 cannot read
-    "onnxoptimizer>=0.4.2",  # brevitas exports through it, without declaring it
     "onnxruntime>=1.28.0",
     "onnxscript>=0.6.2,<0.7",  # loop rolling uses its private rewriter, reworked in 0.7
     "pybind11>=2.11.1",
     "qonnx @ git+https://github.com/fastmachinelearning/qonnx.git@4c1f9b4452bb90e743f3bd7e182603fa5096af06",
     "scipy>=1.11.4",
+]
+
+[project.optional-dependencies]
+# The Brevitas front end: training, quantizing and exporting PyTorch models to QONNX.
+# FINN compiles a QONNX model without it.
+brevitas = [
+    "brevitas>=0.13.4",
+    "onnxoptimizer>=0.4.2",  # brevitas exports through it, without declaring it
     "torch>=2.8.0,<2.9",  # from 2.9 brevitas exports with dynamo, which cannot target the opsets FINN uses
     "torchvision>=0.23.0,<0.24",
 ]
@@ -49,6 +55,7 @@ finn = ["resources.toml", "qnn-data/**/*"]
 
 [dependency-groups]
 test = [
+    "finn[brevitas]",
     "setuptools==68.2.2",
     "wheel==0.45.1",
     "dataset-loading",
