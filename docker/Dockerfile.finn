@@ -123,8 +123,7 @@ ENV LD_PRELOAD=/lib/x86_64-linux-gnu/libudev.so.1:/lib/x86_64-linux-gnu/libcap.s
 # XILINX_LOCAL_USER_DATA=no lets several Vivado instances run at once
 # (https://adaptivesupport.amd.com/s/article/63253). TORCH_HOME/HF_HOME are set by
 # docker/run only when it mounts a cache.
-ENV VIVADO_IP_CACHE="/tmp/vivado_ip_cache" \
-    NUM_DEFAULT_WORKERS=4 \
+ENV NUM_DEFAULT_WORKERS=4 \
     LOCALHOST_URL="localhost" \
     SHELL=/bin/bash \
     XILINX_LOCAL_USER_DATA=no

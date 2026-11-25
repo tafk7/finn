@@ -239,7 +239,7 @@ A `STAGES` row that produces these zips declares a `zipArtifacts` nested key:
 Set `FINN_CI_NFS_ROOT` once on the Jenkins controller (in the job DSL) and the build pipeline derives every shared subtree from it. There are no other CI storage env vars to set. Layout under `FINN_CI_NFS_ROOT`:
 
 ```
-agent_caches/<NODE>/{xrt,finn_cache,finn_home,vivado_ip_cache}   per-agent caches
+agent_caches/<NODE>/{xrt,finn_cache,finn_home}         per-agent caches
 docker_images/<jobKey>/<BUILD>/                        shared docker image
 artifacts/ci_runs/<jobKey>/<BUILD>/                    build-to-HW handoff + BUILD_INFO
 _ci_state/<jobKey>/                                    timing master + snapshots

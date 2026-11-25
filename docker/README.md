@@ -153,7 +153,6 @@ Dev Container that owns its workspace and state.
 | `FINN_RESOURCES_<NAME>` | unset | a local directory replacing one resource, unverified |
 | `FINN_BOARD_FILES_PATH` | assembled in `FINN_RESOURCES_DIR` | an already assembled site board tree |
 | `FINN_DOCKER_CACHE_DIR` | unset | Torch, Hugging Face and uv download caches for containers |
-| `VIVADO_IP_CACHE` | `/tmp/vivado_ip_cache` in the image | Vivado's IP cache |
 
 Deleting `FINN_HOME` costs only rebuilds and downloads; deleting the build
 directory loses only build output. `docker/run` creates `FINN_HOME`,
