@@ -20,6 +20,9 @@ x-finn: &finn
   image: ${FINN_IMAGE:-finn:dev}
   platform: linux/amd64
   init: false  # tini is the image's entrypoint
+  # Docker's default bridge: a project network would outlive `compose run --rm`, and
+  # each new one takes a subnet from Docker's pools, which can collide with site ranges.
+  network_mode: bridge
   user: "${FINN_UID:-1000}:${FINN_GID:-1000}"
   working_dir: ${FINN_WORKDIR:-${FINN_ROOT:-${PWD}}}
   environment:
