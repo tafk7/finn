@@ -48,8 +48,8 @@ from finn.builder.build_dataflow_steps import (
     _maybe_enable_verify_behavioral,
     build_dataflow_step_lookup,
 )
-from finn.resources import scratch
 from finn.util.build_log import log_run, running_step
+from finn.util.paths import scratch
 
 # Not __name__: run as a script, this module is __main__, outside the finn logger tree.
 log = logging.getLogger("finn.builder.build_dataflow")

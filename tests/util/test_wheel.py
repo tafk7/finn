@@ -15,7 +15,7 @@ pytestmark = pytest.mark.util
 
 REPO = Path(__file__).resolve().parents[2]
 # What the wheel is built from: the project files and the trees it ships.
-INPUTS = ("pyproject.toml", "setup.py", "MANIFEST.in", "README.md", "LICENSE.txt", "src")
+INPUTS = ("pyproject.toml", "MANIFEST.in", "README.md", "LICENSE.txt", "src")
 TREES = {"rtllib": "finn-rtllib", "finn-xsi": "finn_xsi", "custom-hls": "custom_hls"}
 SKIP = shutil.ignore_patterns("__pycache__", "*.pyc", "*.so", "*.egg-info", "build")
 
@@ -40,7 +40,7 @@ def wheel(tmp_path_factory):
     source = tmp_path_factory.mktemp("source")
     for name in (*INPUTS, *TREES.values()):
         if (REPO / name).is_dir():
-            shutil.copytree(REPO / name, source / name, ignore=SKIP)
+            shutil.copytree(REPO / name, source / name, ignore=SKIP, symlinks=True)
         else:
             shutil.copy2(REPO / name, source / name)
     out = tmp_path_factory.mktemp("dist")

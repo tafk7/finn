@@ -10,6 +10,7 @@ uv.lock
 .uv-version
 src/finn/resources/*.py
 src/finn/resources.toml
+src/finn/util/paths.py
 docker/finn_entrypoint.sh
 docker/identity.py
 docker/toolchain-shim

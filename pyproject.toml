@@ -43,13 +43,12 @@ Documentation = "https://finn.readthedocs.io/"
 [project.scripts]
 finn = "finn.cli:main"
 build_dataflow = "finn.builder.build_dataflow:main"
-finn-resources = "finn.resources._cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-finn = ["resources.toml", "qnn-data/**/*"]
+finn = ["resources.toml", "qnn-data/**/*", "_sources/**/*"]
 
 [tool.setuptools.exclude-package-data]
 "*" = ["__pycache__/*", "*.pyc"]

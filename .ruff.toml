@@ -27,3 +27,5 @@ select = ["E", "F", "PLC", "TID251"]
 "docker/**" = ["TID251"]
 # The image build runs finn.resources from its own directory, before FINN is installed.
 "src/finn/resources/**" = ["TID251"]
+# A maintainer's script on the resources' standard-library implementation.
+"scripts/update-resource.py" = ["TID251"]

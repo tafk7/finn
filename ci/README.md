@@ -245,7 +245,7 @@ artifacts/ci_runs/<jobKey>/<BUILD>/                    build-to-HW handoff + BUI
 _ci_state/<jobKey>/                                    timing master + snapshots
 ```
 
-`finn_home` is the agents' `FINN_HOME`: content-keyed XSI builds, assembled board files and golden references, shared by every shard and build on the agent. Its size is logged whenever the caches are prepared; `finn-resources clean --unused` in the container removes entries the current pins and tools do not use.
+`finn_home` is the agents' `FINN_HOME`: content-keyed XSI builds, assembled board files and golden references, shared by every shard and build on the agent. Its size is logged whenever the caches are prepared; `finn resources clean --unused` in the container removes entries the current pins and tools do not use.
 
 Per-shard scratch lives at `${WORKSPACE_TMP}/finn_ci_runs/<BUILD>/<stash>` (falling back to `${WORKSPACE}/tmp/finn_ci_runs/...` only when `WORKSPACE_TMP` is unset). The workspace itself is per-agent and configured on the DSL side: NFS-mounted via `remote_fs` on the lab build hosts, local SSD elsewhere.
 

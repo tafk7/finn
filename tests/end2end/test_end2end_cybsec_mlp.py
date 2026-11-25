@@ -45,10 +45,11 @@ import finn.builder.build_dataflow_config as build_cfg
 from finn import resources
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
 from finn.util.basic import make_build_dir
+from finn.util.paths import scratch
 from finn.util.test import load_test_checkpoint_or_skip
 
 target_clk_ns = 10
-build_dir = str(resources.scratch())
+build_dir = str(scratch())
 
 
 def get_checkpoint_name(step):

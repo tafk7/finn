@@ -24,32 +24,12 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Optional
 
+from finn.util.paths import home
+
 from ._declare import PREFIX, ResourceError
 
 MARKER = ".finn-resource"
 DEFAULT_SYSTEM_CACHE = "/opt/finn/resources"
-
-
-def home(environ=None):
-    """FINN's persistent per-user directory: FINN_HOME, by default ``~/.finn``.
-
-    It holds content-keyed state that outlives builds: fetched resources
-    (``resources/``, or FINN_RESOURCES_DIR), finn_xsi builds (``xsi/``, or
-    FINN_XSI_PATH), golden references (``golden/``, or FINN_GOLDEN_DIR) and
-    container identity files (``identity/``). Deleting it only costs rebuilds.
-    """
-    env = os.environ if environ is None else environ
-    return Path(env.get("FINN_HOME") or Path.home() / ".finn").expanduser()
-
-
-def scratch(environ=None):
-    """FINN's build directory, where builds and tests allocate their working
-    directories: FINN_BUILD_DIR, by default ``/tmp/finn_build_<uid>``. Nothing
-    there is reused, so it may be wiped at any time. Absolute, and not created
-    here."""
-    env = os.environ if environ is None else environ
-    value = env.get("FINN_BUILD_DIR")
-    return Path(value).expanduser().resolve() if value else Path(f"/tmp/finn_build_{os.getuid()}")
 
 
 def tree_digest(path):
@@ -102,6 +82,10 @@ def fetch_root():
     return next(path for path, writable in roots() if writable)
 
 
+def offline():
+    return os.environ.get(PREFIX + "OFFLINE", "") not in ("", "0")
+
+
 def complete(entry, digest):
     marker = Path(entry) / MARKER
     try:
@@ -147,30 +131,13 @@ def fetch(resource, root):
     return entry
 
 
-def urls(resource):
-    """Where a resource's source is fetched from, in order: the declared URL, or
-    FINN_RESOURCES_<NAME>_URL in its place, then the declared mirrors. A git source
-    that does not publish its repository and has no mirror needs the variable."""
-    primary = os.environ.get(resource.env + "_URL") or resource.git or resource.url
-    found = [url for url in (primary, *resource.mirrors) if url]
-    if not found:
-        raise ResourceError(
-            "repository-unnamed",
-            f"Resource {resource.name}: {resource.origin} does not name its repository, so "
-            f"commit {resource.commit} cannot be fetched. Set {resource.env}=/path/to/checkout "
-            f"to use a local clone, or {resource.env}_URL to the repository to fetch it from.",
-        )
-    return found
-
-
 def _verified_tree(resource, work):
     """Try each place a resource can come from until one yields its digest."""
     # A copy in another cache (e.g. when filling a directory to carry offline)
     # saves the download; it is verified like a fetched tree.
     copy = lookup(resource)
     failures = []
-    offline = os.environ.get(PREFIX + "OFFLINE", "") not in ("", "0")
-    if offline and not copy:
+    if offline() and not copy:
         raise ResourceError(
             "resource-offline",
             f"Resource {resource.name} is not cached; offline fetching is disabled",
@@ -180,8 +147,8 @@ def _verified_tree(resource, work):
         if copy:
             yield copy
         # Named only past the copy: a verified copy needs no repository.
-        if not offline:
-            yield from urls(resource)
+        if not offline():
+            yield resource.git
 
     for number, where in enumerate(places()):
         print(f"finn: fetching resource {resource.name} from {where}", file=sys.stderr)
@@ -203,7 +170,7 @@ def _verified_tree(resource, work):
         "fetch-failed",
         f"Cannot fetch resource {resource.name} with the digest {resource.origin} declares "
         f"({resource.digest}):\n  {message}\nIf the source changed on purpose, update the "
-        "pin with `finn-resources update`.",
+        "pin with scripts/update-resource.py.",
     )
 
 
@@ -217,13 +184,10 @@ def publish(tree, entry, digest):
 
 
 def assemble(resource, work, url=None) -> Path:
-    """Fetch a resource's source (by default from its first URL) into work and lay
-    out its tree, unverified."""
-    url = url or urls(resource)[0]
-    if resource.commit:
-        source = git_source(url, resource.commit, resource.subdir, work / "source")
-    else:
-        source = archive(url, resource.sha256, work / "source")
+    """Fetch a resource's commit (by default from its repository) into work and lay out
+    its tree, unverified."""
+    url = url or resource.git
+    source = git_source(url, resource.commit, resource.subdir, work / "source")
     if resource.subdir:
         source = source / resource.subdir
         if not source.is_dir():
@@ -252,7 +216,7 @@ def git_source(url, commit, subdir, dest):
     print(f"finn: git is not installed; using {tarball}", file=sys.stderr)
     # GitHub archives are not byte-stable, so there is no archive checksum; the
     # tree digest verifies the content.
-    return archive(tarball, None, dest)
+    return archive(tarball, dest)
 
 
 def github_archive(url, commit) -> Optional[str]:
@@ -285,9 +249,8 @@ def git_checkout(url, commit, subdir, dest):
     return dest
 
 
-def archive(url, sha256, dest) -> Path:
-    """Download, check (unless sha256 is None) and safely extract an archive;
-    return its root directory.
+def archive(url, dest) -> Path:
+    """Download and safely extract an archive; return its root directory.
 
     An archive holding a single top-level directory has that directory as its
     root, as source archives usually do.
@@ -300,11 +263,6 @@ def archive(url, sha256, dest) -> Path:
             shutil.copyfileobj(response, out)
     except OSError as error:
         raise ResourceError("download-failed", f"Cannot download {url}: {error}") from None
-    actual = _file_sha256(download).hexdigest()
-    if sha256 is not None and actual != sha256:
-        raise ResourceError(
-            "archive-sha256-mismatch", f"{url} has sha256 {actual}, expected {sha256}"
-        )
     tree = dest / "tree"
     tree.mkdir()
     if tarfile.is_tarfile(download):

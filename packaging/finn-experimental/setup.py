@@ -11,6 +11,7 @@ from pathlib import Path
 # Builds run before FINN is installed; the resource implementation is stdlib only.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 from finn import resources
+from finn.resources._store import tree_digest
 
 source = Path(resources.path("finn-experimental"))
 # A private build copy keeps setuptools' paths relative and the resource immutable.
@@ -23,7 +24,7 @@ origin = resources.declarations()["finn-experimental"]
             "git": origin.git,
             "declared_commit": origin.commit,
             "declared_digest": origin.digest,
-            "actual_digest": resources.tree_digest(source),
+            "actual_digest": tree_digest(source),
             "state": resources.status("finn-experimental").state,
         },
         sort_keys=True,

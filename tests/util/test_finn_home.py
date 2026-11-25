@@ -9,9 +9,10 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from finn import resources, xsi
+from finn import xsi
 from finn.resources import _cli, prepare
 from finn.util.basic import get_pynq_golden_dir, make_build_dir, tcl_string
+from finn.util.paths import home, scratch
 from finn.xsi import paths
 
 pytestmark = pytest.mark.util
@@ -30,7 +31,6 @@ def state(tmp_path, monkeypatch):
             monkeypatch.delenv(name)
     monkeypatch.setenv("FINN_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("FINN_RESOURCES_SYSTEM_CACHE", str(tmp_path / "no-system-cache"))
-    resources._cache.clear()
     return tmp_path / "home"
 
 
@@ -44,16 +44,16 @@ def vivado(tmp_path, name="2025.2", settings="# settings\n"):
 def test_defaults(state, tmp_path, monkeypatch):
     monkeypatch.delenv("FINN_HOME")
     monkeypatch.setenv("HOME", str(tmp_path))
-    assert resources.home() == tmp_path / ".finn"
-    assert resources.scratch() == Path("/tmp/finn_build_%d" % os.getuid())
+    assert home() == tmp_path / ".finn"
+    assert scratch() == Path("/tmp/finn_build_%d" % os.getuid())
     assert paths.root() == tmp_path / ".finn/xsi"
     assert prepare.golden_root() == tmp_path / ".finn/golden"
 
 
 def test_build_directory_is_named_not_created(state, tmp_path, monkeypatch):
-    assert resources.scratch({"FINN_BUILD_DIR": str(tmp_path / "scratch")}) == tmp_path / "scratch"
+    assert scratch({"FINN_BUILD_DIR": str(tmp_path / "scratch")}) == tmp_path / "scratch"
     monkeypatch.chdir(tmp_path)
-    assert resources.scratch({"FINN_BUILD_DIR": "relative"}) == tmp_path / "relative"
+    assert scratch({"FINN_BUILD_DIR": "relative"}) == tmp_path / "relative"
     assert not (tmp_path / "scratch").exists() and not (tmp_path / "relative").exists()
 
 
@@ -64,7 +64,7 @@ def test_make_build_dir_needs_no_environment(state, tmp_path, monkeypatch):
     monkeypatch.delenv("FINN_BUILD_DIR")
     made = Path(make_build_dir("probe_"))
     try:
-        assert made.parent == resources.scratch()
+        assert made.parent == scratch()
     finally:
         made.rmdir()
 

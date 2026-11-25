@@ -14,7 +14,6 @@ from qonnx.custom_op.registry import getCustomOp
 
 import finn.builder.build_dataflow as build
 import finn.builder.build_dataflow_config as build_cfg
-from finn import resources
 from finn.util.basic import (
     is_versal,
     make_build_dir,
@@ -22,6 +21,7 @@ from finn.util.basic import (
     slash_part_map,
     vitis_part_map,
 )
+from finn.util.paths import scratch
 
 
 def benchmark_root():
@@ -270,7 +270,7 @@ def estimate_build(tag, configure, model_file):
     same model from building it twice."""
     prefix = f"est_{tag}_"
     report = "report/estimate_network_performance.json"
-    with open(os.path.join(str(resources.scratch()), prefix + "lock"), "w") as lock:
+    with open(os.path.join(str(scratch()), prefix + "lock"), "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         output_dir = find_cached_build(prefix)
         if output_dir is None or not os.path.isfile(os.path.join(output_dir, report)):

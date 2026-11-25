@@ -43,6 +43,7 @@ import finn.builder.build_dataflow_config as build_cfg
 from finn import resources
 from finn.core.onnx_exec import execute_onnx
 from finn.util.basic import get_vivado_version, make_build_dir, robust_rmtree
+from finn.util.paths import scratch
 from finn.util.test import (
     get_example_input,
     load_test_checkpoint_or_skip,
@@ -52,7 +53,7 @@ from finn.util.test import (
 target_clk_ns = 10
 # the CI hardware pipeline tests this board's bitfiles under ext_weights_build
 target_board = "AUP-ZU3_8GB"
-build_dir = str(resources.scratch())
+build_dir = str(scratch())
 onnx_zip_url = "https://github.com/Xilinx/finn-examples"
 onnx_zip_url += "/releases/download/v0.0.1a/onnx-models-bnn-pynq.zip"
 onnx_zip_local = build_dir + "/onnx-models-bnn-pynq.zip"

@@ -14,6 +14,7 @@ from pathlib import Path
 from finn import resources
 from finn.resources import _store
 from finn.util.launcher import amd_path
+from finn.util.paths import home
 
 GOLDEN_FILES = ("golden_ref.tcl", "golden_noc.ncr", "golden_routed.dcp")
 
@@ -54,8 +55,10 @@ def _board_sources(fetch=True):
         if "vivado-boards" not in resource.kind:
             continue
         current = resources.status(resource.name)
-        path = current.path or resources.path(resource.name, fetch)
-        local = current.state == "override" or resource.local
+        if not (current.path or fetch):
+            raise resources.ResourceError("resource-not-cached", f"{resource.name} is not cached")
+        path = current.path or resources.path(resource.name)
+        local = current.state in ("override", "package")
         identity = _store.tree_digest(path) if local else resource.digest
         sources.append((path, identity))
     return sources
@@ -74,7 +77,7 @@ def board_entry(sources=None) -> Path:
 
 def golden_root() -> Path:
     """Where FINN builds golden references: ``$FINN_HOME/golden``."""
-    return resources.home() / "golden"
+    return home() / "golden"
 
 
 def _golden_identity() -> dict:
@@ -84,8 +87,8 @@ def _golden_identity() -> dict:
     settings = Path(vivado) / "settings64.sh"
     return {
         # A local override or source is unverified, so its content is the identity.
-        "source": resources.tree_digest(pynq.path)
-        if pynq.state in ("override", "package", "path")
+        "source": _store.tree_digest(pynq.path)
+        if pynq.state in ("override", "package")
         else resources.declarations()["pynq"].digest,
         "vivado": str(Path(vivado).resolve()) if vivado else "",
         # Track installation changes under the same path as well as version selection.

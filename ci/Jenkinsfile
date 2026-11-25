@@ -1031,7 +1031,7 @@ void prepareAgentCaches(String node) {
      "${shellQuote(cachesDir + '/finn_home')}"
   // finn_home keeps content-keyed XSI builds, assembled board files and golden
   // references across builds; report its size so growth is visible in the log.
-  // `finn-resources clean --unused` inside the container prunes stale entries.
+  // `finn resources clean --unused` inside the container prunes stale entries.
   sh "du -sh ${shellQuote(cachesDir)}/* 2>/dev/null || true"
 }
 

@@ -36,12 +36,12 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import gen_finn_dt_tensor, qonnx_make_model
 
 import finn.core.onnx_exec as oxe
-from finn import resources
 from finn.transformation.streamline.reorder import (
     MoveAddPastJoinConcat,
     MoveMulPastJoinConcat,
     MoveTransposePastJoinConcat,
 )
+from finn.util.paths import scratch
 
 
 def create_concat_model(identical_op):
@@ -148,7 +148,7 @@ transform_dict = {
 )
 def test_move_identical_op_past_join_concat(identical_op):
     model = create_concat_model(identical_op)
-    build_dir = str(resources.scratch())
+    build_dir = str(scratch())
     model.save(join(build_dir, "concat_pytest_model_{}.onnx".format(identical_op)))
 
     # Create input data

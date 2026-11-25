@@ -12,6 +12,7 @@ from pathlib import Path
 
 from finn import resources
 from finn.util.launcher import ToolFailed, ToolUnavailable, amd_path, run_tool
+from finn.util.paths import home
 from finn.xsi._build_config import LINK_ARGS, get_build_paths
 
 
@@ -78,4 +79,4 @@ def build_dir() -> Path:
 def root() -> Path:
     """Where finn_xsi builds are kept: FINN_XSI_PATH, by default ``$FINN_HOME/xsi``."""
     value = os.environ.get("FINN_XSI_PATH")
-    return Path(value).expanduser() if value else resources.home() / "xsi"
+    return Path(value).expanduser() if value else home() / "xsi"

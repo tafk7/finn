@@ -77,7 +77,7 @@ accelerator userspace independently of host tools. Runtime manifests also
 support supplied SLASH packages. Board kernel drivers remain host responsibilities.
 
 External source trees live in verified resource caches, declared in
-``src/finn/resources.toml``. Use ``finn-resources update NAME --ref REF`` to
+``src/finn/resources.toml``. Use ``scripts/update-resource.py NAME --ref REF`` to
 change a pin and its digest; use ``FINN_RESOURCES_<NAME>`` for local development.
 Persistent, content-keyed state (resources, XSI builds, golden references) lives
 in ``FINN_HOME`` (default ``~/.finn``); build output lives in the disposable

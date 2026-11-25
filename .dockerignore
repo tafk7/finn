@@ -5,7 +5,6 @@ packaging/**/_source/
 packaging/**/build/
 !pyproject.toml
 !uv.lock
-!setup.py
 !setup.cfg
 !README.md
 !LICENSE.txt

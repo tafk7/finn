@@ -159,7 +159,7 @@ cppsim and RTL simulation also need ``g++``.
 
 FINN fetches finn-hlslib, board files and its other resources into ``~/.finn`` the
 first time a build needs them, and builds its XSim binding for the sourced Vivado
-the first time it simulates RTL. ``finn-resources fetch --all`` fetches every
+the first time it simulates RTL. ``finn resources fetch --all`` fetches every
 resource ahead of offline use, and ``python -m finn.xsi.setup`` prebuilds the
 binding.
 
@@ -226,7 +226,7 @@ The ``setup-local.sh`` script supports several options:
 
 * ``--help``: Show usage information
 * ``--prefetch``: Fetch every declared resource now, for use offline later
-  (``finn-resources fetch --all`` does the same for a pip install)
+  (``finn resources fetch --all`` does the same for a pip install)
 
 FINN fetches resources, and builds its XSim binding for the sourced Vivado, the
 first time it needs them; ``python -m finn.xsi.setup`` builds the binding ahead

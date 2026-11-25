@@ -4,9 +4,9 @@ Sources are local git repositories; no network is used.
 """
 import pytest
 
+import importlib.util
 import multiprocessing
 import os
-import shutil
 import subprocess
 import sys
 import textwrap
@@ -20,7 +20,8 @@ from finn.resources import _declare, _store
 
 pytestmark = pytest.mark.util
 
-SRC = str(Path(__file__).resolve().parents[2] / "src")
+REPO = Path(__file__).resolve().parents[2]
+SRC = str(REPO / "src")
 
 
 @contextmanager
@@ -71,7 +72,7 @@ def digest_of(tmp_path, files):
     """The digest of a tree with exactly these files."""
     root = tmp_path / f"expected-{len(list(tmp_path.iterdir()))}"
     root.mkdir()
-    return resources.tree_digest(write(root, files))
+    return _store.tree_digest(write(root, files))
 
 
 @pytest.fixture
@@ -89,12 +90,11 @@ def project(tmp_path, monkeypatch):
     def declare(text):
         file.write_text(textwrap.dedent(text))
         monkeypatch.setattr(_declare, "FINN_FILE", file)
-        resources._cache.clear()
+        monkeypatch.setattr(resources, "_declared", None)
         return file
 
-    resources._cache.clear()
+    monkeypatch.setattr(resources, "_declared", None)
     yield declare
-    resources._cache.clear()
 
 
 @pytest.fixture
@@ -127,9 +127,8 @@ def boards(tmp_path, project):
 
 def test_finn_declares_its_trees_hlslib_and_board_files(project):
     declared = resources.declarations()
-    own = {r.name: r for r in declared.values() if r.local}
-    assert set(own) == {"rtllib", "finn-xsi", "qnn-data", "custom-hls"}
-    assert all(r.redistributable for r in own.values())
+    own = {r.name for r in declared.values() if r.package}
+    assert own == {"rtllib", "finn-xsi", "qnn-data", "custom-hls"}
     assert declared["hlslib"].kind == ("hls-include",) and declared["hlslib"].redistributable
     # FINN's own include directory follows finn-hlslib, as the include order did.
     hls = [r.name for r in declared.values() if "hls-include" in r.kind]
@@ -193,14 +192,11 @@ def test_cache_order_and_read_only_system_cache(boards, tmp_path, monkeypatch):
 
 def test_offline_and_no_fetch_report_the_fetch_command(boards, monkeypatch):
     monkeypatch.setenv("FINN_RESOURCES_OFFLINE", "1")
-    with fault("resource-not-cached", message="finn-resources fetch kv260-boards") as error:
+    with fault("resource-not-cached", message="finn resources fetch kv260-boards") as error:
         resources.path("kv260-boards")
     # The message names settings that exist.
     assert "set FINN_RESOURCES_DIR=DIR" in str(error.value)
     assert "FINN_RESOURCES_SYSTEM_CACHE=DIR" in str(error.value)
-    monkeypatch.delenv("FINN_RESOURCES_OFFLINE")
-    with fault("resource-not-cached"):
-        resources.paths("test-boards", fetch=False)
     assert resources.status("kv260-boards").state == "missing"
 
 
@@ -210,7 +206,7 @@ def test_overrides(boards, tmp_path, monkeypatch):
     monkeypatch.setenv("FINN_RESOURCES_KV260_BOARDS", str(local))
     assert resources.path("kv260-boards") == str(local)
     assert resources.status("kv260-boards") == resources.Status(
-        "kv260-boards", "override", str(local), "FINN_RESOURCES_KV260_BOARDS"
+        "kv260-boards", "override", str(local)
     )
     monkeypatch.setenv("FINN_RESOURCES_KV260_BOARDS", str(tmp_path / "missing"))
     with fault("override-not-directory", message="FINN_RESOURCES_KV260_BOARDS"):
@@ -220,18 +216,6 @@ def test_overrides(boards, tmp_path, monkeypatch):
 def test_retired_names_select_nothing(project, tmp_path, monkeypatch):
     monkeypatch.setenv("FINN_HLSLIB_PATH", str(tmp_path))
     assert resources.status("hlslib").state != "override"
-
-
-def test_url_override_fetches_the_same_content_elsewhere(boards, tmp_path, monkeypatch):
-    """FINN_RESOURCES_<NAME>_URL names a site mirror; the digest still decides."""
-    mirror = tmp_path / "mirror"
-    git(tmp_path, "clone", "--quiet", "--bare", str(boards), str(mirror))
-    git(mirror, "config", "uploadpack.allowReachableSHA1InWant", "true")
-    shutil.rmtree(boards)
-    with fault("fetch-failed", message="git fetch failed"):
-        resources.path("kv260-boards")
-    monkeypatch.setenv("FINN_RESOURCES_KV260_BOARDS_URL", mirror.as_uri())
-    assert (Path(resources.path("kv260-boards")) / "kv260/board.xml").read_text() == "k\n"
 
 
 def test_git_is_required_to_fetch(boards, tmp_path, monkeypatch):
@@ -276,7 +260,7 @@ def test_fetching_into_another_cache_copies_a_verified_copy(boards, tmp_path):
         patch.setattr(_store, "assemble", no_network)
         (carried,) = resources.fetch(["kv260-boards"], tmp_path / "carry")
     assert Path(carried).parent == tmp_path / "carry"
-    assert resources.tree_digest(carried) == resources.tree_digest(fetched)
+    assert _store.tree_digest(carried) == _store.tree_digest(fetched)
 
     # A copy that no longer matches its digest is not propagated: the source is used.
     (fetched / "kv260/board.xml").write_text("tampered\n")
@@ -291,18 +275,15 @@ VALID = {"git": "u", "commit": "c" * 40, "digest": "sha256:" + "0" * 64}
     "fields, code, message",
     [
         ({"git": "u", "commit": "c" * 40}, "digest-invalid", "digest must be"),
-        ({"git": "u"}, "field-required", "commit is required"),
+        ({"git": "u"}, "source-invalid", "40-character commit"),
         ({**VALID, "digest": "sha256:0"}, "digest-invalid", "digest must be"),
-        ({**VALID, "commit": "main"}, "commit-invalid", "full 40-character"),
+        ({**VALID, "commit": "main"}, "source-invalid", "40-character commit"),
         ({**VALID, "subdir": "../x"}, "path-not-relative", "relative"),
         ({**VALID, "kind": "rtl"}, "field-type-invalid", "kind must be a list"),
-        ({**VALID, "url": "u"}, "source-not-one", "exactly one source"),
-        ({**VALID, "mirrors": "u"}, "field-type-invalid", "mirrors must be a list"),
+        ({**VALID, "url": "u"}, "field-unknown", "unknown field"),
         ({**VALID, "colour": "x"}, "field-unknown", "unknown field"),
-        ({"url": "u", "digest": VALID["digest"]}, "field-required", "sha256 is required"),
         ({"package": "a-b"}, "package-invalid", "importable module"),
         ({"package": "acme", "digest": VALID["digest"]}, "package-fields-invalid", "only subdir"),
-        ({"path": "x", "subdir": "y"}, "path-fields-invalid", "a path source is a directory"),
     ],
 )
 def test_invalid_declarations_are_rejected(fields, code, message):
@@ -314,9 +295,8 @@ def test_invalid_declarations_are_rejected(fields, code, message):
     "name, code",
     [
         ("Acme", "name-invalid"),
-        ("dir", "name-reserved"),
-        ("offline", "name-reserved"),
-        ("acme-url", "name-reserved"),
+        ("dir", "name-invalid"),
+        ("offline", "name-invalid"),
         ("acme_rtl", "name-invalid"),
     ],
 )
@@ -331,7 +311,7 @@ def test_digest_matches_the_previous_board_file_algorithm(tmp_path):
     old = __import__("hashlib").sha256()
     for name in ("a/x", "a-b/x"):
         old.update(name.encode() + b"\0" + sha256((tree / name).read_bytes()).digest())
-    assert resources.tree_digest(tree) == "sha256:" + old.hexdigest()
+    assert _store.tree_digest(tree) == "sha256:" + old.hexdigest()
 
 
 def test_resources_import_only_the_standard_library(tmp_path):
@@ -345,7 +325,8 @@ def test_resources_import_only_the_standard_library(tmp_path):
         loaded = {name.partition(".")[0] for name in set(sys.modules) - before}
         foreign = sorted(loaded - set(sys.stdlib_module_names) - {"finn"})
         assert not foreign, foreign
-        assert not any(n.startswith("finn.") and not n.startswith("finn.resources")
+        allowed = ("finn.resources", "finn.util", "finn.util.paths")
+        assert not any(n.startswith("finn.") and not n.startswith(allowed)
                        for n in sys.modules), sorted(sys.modules)
         """
     )
@@ -366,16 +347,11 @@ def cli(capsys, *args):
     return code, out, err
 
 
-def test_cli_list_fetch_verify_and_digest(boards, tmp_path, capsys):
-    board = boards / "boards/Xilinx/kv260/board.xml"
-    assert cli(capsys, "list", "--kind", "test-boards")[1].splitlines()[1].split()[:3] == [
-        "kv260-boards",
-        "missing",
-        "test-boards",
-    ]
-    # A named resource must be present; unfetched ones are fine otherwise.
-    assert cli(capsys, "verify", "kv260-boards")[:2] == (1, "missing  kv260-boards\n")
-    assert cli(capsys, "verify")[0] == 0
+def test_cli_list_fetch_and_path(boards, tmp_path, capsys):
+    row = cli(capsys, "list")[1].splitlines()
+    assert ["kv260-boards", "missing", "test-boards"] == next(
+        line.split()[:3] for line in row if line.startswith("kv260-boards")
+    )
     code, out, err = cli(capsys, "fetch", "--kind", "test-boards", "--redistributable-only")
     assert (code, out, err) == (0, "", "")
     dest = tmp_path / "carry"
@@ -383,26 +359,23 @@ def test_cli_list_fetch_verify_and_digest(boards, tmp_path, capsys):
     assert code == 0 and out.strip() == str(dest / resources.declarations()["kv260-boards"].entry)
     assert cli(capsys, "fetch")[0] == 1
     assert "no resource named 'nope'" in cli(capsys, "fetch", "nope")[2].lower()
+    code, out, _ = cli(capsys, "path", "kv260-boards")
+    assert code == 0 and (Path(out.strip()) / "kv260/board.xml").read_text() == "k\n"
 
-    # A board.xml in the fetched tree is listed with --boards.
-    entry = Path(out.strip())
-    (entry / "kv260/board.xml").write_text(
-        '<board vendor="xilinx.com" name="kv260_som" display_name="KV260">'
-        "<file_version>1.3</file_version><components>"
-        '<component name="som" type="fpga"/></components></board>'
+
+def update_script(monkeypatch, *args):
+    """Run scripts/update-resource.py in this process, so it sees the test's declarations."""
+    spec = importlib.util.spec_from_file_location(
+        "update_resource", REPO / "scripts/update-resource.py"
     )
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setenv("FINN_RESOURCES_DIR", str(dest))
-        out = cli(capsys, "list", "--boards", "--kind", "test-boards")[1]
-        assert "xilinx.com:kv260_som:som:1.3  KV260" in out
-        # ...which also changed the content: verify notices.
-        code, out, _ = cli(capsys, "verify", "kv260-boards")
-        assert code == 1 and out.startswith("MODIFIED  kv260-boards")
-    assert cli(capsys, "digest", str(entry))[1].strip() == resources.tree_digest(entry)
-    assert board.exists()
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(sys, "argv", ["update-resource.py", *args])
+    module.main()
+    return module
 
 
-def test_cli_update_rewrites_only_the_pin(boards, capsys, monkeypatch):
+def test_update_script_rewrites_only_the_pin(boards, capsys, monkeypatch):
     file = _declare.FINN_FILE
     before = file.read_text()
     file.write_text(before + '\n[other]\ncommit = "keep"\n')
@@ -410,43 +383,48 @@ def test_cli_update_rewrites_only_the_pin(boards, capsys, monkeypatch):
     revision = commit(boards, {"boards/Xilinx/kv260/board.xml": "k2\n"})
     git(boards, "branch", "release")
 
-    code, out, _ = cli(capsys, "update", "kv260-boards", "--ref", "release")
-    assert code == 0 and revision[:12] in out
+    update_script(monkeypatch, "kv260-boards", "--ref", "release")
+    assert revision[:12] in capsys.readouterr().out
     text = file.read_text()
-    resources._cache.clear()
+    monkeypatch.setattr(resources, "_declared", None)
     new = resources.declarations()["kv260-boards"]
     assert new.commit == revision and new.digest != old.digest
     assert text.replace(revision, old.commit).replace(new.digest, old.digest) == (
         before + '\n[other]\ncommit = "keep"\n'
     )
-    # update published the new tree, so no fetch is needed.
+    # The script published the new tree, so no fetch is needed.
     monkeypatch.setenv("FINN_RESOURCES_OFFLINE", "1")
     assert (Path(resources.path("kv260-boards")) / "kv260/board.xml").read_text() == "k2\n"
-    assert "already at" in cli(capsys, "update", "kv260-boards", "--ref", revision)[1]
+    update_script(monkeypatch, "kv260-boards", "--ref", revision)
+    assert "already at" in capsys.readouterr().out
+    entry = resources.path("kv260-boards")
+    update_script(monkeypatch, "--digest", entry)
+    assert capsys.readouterr().out.strip() == _store.tree_digest(entry)
 
 
-def test_update_refuses_edits_it_cannot_confine(tmp_path):
+def test_update_refuses_edits_it_cannot_confine(tmp_path, monkeypatch):
+    module = update_script(monkeypatch, "--digest", str(tmp_path))
     file = tmp_path / "resources.toml"
     inline = '[resources]\nacme = { git = "u", commit = "%s", digest = "d" }\n' % ("a" * 40)
     file.write_text(inline)
-    with fault("rewrite-value-missing", resources.DeclarationError, "edit it by hand"):
-        _declare.rewrite(file, ("resources",), "acme", {"commit": "b" * 40})
+    with pytest.raises(SystemExit, match="edit it by hand"):
+        module.rewrite(file, "acme", {"commit": "b" * 40})
     # A multi-line string that looks like a field would change another value.
     tricky = '[resources.acme]\nnote = """\ncommit = "x"\n"""\ncommit = "%s"\n' % ("a" * 40)
     file.write_text(tricky)
-    with fault("rewrite-changes-more", resources.DeclarationError, "change more than"):
-        _declare.rewrite(file, ("resources",), "acme", {"commit": "b" * 40})
+    with pytest.raises(SystemExit, match="edit it by hand"):
+        module.rewrite(file, "acme", {"commit": "b" * 40})
     assert file.read_text() == tricky
 
 
 def test_cli_runs_as_a_module(project):
     result = subprocess.run(
-        [sys.executable, "-m", "finn.resources", "list", "--kind", "hls-include"],
+        [sys.executable, "-m", "finn.cli", "resources", "list"],
         capture_output=True,
         text=True,
         check=True,
     )
-    assert result.stdout.splitlines()[1].startswith("hlslib ")
+    assert any(line.startswith("hlslib ") for line in result.stdout.splitlines())
 
 
 def test_a_resource_fault_names_its_reason_by_a_code_and_keeps_its_message():
@@ -459,82 +437,50 @@ def test_a_resource_fault_names_its_reason_by_a_code_and_keeps_its_message():
     assert (declaration.code, str(declaration)) == ("name-invalid", "bad name")
 
 
-def test_local_sources_are_used_in_place(project, tmp_path, monkeypatch):
-    write(tmp_path / "lib", {"acme/rtl/core.v": "module core;\n", "acme/__init__.py": ""})
+def test_package_sources_are_used_in_place(project, tmp_path, monkeypatch):
+    write(tmp_path / "lib", {"acme/rtl/mvu/mvu.sv": "module mvu;\n", "acme/__init__.py": ""})
     monkeypatch.syspath_prepend(str(tmp_path / "lib"))
-    write(tmp_path, {"local/inc/a.h": "// a\n"})
     project(
         """
         [resources.acme-rtl]
-        kind = ["rtl-sources"]
+        kind = ["hls-include"]
         package = "acme"
         subdir = "rtl"
-
-        [resources.acme-inc]
-        kind = ["hls-include"]
-        path = "local/inc"
         """
     )
-    assert resources.status("acme-rtl").state == "package"
-    assert resources.path("acme-rtl") == str((tmp_path / "lib/acme/rtl").resolve())
-    # A relative path is relative to the declaring file, not the working directory.
-    monkeypatch.chdir(tmp_path / "lib")
-    assert resources.status("acme-inc").state == "path"
-    assert resources.paths("hls-include") == [str((tmp_path / "local/inc").resolve())]
+    rtl = str((tmp_path / "lib/acme/rtl").resolve())
+    assert resources.status("acme-rtl") == resources.Status("acme-rtl", "package", rtl)
+    assert resources.paths("hls-include") == [rtl]
     # Used in place: nothing is fetched, verified or cached.
-    assert resources.fetch(["acme-rtl", "acme-inc"]) == []
+    assert resources.fetch(["acme-rtl"]) == []
     assert not (tmp_path / "finn-home/resources").exists()
-
-
-def test_join_stays_inside_a_resource(project, tmp_path):
-    write(tmp_path, {"own/mvu/mvu.sv": "module mvu;\n"})
-    project('[resources.own]\npath = "own"\n')
-    assert resources.join("own", "mvu", "mvu.sv") == str((tmp_path / "own/mvu/mvu.sv").resolve())
-    assert resources.join("own", "mvu/").endswith("/mvu/")
+    assert resources.join("acme-rtl", "mvu", "mvu.sv") == rtl + "/mvu/mvu.sv"
+    assert resources.join("acme-rtl", "mvu/").endswith("/mvu/")
     for escape in ("../x", "/etc/passwd", "mvu/../../x"):
-        with pytest.raises(ValueError, match="leaves resource own"):
-            resources.join("own", escape)
-    with fault("resource-file-missing", message="in resource own"):
-        resources.join("own", "mvu", "absent.sv")
+        with pytest.raises(ValueError, match="leaves resource acme-rtl"):
+            resources.join("acme-rtl", escape)
+    with fault("resource-file-missing", message="in resource acme-rtl"):
+        resources.join("acme-rtl", "mvu", "absent.sv")
 
 
-def test_a_project_adds_and_redefines_resources(project, tmp_path, monkeypatch, caplog):
-    write(tmp_path, {"mine/a.v": "1\n", "fork/a.v": "2\n", "extra/b.v": "3\n"})
-    project('[resources.own]\ndescription = "FINN\'s"\npath = "fork"\n')
-    write(
-        tmp_path,
-        {
-            "app/pyproject.toml": textwrap.dedent(
-                """
-                [project]
-                name = "app"
-
-                [tool.finn.resources.mine]
-                kind = ["rtl-sources"]
-                path = "../mine"
-
-                [tool.finn.resources.own]
-                path = "../fork"
-                """
-            ),
-            "more.toml": '[resources.extra]\npath = "extra"\n',
-        },
-    )
-    monkeypatch.chdir(tmp_path / "app")
-    monkeypatch.setenv("FINN_RESOURCES_FILES", str(tmp_path / "more.toml"))
-    declared = resources.declarations()
-    assert list(declared) == ["own", "mine", "extra"]
-    assert declared["own"].origin == str(tmp_path / "app/pyproject.toml")
-    assert "redefines resource 'own'" in caplog.text
-    assert resources.path("mine") == str((tmp_path / "mine").resolve())
-    assert resources.path("extra") == str((tmp_path / "extra").resolve())
+def test_finn_trees_are_package_data_in_a_checkout_too():
+    """src/finn/_sources links to the checkout's trees, which a wheel carries as files."""
+    for name, tree in (
+        ("rtllib", "finn-rtllib"),
+        ("finn-xsi", "finn_xsi"),
+        ("custom-hls", "custom_hls"),
+    ):
+        status = resources.status(name)
+        assert status.state == "package"
+        if (REPO / tree).is_dir():
+            assert status.path == str((REPO / tree).resolve())
 
 
 def test_a_package_may_only_add_resources(tmp_path):
-    finn = _declare.parse({"own": {"path": "x"}}, "finn")
-    package = _declare.parse({"own": {"path": "y"}}, "acme")
-    with fault("resource-redeclared", resources.DeclarationError, "only a project may redefine"):
-        _declare.merge(finn, package, [])
+    finn = _declare.parse({"own": {"package": "x"}}, "finn")
+    package = _declare.parse({"own": {"package": "y"}}, "acme")
+    with fault("resource-redeclared", resources.DeclarationError, "already declared"):
+        _declare.merge(finn, package)
 
 
 def installed(site, dist, module, declarations):
@@ -574,59 +520,5 @@ def test_package_declarations_in_a_virtual_environment(tmp_path):
             check=True,
         ).stdout
 
-    assert run("list", "--kind", "rtl").splitlines()[1].split()[:3] == [
-        "acme-rtl",
-        "package",
-        "rtl",
-    ]
+    assert ["acme-rtl", "package", "rtl"] in [line.split()[:3] for line in run("list").splitlines()]
     assert run("path", "acme-rtl").strip() == str(site / "acme_finn/rtl")
-
-
-def test_archive_sources_are_checked_and_verified(project, tmp_path):
-    import tarfile  # noqa: PLC0415
-
-    write(tmp_path / "src", {"lib-1.0/core.v": "module core;\n"})
-    archive = tmp_path / "lib-1.0.tar.gz"
-    with tarfile.open(archive, "w:gz") as tar:
-        tar.add(tmp_path / "src/lib-1.0", arcname="lib-1.0")
-    checksum = sha256(archive.read_bytes()).hexdigest()
-    digest = digest_of(tmp_path, {"core.v": "module core;\n"})
-    project(
-        f"""
-        [resources.lib]
-        url = "{archive.as_uri()}"
-        sha256 = "{checksum}"
-        digest = "{digest}"
-        """
-    )
-    assert (Path(resources.path("lib")) / "core.v").read_text() == "module core;\n"
-    resources._cache.clear()
-    project(
-        f"""
-        [resources.lib2]
-        url = "{archive.as_uri()}"
-        sha256 = "{'0' * 64}"
-        digest = "{digest}"
-        """
-    )
-    with fault("fetch-failed", message="expected 0000"):
-        resources.path("lib2")
-
-
-def test_a_wheel_declares_finn_trees_as_package_sources(tmp_path):
-    text, trees = _declare.packaged(_declare.FINN_FILE, "finn", "_sources")
-    if not trees:
-        pytest.skip("FINN is installed from a wheel: its declarations are packaged already")
-    assert set(trees) == {"rtllib", "finn-xsi", "custom-hls"}
-    assert all(Path(location).is_dir() for location in trees.values())
-    file = write(tmp_path, {"resources.toml": text}) / "resources.toml"
-    packaged = {r.name: r for r in _declare.load(file, ("resources",))}
-    finn = {r.name: r for r in _declare.load(_declare.FINN_FILE, ("resources",))}
-    assert packaged["rtllib"].package == "finn"
-    assert packaged["rtllib"].subdir == "_sources/rtllib" and packaged["rtllib"].path is None
-    assert packaged["qnn-data"] == finn["qnn-data"].__class__(
-        **{**finn["qnn-data"].__dict__, "origin": str(file)}
-    )
-    # Everything else is declared as before.
-    for name in finn.keys() - trees.keys():
-        assert packaged[name].__dict__ | {"origin": ""} == finn[name].__dict__ | {"origin": ""}

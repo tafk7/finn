@@ -39,7 +39,6 @@ from qonnx.transformation.general import GiveUniqueNodeNames
 from qonnx.transformation.infer_data_layouts import InferDataLayouts
 from qonnx.util.basic import gen_finn_dt_tensor, qonnx_make_model
 
-from finn import resources
 from finn.core.onnx_exec import execute_onnx
 from finn.transformation.fpgadataflow.alveo_build import PrepareForLinking, VitisLink
 from finn.transformation.fpgadataflow.create_dataflow_partition import (
@@ -59,13 +58,14 @@ from finn.util.basic import (
     vitis_default_platform,
     vitis_part_map,
 )
+from finn.util.paths import scratch
 from finn.util.test import load_test_checkpoint_or_skip
 from finn.util.vivado import parse_ooc_synth_results
 
 test_pynq_board = "AUP-ZU3_8GB"
 test_fpga_part = pynq_part_map[test_pynq_board]
 
-ip_stitch_model_dir = str(resources.scratch())
+ip_stitch_model_dir = str(scratch())
 
 
 def create_one_fc_model(mem_mode="internal_embedded"):

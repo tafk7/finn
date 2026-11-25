@@ -41,7 +41,6 @@ from qonnx.util.basic import gen_finn_dt_tensor, roundup_to_integer_multiple
 from typing import Dict, Optional, Sequence, Tuple, Union
 
 from finn import resources
-from finn.resources import scratch
 from finn.resources.prepare import GOLDEN_FILES, golden_dir
 from finn.util.data_packing import finnpy_to_packed_bytearray
 from finn.util.launcher import (
@@ -54,6 +53,7 @@ from finn.util.launcher import (
     run_tool,
     xilinx_tool,
 )
+from finn.util.paths import scratch
 
 log = logging.getLogger(__name__)
 

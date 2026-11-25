@@ -66,7 +66,7 @@ Setup bootstraps the uv version in `.uv-version` into `~/.cache/finn/uv-tool/`
 if needed; it never installs compiler packages with pip. Resources are fetched,
 and the XSI binding is built for the sourced Vivado, the first time FINN needs
 them; `--prefetch` fetches every declared resource ahead of use offline
-(`finn-resources fetch --all` does the same for a pip install), and
+(`finn resources fetch --all` does the same for a pip install), and
 `python -m finn.xsi.setup` prebuilds XSI. `FINN_VENV` and `FINN_PYTHON` select the
 environment (default `.venv` in the checkout) and the Python 3.12 interpreter.
 Activation installs nothing: it activates the environment and sets `FINN_ROOT`.
@@ -167,7 +167,7 @@ Dev Container that owns its workspace and state.
 Deleting `FINN_HOME` costs only rebuilds and downloads; deleting the build
 directory loses only build output. `docker/run` creates `FINN_HOME`,
 `FINN_RESOURCES_DIR`, `FINN_XSI_PATH` and the build directory on the host and
-mounts each at its own path. `finn-resources clean` removes cached resources,
+mounts each at its own path. `finn resources clean` removes cached resources,
 XSI builds and golden references; `--unused` keeps those the current pins,
 checkout and Vivado installation use. A site `FINN_GOLDEN_DIR` is never cleaned.
 
@@ -213,58 +213,50 @@ Every directory tree FINN uses that is not Python code is a resource declared in
 `src/finn/resources.toml`, and FINN reaches it by name or kind through
 `finn.resources`, never by a path into a checkout:
 
-- FINN's own trees, used in place: `rtllib` (`finn-rtllib/`), `finn-xsi`
-  (`finn_xsi/`), `custom-hls` (`custom_hls/`) and `qnn-data`
-  (`src/finn/qnn-data/`). A checkout declares the first three as `path`
-  sources; the wheel build copies them into `finn/_sources/` and declares them
-  as `package` sources there, so an installed FINN needs no checkout.
-- Fetched trees, each at a Git commit (or an archive URL and its sha256) with a
-  content digest: finn-hlslib, the five upstream Vivado board repositories, the
-  PYNQ golden sources and finn-experimental.
-
-`finn-resources` lists, checks, fetches, verifies and updates them:
+- FINN's own trees: `rtllib` (`finn-rtllib/`), `finn-xsi` (`finn_xsi/`),
+  `custom-hls` (`custom_hls/`) and `qnn-data` (`src/finn/qnn-data/`). They are
+  package data under `finn/_sources`: in a checkout symbolic links to the trees,
+  in a wheel the files themselves, so an installed FINN needs no checkout.
+- Fetched trees, each at a Git commit with a content digest: finn-hlslib, the
+  five upstream Vivado board repositories, the PYNQ golden sources and
+  finn-experimental.
 
 ```bash
-finn-resources list
-finn-resources check
-finn-resources fetch --kind hls-include --kind vivado-boards
-finn-resources verify
-finn-resources update hlslib --ref FULL_COMMIT_OR_REF
-finn-resources clean --unused
+finn resources list
+finn resources fetch --all              # ahead of offline use
+finn resources path hlslib
+finn resources clean --unused
 ```
 
 Caches are content-addressed and published atomically under file locks.
 `FINN_RESOURCES_<NAME>` (uppercase, `-` as `_`, e.g. `FINN_RESOURCES_HLSLIB`)
-replaces a resource with a local directory, unverified.
-`FINN_RESOURCES_<NAME>_URL` fetches it from another repository, such as a site
-mirror, verified against the same digest. `FINN_RESOURCES_OFFLINE=1` forbids
-downloads, including explicit fetches; to prepare an offline machine, fetch into
-a directory with `--dest PATH` elsewhere and select it with `FINN_RESOURCES_DIR`.
+replaces a resource with a local directory, unverified. `FINN_RESOURCES_OFFLINE=1`
+forbids downloads; to prepare an offline machine, fetch into a directory with
+`--dest PATH` elsewhere and select it with `FINN_RESOURCES_DIR`. Maintainers move
+a pin with `scripts/update-resource.py NAME --ref REF`.
 
 ### Your own resources
 
-Declare resources in the same format at three levels:
-
-- a project: `[tool.finn.resources.NAME]` in the nearest `pyproject.toml`, or
-  `[resources.NAME]` in files listed in `FINN_RESOURCES_FILES`. A project may
-  add resources and redefine FINN's (another finn-hlslib pin, a fork of
-  finn-rtllib);
-- an installed package: an entry point in the `finn.resources` group naming a
-  module that contains a `resources.toml`. A package may only add resources, for
-  example the RTL of its custom operators as a `package` source;
-- a session: `FINN_RESOURCES_<NAME>=/dir` replaces any resource.
+An installed package adds resources through an entry point in the
+`finn.resources` group, naming a module that contains a `resources.toml`, for
+example the RTL of its custom operators:
 
 ```toml
-[tool.finn.resources.acme-hls]
+# acme_finn/resources.toml; pyproject.toml: [project.entry-points."finn.resources"] acme = "acme_finn"
+[resources.acme-hls]
 kind = ["hls-include"]
-path = "hls/include"          # relative to the declaring file
+package = "acme_finn"
+subdir = "hls/include"
 
-[tool.finn.resources.acme-boards]
+[resources.acme-boards]
 kind = ["vivado-boards"]
 git = "https://example.com/acme/boards.git"
 commit = "FULL_COMMIT"
-digest = "sha256:..."         # `finn-resources digest DIR` of that commit's tree
+digest = "sha256:..."         # scripts/update-resource.py --digest DIR of that tree
 ```
+
+A package may only add resources; `FINN_RESOURCES_<NAME>=/dir` replaces any
+resource for a session (another finn-hlslib, a fork of finn-rtllib).
 
 Every `hls-include` resource is an include directory for HLS C++ simulation and
 IP generation, and every `vivado-boards` resource joins the assembled board

@@ -61,7 +61,6 @@ import finn.builder.build_dataflow_config as build_cfg
 import finn.transformation.fpgadataflow.convert_to_hw_layers as to_hw
 import finn.transformation.streamline.absorb as absorb
 import finn.transformation.streamline.reorder as reorder
-from finn import resources
 from finn.analysis.fpgadataflow.dataflow_performance import dataflow_performance
 from finn.core.onnx_exec import execute_onnx
 from finn.transformation.fpgadataflow.annotate_cycles import AnnotateCycles
@@ -90,6 +89,7 @@ from finn.transformation.streamline import Streamline
 from finn.transformation.streamline.collapse_repeated import CollapseRepeatedMul
 from finn.transformation.streamline.round_thresholds import RoundAndClipThresholds
 from finn.util.basic import get_finn_root, get_vivado_version, make_build_dir
+from finn.util.paths import scratch
 from finn.util.pytorch import NormalizePreProc
 from finn.util.test import (
     crop_center,
@@ -98,7 +98,7 @@ from finn.util.test import (
     resize_smaller_side,
 )
 
-build_dir = str(resources.scratch())
+build_dir = str(scratch())
 
 # Detect Vivado version to determine FPGA part
 # Use V80 (Slash) when Vivado 2025.1, otherwise use Versal xcvm1802
