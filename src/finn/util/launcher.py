@@ -628,6 +628,9 @@ def run_tool(
     command = [os.fspath(arg) for arg in command]
     if not command:
         raise ValueError("Empty command")
+    if command[0] in XILINX_TOOLS and "XILINX_LOCAL_USER_DATA" not in (env or os.environ):
+        # AMD's setting for concurrent Vivado runs (support article 63253).
+        env_overrides = {"XILINX_LOCAL_USER_DATA": "no", **(env_overrides or {})}
     if env_overrides:
         for name in env_overrides:
             if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is None:

@@ -523,3 +523,17 @@ def test_environment_overrides_reach_execution_and_replay(tmp_path, monkeypatch)
     assert repeated.stdout == result.stdout
     with pytest.raises(ValueError, match="Invalid environment variable"):
         run_tool(cmd, env_overrides={"BAD;NAME": "value"}, replay=replay)
+
+
+@pytest.mark.util
+def test_amd_tools_run_with_the_concurrent_user_data_setting(tmp_path, monkeypatch):
+    """settings64.sh does not set XILINX_LOCAL_USER_DATA=no; FINN sets it on the AMD
+    tools it starts, unless the environment chose a value."""
+    for name in ("XILINX_VIVADO", "XILINX_HLS", "XILINX_VITIS", "XILINX_LOCAL_USER_DATA"):
+        monkeypatch.delenv(name, raising=False)
+    tools = tmp_path / "tools"
+    make_tool(tools, "vivado", "import os; print(os.environ.get('XILINX_LOCAL_USER_DATA'))\n")
+    monkeypatch.setenv("PATH", f"{tools}{os.pathsep}{os.environ['PATH']}")
+    assert run_tool(["vivado"]).stdout.decode().strip() == "no"
+    monkeypatch.setenv("XILINX_LOCAL_USER_DATA", "yes")
+    assert run_tool(["vivado"]).stdout.decode().strip() == "yes"
