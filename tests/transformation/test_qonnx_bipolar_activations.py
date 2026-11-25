@@ -131,3 +131,28 @@ def test_bipolar_quant_after_selu_large_scale_left_in_place(scale):
         converted = model.transform(ConvertQONNXtoFINN())
     assert [n.op_type for n in converted.graph.node] == ["Selu", "BipolarQuant"]
     assert np.array_equal(execute(converted, INPUTS), execute(model, INPUTS))
+
+
+@pytest.mark.transform
+@pytest.mark.parametrize("scale", [1.0, 0.5])
+def test_bipolar_quant_after_relu_refused(scale):
+    # A Relu's output is never negative, so the BipolarQuant gives its scale for
+    # every input
+    model = make_bipolar_act_model("Relu", scale)
+    expected = np.full(INPUTS.shape, scale, dtype=np.float32)
+    assert np.array_equal(execute(model, INPUTS), expected)
+    with pytest.raises(ValueError, match="follows a Relu and has a nonzero scale"):
+        model.transform(ConvertQONNXtoFINN())
+
+
+@pytest.mark.transform
+def test_bipolar_quant_after_relu_zero_scale():
+    # At scale 0 the pair gives 0 for every input, which the Relu conversion computes
+    model = make_bipolar_act_model("Relu", 0.0)
+    converted = model.transform(ConvertQONNXtoFINN())
+    assert [n.op_type for n in converted.graph.node] == ["MultiThreshold"]
+    expected = np.zeros(INPUTS.shape, dtype=np.float32)
+    x = np.random.default_rng(0).uniform(-4, 4, size=(1, 6)).astype(np.float32)
+    for inputs in [INPUTS, x]:
+        assert np.array_equal(execute(model, inputs), expected)
+        assert np.array_equal(execute(converted, inputs), expected)

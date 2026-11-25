@@ -521,6 +521,15 @@ class QuantReluHandler(QuantActBaseHandler):
                         f"alpha {alpha} and gamma {gamma}. It converts only after a Selu "
                         "with positive, finite alpha and gamma, which keeps its input's sign."
                     )
+            elif act_node.op_type == "Relu":
+                scale = self._model.get_initializer(self._q_node.input[1])
+                if scale is None or np.any(scale != 0):
+                    raise ValueError(
+                        f"The BipolarQuant node {self._q_node.name} follows a Relu and "
+                        "has a nonzero scale, so it gives that scale for every input: a "
+                        "nonzero constant, which the Relu conversion, a MultiThreshold "
+                        "that gives 0 below its threshold, does not compute."
+                    )
         else:
             raise RuntimeError("Got an unexpected quantizer node type")
 
