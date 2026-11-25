@@ -112,6 +112,32 @@ def round_half_even_thresholds(thresholds, quant_scale, min_code, rounding_fn):
     return thresholds
 
 
+def scaled_threshold_output_datatype(out_bias, out_scale, num_thresholds):
+    """Name the datatype of what a MultiThreshold with scalar ``out_bias`` and
+    ``out_scale`` computes, ``out_bias + out_scale * count`` for a count in
+    ``[0, num_thresholds]``: BIPOLAR for -1 and 1 alone, FLOAT32 unless both ends
+    are integers, else the smallest integer type holding them, found in exact
+    integer arithmetic. Return None for ends that are not finite or that no
+    integer type of at most 64 bits holds."""
+    ends = (out_bias, out_bias + out_scale * num_thresholds)
+    if not all(np.isfinite(end) for end in ends):
+        return None
+    if not all(float(end).is_integer() for end in ends):
+        return "FLOAT32"
+    lo, hi = sorted(int(end) for end in ends)
+    if num_thresholds == 1 and (lo, hi) == (-1, 1):
+        return "BIPOLAR"
+    if lo >= 0:
+        if hi > DataType["UINT64"].max():
+            return None
+        return DataType.get_smallest_possible(hi).name
+    if lo < DataType["INT64"].min() or hi > DataType["INT64"].max():
+        return None
+    # a signed type holding -1 - hi also holds hi
+    candidates = [DataType.get_smallest_possible(lo), DataType.get_smallest_possible(-1 - hi)]
+    return max(candidates, key=lambda dt: dt.bitwidth()).name
+
+
 class QuantActBaseHandler(ABC):
     """Base class for converting quantized activation expressed in the QONNX dialect
     to the FINN ONNX dialect.
@@ -175,6 +201,12 @@ class QuantActBaseHandler(ABC):
         dtype = q_inst.get_integer_datatype(self._model)
         dtype = dtype.name
         return dtype
+
+    def _decline_reason(self):
+        """Return why this handler leaves its quantizer in the graph, unconverted,
+        or None if it converts it. Asked by ConvertQuantActToMultiThreshold alone;
+        a filter that keeps quantizers in the graph belongs in its filter_function."""
+        return None
 
     def _half_even_rounding_fn(self):
         """Return the quantizer's rounding function if it is an integer quantizer
@@ -333,7 +365,11 @@ class QuantActBaseHandler(ABC):
             finn_bias = adder_bias[0].item() * mul_scale[0].item()
             mt_inst.set_nodeattr("out_bias", finn_bias)
 
-            # Set the output data type
+            # Set the output data type: that of what the MultiThreshold computes,
+            # since a BipolarQuant's scale makes its outputs -scale and scale
+            out_dtype = scaled_threshold_output_datatype(
+                finn_bias, mul_scale[0].item(), thresholds.shape[-1]
+            )
             mt_inst.set_nodeattr("out_dtype", out_dtype)
         else:
             # Set datatype
@@ -473,9 +509,38 @@ class QuantReluHandler(QuantActBaseHandler):
                         "for Relu activations."
                     )
         elif self._q_node.op_type == "BipolarQuant":
-            return
+            act_node = self._model.find_direct_predecessors(self._q_node)[0]
+            if act_node.op_type == "Selu":
+                # ONNX's defaults when the attributes are absent
+                attrs = {a.name: helper.get_attribute_value(a) for a in act_node.attribute}
+                alpha = attrs.get("alpha", 1.67326319217681884765625)
+                gamma = attrs.get("gamma", 1.05070102214813232421875)
+                if not (np.isfinite([alpha, gamma]).all() and alpha > 0 and gamma > 0):
+                    raise ValueError(
+                        f"The BipolarQuant node {self._q_node.name} follows a Selu with "
+                        f"alpha {alpha} and gamma {gamma}. It converts only after a Selu "
+                        "with positive, finite alpha and gamma, which keeps its input's sign."
+                    )
         else:
             raise RuntimeError("Got an unexpected quantizer node type")
+
+    def _decline_reason(self):
+        act_node = self._model.find_direct_predecessors(self._q_node)[0]
+        if self._q_node.op_type != "BipolarQuant" or act_node.op_type != "Selu":
+            return None
+        scale = self._model.get_initializer(self._q_node.input[1])
+        with np.errstate(over="ignore"):
+            out_scale = np.asarray(scale, dtype=np.float32) * np.float32(2)
+        if not np.isfinite(out_scale).all():
+            return "twice its scale, the MultiThreshold's scale, is not a finite float32"
+        if out_scale.size == 1:
+            out_dtype = scaled_threshold_output_datatype(-out_scale.item() / 2, out_scale.item(), 1)
+            if out_dtype is None:
+                return (
+                    "its outputs, -scale and scale, are integers that no integer "
+                    "datatype of at most 64 bits holds"
+                )
+        return None
 
     def _calculate_act_bias(self):
         # No bias allowed for Relu activations, see: https://github.com/Xilinx/
@@ -538,6 +603,11 @@ class QuantReluHandler(QuantActBaseHandler):
                 for t in range(num_thresholds):
                     thresholds[c][t] = min_threshold[c] + step[c] * t
 
+        elif self._q_node.op_type == "BipolarQuant":
+            # After a Selu, whose output has its input's sign, a BipolarQuant's
+            # one threshold is 0.
+            thresholds = np.zeros((1, 1), dtype=np.float64)
+
         elif act_node.op_type == "Selu":
             q_inst = getCustomOp(self._q_node)
             narrow = q_inst.get_nodeattr("narrow")
@@ -598,6 +668,11 @@ class QuantReluHandler(QuantActBaseHandler):
         # a5bfd6dc5e030f0047ac1ee47932b60e8e873e17/src/brevitas/export/
         # onnx/finn/handler/act.py#L40
         scale = quant_scale
+        act_node = self._model.find_direct_predecessors(self._q_node)[0]
+        if self._q_node.op_type == "BipolarQuant" and act_node.op_type == "Selu":
+            # the MultiThreshold's 0 and 1, less the bias 0.5, times twice the
+            # scale: -scale and scale
+            scale = quant_scale * np.float32(2)
         return scale
 
     def _remove_activation_node(self, multi_threshold_node):

@@ -157,6 +157,14 @@ class ConvertQuantActToMultiThreshold(Transformation):
                     # but better than just erroring out without trying
                     handler = QuantIdentityHandler(model, n, node_ind)
 
+                reason = handler._decline_reason()
+                if reason is not None:
+                    warnings.warn(
+                        f'The {n.op_type} node with name: "{n.name}" was not converted to '
+                        f"a MultiThreshold node, because {reason}."
+                    )
+                    continue
+
                 model = handler.replace_quant_node()
                 graph_modified = True
                 return (model, graph_modified)
