@@ -118,7 +118,7 @@ class MakePYNQProject(Transformation):
     All nodes in the graph must have the fpgadataflow backend attribute,
     and the CreateStitchedIP transformation must have been previously run on
     the graph. For Zynq this creates a fully custom block design. For Versal
-    it builds on the PYNQ golden reference (requires FINN_VCK190_GOLDEN=1).
+    it builds on the PYNQ golden reference (built once with `finn resources golden`).
     However, this transform requires DMAs in the accelerator design.
 
     The shells provide no double-speed clock ap_clk2x: kernels with

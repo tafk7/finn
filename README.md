@@ -74,6 +74,6 @@ Please be aware that this version is deprecated and unsupported, and the main br
 
 Environment setup uses `pyproject.toml` and `uv.lock` with uv 0.10.0 and Python 3.12.
 Use `./docker/run` (configured AMD tools are mounted; `--fpga` requires them),
-or `./setup-local.sh` followed by `source scripts/activate.sh` natively.
+or `uv sync` and `source .venv/bin/activate` natively.
 See [environment setup and migration](docker/README.md) for runtime selection,
 resource overrides, dependency updates, and CI image transport.

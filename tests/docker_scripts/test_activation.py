@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Tool activation, natively (scripts/activate.sh) and in the container
-(docker/profile.sh), container identity and the installers."""
+"""Tool activation in the container (docker/profile.sh), native use without
+FINN's own scripts, container identity and the installers."""
 import pytest
 
 import json
@@ -82,86 +82,38 @@ def test_the_container_without_tools_sets_no_amd_variables(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# Native activation.
+# Native use: uv sync and the venv, nothing of FINN's own.
 # --------------------------------------------------------------------------
 
 
-def standin_checkout(tmp_path):
-    """Activation's own file, with a test-owned virtual environment."""
-    checkout = tmp_path / "finn"
-    (checkout / "scripts").mkdir(parents=True)
-    shutil.copy2(REPO / "scripts/activate.sh", checkout / "scripts/activate.sh")
-    (checkout / ".venv/bin").mkdir(parents=True)
-    (checkout / ".venv/bin/activate").write_text(
-        'PATH="%s:$PATH"  # test-owned virtual environment stand-in\n'
-        % os.path.dirname(sys.executable)
-    )
-    return checkout
+def test_finn_finds_its_checkout_without_finn_root(monkeypatch):
+    from finn.util.basic import get_finn_root  # noqa: PLC0415
+
+    monkeypatch.delenv("FINN_ROOT", raising=False)
+    assert Path(get_finn_root()) == REPO
+    monkeypatch.setenv("FINN_ROOT", "/elsewhere")
+    assert get_finn_root() == "/elsewhere"
 
 
-def activate(checkout, tmp_path, probe, **env):
-    return subprocess.run(
-        ["bash", "-c", 'source "$1/scripts/activate.sh" && ' + probe, "test", str(checkout)],
-        env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path / "home"), **env},
-        text=True,
-        capture_output=True,
-    )
-
-
-def test_activation_takes_the_shells_tools_and_sets_nothing_else(tmp_path):
-    """Native use is the venv plus AMD's own settings: activation neither selects
-    tools nor allocates FINN's directories."""
-    checkout = standin_checkout(tmp_path)
-    vivado = "/tools/Xilinx/2025.2/Vivado"
-    proc = activate(
-        checkout,
-        tmp_path,
-        'test "$FINN_ROOT" = "$1" && test "$XILINX_VIVADO" = "%s" && env | sort' % vivado,
-        XILINX_VIVADO=vivado,
-    )
-    assert proc.returncode == 0, proc.stderr
-    assert proc.stderr == ""
-    names = {line.split("=", 1)[0] for line in proc.stdout.splitlines()}
-    assert {name for name in names if name.startswith("FINN_")} == {"FINN_ROOT"}
-    assert "LD_LIBRARY_PATH" not in names and "LD_PRELOAD" not in names
-    assert not (tmp_path / "home").exists()
-
-
-def test_activation_without_tools_says_what_to_source(tmp_path):
-    checkout = standin_checkout(tmp_path)
-    proc = activate(checkout, tmp_path, "true")
-    assert proc.returncode == 0, proc.stderr
-    assert proc.stderr.startswith("FINN: no AMD tools in this shell. ")
-    assert "settings64.sh" in proc.stderr
-
-
-def test_activation_needs_the_environment(tmp_path):
-    checkout = standin_checkout(tmp_path)
-    (checkout / ".venv/bin/activate").unlink()
-    proc = activate(checkout, tmp_path, "true")
-    assert proc.returncode == 1
-    assert "run %s/setup-local.sh" % checkout in proc.stderr
+def test_one_uv_version():
+    """uv's own pin (required-version) is the one the image and Travis install."""
+    pin = re.search(r'required-version = "==([0-9.]+)"', (REPO / "pyproject.toml").read_text())
+    assert pin, "pyproject.toml pins uv"
+    assert f"astral-sh/uv:{pin[1]} " in (REPO / "docker/Dockerfile").read_text()
+    assert f"uv=={pin[1]}" in (REPO / ".travis.yml").read_text()
 
 
 def test_installers_do_not_hardcode_layouts_or_pins():
     """The pre-2024.2 layout, hardcoded, reported "Vivado not found" at a path
     the user could see; Python pins live only in pyproject.toml and uv.lock."""
     pin = re.compile(r"[A-Za-z0-9_.\-]+(?:\[[A-Za-z0-9_,.\-]+\])?==[0-9]")
-    for rel in ("setup-local.sh", "scripts/activate.sh", "docker/Dockerfile"):
+    for rel in ("scripts/install-system-deps.sh", "docker/Dockerfile"):
         body = (REPO / rel).read_text()
         for number, line in enumerate(body.splitlines(), 1):
             if line.lstrip().startswith("#"):
                 continue
             assert "$FINN_XILINX_PATH/Vivado/" not in line, "%s:%d" % (rel, number)
         assert pin.findall(body) == [], rel
-
-
-def test_nothing_writes_to_the_checkout_by_default():
-    """Persistent state belongs in FINN_HOME and scratch in FINN_BUILD_DIR."""
-    for rel in ("setup-local.sh", "scripts/activate.sh", "scripts/ensure-uv.sh"):
-        for line in (REPO / rel).read_text().splitlines():
-            if not line.lstrip().startswith("#"):
-                assert ".cache/" not in line, (rel, line)
 
 
 # --------------------------------------------------------------------------

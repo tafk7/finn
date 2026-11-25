@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Prepare derived resources in writable storage, leaving source trees intact."""
 
-import argparse
 import hashlib
 import json
 import os
@@ -124,7 +123,9 @@ def golden() -> str:
         # A site-supplied reference is used as is.
         return str(output)
     if not amd_path("XILINX_VIVADO"):
-        raise RuntimeError("FINN_VCK190_GOLDEN=1 requires a selected Vivado installation")
+        raise RuntimeError(
+            "The VCK190 golden reference is built with Vivado: source a release's settings64.sh"
+        )
     identity = _golden_identity()
     digest = _golden_digest(identity)
     source = Path(resources.path("pynq"))
@@ -149,15 +150,3 @@ def golden() -> str:
                 (publish / "provenance.json").write_text(json.dumps(identity, indent=2) + "\n")
                 _store.publish(publish, entry, digest)
     return str(output)
-
-
-def main():
-    """Print the prepared directory; diagnostics and tools never pollute stdout."""
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("kind", choices=("boards", "golden"))
-    args = parser.parse_args()
-    print(board_files() if args.kind == "boards" else golden())
-
-
-if __name__ == "__main__":
-    main()

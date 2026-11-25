@@ -39,8 +39,8 @@ pytest -m finn_examples
 pytest -k "test_build_gtsrb"
 ```
 
-`FINN_ROOT` must point at the repo (the suite resolves models/configs/goldens
-relative to it). Models are fetched by `models/download_models.sh`.
+The suite resolves its models, configs and goldens relative to its own directory.
+Models are fetched by `models/download_models.sh`.
 
 ### Environment variables
 

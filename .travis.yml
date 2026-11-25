@@ -33,9 +33,9 @@ dist: noble
 python: "3.12"
 install:
   - python -m pip install uv==0.10.0
-  - ./setup-local.sh --ci --skip-xsi
+  - uv sync --locked
 script:
-  - bash -c 'source scripts/activate.sh && ./scripts/quicktest-local.sh'
+  - bash -c 'source .venv/bin/activate && ./scripts/quicktest-local.sh'
 cache:
   directories:
     - $HOME/.cache/uv

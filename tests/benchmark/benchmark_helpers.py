@@ -27,12 +27,12 @@ from finn.util.paths import scratch
 def benchmark_root():
     """Absolute path to the ``tests/benchmark`` suite root.
 
-    Anchored on ``FINN_ROOT`` so the suite resolves its models/configs/goldens
+    Anchored on this file so the suite resolves its models/configs/goldens
     independently of the process working directory (several tests historically
     used a bare ``"tests/benchmark/"`` relative path, which only worked when
     pytest happened to run from the repo root).
     """
-    return os.path.join(os.environ["FINN_ROOT"], "tests", "benchmark")
+    return os.path.dirname(os.path.abspath(__file__))
 
 
 def verification_io_dir():
@@ -394,7 +394,7 @@ def _git_commit():
     try:
         out = subprocess.check_output(
             ["git", "rev-parse", "HEAD"],
-            cwd=os.environ.get("FINN_ROOT"),
+            cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
             stderr=subprocess.DEVNULL,
         )
         return out.decode().strip()

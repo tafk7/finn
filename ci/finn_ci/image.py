@@ -47,7 +47,6 @@ INPUTS = (
     "packaging/finn-experimental/setup.py",
     "pyproject.toml",
     "uv.lock",
-    ".uv-version",
     "src/finn/resources/*.py",
     "src/finn/resources.toml",
     "src/finn/util/paths.py",

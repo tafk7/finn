@@ -35,6 +35,7 @@ import shlex
 import shutil
 import tempfile
 import time
+from pathlib import Path
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.util.basic import gen_finn_dt_tensor, roundup_to_integer_multiple
@@ -146,16 +147,16 @@ def get_rtlsim_trace_depth():
 
 
 def get_finn_root():
-    "Return the root directory that FINN is cloned into."
-
-    try:
+    """The FINN checkout: FINN_ROOT, else the checkout FINN is installed from."""
+    if "FINN_ROOT" in os.environ:
         return os.environ["FINN_ROOT"]
-    except KeyError:
-        raise Exception(
-            """Environment variable FINN_ROOT must be set
-        correctly. Please ensure you have launched the Docker contaier correctly.
-        """
-        )
+    checkout = Path(__file__).resolve().parents[3]
+    if (checkout / "pyproject.toml").is_file() and (checkout / "notebooks").is_dir():
+        return str(checkout)
+    raise Exception(
+        "FINN is installed from a wheel, without its source tree: set FINN_ROOT to a "
+        "FINN checkout for what needs one (notebooks, tutorials, some tests)."
+    )
 
 
 # Golden reference design files the Versal PYNQ shell is built against

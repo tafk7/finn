@@ -99,7 +99,7 @@ installation layouts work. Software runs need no tools.
 * ``FINN_HOME`` selects persistent state such as resources and XSI builds (default ``~/.finn``); ``FINN_RESOURCES_DIR``, ``FINN_XSI_PATH`` and ``FINN_GOLDEN_DIR`` move parts of it elsewhere.
 * ``-e NAME[=VALUE]`` passes further variables (``NUM_DEFAULT_WORKERS``, ``FINN_XELAB_MT``), ``-v SOURCE:TARGET`` further mounts; ``COMPOSE_FILE`` adds your own Compose files.
 * The checkout's ``ssh_keys`` directory, where it exists, is mounted read-only as the container's ``~/.ssh``.
-* ``python -m finn.resources.prepare golden`` builds the optional VCK190 golden reference into ``FINN_HOME``.
+* ``finn resources golden`` builds the optional VCK190 golden reference into ``FINN_HOME``.
 
 The container is defined in ``compose.yaml`` and ``compose.tools.yaml``, which
 Dev Containers and agent sandboxes can use directly; ``docker/run --dry-run``
@@ -190,39 +190,28 @@ Quick Start
    FINN uses the release this shell has; to switch, source another release's
    ``settings64.sh`` in a new shell.
 
-3. Install uv 0.10.0, then clone FINN and run the local setup script::
+3. Install `uv <https://docs.astral.sh/uv/getting-started/installation/>`_ 0.10.0,
+   then clone FINN and install its locked environment::
 
     git clone https://github.com/Xilinx/finn.git
     cd finn
-    ./setup-local.sh
+    uv sync
 
-   If your system Python is not 3.12, set ``FINN_PYTHON`` to point to a Python 3.12 interpreter::
+   uv uses Python 3.12 (``.python-version``); ``uv sync --python /path/to/python3.12``
+   names an interpreter.
 
-    export FINN_PYTHON=/path/to/python3.12
-    ./setup-local.sh
+4. Activate the environment (or prefix commands with ``uv run``)::
 
-4. Activate the FINN environment::
-
-    source scripts/activate.sh
+    source .venv/bin/activate
 
 5. Check what FINN finds, then verify the installation::
 
     finn doctor
     ./scripts/quicktest-local.sh
 
-Setup Script Options
-********************
-
-The ``setup-local.sh`` script supports several options:
-
-* ``--help``: Show usage information
-* ``--prefetch``: Fetch every declared resource now, for use offline later
-  (``finn resources fetch --all`` does the same for a pip install)
-
 FINN fetches resources, and builds its XSim binding for the sourced Vivado, the
-first time it needs them; ``python -m finn.xsi.setup`` builds the binding ahead
-of time. ``--ci``, ``--skip-xsi`` and ``--skip-resources`` are accepted and do
-nothing.
+first time it needs them. To prepare ahead, for use offline, run
+``finn resources fetch --all`` and ``python -m finn.xsi.setup``.
 
 Validation Test Modes
 *********************

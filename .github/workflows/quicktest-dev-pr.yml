@@ -19,6 +19,5 @@ jobs:
 
       - name: DockerRunQuicktest
         run: |
-          export FINN_ROOT=$(pwd)
           export FINN_BUILD_DIR=/tmp/finn_gha
           ./docker/run -- bash docker/quicktest.sh

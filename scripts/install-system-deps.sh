@@ -134,6 +134,6 @@ else
 fi
 
 echo ""
-gecho "Done! You can now run ./setup-local.sh to set up FINN."
+gecho "Done! Now install FINN with uv: uv sync && source .venv/bin/activate"
 echo "The Vivado and Vitis installation has its own prerequisites: run the release's"
 echo "scripts/installLibs.sh (for example /tools/Xilinx/2025.2/Vitis/scripts/installLibs.sh)."

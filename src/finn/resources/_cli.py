@@ -36,6 +36,7 @@ def main(argv=None):
         action="store_true",
         help="skip resources that may not be redistributed",
     )
+    commands.add_parser("golden", help="build the VCK190 golden reference with the sourced Vivado")
     command = commands.add_parser(
         "clean", help="remove cached resources, XSI builds and golden references"
     )
@@ -94,6 +95,16 @@ def _fetch(args):
         print(entry)
 
 
+def _golden(args):
+    from finn.resources import prepare  # noqa: PLC0415
+
+    try:
+        print(prepare.golden())
+    except RuntimeError as error:
+        print(f"finn resources: error: {error}", file=sys.stderr)
+        return 1
+
+
 def _clean(args):
     """Remove derived and cached state from FINN_HOME and the writable caches.
 
@@ -124,15 +135,6 @@ def _clean(args):
             with _store.locked(root, entry.name):
                 shutil.rmtree(entry)
             print(f"removed {entry}")
-
-
-def _current_boards():
-    """The assembled board files of the current pins, if their sources are at hand."""
-    from finn.resources import prepare  # noqa: PLC0415
-
-    if os.environ.get("FINN_BOARD_FILES_PATH"):
-        raise ResourceError("board-path-supplied", "site board files are not cached")
-    return prepare.board_entry()
 
 
 def _current_boards():

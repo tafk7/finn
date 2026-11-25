@@ -97,7 +97,7 @@ static final String FINN_BUILD_LABEL = 'finn-build'
 @Field
 String PINNED_SCM_COMMIT = ''
 
-// Optional setup-local.sh stage label and cache root.
+// Optional native (non-Docker) stage label and cache root.
 // Read via helpers, not @Field, so env resolution happens
 // inside the running pipeline rather than at script load.
 String finnLocalBuildLabel() { return (env.FINN_LOCAL_BUILD_LABEL ?: FINN_BUILD_LABEL) }
@@ -153,7 +153,7 @@ pipeline {
     booleanParam(name: 'local_setup',  defaultValue: false,
                  description: 'Run the non-Docker Vivado setup test on the finn-local-build host. ' +
                               'Slow and orthogonal to STAGES. Leave off unless you are working ' +
-                              'on setup-local.sh itself.')
+                              'on native installation itself.')
     string(name: 'STAGE_FILTER', defaultValue: '',
            description: 'Substring filter for debugging a single shard. ' +
                         'Leave empty for a normal build.')
@@ -519,8 +519,8 @@ void stageZipArtifacts(Map entry, String buildDir, String stashName) {
   }
 }
 
-// setup-local.sh expects apt prerequisites and Python 3.12; it bootstraps pinned uv. Override
-// FINN_LOCAL_BUILD_LABEL when the main build pool lacks those.
+// The native stage needs apt prerequisites, Python 3.12 and pyproject.toml's uv on PATH.
+// Override FINN_LOCAL_BUILD_LABEL when the main build pool lacks those.
 void runLocalSetupTest() {
   node(finnLocalBuildLabel()) {
     withAgentNfsEnv {
@@ -533,7 +533,7 @@ void runLocalSetupTest() {
         // Cache key tracks the dep inputs so changes force a fresh download.
         String uvCacheKey = sh(
           returnStdout: true,
-          script: 'sha256sum pyproject.toml uv.lock .uv-version | sha256sum | cut -c1-16'
+          script: 'sha256sum pyproject.toml uv.lock | sha256sum | cut -c1-16'
         ).trim()
         if (!uvCacheKey) { uvCacheKey = "build-${env.BUILD_NUMBER}" }
         String cacheRoot   = finnCiLocalCacheRoot()
@@ -555,10 +555,10 @@ ${CI_TOOL} prune-pip-cache \\
 """
           cleanPreviousBuildFiles(buildDir)
           catchError(stageResult: 'FAILURE') {
-            sh './setup-local.sh --ci'
+            sh 'uv sync --locked'
             sh '''#!/bin/bash
 set -eo pipefail
-source scripts/activate.sh
+source .venv/bin/activate
 ./scripts/quicktest-local.sh vivado
 '''
           }

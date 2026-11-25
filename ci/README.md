@@ -111,7 +111,7 @@ Optional CI-related overrides are listed below, with sensible defaults:
 
 | Env var                    | Defaults to                            | What it changes                                                                                                             |
 | -------------------------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `FINN_LOCAL_BUILD_LABEL`   | `finn-build`                           | Agent label for the optional non-Docker `setup-local.sh` stage, requires a host with dependencies in place.                 |
+| `FINN_LOCAL_BUILD_LABEL`   | `finn-build`                           | Agent label for the optional non-Docker stage (`uv sync`), requires a host with dependencies in place.                 |
 | `FINN_CI_LOCAL_CACHE_ROOT` | `${WORKSPACE_TMP:-/tmp}/finn-ci-cache` | Pip + XDG cache root for the same non-Docker stage.                                                                         |
 | `FINN_CI_MIN_FREE_GB`      | `120`                                  | Minimum free space (GB) on the agent scratch volume below which a shard refuses to start.                                   |
 | `FINN_LSF_NFS_STAGING`     | unset                                  | Staging area for LSF jobs, setting this variable enables a range of LSF functionality. Only needed if using an LSF cluster. |

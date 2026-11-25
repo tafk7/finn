@@ -23,17 +23,14 @@ jobs:
         run: |
           sudo ./scripts/install-system-deps.sh
 
+      # The uv version is pyproject.toml's required-version.
       - uses: astral-sh/setup-uv@v6
-        with:
-          version-file: .uv-version
 
-      - name: Setup local FINN environment
-        run: |
-          export FINN_BUILD_DIR=/tmp/finn_gha
-          ./setup-local.sh --skip-xsi
+      - name: Install FINN
+        run: uv sync --locked
 
       - name: Run quicktest
         run: |
           export FINN_BUILD_DIR=/tmp/finn_gha
-          source scripts/activate.sh
+          source .venv/bin/activate
           ./scripts/quicktest-local.sh

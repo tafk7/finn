@@ -17,20 +17,18 @@ Install the system prerequisites (`sudo ./scripts/install-system-deps.sh`), then
 
 ```bash
 source /tools/Xilinx/2025.2/Vivado/settings64.sh   # or the site's Vivado module
-./setup-local.sh
-source scripts/activate.sh
+uv sync                      # the locked environment in .venv
+source .venv/bin/activate    # or prefix commands with `uv run`
 finn doctor                  # what FINN finds, and what it can run here
 ./scripts/quicktest-local.sh
 ```
 
-Setup bootstraps the uv version in `.uv-version` into `~/.cache/finn/uv-tool/`
-if needed; it never installs compiler packages with pip. Resources are fetched,
-and the XSI binding is built for the sourced Vivado, the first time FINN needs
-them; `--prefetch` fetches every declared resource ahead of use offline
-(`finn resources fetch --all` does the same for a pip install), and
-`python -m finn.xsi.setup` prebuilds XSI. `FINN_VENV` and `FINN_PYTHON` select the
-environment (default `.venv` in the checkout) and the Python 3.12 interpreter.
-Activation installs nothing: it activates the environment and sets `FINN_ROOT`.
+uv checks its own version against `pyproject.toml` (`required-version`) and
+picks Python 3.12 from `.python-version`. Resources are fetched, and the XSI
+binding is built for the sourced Vivado, the first time FINN needs them;
+`finn resources fetch --all` fetches every declared resource ahead of use
+offline, and `python -m finn.xsi.setup` prebuilds XSI. FINN finds its checkout
+from where it is installed; `FINN_ROOT` overrides it.
 
 FINN reads the AMD tools' own environment, as a release's `settings64.sh` or a
 site's module sets it: `XILINX_VIVADO`, `XILINX_HLS`, `XILINX_VITIS` and the tools
@@ -221,7 +219,7 @@ resource cache. Locally built images contain the board sources, which may not
 be redistributed; the release target omits them.
 
 XSI builds are keyed by their sources, Python ABI, compiler, compile and link
-settings, pybind11 version and Vivado installation. `FINN_VCK190_GOLDEN=1` builds
+settings, pybind11 version and Vivado installation. `finn resources golden` builds
 the VCK190 golden reference from the pinned PYNQ sources with the selected
 Vivado; the pinned Tcl declares Vivado 2025.2.
 
@@ -233,7 +231,7 @@ Vivado; the pinned Tcl declares Vivado 2025.2.
 | `run-docker.sh test`, `quicktest` | `docker/run --fpga -- python -m pytest`, `docker/run -- bash docker/quicktest.sh [MODE]` |
 | `run-docker.sh build_dataflow DIR` | `docker/run --fpga -v DIR:DIR -- build_dataflow DIR` |
 | `run-docker.sh notebook` | `docker/run --notebook` |
-| `scripts/finn-env.sh` | `scripts/activate.sh`, with the AMD tools from a sourced `settings64.sh` |
+| `scripts/finn-env.sh` | `source .venv/bin/activate` after `uv sync`, with the AMD tools from a sourced `settings64.sh` |
 | `FINN_XILINX_PATH`, `FINN_XILINX_VERSION` | `XILINX_VIVADO`, from a sourced `settings64.sh` or set to `<root>/<release>/Vivado` |
 | `VIVADO_PATH`, `VITIS_PATH`, `HLS_PATH` | `XILINX_VIVADO`, `XILINX_VITIS`, `XILINX_HLS` |
 | `fetch-repos.sh`, Python clones in `deps/` | `uv.lock` and verified resources |
