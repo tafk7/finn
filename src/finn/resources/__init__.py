@@ -33,7 +33,7 @@ Standard library only, so an image build can fill a cache before FINN is install
 """
 import os
 from dataclasses import dataclass
-from importlib.resources import files
+from importlib.util import find_spec
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -84,20 +84,27 @@ def _get(name):
 
 
 def _package_path(resource):
+    """A directory inside an installed module. FINN is a namespace package, which may
+    have several portions; the directory is in the first portion that holds it."""
     try:
-        location = files(resource.package).joinpath(resource.subdir or "")
+        spec = find_spec(resource.package)
     except ModuleNotFoundError:
+        spec = None
+    if spec is None:
         raise ResourceError(
             "package-not-installed",
             f"Resource {resource.name}: {resource.package} is not installed",
-        ) from None
-    if not os.path.isdir(str(location)):
-        raise ResourceError(
-            "package-not-directory",
-            f"Resource {resource.name}: {resource.source} is not a directory in an unpacked "
-            "installation",
         )
-    return os.path.realpath(str(location))
+    portions = spec.submodule_search_locations or [os.path.dirname(spec.origin)]
+    for portion in portions:
+        location = os.path.join(portion, resource.subdir or "")
+        if os.path.isdir(location):
+            return os.path.realpath(location)
+    raise ResourceError(
+        "package-not-directory",
+        f"Resource {resource.name}: {resource.source} is not a directory in an unpacked "
+        "installation",
+    )
 
 
 def status(name) -> Status:

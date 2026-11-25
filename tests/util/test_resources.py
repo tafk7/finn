@@ -472,7 +472,8 @@ def test_finn_trees_are_package_data_in_a_checkout_too():
     ):
         status = resources.status(name)
         assert status.state == "package"
-        if (REPO / tree).is_dir():
+        # From this checkout (not a wheel installed beside it): the links' targets.
+        if status.path.startswith(str(REPO)):
             assert status.path == str((REPO / tree).resolve())
 
 
