@@ -177,9 +177,13 @@ Setup Script Options
 The ``setup-local.sh`` script supports several options:
 
 * ``--help``: Show usage information
-* ``--ci``: CI mode (non-interactive, fail fast on errors)
-* ``--skip-xsi``: Skip building finn_xsi (Vivado Python interface)
-* ``--skip-resources``: Use prepared resource caches or local overrides. Python dependencies still follow the lock.
+* ``--prefetch``: Fetch every declared resource now, for use offline later
+  (``finn-resources fetch --all`` does the same for a pip install)
+
+FINN fetches resources, and builds its XSim binding for the sourced Vivado, the
+first time it needs them; ``python -m finn.xsi.setup`` builds the binding ahead
+of time. ``--ci``, ``--skip-xsi`` and ``--skip-resources`` are accepted and do
+nothing.
 
 Validation Test Modes
 *********************

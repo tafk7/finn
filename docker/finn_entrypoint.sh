@@ -48,9 +48,6 @@ if [ -n "${FINN_ROOT:-}" ] && [ -d "$FINN_ROOT/.Xilinx" ]; then
     mkdir -p "$HOME/.Xilinx"
     cp -a "$FINN_ROOT/.Xilinx/." "$HOME/.Xilinx/"
 fi
-if [ "${FINN_PREPARE_XSI:-1}" = 1 ] && [ -n "${XILINX_VIVADO:-}" ]; then
-    python -m finn.xsi.setup --quiet
-fi
 if [ "${FINN_VCK190_GOLDEN:-0}" = 1 ]; then
     python -m finn.resources.prepare golden
 fi

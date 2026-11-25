@@ -62,8 +62,11 @@ source scripts/activate.sh
 ```
 
 Setup bootstraps the uv version in `.uv-version` into `~/.cache/finn/uv-tool/`
-if needed; it never installs compiler packages with pip. It builds XSI when the
-shell has Vivado (`--skip-xsi` skips it). `FINN_VENV` and `FINN_PYTHON` select the
+if needed; it never installs compiler packages with pip. Resources are fetched,
+and the XSI binding is built for the sourced Vivado, the first time FINN needs
+them; `--prefetch` fetches every declared resource ahead of use offline
+(`finn-resources fetch --all` does the same for a pip install), and
+`python -m finn.xsi.setup` prebuilds XSI. `FINN_VENV` and `FINN_PYTHON` select the
 environment (default `.venv` in the checkout) and the Python 3.12 interpreter.
 Activation installs nothing: it activates the environment and sets `FINN_ROOT`.
 

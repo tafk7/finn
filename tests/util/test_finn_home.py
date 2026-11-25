@@ -132,9 +132,13 @@ def test_missing_xsi_says_what_to_do(state, tmp_path, monkeypatch):
     with pytest.raises(ImportError, match="XILINX_VIVADO is not set"):
         xsi.compile_sim_obj("top", [], str(tmp_path))
     monkeypatch.setenv("XILINX_VIVADO", str(vivado(tmp_path)))
-    with pytest.raises(ImportError, match="python -m finn.xsi.setup") as error:
+    # On first use FINN builds the binding; against this stub installation that fails.
+    monkeypatch.setattr(xsi, "_build_attempted", False)
+    monkeypatch.setattr(xsi, "_build_failed", False)
+    with pytest.raises(ImportError, match="did not build") as error:
         xsi.SimEngine()
-    assert str(paths.build_dir() / "xsi.so") in str(error.value)
+    assert str(paths.build_dir() / "compile_xsi.stderr.log") in str(error.value)
+    assert "python -m finn.xsi.setup --force" in str(error.value)
 
 
 def test_golden_references_are_keyed_by_sources_and_vivado(state, tmp_path, monkeypatch):

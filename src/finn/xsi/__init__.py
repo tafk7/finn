@@ -9,7 +9,8 @@
 """FINN XSI (Xilinx Simulation Interface) support module
 
 This module provides utilities for RTL simulation support via finn_xsi.
-The finn_xsi extension must be built separately using the setup command.
+The finn_xsi extension is built for the Vivado installation in use the first time
+it is needed (python -m finn.xsi.setup builds it ahead of time).
 
 Usage:
     # Check if XSI support is available
@@ -27,18 +28,11 @@ from finn.xsi.paths import build_dir, source_dir
 
 
 def is_available() -> bool:
-    """Check if XSI (RTL simulation) support is available.
+    """Check if XSI (RTL simulation) support is available, building it if needed.
 
     Returns:
         bool: True if finn_xsi can be imported, False otherwise
     """
-    # Check if xsi.so exists
-    xsi_path = build_dir()
-    xsi_so = xsi_path / "xsi.so"
-    if not xsi_so.exists():
-        return False
-
-    # Try loading the modules (this will cache them if successful)
     return _load_modules()
 
 
@@ -48,19 +42,41 @@ _sim_engine_module: Optional[Any] = None
 _xsi_module: Optional[Any] = None
 # Why the built extension did not import, if it did not.
 _import_error: Optional[str] = None
+# Whether this process built the extension on first use, and whether that failed.
+_build_attempted = False
+_build_failed = False
 
 
 def _load_modules() -> bool:
-    """Load finn_xsi modules if available."""
-    global _adapter_module, _sim_engine_module, _xsi_module, _import_error
-
+    """Load finn_xsi, building it for this Vivado installation on first use."""
     if _adapter_module is not None:
         return True
+    xsi_so = build_dir() / "xsi.so"
+    if xsi_so.exists() and _import_built():
+        return True
+    # Missing, or built but not loadable here (an older build): build once per process.
+    return _build_on_first_use(force=xsi_so.exists()) and _import_built()
+
+
+def _build_on_first_use(force: bool) -> bool:
+    """Build the extension where Vivado is set up; once per process."""
+    global _build_attempted, _build_failed
+    if _build_attempted or not amd_path("XILINX_VIVADO"):
+        return False
+    _build_attempted = True
+    from finn.xsi.setup import build_xsi  # noqa: PLC0415
+
+    logging.info("Building finn_xsi for %s in %s", amd_path("XILINX_VIVADO"), build_dir())
+    _build_failed = not build_xsi(force=force, verbose=False)
+    return not _build_failed
+
+
+def _import_built() -> bool:
+    """Import the built extension and its Python package."""
+    global _adapter_module, _sim_engine_module, _xsi_module, _import_error
 
     xsi_path = build_dir()
-    xsi_so = xsi_path / "xsi.so"
-
-    if not xsi_so.exists():
+    if not (xsi_path / "xsi.so").exists():
         return False
 
     # Temporarily add to path for import
@@ -111,6 +127,12 @@ def unavailable_message() -> str:
                 "RTL simulation needs Vivado, but XILINX_VIVADO is not set "
                 "(in a container, use `docker/run --fpga`)",
             )
+        )
+    if _build_failed:
+        return (
+            f"finn_xsi did not build for this Vivado installation and Python environment; "
+            f"the compiler's output is in {build_dir() / 'compile_xsi.stderr.log'}. "
+            f"Retry with: python -m finn.xsi.setup --force"
         )
     if _import_error and (build_dir() / "xsi.so").exists():
         return (

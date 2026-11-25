@@ -3,17 +3,17 @@
 # SPDX-License-Identifier: BSD-3-Clause
 set -euo pipefail
 root=$(cd "$(dirname "$0")" && pwd)
-skip_xsi=0
-skip_resources=0
+prefetch=0
 for arg in "$@"; do
     case "$arg" in
-        --ci) ;;
-        --skip-xsi) skip_xsi=1 ;;
-        --skip-resources|--skip-deps) skip_resources=1 ;;
+        # Resources and the XSI binding are prepared on first use; these are no-ops.
+        --ci|--skip-xsi|--skip-resources|--skip-deps) ;;
+        --prefetch) prefetch=1 ;;
         --help|-h)
-            echo 'Usage: setup-local.sh [--ci] [--skip-xsi] [--skip-resources]'
+            echo 'Usage: setup-local.sh [--prefetch]'
             echo 'Requires Python 3.12, pip, git and a C++ compiler; bootstraps pinned uv locally if needed.'
             echo 'FINN_VENV selects the environment; FINN_PYTHON selects the interpreter.'
+            echo '--prefetch fetches every declared resource now, for later use offline.'
             exit 0 ;;
         *) echo "Unknown option: $arg" >&2; exit 2 ;;
     esac
@@ -25,19 +25,13 @@ done
 cd "$root"
 export UV_PYTHON_DOWNLOADS=${UV_PYTHON_DOWNLOADS:-never}
 export UV_PROJECT_ENVIRONMENT=${FINN_VENV:-$root/.venv}
-[ "$skip_resources" = 0 ] || export FINN_RESOURCES_OFFLINE=1
 uv sync --locked --python "${FINN_PYTHON:-python3.12}"
-if [ "$skip_resources" = 0 ]; then
-    "$UV_PROJECT_ENVIRONMENT/bin/python" -m finn.resources fetch --kind hls-include --kind vivado-boards
+if [ "$prefetch" = 1 ]; then
+    "$UV_PROJECT_ENVIRONMENT/bin/python" -m finn.resources fetch --all
 fi
-# Activation performs no installation; --skip-resources requires prepared caches
-# or local resource overrides (FINN_RESOURCES_OFFLINE=1 enforces this).
 . "$root/scripts/activate.sh"
 python -c 'import finn, qonnx, brevitas, finnexperimental, torch, onnxruntime'
 uv pip check --python "$UV_PROJECT_ENVIRONMENT/bin/python"
-if [ "$skip_xsi" = 0 ] && [ -n "${XILINX_VIVADO:-}" ]; then
-    python -m finn.xsi.setup --quiet
-fi
 if [ "${FINN_VCK190_GOLDEN:-0}" = 1 ]; then
     python -m finn.resources.prepare golden
 fi
