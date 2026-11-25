@@ -30,9 +30,86 @@ from abc import ABC, abstractmethod
 from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.custom_op.general.intquant import min_int, resolve_rounding_mode
 from qonnx.custom_op.registry import getCustomOp
 
 np_default_dtype = np.float32
+
+#: Op types of the integer quantizer. IntQuant is its current name and Quant the
+#: name Brevitas exports, which QONNX keeps as an alias. Both go through the same
+#: handlers; an IntQuant only when int_quant_decline_reason admits it.
+INT_QUANT_OP_TYPES = ("IntQuant", "Quant")
+
+
+def int_quant_decline_reason(model, q_node):
+    """Return why converting the integer quantizer q_node would not give its
+    answers, or None if it converts.
+
+    The conversion gives a quantizer's answers when it rounds half to even (ROUND,
+    also named HALF_EVEN), its scale is static, positive and finite, its zero point
+    is a static scalar 0 and its bit width a static integer of at least 2. A
+    quantizer outside that set is left in the graph, where QONNX executes it.
+    """
+    mode = getCustomOp(q_node).get_nodeattr("rounding_mode")
+    if mode.upper() not in ("ROUND", "HALF_EVEN"):
+        return f"its rounding mode {mode} is not ROUND (half to even)"
+    scale = model.get_initializer(q_node.input[1])
+    if scale is None or not (np.all(np.isfinite(scale)) and np.all(scale > 0)):
+        return "its scale is not static, positive and finite"
+    zero_point = model.get_initializer(q_node.input[2])
+    # the handlers compare the zero point with 0 as a scalar
+    if zero_point is None or zero_point.size != 1 or zero_point.item() != 0:
+        return "its zero point is not a static scalar 0"
+    bit_width = model.get_initializer(q_node.input[3])
+    if bit_width is None or bit_width.size != 1:
+        return "its bit width is not static"
+    bit_width = bit_width.item()
+    if not (float(bit_width).is_integer() and bit_width >= 2):
+        return f"its bit width {bit_width} is not an integer of at least 2"
+    return None
+
+
+def round_half_even_thresholds(thresholds, quant_scale, min_code, rounding_fn):
+    """Move each threshold to the least float32 input that an integer quantizer
+    rounding half to even sends to the threshold's target code.
+
+    The MultiThreshold counts ``x >= threshold``, so a threshold exactly on a half
+    step rounds a tie up, where the quantizer's ROUND (``x / scale``, then round half
+    to even) rounds it to the even code; with a scale that is not a power of two, the
+    float32 division can also put the quantizer's own boundary a step either side of
+    the half step. Row ``c`` of ``thresholds`` belongs to channel ``c`` of the
+    flattened ``quant_scale`` and column ``t`` is the step into code
+    ``min_code + t + 1``. The search repeats the quantizer's float32 arithmetic, so
+    the converted graph agrees with the quantizer at every float32 input.
+    """
+    thresholds = np.asarray(thresholds, dtype=np.float32)
+    scale = np.abs(np.asarray(quant_scale))
+    if not (np.all(np.isfinite(scale)) and np.all(scale > 0)):
+        return thresholds
+    # A 0-d scale stays 0-d, so the division promotes as the quantizer's does.
+    if scale.ndim > 0:
+        scale = scale.reshape(-1, 1)
+    targets = min_code + 1 + np.arange(thresholds.shape[-1])
+
+    def reaches(x):
+        return rounding_fn(x / scale) >= targets
+
+    # The quantizer's code never falls as its input rises, so each threshold walks
+    # one float32 step at a time: down while the next lower input still reaches
+    # the target code, or up until it does.
+    lower = reaches(thresholds)
+    while True:
+        below = np.nextafter(thresholds, np.float32(-np.inf))
+        move = lower & reaches(below)
+        if not move.any():
+            break
+        thresholds = np.where(move, below, thresholds)
+    while True:
+        move = ~reaches(thresholds)
+        if not move.any():
+            break
+        thresholds = np.where(move, np.nextafter(thresholds, np.float32(np.inf)), thresholds)
+    return thresholds
 
 
 class QuantActBaseHandler(ABC):
@@ -98,6 +175,16 @@ class QuantActBaseHandler(ABC):
         dtype = q_inst.get_integer_datatype(self._model)
         dtype = dtype.name
         return dtype
+
+    def _half_even_rounding_fn(self):
+        """Return the quantizer's rounding function if it is an integer quantizer
+        rounding half to even (ROUND, also named HALF_EVEN), else None."""
+        if self._q_node.op_type not in INT_QUANT_OP_TYPES:
+            return None
+        mode = getCustomOp(self._q_node).get_nodeattr("rounding_mode")
+        if mode.upper() not in ("ROUND", "HALF_EVEN"):
+            return None
+        return resolve_rounding_mode(mode)
 
     def _get_channel_axis(self, tensor_name):
         """Determine the channel axis of the Quant node from the SHAPE of its
@@ -368,7 +455,7 @@ class QuantReluHandler(QuantActBaseHandler):
         ]
 
     def _check_compatibility(self):
-        if self._q_node.op_type == "Quant":
+        if self._q_node.op_type in INT_QUANT_OP_TYPES:
             q_inst = getCustomOp(self._q_node)
             narrow = q_inst.get_nodeattr("narrow")
             signed = q_inst.get_nodeattr("signed")
@@ -401,7 +488,7 @@ class QuantReluHandler(QuantActBaseHandler):
         elif act_node.op_type == "Selu":
             # Gather parameters
             q_inst = getCustomOp(self._q_node)
-            if self._q_node.op_type == "Quant":
+            if self._q_node.op_type in INT_QUANT_OP_TYPES:
                 bit_width = self._model.get_initializer(self._q_node.input[3])
                 narrow = q_inst.get_nodeattr("narrow")
             elif self._q_node.op_type == "BipolarQuant":
@@ -423,7 +510,7 @@ class QuantReluHandler(QuantActBaseHandler):
 
     def _calculate_thresholds(self):
         # Gather parameters
-        if self._q_node.op_type == "Quant":
+        if self._q_node.op_type in INT_QUANT_OP_TYPES:
             bit_width = self._model.get_initializer(self._q_node.input[3])
         elif self._q_node.op_type == "BipolarQuant":
             bit_width = 1.0
@@ -479,6 +566,11 @@ class QuantReluHandler(QuantActBaseHandler):
 
         # narrow back to the storage dtype only after the accumulation
         thresholds = thresholds.astype(np_default_dtype)
+        # Relu admits only unsigned, non-narrow integer quantizers: least code 0
+        rounding_fn = self._half_even_rounding_fn()
+        if act_node.op_type == "Relu" and rounding_fn is not None:
+            raw_scale = self._model.get_initializer(self._q_node.input[1])
+            thresholds = round_half_even_thresholds(thresholds, raw_scale, 0, rounding_fn)
 
         # The channel axis is taken directly from the scale shape (the axis numpy
         # broadcasting uses to apply the per-channel scale), so no data-layout
@@ -550,7 +642,7 @@ class QuantIdentityHandler(QuantActBaseHandler):
 
     def _check_compatibility(self):
         # Gather parameters to check
-        if self._q_node.op_type == "Quant":
+        if self._q_node.op_type in INT_QUANT_OP_TYPES:
             if not self._model.get_initializer(self._q_node.input[2]) == 0:
                 raise ValueError(
                     "Only Quant nodes with zero-point == 0 "
@@ -569,7 +661,7 @@ class QuantIdentityHandler(QuantActBaseHandler):
     def _calculate_act_bias(self):
         # Gather parameters
         q_inst = getCustomOp(self._q_node)
-        if self._q_node.op_type == "Quant":
+        if self._q_node.op_type in INT_QUANT_OP_TYPES:
             bit_width = self._model.get_initializer(self._q_node.input[3])
             narrow = q_inst.get_nodeattr("narrow")
             signed = q_inst.get_nodeattr("signed")
@@ -597,7 +689,7 @@ class QuantIdentityHandler(QuantActBaseHandler):
         # Gather parameters
         quant_scale = self._model.get_initializer(self._q_node.input[1])
         q_inst = getCustomOp(self._q_node)
-        if self._q_node.op_type == "Quant":
+        if self._q_node.op_type in INT_QUANT_OP_TYPES:
             bit_width = self._model.get_initializer(self._q_node.input[3])
             narrow = q_inst.get_nodeattr("narrow")
             signed = q_inst.get_nodeattr("signed")
@@ -643,6 +735,11 @@ class QuantIdentityHandler(QuantActBaseHandler):
                     thresholds[c][t] = min_threshold[c] + step[c] * t
             # narrow back to the storage dtype only after the accumulation
             thresholds = thresholds.astype(np_default_dtype)
+            rounding_fn = self._half_even_rounding_fn()
+            if rounding_fn is not None:
+                thresholds = round_half_even_thresholds(
+                    thresholds, quant_scale, min_int(signed, narrow, bit_width), rounding_fn
+                )
 
             # The channel axis is taken directly from the scale shape (the axis
             # numpy broadcasting uses to apply the per-channel scale), so no
@@ -667,7 +764,7 @@ class QuantIdentityHandler(QuantActBaseHandler):
 
     def _calculate_act_scale(self):
         # Gather parameters
-        if self._q_node.op_type == "Quant":
+        if self._q_node.op_type in INT_QUANT_OP_TYPES:
             bit_width = self._model.get_initializer(self._q_node.input[3])
         elif self._q_node.op_type == "BipolarQuant":
             bit_width = 1.0

@@ -31,8 +31,10 @@ import warnings
 from qonnx.transformation.base import Transformation
 
 from finn.transformation.qonnx.qonnx_activation_handlers import (
+    INT_QUANT_OP_TYPES,
     QuantActBaseHandler,
     QuantIdentityHandler,
+    int_quant_decline_reason,
 )
 
 
@@ -47,7 +49,7 @@ def default_filter_function_generator(max_multithreshold_bit_width=8):
     """
 
     def filter_function(model, q_node):
-        if q_node.op_type == "Quant":
+        if q_node.op_type in INT_QUANT_OP_TYPES:
             bit_width = model.get_initializer(q_node.input[3])
         elif q_node.op_type == "BipolarQuant":
             bit_width = 1.0
@@ -99,7 +101,7 @@ class ConvertQuantActToMultiThreshold(Transformation):
 
         for n in graph.node:
             node_ind += 1
-            if n.op_type == "Quant" or n.op_type == "BipolarQuant":
+            if n.op_type in INT_QUANT_OP_TYPES or n.op_type == "BipolarQuant":
                 # Check that the node is in the activation path
                 inp = model.get_initializer(n.input[0])
                 out = model.get_initializer(n.output[0])
@@ -110,6 +112,14 @@ class ConvertQuantActToMultiThreshold(Transformation):
                     predecessor_op_type = predecessor[0].op_type
                 else:
                     predecessor_op_type = predecessor
+                if n.op_type == "IntQuant":
+                    reason = int_quant_decline_reason(model, n)
+                    if reason is not None:
+                        warnings.warn(
+                            f'The IntQuant node with name: "{n.name}" was not converted to '
+                            f"a MultiThreshold node, because {reason}."
+                        )
+                        continue
                 if n.op_type == "Quant" and not model.get_initializer(n.input[2]) == 0:
                     raise ValueError(
                         "Only Quant nodes with zero-point == 0 are currently supported."

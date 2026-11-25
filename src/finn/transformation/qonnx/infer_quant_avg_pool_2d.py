@@ -39,6 +39,8 @@ from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import get_by_name
 
+from finn.transformation.qonnx.qonnx_activation_handlers import INT_QUANT_OP_TYPES
+
 # Largest window-sum width for which a non-FLOOR Trunc is expressed as thresholds:
 # the thresholds are stored as float32, which represents every integer exactly
 # only up to 2**24.
@@ -144,7 +146,7 @@ def _get_signed_from_upstream(model, trunc_node):
             if next_node.op_type == "BipolarQuant":
                 signed = True
                 break
-            if next_node.op_type == "Quant":
+            if next_node.op_type in INT_QUANT_OP_TYPES:
                 q_inst = getCustomOp(next_node, onnx_opset_version=9)
                 out_dt = q_inst.get_integer_datatype(model)
                 if out_dt is not None and out_dt != DataType["FLOAT32"]:

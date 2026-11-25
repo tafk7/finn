@@ -28,6 +28,7 @@
 
 import numpy as np
 import qonnx.core.onnx_exec as oxe
+import warnings
 from onnx import TensorProto, helper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
@@ -35,6 +36,11 @@ from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.transformation.quant_constant_folding import FoldTransposeIntoQuantInit
 from qonnx.transformation.remove import remove_node_and_rewire
 from qonnx.util.basic import get_preferred_qonnx_opset
+
+from finn.transformation.qonnx.qonnx_activation_handlers import (
+    INT_QUANT_OP_TYPES,
+    int_quant_decline_reason,
+)
 
 
 class FoldQuantWeights(Transformation):
@@ -50,7 +56,7 @@ class FoldQuantWeights(Transformation):
         opset_imports = model.get_opset_imports()
         for n in graph.node:
             node_ind += 1
-            if n.op_type == "Quant" or n.op_type == "BipolarQuant":
+            if n.op_type in INT_QUANT_OP_TYPES or n.op_type == "BipolarQuant":
                 node_inp_inits = list(map(lambda x: model.get_initializer(x), n.input))
                 node_inp_dyn = list(filter(lambda x: x is None, node_inp_inits))
                 node_out = n.output[0]
@@ -59,6 +65,14 @@ class FoldQuantWeights(Transformation):
                 is_const_shape = (n.op_type == "Shape") and (ishape is not None)
                 if is_all_constant_inputs or is_const_shape:
                     # Check node validity
+                    if n.op_type == "IntQuant":
+                        reason = int_quant_decline_reason(model, n)
+                        if reason is not None:
+                            warnings.warn(
+                                f'The IntQuant node with name: "{n.name}" was not folded '
+                                f"into its weights, because {reason}."
+                            )
+                            continue
                     if n.op_type == "Quant" and not model.get_initializer(n.input[2]) == 0:
                         raise ValueError(
                             "Only Quant nodes with zero-point == 0 " "are currently supported."
