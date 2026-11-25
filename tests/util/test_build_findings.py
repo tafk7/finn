@@ -241,7 +241,7 @@ def test_a_mid_write_error_leaves_no_partial_findings_file(
     dump = json.dump
 
     def partial_dump(data, stream, *args, **kwargs):
-        if "mid_write_step" in data:
+        if isinstance(data, dict) and isinstance(data.get("mid_write_step"), dict):
             attempted.append(Path(stream.name))
             stream.write('{"partial":')
             stream.flush()
