@@ -126,8 +126,8 @@ Deleting `FINN_HOME` costs only rebuilds and downloads; deleting the build
 directory loses only build output. `finn resources clean` removes cached
 resources, XSI builds and golden references; `--unused` keeps those the current
 pins, installation and Vivado use. A site `FINN_GOLDEN_DIR` is never cleaned.
-FINN writes nothing into a checkout but the native `.venv`, the editable install's
-metadata and the finn-experimental adapter's build directory.
+FINN writes nothing into a checkout but the native `.venv` and the editable
+install's metadata.
 
 ## Dependencies
 
@@ -151,11 +151,7 @@ per-command overlay instead:
 Like the Brevitas candidate job, an overlay resolves separately unless constrained
 with a generated `uv export`.
 
-The pinned finn-experimental repository declares `packages=find:` despite a
-namespace-only source root, so its wheel contains no Python modules. The
-`packaging/finn-experimental` adapter builds its verified, unchanged sources as a
-namespace wheel; it can go when upstream fixes the package. Sphinx 5.0.2 needs
-docutils below 0.19, so the lock selects 0.18.1.
+Sphinx 5.0.2 needs docutils below 0.19, so the lock selects 0.18.1.
 
 ## External resources
 
@@ -168,8 +164,7 @@ Every directory tree FINN uses that is not Python code is a resource declared in
   package data under `finn/_sources`: in a checkout symbolic links to the trees,
   in a wheel the files themselves, so an installed FINN needs no checkout.
 - Fetched trees, each at a Git commit with a content digest: finn-hlslib, the
-  five upstream Vivado board repositories, the PYNQ golden sources and
-  finn-experimental.
+  five upstream Vivado board repositories, and the PYNQ golden sources.
 
 ```bash
 finn resources list

@@ -105,11 +105,9 @@ MANIFEST
 /tests/benchmark/models/*.zip
 /tests/benchmark/verification_io/*.npy
 
-# Prepared packaging adapter and CI environment evidence
-/packaging/finn-experimental/_source/
+# CI environment evidence
 /image-metadata/
 /brevitas-provenance/
 
-/packaging/finn-experimental/build/
 /docker/packages/*.deb
 /docker/packages/*.rpm

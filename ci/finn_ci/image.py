@@ -43,8 +43,6 @@ INPUTS = (
     "docker/identity.py",
     "docker/install-runtimes.sh",
     "docker/runtimes/*.env",
-    "packaging/finn-experimental/pyproject.toml",
-    "packaging/finn-experimental/setup.py",
     "pyproject.toml",
     "uv.lock",
     "src/finn/resources/*.py",

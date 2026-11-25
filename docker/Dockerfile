@@ -144,8 +144,6 @@ ENV VIRTUAL_ENV=/opt/venv \
     PATH=/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 ARG FINN_UV_NO_CACHE=0
-COPY packaging/finn-experimental/pyproject.toml packaging/finn-experimental/setup.py \
-    /tmp/finn-lock/packaging/finn-experimental/
 
 # FINN's locked dependencies. FINN itself is not installed here; the entrypoint
 # installs it editable from the mounted checkout.
@@ -167,7 +165,7 @@ RUN --mount=type=bind,source=pyproject.toml,target=/tmp/finn-lock/pyproject.toml
 # with the metadata check: a plugin import failure (as with jupyter/anyio) has no
 # metadata conflict.
 RUN uv pip check && \
-    python -c "import numpy, onnx, onnxruntime, torch, qonnx, brevitas, finnexperimental" && \
+    python -c "import numpy, onnx, onnxruntime, torch, qonnx, brevitas" && \
     mkdir -p /tmp/pytest-probe && \
     printf 'def test_probe():\n    assert True\n' > /tmp/pytest-probe/test_probe.py && \
     (cd /tmp/pytest-probe && pytest -q -p no:cacheprovider >/dev/null) && \

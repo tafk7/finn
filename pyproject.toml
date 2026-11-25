@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools==68.2.2", "wheel==0.45.1"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -54,44 +54,28 @@ finn = ["resources.toml", "qnn-data/**/*", "_sources/**/*"]
 [dependency-groups]
 test = [
     "finn[brevitas]",
-    "setuptools==68.2.2",
-    "wheel==0.45.1",
+    "setuptools>=77",  # test_wheel builds FINN with it
     "dataset-loading",
-    "finn-experimental",
     "pytest==7.4.4",
-    "pytest-dependency==0.5.1",
     "pytest-xdist[setproctitle]==3.2.0",
-    "pytest-parallel==0.1.1",
-    "torchaudio==2.8.0",
     "wget==3.2",
-    "deap==1.4.1",
-    "mip==1.13.0",
-    "networkx==2.8",
-    "future-annotations==1.0.0",
-    "dependencies==2.0.1",
-    "tokenize-rt==4.2.1",
 ]
 ci = [
     {"include-group" = "test"},
     {"include-group" = "notebooks"},
-    "pytest-metadata==3.1.1",
     "pytest-html==4.1.1",
     "pytest-html-merger==0.1.0",
     "pytest-cov==4.1.0",
 ]
 notebooks = [
-    "gspread==3.6.0",
     "ipython==8.18.1",
     "ipykernel==6.29.0",
-    "markupsafe==2.1.5",
     "matplotlib>=3.9",  # numpy 2
     "netron",
     "pandas>=2.2.2,<3",  # numpy 2
     "scikit-learn>=1.5",  # numpy 2
     "tqdm==4.64.1",
     "jupyter==1.0.0",
-    "pygments==2.17.2",
-    "pyyaml==6.0.1",
 ]
 docs = [
     {"include-group" = "ci"},
@@ -100,17 +84,11 @@ docs = [
     "sphinx-rtd-theme==2.0.0",
 ]
 # The PyTorch build, selected by the index each group's sources name.
-cpu = ["torch==2.8.0", "torchvision==0.23.0", "torchaudio==2.8.0"]
-cuda = ["torch==2.8.0", "torchvision==0.23.0", "torchaudio==2.8.0"]
+cpu = ["torch==2.8.0", "torchvision==0.23.0"]
+cuda = ["torch==2.8.0", "torchvision==0.23.0"]
 dev = [
     {"include-group" = "docs"},
     "pre-commit==3.5.0",
-    "pyscaffold==4.6",
-    "setupext-janitor>=1.1.2",
-    "setuptools==68.2.2",
-    "wheel==0.45.1",
-    "build==1.2.2.post1",
-    "pip",
 ]
 
 [tool.uv]
@@ -118,18 +96,12 @@ required-version = "==0.10.0"
 default-groups = ["dev", "cpu"]
 conflicts = [[{group = "cpu"}, {group = "cuda"}]]
 environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
-build-constraint-dependencies = ["setuptools==68.2.2", "wheel==0.45.1"]
-constraint-dependencies = ["setuptools==68.2.2", "wheel==0.45.1"]
-# The upstream namespace-only package cannot produce a usable wheel. The
-# adapter below builds its verified, unchanged sources with current metadata.
 
 [tool.uv.sources]
-finn-experimental = {path = "packaging/finn-experimental"}
 dataset-loading = {git = "https://github.com/fbcotter/dataset_loading.git", rev = "5b9faa226e5f7c857579d31cdd9acde8cdfb816f"}
 # PyTorch builds: CPU by default; `uv sync --no-group cpu --group cuda` selects CUDA.
 torch = [{index = "pytorch-cpu", group = "cpu"}, {index = "pytorch-cu126", group = "cuda"}]
 torchvision = [{index = "pytorch-cpu", group = "cpu"}, {index = "pytorch-cu126", group = "cuda"}]
-torchaudio = [{index = "pytorch-cpu", group = "cpu"}, {index = "pytorch-cu126", group = "cuda"}]
 
 [[tool.uv.index]]
 name = "pytorch-cpu"
