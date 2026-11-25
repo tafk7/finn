@@ -29,10 +29,10 @@
 
 import pytest
 
-import importlib_resources as importlib
 import numpy as np
 import torch
 from brevitas.export import export_qonnx
+from importlib import resources
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.bipolar_to_xnor import ConvertBipolarMatMulToXnorPopcount
@@ -102,8 +102,8 @@ def _test_convert_to_hw_layers_cnv_w1a1(fused_activation, build_dir):
     model = model.transform(Streamline())
     model = model.transform(InferDataLayouts())
     # load one of the test vectors
-    ref = importlib.files("finn.qnn-data") / "cifar10/cifar10-test-data-class3.npz"
-    with importlib.as_file(ref) as fn:
+    ref = resources.files("finn.qnn-data") / "cifar10/cifar10-test-data-class3.npz"
+    with resources.as_file(ref) as fn:
         input_tensor = np.load(fn)["arr_0"].astype(np.float32)
     input_tensor = input_tensor / 255
     assert input_tensor.shape == (1, 3, 32, 32)

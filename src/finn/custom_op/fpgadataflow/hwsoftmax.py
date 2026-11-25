@@ -7,9 +7,9 @@
 # @author       Shane T. Fleming <shane.fleming@amd.com>
 ############################################################################
 
+import numpy as np
 import warnings
 from qonnx.core.datatype import DataType
-from scipy.special import softmax
 
 from finn.custom_op.fpgadataflow.hwcustomop import HWCustomOp
 
@@ -40,7 +40,8 @@ class HWSoftmax(HWCustomOp):
     def execute_node(self, context, graph):
         node = self.onnx_node
         input_data = context[node.input[0]]
-        output_data = softmax(input_data, axis=-1)
+        shifted = np.exp(input_data - np.max(input_data, axis=-1, keepdims=True))
+        output_data = shifted / np.sum(shifted, axis=-1, keepdims=True)
         context[node.output[0]] = output_data
 
     def get_input_datatype(self, ind=0):

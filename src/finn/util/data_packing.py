@@ -87,7 +87,7 @@ def array2hexstring(array, dtype, pad_to_nbits, prefix="0x", reverse=False):
     # reverse prior to packing, if desired
     if reverse:
         array = np.flip(array, -1)
-    lineval = BitArray(length=0)
+    lineval = BitArray()
     bw = dtype.bitwidth()
     # special handling for fixed point: rescale, then pack as integers
     if dtype.is_fixed_point():
@@ -105,9 +105,9 @@ def array2hexstring(array, dtype, pad_to_nbits, prefix="0x", reverse=False):
                 lineval.append(BitArray(uint=int(val), length=bw))
         else:
             lineval.append(BitArray(float=val, length=bw))
-    if pad_to_nbits >= lineval.len:
+    if pad_to_nbits >= len(lineval):
         # extend to the desired output width (a minimum of 4 bits)
-        lineval.prepend(BitArray(length=pad_to_nbits - lineval.len))
+        lineval.prepend(BitArray(bin="0" * (pad_to_nbits - len(lineval))))
     else:
         raise Exception("Number of bits is greater than pad_to_nbits")
     # represent as hex

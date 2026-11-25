@@ -28,7 +28,6 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import copy
-import importlib_resources as importlib
 import json
 import numpy as np
 import onnx
@@ -37,6 +36,7 @@ import os
 import shutil
 import warnings
 import xml.etree.ElementTree as ET
+from importlib import resources
 from onnx import TensorProto, helper
 from pkgutil import get_data
 from qonnx.core.datatype import DataType
@@ -187,8 +187,8 @@ def get_example_input(topology):
         onnx_tensor = onnx.load_tensor_from_string(raw_i)
         return nph.to_array(onnx_tensor)
     elif topology == "cnv":
-        ref = importlib.files("finn.qnn-data") / "cifar10/cifar10-test-data-class3.npz"
-        with importlib.as_file(ref) as fn:
+        ref = resources.files("finn.qnn-data") / "cifar10/cifar10-test-data-class3.npz"
+        with resources.as_file(ref) as fn:
             input_tensor = np.load(fn)["arr_0"].astype(np.float32)
         return input_tensor
     else:

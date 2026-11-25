@@ -28,12 +28,12 @@
 
 import pytest
 
-import importlib_resources as importlib
 import numpy as np
 import onnx
 import onnx.numpy_helper as nph
 import torch
 from brevitas.export import export_qonnx
+from importlib import resources
 from pkgutil import get_data
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.batchnorm_to_affine import BatchNormToAffine
@@ -59,8 +59,8 @@ def test_batchnorm_to_affine_cnv_w1a1():
         model = model.transform(ConvertQONNXtoFINN())
         model = model.transform(InferShapes())
         model = model.transform(FoldConstants())
-        ref = importlib.files("finn.qnn-data") / "cifar10/cifar10-test-data-class3.npz"
-        with importlib.as_file(ref) as fn:
+        ref = resources.files("finn.qnn-data") / "cifar10/cifar10-test-data-class3.npz"
+        with resources.as_file(ref) as fn:
             input_tensor = np.load(fn)["arr_0"].astype(np.float32)
         input_tensor = input_tensor / 255
         assert input_tensor.shape == (1, 3, 32, 32)

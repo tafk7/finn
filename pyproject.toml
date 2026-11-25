@@ -13,17 +13,15 @@ requires-python = ">=3.12,<3.13"
 classifiers = ["Development Status :: 4 - Beta", "Programming Language :: Python", "Operating System :: POSIX :: Linux"]
 dependencies = [
     # Lower bounds are the versions upstream dev tests (requirements.txt, the image).
-    "bitstring>=4.2.3,<5",  # 5.0 drops BitArray(length=...)
+    "bitstring>=4.2.3",
     "clize>=5.0.1",
     "dataclasses-json>=0.5.7",
-    "importlib-resources>=6.1.0",
-    "numpy>=1.26.4,<2",  # numpy 2: qonnx attributes reject numpy.float32 from streamlining
-    "onnx>=1.22.0,<1.23",  # 1.23 writes IR version 14, which onnxruntime 1.28 cannot read
-    "onnxruntime>=1.28.0",
+    "numpy>=1.26.4,<2.4",  # 2.4: qonnx IntQuant.get_integer_datatype int()s a shape-(1,) bit width
+    "onnx>=1.22.0",
+    "onnxruntime>=1.32.0",  # reads the IR version onnx 1.23 writes
     "onnxscript>=0.6.2,<0.7",  # loop rolling uses its private rewriter, reworked in 0.7
     "pybind11>=2.11.1",
     "qonnx @ git+https://github.com/fastmachinelearning/qonnx.git@4c1f9b4452bb90e743f3bd7e182603fa5096af06",
-    "scipy>=1.11.4",
 ]
 
 [project.optional-dependencies]
@@ -86,10 +84,10 @@ notebooks = [
     "ipython==8.18.1",
     "ipykernel==6.29.0",
     "markupsafe==2.1.5",
-    "matplotlib==3.8.2",
+    "matplotlib>=3.9",  # numpy 2
     "netron",
-    "pandas==2.1.4",
-    "scikit-learn==1.4.0",
+    "pandas>=2.2.2,<3",  # numpy 2
+    "scikit-learn>=1.5",  # numpy 2
     "tqdm==4.64.1",
     "jupyter==1.0.0",
     "pygments==2.17.2",

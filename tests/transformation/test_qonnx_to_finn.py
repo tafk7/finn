@@ -29,12 +29,12 @@
 
 import pytest
 
-import importlib_resources as importlib
 import numpy as np
 import onnx
 import onnx.numpy_helper as nph
 import torch
 from brevitas.export import export_qonnx
+from importlib import resources
 from onnx import TensorProto, helper
 from pkgutil import get_data
 from qonnx.core.modelwrapper import ModelWrapper
@@ -60,8 +60,8 @@ def get_brev_model_and_sample_inputs(model_name, wbits, abits):
         brev_model = get_test_model_trained(model_name, wbits, abits)
     elif model_name == "CNV":
         in_shape = (1, 3, 32, 32)
-        ref = importlib.files("finn.qnn-data") / "cifar10/cifar10-test-data-class3.npz"
-        with importlib.as_file(ref) as fn:
+        ref = resources.files("finn.qnn-data") / "cifar10/cifar10-test-data-class3.npz"
+        with resources.as_file(ref) as fn:
             input_tensor = np.load(fn)["arr_0"].astype(np.float32)
         input_tensor = input_tensor / 255
         brev_model = get_test_model_trained(model_name, wbits, abits)
