@@ -31,9 +31,11 @@ import math
 import numpy as np
 import os
 import shutil
+from onnx import helper
 from pathlib import Path
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.core.onnx_exec import exact_integers_enabled
 from qonnx.custom_op.registry import getCustomOp, is_custom_op
 from qonnx.util.basic import get_by_name, qonnx_make_model
 
@@ -386,7 +388,16 @@ class FINNLoop(HWCustomOp, RTLBackend):
             # Save all iteration contexts to file
             if save_iteration_context:
                 np.savez(iteration_context_path, **all_iteration_contexts)
-        context[node.output[0]] = np.asarray(result, dtype=np.float32)
+        if exact_integers_enabled() and self.get_nodeattr("exec_mode") != "rtlsim":
+            # Keep the body's computed value across the container boundary.
+            # inp_values above also keeps it between iterations without a cast.
+            dtype = loop_body.graph.output[0].type.tensor_type.elem_type
+            with np.errstate(over="ignore", invalid="ignore"):
+                cast = result.astype(helper.tensor_dtype_to_np_dtype(dtype))
+            kept = np.array_equal(result.astype(object), cast.astype(object))
+            context[node.output[0]] = cast if kept else result
+        else:
+            context[node.output[0]] = np.asarray(result, dtype=np.float32)
 
     def generate_hdl(self, model, fpgapart, clk):
         # Generate params as part of IP preparation

@@ -33,6 +33,7 @@ import os
 import pdb  # NOQA
 import time
 from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.core.onnx_exec import exact_integers
 
 from finn.builder.build_dataflow_checks import (
     format_report,
@@ -238,7 +239,8 @@ def _build_dataflow_cfg(model_filename, cfg: DataflowBuildConfig):
             )
 
     build_dataflow_steps = resolve_build_steps(cfg)
-    return _run_build_steps(model, cfg, build_dataflow_steps)
+    with exact_integers(False if cfg.exact_integers is None else cfg.exact_integers):
+        return _run_build_steps(model, cfg, build_dataflow_steps)
 
 
 def build_dataflow_directory(path_to_cfg_dir: str):

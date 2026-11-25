@@ -25,8 +25,10 @@
 # CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+import numpy as np
 import onnx
 from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.core.onnx_exec import exact_integers_enabled
 from qonnx.custom_op.base import CustomOp
 
 from finn.core.onnx_exec import execute_onnx
@@ -77,9 +79,17 @@ class StreamingDataflowPartition(CustomOp):
             model_oname = model.graph.output[i].name
             # make sure the right output datatype is propagated
             dtype = model.graph.output[i].type.tensor_type.elem_type
-            context[node_oname] = ret[model_oname].astype(
-                onnx.helper.tensor_dtype_to_np_dtype(dtype)
-            )
+            if exact_integers_enabled():
+                output = ret[model_oname]
+                with np.errstate(over="ignore", invalid="ignore"):
+                    cast = output.astype(onnx.helper.tensor_dtype_to_np_dtype(dtype))
+                # Object comparison keeps wide integer/float equality exact too.
+                kept = np.array_equal(output.astype(object), cast.astype(object))
+                context[node_oname] = cast if kept else output
+            else:
+                context[node_oname] = ret[model_oname].astype(
+                    onnx.helper.tensor_dtype_to_np_dtype(dtype)
+                )
         # prefix and insert exec context entries
         if return_full_exec_context:
             for tname in ret.keys():

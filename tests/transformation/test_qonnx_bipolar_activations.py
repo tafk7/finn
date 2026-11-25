@@ -7,6 +7,7 @@ import numpy as np
 from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.core.onnx_exec import exact_integers
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
@@ -36,6 +37,18 @@ def make_bipolar_act_model(act_op_type, scale, **act_attrs):
 
 def execute(model, x):
     return oxe.execute_onnx(model, {"x": x})["y"]
+
+
+@pytest.mark.transform
+def test_bipolar_quant_after_selu_exact_integers():
+    # A fractional scale needs FLOAT32, which holds both outputs exactly.
+    model = make_bipolar_act_model("Selu", 0.5)
+    converted = model.transform(ConvertQONNXtoFINN())
+    assert converted.get_tensor_datatype("y") == DataType["FLOAT32"]
+    expected = np.where(INPUTS >= 0, 0.5, -0.5).astype(np.float32)
+    with exact_integers():
+        assert np.array_equal(execute(model, INPUTS), expected)
+        assert np.array_equal(execute(converted, INPUTS), expected)
 
 
 @pytest.mark.transform

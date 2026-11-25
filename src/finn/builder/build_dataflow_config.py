@@ -508,6 +508,25 @@ class DataflowBuildConfig(DataClassJsonMixin):
     #: Example (step):  inject_steps_before={"step_convert_to_hw": [my_custom_analysis]}
     inject_steps_before: Dict[str, List[Callable]] = field(default_factory=dict)
 
+    #: (Optional) Run executions in the build's own thread inside qonnx's
+    #: exact_integers context. False or None means off. Integer arithmetic with
+    #: a bound and operators that only move values have an exactness proof;
+    #: other operators only refuse values out of range (see qonnx's context).
+    #: MultiThreshold's count and affine result are exact. Synchronous nested
+    #: partitions and loops inherit the setting and keep their computed output
+    #: where casting to the stated type would lose a value.
+    #: A thread or process a step starts does not inherit the setting. No built-in
+    #: step dispatches Python graph execution to a worker. step_create_stitched_ip
+    #: can dispatch native RTL iteration simulation for mlo_parallel_rtlsim;
+    #: native cppsim and RTL execution are outside this guarantee, as are FINN
+    #: HW custom ops' own numpy arithmetic. Native output decoding and the casts
+    #: in HLSBackend, RTLBackend, Thresholding_rtl, MVAU_rtl, VVAU_rtl, Pad1D_rtl
+    #: and LabelSelect_hls execute_node remain outside the guarantee, as do
+    #: finn.util.rtlsim.run_parallel_mlo_rtlsim,
+    #: _simulate_finnloop_iterations and rtlsim_boundary_submodel.
+    #: Saved configurations include this key, False unless set.
+    exact_integers: Optional[bool] = False
+
     def _resolve_hls_clk_period(self):
         if self.hls_clk_period_ns is None:
             # use same clk for synth and hls if not explicitly specified
