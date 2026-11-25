@@ -413,7 +413,7 @@ def test_build_move_add_past_conv_exact_integers(tmp_path, wide):
         # widened execution, rather than round or lack the model's annotations.
         assert wide
         log = (tmp_path / "output/build_dataflow.log").read_text()
-        assert "NotImplementedError" in log and "no float64 kernel for Conv" in log
+        assert "ExecutionUnsupported" in log and "no float64 kernel for Conv" in log
     else:
         assert result == 0
         moved = ModelWrapper(str(tmp_path / "output/intermediate_models/move_add.onnx"))
