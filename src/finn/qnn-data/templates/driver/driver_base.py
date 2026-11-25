@@ -350,7 +350,9 @@ class FINNExampleOverlay(Overlay):
 
     def pack_input(self, ibuf_folded, ind=0):
         """Packs folded input and reverses both SIMD dim and endianness.
-        Gets input data in folded shape and returns packed input data."""
+        Gets input data in folded shape and returns packed input data.
+        Each value the input datatype holds is packed exactly, in whatever
+        numpy type it is given."""
         ibuf_packed = finnpy_to_packed_bytearray(
             ibuf_folded, self.idt(ind), reverse_endian=True, reverse_inner=True
         )
@@ -358,13 +360,18 @@ class FINNExampleOverlay(Overlay):
 
     def unpack_output(self, obuf_packed, ind=0):
         """Unpacks the packed output buffer from accelerator.
-        Gets packed output and returns output data in folded shape."""
+        Gets packed output and returns output data in folded shape.
+        Each value is exact: float32 where float32 holds every value of the
+        output datatype, else float64, or int64/uint64 for an integer datatype
+        wider than float64 holds. A FIXED wider than 54 bits comes back as
+        float64, each value rounded once from its exact value."""
         obuf_folded = packed_bytearray_to_finnpy(
             obuf_packed,
             self.odt(ind),
             self.oshape_folded(ind),
             reverse_endian=True,
             reverse_inner=True,
+            exact=True,
         )
         return obuf_folded
 

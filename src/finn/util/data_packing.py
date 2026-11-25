@@ -406,6 +406,9 @@ def finnpy_to_packed_bytearray(ndarray, dtype, reverse_inner=False, reverse_endi
     * 1-bit dtypes with no padding and both reverses -> direct np.packbits
     * everything else -> general bit-level packing
 
+    Each value that is one of dtype's values is packed exactly, in whatever
+    numpy type it is given. Other values are packed from their float32 value.
+
     Can return a non-contiguous ndarray. Use np.ascontiguousarray or np.copy to
     make it contiguous.
     """
@@ -477,17 +480,44 @@ def _pack_bit_double_reverse(ndarray, dtype, reverse_inner, reverse_endian):
 
 
 def _pack_general(ndarray, dtype, reverse_inner, reverse_endian):
-    """General fallback: convert to a float32 container, encode each value to its
-    target_bits-wide bit pattern, then bit-pack. Handles any dtype/shape (incl.
-    sub-byte widths and scalars) but is the slowest path."""
-    if (not isinstance(ndarray, np.ndarray)) or ndarray.dtype != np.float32:
+    """General fallback: encode each value to its target_bits-wide bit pattern, then
+    bit-pack. Handles any dtype/shape (incl. sub-byte widths and scalars) but is the
+    slowest path.
+
+    A value that is one of dtype's values (dtype.contains) is encoded exactly, in
+    whatever container it is given. Every other value, and every value of a FLOAT
+    dtype, is converted to float32 first and encoded from that."""
+    held = None
+    if not dtype.name.startswith("FLOAT"):
+        values = ndarray
+        if not isinstance(ndarray, np.ndarray):
+            values = np.asarray(ndarray)
+            if values.dtype.kind == "f":
+                # numpy may have rounded Python integers to float64: if so, keep each
+                # value as given
+                given = np.array(ndarray, dtype=object)
+                if given.shape == values.shape and not np.all(given == values.astype(object)):
+                    values = given
+        if values.dtype != np.float32:
+            held = np.asarray(dtype.contains(values), dtype=bool)
+    if held is not None and held.all():
+        ndarray = values
+    elif (not isinstance(ndarray, np.ndarray)) or ndarray.dtype != np.float32:
         # convert to a float numpy array
         ndarray = np.asarray(ndarray, dtype=np.float32)
     scalar_input = ndarray.ndim == 0
     if scalar_input:
         ndarray = ndarray.reshape(1)
     # convert FINN values to their unsigned target_bits-wide bit pattern
-    int_array = finnpy_to_int_array(ndarray, dtype)
+    if held is None or held.all() or not held.any():
+        int_array = finnpy_to_int_array(ndarray, dtype)
+    else:
+        # the values dtype holds exactly as given, the others from their float32 value
+        held = held.reshape(ndarray.shape)
+        exact = finnpy_to_int_array(values.reshape(ndarray.shape)[held], dtype)
+        int_array = np.empty(ndarray.shape, dtype=exact.dtype)
+        int_array[held] = exact
+        int_array[~held] = finnpy_to_int_array(ndarray[~held], dtype)
     # reverse inner dim prior to packing, if desired (value 0 -> most significant)
     if reverse_inner:
         int_array = np.flip(int_array, axis=-1)
@@ -501,9 +531,16 @@ def _pack_general(ndarray, dtype, reverse_inner, reverse_endian):
 
 
 def finnpy_to_int_array(ndarray, dtype):
-    """Encode a float32 container ndarray into an unsigned-integer ndarray whose
-    values are the target_bits-wide bit pattern of each element. Container is the
-    smallest uint that fits target_bits."""
+    """Encode an ndarray of values into an unsigned-integer ndarray whose values
+    are the target_bits-wide bit pattern of each element. Container is the
+    smallest uint that fits target_bits.
+
+    An element that is one of dtype's values (dtype.contains) takes its code from
+    dtype.codes(), exactly, whatever its container. For a FIXED wider than 54
+    bits, codes() takes values as int64 scaled by 2**frac_bits, so those elements
+    are scaled exactly first. Every other element, and every element of a FLOAT dtype,
+    is encoded from its value in the given container after asserting
+    dtype.allowed on it; _pack_general gives those elements as float32."""
     target_bits = dtype.bitwidth()
     # choose smallest unsigned container that fits target_bits
     if target_bits <= 8:
@@ -523,6 +560,52 @@ def finnpy_to_int_array(ndarray, dtype):
         floats = ndarray.astype(">f%d" % nbytes)
         return floats.view(">u%d" % nbytes).astype(target_dtype)
 
+    # the elements dtype holds exactly take their codes from dtype.codes()
+    held = np.zeros(np.shape(ndarray), dtype=bool)
+    if isinstance(ndarray, np.ndarray):
+        held = np.asarray(dtype.contains(ndarray), dtype=bool)
+    encoded = None
+    if held.any():
+        values = ndarray[held]
+        if dtype.carried_as_codes():
+            # codes() takes a wide FIXED's values as int64 scaled by 2**frac_bits
+            frac, top = int(dtype.frac_bits()), 2 ** (int(dtype.bitwidth()) - 1)
+
+            def scale(value):
+                if isinstance(value, (int, np.integer)):
+                    numerator, denominator = int(value), 1
+                else:
+                    numerator, denominator = value.as_integer_ratio()
+                scaled, rest = divmod(numerator << frac, denominator)
+                if rest or not -top <= scaled < top:
+                    raise ValueError(f"{value!r} is not a {dtype} value")
+                return scaled
+
+            if values.dtype.kind == "f" and values.dtype.itemsize <= 8:
+                # scaling by a power of two is exact in float64
+                scaled = np.ldexp(values.astype(np.float64), frac)
+                if not np.all((np.floor(scaled) == scaled) & (scaled >= -top) & (scaled < top)):
+                    raise ValueError(f"a value is not a {dtype} value")
+                values = scaled.astype(np.int64)
+            elif values.dtype.kind in "iu":
+                # an integer v scales into range iff low <= v <= high; then v << frac
+                # is exact in int64
+                low, high = -(top >> frac), (top - 1) >> frac
+                if values.dtype.kind == "u" and np.any(values > high):
+                    raise ValueError(f"a value is not a {dtype} value")
+                values = values.astype(np.int64)
+                if not np.all((values >= low) & (values <= high)):
+                    raise ValueError(f"a value is not a {dtype} value")
+                values = np.left_shift(values, frac) if frac < 64 else np.zeros_like(values)
+            else:
+                values = np.array([scale(value) for value in values.flat], dtype=np.int64)
+        encoded = np.empty(held.shape, dtype=target_dtype)
+        encoded[held] = dtype.codes(values)
+        if held.all():
+            return encoded
+        # the other elements are encoded as before
+        ndarray = ndarray[~held]
+
     assert np.all(dtype.allowed(ndarray)), "This value is not permitted by chosen dtype."
 
     if dtype.name == "BIPOLAR":
@@ -538,7 +621,11 @@ def finnpy_to_int_array(ndarray, dtype):
 
     # mask to target_bits, which yields two's-complement for negative values.
     mask = target_dtype((1 << target_bits) - 1)
-    return ints.astype(target_dtype) & mask
+    ints = ints.astype(target_dtype) & mask
+    if encoded is None:
+        return ints
+    encoded[~held] = ints
+    return encoded
 
 
 def int_array_to_packed_bytearray(int_array, target_bits):
@@ -566,7 +653,12 @@ def int_array_to_packed_bytearray(int_array, target_bits):
 
 
 def packed_bytearray_to_finnpy(
-    packed_bytearray, dtype, output_shape, reverse_inner=False, reverse_endian=False
+    packed_bytearray,
+    dtype,
+    output_shape,
+    reverse_inner=False,
+    reverse_endian=False,
+    exact=False,
 ):
     """
     Given a packed numpy uint8 ndarray, unpack it into a FINN array of
@@ -574,12 +666,55 @@ def packed_bytearray_to_finnpy(
 
     output_shape must be specified to remove padding from the
     packed dimension
+
+    The values come back as float32, rounded where float32 cannot hold them.
+    With exact=True, each value comes back exactly where a numpy number type
+    holds it: as float32 where float32 holds every value of dtype (the same
+    array as without exact), else as float64 where float64 holds every value,
+    else, for an integer dtype, as int64 or uint64. A FIXED wider than 54 bits
+    has no such type: it comes back as float64, each value rounded once to the
+    nearest float64 from its exact value. FLOAT dtypes are not affected.
     """
 
     if (not issubclass(type(packed_bytearray), np.ndarray)) or packed_bytearray.dtype != np.uint8:
         raise Exception("packed_bytearray_to_finnpy needs NumPy uint8 arrays")
     if packed_bytearray.ndim == 0:
         raise Exception("packed_bytearray_to_finnpy expects at least 1D ndarray")
+
+    if exact and not dtype.name.startswith("FLOAT"):
+        try:
+            low, high = dtype.bounds()
+        except ValueError:
+            low = high = None
+        if low is not None:
+            # each value is a multiple of 2**-frac, at most steps of them from 0
+            frac = int(dtype.frac_bits()) if dtype.is_fixed_point() else 0
+            steps = max(-low, high) * 2**frac
+            # float32 holds them if steps fits its 24-bit significand and 2**-frac is
+            # at least its least subnormal, 2**-149; float64 likewise with 53 and 1074
+            if not (steps <= 2**24 and frac <= 149):
+                codes = prepare_values(
+                    packed_bytearray, dtype, output_shape, reverse_inner, reverse_endian
+                )
+                values = dtype.values(codes)
+                if steps <= 2**53 and frac <= 1074:
+                    return values.astype(np.float64)
+                if not dtype.carried_as_codes():
+                    # an integer dtype: values are in int64 or uint64
+                    return values
+                # a wide FIXED: values are int64 scaled by 2**frac; round each once
+                if frac <= 1022:
+                    # every nonzero value is a normal float64, so scaling is exact
+                    return np.ldexp(values.astype(np.float64), -frac)
+                rounded = [value / (1 << frac) for value in values.ravel().tolist()]
+                return np.array(rounded, dtype=np.float64).reshape(values.shape)
+            if dtype.is_fixed_point() and dtype.int_bits() <= 0:
+                # float32 holds these values, but the decoder below needs a positive
+                # integer width
+                codes = prepare_values(
+                    packed_bytearray, dtype, output_shape, reverse_inner, reverse_endian
+                )
+                return dtype.values(codes).astype(np.float32)
 
     # The fast path views the bytes as dtype.to_numpy_dt(), which only works if that
     # numpy type has exactly the packed width: not for types mapped to float32, such
