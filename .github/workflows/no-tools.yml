@@ -1,0 +1,67 @@
+name: NoTools
+
+# FINN installed from its wheel, without the AMD tools: what a pip user without
+# Vivado gets. finn doctor reports and passes, a step that needs a tool says what to
+# source, and the tests that need no tool pass against the installed package.
+
+on:
+  pull_request:
+    branches: [ dev ]
+  push:
+    branches: [ dev ]
+
+jobs:
+
+  wheel-without-tools:
+    name: Wheel install without AMD tools
+    runs-on: ubuntu-24.04
+    env:
+      UV_PROJECT_ENVIRONMENT: ${{ github.workspace }}/../finn-env
+      FINN_BUILD_DIR: ${{ github.workspace }}/../finn-build
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.0"
+
+      - name: Locked dependencies, then FINN from its wheel
+        run: |
+          uv sync --locked --no-install-project
+          uv build --wheel --out-dir ../finn-dist
+          uv pip install --python "$UV_PROJECT_ENVIRONMENT" --no-deps ../finn-dist/finn-*.whl
+          echo "$UV_PROJECT_ENVIRONMENT/bin" >> "$GITHUB_PATH"
+
+      - name: finn doctor
+        working-directory: ${{ runner.temp }}
+        run: |
+          python -c "import finn.util, sys; assert 'site-packages' in finn.util.__file__, finn.util.__file__"
+          finn doctor
+
+      - name: A step that needs a tool names what to source
+        working-directory: ${{ runner.temp }}
+        run: |
+          python - <<'EOF'
+          from finn.util.basic import require_vivado_version
+          from finn.util.launcher import ToolUnavailable
+          try:
+              require_vivado_version()
+          except ToolUnavailable as error:
+              assert "No AMD tools are set up" in str(error), error
+          else:
+              raise SystemExit("require_vivado_version() found Vivado")
+          EOF
+
+      - name: Tests that need no tools, against the installed package
+        working-directory: ${{ runner.temp }}
+        env:
+          # Only for tests that still read the checkout's files (notebooks, benchmarks, an
+          # RTL source), until FINN_ROOT is removed. FINN itself runs from the wheel.
+          FINN_ROOT: ${{ github.workspace }}
+        run: |
+          pytest -c "$GITHUB_WORKSPACE/pyproject.toml" --rootdir "$GITHUB_WORKSPACE" \
+            "$GITHUB_WORKSPACE/tests" -p no:cacheprovider --dist=loadgroup -n auto \
+            -m 'not (vivado or slow or vitis or board or notebooks or sanity_bnn or bnn_aup_zu3 or bnn_zcu104 or bnn_kv260 or bnn_u55c)'

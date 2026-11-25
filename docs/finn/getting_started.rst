@@ -122,6 +122,53 @@ General FINN Docker tips
 * If you want a new terminal on an already-running container, you can do this with ``docker exec -it <name_of_container> bash``.
 * The container is spawned with the `--rm` option, so make sure that any important files you created inside the container are either in the finn compiler folder (which is mounted from the host computer) or otherwise backed up.
 
+Installing FINN with pip
+========================
+
+FINN installs into any Python 3.12 environment, without a checkout of its
+repository. It reads the AMD tools from the shell it starts in, as every AMD tool
+does, and fetches what else it needs the first time it needs it.
+
+1. Make a Python 3.12 environment and install FINN into it (with ``[brevitas]`` for
+   the PyTorch front end)::
+
+    uv venv --python 3.12 finn-env
+    source finn-env/bin/activate
+    uv pip install "finn @ git+https://github.com/Xilinx/finn.git@dev"
+
+   ``uv python install 3.12`` provides the interpreter if the system has none. A
+   distribution's Python needs its headers package as well (``python3.12-dev`` on
+   Ubuntu) for RTL simulation.
+
+2. Source a release's settings, or load your site's Vivado module, and name your
+   licence server::
+
+    source /tools/Xilinx/2025.2/Vivado/settings64.sh
+    export XILINXD_LICENSE_FILE=2100@licence-server
+
+   One FINN process uses one release; to switch, source another release's
+   ``settings64.sh`` in a new shell.
+
+3. Check what FINN finds and what it can run::
+
+    finn doctor
+
+Without the AMD tools FINN still imports, transforms and estimates models, and
+generates code; a step that needs a tool says which ``settings64.sh`` to source.
+cppsim and RTL simulation also need ``g++``.
+
+FINN fetches finn-hlslib, board files and its other resources into ``~/.finn`` the
+first time a build needs them, and builds its XSim binding for the sourced Vivado
+the first time it simulates RTL. ``finn-resources fetch --all`` fetches every
+resource ahead of offline use, and ``python -m finn.xsi.setup`` prebuilds the
+binding.
+
+``finn doctor`` also lists what FINN knows about the sourced release that its
+installation does not show: a release's own behaviour and what FINN does about it.
+With Vitis 2026.2, for example, ``settings64.sh`` makes every Python load an older
+C++ runtime, so extensions you compile yourself may fail to import there; FINN's own
+binding is not affected.
+
 Running FINN without Docker (Local Installation)
 =================================================
 
@@ -167,8 +214,9 @@ Quick Start
 
     source scripts/activate.sh
 
-5. Verify the installation::
+5. Check what FINN finds, then verify the installation::
 
+    finn doctor
     ./scripts/quicktest-local.sh
 
 Setup Script Options

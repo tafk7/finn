@@ -58,6 +58,7 @@ Install the system prerequisites (`sudo ./scripts/install-system-deps.sh`), then
 source /tools/Xilinx/2025.2/Vivado/settings64.sh   # or the site's Vivado module
 ./setup-local.sh
 source scripts/activate.sh
+finn doctor                  # what FINN finds, and what it can run here
 ./scripts/quicktest-local.sh
 ```
 
@@ -79,6 +80,15 @@ tools set up, a step that needs them names the newest release installed under
 `/tools/Xilinx`, `/opt/Xilinx` or `~/Xilinx` and the `settings64.sh` to source; it
 never uses it by itself. `VIVADO_PATH`, `VITIS_PATH` and `HLS_PATH`, which only
 `run-docker.sh` set, are still read in place of the AMD names, with a warning.
+
+`finn doctor` reports, and changes nothing: the release in the environment and
+whether its tools agree, other installed releases, the compiler, Python headers,
+licence settings, the XSI binding, each resource's source, and what FINN can run
+with what is set up. It also prints what FINN knows about the release in use that
+the installation does not show (`finn.util.releases`: a release's own behaviour and
+what FINN does about it). It exits 1 for a broken environment, such as tools of two
+releases, and 0 without tools; `--json` is for CI. Inside a container it shows what
+the launch passed in.
 
 ## Host tools and licences
 
