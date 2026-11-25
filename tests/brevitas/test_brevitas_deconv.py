@@ -68,7 +68,7 @@ def test_brevitas_QTransposeConv(ifm_ch, ofm_ch, mh, mw, padding, stride, kw, bi
     build_dir = make_build_dir("test_brevitas_QTransposeConv")
     export_path = os.path.join(build_dir, "test_brevitas_deconv.onnx")
     # outp = el(inp) # expects NCHW data format
-    export_qonnx(b_deconv, input_t=inp, export_path=export_path, opset_version=11)
+    export_qonnx(b_deconv, input_t=inp, export_path=export_path, opset_version=11, dynamo=False)
     qonnx_cleanup(export_path, out_file=export_path)
     model = ModelWrapper(export_path)
     model = model.transform(ConvertQONNXtoFINN())

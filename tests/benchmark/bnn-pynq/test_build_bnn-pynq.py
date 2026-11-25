@@ -45,7 +45,7 @@ def custom_step_add_preproc(model, cfg):
     global_inp_name = model.get_first_global_in()
     ishape = model.get_tensor_shape(global_inp_name)
     preproc_file = os.path.join(make_build_dir("bnn_preproc_"), "preproc.onnx")
-    export_qonnx(ToTensor(), torch.randn(ishape), preproc_file, opset_version=13)
+    export_qonnx(ToTensor(), torch.randn(ishape), preproc_file, opset_version=13, dynamo=False)
     qonnx_cleanup(preproc_file, out_file=preproc_file)
     pre_model = ModelWrapper(preproc_file)
     pre_model = pre_model.transform(ConvertQONNXtoFINN())

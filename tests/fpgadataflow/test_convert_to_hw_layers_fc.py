@@ -74,7 +74,7 @@ def test_convert_to_hw_layers_tfc_w1a1():
 def _test_convert_to_hw_layers_tfc_w1a1(build_dir):
     export_onnx_path = f"{build_dir}/test_convert_to_hw_layers_fc.onnx"
     tfc = get_test_model_trained("TFC", 1, 1)
-    export_qonnx(tfc, torch.randn(1, 1, 28, 28), export_onnx_path)
+    export_qonnx(tfc, torch.randn(1, 1, 28, 28), export_onnx_path, dynamo=False)
     qonnx_cleanup(export_onnx_path, out_file=export_onnx_path)
     model = ModelWrapper(export_onnx_path)
     model = model.transform(ConvertQONNXtoFINN())
@@ -157,7 +157,7 @@ def test_convert_to_hw_layers_tfc_w1a2():
 def _test_convert_to_hw_layers_tfc_w1a2(build_dir):
     export_onnx_path = f"{build_dir}/test_convert_to_hw_layers_fc.onnx"
     tfc = get_test_model_trained("TFC", 1, 2)
-    export_qonnx(tfc, torch.randn(1, 1, 28, 28), export_onnx_path)
+    export_qonnx(tfc, torch.randn(1, 1, 28, 28), export_onnx_path, dynamo=False)
     qonnx_cleanup(export_onnx_path, out_file=export_onnx_path)
     model = ModelWrapper(export_onnx_path)
     model = model.transform(ConvertQONNXtoFINN())

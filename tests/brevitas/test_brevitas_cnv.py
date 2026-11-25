@@ -55,7 +55,7 @@ def test_brevitas_cnv_export_exec(wbits, abits):
     export_onnx_path = os.path.join(build_dir, "test_brevitas_cnv.onnx")
     cnv = get_test_model_trained("CNV", wbits, abits)
     ishape = (1, 3, 32, 32)
-    export_qonnx(cnv, torch.randn(ishape), export_onnx_path)
+    export_qonnx(cnv, torch.randn(ishape), export_onnx_path, dynamo=False)
     qonnx_cleanup(export_onnx_path, out_file=export_onnx_path)
     model = ModelWrapper(export_onnx_path)
     model = model.transform(ConvertQONNXtoFINN())

@@ -95,7 +95,7 @@ def create_requant_model(abits, max_val, ishape, per_channel):
     # Export to QONNX
     build_dir = make_build_dir(prefix="test_requant_")
     m_path = os.path.join(build_dir, "model.onnx")
-    export_qonnx(b_act, torch.randn(ishape), m_path)
+    export_qonnx(b_act, torch.randn(ishape), m_path, dynamo=False)
     qonnx_cleanup(m_path, out_file=m_path)
 
     # Convert to FINN format (creates MultiThreshold)
@@ -137,7 +137,7 @@ def create_signed_requant_model(abits, max_val, ishape, per_channel):
     # Export to QONNX
     build_dir = make_build_dir(prefix="test_requant_signed_")
     m_path = os.path.join(build_dir, "model.onnx")
-    export_qonnx(b_act, torch.randn(ishape), m_path)
+    export_qonnx(b_act, torch.randn(ishape), m_path, dynamo=False)
     qonnx_cleanup(m_path, out_file=m_path)
 
     # Convert to FINN format (creates MultiThreshold)

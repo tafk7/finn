@@ -64,7 +64,7 @@ def make_concat_model(i_shapes, idts):
         input_t.append(torch.zeros(i_shape, dtype=torch.float32))
     input_t = tuple(input_t)
     model_bytes = BytesIO()
-    torch.onnx.export(torch_model, input_t, model_bytes, opset_version=11)
+    torch.onnx.export(torch_model, input_t, model_bytes, opset_version=11, dynamo=False)
     model = onnx.ModelProto.FromString(model_bytes.getvalue())
     model = ModelWrapper(model)
     for inp, idt in zip(model.graph.input, idts):

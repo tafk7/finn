@@ -63,7 +63,7 @@ def test_brevitas_fc_onnx_export_and_exec(size, wbits, abits):
     finn_onnx = export_onnx_path + "/%s.onnx" % nname
     fc = get_test_model_trained(size, wbits, abits)
     ishape = (1, 1, 28, 28)
-    export_qonnx(fc, torch.randn(ishape), finn_onnx)
+    export_qonnx(fc, torch.randn(ishape), finn_onnx, dynamo=False)
     qonnx_cleanup(finn_onnx, out_file=finn_onnx)
     model = ModelWrapper(finn_onnx)
     model = model.transform(ConvertQONNXtoFINN())

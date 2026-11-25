@@ -137,7 +137,7 @@ updates. QONNX and Brevitas are pinned to upstream's Git selections. The groups
 
 PyTorch is the CPU build by default (the `cpu` group). FINN does not use CUDA;
 for a GPU environment, `uv sync --locked --no-group cpu --group cuda` selects the
-CUDA 12.6 build from the same lock.
+CUDA 13.2 build from the same lock.
 
 For native co-development of a dependency, use uv's local source support
 (`uv add --editable /absolute/checkout`), and restore the committed selection

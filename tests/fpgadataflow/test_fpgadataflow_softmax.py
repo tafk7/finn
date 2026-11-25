@@ -57,7 +57,7 @@ def create_softmax_model(io_shape, idt, build_dir):
     export_onnx_path = f"{build_dir}/pytest_softmax_dut.onnx"
     dut = SoftMaxSimple()
     input = torch.rand(io_shape)
-    export_qonnx(dut, input, export_onnx_path, opset_version=11)
+    export_qonnx(dut, input, export_onnx_path, opset_version=11, dynamo=False)
     qonnx_cleanup(export_onnx_path, out_file=export_onnx_path)
     model = ModelWrapper(export_onnx_path)
     model.set_tensor_datatype(model.graph.input[0].name, idt)

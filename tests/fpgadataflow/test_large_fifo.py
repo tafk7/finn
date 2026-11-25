@@ -22,7 +22,7 @@ def fetch_test_model(topology, wbits=2, abits=2):
     tmp_output_dir = make_build_dir("build_large_fifo_%s_" % topology)
     (model, ishape) = get_trained_network_and_ishape(topology, wbits, abits)
     chkpt_name = tmp_output_dir + "/model.onnx"
-    export_qonnx(model, torch.randn(ishape), chkpt_name)
+    export_qonnx(model, torch.randn(ishape), chkpt_name, dynamo=False)
     return tmp_output_dir
 
 

@@ -51,7 +51,7 @@ def test_sign_to_thres():
     try:
         export_onnx_path = f"{build_dir}/test_sign_to_thres.onnx"
         lfc = get_test_model_trained("LFC", 1, 1)
-        export_qonnx(lfc, torch.randn(1, 1, 28, 28), export_onnx_path)
+        export_qonnx(lfc, torch.randn(1, 1, 28, 28), export_onnx_path, dynamo=False)
         qonnx_cleanup(export_onnx_path, out_file=export_onnx_path)
         model = ModelWrapper(export_onnx_path)
         model = model.transform(ConvertQONNXtoFINN())

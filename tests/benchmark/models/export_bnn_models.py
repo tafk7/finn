@@ -37,7 +37,9 @@ def main():
     for topology, wbits, abits in _CONFIGS:
         model = get_test_model_trained(topology.upper(), wbits, abits)
         out_file = os.path.join(HERE, "%s-w%da%d.onnx" % (topology, wbits, abits))
-        export_qonnx(model, torch.randn(_ISHAPE[topology]), out_file, opset_version=13)
+        export_qonnx(
+            model, torch.randn(_ISHAPE[topology]), out_file, opset_version=13, dynamo=False
+        )
         print("exported %s" % out_file)
 
 

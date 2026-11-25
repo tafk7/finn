@@ -60,7 +60,7 @@ def test_infer_data_layouts_cnv():
     try:
         export_onnx_path_cnv = f"{build_dir}/test_infer_data_layouts.onnx"
         cnv = get_test_model_trained("CNV", 1, 1)
-        export_qonnx(cnv, torch.randn(1, 3, 32, 32), export_onnx_path_cnv)
+        export_qonnx(cnv, torch.randn(1, 3, 32, 32), export_onnx_path_cnv, dynamo=False)
         qonnx_cleanup(export_onnx_path_cnv, out_file=export_onnx_path_cnv)
         model = ModelWrapper(export_onnx_path_cnv)
         model = model.transform(ConvertQONNXtoFINN())

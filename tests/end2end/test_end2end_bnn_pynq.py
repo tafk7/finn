@@ -445,7 +445,7 @@ class TestEnd2End:
             pytest.skip("Skipping certain lfc configs")
         (model, ishape) = get_trained_network_and_ishape(topology, wbits, abits)
         chkpt_name = get_checkpoint_name(board, topology, wbits, abits, "export")
-        export_qonnx(model, torch.randn(ishape), chkpt_name, opset_version=13)
+        export_qonnx(model, torch.randn(ishape), chkpt_name, opset_version=13, dynamo=False)
         qonnx_cleanup(chkpt_name, out_file=chkpt_name)
         model = ModelWrapper(chkpt_name)
         model = model.transform(ConvertQONNXtoFINN())
@@ -472,7 +472,9 @@ class TestEnd2End:
         # preprocessing: torchvision's ToTensor divides uint8 inputs by 255
         totensor_pyt = ToTensor()
         chkpt_preproc_name = get_checkpoint_name(board, topology, wbits, abits, "preproc")
-        export_qonnx(totensor_pyt, torch.randn(ishape), chkpt_preproc_name, opset_version=13)
+        export_qonnx(
+            totensor_pyt, torch.randn(ishape), chkpt_preproc_name, opset_version=13, dynamo=False
+        )
         qonnx_cleanup(chkpt_preproc_name, out_file=chkpt_preproc_name)
         pre_model = ModelWrapper(chkpt_preproc_name)
         pre_model = pre_model.transform(ConvertQONNXtoFINN())

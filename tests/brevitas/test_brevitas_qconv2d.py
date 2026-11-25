@@ -93,7 +93,7 @@ def test_brevitas_QConv2d(dw, bias, in_channels):
     b_conv.eval()
     build_dir = make_build_dir(prefix="test_brevitas_QConv2d")
     m_path = os.path.join(build_dir, "test_brevitas_conv.onnx")
-    export_qonnx(b_conv, torch.randn(ishape), m_path)
+    export_qonnx(b_conv, torch.randn(ishape), m_path, dynamo=False)
     qonnx_cleanup(m_path, out_file=m_path)
     model = ModelWrapper(m_path)
     model = model.transform(ConvertQONNXtoFINN())

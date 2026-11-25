@@ -30,8 +30,10 @@ dependencies = [
 brevitas = [
     "brevitas>=0.13.4",
     "onnxoptimizer>=0.4.2",  # brevitas exports through it, without declaring it
-    "torch>=2.8.0,<2.9",  # from 2.9 brevitas exports with dynamo, which cannot target the opsets FINN uses
-    "torchvision>=0.23.0,<0.24",
+    # From 2.9 brevitas exports with dynamo by default, whose opset 18+ graphs FINN
+    # cannot read yet: export with dynamo=False.
+    "torch>=2.8.0",
+    "torchvision>=0.23.0",
 ]
 
 [project.urls]
@@ -82,8 +84,8 @@ docs = [
     "sphinx-rtd-theme==2.0.0",
 ]
 # The PyTorch build, selected by the index each group's sources name.
-cpu = ["torch==2.8.0", "torchvision==0.23.0"]
-cuda = ["torch==2.8.0", "torchvision==0.23.0"]
+cpu = ["torch", "torchvision"]
+cuda = ["torch", "torchvision"]
 dev = [
     {"include-group" = "docs"},
     "pre-commit==3.5.0",
@@ -97,8 +99,8 @@ environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
 
 [tool.uv.sources]
 # PyTorch builds: CPU by default; `uv sync --no-group cpu --group cuda` selects CUDA.
-torch = [{index = "pytorch-cpu", group = "cpu"}, {index = "pytorch-cu126", group = "cuda"}]
-torchvision = [{index = "pytorch-cpu", group = "cpu"}, {index = "pytorch-cu126", group = "cuda"}]
+torch = [{index = "pytorch-cpu", group = "cpu"}, {index = "pytorch-cu132", group = "cuda"}]
+torchvision = [{index = "pytorch-cpu", group = "cpu"}, {index = "pytorch-cu132", group = "cuda"}]
 
 [[tool.uv.index]]
 name = "pytorch-cpu"
@@ -106,8 +108,8 @@ url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
 [[tool.uv.index]]
-name = "pytorch-cu126"
-url = "https://download.pytorch.org/whl/cu126"
+name = "pytorch-cu132"
+url = "https://download.pytorch.org/whl/cu132"
 explicit = true
 
 [tool.pytest.ini_options]

@@ -57,6 +57,7 @@ def test_brevitas_act_export_selu(abits, ishape, narrow):
         torch.randn(ishape),
         export_path,
         opset_version=get_preferred_onnx_opset(),
+        dynamo=False,
     )
     qonnx_cleanup(export_path, out_file=export_path)
     model = ModelWrapper(export_path)

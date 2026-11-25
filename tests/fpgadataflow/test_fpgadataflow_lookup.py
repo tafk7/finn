@@ -76,7 +76,7 @@ def make_lookup_model(embeddings, ishape, idt, edt, build_dir):
 
     torch_model = LookupModel(num_embeddings, embedding_dim)
     input_t = torch.zeros(ishape, dtype=torch.int64)
-    export_qonnx(torch_model, input_t, export_onnx_path, opset_version=11)
+    export_qonnx(torch_model, input_t, export_onnx_path, opset_version=11, dynamo=False)
     qonnx_cleanup(export_onnx_path, out_file=export_onnx_path)
     model = ModelWrapper(export_onnx_path)
     model = model.transform(ConvertQONNXtoFINN())

@@ -113,7 +113,7 @@ def test_QONNX_to_FINN(model_name, wbits, abits):
     brev_output = brev_model.forward(torch_input_tensor).detach().numpy()
 
     # Get QONNX model
-    _ = export_qonnx(brev_model, torch.randn(in_shape), qonnx_base_path.format("raw"))
+    _ = export_qonnx(brev_model, torch.randn(in_shape), qonnx_base_path.format("raw"), dynamo=False)
     cleanup(qonnx_base_path.format("raw"), out_file=qonnx_base_path.format("clean"))
 
     # Compare output

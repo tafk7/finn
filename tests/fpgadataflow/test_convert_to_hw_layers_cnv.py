@@ -84,7 +84,7 @@ def test_convert_to_hw_layers_cnv_w1a1(fused_activation):
 def _test_convert_to_hw_layers_cnv_w1a1(fused_activation, build_dir):
     export_onnx_path_cnv = f"{build_dir}/test_convert_to_hw_layers_cnv.onnx"
     cnv = get_test_model_trained("CNV", 1, 1)
-    export_qonnx(cnv, torch.randn(1, 3, 32, 32), export_onnx_path_cnv)
+    export_qonnx(cnv, torch.randn(1, 3, 32, 32), export_onnx_path_cnv, dynamo=False)
     qonnx_cleanup(export_onnx_path_cnv, out_file=export_onnx_path_cnv)
     model = ModelWrapper(export_onnx_path_cnv)
     model = model.transform(ConvertQONNXtoFINN())

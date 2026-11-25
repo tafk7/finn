@@ -68,7 +68,7 @@ def test_brevitas_qlinear(bias, out_features, in_features, w_bits, i_dtype):
     b_linear.eval()
     build_dir = make_build_dir(prefix="test_brevitas_qlinear")
     m_path = os.path.join(build_dir, "test_brevitas_qlinear.onnx")
-    export_qonnx(b_linear, torch.randn(i_shape), m_path)
+    export_qonnx(b_linear, torch.randn(i_shape), m_path, dynamo=False)
     qonnx_cleanup(m_path, out_file=m_path)
     model = ModelWrapper(m_path)
     model = model.transform(ConvertQONNXtoFINN())

@@ -113,7 +113,7 @@ def test_brevitas_compare_exported_mobilenet():
     # export preprocessing
     preproc_onnx = export_onnx_path + "/quant_mobilenet_v1_4b_preproc.onnx"
     preproc = NormalizePreProc(mean, std, ch)
-    export_qonnx(preproc, torch.randn(1, 3, 224, 224), preproc_onnx)
+    export_qonnx(preproc, torch.randn(1, 3, 224, 224), preproc_onnx, dynamo=False)
     qonnx_cleanup(preproc_onnx, out_file=preproc_onnx)
     preproc_model = ModelWrapper(preproc_onnx)
     preproc_model = preproc_model.transform(ConvertQONNXtoFINN())
@@ -126,7 +126,7 @@ def test_brevitas_compare_exported_mobilenet():
     mobilenet = get_test_model_trained("mobilenet", 4, 4)
     if debug_mode:
         dbg_hook = bo.enable_debug(mobilenet)
-    export_qonnx(mobilenet, torch.randn(1, 3, 224, 224), finn_onnx)
+    export_qonnx(mobilenet, torch.randn(1, 3, 224, 224), finn_onnx, dynamo=False)
     qonnx_cleanup(finn_onnx, out_file=finn_onnx)
     model = ModelWrapper(finn_onnx)
     model = model.transform(ConvertQONNXtoFINN())

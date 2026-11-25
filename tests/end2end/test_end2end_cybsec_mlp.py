@@ -120,7 +120,9 @@ def test_end2end_cybsec_mlp_export():
 
     # With the onnx export from Brevitas we need to manually set
     # the FINN DataType at the input
-    export_qonnx(model_for_export, torch.randn(input_shape), export_path=export_onnx_path)
+    export_qonnx(
+        model_for_export, torch.randn(input_shape), export_path=export_onnx_path, dynamo=False
+    )
     model = ModelWrapper(export_onnx_path)
     model.set_tensor_datatype(model.get_first_global_in(), DataType["BIPOLAR"])
     model.save(export_onnx_path)

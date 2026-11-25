@@ -98,7 +98,7 @@ def construct_onnx_model(
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".onnx") as temp_file:
         model_input = torch.rand(input_shape)
-        export_qonnx(model, model_input, temp_file.name, opset_version=17)
+        export_qonnx(model, model_input, temp_file.name, opset_version=17, dynamo=False)
         qonnx_cleanup(temp_file.name, out_file=temp_file.name)
 
         new_model = ModelWrapper(temp_file.name)

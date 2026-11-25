@@ -54,7 +54,7 @@ def test_brevitas_debug(QONNX_FINN_conversion):
     fc = get_test_model_trained("TFC", 2, 2)
     ishape = (1, 1, 28, 28)
     dbg_hook = bo.enable_debug(fc, proxy_level=True)
-    export_qonnx(fc, torch.randn(ishape), finn_onnx)
+    export_qonnx(fc, torch.randn(ishape), finn_onnx, dynamo=False)
     # DebugMarkers have the brevitas.onnx domain, so that needs adjusting
     model = ModelWrapper(finn_onnx)
     dbg_nodes = model.get_nodes_by_op_type("DebugMarker")

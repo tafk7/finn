@@ -196,7 +196,13 @@ def test_fpgadataflow_upsampler(dt, IFMDim, scale, NumChannels, exec_mode, SIMD,
     # Get golden PyTorch and ONNX inputs
     golden_torch_float = torch_model(test_in)
     export_path = f"{tmpdir}/Upsample_exported.onnx"
-    export_qonnx(torch_model, torch.randn(input_shape), export_path, opset_version=opset_version)
+    export_qonnx(
+        torch_model,
+        torch.randn(input_shape),
+        export_path,
+        opset_version=opset_version,
+        dynamo=False,
+    )
     qonnx_cleanup(export_path, out_file=export_path)
     model = ModelWrapper(export_path)
     model = model.transform(ConvertQONNXtoFINN())

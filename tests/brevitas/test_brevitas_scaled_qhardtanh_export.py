@@ -86,7 +86,7 @@ tensor_quant.scaling_impl.learned_value": torch.tensor(
         b_act.load_state_dict(checkpoint)
     build_dir = make_build_dir(prefix="test_brevitas_act_export_qhardtanh_scaled")
     m_path = os.path.join(build_dir, "test_brevitas_scaled_QHardTanh_export.onnx")
-    export_qonnx(b_act, torch.randn(ishape), m_path)
+    export_qonnx(b_act, torch.randn(ishape), m_path, dynamo=False)
     qonnx_cleanup(m_path, out_file=m_path)
     model = ModelWrapper(m_path)
     model = model.transform(ConvertQONNXtoFINN())

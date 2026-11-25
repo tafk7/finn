@@ -96,6 +96,7 @@ def test_brevitas_avg_pool_export(
         model_brevitas,
         export_path=export_onnx_path,
         input_t=input_tensor,
+        dynamo=False,
     )
     model = ModelWrapper(export_onnx_path)
     model.save(export_onnx_path)

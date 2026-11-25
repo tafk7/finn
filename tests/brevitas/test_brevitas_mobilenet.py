@@ -78,7 +78,7 @@ def test_brevitas_mobilenet():
     std = 0.226
     ch = 3
     preproc = NormalizePreProc(mean, std, ch)
-    export_qonnx(preproc, torch.randn(1, 3, 224, 224), preproc_onnx)
+    export_qonnx(preproc, torch.randn(1, 3, 224, 224), preproc_onnx, dynamo=False)
     qonnx_cleanup(preproc_onnx, out_file=preproc_onnx)
     preproc_model = ModelWrapper(preproc_onnx)
     preproc_model = preproc_model.transform(ConvertQONNXtoFINN())
@@ -91,7 +91,7 @@ def test_brevitas_mobilenet():
 
     finn_onnx = export_onnx_path + "/quant_mobilenet_v1_4b_exported.onnx"
     mobilenet = get_test_model_trained("mobilenet", 4, 4)
-    export_qonnx(mobilenet, torch.randn(1, 3, 224, 224), finn_onnx)
+    export_qonnx(mobilenet, torch.randn(1, 3, 224, 224), finn_onnx, dynamo=False)
     qonnx_cleanup(finn_onnx, out_file=finn_onnx)
 
     # do forward pass in PyTorch/Brevitas

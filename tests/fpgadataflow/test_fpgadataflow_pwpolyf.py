@@ -258,7 +258,7 @@ def test_fpgadataflow_pwpolyf_infer(pattern, expected_func, degree):
     if pattern == "export":
         mod = PWPolyFActivation(expected_func, K=3, degree=degree).eval()
         with tempfile.NamedTemporaryFile(suffix=".onnx") as f:
-            export_qonnx(mod, torch.randn(1, num_channels), f.name)
+            export_qonnx(mod, torch.randn(1, num_channels), f.name, dynamo=False)
             model = ModelWrapper(f.name)
         assert model.graph.node[0].op_type == "PWPolyFunction"
     elif pattern in ["Gelu", "Sigmoid", "Tanh"]:

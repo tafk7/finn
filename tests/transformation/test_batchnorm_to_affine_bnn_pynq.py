@@ -53,7 +53,7 @@ def test_batchnorm_to_affine_cnv_w1a1():
     try:
         export_onnx_path = f"{build_dir}/test_output_bn2affine.onnx"
         lfc = get_test_model_trained("CNV", 1, 1)
-        export_qonnx(lfc, torch.randn(1, 3, 32, 32), export_onnx_path)
+        export_qonnx(lfc, torch.randn(1, 3, 32, 32), export_onnx_path, dynamo=False)
         qonnx_cleanup(export_onnx_path, out_file=export_onnx_path)
         model = ModelWrapper(export_onnx_path)
         model = model.transform(ConvertQONNXtoFINN())
@@ -85,7 +85,7 @@ def test_batchnorm_to_affine_lfc_w1a1():
     try:
         export_onnx_path = f"{build_dir}/test_output_bn2affine.onnx"
         lfc = get_test_model_trained("LFC", 1, 1)
-        export_qonnx(lfc, torch.randn(1, 1, 28, 28), export_onnx_path)
+        export_qonnx(lfc, torch.randn(1, 1, 28, 28), export_onnx_path, dynamo=False)
         qonnx_cleanup(export_onnx_path, out_file=export_onnx_path)
         model = ModelWrapper(export_onnx_path)
         model = model.transform(ConvertQONNXtoFINN())

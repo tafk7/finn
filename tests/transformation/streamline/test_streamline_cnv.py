@@ -65,7 +65,7 @@ def test_streamline_cnv(size, wbits, abits):
     export_onnx_path = make_build_dir("test_streamline_cnv_")
     finn_onnx = export_onnx_path + "/%s.onnx" % nname
     fc = get_test_model_trained(size, wbits, abits)
-    export_qonnx(fc, torch.randn(1, 3, 32, 32), finn_onnx)
+    export_qonnx(fc, torch.randn(1, 3, 32, 32), finn_onnx, dynamo=False)
     qonnx_cleanup(finn_onnx, out_file=finn_onnx)
     model = ModelWrapper(finn_onnx)
     model = model.transform(ConvertQONNXtoFINN())

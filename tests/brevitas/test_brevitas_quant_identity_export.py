@@ -35,6 +35,7 @@ def test_brevitas_quant_identity_export(abits, ishape, narrow, quant):
         torch.randn(ishape),
         export_path,
         opset_version=get_preferred_onnx_opset(),
+        dynamo=False,
     )
     qonnx_cleanup(export_path, out_file=export_path)
     model = ModelWrapper(export_path)
@@ -95,6 +96,7 @@ def test_brevitas_quant_identity_export_per_channel(
         torch.randn(ishape),
         export_path,
         opset_version=get_preferred_onnx_opset(),
+        dynamo=False,
     )
     qonnx_cleanup(export_path, out_file=export_path)
     model = ModelWrapper(export_path)
