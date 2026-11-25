@@ -51,3 +51,28 @@ def test_the_kernel_loads_without_ld_library_path():
     )
     assert proc.returncode == 0, proc.stderr
     assert int(proc.stdout) > 1
+
+
+def test_a_design_library_loads_without_ld_library_path():
+    """An IP-integrator design's xsimk.so needs libxv_simbridge_kernel.so, which the
+    kernel does not; load_needed brings in what a design needs."""
+    vivado = os.environ.get("XILINX_VIVADO")
+    lib_dir = os.path.join(vivado or "", "lib", "lnx64.o")
+    bridge = os.path.join(lib_dir, "libxv_simbridge_kernel.so")
+    if not os.path.isfile(bridge):
+        pytest.skip("needs a Vivado installation with libxv_simbridge_kernel.so (XILINX_VIVADO)")
+    probe = (
+        "import ctypes, sys; sys.path.insert(0, sys.argv[1]);"
+        "from finn_xsi.kernel_loader import load_needed;"
+        "print(load_needed(sys.argv[2], sys.argv[3]));"
+        "ctypes.CDLL(sys.argv[3])"
+    )
+    env = {k: v for k, v in os.environ.items() if k not in ("LD_LIBRARY_PATH", "LD_PRELOAD")}
+    proc = subprocess.run(
+        [sys.executable, "-c", probe, _XSI_ROOT, vivado, bridge],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert int(proc.stdout) > 1

@@ -12,7 +12,7 @@ import errno
 import os
 import os.path
 import xsi
-from finn_xsi.kernel_loader import load_kernel
+from finn_xsi.kernel_loader import load_kernel, load_needed
 from finn_xsi.sim_engine import SimEngine
 from finn_xsi.srcutil import order_pkg_first
 from typing import Optional
@@ -160,6 +160,7 @@ def load_sim_obj(sim_out_dir, out_so_relative_path, tracefile=None, simkernel_so
     # is no longer sim_out_dir. Hence, load by absolute paths and pass the snapshot
     # directory as xsimDir, which does not change the CWD at all.
     sim_out_dir = os.path.abspath(sim_out_dir)
+    load_needed(amd_path("XILINX_VIVADO"), os.path.join(sim_out_dir, out_so_relative_path))
     transcript = os.path.join(sim_out_dir, "rtlsim.log")
     if tracefile:
         # relative trace files land in sim_out_dir

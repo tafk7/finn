@@ -6,8 +6,9 @@ AMD's settings64.sh does not put ``$XILINX_VIVADO/lib/lnx64.o`` on LD_LIBRARY_PA
 and the kernel and its libraries there carry no run path, so the dynamic loader
 cannot find them by name. Loading each one by its full path, dependencies first,
 makes the later load by name (the kernel, and each design's xsimk.so that needs it)
-reuse them. Only libraries in that directory are loaded; the system's own are left
-to the dynamic loader."""
+reuse them. A design may need more of them than the kernel does (an IP-integrator
+design, libxv_simbridge_kernel.so). Only libraries in that directory are loaded; the
+system's own are left to the dynamic loader."""
 import ctypes
 import functools
 import os
@@ -61,6 +62,17 @@ def _load(lib_dir: str, name: str, loaded: set) -> None:
     for dependency in needed(path):
         _load(lib_dir, dependency, loaded)
     ctypes.CDLL(path, mode=os.RTLD_GLOBAL | os.RTLD_LAZY)
+
+
+@functools.lru_cache(maxsize=None)
+def load_needed(vivado: str, path: str) -> int:
+    """Load the libraries from ``<vivado>/lib/lnx64.o`` that the shared object ``path``
+    (a design's xsimk.so) needs, dependencies first; return how many."""
+    lib_dir = os.path.join(vivado, "lib", "lnx64.o")
+    loaded = set()
+    for name in needed(path):
+        _load(lib_dir, name, loaded)
+    return len(loaded)
 
 
 @functools.lru_cache(maxsize=None)
