@@ -32,8 +32,8 @@ import json
 import logging
 import os
 import pdb  # NOQA
-import tempfile
 import time
+import uuid
 from qonnx.core.findings import Refusal, collect_findings
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.onnx_exec import exact_integers
@@ -171,9 +171,8 @@ def _run_build_steps(model, cfg, build_dataflow_steps):
     def save_findings():
         temporary = None
         try:
-            with tempfile.NamedTemporaryFile(
-                mode="w", dir=cfg.output_dir, prefix=".build_findings-", delete=False
-            ) as f:
+            candidate = cfg.output_dir + "/.build_findings-" + uuid.uuid4().hex
+            with open(candidate, "x") as f:
                 temporary = f.name
                 json.dump(build_findings, f, indent=2)
             os.replace(temporary, cfg.output_dir + "/build_findings.json")

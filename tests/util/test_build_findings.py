@@ -5,6 +5,8 @@ import pytest
 
 import errno
 import json
+import os
+import stat
 import subprocess
 import sys
 from onnx import TensorProto, helper
@@ -12,6 +14,7 @@ from pathlib import Path
 from qonnx.core.datatype import DataType
 from qonnx.core.findings import Finding, Refusal, collect_findings, report_finding
 from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.transformation.base import NodeLocalTransformation
 
 from finn.builder.build_dataflow import build_dataflow_cfg
 from finn.builder.build_dataflow_config import DataflowBuildConfig, DataflowOutputType
@@ -295,3 +298,54 @@ def test_a_findings_path_symlink_does_not_redirect_the_report(tmp_path, failure)
     if failure:
         expected["refused"] = [finding.record() for finding in REASONS]
     assert read_findings(tmp_path) == {"symlink_step": expected}
+
+
+@pytest.mark.parametrize("mask", [0o022, 0o002], ids=["ordinary-output", "shared-output"])
+@pytest.mark.parametrize("failure", [False, True], ids=["successful-build", "refused-build"])
+def test_the_findings_report_uses_the_sibling_output_file_mode(tmp_path, mask, failure):
+    def mode_step(model, cfg):
+        report_finding(FIRST)
+        if failure:
+            raise Refusal(REASONS)
+        return model
+
+    previous_mask = os.umask(mask)
+    try:
+        assert run_build(tmp_path, [mode_step]) == (-1 if failure else 0)
+    finally:
+        os.umask(previous_mask)
+    output = tmp_path / "output"
+    mode = stat.S_IMODE((output / "build_findings.json").stat().st_mode)
+    assert mode == stat.S_IMODE((output / "build_dataflow.log").stat().st_mode)
+    if not failure:
+        assert mode == stat.S_IMODE((output / "time_per_step.json").stat().st_mode)
+
+
+def fail_in_worker(node):
+    report_finding(
+        Finding("worker-notice", "ExamplePass", "before worker failure", (("node", node.name),))
+    )
+    raise RuntimeError("worker failed while transforming " + node.name)
+
+
+class FailingNodeLocalTransformation(NodeLocalTransformation):
+    def applyNodeLocal(self, node):
+        return fail_in_worker(node)
+
+
+def test_a_parallel_build_step_keeps_the_failed_workers_frames_in_the_log(tmp_path):
+    model = make_model()
+    model.graph.node[0].name = "worker_first"
+    model.graph.node[0].output[0] = "mid"
+    model.graph.node.append(helper.make_node("Relu", ["mid"], ["out"], name="worker_second"))
+
+    def parallel_step(model, cfg):
+        return model.transform(FailingNodeLocalTransformation(num_workers=2))
+
+    assert run_build(tmp_path, [parallel_step], model) == -1
+    log = (tmp_path / "output/build_dataflow.log").read_text()
+    assert "RuntimeError: worker failed while transforming " in log
+    assert "in applyNodeLocal" in log
+    assert "in fail_in_worker" in log
+    assert "before worker failure" in log
+    assert read_findings(tmp_path)["parallel_step"]["findings"][0]["code"] == "worker-notice"
