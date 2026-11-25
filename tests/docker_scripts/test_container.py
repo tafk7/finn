@@ -65,4 +65,4 @@ subprocess.run(['make', '--version'], check=True)
     library = Path(line.split('"')[1])
     assert library.is_relative_to(home / "resources")
     # This process is outside Docker, as a routed farm invocation would be.
-    assert (library / "bnn-library.h").is_file()
+    assert (library / "activations.hpp").is_file()
