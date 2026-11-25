@@ -166,8 +166,8 @@ def build_xsi(force: bool = False, verbose: bool = True) -> bool:
     return True
 
 
-def verify_installation() -> bool:
-    """Verify that finn_xsi can be imported and works."""
+def verify_installation(verbose: bool = True) -> bool:
+    """Verify that finn_xsi can be imported and works; failures are always reported."""
     xsi_path = build_dir()
 
     # Check if xsi.so exists
@@ -184,15 +184,17 @@ def verify_installation() -> bool:
         # Import the compiled C++ extension
         importlib.import_module("xsi")
 
-        print("\n✓ xsi C++ extension module imports successfully")
+        if verbose:
+            print("\n✓ xsi C++ extension module imports successfully")
 
         # Import the Python package
         adapter = importlib.import_module("finn_xsi.adapter")
 
-        print("✓ finn_xsi.adapter imports successfully")
+        if verbose:
+            print("✓ finn_xsi.adapter imports successfully")
 
         # Check for basic functionality
-        if hasattr(adapter, "rtlsim_multi_io"):
+        if verbose and hasattr(adapter, "rtlsim_multi_io"):
             print("✓ RTL simulation functions available")
 
         return True
@@ -271,7 +273,7 @@ def main() -> int:
         return 1
 
     # Verify installation
-    verification_result = verify_installation() if not args.quiet else True
+    verification_result = verify_installation(verbose=not args.quiet)
 
     if verification_result:
         if not args.quiet:

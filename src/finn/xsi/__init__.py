@@ -46,11 +46,13 @@ def is_available() -> bool:
 _adapter_module: Optional[Any] = None
 _sim_engine_module: Optional[Any] = None
 _xsi_module: Optional[Any] = None
+# Why the built extension did not import, if it did not.
+_import_error: Optional[str] = None
 
 
 def _load_modules() -> bool:
     """Load finn_xsi modules if available."""
-    global _adapter_module, _sim_engine_module, _xsi_module
+    global _adapter_module, _sim_engine_module, _xsi_module, _import_error
 
     if _adapter_module is not None:
         return True
@@ -82,8 +84,8 @@ def _load_modules() -> bool:
 
         return True
     except ImportError as e:
-        # Log the specific import error for debugging
         logging.debug(f"Failed to import finn_xsi modules: {e}")
+        _import_error = str(e)
         return False
     except Exception as e:
         # Catch any unexpected errors during module loading
@@ -109,6 +111,11 @@ def unavailable_message() -> str:
                 "RTL simulation needs Vivado, but XILINX_VIVADO is not set "
                 "(in a container, use `docker/run --fpga`)",
             )
+        )
+    if _import_error and (build_dir() / "xsi.so").exists():
+        return (
+            f"finn_xsi is built ({build_dir() / 'xsi.so'}) but does not load here: "
+            f"{_import_error}. Rebuild it: python -m finn.xsi.setup --force"
         )
     return (
         f"finn_xsi is not built for this Vivado installation and Python environment "

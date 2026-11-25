@@ -8,7 +8,10 @@ from typing import List, Tuple
 
 from finn.util.launcher import amd_path
 
-LINK_ARGS = ["-ldl", "-lrt"]
+# The binding carries its own C++ runtime: an AMD release may load an older one into
+# every Python first (2026.2's Vitis sitecustomize.py, on settings64.sh's PYTHONPATH).
+# Its symbols stay hidden, or other extensions bind to them (ml_dtypes crashes).
+LINK_ARGS = ["-static-libstdc++", "-static-libgcc", "-Wl,--exclude-libs,ALL", "-ldl", "-lrt"]
 
 
 def get_build_paths() -> Tuple[List[str], str, List[str]]:
