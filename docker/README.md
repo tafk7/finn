@@ -151,8 +151,6 @@ per-command overlay instead:
 Like the Brevitas candidate job, an overlay resolves separately unless constrained
 with a generated `uv export`.
 
-Sphinx 5.0.2 needs docutils below 0.19, so the lock selects 0.18.1.
-
 ## External resources
 
 Every directory tree FINN uses that is not Python code is a resource declared in

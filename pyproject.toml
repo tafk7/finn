@@ -30,6 +30,7 @@ dependencies = [
 brevitas = [
     "brevitas>=0.13.4",
     "onnxoptimizer>=0.4.2",  # brevitas exports through it, without declaring it
+    "pillow>=10",  # finn.util.imagenet
     # From 2.9 brevitas exports with dynamo by default, whose opset 18+ graphs FINN
     # cannot read yet: export with dynamo=False.
     "torch>=2.8.0",
@@ -57,38 +58,40 @@ finn = ["resources.toml", "qnn-data/**/*", "_sources/**/*"]
 test = [
     "finn[brevitas]",
     "setuptools>=77",  # test_wheel builds FINN with it
-    "pytest==7.4.4",
-    "pytest-xdist[setproctitle]==3.2.0",
+    "pytest>=9",
+    "pytest-xdist[setproctitle]>=3.8",
 ]
 ci = [
     {"include-group" = "test"},
     {"include-group" = "notebooks"},
-    "pytest-html==4.1.1",
-    "pytest-html-merger==0.1.0",
-    "pytest-cov==4.1.0",
+    "pytest-html>=4.1.1",
+    "pytest-html-merger>=0.1",
+    "pytest-cov>=7",
 ]
 notebooks = [
-    "ipython==8.18.1",
-    "ipykernel==6.29.0",
+    "ipykernel>=6.29",
+    "ipython>=8.18",
+    "jupyter>=1.1",
     "matplotlib>=3.9",  # numpy 2
+    "nbconvert>=7.16",  # test_jupyter_notebooks runs them
+    "nbformat>=5.10",
     "netron",
     "pandas>=2.2.2,<3",  # numpy 2
     "scikit-learn>=1.5",  # numpy 2
-    "tqdm==4.64.1",
-    "jupyter==1.0.0",
+    "tqdm>=4.66",
 ]
+# Sphinx and FINN's runtime: conf.py mocks the front end's imports for autodoc.
 docs = [
-    {"include-group" = "ci"},
-    "docutils==0.18.1",
-    "sphinx==5.0.2",
-    "sphinx-rtd-theme==2.0.0",
+    "sphinx>=8.2",
+    "sphinx-rtd-theme>=3",
 ]
 # The PyTorch build, selected by the index each group's sources name.
 cpu = ["torch", "torchvision"]
 cuda = ["torch", "torchvision"]
 dev = [
+    {"include-group" = "ci"},
     {"include-group" = "docs"},
-    "pre-commit==3.5.0",
+    "pre-commit>=4",
 ]
 
 [tool.uv]

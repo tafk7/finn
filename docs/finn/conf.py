@@ -36,6 +36,22 @@ extensions = []
 extensions.append("sphinx.ext.autodoc")
 extensions.append("sphinx.ext.autosectionlabel")
 
+# The docs environment has FINN's runtime only: the front end, notebook,
+# board-side and qonnx's optional imports are mocked for autodoc.
+autodoc_mock_imports = [
+    "brevitas",
+    "brevitas_examples",
+    "IPython",
+    "matplotlib",
+    "netron",
+    "PIL",
+    "pynq",
+    "pytest",
+    "torch",
+    "torchvision",
+    "tqdm",
+]
+
 # Prefix section labels with document name to avoid duplicates
 # e.g., "concepts:overview" instead of just "overview"
 autosectionlabel_prefix_document = True

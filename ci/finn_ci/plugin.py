@@ -314,9 +314,20 @@ class _FinnCiPlugin:
                     self.timings["nodeid_to_group"][item.nodeid] = str(name)
                     break
 
+    @pytest.hookimpl(wrapper=True)
+    def pytest_runtest_makereport(self, item, call):
+        # xdist 3.5+ forwards plain nodeids (no "@<group>" suffix) and the
+        # controller collects no items, so the group travels on the report.
+        report = yield
+        report.finn_group = _group_key(item)
+        return report
+
     def pytest_runtest_logreport(self, report):
         if self.timings is None:
             return
+        group = getattr(report, "finn_group", None)
+        if group:
+            self.timings["nodeid_to_group"][report.nodeid] = group
         # sum setup+call+teardown per nodeid. xdist forwards worker reports here.
         duration = float(getattr(report, "duration", 0.0) or 0.0)
         self.timings["per_test_seconds"][report.nodeid] = (
@@ -369,10 +380,8 @@ class _FinnCiPlugin:
         out_path = os.path.join(out_dir, stash + ".timings.json")
         groups = {}
         for nodeid, duration in self.timings["per_test_seconds"].items():
-            # under --dist loadgroup the forwarded report nodeid gains an
-            # "@<group>" suffix, so it misses the plain-nodeid keys in
-            # nodeid_to_group. canonical_key recovers the group from the suffix
-            # so a group's members sum together per shard, not as singletons.
+            # reports carry their group; canonical_key still folds an older
+            # xdist's "@<group>" nodeid suffix onto it.
             group = self.timings["nodeid_to_group"].get(nodeid) or sharding.canonical_key(nodeid)
             entry = groups.setdefault(group, {"name": group, "count": 0, "seconds": 0.0})
             entry["count"] += 1
