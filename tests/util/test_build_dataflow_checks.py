@@ -443,14 +443,15 @@ def test_auto_fifo_strategy_characterize_alias():
     ],
 )
 def test_vivado_version_checks_without_vivado(check_name, kw):
-    """Without Vivado (XILINX_VIVADO unset) a version check fails with a message
-    instead of crashing while formatting the version it did not find."""
+    """Without Vivado (XILINX_VIVADO unset) a release check does not stop a build:
+    its steps that need no tools (estimates, say) run, and the first tool step
+    refuses with the settings to source."""
     output_dir = make_build_dir("test_config_check_no_vivado_")
     with patch.dict("os.environ", {"XILINX_VIVADO": ""}):
         report = run_all_config_checks(cfg(output_dir, **kw))
     check = next(c for c in report.checks if c.name == check_name)
-    assert not check.passed
-    assert "found unknown" in check.message
+    assert check.passed
+    assert "needs Vivado" in check.message
 
 
 @pytest.mark.util

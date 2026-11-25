@@ -60,14 +60,16 @@ class Report:
 
 def _release_check(name, key, v, what):
     """An error unless Vivado v is a release that the release note ``key`` (a missing
-    feature) no longer holds for."""
+    feature) no longer holds for. Without Vivado there is nothing to check: the steps
+    that need no tools run, and the first one that does names the settings to source."""
     minimum = releases.minimum(key)
-    found = "%d.%d" % v if v else "unknown"
+    if v is None:
+        return Check(name, Severity.INFO, True, f"{what} needs Vivado {minimum} or later")
     return _check(
         name,
         Severity.ERROR,
-        v is not None and not releases.affects(key, v),
-        f"{what} requires Vivado {minimum} or later, found {found}",
+        not releases.affects(key, v),
+        f"{what} requires Vivado {minimum} or later, found {v[0]}.{v[1]}",
         f"Upgrade to Vivado {minimum} or later",
     )
 
