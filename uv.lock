@@ -363,15 +363,6 @@ wheels = [
 ]
 
 [[package]]
-name = "dataset-loading"
-version = "0.0.4"
-source = { git = "https://github.com/fbcotter/dataset_loading.git?rev=5b9faa226e5f7c857579d31cdd9acde8cdfb816f#5b9faa226e5f7c857579d31cdd9acde8cdfb816f" }
-dependencies = [
-    { name = "pillow", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda') or (sys_platform != 'linux' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda')" },
-    { name = "scipy", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda') or (sys_platform != 'linux' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda')" },
-]
-
-[[package]]
 name = "debugpy"
 version = "1.8.22"
 source = { registry = "https://pypi.org/simple" }
@@ -495,7 +486,6 @@ brevitas = [
 
 [package.dev-dependencies]
 ci = [
-    { name = "dataset-loading", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda') or (sys_platform != 'linux' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda')" },
     { name = "finn", extra = ["brevitas"], marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda') or (sys_platform != 'linux' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda')" },
     { name = "ipykernel", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda') or (sys_platform != 'linux' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda')" },
     { name = "ipython", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda') or (sys_platform != 'linux' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda')" },
@@ -511,7 +501,6 @@ ci = [
     { name = "scikit-learn", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda') or (sys_platform != 'linux' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda')" },
     { name = "setuptools", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda') or (sys_platform != 'linux' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda')" },
     { name = "tqdm", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda') or (sys_platform != 'linux' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda')" },
-    { name = "wget", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda') or (sys_platform != 'linux' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda')" },
 ]
 cpu = [
     { name = "torch", version = "2.8.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -522,7 +511,6 @@ cuda = [
     { name = "torchvision", version = "0.23.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" }, marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 dev = [
-    { name = "dataset-loading", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda') or (sys_platform != 'linux' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda')" },
     { name = "docutils", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda') or (sys_platform != 'linux' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda')" },
     { name = "finn", extra = ["brevitas"], marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda') or (sys_platform != 'linux' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda')" },
     { name = "ipykernel", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda') or (sys_platform != 'linux' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda')" },
@@ -542,10 +530,8 @@ dev = [
     { name = "sphinx", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda') or (sys_platform != 'linux' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda')" },
     { name = "sphinx-rtd-theme", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda') or (sys_platform != 'linux' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda')" },
     { name = "tqdm", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda') or (sys_platform != 'linux' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda')" },
-    { name = "wget", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda') or (sys_platform != 'linux' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda')" },
 ]
 docs = [
-    { name = "dataset-loading", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda') or (sys_platform != 'linux' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda')" },
     { name = "docutils", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda') or (sys_platform != 'linux' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda')" },
     { name = "finn", extra = ["brevitas"], marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda') or (sys_platform != 'linux' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda')" },
     { name = "ipykernel", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda') or (sys_platform != 'linux' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda')" },
@@ -564,7 +550,6 @@ docs = [
     { name = "sphinx", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda') or (sys_platform != 'linux' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda')" },
     { name = "sphinx-rtd-theme", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda') or (sys_platform != 'linux' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda')" },
     { name = "tqdm", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda') or (sys_platform != 'linux' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda')" },
-    { name = "wget", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda') or (sys_platform != 'linux' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda')" },
 ]
 notebooks = [
     { name = "ipykernel", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda') or (sys_platform != 'linux' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda')" },
@@ -577,12 +562,10 @@ notebooks = [
     { name = "tqdm", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda') or (sys_platform != 'linux' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda')" },
 ]
 test = [
-    { name = "dataset-loading", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda') or (sys_platform != 'linux' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda')" },
     { name = "finn", extra = ["brevitas"], marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda') or (sys_platform != 'linux' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda')" },
     { name = "pytest", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda') or (sys_platform != 'linux' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda')" },
     { name = "pytest-xdist", extra = ["setproctitle"], marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda') or (sys_platform != 'linux' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda')" },
     { name = "setuptools", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda') or (sys_platform != 'linux' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda')" },
-    { name = "wget", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda') or (sys_platform != 'linux' and extra == 'group-4-finn-cpu' and extra == 'group-4-finn-cuda')" },
 ]
 
 [package.metadata]
@@ -605,7 +588,6 @@ provides-extras = ["brevitas"]
 
 [package.metadata.requires-dev]
 ci = [
-    { name = "dataset-loading", git = "https://github.com/fbcotter/dataset_loading.git?rev=5b9faa226e5f7c857579d31cdd9acde8cdfb816f" },
     { name = "finn", extras = ["brevitas"] },
     { name = "ipykernel", specifier = "==6.29.0" },
     { name = "ipython", specifier = "==8.18.1" },
@@ -621,7 +603,6 @@ ci = [
     { name = "scikit-learn", specifier = ">=1.5" },
     { name = "setuptools", specifier = ">=77" },
     { name = "tqdm", specifier = "==4.64.1" },
-    { name = "wget", specifier = "==3.2" },
 ]
 cpu = [
     { name = "torch", specifier = "==2.8.0", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "finn", group = "cpu" } },
@@ -632,7 +613,6 @@ cuda = [
     { name = "torchvision", specifier = "==0.23.0", index = "https://download.pytorch.org/whl/cu126", conflict = { package = "finn", group = "cuda" } },
 ]
 dev = [
-    { name = "dataset-loading", git = "https://github.com/fbcotter/dataset_loading.git?rev=5b9faa226e5f7c857579d31cdd9acde8cdfb816f" },
     { name = "docutils", specifier = "==0.18.1" },
     { name = "finn", extras = ["brevitas"] },
     { name = "ipykernel", specifier = "==6.29.0" },
@@ -652,10 +632,8 @@ dev = [
     { name = "sphinx", specifier = "==5.0.2" },
     { name = "sphinx-rtd-theme", specifier = "==2.0.0" },
     { name = "tqdm", specifier = "==4.64.1" },
-    { name = "wget", specifier = "==3.2" },
 ]
 docs = [
-    { name = "dataset-loading", git = "https://github.com/fbcotter/dataset_loading.git?rev=5b9faa226e5f7c857579d31cdd9acde8cdfb816f" },
     { name = "docutils", specifier = "==0.18.1" },
     { name = "finn", extras = ["brevitas"] },
     { name = "ipykernel", specifier = "==6.29.0" },
@@ -674,7 +652,6 @@ docs = [
     { name = "sphinx", specifier = "==5.0.2" },
     { name = "sphinx-rtd-theme", specifier = "==2.0.0" },
     { name = "tqdm", specifier = "==4.64.1" },
-    { name = "wget", specifier = "==3.2" },
 ]
 notebooks = [
     { name = "ipykernel", specifier = "==6.29.0" },
@@ -687,12 +664,10 @@ notebooks = [
     { name = "tqdm", specifier = "==4.64.1" },
 ]
 test = [
-    { name = "dataset-loading", git = "https://github.com/fbcotter/dataset_loading.git?rev=5b9faa226e5f7c857579d31cdd9acde8cdfb816f" },
     { name = "finn", extras = ["brevitas"] },
     { name = "pytest", specifier = "==7.4.4" },
     { name = "pytest-xdist", extras = ["setproctitle"], specifier = "==3.2.0" },
     { name = "setuptools", specifier = ">=77" },
-    { name = "wget", specifier = "==3.2" },
 ]
 
 [[package]]
@@ -3139,12 +3114,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/d8/cb/a5abcc2891249f393
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d5/d2/cc4dc1271e464942db7ee278baae2daa99ee77cb2af744025c04da585a3e/websocket_client-1.9.2-py3-none-any.whl", hash = "sha256:e1a673830a9c7bfa47b1cd3d5e4178f4c9651d80a4eab02c9c23a1c3ec6250ce", size = 95786, upload-time = "2026-08-31T14:08:39.899Z" },
 ]
-
-[[package]]
-name = "wget"
-version = "3.2"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/47/6a/62e288da7bcda82b935ff0c6cfe542970f04e29c756b0e147251b2fb251f/wget-3.2.zip", hash = "sha256:35e630eca2aa50ce998b9b1a127bb26b30dfee573702782aa982f875e3f16061", size = 10857, upload-time = "2015-10-22T15:26:37.51Z" }
 
 [[package]]
 name = "widgetsnbextension"

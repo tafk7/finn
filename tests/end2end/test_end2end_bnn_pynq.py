@@ -39,7 +39,6 @@ import os
 import torch
 import warnings
 from brevitas.export import export_qonnx
-from dataset_loading import cifar, mnist
 from finn_ci.config import BOARDS, TEST_BOARDS
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
@@ -60,6 +59,7 @@ from qonnx.transformation.lower_convs_to_matmul import LowerConvsToMatMul
 from qonnx.transformation.merge_onnx_models import MergeONNXModels
 from qonnx.util.cleanup import cleanup as qonnx_cleanup
 from shutil import copy, copytree
+from torchvision import datasets
 
 import finn.transformation.fpgadataflow.convert_to_hw_layers as to_hw
 import finn.transformation.streamline.absorb as absorb
@@ -268,18 +268,17 @@ def get_golden_io_pair(topology, wbits, abits, preproc=ToTensor(), return_topk=N
 
 
 def measure_top1_accuracy(model_chkpt, dataset, parent_chkpt=None):
+    root = get_finn_root() + "/dataset"
     if dataset == "cifar10":
-        trainx, trainy, testx, testy, valx, valy = cifar.load_cifar_data(
-            get_finn_root() + "/dataset", download=True, one_hot=False
-        )
+        test_set = datasets.CIFAR10(root, train=False, download=True)
     elif dataset == "mnist":
-        trainx, trainy, testx, testy, valx, valy = mnist.load_mnist_data(
-            get_finn_root() + "/dataset", download=True, one_hot=False
-        )
+        test_set = datasets.MNIST(root, train=False, download=True)
     else:
         raise Exception("Unrecognized dataset")
-    # move from dataset_loader layout to ONNX layout: NHWC -> NCHW
-    testx = testx.transpose(0, 3, 1, 2)
+    # UINT8 images in the model's NCHW layout
+    testx = np.asarray(test_set.data, dtype=np.uint8)
+    testx = testx[:, None] if testx.ndim == 3 else testx.transpose(0, 3, 1, 2)
+    testy = np.asarray(test_set.targets)
     model = load_test_checkpoint_or_skip(model_chkpt)
     iname = model.get_first_global_in()
     oname = model.get_first_global_out()

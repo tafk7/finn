@@ -55,10 +55,8 @@ finn = ["resources.toml", "qnn-data/**/*", "_sources/**/*"]
 test = [
     "finn[brevitas]",
     "setuptools>=77",  # test_wheel builds FINN with it
-    "dataset-loading",
     "pytest==7.4.4",
     "pytest-xdist[setproctitle]==3.2.0",
-    "wget==3.2",
 ]
 ci = [
     {"include-group" = "test"},
@@ -98,7 +96,6 @@ conflicts = [[{group = "cpu"}, {group = "cuda"}]]
 environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
 
 [tool.uv.sources]
-dataset-loading = {git = "https://github.com/fbcotter/dataset_loading.git", rev = "5b9faa226e5f7c857579d31cdd9acde8cdfb816f"}
 # PyTorch builds: CPU by default; `uv sync --no-group cpu --group cuda` selects CUDA.
 torch = [{index = "pytorch-cpu", group = "cpu"}, {index = "pytorch-cu126", group = "cuda"}]
 torchvision = [{index = "pytorch-cpu", group = "cpu"}, {index = "pytorch-cu126", group = "cuda"}]

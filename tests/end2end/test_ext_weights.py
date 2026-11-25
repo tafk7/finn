@@ -34,7 +34,7 @@ import numpy as np
 import os
 import shutil
 import subprocess
-import wget
+import urllib.request
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.infer_shapes import InferShapes
 
@@ -118,7 +118,7 @@ def to_driver_input(x, topology):
 @pytest.mark.parametrize("topology", ["cnv", "tfc"])
 def test_end2end_ext_weights_download(topology):
     if not os.path.isfile(onnx_zip_local):
-        wget.download(onnx_zip_url, out=onnx_zip_local)
+        urllib.request.urlretrieve(onnx_zip_url, onnx_zip_local)
     assert os.path.isfile(onnx_zip_local)
     subprocess.check_output(["unzip", "-o", onnx_zip_local, "-d", onnx_dir_local])
     assert os.path.isfile(get_checkpoint_name("download", topology))
