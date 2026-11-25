@@ -37,7 +37,8 @@ np_default_dtype = np.float32
 
 #: Op types of the integer quantizer. IntQuant is its current name and Quant the
 #: name Brevitas exports, which QONNX keeps as an alias. Both go through the same
-#: handlers; an IntQuant only when int_quant_decline_reason admits it.
+#: activation handlers, only when int_quant_decline_reason admits them. Weight
+#: folding applies that predicate to IntQuant alone.
 INT_QUANT_OP_TYPES = ("IntQuant", "Quant")
 
 
@@ -49,6 +50,9 @@ def int_quant_decline_reason(model, q_node):
     also named HALF_EVEN), its scale is static, positive and finite, its zero point
     is a static scalar 0 and its bit width a static integer of at least 2. A
     quantizer outside that set is left in the graph, where QONNX executes it.
+    Activation conversion calls this for both op types; weight folding calls it
+    for IntQuant only. Quant's activation zero-point check raises before this
+    predicate is called.
     """
     mode = getCustomOp(q_node).get_nodeattr("rounding_mode")
     if mode.upper() not in ("ROUND", "HALF_EVEN"):
