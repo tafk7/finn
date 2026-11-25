@@ -4,11 +4,8 @@ x-common: &common
   platform: linux/amd64
   init: false  # the image uses tini
 services:
-  dev:
+  finn:
     <<: *common
-  build:
-    <<: *common
-    profiles: [fpga]
   notebook:
     <<: *common
     profiles: [notebook]

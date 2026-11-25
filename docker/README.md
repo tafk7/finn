@@ -122,9 +122,14 @@ into the container's home.
 Inspect the resolved host request, or render a Compose override from it:
 
 ```bash
-./docker/launcher.py inspect --tier build
-FINN_IMAGE=$(./docker/build --print-tag) ./docker/launcher.py compose --tier build --service build
+./docker/launcher.py inspect
+FINN_IMAGE=$(./docker/build --print-tag) ./docker/launcher.py compose --fpga
 ```
+
+Both take `--fpga` and `--no-tools` as `docker/run` does; without either, the tools
+are mounted where they are configured. The checkout is mirrored at its host path;
+`--workspace-policy fixed` mounts it at `/workspace/finn` instead, for a remote
+Docker daemon, and only with `--no-tools`.
 
 `compose --inputs-only` renders only tool, licence and resource inputs for a
 Dev Container that owns its workspace and state.

@@ -316,13 +316,13 @@ def classify_license(value):
 # Host resolution: what a container gets, derived from the host exactly once.
 # --------------------------------------------------------------------------
 
-# A tier is a host access profile, independent of the image. `build` gets the
-# Xilinx toolchain, licences and declared network requirements; `dev` gets none.
-# `auto` is `build` where tools are configured, else `dev`.
-TIERS = ("dev", "build")
+# What a launch does with the host's Xilinx tools. `auto` mounts them, with their
+# licences and network requirements, where they are configured; `require` (--fpga)
+# fails without them; `never` (--no-tools) leaves them out even where configured.
+TOOLS = ("auto", "require", "never")
 FIXED_WORKSPACE = "/workspace/finn"
 
-# Inputs passed through to the container when set, whatever the tier.
+# Inputs passed through to the container when set, with or without tools.
 PASSTHROUGH = (
     "NUM_DEFAULT_WORKERS",
     "LOCALHOST_URL",
@@ -351,25 +351,20 @@ def tools_configured():
     )
 
 
-def resolve_tier(tier):
-    """`auto` is `build` where tools are configured, else `dev`. Explicit tiers stand."""
-    if tier != "auto":
-        return tier
-    return "build" if tools_configured() else "dev"
-
-
-def resolve_workspace(tier, policy="auto"):
+def resolve_workspace(tools, policy="mirror"):
     """Resolve the host and container workspace paths.
 
-    Tool tiers mirror the checkout at its host path, since generated Vivado
-    projects embed absolute paths. The dev tier may use a fixed path, useful for
-    remote daemons and Dev Containers.
+    The checkout is mirrored at its host path: generated Vivado projects, replay
+    scripts and build outputs embed absolute paths. A fixed path is for a remote
+    Docker daemon, where the host path does not exist, and only without tools.
     """
     source = hostpath(os.environ.get("FINN_ROOT") or str(REPO))
-    if policy == "auto":
-        policy = "mirror" if tier == "build" else "fixed"
-    elif policy == "fixed" and tier == "build":
-        raise LaunchError("workspace policy 'fixed' is incompatible with tier 'build'", 2)
+    if policy == "fixed" and tools:
+        raise LaunchError(
+            "workspace policy 'fixed' is incompatible with the Xilinx tools, whose "
+            "projects embed absolute paths; mirror the workspace or use --no-tools",
+            2,
+        )
     target = source if policy == "mirror" else FIXED_WORKSPACE
     return {"policy": policy, "source": source, "target": target}
 
@@ -525,7 +520,7 @@ def add_licenses(out):
 
 
 def add_optional_inputs(out):
-    """Add explicitly requested, tier-independent runtime inputs."""
+    """Add explicitly requested runtime inputs, with or without tools."""
     for variable in PASSTHROUGH:
         if os.environ.get(variable):
             out["env"][variable] = os.environ[variable]
@@ -576,22 +571,25 @@ def add_resource_overrides(out):
         out["env"][variable] = path
 
 
-def resolve_host(tier, workspace_policy="auto", runtimes=None):
+def resolve_host(tools="auto", workspace_policy="mirror", runtimes=None):
     """Everything a launcher needs, derived from the host exactly once."""
     apply_host_settings()
-    tier = resolve_tier(tier)
-    if tier not in TIERS:
-        raise LaunchError("unknown tier %r; expected one of %s" % (tier, ", ".join(TIERS)), 2)
+    if tools not in TOOLS:
+        raise LaunchError(
+            "unknown tools mode %r; expected one of %s" % (tools, ", ".join(TOOLS)), 2
+        )
+    # --fpga looks even where nothing is configured, so its error says what was found.
+    mounted = tools == "require" or (tools == "auto" and tools_configured())
     runtimes = normalize_runtimes(
         os.environ.get("FINN_RUNTIMES", "") if runtimes is None else runtimes
     )
-    workspace = resolve_workspace(tier, workspace_policy)
+    workspace = resolve_workspace(mounted, workspace_policy)
     state = {"FINN_HOME": resolve_finn_home()}
     for variable in STATE_DIRECTORIES[1:]:
         if os.environ.get(variable):
             state[variable] = hostpath(os.environ[variable])
     out = {
-        "tier": tier,
+        "tools": mounted,
         "backend": "docker",
         "runtimes": runtimes,
         "runtime_csv": ",".join(runtimes),
@@ -614,12 +612,13 @@ def resolve_host(tier, workspace_policy="auto", runtimes=None):
             out["env"][variable] = os.environ[variable]
     add_optional_inputs(out)
     add_resource_overrides(out)
-    if tier == "dev":
-        out["dev_contract"] = {"toolchain": False, "license": False, "egress": False}
-        return out
-    root = add_toolchain(out)
-    add_platform_repo(out, root)
-    add_licenses(out)
+    if mounted:
+        root = add_toolchain(out)
+        add_platform_repo(out, root)
+        add_licenses(out)
+        out["tools"] = any(out["env"].get(name) for name in AMD_VARIABLES)
+    if tools == "require":
+        require_tools(out)
     return out
 
 
@@ -656,7 +655,7 @@ def sh_assignments(data):
             "FINN_WORKSPACE_TARGET": data["workspace"]["target"],
         }
     )
-    if data["tier"] == "build" and os.environ.get("FINN_XILINX_PATH"):
+    if data["tools"] and os.environ.get("FINN_XILINX_PATH"):
         values["FINN_XILINX_PATH"] = hostpath(os.environ["FINN_XILINX_PATH"])
     if os.environ.get("FINN_IMAGE"):
         values["FINN_IMAGE"] = os.environ["FINN_IMAGE"]
@@ -1624,7 +1623,7 @@ def command_run(argv):
     # Select the checkout containing this launcher, even after native activation of another.
     os.environ["FINN_ROOT"] = str(REPO)
     runtimes = os.environ.get("FINN_RUNTIMES", "").replace(",", " ").split()
-    tier = "auto"
+    tools = "auto"
     print_only = False
     rebuild = os.environ.get("FINN_CONTAINER_REBUILD") == "1"
     no_build = os.environ.get("FINN_CONTAINER_NO_BUILD") == "1"
@@ -1636,9 +1635,9 @@ def command_run(argv):
             i += 1
             break
         if option == "--fpga":
-            tier, i = "build", i + 1
+            tools, i = "require", i + 1
         elif option == "--no-tools":
-            tier, i = "dev", i + 1
+            tools, i = "never", i + 1
         elif option == "--runtime":
             value, i = take_value(argv, i, option)
             runtimes.append(value)
@@ -1672,11 +1671,9 @@ def command_run(argv):
     request.rebuild = rebuild
     request.extra = shlex.split(os.environ.get("FINN_DOCKER_BUILD_EXTRA", ""))
     # Resolve host inputs before an expensive build, and reuse exactly that request.
-    data = resolve_host(tier, "mirror", request.runtimes)
-    if tier == "build":
-        require_tools(data)
+    data = resolve_host(tools, "mirror", request.runtimes)
     if print_only:
-        print("tier=%s" % data["tier"])
+        print("tools=%s" % ("mounted" if data["tools"] else "none"))
         print("runtimes=%s" % ",".join(request.runtimes))
         print("bake_target=%s" % request.target)
         print("image_revision=%s" % request.revision)
@@ -1696,7 +1693,7 @@ def command_inspect(argv):
     add_resolution_arguments(parser)
     parser.add_argument("--format", default="json", choices=("json", "sh"))
     args = parser.parse_args(argv)
-    data = resolve_host(args.tier, args.workspace_policy)
+    data = resolve_host(args.tools, args.workspace_policy)
     if args.format == "json":
         json.dump(data, sys.stdout, indent=2, sort_keys=True)
         sys.stdout.write("\n")
@@ -1718,18 +1715,27 @@ def command_compose(argv):
         help="only toolchain, licence and resource inputs; the caller owns workspace and state",
     )
     args = parser.parse_args(argv)
-    data = resolve_host(args.tier, args.workspace_policy)
+    data = resolve_host(args.tools, args.workspace_policy)
     render = inputs_override if args.inputs_only else compose_override
-    json.dump(render(data, args.service or [data["tier"]]), sys.stdout, indent=2, sort_keys=True)
+    json.dump(render(data, args.service or ["finn"]), sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
     return 0
 
 
 def add_resolution_arguments(parser):
-    parser.add_argument(
-        "--tier", default=os.environ.get("FINN_DOCKER_TARGET", "auto"), choices=TIERS + ("auto",)
+    tools = parser.add_mutually_exclusive_group()
+    tools.add_argument(
+        "--fpga",
+        dest="tools",
+        action="store_const",
+        const="require",
+        default="auto",
+        help="require the Xilinx tools",
     )
-    parser.add_argument("--workspace-policy", default="auto", choices=("auto", "fixed", "mirror"))
+    tools.add_argument(
+        "--no-tools", dest="tools", action="store_const", const="never", help="leave them out"
+    )
+    parser.add_argument("--workspace-policy", default="mirror", choices=("mirror", "fixed"))
 
 
 def command_image(argv):

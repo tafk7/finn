@@ -69,8 +69,8 @@ def launch(*args, env=None, cwd=None):
     )
 
 
-def inspect(env, tier, cwd=None):
-    proc = launch("inspect", "--tier", tier, env=env, cwd=cwd)
+def inspect(env, *flags, cwd=None):
+    proc = launch("inspect", *flags, env=env, cwd=cwd)
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout)
 
@@ -168,7 +168,6 @@ def test_node_locked_licences_are_mounted_exactly(tmp_path):
             "XILINXD_LICENSE_FILE": str(licdir / "Xilinx.lic"),
             "LM_LICENSE_FILE": str(sitedir),
         },
-        "build",
     )
     licences = [m["source"] for m in data["mounts"] if m["reason"] == "license-file"]
     assert licences == [str(licdir / "Xilinx.lic"), str(sitedir)]
@@ -184,31 +183,29 @@ def test_floating_license_requirements(tmp_path):
         "FINN_XILINX_VERSION": "2025.1",
         "XILINXD_LICENSE_FILE": "2100@licsrv.example",
     }
-    data = inspect(env, "build")
+    data = inspect(env)
     assert data["egress"] == [
         {"host": "licsrv.example", "reason": "flexlm", "advertised_port": "2100", "ports": []}
     ]
     assert data["egress_enforcement"] == "declared"
-    data = inspect(dict(env, FINN_LICENSE_VENDOR_PORT="2101"), "build")
+    data = inspect(dict(env, FINN_LICENSE_VENDOR_PORT="2101"))
     assert data["egress"][0]["ports"] == ["2100", "2101"]
     assert data["egress"][0]["vendor_port"] == "2101"
 
 
 # --------------------------------------------------------------------------
-# Tiers: tools are mounted when configured; --fpga requires them.
+# Tools are mounted when configured; --fpga requires them, --no-tools refuses them.
 # --------------------------------------------------------------------------
 
 
-def test_auto_tier_follows_the_configured_toolchain(host, monkeypatch):
-    assert launcher.resolve_tier("auto") == "dev"
-    monkeypatch.setenv("FINN_XILINX_PATH", str(host))
-    assert launcher.resolve_tier("auto") == "build"
-    monkeypatch.delenv("FINN_XILINX_PATH")
-    assert launcher.resolve_tier("build") == "build"  # explicit tiers are requests
+def test_tools_follow_the_configured_toolchain(tmp_path):
+    root = make_tree(tmp_path / "Xilinx", "new", "2025.2")
+    assert inspect({})["tools"] is False
+    assert inspect({"FINN_XILINX_PATH": root, "FINN_XILINX_VERSION": "2025.2"})["tools"] is True
 
 
-def test_dev_requires_nothing(tmp_path):
-    """The Xilinx variables are set here deliberately: dev must ignore them."""
+def test_no_tools_requires_nothing(tmp_path):
+    """The Xilinx variables are set here deliberately: --no-tools must ignore them."""
     root = make_tree(tmp_path / "Xilinx", "new", "2025.1")
     data = inspect(
         {
@@ -217,36 +214,36 @@ def test_dev_requires_nothing(tmp_path):
             "XILINXD_LICENSE_FILE": "2100@licsrv.example",
             "PLATFORM_REPO_PATHS": str(tmp_path),
         },
-        "dev",
+        "--no-tools",
     )
     assert data["mounts"] == [] and data["egress"] == []
-    assert data["dev_contract"] == {"toolchain": False, "license": False, "egress": False}
+    assert data["tools"] is False
     for leaked in ("XILINX_VIVADO", "XILINXD_LICENSE_FILE", "PLATFORM_REPO_PATHS"):
         assert leaked not in data["env"]
 
 
 def test_build_mounts_root_read_only(tmp_path):
     root = make_tree(tmp_path / "Xilinx", "old", "2022.2")
-    data = inspect({"FINN_XILINX_PATH": root, "FINN_XILINX_VERSION": "2022.2"}, "build")
+    data = inspect({"FINN_XILINX_PATH": root, "FINN_XILINX_VERSION": "2022.2"})
     toolchain = [m for m in data["mounts"] if m["reason"] == "xilinx-toolchain"]
     assert toolchain == [
         {"source": root, "target": root, "mode": "ro", "reason": "xilinx-toolchain"}
     ]
 
 
-def test_missing_xilinx_path_warns_without_blocking_inspection(tmp_path):
-    proc = launch("inspect", "--tier", "build")
-    assert proc.returncode == 0
-    assert "FINN_XILINX_PATH" in proc.stderr
+def test_no_tools_configured_is_quiet_unless_required(tmp_path):
+    proc = launch("inspect")
+    assert proc.returncode == 0 and proc.stderr == ""
     assert json.loads(proc.stdout)["mounts"] == []
+    proc = launch("inspect", "--fpga")
+    assert proc.returncode == 3
+    assert "FINN_XILINX_PATH" in proc.stderr
 
 
 def test_stdout_is_pure_json_even_with_warnings(tmp_path):
     (tmp_path / "Xilinx").mkdir()
     proc = launch(
         "inspect",
-        "--tier",
-        "build",
         env={"FINN_XILINX_PATH": str(tmp_path / "Xilinx"), "FINN_XILINX_VERSION": "2022.2"},
     )
     assert proc.returncode == 0
@@ -254,10 +251,10 @@ def test_stdout_is_pure_json_even_with_warnings(tmp_path):
     assert "no Vivado/Vitis/HLS found" in proc.stderr
 
 
-def test_unknown_tier_is_rejected():
-    proc = launch("inspect", "--tier", "nonsense")
+def test_fpga_and_no_tools_exclude_each_other():
+    proc = launch("inspect", "--fpga", "--no-tools")
     assert proc.returncode == 2
-    assert "invalid choice: 'nonsense'" in proc.stderr
+    assert "not allowed with argument" in proc.stderr
 
 
 def run_print(*args, env=None):
@@ -267,10 +264,10 @@ def run_print(*args, env=None):
 def test_run_mounts_configured_tools_without_a_flag(tmp_path):
     root = make_tree(tmp_path / "Xilinx", "new", "2025.2")
     tools = {"FINN_XILINX_PATH": root, "FINN_XILINX_VERSION": "2025.2"}
-    assert "tier=build" in run_print(env=tools).stdout
-    assert "tier=dev" in run_print("--no-tools", env=tools).stdout
+    assert "tools=mounted" in run_print(env=tools).stdout
+    assert "tools=none" in run_print("--no-tools", env=tools).stdout
     proc = run_print()
-    assert proc.returncode == 0 and "tier=dev" in proc.stdout
+    assert proc.returncode == 0 and "tools=none" in proc.stdout
     assert proc.stderr == ""  # no tools configured is an ordinary software setup
 
 
@@ -287,10 +284,10 @@ def test_fpga_fails_before_any_build_without_tools(tmp_path):
     root = make_tree(tmp_path / "Real", "new", "2025.2")
     proc = run_print("--fpga", env={"FINN_XILINX_PATH": root, "FINN_XILINX_VERSION": "2025.2"})
     assert proc.returncode == 0, proc.stderr
-    assert "tier=build" in proc.stdout
+    assert "tools=mounted" in proc.stdout
 
 
-def test_build_tier_from_the_host_file_alone(tmp_path):
+def test_tools_from_the_host_file_alone(tmp_path):
     """`docker/run --fpga` with nothing exported: the file supplies the toolchain
     and the licence, composed into FlexLM's PORT@HOST."""
     root = make_tree(tmp_path / "Xilinx", "new", "2025.2")
@@ -301,16 +298,16 @@ def test_build_tier_from_the_host_file_alone(tmp_path):
         "FINN_LICENSE_HOST=192.0.2.1\nFINN_LICENSE_PORT=2100\nFINN_LICENSE_VENDOR_PORT=2101\n"
         % root,
     )
-    data = inspect({"FINN_XILINX_ENV": path}, "auto")
-    assert data["tier"] == "build"
+    data = inspect({"FINN_XILINX_ENV": path})
+    assert data["tools"] is True
     assert data["env"]["XILINX_VIVADO"] == os.path.join(root, "2025.2", "Vivado")
     assert data["env"]["XILINXD_LICENSE_FILE"] == "2100@192.0.2.1"
     assert data["egress"][0]["ports"] == ["2100", "2101"]
-    other = inspect({"FINN_XILINX_ENV": path, "FINN_XILINX_VERSION": "2026.1"}, "build")
+    other = inspect({"FINN_XILINX_ENV": path, "FINN_XILINX_VERSION": "2026.1"})
     assert other["env"]["XILINX_VIVADO"] == os.path.join(root, "2026.1", "Vivado")
-    explicit = inspect({"FINN_XILINX_ENV": path, "XILINXD_LICENSE_FILE": "27000@lic"}, "build")
+    explicit = inspect({"FINN_XILINX_ENV": path, "XILINXD_LICENSE_FILE": "27000@lic"})
     assert explicit["env"]["XILINXD_LICENSE_FILE"] == "27000@lic"
-    dev = inspect({"FINN_XILINX_ENV": path}, "dev")
+    dev = inspect({"FINN_XILINX_ENV": path}, "--no-tools")
     assert dev["mounts"] == [] and not any("XILINX" in key for key in dev["env"])
 
 
@@ -328,15 +325,15 @@ def test_platform_repositories(host, tmp_path, monkeypatch):
     outside = tmp_path / "platforms"
     outside.mkdir()
     monkeypatch.setenv("PLATFORM_REPO_PATHS", "%s:%s:%s" % (inside, tmp_path / "absent", outside))
-    data = launcher.resolve_host("build", "mirror")
+    data = launcher.resolve_host("auto", "mirror")
     assert data["env"]["PLATFORM_REPO_PATHS"] == "%s:%s" % (inside, outside)
     assert [m["source"] for m in data["mounts"] if m["reason"] == "platform-repo"] == [str(outside)]
     # Unset, upstream's /opt/xilinx/platforms is used where it exists.
     monkeypatch.delenv("PLATFORM_REPO_PATHS")
     monkeypatch.setattr(launcher, "DEFAULT_PLATFORMS", str(outside))
-    assert launcher.resolve_host("build", "mirror")["env"]["PLATFORM_REPO_PATHS"] == str(outside)
+    assert launcher.resolve_host("auto", "mirror")["env"]["PLATFORM_REPO_PATHS"] == str(outside)
     monkeypatch.setenv("PLATFORM_REPO_PATHS", "")  # set empty: none
-    assert "PLATFORM_REPO_PATHS" not in launcher.resolve_host("build", "mirror")["env"]
+    assert "PLATFORM_REPO_PATHS" not in launcher.resolve_host("auto", "mirror")["env"]
 
 
 def test_missing_optional_installation_is_skipped(host, tmp_path, monkeypatch):
@@ -344,7 +341,7 @@ def test_missing_optional_installation_is_skipped(host, tmp_path, monkeypatch):
     hls.mkdir(parents=True)
     monkeypatch.setenv("FINN_XILINX_PATH", str(tmp_path / "not-installed"))
     monkeypatch.setenv("XILINX_HLS", str(hls))
-    request = launcher.resolve_host("build", "mirror")
+    request = launcher.resolve_host("auto", "mirror")
     assert request["env"]["XILINX_HLS"] == str(hls)
     assert all(Path(m["source"]).is_dir() for m in request["mounts"])
 
@@ -374,7 +371,7 @@ def test_a_sourced_host_shell_selects_the_release(host, tmp_path, monkeypatch):
         "FINN_LICENSE_PORT=2100\n" % (tmp_path / "file-tools"),
     )
     monkeypatch.setenv("FINN_XILINX_ENV", str(path))
-    request = launcher.resolve_host("build", "mirror")
+    request = launcher.resolve_host("auto", "mirror")
     for name, value in sourced.items():
         assert request["env"][name] == value
     toolchain = [m["source"] for m in request["mounts"] if m["reason"] == "xilinx-toolchain"]
@@ -390,7 +387,7 @@ def test_finn_xilinx_variables_win_over_a_sourced_shell(host, tmp_path, monkeypa
     sourced_release(tmp_path / "pinned", "2025.2")
     monkeypatch.setenv("FINN_XILINX_PATH", str(tmp_path / "pinned"))
     monkeypatch.setenv("FINN_XILINX_VERSION", "2025.2")
-    request = launcher.resolve_host("build", "mirror")
+    request = launcher.resolve_host("auto", "mirror")
     assert request["env"]["XILINX_VIVADO"] == str(tmp_path / "pinned/2025.2/Vivado")
     assert (
         "the shell's XILINX_HLS, XILINX_VITIS, XILINX_VIVADO is not used" in capsys.readouterr().err
@@ -401,7 +398,7 @@ def test_the_old_tool_names_are_deprecated_aliases(host, tmp_path, monkeypatch, 
     vivado = tmp_path / "Vivado" / "2024.2"
     vivado.mkdir(parents=True)
     monkeypatch.setenv("VIVADO_PATH", str(vivado))
-    request = launcher.resolve_host("build", "mirror")
+    request = launcher.resolve_host("auto", "mirror")
     assert request["env"]["XILINX_VIVADO"] == str(vivado)
     assert "VIVADO_PATH" not in request["env"]
     assert "VIVADO_PATH is deprecated; set XILINX_VIVADO" in capsys.readouterr().err
@@ -460,8 +457,7 @@ def test_host_file_location_and_precedence(tmp_path):
 def test_a_malformed_host_file_is_an_error(tmp_path):
     proc = launch(
         "inspect",
-        "--tier",
-        "dev",
+        "--no-tools",
         env={"FINN_XILINX_ENV": host_file(tmp_path, "XILINX_VIVADO=/x\n")},
     )
     assert proc.returncode == 3
@@ -478,8 +474,6 @@ def test_the_host_files_licence_reaches_activation(tmp_path, licensed):
         lines += ["FINN_LICENSE_HOST=licsrv.example", "FINN_LICENSE_PORT=2100"]
     proc = launch(
         "inspect",
-        "--tier",
-        "build",
         "--format",
         "sh",
         env={"HOME": str(tmp_path), "FINN_XILINX_ENV": host_file(tmp_path, "\n".join(lines))},
@@ -496,27 +490,31 @@ def test_the_host_files_licence_reaches_activation(tmp_path, licensed):
 
 
 def test_workspace_policy(tmp_path):
-    """Tool tiers mirror the checkout (generated .xpr files embed absolute paths);
-    dev uses a fixed path. FINN_ROOT is always the container path."""
+    """The checkout is mirrored (generated .xpr files embed absolute paths); a fixed
+    path is only for a launch without tools. FINN_ROOT is always the container path."""
     root = make_tree(tmp_path / "Xilinx", "new", "2025.1")
     tools = {"FINN_XILINX_PATH": root, "FINN_XILINX_VERSION": "2025.1"}
-    data = inspect(dict(tools, FINN_ROOT="/somewhere/finn"), "build")
+    data = inspect(dict(tools, FINN_ROOT="/somewhere/finn"))
     assert data["workspace"] == {
         "policy": "mirror",
         "source": "/somewhere/finn",
         "target": "/somewhere/finn",
     }
-    data = inspect({"FINN_ROOT": "/somewhere/finn"}, "dev")
+    data = inspect({"FINN_ROOT": "/somewhere/finn"})
+    assert data["workspace"]["target"] == "/somewhere/finn"  # without tools too
+    data = inspect(
+        dict(tools, FINN_ROOT="/somewhere/finn"), "--no-tools", "--workspace-policy", "fixed"
+    )
     assert data["workspace"]["target"] == launcher.FIXED_WORKSPACE
     assert data["env"]["FINN_ROOT"] == data["workspace"]["target"]
-    proc = launch("inspect", "--tier", "build", "--workspace-policy", "fixed", env=tools)
-    assert proc.returncode == 2
+    proc = launch("inspect", "--workspace-policy", "fixed", env=tools)
+    assert proc.returncode == 2 and "--no-tools" in proc.stderr
 
 
 def test_state_defaults_and_overrides(tmp_path):
     """FINN_HOME is persistent (default ~/.finn); the build directory is scratch
     (default /tmp/finn_build_<uid>). Each cache may live elsewhere."""
-    data = inspect({"HOME": str(tmp_path)}, "dev")
+    data = inspect({"HOME": str(tmp_path)}, "--no-tools")
     assert data["state"] == {"FINN_HOME": str(tmp_path / ".finn")}
     assert data["env"]["FINN_HOME"] == str(tmp_path / ".finn")
     assert data["build_dir"] == "/tmp/finn_build_%d" % os.getuid()
@@ -528,7 +526,7 @@ def test_state_defaults_and_overrides(tmp_path):
             "FINN_XSI_PATH": str(tmp_path / "xsi"),
             "FINN_BUILD_DIR": str(tmp_path / "build"),
         },
-        "dev",
+        "--no-tools",
     )
     assert data["state"] == {
         "FINN_HOME": str(tmp_path / "state"),
@@ -541,7 +539,7 @@ def test_state_defaults_and_overrides(tmp_path):
 
 def test_run_mounts_state_at_its_host_path(host, tmp_path, monkeypatch):
     monkeypatch.setenv("FINN_XSI_PATH", str(tmp_path / "shared xsi"))
-    data = launcher.resolve_host("dev", "mirror")
+    data = launcher.resolve_host("never", "mirror")
     argv = launcher.docker_run_argv(data, "image", run_options(), ["true"])
     home = tmp_path / "finn-home"
     for path in (home, tmp_path / "shared xsi", tmp_path / "build with spaces"):
@@ -560,8 +558,7 @@ def test_run_mounts_state_at_its_host_path(host, tmp_path, monkeypatch):
 def test_shell_inspection_never_allocates(tmp_path):
     proc = launch(
         "inspect",
-        "--tier",
-        "dev",
+        "--no-tools",
         "--format",
         "sh",
         env={"FINN_HOST_BUILD_DIR": str(tmp_path / "scratch"), "FINN_HOME": str(tmp_path / "h")},
@@ -583,8 +580,6 @@ def test_emitted_paths_have_no_tilde(tmp_path):
     root = make_tree(tmp_path / "Xilinx", "new", "2025.1")
     proc = launch(
         "inspect",
-        "--tier",
-        "build",
         "--format",
         "sh",
         env={
@@ -609,14 +604,13 @@ def test_emitted_paths_have_no_tilde(tmp_path):
 def test_sh_output(tmp_path):
     proc = launch(
         "inspect",
-        "--tier",
-        "dev",
+        "--no-tools",
         "--format",
         "sh",
         env={"FINN_ROOT": "/w/finn", "FINN_RUNTIMES": "xrt,slash,xrt", "FINN_XELAB_MT": "3"},
     )
     assert "FINN_WORKSPACE_SOURCE='/w/finn'" in proc.stdout
-    assert "FINN_ROOT='%s'" % launcher.FIXED_WORKSPACE in proc.stdout
+    assert "FINN_ROOT='/w/finn'" in proc.stdout
     assert "FINN_RUNTIMES='slash,xrt'" in proc.stdout
     assert "FINN_XELAB_MT='3'" in proc.stdout
     assert "FINN_UID=" in proc.stdout and "FINN_GID=" in proc.stdout
@@ -626,9 +620,9 @@ def test_sh_output(tmp_path):
 def test_sh_output_names_the_xilinx_path_only_for_tools(tmp_path):
     root = make_tree(tmp_path / "Xilinx", "new", "2025.1")
     tools = {"FINN_XILINX_PATH": root, "FINN_XILINX_VERSION": "2025.1"}
-    dev = launch("inspect", "--tier", "dev", "--format", "sh", env=tools)
+    dev = launch("inspect", "--no-tools", "--format", "sh", env=tools)
     assert "FINN_XILINX_PATH" not in dev.stdout
-    build = launch("inspect", "--tier", "build", "--format", "sh", env=tools)
+    build = launch("inspect", "--format", "sh", env=tools)
     assert "FINN_XILINX_PATH=" in build.stdout
 
 
@@ -640,7 +634,7 @@ def test_sh_output_survives_eval_with_spaces_and_quotes():
         [
             "bash",
             "-c",
-            "eval \"$(%s %s inspect --tier dev --format sh | sed 's/^/export /')\"; "
+            "eval \"$(%s %s inspect --no-tools --format sh | sed 's/^/export /')\"; "
             'printf "%%s" "$FINN_WORKSPACE_SOURCE"' % (sys.executable, LAUNCHER),
         ],
         capture_output=True,
@@ -668,7 +662,7 @@ def test_resource_overrides_are_mounted_and_passed(tmp_path):
             "FINN_RESOURCES_HLSLIB_URL": "https://git.example/hlslib.git",
             "FINN_RESOURCES_SYSTEM_CACHE": str(tmp_path),
         },
-        "dev",
+        "--no-tools",
     )
     assert data["mounts"] == [
         {"source": str(user_lib), "target": str(user_lib), "mode": "rw", "reason": "resource"}
@@ -682,16 +676,16 @@ def test_resource_overrides_are_mounted_and_passed(tmp_path):
 
 def test_relative_resource_override_becomes_absolute(tmp_path):
     (tmp_path / "user_lib").mkdir()
-    data = inspect({"FINN_RESOURCES_USER_LIB": "user_lib"}, "dev", cwd=tmp_path)
+    data = inspect({"FINN_RESOURCES_USER_LIB": "user_lib"}, "--no-tools", cwd=tmp_path)
     assert data["env"]["FINN_RESOURCES_USER_LIB"] == str(tmp_path / "user_lib")
 
 
 def test_site_directories_must_exist(tmp_path):
     golden = tmp_path / "golden"
-    proc = launch("inspect", "--tier", "dev", env={"FINN_GOLDEN_DIR": str(golden)})
+    proc = launch("inspect", "--no-tools", env={"FINN_GOLDEN_DIR": str(golden)})
     assert proc.returncode == 3 and "FINN_GOLDEN_DIR is not a directory" in proc.stderr
     golden.mkdir()
-    data = inspect({"FINN_GOLDEN_DIR": str(golden)}, "dev")
+    data = inspect({"FINN_GOLDEN_DIR": str(golden)}, "--no-tools")
     assert data["mounts"][0]["source"] == str(golden) and data["mounts"][0]["mode"] == "rw"
 
 
@@ -704,7 +698,7 @@ def test_tool_dir_override_may_exist_only_in_the_container(tmp_path):
     }
     wrappers = tmp_path / "wrappers"
     wrappers.mkdir()
-    data = inspect(dict(tools, FINN_TOOL_DIR_OVERRIDE=str(wrappers)), "build")
+    data = inspect(dict(tools, FINN_TOOL_DIR_OVERRIDE=str(wrappers)))
     assert data["env"]["FINN_TOOL_DIR_OVERRIDE"] == str(wrappers)
     assert {
         "source": str(wrappers),
@@ -714,7 +708,7 @@ def test_tool_dir_override_may_exist_only_in_the_container(tmp_path):
     } in data["mounts"]
     kit = "/opt/finn-lsf/bin"
     assert not os.path.exists(kit)
-    proc = launch("inspect", "--tier", "build", env=dict(tools, FINN_TOOL_DIR_OVERRIDE=kit))
+    proc = launch("inspect", env=dict(tools, FINN_TOOL_DIR_OVERRIDE=kit))
     assert proc.returncode == 0, proc.stderr
     data = json.loads(proc.stdout)
     assert data["env"]["FINN_TOOL_DIR_OVERRIDE"] == kit
@@ -735,7 +729,7 @@ def run_options(**changes):
 
 def test_run_preserves_arguments_and_site_flags(host, monkeypatch):
     monkeypatch.setenv("FINN_DOCKER_EXTRA", "--hostname farm-agent --env 'SITE_VALUE=a b'")
-    data = launcher.resolve_host("dev", "mirror")
+    data = launcher.resolve_host("never", "mirror")
     options = run_options(
         volume=["/model with spaces:/model with spaces"],
         env=["VALUE=two words"],
@@ -756,7 +750,7 @@ def test_explicit_commands_receive_terminal_when_attached(host, monkeypatch, ter
     monkeypatch.setattr(sys.stdin, "isatty", lambda: terminal)
     monkeypatch.setattr(sys.stdout, "isatty", lambda: terminal)
     argv = launcher.docker_run_argv(
-        launcher.resolve_host("dev"), "image", run_options(), ["ipython"]
+        launcher.resolve_host("never"), "image", run_options(), ["ipython"]
     )
     assert ("-i" in argv) is terminal and ("-t" in argv) is terminal
     assert argv[-1] == "ipython"
@@ -772,7 +766,7 @@ def test_site_inputs_are_mounted(host, tmp_path, monkeypatch):
     monkeypatch.setenv("VERIFICATION_IO", str(io))
     monkeypatch.setenv("FINN_SSH_KEY_DIR", str(keys))
     monkeypatch.setenv("FINN_BOARD_FILES_PATH", str(boards))
-    argv = launcher.docker_run_argv(launcher.resolve_host("dev"), "image", run_options(), [])
+    argv = launcher.docker_run_argv(launcher.resolve_host("never"), "image", run_options(), [])
     assert "VERIFICATION_IO=%s" % io in argv and "%s:%s:rw" % (io, io) in argv
     assert "%s:/run/finn-ssh:ro" % keys in argv
     assert "%s:%s:rw" % (boards, boards) in argv
@@ -783,10 +777,10 @@ def test_site_inputs_are_mounted(host, tmp_path, monkeypatch):
 def test_ssh_keys_default_to_the_checkouts_directory(host, tmp_path, monkeypatch):
     """Upstream's default, so existing setups keep password-less deployment."""
     monkeypatch.setattr(launcher, "REPO", tmp_path)
-    argv = launcher.docker_run_argv(launcher.resolve_host("dev"), "image", run_options(), [])
+    argv = launcher.docker_run_argv(launcher.resolve_host("never"), "image", run_options(), [])
     assert not any(arg.endswith(":/run/finn-ssh:ro") for arg in argv)
     (tmp_path / "ssh_keys").mkdir()
-    argv = launcher.docker_run_argv(launcher.resolve_host("dev"), "image", run_options(), [])
+    argv = launcher.docker_run_argv(launcher.resolve_host("never"), "image", run_options(), [])
     assert "%s:/run/finn-ssh:ro" % (tmp_path / "ssh_keys") in argv
 
 
@@ -797,7 +791,7 @@ def test_tool_libraries_are_in_the_creation_environment(host, tmp_path, monkeypa
         (root / directory).mkdir(parents=True)
     monkeypatch.setenv("FINN_XILINX_PATH", str(root))
     monkeypatch.setenv("FINN_XILINX_VERSION", "2024.2")
-    env = launcher.container_environment(launcher.resolve_host("build", "mirror", ["xrt"]))
+    env = launcher.container_environment(launcher.resolve_host("auto", "mirror", ["xrt"]))
     assert env["XILINX_HLS"] == str(root / "Vitis_HLS/2024.2")
     assert env["XILINX_XRT"] == "/opt/xilinx/xrt"
     assert str(root / "Vivado/2024.2/lib/lnx64.o") in env["LD_LIBRARY_PATH"].split(":")
@@ -875,10 +869,8 @@ def test_compose_override_consumes_resolved_mounts(tmp_path):
     licence.write_text("FEATURE x\n")
     proc = launch(
         "compose",
-        "--tier",
-        "build",
         "--service",
-        "build",
+        "finn",
         env={
             "HOME": str(tmp_path),
             "FINN_XILINX_PATH": root,
@@ -888,7 +880,7 @@ def test_compose_override_consumes_resolved_mounts(tmp_path):
         },
     )
     assert proc.returncode == 0, proc.stderr
-    service = json.loads(proc.stdout)["services"]["build"]
+    service = json.loads(proc.stdout)["services"]["finn"]
     mounts = {m["target"]: m for m in service["volumes"]}
     assert mounts[root]["read_only"] is True
     assert mounts[str(licence)]["read_only"] is True
@@ -904,18 +896,17 @@ def test_compose_uses_the_resolved_image(tmp_path):
         "FINN_HOST_BUILD_DIR": str(tmp_path / "build"),
         "FINN_RUNTIMES": "xrt",
     }
-    proc = launch("compose", "--tier", "dev", "--service", "dev", env=env)
+    proc = launch("compose", "--no-tools", "--service", "finn", env=env)
     assert proc.returncode == 2
     assert "FINN_IMAGE must be set" in proc.stderr
     proc = launch(
         "compose",
-        "--tier",
-        "dev",
+        "--no-tools",
         "--service",
-        "dev",
+        "finn",
         env=dict(env, FINN_IMAGE="xilinx/finn:test.xrt", FINN_IMAGE_REVISION="env-test"),
     )
-    service = json.loads(proc.stdout)["services"]["dev"]
+    service = json.loads(proc.stdout)["services"]["finn"]
     assert service["image"] == "xilinx/finn:test.xrt"
     assert "build" not in service
     assert service["environment"]["FINN_IMAGE_REVISION"] == "env-test"
@@ -932,20 +923,18 @@ def test_dev_container_inputs_carry_the_toolchain_but_not_owned_state(tmp_path):
     )
     proc = launch(
         "compose",
-        "--tier",
-        "auto",
         "--inputs-only",
         "--service",
-        "dev",
+        "finn",
         env={"HOME": str(tmp_path), "FINN_XILINX_ENV": path},
     )
     assert proc.returncode == 0, proc.stderr
-    service = json.loads(proc.stdout)["services"]["dev"]
+    service = json.loads(proc.stdout)["services"]["finn"]
     assert [v["target"] for v in service["volumes"]] == [root]
     assert service["volumes"][0]["read_only"] is True
     assert service["environment"]["XILINXD_LICENSE_FILE"] == "2100@192.0.2.1"
     for owned in ("FINN_ROOT", "FINN_BUILD_DIR", "FINN_HOME"):
         assert owned not in service["environment"]
     assert set(service) == {"environment", "volumes"}
-    proc = launch("compose", "--inputs-only", "--service", "dev", env={"HOME": str(tmp_path)})
-    assert json.loads(proc.stdout)["services"]["dev"]["volumes"] == []
+    proc = launch("compose", "--inputs-only", "--service", "finn", env={"HOME": str(tmp_path)})
+    assert json.loads(proc.stdout)["services"]["finn"]["volumes"] == []
