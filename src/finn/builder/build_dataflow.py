@@ -32,6 +32,7 @@ import logging
 import os
 import pdb  # NOQA
 import time
+from qonnx.core.findings import Refusal, collect_findings
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.onnx_exec import exact_integers
 
@@ -145,17 +146,43 @@ def _run_build_steps(model, cfg, build_dataflow_steps):
     name of the configured step or phase.
 
     Returns 0 on success and -1 on the first failing step.
+
+    Reported findings and refusal reasons are logged and saved per step in
+    build_findings.json on success or failure. An enclosing qonnx collector
+    also receives the step's reported findings.
     """
     step_num = 1
     time_per_step = dict()
+    build_findings = dict()
+
+    def record_findings(step_name, found, refusal=None):
+        if found or refusal is not None:
+            record = build_findings.setdefault(step_name, {"findings": []})
+            record["findings"].extend(finding.record() for finding in found)
+            for finding in found:
+                log.warning("%s", finding.subject_line())
+            if refusal is not None:
+                record["refused"] = [finding.record() for finding in refusal.findings]
+                for finding in refusal.findings:
+                    log.error("%s", finding.subject_line())
+
+    def save_findings():
+        try:
+            with open(cfg.output_dir + "/build_findings.json", "w") as f:
+                json.dump(build_findings, f, indent=2)
+        except OSError as error:
+            log.warning("Could not write build_findings.json: %s", error)
+
     for transform_step in build_dataflow_steps:
         step_name = transform_step.__name__
         with running_step(step_name):
+            found = []
             try:
                 log.info("Running step: %s [%d/%d]", step_name, step_num, len(build_dataflow_steps))
                 # run the step
                 step_start = time.time()
-                model = transform_step(model, cfg)
+                with collect_findings() as found:
+                    model = transform_step(model, cfg)
                 step_end = time.time()
                 time_per_step[step_name] = step_end - step_start
                 chkpt_name = "%s.onnx" % (step_name)
@@ -166,6 +193,8 @@ def _run_build_steps(model, cfg, build_dataflow_steps):
                     model.save("%s/%s" % (intermediate_model_dir, chkpt_name))
                 step_num += 1
             except Exception as e:
+                record_findings(step_name, found, e if isinstance(e, Refusal) else None)
+                save_findings()
                 log.error("Step %s failed:", step_name, exc_info=True)
                 # start postmortem debug if configured
                 if cfg.enable_build_pdb_debug:
@@ -174,7 +203,9 @@ def _run_build_steps(model, cfg, build_dataflow_steps):
                     log.info("enable_build_pdb_debug not set in build config, exiting...")
                 log.info("Build failed")
                 return -1
+            record_findings(step_name, found)
 
+    save_findings()
     with open(cfg.output_dir + "/time_per_step.json", "w") as f:
         json.dump(time_per_step, f, indent=2)
     log.info("Completed successfully")
