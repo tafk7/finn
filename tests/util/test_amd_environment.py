@@ -4,7 +4,6 @@
 and PATH, as a release's settings64.sh sets them) and never builds it."""
 import pytest
 
-import logging
 import os
 
 from finn.util import launcher
@@ -23,7 +22,7 @@ from finn.util.launcher import (
 
 pytestmark = pytest.mark.util
 
-NAMES = ("XILINX_VIVADO", "XILINX_HLS", "XILINX_VITIS", "VIVADO_PATH", "HLS_PATH", "VITIS_PATH")
+NAMES = ("XILINX_VIVADO", "XILINX_HLS", "XILINX_VITIS")
 
 
 @pytest.fixture
@@ -33,7 +32,6 @@ def bare(monkeypatch, tmp_path):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("PATH", str(tmp_path / "empty-path"))
     monkeypatch.setattr(launcher, "INSTALL_ROOTS", (str(tmp_path / "no-root"),))
-    monkeypatch.setattr(launcher, "_warned_names", set())
     xilinx_tool.cache_clear()
     yield
     xilinx_tool.cache_clear()
@@ -73,16 +71,6 @@ def source(monkeypatch, vivado, vitis):
 )
 def test_release_of(path, expected):
     assert release_of(path) == expected
-
-
-def test_the_deprecated_names_are_read_with_a_warning(bare, monkeypatch, caplog):
-    monkeypatch.setenv("VIVADO_PATH", "/opt/Xilinx/Vivado/2024.2")
-    with caplog.at_level(logging.WARNING, logger="finn.util.launcher"):
-        assert amd_path("XILINX_VIVADO") == "/opt/Xilinx/Vivado/2024.2"
-        assert get_vivado_version() == (2024, 2)
-    assert caplog.text.count("VIVADO_PATH is deprecated") == 1
-    monkeypatch.setenv("XILINX_VIVADO", "/tools/Xilinx/2025.2/Vivado")
-    assert amd_path("XILINX_VIVADO") == "/tools/Xilinx/2025.2/Vivado"
 
 
 def test_installed_releases_are_found_in_both_layouts_newest_first(tmp_path):

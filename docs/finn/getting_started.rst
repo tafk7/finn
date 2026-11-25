@@ -8,7 +8,7 @@ Quickstart
 ==========
 
 1. Install Docker to run `without root <https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user>`_
-2. Set up ``FINN_XILINX_PATH`` and ``FINN_XILINX_VERSION`` environment variables pointing respectively to the Xilinx tools installation directory and version (e.g. ``FINN_XILINX_PATH=/opt/Xilinx`` and ``FINN_XILINX_VERSION=2024.2``)
+2. Source your Xilinx release's settings, as for any AMD tool (e.g. ``source /opt/Xilinx/2025.2/Vivado/settings64.sh``), and name your licence server in ``XILINXD_LICENSE_FILE``
 3. Clone the FINN compiler from the repo: ``git clone https://github.com/Xilinx/finn/`` and go into the directory where it is cloned
 4. Execute ``./docker/run --fpga -- bash docker/quicktest.sh verify`` to verify your installation. It is normal to see warnings during the tests - FINN uses warnings to inform users about certain conditions. As long as all tests pass, your installation is successful.
 5. Optionally, follow the instructions on :ref:`getting_started:PYNQ board first-time setup`, :ref:`getting_started:Vitis-based Alveo first-time setup`, or :ref:`getting_started:Slash-based Alveo first-time setup` for board setup.
@@ -48,76 +48,67 @@ by using the "advanced mode" described in the :ref:`command_line` section.
 
 Running FINN in Docker
 ======================
-FINN uses Ubuntu 24.04, Python 3.12 and a uv-locked environment. The
-``docker/build`` command prepares it; ``docker/run`` reuses it and installs
-the mounted FINN checkout editable without resolving dependencies.
+The container is FINN's locked environment on Ubuntu 24.04, started like a shell
+that sourced your release's ``settings64.sh``. ``docker/run`` builds the image
+when it is missing and installs the mounted FINN checkout in it, editable.
 
 Launch interactive shell
 ************************
-Start a shell; configured Vivado/Vitis installations and licences are mounted
-automatically::
+Start a shell; with a release's ``settings64.sh`` sourced (``XILINX_VIVADO`` set),
+the tools and your licence settings come along::
 
+  source /opt/Xilinx/2025.2/Vivado/settings64.sh
+  export XILINXD_LICENSE_FILE=2100@licence-server
   ./docker/run
 
-To require the tools (failing early if none are configured), or to leave them out::
+To require the tools (failing early if none are set up), or to leave them out::
 
   ./docker/run --fpga
   ./docker/run --no-tools
 
 Launch a Build with ``build_dataflow``
 **************************************
-For an external model directory, mount it explicitly. Paths are mirrored inside
-the container, including paths with spaces::
+The working directory is mounted at its own path. For a model directory
+elsewhere, run from it, or mount it explicitly::
 
-  ./docker/run --fpga --volume "/path/to/model:/path/to/model" -- build_dataflow /path/to/model
-
-For a custom Python flow, also select its working directory::
-
-  ./docker/run --fpga --volume "/path/to/model:/path/to/model" --workdir /path/to/model -- python build.py
+  cd /path/to/model && /path/to/finn/docker/run --fpga -- build_dataflow /path/to/model
+  ./docker/run --fpga -v "/path/to/model:/path/to/model" -- python /path/to/model/build.py
 
 Vitis/Alveo builds additionally select the XRT userspace runtime with
-``--runtime xrt``. Jenkins selects that full profile by default.
+``--runtime xrt``.
 
 Launch Jupyter notebooks
 ************************
-Serve the upstream notebooks, with token authentication enabled by default::
+Serve the upstream notebooks, with token authentication::
 
   ./docker/run --fpga --notebook
 
 Open the token URL printed by Jupyter. ``JUPYTER_PORT`` defaults to 8888 and
-``NETRON_PORT`` to 8081. Set ``JUPYTER_PASSWD_HASH`` to use a hashed password.
+``NETRON_PORT`` to 8081.
 
 Environment variables
 **********************
-``docker/run`` mounts the Xilinx tools named by ``FINN_XILINX_PATH`` and
-``FINN_XILINX_VERSION``, else those of a shell that sourced a release's
-``settings64.sh``, else those in ``~/.config/finn/xilinx.env``, the machine
-description that launchers (``docker/run``, Dev Containers, CI agents, sandboxes)
-read. ``FINN_XILINX_ENV`` selects another file (empty disables it). Write plain
-``NAME=value`` lines, without quotes or expansion::
+The container takes AMD's own variables from your shell: ``XILINX_VIVADO`` (the
+install root it lies in is mounted read-only, and the container sources that
+release's ``settings64.sh``), ``XILINXD_LICENSE_FILE`` and ``LM_LICENSE_FILE``
+(licence files are mounted), ``PLATFORM_REPO_PATHS`` and
+``FINN_TOOL_DIR_OVERRIDE`` (site tool wrappers, such as LSF). Both AMD
+installation layouts work. Software runs need no tools.
 
-  FINN_XILINX_PATH=/opt/Xilinx
-  FINN_XILINX_VERSION=2024.2
-  XILINXD_LICENSE_FILE=2100@licence-server
-
-Both AMD installation layouts are detected. Software runs work without tools.
-
-* ``PLATFORM_REPO_PATHS`` names colon-separated platform directories (default ``/opt/xilinx/platforms`` where it exists).
-* ``FINN_TOOL_DIR_OVERRIDE`` retains site tool interception, including LSF wrappers.
-* ``FINN_HOST_BUILD_DIR`` selects the disposable build directory (default ``/tmp/finn_build_<uid>``).
+* ``FINN_BUILD_DIR`` selects the disposable build directory (default ``/tmp/finn_build_<uid>``).
 * ``FINN_HOME`` selects persistent state such as resources and XSI builds (default ``~/.finn``); ``FINN_RESOURCES_DIR``, ``FINN_XSI_PATH`` and ``FINN_GOLDEN_DIR`` move parts of it elsewhere.
-* ``NUM_DEFAULT_WORKERS`` and ``FINN_XELAB_MT`` retain their existing meanings.
-* ``FINN_DOCKER_EXTRA`` passes shell-quoted Docker flags; they are tokenized without shell evaluation.
-* ``FINN_DOCKER_CACHE_DIR`` retains Torch and Hugging Face download caches.
-* ``FINN_SSH_KEY_DIR`` (default: the checkout's ``ssh_keys`` directory, where it exists) is mounted read-only as the container's ``~/.ssh``.
-* ``FINN_VCK190_GOLDEN=1`` builds the optional VCK190 golden reference into ``FINN_HOME``.
+* ``-e NAME[=VALUE]`` passes further variables (``NUM_DEFAULT_WORKERS``, ``FINN_XELAB_MT``), ``-v SOURCE:TARGET`` further mounts; ``COMPOSE_FILE`` adds your own Compose files.
+* The checkout's ``ssh_keys`` directory, where it exists, is mounted read-only as the container's ``~/.ssh``.
+* ``python -m finn.resources.prepare golden`` builds the optional VCK190 golden reference into ``FINN_HOME``.
 
-See ``docker/README.md`` for the full interface migration, resource overrides,
-runtime packages, shared images, and Apptainer/Singularity exports.
+The container is defined in ``compose.yaml`` and ``compose.tools.yaml``, which
+Dev Containers and agent sandboxes can use directly; ``docker/run --dry-run``
+prints what it would run. See ``docker/README.md`` for images, runtime packages
+and the migration from ``run-docker.sh``.
 
 General FINN Docker tips
 ************************
-* Several folders including the root directory of the FINN compiler and the ``FINN_HOST_BUILD_DIR`` will be mounted into the Docker container and can be used to exchange files.
+* The FINN checkout, the working directory, ``FINN_HOME`` and ``FINN_BUILD_DIR`` are mounted into the container at their own paths and can be used to exchange files.
 * Do not use ``sudo`` to launch the FINN Docker. Instead, setup Docker to run `without root <https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user>`_.
 * If you want a new terminal on an already-running container, you can do this with ``docker exec -it <name_of_container> bash``.
 * The container is spawned with the `--rm` option, so make sure that any important files you created inside the container are either in the finn compiler folder (which is mounted from the host computer) or otherwise backed up.
@@ -304,7 +295,7 @@ On the target side:
 On the host side:
 
 1. Install Vitis 2024.2 and source its ``settings64.sh``, which sets ``XILINX_VITIS``.
-2. Install Xilinx XRT on the host if you want to run accelerators there; the FINN image gets its pinned XRT userspace with ``./docker/build --runtime xrt``.
+2. Install Xilinx XRT on the host if you want to run accelerators there; the FINN image gets its pinned XRT userspace with ``./docker/run --runtime xrt``.
 3. Install the Vitis platform files for Alveo and set up the ``PLATFORM_REPO_PATHS`` environment variable to point to your installation. *This must be the same path as the target's platform files (target step 2)*
 4. `Set up public key authentication <https://www.digitalocean.com/community/tutorials/how-to-configure-ssh-key-based-authentication-on-a-linux-server>`_. Copy your private key to the ``finn/ssh_keys`` folder on the host to get password-less deployment and remote execution.
 5. Done!
@@ -333,8 +324,7 @@ On the host side:
    <https://github.com/Xilinx/slash>`_ and copy it to a location accessible on the host.
 2. Supply the packages named by ``docker/runtimes/slash.env`` and
    ``docker/runtimes/slashkit.env`` under ``docker/packages/``. Select them with
-   ``./docker/build --runtime xrt --runtime slash --runtime slashkit`` and use
-   the same runtime options when launching.
+   ``./docker/run --runtime xrt,slash,slashkit``, which builds that image.
 3. `Set up public key authentication <https://www.digitalocean.com/community/tutorials/how-to-configure-ssh-key-based-authentication-on-a-linux-server>`_.
    Copy your private key to the ``finn/ssh_keys`` folder on the host to get
    password-less deployment and remote execution.
@@ -342,15 +332,11 @@ On the host side:
 
 Vivado/Vitis license
 *********************
-If you are targeting Xilinx FPGA parts that needs specific licenses (non-WebPack) you can make these available to the
-FINN Docker container by passing extra arguments. To do this, you can use the ``FINN_DOCKER_EXTRA`` environment variable as follows:
+If you are targeting Xilinx FPGA parts that need specific licenses (non-WebPack), set AMD's own
+variable before starting FINN, natively or with ``docker/run``, which mounts a licence file
+into the container at the same path::
 
-::
-
-  export FINN_DOCKER_EXTRA=" -v /path/to/licenses:/path/to/licenses -e XILINXD_LICENSE_FILE=/path/to/licenses "
-
-The above example mounts ``/path/to/licenses`` from the host into the same path on the Docker container, and sets the
-value of the ``XILINXD_LICENSE_FILE`` environment variable.
+  export XILINXD_LICENSE_FILE=2100@licence-server      # or /path/to/licence.lic
 
 System Requirements
 ====================
@@ -358,7 +344,7 @@ System Requirements
 * A Linux host with ``bash`` (the FINN Docker image provides the required OS environment, so the host distribution/version is not critical)
 * Docker `without root <https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user>`_
 * A working Vitis/Vivado 2024.2 installation
-* ``FINN_XILINX_PATH`` and ``FINN_XILINX_VERSION`` environment variables correctly set, see `Quickstart`_
+* A shell that sourced the release's ``settings64.sh``, see `Quickstart`_
 * *(optional)* `Vivado/Vitis license`_ if targeting non-WebPack FPGA parts.
 * *(optional)* A PYNQ board with a network connection, see `PYNQ board first-time setup`_
 
@@ -380,6 +366,6 @@ strong hardware:
   the process. For larger networks, you may need 10s of GB of space for the temporary
   files generated during the build.
   By default, these generated files will be placed under ``/tmp/finn_build_<uid>``.
-  You can override this location by using the ``FINN_HOST_BUILD_DIR`` environment
+  You can override this location by using the ``FINN_BUILD_DIR`` environment
   variable.
   Mapping the generated file dir to a fast SSD will result in quicker builds.

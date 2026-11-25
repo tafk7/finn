@@ -13,8 +13,11 @@ retention, or LSF parsing logic.
 
 import argparse
 import json
+import os
+import signal
+import subprocess
 import sys
-from finn_ci import config, failures, hw, lsf, retention, timing
+from finn_ci import config, failures, hw, image, lsf, retention, timing
 
 
 def main(argv=None):
@@ -113,6 +116,26 @@ def _dispatch(argv):
     p.add_argument("current_build")
     p.add_argument("--dry-run", action="store_true")
 
+    # The CI image: its content-addressed tag, a Bake build under it, its
+    # provenance, and publication to and verified loading from a shared
+    # directory. build and load print the image ID, for FINN_IMAGE.
+    p = sub.add_parser("image")
+    actions = p.add_subparsers(dest="action", required=True)
+    actions.add_parser("tag")
+    q = actions.add_parser("build")
+    q.add_argument("--if-missing", action="store_true")
+    q = actions.add_parser("metadata")
+    q.add_argument("directory")
+    q.add_argument("reference", nargs="?")
+    q = actions.add_parser("publish")
+    q.add_argument("directory")
+    q.add_argument("reference", nargs="?")
+    q.add_argument("--workspace", required=True)
+    q = actions.add_parser("load")
+    q.add_argument("directory")
+    for q in actions.choices.values():
+        q.add_argument("--runtime", action="append", default=[], help="default: FINN_RUNTIMES")
+
     args = parser.parse_args(argv)
     if args.cmd == "stage-choices-json":
         print(json.dumps(config.jenkins_stage_choices()))
@@ -203,8 +226,40 @@ def _dispatch(argv):
             args.dry_run,
         )
         return 0
+    if args.cmd == "image":
+        return _image(args)
     parser.print_help()
     return 2
+
+
+def _terminate(signum, frame):
+    # Unwind staging directories and child processes on a Jenkins abort.
+    raise SystemExit(128 + signum)
+
+
+def _image(args):
+    signal.signal(signal.SIGTERM, _terminate)
+    runtimes = image.normalize_runtimes(
+        ",".join(args.runtime) or os.environ.get("FINN_RUNTIMES", "")
+    )
+    try:
+        if args.action == "tag":
+            print(image.tag(runtimes))
+        elif args.action == "build":
+            print(image.build(runtimes, if_missing=args.if_missing))
+        elif args.action == "load":
+            print(image.load(args.directory, runtimes))
+        else:
+            reference = args.reference or image.tag(runtimes)
+            if args.action == "metadata":
+                info = image.image_metadata(reference, runtimes)
+                image.write_metadata(args.directory, reference, info)
+            else:
+                image.publish(args.directory, reference, args.workspace, runtimes)
+    except (image.ImageError, OSError, RuntimeError, subprocess.CalledProcessError) as error:
+        print("finn_ci image: error: %s" % error, file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

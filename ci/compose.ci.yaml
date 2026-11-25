@@ -1,0 +1,17 @@
+# Jenkins' additions to compose.yaml: the agent's download caches and its host
+# name. ci/Jenkinsfile puts this file in COMPOSE_FILE, after any the job DSL names,
+# and docker/run adds COMPOSE_FILE's files after its own.
+#
+#   FINN_CI_CACHES  the agent's cache directory, created beforehand
+#                   (agent_caches/<NODE>/finn_cache under FINN_CI_NFS_ROOT)
+#   NODE_NAME       the Jenkins agent: bsub's gethostbyname() fails on the
+#                   container's generated host name
+services:
+  finn:
+    hostname: ${NODE_NAME:-localhost}
+    environment:
+      TORCH_HOME: /finn_cache/torch
+      HF_HOME: /finn_cache/huggingface
+      UV_CACHE_DIR: /finn_cache/uv
+    volumes:
+      - ${FINN_CI_CACHES:?}:/finn_cache

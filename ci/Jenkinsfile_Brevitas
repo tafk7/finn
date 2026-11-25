@@ -7,18 +7,23 @@ pipeline {
       }
       environment {
         TEST_NAME = "brevitas_suite"
-        FINN_HOST_BUILD_DIR = "${env.FINN_HOST_BUILD_DIR}/${env.TEST_NAME}"
+        FINN_BUILD_DIR = "${env.FINN_BUILD_DIR}/${env.TEST_NAME}"
       }
       steps {
         catchError(stageResult: 'FAILURE') {
           script {
             // Clear reports even if Docker/overlay preparation fails before pytest.
             sh 'rm -rf -- brevitas_suite.xml brevitas_suite.html brevitas-provenance coverage_brevitas_suite'
-            cleanPreviousBuildFiles(env.FINN_HOST_BUILD_DIR)
+            cleanPreviousBuildFiles(env.FINN_BUILD_DIR)
 
             // The committed lock stays unchanged; the command selects an overlay.
-
-            sh 'FINN_RUNTIMES=${FINN_RUNTIMES:-xrt} ./docker/run --env BREVITAS_COMMIT --env PYTHONPATH=ci -- bash ci/scripts/brevitas_candidate.sh --junitxml=brevitas_suite.xml --html=brevitas_suite.html --self-contained-html --cov --cov-report=html:coverage_brevitas_suite'
+            // The content-addressed image is built only when the agent lacks it.
+            sh '''
+export FINN_RUNTIMES=${FINN_RUNTIMES:-xrt}
+FINN_IMAGE=$(PYTHONPATH=ci python3 -m finn_ci image build --if-missing)
+export FINN_IMAGE
+./docker/run --no-build --env BREVITAS_COMMIT --env PYTHONPATH=ci -- bash ci/scripts/brevitas_candidate.sh --junitxml=brevitas_suite.xml --html=brevitas_suite.html --self-contained-html --cov --cov-report=html:coverage_brevitas_suite
+'''
             archiveArtifacts artifacts: 'brevitas-provenance/*', allowEmptyArchive: false
 
             // Stash the test results file(s)

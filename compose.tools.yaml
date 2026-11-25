@@ -1,0 +1,21 @@
+# The AMD tools for compose.yaml: the install root that XILINX_VIVADO lies in,
+# read-only at its own path, and AMD's own variables. The container sources
+# $XILINX_VIVADO/settings64.sh at start, as a native shell would.
+#
+#   XILINX_VIVADO       the release, e.g. /tools/Xilinx/2025.2/Vivado (required)
+#   FINN_XILINX_ROOT    the install root to mount (docker/run derives it from XILINX_VIVADO)
+#   XILINXD_LICENSE_FILE, LM_LICENSE_FILE, PLATFORM_REPO_PATHS, FINN_TOOL_DIR_OVERRIDE: as natively
+x-tools: &tools
+  # Named without a value: passed on when set, left unset otherwise.
+  environment:
+    - XILINX_VIVADO
+    - XILINXD_LICENSE_FILE
+    - LM_LICENSE_FILE
+    - PLATFORM_REPO_PATHS
+    - FINN_TOOL_DIR_OVERRIDE
+  volumes:
+    - ${FINN_XILINX_ROOT:?}:${FINN_XILINX_ROOT:?}:ro
+
+services:
+  finn: *tools
+  notebook: *tools

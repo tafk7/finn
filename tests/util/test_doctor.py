@@ -38,7 +38,7 @@ def source(monkeypatch, vivado, vitis):
 
 @pytest.fixture
 def clean(monkeypatch, tmp_path):
-    for name in (*launcher.AMD_VARIABLES, *launcher.DEPRECATED_NAMES.values()):
+    for name in launcher.AMD_VARIABLES:
         monkeypatch.delenv(name, raising=False)
     for name in (launcher.TOOL_DIR_ENV, "PLATFORM_REPO_PATHS", "XILINX_XRT"):
         monkeypatch.delenv(name, raising=False)

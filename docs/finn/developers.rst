@@ -63,18 +63,16 @@ Docker images
 exact versions and Git selections. Use uv 0.10.0 for updates and commit both
 files. All groups resolve together. Run ``uv sync --locked`` for development.
 
-``docker/build`` uses Bake to prepare staged system, Python, runtime and
-board-resource layers. Development tags hash environment inputs rather than
-ordinary FINN source files. Ubuntu 24.04 and Python 3.12 remain the tested base.
-``docker/run`` mounts the checkout, installs FINN editable without dependencies,
-and runs the requested argument vector. Failed preparation stops the command.
-
-Configured host tools and licences are mounted automatically; ``--fpga`` makes
-them a requirement and ``--no-tools`` leaves them out. Host discovery is the
-standard-library ``docker/launcher.py`` (Python 3.7 or later); native activation
-and containers share ``docker/finn-toolchain.sh``. ``--runtime xrt`` selects
-accelerator userspace independently of host tools. Runtime manifests also
-support supplied SLASH packages. Board kernel drivers remain host responsibilities.
+``docker buildx bake`` builds the image (``docker/Dockerfile``: Ubuntu 24.04,
+Python 3.12 and the locked dependencies; runtimes such as XRT on request; a
+release image from FINN's wheel). The container is defined in ``compose.yaml``;
+``docker/run`` sets its variables from the host, mounts the checkout, installs
+FINN editable without dependencies, and runs the requested command. AMD tools
+follow the shell: with ``XILINX_VIVADO`` set, the install root is mounted and the
+container sources that release's ``settings64.sh``, as a native shell does;
+``--fpga`` makes them a requirement and ``--no-tools`` leaves them out.
+``--runtime xrt`` selects accelerator userspace independently of host tools.
+Board kernel drivers remain host responsibilities.
 
 External source trees live in verified resource caches, declared in
 ``src/finn/resources.toml``. Use ``scripts/update-resource.py NAME --ref REF`` to

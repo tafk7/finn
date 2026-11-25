@@ -177,7 +177,6 @@ pipeline {
     }
     stage('Build Docker Image') {
       agent { label "${FINN_BUILD_LABEL}" }
-      environment { FINN_DOCKER_PREBUILT = '0' }
       steps { script { checkoutPinned(); wipeStaleWorkspace(); withAgentNfsEnv(exposeSharedImage: false) { buildAndPublishDockerImage() } } }
     }
     stage('Run Tests') {
@@ -215,7 +214,7 @@ void announceCiMode() {
 [finn-ci]   - no shared Docker images (each agent builds locally)
 [finn-ci]   - no build-to-HW artifact handoff (HW pipeline cannot test this build)
 [finn-ci]   - no persistent timing master (cold-start round-robin each build)
-[finn-ci]   - no per-agent NFS caches (network downloads run fresh)"""
+[finn-ci]   - no per-agent NFS caches (downloads are cached per workspace only)"""
   }
 }
 
@@ -374,7 +373,7 @@ void buildAndPublishDockerImage() {
   // assumed single-tenant so this will not evict another job's images.
   sh 'docker system prune -a -f'
   withEnv(["FINN_RUNTIMES=${env.FINN_RUNTIMES ?: 'xrt'}"]) {
-    sh './docker/build'
+    sh "${CI_TOOL} image build"
     sh './ci/scripts/image_metadata.sh'
   }
   String imageDir = buildDockerImageDir()
@@ -394,16 +393,16 @@ String buildDockerImageDir() {
 }
 
 // Other agents docker-load this image instead of rebuilding. Tag comes from
-// `./docker/build --print-tag`. The build-scoped imageDir keeps cross-build
-// readers away from in-progress writes. publish_docker_image.sh handles the
+// `finn_ci image tag`. The build-scoped imageDir keeps cross-build readers
+// away from in-progress writes. publish_docker_image.sh handles the
 // same-build-retry serialisation.
 void publishSharedDockerImage(String imageDir) {
-  def tag = sh(returnStdout: true, script: 'FINN_RUNTIMES=${FINN_RUNTIMES:-xrt} ./docker/build --print-tag').trim()
+  def tag = sh(returnStdout: true,
+               script: "FINN_RUNTIMES=\${FINN_RUNTIMES:-xrt} ${CI_TOOL} image tag").trim()
   if (!tag || tag.contains('\n')) {
-    error "docker/build --print-tag must emit exactly one Docker tag line. Got: ${tag}"
+    error "finn_ci image tag must emit exactly one Docker tag line. Got: ${tag}"
   }
-  sh "ci/scripts/publish_docker_image.sh " +
-     "${shellQuote(imageDir)} ${shellQuote(tag)} ${shellQuote(env.BUILD_NUMBER ?: '')}"
+  sh "ci/scripts/publish_docker_image.sh ${shellQuote(imageDir)} ${shellQuote(tag)}"
 }
 
 
@@ -453,7 +452,7 @@ void runShard(Map entry) {
         String stageMap = "[stage-map] build=${env.BUILD_NUMBER} stage='${stageName}' stash=${stashName} shard=${(entry.shardId as int) + 1}/${entry.numShards} node=${env.NODE_NAME} workspace=${env.WORKSPACE} build_dir=${buildDir}"
         echo stageMap
         writeFile file: "${stashName}.stagemap", text: "${stageMap}\n"
-        withEnv(["FINN_HOST_BUILD_DIR=${buildDir}"]) {
+        withEnv(["FINN_BUILD_DIR=${buildDir}"]) {
           sh "mkdir -p ${shellQuote(perBuildRoot)}"
           sh "touch ${shellQuote(startMarker)}"
           checkAgentFreeSpace(finnCiMinFreeGB())
@@ -542,7 +541,7 @@ void runLocalSetupTest() {
         String uvCacheDir  = "${uvCacheRoot}/${uvCacheKey}"
         String xdgCacheDir  = "${cacheRoot}/xdg"
         withEnv([
-          "FINN_HOST_BUILD_DIR=${buildDir}",
+          "FINN_BUILD_DIR=${buildDir}",
           "UV_CACHE_DIR=${uvCacheDir}",
           "XDG_CACHE_HOME=${xdgCacheDir}",
         ]) {
@@ -631,8 +630,9 @@ void runPytest(Map opts) {
   writeFile file: 'run-tests.sh', text:
       "#!/bin/bash\nset -eo pipefail\n${scriptLines}\n"
   // invoke via bash so we do not depend on the workspace file having the
-  // execute bit set (writeFile creates 0644 by default).
-  runDockerCommand('./ci/scripts/run.sh bash run-tests.sh')
+  // execute bit set (writeFile creates 0644 by default). Compiler tests
+  // require the AMD tools, as ci/scripts/run.sh does.
+  runDockerCommand('--fpga -- bash run-tests.sh')
 }
 
 
@@ -658,7 +658,7 @@ void aggregateReports() {
   publishStageMap()
   catchError(buildResult: null, stageResult: 'UNSTABLE',
              message: 'pytest_html_merger failed, per-stage HTMLs still archived') {
-    runDockerCommand('./docker/run -- pytest_html_merger -i reports/ -o reports/test_report_final.html')
+    runDockerCommand('-- pytest_html_merger -i reports/ -o reports/test_report_final.html')
   }
   catchError(buildResult: null, stageResult: 'UNSTABLE',
              message: 'archiveArtifacts (xml) failed') {
@@ -700,7 +700,7 @@ done
     '''
     // pytest-cov ships its own coverage. Run via the same docker image so
     // the merge uses the same Python/library versions as the per-shard runs.
-    runDockerCommand("./docker/run -- bash -c 'cd coverage_data && coverage combine && " +
+    runDockerCommand("-- bash -c 'cd coverage_data && coverage combine && " +
                      "coverage html -d ../coverage_combined'")
     archiveArtifacts artifacts: 'coverage_combined/**/*', allowEmptyArchive: true
   }
@@ -1020,59 +1020,64 @@ void reapOrphanedLsfJobs() {
   }
 }
 
-// Pre-create the per-agent NFS cache subtree. Split out from
-// agentCachesDockerExtra so the env-map builder stays free of side effects
-// and can be called from any context without an sh side effect.
+// The agent's caches: finn_cache holds the container's torch, Hugging Face and uv
+// downloads (ci/compose.ci.yaml mounts it), finn_home is the agents' FINN_HOME.
+// Under FINN_CI_NFS_ROOT both persist per agent. Without it the download cache is
+// host-local under finnCiLocalCacheRoot() and FINN_HOME is docker/run's default.
+String agentCacheDir(String node) {
+  String cachesDir = finnAgentCachesDir(node)
+  return cachesDir ? "${cachesDir}/finn_cache" : "${finnCiLocalCacheRoot()}/finn_cache"
+}
+
+// Pre-create the agent's caches, so that Docker does not create the mount
+// sources as root. Split out from agentCachesEnv so the env-list builder stays
+// free of side effects.
 void prepareAgentCaches(String node) {
+  sh "mkdir -p ${shellQuote(agentCacheDir(node))}"
   String cachesDir = finnAgentCachesDir(node)
   if (!cachesDir) { return }
-  sh "mkdir -p ${shellQuote(cachesDir + '/xrt')} " +
-     "${shellQuote(cachesDir + '/finn_cache')} " +
-     "${shellQuote(cachesDir + '/finn_home')}"
+  sh "mkdir -p ${shellQuote(cachesDir + '/finn_home')}"
   // finn_home keeps content-keyed XSI builds, assembled board files and golden
   // references across builds; report its size so growth is visible in the log.
   // `finn resources clean --unused` inside the container prunes stale entries.
   sh "du -sh ${shellQuote(cachesDir)}/* 2>/dev/null || true"
 }
 
-// Pure compute: returns the env-var list and FINN_DOCKER_EXTRA addition
-// implied by the per-agent NFS caches plus the unconditional hostname pin.
-// Hostname pin is required because bsub's gethostbyname() on the default
-// finn_dev_<user> fails with "Error 0".
-Map agentCachesDockerExtra() {
+// Pure compute: the env-var list for the agent's caches and ci/compose.ci.yaml,
+// which mounts them and pins the container's hostname to the agent's (bsub's
+// gethostbyname() on a generated container hostname fails with "Error 0").
+// compose.ci.yaml goes after any Compose files the DSL names in COMPOSE_FILE.
+List<String> agentCachesEnv() {
   String node = env.NODE_NAME ?: 'localhost'
-  String dockerExtra = "${env.FINN_DOCKER_EXTRA ?: ''} --hostname ${node}"
-  List<String> envList = []
+  String composeFile = "${env.WORKSPACE}/ci/compose.ci.yaml"
+  List<String> envList = [
+    "FINN_CI_CACHES=${agentCacheDir(node)}",
+    "COMPOSE_FILE=${env.COMPOSE_FILE ? env.COMPOSE_FILE + ':' : ''}${composeFile}",
+  ]
   String cachesDir = finnAgentCachesDir(node)
   if (cachesDir) {
-    envList << "FINN_XRT_PATH=${cachesDir}/xrt"
-    envList << "FINN_DOCKER_CACHE_DIR=${cachesDir}/finn_cache"
     envList << "FINN_HOME=${cachesDir}/finn_home"
   }
-  return [envList: envList, dockerExtra: dockerExtra]
+  return envList
 }
 
 void withAgentNfsEnv(Closure body) { withAgentNfsEnv([:], body) }
 
-// Must run after node binding so ${NODE_NAME} resolves before
-// FINN_DOCKER_EXTRA is interpolated. Composes prepareAgentCaches +
-// agentCachesDockerExtra with the shared-image-dir or local-build toggle.
-// The Build-Docker-Image stage passes exposeSharedImage:false because imageDir
-// is not published there yet, so exposing it would make docker/run log a
-// spurious "no usable shared image" fallback. That stage relies on its own
-// FINN_DOCKER_PREBUILT=0 to build locally.
+// Must run after node binding so NODE_NAME and WORKSPACE resolve. Composes
+// prepareAgentCaches + agentCachesEnv with the shared image directory. The
+// Build-Docker-Image stage passes exposeSharedImage:false because imageDir is
+// not published there yet; it builds the image itself.
 void withAgentNfsEnv(Map opts, Closure body) {
+  if (env.FINN_DOCKER_EXTRA) {
+    error "FINN_DOCKER_EXTRA is no longer read. Put its mounts and variables in a " +
+          "Compose file named in COMPOSE_FILE (ci/README.md, \"DSL environment variables\")."
+  }
   String node = env.NODE_NAME ?: 'localhost'
   prepareAgentCaches(node)
-  Map agentEnv = agentCachesDockerExtra()
-  List<String> envList = agentEnv.envList as List<String>
-  envList << "FINN_DOCKER_EXTRA=${agentEnv.dockerExtra}"
+  List<String> envList = agentCachesEnv()
   String imageDir = buildDockerImageDir()
-  boolean exposeSharedImage = opts.get('exposeSharedImage', true)
-  if (imageDir && exposeSharedImage) {
-    envList << "FINN_DOCKER_SHARED_IMAGE_DIR=${imageDir}"
-  } else if (!imageDir) {
-    envList << "FINN_DOCKER_PREBUILT=0"
+  if (imageDir && opts.get('exposeSharedImage', true)) {
+    envList << "FINN_CI_IMAGE_DIR=${imageDir}"
   }
   withEnv(envList) { body() }
 }
@@ -1147,7 +1152,7 @@ String finnCiPerBuildRoot() {
 // Fail fast on low scratch space so pytest does not hit ENOSPC mid-run.
 void checkAgentFreeSpace(int minFreeGB) {
   if (minFreeGB <= 0) { return }
-  String target = env.FINN_HOST_BUILD_DIR ?: '/scratch'
+  String target = env.FINN_BUILD_DIR ?: '/scratch'
   // Climb to the nearest existing ancestor so df works on a path that has
   // not yet been mkdir'd. -P forces single-line records so a long device
   // name cannot wrap and push the data onto a third line, which would make
@@ -1215,7 +1220,7 @@ void archiveFailureLogs(String buildDir, String stashName, String startMarker) {
 void safeStashReport(String stashName)        { loadCommonOnce().safeStashShardReport(stashName) }
 void unstashIfPresent(String stashName)       { loadCommonOnce().unstashIfPresent(stashName) }
 void cleanPreviousBuildFiles(String buildDir) { loadCommonOnce().cleanPreviousBuildFiles(buildDir) }
-void runDockerCommand(String command)         { loadCommonOnce().runDockerCommand(command) }
+void runDockerCommand(String args)            { loadCommonOnce().runDockerCommand(args) }
 boolean paramBool(String name)                { return loadCommonOnce().paramBool(name) }
 String  paramString(String name)              { return loadCommonOnce().paramString(name) }
 String  shellQuote(String s)                  { return loadCommonOnce().shellQuote(s) }

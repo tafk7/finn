@@ -1,13 +1,42 @@
-# Host-specific mounts and identity are rendered by `docker/launcher.py compose`.
-x-common: &common
-  image: ${FINN_IMAGE:-xilinx/finn:local}
+# FINN's container: the definition docker/run, Dev Containers and agents share.
+#
+# docker/run sets the variables below from the host and runs `docker compose run`;
+# anything else that starts FINN's container sets them itself. Host paths are mounted
+# at the same paths, so generated scripts and builds mean the same inside and out.
+# compose.tools.yaml adds the AMD tools; further files (CI's caches, say) go in
+# COMPOSE_FILE after these two.
+#
+#   FINN_IMAGE      the image (default finn:dev, built by `docker buildx bake`)
+#   FINN_UID/GID    the caller's ids
+#   FINN_ROOT       the FINN checkout (default: the working directory), mounted, and
+#                   installed editable at start (the release image uses its own FINN)
+#   FINN_WORKDIR    the directory to work in (default: the checkout; docker/run mounts
+#                   it when it lies outside)
+#   FINN_HOME       FINN's persistent state (default ~/.finn)
+#   FINN_BUILD_DIR  disposable build output (default /tmp/finn_build_<uid>)
+name: finn
+
+x-finn: &finn
+  image: ${FINN_IMAGE:-finn:dev}
   platform: linux/amd64
-  init: false  # the image uses tini
+  init: false  # tini is the image's entrypoint
+  user: "${FINN_UID:-1000}:${FINN_GID:-1000}"
+  working_dir: ${FINN_WORKDIR:-${FINN_ROOT:-${PWD}}}
+  environment:
+    USER: ${USER:-finn}
+    FINN_ROOT: ${FINN_ROOT:-${PWD}}
+    FINN_HOME: ${FINN_HOME:-${HOME}/.finn}
+    FINN_BUILD_DIR: ${FINN_BUILD_DIR:-/tmp/finn_build_${FINN_UID:-1000}}
+  volumes:
+    - ${FINN_ROOT:-${PWD}}:${FINN_ROOT:-${PWD}}
+    - ${FINN_HOME:-${HOME}/.finn}:${FINN_HOME:-${HOME}/.finn}
+    - ${FINN_BUILD_DIR:-/tmp/finn_build_${FINN_UID:-1000}}:${FINN_BUILD_DIR:-/tmp/finn_build_${FINN_UID:-1000}}
+
 services:
   finn:
-    <<: *common
+    <<: *finn
   notebook:
-    <<: *common
+    <<: *finn
     profiles: [notebook]
     ports:
       - "${JUPYTER_PORT:-8888}:${JUPYTER_PORT:-8888}"

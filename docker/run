@@ -1,5 +1,140 @@
-#!/bin/sh
+#!/usr/bin/env python3
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-# Run a command in the FINN container; see `docker/run --help` and docker/README.md.
-exec python3 "$(dirname "$0")/launcher.py" run "$@"
+"""Run a command in FINN's container, as a native shell would run it.
+
+    docker/run [--fpga | --no-tools] [--runtime NAME] [--release] [--notebook]
+               [--build | --no-build] [--dry-run] [-v SRC:DST] [-e VAR[=VALUE]] [-- COMMAND...]
+
+The container is compose.yaml's: this checkout and the working directory, FINN_HOME
+and the build directory are mounted at their host paths, and the container runs as
+the caller. AMD tools follow the shell, as natively: with XILINX_VIVADO set (a
+sourced settings64.sh, a site module, or a CI job's environment), compose.tools.yaml
+mounts the install root read-only and the container sources that release's
+settings64.sh. --fpga requires the tools; --no-tools leaves them out.
+
+The image is built with `docker buildx bake` when it is missing (--build rebuilds
+it): finn:dev, finn:dev-<runtime> with --runtime (xrt, slash), finn:release with
+--release (FINN from its wheel). COMPOSE_FILE adds further Compose files.
+"""
+import argparse
+import os
+import shlex
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[1]
+
+
+def fail(message):
+    sys.exit(f"docker/run: {message}")
+
+
+def host_paths(variable):
+    """The absolute paths in a colon-separated variable (licence files, platform
+    repositories); port@host licence servers need no mount."""
+    return [
+        p for p in os.environ.get(variable, "").split(":") if p.startswith("/") and Path(p).exists()
+    ]
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="docker/run", description=__doc__.split("\n\n")[0])
+    tools = parser.add_mutually_exclusive_group()
+    tools.add_argument("--fpga", action="store_true", help="require the AMD tools")
+    tools.add_argument("--no-tools", action="store_true", help="leave the AMD tools out")
+    parser.add_argument("--runtime", action="append", default=[], help="image with this runtime")
+    parser.add_argument(
+        "--release", action="store_true", help="FINN from its wheel, not the checkout"
+    )
+    parser.add_argument("--notebook", action="store_true", help="start Jupyter on JUPYTER_PORT")
+    build = parser.add_mutually_exclusive_group()
+    build.add_argument("--build", action="store_true", help="rebuild the image first")
+    build.add_argument("--no-build", action="store_true", help="never build the image")
+    parser.add_argument("--dry-run", action="store_true", help="print the command, run nothing")
+    parser.add_argument("-v", "--volume", action="append", default=[], help="an extra mount")
+    parser.add_argument("-e", "--env", action="append", default=[], help="an extra variable")
+    parser.add_argument("command", nargs=argparse.REMAINDER)
+    args = parser.parse_args(argv)
+    command = args.command[1:] if args.command[:1] == ["--"] else args.command
+    if args.notebook and command:
+        fail("--notebook takes no command")
+
+    runtimes = sorted({r for value in args.runtime for r in value.split(",") if r})
+    suffix = "".join("-" + r for r in runtimes)
+    image = (
+        os.environ.get("FINN_IMAGE") or ("finn:release" if args.release else "finn:dev") + suffix
+    )
+    uid, gid = os.getuid(), os.getgid()
+    env = {
+        "FINN_IMAGE": image,
+        "FINN_UID": str(uid),
+        "FINN_GID": str(gid),
+        "FINN_ROOT": str(REPO),
+        "FINN_WORKDIR": os.getcwd(),
+        "FINN_HOME": os.path.abspath(os.path.expanduser(os.environ.get("FINN_HOME", "~/.finn"))),
+        "FINN_BUILD_DIR": os.path.abspath(
+            os.environ.get("FINN_BUILD_DIR", f"/tmp/finn_build_{uid}")
+        ),
+    }
+    for directory in (env["FINN_HOME"], env["FINN_BUILD_DIR"]):
+        os.makedirs(directory, exist_ok=True)
+    volumes = list(args.volume)
+    if not Path(os.getcwd()).resolve().is_relative_to(REPO):
+        volumes.append(f"{os.getcwd()}:{os.getcwd()}")
+    if (REPO / "ssh_keys").is_dir():
+        volumes.append(f"{REPO / 'ssh_keys'}:/run/finn/ssh:ro")
+
+    files = [REPO / "compose.yaml"]
+    vivado = None if args.no_tools else os.environ.get("XILINX_VIVADO")
+    if vivado:
+        # <root>/<release>/Vivado and <root>/Vivado/<release> alike: two levels up.
+        env["FINN_XILINX_ROOT"] = str(Path(vivado).resolve().parents[1])
+        files.append(REPO / "compose.tools.yaml")
+        for variable in ("XILINXD_LICENSE_FILE", "LM_LICENSE_FILE", "PLATFORM_REPO_PATHS"):
+            volumes += [f"{path}:{path}:ro" for path in host_paths(variable)]
+        override = os.environ.get("FINN_TOOL_DIR_OVERRIDE")
+        if override:
+            volumes.append(f"{override}:{override}:ro")
+    elif args.fpga:
+        fail(
+            "--fpga needs the AMD tools, but XILINX_VIVADO is not set. Source a release's "
+            "settings64.sh (or load the site's Vivado module) first."
+        )
+    files += [f for f in os.environ.get("COMPOSE_FILE", "").split(os.pathsep) if f]
+    env["COMPOSE_FILE"] = os.pathsep.join(map(str, files))
+
+    service = "notebook" if args.notebook else "finn"
+    argv = ["docker", "compose", "--progress", "quiet", "--project-directory", str(REPO)]
+    argv += ["run", "--rm", "--pull", "never"]
+    if args.notebook:
+        argv.append("--service-ports")
+    if not sys.stdin.isatty():
+        argv.append("-T")
+    for volume in volumes:
+        argv += ["--volume", volume]
+    for variable in args.env:
+        argv += ["--env", variable]
+    argv += [service, *command]
+
+    bake = ["docker", "buildx", "bake", "--load", "release" if args.release else "finn"]
+    bake_env = {"FINN_RUNTIMES": ",".join(runtimes)}
+    if args.dry_run:
+        for key, value in env.items():
+            print(f"{key}={shlex.quote(value)}")
+        print(shlex.join(argv))
+        return
+    missing = subprocess.run(["docker", "image", "inspect", image], capture_output=True).returncode
+    if args.build or (missing and not args.no_build):
+        subprocess.run(bake, cwd=REPO, env={**os.environ, **bake_env}, check=True)
+    elif missing:
+        fail(f"no image {image}, and --no-build")
+    if not shutil.which("docker"):
+        fail("docker is not installed")
+    os.execvpe("docker", argv, {**os.environ, **env})
+
+
+if __name__ == "__main__":
+    main()

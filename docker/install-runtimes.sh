@@ -1,6 +1,6 @@
 #!/bin/sh
-# Install the selected runtime targets. Runs as root in the `runtime` stage of
-# docker/Dockerfile.finn.
+# Install the selected runtime targets. Runs as root in the `finn` stage of
+# docker/Dockerfile.
 #
 #   FINN_RUNTIMES=xrt,slash sh install-runtimes.sh
 #
@@ -26,10 +26,6 @@ fi
 
 run_os=$(. /etc/os-release; echo "$VERSION_ID")
 debs=""
-# Fetched packages are written into /tmp inside this same RUN, so they land in
-# the layer unless we delete them here. Supplied ones arrive through a bind
-# mount and never do, which is why the two are tracked apart.
-fetched=""
 
 # ---------------------------------------------------------------------------
 # Resolve every manifest FIRST, install nothing.
@@ -70,34 +66,34 @@ for name in $(echo "$FINN_RUNTIMES" | tr ',' ' '); do
     fetch)
         : "${DEB:?$manifest is SOURCE=fetch but does not set DEB}"
         : "${URL:?$manifest is SOURCE=fetch but does not set URL}"
-        cached="/tmp/runtime-cache/$DEB.deb"
-        if [ -f "$cached" ] && [ -n "${SHA256:-}" ]; then
-            out="$cached"
-            echo "runtime '$name': using checksum-verified download cache"
+        # BuildKit's cache mount keeps verified downloads between builds.
+        out="/var/cache/finn-runtimes/$DEB.deb"
+        if [ -n "${SHA256:-}" ] && [ -f "$out" ] && echo "$SHA256  $out" | sha256sum -c --status -; then
+            echo "runtime '$name': using the verified download in the build cache"
         else
-            out="/tmp/$DEB.deb"
             echo "runtime '$name': fetching $DEB"
-            if ! wget -q "$URL" -O "$out"; then
+            rm -f "$out.part"
+            if ! wget -q "$URL" -O "$out.part"; then
                 if [ -n "${FALLBACK_URL:-}" ]; then
                     echo "  primary URL failed, trying the fallback" >&2
-                    rm -f "$out"
-                    wget -q "$FALLBACK_URL" -O "$out"
+                    rm -f "$out.part"
+                    wget -q "$FALLBACK_URL" -O "$out.part"
                 else
                     echo "ERROR: could not download $name from $URL" >&2
                     exit 1
                 fi
             fi
-            fetched="$fetched $out"
-        fi
-        if [ -n "${SHA256:-}" ]; then
-            echo "$SHA256  $out" | sha256sum -c -
-        else
-            # Not fatal: a user pinning an unpublished build has nothing to
-            # check against. Loud, because this is an unauthenticated fetch
-            # installed as root.
-            echo "WARNING: $name downloaded with no checksum. Set SHA256 in" >&2
-            echo "         docker/runtimes/$name.env to pin it. Actual sum:" >&2
-            sha256sum "$out" >&2
+            if [ -n "${SHA256:-}" ]; then
+                echo "$SHA256  $out.part" | sha256sum -c -
+            else
+                # Not fatal: a user pinning an unpublished build has nothing to
+                # check against. Loud, because this is an unauthenticated fetch
+                # installed as root.
+                echo "WARNING: $name downloaded with no checksum. Set SHA256 in" >&2
+                echo "         docker/runtimes/$name.env to pin it. Actual sum:" >&2
+                sha256sum "$out.part" >&2
+            fi
+            mv "$out.part" "$out"
         fi
         debs="$debs $out"
         ;;
@@ -131,12 +127,6 @@ apt-get update
 # shellcheck disable=SC2086
 apt-get install -y --no-install-recommends $debs
 rm -rf /var/lib/apt/lists/*
-# An `if`, not `[ -n ] && rm`. Under `set -e` a false test as the last command
-# in a script exits 1, and this is one line away from being last.
-if [ -n "$fetched" ]; then
-    # shellcheck disable=SC2086
-    rm -f $fetched
-fi
-# Supplied packages need no cleanup: they arrive through RUN --mount=type=bind
-# and are never written into a layer.
+# Neither fetched nor supplied packages are written into a layer: they arrive
+# through the cache and bind mounts.
 echo "Runtime targets installed: $FINN_RUNTIMES"

@@ -25,10 +25,9 @@ This demo was created using Vivado 2024.2.
 
 Prior to running, insure the following prerequisites have been met:
 - Install FINN and prerequisites.  The [Getting Started](https://finn.readthedocs.io/en/latest/getting_started.html#quickstart) section of the FINN documentation might be helpful for this.
-- Ensure you have the `FINN_XILINX_PATH` and `FINN_XILINX_VERSION` env variables set appropriately for your install.  For example:
+- Source your Xilinx release's settings, for example:
 ```shell
-export FINN_XILINX_PATH=/opt/Xilinx
-export FINN_XILINX_VERSION=2024.2
+source /opt/Xilinx/2025.2/Vivado/settings64.sh
 ```
 
 - Set the env variable for your `finn` install top directory (where you cloned the FINN compiler repo):
@@ -135,6 +134,6 @@ There are any number of ways to bring the stitched IP into larger design.
 
 FINN already packages the stitched IP block design as a standalone IP-XACT component, which you can find under `${FINN_ROOT}/tutorials/fpga_flow/output_tfc_w0a1_fpga/stitched_ip/ip`. You can add this to the list of IP repos and use it in your own Vivado designs. A good reference for this is [UG1119](https://www.xilinx.com/content/dam/xilinx/support/documents/sw_manuals/xilinx2022_1/ug1119-vivado-creating-packaging-ip-tutorial.pdf)
 
-Keep in mind that all of the User IP Repo's included in the Stitched IP project (from `$FINN_HOST_BUILD_DIR` which is normally located under `/tmp/finn_dev_<username>`) need to also be brought in as IP Repo's to any project using the stitched IP.  It would be prudent to copy those IP repos to an appropriate archive location. You should also set the
+Keep in mind that all of the User IP Repo's included in the Stitched IP project (from `$FINN_BUILD_DIR` which is normally located under `/tmp/finn_dev_<username>`) need to also be brought in as IP Repo's to any project using the stitched IP.  It would be prudent to copy those IP repos to an appropriate archive location. You should also set the
 `FINN_ROOT` environment variable to point to the compiler installation directory, as some of the build scripts will
 use this to access various components. Alternatively, if you don't want to copy all of the dependencies, you can ask FINN to generate the IP-XACT component with a synthesized .dcp checkpoint by passing the [stitched_ip_gen_dcp=True](https://finn-dev.readthedocs.io/en/latest/source_code/finn.builder.html#finn.builder.build_dataflow_config.DataflowBuildConfig.stitched_ip_gen_dcp) option as part of the build configuration.

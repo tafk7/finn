@@ -29,11 +29,11 @@ jobs:
 
       - name: Setup local FINN environment
         run: |
-          export FINN_HOST_BUILD_DIR=/tmp/finn_gha
+          export FINN_BUILD_DIR=/tmp/finn_gha
           ./setup-local.sh --skip-xsi
 
       - name: Run quicktest
         run: |
-          export FINN_HOST_BUILD_DIR=/tmp/finn_gha
+          export FINN_BUILD_DIR=/tmp/finn_gha
           source scripts/activate.sh
           ./scripts/quicktest-local.sh

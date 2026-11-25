@@ -4,19 +4,18 @@ A runtime target is a set of `.deb` files installed into the image on top of
 the base. It is how FINN supports a specific accelerator stack: XRT for
 Vitis/Alveo, SLASH for the V80.
 
-Select them at build time. The names go into the tag, sorted:
+Select them at build time (or with `docker/run --runtime NAME`, which builds the
+image when it is missing). The names go into the tag, sorted:
 
 ```bash
-FINN_RUNTIMES=xrt docker buildx bake -f docker-bake.hcl finn-xrt
-#   -> xilinx/finn:<git>.xrt
+FINN_RUNTIMES=xrt docker buildx bake        # -> finn:dev-xrt
+FINN_RUNTIMES=xrt,slash docker buildx bake  # -> finn:dev-slash-xrt
 ```
 
 ## Add a runtime target
 
-Write one file, `docker/runtimes/<name>.env`. The parameterized
-`finn-runtime` Bake target and launchers can use it without a
-new named target. Add an explicit named target only when the combination should
-join the supported CI matrix.
+Write one file, `docker/runtimes/<name>.env`; the `finn` Bake target takes any
+combination through `FINN_RUNTIMES`.
 
 | key | required | meaning |
 |---|---|---|
@@ -63,5 +62,5 @@ already built and installed SLASH on the host, because the kernel module has to
 be there, so the SLASH and slashkit `.deb` files are by-products they already
 hold. FINN has no V80 to test a build against.
 
-**The Xilinx toolchain.** Vivado and Vitis are host facts. `docker/launcher.py`
-resolves them at launch and the lane mounts them read-only.
+**The Xilinx toolchain.** Vivado and Vitis are host facts. `docker/run` mounts
+the install root of `XILINX_VIVADO` read-only (`compose.tools.yaml`).

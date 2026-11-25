@@ -9,7 +9,7 @@ because these are vendor packages that FINN neither owns nor redistributes.
 ```bash
 cp slash.deb docker/packages/
 cp slashkit.deb docker/packages/
-FINN_RUNTIMES=xrt,slash,slashkit docker buildx bake -f docker-bake.hcl finn-runtime
+FINN_RUNTIMES=xrt,slash,slashkit docker buildx bake
 ```
 
 A runtime target that needs a file you have not put here stops the build and

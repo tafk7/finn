@@ -3,4 +3,4 @@
 set -euo pipefail
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 export FINN_RUNTIMES=${FINN_RUNTIMES:-xrt}
-exec python3 "$REPO/docker/launcher.py" image metadata "$REPO/image-metadata"
+PYTHONPATH="$REPO/ci" exec python3 -m finn_ci image metadata "$REPO/image-metadata"

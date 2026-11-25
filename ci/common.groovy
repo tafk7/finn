@@ -19,16 +19,21 @@ String shellQuote(String s) {
   return "'" + (s ?: '').replace("'", "'\"'\"'") + "'"
 }
 
-// Sets FINN_DOCKER_PREBUILT=1 when a shared image is configured so non-builder
-// agents load the image from NFS instead of rebuilding. Every container uses
-// the runtime profile the image was built and published with.
-void runDockerCommand(String command) {
-  List vars = ["FINN_RUNTIMES=${env.FINN_RUNTIMES ?: 'xrt'}"]
-  if (env.FINN_DOCKER_SHARED_IMAGE_DIR) {
-    vars << 'FINN_DOCKER_PREBUILT=1'
-  }
-  withEnv(vars) {
-    sh command
+// Runs `docker/run ARGS` (its options, then `-- COMMAND`) in the image this build
+// tests. With a shared image (FINN_CI_IMAGE_DIR), non-builder agents load it
+// from NFS instead of rebuilding, and fail if it is missing or does not verify;
+// without one, the agent builds the content-addressed image when it lacks it.
+// docker/run gets the image by immutable ID and never builds. Every container
+// uses the runtime profile the image was built and published with.
+void runDockerCommand(String args) {
+  withEnv(["FINN_RUNTIMES=${env.FINN_RUNTIMES ?: 'xrt'}"]) {
+    String action = env.FINN_CI_IMAGE_DIR ? "load ${shellQuote(env.FINN_CI_IMAGE_DIR)}"
+                                          : 'build --if-missing'
+    String image = sh(returnStdout: true,
+                      script: "PYTHONPATH=ci python3 -m finn_ci image ${action}").trim()
+    withEnv(["FINN_IMAGE=${image}"]) {
+      sh "./docker/run --no-build ${args}"
+    }
   }
 }
 

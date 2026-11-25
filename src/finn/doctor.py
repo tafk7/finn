@@ -71,9 +71,6 @@ def _first_line(command) -> str:
 def check_tools(report):
     section = "AMD tools"
     set_up = {name: launcher.amd_path(name) for name in launcher.AMD_VARIABLES}
-    for name, old in launcher.DEPRECATED_NAMES.items():
-        if os.environ.get(old) and not os.environ.get(name):
-            report.add(section, old, WARN, f"deprecated: settings64.sh sets {name}")
     if not any(set_up.values()):
         report.add(section, "release", NOTE, "none set up: " + launcher.setup_hint())
         return {}

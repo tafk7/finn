@@ -19,5 +19,6 @@ Submodules:
   lsf       - bjobs orphan-job parsing for the build reaper
   failures  - the stdlib JUnit failure printer
   hw        - the build-to-HW zip resolver and HW config projection
+  image     - the CI image: content-addressed tag, Bake build, shared transport
   __main__  - the CLI dispatched by python3 -m finn_ci
 """

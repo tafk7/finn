@@ -178,6 +178,6 @@ echo "Your FINN installation is working correctly."
 echo ""
 if [ -z "$XILINX_VIVADO" ]; then
     echo "Note: Vivado integration was not tested. To test Vivado:"
-    echo "  1. Set FINN_XILINX_PATH and FINN_XILINX_VERSION"
+    echo "  1. Source your release's settings64.sh"
     echo "  2. Run: ./scripts/quicktest-local.sh vivado"
 fi

@@ -102,35 +102,18 @@ TOOL_DIR_ENV = "FINN_TOOL_DIR_OVERRIDE"
 # FINN reads the AMD tools' own environment, as a release's settings64.sh (or a site's
 # environment module) sets it, and never builds it: whoever starts FINN does.
 AMD_VARIABLES = ("XILINX_VIVADO", "XILINX_HLS", "XILINX_VITIS")
-# Names that only run-docker.sh used to set. Still read, with a warning.
-DEPRECATED_NAMES = {
-    "XILINX_VIVADO": "VIVADO_PATH",
-    "XILINX_HLS": "HLS_PATH",
-    "XILINX_VITIS": "VITIS_PATH",
-}
 # Where AMD's installer puts releases. FINN only looks here to tell a user without the
 # tools which settings64.sh to source; it never uses what it finds.
 INSTALL_ROOTS = ("/tools/Xilinx", "/opt/Xilinx", "~/Xilinx")
 # A release in a path: the last one, since a site's install root may name a build of
 # it too (/proj/xbuilds/SWIP/2022.2_1014_8888/installs/lin64/Vivado/2022.2).
 _RELEASE = re.compile(r"(?<![\d.])(20\d\d)\.([12])(?![\d.])")
-_warned_names = set()
 
 
 def amd_path(name: str) -> Optional[str]:
     """Return the directory that AMD's variable ``name`` (one of ``AMD_VARIABLES``)
-    names, or None. A deprecated name set without the AMD one is read with a warning."""
-    value = os.environ.get(name)
-    if value:
-        return value
-    old = DEPRECATED_NAMES[name]
-    value = os.environ.get(old)
-    if value:
-        if old not in _warned_names:
-            _warned_names.add(old)
-            log.warning("%s is deprecated: FINN reads %s, which settings64.sh sets", old, name)
-        return value
-    return None
+    names, or None."""
+    return os.environ.get(name) or None
 
 
 def release_of(path: StrPath) -> Optional[Tuple[int, int]]:

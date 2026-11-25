@@ -1,10 +1,9 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Tool activation shared by native use and containers: finn-toolchain.sh,
-scripts/activate.sh, container identity and the installers."""
+"""Tool activation, natively (scripts/activate.sh) and in the container
+(docker/profile.sh), container identity and the installers."""
 import pytest
 
-import glob
 import json
 import os
 import re
@@ -15,7 +14,7 @@ from packaging.requirements import Requirement
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-TOOLCHAIN_SH = str(REPO / "docker/finn-toolchain.sh")
+PROFILE_SH = str(REPO / "docker/profile.sh")
 sys.path.insert(0, str(REPO / "docker"))
 
 pytestmark = pytest.mark.util
@@ -37,134 +36,49 @@ def clean_env(tmp_path, monkeypatch):
             "LM_LICENSE_FILE",
         ):
             monkeypatch.delenv(name)
-    monkeypatch.setenv("FINN_XILINX_ENV", "")
     monkeypatch.setenv("FINN_ROOT", str(REPO))
-    monkeypatch.setenv("FINN_HOST_BUILD_DIR", str(tmp_path / "build"))
     monkeypatch.setenv("FINN_HOME", str(tmp_path / "state"))
 
 
 # --------------------------------------------------------------------------
-# finn-toolchain.sh: sourced natively, by the entrypoint, BASH_ENV and shims.
+# docker/profile.sh: the container's environment.
 # --------------------------------------------------------------------------
 
 
-def toolchain_env(env):
-    """os.environ minus everything finn-toolchain.sh reads, plus `env`.
-
-    These tests also run inside the container, where XILINX_VIVADO is set and a
-    real settings64.sh would put Vivado's bin on PATH. BASH_ENV and ENV go too:
-    bash reads them even with --noprofile --norc.
-    """
-    child = dict(os.environ)
-    child.pop("FINN_ENV_APPLIED", None)
-    for key in (
-        "BASH_ENV",
-        "VIRTUAL_ENV",
-        "ENV",
-        "XILINX_VIVADO",
-        "XILINX_VITIS",
-        "XILINX_HLS",
-        "XILINX_XRT",
-        "LD_LIBRARY_PATH",
-        "LD_PRELOAD",
-        "PYTHONPATH",
-    ):
-        child.pop(key, None)
-    child.update(env)
-    return child
-
-
-def apply_toolchain(env, probe='printf "%s" "$PATH"'):
+def profile(tmp_path, probe, **env):
+    """Source docker/profile.sh in a clean bash and run probe."""
     proc = subprocess.run(
-        ["/bin/bash", "--noprofile", "--norc", "-c", ". %s; %s" % (TOOLCHAIN_SH, probe)],
+        ["/bin/bash", "--noprofile", "--norc", "-c", f". {PROFILE_SH}; {probe}"],
         capture_output=True,
         text=True,
-        env=toolchain_env(env),
+        env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path / "home"), **env},
     )
     assert proc.returncode == 0, proc.stderr
     return proc.stdout
 
 
-def test_toolchain_dedupes_path_variables():
-    """settings64.sh prepends unconditionally; nested shells must not grow PATH."""
-    assert apply_toolchain({"PATH": "/a:/b:/a:/c:/b"}) == "/a:/b:/c"
-    assert apply_toolchain({"PATH": "/a::/b:"}) == "/a:/b"
-    assert (
-        apply_toolchain({"PATH": "/a", "LD_PRELOAD": "/x:/x"}, 'printf "%s" "$LD_PRELOAD"') == "/x"
+def test_the_container_sources_the_release_it_is_given(tmp_path):
+    vivado = tmp_path / "2025.2/Vivado"
+    vivado.mkdir(parents=True)
+    (vivado / "settings64.sh").write_text(
+        f'export XILINX_HLS={tmp_path}/2025.2/Vitis; export PATH="{vivado}/bin:$PATH"\n'
+        "false  # a failing line in AMD's script does not stop the container\n"
     )
+    out = profile(tmp_path, 'echo "$XILINX_HLS|$PATH|$FINN_PROFILE"', XILINX_VIVADO=str(vivado))
+    hls, path, marker = out.strip().split("|")
+    assert hls == f"{tmp_path}/2025.2/Vitis" and path.startswith(f"{vivado}/bin:")
+    assert marker == "1"
+    # Once per process tree: a child shell inherits, it does not source again.
+    again = profile(tmp_path, f'. {PROFILE_SH}; echo "$PATH"', XILINX_VIVADO=str(vivado))
+    assert again.count(f"{vivado}/bin") == 1
 
 
-@pytest.mark.skipif(
-    not glob.glob("/lib/*-linux-gnu/libudev.so.1"), reason="no system libudev to preload"
-)
-def test_toolchain_preloads_libudev_on_merged_usr_hosts():
-    """/lib is a symlink on merged-/usr hosts; discovery must follow it."""
-    preload = apply_toolchain({}, 'printf "%s" "$LD_PRELOAD"')
-    assert preload.endswith("-linux-gnu/libudev.so.1")
-
-
-def test_toolchain_is_idempotent_and_silent():
-    """BASH_ENV sources this before every `bash -c`, so a stray echo corrupts
-    the output of every command in the image."""
-    assert apply_toolchain({"PATH": "/a"}, probe="true") == ""
-    proc = subprocess.run(
-        [
-            "/bin/bash",
-            "--noprofile",
-            "--norc",
-            "-c",
-            '. {0}; . {0}; printf "%s|%s" "$PATH" "$FINN_ENV_APPLIED"'.format(TOOLCHAIN_SH),
-        ],
-        capture_output=True,
-        text=True,
-        env=toolchain_env({"PATH": "/a:/b"}),
-    )
-    assert proc.stdout == "/a:/b|1", proc.stderr
-
-
-def test_vendor_settings_tolerate_unset_variables_and_keep_selected_python(tmp_path):
-    tool = tmp_path / "Vivado"
-    tool.mkdir()
-    (tool / "settings64.sh").write_text(
-        'echo "${SITE_UNSET_SETTING}" >/dev/null\nexport PATH="/vendor/python:$PATH"\n'
-    )
-    env = toolchain_env({"XILINX_VIVADO": str(tool), "VIRTUAL_ENV": str(tmp_path / "venv")})
-    result = subprocess.run(
-        ["bash", "-eu", "-c", 'source "$1"; test "${PATH%%:*}" = "$VIRTUAL_ENV/bin"', "probe"]
-        + [TOOLCHAIN_SH],
-        env=env,
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, result.stderr
-
-
-def test_farm_wrappers_do_not_shadow_bare_tools(clean_env, tmp_path, monkeypatch):
-    wrappers = tmp_path / "wrappers"
-    wrappers.mkdir()
-    for tool in ("make", "vivado"):
-        (wrappers / tool).write_text("#!/bin/sh\nexit 99\n")
-        (wrappers / tool).chmod(0o755)
-    monkeypatch.setenv("FINN_TOOL_DIR_OVERRIDE", str(wrappers))
-    result = subprocess.run(
-        ["bash", "-c", ". docker/finn-toolchain.sh; command -v make"],
-        cwd=REPO,
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() != str(wrappers / "make")
-    from finn.util.basic import resolve_xilinx_tool  # noqa: PLC0415
-
-    assert resolve_xilinx_tool("vivado") == str(wrappers / "vivado")
-
-
-def test_slashkit_has_a_transparent_tool_shim():
-    assert re.search(
-        r"for t in [^;\n]*\bslashkit\b[^;\n]*; do \\\n"
-        r'\s*ln -sf /usr/local/lib/finn/toolchain-shim /usr/local/lib/finn/toolchain-bin/"\$t"',
-        (REPO / "docker/Dockerfile.finn").read_text(),
-    )
+def test_the_container_without_tools_sets_no_amd_variables(tmp_path):
+    out = profile(tmp_path, 'echo "${XILINX_HLS:-none}|$FINN_HOME"', HOME="/")
+    hls, home = out.strip().split("|")
+    assert hls == "none"
+    # A caller uid with no writable home gets one under /tmp.
+    assert home == f"/tmp/finn-home-{os.getuid()}/.finn"
 
 
 # --------------------------------------------------------------------------
@@ -233,7 +147,7 @@ def test_installers_do_not_hardcode_layouts_or_pins():
     """The pre-2024.2 layout, hardcoded, reported "Vivado not found" at a path
     the user could see; Python pins live only in pyproject.toml and uv.lock."""
     pin = re.compile(r"[A-Za-z0-9_.\-]+(?:\[[A-Za-z0-9_,.\-]+\])?==[0-9]")
-    for rel in ("setup-local.sh", "scripts/activate.sh", "docker/Dockerfile.finn"):
+    for rel in ("setup-local.sh", "scripts/activate.sh", "docker/Dockerfile"):
         body = (REPO / rel).read_text()
         for number, line in enumerate(body.splitlines(), 1):
             if line.lstrip().startswith("#"):

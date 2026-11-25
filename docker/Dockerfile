@@ -28,18 +28,17 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-# Stages: system -> python -> runtime -> dev; runtime -> release.
-# /opt/venv contains the full locked developer/CI environment. The development
-# image installs only the mounted FINN checkout at startup. The release target
-# embeds the upstream source assets for read-only SIF execution.
+# Stages: base (Ubuntu, FINN's locked dependencies) -> finn (plus the runtimes named
+# in FINN_RUNTIMES; FINN itself is the mounted checkout, installed editable at start)
+# -> release (FINN installed from its wheel, no source tree).
 
 # Must match the Ubuntu release the runtime manifests were built for; each
 # manifest may declare EXPECT_OS, which docker/install-runtimes.sh checks.
 ARG UBUNTU_TAG=noble-20240605
 
 
-# --- system ------------------------------------------------------------------
-FROM ubuntu:${UBUNTU_TAG} AS system
+# --- base --------------------------------------------------------------------
+FROM ubuntu:${UBUNTU_TAG} AS base
 LABEL maintainer="Jakoba Petri-Koenig <jakoba.petri-koenig@amd.com>, Thomas Preusser <thomas.preusser@amd.com>"
 
 # Some Vitis dependencies prompt for a timezone during installation.
@@ -120,13 +119,9 @@ RUN test -e /lib/x86_64-linux-gnu/libudev.so.1 || \
 RUN test -e /usr/lib/x86_64-linux-gnu/libnss_wrapper.so
 ENV LD_PRELOAD=/lib/x86_64-linux-gnu/libudev.so.1:/lib/x86_64-linux-gnu/libcap.so.2:/usr/lib/x86_64-linux-gnu/libnss_wrapper.so
 
-# XILINX_LOCAL_USER_DATA=no lets several Vivado instances run at once
-# (https://adaptivesupport.amd.com/s/article/63253). TORCH_HOME/HF_HOME are set by
-# docker/run only when it mounts a cache.
 ENV NUM_DEFAULT_WORKERS=4 \
     LOCALHOST_URL="localhost" \
-    SHELL=/bin/bash \
-    XILINX_LOCAL_USER_DATA=no
+    SHELL=/bin/bash
 
 # A stable non-root default user. docker/run overrides it with --user $UID:$GID.
 # The Ubuntu base ships an `ubuntu` user at uid 1000; `agent` takes its place.
@@ -137,8 +132,6 @@ RUN userdel --remove ubuntu 2>/dev/null || true; \
     chown -R agent:agent /home/agent
 
 
-# --- python ------------------------------------------------------------------
-FROM system AS python
 
 COPY --from=ghcr.io/astral-sh/uv:0.10.0 /uv /uvx /usr/local/bin/
 
@@ -148,7 +141,7 @@ ENV VIRTUAL_ENV=/opt/venv \
     UV_PROJECT_ENVIRONMENT=/opt/venv \
     UV_PYTHON_DOWNLOADS=never \
     UV_LINK_MODE=copy \
-    PATH=/opt/venv/bin:/usr/local/lib/finn/toolchain-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    PATH=/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 ARG FINN_UV_NO_CACHE=0
 COPY packaging/finn-experimental/pyproject.toml packaging/finn-experimental/setup.py \
@@ -162,6 +155,7 @@ RUN --mount=type=bind,source=pyproject.toml,target=/tmp/finn-lock/pyproject.toml
     --mount=type=bind,source=uv.lock,target=/tmp/finn-lock/uv.lock \
     --mount=type=bind,source=src/finn/resources,target=/tmp/finn-lock/src/finn/resources \
     --mount=type=bind,source=src/finn/resources.toml,target=/tmp/finn-lock/src/finn/resources.toml \
+    --mount=type=bind,source=src/finn/util/paths.py,target=/tmp/finn-lock/src/finn/util/paths.py \
     --mount=type=cache,target=/root/.cache/uv \
     uv venv --python /usr/bin/python3.12 /opt/venv && \
     cd /tmp/finn-lock && \
@@ -190,75 +184,50 @@ RUN --mount=type=bind,source=src/finn/resources,target=/tmp/src/finn/resources \
     rm -f /opt/finn/resources/.*.lock
 ENV FINN_RESOURCES_SYSTEM_CACHE=/opt/finn/resources
 
-# Vendor tool shims. direct docker exec do not run the entrypoint, so bare
-# vendor commands (e.g. `vivado -version`) go through a shim early on PATH that
-# applies the selected toolchain environment.
-COPY docker/toolchain-shim /usr/local/lib/finn/toolchain-shim
-COPY docker/finn-toolchain.sh /etc/finn-toolchain.sh
-RUN set -eu; \
-    chmod 755 /usr/local/lib/finn/toolchain-shim; \
-    chmod 644 /etc/finn-toolchain.sh; \
-    mkdir -p /usr/local/lib/finn/toolchain-bin; \
-    for t in vivado vitis vitis_hls vitis-run v++ slashkit xelab xsim xvlog xsc lmutil xsct xclbinutil xbutil xbmgmt; do \
-        ln -sf /usr/local/lib/finn/toolchain-shim /usr/local/lib/finn/toolchain-bin/"$t"; \
-    done
+# The container environment (docker/profile.sh): the caller's home and identity, and
+# AMD's environment sourced from the release the launcher names. The entrypoint
+# sources it; so do login shells and, through BASH_ENV, every bash `docker exec` starts.
+COPY --chmod=0644 docker/profile.sh /etc/profile.d/finn.sh
+ENV BASH_ENV=/etc/profile.d/finn.sh
+RUN echo '. /etc/profile.d/finn.sh' >> /etc/bash.bashrc
 
-COPY --chmod=0644 docker/identity.py /usr/local/lib/finn/identity.py
+COPY --chmod=0755 docker/identity.py /usr/local/bin/finn-identity
 COPY --chmod=0644 uv.lock /opt/finn/uv.lock
-COPY docker/finn_entrypoint.sh /usr/local/bin/
-COPY --chmod=0644 docker/finn-bashenv.sh /etc/finn-bashenv.sh
-ENV BASH_ENV=/etc/finn-bashenv.sh
-RUN chmod 755 /usr/local/bin/finn_entrypoint.sh
-
+COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/finn-entrypoint
 # tini reaps zombies as PID 1 for all container commands.
-ENTRYPOINT ["/usr/bin/tini", "--", "finn_entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/tini", "--", "finn-entrypoint"]
 CMD ["bash"]
 USER agent
 
 
-# --- runtime -----------------------------------------------------------------
+# --- finn --------------------------------------------------------------------
 # FINN_RUNTIMES names manifests in docker/runtimes/ (e.g. "xrt" or "xrt,slash");
-# empty by default. Manifests and packages are bind-mounted, so an unselected
-# runtime's package never lands in a layer. See docker/runtimes/README.md.
-# Bake supplies this named context from its shared _python target. All runtime
-# variants consume one dependency build, even in a multi-target invocation.
-FROM finn-python AS runtime
+# empty by default. Manifests and supplied packages are bind-mounted, so an
+# unselected runtime's package never lands in a layer; fetched packages stay in
+# BuildKit's cache between builds. See docker/runtimes/README.md.
+FROM base AS finn
 USER root
 ARG FINN_RUNTIMES=""
 ENV FINN_RUNTIMES=${FINN_RUNTIMES}
 RUN --mount=type=bind,source=docker/runtimes,target=/tmp/runtimes \
     --mount=type=bind,source=docker/packages,target=/tmp/packages \
-    --mount=type=bind,source=docker/runtime-cache,target=/tmp/runtime-cache \
     --mount=type=bind,source=docker/install-runtimes.sh,target=/tmp/install-runtimes.sh \
+    --mount=type=cache,target=/var/cache/finn-runtimes \
     sh /tmp/install-runtimes.sh
-USER agent
-
-
-# --- dev ---------------------------------------------------------------------
-# Third-party Vivado board files join the system cache. They may not be
-# redistributed, so only images built locally contain them.
-FROM runtime AS dev
-USER root
-RUN --mount=type=bind,source=src/finn/resources,target=/tmp/src/finn/resources \
-    --mount=type=bind,source=src/finn/resources.toml,target=/tmp/src/finn/resources.toml \
-    --mount=type=bind,source=src/finn/util/paths.py,target=/tmp/src/finn/util/paths.py \
-    PYTHONPATH=/tmp/src python -B -m finn.resources fetch --kind vivado-boards \
-        --dest /opt/finn/resources >/dev/null && \
-    rm -f /opt/finn/resources/.*.lock
 USER agent
 
 
 # --- release -----------------------------------------------------------------
 # FINN as pip installs it: the wheel of this checkout, and no source tree. The
 # bind is writable because the build backend writes its build directory there.
-FROM finn-python AS wheel
+FROM base AS wheel
 USER root
 RUN --mount=type=bind,source=.,target=/tmp/finn-source,rw \
     uv build --wheel --no-build-isolation --out-dir /opt/finn/wheel /tmp/finn-source
 
-FROM runtime AS release
+FROM finn AS release
 USER root
 RUN --mount=type=bind,from=wheel,source=/opt/finn/wheel,target=/tmp/wheel \
     uv pip install --no-deps /tmp/wheel/*.whl && uv pip check
-ENV FINN_SYNC=0
+ENV FINN_RELEASE=1
 USER agent

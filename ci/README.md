@@ -5,7 +5,7 @@
 The [Jenkinsfile](./Jenkinsfile) is a declarative pipeline of four stages, delegating most logic to the `finn_ci` Python package.
 
 1. **Validate**: computes the sharding plan once, prepares a timing snapshot from historical records, checks executor budget, and prunes the shared trees.
-2. **Build Docker Image**: builds the FINN image with `docker/build` and `docker/run` and publishes it to NFS (if `FINN_CI_NFS_ROOT` is set) so the test shards load it instead of rebuilding.
+2. **Build Docker Image**: builds the FINN image with `python3 -m finn_ci image build` (`docker buildx bake` under a content-addressed tag) and publishes it to NFS (if `FINN_CI_NFS_ROOT` is set) so the test shards load it instead of rebuilding. Every container then starts through `docker/run`.
 3. **Run Tests**: fans out one parallel branch per shard. Each branch runs `python -m pytest -m <marker> --num-shards N --shard-id i` inside the container and stashes results/artifacts.
 4. **Check Stage Results** unstashes every shard's reports, aggregates one board zip per `(hwTestType, board)`, and refreshes the persistent timing master file.
 
@@ -239,13 +239,13 @@ A `STAGES` row that produces these zips declares a `zipArtifacts` nested key:
 Set `FINN_CI_NFS_ROOT` once on the Jenkins controller (in the job DSL) and the build pipeline derives every shared subtree from it. There are no other CI storage env vars to set. Layout under `FINN_CI_NFS_ROOT`:
 
 ```
-agent_caches/<NODE>/{xrt,finn_cache,finn_home}         per-agent caches
+agent_caches/<NODE>/{finn_cache,finn_home}             per-agent caches
 docker_images/<jobKey>/<BUILD>/                        shared docker image
 artifacts/ci_runs/<jobKey>/<BUILD>/                    build-to-HW handoff + BUILD_INFO
 _ci_state/<jobKey>/                                    timing master + snapshots
 ```
 
-`finn_home` is the agents' `FINN_HOME`: content-keyed XSI builds, assembled board files and golden references, shared by every shard and build on the agent. Its size is logged whenever the caches are prepared; `finn resources clean --unused` in the container removes entries the current pins and tools do not use.
+`finn_cache` holds the container's torch, Hugging Face and uv downloads ([compose.ci.yaml](./compose.ci.yaml) mounts it at `/finn_cache`); without `FINN_CI_NFS_ROOT` it is host-local, under `FINN_CI_LOCAL_CACHE_ROOT`. XRT's package is cached by BuildKit on each agent, so an `xrt` directory left from earlier builds can be removed. `finn_home` is the agents' `FINN_HOME`: content-keyed XSI builds, assembled board files and golden references, shared by every shard and build on the agent. Its size is logged whenever the caches are prepared; `finn resources clean --unused` in the container removes entries the current pins and tools do not use.
 
 Per-shard scratch lives at `${WORKSPACE_TMP}/finn_ci_runs/<BUILD>/<stash>` (falling back to `${WORKSPACE}/tmp/finn_ci_runs/...` only when `WORKSPACE_TMP` is unset). The workspace itself is per-agent and configured on the DSL side: NFS-mounted via `remote_fs` on the lab build hosts, local SSD elsewhere.
 
@@ -284,17 +284,29 @@ nodeid=<nodeid> stage=<stage> shard=<i>/<n> stash=<stash> group=<group> weight_s
 
 ### DSL environment variables
 
-These are the other env vars a job DSL typically sets for a build-pipeline job, on top of the CI-specific ones in "Infrastructure configuration" (`FINN_CI_NFS_ROOT` and the optional overrides). They are consumed by `docker/build` and `docker/run` and the FINN flow rather than by the pipeline itself, so the defaults and meanings match a normal local `docker/build` and `docker/run` run.
+These are the other env vars a job DSL typically sets for a build-pipeline job, on top of the CI-specific ones in "Infrastructure configuration" (`FINN_CI_NFS_ROOT` and the optional overrides). They are AMD's own variables and those `docker/run` reads, consumed by `docker/run` and the FINN flow rather than by the pipeline itself, so the meanings match a native shell that sourced `settings64.sh` and a local `docker/run` run.
 
-| Env var               | What it sets                                                                                                                                                  |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `FINN_XILINX_PATH`    | Path to the Xilinx tools install. `docker/run` mounts it when set and `--fpga` (as in `ci/scripts/run.sh`) requires it.                                        |
-| `FINN_XILINX_VERSION` | Xilinx tool version (for example `2022.2`).                                                                                                                   |
-| `PLATFORM_REPO_PATHS` | Vitis platform (DSA) files, required for Vitis-based Alveo cards.                                                                                             |
-| `FINN_DOCKER_EXTRA`   | Extra `docker run` arguments (bind mounts, licence, network, and any `-e` vars the tool-dispatch layer needs). The pipeline appends a per-agent `--hostname` and the NFS cache mounts to whatever the DSL sets. |
-| `NUM_DEFAULT_WORKERS` | Default xdist worker count for ad-hoc runs. Per-shard worker counts come from `STAGES`, not this.                                                             |
+| Env var                | What it sets                                                                                                                                       |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `XILINX_VIVADO`        | The Vivado release, e.g. `/tools/Xilinx/2025.2/Vivado` (`<root>/Vivado/<release>` before 2025.1). `docker/run` mounts its install root read-only and the container sources its `settings64.sh`; `--fpga` (as in compiler test shards and `ci/scripts/run.sh`) requires it. |
+| `XILINXD_LICENSE_FILE` | AMD's licence (`port@host` or a file, which `docker/run` mounts); `LM_LICENSE_FILE` works as well.                                                  |
+| `PLATFORM_REPO_PATHS`  | Vitis platform (DSA) files, required for Vitis-based Alveo cards.                                                                                  |
+| `COMPOSE_FILE`         | Compose files with site additions to the container (bind mounts, network, variables the tool-dispatch layer needs). The pipeline appends [compose.ci.yaml](./compose.ci.yaml), which mounts the agent's caches and pins the container's hostname to the agent's. |
+| `FINN_BUILD_DIR`       | The build directory root for `Jenkinsfile_Brevitas` (the build pipeline sets one per shard).                                                       |
+| `NUM_DEFAULT_WORKERS`  | Default xdist worker count for ad-hoc runs. Per-shard worker counts come from `STAGES`, not this.                                                  |
 
-A site that offloads the heavy Xilinx tools to a compute farm (see "Running tools on LSF") needs no pipeline changes. The tool wrapper and its configuration ride into the container through `FINN_DOCKER_EXTRA`, and the only variable FINN itself reads is the shim-directory override below:
+`FINN_XILINX_PATH`, `FINN_XILINX_VERSION`, `FINN_LICENSE_HOST`/`PORT`/`VENDOR_PORT`, `FINN_XRT_PATH`, `FINN_HOST_BUILD_DIR` and `FINN_DOCKER_EXTRA` are no longer read; the build pipeline stops with an error when `FINN_DOCKER_EXTRA` is set, so its flags are not lost silently. Write them as a Compose file:
+
+```yaml
+services:
+  finn:
+    volumes:
+      - /site/lsf:/site/lsf:ro
+    environment:
+      LSF_ENVDIR: /site/lsf/conf
+```
+
+A site that offloads the heavy Xilinx tools to a compute farm (see "Running tools on LSF") needs no pipeline changes. The tool wrapper and its configuration ride into the container through such a Compose file, and the only variable FINN itself reads is the shim-directory override below, which `docker/run` mounts:
 
 | Env var                  | What it sets                                                                                                                                        |
 | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -305,48 +317,56 @@ The wrapper's own variables are deployment-specific.
 
 ## Environment migration and image transport
 
-`ci/scripts/run.sh` launches the new environment with `--fpga` and defaults
-`FINN_RUNTIMES` to `xrt`, retaining the previous compiler image's full capability.
-Software report aggregation can run without a tool mount. The host's `finn_ci`
-CLI remains standard-library-only; board PYNQ/XRT profiles remain unchanged.
+Compiler test shards run `docker/run --fpga` (as `ci/scripts/run.sh` does) with
+`FINN_RUNTIMES` defaulting to `xrt`, retaining the previous compiler image's full
+capability. Software report aggregation can run without a tool mount. The host's
+`finn_ci` CLI remains standard-library-only; board PYNQ/XRT profiles remain unchanged.
 All stage/shard/board matrices and hardware READY/fallback policies are retained.
+
+The image is CI's own: `python3 -m finn_ci image tag` names it `finn:ci-<hash>-xrt`,
+the hash covering the image inputs listed in
+[finn_ci/image.py](./finn_ci/image.py) (Dockerfile, Bake file, entrypoint, lock and
+resource declarations), the archives the selected runtime manifests supply,
+`FINN_RUNTIMES` and `UBUNTU_TAG`; FINN's own sources are not inputs, since containers
+install the mounted checkout. `image build` runs `docker buildx bake finn` under that
+tag (`--if-missing` reuses an image already there), and `image build` and `image load`
+print the image ID, which every container runs as `FINN_IMAGE` with
+`docker/run --no-build`. Without `FINN_CI_NFS_ROOT`, an agent builds the image when it
+lacks it.
 
 The image build archives `image-metadata/*` in the Jenkins workspace even in
 local fallback mode. Shared publication retains
-`${FINN_CI_NFS_ROOT}/docker_images/<jobKey>/<BUILD>/` and adds identity:
+`${FINN_CI_NFS_ROOT}/docker_images/<jobKey>/<BUILD>/`:
 
-- `finn-docker-image.tar.gz` and `finn-docker-tag.txt` retain the existing transport.
+- `finn-docker-image.tar.gz` and `finn-docker-tag.txt` hold the image and its transport tag.
 - `finn-image-digest.txt` records the actual Docker image ID.
 - `finn-image-provenance.json` records source/dirty state, lock and resource
-  declaration SHA256s, environment input hash, runtimes and archive SHA256.
+  declaration SHA256s, the input hash, runtimes and archive SHA256.
 
 Publication renames a complete directory into place. Retries verify an existing
 publication; they cannot replace another image or source. Consumers verify metadata
-and actual image identity/labels. A loaded matching image ID is reused without
-reading the archive; a matching tag alone is insufficient. Cache misses take a
-host-local lock, recheck identity, and stream the archive into `docker load` once,
-verifying its checksum on the way (one read of the archive). Publication gzips
-with `pigz` on all cores where it is installed, else with Python's gzip.
-Thus corrupt archive bytes fail when loading is necessary, while existing verified
-image bytes remain usable. Missing archives or invalid metadata always fail.
-Authoritative `FINN_DOCKER_PREBUILT=1` fails closed on incomplete or mismatched
-inputs. Optional shared cache mode permits local fallback. Old
-archives lacking provenance require rebuilding; do not deploy mixed producers
-and consumers. Source checkouts remain pinned by the pipeline separately from
-source-independent dependency images.
+and the actual image ID. A loaded matching image ID is reused without reading the
+archive; a matching tag alone is insufficient. Cache misses take a host-local lock,
+recheck identity, and stream the archive into `docker load` once, verifying its
+checksum on the way (one read of the archive). Loading tags the image with its
+`finn:ci-...` name as well. Publication gzips with `pigz` on all cores where it is
+installed, else with Python's gzip. Thus corrupt archive bytes fail when loading is
+necessary, while existing verified image bytes remain usable. Missing archives,
+invalid metadata or a publication of other inputs always fail the shard; there is no
+local fallback once an image is published. Publications by `docker/launcher.py`
+(schema 1) are rejected; do not deploy mixed producers and consumers. Source
+checkouts remain pinned by the pipeline separately from source-independent
+dependency images.
 
 SIGTERM unwinds publication staging and stops its Docker save process. Image
 retention also removes `.finn-image-*` staging directories with no writes for
 24 hours, covering hard kills and host crashes. Recent publication writes survive.
-The per-agent `FINN_XRT_PATH` cache is populated and checksum-verified on local
-builds. `SLASHKIT_DEB_PACKAGE` is staged and selects slashkit before tag/provenance
-resolution, including in the legacy Jenkins entrypoints.
-An explicitly set `SLASHKIT_DEB_PACKAGE` must be readable on every agent that
-runs `docker/run`, including consumers of prebuilt images. Each agent stages and
-hashes the same package bytes. Confirm the deployed Job DSL exposes that file to
-all affected agents before cutover; the deployed definition is external to this
-repository. An absent package is an error, rather than silently selecting XRT only.
-Unused archives left in `docker/packages/` do not affect other runtime profiles.
+XRT's pinned package is downloaded once per agent into a BuildKit cache mount and
+checked against the manifest's SHA256. A supplied runtime (slashkit, SLASH) is
+selected with `FINN_RUNTIMES` and its archive placed in `docker/packages/`
+beforehand; the archive is an image input, so its bytes are part of the tag. An
+absent package is an error, rather than silently selecting XRT only. Unused archives
+left in `docker/packages/` do not affect other runtime profiles.
 
 Cold image loads use `/tmp/finn-docker-load.lock`, owned by its first creator.
 For agents with multiple users, provision a common writable host-local lock file

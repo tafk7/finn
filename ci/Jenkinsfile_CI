@@ -5,13 +5,17 @@ node('finn-build || built-in') {
         checkout scm
     }
     withEnv([
-        "FINN_XILINX_PATH=/proj/xbuilds/SWIP/2022.2_1014_8888/installs/lin64",
-        "FINN_XILINX_VERSION=2022.2",
+        // 2022.2's install layout: <root>/Vivado/<release>.
+        "XILINX_VIVADO=/proj/xbuilds/SWIP/2022.2_1014_8888/installs/lin64/Vivado/2022.2",
         "FINN_RUNTIMES=xrt",
-        "FINN_HOST_BUILD_DIR=/scratch/users/finn_ci",
+        "FINN_BUILD_DIR=/scratch/users/finn_ci",
         "PLATFORM_REPO_PATHS=/opt/xilinx/platforms"
     ]){
-        stage('Prepare environment') { sh './docker/build' }
+        String image
+        stage('Prepare environment') {
+            image = sh(returnStdout: true, script: 'PYTHONPATH=ci python3 -m finn_ci image build').trim()
+        }
+        withEnv(["FINN_IMAGE=${image}"]) {
         parallel firstBranch: {
             stage('Brevitas export') {
                 dir("${env.WORKSPACE}") {
@@ -42,6 +46,7 @@ node('finn-build || built-in') {
                 sh("./ci/scripts/run.sh python -m pytest -mfpgadataflow")
                 }
             }
+        }
         }
     }
 }
