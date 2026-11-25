@@ -56,6 +56,7 @@ from finn.transformation.fpgadataflow.prepare_rtlsim import PrepareRTLSim
 from finn.transformation.fpgadataflow.set_exec_mode import SetExecMode
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
+from finn.util import releases
 from finn.util.basic import get_vivado_version, make_build_dir, robust_rmtree
 from finn.util.test import tree_model_test
 
@@ -124,9 +125,8 @@ def test_fpgadataflow_lookup(edt, embedding_cfg, exec_mode, fpga_part, ram_style
 def _test_fpgadataflow_lookup(edt, embedding_cfg, exec_mode, fpga_part, ram_style, build_dir):
     # Skip URAM on old Vivado versions
     if ram_style == "ultra":
-        vivado_version = get_vivado_version()
-        if vivado_version is not None and vivado_version < (2024, 2):
-            pytest.skip("URAM lookup requires Vivado 2024.2+")
+        if releases.affects("uram-init", get_vivado_version()):
+            pytest.skip(f"URAM lookup requires Vivado {releases.minimum('uram-init')}+")
 
     ishape = (1, 10)
     num_embeddings, idt, embedding_dim = embedding_cfg

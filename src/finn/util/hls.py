@@ -27,6 +27,7 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
+from finn.util import releases
 from finn.util.basic import require_vivado_version
 from finn.util.launcher import run_tool
 
@@ -53,7 +54,7 @@ class CallHLS:
         directory. Also writes ipgen.sh in code_gen_dir, which repeats the run by
         hand. The output of HLS goes to ipgen.stdout.log and ipgen.stderr.log in
         code_gen_dir. Raises ToolFailed if HLS fails."""
-        if require_vivado_version() > (2024, 2):
+        if releases.affects("hls-via-vitis-run", require_vivado_version()):
             command = ["vitis-run", "--mode", "hls", "--tcl", self.tcl_script]
         else:
             command = ["vitis_hls", self.tcl_script]

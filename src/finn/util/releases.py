@@ -7,14 +7,14 @@ Differences in the install tree are detected where they matter, never looked up 
 release: the two install layouts (``finn.util.launcher.installed_releases``) and
 whether the HLS headers are in Vitis HLS or Vitis (``finn.util.launcher.hls_root``).
 This table holds the rest: what a release does differently only when it runs, and
-what FINN does about it. ``finn doctor`` prints the entries for the release in use.
-
-An entry names the code that handles it (``where``: files of the repository, each
-with a text in it, which a test checks), so that it changes with that code.
+what FINN does about it. Code that depends on a release asks the table
+(``affects("uram-init", release)``) rather than comparing release numbers, and code
+that works around a release names the entry's key; ``finn doctor`` prints the
+entries for the release in use.
 """
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 Release = Tuple[int, int]
 
@@ -27,7 +27,6 @@ class ReleaseNote:
     last: Optional[Release]
     differs: str
     finn_does: str
-    where: Tuple[Tuple[str, str], ...]
 
     def applies_to(self, release: Release) -> bool:
         return (self.first is None or self.first <= release) and (
@@ -36,20 +35,20 @@ class ReleaseNote:
 
     def releases(self) -> str:
         if self.first and self.last:
-            return f"{_name(self.first)} to {_name(self.last)}"
+            return f"{name(self.first)} to {name(self.last)}"
         if self.first:
-            return f"{_name(self.first)} and later"
+            return f"{name(self.first)} and later"
         if self.last:
-            return f"up to {_name(self.last)}"
+            return f"up to {name(self.last)}"
         return "every release"
 
 
-def _name(release: Release) -> str:
+def name(release: Release) -> str:
     return "%d.%d" % release
 
 
-NOTES = (
-    ReleaseNote(
+NOTES: Dict[str, ReleaseNote] = {
+    "vitis-sitecustomize": ReleaseNote(
         tools="Vitis",
         first=(2026, 2),
         last=None,
@@ -63,9 +62,8 @@ NOTES = (
             "Extensions built outside FINN stay affected: run them with python -E, or "
             "with PYTHONPATH unset."
         ),
-        where=(("src/finn/xsi/_build_config.py", "-static-libstdc++"),),
     ),
-    ReleaseNote(
+    "alveo-kernel-clock": ReleaseNote(
         tools="Vitis",
         first=(2024, 2),
         last=None,
@@ -74,17 +72,15 @@ NOTES = (
             "of its MMCM ([Ip 78-110] Invalid part string Project). Seen up to 2026.1."
         ),
         finn_does="re-constrains the kernel clock to the requested frequency before opt_design.",
-        where=(("src/finn/transformation/fpgadataflow/alveo_build.py", "finn_kernel_clk.tcl"),),
     ),
-    ReleaseNote(
+    "hls-via-vitis-run": ReleaseNote(
         tools="Vitis HLS",
         first=(2025, 1),
         last=None,
         differs="HLS synthesis is started through Vitis: vitis-run --mode hls.",
-        finn_does="runs vitis-run --mode hls from 2025.1, and vitis_hls before.",
-        where=(("src/finn/util/hls.py", 'command = ["vitis-run", "--mode", "hls"'),),
+        finn_does="runs vitis-run --mode hls, and vitis_hls for earlier releases.",
     ),
-    ReleaseNote(
+    "xsim-dsp-conflict": ReleaseNote(
         tools="XSim",
         first=None,
         last=None,
@@ -94,68 +90,59 @@ NOTES = (
             "correct. Seen up to 2025.2."
         ),
         finn_does="skips rtlsim verification of such a model, with a warning.",
-        where=(("src/finn/util/fpgadataflow.py", "HLS+RTL DSP CONFLICT DETECTED"),),
     ),
-    ReleaseNote(
+    "uram-init": ReleaseNote(
         tools="Vitis HLS",
         first=None,
         last=(2024, 1),
         differs="cannot initialize URAM-backed arrays.",
         finn_does=(
-            "refuses URAM thresholds and URAM lookup tables embedded in the design "
-            "(mem_mode internal_embedded)."
-        ),
-        where=(
-            (
-                "src/finn/custom_op/fpgadataflow/hls/thresholding_hls.py",
-                "require Vitis HLS 2024.2",
-            ),
-            (
-                "src/finn/custom_op/fpgadataflow/hls/lookup_hls.py",
-                "requires Vivado/Vitis HLS 2024.2",
-            ),
+            "refuses URAM constants embedded in the design (mem_mode internal_embedded): "
+            "thresholds, lookup tables, elementwise operands."
         ),
     ),
-    ReleaseNote(
+    "no-v80": ReleaseNote(
         tools="Vivado",
         first=None,
         last=(2024, 1),
-        differs="no V80 support, and no multi-layer offload (MLO).",
-        finn_does="refuses a V80 or MLO build in the configuration check, before step one.",
-        where=(
-            ("src/finn/builder/build_dataflow_checks.py", "V80 board requires Vivado 2024.2"),
-            ("src/finn/builder/build_dataflow_checks.py", "MLO requires Vivado 2024.2"),
-        ),
+        differs="no V80 support.",
+        finn_does="refuses a V80 build in the configuration check, before step one.",
     ),
-    ReleaseNote(
+    "no-mlo": ReleaseNote(
+        tools="Vivado",
+        first=None,
+        last=(2024, 1),
+        differs="no multi-layer offload (MLO).",
+        finn_does="refuses an MLO build in the configuration check.",
+    ),
+    "no-slash": ReleaseNote(
         tools="Vivado",
         first=None,
         last=(2024, 2),
         differs="no SLASH shell flow for the V80.",
         finn_does="refuses a SLASH_ALVEO build in the configuration check.",
-        where=(
-            (
-                "src/finn/builder/build_dataflow_checks.py",
-                "SLASH_ALVEO shell flow requires Vivado 2025.1",
-            ),
-        ),
     ),
-    ReleaseNote(
+    "no-aup-zu3": ReleaseNote(
         tools="Vivado",
         first=None,
         last=(2023, 2),
         differs="no AUP-ZU3 board support.",
         finn_does="refuses an AUP-ZU3_8GB build in the configuration check.",
-        where=(
-            (
-                "src/finn/builder/build_dataflow_checks.py",
-                "AUP-ZU3_8GB board requires Vivado 2024.1",
-            ),
-        ),
     ),
-)
+}
+
+
+def affects(key: str, release: Optional[Release]) -> bool:
+    """Whether the entry ``key`` holds for ``release``; False for an unknown release."""
+    return release is not None and NOTES[key].applies_to(release)
+
+
+def minimum(key: str) -> str:
+    """The first release that the entry ``key`` (one with a last release) no longer holds for."""
+    year, half = NOTES[key].last
+    return name((year, 2) if half == 1 else (year + 1, 1))
 
 
 def notes_for(release: Release):
-    """The entries of ``NOTES`` that apply to ``release``."""
-    return [note for note in NOTES if note.applies_to(release)]
+    """The entries that apply to ``release``."""
+    return [note for note in NOTES.values() if note.applies_to(release)]

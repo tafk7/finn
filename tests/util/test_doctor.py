@@ -130,20 +130,25 @@ def test_finn_doctor_runs_as_a_command(clean):
 
 
 @pytest.mark.util
-def test_every_release_note_names_code_that_exists():
-    """The table stays with the code that handles each entry."""
-    for note in releases.NOTES:
-        assert note.where
-        for path, text in note.where:
-            assert text in (REPOSITORY / path).read_text(), f"{path} no longer has {text!r}"
+def test_every_release_note_is_used_by_code():
+    """The table stays with the code: each entry's key appears where FINN acts on it."""
+    sources = "".join(
+        path.read_text()
+        for path in (REPOSITORY / "src" / "finn").rglob("*.py")
+        if path.name != "releases.py"
+    )
+    for key in releases.NOTES:
+        assert key in sources, f"no code names the release note {key!r}"
 
 
 @pytest.mark.util
 def test_release_ranges():
-    note = releases.ReleaseNote("Vivado", None, (2024, 1), "", "", ())
+    note = releases.ReleaseNote("Vivado", None, (2024, 1), "", "")
     assert note.applies_to((2023, 2)) and note.applies_to((2024, 1))
     assert not note.applies_to((2024, 2))
     assert note.releases() == "up to 2024.1"
-    note = releases.ReleaseNote("Vitis", (2024, 2), None, "", "", ())
+    note = releases.ReleaseNote("Vitis", (2024, 2), None, "", "")
     assert not note.applies_to((2024, 1)) and note.applies_to((2026, 2))
     assert note.releases() == "2024.2 and later"
+    assert releases.minimum("no-slash") == "2025.1" and releases.minimum("uram-init") == "2024.2"
+    assert not releases.affects("uram-init", None)

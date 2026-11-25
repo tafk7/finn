@@ -58,6 +58,7 @@ from finn.transformation.fpgadataflow.prepare_rtlsim import PrepareRTLSim
 from finn.transformation.fpgadataflow.set_exec_mode import SetExecMode
 from finn.transformation.fpgadataflow.set_fifo_depths import InsertAndSetFIFODepths
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
+from finn.util import releases
 from finn.util.basic import get_vivado_version
 from finn.util.test import tree_model_test
 
@@ -298,9 +299,9 @@ def test_elementwise_binary_operation_stitched_ip(
     # Skip URAM tests based on device and Vitis HLS version
     if ram_style == "ultra":
         if mem_mode == "internal_embedded":
-            vivado_version = get_vivado_version()
-            if vivado_version is not None and vivado_version < (2024, 2):
-                pytest.skip("URAM with internal_embedded requires Vitis HLS 2024.2+")
+            if releases.affects("uram-init", get_vivado_version()):
+                minimum = releases.minimum("uram-init")
+                pytest.skip(f"URAM with internal_embedded requires Vitis HLS {minimum}+")
 
     lhs_dtype, rhs_dtype = lhs_dtype_rhs_dtype
     out_dtype = "FLOAT16" if lhs_dtype == "FLOAT16" and rhs_dtype == "FLOAT16" else "FLOAT32"

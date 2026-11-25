@@ -36,6 +36,7 @@ from qonnx.util.basic import roundup_to_integer_multiple
 from finn import resources
 from finn.custom_op.fpgadataflow.hlsbackend import HLSBackend
 from finn.custom_op.fpgadataflow.thresholding import Thresholding
+from finn.util import releases
 from finn.util.basic import get_vivado_version, is_versal
 from finn.util.data_packing import (
     hls_datatype_str,
@@ -167,10 +168,10 @@ class Thresholding_hls(Thresholding, HLSBackend):
                         "URAM thresholds with internal_embedded mode are not supported "
                         "on non-Versal devices, as URAM cannot be initialized from bitfile."
                     )
-                vivado_version = get_vivado_version()
-                assert vivado_version is None or vivado_version >= (2024, 2), (
-                    "URAM thresholds with internal_embedded mode require Vitis HLS 2024.2 "
-                    "or newer because older versions cannot initialize URAM-backed arrays."
+                assert not releases.affects("uram-init", get_vivado_version()), (
+                    "URAM thresholds with internal_embedded mode require Vitis HLS "
+                    f"{releases.minimum('uram-init')} or newer because older versions cannot "
+                    "initialize URAM-backed arrays."
                 )
             elif mem_mode == "internal_decoupled":
                 if not is_versal(fpgapart):

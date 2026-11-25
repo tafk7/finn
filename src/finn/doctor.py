@@ -20,9 +20,8 @@ import sysconfig
 from dataclasses import asdict, dataclass
 from typing import List, Optional, Tuple
 
-from finn.util import launcher
+from finn.util import launcher, releases
 from finn.util.launcher import ToolchainMismatch, ToolUnavailable
-from finn.util.releases import notes_for
 
 OK, NOTE, WARN, FAIL = "ok", "note", "warn", "fail"
 
@@ -93,7 +92,7 @@ def check_tools(report):
     found = {}
     found["vivado"] = _tool(report, "vivado") if set_up["XILINX_VIVADO"] else False
     found["xelab"] = _tool(report, "xelab") if set_up["XILINX_VIVADO"] else False
-    hls_tool = "vitis-run" if (report.release or (0, 0)) > (2024, 2) else "vitis_hls"
+    hls_tool = "vitis-run" if releases.affects("hls-via-vitis-run", report.release) else "vitis_hls"
     found["hls"] = (
         _tool(report, hls_tool) if set_up["XILINX_HLS"] or set_up["XILINX_VITIS"] else False
     )
@@ -245,7 +244,7 @@ def diagnose() -> Report:
     check_resources(report)
     check_capabilities(report, tools, host, xsi)
     if report.release:
-        for note in notes_for(report.release):
+        for note in releases.notes_for(report.release):
             report.add(
                 f"Known differences of release {_release_name(report.release)}",
                 f"{note.tools} ({note.releases()})",

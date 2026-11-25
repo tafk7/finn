@@ -465,7 +465,7 @@ class VitisLink(Transformation):
 
         vivado_props = []
         if self.clk2x_clock_ids is None:
-            # Vitis (2024.2 to 2026.1 at least) fails to derive the constraint of the
+            # Release note alveo-kernel-clock: Vitis fails to derive the constraint of the
             # kernel clock on (non-Versal) Alveo platforms: its clock wizard helper
             # gets the project instead of the part ("[Ip 78-110] Invalid part string
             # Project") and the kernel clock is constrained to the 100 MHz reference

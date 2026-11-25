@@ -32,6 +32,7 @@ from qonnx.core.datatype import DataType
 
 from finn.custom_op.fpgadataflow.hlsbackend import HLSBackend
 from finn.custom_op.fpgadataflow.lookup import Lookup
+from finn.util import releases
 from finn.util.basic import get_vivado_version, is_versal
 from finn.util.data_packing import (
     hls_datatype_str,
@@ -64,11 +65,10 @@ class Lookup_hls(Lookup, HLSBackend):
             "Use a non-URAM ram_style or an external/runtime-writeable memory implementation "
             "for non-Versal targets."
         )
-        vivado_version = get_vivado_version()
-        assert vivado_version is None or vivado_version >= (2024, 2), (
-            "Lookup_hls with internal_embedded URAM requires Vivado/Vitis HLS 2024.2 "
-            "or newer because older HLS versions cannot initialize URAM-backed "
-            "global/static embedding tables."
+        assert not releases.affects("uram-init", get_vivado_version()), (
+            "Lookup_hls with internal_embedded URAM requires Vitis HLS "
+            f"{releases.minimum('uram-init')} or newer because older HLS versions cannot "
+            "initialize URAM-backed global/static embedding tables."
         )
 
     def code_generation_ipgen(self, model, fpgapart, clk):

@@ -38,6 +38,7 @@ from finn import resources
 from finn.custom_op.fpgadataflow.elementwise_binary import ElementwiseBinaryOperation
 from finn.custom_op.fpgadataflow.hls import register_custom_op
 from finn.custom_op.fpgadataflow.hlsbackend import HLSBackend
+from finn.util import releases
 from finn.util.basic import get_vivado_version, is_versal
 from finn.util.data_packing import (
     hls_datatype_str,
@@ -98,11 +99,10 @@ class ElementwiseBinaryOperation_hls(
                 "a Versal target. Use internal_decoupled memory mode or a non-URAM "
                 "ram_style for non-Versal targets."
             )
-            vivado_version = get_vivado_version()
-            assert vivado_version is None or vivado_version >= (2024, 2), (
+            assert not releases.affects("uram-init", get_vivado_version()), (
                 "ElementwiseBinaryOperation_hls with internal_embedded URAM constants requires "
-                "Vitis HLS 2024.2 or newer because older versions cannot initialize "
-                "URAM-backed arrays."
+                f"Vitis HLS {releases.minimum('uram-init')} or newer because older versions "
+                "cannot initialize URAM-backed arrays."
             )
         elif mem_mode == "internal_decoupled" or mlo:
             assert is_versal(fpgapart), (

@@ -19,6 +19,7 @@ from finn.builder.build_dataflow_config import (
     VerificationStepType,
     verify_step_prereqs,
 )
+from finn.util import releases
 from finn.util.basic import (
     get_pynq_golden_dir,
     get_vivado_version,
@@ -57,6 +58,20 @@ class Report:
         return any(c.severity == Severity.ERROR and not c.passed for c in self.checks)
 
 
+def _release_check(name, key, v, what):
+    """An error unless Vivado v is a release that the release note ``key`` (a missing
+    feature) no longer holds for."""
+    minimum = releases.minimum(key)
+    found = "%d.%d" % v if v else "unknown"
+    return _check(
+        name,
+        Severity.ERROR,
+        v is not None and not releases.affects(key, v),
+        f"{what} requires Vivado {minimum} or later, found {found}",
+        f"Upgrade to Vivado {minimum} or later",
+    )
+
+
 def _check(name, severity, condition, msg_fail, suggestion=None):
     """Helper to create a Check result."""
     if condition:
@@ -77,7 +92,6 @@ def run_all_config_checks(cfg: DataflowBuildConfig) -> Report:
     """Run all configuration checks and return report."""
     v = get_vivado_version()
     # for the check messages; v is None without Vivado (XILINX_VIVADO unset)
-    v_found = "%d.%d" % v if v else "unknown"
     checks = []
 
     has_bitfile = cfg.generate_outputs and DataflowOutputType.BITFILE in cfg.generate_outputs
@@ -99,48 +113,16 @@ def run_all_config_checks(cfg: DataflowBuildConfig) -> Report:
 
     # === Vivado Version Checks ===
     if cfg.board == "V80":
-        checks.append(
-            _check(
-                "v80_vivado",
-                Severity.ERROR,
-                v and v >= (2024, 2),
-                f"V80 board requires Vivado 2024.2 or later, found {v_found}",
-                "Upgrade to Vivado 2024.2 or later to use V80",
-            )
-        )
+        checks.append(_release_check("v80_vivado", "no-v80", v, "V80 board"))
 
     if resolved_shell == ShellFlowType.SLASH_ALVEO:
-        checks.append(
-            _check(
-                "slash_vivado",
-                Severity.ERROR,
-                v and v >= (2025, 1),
-                f"SLASH_ALVEO shell flow requires Vivado 2025.1, found {v_found}",
-                "Upgrade to Vivado 2025.1 for SLASH support",
-            )
-        )
+        checks.append(_release_check("slash_vivado", "no-slash", v, "SLASH_ALVEO shell flow"))
 
     if cfg.mlo:
-        checks.append(
-            _check(
-                "mlo_vivado",
-                Severity.ERROR,
-                v and v >= (2024, 2),
-                f"MLO requires Vivado 2024.2 or later, found {v_found}",
-                "Upgrade to Vivado 2024.2 or later for MLO support",
-            )
-        )
+        checks.append(_release_check("mlo_vivado", "no-mlo", v, "MLO"))
 
     if cfg.board == "AUP-ZU3_8GB":
-        checks.append(
-            _check(
-                "aupzu3_vivado",
-                Severity.ERROR,
-                v and v >= (2024, 1),
-                f"AUP-ZU3_8GB board requires Vivado 2024.1 or later, found {v_found}",
-                "Upgrade to Vivado 2024.1 or later to use AUP-ZU3_8GB",
-            )
-        )
+        checks.append(_release_check("aupzu3_vivado", "no-aup-zu3", v, "AUP-ZU3_8GB board"))
 
     if v and v not in [(2022, 2), (2024, 2)]:
         checks.append(

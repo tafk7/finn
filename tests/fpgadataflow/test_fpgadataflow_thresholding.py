@@ -56,6 +56,7 @@ from finn.transformation.fpgadataflow.set_exec_mode import SetExecMode
 from finn.transformation.fpgadataflow.set_fifo_depths import InsertAndSetFIFODepths
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
 from finn.transformation.streamline.round_thresholds import RoundAndClipThresholds
+from finn.util import releases
 from finn.util.basic import get_vivado_version, is_versal, make_build_dir
 from finn.util.test import tree_model_test
 
@@ -707,9 +708,10 @@ def test_fpgadataflow_thresholding_hls_internal_embedded_ram_style(
     """Test HLS Thresholding with internal_embedded mode and different ram_style options."""
     # Skip URAM on old Vitis HLS versions
     if ram_style == "ultra":
-        vivado_version = get_vivado_version()
-        if vivado_version is not None and vivado_version < (2024, 2):
-            pytest.skip("URAM with internal_embedded requires Vitis HLS 2024.2+")
+        if releases.affects("uram-init", get_vivado_version()):
+            pytest.skip(
+                f"URAM with internal_embedded requires Vitis HLS {releases.minimum('uram-init')}+"
+            )
 
     num_input_vecs = [1]
     input_data_type, threshold_data_type = idt_tdt_cfg

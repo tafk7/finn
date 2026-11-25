@@ -214,6 +214,7 @@ def warn_hls_rtl_dsp_conflict(model, verification_type, output_dir=None):
     Returns:
         bool: True if conflict was detected (and verification should be skipped)
     """
+    # Release note xsim-dsp-conflict.
     has_conflict, hls_ops, rtl_ops = detect_hls_rtl_dsp_conflict(model)
 
     if has_conflict:
