@@ -44,7 +44,7 @@ if [ -n "${XILINX_VIVADO:-}${FINN_BOARD_FILES_PATH:-}" ]; then
     export FINN_BOARD_FILES_PATH
 fi
 # Restore upstream's opt-in device initialization scripts in the caller's HOME.
-if [ -d "$FINN_ROOT/.Xilinx" ]; then
+if [ -n "${FINN_ROOT:-}" ] && [ -d "$FINN_ROOT/.Xilinx" ]; then
     mkdir -p "$HOME/.Xilinx"
     cp -a "$FINN_ROOT/.Xilinx/." "$HOME/.Xilinx/"
 fi

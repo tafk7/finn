@@ -281,10 +281,11 @@ modules and host daemons remain host responsibilities.
 ./docker/build --export-sif /absolute/finn.sif --runtime xrt
 ```
 
-Release builds snapshot Git-tracked working-tree files, including tracked edits
-and deletions; add new source files to Git first. Ignored downloads, untracked
-output and supplied `.deb`/`.rpm` archives are excluded. The release image needs
-no startup installation. SIF export needs Apptainer or Singularity. Run the SIF
+The release image holds FINN as `pip install` gives it: the build compiles a
+wheel of the checkout and installs that, with no source tree and no `FINN_ROOT`,
+so it needs no startup installation. The development image instead installs the
+mounted checkout in editable mode at start. SIF export needs Apptainer or
+Singularity. Run the SIF
 with `apptainer run` (which runs the entrypoint), binding tool, licence and
 scratch directories, and set `FINN_BUILD_DIR` and `FINN_HOME` (default
 `~/.finn`) to writable host storage. Supply board caches for offline use.

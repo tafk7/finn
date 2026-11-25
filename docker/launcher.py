@@ -1149,7 +1149,7 @@ def verify_image(inspected, request):
             "Image environment %r differs from requested %r" % (revision, request.revision)
         )
     mode = labels.get("dev.finn.source-mode", "checkout")
-    expected_mode = "embedded" if request.variant == "release" else "checkout"
+    expected_mode = "wheel" if request.variant == "release" else "checkout"
     if mode != expected_mode:
         raise LaunchError("Image source mode %r; requested %r" % (mode, expected_mode))
     if labels.get("dev.finn.runtimes", "").split(",") != (request.runtimes or [""]):
@@ -1447,33 +1447,6 @@ def load_image(directory, request):
 # --------------------------------------------------------------------------
 
 
-def snapshot_source(source, output):
-    """Tracked working-tree files, including edits and deletions; never ignored
-    downloads, notebook output or supplied runtime archives."""
-    import tarfile  # noqa: PLC0415
-
-    source = Path(source).resolve()
-    names = subprocess.check_output(["git", "-C", str(source), "ls-files", "--cached", "-z"])
-    with tarfile.open(output, "w") as archive:
-        for name in sorted(set(os.fsdecode(name) for name in names.split(b"\0") if name)):
-            path = source / name
-            if name.startswith("docker/packages/") and path.suffix in (".deb", ".rpm"):
-                continue
-            if not path.exists() and not path.is_symlink():
-                continue
-            if path.is_dir() and not path.is_symlink():
-                raise LaunchError("Source snapshot needs an expanded tracked file, not: " + name)
-            info = archive.gettarinfo(str(path), arcname=name)
-            info.uid = info.gid = info.mtime = 0
-            info.uname = info.gname = ""
-            info.mode = 0o755 if info.mode & 0o100 else 0o644
-            if info.isfile():
-                with path.open("rb") as handle:
-                    archive.addfile(info, handle)
-            else:
-                archive.addfile(info)
-
-
 def export_sif(image, output):
     runtime = shutil.which("apptainer") or shutil.which("singularity")
     if not runtime:
@@ -1529,7 +1502,7 @@ BUILD_USAGE = """\
 Usage: docker/build [OPTIONS]
 
 Options:
-  --release          build the release image: FINN installed from this checkout
+  --release          build the release image: FINN installed from a wheel of this checkout
   --export-sif PATH  build the release image and export it as an Apptainer SIF
   --runtime NAME     add image content such as xrt; repeatable
   --rebuild          rebuild image layers without cache
@@ -1609,11 +1582,7 @@ def command_build(argv):
         ):
             print("%s=%s" % (key, value))
         return 0
-    with tempfile.TemporaryDirectory(prefix="finn-release-source-") as work:
-        if variant == "release":
-            snapshot_source(REPO, Path(work) / "source.tar")
-            os.environ["FINN_RELEASE_SOURCE_DIR"] = work
-        image = prepare_image(request, build=True)
+    image = prepare_image(request, build=True)
     if sif:
         export_sif(image, sif)
     return 0

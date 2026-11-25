@@ -248,15 +248,16 @@ USER agent
 
 
 # --- release -----------------------------------------------------------------
-FROM runtime AS release
-ARG FINN_SOURCE_REVISION=unknown
-ARG FINN_SOURCE_DIRTY=unknown
+# FINN as pip installs it: the wheel of this checkout, and no source tree. The
+# bind is writable because the build backend writes its build directory there.
+FROM finn-python AS wheel
 USER root
-RUN --mount=type=bind,from=finn-source,source=source.tar,target=/tmp/finn-source.tar \
-    --mount=type=bind,source=docker/copy-source.sh,target=/tmp/copy-source.sh \
-    sh /tmp/copy-source.sh /tmp/finn-source.tar /opt/finn/source
-RUN uv pip install --no-deps --no-build-isolation -e /opt/finn/source && uv pip check && \
-    printf '{"revision":"%s","dirty":"%s"}\n' "$FINN_SOURCE_REVISION" "$FINN_SOURCE_DIRTY" > /opt/finn/source/FINN_BUILD_INFO.json
-ENV FINN_ROOT=/opt/finn/source FINN_SYNC=0
-WORKDIR /opt/finn/source
+RUN --mount=type=bind,source=.,target=/tmp/finn-source,rw \
+    uv build --wheel --no-build-isolation --out-dir /opt/finn/wheel /tmp/finn-source
+
+FROM runtime AS release
+USER root
+RUN --mount=type=bind,from=wheel,source=/opt/finn/wheel,target=/tmp/wheel \
+    uv pip install --no-deps /tmp/wheel/*.whl && uv pip check
+ENV FINN_SYNC=0
 USER agent
