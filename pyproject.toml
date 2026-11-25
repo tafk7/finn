@@ -9,8 +9,15 @@ description = "A Framework for Fast, Scalable Quantized Neural Network Inference
 readme = "README.md"
 license = {text = "BSD-3-Clause"}
 authors = [{name = "Yaman Umuroglu"}, {name = "Jakoba Petri-Koenig", email = "jakoba.petri-koenig@amd.com"}]
-requires-python = ">=3.12,<3.13"
-classifiers = ["Development Status :: 4 - Beta", "Programming Language :: Python", "Operating System :: POSIX :: Linux"]
+requires-python = ">=3.12"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
 dependencies = [
     # Lower bounds are the versions upstream dev tests (requirements.txt, the image).
     "bitstring>=4.2.3",

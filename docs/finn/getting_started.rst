@@ -116,8 +116,8 @@ General FINN Docker tips
 Installing FINN with pip
 ========================
 
-FINN installs into any Python 3.12 environment, without a checkout of its
-repository. It reads the AMD tools from the shell it starts in, as every AMD tool
+FINN installs into any environment with Python 3.12 or later, without a checkout of
+its repository. It reads the AMD tools from the shell it starts in, as every AMD tool
 does, and fetches what else it needs the first time it needs it.
 
 1. Make a Python 3.12 environment and install FINN into it (with ``[brevitas]`` for
@@ -170,7 +170,7 @@ Prerequisites
 *************
 
 * Ubuntu 24.04 (other distributions may work but are not officially tested)
-* Python 3.12
+* Python 3.12 or later (the container and CI use 3.12)
 * System dependencies (see below)
 * Vivado/Vitis 2024.2 or later (for synthesis and simulation)
 
