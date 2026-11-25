@@ -71,7 +71,7 @@ from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
 from finn.transformation.general import ApplyConfig
 from finn.transformation.streamline.round_thresholds import RoundAndClipThresholds
 from finn.util.basic import is_versal
-from finn.util.test import (
+from finn_test_helpers import (
     get_hls_synth_interval,
     make_runtime_weight_stream,
     tree_model_test,

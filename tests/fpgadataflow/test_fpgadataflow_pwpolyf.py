@@ -29,8 +29,8 @@ from finn.transformation.fpgadataflow.set_fifo_depths import InsertAndSetFIFODep
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
 from finn.transformation.streamline import Streamline
 from finn.util.basic import get_finn_root
-from finn.util.test import tree_model_test
 from finn.util.torch_hw_modules import PWPolyFActivation
+from finn_test_helpers import tree_model_test
 
 TEST_FPGA_PART = "xcvc1902-vsva2197-2MP-e-S"
 NON_VERSAL_FPGA_PART = "xczu3eg-sbva484-1-e"

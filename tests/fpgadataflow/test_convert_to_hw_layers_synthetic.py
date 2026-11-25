@@ -69,7 +69,7 @@ from finn.transformation.streamline.reorder import (
     MoveScalarLinearPastInvariants,
 )
 from finn.util.basic import make_build_dir, robust_rmtree
-from finn.util.test import soft_verify_topk
+from finn_test_helpers import soft_verify_topk
 
 # construct a synthetic graph to test:
 # topk insertion, topk conversion to hw, add conversion to hw

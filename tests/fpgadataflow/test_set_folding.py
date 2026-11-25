@@ -45,7 +45,7 @@ from finn.transformation.fpgadataflow.create_dataflow_partition import (
 )
 from finn.transformation.fpgadataflow.set_folding import SetFolding
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
-from finn.util.test import load_test_checkpoint_or_skip
+from finn_test_helpers import load_test_checkpoint_or_skip
 
 
 def make_multi_fclayer_model(ch, wdt, adt, tdt, nnodes):

@@ -32,8 +32,8 @@ from finn.transformation.fpgadataflow.prepare_rtlsim import PrepareRTLSim
 from finn.transformation.fpgadataflow.set_exec_mode import SetExecMode
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
 from finn.util.basic import get_vivado_version, make_build_dir, robust_rmtree
-from finn.util.test import tree_model_test
 from finn.util.vivado import parse_ooc_synth_results
+from finn_test_helpers import tree_model_test
 
 FPGA_PART = "xc7z020clg400-1"
 CLK_NS = 10

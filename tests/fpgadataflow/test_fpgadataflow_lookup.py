@@ -58,7 +58,7 @@ from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
 from finn.util import releases
 from finn.util.basic import get_vivado_version, make_build_dir, robust_rmtree
-from finn.util.test import tree_model_test
+from finn_test_helpers import tree_model_test
 
 
 def make_lookup_model(embeddings, ishape, idt, edt, build_dir):

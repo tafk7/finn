@@ -124,6 +124,7 @@ explicit = true
 
 [tool.pytest.ini_options]
 addopts = "--verbose"
+pythonpath = ["tests"]  # finn_test_helpers
 testpaths = ["tests"]
 norecursedirs = ["dist", "build", ".tox", ".venv"]
 markers = [

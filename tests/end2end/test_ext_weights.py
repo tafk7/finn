@@ -35,20 +35,17 @@ import os
 import shutil
 import subprocess
 import urllib.request
+from pathlib import Path
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.infer_shapes import InferShapes
 
 import finn.builder.build_dataflow as build
 import finn.builder.build_dataflow_config as build_cfg
-from finn import resources
 from finn.core.onnx_exec import execute_onnx
 from finn.util.basic import get_vivado_version, make_build_dir, robust_rmtree
 from finn.util.paths import scratch
-from finn.util.test import (
-    get_example_input,
-    load_test_checkpoint_or_skip,
-    stage_hw_deployment,
-)
+from finn.util.test import get_example_input
+from finn_test_helpers import load_test_checkpoint_or_skip, stage_hw_deployment
 
 target_clk_ns = 10
 # the CI hardware pipeline tests this board's bitfiles under ext_weights_build
@@ -135,7 +132,7 @@ def test_end2end_ext_weights_build(topology):
         pytest.skip("AUP-ZU3 board requires at least Vivado 2024.1")
     model_file = get_checkpoint_name("download", topology)
     load_test_checkpoint_or_skip(model_file)
-    test_data = resources.join("qnn-data", "test_ext_weights")
+    test_data = str(Path(__file__).parents[1] / "data" / "test_ext_weights")
     folding_config_file = test_data + "/" + topology + "-w2a2-extw.json"
     specialize_layers_config_file = test_data + "/specialize_layers_config_" + topology + ".json"
     output_dir = make_build_dir("test_end2end_" + topology + "_ext_weights_build")

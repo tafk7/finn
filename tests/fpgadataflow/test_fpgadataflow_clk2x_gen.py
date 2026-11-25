@@ -61,7 +61,7 @@ from finn.util.basic import (
 )
 from finn.util.fpgadataflow import find_clk2x_nodes
 from finn.util.launcher import run_tool
-from finn.util.test import bd_nets, cppsim_reference, make_pumped_chain_model
+from finn_test_helpers import bd_nets, cppsim_reference, make_pumped_chain_model
 
 parts = {"versal": "xcvc1902-vsva2197-2MP-e-S", "zu3": "xczu3eg-sfvc784-2-e"}
 CLK2X_GEN_TCL = resources.join("rtllib", "clk2x_gen/clk2x_gen.tcl")

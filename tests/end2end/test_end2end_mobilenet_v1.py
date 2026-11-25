@@ -91,12 +91,8 @@ from finn.transformation.streamline.round_thresholds import RoundAndClipThreshol
 from finn.util.basic import get_finn_root, get_vivado_version, make_build_dir
 from finn.util.paths import scratch
 from finn.util.pytorch import NormalizePreProc
-from finn.util.test import (
-    crop_center,
-    get_test_model_trained,
-    load_test_checkpoint_or_skip,
-    resize_smaller_side,
-)
+from finn.util.test import crop_center, get_test_model_trained, resize_smaller_side
+from finn_test_helpers import load_test_checkpoint_or_skip
 
 build_dir = str(scratch())
 

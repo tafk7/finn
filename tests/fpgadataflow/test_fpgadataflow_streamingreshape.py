@@ -27,7 +27,7 @@ from finn.transformation.fpgadataflow.prepare_ip import PrepareIP
 from finn.transformation.fpgadataflow.prepare_rtlsim import PrepareRTLSim
 from finn.transformation.fpgadataflow.set_exec_mode import SetExecMode
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
-from finn.util.test import tree_model_test
+from finn_test_helpers import tree_model_test
 
 FPGA_PART = "xc7z020clg400-1"
 CLK_NS = 10

@@ -58,7 +58,7 @@ from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
 from finn.transformation.general import ApplyConfig
 from finn.util.basic import make_build_dir, robust_rmtree
 from finn.util.fpgadataflow import find_clk2x_nodes
-from finn.util.test import cppsim_reference, make_mvau_node, make_pumped_chain_model
+from finn_test_helpers import cppsim_reference, make_mvau_node, make_pumped_chain_model
 
 # DSP58 compute pumping needs a Versal part
 versal_part = "xcvc1902-vsva2197-2MP-e-S"

@@ -102,12 +102,10 @@ from finn.util.basic import get_finn_root, make_build_dir
 from finn.util.paths import scratch
 from finn.util.pytorch import ToTensor
 from finn.util.rtlsim import annotate_rtlsim_performance
-from finn.util.test import (
+from finn.util.test import get_example_input, get_topk, get_trained_network_and_ishape
+from finn_test_helpers import (
     execute_parent,
     get_build_env,
-    get_example_input,
-    get_topk,
-    get_trained_network_and_ishape,
     load_test_checkpoint_or_skip,
 )
 

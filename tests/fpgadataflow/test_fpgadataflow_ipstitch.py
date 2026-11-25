@@ -59,8 +59,8 @@ from finn.util.basic import (
     vitis_part_map,
 )
 from finn.util.paths import scratch
-from finn.util.test import load_test_checkpoint_or_skip
 from finn.util.vivado import parse_ooc_synth_results
+from finn_test_helpers import load_test_checkpoint_or_skip
 
 test_pynq_board = "AUP-ZU3_8GB"
 test_fpga_part = pynq_part_map[test_pynq_board]

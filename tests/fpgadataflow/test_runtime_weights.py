@@ -46,7 +46,7 @@ from finn.transformation.fpgadataflow.insert_fifo import InsertFIFO
 from finn.transformation.fpgadataflow.prepare_ip import PrepareIP
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
 from finn.util.create import hw_random_mlp_maker
-from finn.util.test import make_runtime_weight_stream
+from finn_test_helpers import make_runtime_weight_stream
 
 test_fpga_part = "xczu3eg-sbva484-1-e"
 target_clk_ns = 5

@@ -60,7 +60,7 @@ from finn.transformation.fpgadataflow.set_fifo_depths import InsertAndSetFIFODep
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
 from finn.util import releases
 from finn.util.basic import get_vivado_version
-from finn.util.test import tree_model_test
+from finn_test_helpers import tree_model_test
 
 # Mapping of ElementwiseBinaryOperation specializations to numpy reference
 # implementation functions

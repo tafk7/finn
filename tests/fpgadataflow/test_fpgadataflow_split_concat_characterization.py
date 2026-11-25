@@ -12,7 +12,7 @@ from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
 
-from finn.util.test import tree_model_test_up_to_rotation
+from finn_test_helpers import tree_model_test_up_to_rotation
 
 # ChannelsPerStream, SIMD, numInputVectors
 CONFIGS = [

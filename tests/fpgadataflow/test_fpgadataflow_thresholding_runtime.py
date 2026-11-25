@@ -45,7 +45,7 @@ from finn.transformation.fpgadataflow.insert_fifo import InsertFIFO
 from finn.transformation.fpgadataflow.prepare_ip import PrepareIP
 from finn.transformation.fpgadataflow.prepare_rtlsim import PrepareRTLSim
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
-from finn.util.test import make_runtime_weight_stream
+from finn_test_helpers import make_runtime_weight_stream
 
 finnxsi = xsi
 

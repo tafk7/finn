@@ -49,7 +49,7 @@ from finn.transformation.fpgadataflow.prepare_ip import PrepareIP
 from finn.transformation.fpgadataflow.prepare_rtlsim import PrepareRTLSim
 from finn.transformation.fpgadataflow.set_exec_mode import SetExecMode
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
-from finn.util.test import tree_model_test
+from finn_test_helpers import tree_model_test
 
 tree_model_fpga_part = "xczu7ev-ffvc1156-2-e"
 tree_model_clk_ns = 5.0

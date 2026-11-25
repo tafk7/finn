@@ -171,7 +171,7 @@ A new `hwTestType` (today `bnn_build_sanity`, `bnn_build_full`, `mlo_build` or `
 
 ### Adding a board test outside the BNN matrix
 
-Any build test can hand its bitfile to the HW pipeline. Call `finn.util.test.stage_hw_deployment()` with the build's `deploy/` directory, the board, a model title, and a reference input and output. It writes `hw_deployment_*/<board>/<title>/`, which the shard picks up for every board in its row's `zipArtifacts`. On the board, [test_bnn_hw_pytest.py](./test_bnn_hw_pytest.py) runs the driver on the input, compares the result to the reference, and measures throughput. The MLO tests in `tests/fpgadataflow/test_fpgadataflow_finnloop.py` and the external-weights tests in `tests/end2end/test_ext_weights.py` work this way.
+Any build test can hand its bitfile to the HW pipeline. Call `stage_hw_deployment()` from `tests/finn_test_helpers.py` with the build's `deploy/` directory, the board, a model title, and a reference input and output. It writes `hw_deployment_*/<board>/<title>/`, which the shard picks up for every board in its row's `zipArtifacts`. On the board, [test_bnn_hw_pytest.py](./test_bnn_hw_pytest.py) runs the driver on the input, compares the result to the reference, and measures throughput. The MLO tests in `tests/fpgadataflow/test_fpgadataflow_finnloop.py` and the external-weights tests in `tests/end2end/test_ext_weights.py` work this way.
 
 Titles must be unique per board within a row, because a duplicate fails the zip aggregation. Only stage after the build's own checks have passed, so a known-bad bitfile never reaches a board.
 

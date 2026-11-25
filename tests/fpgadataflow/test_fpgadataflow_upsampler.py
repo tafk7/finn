@@ -61,7 +61,7 @@ from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
 from finn.transformation.streamline.reorder import MakeScaleResizeNHWC
 from finn.util.basic import make_build_dir, robust_rmtree
-from finn.util.test import tree_model_test_up_to_rotation
+from finn_test_helpers import tree_model_test_up_to_rotation
 
 
 class ForceDataTypeForTensors(Transformation):

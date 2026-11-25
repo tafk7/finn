@@ -41,7 +41,7 @@ from finn.util.basic import (
     robust_rmtree,
 )
 from finn.util.rtlsim import check_fifo_log_consistency, read_fifo_log_snapshot
-from finn.util.test import stage_hw_deployment
+from finn_test_helpers import stage_hw_deployment
 
 verif_steps = [
     "folded_hls_cppsim",

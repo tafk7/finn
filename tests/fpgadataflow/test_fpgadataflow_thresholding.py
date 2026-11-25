@@ -58,7 +58,7 @@ from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
 from finn.transformation.streamline.round_thresholds import RoundAndClipThresholds
 from finn.util import releases
 from finn.util.basic import get_vivado_version, is_versal, make_build_dir
-from finn.util.test import tree_model_test
+from finn_test_helpers import tree_model_test
 
 test_fpga_part = "xczu3eg-sbva484-1-e"
 target_clk_ns = 5

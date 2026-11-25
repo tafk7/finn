@@ -5,7 +5,7 @@
 
 import pytest
 
-from finn.util.test import make_runtime_weight_stream
+from finn_test_helpers import make_runtime_weight_stream
 
 pytestmark = pytest.mark.util
 

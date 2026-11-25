@@ -63,7 +63,7 @@ from finn.transformation.qonnx.quant_act_to_multithreshold import (
 )
 from finn.transformation.streamline.absorb import AbsorbScalarBiasIntoMultiThreshold
 from finn.util.basic import get_dsp_block, make_build_dir, pynq_part_map
-from finn.util.test import tree_model_test
+from finn_test_helpers import tree_model_test
 
 test_pynq_board = "ZCU104"
 test_fpga_part = pynq_part_map[test_pynq_board]

@@ -51,7 +51,7 @@ from finn.transformation.general import ApplyConfig
 from finn.util.basic import get_watchdog_timeout_cycles, make_build_dir, robust_rmtree
 from finn.util.config import extract_model_config_consolidate_shuffles
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
-from finn.util.test import tree_model_test_up_to_rotation
+from finn_test_helpers import tree_model_test_up_to_rotation
 
 test_fpga_part: str = "xcvc1902-vsva2197-2MP-e-S"
 test_synth_clk_period_ns: int = 10
