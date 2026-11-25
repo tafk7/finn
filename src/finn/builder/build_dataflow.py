@@ -27,10 +27,12 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import clize
+import contextlib
 import json
 import logging
 import os
 import pdb  # NOQA
+import tempfile
 import time
 from qonnx.core.findings import Refusal, collect_findings
 from qonnx.core.modelwrapper import ModelWrapper
@@ -167,11 +169,21 @@ def _run_build_steps(model, cfg, build_dataflow_steps):
                     log.error("%s", finding.subject_line())
 
     def save_findings():
+        temporary = None
         try:
-            with open(cfg.output_dir + "/build_findings.json", "w") as f:
+            with tempfile.NamedTemporaryFile(
+                mode="w", dir=cfg.output_dir, prefix=".build_findings-", delete=False
+            ) as f:
+                temporary = f.name
                 json.dump(build_findings, f, indent=2)
+            os.replace(temporary, cfg.output_dir + "/build_findings.json")
+            temporary = None
         except OSError as error:
             log.warning("Could not write build_findings.json: %s", error)
+        finally:
+            if temporary is not None:
+                with contextlib.suppress(OSError):
+                    os.unlink(temporary)
 
     for transform_step in build_dataflow_steps:
         step_name = transform_step.__name__

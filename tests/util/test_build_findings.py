@@ -3,10 +3,12 @@
 
 import pytest
 
+import errno
 import json
 import subprocess
 import sys
 from onnx import TensorProto, helper
+from pathlib import Path
 from qonnx.core.datatype import DataType
 from qonnx.core.findings import Finding, Refusal, collect_findings, report_finding
 from qonnx.core.modelwrapper import ModelWrapper
@@ -222,3 +224,74 @@ def test_a_refused_command_keeps_exit_one_and_writes_its_reason(tmp_path):
     assert "renamed MVAU" in finding["message"]
     assert "CustomOpRefused:" in result.stderr
     assert "domain-retired:" in result.stderr
+
+
+@pytest.mark.parametrize("failure", [False, True], ids=["successful-build", "refused-build"])
+@pytest.mark.parametrize("existing", [False, True], ids=["no-previous-report", "previous-report"])
+def test_a_mid_write_error_leaves_no_partial_findings_file(
+    tmp_path, monkeypatch, capfd, failure, existing
+):
+    output = tmp_path / "output"
+    output.mkdir()
+    destination = output / "build_findings.json"
+    previous = '{"previous_step": {"findings": []}}'
+    if existing:
+        destination.write_text(previous)
+    attempted = []
+    dump = json.dump
+
+    def partial_dump(data, stream, *args, **kwargs):
+        if "mid_write_step" in data:
+            attempted.append(Path(stream.name))
+            stream.write('{"partial":')
+            stream.flush()
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return dump(data, stream, *args, **kwargs)
+
+    def mid_write_step(model, cfg):
+        report_finding(FIRST)
+        if failure:
+            raise Refusal(REASONS)
+        return model
+
+    monkeypatch.setattr(json, "dump", partial_dump)
+    assert run_build(tmp_path, [mid_write_step]) == (-1 if failure else 0)
+    assert len(attempted) == 1
+    assert attempted[0].parent == output
+    if existing:
+        assert destination.read_text() == previous
+        assert json.loads(destination.read_text()) == {"previous_step": {"findings": []}}
+    else:
+        assert not destination.exists()
+    assert all(not path.exists() for path in attempted if path != destination)
+    console = capfd.readouterr()
+    assert console.err.count("WARNING: Could not write build_findings.json:") == 1
+    assert "No space left on device" in console.err
+    assert console.out.splitlines()[-1] == ("Build failed" if failure else "Completed successfully")
+    assert (output / "time_per_step.json").exists() != failure
+    if failure:
+        assert "Refusal: " in (output / "build_dataflow.log").read_text()
+
+
+@pytest.mark.parametrize("failure", [False, True], ids=["successful-build", "refused-build"])
+def test_a_findings_path_symlink_does_not_redirect_the_report(tmp_path, failure):
+    output = tmp_path / "output"
+    output.mkdir()
+    outside = tmp_path / "outside.json"
+    outside.write_text("outside content")
+    destination = output / "build_findings.json"
+    destination.symlink_to(outside)
+
+    def symlink_step(model, cfg):
+        report_finding(FIRST)
+        if failure:
+            raise Refusal(REASONS)
+        return model
+
+    assert run_build(tmp_path, [symlink_step]) == (-1 if failure else 0)
+    assert outside.read_text() == "outside content"
+    assert not destination.is_symlink()
+    expected = {"findings": [FIRST.record()]}
+    if failure:
+        expected["refused"] = [finding.record() for finding in REASONS]
+    assert read_findings(tmp_path) == {"symlink_step": expected}
