@@ -61,6 +61,11 @@ fallback_version = "0.0.0+unknown"
 # release tags only: the archive/* tags carry digits too
 describe_command = "git describe --dirty --tags --long --match v[0-9]*"
 
+[tool.setuptools]
+# package-data below, not the file list setuptools-scm takes from git: git lists
+# the _sources links as files, and the wheel build fails copying them
+include-package-data = false
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
