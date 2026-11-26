@@ -13,8 +13,13 @@ on:
 jobs:
 
   wheel-without-tools:
-    name: Wheel install without AMD tools
+    name: Wheel install without AMD tools (Python ${{ matrix.python }})
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest and the newest Python FINN supports.
+        python: ["3.12", "3.14"]
     env:
       UV_PROJECT_ENVIRONMENT: ${{ github.workspace }}/../finn-env
       FINN_BUILD_DIR: ${{ github.workspace }}/../finn-build
@@ -30,7 +35,7 @@ jobs:
 
       - name: Locked dependencies, then FINN from its wheel
         run: |
-          uv sync --locked --no-install-project
+          uv sync --locked --no-install-project --python ${{ matrix.python }}
           uv build --wheel --out-dir ../finn-dist
           uv pip install --python "$UV_PROJECT_ENVIRONMENT" --no-deps ../finn-dist/finn-*.whl
           echo "$UV_PROJECT_ENVIRONMENT/bin" >> "$GITHUB_PATH"
@@ -65,3 +70,41 @@ jobs:
           pytest -c "$GITHUB_WORKSPACE/pyproject.toml" --rootdir "$GITHUB_WORKSPACE" \
             "$GITHUB_WORKSPACE/tests" -p no:cacheprovider --dist=loadgroup -n auto \
             -m 'not (vivado or slow or vitis or board or notebooks or sanity_bnn or bnn_aup_zu3 or bnn_zcu104 or bnn_kv260 or bnn_u55c)'
+
+  pip-user:
+    name: pip install, the newest compatible releases
+    runs-on: ubuntu-24.04
+    env:
+      FINN_BUILD_DIR: ${{ github.workspace }}/../finn-build
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # No lock: pip resolves pyproject.toml's ranges as a user's pip does today.
+      - name: FINN with pip
+        run: |
+          python -m venv ../pip-env
+          ../pip-env/bin/pip install --upgrade pip
+          ../pip-env/bin/pip install ".[brevitas]" "pytest>=9" "pytest-xdist>=3.8"
+          ../pip-env/bin/pip list
+          echo "$GITHUB_WORKSPACE/../pip-env/bin" >> "$GITHUB_PATH"
+
+      - name: finn doctor
+        working-directory: ${{ runner.temp }}
+        run: |
+          python -c "import finn.util, sys; assert 'site-packages' in finn.util.__file__, finn.util.__file__"
+          finn doctor
+
+      - name: Front end, streamlining and transformations
+        working-directory: ${{ runner.temp }}
+        env:
+          FINN_ROOT: ${{ github.workspace }}
+        run: |
+          pytest -c "$GITHUB_WORKSPACE/pyproject.toml" --rootdir "$GITHUB_WORKSPACE" \
+            "$GITHUB_WORKSPACE/tests" -p no:cacheprovider --dist=loadgroup -n auto \
+            -m 'brevitas_export or streamline or transform'

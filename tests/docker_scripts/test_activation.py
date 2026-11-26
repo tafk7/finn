@@ -87,8 +87,12 @@ def test_the_container_without_tools_sets_no_amd_variables(tmp_path):
 
 
 def test_finn_finds_its_checkout_without_finn_root(monkeypatch):
+    import finn  # noqa: PLC0415
     from finn.util.basic import get_finn_root  # noqa: PLC0415
 
+    # an installed wheel has no checkout to find (CI's no-tools job tests the wheel)
+    if not Path(finn.__path__[0]).is_relative_to(REPO):
+        pytest.skip("FINN is installed from a wheel, not run from this checkout")
     monkeypatch.delenv("FINN_ROOT", raising=False)
     assert Path(get_finn_root()) == REPO
     monkeypatch.setenv("FINN_ROOT", "/elsewhere")

@@ -9,6 +9,9 @@ resolution-markers = [
 supported-markers = [
     "platform_machine == 'x86_64' and sys_platform == 'linux'",
 ]
+required-markers = [
+    "platform_machine == 'x86_64' and sys_platform == 'linux'",
+]
 conflicts = [[
     { package = "finn", group = "cpu" },
     { package = "finn", group = "cuda" },

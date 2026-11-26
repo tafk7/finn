@@ -1,0 +1,48 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+
+name: Dependencies
+
+# The lock pins one set of versions; pyproject.toml promises a range. Each week FINN's
+# tests that need no AMD tools run at both ends of that range: every dependency at its
+# newest allowed release, and every direct dependency at its lowest. A failure here
+# means a bound to move, before a user meets it.
+
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+jobs:
+
+  range:
+    name: Dependencies at the ${{ matrix.resolution }} end
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        resolution: [highest, lowest-direct]
+    env:
+      FINN_BUILD_DIR: ${{ github.workspace }}/../finn-build
+      FINN_ROOT: ${{ github.workspace }}
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.0"
+
+      - name: Resolve at the ${{ matrix.resolution }} end
+        run: |
+          uv lock --upgrade --resolution ${{ matrix.resolution }}
+          # --frozen: --locked would compare against the default resolution mode
+          uv sync --frozen
+          uv pip list
+
+      - name: Tests that need no tools
+        run: |
+          uv run --frozen pytest -p no:cacheprovider --dist=loadgroup -n auto \
+            -m 'not (vivado or slow or vitis or board or notebooks or sanity_bnn or bnn_aup_zu3 or bnn_zcu104 or bnn_kv260 or bnn_u55c)'

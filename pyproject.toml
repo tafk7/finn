@@ -106,6 +106,8 @@ required-version = "==0.10.0"
 default-groups = ["dev", "cpu"]
 conflicts = [[{group = "cpu"}, {group = "cuda"}]]
 environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+# torch's bare releases on the PyTorch index carry only macOS wheels: require a Linux one
+required-environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
 
 [tool.uv.sources]
 # PyTorch builds: CPU by default; `uv sync --no-group cpu --group cuda` selects CUDA.
