@@ -139,7 +139,10 @@ def affects(key: str, release: Optional[Release]) -> bool:
 
 def minimum(key: str) -> str:
     """The first release that the entry ``key`` (one with a last release) no longer holds for."""
-    year, half = NOTES[key].last
+    last = NOTES[key].last
+    if last is None:
+        raise ValueError(f"release note {key!r} has no last release")
+    year, half = last
     return name((year, 2) if half == 1 else (year + 1, 1))
 
 

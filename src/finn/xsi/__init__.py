@@ -172,6 +172,7 @@ def __getattr__(name: str) -> Any:
     if name == "SimulationError":
         if not _load_modules():
             raise ImportError(unavailable_message())
+        assert _sim_engine_module is not None
         return _sim_engine_module.SimulationError
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 

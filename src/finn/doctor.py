@@ -255,7 +255,7 @@ _MARK = {OK: "ok  ", NOTE: "--  ", WARN: "warn", FAIL: "FAIL"}
 
 
 def render(report) -> str:
-    sections = {}
+    sections: dict[str, list[str]] = {}
     for f in report.findings:
         line = f"  {_MARK[f.state]}  {f.label}" + (f": {f.detail}" if f.detail else "")
         sections.setdefault(f.section, []).append(line)
