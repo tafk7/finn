@@ -115,14 +115,10 @@ mem_mode = "internal_decoupled"
 rtlsim_trace = False
 
 
-def get_checkpoint_name(board, topology, wbits, abits, step):
-    return build_dir + "/end2end_%s_%s_w%da%d_%s.onnx" % (
-        board,
-        topology,
-        wbits,
-        abits,
-        step,
-    )
+def get_checkpoint_name(scenario, step):
+    # named by scenario: a sanity scenario and the full one with the same
+    # parameters run in different xdist groups and must not share files
+    return build_dir + "/end2end_%s_%s.onnx" % (scenario, step)
 
 
 def fold_tfc(model):
@@ -429,20 +425,22 @@ def pytest_generate_tests(metafunc):
     scenarios = _bnn_scenarios()
     if not scenarios:
         return
-    argnames = ["wbits", "abits", "topology", "board"]
+    argnames = ["wbits", "abits", "topology", "board", "scenario"]
     idlist = [s[0] for s in scenarios]
-    argvalues = [pytest.param(*(s[1][k] for k in argnames), marks=s[2]) for s in scenarios]
+    argvalues = [
+        pytest.param(*(s[1][k] for k in argnames[:-1]), s[0], marks=s[2]) for s in scenarios
+    ]
     metafunc.parametrize(argnames, argvalues, ids=idlist, scope="class")
 
 
 class TestEnd2End:
-    def test_export(self, topology, wbits, abits, board):
+    def test_export(self, topology, wbits, abits, board, scenario):
         if wbits > abits:
             pytest.skip("No wbits > abits end2end network configs for now")
         if topology == "lfc" and not (wbits == 1 and abits == 1):
             pytest.skip("Skipping certain lfc configs")
         (model, ishape) = get_trained_network_and_ishape(topology, wbits, abits)
-        chkpt_name = get_checkpoint_name(board, topology, wbits, abits, "export")
+        chkpt_name = get_checkpoint_name(scenario, "export")
         export_qonnx(model, torch.randn(ishape), chkpt_name, opset_version=13, dynamo=False)
         qonnx_cleanup(chkpt_name, out_file=chkpt_name)
         model = ModelWrapper(chkpt_name)
@@ -450,8 +448,8 @@ class TestEnd2End:
         model.save(chkpt_name)
         assert os.path.isfile(chkpt_name)
 
-    def test_import_and_tidy(self, topology, wbits, abits, board):
-        prev_chkpt_name = get_checkpoint_name(board, topology, wbits, abits, "export")
+    def test_import_and_tidy(self, topology, wbits, abits, board, scenario):
+        prev_chkpt_name = get_checkpoint_name(scenario, "export")
         model = load_test_checkpoint_or_skip(prev_chkpt_name)
         model = model.transform(InferShapes())
         model = model.transform(FoldConstants())
@@ -459,17 +457,17 @@ class TestEnd2End:
         model = model.transform(GiveReadableTensorNames())
         model = model.transform(InferDataTypes())
         model = model.transform(RemoveStaticGraphInputs())
-        chkpt = get_checkpoint_name(board, topology, wbits, abits, "import_and_tidy")
+        chkpt = get_checkpoint_name(scenario, "import_and_tidy")
         model.save(chkpt)
 
-    def test_add_pre_and_postproc(self, topology, wbits, abits, board):
-        prev_chkpt_name = get_checkpoint_name(board, topology, wbits, abits, "import_and_tidy")
+    def test_add_pre_and_postproc(self, topology, wbits, abits, board, scenario):
+        prev_chkpt_name = get_checkpoint_name(scenario, "import_and_tidy")
         model = load_test_checkpoint_or_skip(prev_chkpt_name)
         global_inp_name = model.get_first_global_in()
         ishape = model.get_tensor_shape(global_inp_name)
         # preprocessing: torchvision's ToTensor divides uint8 inputs by 255
         totensor_pyt = ToTensor()
-        chkpt_preproc_name = get_checkpoint_name(board, topology, wbits, abits, "preproc")
+        chkpt_preproc_name = get_checkpoint_name(scenario, "preproc")
         export_qonnx(
             totensor_pyt, torch.randn(ishape), chkpt_preproc_name, opset_version=13, dynamo=False
         )
@@ -488,7 +486,7 @@ class TestEnd2End:
         model.set_tensor_datatype(global_inp_name, DataType["UINT8"])
         # postprocessing: insert Top-1 node at the end
         model = model.transform(InsertTopK(k=1))
-        chkpt_name = get_checkpoint_name(board, topology, wbits, abits, "pre_post")
+        chkpt_name = get_checkpoint_name(scenario, "pre_post")
         # tidy-up again
         model = model.transform(InferShapes())
         model = model.transform(FoldConstants())
@@ -499,8 +497,8 @@ class TestEnd2End:
         model.save(chkpt_name)
         assert os.path.isfile(chkpt_name)
 
-    def test_streamline(self, topology, wbits, abits, board):
-        prev_chkpt_name = get_checkpoint_name(board, topology, wbits, abits, "pre_post")
+    def test_streamline(self, topology, wbits, abits, board, scenario):
+        prev_chkpt_name = get_checkpoint_name(scenario, "pre_post")
         model = load_test_checkpoint_or_skip(prev_chkpt_name)
         model = model.transform(absorb.AbsorbScalarBiasIntoMultiThreshold())
         # move past any reshapes to be able to streamline input scaling
@@ -516,10 +514,10 @@ class TestEnd2End:
         model = model.transform(absorb.AbsorbScalarMulAddIntoTopK())
         model = model.transform(InferDataLayouts())
         model = model.transform(RemoveUnusedTensors())
-        model.save(get_checkpoint_name(board, topology, wbits, abits, "streamline"))
+        model.save(get_checkpoint_name(scenario, "streamline"))
 
-    def test_convert_to_hw_layers(self, topology, wbits, abits, board):
-        prev_chkpt_name = get_checkpoint_name(board, topology, wbits, abits, "streamline")
+    def test_convert_to_hw_layers(self, topology, wbits, abits, board, scenario):
+        prev_chkpt_name = get_checkpoint_name(scenario, "streamline")
         model = load_test_checkpoint_or_skip(prev_chkpt_name)
         if topology == "tfc" and wbits == 1 and abits == 1:
             # use standalone thresholds for tfc-w1a1 to also exercise that option
@@ -542,7 +540,7 @@ class TestEnd2End:
         model = model.transform(absorb.AbsorbConsecutiveTransposes())
         model = model.transform(GiveUniqueNodeNames())
         model = model.transform(InferDataLayouts())
-        model.save(get_checkpoint_name(board, topology, wbits, abits, "convert_to_hw_layers"))
+        model.save(get_checkpoint_name(scenario, "convert_to_hw_layers"))
         exp_layer_counts = {
             "tfc": [
                 ("Reshape", 1),
@@ -579,9 +577,9 @@ class TestEnd2End:
         for op_type, exp_count in exp_layer_counts:
             assert len(model.get_nodes_by_op_type(op_type)) == exp_count
 
-    def test_specialize_layers(self, topology, wbits, abits, board):
+    def test_specialize_layers(self, topology, wbits, abits, board, scenario):
         build_data = get_build_env(board, target_clk_ns)
-        prev_chkpt_name = get_checkpoint_name(board, topology, wbits, abits, "convert_to_hw_layers")
+        prev_chkpt_name = get_checkpoint_name(scenario, "convert_to_hw_layers")
         model = load_test_checkpoint_or_skip(prev_chkpt_name)
         # First pass: datatype-only bit width minimization before specialization
         # Gives specialization realistic bit widths for RTL/HLS decisions
@@ -590,7 +588,7 @@ class TestEnd2End:
         model = model.transform(InferDataTypes())
         model = model.transform(SpecializeLayers(build_data["part"]))
         model = model.transform(GiveUniqueNodeNames())
-        model.save(get_checkpoint_name(board, topology, wbits, abits, "specialize_layers"))
+        model.save(get_checkpoint_name(scenario, "specialize_layers"))
         exp_layer_counts = {
             "tfc": [
                 ("Reshape", 1),
@@ -627,47 +625,47 @@ class TestEnd2End:
         for op_type, exp_count in exp_layer_counts:
             assert len(model.get_nodes_by_op_type(op_type)) == exp_count
 
-    def test_create_dataflow_partition(self, topology, wbits, abits, board):
-        prev_chkpt_name = get_checkpoint_name(board, topology, wbits, abits, "specialize_layers")
+    def test_create_dataflow_partition(self, topology, wbits, abits, board, scenario):
+        prev_chkpt_name = get_checkpoint_name(scenario, "specialize_layers")
         model = load_test_checkpoint_or_skip(prev_chkpt_name)
         parent_model = model.transform(CreateDataflowPartition())
-        parent_model_chkpt = get_checkpoint_name(board, topology, wbits, abits, "dataflow_parent")
+        parent_model_chkpt = get_checkpoint_name(scenario, "dataflow_parent")
         parent_model.save(parent_model_chkpt)
         sdp_node = parent_model.get_nodes_by_op_type("StreamingDataflowPartition")[0]
         sdp_node = getCustomOp(sdp_node)
         dataflow_model_filename = sdp_node.get_nodeattr("model")
         dataflow_model = load_test_checkpoint_or_skip(dataflow_model_filename)
-        dataflow_model_chkpt = get_checkpoint_name(board, topology, wbits, abits, "dataflow_model")
+        dataflow_model_chkpt = get_checkpoint_name(scenario, "dataflow_model")
         dataflow_model.save(dataflow_model_chkpt)
 
-    def test_fold(self, topology, wbits, abits, board):
-        prev_chkpt_name = get_checkpoint_name(board, topology, wbits, abits, "dataflow_model")
+    def test_fold(self, topology, wbits, abits, board, scenario):
+        prev_chkpt_name = get_checkpoint_name(scenario, "dataflow_model")
         model = load_test_checkpoint_or_skip(prev_chkpt_name)
         folding_fxn = get_folding_function(topology, wbits, abits)
         model = folding_fxn(model)
-        model.save(get_checkpoint_name(board, topology, wbits, abits, "fold"))
+        model.save(get_checkpoint_name(scenario, "fold"))
 
-    def test_minimize_bit_width(self, topology, wbits, abits, board):
-        prev_chkpt_name = get_checkpoint_name(board, topology, wbits, abits, "fold")
+    def test_minimize_bit_width(self, topology, wbits, abits, board, scenario):
+        prev_chkpt_name = get_checkpoint_name(scenario, "fold")
         model = load_test_checkpoint_or_skip(prev_chkpt_name)
         model = model.transform(MinimizeWeightBitWidth())
         model = model.transform(MinimizeAccumulatorWidth())
         model = model.transform(RoundAndClipThresholds())
         model = model.transform(MinimizeWeightBitWidth())
-        curr_chkpt_name = get_checkpoint_name(board, topology, wbits, abits, "minimize_bit_width")
+        curr_chkpt_name = get_checkpoint_name(scenario, "minimize_bit_width")
         model.save(curr_chkpt_name)
 
     @pytest.mark.slow
     @pytest.mark.vivado
-    def test_cppsim(self, topology, wbits, abits, board):
-        prev_chkpt_name = get_checkpoint_name(board, topology, wbits, abits, "minimize_bit_width")
+    def test_cppsim(self, topology, wbits, abits, board, scenario):
+        prev_chkpt_name = get_checkpoint_name(scenario, "minimize_bit_width")
         model = load_test_checkpoint_or_skip(prev_chkpt_name)
         model = model.transform(PrepareCppSim())
         model = model.transform(CompileCppSim())
         model = model.transform(SetExecMode("cppsim"))
-        cppsim_chkpt = get_checkpoint_name(board, topology, wbits, abits, "cppsim")
+        cppsim_chkpt = get_checkpoint_name(scenario, "cppsim")
         model.save(cppsim_chkpt)
-        parent_chkpt = get_checkpoint_name(board, topology, wbits, abits, "dataflow_parent")
+        parent_chkpt = get_checkpoint_name(scenario, "dataflow_parent")
         (input_tensor_npy, output_tensor_npy) = get_golden_io_pair(
             topology, wbits, abits, return_topk=1
         )
@@ -676,33 +674,33 @@ class TestEnd2End:
 
     @pytest.mark.slow
     @pytest.mark.vivado
-    def test_ipgen(self, topology, wbits, abits, board):
+    def test_ipgen(self, topology, wbits, abits, board, scenario):
         build_data = get_build_env(board, target_clk_ns)
         if build_data["toolchain"] == "vitis-xrt" and ("XILINX_VITIS" not in os.environ):
             pytest.skip("XILINX_VITIS not set")
-        prev_chkpt_name = get_checkpoint_name(board, topology, wbits, abits, "minimize_bit_width")
+        prev_chkpt_name = get_checkpoint_name(scenario, "minimize_bit_width")
         model = load_test_checkpoint_or_skip(prev_chkpt_name)
         model = model.transform(GiveUniqueNodeNames())
         model = model.transform(PrepareIP(build_data["part"], target_clk_ns))
         model = model.transform(HLSSynthIP())
-        model.save(get_checkpoint_name(board, topology, wbits, abits, "ipgen"))
+        model.save(get_checkpoint_name(scenario, "ipgen"))
 
     @pytest.mark.slow
     @pytest.mark.vivado
-    def test_set_fifo_depths(self, topology, wbits, abits, board):
-        prev_chkpt_name = get_checkpoint_name(board, topology, wbits, abits, "ipgen")
+    def test_set_fifo_depths(self, topology, wbits, abits, board, scenario):
+        prev_chkpt_name = get_checkpoint_name(scenario, "ipgen")
         model = load_test_checkpoint_or_skip(prev_chkpt_name)
         test_fpga_part = get_build_env(board, target_clk_ns)["part"]
         model = model.transform(InsertAndSetFIFODepths(test_fpga_part, target_clk_ns))
 
         fifo_layers = model.get_nodes_by_op_type("StreamingFIFO_rtl")
         assert len(fifo_layers) > 0
-        model.save(get_checkpoint_name(board, topology, wbits, abits, "fifodepth"))
+        model.save(get_checkpoint_name(scenario, "fifodepth"))
 
     @pytest.mark.slow
     @pytest.mark.vivado
-    def test_ipstitch_rtlsim(self, topology, wbits, abits, board, monkeypatch):
-        prev_chkpt_name = get_checkpoint_name(board, topology, wbits, abits, "fifodepth")
+    def test_ipstitch_rtlsim(self, topology, wbits, abits, board, scenario, monkeypatch):
+        prev_chkpt_name = get_checkpoint_name(scenario, "fifodepth")
         model = load_test_checkpoint_or_skip(prev_chkpt_name)
         test_fpga_part = get_build_env(board, target_clk_ns)["part"]
         model = model.transform(InsertDWC())
@@ -719,9 +717,9 @@ class TestEnd2End:
         if rtlsim_trace:
             model.set_metadata_prop("rtlsim_trace", "%s_w%da%d.vcd" % (topology, wbits, abits))
             monkeypatch.setenv("RTLSIM_TRACE_DEPTH", "3")
-        rtlsim_chkpt = get_checkpoint_name(board, topology, wbits, abits, "ipstitch_rtlsim")
+        rtlsim_chkpt = get_checkpoint_name(scenario, "ipstitch_rtlsim")
         model.save(rtlsim_chkpt)
-        parent_chkpt = get_checkpoint_name(board, topology, wbits, abits, "dataflow_parent")
+        parent_chkpt = get_checkpoint_name(scenario, "dataflow_parent")
         (input_tensor_npy, output_tensor_npy) = get_golden_io_pair(
             topology, wbits, abits, return_topk=1
         )
@@ -730,8 +728,8 @@ class TestEnd2End:
 
     @pytest.mark.slow
     @pytest.mark.vivado
-    def test_throughput_rtlsim(self, topology, wbits, abits, board):
-        prev_chkpt_name = get_checkpoint_name(board, topology, wbits, abits, "ipstitch_rtlsim")
+    def test_throughput_rtlsim(self, topology, wbits, abits, board, scenario):
+        prev_chkpt_name = get_checkpoint_name(scenario, "ipstitch_rtlsim")
         model = load_test_checkpoint_or_skip(prev_chkpt_name)
         n_nodes = len(model.graph.node)
         perf_est = model.analysis(dataflow_performance)
@@ -751,14 +749,14 @@ class TestEnd2End:
 
     @pytest.mark.slow
     @pytest.mark.vivado
-    def test_validate_top1(self, topology, wbits, abits, board):
+    def test_validate_top1(self, topology, wbits, abits, board, scenario):
         if "TEST_END2END_VALIDATE_TOP1" not in os.environ:
             pytest.skip("TEST_END2END_VALIDATE_TOP1 not set")
-        prepostproc_chkpt = get_checkpoint_name(board, topology, wbits, abits, "pre_post")
-        streamline_chkpt = get_checkpoint_name(board, topology, wbits, abits, "streamline")
-        parent_chkpt = get_checkpoint_name(board, topology, wbits, abits, "dataflow_parent")
-        cppsim_chkpt = get_checkpoint_name(board, topology, wbits, abits, "cppsim")
-        rtlsim_chkpt = get_checkpoint_name(board, topology, wbits, abits, "ipstitch_rtlsim")
+        prepostproc_chkpt = get_checkpoint_name(scenario, "pre_post")
+        streamline_chkpt = get_checkpoint_name(scenario, "streamline")
+        parent_chkpt = get_checkpoint_name(scenario, "dataflow_parent")
+        cppsim_chkpt = get_checkpoint_name(scenario, "cppsim")
+        rtlsim_chkpt = get_checkpoint_name(scenario, "ipstitch_rtlsim")
         dataset = topology2dataset(topology)
         assert measure_top1_accuracy(prepostproc_chkpt, dataset) > 80
         assert measure_top1_accuracy(streamline_chkpt, dataset) > 80
@@ -767,43 +765,43 @@ class TestEnd2End:
 
     @pytest.mark.slow
     @pytest.mark.vivado
-    def test_prepare_for_linking(self, topology, wbits, abits, board):
+    def test_prepare_for_linking(self, topology, wbits, abits, board, scenario):
         build_data = get_build_env(board, target_clk_ns)
-        prev_chkpt_name = get_checkpoint_name(board, topology, wbits, abits, "fifodepth")
+        prev_chkpt_name = get_checkpoint_name(scenario, "fifodepth")
         model = load_test_checkpoint_or_skip(prev_chkpt_name)
         if build_data["toolchain"] == "vitis-xrt":
             model = model.transform(
                 PrepareForLinking(build_data["part"], target_clk_ns, build_data["toolchain"])
             )
-        model.save(get_checkpoint_name(board, topology, wbits, abits, "prepare_linking"))
+        model.save(get_checkpoint_name(scenario, "prepare_linking"))
 
     @pytest.mark.slow
     @pytest.mark.vivado
     @pytest.mark.vitis
-    def test_linking(self, topology, wbits, abits, board):
+    def test_linking(self, topology, wbits, abits, board, scenario):
         build_data = get_build_env(board, target_clk_ns)
         if build_data["toolchain"] == "vitis-xrt" and ("XILINX_VITIS" not in os.environ):
             pytest.skip("XILINX_VITIS not set")
-        prev_chkpt_name = get_checkpoint_name(board, topology, wbits, abits, "prepare_linking")
+        prev_chkpt_name = get_checkpoint_name(scenario, "prepare_linking")
         model = load_test_checkpoint_or_skip(prev_chkpt_name)
         model = model.transform(build_data["build_fxn"])
-        model.save(get_checkpoint_name(board, topology, wbits, abits, "linking"))
+        model.save(get_checkpoint_name(scenario, "linking"))
 
-    def test_annotate_resources(self, topology, wbits, abits, board):
+    def test_annotate_resources(self, topology, wbits, abits, board, scenario):
         build_data = get_build_env(board, target_clk_ns)
-        prev_chkpt_name = get_checkpoint_name(board, topology, wbits, abits, "linking")
+        prev_chkpt_name = get_checkpoint_name(scenario, "linking")
         model = load_test_checkpoint_or_skip(prev_chkpt_name)
         model = model.transform(AnnotateResources("synth", build_data["part"]))
-        model.save(get_checkpoint_name(board, topology, wbits, abits, "annotate_resources"))
+        model.save(get_checkpoint_name(scenario, "annotate_resources"))
 
     @pytest.mark.slow
     @pytest.mark.vivado
     @pytest.mark.vitis
-    def test_make_driver(self, topology, wbits, abits, board):
+    def test_make_driver(self, topology, wbits, abits, board, scenario):
         build_data = get_build_env(board, target_clk_ns)
         if build_data["toolchain"] == "vitis-xrt" and ("XILINX_VITIS" not in os.environ):
             pytest.skip("XILINX_VITIS not set")
-        prev_chkpt_name = get_checkpoint_name(board, topology, wbits, abits, "linking")
+        prev_chkpt_name = get_checkpoint_name(scenario, "linking")
         model = load_test_checkpoint_or_skip(prev_chkpt_name)
         if build_data["toolchain"] == "vitis-xrt":
             if topology == "tfc":
@@ -814,12 +812,12 @@ class TestEnd2End:
             model = model.transform(MakePYNQDriver("pynq-iodma"))
         else:
             raise Exception("Unsupported toolchain/topology combination for driver generation")
-        model.save(get_checkpoint_name(board, topology, wbits, abits, "driver"))
+        model.save(get_checkpoint_name(scenario, "driver"))
 
-    def test_deploy(self, topology, wbits, abits, board):
-        prev_chkpt_name = get_checkpoint_name(board, topology, wbits, abits, "driver")
+    def test_deploy(self, topology, wbits, abits, board, scenario):
+        prev_chkpt_name = get_checkpoint_name(scenario, "driver")
         model = load_test_checkpoint_or_skip(prev_chkpt_name)
         model_title = "%s_w%d_a%d_%s" % ("bnn", wbits, abits, topology)
         deploy_based_on_board(model, model_title, topology, wbits, abits, board)
         # save the model to be able to link it to the parent
-        model.save(get_checkpoint_name(board, topology, wbits, abits, "deploy"))
+        model.save(get_checkpoint_name(scenario, "deploy"))
