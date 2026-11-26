@@ -115,7 +115,9 @@ def to_driver_input(x, topology):
 @pytest.mark.parametrize("topology", ["cnv", "tfc"])
 def test_end2end_ext_weights_download(topology):
     if not os.path.isfile(onnx_zip_local):
-        urllib.request.urlretrieve(onnx_zip_url, onnx_zip_local)
+        # into a temporary name first, so a failed download leaves no partial zip
+        urllib.request.urlretrieve(onnx_zip_url, onnx_zip_local + ".part")
+        os.replace(onnx_zip_local + ".part", onnx_zip_local)
     assert os.path.isfile(onnx_zip_local)
     subprocess.check_output(["unzip", "-o", onnx_zip_local, "-d", onnx_dir_local])
     assert os.path.isfile(get_checkpoint_name("download", topology))

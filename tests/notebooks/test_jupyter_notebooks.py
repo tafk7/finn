@@ -1,10 +1,12 @@
 import pytest
 
-import nbformat
 import os
-from nbconvert.preprocessors import ExecutePreprocessor
 
 from finn.util.basic import get_finn_root
+
+# the notebooks group, which a pip install of finn[brevitas] lacks
+nbformat = pytest.importorskip("nbformat")
+ExecutePreprocessor = pytest.importorskip("nbconvert.preprocessors").ExecutePreprocessor
 
 notebook_timeout_seconds = 3600
 notebook_basic_dir = get_finn_root() + "/notebooks/basics/"
