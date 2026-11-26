@@ -128,12 +128,25 @@ def main(argv=None):
         return
     missing = subprocess.run(["docker", "image", "inspect", image], capture_output=True).returncode
     if args.build or (missing and not args.no_build):
+        bake_env["FINN_VERSION"] = finn_version()
         subprocess.run(bake, cwd=REPO, env={**os.environ, **bake_env}, check=True)
     elif missing:
         fail(f"no image {image}, and --no-build")
     if not shutil.which("docker"):
         fail("docker is not installed")
     os.execvpe("docker", argv, {**os.environ, **env})
+
+
+def finn_version():
+    """The checkout's version for the release image, if setuptools-scm is at hand."""
+    for python in (REPO / ".venv" / "bin" / "python", Path(sys.executable)):
+        if python.exists():
+            found = subprocess.run(
+                [str(python), "-m", "setuptools_scm"], cwd=REPO, capture_output=True, text=True
+            )
+            if found.returncode == 0 and found.stdout.strip():
+                return found.stdout.strip().splitlines()[-1]
+    return ""
 
 
 if __name__ == "__main__":

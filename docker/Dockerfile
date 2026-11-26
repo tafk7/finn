@@ -220,7 +220,11 @@ USER agent
 # bind is writable because the build backend writes its build directory there.
 FROM base AS wheel
 USER root
+# The build context has no git metadata: the version comes in as FINN_VERSION
+# (docker/run passes the checkout's), else it is setuptools-scm's fallback.
+ARG FINN_VERSION=""
 RUN --mount=type=bind,source=.,target=/tmp/finn-source,rw \
+    if [ -n "$FINN_VERSION" ]; then export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_FINN="$FINN_VERSION"; fi && \
     uv build --wheel --no-build-isolation --out-dir /opt/finn/wheel /tmp/finn-source
 
 FROM finn AS release

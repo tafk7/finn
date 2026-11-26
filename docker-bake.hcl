@@ -9,6 +9,7 @@
 # them itself (--set '*.tags=...').
 
 variable "FINN_RUNTIMES" { default = "" }
+variable "FINN_VERSION" { default = "" }
 variable "UBUNTU_TAG" { default = "noble-20240605" }
 
 function "runtime_suffix" {
@@ -22,7 +23,7 @@ target "_common" {
   dockerfile = "docker/Dockerfile"
   context    = "."
   platforms  = ["linux/amd64"]
-  args       = { UBUNTU_TAG = UBUNTU_TAG, FINN_RUNTIMES = FINN_RUNTIMES }
+  args       = { UBUNTU_TAG = UBUNTU_TAG, FINN_RUNTIMES = FINN_RUNTIMES, FINN_VERSION = FINN_VERSION }
   labels     = {
     "org.opencontainers.image.title"  = "FINN"
     "org.opencontainers.image.source" = "https://github.com/Xilinx/finn"

@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=77"]
+requires = ["setuptools>=77", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "finn"
-version = "0.0.0"
+dynamic = ["version"]
 description = "A Framework for Fast, Scalable Quantized Neural Network Inference"
 readme = "README.md"
 license = {text = "BSD-3-Clause"}
@@ -52,6 +52,15 @@ Documentation = "https://finn.readthedocs.io/"
 finn = "finn.cli:main"
 build_dataflow = "finn.builder.build_dataflow:main"
 
+[tool.setuptools_scm]
+# the version comes from the git tags; a tree without git metadata (a worktree
+# mounted without its repository) builds as this
+fallback_version = "0.0.0+unknown"
+
+[tool.setuptools_scm.scm.git]
+# release tags only: the archive/* tags carry digits too
+describe_command = "git describe --dirty --tags --long --match v[0-9]*"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
@@ -65,6 +74,7 @@ finn = ["resources.toml", "qnn-data/**/*", "_sources/**/*"]
 test = [
     "finn[brevitas]",
     "setuptools>=77",  # test_wheel builds FINN with it
+    "setuptools-scm>=8",  # and the builds without isolation (the container's)
     "pytest>=9",
     "pytest-xdist[setproctitle]>=3.8",
 ]
@@ -102,6 +112,8 @@ dev = [
 ]
 
 [tool.uv]
+# reinstall the editable FINN when a commit or tag changes its version
+cache-keys = [{file = "pyproject.toml"}, {git = {commit = true, tags = true}}]
 required-version = "==0.10.0"
 default-groups = ["dev", "cpu"]
 conflicts = [[{group = "cpu"}, {group = "cuda"}]]
