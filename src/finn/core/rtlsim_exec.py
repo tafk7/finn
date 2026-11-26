@@ -263,7 +263,7 @@ def rtlsim_exec_cppxsi(
         len(instream_iters),
     )
     instream_descrs = [
-        (instream_names[i], instream_iters[i], instream_iters[i] + throttle_cycles)
+        (instream_names[i], instream_iters[i], instream_iters[i] + int(throttle_cycles))
         for i in range(len(instream_names))
     ]
     instream_descrs_str = str(instream_descrs).replace("[", "").replace("]", "")
