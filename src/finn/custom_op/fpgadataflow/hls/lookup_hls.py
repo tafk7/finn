@@ -115,7 +115,7 @@ class Lookup_hls(Lookup, HLSBackend):
         npy_type = "float"
         npy_out = "%s/output_0.npy" % code_gen_dir
         oshape = self.get_folded_output_shape()
-        oshape_cpp_str = str(oshape).replace("(", "{").replace(")", "}")
+        oshape_cpp_str = str(tuple(int(x) for x in oshape)).replace("(", "{").replace(")", "}")
 
         self.code_gen_dict["$DATAOUTSTREAM$"] = [
             'tensorstream2npy<%s>(strm0, %s, "%s");' % (npy_type, oshape_cpp_str, npy_out)

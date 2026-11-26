@@ -534,7 +534,7 @@ class Thresholding_hls(Thresholding, HLSBackend):
         npy_type = "half" if elem_hls_type == "half" else "float"
         npy_out = "%s/output_0.npy" % code_gen_dir
         shape = self.get_folded_output_shape()
-        shape_cpp_str = str(shape).replace("(", "{").replace(")", "}")
+        shape_cpp_str = str(tuple(int(x) for x in shape)).replace("(", "{").replace(")", "}")
 
         self.code_gen_dict["$DATAOUTSTREAM$"] = [
             'tensorstream2npy<%s>(strm0, %s, "%s");'

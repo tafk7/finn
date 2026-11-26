@@ -503,7 +503,7 @@ compilation transformations?
             npy_type = "half" if elem_hls_type == "half" else "float"
             npy_out = "%s/output_%s.npy" % (code_gen_dir, o)
             oshape = self.get_folded_output_shape(o)
-            oshape_cpp_str = str(oshape).replace("(", "{").replace(")", "}")
+            oshape_cpp_str = str(tuple(int(x) for x in oshape)).replace("(", "{").replace(")", "}")
 
             self.code_gen_dict["$DATAOUTSTREAM$"].append(
                 'tensorstream2npy<%s>(strm%s, %s, "%s");' % (npy_type, o, oshape_cpp_str, npy_out)

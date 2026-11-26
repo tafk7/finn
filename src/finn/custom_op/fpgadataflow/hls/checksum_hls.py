@@ -199,7 +199,7 @@ class CheckSum_hls(HWCustomOp, HLSBackend):
         npy_type = "float"
         npy_out = "%s/output_0.npy" % code_gen_dir
         shape = tuple(self.get_folded_output_shape())
-        shape_cpp_str = str(shape).replace("(", "{").replace(")", "}")
+        shape_cpp_str = str(tuple(int(x) for x in shape)).replace("(", "{").replace(")", "}")
 
         self.code_gen_dict["$DATAOUTSTREAM$"] = [
             'tensorstream2npy<%s>(strm0, %s, "%s");' % (npy_type, shape_cpp_str, npy_out),

@@ -233,7 +233,7 @@ def rtlsim_exec_cppxsi(
         if not has_s_axis_port(first_node, top_ind):
             continue
         ishape_folded = fnode_inst.get_folded_input_shape(ind=top_ind)
-        instream_iters.append(np.prod(ishape_folded[:-1]))
+        instream_iters.append(int(np.prod(ishape_folded[:-1])))
     for top_out in model.graph.output:
         oname = top_out.name
         last_node = model.find_producer(oname)
@@ -241,7 +241,7 @@ def rtlsim_exec_cppxsi(
         lnode_inst = getCustomOp(last_node)
         top_ind = list(last_node.output).index(oname)
         oshape_folded = lnode_inst.get_folded_output_shape(ind=top_ind)
-        outstream_iters.append(np.prod(oshape_folded[:-1]))
+        outstream_iters.append(int(np.prod(oshape_folded[:-1])))
 
     # retrieve the number of inputs from execution_context
     n_inferences = execution_context[model.get_first_global_in()]
