@@ -8,7 +8,7 @@ import os
 import runpy
 from shutil import copytree
 
-from finn.util.basic import make_build_dir
+from finn.util.basic import get_finn_root, make_build_dir
 
 
 @pytest.mark.slow
@@ -20,7 +20,7 @@ def test_fpga_flow_tutorial():
     # folding_config.json, templates/) resolve against a writable directory.
     test_dir = make_build_dir("test_fpga_flow_tutorial_")
     target_dir = test_dir + "/fpga_flow"
-    tutorial_dir = os.environ["FINN_ROOT"] + "/tutorials/fpga_flow"
+    tutorial_dir = get_finn_root() + "/tutorials/fpga_flow"
     copytree(tutorial_dir, target_dir)
 
     # build.py uses relative paths and a relative output_dir, so run it with the

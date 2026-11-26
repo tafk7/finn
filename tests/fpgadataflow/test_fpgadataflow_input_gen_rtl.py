@@ -16,11 +16,12 @@ import pytest
 import os
 import re
 
+from finn import resources
 from finn.util.basic import make_build_dir, robust_rmtree
 from finn.util.input_gen import input_gen_buffer_depth
 from finn.util.launcher import run_tool
 
-TB_DIR = os.path.join(os.environ["FINN_ROOT"], "finn-rtllib/input_gen")
+TB_DIR = resources.join("rtllib", "input_gen")
 
 
 def pool(h, w, cf, kh, kw, sh, sw):
